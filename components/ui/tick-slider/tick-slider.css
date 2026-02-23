@@ -1,0 +1,40 @@
+@layer components {
+  .tick-slider {
+    --tick-w: 2px;
+    --tick-h: 2.5rem;
+    padding-bottom: var(--spacing-2);
+    -webuser-select: none;
+    user-select: none;
+  }
+
+  .tick-slider__window {
+    height: calc(var(--tick-h));
+    width: 100%;
+    padding-top: 0.25rem;
+  }
+
+  .tick-slider__options {
+    display: flex;
+    gap: 3px;
+    /* magical 1px extra helps it go to the very end */
+    padding-inline: calc((100% - var(--tick-w) + 1px) / 2);
+    scroll-padding-inline: calc((100% - var(--tick-w) + 1px) / 2);
+    height: 100%;
+    -webuser-select: none;
+    user-select: none;
+
+    & > div {
+      height: var(--tick-h);
+      width: var(--tick-w);
+      background-color: light-dark(var(--gray-500), var(--gray-100));
+      transform-origin: bottom center;
+      transform: scaleY(var(--scale, 0.4));
+      will-change: transform;
+      -webuser-select: none;
+      user-select: none;
+    }
+    & > :nth-child(odd) {
+      background-color: transparent;
+    }
+  }
+}

@@ -1,0 +1,101 @@
+@layer components {
+  .collapsible {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  .collapsible-depth-1 {
+    padding-left: var(--spacing-2);
+  }
+
+  .collapsible-trigger {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0;
+    border: 0;
+    outline: 0;
+    padding: var(--spacing) var(--spacing-2);
+    border-radius: var(--radius);
+    color: var(--gray-900);
+    font-family: inherit;
+    font-size: var(--text-sm);
+    line-height: 1.25rem;
+    font-weight: 500;
+
+    :where(svg) {
+      width: 0.75rem;
+      height: 0.75rem;
+      transition: transform 150ms ease-out;
+    }
+
+    @media (hover: hover) {
+      &:hover {
+        background-color: var(--gray-100);
+      }
+      &:active {
+        background-color: var(--gray-100);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        &:hover {
+          background-color: var(--gray-50);
+        }
+        &:active {
+          background-color: var(--gray-50);
+        }
+      }
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--primary);
+    }
+
+    &[data-panel-open] :where(svg) {
+      transform: rotate(90deg);
+    }
+  }
+
+  .collapsible-panel {
+    display: flex;
+    height: var(--collapsible-panel-height);
+    flex-direction: column;
+    justify-content: end;
+    overflow: hidden;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    transition: all 100ms ease-out;
+
+    &[hidden]:not([hidden="until-found"]) {
+      display: none;
+    }
+
+    &[data-starting-style],
+    &[data-ending-style] {
+      height: 0;
+    }
+  }
+
+  .collapsible-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.25rem;
+    padding: 0.5rem 0 0.5rem 1.75rem;
+    border-radius: var(--radius);
+    background-color: var(--gray-100);
+    cursor: text;
+  }
+
+  .collapsible-trigger-with-enabled {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: var(--spacing);
+  }
+
+  .collapsible-checkbox input[type="checkbox"] {
+    width: 1rem;
+    height: 1rem;
+  }
+}

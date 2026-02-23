@@ -1,0 +1,46 @@
+.palette-preset {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: background-color 50ms ease-out;
+  cursor: pointer;
+  justify-content: normal;
+  height: auto;
+
+  :where(.palette-preset__swatches) {
+    display: flex;
+    gap: 4px;
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  :where(.palette-preset__swatch) {
+    border-radius: 999px;
+    height: calc(var(--spacing-2) * 2);
+    width: calc(var(--spacing-2) * 2);
+    border: 0.5px solid var(--border);
+  }
+}
+
+.palette-preset--selected {
+  background: var(--button-background);
+  border: 1px solid light-dark(var(--gray-300), var(--gray-100));
+}
+
+/* Inline swatches for select items */
+.palette-swatches--inline {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.palette-swatch--inline {
+  border-radius: 999px;
+  height: 14px;
+  width: 14px;
+  border: 0.5px solid var(--border);
+  flex-shrink: 0;
+}

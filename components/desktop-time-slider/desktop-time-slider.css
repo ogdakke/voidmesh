@@ -1,0 +1,36 @@
+.desktop-time-slider {
+  padding: 0;
+}
+
+.desktop-time-slider__label {
+  display: block;
+  padding: 4px 12px 0;
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
+.desktop-time-slider__grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+  align-items: center;
+}
+
+.desktop-time-slider__button {
+  grid-row: 1;
+  grid-column: 1;
+  z-index: 1;
+  justify-self: start;
+  margin-left: 12px;
+  display: grid;
+  place-items: center;
+
+  :where(svg) {
+    grid-area: 1 / 1;
+  }
+}
+
+.desktop-time-slider__slider {
+  grid-row: 1;
+  grid-column: 1;
+}

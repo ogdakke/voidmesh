@@ -1,0 +1,35 @@
+@layer components {
+  .infinite-slider {
+    --tick-w: 2px;
+    --tick-h: 2.5rem;
+    --slider-tick-color: light-dark(var(--gray-500), var(--gray-100));
+    --slider-highlight-color: light-dark(var(--gray-900), var(--gray-1100));
+    --slider-major-tick-color: light-dark(var(--gray-700), var(--gray-300));
+    -webkit-user-select: none;
+    user-select: none;
+    touch-action: none;
+
+    &:focus-visible {
+      outline: 2px solid var(--primary);
+      border-radius: var(--radius-lg);
+    }
+
+    @media screen and (max-width: 768px) {
+      --tick-h: 3rem;
+      padding-top: var(--spacing-2);
+    }
+  }
+
+  .infinite-slider__canvas {
+    display: block;
+    width: 100%;
+    height: calc(var(--tick-h));
+    cursor: grab;
+    mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent);
+    -webkit-mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent);
+  }
+
+  .infinite-slider__canvas:active {
+    cursor: grabbing;
+  }
+}

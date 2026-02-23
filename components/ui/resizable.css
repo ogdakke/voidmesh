@@ -1,0 +1,77 @@
+@layer components {
+  .resizable {
+    display: flex;
+    height: 100%;
+    width: 100%;
+  }
+
+  .resizable[data-panel-group-direction="vertical"] {
+    flex-direction: column;
+  }
+
+  .resize-handle {
+    --and-a-bit: 6px;
+    background: transparent;
+    position: relative;
+    display: flex;
+    width: 1px;
+    align-items: center;
+    justify-content: center;
+    height: calc(100% - 2 * var(--content-radius) - var(--and-a-bit));
+    top: calc(var(--content-radius) + var(--and-a-bit) / 2);
+    z-index: 1;
+  }
+
+  .resize-handle--left {
+    transform: translateX(2px);
+  }
+  .resize-handle--right {
+    transform: translateX(-2px);
+  }
+
+  .resize-handle::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 0.25rem;
+    transform: translateX(-50%);
+    border-radius: var(--radius);
+  }
+
+  .resize-handle[data-separator="hover"]::after,
+  .resize-handle[data-separator="active"]::after,
+  .resize-handle:focus-visible {
+    background-color: var(--border);
+    outline: none;
+  }
+
+  .resize-handle[data-panel-group-direction="vertical"] {
+    height: 1px;
+    width: 100%;
+  }
+
+  .resize-handle[data-panel-group-direction="vertical"]::after {
+    left: 0;
+    height: 0.25rem;
+    width: 100%;
+    transform: translateX(0) translateY(-50%);
+  }
+
+  .resize-handle[data-panel-group-direction="vertical"] > div {
+    rotate: 90deg;
+  }
+}
+
+.resizable-handle--icon {
+  background-color: var(--border);
+  z-index: 10;
+  display: flex;
+  height: 1rem;
+  width: 0.75rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid;
+}

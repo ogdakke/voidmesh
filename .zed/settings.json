@@ -1,0 +1,113 @@
+{
+  "formatter": [
+    "language_server",
+    {
+      "language_server": {
+        "name": "oxfmt"
+      }
+    }
+  ],
+  "language_servers": [
+    "!tailwindcss-language-server",
+    "!typescript-language-server",
+    "!tsgo",
+    "!eslint",
+    "vtsls",
+    "..."
+  ],
+  "lsp": {
+    "oxlint": {
+      "initialization_options": {
+        "settings": {
+          "fixKind": "safe_fix",
+          "run": "onType",
+          "typeAware": false
+        }
+      }
+    }
+  },
+  "languages": {
+    "JavaScript": {
+      "format_on_save": "on",
+      "formatter": [
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        }
+      ]
+    },
+    "TSX": {
+      "format_on_save": "on",
+      "formatter": [
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        }
+      ]
+    },
+    "TypeScript": {
+      "formatter": [
+        "language_server",
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        }
+      ]
+    },
+    "HTML": {
+      "format_on_save": "on",
+      "formatter": [
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        }
+      ]
+    },
+    "CSS": {
+      "format_on_save": "on",
+      "formatter": [
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        }
+      ]
+    },
+    "JSON": {
+      "language_servers": ["json-language-server", "..."],
+      "format_on_save": "on",
+      "formatter": [
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        }
+      ]
+    },
+    "JSONC": {
+      "language_servers": ["json-language-server", "..."],
+      "format_on_save": "on",
+      "formatter": [
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        }
+      ]
+    },
+    "Markdown": {
+      "format_on_save": "on",
+      "formatter": [
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        }
+      ]
+    }
+  }
+}

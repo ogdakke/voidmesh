@@ -1,0 +1,105 @@
+@layer primitives {
+  a {
+    border-radius: var(--radius);
+
+    &:link {
+      color: color-mix(in srgb, var(--color) 95%, var(--background));
+      text-decoration: none;
+    }
+    &:visited {
+      color: color-mix(in srgb, var(--color) 75%, var(--background));
+    }
+    &:hover,
+    &:focus-visible {
+      color: var(--color);
+      text-decoration: underline;
+    }
+    &:focus-visible {
+      outline: 1px solid var(--border);
+    }
+    &:active {
+      color: color-mix(in srgb, var(--color) 95%, var(--background));
+    }
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    border-radius: var(--radius);
+    &:focus-visible {
+      outline: 1px solid var(--border);
+    }
+  }
+
+  .button {
+    line-height: 1;
+    padding: calc(8rem / 16);
+    cursor: pointer;
+    text-align: center;
+    background: var(--background);
+    color: var(--color);
+    border-radius: var(--radius);
+    transition: background-color 125ms;
+    transition-delay: var(--button-transition-delay);
+
+    &:focus-visible {
+      outline: 1px solid var(--outline);
+      outline-offset: 2px;
+    }
+
+    @media screen and (pointer: fine) {
+      &:hover {
+        background: color-mix(in oklch, var(--background) 95%, var(--color));
+      }
+    }
+  }
+
+  .button--accent {
+    background-color: var(--accent);
+    @media screen and (pointer: fine) {
+      &:hover {
+        background: color-mix(in oklch, var(--accent) 95%, var(--color));
+      }
+    }
+  }
+
+  .button--primary {
+    background-color: var(--primary);
+    color: var(--background);
+    @media screen and (pointer: fine) {
+      &:hover {
+        background: color-mix(in oklch, var(--primary) 95%, var(--color));
+      }
+    }
+  }
+
+  .button--destructive {
+    background: transparent;
+    border: 1px solid var(--destructive);
+    color: var(--destructive);
+    @media screen and (pointer: fine) {
+      &:hover {
+        background: var(--destructive);
+        color: var(--background);
+      }
+    }
+  }
+
+  .divider {
+    border: none;
+    display: block;
+    height: 1px;
+    background-color: var(--border);
+    margin: 4px 0;
+  }
+
+  .link {
+    display: inline-grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    gap: 8px;
+  }
+}

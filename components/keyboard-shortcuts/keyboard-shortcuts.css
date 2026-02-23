@@ -1,0 +1,48 @@
+.keyboard-shortcuts__keybinds {
+  display: none;
+  overflow-y: auto;
+}
+
+@media screen and (min-width: 767px) and (pointer: fine) {
+  .keyboard-shortcuts__keybinds {
+    display: block;
+    flex: 1;
+    min-width: 320px;
+  }
+}
+
+.modal-content.keyboard-shortcuts__modal:has(.keybind-item:hover) .keybind-item:not(:hover) {
+  :where(.kbd-shortcut) {
+    opacity: 0.5;
+    transition: opacity 200ms ease-in-out 20ms;
+  }
+}
+
+.keybind-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.keybind-section {
+  padding: var(--spacing-3);
+  border-top: 1px solid var(--border);
+  :where(h2) {
+    font-size: var(--text);
+  }
+}
+
+.keybind-section:first-of-type {
+  border-top: none;
+}
+
+.keybind-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-gap: var(--spacing-2);
+  align-items: center;
+
+  :where(.kbd-shortcut) {
+    transition: opacity 200ms ease-in-out 150ms;
+  }
+}

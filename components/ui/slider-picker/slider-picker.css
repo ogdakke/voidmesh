@@ -1,0 +1,28 @@
+/* Minimal functional styles for scroll-snap behavior */
+
+.slider-picker-window {
+  position: relative;
+  overflow: hidden;
+}
+
+.slider-picker-options {
+  display: flex;
+  overflow-x: scroll;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+
+  scroll-snap-type: x proximity;
+  scroll-behavior: smooth;
+}
+
+.slider-picker-options::-webkit-scrollbar {
+  display: none;
+}
+
+.slider-picker-item {
+  flex-shrink: 0;
+  scroll-snap-align: center;
+  cursor: pointer;
+  outline: none;
+}

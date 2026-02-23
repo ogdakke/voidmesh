@@ -1,0 +1,326 @@
+/* Z-index layering for canvas overlay elements */
+:root {
+  --canvas-overlay-z: 1000;
+  --canvas-overlay-z-1: 1001;
+  --canvas-overlay-z-2: 1002;
+  --canvas-overlay-z-3: 1003; /* Above media controls for floating labels */
+}
+
+.infinite-canvas {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  cursor: default;
+  touch-action: none; /* Prevent browser gestures */
+  -webkit-user-select: none;
+  user-select: none;
+  background-color: var(--studio-background);
+  outline: none;
+
+  @media screen and (max-width: 768px) {
+    /* canvas gets default background on small screens to not mess with colors in PWA mode especially */
+    background-color: var(--background);
+  }
+}
+
+.infinite-canvas:active {
+  cursor: default;
+}
+
+.infinite-canvas__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: auto;
+}
+
+.infinite-canvas__overlay {
+  position: absolute;
+  inset: 0;
+  top: env(safe-area-inset-top, 0);
+  pointer-events: none;
+  z-index: var(--canvas-overlay-z);
+}
+
+.infinite-canvas__overlay > *,
+.infinite-canvas__controls > *,
+.infinite-canvas__toolrow > * {
+  pointer-events: auto;
+}
+
+.infinite-canvas__entity-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  will-change: transform;
+  /* transform is set per-frame by EntityLabelController */
+  /* Format: translate(calc(Xpx - 50%), calc(Ypx - 100% - 8px)) */
+  font-size: 0.875rem;
+  padding: 4px 3px;
+  border-radius: var(--radius);
+  /* copied from .ui-button primary */
+  background: linear-gradient(180deg, var(--primary-lighter), var(--primary));
+  box-shadow:
+    inset 0 0 1px 1px #ffffff14,
+    0 1px 1.5px 0 #00000052,
+    0 0 0 0.5px oklch(0.66 0.19 251.62);
+  color: white;
+  display: grid;
+  align-items: center;
+  gap: 4px;
+  grid-template-columns: auto minmax(0, 1fr);
+  white-space: nowrap;
+  z-index: var(--canvas-overlay-z); /* Behind controls and media controls */
+  max-width: 20rem;
+  pointer-events: none;
+  /* Visibility controlled by EntityLabelController */
+  opacity: 1;
+
+  @media screen and (max-width: 768px) {
+    font-size: 0.75rem;
+    max-width: 12rem;
+    padding: 2px 6px;
+    border-radius: var(--radius-button);
+  }
+}
+
+.infinite-canvas__entity-label span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.infinite-canvas__entity-label-icon {
+  display: inline;
+  vertical-align: middle;
+  height: 1em;
+  width: 0;
+  overflow: hidden;
+  transition: width 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.infinite-canvas__entity-label--dragging .infinite-canvas__entity-label-icon {
+  width: 1.2em;
+}
+
+.infinite-canvas__entity-label--warning {
+  background: var(--orange);
+}
+
+.infinite-canvas__perf-overlay {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 4px 8px;
+  background: var(--gray-50);
+  color: light-dark(oklch(0.49 0.21 254.9), oklch(0.75 0.14 251.13));
+  font-size: var(--text-sm);
+  border-radius: var(--radius);
+  pointer-events: none;
+  z-index: var(--canvas-overlay-z-3);
+  white-space: nowrap;
+
+  @media screen and (max-width: 768px) {
+    top: calc(var(--spacing) * 12);
+  }
+}
+
+.left-controls {
+  display: grid;
+  grid-auto-flow: column;
+  gap: var(--spacing-2);
+  pointer-events: auto;
+}
+
+.infinite-canvas__keyboard-shortcuts {
+  @media screen and (max-width: 768px) {
+    bottom: initial;
+    top: calc(var(--spacing) * 1.5);
+  }
+}
+
+/* Controls container - covers canvas height for proper layout */
+.infinite-canvas__controls {
+  pointer-events: none;
+  display: grid;
+  grid-auto-flow: column;
+  gap: var(--spacing-2);
+
+  @media screen and (max-width: 768px) {
+    align-content: start;
+  }
+}
+
+.infinite-canvas__zoom-indicator {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono, monospace);
+
+  @media screen and (max-width: 768px) {
+    display: none;
+  }
+}
+
+.infinite-canvas__center {
+  font-size: var(--text);
+}
+
+.infinite-canvas__select,
+.infinite-canvas__confirm,
+.infinite-canvas__reset {
+  font-size: var(--text-sm);
+  height: calc(8 * var(--spacing));
+}
+
+.infinite-canvas__confirm {
+  width: calc(8 * var(--spacing));
+  svg {
+    width: 1.125rem;
+    height: 1.125rem;
+  }
+}
+
+.infinite-canvas__loading {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: calc(var(--spacing) * 2);
+  background: var(--background);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+  color: var(--text-color-secondary);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.infinite-canvas-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: calc(var(--spacing) * 4);
+  background-color: var(--studio-background);
+  color: var(--text-color-secondary);
+  text-align: center;
+
+  @media screen and (max-width: 768px) {
+    /* canvas gets default background on small screens to not mess with colors in PWA mode especially */
+    background-color: var(--background);
+  }
+}
+
+.infinite-canvas-error p {
+  margin: 0 0 calc(var(--spacing) * 1);
+}
+
+.infinite-canvas-error .error-message {
+  font-size: 12px;
+  color: var(--invalid-color);
+  font-family: var(--font-mono, monospace);
+}
+
+/* Drop zone styles */
+.infinite-canvas-dropzone {
+  width: 100%;
+  height: 100%;
+  outline: none;
+}
+
+.infinite-canvas-dropzone[data-drop-target] .infinite-canvas {
+  outline-offset: -2px;
+  outline: 2px solid var(--primary);
+  border-radius: var(--radius-xl);
+}
+
+.canvas-menu-trigger {
+  height: 100%;
+}
+
+.infinite-canvas-toolrow {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  display: grid;
+  grid-auto-flow: column;
+  pointer-events: none;
+  z-index: var(--canvas-overlay-z-1); /* Above entity label */
+  padding: calc(var(--spacing) * 1.5);
+  justify-content: space-between;
+
+  @media screen and (max-width: 768px) {
+    top: 0;
+    bottom: initial;
+    align-content: start;
+  }
+}
+
+.undo-redo {
+  display: grid;
+  grid-auto-flow: column;
+  gap: var(--spacing-2);
+  background: linear-gradient(to top, var(--background), var(--gray-100) 50%, var(--background));
+  color: var(--gray-900);
+  border-radius: var(--radius-button);
+  border: 1px solid var(--border);
+  height: calc(7 * var(--spacing));
+  transition:
+    background-color 150ms ease-out,
+    transform 150ms ease-out;
+
+  :where(button) {
+    width: calc(7 * var(--spacing));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: light-dark(var(--color), var(--gray-1600));
+  }
+
+  :where(button:disabled) {
+    cursor: not-allowed;
+    color: light-dark(var(--gray-700), var(--gray-900));
+  }
+
+  &:has(button:active:not(:disabled)) {
+    transform: scale(0.97);
+
+    @media (prefers-reduced-motion: reduce) {
+      transition: none;
+    }
+  }
+
+  @media (prefers-color-scheme: dark) {
+    background: var(--gray-50);
+    color: var(--gray-1600);
+  }
+
+  @media screen and (max-width: 768px) {
+    height: calc(8 * var(--spacing));
+
+    :where(button) {
+      /* copied from .ui-button data-size=md */
+      width: calc(8 * var(--spacing));
+    }
+  }
+}
+
+.infinite-canvas__top-right {
+  position: absolute;
+  top: 0;
+  right: 0;
+  padding: calc(var(--spacing) * 1.5);
+  z-index: var(--canvas-overlay-z-1);
+  pointer-events: auto;
+  filter: drop-shadow(var(--floaty-shadow));
+}
+
+.infinite-canvas__keyboard-shortcuts,
+.undo-redo,
+.infinite-canvas__confirm,
+.infinite-canvas__reset,
+.infinite-canvas__select {
+  filter: drop-shadow(var(--floaty-shadow));
+  will-change: transform;
+}

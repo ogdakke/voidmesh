@@ -1,0 +1,139 @@
+@layer components {
+  .drawer-overlay {
+    --backdrop-opacity: 0.5;
+    position: fixed;
+    inset: 0;
+    min-height: 100dvh;
+    background-color: black;
+    opacity: calc(var(--backdrop-opacity) * (1 - var(--drawer-swipe-progress)));
+    transition: opacity 450ms cubic-bezier(0.32, 0.72, 0, 1);
+
+    &[data-starting-style],
+    &[data-ending-style] {
+      opacity: 0;
+    }
+
+    &[data-swiping] {
+      transition-duration: 0ms;
+    }
+
+    &[data-ending-style] {
+      transition-duration: calc(var(--drawer-swipe-strength) * 400ms);
+    }
+  }
+
+  .drawer-viewport {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+  }
+
+  .drawer-popup {
+    --bleed: 3rem;
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    max-height: calc(90% + var(--bleed) + env(safe-area-inset-bottom, 0px));
+    margin-bottom: calc(-1 * (env(safe-area-inset-bottom, 0px) + var(--bleed)));
+    padding: 1rem 0 0;
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + var(--bleed));
+    display: flex;
+    flex-direction: column;
+    border-top-left-radius: var(--radius-2xl);
+    border-top-right-radius: var(--radius-2xl);
+    filter: drop-shadow(var(--popover-shadow));
+    box-shadow: 0 0 0 1px var(--border);
+    border: none;
+    background-color: var(--background);
+    touch-action: auto;
+    transition: transform 450ms cubic-bezier(0.32, 0.72, 0, 1);
+    will-change: transform;
+    transform: translateY(
+      calc(var(--drawer-snap-point-offset, 0px) + var(--drawer-swipe-movement-y))
+    );
+
+    @supports (corner-shape: squircle) {
+      corner-shape: squircle;
+      border-top-left-radius: calc(var(--radius-2xl) * 1.8);
+      border-top-right-radius: calc(var(--radius-2xl) * 1.8);
+    }
+
+    &[data-swiping] {
+      user-select: none;
+    }
+
+    &[data-starting-style],
+    &[data-ending-style] {
+      transform: translateY(calc(100% - var(--bleed)));
+    }
+
+    &[data-ending-style] {
+      transition-duration: calc(var(--drawer-swipe-strength) * 400ms);
+    }
+
+    & .drawer-handle {
+      height: 6px;
+      width: 42px;
+      margin: 0 auto 0.75rem;
+      border-radius: 9999px;
+      background: var(--gray-400);
+      flex-shrink: 0;
+    }
+
+    & .drawer-close {
+      position: absolute;
+      top: 1rem;
+      right: 1rem;
+      z-index: 1;
+    }
+  }
+
+  /* by default, drawer does not allow overscroll-y. It needs to be explicitly set by the consumer */
+  .drawer-content {
+    flex: 1;
+    min-height: 0;
+    overscroll-behavior: contain;
+  }
+
+  .drawer-indent-root {
+    position: relative;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .drawer-indent-bg {
+    position: absolute;
+    inset: 0;
+    background-color: black;
+  }
+
+  .drawer-indent {
+    height: 100%;
+    background-color: var(--background);
+    --indent-progress: var(--drawer-swipe-progress);
+    --indent-radius: calc(1.5rem * (1 - var(--indent-progress)));
+    --indent-transition: calc(1 - clamp(0, calc(var(--drawer-swipe-progress) * 100000), 1));
+    position: relative;
+    transition:
+      transform 0.4s cubic-bezier(0.32, 0.72, 0, 1),
+      border-radius 0.25s cubic-bezier(0.32, 0.72, 0, 1);
+    transition-duration:
+      calc(400ms * var(--indent-transition)), calc(250ms * var(--indent-transition));
+    transform-origin: center top;
+    will-change: transform;
+
+    &[data-active] {
+      transform: scale(calc(0.96 + (0.04 * var(--indent-progress))))
+        translateY(
+          calc(
+            0.5rem * (1 - var(--indent-progress)) +
+              (env(safe-area-inset-top) * (1 - var(--indent-progress)))
+          )
+        );
+      border-radius: var(--indent-radius);
+      overflow: hidden;
+    }
+  }
+}

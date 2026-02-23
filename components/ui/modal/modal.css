@@ -1,0 +1,46 @@
+@layer components {
+  .modal {
+    --duration: 100ms;
+
+    inset: 0;
+    position: fixed;
+    z-index: 99999;
+    margin: auto;
+    padding: 0;
+  }
+
+  /*immediate children get normal user-select*/
+  .modal > * {
+    -webkit-user-select: none;
+    user-select: auto;
+    pointer-events: auto;
+  }
+
+  .modal::backdrop {
+    background: oklch(0% 0 0 / 0.1);
+    backdrop-filter: blur(4px);
+    opacity: 0;
+    transition:
+      opacity var(--duration) ease-out,
+      overlay var(--duration) ease-out allow-discrete,
+      display var(--duration) ease-out allow-discrete;
+  }
+
+  .modal[open]::backdrop {
+    opacity: 1;
+
+    @starting-style {
+      opacity: 0;
+    }
+  }
+
+  .modal[open]:focus-visible {
+    outline: none;
+  }
+
+  @starting-style {
+    .modal[open]::backdrop {
+      opacity: 0;
+    }
+  }
+}

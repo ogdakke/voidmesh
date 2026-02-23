@@ -1,0 +1,18 @@
+@layer utilities {
+  .text-xs {
+    font-size: var(--text-xs);
+  }
+  .no-wrap {
+    white-space: nowrap;
+    text-wrap: nowrap;
+  }
+  .pb-1 {
+    padding-bottom: var(--spacing);
+  }
+  .pb-2 {
+    padding-bottom: var(--spacing-2);
+  }
+  .pb-3 {
+    padding-bottom: var(--spacing-3);
+  }
+}

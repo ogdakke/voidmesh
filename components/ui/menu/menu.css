@@ -1,0 +1,314 @@
+@layer components {
+  .menu-positioner {
+    outline: 0;
+  }
+  .menu-separator {
+    margin: 0.375rem 0;
+    height: 1px;
+    background-color: light-dark(var(--border), var(--gray-100));
+  }
+
+  .menu-popup,
+  .menu-submenu-popup {
+    box-sizing: border-box;
+    padding-block: 0.25rem;
+    border-radius: var(--radius-md);
+    backdrop-filter: var(--floating-backdrop);
+    background: var(--floating-background);
+    color: var(--gray-900);
+    transform-origin: var(--transform-origin);
+    transition:
+      transform 150ms,
+      opacity 150ms;
+    filter: drop-shadow(var(--popover-shadow));
+
+    &[data-ending-style] {
+      opacity: 0;
+    }
+
+    @media (prefers-color-scheme: light) {
+      outline: 1px solid var(--gray-200);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      outline: 1px solid var(--gray-50);
+      outline-offset: -1px;
+    }
+  }
+
+  .menu-submenu-popup {
+    &[data-starting-style],
+    &[data-ending-style] {
+      transform: scale(0.9);
+      opacity: 0;
+    }
+  }
+
+  .menu-arrow {
+    display: flex;
+
+    &[data-side="top"] {
+      bottom: -8px;
+      rotate: 180deg;
+    }
+
+    &[data-side="bottom"] {
+      top: -8px;
+      rotate: 0deg;
+    }
+
+    &[data-side="left"] {
+      right: -13px;
+      rotate: 90deg;
+    }
+
+    &[data-side="right"] {
+      left: -13px;
+      rotate: -90deg;
+    }
+  }
+
+  .menu-arrow-fill {
+    fill: canvas;
+  }
+
+  .menu-arrow-outer-stroke {
+    @media (prefers-color-scheme: light) {
+      fill: var(--gray-200);
+    }
+  }
+
+  .menu-arrow-inner-stroke {
+    @media (prefers-color-scheme: dark) {
+      fill: var(--gray-300);
+    }
+  }
+
+  .menu-item,
+  .menu-submenu-trigger {
+    outline: 0;
+    cursor: default;
+    -webkit-user-select: none;
+    user-select: none;
+    padding-block: 0.5rem;
+    padding-left: 1rem;
+    padding-right: 2rem;
+    display: flex;
+    font-size: 0.875rem;
+    line-height: 1rem;
+
+    &[data-popup-open] {
+      z-index: 0;
+      position: relative;
+    }
+
+    &[data-popup-open]::before {
+      content: "";
+      z-index: -1;
+      position: absolute;
+      inset-block: 0;
+      inset-inline: 0.25rem;
+      border-radius: var(--radius);
+      background-color: var(--gray-100);
+    }
+
+    &[data-highlighted] {
+      z-index: 0;
+      position: relative;
+      color: var(--gray-50);
+    }
+
+    &[data-disabled] {
+      z-index: 0;
+      position: relative;
+      pointer-events: none;
+      opacity: 0.5;
+    }
+
+    &[data-highlighted]::before {
+      content: "";
+      z-index: -1;
+      position: absolute;
+      inset-block: 0;
+      inset-inline: 0.25rem;
+      border-radius: var(--radius);
+      background-color: var(--gray-900);
+    }
+
+    &[data-variant="destructive"] {
+      color: var(--destructive);
+
+      &[data-highlighted]::before {
+        background-color: var(--destructive-25);
+      }
+    }
+  }
+
+  .menu-icon-right,
+  .menu-icon-left {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1rem;
+    height: 1rem;
+
+    svg {
+      width: 0.875rem;
+      height: 0.875rem;
+    }
+  }
+  .menu-icon-right {
+    right: 0.5rem;
+  }
+  .menu-icon-left {
+    left: 0.5rem;
+  }
+
+  .menu-submenu-trigger {
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding-right: 1rem;
+  }
+
+  .menu-group-label {
+    outline: 0;
+    cursor: default;
+    -webkit-user-select: none;
+    user-select: none;
+    display: flex;
+    padding-block-start: 0.5rem;
+    padding-block-end: 0.5rem;
+    padding-left: 0.875rem;
+    padding-right: 2rem;
+    font-size: var(--text-xs);
+    line-height: 1rem;
+  }
+
+  /* Checkbox items */
+  .menu-checkbox-item {
+    outline: 0;
+    cursor: default;
+    -webkit-user-select: none;
+    user-select: none;
+    padding-block: 0.5rem;
+    padding-left: 2rem;
+    padding-right: 2rem;
+    display: flex;
+    align-items: center;
+    font-size: 0.875rem;
+    line-height: 1rem;
+    position: relative;
+
+    &[data-highlighted] {
+      z-index: 0;
+      position: relative;
+      color: var(--gray-50);
+    }
+
+    &[data-highlighted]::before {
+      content: "";
+      z-index: -1;
+      position: absolute;
+      inset-block: 0;
+      inset-inline: 0.25rem;
+      border-radius: var(--radius);
+      background-color: var(--gray-900);
+    }
+
+    &[data-disabled] {
+      pointer-events: none;
+      opacity: 0.5;
+    }
+  }
+
+  .menu-checkbox-indicator {
+    position: absolute;
+    left: 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1rem;
+    height: 1rem;
+
+    &[data-unchecked] {
+      display: none;
+    }
+
+    svg {
+      width: 0.875rem;
+      height: 0.875rem;
+    }
+  }
+
+  /* Radio items */
+  .menu-radio-item {
+    outline: 0;
+    cursor: default;
+    -webkit-user-select: none;
+    user-select: none;
+    padding-block: 0.5rem;
+    padding-left: 2rem;
+    padding-right: 2rem;
+    display: flex;
+    align-items: center;
+    font-size: 0.875rem;
+    line-height: 1rem;
+    position: relative;
+
+    &[data-highlighted] {
+      z-index: 0;
+      position: relative;
+      color: var(--gray-50);
+    }
+
+    &[data-highlighted]::before {
+      content: "";
+      z-index: -1;
+      position: absolute;
+      inset-block: 0;
+      inset-inline: 0.25rem;
+      border-radius: var(--radius);
+      background-color: var(--gray-900);
+    }
+
+    &[data-disabled] {
+      pointer-events: none;
+      opacity: 0.5;
+    }
+  }
+
+  .menu-radio-indicator {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 0.5rem;
+    height: 0.5rem;
+    left: 0.75rem;
+
+    &[data-unchecked] {
+      display: none;
+    }
+
+    svg {
+      width: 0.875rem;
+      height: 0.875rem;
+    }
+  }
+
+  .menu-item:has(> .menu-icon-right),
+  .menu-item--icon-right,
+  .menu-checkbox-item:has(> .menu-icon-right) {
+    padding-right: 0.5rem;
+    align-items: center;
+    gap: 3.5rem;
+    justify-content: space-between;
+  }
+
+  .menu-item:has(> .menu-icon-left),
+  .menu-item--icon-left {
+    padding-left: 2rem;
+  }
+}

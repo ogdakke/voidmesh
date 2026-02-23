@@ -1,0 +1,239 @@
+@layer components {
+  .ui-button {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    height: calc(10 * var(--spacing)); /* 2.5rem to 3,125rem */
+    padding: 0 calc(3.5 * var(--spacing)); /* 0.875rem to 1.09375rem */
+    margin: 0;
+    outline: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-button);
+    background: var(--gray-50);
+    background: linear-gradient(to top, var(--background), var(--gray-100) 50%, var(--background));
+    font-family: inherit;
+    font-size: 1rem;
+    font-weight: 500;
+    line-height: 1.5rem;
+    color: var(--color);
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: pointer;
+    transition:
+      --destructive-btn-gradient-to 150ms ease-out,
+      --primary-btn-gradient-to 150ms ease-out,
+      background 150ms ease-out,
+      transform 150ms ease-out;
+
+    &[data-variant="secondary"] {
+      @media (prefers-color-scheme: dark) {
+        background: var(--gray-50);
+        color: var(--gray-1600);
+      }
+
+      @media (hover: hover) {
+        &:hover:not([data-disabled]) {
+          background: var(--gray-100);
+
+          @media (prefers-color-scheme: dark) {
+            background: var(--gray-200);
+          }
+        }
+      }
+
+      &:active:not([data-disabled]) {
+        background: var(--gray-200);
+
+        @media (prefers-color-scheme: dark) {
+          background: var(--gray-600);
+        }
+      }
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+    }
+
+    &[data-pending="true"] {
+      cursor: wait;
+    }
+
+    &:active {
+      transform: scale(0.97);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      transition: none;
+
+      &:active {
+        transform: none;
+      }
+    }
+  }
+
+  /* Size variants */
+  .ui-button[data-size="sm"] {
+    height: calc(7 * var(--spacing)); /* 1.75rem to 2.1875rem */
+    padding: 0 calc(3 * var(--spacing)); /* 0.75rem to 0.9375rem */
+    font-size: var(--font-sm);
+    line-height: 1.25rem;
+  }
+
+  .ui-button[data-size="lg"] {
+    height: calc(12 * var(--spacing)); /* 3rem to 3.75rem */
+    padding: 0 calc(4 * var(--spacing)); /* 1rem to 1.25rem */
+    font-size: 1.125rem;
+    line-height: 1.75rem;
+  }
+
+  /* Icon-only button size adjustments */
+  .ui-button[data-size="sm"]:has(> svg:only-child) {
+    height: calc(7 * var(--spacing)); /* 1.75rem to 2.1875rem */
+    width: calc(7 * var(--spacing)); /* 1.75rem to 2.1875rem */
+  }
+
+  .ui-button[data-size="md"]:has(> svg:only-child) {
+    height: calc(8 * var(--spacing)); /* 2rem to 2.5rem */
+    width: calc(8 * var(--spacing)); /* 2rem to 2.5rem */
+  }
+
+  .ui-button[data-size="lg"]:has(> svg:only-child) {
+    width: 2.5rem;
+    height: 2.5rem;
+  }
+
+  /* Icon sizing by button size */
+  .ui-button[data-size="sm"] svg {
+    width: 1rem;
+    height: 1rem;
+  }
+
+  .ui-button[data-size="md"] svg {
+    width: 1.125rem;
+    height: 1.125rem;
+  }
+
+  .ui-button[data-size="lg"] svg {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
+
+  @property --primary-btn-gradient-to {
+    syntax: "<color>";
+    /* pretty much equal to var(--primary) */
+    initial-value: oklch(62% 0.23 252.87);
+    inherits: true;
+  }
+
+  @property --destructive-btn-gradient-to {
+    syntax: "<color>";
+    /* pretty much equal to var(--destructive) */
+    initial-value: oklch(0.65 0.3 28.96);
+    inherits: true;
+  }
+
+  /* Primary variant - blue/primary color */
+  .ui-button[data-variant="primary"] {
+    border-color: var(--primary);
+    background: linear-gradient(180deg, var(--primary-lighter), var(--primary-btn-gradient-to));
+    box-shadow:
+      inset 0 0 1px 1px hsla(0, 0%, 100%, 0.08),
+      0 1px 1.5px 0 rgba(0, 0, 0, 0.32),
+      0 0 0 0.5px oklch(0.66 0.19 251.62);
+    --active-primary-bg: oklch(0.53 0.22 254.63);
+    color: #fff;
+
+    @media (hover: hover) {
+      &:hover:not([data-disabled]) {
+        /* sligthly darker than --primary */
+        --primary-btn-gradient-to: var(--active-primary-bg);
+        border-color: var(--primary);
+      }
+    }
+
+    &:active:not([data-disabled]),
+    &:focus-visible:not([data-disabled]) {
+      /* sligthly darker than --primary */
+      --primary-btn-gradient-to: var(--active-primary-bg);
+      border-color: var(--primary);
+    }
+  }
+
+  /* Quiet variant - transparent with subtle hover */
+  .ui-button[data-variant="quiet"] {
+    border-color: transparent;
+    background: transparent;
+
+    @media (hover: hover) {
+      &:hover:not([data-disabled]),
+      &:active:not([data-disabled]) {
+        background: var(--gray-200);
+
+        @media (prefers-color-scheme: dark) {
+          background: var(--gray-100);
+          color: var(--gray-1500);
+        }
+      }
+    }
+  }
+
+  /* Destructive variant - red */
+  .ui-button[data-variant="destructive"] {
+    border-color: var(--destructive-50);
+    background: linear-gradient(
+      180deg,
+      var(--destructive-lighter),
+      var(--destructive-btn-gradient-to)
+    );
+    --active-destructive-bg: oklch(0.5 0.23 28.96);
+    color: white;
+
+    @media (hover: hover) {
+      &:hover:not([data-disabled]) {
+        /* slightly darker than --destructive */
+        --destructive-btn-gradient-to: var(--active-destructive-bg);
+        border-color: var(--destructive);
+      }
+    }
+
+    &:active:not([data-disabled]) {
+      /* slightly darker than --destructive */
+      --destructive-btn-gradient-to: var(--active-destructive-bg);
+      border-color: var(--destructive-25);
+    }
+  }
+
+  /* Icon-only button - round styling */
+  .ui-button:has(> svg:only-child),
+  .ui-button[data-icon] {
+    padding: 0;
+    border-radius: 9999px;
+    aspect-ratio: 1;
+  }
+
+  /* Icon flex styling */
+  .ui-button svg {
+    flex-shrink: 0;
+  }
+
+  .ui-button[data-disabled] {
+    cursor: not-allowed;
+    background: var(--gray-200);
+    color: var(--gray-700);
+    transition: none;
+    border-color: var(--border);
+    box-shadow: none;
+
+    &:active {
+      transform: none;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      background: var(--gray-50);
+      color: var(--gray-900);
+    }
+  }
+}

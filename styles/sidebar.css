@@ -1,0 +1,347 @@
+.sidebar--left {
+  height: 100%;
+  padding: 8px 0 8px;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-controls-overflow {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  scrollbar-gutter: stable;
+
+  @media screen and (max-width: 768px) {
+    overflow-y: initial;
+    scrollbar-gutter: initial;
+  }
+  /* direct child (wraps all controls) gets the padding, so fade-mask-y goes edge to edge */
+  > div {
+    padding: 8px 0;
+  }
+}
+
+.sidebar--right {
+  height: 100%;
+}
+
+.sidebar-row {
+  display: grid;
+  padding: 4px 12px;
+}
+
+.buttons-row {
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.last-row {
+  margin-top: auto;
+}
+
+.studio-file-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin-top: auto;
+}
+
+.export-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+
+  &:has(> :only-child) {
+    grid-template-columns: 1fr;
+  }
+
+  [data-image-only] & {
+    grid-template-columns: 1fr;
+
+    & > button[data-size="sm"] {
+      height: calc(10 * var(--spacing));
+      padding: 0 calc(3.5 * var(--spacing));
+      font-size: 1rem;
+      line-height: 1.5rem;
+    }
+  }
+}
+
+.balanced-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+}
+
+.color-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto auto;
+  gap: 0.25rem 0.5rem;
+
+  :where(.divider) {
+    grid-column: 1;
+    margin-left: -8px;
+  }
+}
+
+.swap-btn {
+  grid-row: 1 / -1;
+  grid-column: 2;
+  place-self: center;
+}
+
+.preserve-colors-row,
+.show-original-row {
+  padding: 6px 12px;
+}
+
+.show-original-row {
+  grid-template-columns: 1fr auto;
+  gap: var(--spacing-6);
+}
+
+.controls {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.file-input {
+  display: none;
+}
+
+.studio-heading {
+  font-size: var(--text);
+  font-weight: 500;
+}
+
+.renders-container {
+  overflow: auto;
+  padding: 4px 0 4px 12px;
+
+  :where(p) {
+    padding: 4px 0;
+    font-size: var(--text-sm);
+    color: var(--color-light);
+  }
+}
+
+.render-examples {
+  --box-padding: 24px;
+  display: grid;
+  overflow: auto;
+  grid-template-columns: 1fr;
+  padding-right: 12px;
+
+  :where(app-lightbox) {
+    margin: 0 0 1rem 0;
+  }
+
+  :where(app-lightbox:first-child) {
+    margin-top: calc(-1 * var(--box-padding));
+  }
+
+  :where(app-lightbox:last-child) {
+    margin-bottom: calc(-1 * var(--box-padding));
+  }
+}
+
+.render-examples::before,
+.render-examples::after {
+  content: "";
+  position: sticky;
+  left: 0;
+  width: 100%;
+  height: var(--box-padding);
+  z-index: 1;
+  pointer-events: none;
+  animation: scroll linear;
+  animation-timeline: scroll();
+  animation-fill-mode: both;
+}
+
+.render-examples::before {
+  top: 0;
+  background: linear-gradient(0deg, var(--mask));
+  animation-range: 20px 50px;
+}
+
+.render-examples::after {
+  bottom: 0;
+  background: linear-gradient(180deg, var(--mask));
+  animation-direction: reverse;
+  animation-range: entry 95%;
+}
+
+.render-example-img {
+  height: auto;
+  border-radius: var(--radius);
+}
+
+.sidebar-exit-link {
+  font-size: var(--text-sm);
+}
+
+.sidebar-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  justify-content: space-between;
+  padding-bottom: 0.5rem;
+}
+
+.sidebar-text {
+  font-size: var(--text-xs);
+}
+
+.no-selection-message {
+  color: var(--text-accent);
+  font-size: var(--text-sm);
+  text-align: center;
+
+  @media (max-width: 768px) {
+    color: var(--gray-1000);
+    font-size: var(--text-xs);
+  }
+}
+
+.sidebar-hint--image-selected {
+  margin-bottom: var(--spacing-3);
+}
+
+/* Video export button */
+.export-video-row {
+  display: grid;
+}
+
+.export-video-btn {
+  width: auto;
+}
+
+/* Export progress indicator */
+.export-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+  background: light-dark(var(--gray-100), var(--accent));
+  border-radius: var(--radius);
+  min-width: 0;
+}
+
+.export-progress__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: var(--spacing-1);
+}
+
+.export-progress__label {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.export-progress__cancel {
+  flex-shrink: 0;
+  border-radius: var(--radius);
+  height: var(--spacing-6);
+  width: var(--spacing-6);
+}
+
+.export-progress__bar {
+  height: 4px;
+  background: var(--primary-25);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.export-progress__fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: var(--radius-sm);
+  transition: width 0.1s ease-out;
+}
+
+.export-progress__status {
+  font-size: var(--text-xs);
+  color: var(--text-accent);
+  font-variant: tabular-nums;
+}
+
+.palette-row {
+  gap: var(--spacing);
+}
+
+/* Multi-select mixed state styles */
+.color-section-mixed {
+  color: var(--text-accent);
+  font-size: var(--text-sm);
+  text-align: center;
+  padding: var(--spacing-2) 0;
+}
+
+.select-mixed {
+  color: inherit;
+}
+
+.palette-mixed {
+  color: var(--text-accent);
+  font-size: var(--text-sm);
+  padding: var(--spacing-2) 0;
+}
+
+.sidebar-collapsible-trigger {
+  margin: var(--spacing);
+}
+
+.collapsible-trigger-with-enabled {
+  padding-right: var(--spacing-3);
+}
+
+.exports-content {
+  padding-top: var(--spacing);
+}
+
+.hint-text {
+  color: var(--gray-900);
+  font-size: var(--text-xs);
+}
+
+/* Export queue */
+.export-queue-collapsible {
+  min-width: 0;
+}
+
+.export-queue-header {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding-right: var(--spacing);
+}
+
+.export-queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding: 4px 12px;
+}
+
+.export-progress__icon {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+}
+
+.export-progress__icon--failed {
+  color: var(--error);
+}
+
+.select-select {
+  width: 100%;
+}

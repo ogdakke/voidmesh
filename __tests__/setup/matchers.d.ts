@@ -1,0 +1,12 @@
+/**
+ * TypeScript declaration merging for jest-dom matchers with Bun's test runner
+ */
+import type { TestingLibraryMatchers } from "@testing-library/jest-dom/matchers";
+
+declare module "bun:test" {
+  interface Matchers<T = unknown> extends TestingLibraryMatchers<
+    typeof expect.stringContaining,
+    T
+  > {}
+  interface AsymmetricMatchers extends TestingLibraryMatchers<unknown, unknown> {}
+}

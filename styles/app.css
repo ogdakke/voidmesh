@@ -1,0 +1,414 @@
+@import "./primitives.css";
+@import "../components/ui/menu/menu.css";
+@import "./utilities.css";
+
+@layer global {
+  :root {
+    --studio-background: light-dark(lch(98 0 0), lch(4.8 0.7 272));
+    --content-radius: var(--radius-xl);
+    --mobile-controls-h: 160px;
+    --bottom-bar-height: 54px;
+    --canvas-bottom: calc(
+      env(safe-area-inset-bottom, 0) + var(--mobile-controls-h) + var(--bottom-bar-height) +
+        var(--spacing-2)
+    );
+    --floating-background: color-mix(in srgb, canvas 90%, transparent);
+    --floating-backdrop: blur(12px);
+  }
+
+  #root {
+    isolation: isolate;
+    height: 100dvh;
+    position: fixed;
+    width: 100%;
+  }
+
+  body {
+    min-height: 100dvh;
+  }
+
+  html,
+  body {
+    background: var(--background);
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+  }
+
+  #root,
+  body {
+    margin: 0;
+  }
+
+  html,
+  body,
+  #root {
+    overflow: hidden;
+  }
+
+  html {
+    min-height: calc(100% + env(safe-area-inset-top));
+  }
+
+  .app-sidebar {
+    height: 100%;
+  }
+
+  .content {
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    -webkit-box-align: stretch;
+    align-items: stretch;
+    justify-items: stretch;
+    background-color: var(--studio-background);
+    border-radius: var(--content-radius);
+    overflow: hidden;
+    border-width: 1px;
+    border-style: solid;
+    border-color: light-dark(var(--gray-200), var(--gray-50));
+    border-image: initial;
+    --margin-y: 8px;
+    margin: var(--margin-y) 0;
+    height: calc(100% - var(--margin-y) * 2);
+  }
+
+  .handle--invisible {
+    background-color: transparent;
+  }
+
+  .handle--invisible:focus-visible {
+    outline: none;
+  }
+
+  .canvas {
+    height: 100%;
+  }
+
+  /* Mobile layout */
+  .mobile-layout {
+    position: relative;
+    height: 100%;
+  }
+
+  .mobile-content {
+    position: absolute;
+    -webkit-user-select: none;
+    user-select: none;
+    border: none;
+    border-radius: 0;
+    height: 100%;
+    margin: 0;
+    inset: 0;
+    background: var(--background);
+  }
+
+  .mobile-float {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 1100;
+    pointer-events: none;
+    padding-bottom: env(safe-area-inset-bottom, 0);
+
+    background-image:
+      linear-gradient(
+        0deg,
+        #fff 0%,
+        #fffffffd 6.25%,
+        #fffffff5 12.5%,
+        #ffffffea 18.75%,
+        #ffffffda 25%,
+        #ffffffc6 31.25%,
+        #ffffffb0 37.5%,
+        #ffffff98 43.75%,
+        #ffffff80 50%,
+        #ffffff67 56.25%,
+        #ffffff4f 62.5%,
+        #ffffff39 68.75%,
+        #ffffff25 75%,
+        #ffffff15 81.25%,
+        #ffffff0a 87.5%,
+        #ffffff02 93.75%,
+        #fff0 100%
+      ),
+      linear-gradient(0deg, var(--background), #ffffff69 62.5%, #ffffff3d 75% 75%, #ffffff00 100%);
+
+    @media (prefers-color-scheme: dark) {
+      background-image:
+        linear-gradient(
+          0deg,
+          #000 0%,
+          #000000fd 6.25%,
+          #000000f5 12.5%,
+          #000000ea 18.75%,
+          #000000da 25%,
+          #000000c6 31.25%,
+          #000000b0 37.5%,
+          #00000098 43.75%,
+          #00000080 50%,
+          #00000067 56.25%,
+          #0000004f 62.5%,
+          #00000039 68.75%,
+          #00000025 75%,
+          #00000015 81.25%,
+          #0000000a 87.5%,
+          #00000002 93.75%,
+          #0000 100%
+        ),
+        linear-gradient(
+          0deg,
+          #000000,
+          #000000a1 59.5%,
+          #0000006e 69.75%,
+          #0000003b 80%,
+          #00000014 90.5%,
+          #0000 100%
+        );
+    }
+  }
+
+  .mobile-float > * {
+    pointer-events: auto;
+  }
+
+  .mobile-controls-container {
+    overflow-y: auto;
+    height: var(--mobile-controls-h, 160px);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    pointer-events: none;
+  }
+
+  .mobile-controls-container > *,
+  .mobile-exports > * {
+    pointer-events: auto;
+  }
+
+  .mobile-controls {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    height: auto; /* Override .controls height: 100% which doesn't work with flex parents */
+    min-height: 0; /* Allow flex children to shrink */
+
+    :where(.sidebar-controls-overflow) {
+      --fade-gradient: var(--background);
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+
+    :where(.last-row) {
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+  }
+
+  .mobile-exports-drawer-content {
+    &[data-image-only] {
+      max-height: 40%;
+      overflow-y: hidden;
+    }
+  }
+
+  .mobile-exports-drawer-inner {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: var(--spacing-2);
+    height: 100%;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .mobile-exports-settings {
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    align-content: start;
+    gap: var(--spacing);
+  }
+
+  .mobile-row {
+    display: grid;
+    padding: var(--spacing) var(--spacing-2);
+  }
+
+  .mobile-common-knobs {
+    margin-top: auto;
+  }
+
+  .mobile-exports-actions {
+    flex-shrink: 0;
+  }
+
+  .mobile-export-btn {
+    width: 100%;
+  }
+
+  .mobile-exports {
+    display: grid;
+    align-content: center;
+    margin-top: auto;
+    padding-bottom: var(--spacing);
+    /* Don't capture because content is not edge to edge */
+    pointer-events: none;
+  }
+
+  .modal-content {
+    position: relative;
+    min-width: clamp(200px, 500px, 90vw);
+    max-height: 90dvh;
+    overflow-y: auto;
+    background-color: var(--gray-50);
+    border-radius: calc(var(--radius) * 2);
+    border: 1px solid var(--border);
+    padding: 0.5rem 1rem;
+  }
+
+  @supports (animation-timeline: scroll()) {
+    .fade-mask-y {
+      --box-padding: 24px;
+      --fade-gradient: var(--mask);
+      :where(.fade-mask-y > :first-child) {
+        margin-top: calc(-1 * var(--box-padding));
+      }
+      :where(.fade-mask-y > :last-child) {
+        margin-bottom: calc(-1 * var(--box-padding));
+      }
+    }
+    .fade-mask-y::after,
+    .fade-mask-y::before {
+      content: "";
+      position: sticky;
+      display: block;
+      left: 0;
+      width: 100%;
+      height: var(--box-padding);
+      z-index: 1;
+      pointer-events: none;
+      opacity: 0;
+      animation: scroll linear;
+      animation-timeline: scroll();
+      animation-fill-mode: both;
+    }
+
+    .fade-mask-y::before {
+      top: 0;
+      background: linear-gradient(0deg, var(--fade-gradient));
+      animation-range: var(--fade-range-start, 20px) var(--fade-range-end, 50px);
+    }
+
+    .fade-mask-y::after {
+      bottom: 0;
+      background: linear-gradient(180deg, var(--fade-gradient));
+      animation-direction: reverse;
+      animation-range: calc(100% - var(--fade-range-end, 50px))
+        calc(100% - var(--fade-range-start, 20px));
+    }
+
+    .fade-mask-x {
+      --box-padding: 24px;
+      --fade-gradient: var(--mask);
+      :where(.fade-mask-x > :first-child) {
+        margin-left: calc(-1 * var(--box-padding));
+      }
+      :where(.fade-mask-x > :last-child) {
+        margin-right: calc(-1 * var(--box-padding));
+      }
+    }
+    .fade-mask-x::after,
+    .fade-mask-x::before {
+      content: "";
+      position: sticky;
+      top: 0;
+      height: 100%;
+      width: var(--box-padding);
+      flex-shrink: 0;
+      z-index: 1;
+      pointer-events: none;
+      opacity: 0;
+      animation: scroll linear;
+      animation-timeline: scroll(x);
+      animation-fill-mode: both;
+    }
+
+    .fade-mask-x::before {
+      left: 0;
+      background: linear-gradient(270deg, var(--fade-gradient));
+      animation-range: var(--fade-range-start, 20px) var(--fade-range-end, 50px);
+    }
+
+    .fade-mask-x::after {
+      right: 0;
+      background: linear-gradient(90deg, var(--fade-gradient));
+      animation-direction: reverse;
+      animation-range: calc(100% - var(--fade-range-end, 50px))
+        calc(100% - var(--fade-range-start, 20px));
+    }
+  }
+  .kbd {
+    background: var(--gray-100);
+    border-radius: var(--radius);
+    color: var(--gray-900);
+    min-width: 1.25rem;
+    height: 1.25rem;
+    padding-inline: 4px;
+    font-weight: 500;
+    line-height: 1;
+    font-size: var(--text-sm);
+    display: inline-flex;
+    justify-content: center;
+    width: fit-content;
+    align-items: center;
+  }
+
+  .kbd-shortcut {
+    display: flex;
+    gap: var(--spacing);
+    width: auto;
+  }
+
+  /* Shared icon crossfade transition — overlapping icons with blur+scale swap.
+     Apply to a container that uses grid or absolute positioning to stack its SVG children. */
+  .icon-crossfade {
+    --icon-crossfade-dur: 0.15s;
+
+    :where(svg) {
+      transition:
+        opacity var(--icon-crossfade-dur) ease-out,
+        filter var(--icon-crossfade-dur) ease-out,
+        transform var(--icon-crossfade-dur) ease-out;
+    }
+
+    .icon-visible {
+      opacity: 1;
+      filter: blur(0px);
+      transform: scale(1);
+    }
+
+    .icon-hidden {
+      opacity: 0;
+      filter: blur(4px);
+      transform: scale(0.4);
+      pointer-events: none;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      --icon-crossfade-dur: 0s;
+    }
+  }
+
+  @keyframes scroll {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+}

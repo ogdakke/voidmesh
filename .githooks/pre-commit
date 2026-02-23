@@ -1,0 +1,16 @@
+#!/bin/sh
+
+# Get the list of staged files before formatting
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
+
+if [ -z "$STAGED_FILES" ]; then
+  exit 0
+fi
+
+echo "Formatting staged files..."
+bun run format
+
+# Only re-add the files that were originally staged
+echo "$STAGED_FILES" | xargs git add
+
+echo "✓ Code formatted and staged"

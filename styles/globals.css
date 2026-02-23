@@ -1,0 +1,39 @@
+@import "variables.css";
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 75ms;
+}
+
+/* HACK: this should all be in the lightbox.ts, but it does not work without it */
+::view-transition-group(lightbox-image) {
+  animation-duration: 350ms;
+  /* prettier-ignore */
+  animation-timing-function: linear( 0, 0.006, 0.025 2.8%, 0.101 6.1%, 0.539 18.9%, 0.721 25.3%, 0.849 31.5%, 0.937 38.1%, 0.968 41.8%, 0.991 45.7%, 1.006 50.1%, 1.015 55%, 1.017 63.9%, 1.001);
+}
+
+/* Lightbox view transition - name must be set externally for shadow DOM */
+app-lightbox[data-transitioning="image"]::part(image) {
+  view-transition-name: lightbox-image;
+}
+
+/* prevent scroll on document when there is a open dialog */
+html:has(dialog[open]) {
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--sans-serif);
+  background: var(--background);
+  color: var(--color);
+}
+
+noscript {
+  display: block;
+  place-self: center;
+  height: 100%;
+  align-content: center;
+  font-size: var(--text-lg);
+  font-weight: 600;
+  text-align: center;
+}
