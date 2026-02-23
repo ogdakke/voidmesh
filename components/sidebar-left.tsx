@@ -10,10 +10,6 @@ export const SidebarLeft = () => {
   return (
     <div className="app-sidebar sidebar--left">
       <div className="sidebar-row sidebar-header">
-        <a href="/experiments" className="link sidebar-exit-link">
-          <ArrowLeft />
-          Back
-        </a>
         <h1 className="studio-heading">Voidmesh</h1>
       </div>
       <div className="sidebar-row">

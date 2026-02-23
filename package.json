@@ -43,8 +43,7 @@
     "react-resizable-panels": "^4.6.5",
     "thumbhash": "^0.1.1",
     "unlazy": "^1.1.0",
-    "unstorage": "^1.17.4",
-    "vercel": "^50.22.1"
+    "unstorage": "^1.17.4"
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "^20.7.0",
