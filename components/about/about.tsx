@@ -179,7 +179,7 @@ function FeatureSection() {
           locally in your browser.
         </li>
         <li>Post-processing—film grain, bloom, chromatic aberration</li>
-        <li>Export to MP4, WebM, MOV, or GIF</li>
+        <li>Export to MP4, MOV, or GIF</li>
         <li>Save your work to a file, and continue later</li>
       </ul>
     </section>

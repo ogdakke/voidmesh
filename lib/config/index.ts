@@ -613,7 +613,6 @@ export const config = {
     ui: {
       fps: { min: 1, max: 60, step: 1 },
       gifFps: { min: 1, max: 30, step: 1 },
-      crf: { min: 0, max: 51, step: 1 },
       gifMaxWidth: { min: 100, max: 1920, step: 10 },
       bitrate: { min: 1000, max: 50000, step: 100 }, // kbps
     },

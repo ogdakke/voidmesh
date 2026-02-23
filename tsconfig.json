@@ -28,5 +28,5 @@
     "noPropertyAccessFromIndexSignature": false
   },
   "include": ["./**/*"],
-  "exclude": ["msdf-atlas-gen/**/*", "node_modules", "dist"]
+  "exclude": ["msdf-atlas-gen/**/*", "node_modules", "dist", "opensrc/"]
 }

@@ -2,10 +2,12 @@
  * Video Exporter - Exports videos with shader effects applied
  *
  * Supports multiple export formats:
- * - MP4: WebCodecs fast path (H.264 + mp4box.js) - fastest, best compatibility
- * - WebM/MOV/GIF: FFmpeg pipeline (PNG frames → ffmpeg.wasm encode)
+ * - MP4: WebCodecs H.264 + mediabunny MP4 muxer
+ * - WebM: WebCodecs VP9/VP8 + mediabunny WebM muxer
+ * - MOV: WebCodecs H.264 + mediabunny MP4 muxer (same container as MP4)
+ * - GIF: gifenc pipeline (separate module)
  *
- * Uses a Web Worker for H.264 encoding and MP4 muxing to keep the main thread responsive.
+ * Uses a Web Worker for encoding and muxing to keep the main thread responsive.
  * The main thread handles WebGPU rendering (GPU device cannot be transferred to workers).
  */
 
@@ -17,8 +19,10 @@ import {
   type QualityPreset,
   type ResolutionPreset,
   type GifDitherMode,
+  qualityConfigs,
+  calculateTargetResolution,
 } from "./export-formats.ts";
-import { exportVideoFFmpeg } from "./video-export-ffmpeg.ts";
+import type { DemuxedAudio } from "#lib/audio-demux.ts";
 
 /** Check if the video element supports requestVideoFrameCallback */
 function hasRVFC(video: HTMLVideoElement): boolean {
@@ -31,12 +35,12 @@ export interface ExportProgress {
   percent: number; // 0-1
   stage:
     | "extracting" // Extracting/rendering frames from video
-    | "encoding" // Encoding video with WebCodecs or FFmpeg
-    | "muxing" // Creating MP4 container
-    | "extracting-audio" // Extracting audio from original (ffmpeg)
-    | "adding-audio" // Muxing audio into processed video (ffmpeg)
+    | "encoding" // Encoding video with WebCodecs
+    | "muxing" // Creating container
+    | "extracting-audio" // Extracting audio from original
+    | "adding-audio" // Muxing audio into processed video
     | "done";
-  message?: string; // Optional detailed status message
+  message?: string;
 }
 
 export interface VideoExportOptions {
@@ -50,14 +54,10 @@ export interface VideoExportOptions {
   includeAudio?: boolean;
   /** Advanced encoding options */
   advanced?: {
-    /** CRF value (0-51, lower = better quality). Overrides quality preset. */
-    crf?: number;
-    /** Explicit bitrate in kbps. Overrides auto-calculation. */
+    /** Explicit bitrate in bps. Overrides auto-calculation. */
     bitrate?: number;
     /** Target resolution. Default: 'original' */
     resolution?: ResolutionPreset | { width: number; height: number };
-    /** Two-pass encoding for better file size (WebM/MP4). */
-    twoPass?: boolean;
     /** GIF dither algorithm. Default: 'floyd_steinberg' */
     gifDither?: GifDitherMode;
     /** GIF maximum width (maintains aspect ratio). Default: 480 */
@@ -98,32 +98,30 @@ export function exportVideo(
   source: AnimatedSource,
   renderFrame: (timestampSeconds: number) => Promise<ImageBitmap>,
   options: VideoExportOptions = {},
+  audioData?: DemuxedAudio | null,
 ): VideoExportHandle {
   const { videoExporting } = config;
   const format = options.format ?? "mp4";
   const fps = options.fps ?? videoExporting.defaults.fps;
-  const quality = options.quality ?? "high";
 
-  // Route to FFmpeg pipeline for non-MP4 formats
-  if (format !== "mp4") {
-    return exportVideoFFmpeg(source, renderFrame, {
-      fps,
-      format,
-      quality,
-      resolution: options.advanced?.resolution,
-      includeAudio: options.includeAudio,
-      advanced: {
-        crf: options.advanced?.crf,
-        bitrate: options.advanced?.bitrate,
-        gifDither: options.advanced?.gifDither,
-        gifMaxWidth: options.advanced?.gifMaxWidth,
-      },
-    });
+  // GIF uses a separate pipeline (gifenc)
+  if (format === "gif") {
+    return exportGifLazy(source, renderFrame, options);
   }
 
-  // MP4 fast path: WebCodecs + mp4box.js
-  // Auto-calculate bitrate based on resolution if not explicitly provided
-  const bitrate = options.advanced?.bitrate ?? calculateVideoBitrate(source.width, source.height);
+  // MP4/MOV: WebCodecs + mediabunny worker pipeline
+  // Apply resolution preset (defaults to original source dimensions)
+  const resolution = calculateTargetResolution(
+    source.width,
+    source.height,
+    options.advanced?.resolution ?? "original",
+  );
+
+  // Apply quality preset's bitrate multiplier to the resolution-based bitrate
+  const qualityFactor = qualityConfigs[options.quality ?? "high"].bitrateFactor;
+  const bitrate =
+    options.advanced?.bitrate ??
+    Math.round(calculateVideoBitrate(resolution.width, resolution.height) * qualityFactor);
 
   let cancelled = false;
   let resolveResult: (blob: Blob) => void;
@@ -146,8 +144,6 @@ export function exportVideo(
     }
   }
 
-  // Wake up the progress generator without adding a progress event
-  // Used when cancelling to break the generator out of its wait
   function wakeProgressGenerator(): void {
     if (progressResolve) {
       progressResolve();
@@ -157,7 +153,6 @@ export function exportVideo(
 
   async function* progressGenerator(): AsyncGenerator<ExportProgress> {
     while (true) {
-      // Check for cancellation before waiting
       if (cancelled) return;
 
       if (progressQueue.length > 0) {
@@ -168,7 +163,6 @@ export function exportVideo(
         await new Promise<void>((resolve) => {
           progressResolve = resolve;
         });
-        // Check for cancellation after waking up
         if (cancelled) return;
       }
     }
@@ -197,20 +191,36 @@ export function exportVideo(
         worker.terminate();
         break;
       case "error":
+        cancelled = true;
         rejectResult!(new Error(msg.message));
+        wakeProgressGenerator();
         worker.terminate();
         break;
     }
   };
 
   worker.onerror = (event) => {
+    cancelled = true;
     rejectResult!(new Error(event.message || "Worker error"));
+    wakeProgressGenerator();
     worker.terminate();
   };
 
   // Start export in background
-  runExport(source, renderFrame, fps, bitrate, worker, () => cancelled).catch((err) => {
+  runExport(
+    source,
+    renderFrame,
+    fps,
+    bitrate,
+    resolution,
+    format,
+    worker,
+    () => cancelled,
+    audioData ?? null,
+  ).catch((err) => {
+    cancelled = true;
     rejectResult!(err);
+    wakeProgressGenerator();
     worker.terminate();
   });
 
@@ -222,37 +232,20 @@ export function exportVideo(
       const msg: ToWorkerMessage = { type: "cancel" };
       worker.postMessage(msg);
       worker.terminate();
-      wakeProgressGenerator(); // Break the progress generator loop
+      wakeProgressGenerator();
       rejectResult(new Error("Export cancelled"));
     },
   };
 }
 
-async function runExport(
-  source: AnimatedSource,
-  renderFrame: (timestampSeconds: number) => Promise<ImageBitmap>,
+/** Select appropriate H.264 codec string for the resolution/fps */
+async function selectCodec(
+  width: number,
+  height: number,
   fps: number,
   bitrate: number,
-  worker: Worker,
-  isCancelled: () => boolean,
-): Promise<void> {
-  const width = source.width;
-  const height = source.height;
-  const duration = source.duration;
-  const totalFrames = Math.round(duration * fps);
-
-  // Check WebCodecs support
-  if (typeof VideoEncoder === "undefined") {
-    throw new Error("WebCodecs API not supported in this browser");
-  }
-
-  const { videoExporting } = config;
-
-  // Select H.264 level appropriate for the actual resolution/fps
-  // (lower levels are more reliably hardware-decoded on iOS)
+): Promise<string> {
   const codec = getH264Codec(width, height, fps);
-
-  // Check H.264 support (High Profile)
   const codecSupport = await VideoEncoder.isConfigSupported({
     codec,
     width,
@@ -260,12 +253,35 @@ async function runExport(
     bitrate,
     framerate: fps,
   });
-
   if (!codecSupport.supported) {
-    throw new Error("H.264 High Profile codec not supported");
+    throw new Error("H.264 codec not supported");
+  }
+  return codec;
+}
+
+async function runExport(
+  source: AnimatedSource,
+  renderFrame: (timestampSeconds: number) => Promise<ImageBitmap>,
+  fps: number,
+  bitrate: number,
+  resolution: { width: number; height: number },
+  format: ExportFormat,
+  worker: Worker,
+  isCancelled: () => boolean,
+  audioData: DemuxedAudio | null,
+): Promise<void> {
+  const { width, height } = resolution;
+  const duration = source.duration;
+  const totalFrames = Math.round(duration * fps);
+
+  if (typeof VideoEncoder === "undefined") {
+    throw new Error("WebCodecs API not supported in this browser");
   }
 
-  // Initialize worker with all encoder config
+  const { videoExporting } = config;
+  const codec = await selectCodec(width, height, fps, bitrate);
+
+  // Initialize worker with encoder config
   const initMsg: ToWorkerMessage = {
     type: "init",
     width,
@@ -273,9 +289,8 @@ async function runExport(
     fps,
     bitrate,
     totalFrames,
-    // Encoder config from centralized config
+    format,
     codec,
-    mp4Timescale: videoExporting.mp4Timescale,
     keyFrameIntervalSeconds: videoExporting.keyFrameIntervalSeconds,
     hardwareAcceleration: videoExporting.hardwareAcceleration,
     latencyMode: videoExporting.latencyMode,
@@ -284,24 +299,34 @@ async function runExport(
   };
   worker.postMessage(initMsg);
 
+  // Send audio data immediately after init to guarantee message ordering:
+  // init → audio-track → frames → finish
+  // The worker handles transcoding if needed (e.g. AAC→Opus for WebM)
+  if (audioData) {
+    const audioMsg: ToWorkerMessage = {
+      type: "audio-track",
+      packets: audioData.packets,
+      codec: audioData.codec,
+      sampleRate: audioData.sampleRate,
+      numberOfChannels: audioData.numberOfChannels,
+      description: audioData.description,
+    };
+    worker.postMessage(audioMsg);
+  }
+
   const video = source.videoElement;
   const wasPlaying = video ? !video.paused : false;
   const originalTime = video ? video.currentTime : 0;
 
   try {
     logger.debug(
-      `[export] Starting export: ${totalFrames} frames at ${fps}fps, ${width}x${height}, duration=${duration.toFixed(3)}s`,
+      `[export] Starting ${format} export: ${totalFrames} frames at ${fps}fps, ${width}x${height}, codec=${codec}`,
     );
     const exportStart = performance.now();
 
-    // For video sources with requestVideoFrameCallback support, use
-    // playback-based capture. This lets the browser's decoder naturally
-    // handle B-frames instead of seeking frame-by-frame (which produces
-    // duplicate frames because B-frames can't be decoded on a paused video).
     if (video && hasRVFC(video)) {
       await runPlaybackExport(video, renderFrame, fps, totalFrames, worker, isCancelled);
     } else {
-      // Fallback: seek-based export for GIF sources or browsers without RVFC
       source.videoElement?.pause();
       await runSeekExport(renderFrame, fps, totalFrames, worker, isCancelled);
     }
@@ -310,11 +335,9 @@ async function runExport(
       `[export] All frames rendered in ${((performance.now() - exportStart) / 1000).toFixed(1)}s, signaling finish to worker`,
     );
 
-    // Signal finish to worker
     const finishMsg: ToWorkerMessage = { type: "finish" };
     worker.postMessage(finishMsg);
   } finally {
-    // Restore video state
     if (video) {
       video.pause();
       video.currentTime = originalTime;
@@ -340,9 +363,8 @@ async function runPlaybackExport(
 ): Promise<void> {
   const frameDuration = 1 / fps;
   let frameIndex = 0;
-  let nextFrameTime = 0; // Next target timestamp to capture
+  let nextFrameTime = 0;
 
-  // Seek to beginning and wait
   video.pause();
   video.currentTime = 0;
   await new Promise<void>((resolve) => {
@@ -353,7 +375,6 @@ async function runPlaybackExport(
     video.addEventListener("seeked", onSeeked);
   });
 
-  // Mute to avoid audio during export playback
   const originalMuted = video.muted;
   video.muted = true;
 
@@ -367,7 +388,6 @@ async function runPlaybackExport(
     let callbackId: number;
     let settled = false;
 
-    // Stall detection: if no frame is captured within 30s, abort
     const STALL_TIMEOUT_MS = 30_000;
     let stallTimer = setTimeout(onStall, STALL_TIMEOUT_MS);
 
@@ -393,8 +413,6 @@ async function runPlaybackExport(
       resolve();
     }
 
-    // Capture all remaining frames up to totalFrames using whatever frame
-    // the video element currently has composited (used both by RVFC and ended handler)
     async function captureRemainingFrames(): Promise<void> {
       while (frameIndex < totalFrames) {
         if (isCancelled()) throw new Error("Export cancelled");
@@ -440,9 +458,6 @@ async function runPlaybackExport(
 
         const mediaTime = metadata.mediaTime;
 
-        // Capture frames for every target timestamp the video has passed.
-        // The video may play faster than we can process, so we capture
-        // all frames up to the current media time.
         while (nextFrameTime <= mediaTime + frameDuration * 0.5 && frameIndex < totalFrames) {
           const timestampSeconds = frameIndex / fps;
           const timestampUs = Math.floor(timestampSeconds * 1_000_000);
@@ -475,7 +490,6 @@ async function runPlaybackExport(
           return;
         }
 
-        // Request next frame callback
         callbackId = rvfc.requestVideoFrameCallback(onFrame);
       } catch (err) {
         clearTimeout(stallTimer);
@@ -490,9 +504,6 @@ async function runPlaybackExport(
       }
     };
 
-    // When the video reaches its end, RVFC stops firing. Flush remaining
-    // frames using the last composited frame (visually correct for the
-    // final few frames near the end of the video).
     const onEnded = async () => {
       video.removeEventListener("ended", onEnded);
       if (settled || frameIndex >= totalFrames) return;
@@ -513,7 +524,6 @@ async function runPlaybackExport(
     };
     video.addEventListener("ended", onEnded);
 
-    // Start playback and register RVFC
     callbackId = rvfc.requestVideoFrameCallback(onFrame);
     video.play().catch((err) => {
       clearTimeout(stallTimer);
@@ -529,8 +539,7 @@ async function runPlaybackExport(
 }
 
 /**
- * Seek-based export fallback: used for GIF sources or browsers without
- * requestVideoFrameCallback. Seeks to each frame timestamp sequentially.
+ * Seek-based export fallback: used for GIF sources or browsers without RVFC.
  */
 async function runSeekExport(
   renderFrame: (timestampSeconds: number) => Promise<ImageBitmap>,
@@ -567,6 +576,73 @@ async function runSeekExport(
       await new Promise((r) => setTimeout(r, 0));
     }
   }
+}
+
+/**
+ * Lazy import for GIF export to keep it tree-shakable
+ */
+function exportGifLazy(
+  source: AnimatedSource,
+  renderFrame: (timestampSeconds: number) => Promise<ImageBitmap>,
+  options: VideoExportOptions,
+): VideoExportHandle {
+  let cancelled = false;
+  let resolveResult: (blob: Blob) => void;
+  let rejectResult: (error: Error) => void;
+
+  const resultPromise = new Promise<Blob>((resolve, reject) => {
+    resolveResult = resolve;
+    rejectResult = reject;
+  });
+
+  const progressQueue: ExportProgress[] = [];
+  let progressResolve: (() => void) | null = null;
+
+  function emitProgress(progress: ExportProgress): void {
+    progressQueue.push(progress);
+    if (progressResolve) {
+      progressResolve();
+      progressResolve = null;
+    }
+  }
+
+  function wakeProgressGenerator(): void {
+    if (progressResolve) {
+      progressResolve();
+      progressResolve = null;
+    }
+  }
+
+  async function* progressGenerator(): AsyncGenerator<ExportProgress> {
+    while (true) {
+      if (cancelled) return;
+      if (progressQueue.length > 0) {
+        const progress = progressQueue.shift()!;
+        yield progress;
+        if (progress.stage === "done") return;
+      } else {
+        await new Promise<void>((resolve) => {
+          progressResolve = resolve;
+        });
+        if (cancelled) return;
+      }
+    }
+  }
+
+  import("./gif-export.ts")
+    .then(({ exportGif }) => exportGif(source, renderFrame, options, emitProgress, () => cancelled))
+    .then((blob) => resolveResult(blob))
+    .catch((err) => rejectResult(err));
+
+  return {
+    progress: progressGenerator(),
+    result: resultPromise,
+    cancel: () => {
+      cancelled = true;
+      wakeProgressGenerator();
+      rejectResult(new Error("Export cancelled"));
+    },
+  };
 }
 
 /**

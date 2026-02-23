@@ -16,15 +16,16 @@ export default defineConfig({
   build: {
     emptyOutDir: true,
     sourcemap: true,
+    rollupOptions: {
+      external: ["opensrc/"],
+    },
   },
-
   // @ts-expect-error idk
   oxc: {
     pure: process.env.NODE_ENV === "production" ? ["console.log", "console.debug"] : [],
   },
 
   optimizeDeps: {
-    include: ["mp4box"],
-    exclude: ["@ffmpeg/ffmpeg", "@ffmpeg/util", "@ffmpeg/core"],
+    include: ["mediabunny", "gifenc"],
   },
 });

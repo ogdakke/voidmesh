@@ -13,7 +13,6 @@ import {
 } from "#renderer/video-exporter.ts";
 import { config } from "#config";
 import { isGifEntity, isVideoEntity, type ShaderCanvasEntity } from "#types/canvas.ts";
-import { preloadFFmpeg } from "#lib/ffmpeg-service.ts";
 
 /** Global export settings state */
 export interface ExportOptionsState {
@@ -23,9 +22,7 @@ export interface ExportOptionsState {
   includeAudio: boolean;
   advanced: {
     resolution: ResolutionPreset;
-    crf?: number;
     bitrate?: number;
-    twoPass: boolean;
     gifMaxWidth: number;
     gifDither: GifDitherMode;
   };
@@ -38,9 +35,7 @@ const DEFAULT_EXPORT_OPTIONS: ExportOptionsState = {
   includeAudio: true,
   advanced: {
     resolution: "original",
-    crf: undefined,
     bitrate: undefined,
-    twoPass: false,
     gifMaxWidth: 256,
     gifDither: "floyd_steinberg",
   },
@@ -54,8 +49,6 @@ export type ExportOptionsUpdate = Partial<Omit<ExportOptionsState, "advanced">> 
 export interface VideoExportContextValue {
   exportOptions: ExportOptionsState;
   updateExportOptions: (options: ExportOptionsUpdate) => void;
-  /** Preload FFmpeg in background to reduce export wait time. Call on hover over export button. */
-  preloadFFmpeg: () => void;
   /** Sync export FPS with the selected entity's native frame rate (if available) */
   syncFpsWithEntity: (entity: ShaderCanvasEntity | null) => void;
 }
@@ -85,7 +78,6 @@ export function VideoExportProvider({ children }: PropsWithChildren) {
     }
 
     if (fps !== null && fps > 0) {
-      // Only update if different from current to avoid unnecessary re-renders
       setExportOptions((prev) => {
         if (prev.fps === fps) return prev;
         return { ...prev, fps };
@@ -98,7 +90,6 @@ export function VideoExportProvider({ children }: PropsWithChildren) {
       value={{
         exportOptions,
         updateExportOptions,
-        preloadFFmpeg,
         syncFpsWithEntity,
       }}
     >

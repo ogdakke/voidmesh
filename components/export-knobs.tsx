@@ -41,10 +41,8 @@ import "../styles/sidebar.css";
 import { useIsMobile } from "#hooks/use-is-mobile.ts";
 import { UploadControls } from "./upload-button-controls.tsx";
 
-// Option definitions
 const FORMAT_OPTIONS: { value: ExportFormat; label: string }[] = [
   { value: "mp4", label: "MP4 (H.264)" },
-  { value: "webm", label: "WebM (VP8)" },
   { value: "mov", label: "MOV (H.264)" },
   { value: "gif", label: "GIF" },
 ];
@@ -64,8 +62,6 @@ const RESOLUTION_OPTIONS: { value: ResolutionPreset; label: string }[] = [
 
 const GIF_DITHER_OPTIONS: { value: GifDitherMode; label: string }[] = [
   { value: "floyd_steinberg", label: "Floyd-Steinberg" },
-  { value: "bayer", label: "Bayer (Ordered)" },
-  { value: "sierra2", label: "Sierra" },
   { value: "none", label: "None" },
 ];
 
@@ -74,7 +70,7 @@ const { ui: exportUiConfig } = config.videoExporting;
 /** Export save buttons - frame copy/save and video export */
 export function ExportSaveButtons({ imageFormat }: { imageFormat: ImageExportFormat }) {
   const isMobile = useIsMobile();
-  const { exportOptions, preloadFFmpeg, addToQueue } = useExportQueue();
+  const { exportOptions, addToQueue } = useExportQueue();
   const { selectionState, selectedEntities } = useCanvasActions();
   const {
     saveSelectedEntityToFile: saveToFile,
@@ -102,12 +98,7 @@ export function ExportSaveButtons({ imageFormat }: { imageFormat: ImageExportFor
       {/* Video export button - adds to queue */}
       {hasAnimated && (
         <div className="export-video-row sidebar-row">
-          <Button
-            onClick={handleStartExport}
-            onMouseEnter={preloadFFmpeg}
-            onFocus={preloadFFmpeg}
-            className="export-video-btn"
-          >
+          <Button onClick={handleStartExport} className="export-video-btn">
             <MediaVideo />
             <span>
               {isMultiAnimated
@@ -167,6 +158,8 @@ export function ExportSettingsKnobs() {
     lastSyncedAnimatedEntityIdRef.current = currentEntityId;
   }, [firstAnimatedEntity, syncFpsWithEntity]);
 
+  const formatOptions = FORMAT_OPTIONS;
+
   const isGif = exportOptions.format === "gif";
   const supportsAudio = formatSupportsAudio(exportOptions.format);
 
@@ -210,21 +203,6 @@ export function ExportSettingsKnobs() {
     }
   };
 
-  // CRF change handler
-  const handleCrfChange = (value: number | number[]) => {
-    const val = Array.isArray(value) ? value[0] : value;
-    updateExportOptions({
-      advanced: { crf: val },
-    });
-  };
-
-  // Two-pass change handler
-  const handleTwoPassChange = (e: ChangeEvent<HTMLInputElement>) => {
-    updateExportOptions({
-      advanced: { twoPass: e.target.checked },
-    });
-  };
-
   // GIF max width handler
   const handleGifMaxWidthChange = (value: number | null) => {
     if (value !== null) {
@@ -255,9 +233,9 @@ export function ExportSettingsKnobs() {
           value={exportOptions.format}
           onValueChange={handleFormatChange}
           name="export-format"
-          items={FORMAT_OPTIONS}
+          items={formatOptions}
         >
-          {FORMAT_OPTIONS.map(({ value, label }) => (
+          {formatOptions.map(({ value, label }) => (
             <SelectItem key={value} value={value}>
               {label}
             </SelectItem>
@@ -265,7 +243,7 @@ export function ExportSettingsKnobs() {
         </Select>
       </div>
 
-      {/* Quality - only for video formats (controls CRF) */}
+      {/* Quality - only for video formats (controls bitrate) */}
       {!isGif && (
         <div className="sidebar-row">
           <Select
@@ -338,37 +316,6 @@ export function ExportSettingsKnobs() {
                   </SelectItem>
                 ))}
               </Select>
-            </div>
-          )}
-
-          {/* CRF - not for GIF */}
-          {!isGif && (
-            <div className="sidebar-row">
-              <Slider
-                name="export-crf"
-                label="CRF (Quality)"
-                min={exportUiConfig.crf.min}
-                max={exportUiConfig.crf.max}
-                step={exportUiConfig.crf.step}
-                value={exportOptions.advanced.crf ?? 23}
-                onValueChange={handleCrfChange}
-                showValue
-              />
-              <span className="hint-text">Lower = better quality, larger file</span>
-            </div>
-          )}
-
-          {/* Two-pass - only for video formats */}
-          {!isGif && (
-            <div className="sidebar-row">
-              <Checkbox
-                name="two_pass"
-                checked={exportOptions.advanced.twoPass}
-                onChange={handleTwoPassChange}
-                switch
-              >
-                Two-pass encoding
-              </Checkbox>
             </div>
           )}
 
@@ -465,6 +412,8 @@ function MobileExportSettingsKnobs() {
     lastSyncedAnimatedEntityIdRef.current = currentEntityId;
   }, [firstAnimatedEntity, syncFpsWithEntity]);
 
+  const formatOptions = FORMAT_OPTIONS;
+
   const isGif = exportOptions.format === "gif";
   const supportsAudio = formatSupportsAudio(exportOptions.format);
 
@@ -494,19 +443,6 @@ function MobileExportSettingsKnobs() {
   const handleResolutionChange = (e: ChangeEvent<HTMLSelectElement>) => {
     updateExportOptions({
       advanced: { resolution: e.target.value as ResolutionPreset },
-    });
-  };
-
-  const handleCrfChange = (value: number | number[]) => {
-    const val = Array.isArray(value) ? value[0] : value;
-    updateExportOptions({
-      advanced: { crf: val },
-    });
-  };
-
-  const handleTwoPassChange = (e: ChangeEvent<HTMLInputElement>) => {
-    updateExportOptions({
-      advanced: { twoPass: e.target.checked },
     });
   };
 
@@ -542,7 +478,7 @@ function MobileExportSettingsKnobs() {
             variant="quiet"
             name="export-format"
           >
-            {FORMAT_OPTIONS.map(({ value, label }) => (
+            {formatOptions.map(({ value, label }) => (
               <NativeSelectOption key={value} value={value}>
                 {label}
               </NativeSelectOption>
@@ -629,35 +565,6 @@ function MobileExportSettingsKnobs() {
                   ))}
                 </NativeSelect>
               </div>
-            </div>
-          )}
-
-          {!isGif && (
-            <div className="mobile-row">
-              <Slider
-                name="export-crf"
-                label="CRF (Quality)"
-                min={exportUiConfig.crf.min}
-                max={exportUiConfig.crf.max}
-                step={exportUiConfig.crf.step}
-                value={exportOptions.advanced.crf ?? 23}
-                onValueChange={handleCrfChange}
-                showValue
-              />
-              <span className="hint-text">Lower = better quality, larger file</span>
-            </div>
-          )}
-
-          {!isGif && (
-            <div className="mobile-row">
-              <Checkbox
-                name="two_pass"
-                checked={exportOptions.advanced.twoPass}
-                onChange={handleTwoPassChange}
-                switch
-              >
-                Two-pass encoding
-              </Checkbox>
             </div>
           )}
 

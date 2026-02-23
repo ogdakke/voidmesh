@@ -6,6 +6,7 @@
  * - Video element cloning to isolate export from preview playback
  * - Non-blocking exports that allow continued canvas editing
  * - Auto-download on completion
+ * - Audio demuxed from source and sent to worker for muxing (no FFmpeg needed)
  */
 
 import { useState, useRef, useEffect, type PropsWithChildren } from "react";
@@ -21,8 +22,8 @@ import {
 } from "#renderer/video-exporter.ts";
 import { isAnimatedEntity, MediaType, type ShaderCanvasEntity } from "#types/canvas.ts";
 import type { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
+import type { DemuxedAudio } from "#lib/audio-demux.ts";
 import { logger } from "#lib/client.logger.ts";
-import { addAudioToProcessedVideo, preloadFFmpeg, terminateFFmpeg } from "#lib/ffmpeg-service.ts";
 import { useVideoExportContext } from "./use-video-export.ts";
 import type { ExportOptionsState, ExportOptionsUpdate } from "./video-export-context.tsx";
 
@@ -84,9 +85,6 @@ export interface ExportQueueContextValue {
   /** Check if there are any active exports */
   isExporting: boolean;
 
-  /** Preload FFmpeg in background */
-  preloadFFmpeg: () => void;
-
   /** Sync export FPS with the selected entity's native frame rate */
   syncFpsWithEntity: (entity: ShaderCanvasEntity | null) => void;
 }
@@ -139,7 +137,6 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
   const currentHandleRef = useRef<VideoExportHandle | null>(null);
   const currentVideoCloneRef = useRef<HTMLVideoElement | null>(null);
   const isProcessingRef = useRef(false);
-  // Track if current job was cancelled (to abort FFmpeg operations)
   const cancelledJobIdRef = useRef<string | null>(null);
 
   /** Update a specific job in the queue */
@@ -186,14 +183,11 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
         throw new Error("Entity is not a video or animated GIF");
       }
 
-      // Drive shader time externally during export: if the shader was
-      // animating at queue time, advance time in sync with export frame
-      // timestamps instead of relying on the shader's performance.now() deltas.
+      // Drive shader time externally during export
       const initialShaderTime = entitySnapshot.shaderParams.time ?? 0;
       const shouldAnimateShaderTime = entitySnapshot.shaderParams.timeAutoPlay !== false;
       entitySnapshot.shaderParams.timeAutoPlay = false;
 
-      // Build AnimatedSource and renderFrame based on entity type
       let animatedSource: AnimatedSource;
       let renderFrame: (timestampSeconds: number) => Promise<ImageBitmap>;
 
@@ -213,19 +207,14 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
           if (shouldAnimateShaderTime) {
             entitySnapshot.shaderParams.time = initialShaderTime + timestampSeconds;
           }
-          // If the video is playing (playback-based export via RVFC), capture
-          // the current frame directly without seeking. Otherwise fall back to
-          // seek-based capture (used for browsers without RVFC).
           const bitmap = videoClone.paused
             ? await renderer.renderVideoFrameAtTime(entitySnapshot, timestampSeconds, videoClone)
             : await renderer.renderCurrentVideoFrame(entitySnapshot, videoClone);
-          if (!bitmap) {
-            throw new Error("Failed to render frame");
-          }
+          if (!bitmap) throw new Error("Failed to render frame");
           return bitmap;
         };
       } else {
-        // GIF path: no video clone needed, use GIF frame lookup
+        // GIF path: no video clone needed
         animatedSource = {
           width: entity.originalSize.width,
           height: entity.originalSize.height,
@@ -238,15 +227,46 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
             entitySnapshot.shaderParams.time = initialShaderTime + timestampSeconds;
           }
           const bitmap = await renderer.renderGifFrameAtTime(entitySnapshot, timestampSeconds);
-          if (!bitmap) {
-            throw new Error("Failed to render GIF frame");
-          }
+          if (!bitmap) throw new Error("Failed to render GIF frame");
           return bitmap;
         };
       }
 
-      // Start export with the animated source
-      const handle = exportVideo(animatedSource, renderFrame, nextJob.options);
+      // Demux audio from source video if needed (before starting export)
+      // Audio is sent to the worker and muxed inline — no post-processing needed
+      const format = nextJob.options.format ?? "mp4";
+      const needsAudio =
+        entity.mediaSource.type === MediaType.video &&
+        nextJob.options.includeAudio &&
+        formatSupportsAudio(format) &&
+        format !== "gif";
+
+      let audioData: DemuxedAudio | null = null;
+
+      if (needsAudio && entity.mediaSource.type === MediaType.video) {
+        updateJob(nextJob.id, {
+          progress: {
+            frame: 0,
+            totalFrames: 0,
+            percent: 0,
+            stage: "extracting-audio",
+            message: "Extracting audio from source...",
+          },
+        });
+
+        const { demuxAudio } = await import("#lib/audio-demux.ts");
+        const videoBlob = await fetch(entity.mediaSource.videoElement.src).then((r) => r.blob());
+        audioData = await demuxAudio(videoBlob);
+        if (!audioData) {
+          throw new Error("Audio extraction returned no audio track from source video");
+        }
+      }
+
+      if (cancelledJobIdRef.current === nextJob.id) throw new Error("Export cancelled");
+
+      // Start export — audio data is passed directly so it's sent to the worker
+      // right after init, guaranteeing correct message ordering
+      const handle = exportVideo(animatedSource, renderFrame, nextJob.options, audioData);
       currentHandleRef.current = handle;
 
       // Prevent unhandled rejection when cancelled
@@ -258,61 +278,9 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
       }
 
       // Wait for result
-      let videoBlob = await handle.result;
+      const videoBlob = await handle.result;
 
-      // Check if cancelled during video export
-      if (cancelledJobIdRef.current === nextJob.id) {
-        throw new Error("Export cancelled");
-      }
-
-      // Handle audio muxing for MP4 format (only for video entities with audio)
-      const needsManualAudioMux =
-        entity.mediaSource.type === MediaType.video &&
-        nextJob.options.format === "mp4" &&
-        nextJob.options.includeAudio &&
-        formatSupportsAudio(nextJob.options.format ?? "mp4");
-
-      if (needsManualAudioMux && entity.mediaSource.type === MediaType.video) {
-        const totalFrames = Math.ceil(
-          entity.mediaSource.videoElement.duration * (nextJob.options.fps ?? 30),
-        );
-
-        updateJob(nextJob.id, {
-          progress: {
-            frame: totalFrames,
-            totalFrames,
-            percent: 0,
-            stage: "extracting-audio",
-            message: "Extracting audio from original video...",
-          },
-        });
-
-        // Fetch original video for audio extraction
-        const response = await fetch(entity.mediaSource.videoElement.src);
-        const originalVideoBlob = await response.blob();
-
-        // Mux audio into processed video
-        videoBlob = await addAudioToProcessedVideo(
-          originalVideoBlob,
-          videoBlob,
-          (ffmpegProgress) => {
-            updateJob(nextJob.id, {
-              progress: {
-                frame: totalFrames,
-                totalFrames,
-                percent: ffmpegProgress.percent,
-                stage: ffmpegProgress.stage === "muxing" ? "adding-audio" : "extracting-audio",
-                message: ffmpegProgress.message,
-              },
-            });
-          },
-        );
-
-        // Check if cancelled during FFmpeg muxing
-        if (cancelledJobIdRef.current === nextJob.id) {
-          throw new Error("Export cancelled");
-        }
-      }
+      if (cancelledJobIdRef.current === nextJob.id) throw new Error("Export cancelled");
 
       // Auto-download the result
       const url = URL.createObjectURL(videoBlob);
@@ -331,7 +299,6 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
     } catch (err) {
       const message = err instanceof Error ? err.message : "Export failed";
 
-      // Only mark as failed if not cancelled
       if (message !== "Export cancelled") {
         logger.error(`Export failed: ${nextJob.outputFileName}`, err);
         updateJob(nextJob.id, {
@@ -340,7 +307,6 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
         });
       }
     } finally {
-      // Cleanup
       currentHandleRef.current = null;
       if (currentVideoCloneRef.current) {
         currentVideoCloneRef.current.src = "";
@@ -350,19 +316,17 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
       cancelledJobIdRef.current = null;
       jobEntityRefs.current.delete(nextJob.id);
 
-      // Clear currentJobId - useEffect will trigger next job processing
       setState((prev) => ({ ...prev, currentJobId: null }));
     }
   };
 
-  // Store entity/renderer references for jobs (not in state to avoid serialization issues)
-  // entitySnapshot contains frozen shaderParams from queue time to prevent mid-export changes
+  // Store entity/renderer references for jobs
   const jobEntityRefs = useRef<
     Map<
       string,
       {
-        entity: ShaderCanvasEntity; // Original reference (for video source/audio)
-        entitySnapshot: ShaderCanvasEntity; // Frozen copy (for rendering with snapshotted params)
+        entity: ShaderCanvasEntity;
+        entitySnapshot: ShaderCanvasEntity;
         renderer: InfiniteCanvasRenderer;
       }
     >
@@ -392,9 +356,7 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
         includeAudio: formatSupportsAudio(exportOptions.format) && exportOptions.includeAudio,
         advanced: {
           resolution: exportOptions.advanced.resolution,
-          crf: exportOptions.advanced.crf,
           bitrate: exportOptions.advanced.bitrate,
-          twoPass: exportOptions.advanced.twoPass,
           gifDither: exportOptions.advanced.gifDither,
           gifMaxWidth: exportOptions.advanced.gifMaxWidth,
         },
@@ -406,15 +368,11 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
       createdAt: Date.now(),
     };
 
-    // Deep clone the entity for export (freeze shaderParams at queue time)
-    // This prevents mid-export parameter changes from affecting the render
     const entitySnapshot: ShaderCanvasEntity = {
       ...entity,
       shaderParams: structuredClone(entity.shaderParams),
-      // Note: mediaSource stays as reference (we clone the video element separately)
     };
 
-    // Store entity reference (for video src/audio) and snapshot (for rendering params)
     jobEntityRefs.current.set(jobId, { entity, entitySnapshot, renderer });
 
     setState((prev) => ({
@@ -427,8 +385,6 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
     return jobId;
   };
 
-  // Ref so the auto-start effect always calls the latest closure without
-  // needing the function itself in the dep array (it changes every render).
   const processNextJobRef = useRef(processNextJob);
   processNextJobRef.current = processNextJob;
 
@@ -448,41 +404,26 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
     if (!job) return;
 
     if (job.status === "queued") {
-      // Just remove from queue
       removeJob(jobId);
       jobEntityRefs.current.delete(jobId);
     } else if (job.status === "processing") {
-      // Mark this job as cancelled so processNextJob knows to abort
       cancelledJobIdRef.current = jobId;
-
-      // Cancel current video export handle
       if (currentHandleRef.current) {
         currentHandleRef.current.cancel();
       }
-
-      // Terminate FFmpeg to abort any ongoing audio muxing operations
-      // This will cause addAudioToProcessedVideo to throw, triggering cleanup
-      terminateFFmpeg();
-
       updateJob(jobId, { status: "cancelled" });
     }
   };
 
   /** Cancel all jobs */
   const cancelAll = () => {
-    // Cancel current processing job
     if (currentHandleRef.current) {
       currentHandleRef.current.cancel();
     }
 
-    // Terminate FFmpeg to abort any ongoing operations
-    terminateFFmpeg();
-
-    // Reset processing state
     isProcessingRef.current = false;
     cancelledJobIdRef.current = null;
 
-    // Clear all jobs
     setState({ jobs: [], currentJobId: null });
     jobEntityRefs.current.clear();
   };
@@ -494,7 +435,6 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
         (job) =>
           job.status !== "completed" && job.status !== "failed" && job.status !== "cancelled",
       );
-      // Also clear currentJobId if the current job was removed
       const currentJobRemoved =
         prev.currentJobId !== null && !remainingJobs.some((job) => job.id === prev.currentJobId);
 
@@ -546,8 +486,6 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
       if (currentVideoCloneRef.current) {
         currentVideoCloneRef.current.src = "";
       }
-      // Terminate FFmpeg to clean up any ongoing operations
-      terminateFFmpeg();
     };
   }, []);
 
@@ -565,7 +503,6 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
         clearCompleted,
         getQueueStats,
         isExporting,
-        preloadFFmpeg,
         syncFpsWithEntity,
       }}
     >

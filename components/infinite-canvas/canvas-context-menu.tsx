@@ -197,7 +197,7 @@ function CanvasContextMenuItems({
   } = useCanvasActions();
 
   const { saveSelectedEntityToFile, renderer, entities } = useCanvas();
-  const { addToQueue, preloadFFmpeg } = useExportQueue();
+  const { addToQueue } = useExportQueue();
   const { exportStudioFile, importStudioFile } = useStudioFile();
 
   // Single selected entity for display (undefined if multi-selected)
@@ -536,7 +536,7 @@ function CanvasContextMenuItems({
       {/* Save section - branched by selection composition */}
       {hasAnimated ? (
         <ContextMenu.SubmenuRoot>
-          <ContextMenu.SubmenuTrigger className="menu-submenu-trigger" onMouseEnter={preloadFFmpeg}>
+          <ContextMenu.SubmenuTrigger className="menu-submenu-trigger">
             Save as...
             <NavArrowRight />
           </ContextMenu.SubmenuTrigger>
@@ -549,7 +549,6 @@ function CanvasContextMenuItems({
                   <ContextMenu.Item
                     className="menu-item menu-item--icon-left"
                     onClick={handleSaveAll}
-                    onMouseEnter={preloadFFmpeg}
                   >
                     <Download className="menu-icon-left" />
                     Save All
@@ -573,7 +572,6 @@ function CanvasContextMenuItems({
                 <ContextMenu.Item
                   className="menu-item menu-item--icon-left"
                   onClick={handleAnimatedExport}
-                  onMouseEnter={preloadFFmpeg}
                 >
                   <MediaVideo className="menu-icon-left" />
                   Export{isMultiple && animatedCount > 1 ? ` ${animatedCount}` : ""}

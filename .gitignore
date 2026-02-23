@@ -153,3 +153,6 @@ msdf-atlas-gen/
 
 .venv
 .claude/worktrees
+
+# opensrc - source code for packages
+opensrc/
