@@ -70,7 +70,6 @@ export function Image({
         height={height}
         className={className}
         style={{ aspectRatio: `${width} / ${height}`, ...style }}
-        loading="lazy"
         decoding="async"
         {...rest}
       />
