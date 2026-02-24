@@ -75,7 +75,7 @@
   max-width: 20rem;
   pointer-events: none;
   /* Visibility controlled by EntityLabelController */
-  opacity: 1;
+  opacity: 0;
 
   @media screen and (max-width: 768px) {
     font-size: 0.75rem;
