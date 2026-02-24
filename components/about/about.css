@@ -101,6 +101,7 @@
     :where(.fullsize) {
       width: 100%;
       height: auto;
+      min-height: 180px;
     }
 
     :where(footer) {

@@ -60,10 +60,7 @@ Video: WebCodecs H.264 + mediabunny muxer in Web Worker (MP4/MOV only). GIF: gif
 
 Source code for dependencies is available in `opensrc/` for deeper understanding of implementation details.
 
-Available packages:
-
-- `Vanilagy/mediabunny` — Media muxing/demuxing library used for video export (MP4/MOV) and audio demuxing.
-- `mattdesl/gifenc` — GIF encoding library used for GIF export.
+See `opensrc/sources.json` for the list of available packages and their versions.
 
 Use this source code when you need to understand how a package works internally, not just its types/interface.
 
