@@ -10,7 +10,8 @@ import { useIsMobile } from "#hooks/use-is-mobile.ts";
 import "./about.css";
 import { Updates } from "./updates";
 import { useCarouselDots } from "#hooks/use-carousel-dots.ts";
-import { UnLazyImage } from "@unlazy/react";
+import { Image } from "#ui/image.tsx";
+import houseBurning from "../../media/house_burning_ascii.webp?img";
 
 export interface AboutProps extends ComponentProps<"div"> {}
 export const About = memo(function About(props: AboutProps) {
@@ -123,11 +124,7 @@ function AboutSection({ children }: { children?: ReactNode }) {
         Apply dithering, halftone, and ASCII effects to videos, GIFs, and images. Everything runs
         locally in your browser—nothing gets uploaded.
       </p>
-      <UnLazyImage
-        srcSet="/media/house_burning_ascii-768w.webp 768w, /media/house_burning_ascii-1152w.webp 1152w, /media/house_burning_ascii.webp"
-        alt="Burning house ASCII"
-        thumbhash="CAgGDYAGylV5h3eFemaYeQZ4ZoB3"
-      />
+      <Image {...houseBurning} alt="Burning house ASCII" />
       <h2>Effects</h2>
       <dl className="about__effects">
         <div>
