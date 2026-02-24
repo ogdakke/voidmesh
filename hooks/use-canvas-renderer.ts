@@ -16,13 +16,13 @@ export interface UseCanvasRendererResult {
 export function useCanvasRenderer(
   canvasRef: React.RefObject<HTMLCanvasElement | null>,
 ): UseCanvasRendererResult {
-  const [isReady, setIsReady] = useState(false);
-  const [isSupported, setIsSupported] = useState(() => !!navigator.gpu);
-  const [error, setError] = useState<Error | null>(() =>
-    navigator.gpu ? null : new Error("WebGPU is not supported in this browser"),
-  );
+  const [state, setState] = useState<UseCanvasRendererResult>(() => ({
+    renderer: null,
+    isReady: false,
+    isSupported: !!navigator.gpu,
+    error: navigator.gpu ? null : new Error("WebGPU is not supported in this browser"),
+  }));
   const [canvasElement, setCanvasElement] = useState<HTMLCanvasElement | null>(null);
-  const [renderer, setRenderer] = useState<InfiniteCanvasRenderer | null>(null);
   const rendererRef = useRef<InfiniteCanvasRenderer | null>(null);
   const initializingRef = useRef(false);
 
@@ -59,6 +59,8 @@ export function useCanvasRenderer(
     if (!navigator.gpu) return;
 
     initializingRef.current = true;
+    const initStart = Date.now();
+    let cancelled = false;
 
     const renderer = new InfiniteCanvasRenderer(canvasElement);
     rendererRef.current = renderer;
@@ -66,13 +68,16 @@ export function useCanvasRenderer(
     renderer
       .initialize()
       .then(() => {
-        setRenderer(renderer);
-        setIsReady(true);
-        setError(null);
+        const elapsed = Date.now() - initStart;
+        const delay = Math.max(0, 800 - elapsed);
+        setTimeout(() => {
+          if (cancelled) return;
+          setState({ renderer, isReady: true, isSupported: true, error: null });
+        }, delay);
       })
       .catch((err: Error) => {
-        setError(err);
-        setIsSupported(false);
+        if (cancelled) return;
+        setState((prev) => ({ ...prev, isSupported: false, error: err }));
         logger.error("Failed to initialize canvas renderer:", err);
       })
       .finally(() => {
@@ -80,17 +85,12 @@ export function useCanvasRenderer(
       });
 
     return () => {
+      cancelled = true;
       renderer.destroy();
       rendererRef.current = null;
-      setRenderer(null);
-      setIsReady(false);
+      setState((prev) => ({ ...prev, renderer: null, isReady: false }));
     };
   }, [canvasElement]);
 
-  return {
-    renderer,
-    isReady,
-    isSupported,
-    error,
-  };
+  return state;
 }
