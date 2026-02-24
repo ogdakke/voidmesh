@@ -1,6 +1,8 @@
 import { useIsMobile } from "#hooks/use-is-mobile.ts";
-import { UnLazyImage } from "@unlazy/react";
+import { Image } from "#ui/image.tsx";
 import type { PropsWithChildren } from "react";
+import saveFeature from "../../media/save_feature_img.webp?img";
+import flowingExample from "../../media/flowing_example_updates.webp?img";
 
 function formatDate(isoDate: string): string {
   return Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(isoDate));
@@ -19,14 +21,10 @@ export function Updates() {
         {isMobile ? (
           <>
             <figure>
-              <UnLazyImage
+              <Image
+                {...saveFeature}
                 className="fullsize"
-                style={{ aspectRatio: "2356 / 1156" }}
-                src="/media/save_feature_img.webp"
                 alt="Where to find the preferences menu on mobile"
-                thumbhash="wvcBC4LbjJu_vbiqAAIFEEE"
-                width={2356}
-                height={1156}
               />
               <figcaption>
                 You can export and import the ".vdmsh" file from the preferences menu
@@ -43,14 +41,10 @@ export function Updates() {
           evolving style, emulating a flowing glass material with some turbulence.
         </p>
         <figure>
-          <UnLazyImage
+          <Image
+            {...flowingExample}
             className="fullsize"
-            style={{ aspectRatio: "1080 / 1350" }}
-            srcSet="/media/flowing_example_updates-768w.webp 768w, /media/flowing_example_updates-1152w.webp 1152w, /media/flowing_example_updates.webp"
             alt="Where to find the preferences menu on mobile"
-            thumbhash="oucNBgK_ZWeGd6dol3iGaIh4j4H0FWg"
-            width={1080}
-            height={1350}
           />
           <figcaption>Images don't do it justice, so give it a go yourself</figcaption>
         </figure>
