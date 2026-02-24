@@ -917,11 +917,7 @@ export function InfiniteCanvas() {
           {isSupported && (
             <div className="infinite-canvas__loading" hidden={isReady}>
               <div className="loading-spinner">
-                <UnLazyImage
-                  src="/favicon.webp"
-                  thumbhash="08WFFQIsXZhyekDMyJGPHvi4CFd3d4CDWA"
-                  alt="blurry shapes on a blue background"
-                />
+                <img src="/favicon.webp" alt="blurry shapes on a blue background" loading="eager" />
               </div>
               <p>Initializing...</p>
             </div>
