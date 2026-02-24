@@ -95,6 +95,7 @@
       border-radius: var(--radius-lg);
       margin: var(--spacing-5) 0 var(--spacing);
       height: 180px;
+      min-height: 180px;
       object-fit: cover;
     }
 

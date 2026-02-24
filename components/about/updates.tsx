@@ -21,6 +21,7 @@ export function Updates() {
             <figure>
               <UnLazyImage
                 className="fullsize"
+                style={{ aspectRatio: "2356 / 1156" }}
                 src="/media/save_feature_img.webp"
                 alt="Where to find the preferences menu on mobile"
                 thumbhash="wvcBC4LbjJu_vbiqAAIFEEE"
@@ -44,6 +45,7 @@ export function Updates() {
         <figure>
           <UnLazyImage
             className="fullsize"
+            style={{ aspectRatio: "1080 / 1350" }}
             srcSet="/media/flowing_example_updates-768w.webp 768w, /media/flowing_example_updates-1152w.webp 1152w, /media/flowing_example_updates.webp"
             alt="Where to find the preferences menu on mobile"
             thumbhash="oucNBgK_ZWeGd6dol3iGaIh4j4H0FWg"
