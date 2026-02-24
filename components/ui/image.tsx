@@ -6,7 +6,7 @@ const isCrawler =
 
 interface ImageProps extends Omit<ComponentProps<"img">, "src" | "srcSet"> {
   src: string;
-  srcSet: string;
+  sources: { srcSet: string; type: string }[];
   thumbhash: string;
   /** Load immediately instead of waiting for viewport intersection. */
   preload?: boolean;
@@ -14,52 +14,66 @@ interface ImageProps extends Omit<ComponentProps<"img">, "src" | "srcSet"> {
 
 export function Image({
   src,
-  srcSet,
+  sources,
   thumbhash,
   width,
   height,
   style,
   preload,
   alt,
+  className,
   ...rest
 }: ImageProps) {
-  const ref = useRef<HTMLImageElement>(null);
+  const pictureRef = useRef<HTMLPictureElement>(null);
 
   useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
+    const picture = pictureRef.current;
+    if (!picture) return;
+
+    const swap = () => {
+      const sourceEls = picture.querySelectorAll("source[data-srcset]");
+      for (const source of sourceEls) {
+        source.setAttribute("srcset", source.getAttribute("data-srcset")!);
+        source.removeAttribute("data-srcset");
+      }
+      const img = picture.querySelector("img");
+      if (img) img.src = src;
+    };
 
     if (preload || isCrawler) {
-      if (srcSet) el.srcset = srcSet;
-      el.src = src;
+      swap();
       return;
     }
 
     const observer = new IntersectionObserver(
       (entries) => {
         if (!entries[0]?.isIntersecting) return;
-        if (srcSet) el.srcset = srcSet;
-        el.src = src;
+        swap();
         observer.disconnect();
       },
       { rootMargin: "200px" },
     );
 
-    observer.observe(el);
+    observer.observe(picture);
     return () => observer.disconnect();
-  }, [src, srcSet, preload]);
+  }, [src, sources, preload]);
 
   return (
-    <img
-      ref={ref}
-      src={isCrawler ? src : thumbhash}
-      alt={alt}
-      width={width}
-      height={height}
-      style={{ aspectRatio: `${width} / ${height}`, ...style }}
-      loading="lazy"
-      decoding="async"
-      {...rest}
-    />
+    <picture ref={pictureRef}>
+      {sources.map((s) => (
+        <source key={s.type} data-srcset={s.srcSet} type={s.type} />
+      ))}
+      <img
+        src={isCrawler ? src : thumbhash}
+        alt={alt}
+        width={width}
+        height={height}
+        className={className}
+        style={{ aspectRatio: `${width} / ${height}`, ...style }}
+        loading="lazy"
+        decoding="async"
+        {...rest}
+      />
+    </picture>
   );
 }
