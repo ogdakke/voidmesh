@@ -30,7 +30,6 @@ import { toastManager } from "../ui/toast/toast-manager.ts";
 import { CanvasContextMenu } from "./canvas-context-menu.tsx";
 import "./infinite-canvas.css";
 import { UndoRedoButtons } from "./undo-redo.tsx";
-import { UnLazyImage } from "@unlazy/react";
 
 /** Label overlay for selected entity - positioned by direct DOM manipulation in game loop */
 function EntityLabel({
