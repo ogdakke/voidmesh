@@ -30,6 +30,7 @@ import { toastManager } from "../ui/toast/toast-manager.ts";
 import { CanvasContextMenu } from "./canvas-context-menu.tsx";
 import "./infinite-canvas.css";
 import { UndoRedoButtons } from "./undo-redo.tsx";
+import { UnLazyImage } from "@unlazy/react";
 
 /** Label overlay for selected entity - positioned by direct DOM manipulation in game loop */
 function EntityLabel({
@@ -811,6 +812,7 @@ export function InfiniteCanvas() {
       <div
         ref={containerRef}
         className="infinite-canvas"
+        data-ready={isReady || undefined}
         tabIndex={0}
         onFocus={handleContainerFocus}
         onBlur={handleContainerBlur}
@@ -912,8 +914,13 @@ export function InfiniteCanvas() {
               </div>
             </InfiniteCanvasToolRow>
           )}
-          {!isReady && isSupported && (
-            <div className="infinite-canvas__loading">Initializing WebGPU...</div>
+          {isSupported && (
+            <div className="infinite-canvas__loading" hidden={isReady}>
+              <div className="loading-spinner">
+                <img src="/favicon.webp" alt="blurry shapes on a blue background" loading="eager" />
+              </div>
+              <p>Initializing...</p>
+            </div>
           )}
         </div>
       </div>

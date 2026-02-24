@@ -4,7 +4,7 @@
 
 @layer global {
   :root {
-    --studio-background: light-dark(lch(98 0 0), lch(4.8 0.7 272));
+    --studio-background: light-dark(#fafafa, #060608);
     --content-radius: var(--radius-xl);
     --mobile-controls-h: 160px;
     --bottom-bar-height: 54px;

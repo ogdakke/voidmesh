@@ -1,4 +1,3 @@
-import { ArrowLeft } from "iconoir-react";
 import { useEffect } from "react";
 import { lazyLoad } from "unlazy";
 
