@@ -35,7 +35,6 @@
   );
 
   --outline: color-mix(in srgb, var(--color) 50%, var(--background));
-  --overlay-background: oklch(from var(--color) l c h / 0.15);
   /* Layout */
   --screen-s: calc(384rem / 16);
   --max-w: calc(1200rem / 16);
@@ -85,10 +84,6 @@
     rgb(100% 100% 100% / 0.765625) 87.5%, rgb(100% 100% 100% / 0.87890625) 93.75%,
     rgb(100% 100% 100%) 100%;
   --mask: light-dark(var(--mask-light), var(--mask-dark));
-
-  @view-transition {
-    navigation: auto;
-  }
 }
 
 /* colors */
@@ -100,16 +95,6 @@
   /* lightness channel is only used as a multiplier for chroma (see below) */
   --gray: oklch(0.4 0 0);
   --tint: var(--primary);
-  --red: oklch(0.51 0.23 29.99);
-  --orange: oklch(0.7 0.150492 54);
-  --yellow: oklch(0.8 0.128516 73.8032);
-  --turquoise: oklch(0.5 0.081146 205.114);
-  --cyan: oklch(0.4 0.142107 243.926);
-  --green: oklch(0.5 0.121276 155.372);
-  --blue: oklch(0.5 0.22049 266.315);
-  --indigo: oklch(1 0.25049 284.23);
-  --purple: oklch(0.7 0.223324 302);
-  --pink: oklch(0.6 0.177717 347.813);
 
   /** tint color scale */
   --tint-100: oklch(from var(--tint) var(--lightness-100) var(--chroma-100) h);
@@ -188,10 +173,6 @@
   --chroma-1500: c;
   --chroma-1600: c;
 
-  --highlight-hover: rgb(0 0 0 / 0.07);
-  --highlight-pressed: rgb(0 0 0 / 0.15);
-  --overlay-background: var(--gray-50);
-  --overlay-border: rgb(0 0 0 / 0.06);
   --popover-shadow: 0 8px 20px rgba(0 0 0 / 0.12);
   --floaty-shadow: 0 4px 12px #00000011;
 }
@@ -219,68 +200,7 @@
     --lightness-1500: 95.2045%;
     --lightness-1600: 100%;
 
-    --highlight-hover: rgb(255 255 255 / 0.1);
-    --highlight-pressed: rgb(255 255 255 / 0.2);
-    --overlay-background: var(--gray-100);
-    --overlay-border: rgb(255 255 255 / 0.2);
     --popover-shadow: 0 8px 20px rgba(0 0 0 / 0.5);
-  }
-}
-
-/* Semantic colors */
-:root {
-  --focus-ring-color: var(--tint-1000);
-  --text-color: var(--gray-1200);
-  --text-color-hover: var(--gray-1300);
-  --text-color-disabled: var(--gray-600);
-  --text-color-placeholder: var(--gray-1000);
-  --link-color: var(--tint-1200);
-  --link-color-secondary: var(--gray-1200);
-  --link-color-pressed: var(--tint-1300);
-  --border-color: var(--gray-400);
-  --border-color-hover: var(--gray-500);
-  --border-color-disabled: var(--gray-300);
-  --field-text-color: var(--gray-1400);
-  --button-background: var(--tint-100);
-  --button-background-pressed: var(--tint-200);
-  /* these colors are the same between light and dark themes
-   * to ensure contrast with the foreground color */
-  --highlight-background: oklch(from var(--tint) 55% c h);
-  --highlight-background-pressed: oklch(from var(--tint) 50% c h);
-  --highlight-background-invalid: oklch(from var(--red) var(--lightness-900) c h);
-  --highlight-foreground: white;
-  --highlight-overlay: oklch(from var(--tint-1000) l c h / 15%);
-  --invalid-color: oklch(from var(--red) var(--lightness-900) c h);
-  --field-background: var(--gray-50);
-}
-
-/* Windows high contrast mode overrides */
-@media (forced-colors: active) {
-  :root {
-    --background-color: Canvas;
-    --focus-ring-color: Highlight;
-    --text-color: ButtonText;
-    --text-color-hover: ButtonText;
-    --text-color-disabled: GrayText;
-    --text-color-placeholder: ButtonText;
-    --link-color: LinkText;
-    --link-color-secondary: LinkText;
-    --link-color-pressed: LinkText;
-    --border-color: ButtonBorder;
-    --border-color-hover: ButtonBorder;
-    --border-color-pressed: ButtonBorder;
-    --border-color-disabled: GrayText;
-    --field-background: Field;
-    --field-text-color: FieldText;
-    --overlay-background: Canvas;
-    --overlay-border: ButtonBorder;
-    --button-background: ButtonFace;
-    --button-background-pressed: ButtonFace;
-    --highlight-background: Highlight;
-    --highlight-background-pressed: Highlight;
-    --highlight-background-invalid: LinkText;
-    --highlight-foreground: HighlightText;
-    --invalid-color: LinkText;
   }
 }
 

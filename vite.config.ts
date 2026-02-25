@@ -27,11 +27,6 @@ export default defineConfig({
       external: ["opensrc/"],
     },
   },
-  // @ts-expect-error idk
-  oxc: {
-    pure: process.env.NODE_ENV === "production" ? ["console.log", "console.debug"] : [],
-  },
-
   optimizeDeps: {
     entries: ["index.html"],
     include: ["mediabunny", "gifenc"],

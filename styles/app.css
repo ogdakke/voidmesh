@@ -1,5 +1,4 @@
 @import "./primitives.css";
-@import "../components/ui/menu/menu.css";
 @import "./utilities.css";
 
 @layer global {
