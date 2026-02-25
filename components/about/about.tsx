@@ -46,11 +46,7 @@ function MobileAbout(props: MobileAboutProps) {
           <div ref={contentRef} className="about-drawer-content about">
             <AboutSection>
               <br />
-              <footer>
-                <p>
-                  Made by <a href="https://x.com/ogdakke">Daniel</a>.
-                </p>
-              </footer>
+              <Footer />
             </AboutSection>
             <FeatureSection />
             <Updates />
@@ -97,17 +93,14 @@ function DesktopAbout({ ...props }: ComponentProps<"div">) {
         open={showModal}
         onClose={() => setShowModal(false)}
         onScroll={(e) => e.stopPropagation()}
+        className="desktop-about-modal"
       >
         <div className="modal-content about desktop-about">
           <section>
             <AboutSection />
             <FeatureSection />
             <br />
-            <footer>
-              <p>
-                Made by <a href="https://x.com/ogdakke">Daniel</a>.
-              </p>
-            </footer>
+            <Footer />
           </section>
           <KeyboardShortcuts />
         </div>
@@ -121,8 +114,8 @@ function AboutSection({ children }: { children?: ReactNode }) {
     <section className="about-section">
       <h1>Voidmesh</h1>
       <p>
-        Apply dithering, halftone, and ASCII effects to videos, GIFs, and images. Everything runs
-        locally in your browser—nothing gets uploaded.
+        Apply dithering, halftone, ASCII and more effects to videos, GIFs, and images. Everything
+        runs locally in your browser—nothing gets uploaded.
       </p>
       <Image {...houseBurning} alt="Burning house ASCII" />
       <h2>Effects</h2>
@@ -164,6 +157,26 @@ function AboutSection({ children }: { children?: ReactNode }) {
     </section>
   );
 }
+
+const Footer = () => {
+  return (
+    <footer>
+      <p>
+        Made by{" "}
+        <a href="https://x.com/ogdakke" target="_blank">
+          Daniel
+        </a>
+        .
+        <br />
+        Source code available on{" "}
+        <a href="https://github.com/ogdakke/voidmesh" target="_blank">
+          GitHub
+        </a>
+        .
+      </p>
+    </footer>
+  );
+};
 
 function FeatureSection() {
   return (

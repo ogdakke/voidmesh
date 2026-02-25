@@ -11,53 +11,31 @@
     initial-value: 0px;
   }
 
-  .about-drawer-content {
-    overflow-y: hidden;
-    overflow-x: scroll;
-    scroll-snap-type: x mandatory;
-    scroll-behavior: smooth;
-    scrollbar-width: none;
-
-    & > section {
-      --fade-top: 0px;
-      --fade-bottom: 50px;
-
-      min-width: 100%;
-      scroll-snap-align: center;
-      scroll-snap-stop: always;
-      padding: var(--spacing-4);
-      overflow-y: auto;
-
-      mask-image: linear-gradient(
-        to bottom,
-        rgb(0 0 0 / 0) 0px,
-        rgb(0 0 0 / 0.33) calc(var(--fade-top) * 0.125),
-        rgb(0 0 0 / 0.578) calc(var(--fade-top) * 0.25),
-        rgb(0 0 0 / 0.753) calc(var(--fade-top) * 0.375),
-        rgb(0 0 0 / 0.875) calc(var(--fade-top) * 0.5),
-        rgb(0 0 0 / 0.95) calc(var(--fade-top) * 0.625),
-        rgb(0 0 0 / 0.984) calc(var(--fade-top) * 0.75),
-        rgb(0 0 0 / 0.998) calc(var(--fade-top) * 0.875),
-        rgb(0 0 0 / 1) var(--fade-top),
-        rgb(0 0 0 / 1) calc(100% - var(--fade-bottom)),
-        rgb(0 0 0 / 0.998) calc(100% - var(--fade-bottom) * 0.875),
-        rgb(0 0 0 / 0.984) calc(100% - var(--fade-bottom) * 0.75),
-        rgb(0 0 0 / 0.95) calc(100% - var(--fade-bottom) * 0.625),
-        rgb(0 0 0 / 0.875) calc(100% - var(--fade-bottom) * 0.5),
-        rgb(0 0 0 / 0.753) calc(100% - var(--fade-bottom) * 0.375),
-        rgb(0 0 0 / 0.578) calc(100% - var(--fade-bottom) * 0.25),
-        rgb(0 0 0 / 0.33) calc(100% - var(--fade-bottom) * 0.125),
-        rgb(0 0 0 / 0) 100%
-      );
-
-      animation:
-        section-blur linear both,
-        scroll-fade linear both;
-      animation-timeline: view(x), scroll(self);
-    }
-  }
-
   .about {
+    --fade-top: 0px;
+    --fade-bottom: 50px;
+    --mask: linear-gradient(
+      to bottom,
+      rgb(0 0 0 / 0) 0px,
+      rgb(0 0 0 / 0.33) calc(var(--fade-top) * 0.125),
+      rgb(0 0 0 / 0.578) calc(var(--fade-top) * 0.25),
+      rgb(0 0 0 / 0.753) calc(var(--fade-top) * 0.375),
+      rgb(0 0 0 / 0.875) calc(var(--fade-top) * 0.5),
+      rgb(0 0 0 / 0.95) calc(var(--fade-top) * 0.625),
+      rgb(0 0 0 / 0.984) calc(var(--fade-top) * 0.75),
+      rgb(0 0 0 / 0.998) calc(var(--fade-top) * 0.875),
+      rgb(0 0 0 / 1) var(--fade-top),
+      rgb(0 0 0 / 1) calc(100% - var(--fade-bottom)),
+      rgb(0 0 0 / 0.998) calc(100% - var(--fade-bottom) * 0.875),
+      rgb(0 0 0 / 0.984) calc(100% - var(--fade-bottom) * 0.75),
+      rgb(0 0 0 / 0.95) calc(100% - var(--fade-bottom) * 0.625),
+      rgb(0 0 0 / 0.875) calc(100% - var(--fade-bottom) * 0.5),
+      rgb(0 0 0 / 0.753) calc(100% - var(--fade-bottom) * 0.375),
+      rgb(0 0 0 / 0.578) calc(100% - var(--fade-bottom) * 0.25),
+      rgb(0 0 0 / 0.33) calc(100% - var(--fade-bottom) * 0.125),
+      rgb(0 0 0 / 0) 100%
+    );
+
     display: flex;
     min-width: 0;
     position: relative;
@@ -110,6 +88,41 @@
     }
   }
 
+  .about-drawer-content {
+    overflow-y: hidden;
+    overflow-x: scroll;
+    scroll-snap-type: x mandatory;
+    scroll-behavior: smooth;
+    scrollbar-width: none;
+
+    & > section {
+      min-width: 100%;
+      scroll-snap-align: center;
+      scroll-snap-stop: always;
+      padding: var(--spacing-4);
+      padding-bottom: var(--spacing-10);
+      overflow-y: auto;
+
+      mask-image: var(--mask);
+
+      animation:
+        section-blur linear both,
+        scroll-fade linear both;
+      animation-timeline: view(x), scroll(self);
+
+      :where(a) {
+        text-decoration: underline;
+      }
+    }
+  }
+
+  .desktop-about-modal {
+    background: var(--gray-50);
+    border-radius: var(--radius-lg);
+    overflow-y: clip;
+    margin: none;
+  }
+
   .desktop-about {
     display: grid;
     grid-template-columns: 3fr 2fr;
@@ -117,11 +130,20 @@
     padding: 0;
     grid-auto-flow: column;
     gap: var(--spacing-2);
+    padding: var(--spacing-3);
+    overflow-y: auto;
+    mask-image: var(--mask);
+    animation: scroll-fade linear both;
+    animation-timeline: view(x), scroll(self);
 
     & > section {
       display: flex;
       flex-direction: column;
       gap: var(--spacing-2);
+
+      :where(a) {
+        text-decoration: underline;
+      }
     }
   }
 
@@ -243,16 +265,11 @@
 
   .about-section {
     border-bottom: none;
-
-    :where(a) {
-      text-decoration: underline;
-    }
   }
 
   .update {
     content-visibility: auto;
     contain-intrinsic-size: auto 500px;
-    margin-bottom: var(--spacing-5);
   }
 
   .updates-title {
