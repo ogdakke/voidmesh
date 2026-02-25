@@ -26,6 +26,7 @@
       scroll-snap-align: center;
       scroll-snap-stop: always;
       padding: var(--spacing-4);
+      padding-bottom: var(--spacing-10);
       overflow-y: auto;
 
       mask-image: linear-gradient(
@@ -54,6 +55,10 @@
         section-blur linear both,
         scroll-fade linear both;
       animation-timeline: view(x), scroll(self);
+
+      :where(a) {
+        text-decoration: underline;
+      }
     }
   }
 
@@ -117,11 +122,16 @@
     padding: 0;
     grid-auto-flow: column;
     gap: var(--spacing-2);
+    padding: var(--spacing-3);
 
     & > section {
       display: flex;
       flex-direction: column;
       gap: var(--spacing-2);
+
+      :where(a) {
+        text-decoration: underline;
+      }
     }
   }
 
@@ -243,16 +253,11 @@
 
   .about-section {
     border-bottom: none;
-
-    :where(a) {
-      text-decoration: underline;
-    }
   }
 
   .update {
     content-visibility: auto;
     contain-intrinsic-size: auto 500px;
-    margin-bottom: var(--spacing-5);
   }
 
   .updates-title {

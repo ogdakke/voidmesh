@@ -49,6 +49,8 @@ function MobileAbout(props: MobileAboutProps) {
               <footer>
                 <p>
                   Made by <a href="https://x.com/ogdakke">Daniel</a>.
+                  <br />
+                  Source code available on <a href="https://github.com/ogdakke/voidmesh">GitHub</a>.
                 </p>
               </footer>
             </AboutSection>
@@ -106,6 +108,8 @@ function DesktopAbout({ ...props }: ComponentProps<"div">) {
             <footer>
               <p>
                 Made by <a href="https://x.com/ogdakke">Daniel</a>.
+                <br />
+                Source code available on <a href="https://github.com/ogdakke/voidmesh">GitHub</a>.
               </p>
             </footer>
           </section>
