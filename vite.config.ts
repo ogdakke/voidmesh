@@ -6,6 +6,11 @@ import imagePlugin from "./plugins/vite-plugin-image.ts";
 export default defineConfig({
   publicDir: resolve(__dirname, "public"),
   appType: "spa",
+  server: {
+    watch: {
+      ignored: ["**/opensrc/**"],
+    },
+  },
   plugins: [
     imagePlugin({ widths: [768, 1152], quality: 80 }),
     react({
@@ -28,6 +33,7 @@ export default defineConfig({
   },
 
   optimizeDeps: {
+    entries: ["index.html"],
     include: ["mediabunny", "gifenc"],
   },
 });
