@@ -1,6 +1,6 @@
 import { useCanvas } from "#context/use-canvas.ts";
 import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
-import type { BarItem } from "#app";
+import type { BarItem } from "./mobile-bottom/bar-items.ts";
 import { MobileStyleKnobs } from "./knobs/style-knobs";
 import { ParamsKnobs } from "./knobs/params-knobs";
 import { PostProcessMobileKnobs } from "./knobs/post-process-knobs";

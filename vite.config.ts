@@ -2,6 +2,7 @@ import { resolve } from "path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import imagePlugin from "./plugins/vite-plugin-image.ts";
+import wgslMinifyPlugin from "./plugins/vite-plugin-wgsl-minify.ts";
 
 export default defineConfig({
   publicDir: resolve(__dirname, "public"),
@@ -12,6 +13,7 @@ export default defineConfig({
     },
   },
   plugins: [
+    wgslMinifyPlugin(),
     imagePlugin({ widths: [768, 1152], quality: 80 }),
     react({
       babel: {
@@ -22,8 +24,8 @@ export default defineConfig({
 
   build: {
     emptyOutDir: true,
-    sourcemap: true,
-    rollupOptions: {
+    sourcemap: process.env.NODE_ENV !== "production",
+    rolldownOptions: {
       external: ["opensrc/"],
     },
   },

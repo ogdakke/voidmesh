@@ -11,8 +11,7 @@
     "#lib/*": "./lib/*",
     "#hooks/*": "./hooks/*",
     "#context/*": "./context/*",
-    "#config": "./lib/config/index.ts",
-    "#app": "./app.tsx"
+    "#config": "./lib/config/index.ts"
   },
   "scripts": {
     "dev": "vite dev",
