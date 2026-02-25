@@ -22,6 +22,7 @@ import {
   type Point,
   type Viewport,
 } from "#types/canvas.ts";
+import { createEnum } from "#types/index.ts";
 import { canvasStore } from "./canvas-store.ts";
 import { entityDragVisual } from "./entity-drag-visual.ts";
 import { entityLabel } from "./entity-label.ts";
@@ -68,6 +69,15 @@ export interface TouchGestureState {
   /** Entity ID that the long-press is targeting */
   longPressEntityId: string | null;
 }
+
+/** State machine for space+drag canvas panning */
+export const SpacePanMode = createEnum({
+  idle: "idle",
+  ready: "ready",
+  panning: "panning",
+  panned: "panned",
+});
+type SpacePanMode = typeof SpacePanMode.infer;
 
 /** Drag-select mode determines how selection is modified */
 export type DragSelectMode = "replace" | "additive" | "subtractive";
@@ -166,6 +176,9 @@ export class GameLoop {
   /** Touch sensitivity configuration */
   #touchConfig: TouchConfig = { ...config.touch };
 
+  /** Space+drag canvas pan state machine */
+  #spacePanMode: SpacePanMode = SpacePanMode.idle;
+
   /** Double-tap detection state */
   private lastTapTime = 0;
   private lastTapEntityId: string | null = null;
@@ -225,6 +238,16 @@ export class GameLoop {
   /** Get current touch configuration */
   getTouchConfig(): TouchConfig {
     return { ...this.#touchConfig };
+  }
+
+  /** Set whether the spacebar is held for canvas panning */
+  setSpaceHeld(held: boolean): void {
+    this.#spacePanMode = held ? SpacePanMode.ready : SpacePanMode.idle;
+  }
+
+  /** Current space+drag pan state */
+  get spacePanMode(): SpacePanMode {
+    return this.#spacePanMode;
   }
 
   /** Check if multi-select mode is active (reads from canvas store) */
@@ -733,6 +756,12 @@ export class GameLoop {
     this.inputState.pointerPosition = screenPoint;
     this.inputState.pointerDownPosition = screenPoint;
 
+    if (this.#spacePanMode === SpacePanMode.ready || this.#spacePanMode === SpacePanMode.panned) {
+      this.#spacePanMode = SpacePanMode.panning;
+      this.stopMomentum();
+      return;
+    }
+
     const rect = this.container.getBoundingClientRect();
     const state = canvasStore.getState();
     const viewport = canvasStore.getViewport(); // Always get fresh viewport
@@ -832,7 +861,20 @@ export class GameLoop {
   }
 
   handlePointerMove(screenPoint: Point): void {
+    const lastPos = this.inputState.pointerPosition;
     this.inputState.pointerPosition = screenPoint;
+
+    if (this.#spacePanMode === SpacePanMode.panning) {
+      if (lastPos) {
+        const viewport = canvasStore.getViewport();
+        const dpr = window.devicePixelRatio || 1;
+        canvasStore.panBy({
+          x: (-(screenPoint.x - lastPos.x) * dpr) / viewport.zoom,
+          y: (-(screenPoint.y - lastPos.y) * dpr) / viewport.zoom,
+        });
+      }
+      return;
+    }
 
     // Update drag-select rectangle if active
     if (this.dragSelect?.isActive && this.container) {
@@ -926,6 +968,14 @@ export class GameLoop {
   }
 
   handlePointerUp(screenPoint: Point): void {
+    if (this.#spacePanMode === SpacePanMode.panning) {
+      this.#spacePanMode = SpacePanMode.panned;
+      this.inputState.pointerDown = false;
+      this.inputState.pointerDownPosition = null;
+      this.inputState.lastWorldPoint = null;
+      return;
+    }
+
     // Context menu flag should already be reset by handleContextMenuClose(),
     // but keep this check as a safety net for edge cases where the menu
     // might still be animating closed while a pointer event occurs

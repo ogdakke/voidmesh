@@ -23,6 +23,14 @@
   cursor: default;
 }
 
+.infinite-canvas--space {
+  cursor: grab;
+
+  &:active {
+    cursor: grabbing;
+  }
+}
+
 .infinite-canvas__canvas {
   display: block;
   width: 100%;
