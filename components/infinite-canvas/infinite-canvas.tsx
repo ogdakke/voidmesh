@@ -2,7 +2,7 @@ import { config } from "#config";
 import { useKeybinds, useRegisterKeybinds } from "#context/keybind-context.ts";
 import { DebugType, useCanvas, useViewport } from "#context/use-canvas.ts";
 import { useLayout } from "#context/use-layout.ts";
-import { canvasStore, gameLoop, viewportAnimation } from "#engine";
+import { canvasStore, gameLoop, SpacePanMode, viewportAnimation } from "#engine";
 import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
 import { useCanvasContainerResize } from "#hooks/use-canvas-container-resize.ts";
 import { useCanvasRenderer } from "#hooks/use-canvas-renderer.ts";
@@ -21,7 +21,15 @@ import {
 import { logger } from "#lib/client.logger.ts";
 import { undo } from "#lib/undo.ts";
 import { Check, Drag, Enlarge, Reduce, Square3dFromCenter } from "iconoir-react";
-import { memo, useEffect, useRef, type PropsWithChildren, type RefObject } from "react";
+import {
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type PropsWithChildren,
+  type RefObject,
+} from "react";
 import { About } from "../about/about.tsx";
 import { SettingsDrawer } from "../settings-drawer/index.ts";
 import { Button } from "../ui/button/index.tsx";
@@ -118,6 +126,8 @@ export function InfiniteCanvas() {
 
   // Initialize WebGPU renderer
   const { renderer, isReady, isSupported, error } = useCanvasRenderer(canvasRef);
+
+  const [isSpaceHeld, setIsSpaceHeld] = useState(false);
 
   const isMobile = useIsMobile();
   const bottomInset = isMobile ? config.canvas.mobile.bottomInset : 0;
@@ -338,6 +348,38 @@ export function InfiniteCanvas() {
     }
     await mediaActions.togglePlayback();
   };
+  const playPauseRef = useRef(playPauseShortcutHandler);
+  useLayoutEffect(() => {
+    playPauseRef.current = playPauseShortcutHandler;
+  });
+
+  // Space+drag canvas panning: intercept space before the keybind system (capture phase,
+  // registered first due to React's child-before-parent effect ordering).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== " " || e.repeat) return;
+      e.preventDefault();
+      gameLoop.setSpaceHeld(true);
+      setIsSpaceHeld(true);
+    };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key !== " ") return;
+      const wasReady = gameLoop.spacePanMode === SpacePanMode.ready;
+      gameLoop.setSpaceHeld(false);
+      setIsSpaceHeld(false);
+      if (wasReady) {
+        void playPauseRef.current(e);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, []);
 
   const zoomTo100PercentShortcutHandler = (e: KeyboardEvent) => {
     e.preventDefault();
@@ -581,6 +623,12 @@ export function InfiniteCanvas() {
   // Canvas context keybinds (active when no entity is selected)
   useRegisterKeybinds("canvas", [
     {
+      bind: " ",
+      group: "canvas",
+      label: "Hold and drag to pan canvas",
+      action: () => {}, // Handled by space+drag keyup handler to distinguish tap vs hold
+    },
+    {
       bind: (bb) => bb.withBind("h").withSensitive(false),
       group: "canvas",
       label: "Center canvas to origin",
@@ -709,7 +757,7 @@ export function InfiniteCanvas() {
       bind: " ",
       group: "video",
       label: "Play/Pause media",
-      action: playPauseShortcutHandler,
+      action: () => {}, // Handled by space+drag keyup handler to distinguish tap vs hold
     },
     {
       id: "copy_selection",
@@ -810,7 +858,7 @@ export function InfiniteCanvas() {
     <DropZone onDrop={handleDrop} className="infinite-canvas-dropzone">
       <div
         ref={containerRef}
-        className="infinite-canvas"
+        className={`infinite-canvas${isSpaceHeld ? " infinite-canvas--space" : ""}`}
         data-ready={isReady || undefined}
         tabIndex={0}
         onFocus={handleContainerFocus}
