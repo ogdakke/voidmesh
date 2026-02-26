@@ -183,7 +183,7 @@ function FeatureSection() {
     <section className="about-section">
       <h1>Features</h1>
       <ul>
-        <li>Works on video, GIFs, and images</li>
+        <li>Works on videos, images, GIFs, and SVGs</li>
         <li>
           Color palettes—Game Boy, CGA, sepia, or extract from any image. Custom palettes are saved
           locally in your browser.

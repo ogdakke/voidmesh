@@ -14,6 +14,11 @@ export function isImageFile(file: File): boolean {
   return file.type.startsWith("image/");
 }
 
+/** Check if a file is an SVG */
+export function isSvgFile(file: File): boolean {
+  return file.type === "image/svg+xml";
+}
+
 /** Result of loading a video file */
 export interface VideoLoadResult {
   videoElement: HTMLVideoElement;
@@ -263,6 +268,102 @@ export function createGifEntityData(
   };
 }
 
+/** Result of rasterizing an SVG */
+export interface SvgRasterizeResult {
+  bitmap: ImageBitmap;
+  width: number;
+  height: number;
+}
+
+/** Fixed rasterization size for SVGs (longest axis) */
+const SVG_RASTER_SIZE = 1024;
+
+/**
+ * Rasterize SVG text to an ImageBitmap.
+ * Always renders at {@link SVG_RASTER_SIZE}px on the longest axis, preserving aspect ratio.
+ * Shared by both the media loader (file drop) and deserializer (.vdmsh restore).
+ */
+export async function rasterizeSvg(text: string): Promise<SvgRasterizeResult> {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(text, "image/svg+xml");
+  const svgEl = doc.documentElement;
+
+  // Extract aspect ratio from viewBox, width/height, or default to 1:1
+  let aspectRatio = 1;
+  const viewBox = svgEl.getAttribute("viewBox");
+  if (viewBox) {
+    const parts = viewBox.split(/[\s,]+/).map(Number);
+    const vbW = parts[2] ?? 0;
+    const vbH = parts[3] ?? 0;
+    if (vbW > 0 && vbH > 0) aspectRatio = vbW / vbH;
+  } else {
+    const w = parseFloat(svgEl.getAttribute("width") ?? "");
+    const h = parseFloat(svgEl.getAttribute("height") ?? "");
+    if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
+      aspectRatio = w / h;
+    }
+  }
+
+  // Scale to fixed size, longest axis = SVG_RASTER_SIZE
+  let width: number;
+  let height: number;
+  if (aspectRatio >= 1) {
+    width = SVG_RASTER_SIZE;
+    height = Math.round(SVG_RASTER_SIZE / aspectRatio);
+  } else {
+    height = SVG_RASTER_SIZE;
+    width = Math.round(SVG_RASTER_SIZE * aspectRatio);
+  }
+
+  // Rasterize via Image element + OffscreenCanvas
+  const blob = new Blob([text], { type: "image/svg+xml" });
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = new Image();
+    img.src = url;
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error("Failed to rasterize SVG"));
+    });
+
+    const canvas = new OffscreenCanvas(width, height);
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(img, 0, 0, width, height);
+    const bitmap = await createImageBitmap(canvas);
+
+    return { bitmap, width, height };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/**
+ * Create entity data from an SVG file
+ */
+export function createSvgEntityData(
+  rasterResult: SvgRasterizeResult,
+  blob: Blob,
+  position: Point = { x: 0, y: 0 },
+  filename?: string,
+): Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string } {
+  const { bitmap, width, height } = rasterResult;
+  return {
+    name: filename,
+    mediaSource: { type: "svg", blob },
+    imageBitmap: bitmap,
+    position,
+    size: { width, height },
+    originalSize: { width, height },
+    rotation: 0,
+    shaderType: config.defaults.shader,
+    shaderParams: config.defaults.shaderParams,
+    textureDirty: true,
+    selected: false,
+    locked: false,
+    edited: false,
+  };
+}
+
 /**
  * Create entity data from a VideoLoadResult (for videos)
  */
@@ -319,6 +420,19 @@ export async function loadMediaFile(
   }
 
   if (isImageFile(file)) {
+    // Check for SVG before other image types (image/svg+xml starts with "image/")
+    if (isSvgFile(file)) {
+      try {
+        const text = await file.text();
+        const blob = new Blob([text], { type: "image/svg+xml" });
+        const rasterResult = await rasterizeSvg(text);
+        return createSvgEntityData(rasterResult, blob, position, file.name);
+      } catch (err) {
+        console.error("Failed to load SVG:", err);
+        return null;
+      }
+    }
+
     // Check for animated GIF before treating as static image
     if (file.type === "image/gif") {
       try {

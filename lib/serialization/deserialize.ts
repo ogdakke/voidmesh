@@ -4,6 +4,7 @@ import { canvasStore } from "#engine";
 import { config } from "#config";
 import { deepMerge } from "../deep-merge.ts";
 import { decodeGif } from "../gif-decoder.ts";
+import { rasterizeSvg } from "../media-loader.ts";
 import { bytesToImageBitmap, bytesToVideoElement } from "./media.ts";
 import { runMigrations } from "./migrations.ts";
 import type { DeserializeResult, SerializedEntity, StudioManifest } from "./types.ts";
@@ -263,6 +264,21 @@ async function deserializeEntity(
           blob,
         },
         playback: toPlaybackState(serialized.playback),
+      };
+    }
+
+    case "svg": {
+      const bytes = zipEntries[serialized.mediaFile];
+      if (!bytes) throw new Error(`Missing media file: ${serialized.mediaFile}`);
+
+      const text = new TextDecoder().decode(bytes);
+      const blob = new Blob([bytes.slice()], { type: "image/svg+xml" });
+      const { bitmap } = await rasterizeSvg(text);
+
+      return {
+        ...base,
+        imageBitmap: bitmap,
+        mediaSource: { type: "svg" as const, blob },
       };
     }
 

@@ -31,7 +31,11 @@ export interface SerializedViewport {
 // Entity (discriminated union on mediaType)
 // ============================================================================
 
-export type SerializedEntity = SerializedImageEntity | SerializedVideoEntity | SerializedGifEntity;
+export type SerializedEntity =
+  | SerializedImageEntity
+  | SerializedVideoEntity
+  | SerializedGifEntity
+  | SerializedSvgEntity;
 
 interface SerializedEntityBase {
   id: string;
@@ -75,6 +79,12 @@ export interface SerializedGifEntity extends SerializedEntityBase {
   fps: number;
   /** Playback state at time of save */
   playback: SerializedPlaybackState;
+}
+
+export interface SerializedSvgEntity extends SerializedEntityBase {
+  mediaType: "svg";
+  /** Path to the SVG file inside the zip archive */
+  mediaFile: string;
 }
 
 /** Playback state for serialization */

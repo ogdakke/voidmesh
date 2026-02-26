@@ -215,7 +215,7 @@ function CanvasContextMenuItems({
   // Compute selection composition from frozen selection
   const frozenEntities = frozenSelection?.entities ?? [];
   const animatedEntities = frozenEntities.filter(isAnimatedEntity);
-  const staticCount = frozenEntities.filter((e) => e.mediaSource.type === "image").length;
+  const staticCount = frozenEntities.filter((e) => !isAnimatedEntity(e)).length;
   const animatedCount = animatedEntities.length;
   const hasAnimated = animatedCount > 0;
   const hasMixed = hasAnimated && staticCount > 0;
