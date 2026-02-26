@@ -95,6 +95,24 @@
   /* lightness channel is only used as a multiplier for chroma (see below) */
   --gray: oklch(0.4 0 0);
   --tint: var(--primary);
+  --amber: oklch(0.78 0.2 62.49);
+
+  --amber-100: oklch(from var(--amber) var(--lightness-100) var(--chroma-100) h);
+  --amber-200: oklch(from var(--amber) var(--lightness-200) var(--chroma-200) h);
+  --amber-300: oklch(from var(--amber) var(--lightness-300) var(--chroma-300) h);
+  --amber-400: oklch(from var(--amber) var(--lightness-400) var(--chroma-400) h);
+  --amber-500: oklch(from var(--amber) var(--lightness-500) var(--chroma-500) h);
+  --amber-600: oklch(from var(--amber) var(--lightness-600) var(--chroma-600) h);
+  --amber-700: oklch(from var(--amber) var(--lightness-700) var(--chroma-700) h);
+  --amber-800: oklch(from var(--amber) var(--lightness-800) var(--chroma-800) h);
+  --amber-900: oklch(from var(--amber) var(--lightness-900) var(--chroma-900) h);
+  --amber-1000: oklch(from var(--amber) var(--lightness-1000) var(--chroma-1000) h);
+  --amber-1100: oklch(from var(--amber) var(--lightness-1100) var(--chroma-1100) h);
+  --amber-1200: oklch(from var(--amber) var(--lightness-1200) var(--chroma-1200) h);
+  --amber-1300: oklch(from var(--amber) var(--lightness-1300) var(--chroma-1300) h);
+  --amber-1400: oklch(from var(--amber) var(--lightness-1400) var(--chroma-1400) h);
+  --amber-1500: oklch(from var(--amber) var(--lightness-1500) var(--chroma-1500) h);
+  --amber-1600: oklch(from var(--amber) var(--lightness-1600) var(--chroma-1600) h);
 
   /** tint color scale */
   --tint-100: oklch(from var(--tint) var(--lightness-100) var(--chroma-100) h);

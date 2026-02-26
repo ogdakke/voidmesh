@@ -415,6 +415,10 @@ export function SliderPickerItem({
 export interface SliderPickerMixedItemProps extends ComponentProps<"div"> {
   /** Value to register with. @default "" */
   value?: string;
+  /** Toggle state (like a checkbox) - only used when item is selected */
+  checked?: boolean;
+  /** Called when selected item is clicked - toggles the checked state */
+  onCheckedChange?: (checked: boolean) => void;
 }
 
 /** Non-interactive scroll target shown when the controlled value is mixed across a multi-selection. */
@@ -422,6 +426,8 @@ export function SliderPickerMixedItem({
   value: itemValue = "",
   className,
   children,
+  checked,
+  onCheckedChange,
   ...props
 }: SliderPickerMixedItemProps) {
   const { centeredValue, registerItem, unregisterItem } = useSliderPickerContext();
@@ -436,16 +442,35 @@ export function SliderPickerMixedItem({
     }
   }, [itemValue, registerItem, unregisterItem]);
 
+  const handleClick = () => {
+    if (isSelected && onCheckedChange !== undefined) {
+      onCheckedChange(!checked);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if ((e.key === "Enter" || e.key === " ") && isSelected && onCheckedChange !== undefined) {
+      e.preventDefault();
+      onCheckedChange(!checked);
+    }
+  };
+
+  const hasToggle = onCheckedChange !== undefined;
+
   return (
     <div
       ref={ref}
       data-slot="slider-picker-mixed-item"
       data-value={itemValue}
       data-selected={isSelected || undefined}
+      data-toggleable={hasToggle || undefined}
+      data-checked={checked || undefined}
       className={clsx("slider-picker-item", className)}
       role="option"
       aria-selected={isSelected}
       tabIndex={-1}
+      onClick={handleClick}
+      onKeyDown={handleKeyDown}
       {...props}
     >
       {children}
