@@ -589,13 +589,31 @@ function MobileShapeStyleKnobs() {
 
 export function MobileStyleKnobs() {
   const { selectedShaderType, updateSelectedShaderType } = useCanvas();
-  const { selectionState } = useCanvasActions();
+  const { selectionState, handleShowOriginalChange } = useCanvasActions();
 
   // Floating label state
   const [floatingLabel, setFloatingLabel] = useState<string | null>(null);
   const floatingLabelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isShaderMixed = !selectionState.hasUniformShader;
+
+  // Show original state for toggle-on-reselect
+  const showOriginal = useParamValue("showOriginal", config.defaults.shaderParams.showOriginal);
+
+  const showFloatingLabel = (text: string) => {
+    if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
+    setFloatingLabel(text);
+    floatingLabelTimeoutRef.current = setTimeout(() => {
+      setFloatingLabel(null);
+    }, config.ui.floatingParamLabelHideTimeoutMs);
+  };
+
+  const handleShowOriginalToggle = () => {
+    // if mixed, set all to true; otherwise toggle
+    const newValue = showOriginal.isMixed ? true : !showOriginal.value;
+    handleShowOriginalChange(newValue);
+    showFloatingLabel(newValue ? "Show Original On" : "Show Original Off");
+  };
 
   const handleShaderTypeChange = (value: string) => {
     updateSelectedShaderType(value as ShaderType);
@@ -620,6 +638,9 @@ export function MobileStyleKnobs() {
       setFloatingLabel(null);
     }, config.ui.floatingParamLabelHideTimeoutMs);
   };
+
+  // checked=true means shader is active (not showing original)
+  const showOriginalChecked = showOriginal.isMixed ? true : !showOriginal.value;
 
   return (
     <>
@@ -646,7 +667,11 @@ export function MobileStyleKnobs() {
             aria-label="Filter selection"
           >
             {isShaderMixed && (
-              <SliderPickerMixedItem className="mobile-style-knobs__item">
+              <SliderPickerMixedItem
+                className="mobile-style-knobs__item"
+                checked={showOriginalChecked}
+                onCheckedChange={handleShowOriginalToggle}
+              >
                 <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
                   <QuestionMark />
                 </button>
@@ -658,6 +683,8 @@ export function MobileStyleKnobs() {
                 key={shader.value}
                 value={shader.value}
                 className="mobile-style-knobs__item"
+                checked={showOriginalChecked}
+                onCheckedChange={handleShowOriginalToggle}
               >
                 <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
                   {shaderIconMap[shader.value]()}
