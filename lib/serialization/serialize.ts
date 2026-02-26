@@ -127,6 +127,16 @@ async function serializeEntity(entity: ShaderCanvasEntity): Promise<EntitySerial
         mediaEntries,
       };
     }
+
+    case "svg": {
+      const bytes = new Uint8Array(await entity.mediaSource.blob.arrayBuffer());
+      const path = `media/${entity.id}.svg`;
+      mediaEntries[path] = bytes;
+      return {
+        serialized: { ...base, mediaType: "svg", mediaFile: path },
+        mediaEntries,
+      };
+    }
   }
 }
 

@@ -337,6 +337,7 @@ export const MediaType = createEnum({
   image: "image",
   video: "video",
   gif: "gif",
+  svg: "svg",
 });
 
 export type MediaType = typeof MediaType.infer;
@@ -356,9 +357,14 @@ export type MediaSourceGif = {
   /** Original GIF binary data for serialization */
   blob: Blob;
 };
+export type MediaSourceSvg = {
+  type: typeof MediaType.svg;
+  /** Original SVG data for lossless serialization */
+  blob: Blob;
+};
 
-/** Media source for an entity - an image, video, or animated GIF */
-export type MediaSource = MediaSourceImage | MediaSourceVideo | MediaSourceGif;
+/** Media source for an entity - an image, video, animated GIF, or SVG */
+export type MediaSource = MediaSourceImage | MediaSourceVideo | MediaSourceGif | MediaSourceSvg;
 
 /** Video playback state */
 export interface PlaybackState {
@@ -427,14 +433,20 @@ type ShaderCanvasGifEntity = ShaderCanvasEntityBase & {
   mediaSource: MediaSourceGif;
 };
 
+type ShaderCanvasSvgEntity = ShaderCanvasEntityBase & {
+  /** Media source SVG */
+  mediaSource: MediaSourceSvg;
+};
+
 /** Animated entity type for type guard return (not in main union) */
 type ShaderCanvasAnimatedEntity = ShaderCanvasVideoEntity | ShaderCanvasGifEntity;
 
-/** Entity on the infinite canvas - an image or video with shader processing */
+/** Entity on the infinite canvas - an image, video, GIF, or SVG with shader processing */
 export type ShaderCanvasEntity =
   | ShaderCanvasImageEntity
   | ShaderCanvasVideoEntity
-  | ShaderCanvasGifEntity;
+  | ShaderCanvasGifEntity
+  | ShaderCanvasSvgEntity;
 
 /** Type guard for video entities */
 export function isVideoEntity(entity: ShaderCanvasEntity): entity is ShaderCanvasVideoEntity {
@@ -449,6 +461,11 @@ export function isGifEntity(entity: ShaderCanvasEntity): entity is ShaderCanvasG
 /** Type guard for animated entities (video or GIF) */
 export function isAnimatedEntity(entity: ShaderCanvasEntity): entity is ShaderCanvasAnimatedEntity {
   return entity.mediaSource.type === "video" || entity.mediaSource.type === "gif";
+}
+
+/** Type guard for SVG entities */
+export function isSvgEntity(entity: ShaderCanvasEntity): entity is ShaderCanvasSvgEntity {
+  return entity.mediaSource.type === "svg";
 }
 
 /** Pointer state for tracking drag operations */

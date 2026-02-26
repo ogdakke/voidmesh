@@ -75,6 +75,8 @@ function tryCleanupEntityResources(entity: ShaderCanvasEntity, ownerToken: numbe
     for (const frame of entity.mediaSource.frames) {
       frame.bitmap.close();
     }
+  } else if (entity.mediaSource.type === "svg") {
+    entity.imageBitmap.close();
   } else if (entity.mediaSource.type === "image") {
     entity.imageBitmap.close();
   }
@@ -503,8 +505,12 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       }),
     );
 
-    // Async palette extraction for images and GIFs (use first frame for GIFs)
-    if (entity.mediaSource.type === MediaType.image || entity.mediaSource.type === MediaType.gif) {
+    // Async palette extraction for images, GIFs, and SVGs (use first frame for GIFs)
+    if (
+      entity.mediaSource.type === MediaType.image ||
+      entity.mediaSource.type === MediaType.gif ||
+      entity.mediaSource.type === MediaType.svg
+    ) {
       // Capture the preset at add-time (in case URL changes before extraction completes)
       const targetPreset = renderState.preset;
 
