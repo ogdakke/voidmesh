@@ -15,7 +15,7 @@ function MobileFloat() {
   const { multiSelectMode, selectedEntityIds } = useCanvas();
   const { isFullscreen } = useLayout();
   const palette = useParamValue("palette", null);
-  const bottomBarDisabled = multiSelectMode || selectedEntityIds.size === 0;
+  const bottomBarDisabled = multiSelectMode || selectedEntityIds.size === 0 || isFullscreen;
 
   const propsMapByItem: Record<BarItem, { disabled: boolean }> = {
     "adjustments and post-processing": {

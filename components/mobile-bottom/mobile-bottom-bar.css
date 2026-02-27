@@ -1,4 +1,5 @@
 .mobile-bottom-bar {
+  position: relative;
   background: linear-gradient(to top, var(--background), var(--gray-100) 50%, var(--background));
   display: grid;
   grid-auto-flow: column;
@@ -9,10 +10,33 @@
   height: 100%;
   padding: 4px;
   filter: drop-shadow(0px 1px 2px #00000010);
+  gap: 4px;
 
   @media (prefers-color-scheme: dark) {
-    background: var(--gray-50);
+    background: color-mix(in oklch, var(--gray-50) 88%, transparent);
+    backdrop-filter: blur(5px);
+    border: none;
     filter: none;
+    box-shadow: 0px 0px 3px 1px #000000 inset;
+
+    &::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      padding: 2px;
+      background: linear-gradient(to top, #4040402b 10%, transparent);
+      -webkit-mask:
+        linear-gradient(#fff 0 0) content-box,
+        linear-gradient(#fff 0 0);
+      -webkit-mask-composite: xor;
+      mask:
+        linear-gradient(#fff 0 0) content-box,
+        linear-gradient(#fff 0 0);
+      mask-composite: exclude;
+      pointer-events: none;
+      box-shadow: 0px 0px 0px 0.5px #3e3e3e24 inset;
+    }
   }
 }
 
@@ -63,7 +87,7 @@
     box-shadow: 0px 0px 3px 1px #2c2c2c1a inset;
 
     @media (prefers-color-scheme: dark) {
-      background: var(--gray-100);
+      background: color-mix(in oklch, var(--gray-100) 40%, transparent);
       box-shadow:
         0px 0px 3px 1px #000000 inset,
         0px 4px 40px 1px #d1d1d11a;
@@ -137,6 +161,7 @@
   height: var(--bottom-bar-height, 56px);
 }
 
+/* TODO: delete this */
 .mobile-action-btn-slot {
   justify-self: end;
   display: grid;
@@ -149,6 +174,7 @@
   }
 }
 
+/* TODO: delete these */
 .mobile-delete-btn,
 .mobile-fullscreen-btn {
   --in-dur: 150ms;
@@ -157,7 +183,7 @@
 
   opacity: 1;
   scale: 1;
-  width: 100%;
+  /*width: 100%;*/
   height: inherit;
   filter: drop-shadow(0px 1px 2px #00000010);
   border-color: var(--border-75);
