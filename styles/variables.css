@@ -133,6 +133,7 @@
   --tint-1600: oklch(from var(--tint) var(--lightness-1600) var(--chroma-1600) h);
 
   /* gray scale */
+  --gray-75: oklch(from var(--gray) var(--lightness-75) c h);
   --gray-100: oklch(from var(--gray) var(--lightness-100) c h);
   --gray-200: oklch(from var(--gray) var(--lightness-200) c h);
   --gray-300: oklch(from var(--gray) var(--lightness-300) c h);
@@ -156,6 +157,7 @@
   --background-color: var(--background);
   --gray-50: #ffffff;
 
+  --lightness-75: 97.1%;
   --lightness-100: 98.1187%;
   --lightness-200: 95.2045%;
   --lightness-300: 91.1434%;
@@ -201,6 +203,7 @@
     --background-color: var(--background);
     --gray-50: oklch(16% 0 0);
 
+    --lightness-75: 20.6725%;
     --lightness-100: 29.6725%;
     --lightness-200: 35.3616%;
     --lightness-300: 41.0821%;

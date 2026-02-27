@@ -52,32 +52,60 @@
 
 /* Mobile drawer */
 .color-picker__drawer {
-  max-height: calc(280px + env(safe-area-inset-bottom, 0px));
+  max-height: calc(400px + env(safe-area-inset-bottom, 0px));
+
+  .color-picker__label {
+    font-size: var(--text-xs);
+  }
+
+  .color-picker__input {
+    border-color: transparent;
+    background: var(--gray-75);
+  }
 }
 
 .color-picker__drawer-body {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--spacing-4);
-  align-items: start;
-  padding: var(--spacing-3) var(--spacing-2) env(safe-area-inset-bottom, var(--spacing-3))
-    var(--spacing-2);
+  grid-template-rows: 1fr auto;
+  padding: calc(var(--color-radius) + var(--spacing-3)) var(--spacing-2)
+    max(env(safe-area-inset-bottom, var(--spacing-2)), var(--spacing-2)) var(--spacing-2);
   height: 100%;
+  --color-radius: var(--radius-xl);
+  filter: drop-shadow(0 0px 6px #00000014);
 }
 
 .color-picker__drawer-actions {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr auto;
+  gap: var(--spacing-3) var(--spacing-2);
+  padding: calc(var(--color-radius) + var(--spacing)) var(--spacing-2) var(--spacing-2);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: var(--radius-2xl);
+  border-bottom-right-radius: var(--radius-2xl);
+  align-items: end;
+  background: var(--gray-100);
+  z-index: 0;
+
+  :where(button[data-variant="destructive"]) {
+    grid-column: 1 / -1;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    background: var(--gray-50);
+    box-shadow: 0px 0px 0px 1px #74747414 inset;
+  }
 }
 
 .color-picker__drawer-input {
   width: 100%;
-  height: 100%;
+  height: calc(100% + calc(2 * var(--color-radius)));
   background-color: var(--background);
   border: 1px solid var(--border);
   padding: 0;
-  border-radius: var(--radius-xl);
+  border-radius: var(--color-radius);
+  margin-top: calc(-1 * var(--color-radius));
+  z-index: 1;
   cursor: pointer;
 
   &::-webkit-color-swatch-wrapper {

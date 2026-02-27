@@ -6,6 +6,7 @@ import { Button } from "../button";
 import { useIsMobile } from "#hooks/use-is-mobile.ts";
 
 import "./color-picker.css";
+import { Field } from "#ui/field/field.tsx";
 
 export interface ColorPickerProps {
   /** Hex color value like "#ff0000" */
@@ -73,7 +74,13 @@ export function ColorPicker({
   };
 
   const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    onChange(e.target.value);
+    const raw = e.target.value.trim();
+    const hex = /^#[0-9a-fA-F]{3}$/.test(raw)
+      ? `#${raw[1]}${raw[1]}${raw[2]}${raw[2]}${raw[3]}${raw[3]}`
+      : raw;
+    if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
+      onChange(hex);
+    }
   };
 
   const hiddenInput = (
@@ -106,6 +113,8 @@ export function ColorPicker({
     onRemove?.();
   };
 
+  const [defaultValue] = useState<string>(value);
+
   if (isMobile) {
     return (
       <Drawer.Root open={drawerOpen} onOpenChange={handleDrawerOpenChange}>
@@ -130,12 +139,22 @@ export function ColorPicker({
               <label
                 htmlFor="color-picker-mobile"
                 className="ui-button"
-                data-variant="secondary"
+                data-variant="primary"
                 data-size="md"
               >
                 <EditPencil />
                 <span>Edit</span>
               </label>
+              <Field.Root validationMode="onChange">
+                <Field.Label className="color-picker__label">Color</Field.Label>
+                <Field.Control
+                  className="color-picker__input"
+                  type="text"
+                  defaultValue={defaultValue}
+                  pattern="#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?"
+                  onChange={handleInput}
+                />
+              </Field.Root>
               {onRemove && (
                 <Button onClick={handleRemove} variant="destructive">
                   <Trash />
