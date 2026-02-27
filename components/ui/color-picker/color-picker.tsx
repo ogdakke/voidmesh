@@ -146,8 +146,9 @@ export function ColorPicker({
                 <span>Edit</span>
               </label>
               <Field.Root validationMode="onChange">
-                <Field.Label className="color-picker__label">Color</Field.Label>
                 <Field.Control
+                  required
+                  aria-label="Color"
                   className="color-picker__input"
                   type="text"
                   defaultValue={defaultValue}

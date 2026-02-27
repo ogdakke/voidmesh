@@ -54,13 +54,18 @@
 .color-picker__drawer {
   max-height: calc(400px + env(safe-area-inset-bottom, 0px));
 
-  .color-picker__label {
-    font-size: var(--text-xs);
+  :where(.color-picker__input) {
+    background: var(--gray-75);
+    height: calc(9 * var(--spacing));
+    font-size: 1.5rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--gray-1400);
+    font-variant: tabular-nums;
   }
 
-  .color-picker__input {
+  :where(.color-picker__input:not([data-invalid])) {
     border-color: transparent;
-    background: var(--gray-75);
   }
 }
 
@@ -83,7 +88,7 @@
   border: 1px solid var(--border);
   border-bottom-left-radius: var(--radius-2xl);
   border-bottom-right-radius: var(--radius-2xl);
-  align-items: end;
+  align-items: center;
   background: var(--gray-100);
   z-index: 0;
 
