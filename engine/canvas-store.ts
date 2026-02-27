@@ -45,6 +45,11 @@ export interface CanvasState {
   viewportVersion: number; // Incremented only on viewport changes
   selectionVersion: number; // Incremented on selection/entity changes
   playbackVersion: number; // Incremented on video time updates (lightweight, isolated)
+  dragVersion: number; // Incremented on entity drag state changes (mobile long-press drag)
+
+  // Mobile entity drag state (transient)
+  /** Whether a mobile long-press entity drag is currently active */
+  entityDragActive: boolean;
 }
 
 // Snapshot types for selective subscriptions
@@ -60,6 +65,11 @@ export interface SelectionSnapshot {
   entities: Map<string, ShaderCanvasEntity>;
   multiSelectMode: boolean;
   snapToGrid: boolean;
+  version: number;
+}
+
+export interface DragSnapshot {
+  entityDragActive: boolean;
   version: number;
 }
 
@@ -115,6 +125,7 @@ export class CanvasStore extends Store<CanvasState> {
   readonly getViewportSnapshot: () => ViewportSnapshot;
   readonly getSelectionSnapshot: () => SelectionSnapshot;
   readonly getPlaybackSnapshot: () => PlaybackSnapshot;
+  readonly getDragSnapshot: () => DragSnapshot;
 
   constructor() {
     super({
@@ -135,6 +146,8 @@ export class CanvasStore extends Store<CanvasState> {
       viewportVersion: 0,
       selectionVersion: 0,
       playbackVersion: 0,
+      dragVersion: 0,
+      entityDragActive: false,
     });
 
     this.#logger = logger;
@@ -190,6 +203,11 @@ export class CanvasStore extends Store<CanvasState> {
         version: s.playbackVersion,
       };
     });
+
+    this.getDragSnapshot = this.createSnapshot("dragVersion", (s) => ({
+      entityDragActive: s.entityDragActive,
+      version: s.dragVersion,
+    }));
   }
 
   /** Direct state access for game loop - NO ALLOCATIONS */
@@ -442,6 +460,13 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.snapToGrid = enabled;
     this.state.version++;
     this.notifySelectionChange();
+  }
+
+  setEntityDragActive(active: boolean): void {
+    if (this.state.entityDragActive === active) return;
+    this.state.entityDragActive = active;
+    this.state.dragVersion++;
+    this.notify();
   }
 
   setMultiSelectMode(enabled: boolean): void {

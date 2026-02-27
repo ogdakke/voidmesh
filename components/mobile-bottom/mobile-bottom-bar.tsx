@@ -8,10 +8,8 @@ import {
 } from "react";
 import "./mobile-bottom-bar.css";
 import clsx from "clsx";
-import { Enlarge, Reduce, Trash } from "iconoir-react";
+import { Enlarge, Reduce } from "iconoir-react";
 import { useLayout } from "#context/use-layout.ts";
-import { Button } from "../ui/button/index.tsx";
-import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
 
 interface BottomBarContextValue<T extends string> {
   items: T[];
@@ -74,43 +72,11 @@ function BottomBarRoot<T extends string>({
   );
 }
 
-function DeleteButton({ hidden }: { hidden?: boolean }) {
-  const { deleteEntity } = useCanvasActions();
-
-  return (
-    <Button
-      variant="destructive"
-      aria-label="Delete selected"
-      className="mobile-delete-btn"
-      hidden={hidden}
-      onClick={() => deleteEntity()}
-    >
-      <Trash />
-    </Button>
-  );
-}
-
-function FullscreenButton({ hidden }: { hidden?: boolean }) {
-  const { isFullscreen, toggleFullscreen } = useLayout();
-  return (
-    <Button
-      variant="secondary"
-      aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-      className="mobile-fullscreen-btn"
-      hidden={hidden}
-      onClick={toggleFullscreen}
-    >
-      {isFullscreen ? <Reduce /> : <Enlarge />}
-    </Button>
-  );
-}
-
 export function MobileBottomBar<T extends string>({
   items,
   children,
   onChange,
   value,
-  hideItems,
 }: {
   items: readonly T[];
   children: ReactNode | ((items: readonly T[]) => ReactNode);
@@ -118,20 +84,20 @@ export function MobileBottomBar<T extends string>({
   value: T | null;
   hideItems?: boolean;
 }) {
-  const { hasSelection } = useCanvasActions();
-  const { isFullscreen } = useLayout();
-  const showDelete = hasSelection && !isFullscreen;
+  const { isFullscreen, toggleFullscreen } = useLayout();
   return (
     <div className="mobile-bottom-bar-container">
-      {!hideItems && (
-        <BottomBarRoot items={items} onChange={onChange} value={value}>
-          {children}
-        </BottomBarRoot>
-      )}
-      <div className="mobile-action-btn-slot">
-        <DeleteButton hidden={!showDelete} />
-        <FullscreenButton hidden={showDelete} />
-      </div>
+      <BottomBarRoot items={items} onChange={onChange} value={value}>
+        {typeof children === "function" ? children(items) : children}
+        <button
+          className={"bottom-bar-item"}
+          data-active={isFullscreen ? true : undefined}
+          onClick={toggleFullscreen}
+          aria-label={`Toggle fullscreen ${isFullscreen ? "off" : "on"}`}
+        >
+          {isFullscreen ? <Reduce /> : <Enlarge />}
+        </button>
+      </BottomBarRoot>
     </div>
   );
 }

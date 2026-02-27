@@ -1399,6 +1399,7 @@ export class GameLoop {
     // Stop panning — the viewport freezes, entity follows finger
     this.touchState.isPanning = false;
     this.touchState.isDraggingEntity = true;
+    canvasStore.setEntityDragActive(true);
 
     // Select the entity and determine drag target
     const state = canvasStore.getState();
@@ -1769,6 +1770,7 @@ export class GameLoop {
         };
       } else if (this.touchState.isDraggingEntity) {
         // Entity drag complete — just drop it. No tap handling, no momentum.
+        canvasStore.setEntityDragActive(false);
         entityDragVisual.release();
       } else if (!isCancelled && this.touchState.isPinching) {
         // Pinch ended (both fingers lifted) — trigger zoom momentum
@@ -1966,6 +1968,10 @@ export class GameLoop {
   /** Reset all touch state */
   private resetTouchState(): void {
     this.cancelLongPressTimer();
+    // Clear drag state before resetting (guard: only notify store if drag was active)
+    if (this.touchState.isDraggingEntity) {
+      canvasStore.setEntityDragActive(false);
+    }
     // Note: do NOT cancel doubleTapTimer here — it must survive across taps
     // so the delayed playback toggle can fire after the double-tap window expires.
     this.touchState = {
