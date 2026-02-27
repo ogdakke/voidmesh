@@ -25,6 +25,7 @@ import { PaletteUpload } from "../palette-upload/index.ts";
 import { ColorPaletteThumbnail } from "../color-palette-thumbnail/index.ts";
 import "./knobs.css";
 import "./mobile-color-knobs.css";
+import clsx from "clsx";
 
 // Special IDs for non-palette items
 const PRESERVE_COLORS_ID = "__preserve_colors__";
@@ -255,12 +256,17 @@ function PreserveColors({ on, isMixed }: { on: boolean; isMixed: boolean }) {
   return (
     <div className="mobile-color__preserve-colors">
       <p className="preserve-colors-label">
-        Preserve Colors Mode ({isMixed ? "Mixed" : on ? "On" : "Off"})
+        <span
+          key={`${on}${isMixed}`}
+          className={clsx("preserve-colors-status", {
+            "preserve-colors-status--on": on,
+            "preserve-colors-status--off": !on,
+            "preserve-colors-status--mixed": isMixed,
+          })}
+        />
+        <span>Preserve Colors Mode</span>
       </p>
-      <p className="preserve-colors-hint">
-        Original colors with background of the selected palette (default:{" "}
-        <span className="color-circle--black" /> black)
-      </p>
+      <p className="preserve-colors-hint">Original colors with the palette’s background</p>
     </div>
   );
 }

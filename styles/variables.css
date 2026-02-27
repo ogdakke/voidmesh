@@ -99,6 +99,8 @@
   --gray: oklch(0.4 0 0);
   --tint: var(--primary);
   --amber: oklch(0.78 0.2 62.49);
+  --green: oklch(0.75 0.29 141.23);
+  --red: oklch(0.65 0.3 28.77);
 
   --amber-100: oklch(from var(--amber) var(--lightness-100) var(--chroma-100) h);
   --amber-200: oklch(from var(--amber) var(--lightness-200) var(--chroma-200) h);
@@ -117,9 +119,40 @@
   --amber-1500: oklch(from var(--amber) var(--lightness-1500) var(--chroma-1500) h);
   --amber-1600: oklch(from var(--amber) var(--lightness-1600) var(--chroma-1600) h);
 
-  /** tint color scale */
-  --tint-100: oklch(from var(--tint) var(--lightness-100) var(--chroma-100) h);
-  --tint-200: oklch(from var(--tint) var(--lightness-200) var(--chroma-200) h);
+  --green-100: oklch(from var(--green) var(--lightness-100) var(--chroma-100) h);
+  --green-200: oklch(from var(--green) var(--lightness-200) var(--chroma-200) h);
+  --green-300: oklch(from var(--green) var(--lightness-300) var(--chroma-300) h);
+  --green-400: oklch(from var(--green) var(--lightness-400) var(--chroma-400) h);
+  --green-500: oklch(from var(--green) var(--lightness-500) var(--chroma-500) h);
+  --green-600: oklch(from var(--green) var(--lightness-600) var(--chroma-600) h);
+  --green-700: oklch(from var(--green) var(--lightness-700) var(--chroma-700) h);
+  --green-800: oklch(from var(--green) var(--lightness-800) var(--chroma-800) h);
+  --green-900: oklch(from var(--green) var(--lightness-900) var(--chroma-900) h);
+  --green-1000: oklch(from var(--green) var(--lightness-1000) var(--chroma-1000) h);
+  --green-1100: oklch(from var(--green) var(--lightness-1100) var(--chroma-1100) h);
+  --green-1200: oklch(from var(--green) var(--lightness-1200) var(--chroma-1200) h);
+  --green-1300: oklch(from var(--green) var(--lightness-1300) var(--chroma-1300) h);
+  --green-1400: oklch(from var(--green) var(--lightness-1400) var(--chroma-1400) h);
+  --green-1500: oklch(from var(--green) var(--lightness-1500) var(--chroma-1500) h);
+  --green-1600: oklch(from var(--green) var(--lightness-1600) var(--chroma-1600) h);
+
+  --red-100: oklch(from var(--red) var(--lightness-100) var(--chroma-100) h);
+  --red-200: oklch(from var(--red) var(--lightness-200) var(--chroma-200) h);
+  --red-300: oklch(from var(--red) var(--lightness-300) var(--chroma-300) h);
+  --red-400: oklch(from var(--red) var(--lightness-400) var(--chroma-400) h);
+  --red-500: oklch(from var(--red) var(--lightness-500) var(--chroma-500) h);
+  --red-600: oklch(from var(--red) var(--lightness-600) var(--chroma-600) h);
+  --red-700: oklch(from var(--red) var(--lightness-700) var(--chroma-700) h);
+  --red-800: oklch(from var(--red) var(--lightness-800) var(--chroma-800) h);
+  --red-900: oklch(from var(--red) var(--lightness-900) var(--chroma-900) h);
+  --red-1000: oklch(from var(--red) var(--lightness-1000) var(--chroma-1000) h);
+  --red-1100: oklch(from var(--red) var(--lightness-1100) var(--chroma-1100) h);
+  --red-1200: oklch(from var(--red) var(--lightness-1200) var(--chroma-1200) h);
+  --red-1300: oklch(from var(--red) var(--lightness-1300) var(--chroma-1300) h);
+  --red-1400: oklch(from var(--red) var(--lightness-1400) var(--chroma-1400) h);
+  --red-1500: oklch(from var(--red) var(--lightness-1500) var(--chroma-1500) h);
+  --red-1600: oklch(from var(--red) var(--lightness-1600) var(--chroma-1600) h);
+
   --tint-300: oklch(from var(--tint) var(--lightness-300) var(--chroma-300) h);
   --tint-400: oklch(from var(--tint) var(--lightness-400) var(--chroma-400) h);
   --tint-500: oklch(from var(--tint) var(--lightness-500) var(--chroma-500) h);

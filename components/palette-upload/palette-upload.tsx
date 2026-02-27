@@ -28,12 +28,10 @@ export function PaletteUpload({ onUpload, variant = "desktop" }: PaletteUploadPr
           variant="primary"
           onClick={() => inputRef.current?.click()}
           className="mobile-palette-upload__button"
-          size="sm"
         >
           <Palette />
           <span>Extract Palette from Image</span>
         </Button>
-        <p className="mobile-palette__hint">Select an image to extract its color palette</p>
       </div>
     );
   }
