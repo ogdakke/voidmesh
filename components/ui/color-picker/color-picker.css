@@ -85,6 +85,12 @@
     height: calc(9 * var(--spacing));
     color: var(--gray-1400);
     padding-left: calc(1.1em);
+    border-radius: var(--radius-xl);
+    box-shadow: 0px 0px 7px 1px #0000000d inset;
+
+    @media (prefers-color-scheme: dark) {
+      box-shadow: 0px 0px 7px 1px #00000047 inset;
+    }
   }
 
   :where(.color-picker__input:not([data-invalid])) {
@@ -105,7 +111,6 @@
 .color-picker__drawer-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  grid-template-rows: 1fr auto;
   gap: var(--spacing-3) var(--spacing-2);
   padding: calc(var(--color-radius) + var(--spacing)) var(--spacing-2) var(--spacing-2);
   border: 1px solid var(--border);
