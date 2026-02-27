@@ -57,7 +57,10 @@ export function ColorPicker({
   const onChangeEndRef = useRef(onChangeEnd);
   // oxlint-disable-next-line react-hooks-js/refs -- callback ref pattern: only read in event handlers, not during render
   onChangeEndRef.current = onChangeEnd;
-  const [defaultValue] = useState<string>(() => value.replace(/^#/, ""));
+  // While focused, display the user's local edits. Otherwise derive from the value prop.
+  const [inputValue, setInputValue] = useState<string>(() => value.replace(/^#/, ""));
+  const [textFocused, setTextFocused] = useState(false);
+  const displayValue = textFocused ? inputValue : value.replace(/^#/, "");
 
   const startInteraction = () => {
     if (!isInteractingRef.current) {
@@ -94,10 +97,13 @@ export function ColorPicker({
 
   // For the text input — strips leading "#" from display, parses hex/hexA
   const handleTextChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.value.startsWith("#")) {
-      e.target.value = e.target.value.slice(1);
+    let raw = e.target.value;
+    if (raw.startsWith("#")) {
+      raw = raw.slice(1);
+      e.target.value = raw; // immediate DOM fix, before controlled re-render
     }
-    const resolved = resolveHex(e.target.value);
+    setInputValue(raw);
+    const resolved = resolveHex(raw);
     if (resolved) onChange(resolved);
   };
 
@@ -135,10 +141,10 @@ export function ColorPicker({
     event.preventDefault();
     const resolved = resolveHex(event.clipboardData.getData("text"));
     if (resolved) {
-      event.currentTarget.value = resolved.slice(1); // strip # — shown as pseudo-element
-      // Call validate() imperatively so Field reads the updated element.validity and clears
-      // data-invalid. Needed for validation errors to be cleared
+      const stripped = resolved.slice(1);
+      event.currentTarget.value = stripped; // sync DOM before validate() reads element.validity
       fieldActionsRef.current?.validate();
+      setInputValue(stripped);
       onChange(resolved);
     }
   };
@@ -179,9 +185,16 @@ export function ColorPicker({
                   aria-label="Color"
                   className="color-picker__input"
                   type="text"
-                  defaultValue={defaultValue}
+                  value={displayValue}
                   pattern="[0-9a-fA-F]{3}([0-9a-fA-F]{3})?"
                   onChange={handleTextChange}
+                  onFocus={() => {
+                    setTextFocused(true);
+                    setInputValue(value.replace(/^#/, ""));
+                  }}
+                  onBlur={() => {
+                    setTextFocused(false);
+                  }}
                   placeholder="000"
                   onPaste={handlePaste}
                 />
