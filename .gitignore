@@ -155,4 +155,4 @@ msdf-atlas-gen/
 .claude/worktrees
 
 # opensrc - source code for packages
-opensrc/
+opensrc/repos/
