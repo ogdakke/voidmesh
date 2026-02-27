@@ -54,14 +54,37 @@
 .color-picker__drawer {
   max-height: calc(400px + env(safe-area-inset-bottom, 0px));
 
+  :where(.ui-field) {
+    position: relative;
+
+    .color-picker__input,
+    &::before {
+      line-height: 1.5rem;
+      font-size: 1.5rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      font-family: var(--sans-serif-rounded);
+      font-variant: tabular-nums;
+    }
+
+    &::before {
+      content: "#";
+      display: block;
+      width: 1em;
+      height: 1em;
+      position: absolute;
+      left: 0;
+      top: 50%;
+      transform: translateY(-50%);
+      padding: 0 var(--spacing-2);
+      color: var(--gray-1000);
+    }
+  }
   :where(.color-picker__input) {
     background: var(--gray-75);
     height: calc(9 * var(--spacing));
-    font-size: 1.5rem;
-    font-weight: 600;
-    text-transform: uppercase;
     color: var(--gray-1400);
-    font-variant: tabular-nums;
+    padding-left: calc(1.1em);
   }
 
   :where(.color-picker__input:not([data-invalid])) {
