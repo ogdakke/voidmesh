@@ -1,0 +1,44 @@
+.mobile-delete-drop-zone {
+  --_size: calc(10 * var(--spacing));
+  width: var(--_size);
+  height: var(--_size);
+  border-radius: 50%;
+  margin-inline: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--floating-background);
+  filter: drop-shadow(var(--popover-shadow)) blur(8px);
+  color: var(--color);
+  backdrop-filter: var(--floating-backdrop);
+  opacity: 0;
+  scale: 0.86;
+  pointer-events: none;
+  transition:
+    opacity 200ms ease-out,
+    scale 200ms ease-out,
+    background-color 150ms ease-out,
+    filter 200ms ease-out;
+  margin-block-end: var(--spacing-2);
+
+  svg {
+    width: 2rem;
+    height: 2rem;
+  }
+
+  &[data-drag-active] {
+    opacity: 1;
+    scale: 1;
+    filter: drop-shadow(var(--popover-shadow)) blur(0px);
+  }
+
+  &[data-over] {
+    scale: 1.22;
+    background-color: color-mix(in oklch, var(--red) 70%, transparent);
+    color: var(--red-200);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+}

@@ -5,6 +5,7 @@ import { MediaControls } from "./infinite-canvas/media-controls.tsx";
 import { MobileControls } from "./mobile-controls.tsx";
 import { BottomBarItem, MobileBottomBar } from "./mobile-bottom/mobile-bottom-bar.tsx";
 import { items, type BarItem } from "./mobile-bottom/bar-items.ts";
+import { DeleteDropZone } from "./delete-drop-zone/delete-drop-zone.tsx";
 import { Drawer } from "#ui/drawer/index.tsx";
 import { useCanvas } from "#context/use-canvas.ts";
 import { useLayout } from "#context/use-layout.ts";
@@ -38,6 +39,7 @@ function MobileFloat() {
 
   return (
     <div className="mobile-float">
+      <DeleteDropZone />
       {!isFullscreen && !multiSelectMode && <MediaControls />}
       {!isFullscreen && (
         <div className="mobile-controls-container">
@@ -45,12 +47,7 @@ function MobileFloat() {
         </div>
       )}
 
-      <MobileBottomBar
-        items={items}
-        onChange={setActiveItem}
-        value={activeItem}
-        hideItems={isFullscreen}
-      >
+      <MobileBottomBar items={items} onChange={setActiveItem} value={activeItem}>
         <BottomBarItem label="style" {...propsMapByItem["style"]}>
           <Component />
         </BottomBarItem>

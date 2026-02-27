@@ -8,10 +8,8 @@ import {
 } from "react";
 import "./mobile-bottom-bar.css";
 import clsx from "clsx";
-import { Enlarge, Reduce, Trash } from "iconoir-react";
+import { Enlarge, Reduce } from "iconoir-react";
 import { useLayout } from "#context/use-layout.ts";
-import { Button } from "../ui/button/index.tsx";
-import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
 
 interface BottomBarContextValue<T extends string> {
   items: T[];
@@ -71,35 +69,6 @@ function BottomBarRoot<T extends string>({
         {typeof children === "function" ? children(items) : children}
       </div>
     </BottomBarProvider>
-  );
-}
-
-function DeleteButton({ hidden }: { hidden?: boolean }) {
-  const { deleteEntity } = useCanvasActions();
-
-  return (
-    <Button
-      variant="destructive"
-      aria-label="Delete selected"
-      className="mobile-delete-btn"
-      hidden={hidden}
-      onClick={() => deleteEntity()}
-    >
-      <Trash />
-    </Button>
-  );
-}
-
-function FullscreenButton({ hidden }: { hidden?: boolean }) {
-  const { isFullscreen, toggleFullscreen } = useLayout();
-  return (
-    <Button
-      variant="secondary"
-      aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-      // className="mobile-fullscreen-btn"
-      hidden={hidden}
-      onClick={toggleFullscreen}
-    ></Button>
   );
 }
 

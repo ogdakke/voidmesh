@@ -1,5 +1,5 @@
 export { CanvasStore, canvasStore } from "./canvas-store.ts";
-export type { CanvasState, RenderState, ParamResult } from "./canvas-store.ts";
+export type { CanvasState, RenderState, ParamResult, DragSnapshot } from "./canvas-store.ts";
 
 export { GameLoop, gameLoop, SpacePanMode } from "./game-loop.ts";
 export type { InputState } from "./game-loop.ts";
