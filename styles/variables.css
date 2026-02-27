@@ -44,14 +44,16 @@
 
   /* Typography */
   --sans-serif:
-    system-ui, BlinkMacSystemFont, avenir next, avenir, segoe ui, helvetica neue, Adwaita Sans,
-    Cantarell, Ubuntu, roboto, noto, helvetica, arial, sans-serif;
+    system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol",
+    "Noto Color Emoji";
   --sans-serif-rounded:
-    ui-rounded, system-ui, BlinkMacSystemFont, avenir next, avenir, segoe ui, helvetica neue,
-    Adwaita Sans, Cantarell, Ubuntu, roboto, noto, helvetica, arial, sans-serif;
+    ui-rounded, "Hiragino Maru Gothic ProN", Quicksand, Comfortaa, Manjari, "Arial Rounded MT",
+    "Arial Rounded MT Bold", Calibri, source-sans-pro, sans-serif, "Apple Color Emoji",
+    "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
   --serif:
     Iowan Old Style, Apple Garamond, Baskerville, Times New Roman, Droid Serif, Times,
-    Source Serif Pro, serif, Apple Color Emoji, Segoe UI Emoji, Segoe UI Symbol;
+    Source Serif Pro, serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol",
+    "Noto Color Emoji";
 
   --text-2xl: 2.25rem;
   --text-xl: 1.75rem;

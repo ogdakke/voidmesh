@@ -23,7 +23,7 @@ html:has(dialog[open]) {
 }
 
 body {
-  font-family: var(--sans-serif);
+  font-family: var(--sans-serif-rounded);
   background: var(--background);
   color: var(--color);
 }
