@@ -1,6 +1,6 @@
 import { IconoirProvider } from "iconoir-react";
 import { NuqsAdapter } from "nuqs/adapters/react";
-import React, { lazy, Suspense, useState } from "react";
+import React, { lazy, Suspense, useState, type PropsWithChildren } from "react";
 import ReactDOM from "react-dom/client";
 import { logger } from "#lib/client.logger.ts";
 import { ToastProvider } from "#ui/toast/toast.tsx";
@@ -71,12 +71,23 @@ ReactDOM.createRoot(document.getElementById("root")!, {
   },
 }).render(
   <React.StrictMode>
-    <PostHogProvider apiKey={import.meta.env.VITE_PUBLIC_POSTHOG_KEY!} options={options}>
+    <AnalyticsProvider>
       <NuqsAdapter>
         <KeybindProvider>
           <App />
         </KeybindProvider>
       </NuqsAdapter>
-    </PostHogProvider>
+    </AnalyticsProvider>
   </React.StrictMode>,
 );
+
+function AnalyticsProvider({ children }: PropsWithChildren) {
+  if (typeof window !== "undefined" && window.location.hostname === "localhost") {
+    return children;
+  }
+  return (
+    <PostHogProvider apiKey={import.meta.env.VITE_PUBLIC_POSTHOG_KEY!} options={options}>
+      {children}
+    </PostHogProvider>
+  );
+}
