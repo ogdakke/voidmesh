@@ -14,7 +14,7 @@ import { Command, undo } from "#lib/undo.ts";
 import { extractPaletteFromImage } from "#lib/palette-extraction/index.ts";
 import { useSyncExternalStore } from "react";
 import { useCanvas } from "../context/use-canvas.ts";
-import { canvasStore } from "../engine/index.ts";
+import { canvasStore, disintegrationController } from "../engine/index.ts";
 import {
   AsciiKind,
   DitheringKind,
@@ -413,6 +413,9 @@ export function useCanvasActions() {
 
     e?.preventDefault(); // Prevent browser back navigation
 
+    // Reset stagger so multi-entity deletions get staggered timing
+    disintegrationController.resetStagger();
+
     if (entities.length === 1) {
       // Single entity: use existing removeEntity (handles undo)
       removeEntity(entities[0]!.id);
@@ -562,6 +565,12 @@ export function useCanvasActions() {
     preferences.setSnapToGrid(enabled);
   };
 
+  // Fancy deletions toggle (persists to storage)
+  const handleFancyDeleteChange = (enabled: boolean) => {
+    canvasStore.setFancyDelete(enabled);
+    preferences.setFancyDelete(enabled);
+  };
+
   const handleSizeChange = (value: number | null) => {
     if (value !== null) {
       updateSelectedEntityParams({ size: value });
@@ -613,6 +622,8 @@ export function useCanvasActions() {
     handleSizeChange,
     snapToGrid: storeSnapshot.snapToGrid,
     handleSnapToGridChange,
+    fancyDelete: storeSnapshot.fancyDelete,
+    handleFancyDeleteChange,
 
     // Bulk update helper
     updateSelectedEntities,

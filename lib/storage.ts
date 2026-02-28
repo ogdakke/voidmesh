@@ -13,6 +13,12 @@ export const preferences = {
   async setSnapToGrid(enabled: boolean): Promise<void> {
     await storage.setItem("snapToGrid", enabled);
   },
+  async getFancyDelete(): Promise<boolean | null> {
+    return (await storage.getItem<boolean>("fancyDelete")) ?? null;
+  },
+  async setFancyDelete(enabled: boolean): Promise<void> {
+    await storage.setItem("fancyDelete", enabled);
+  },
   async getCustomPalettes(): Promise<ColorPalette[]> {
     return (await storage.getItem<ColorPalette[]>("customPalettes")) ?? [];
   },

@@ -10,13 +10,18 @@ import "./settings-drawer.css";
 import { shareOrCopyUrl } from "./share.ts";
 
 export default function SettingsDrawer() {
-  const { snapToGrid, handleSnapToGridChange } = useCanvasActions();
+  const { snapToGrid, handleSnapToGridChange, fancyDelete, handleFancyDeleteChange } =
+    useCanvasActions();
   const { entities } = useCanvas();
   const { exportStudioFile, importStudioFile, isExporting, isImporting } = useStudioFile();
   const [open, setOpen] = useState(false);
 
   const handleSnapChange = (e: ChangeEvent<HTMLInputElement>) => {
     handleSnapToGridChange(e.target.checked);
+  };
+
+  const handleFancyChange = (e: ChangeEvent<HTMLInputElement>) => {
+    handleFancyDeleteChange(e.target.checked);
   };
 
   const isLoading = isExporting || isImporting;
@@ -43,6 +48,11 @@ export default function SettingsDrawer() {
           <div className="settings-drawer-switch">
             <Checkbox name="snap_to_grid" checked={snapToGrid} onChange={handleSnapChange} switch>
               Snap to Grid
+            </Checkbox>
+          </div>
+          <div className="settings-drawer-switch">
+            <Checkbox name="fancy_delete" checked={fancyDelete} onChange={handleFancyChange} switch>
+              Fancy deletions
             </Checkbox>
           </div>
           <hr className="divider" />

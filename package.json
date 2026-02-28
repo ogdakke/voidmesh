@@ -11,7 +11,8 @@
     "#lib/*": "./lib/*",
     "#hooks/*": "./hooks/*",
     "#context/*": "./context/*",
-    "#config": "./lib/config/index.ts"
+    "#config": "./lib/config/index.ts",
+    "#media/*": "./media/*"
   },
   "scripts": {
     "dev": "vite dev",
@@ -29,6 +30,7 @@
   "dependencies": {
     "@base-ui/react": "^1.2.0",
     "@base-ui/utils": "^0.2.5",
+    "@vercel/blob": "^2.3.0",
     "clsx": "^2.1.1",
     "fflate": "^0.8.2",
     "gifenc": "^1.0.3",
