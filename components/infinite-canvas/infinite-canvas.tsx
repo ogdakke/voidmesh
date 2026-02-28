@@ -22,7 +22,9 @@ import { logger } from "#lib/client.logger.ts";
 import { undo } from "#lib/undo.ts";
 import { Check, Drag, Enlarge, Reduce, Square3dFromCenter } from "iconoir-react";
 import {
+  lazy,
   memo,
+  Suspense,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -30,14 +32,16 @@ import {
   type PropsWithChildren,
   type RefObject,
 } from "react";
-import { About } from "../about/about.tsx";
-import { SettingsDrawer } from "../settings-drawer/index.ts";
 import { Button } from "../ui/button/index.tsx";
 import { DropZone } from "../ui/dropzone/index.tsx";
 import { toastManager } from "../ui/toast/toast-manager.ts";
-import { CanvasContextMenu } from "./canvas-context-menu.tsx";
-import "./infinite-canvas.css";
 import { UndoRedoButtons } from "./undo-redo.tsx";
+import "./infinite-canvas.css";
+
+const DesktopSettings = lazy(() => import("#components/settings-drawer/desktop-settings.tsx"));
+const CanvasContextMenu = lazy(() => import("./canvas-context-menu.tsx"));
+const SettingsDrawer = lazy(() => import("../settings-drawer/settings-drawer.tsx"));
+const About = lazy(() => import("../about/index.tsx"));
 
 /** Label overlay for selected entity - positioned by direct DOM manipulation in game loop */
 function EntityLabel({
@@ -865,7 +869,7 @@ export function InfiniteCanvas() {
         onBlur={handleContainerBlur}
       >
         {isSupported ? (
-          <CanvasContextMenu onOpenChange={handleContextMenuOpenChange} containerRef={containerRef}>
+          <CanvasWrapper onOpenChange={handleContextMenuOpenChange} containerRef={containerRef}>
             <canvas
               ref={canvasRef}
               onPointerDown={handlePointerDown}
@@ -879,7 +883,7 @@ export function InfiniteCanvas() {
               onContextMenu={handleContextMenu}
               className="infinite-canvas__canvas"
             />
-          </CanvasContextMenu>
+          </CanvasWrapper>
         ) : (
           <div className="infinite-canvas-error">
             <p>WebGPU is not supported in your browser.</p>
@@ -893,24 +897,34 @@ export function InfiniteCanvas() {
             className="infinite-canvas__perf-overlay"
             style={{ display: "none" }}
           />
+
           {!isMobile && (
-            <div className="infinite-canvas__top-right">
-              <Button
-                onClick={toggleFullscreen}
-                type="button"
-                aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-                title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-                variant="secondary"
-                size="sm"
-              >
-                {isFullscreen ? <Reduce /> : <Enlarge />}
-              </Button>
-            </div>
+            <>
+              <div className="infinite-canvas__top-left">
+                <Suspense>
+                  <DesktopSettings />
+                </Suspense>
+              </div>
+              <div className="infinite-canvas__top-right">
+                <Button
+                  onClick={toggleFullscreen}
+                  type="button"
+                  aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                  title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                  variant="secondary"
+                  size="sm"
+                >
+                  {isFullscreen ? <Reduce /> : <Enlarge />}
+                </Button>
+              </div>
+            </>
           )}
           {!(isMobile && isFullscreen) && (
             <InfiniteCanvasToolRow>
               <div className="left-controls">
-                <About className="infinite-canvas__keyboard-shortcuts" />
+                <Suspense>
+                  <About className="infinite-canvas__keyboard-shortcuts" />
+                </Suspense>
                 <UndoRedoButtons />
               </div>
               <div className="infinite-canvas__controls">
@@ -956,7 +970,11 @@ export function InfiniteCanvas() {
                     isMobile={false}
                   />
                 )}
-                {isMobile && <SettingsDrawer />}
+                {isMobile && (
+                  <Suspense>
+                    <SettingsDrawer />
+                  </Suspense>
+                )}
                 <ViewportZoom onZoomReset={handleZoomReset} />
               </div>
             </InfiniteCanvasToolRow>
@@ -975,8 +993,27 @@ export function InfiniteCanvas() {
   );
 }
 
-const InfiniteCanvasToolRow = memo(function _InfiniteCanvasToolRow({
+const CanvasWrapper = ({
   children,
-}: PropsWithChildren) {
+  containerRef,
+  onOpenChange,
+}: PropsWithChildren<{
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  onOpenChange: (open: boolean) => void;
+}>) => {
+  const isMobile = useIsMobile();
+
+  return isMobile ? (
+    children
+  ) : (
+    <Suspense>
+      <CanvasContextMenu onOpenChange={onOpenChange} containerRef={containerRef}>
+        {children}
+      </CanvasContextMenu>
+    </Suspense>
+  );
+};
+
+const InfiniteCanvasToolRow = memo(function InfiniteCanvasToolRow({ children }: PropsWithChildren) {
   return <div className="infinite-canvas-toolrow">{children}</div>;
 });

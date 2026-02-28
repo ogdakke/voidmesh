@@ -1,0 +1,30 @@
+.desktop-about-modal {
+  background: var(--gray-50);
+  border-radius: var(--radius-lg);
+  overflow-y: clip;
+  margin: none;
+}
+
+.desktop-about {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  max-width: clamp(200px, 1200px, 90vw);
+  padding: 0;
+  grid-auto-flow: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3);
+  overflow-y: auto;
+  mask-image: var(--mask);
+  animation: scroll-fade linear both;
+  animation-timeline: view(x), scroll(self);
+
+  & > section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-2);
+
+    :where(a) {
+      text-decoration: underline;
+    }
+  }
+}

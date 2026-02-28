@@ -132,7 +132,7 @@
 .infinite-canvas__perf-overlay {
   position: absolute;
   top: 8px;
-  left: 8px;
+  left: calc(12 * var(--spacing));
   padding: 4px 8px;
   background: var(--gray-50);
   color: light-dark(oklch(0.49 0.21 254.9), oklch(0.75 0.14 251.13));
@@ -144,6 +144,7 @@
 
   @media screen and (max-width: 768px) {
     top: calc(var(--spacing) * 12);
+    left: 8px;
   }
 }
 
@@ -371,6 +372,10 @@
     color: light-dark(var(--gray-700), var(--gray-900));
   }
 
+  :where(button:focus-visible:not(:disabled)) {
+    color: var(--primary);
+  }
+
   &:has(button:active:not(:disabled)) {
     transform: scale(0.97);
 
@@ -394,14 +399,22 @@
   }
 }
 
+.infinite-canvas__top-left,
 .infinite-canvas__top-right {
   position: absolute;
   top: 0;
-  right: 0;
   padding: calc(var(--spacing) * 1.5);
   z-index: var(--canvas-overlay-z-1);
   pointer-events: auto;
   filter: drop-shadow(var(--floaty-shadow));
+}
+
+.infinite-canvas__top-left {
+  left: 0;
+}
+
+.infinite-canvas__top-right {
+  right: 0;
 }
 
 .infinite-canvas__keyboard-shortcuts,
