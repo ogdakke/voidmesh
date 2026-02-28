@@ -33,7 +33,6 @@ import { ShapeMenuKnobs } from "../shape-knobs.tsx";
 import { buildPaletteList } from "../palette-preset/palette-presets.ts";
 import { usePaletteStore } from "#lib/palette-store.ts";
 import { MaterialSymbolsResetImage } from "../icons/reset-image.tsx";
-import useMediaQuery from "#hooks/use-media-query.ts";
 import { useStudioFile } from "#hooks/use-studio-file.ts";
 import {
   type ImageExportFormat,
@@ -60,7 +59,7 @@ export interface CanvasContextMenuProps {
 
 const SIDE_OFFSET = 4;
 
-export function CanvasContextMenu({
+export default function CanvasContextMenu({
   children,
   onOpenChange,
   containerRef,
@@ -69,8 +68,6 @@ export function CanvasContextMenu({
   const paletteInputRef = useRef<HTMLInputElement>(null);
   const [frozenEntity, setFrozenEntity] = useState<ShaderCanvasEntity | undefined>(undefined);
   const [frozenSelection, setFrozenSelection] = useState<FrozenSelectionState | null>(null);
-  // TODO: probably not enough, but will do for now
-  const isTouchDevice = useMediaQuery("(pointer: coarse)");
 
   const handleOpenChange = (open: boolean) => {
     onOpenChange(open);
@@ -111,10 +108,6 @@ export function CanvasContextMenu({
     // Reset input to allow selecting the same file again
     e.target.value = "";
   };
-
-  if (isTouchDevice) {
-    return children;
-  }
 
   return (
     <>

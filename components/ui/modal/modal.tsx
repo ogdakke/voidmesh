@@ -1,12 +1,20 @@
+// oxlint-disable react/only-export-components -- compound component: sub-components are internal, only the namespace object is exported
+
 import clsx from "clsx";
-import { useEffect, useRef, type DialogHTMLAttributes, type PropsWithChildren } from "react";
+import {
+  useEffect,
+  useRef,
+  type ComponentProps,
+  type DialogHTMLAttributes,
+  type PropsWithChildren,
+} from "react";
 import "./modal.css";
 
 export interface ModalProps extends DialogHTMLAttributes<HTMLDialogElement> {
   open: boolean;
 }
 
-export function Modal({ open, ...props }: PropsWithChildren<ModalProps>) {
+function Root({ open, ...props }: PropsWithChildren<ModalProps>) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     if (open) {
@@ -34,3 +42,16 @@ export function Modal({ open, ...props }: PropsWithChildren<ModalProps>) {
     </dialog>
   );
 }
+
+function Content({ children, className, ...props }: PropsWithChildren<ComponentProps<"div">>) {
+  return (
+    <div {...props} className={clsx("modal-content", className)}>
+      {children}
+    </div>
+  );
+}
+
+export const Modal = {
+  Root,
+  Content,
+};

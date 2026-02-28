@@ -132,7 +132,7 @@
 .infinite-canvas__perf-overlay {
   position: absolute;
   top: 8px;
-  left: 8px;
+  left: calc(12 * var(--spacing));
   padding: 4px 8px;
   background: var(--gray-50);
   color: light-dark(oklch(0.49 0.21 254.9), oklch(0.75 0.14 251.13));
@@ -144,6 +144,7 @@
 
   @media screen and (max-width: 768px) {
     top: calc(var(--spacing) * 12);
+    left: 8px;
   }
 }
 
@@ -198,86 +199,6 @@
   svg {
     width: 1.125rem;
     height: 1.125rem;
-  }
-}
-
-.infinite-canvas__loading {
-  --transition-dur-in: 200ms;
-  --transition-dur-out: 180ms;
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%) scale(1);
-  opacity: 1;
-  filter: blur(0px);
-  display: grid;
-  padding: calc(var(--spacing) * 2);
-  justify-items: center;
-  gap: var(--spacing);
-  transition:
-    opacity var(--transition-dur-in) ease-out,
-    filter var(--transition-dur-in) ease-out,
-    transform var(--transition-dur-in) ease-out,
-    display var(--transition-dur-in) ease-out allow-discrete;
-
-  @starting-style {
-    opacity: 0;
-    filter: blur(12px);
-    transform: translate(-50%, -50%) scale(0.4);
-  }
-
-  &[hidden] {
-    display: none;
-    opacity: 0;
-    filter: blur(12px);
-    transform: translate(-50%, -50%) scale(0.4);
-    transition:
-      opacity var(--transition-dur-out) ease-in,
-      filter var(--transition-dur-out) ease-in,
-      transform var(--transition-dur-out) ease-in,
-      display var(--transition-dur-out) ease-in allow-discrete;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    --transition-dur-in: 0ms;
-    --transition-dur-out: 0ms;
-  }
-
-  :where(.loading-spinner) {
-    overflow: clip;
-    border-radius: 999px;
-    max-width: 120px;
-    box-shadow: var(--floaty-shadow);
-  }
-  :where(img) {
-    filter: blur(11px) saturate(1.5);
-    animation: loading-img 4s linear infinite;
-
-    @media (prefers-reduced-motion: reduce) {
-      animation: none;
-    }
-  }
-}
-
-@keyframes loading-img {
-  0% {
-    transform: rotateZ(0deg) translate(0%, 0%) scale(2.2);
-  }
-  20% {
-    transform: rotateZ(60deg) translate(-5%, 4%) scale(1.5);
-  }
-  45% {
-    transform: rotateZ(150deg) translate(14%, -14%) scale(2.4);
-  }
-
-  68% {
-    transform: rotateZ(240deg) translate(-20%, 25%) scale(3.1);
-  }
-  85% {
-    transform: rotateZ(310deg) translate(5%, 1%) scale(2.6);
-  }
-  100% {
-    transform: rotateZ(360deg) translate(0%, 0%) scale(2.2);
   }
 }
 
@@ -371,6 +292,10 @@
     color: light-dark(var(--gray-700), var(--gray-900));
   }
 
+  :where(button:focus-visible:not(:disabled)) {
+    color: var(--primary);
+  }
+
   &:has(button:active:not(:disabled)) {
     transform: scale(0.97);
 
@@ -394,14 +319,22 @@
   }
 }
 
+.infinite-canvas__top-left,
 .infinite-canvas__top-right {
   position: absolute;
   top: 0;
-  right: 0;
   padding: calc(var(--spacing) * 1.5);
   z-index: var(--canvas-overlay-z-1);
   pointer-events: auto;
   filter: drop-shadow(var(--floaty-shadow));
+}
+
+.infinite-canvas__top-left {
+  left: 0;
+}
+
+.infinite-canvas__top-right {
+  right: 0;
 }
 
 .infinite-canvas__keyboard-shortcuts,

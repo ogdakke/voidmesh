@@ -1,5 +1,20 @@
 @layer components {
+  @property --btn-gradient-to {
+    syntax: "<color>";
+    /* pretty much equal to var(--primary) */
+    initial-value: oklch(62% 0.23 252.87);
+    inherits: true;
+  }
+
+  @property --destructive-btn-gradient-to {
+    syntax: "<color>";
+    /* pretty much equal to var(--destructive) */
+    initial-value: oklch(0.65 0.3 28.96);
+    inherits: true;
+  }
+
   .ui-button {
+    --btn-gradient-to: var(--gray-100);
     box-sizing: border-box;
     display: flex;
     align-items: center;
@@ -11,8 +26,12 @@
     outline: 0;
     border: 1px solid var(--border);
     border-radius: var(--radius-button);
-    background: var(--gray-50);
-    background: linear-gradient(to top, var(--background), var(--gray-100) 50%, var(--background));
+    background: linear-gradient(
+      to top,
+      var(--background),
+      var(--btn-gradient-to) 50%,
+      var(--background)
+    );
     font-family: inherit;
     font-size: 1rem;
     font-weight: 500;
@@ -23,31 +42,33 @@
     cursor: pointer;
     transition:
       --destructive-btn-gradient-to 150ms ease-out,
-      --primary-btn-gradient-to 150ms ease-out,
+      --btn-gradient-to 150ms ease-out,
       background 150ms ease-out,
       transform 150ms ease-out;
 
     &[data-variant="secondary"] {
       @media (prefers-color-scheme: dark) {
-        background: var(--gray-50);
+        --btn-gradient-to: var(--gray-50);
+        background: linear-gradient(to top, var(--btn-gradient-to), var(--gray-50));
         color: var(--gray-1600);
       }
 
       @media (hover: hover) {
         &:hover:not([data-disabled]) {
-          background: var(--gray-100);
+          --btn-gradient-to: var(--gray-200);
 
           @media (prefers-color-scheme: dark) {
-            background: var(--gray-200);
+            --btn-gradient-to: var(--gray-75);
           }
         }
       }
 
-      &:active:not([data-disabled]) {
-        background: var(--gray-200);
+      &:active:not([data-disabled]),
+      &:focus-visible:not([data-disabled]) {
+        --btn-gradient-to: var(--gray-200);
 
         @media (prefers-color-scheme: dark) {
-          background: var(--gray-600);
+          --btn-gradient-to: var(--gray-75);
         }
       }
     }
@@ -121,24 +142,11 @@
     height: 1.25rem;
   }
 
-  @property --primary-btn-gradient-to {
-    syntax: "<color>";
-    /* pretty much equal to var(--primary) */
-    initial-value: oklch(62% 0.23 252.87);
-    inherits: true;
-  }
-
-  @property --destructive-btn-gradient-to {
-    syntax: "<color>";
-    /* pretty much equal to var(--destructive) */
-    initial-value: oklch(0.65 0.3 28.96);
-    inherits: true;
-  }
-
   /* Primary variant - blue/primary color */
   .ui-button[data-variant="primary"] {
+    --btn-gradient-to: var(--primary);
     border-color: var(--primary);
-    background: linear-gradient(180deg, var(--primary-lighter), var(--primary-btn-gradient-to));
+    background: linear-gradient(180deg, var(--primary-lighter), var(--btn-gradient-to));
     box-shadow:
       inset 0 0 1px 1px hsla(0, 0%, 100%, 0.08),
       0 1px 1.5px 0 rgba(0, 0, 0, 0.32),
@@ -149,7 +157,7 @@
     @media (hover: hover) {
       &:hover:not([data-disabled]) {
         /* sligthly darker than --primary */
-        --primary-btn-gradient-to: var(--active-primary-bg);
+        --btn-gradient-to: var(--active-primary-bg);
         border-color: var(--primary);
       }
     }
@@ -157,7 +165,7 @@
     &:active:not([data-disabled]),
     &:focus-visible:not([data-disabled]) {
       /* sligthly darker than --primary */
-      --primary-btn-gradient-to: var(--active-primary-bg);
+      --btn-gradient-to: var(--active-primary-bg);
       border-color: var(--primary);
     }
   }
@@ -166,42 +174,27 @@
   .ui-button[data-variant="quiet"] {
     border-color: transparent;
     background: transparent;
-
-    @media (hover: hover) {
-      &:hover:not([data-disabled]),
-      &:active:not([data-disabled]) {
-        background: var(--gray-200);
-
-        @media (prefers-color-scheme: dark) {
-          background: var(--gray-100);
-          color: var(--gray-1500);
-        }
-      }
-    }
   }
 
   /* Destructive variant - red */
   .ui-button[data-variant="destructive"] {
+    --btn-gradient-to: var(--destructive);
     border-color: var(--destructive-50);
-    background: linear-gradient(
-      180deg,
-      var(--destructive-lighter),
-      var(--destructive-btn-gradient-to)
-    );
+    background: linear-gradient(180deg, var(--destructive-lighter), var(--btn-gradient-to));
     --active-destructive-bg: oklch(0.5 0.23 28.96);
     color: white;
 
     @media (hover: hover) {
       &:hover:not([data-disabled]) {
         /* slightly darker than --destructive */
-        --destructive-btn-gradient-to: var(--active-destructive-bg);
+        --btn-gradient-to: var(--active-destructive-bg);
         border-color: var(--destructive);
       }
     }
 
     &:active:not([data-disabled]) {
       /* slightly darker than --destructive */
-      --destructive-btn-gradient-to: var(--active-destructive-bg);
+      --btn-gradient-to: var(--active-destructive-bg);
       border-color: var(--destructive-25);
     }
   }
@@ -220,8 +213,8 @@
   }
 
   .ui-button[data-disabled] {
+    --btn-gradient-to: var(--gray-200);
     cursor: not-allowed;
-    background: var(--gray-200);
     color: var(--gray-700);
     transition: none;
     border-color: var(--border);
@@ -232,7 +225,7 @@
     }
 
     @media (prefers-color-scheme: dark) {
-      background: var(--gray-50);
+      --btn-gradient-to: var(--gray-50);
       color: var(--gray-900);
     }
   }

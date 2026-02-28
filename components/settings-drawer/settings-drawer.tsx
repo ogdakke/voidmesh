@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent, type MouseEvent } from "react";
+import { useState, type ChangeEvent } from "react";
 import { FloppyDiskArrowIn, Import, MoreVert, NavArrowRight } from "iconoir-react";
 import { Drawer } from "../ui/drawer/index.tsx";
 import { Checkbox } from "../ui/checkbox/index.tsx";
@@ -7,27 +7,13 @@ import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
 import { useCanvas } from "#context/use-canvas.ts";
 import { useStudioFile } from "#hooks/use-studio-file.ts";
 import "./settings-drawer.css";
-import { toastManager } from "../ui/toast/toast-manager.ts";
+import { shareOrCopyUrl } from "./share.ts";
 
-export function SettingsDrawer() {
+export default function SettingsDrawer() {
   const { snapToGrid, handleSnapToGridChange } = useCanvasActions();
   const { entities } = useCanvas();
   const { exportStudioFile, importStudioFile, isExporting, isImporting } = useStudioFile();
   const [open, setOpen] = useState(false);
-
-  const handleShare = async (e: MouseEvent) => {
-    e.preventDefault();
-    const shareData = {
-      title: "Voidmesh",
-      url: window.location.href,
-    };
-    if (navigator.share) {
-      navigator.share(shareData).catch(() => {});
-    } else {
-      await navigator.clipboard.writeText(window.location.href);
-      toastManager.add({ type: "primary", title: "Link copied to clipboard" });
-    }
-  };
 
   const handleSnapChange = (e: ChangeEvent<HTMLInputElement>) => {
     handleSnapToGridChange(e.target.checked);
@@ -61,7 +47,7 @@ export function SettingsDrawer() {
           </div>
           <hr className="divider" />
           <div className="settings-drawer-ext-item field-label">
-            <button type="button" onClick={handleShare}>
+            <button type="button" onClick={shareOrCopyUrl}>
               Share
             </button>
             <NavArrowRight />

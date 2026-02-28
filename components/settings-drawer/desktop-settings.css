@@ -1,0 +1,54 @@
+@scope (.desktop-settings) {
+  .desktop-settings-modal {
+    min-height: clamp(200px, 60dvh, 700px);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .settings-trigger {
+    filter: drop-shadow(var(--floaty-shadow));
+    will-change: transform;
+  }
+
+  .desktop-settings-title {
+    text-align: center;
+    margin: var(--spacing-1) 0 var(--spacing-3);
+  }
+
+  .desktop-settings-switch,
+  .desktop-settings-ext-item {
+    padding: var(--spacing-1) var(--spacing-2);
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-auto-flow: row;
+    align-items: center;
+
+    @media (hover: hover) {
+      &:hover {
+        color: var(--gray-1200);
+      }
+    }
+  }
+
+  .desktop-settings-link {
+    color: var(--gray-900);
+  }
+
+  .desktop-settings-button {
+    flex: 1;
+    cursor: pointer;
+  }
+
+  .desktop-settings-studio-buttons {
+    margin-top: auto;
+    display: grid;
+    grid-auto-flow: row;
+    justify-content: stretch;
+    gap: var(--spacing-2);
+    padding: var(--spacing-2);
+  }
+
+  .flex {
+    display: flex;
+  }
+}

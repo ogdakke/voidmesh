@@ -1,5 +1,5 @@
 import { type ComponentProps } from "react";
-import { ColorPicker } from "../color-picker/index.tsx";
+import { ColorPicker } from "../color-picker/color-picker.tsx";
 import { Button } from "../button/index.tsx";
 import { Plus, Trash } from "iconoir-react";
 import type { RGBA, ColorPalette as ColorPaletteType } from "#types/canvas.ts";
