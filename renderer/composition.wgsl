@@ -198,15 +198,16 @@ fn disintegrate(input: VertexOutput, textureColor: vec4f) -> vec4f {
     // Solid pixel — not yet reached by dissolve wave
     if (threshold >= dissolveEdge) {
         let edgeDist = threshold - dissolveEdge;
-        let glow = smoothstep(0.05, 0.0, edgeDist);
-        // Warm orange edge glow at dissolve boundary
-        let glowColor = vec4f(
-            mix(textureColor.r, 1.0, 0.6),
-            mix(textureColor.g, 0.5, 0.6),
-            mix(textureColor.b, 0.15, 0.6),
-            textureColor.a
+        // Alpha fade at dissolve edge
+        let edgeFade = smoothstep(0.0, 0.04, edgeDist);
+        // Subtle blue tint near the edge (~rgb(0, 130, 255))
+        let glow = smoothstep(0.06, 0.0, edgeDist);
+        let tinted = vec3f(
+            textureColor.r * (1.0 - glow * 0.1),
+            mix(textureColor.g, 0.51, glow * 0.1),
+            mix(textureColor.b, 1.0, glow * 0.15),
         );
-        return mix(textureColor, glowColor, glow * 0.6);
+        return vec4f(tinted, textureColor.a * edgeFade);
     }
 
     // Dissolved — particles handle this region

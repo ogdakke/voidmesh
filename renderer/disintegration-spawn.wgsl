@@ -143,10 +143,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let noiseVal = fbmNoise(noiseCoord);
   let gradient = uv.x * 0.8 + uv.y * 0.2;
   let threshold = mix(noiseVal, gradient, 0.35);
-  // Particles spawn when the dissolve front reaches their position
-  // dissolveEdge = progress * 1.25 → threshold = dissolveEdge → progress = threshold / 1.25
-  // progress follows easeOutExpo, so timing is: threshold / 1.25 * duration
-  let spawnDelay = threshold / 1.25 * params.duration;
+  // Invert easeOutExpo to find exact time when dissolve front reaches this threshold.
+  // Composition uses: dissolveEdge = easeOutExpo(t/duration) * 1.25
+  // easeOutExpo(x) = 1 - 2^(-10x), so t = -duration * log2(1 - threshold/1.25) / 10
+  let nt = clamp(threshold / 1.25, 0.0, 0.9999);
+  let dissolveTime = -log2(1.0 - nt) / 10.0 * params.duration;
+  // Per-particle random stagger so they don't all pop in at the same instant
+  let stagger = randomFloat(idx, seedU + 70u) * params.particleLifetime * 0.3;
+  let spawnDelay = max(dissolveTime + stagger - 0.2, 0.0);
 
   // Random velocity: wind + scatter
   let windDir = normalize(vec2f(params.windX, params.windY));

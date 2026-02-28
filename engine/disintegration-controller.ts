@@ -15,9 +15,10 @@ export interface DisintegrationOverlay {
   rotation: number;
 }
 
-const DISSOLVE_DURATION_MS = 800;
-const PARTICLE_TAIL_MS = 200;
-const STAGGER_DELAY_MS = 20;
+const DISSOLVE_DURATION_MS = 2800;
+/** How long each particle drifts after spawning (ms). Also determines the tail after dissolve completes. */
+export const PARTICLE_LIFETIME_MS = 600;
+const STAGGER_DELAY_MS = 200;
 
 /**
  * Controls per-entity disintegration animations (timing + spatial data).
@@ -44,7 +45,7 @@ class DisintegrationController {
       id,
       startTime: performance.now() + delay,
       dissolveDuration: DISSOLVE_DURATION_MS,
-      duration: DISSOLVE_DURATION_MS + PARTICLE_TAIL_MS,
+      duration: DISSOLVE_DURATION_MS + PARTICLE_LIFETIME_MS,
       seed: Math.random() * 1000,
       position: { x: position.x, y: position.y },
       size: { width: size.width, height: size.height },

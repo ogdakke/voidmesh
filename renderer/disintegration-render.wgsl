@@ -123,15 +123,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
     discard;
   }
 
-  // Slight warm tint on dying particles
-  let warmth = (1.0 - input.life) * 0.15;
+  // Dust particles — just fade out cleanly
   var color = input.color;
-  color = vec4f(
-    min(color.r + warmth, 1.0),
-    color.g,
-    max(color.b - warmth * 0.5, 0.0),
-    color.a * alpha,
-  );
+  color = vec4f(color.rgb, color.a * alpha);
 
   return color;
 }

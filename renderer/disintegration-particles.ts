@@ -1,9 +1,12 @@
-import type { DisintegrationOverlay } from "../engine/disintegration-controller.ts";
+import {
+  PARTICLE_LIFETIME_MS,
+  type DisintegrationOverlay,
+} from "../engine/disintegration-controller.ts";
 import spawnShaderSource from "./disintegration-spawn.wgsl?raw";
 import updateShaderSource from "./disintegration-update.wgsl?raw";
 import renderShaderSource from "./disintegration-render.wgsl?raw";
 
-const PARTICLE_COUNT = 8000;
+const PARTICLE_COUNT = 15000;
 const PARTICLE_STRUCT_SIZE = 48; // bytes per particle
 // Params struct: 22 fields × 4 bytes = 88 bytes, rounded up to 16-byte alignment = 96
 const PARAMS_BUFFER_SIZE = 96;
@@ -197,11 +200,11 @@ export class DisintegrationParticleSystem {
     const cosR = Math.cos(rotRad);
     const sinR = Math.sin(rotRad);
     const dissolveSec = overlay.dissolveDuration / 1000;
-    const tailSec = (overlay.duration - overlay.dissolveDuration) / 1000;
+    const particleLifetimeSec = PARTICLE_LIFETIME_MS / 1000;
 
     // Particle size scales with entity size
     const maxDim = Math.max(overlay.size.width, overlay.size.height);
-    const particleSize = maxDim * 0.006;
+    const particleSize = maxDim * 0.004;
 
     // Write spawn params
     this.#paramsFloat[0] = overlay.position.x; // entityPosition.x
@@ -211,14 +214,14 @@ export class DisintegrationParticleSystem {
     this.#paramsFloat[4] = overlay.seed; // seed
     this.#paramsUint[5] = PARTICLE_COUNT; // particleCount
     this.#paramsFloat[6] = dissolveSec; // duration (dissolve sweep duration, for spawn delay calc)
-    this.#paramsFloat[7] = tailSec; // particleLifetime (time after spawn to fully decay)
+    this.#paramsFloat[7] = particleLifetimeSec; // particleLifetime (time after spawn to fully decay)
     this.#paramsFloat[8] = 0.7; // windX
     this.#paramsFloat[9] = -0.4; // windY (upward in screen coords)
     this.#paramsFloat[10] = maxDim * 0.3; // windStrength (pixels/sec)
-    this.#paramsFloat[11] = maxDim * 0.15; // scatterStrength
+    this.#paramsFloat[11] = maxDim * 0.04; // scatterStrength
     this.#paramsFloat[12] = particleSize; // particleSize
-    this.#paramsFloat[13] = maxDim * 0.5; // turbulence
-    this.#paramsFloat[14] = 2.5; // shrinkRate
+    this.#paramsFloat[13] = maxDim * 0.08; // turbulence
+    this.#paramsFloat[14] = 0.8; // shrinkRate
     this.#paramsFloat[15] = cosR; // cosR
     this.#paramsFloat[16] = sinR; // sinR
     this.#paramsFloat[17] = 0; // elapsed (0 at spawn)
@@ -317,7 +320,7 @@ export class DisintegrationParticleSystem {
 
     pass.setPipeline(this.#renderPipeline);
     pass.setBindGroup(0, gpu.renderBindGroup);
-    pass.draw(6, PARTICLE_COUNT); // 6 vertices per quad × 3000 instances
+    pass.draw(6, PARTICLE_COUNT); // 6 vertices per quad × PARTICLE_COUNT instances
     pass.end();
   }
 
