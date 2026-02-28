@@ -11,7 +11,16 @@ import { LayoutProvider } from "./context/layout-context.tsx";
 import { VideoExportProvider } from "./context/video-export-context.tsx";
 import { useIsMobile, useIsTouch } from "./hooks/use-is-mobile.ts";
 import useMediaQuery from "./hooks/use-media-query";
+import { PostHogProvider } from "@posthog/react";
 import "./styles/app.css";
+import type { PostHogConfig } from "posthog-js";
+
+const options: Partial<PostHogConfig> = {
+  ui_host: import.meta.env.VITE_PUBLIC_POSTHOG_UI_HOST!,
+  api_host: import.meta.env.VITE_PUBLIC_POSTHOG_HOST!,
+  defaults: "2026-01-30",
+  capture_exceptions: true,
+} as const;
 
 const DesktopLayout = lazy(() => import("./components/desktop-layout.tsx"));
 const MobileLayout = lazy(() => import("./components/mobile-layout.tsx"));
@@ -62,10 +71,12 @@ ReactDOM.createRoot(document.getElementById("root")!, {
   },
 }).render(
   <React.StrictMode>
-    <NuqsAdapter>
-      <KeybindProvider>
-        <App />
-      </KeybindProvider>
-    </NuqsAdapter>
+    <PostHogProvider apiKey={import.meta.env.VITE_PUBLIC_POSTHOG_KEY!} options={options}>
+      <NuqsAdapter>
+        <KeybindProvider>
+          <App />
+        </KeybindProvider>
+      </NuqsAdapter>
+    </PostHogProvider>
   </React.StrictMode>,
 );
