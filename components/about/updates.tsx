@@ -32,6 +32,7 @@ export function Updates() {
               <figcaption>
                 You can turn this effect off from the preferences menu (
                 <MoreVert
+                  role="presentation"
                   style={{
                     display: "inline-block",
                     background: "light-dark(var(--gray-100), var(--gray-50))",
