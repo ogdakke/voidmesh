@@ -27,6 +27,7 @@ export function Updates() {
                 autoPlay
                 loop
                 playsInline
+                style={{ aspectRatio: "1" }}
               />
               <figcaption>
                 You can turn this effect off from the preferences menu (
