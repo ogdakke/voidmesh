@@ -59,7 +59,6 @@ export function useCanvasRenderer(
     if (!navigator.gpu) return;
 
     initializingRef.current = true;
-    const initStart = Date.now();
     let cancelled = false;
 
     const renderer = new InfiniteCanvasRenderer(canvasElement);
@@ -68,12 +67,8 @@ export function useCanvasRenderer(
     renderer
       .initialize()
       .then(() => {
-        const elapsed = Date.now() - initStart;
-        const delay = Math.max(0, 800 - elapsed);
-        setTimeout(() => {
-          if (cancelled) return;
-          setState({ renderer, isReady: true, isSupported: true, error: null });
-        }, delay);
+        if (cancelled) return;
+        setState({ renderer, isReady: true, isSupported: true, error: null });
       })
       .catch((err: Error) => {
         if (cancelled) return;

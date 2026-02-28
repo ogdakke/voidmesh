@@ -89,6 +89,17 @@
     rgb(100% 100% 100% / 0.765625) 87.5%, rgb(100% 100% 100% / 0.87890625) 93.75%,
     rgb(100% 100% 100%) 100%;
   --mask: light-dark(var(--mask-light), var(--mask-dark));
+
+  --studio-background: light-dark(#fafafa, #060608);
+  --content-radius: var(--radius-xl);
+  --mobile-controls-h: 160px;
+  --bottom-bar-height: 54px;
+  --canvas-bottom: calc(
+    env(safe-area-inset-bottom, 0) + var(--mobile-controls-h) + var(--bottom-bar-height) +
+      var(--spacing-2)
+  );
+  --floating-background: color-mix(in srgb, canvas 90%, transparent);
+  --floating-backdrop: blur(12px);
 }
 
 /* colors */

@@ -2,55 +2,6 @@
 @import "./utilities.css";
 
 @layer global {
-  :root {
-    --studio-background: light-dark(#fafafa, #060608);
-    --content-radius: var(--radius-xl);
-    --mobile-controls-h: 160px;
-    --bottom-bar-height: 54px;
-    --canvas-bottom: calc(
-      env(safe-area-inset-bottom, 0) + var(--mobile-controls-h) + var(--bottom-bar-height) +
-        var(--spacing-2)
-    );
-    --floating-background: color-mix(in srgb, canvas 90%, transparent);
-    --floating-backdrop: blur(12px);
-  }
-
-  #root {
-    isolation: isolate;
-    height: 100dvh;
-    position: fixed;
-    width: 100%;
-  }
-
-  body {
-    min-height: 100dvh;
-  }
-
-  html,
-  body {
-    background: var(--background);
-    -webkit-tap-highlight-color: transparent;
-    -webkit-touch-callout: none;
-    width: 100%;
-    margin: 0;
-    padding: 0;
-  }
-
-  #root,
-  body {
-    margin: 0;
-  }
-
-  html,
-  body,
-  #root {
-    overflow: hidden;
-  }
-
-  html {
-    min-height: calc(100% + env(safe-area-inset-top));
-  }
-
   .app-sidebar {
     height: 100%;
   }

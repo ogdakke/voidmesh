@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { useIsMobile } from "#hooks/use-is-mobile.ts";
 import { ColorPickerProvider } from "./color-picker-context";
 import "./color-picker.css";
+import { Swatch } from "./swatch";
 
 const ColorPickerDesktop = lazy(() => import("./color-picker.desktop"));
 const ColorPickerMobile = lazy(() => import("./color-picker.mobile"));
@@ -25,7 +26,9 @@ export function ColorPicker(props: ColorPickerProps) {
   const isMobile = useIsMobile();
   return (
     <ColorPickerProvider {...props}>
-      <Suspense>{isMobile ? <ColorPickerMobile /> : <ColorPickerDesktop />}</Suspense>
+      <Suspense fallback={<Swatch aria-busy={true} color="var(--gray-100)" />}>
+        {isMobile ? <ColorPickerMobile /> : <ColorPickerDesktop />}
+      </Suspense>
     </ColorPickerProvider>
   );
 }

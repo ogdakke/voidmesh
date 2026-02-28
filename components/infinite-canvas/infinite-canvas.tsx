@@ -1,3 +1,4 @@
+import { appLoader } from "#lib/app-loader.ts";
 import { config } from "#config";
 import { useKeybinds, useRegisterKeybinds } from "#context/keybind-context.ts";
 import { DebugType, useCanvas, useViewport } from "#context/use-canvas.ts";
@@ -137,6 +138,19 @@ export function InfiniteCanvas() {
   const bottomInset = isMobile ? config.canvas.mobile.bottomInset : 0;
   const darkTheme = useMediaQuery("(prefers-color-scheme: dark)");
   const { isFullscreen, toggleFullscreen } = useLayout();
+
+  // Update app loader text while canvas initializes
+  useEffect(() => {
+    appLoader.setText("Initializing canvas...");
+  }, []);
+
+  // Dismiss the app loader once the canvas is ready (or unsupported)
+  useEffect(() => {
+    if (isReady || !isSupported) {
+      appLoader.dismiss();
+      console.log(`canvas ready in: ${new Date().getTime() - appLoader.startTime}ms`);
+    }
+  }, [isReady, isSupported]);
 
   // Initialize game loop
   useEffect(() => {
@@ -978,14 +992,6 @@ export function InfiniteCanvas() {
                 <ViewportZoom onZoomReset={handleZoomReset} />
               </div>
             </InfiniteCanvasToolRow>
-          )}
-          {isSupported && (
-            <div className="infinite-canvas__loading" hidden={isReady}>
-              <div className="loading-spinner">
-                <img src="/favicon.webp" alt="blurry shapes on a blue background" loading="eager" />
-              </div>
-              <p>Initializing...</p>
-            </div>
           )}
         </div>
       </div>
