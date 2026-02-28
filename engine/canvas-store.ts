@@ -30,6 +30,8 @@ export interface CanvasState {
   debugMode: boolean;
   // Snap-to-grid mode - entities snap to visible grid during drag
   snapToGrid: boolean;
+  // Fancy deletions - disintegration shader animation on entity removal
+  fancyDelete: boolean;
 
   // Dirty flags for optimization
   viewportDirty: boolean;
@@ -65,6 +67,7 @@ export interface SelectionSnapshot {
   entities: Map<string, ShaderCanvasEntity>;
   multiSelectMode: boolean;
   snapToGrid: boolean;
+  fancyDelete: boolean;
   version: number;
 }
 
@@ -137,6 +140,7 @@ export class CanvasStore extends Store<CanvasState> {
       multiSelectMode: false,
       debugMode: false,
       snapToGrid: false,
+      fancyDelete: true,
       viewportDirty: false,
       entitiesDirty: new Set(),
       selectionDirty: false,
@@ -165,6 +169,7 @@ export class CanvasStore extends Store<CanvasState> {
       entities: s.entities,
       multiSelectMode: s.multiSelectMode,
       snapToGrid: s.snapToGrid,
+      fancyDelete: s.fancyDelete,
       version: s.selectionVersion,
     }));
 
@@ -458,6 +463,13 @@ export class CanvasStore extends Store<CanvasState> {
   setSnapToGrid(enabled: boolean): void {
     if (this.state.snapToGrid === enabled) return;
     this.state.snapToGrid = enabled;
+    this.state.version++;
+    this.notifySelectionChange();
+  }
+
+  setFancyDelete(enabled: boolean): void {
+    if (this.state.fancyDelete === enabled) return;
+    this.state.fancyDelete = enabled;
     this.state.version++;
     this.notifySelectionChange();
   }

@@ -11,7 +11,8 @@ import { shareOrCopyUrl } from "./share.ts";
 
 export default function DesktopSettings() {
   const [isOpen, setIsOpen] = useState(false);
-  const { snapToGrid, handleSnapToGridChange } = useCanvasActions();
+  const { snapToGrid, handleSnapToGridChange, fancyDelete, handleFancyDeleteChange } =
+    useCanvasActions();
   const { entities } = useCanvas();
   const { exportStudioFile, importStudioFile, isExporting, isImporting } = useStudioFile();
 
@@ -19,6 +20,10 @@ export default function DesktopSettings() {
 
   const handleSnapChange = (e: ChangeEvent<HTMLInputElement>) => {
     handleSnapToGridChange(e.target.checked);
+  };
+
+  const handleFancyChange = (e: ChangeEvent<HTMLInputElement>) => {
+    handleFancyDeleteChange(e.target.checked);
   };
 
   return (
@@ -45,6 +50,11 @@ export default function DesktopSettings() {
           <div className="desktop-settings-switch">
             <Checkbox name="snap_to_grid" checked={snapToGrid} onChange={handleSnapChange} switch>
               Snap to Grid
+            </Checkbox>
+          </div>
+          <div className="desktop-settings-switch">
+            <Checkbox name="fancy_delete" checked={fancyDelete} onChange={handleFancyChange} switch>
+              Fancy deletions
             </Checkbox>
           </div>
           <hr className="divider" />

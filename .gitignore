@@ -156,3 +156,5 @@ msdf-atlas-gen/
 
 # opensrc - source code for packages
 opensrc/repos/
+.vercel
+.env*.local

@@ -235,6 +235,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   // Hydrate persisted preferences on mount
   useEffect(() => {
     preferences.getSnapToGrid().then((v) => canvasStore.setSnapToGrid(v));
+    preferences.getFancyDelete().then((v) => {
+      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      canvasStore.setFancyDelete(v ?? !reduced);
+    });
     preferences.getCustomPalettes().then((palettes) => paletteStore.setPalettes(palettes));
   }, []);
 
@@ -630,7 +634,9 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
     // Snapshot the entity's rendered texture and start dust animation overlay.
     // This copies the GPU texture so the entity can be removed immediately.
-    rendererRef.current?.startDisintegration(entity);
+    if (canvasStore.getState().fancyDelete) {
+      rendererRef.current?.startDisintegration(entity);
+    }
 
     // Clean up renderer texture cache and remove from store immediately
     rendererRef.current?.removeEntityTexture(id);
