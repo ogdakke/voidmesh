@@ -20,6 +20,7 @@ import {
 } from "iconoir-react";
 import { type RefObject, type PropsWithChildren, useRef, useState } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
+import "../ui/menu/menu.css";
 import { Keybind } from "../keyboard-shortcuts/keybind.tsx";
 import { useCanvas } from "#context/use-canvas.ts";
 import { MaterialSymbolsFlipToFrontRounded } from "../icons/flip-to-front.tsx";

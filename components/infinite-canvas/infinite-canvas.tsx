@@ -256,7 +256,8 @@ export function InfiniteCanvas() {
     return () => {
       canvas.removeEventListener("wheel", handleWheel);
     };
-  }, []);
+    // Re-run when canvas mounts (delayed by Suspense around CanvasContextMenu on desktop)
+  }, [isReady]);
 
   // Reset zoom to 100% while keeping the viewport center fixed
   const handleZoomReset = () => {
