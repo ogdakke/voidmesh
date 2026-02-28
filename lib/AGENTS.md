@@ -8,7 +8,8 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `canvas-math.ts` (~15KB) — Coordinate transforms (`screenToWorld`, `worldToScreen`, `zoomToPoint`), bounds intersection, viewport matrix, grid level calculation, snap-to-grid. Pure functions on `Point`/`Viewport`/`Bounds`.
 - `store.ts` — `Store<T>` base class for `useSyncExternalStore`. Provides `createSnapshot(versionKey, create)` and `getComputed(key, versionKey, compute)` with structural sharing via `shallowEqual`.
 - `undo.ts` — Command pattern. `Command.create({ execute, undo, onEvict })`. `Undo` class with size limits and transaction grouping. Singleton: `undo`.
-- `media-loader.ts` — Loads images (`File -> ImageBitmap`), videos (`File -> HTMLVideoElement + frame`), GIFs (`File -> decoded frames`). Palette extraction, frame rate detection.
+- `media-loader.ts` — Loads images (`File -> ImageBitmap`), videos (`File -> HTMLVideoElement + frame`), GIFs (`File -> decoded frames`), SVGs (`File -> rasterized ImageBitmap`). SVGs are rasterized to 1024px on longest axis via `rasterizeSvg()`. Palette extraction, frame rate detection.
+- `app-loader.ts` — Controls the HTML loading screen. `setText()` updates status text, `dismiss()` hides with min-display guarantee.
 - `serialization/` — `.vdmsh` zip format (fflate). Versioned manifest with migrations.
 - `palette-extraction/` — K-means clustering for color palettes.
 - `palette-store.ts` — User palette CRUD (persisted via unstorage).
@@ -19,7 +20,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `deep-merge.ts` — Deep object merge for `PartialDeep<ShaderParams>`.
 - `shader-defaults.ts` — Applies `shaderDefaults` from config on shader type switch.
 - `gif-decoder.ts` — Binary search frame lookup by timestamp.
-- `storage.ts` — Browser storage abstraction (unstorage).
+- `storage.ts` — Browser storage abstraction (unstorage). `preferences` object for persisted user settings (snapToGrid, fancyDelete, custom palettes).
 
 ## Patterns
 

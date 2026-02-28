@@ -4,7 +4,7 @@ Canonical domain type definitions. Shared across all subsystems. Bottom of the d
 
 ## Key Files
 
-- `canvas.ts` (~16KB) — Core domain model: `Point`, `Size`, `Bounds`, `Viewport`, `ShaderCanvasEntity`, `ShaderParams`, `PostProcessParams`, `AdjustmentsParams`, `PlaybackState`, `ColorPalette`, `RGBA`. All enum-like discriminants: `ShaderType`, `DitheringKind`, `AsciiKind`, `GlassKind`, `Shape`, `MediaType`, `DragTargetType`. Type guards: `isVideoEntity()`, `isGifEntity()`, `isAnimatedEntity()`. Utility types: `ParamPaths`, `GetParamByPath<P>`.
+- `canvas.ts` (~17KB) — Core domain model: `Point`, `Size`, `Bounds`, `Viewport`, `ShaderCanvasEntity`, `ShaderParams`, `PostProcessParams`, `AdjustmentsParams`, `PlaybackState`, `ColorPalette`, `RGBA`. All enum-like discriminants: `ShaderType`, `DitheringKind`, `AsciiKind`, `GlassKind`, `Shape`, `MediaType`, `DragTargetType`. Type guards: `isVideoEntity()`, `isGifEntity()`, `isAnimatedEntity()`, `isSvgEntity()`. Utility types: `ParamPaths`, `GetParamByPath<P>`.
 - `index.ts` — `createEnum()` factory function and utility types (`Thunk`, `ThunkSync`, `EnumOf`).
 - `gifenc.d.ts` — Type declarations for the untyped `gifenc` npm package.
 
@@ -20,7 +20,7 @@ type ShaderType = typeof ShaderType.infer;
 
 ## Entity Model
 
-`ShaderCanvasEntity` is a discriminated union on `mediaSource.type` (`image`, `video`, `gif`). Use type guards `isVideoEntity()`, `isGifEntity()`, `isAnimatedEntity()` — do not check `.mediaSource.type` directly in consuming code.
+`ShaderCanvasEntity` is a discriminated union on `mediaSource.type` (`image`, `video`, `gif`, `svg`). Use type guards `isVideoEntity()`, `isGifEntity()`, `isAnimatedEntity()`, `isSvgEntity()` — do not check `.mediaSource.type` directly in consuming code.
 
 ## Anti-Patterns
 

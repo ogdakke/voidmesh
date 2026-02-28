@@ -4,7 +4,7 @@ Custom React hooks bridging engine/renderer state to components.
 
 ## Key Files
 
-- `use-canvas-actions.ts` (~20KB) — Selection state computation (`SelectionState`), shader type switching with defaults, palette operations (extract, add/remove/rename, user palette CRUD), multi-select param intersection logic.
+- `use-canvas-actions.ts` (~20KB) — Selection state computation (`SelectionState`), shader type switching with defaults, palette operations (extract, add/remove/rename, user palette CRUD), multi-select param intersection logic. Also exposes `fancyDelete` toggle and `snapToGrid` toggle.
 - `use-canvas-renderer.ts` — `InfiniteCanvasRenderer` lifecycle (init, cleanup, error handling). Polls for canvas element changes.
 - `use-entity-cycling.ts` — Arrow-key entity cycling and focus management.
 - `use-media-controls.ts` (~11KB) — Video/GIF playback controls (play/pause, seek, loop, rate).

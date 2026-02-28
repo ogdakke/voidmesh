@@ -14,16 +14,16 @@ Infinite canvas app with real-time WebGPU shader effects. Users drop images/vide
 
 ## Stack
 
-React 19 + Compiler, Vite 7, WebGPU, TypeScript (strict), Bun, oxlint + tsgo.
+React 19 + Compiler, rolldown-vite 7, WebGPU, TypeScript (strict), Bun, oxlint + tsgo.
 
 ## Path Aliases (package.json `imports`)
 
-`#engine` -> `engine/index.ts`, `#config` -> `lib/config/index.ts`, `#lib/*`, `#types/*`, `#renderer/*`, `#hooks/*`, `#components/*`, `#context/*`, `#ui/*` -> `components/ui/*`.
+`#engine` -> `engine/index.ts`, `#config` -> `lib/config/index.ts`, `#lib/*`, `#types/*`, `#renderer/*`, `#hooks/*`, `#components/*`, `#context/*`, `#ui/*` -> `components/ui/*`, `#media/*` -> `media/*`.
 
 ## Lint & Typecheck
 
 ```bash
-bun run lint:all    # oxlint + tsgo in parallel. Always run after changes.
+bun run lint:all    # oxlint with type-checking. Always run after changes.
 ```
 
 ## Key Patterns
@@ -49,6 +49,15 @@ Video: WebCodecs H.264 + mediabunny muxer in Web Worker (MP4/MOV only). GIF: gif
 ## Provider Composition (app.tsx)
 
 `NuqsAdapter > KeybindProvider > IconoirProvider > ToastProvider > CanvasProvider > VideoExportProvider > ExportQueueProvider > LayoutProvider`
+
+## Vite Plugins (plugins/)
+
+- `vite-plugin-image.ts` — `?img` import suffix. Generates responsive `<picture>` data: multi-width srcsets in avif/webp, thumbhash blur-up placeholders. Uses `sharp` for resizing.
+- `vite-plugin-wgsl-minify.ts` — Minifies `.wgsl?raw` imports in production builds using `miniray`.
+
+## Media Assets
+
+Static media images live in `media/` (not `public/media/`). Import via `#media/*` alias with `?img` suffix for responsive image data.
 
 ## Serialization
 
