@@ -64,6 +64,15 @@ export function useCanvasRenderer(
     const renderer = new InfiniteCanvasRenderer(canvasElement);
     rendererRef.current = renderer;
 
+    renderer.onDeviceLost = (reason) => {
+      if (cancelled) return;
+      setState((prev) => ({
+        ...prev,
+        isSupported: false,
+        error: new Error(`GPU device lost: ${reason}`),
+      }));
+    };
+
     renderer
       .initialize()
       .then(() => {

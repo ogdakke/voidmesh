@@ -2,6 +2,7 @@ import { IconoirProvider } from "iconoir-react";
 import { NuqsAdapter } from "nuqs/adapters/react";
 import React, { lazy, Suspense, useState } from "react";
 import ReactDOM from "react-dom/client";
+import { logger } from "#lib/client.logger.ts";
 import { ToastProvider } from "#ui/toast/toast.tsx";
 import { CanvasProvider } from "./context/canvas-context.tsx";
 import { ExportQueueProvider } from "./context/export-queue-context.tsx";
@@ -52,7 +53,14 @@ export default function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
+ReactDOM.createRoot(document.getElementById("root")!, {
+  onCaughtError(error, errorInfo) {
+    logger.error("[ErrorBoundary]", error, errorInfo.componentStack);
+  },
+  onUncaughtError(error, errorInfo) {
+    logger.error("[Uncaught]", error, errorInfo.componentStack);
+  },
+}).render(
   <React.StrictMode>
     <NuqsAdapter>
       <KeybindProvider>

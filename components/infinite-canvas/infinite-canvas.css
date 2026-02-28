@@ -230,6 +230,11 @@
   font-family: var(--font-mono, monospace);
 }
 
+.infinite-canvas-error__reload {
+  margin-top: var(--spacing-2);
+  min-width: 160px;
+}
+
 /* Drop zone styles */
 .infinite-canvas-dropzone {
   width: 100%;

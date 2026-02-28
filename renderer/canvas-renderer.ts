@@ -1,4 +1,5 @@
 import { config, type GridConfig } from "#config";
+import { logger } from "#lib/client.logger.ts";
 import type { RenderState } from "../engine/canvas-store.ts";
 import { disintegrationController } from "../engine/disintegration-controller.ts";
 import { entityDragVisual } from "../engine/entity-drag-visual.ts";
@@ -73,6 +74,8 @@ export class InfiniteCanvasRenderer {
   #entityErrors: Map<string, string> = new Map();
   // Callback for error notifications (e.g., to show toast)
   onEntityError?: (entityId: string, error: string) => void;
+  // Callback for GPU device lost events
+  onDeviceLost?: (reason: string) => void;
 
   // Entity texture cache
   #entityTextures: Map<string, GPUTexture> = new Map();
@@ -202,6 +205,15 @@ export class InfiniteCanvasRenderer {
 
     this.#device = await adapter.requestDevice({
       requiredLimits,
+    });
+
+    this.#device.lost.then((info) => {
+      logger.error(`[WebGPU] Device lost: ${info.reason}`, info.message);
+      this.onDeviceLost?.(info.reason);
+    });
+
+    this.#device.addEventListener("uncapturederror", (event) => {
+      logger.warn("[WebGPU] Uncaptured error:", (event as GPUUncapturedErrorEvent).error);
     });
 
     this.#context = this.canvas.getContext("webgpu");
