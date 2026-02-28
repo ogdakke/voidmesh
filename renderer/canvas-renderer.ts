@@ -1,5 +1,6 @@
 import { config, type GridConfig } from "#config";
 import type { RenderState } from "../engine/canvas-store.ts";
+import { disintegrationController } from "../engine/disintegration-controller.ts";
 import { entityDragVisual } from "../engine/entity-drag-visual.ts";
 import {
   boundsIntersect,
@@ -17,6 +18,7 @@ import {
   type Viewport,
 } from "#types/canvas.ts";
 import compositionShaderSource from "./composition.wgsl?raw";
+import { DisintegrationParticleSystem } from "./disintegration-particles.ts";
 import dotGridShaderSource from "./dot-grid.wgsl?raw";
 import { ExportService } from "./export-service.ts";
 import { ProcessingPipeline } from "./processing-pipeline.ts";
@@ -112,6 +114,20 @@ export class InfiniteCanvasRenderer {
   // Reusable canvas for Firefox-compatible video frame upload
   #videoUploadCanvas: OffscreenCanvas | null = null;
   #videoUploadCtx: OffscreenCanvasRenderingContext2D | null = null;
+
+  // Disintegration particle system (GPU compute + instanced rendering)
+  #particleSystem: DisintegrationParticleSystem | null = null;
+
+  // Disintegration overlays — GPU resources for fire-and-forget dust animations
+  #disintegrationOverlays: Map<
+    string,
+    {
+      texture: GPUTexture;
+      textureView: GPUTextureView;
+      uniformBuffer: GPUBuffer;
+      bindGroup: GPUBindGroup;
+    }
+  > = new Map();
 
   // Cached canvas dimensions (updated by ResizeObserver, avoids getBoundingClientRect in render loop)
   #cachedCanvasWidth = 0;
@@ -252,6 +268,10 @@ export class InfiniteCanvasRenderer {
       (entity, source, output) => this.#applyShaderToTexture(entity, source, output),
       (video, w, h) => this.#getVideoFrameSource(video, w, h),
     );
+
+    // Initialize disintegration particle system
+    this.#particleSystem = new DisintegrationParticleSystem(this.#device);
+    await this.#particleSystem.initialize(this.#canvasFormat, this.#viewportUniformBuffer!);
 
     // Set up ResizeObserver to cache canvas dimensions (avoids getBoundingClientRect in render loop)
     this.#resizeObserver = new ResizeObserver((entries) => {
@@ -818,9 +838,75 @@ export class InfiniteCanvasRenderer {
     this.#entityUintView[6] = isSelected ? 1 : 0; // isSelected flag
     this.#entityUintView[7] = debugMode ? 1 : 0; // debugMode flag
     this.#entityFloatView[8] = entityDragVisual.getScale(entity.id); // visual drag scale
-    this.#entityFloatView[9] = 0;
-    this.#entityFloatView[10] = 0;
+    this.#entityFloatView[9] = 0; // disintProgress (unused for live entities)
+    this.#entityFloatView[10] = 0; // disintSeed (unused for live entities)
     this.#entityFloatView[11] = 0;
+  }
+
+  #renderDisintegrationOverlays(encoder: GPUCommandEncoder, targetView: GPUTextureView): void {
+    if (this.#disintegrationOverlays.size === 0) return;
+
+    // Clean up GPU resources for overlays whose animations have completed
+    // (controller removes them from its map when tick() finds them finished)
+    const completedIds: string[] = [];
+    for (const id of this.#disintegrationOverlays.keys()) {
+      if (disintegrationController.getProgress(id) === 0) {
+        completedIds.push(id);
+      }
+    }
+    for (const id of completedIds) {
+      this.#cleanupDisintegrationOverlay(id);
+    }
+
+    // Render active overlays
+    const now = performance.now();
+    for (const overlay of disintegrationController.getOverlays()) {
+      const gpu = this.#disintegrationOverlays.get(overlay.id);
+      if (!gpu) continue;
+      if (now < overlay.startTime) continue;
+
+      const progress = disintegrationController.getProgress(overlay.id);
+
+      // Render dissolve front only while dissolve is still in progress (< 1.0)
+      if (progress > 0 && progress < 1) {
+        this.#entityFloatView[0] = overlay.position.x;
+        this.#entityFloatView[1] = overlay.position.y;
+        this.#entityFloatView[2] = overlay.size.width;
+        this.#entityFloatView[3] = overlay.size.height;
+        this.#entityFloatView[4] = (overlay.rotation * Math.PI) / 180;
+        this.#entityUintView[5] = 0; // not hovered
+        this.#entityUintView[6] = 0; // not selected
+        this.#entityUintView[7] = 0; // no debug
+        this.#entityFloatView[8] = 1.0; // scale
+        this.#entityFloatView[9] = progress; // disintProgress
+        this.#entityFloatView[10] = disintegrationController.getSeed(overlay.id); // disintSeed
+        this.#entityFloatView[11] = 0;
+
+        this.#device!.queue.writeBuffer(gpu.uniformBuffer, 0, this.#entityUniformData);
+
+        const pass = encoder.beginRenderPass({
+          label: `Disintegration overlay ${overlay.id}`,
+          colorAttachments: [
+            {
+              view: targetView,
+              loadOp: "load",
+              storeOp: "store",
+            },
+          ],
+        });
+
+        pass.setPipeline(this.#compositionPipeline!);
+        pass.setBindGroup(0, gpu.bindGroup);
+        pass.draw(6);
+        pass.end();
+      }
+
+      // Update + render particles (compute pass must precede render pass)
+      const elapsed = Math.max(now - overlay.startTime, 0) / 1000;
+      const dt = 1 / 60; // approximate frame delta
+      this.#particleSystem?.update(overlay.id, elapsed, dt, encoder);
+      this.#particleSystem?.render(overlay.id, encoder, targetView);
+    }
   }
 
   /**
@@ -941,7 +1027,8 @@ export class InfiniteCanvasRenderer {
     const outputUsage =
       GPUTextureUsage.TEXTURE_BINDING |
       GPUTextureUsage.RENDER_ATTACHMENT |
-      GPUTextureUsage.COPY_DST;
+      GPUTextureUsage.COPY_DST |
+      GPUTextureUsage.COPY_SRC;
 
     let outputTexture: GPUTexture;
     if (cachedTexture && cachedTexture.width === width && cachedTexture.height === height) {
@@ -1175,6 +1262,9 @@ export class InfiniteCanvasRenderer {
       entityPass.end();
     }
 
+    // Pass 2b: Render disintegration overlays (on top of entities)
+    this.#renderDisintegrationOverlays(encoder, targetView);
+
     // Pass 3: Render all selection rectangles (drag-select and multi-select bounds)
     // Collect all active rectangles
     const selectionRects: Array<{
@@ -1276,6 +1366,86 @@ export class InfiniteCanvasRenderer {
 
     // Clear any errors for this entity
     this.#entityErrors.delete(entityId);
+  }
+
+  /**
+   * Snapshot an entity's rendered texture and create a disintegration overlay.
+   * Called before removeEntityTexture — copies the GPU texture so the entity
+   * can be removed immediately while the dust animation plays independently.
+   */
+  startDisintegration(entity: {
+    id: string;
+    position: { x: number; y: number };
+    size: { width: number; height: number };
+    rotation: number;
+  }): void {
+    const sourceTexture = this.#entityTextures.get(entity.id);
+    if (!sourceTexture || !this.#device || !this.#compositionBindGroupLayout) return;
+
+    // Copy the entity's rendered texture (so original can be destroyed freely)
+    const snapshotTexture = this.#device.createTexture({
+      label: `Disintegration snapshot ${entity.id}`,
+      size: [sourceTexture.width, sourceTexture.height],
+      format: sourceTexture.format,
+      usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    const encoder = this.#device.createCommandEncoder();
+    encoder.copyTextureToTexture({ texture: sourceTexture }, { texture: snapshotTexture }, [
+      sourceTexture.width,
+      sourceTexture.height,
+    ]);
+    this.#device.queue.submit([encoder.finish()]);
+
+    const textureView = snapshotTexture.createView();
+    const uniformBuffer = this.#device.createBuffer({
+      label: `Disintegration uniform ${entity.id}`,
+      size: config.rendering.entityUniformSize,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+
+    const bindGroup = this.#device.createBindGroup({
+      label: `Disintegration bind group ${entity.id}`,
+      layout: this.#compositionBindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer: this.#viewportUniformBuffer! } },
+        { binding: 1, resource: { buffer: uniformBuffer } },
+        { binding: 2, resource: textureView },
+        { binding: 3, resource: this.#compositionSampler! },
+      ],
+    });
+
+    this.#disintegrationOverlays.set(entity.id, {
+      texture: snapshotTexture,
+      textureView,
+      uniformBuffer,
+      bindGroup,
+    });
+
+    // Register with the animation controller
+    disintegrationController.addOverlay(entity.id, entity.position, entity.size, entity.rotation);
+
+    // Spawn particles from the snapshot texture
+    const overlayData = [...disintegrationController.getOverlays()].find((o) => o.id === entity.id);
+    if (overlayData) {
+      this.#particleSystem?.spawn(entity.id, snapshotTexture, overlayData);
+    }
+  }
+
+  /**
+   * Cancel a disintegration overlay (e.g., on undo when entity is restored).
+   */
+  cancelDisintegration(id: string): void {
+    disintegrationController.cancelOverlay(id);
+    this.#cleanupDisintegrationOverlay(id);
+  }
+
+  #cleanupDisintegrationOverlay(id: string): void {
+    const overlay = this.#disintegrationOverlays.get(id);
+    if (!overlay) return;
+    overlay.texture.destroy();
+    overlay.uniformBuffer.destroy();
+    this.#disintegrationOverlays.delete(id);
+    this.#particleSystem?.remove(id);
   }
 
   /**
@@ -1404,6 +1574,15 @@ export class InfiniteCanvasRenderer {
       cached.uniformBuffer.destroy();
     }
     this.#entityCompositionCache.clear();
+
+    // Destroy disintegration overlays + particle system
+    for (const overlay of this.#disintegrationOverlays.values()) {
+      overlay.texture.destroy();
+      overlay.uniformBuffer.destroy();
+    }
+    this.#disintegrationOverlays.clear();
+    this.#particleSystem?.destroy();
+    this.#particleSystem = null;
 
     // Destroy processing pipeline
     this.#processingPipeline?.destroy();

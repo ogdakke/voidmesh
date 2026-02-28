@@ -20,8 +20,8 @@ struct EntityUniforms {
   isSelected: u32,    // 1 if entity is selected, 0 otherwise
   debugMode: u32,     // 1 if debug mode is enabled, 0 otherwise
   scale: f32,         // Visual drag scale (1.0 = normal, < 1.0 = shrunk)
-  _pad1: f32,
-  _pad2: f32,
+  disintProgress: f32, // Disintegration progress (0 = inactive, 0-1 = dissolving)
+  disintSeed: f32,    // Per-entity random seed for noise variation
   _pad3: f32,
 }
 
@@ -35,6 +35,49 @@ struct VertexOutput {
   @location(0) uv: vec2f,
   @location(1) size: vec2f,
 }
+
+// --- Noise functions for disintegration ---
+
+fn hash21(p: vec2f) -> f32 {
+  let h = dot(p, vec2f(127.1, 311.7));
+  return fract(sin(h) * 43758.5453);
+}
+
+fn hash22(p: vec2f) -> vec2f {
+  return vec2f(
+    hash21(p),
+    hash21(p + vec2f(47.3, 93.7))
+  );
+}
+
+// Smooth value noise
+fn valueNoise(p: vec2f) -> f32 {
+  let i = floor(p);
+  let f = fract(p);
+  let u = f * f * (3.0 - 2.0 * f);
+
+  let a = hash21(i);
+  let b = hash21(i + vec2f(1.0, 0.0));
+  let c = hash21(i + vec2f(0.0, 1.0));
+  let d = hash21(i + vec2f(1.0, 1.0));
+
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+// Fractal brownian motion — organic dissolve pattern
+fn fbmNoise(p: vec2f) -> f32 {
+  var value = 0.0;
+  var amp = 0.5;
+  var pos = p;
+  for (var i = 0; i < 3; i++) {
+    value += amp * valueNoise(pos);
+    pos *= 2.0;
+    amp *= 0.5;
+  }
+  return value;
+}
+
+// --- End noise functions ---
 
 // Vertex shader - transforms quad vertices from entity local space to clip space
 @vertex
@@ -101,10 +144,17 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
 }
 
 // Fragment shader - samples entity texture and renders hover/selection borders
+// Also handles disintegration dissolve-to-dust effect when disintProgress > 0
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
     // Sample texture first (uniform control flow required for textureSample)
     let textureColor = textureSample(entityTexture, entitySampler, input.uv);
+
+    // --- Disintegration effect ---
+    if (entity.disintProgress > 0.0) {
+        return disintegrate(input, textureColor);
+    }
+
     // Calculate 5 screen-pixel border in UV space (zoom-compensated)
     let border_w = 5.0;
     // 1 screen pixel = 1 / (entity_size_in_world * zoom) in UV space
@@ -127,4 +177,39 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
 
     // Normal texture
     return textureColor;
+}
+
+// Disintegration: noise-driven dissolve with dust particle drift
+fn disintegrate(input: VertexOutput, textureColor: vec4f) -> vec4f {
+    let progress = entity.disintProgress;
+    let seed = entity.disintSeed;
+    let uv = input.uv;
+
+    // Compute dissolve threshold: blend FBM noise with horizontal gradient
+    // Gradient creates a directional sweep (left to right), noise adds organic edges
+    let noiseCoord = uv * 5.0 + vec2f(seed, seed * 0.7);
+    let noiseVal = fbmNoise(noiseCoord);
+    let gradient = uv.x * 0.8 + uv.y * 0.2; // mostly horizontal sweep
+    let threshold = mix(noiseVal, gradient, 0.35);
+
+    // Overshoot progress to ensure complete dissolve at progress=1.0
+    let dissolveEdge = progress * 1.25;
+
+    // Solid pixel — not yet reached by dissolve wave
+    if (threshold >= dissolveEdge) {
+        let edgeDist = threshold - dissolveEdge;
+        let glow = smoothstep(0.05, 0.0, edgeDist);
+        // Warm orange edge glow at dissolve boundary
+        let glowColor = vec4f(
+            mix(textureColor.r, 1.0, 0.6),
+            mix(textureColor.g, 0.5, 0.6),
+            mix(textureColor.b, 0.15, 0.6),
+            textureColor.a
+        );
+        return mix(textureColor, glowColor, glow * 0.6);
+    }
+
+    // Dissolved — particles handle this region
+    discard;
+    return vec4f(0.0);
 }

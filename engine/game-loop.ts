@@ -24,6 +24,7 @@ import {
 } from "#types/canvas.ts";
 import { createEnum } from "#types/index.ts";
 import { canvasStore } from "./canvas-store.ts";
+import { disintegrationController } from "./disintegration-controller.ts";
 import { entityDragVisual } from "./entity-drag-visual.ts";
 import { entityLabel } from "./entity-label.ts";
 import { perfOverlay } from "./perf-overlay.ts";
@@ -320,6 +321,9 @@ export class GameLoop {
     // 5b. Advance drag visual spring animation
     const dragVisualActive = entityDragVisual.tick(now);
 
+    // 5c. Advance disintegration animations
+    const disintegrationActive = disintegrationController.tick(now);
+
     // 6. Add selection bounds to render state (managed by game-loop, not store)
     renderState.dragSelectBounds = this.getDragSelectBounds();
     renderState.multiSelectBounds = this.getMultiSelectBounds();
@@ -335,6 +339,7 @@ export class GameLoop {
       momentumActive ||
       zoomMomentumActive ||
       dragVisualActive ||
+      disintegrationActive ||
       (this.inputState.pointerDown && !!this.dragTarget) ||
       this.dragSelect?.isActive;
 

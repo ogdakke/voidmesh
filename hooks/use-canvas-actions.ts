@@ -14,7 +14,7 @@ import { Command, undo } from "#lib/undo.ts";
 import { extractPaletteFromImage } from "#lib/palette-extraction/index.ts";
 import { useSyncExternalStore } from "react";
 import { useCanvas } from "../context/use-canvas.ts";
-import { canvasStore } from "../engine/index.ts";
+import { canvasStore, disintegrationController } from "../engine/index.ts";
 import {
   AsciiKind,
   DitheringKind,
@@ -412,6 +412,9 @@ export function useCanvasActions() {
     if (entities.length === 0) return;
 
     e?.preventDefault(); // Prevent browser back navigation
+
+    // Reset stagger so multi-entity deletions get staggered timing
+    disintegrationController.resetStagger();
 
     if (entities.length === 1) {
       // Single entity: use existing removeEntity (handles undo)

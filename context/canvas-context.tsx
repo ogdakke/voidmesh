@@ -628,7 +628,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       entity.playback.isPlaying = false;
     }
 
-    // Clean up renderer texture cache and remove from store
+    // Snapshot the entity's rendered texture and start dust animation overlay.
+    // This copies the GPU texture so the entity can be removed immediately.
+    rendererRef.current?.startDisintegration(entity);
+
+    // Clean up renderer texture cache and remove from store immediately
     rendererRef.current?.removeEntityTexture(id);
     canvasStore.removeEntity(id);
 
@@ -636,6 +640,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     undo.add(
       Command.create({
         undo: () => {
+          // Cancel any still-playing disintegration overlay
+          rendererRef.current?.cancelDisintegration(entityCopy.id);
           // Restore the entity with all its resources
           canvasStore.addEntity(entityCopy);
           // Resume playback if entity was playing when deleted
@@ -649,7 +655,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           }
         },
         execute: () => {
-          // Re-delete the entity
+          // Re-delete the entity (no animation on redo)
           if (entityCopy.mediaSource.type === MediaType.video) {
             entityCopy.mediaSource.videoElement.pause();
           } else if (isGifEntity(entityCopy) && entityCopy.playback) {
