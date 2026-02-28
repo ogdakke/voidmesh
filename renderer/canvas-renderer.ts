@@ -132,6 +132,7 @@ export class InfiniteCanvasRenderer {
   // Cached canvas dimensions (updated by ResizeObserver, avoids getBoundingClientRect in render loop)
   #cachedCanvasWidth = 0;
   #cachedCanvasHeight = 0;
+  #lastFrameTime = 0;
   #resizeObserver: ResizeObserver | null = null;
 
   // Selection rectangle pipeline (for drag-to-select)
@@ -843,14 +844,18 @@ export class InfiniteCanvasRenderer {
     this.#entityFloatView[11] = 0;
   }
 
-  #renderDisintegrationOverlays(encoder: GPUCommandEncoder, targetView: GPUTextureView): void {
+  #renderDisintegrationOverlays(
+    encoder: GPUCommandEncoder,
+    targetView: GPUTextureView,
+    dt: number,
+  ): void {
     if (this.#disintegrationOverlays.size === 0) return;
 
     // Clean up GPU resources for overlays whose animations have completed
     // (controller removes them from its map when tick() finds them finished)
     const completedIds: string[] = [];
     for (const id of this.#disintegrationOverlays.keys()) {
-      if (disintegrationController.getProgress(id) === 0) {
+      if (!disintegrationController.hasOverlay(id)) {
         completedIds.push(id);
       }
     }
@@ -879,7 +884,7 @@ export class InfiniteCanvasRenderer {
         this.#entityUintView[7] = 0; // no debug
         this.#entityFloatView[8] = 1.0; // scale
         this.#entityFloatView[9] = progress; // disintProgress
-        this.#entityFloatView[10] = disintegrationController.getSeed(overlay.id); // disintSeed
+        this.#entityFloatView[10] = overlay.seed; // disintSeed
         this.#entityFloatView[11] = 0;
 
         this.#device!.queue.writeBuffer(gpu.uniformBuffer, 0, this.#entityUniformData);
@@ -903,7 +908,6 @@ export class InfiniteCanvasRenderer {
 
       // Update + render particles (compute pass must precede render pass)
       const elapsed = Math.max(now - overlay.startTime, 0) / 1000;
-      const dt = 1 / 60; // approximate frame delta
       this.#particleSystem?.update(overlay.id, elapsed, dt, encoder);
       this.#particleSystem?.render(overlay.id, encoder, targetView);
     }
@@ -1081,6 +1085,8 @@ export class InfiniteCanvasRenderer {
     }
 
     const renderStart = performance.now();
+    const frameDt = this.#lastFrameTime > 0 ? (renderStart - this.#lastFrameTime) / 1000 : 1 / 60;
+    this.#lastFrameTime = renderStart;
     const { entities, viewport, hoveredEntityId, selectedEntityIds, debugMode } = state;
 
     // Update canvas size if needed (uses cached dimensions from ResizeObserver)
@@ -1263,7 +1269,7 @@ export class InfiniteCanvasRenderer {
     }
 
     // Pass 2b: Render disintegration overlays (on top of entities)
-    this.#renderDisintegrationOverlays(encoder, targetView);
+    this.#renderDisintegrationOverlays(encoder, targetView, frameDt);
 
     // Pass 3: Render all selection rectangles (drag-select and multi-select bounds)
     // Collect all active rectangles
@@ -1425,7 +1431,7 @@ export class InfiniteCanvasRenderer {
     disintegrationController.addOverlay(entity.id, entity.position, entity.size, entity.rotation);
 
     // Spawn particles from the snapshot texture
-    const overlayData = [...disintegrationController.getOverlays()].find((o) => o.id === entity.id);
+    const overlayData = disintegrationController.getOverlay(entity.id);
     if (overlayData) {
       this.#particleSystem?.spawn(entity.id, snapshotTexture, overlayData);
     }

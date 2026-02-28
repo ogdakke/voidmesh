@@ -1,6 +1,8 @@
 // Compute shader: initialize particles from entity snapshot texture.
 // Runs once per overlay to place particles at entity pixel positions.
 
+// KEEP IN SYNC: Particle and Params structs are duplicated in
+// disintegration-update.wgsl and disintegration-render.wgsl (WGSL has no #include).
 struct Particle {
   position: vec2f,
   velocity: vec2f,
@@ -43,13 +45,6 @@ struct Params {
 fn hash21(p: vec2f) -> f32 {
   let h = dot(p, vec2f(127.1, 311.7));
   return fract(sin(h) * 43758.5453);
-}
-
-fn hash22(p: vec2f) -> vec2f {
-  return vec2f(
-    hash21(p),
-    hash21(p + vec2f(47.3, 93.7))
-  );
 }
 
 fn valueNoise(p: vec2f) -> f32 {

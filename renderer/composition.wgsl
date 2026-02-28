@@ -43,13 +43,6 @@ fn hash21(p: vec2f) -> f32 {
   return fract(sin(h) * 43758.5453);
 }
 
-fn hash22(p: vec2f) -> vec2f {
-  return vec2f(
-    hash21(p),
-    hash21(p + vec2f(47.3, 93.7))
-  );
-}
-
 // Smooth value noise
 fn valueNoise(p: vec2f) -> f32 {
   let i = floor(p);

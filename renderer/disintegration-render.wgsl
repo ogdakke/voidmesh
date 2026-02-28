@@ -10,6 +10,8 @@ struct ViewportUniforms {
   _padding: f32,
 }
 
+// KEEP IN SYNC: Particle and Params structs are duplicated in
+// disintegration-spawn.wgsl and disintegration-update.wgsl (WGSL has no #include).
 struct Particle {
   position: vec2f,
   velocity: vec2f,

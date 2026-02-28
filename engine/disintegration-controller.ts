@@ -97,19 +97,19 @@ class DisintegrationController {
     return easings.easeOutExpo(t);
   }
 
-  /** Get per-overlay seed for noise variation. */
-  getSeed(id: string): number {
-    return this.#overlays.get(id)?.seed ?? 0;
+  /** Get a specific overlay by ID. */
+  getOverlay(id: string): DisintegrationOverlay | undefined {
+    return this.#overlays.get(id);
+  }
+
+  /** Whether a specific overlay exists (including not-yet-started staggered ones). */
+  hasOverlay(id: string): boolean {
+    return this.#overlays.has(id);
   }
 
   /** Iterate active overlays (for rendering). */
   getOverlays(): IterableIterator<DisintegrationOverlay> {
     return this.#overlays.values();
-  }
-
-  /** Whether any animation is running. */
-  get isActive(): boolean {
-    return this.#overlays.size > 0;
   }
 
   /** Cancel a specific overlay (e.g., on undo). */

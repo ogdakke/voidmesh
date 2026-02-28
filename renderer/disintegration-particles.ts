@@ -14,10 +14,8 @@ const PARAMS_BUFFER_SIZE = 96;
 interface ParticleOverlayGPU {
   particleBuffer: GPUBuffer;
   paramsBuffer: GPUBuffer;
-  spawnBindGroup: GPUBindGroup;
   updateBindGroup: GPUBindGroup;
   renderBindGroup: GPUBindGroup;
-  startTime: number;
 }
 
 export class DisintegrationParticleSystem {
@@ -274,10 +272,8 @@ export class DisintegrationParticleSystem {
     this.#overlays.set(id, {
       particleBuffer,
       paramsBuffer,
-      spawnBindGroup,
       updateBindGroup,
       renderBindGroup,
-      startTime: overlay.startTime,
     });
   }
 

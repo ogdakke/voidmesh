@@ -1,6 +1,8 @@
 // Compute shader: advance particle physics each frame.
 // Applies velocity, wind acceleration, turbulence, fade, and shrink.
 
+// KEEP IN SYNC: Particle and Params structs are duplicated in
+// disintegration-spawn.wgsl and disintegration-render.wgsl (WGSL has no #include).
 struct Particle {
   position: vec2f,
   velocity: vec2f,
