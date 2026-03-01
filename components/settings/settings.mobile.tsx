@@ -1,28 +1,22 @@
-import { useState, type ChangeEvent } from "react";
-import { FloppyDiskArrowIn, Import, MoreVert, NavArrowRight } from "iconoir-react";
-import { Drawer } from "../ui/drawer/index.tsx";
-import { Checkbox } from "../ui/checkbox/index.tsx";
-import { Button } from "../ui/button/index.tsx";
-import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
 import { useCanvas } from "#context/use-canvas.ts";
 import { useStudioFile } from "#hooks/use-studio-file.ts";
-import "./settings-drawer.css";
-import { shareOrCopyUrl } from "./share.ts";
-
+import { Button } from "#ui/button/index.tsx";
+import { Drawer } from "#ui/drawer/index.tsx";
+import { FloppyDiskArrowIn, Import, MoreVert } from "iconoir-react";
+import { useState } from "react";
+import "./settings.mobile.css";
+import {
+  FancyDeleteToggle,
+  FeedbackLink,
+  HapticsToggle,
+  LinkItem,
+  ShareLink,
+  SnapToGridToggle,
+} from "./settings.shared.tsx";
 export default function SettingsDrawer() {
-  const { snapToGrid, handleSnapToGridChange, fancyDelete, handleFancyDeleteChange } =
-    useCanvasActions();
   const { entities } = useCanvas();
   const { exportStudioFile, importStudioFile, isExporting, isImporting } = useStudioFile();
   const [open, setOpen] = useState(false);
-
-  const handleSnapChange = (e: ChangeEvent<HTMLInputElement>) => {
-    handleSnapToGridChange(e.target.checked);
-  };
-
-  const handleFancyChange = (e: ChangeEvent<HTMLInputElement>) => {
-    handleFancyDeleteChange(e.target.checked);
-  };
 
   const isLoading = isExporting || isImporting;
 
@@ -46,30 +40,24 @@ export default function SettingsDrawer() {
             <h3 className="settings-drawer-title">Settings</h3>
           </div>
           <div className="settings-drawer-switch">
-            <Checkbox name="snap_to_grid" checked={snapToGrid} onChange={handleSnapChange} switch>
-              Snap to Grid
-            </Checkbox>
+            <SnapToGridToggle />
           </div>
           <div className="settings-drawer-switch">
-            <Checkbox name="fancy_delete" checked={fancyDelete} onChange={handleFancyChange} switch>
-              Fancy deletions
-            </Checkbox>
+            <FancyDeleteToggle />
+          </div>
+          <div className="settings-drawer-switch">
+            <HapticsToggle />
           </div>
           <hr className="divider" />
           <div className="settings-drawer-ext-item field-label">
-            <button type="button" onClick={shareOrCopyUrl}>
-              Share
-            </button>
-            <NavArrowRight />
+            <LinkItem>
+              <ShareLink />
+            </LinkItem>
           </div>
           <div className="settings-drawer-ext-item field-label">
-            <a
-              href={`mailto:dw@danielwargh.com?subject=${encodeURIComponent("Feedback on voidmesh")}`}
-              className="settings-drawer-link"
-            >
-              Send feedback
-            </a>
-            <NavArrowRight />
+            <LinkItem>
+              <FeedbackLink className="settings-drawer-link" />
+            </LinkItem>
           </div>
           <div className="settings-drawer-studio-buttons">
             {entities.length > 0 && (

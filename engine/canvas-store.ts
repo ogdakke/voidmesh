@@ -32,6 +32,8 @@ export interface CanvasState {
   snapToGrid: boolean;
   // Fancy deletions - disintegration shader animation on entity removal
   fancyDelete: boolean;
+  // Haptic feedback on touch interactions
+  haptics: boolean;
 
   // Dirty flags for optimization
   viewportDirty: boolean;
@@ -68,6 +70,7 @@ export interface SelectionSnapshot {
   multiSelectMode: boolean;
   snapToGrid: boolean;
   fancyDelete: boolean;
+  haptics: boolean;
   version: number;
 }
 
@@ -141,6 +144,7 @@ export class CanvasStore extends Store<CanvasState> {
       debugMode: false,
       snapToGrid: false,
       fancyDelete: true,
+      haptics: true,
       viewportDirty: false,
       entitiesDirty: new Set(),
       selectionDirty: false,
@@ -170,6 +174,7 @@ export class CanvasStore extends Store<CanvasState> {
       multiSelectMode: s.multiSelectMode,
       snapToGrid: s.snapToGrid,
       fancyDelete: s.fancyDelete,
+      haptics: s.haptics,
       version: s.selectionVersion,
     }));
 
@@ -470,6 +475,13 @@ export class CanvasStore extends Store<CanvasState> {
   setFancyDelete(enabled: boolean): void {
     if (this.state.fancyDelete === enabled) return;
     this.state.fancyDelete = enabled;
+    this.state.version++;
+    this.notifySelectionChange();
+  }
+
+  setHaptics(enabled: boolean): void {
+    if (this.state.haptics === enabled) return;
+    this.state.haptics = enabled;
     this.state.version++;
     this.notifySelectionChange();
   }
