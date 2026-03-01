@@ -4,7 +4,7 @@
     z-index: 1;
     width: clamp(250px, 100%, calc(100vw - var(--spacing-3)));
     padding: var(--spacing);
-    bottom: 1rem;
+    bottom: calc(env(safe-area-inset-bottom, 0) + 1rem);
     left: 50%;
     transform: translateX(-50%);
     top: auto;
@@ -16,7 +16,7 @@
     }
 
     &[data-position="top-center"] {
-      top: 1rem;
+      top: calc(env(safe-area-inset-top, 0) + 1rem);
       bottom: auto;
 
       @media (min-width: 500px) {
