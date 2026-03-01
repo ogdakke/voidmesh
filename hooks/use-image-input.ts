@@ -74,8 +74,8 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
           toastManager.add({ title: "Pasted Link" });
         } else {
           toastManager.add({
-            title: "Failed to load image from link",
-            description: "Check if the link points to a image",
+            title: "Failed to load media from link",
+            description: "Check if the link points to a supported image or video",
             type: "destructive",
           });
         }
