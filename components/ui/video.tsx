@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ComponentProps } from "react";
+import { decodeThumbhash } from "#lib/thumbhash.ts";
 
 const codecType = {
   av1: "video/mp4; codecs=av01.0.05M.08",
@@ -15,7 +16,7 @@ interface VideoSource {
 
 interface VideoProps extends Omit<ComponentProps<"video">, "src" | "preload" | "children"> {
   src: string | VideoSource[];
-  /** Thumbhash data URL shown as a blurred poster until the video loads. */
+  /** Compact base64 thumbhash shown as a blurred poster until the video loads. */
   placeholder?: string;
   /** Load immediately instead of waiting for viewport intersection. */
   eager?: boolean;
@@ -77,7 +78,7 @@ export function Video({ src, placeholder, eager, autoPlay, muted, onClick, ...re
       preload="none"
       autoPlay={false}
       muted={muted}
-      poster={placeholder}
+      poster={placeholder ? decodeThumbhash(placeholder) : undefined}
       onClick={handleClick}
       {...rest}
     >
