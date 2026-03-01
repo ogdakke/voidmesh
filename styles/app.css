@@ -25,6 +25,10 @@
     height: calc(100% - var(--margin-y) * 2);
   }
 
+  .video {
+    width: 100%;
+  }
+
   .handle--invisible {
     background-color: transparent;
   }
@@ -279,6 +283,7 @@
         calc(100% - var(--fade-range-start, 20px));
     }
   }
+
   .kbd {
     background: var(--gray-100);
     border-radius: var(--radius);

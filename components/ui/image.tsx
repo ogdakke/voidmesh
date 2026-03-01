@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ComponentProps } from "react";
+import { decodeThumbhash } from "#lib/thumbhash.ts";
 
 const isCrawler =
   typeof window !== "undefined" &&
@@ -64,7 +65,7 @@ export function Image({
         <source key={s.type} data-srcset={s.srcSet} type={s.type} />
       ))}
       <img
-        src={isCrawler ? src : thumbhash}
+        src={isCrawler ? src : decodeThumbhash(thumbhash)}
         alt={alt}
         width={width}
         height={height}

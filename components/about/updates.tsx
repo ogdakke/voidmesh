@@ -22,6 +22,7 @@ export function Updates() {
           <>
             <figure>
               <Video
+                className="video"
                 src={[
                   {
                     src: "/m/fancy_delete_update_1_av1_qp50.mp4",
@@ -32,6 +33,7 @@ export function Updates() {
                     codec: "h264",
                   },
                 ]}
+                placeholder="w/cBBwAGikV/qGNVqJZlSZdpll/J+YkJ"
                 muted
                 autoPlay
                 loop

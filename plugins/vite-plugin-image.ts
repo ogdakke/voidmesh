@@ -1,6 +1,6 @@
 import type { Plugin, ResolvedConfig } from "vite";
 import sharp from "sharp";
-import { rgbaToThumbHash, thumbHashToDataURL } from "thumbhash";
+import { rgbaToThumbHash } from "thumbhash";
 import { basename, extname } from "path";
 
 const IMG_RE = /[?&]img(?:&|$)/;
@@ -59,14 +59,14 @@ export default function imagePlugin(options: ImagePluginOptions = {}): Plugin {
         .toBuffer({ resolveWithObject: true });
 
       const hash = rgbaToThumbHash(thumbImg.info.width, thumbImg.info.height, thumbImg.data);
-      const thumbDataURL = thumbHashToDataURL(hash);
+      const thumbB64 = Buffer.from(hash).toString("base64");
 
       if (isDev) {
         const devUrl = `/@fs/${filePath}`;
         return `
           export const src = ${JSON.stringify(devUrl)};
           export const sources = [];
-          export const thumbhash = ${JSON.stringify(thumbDataURL)};
+          export const thumbhash = ${JSON.stringify(thumbB64)};
           export const width = ${origW};
           export const height = ${origH};
           export default { src, sources, thumbhash, width, height };
@@ -96,7 +96,7 @@ export default function imagePlugin(options: ImagePluginOptions = {}): Plugin {
       return `
         export const src = ${JSON.stringify(fallbackUrl)};
         export const sources = ${JSON.stringify(sourcesArr)};
-        export const thumbhash = ${JSON.stringify(thumbDataURL)};
+        export const thumbhash = ${JSON.stringify(thumbB64)};
         export const width = ${origW};
         export const height = ${origH};
         export default { src, sources, thumbhash, width, height };
