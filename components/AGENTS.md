@@ -9,7 +9,7 @@ React UI layer. Feature-specific panels, the canvas viewport, and layout shells.
 - `mobile-layout.tsx` — Mobile drawer-based layout (lazy-loaded from `app.tsx`).
 - `sidebar-right-controls.tsx` (~21KB) — Decides which knob panel to show based on selection state.
 - `sidebar-left.tsx` — Entity list panel.
-- `export-knobs.tsx` (~22KB) — Export format/quality/resolution controls.
+- `export-knobs/` Export format/quality/resolution controls, separated into `export-knobs.desktop.tsx`, `export-knobs.mobile.tsx`, `export-knobs.shared.tsx` (shared components) and `export-knobs.lib.ts` (non-tsx shared code).
 - `*-knobs.tsx` — Per-shader parameter panels (dithering, ascii, glass, shape, adjustments, post-processing).
 - `knobs/` — Shared knob sub-components: `style-knobs.tsx`, `params-knobs.tsx`, `post-process-knobs.tsx`.
 - `delete-drop-zone/` — Mobile drag-to-delete drop zone (appears during entity drag).
@@ -36,7 +36,7 @@ const param = useParamValue("path.to.param", defaultValue);
 
 - CSS co-located with components (`.css` alongside `.tsx`).
 - Components consume canvas state via `useCanvas()` from context, NOT by importing `canvasStore` directly. Exception: `useViewport()` and `useSelectionSnapshot()` use `useSyncExternalStore` directly for performance.
-- Mobile vs desktop: use `useIsMobile()` hook. Desktop uses `react-resizable-panels`; mobile uses bottom drawer.
+- Mobile vs desktop: use `useIsMobile()` hook. Desktop uses `react-resizable-panels`; mobile uses bottom drawer. Separate mobile and desktop to `.mobile.tsx` and `.desktop.tsx` respectively, with a `.shared.tsx` for shared components, `.lib.ts` for shared non-tsx code (to preserve HMR)
 - Prefer composition. Use `React Composition Patterns` skill.
 
 ## Anti-Patterns

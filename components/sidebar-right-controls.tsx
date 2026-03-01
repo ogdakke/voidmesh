@@ -17,7 +17,7 @@ import { AdjustmentsKnobs } from "./adjustments-knobs.tsx";
 import { AsciiKnobs } from "./ascii-knobs.tsx";
 import { DitheringKnobs } from "./dithering-knobs.tsx";
 import { ShapeKnobs } from "./shape-knobs.tsx";
-import { ExportKnobs } from "./export-knobs.tsx";
+import { DesktopExportKnobs } from "./export-knobs/export-knobs.desktop.tsx";
 import { ExportQueuePanel } from "./export-queue-panel.tsx";
 import { DesktopTimeSlider } from "./desktop-time-slider/desktop-time-slider.tsx";
 import { undo } from "#lib/undo.ts";
@@ -181,7 +181,7 @@ export const SidebarRightControls = ({ className, compact }: SidebarRightControl
                 Export
               </CollapsibleTrigger>
               <CollapsibleContent className="exports-content">
-                <ExportKnobs />
+                <DesktopExportKnobs />
               </CollapsibleContent>
             </Collapsible>
           )}

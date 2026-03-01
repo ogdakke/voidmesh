@@ -2,7 +2,7 @@ import { useCanvas } from "#context/use-canvas.ts";
 import { useParamValue } from "#hooks/use-param-value.ts";
 import { config } from "#config";
 import { undo } from "#lib/undo.ts";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   SliderPicker,
@@ -266,13 +266,26 @@ export function PostProcessMobileKnobs() {
     }
   };
 
+  const showFloatingLabel = (text: string) => {
+    if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
+    setFloatingLabel(text);
+    floatingLabelTimeoutRef.current = setTimeout(
+      () => setFloatingLabel(null),
+      config.ui.floatingParamLabelHideTimeoutMs,
+    );
+  };
+
+  useEffect(
+    () => () => {
+      if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
+    },
+    [],
+  );
+
   // Show floating label on interaction start
   const handleSliderInteractionStart = () => {
-    if (floatingLabelTimeoutRef.current) {
-      clearTimeout(floatingLabelTimeoutRef.current);
-    }
     const isMixed = getParamIsMixed(selectedParam);
-    setFloatingLabel(selectedParam.label + (isMixed ? " (Mixed)" : ""));
+    showFloatingLabel(selectedParam.label + (isMixed ? " (Mixed)" : ""));
   };
 
   // Hide floating label after timeout when scrolling stops
@@ -299,7 +312,7 @@ export function PostProcessMobileKnobs() {
         onValueChange={(value) => {
           const param = PostProcessParamsInOrder.find((p) => p.value === value)!;
           setSelectedParam(param);
-          setFloatingLabel(param.label);
+          showFloatingLabel(param.label);
         }}
         onInteractionStart={handleSliderInteractionStart}
         onValueCommit={handleSliderValueCommit}

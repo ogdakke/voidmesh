@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -209,31 +209,43 @@ function MobileDitheringStyleKnobs() {
   const [floatingLabel, setFloatingLabel] = useState<string | null>(null);
   const floatingLabelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const showFloatingLabel = (text: string) => {
+    if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
+    setFloatingLabel(text);
+    floatingLabelTimeoutRef.current = setTimeout(
+      () => setFloatingLabel(null),
+      config.ui.floatingParamLabelHideTimeoutMs,
+    );
+  };
+
+  useEffect(
+    () => () => {
+      if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
+    },
+    [],
+  );
+
   // Show floating label on value change
   const handleValueChange = (value: string) => {
     handleDitheringKindChange(value);
     const item = DITHERING_ITEMS.find((i) => i.value === value);
-    if (item) setFloatingLabel(item.label);
+    if (item) showFloatingLabel(item.label);
   };
 
   // Show floating label on interaction start
   const handleInteractionStart = () => {
     undo.beginTransaction();
-    if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
     if (ditheringKind.isMixed) {
-      setFloatingLabel("Mixed");
+      showFloatingLabel("Mixed");
     } else {
       const item = DITHERING_ITEMS.find((i) => i.value === ditheringKind.value);
-      if (item) setFloatingLabel(item.label);
+      if (item) showFloatingLabel(item.label);
     }
   };
 
-  // Hide floating label after timeout
+  // Commit undo transaction
   const handleValueCommit = () => {
     undo.commitTransaction();
-    floatingLabelTimeoutRef.current = setTimeout(() => {
-      setFloatingLabel(null);
-    }, config.ui.floatingParamLabelHideTimeoutMs);
   };
 
   if (!ditheringKind.isSupported) return null;
@@ -301,31 +313,43 @@ function MobileAsciiStyleKnobs() {
   const [floatingLabel, setFloatingLabel] = useState<string | null>(null);
   const floatingLabelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const showFloatingLabel = (text: string) => {
+    if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
+    setFloatingLabel(text);
+    floatingLabelTimeoutRef.current = setTimeout(
+      () => setFloatingLabel(null),
+      config.ui.floatingParamLabelHideTimeoutMs,
+    );
+  };
+
+  useEffect(
+    () => () => {
+      if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
+    },
+    [],
+  );
+
   // Show floating label on value change
   const handleValueChange = (value: string) => {
     handleAsciiKindChange(value);
     const item = ASCII_ITEMS.find((i) => i.value === value);
-    if (item) setFloatingLabel(item.label);
+    if (item) showFloatingLabel(item.label);
   };
 
   // Show floating label on interaction start
   const handleInteractionStart = () => {
     undo.beginTransaction();
-    if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
     if (asciiKind.isMixed) {
-      setFloatingLabel("Mixed");
+      showFloatingLabel("Mixed");
     } else {
       const item = ASCII_ITEMS.find((i) => i.value === asciiKind.value);
-      if (item) setFloatingLabel(item.label);
+      if (item) showFloatingLabel(item.label);
     }
   };
 
-  // Hide floating label after timeout
+  // Commit undo transaction
   const handleValueCommit = () => {
     undo.commitTransaction();
-    floatingLabelTimeoutRef.current = setTimeout(() => {
-      setFloatingLabel(null);
-    }, config.ui.floatingParamLabelHideTimeoutMs);
   };
 
   if (!asciiKind.isSupported) return null;
@@ -418,28 +442,40 @@ function MobileGlassStyleKnobs() {
   const [floatingLabel, setFloatingLabel] = useState<string | null>(null);
   const floatingLabelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const showFloatingLabel = (text: string) => {
+    if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
+    setFloatingLabel(text);
+    floatingLabelTimeoutRef.current = setTimeout(
+      () => setFloatingLabel(null),
+      config.ui.floatingParamLabelHideTimeoutMs,
+    );
+  };
+
+  useEffect(
+    () => () => {
+      if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
+    },
+    [],
+  );
+
   const handleValueChange = (value: string) => {
     handleGlassKindChange(value);
     const item = GLASS_ITEMS.find((i) => i.value === value);
-    if (item) setFloatingLabel(item.label);
+    if (item) showFloatingLabel(item.label);
   };
 
   const handleInteractionStart = () => {
     undo.beginTransaction();
-    if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
     if (glassKind.isMixed) {
-      setFloatingLabel("Mixed");
+      showFloatingLabel("Mixed");
     } else {
       const item = GLASS_ITEMS.find((i) => i.value === glassKind.value);
-      if (item) setFloatingLabel(item.label);
+      if (item) showFloatingLabel(item.label);
     }
   };
 
   const handleValueCommit = () => {
     undo.commitTransaction();
-    floatingLabelTimeoutRef.current = setTimeout(() => {
-      setFloatingLabel(null);
-    }, config.ui.floatingParamLabelHideTimeoutMs);
   };
 
   if (!glassKind.isSupported) return null;
@@ -506,31 +542,43 @@ function MobileShapeStyleKnobs() {
   const [floatingLabel, setFloatingLabel] = useState<string | null>(null);
   const floatingLabelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const showFloatingLabel = (text: string) => {
+    if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
+    setFloatingLabel(text);
+    floatingLabelTimeoutRef.current = setTimeout(
+      () => setFloatingLabel(null),
+      config.ui.floatingParamLabelHideTimeoutMs,
+    );
+  };
+
+  useEffect(
+    () => () => {
+      if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
+    },
+    [],
+  );
+
   // Handle shape change
   const handleShapeChange = (value: string) => {
     updateSelectedEntityParams({ shape: value as Shape });
     const item = SHAPE_ITEMS.find((i) => i.value === value);
-    if (item) setFloatingLabel(item.label);
+    if (item) showFloatingLabel(item.label);
   };
 
   // Show floating label on interaction start
   const handleInteractionStart = () => {
     undo.beginTransaction();
-    if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
     if (shape.isMixed) {
-      setFloatingLabel("Mixed");
+      showFloatingLabel("Mixed");
     } else {
       const item = SHAPE_ITEMS.find((i) => i.value === shape.value);
-      if (item) setFloatingLabel(item.label);
+      if (item) showFloatingLabel(item.label);
     }
   };
 
-  // Hide floating label after timeout
+  // Commit undo transaction
   const handleValueCommit = () => {
     undo.commitTransaction();
-    floatingLabelTimeoutRef.current = setTimeout(() => {
-      setFloatingLabel(null);
-    }, config.ui.floatingParamLabelHideTimeoutMs);
   };
 
   if (!shape.isSupported) return null;
@@ -608,6 +656,13 @@ export function MobileStyleKnobs() {
     }, config.ui.floatingParamLabelHideTimeoutMs);
   };
 
+  useEffect(
+    () => () => {
+      if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
+    },
+    [],
+  );
+
   const handleShowOriginalToggle = () => {
     // if mixed, set all to true; otherwise toggle
     const newValue = showOriginal.isMixed ? true : !showOriginal.value;
@@ -618,25 +673,21 @@ export function MobileStyleKnobs() {
   const handleShaderTypeChange = (value: string) => {
     updateSelectedShaderType(value as ShaderType);
     const option = SHADER_TYPE_OPTIONS.find((o) => o.value === value);
-    if (option) setFloatingLabel(option.label);
+    if (option) showFloatingLabel(option.label);
   };
 
   const handleInteractionStart = () => {
     undo.beginTransaction();
-    if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
     if (isShaderMixed) {
-      setFloatingLabel("Mixed");
+      showFloatingLabel("Mixed");
     } else {
       const option = SHADER_TYPE_OPTIONS.find((o) => o.value === selectedShaderType);
-      if (option) setFloatingLabel(option.label);
+      if (option) showFloatingLabel(option.label);
     }
   };
 
   const handleValueCommit = () => {
     undo.commitTransaction();
-    floatingLabelTimeoutRef.current = setTimeout(() => {
-      setFloatingLabel(null);
-    }, config.ui.floatingParamLabelHideTimeoutMs);
   };
 
   // checked=true means shader is active (not showing original)

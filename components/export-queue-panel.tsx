@@ -3,15 +3,15 @@
  */
 
 import { Xmark, WarningCircle, NavArrowRight } from "iconoir-react";
-import { useExportQueue } from "../context/use-export-queue.ts";
-import type { ExportJob, ExportJobStatus } from "../context/export-queue-context.tsx";
-import { Button } from "./ui/button/index.tsx";
+import { useExportQueue } from "#context/use-export-queue.ts";
+import type { ExportJob, ExportJobStatus } from "#context/export-queue-context.tsx";
+import { Button } from "#ui/button/index.tsx";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
-} from "./ui/collapsible/collapsible.tsx";
-import "../styles/sidebar.css";
+} from "#ui/collapsible/collapsible.tsx";
+import "#styles/sidebar.css";
 
 /** Status icon component */
 function StatusIcon({ status }: { status: ExportJobStatus }) {

@@ -1,7 +1,7 @@
 import { useParamValue, type ParamResult } from "#hooks/use-canvas-actions.ts";
 import { useCanvas } from "#context/use-canvas.ts";
 import { type ParamPaths, type ShaderParams, type ShaderType } from "#types/canvas.ts";
-import { memo, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   SliderPicker,
@@ -252,12 +252,25 @@ export function ParamsKnobs() {
   };
 
   // Floating label helpers
+  const showFloatingLabel = (text: string) => {
+    if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
+    setFloatingLabel(text);
+    floatingLabelTimeoutRef.current = setTimeout(
+      () => setFloatingLabel(null),
+      config.ui.floatingParamLabelHideTimeoutMs,
+    );
+  };
+
+  useEffect(
+    () => () => {
+      if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
+    },
+    [],
+  );
+
   const handleSliderInteractionStart = () => {
-    if (floatingLabelTimeoutRef.current) {
-      clearTimeout(floatingLabelTimeoutRef.current);
-    }
     const isMixed = paramValues[selectedKnob.value]?.isMixed ?? false;
-    setFloatingLabel(selectedKnob.label + (isMixed ? " (Mixed)" : ""));
+    showFloatingLabel(selectedKnob.label + (isMixed ? " (Mixed)" : ""));
   };
 
   const handleSliderValueCommit = () => {
@@ -287,7 +300,7 @@ export function ParamsKnobs() {
         onValueChange={(value) => {
           const param = AllSlideyParamsInOrder.find((p) => p.value === value)!;
           setSelectedKnob(param);
-          setFloatingLabel(resolveLabel(param.label, selectedShaderType));
+          showFloatingLabel(resolveLabel(param.label, selectedShaderType));
         }}
         onInteractionStart={handleSliderInteractionStart}
         onValueCommit={handleSliderValueCommit}
