@@ -12,8 +12,8 @@ import { VideoExportProvider } from "./context/video-export-context.tsx";
 import { useIsMobile, useIsTouch } from "./hooks/use-is-mobile.ts";
 import useMediaQuery from "./hooks/use-media-query";
 import { PostHogProvider } from "@posthog/react";
-import "./styles/app.css";
 import type { PostHogConfig } from "posthog-js";
+import "./styles/app.css";
 
 const options: Partial<PostHogConfig> = {
   ui_host: import.meta.env.VITE_PUBLIC_POSTHOG_UI_HOST!,
