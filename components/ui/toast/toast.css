@@ -2,16 +2,29 @@
   .toast_viewport {
     position: fixed;
     z-index: 1;
-    width: 250px;
-    bottom: 1rem;
+    width: clamp(250px, 100%, calc(100vw - var(--spacing-3)));
+    padding: 0 var(--spacing);
+    bottom: calc(env(safe-area-inset-bottom, 0) + 1rem);
     left: 50%;
     transform: translateX(-50%);
     top: auto;
     right: auto;
+    pointer-events: none;
+    -webkit-user-select: none;
+    user-select: none;
 
     @media (min-width: 500px) {
       bottom: 2rem;
-      width: 320px;
+      width: 360px;
+    }
+
+    &[data-position="top-center"] {
+      top: calc(env(safe-area-inset-top, 0) + 1rem);
+      bottom: auto;
+
+      @media (min-width: 500px) {
+        top: 2rem;
+      }
     }
   }
 
@@ -26,17 +39,21 @@
         var(--toast-swipe-movement-y)
     );
     position: absolute;
+    pointer-events: auto;
+    -webkit-user-select: auto;
+    user-select: auto;
     right: 0;
     margin: 0 auto;
     box-sizing: border-box;
-    background: var(--gray-50);
-    color: var(--gray-900);
+    background: var(--floating-background);
+    color: var(--gray-1200);
     border: 0.5px solid var(--gray-100);
     padding: var(--spacing-3);
+    backdrop-filter: var(--floating-backdrop);
     width: 100%;
-    box-shadow: 0 2px 10px rgb(0 0 0 / 0.1);
+    box-shadow: 0 2px 14px rgb(0 0 0 / 0.1);
     background-clip: padding-box;
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-xl);
     transform-origin: bottom center;
     bottom: 0;
     left: auto;
@@ -50,6 +67,7 @@
     cursor: default;
     z-index: calc(1000 - var(--toast-index));
     height: var(--height);
+    min-height: 66px;
     transform: translateX(var(--toast-swipe-movement-x))
       translateY(
         calc(
@@ -102,12 +120,63 @@
     }
 
     &[data-type="destructive"] {
-      border-color: var(--destructive-500);
-      background: var(--destructive);
-      color: #fff;
+      border-color: light-dark(var(--red-1600), var(--red-300));
+      background: oklch(from var(--red) calc(l / 10) c h / 0.86);
+      color: light-dark(var(--red-100), var(--red-1600));
 
       :where(.toast_close:hover) {
         background: var(--destructive-500);
+      }
+    }
+
+    &[data-position="top-center"] {
+      --offset-y: calc(
+        var(--toast-offset-y) + (var(--toast-index) * var(--gap)) + var(--toast-swipe-movement-y)
+      );
+      transform-origin: top center;
+      top: 0;
+      bottom: auto;
+      transform: translateX(var(--toast-swipe-movement-x))
+        translateY(
+          calc(
+            var(--toast-swipe-movement-y) + (var(--toast-index) * var(--peek)) +
+              (var(--shrink) * var(--height))
+          )
+        )
+        scale(var(--scale));
+
+      &[data-expanded] {
+        transform: translateX(var(--toast-swipe-movement-x)) translateY(var(--offset-y));
+        height: var(--toast-height);
+      }
+
+      &[data-starting-style],
+      &[data-ending-style] {
+        transform: translateY(-150%);
+      }
+
+      &[data-ending-style] {
+        opacity: 0;
+
+        &[data-swipe-direction="up"] {
+          transform: translateY(calc(var(--toast-swipe-movement-y) - 150%));
+        }
+        &[data-swipe-direction="left"] {
+          transform: translateX(calc(var(--toast-swipe-movement-x) - 150%))
+            translateY(var(--offset-y));
+        }
+        &[data-swipe-direction="right"] {
+          transform: translateX(calc(var(--toast-swipe-movement-x) + 150%))
+            translateY(var(--offset-y));
+        }
+        &[data-swipe-direction="down"] {
+          transform: translateY(calc(var(--toast-swipe-movement-y) + 150%));
+        }
+      }
+
+      &::after {
+        top: auto;
+        bottom: 100%;
       }
     }
   }

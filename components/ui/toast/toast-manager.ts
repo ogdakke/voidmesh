@@ -7,4 +7,6 @@ export const ToastType = createEnum({
   destructive: "destructive",
 });
 
-export const toastManager = Toast.createToastManager();
+export const toastManager = Toast.createToastManager<{
+  position: "top-center" | "bottom-center";
+}>();
