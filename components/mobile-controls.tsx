@@ -5,9 +5,9 @@ import { MobileStyleKnobs } from "./knobs/style-knobs";
 import { ParamsKnobs } from "./knobs/params-knobs";
 import { PostProcessMobileKnobs } from "./knobs/post-process-knobs";
 import { MobileColorKnobs } from "./knobs/mobile-color-knobs";
-import { MobileExportKnobs } from "./export-knobs";
 import { MultiSelectionControls } from "./multi-selection-controls";
 import { UploadControls } from "./upload-button-controls";
+import { MobileExportKnobs } from "./export-knobs/export-knobs.mobile.tsx";
 
 interface MobileControlsProps {
   activeItem: BarItem | null;
