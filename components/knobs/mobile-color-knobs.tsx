@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Plus, QuestionMark } from "iconoir-react";
 import { useCanvas } from "#context/use-canvas.ts";
@@ -66,6 +66,22 @@ export function MobileColorKnobs() {
   const [floatingLabel, setFloatingLabel] = useState<string | null>(null);
   const floatingLabelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const showFloatingLabel = (text: string) => {
+    if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
+    setFloatingLabel(text);
+    floatingLabelTimeoutRef.current = setTimeout(
+      () => setFloatingLabel(null),
+      config.ui.floatingParamLabelHideTimeoutMs,
+    );
+  };
+
+  useEffect(
+    () => () => {
+      if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
+    },
+    [],
+  );
+
   // Track previous palette ID to detect external changes (undo/redo, new palette created)
   const [prevPaletteId, setPrevPaletteId] = useState(paletteParam.value?.id);
   if (paletteParam.value?.id !== prevPaletteId) {
@@ -127,20 +143,17 @@ export function MobileColorKnobs() {
     const item = paletteList.find((p) => p.id === id);
     if (item?.palette) {
       handlePaletteChange(item.palette);
-      setFloatingLabel(item.label);
+      showFloatingLabel(item.label);
     } else if (id === UPLOAD_MODE_ID) {
-      setFloatingLabel("Upload");
+      showFloatingLabel("Upload");
     } else if (id === PRESERVE_COLORS_ID) {
-      setFloatingLabel("Preserve Colors");
+      showFloatingLabel("Preserve Colors");
     }
   };
 
   // Show floating label on interaction start + begin undo transaction
   const handleInteractionStart = () => {
-    if (floatingLabelTimeoutRef.current) {
-      clearTimeout(floatingLabelTimeoutRef.current);
-    }
-    setFloatingLabel(selectedItem?.label ?? "Upload");
+    showFloatingLabel(selectedItem?.label ?? "Upload");
     undo.beginTransaction();
   };
 
