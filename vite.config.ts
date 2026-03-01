@@ -1,36 +1,49 @@
 import { resolve } from "path";
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import imagePlugin from "./plugins/vite-plugin-image.ts";
 import wgslMinifyPlugin from "./plugins/vite-plugin-wgsl-minify.ts";
 
-export default defineConfig({
-  publicDir: resolve(__dirname, "public"),
-  appType: "spa",
-  server: {
-    watch: {
-      ignored: ["**/opensrc/**"],
-    },
-  },
-  plugins: [
-    wgslMinifyPlugin(),
-    imagePlugin({ widths: [768, 1152], quality: 80 }),
-    react({
-      babel: {
-        plugins: ["babel-plugin-react-compiler"],
-      },
-    }),
-  ],
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "");
 
-  build: {
-    emptyOutDir: true,
-    sourcemap: process.env.NODE_ENV !== "production",
-    rolldownOptions: {
-      external: ["opensrc/"],
+  return {
+    publicDir: resolve(__dirname, "public"),
+    appType: "spa",
+    server: {
+      watch: {
+        ignored: ["**/opensrc/**"],
+      },
     },
-  },
-  optimizeDeps: {
-    entries: ["index.html"],
-    include: ["mediabunny", "gifenc"],
-  },
+    preview: {
+      proxy: {
+        "/m/": {
+          target: env.ASSET_URL,
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/m\//, "/media/"),
+        },
+      },
+    },
+    plugins: [
+      wgslMinifyPlugin(),
+      imagePlugin({ widths: [768, 1152] }),
+      react({
+        babel: {
+          plugins: ["babel-plugin-react-compiler"],
+        },
+      }),
+    ],
+
+    build: {
+      emptyOutDir: true,
+      sourcemap: process.env.NODE_ENV !== "production",
+      rolldownOptions: {
+        external: ["opensrc/"],
+      },
+    },
+    optimizeDeps: {
+      entries: ["index.html"],
+      include: ["mediabunny", "gifenc"],
+    },
+  };
 });
