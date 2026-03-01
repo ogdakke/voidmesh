@@ -20,11 +20,10 @@ interface ImagePluginOptions {
   widths?: number[];
   /** Formats in preference order. Last format is the `<img>` fallback. */
   formats?: ImageFormat[];
-  quality?: number;
 }
 
 export default function imagePlugin(options: ImagePluginOptions = {}): Plugin {
-  const { widths = [768, 1152], formats = ["avif", "webp"], quality = 80 } = options;
+  const { widths = [768, 1152], formats = ["avif", "webp"] } = options;
   let config: ResolvedConfig;
 
   return {
@@ -83,23 +82,11 @@ export default function imagePlugin(options: ImagePluginOptions = {}): Plugin {
 
         for (const w of widths) {
           if (w >= origW) continue;
-          const buffer = await sharp(filePath).resize(w)[fmt]({ quality }).toBuffer();
-          const refId = this.emitFile({
-            type: "asset",
-            name: `${name}-${w}w.${fmt}`,
-            source: buffer,
-          });
-          srcSetParts.push(`__VITE_ASSET__${refId}__ ${w}w`);
+          srcSetParts.push(`/m/${name}/${name}-${w}w.${fmt} ${w}w`);
         }
 
         // Full-size
-        const fullBuffer = await sharp(filePath)[fmt]({ quality }).toBuffer();
-        const fullRefId = this.emitFile({
-          type: "asset",
-          name: `${name}.${fmt}`,
-          source: fullBuffer,
-        });
-        const fullUrl = `__VITE_ASSET__${fullRefId}__`;
+        const fullUrl = `/m/${name}/${name}.${fmt}`;
         srcSetParts.push(`${fullUrl} ${origW}w`);
 
         sourcesArr.push({ srcSet: srcSetParts.join(", "), type: MIME[fmt] });
@@ -107,7 +94,7 @@ export default function imagePlugin(options: ImagePluginOptions = {}): Plugin {
       }
 
       return `
-        export const src = "${fallbackUrl}";
+        export const src = ${JSON.stringify(fallbackUrl)};
         export const sources = ${JSON.stringify(sourcesArr)};
         export const thumbhash = ${JSON.stringify(thumbDataURL)};
         export const width = ${origW};

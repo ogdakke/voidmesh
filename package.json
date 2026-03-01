@@ -26,7 +26,8 @@
     "lint:typecheck": "tsgo --noEmit",
     "format": "oxfmt .",
     "format:check": "oxfmt . --check",
-    "install:hooks": "sh scripts/install-hooks.sh"
+    "install:hooks": "sh scripts/install-hooks.sh",
+    "media:sync": "bun run scripts/media-sync.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.2.0",
