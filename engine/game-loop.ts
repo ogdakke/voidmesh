@@ -29,6 +29,7 @@ import { entityDragVisual } from "./entity-drag-visual.ts";
 import { entityLabel } from "./entity-label.ts";
 import { perfOverlay } from "./perf-overlay.ts";
 import { viewportAnimation } from "./viewport-animation.ts";
+import { haptic } from "#lib/haptic.ts";
 
 export interface InputState {
   pointerPosition: Point | null;
@@ -1432,9 +1433,7 @@ export class GameLoop {
     entityDragVisual.activateDrag(finalState.selectedEntityIds);
 
     // Haptic feedback
-    if (navigator.vibrate) {
-      navigator.vibrate(30);
-    }
+    haptic();
   }
 
   // ============================================================================
