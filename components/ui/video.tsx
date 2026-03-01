@@ -15,11 +15,13 @@ interface VideoSource {
 
 interface VideoProps extends Omit<ComponentProps<"video">, "src" | "preload" | "children"> {
   src: string | VideoSource[];
+  /** Thumbhash data URL shown as a blurred poster until the video loads. */
+  placeholder?: string;
   /** Load immediately instead of waiting for viewport intersection. */
   eager?: boolean;
 }
 
-export function Video({ src, eager, autoPlay, muted, onClick, ...rest }: VideoProps) {
+export function Video({ src, placeholder, eager, autoPlay, muted, onClick, ...rest }: VideoProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [active, setActive] = useState(false);
   const hasSources = typeof src !== "string";
@@ -75,6 +77,7 @@ export function Video({ src, eager, autoPlay, muted, onClick, ...rest }: VideoPr
       preload="none"
       autoPlay={false}
       muted={muted}
+      poster={placeholder}
       onClick={handleClick}
       {...rest}
     >
