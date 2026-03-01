@@ -9,7 +9,7 @@ import {
 import { canvasStore } from "../engine/canvas-store.ts";
 import { viewportAnimation } from "../engine/viewport-animation.ts";
 import { gameLoop } from "../engine/game-loop.ts";
-import { loadMediaFile, createImageEntityData } from "./media-loader.ts";
+import { loadMediaFile, loadMediaFromBlob } from "./media-loader.ts";
 import { config } from "./config/index.ts";
 import { logger } from "./client.logger.ts";
 
@@ -189,7 +189,10 @@ export async function addUrlToCanvas(
   try {
     const response = await fetch(url);
     const blob = await response.blob();
-    const bitmap = await createImageBitmap(blob);
+
+    // Resolve MIME type: prefer Content-Type header, fall back to blob.type
+    const rawContentType = response.headers.get("content-type") ?? "";
+    const mimeType = (rawContentType.split(";")[0]?.trim() || blob.type).toLowerCase();
 
     // Extract filename from URL
     let filename: string | undefined;
@@ -204,20 +207,22 @@ export async function addUrlToCanvas(
       // Ignore URL parsing errors
     }
 
+    const entityData = await loadMediaFromBlob(blob, mimeType, { x: 0, y: 0 }, filename);
+    if (!entityData) return null;
+
     // Calculate centered position
     const viewport = canvasStore.getViewport();
     const rect = container.getBoundingClientRect();
     const centerWorld = getViewportCenter(viewport, rect, window.devicePixelRatio);
 
     let position: Point = {
-      x: centerWorld.x - bitmap.width / 2,
-      y: centerWorld.y - bitmap.height / 2,
+      x: centerWorld.x - entityData.size.width / 2,
+      y: centerWorld.y - entityData.size.height / 2,
     };
     if (canvasStore.getState().snapToGrid) {
       position = snapToGrid(position, SNAP_GRID_SIZE);
     }
-
-    const entityData = createImageEntityData(bitmap, position, filename);
+    entityData.position = position;
 
     const entityId = addEntity(entityData, filename);
 
@@ -226,7 +231,7 @@ export async function addUrlToCanvas(
 
     return entityId;
   } catch (err) {
-    logger.error("Failed to load image from URL:", err);
+    logger.error("Failed to load media from URL:", err);
     return null;
   }
 }

@@ -19,6 +19,16 @@ export function isSvgFile(file: File): boolean {
   return file.type === "image/svg+xml";
 }
 
+/** Check if a MIME type string is a supported video type */
+export function isVideoMimeType(mimeType: string): boolean {
+  return config.supports.video.includes(mimeType);
+}
+
+/** Check if a MIME type string is an image type */
+export function isImageMimeType(mimeType: string): boolean {
+  return mimeType.startsWith("image/");
+}
+
 /** Result of loading a video file */
 export interface VideoLoadResult {
   videoElement: HTMLVideoElement;
@@ -146,11 +156,11 @@ async function detectVideoFps(
 }
 
 /**
- * Load a video file and extract metadata + initial frame
+ * Load a video blob and extract metadata + initial frame
  */
-export async function loadVideo(file: File): Promise<VideoLoadResult> {
+export async function loadVideo(blob: Blob): Promise<VideoLoadResult> {
   const video = document.createElement("video");
-  video.src = URL.createObjectURL(file);
+  video.src = URL.createObjectURL(blob);
   video.muted = true;
   video.loop = true;
   video.playsInline = true;
@@ -457,6 +467,63 @@ export async function loadMediaFile(
   }
 
   console.warn(`Unsupported file type: ${file.type}`);
+  return null;
+}
+
+/**
+ * Load a media blob with a known MIME type and return entity data.
+ * Mirrors loadMediaFile() but works with Blobs (e.g. fetched from a URL).
+ */
+export async function loadMediaFromBlob(
+  blob: Blob,
+  mimeType: string,
+  position: Point = { x: 0, y: 0 },
+  filename?: string,
+): Promise<(Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string }) | null> {
+  if (isVideoMimeType(mimeType)) {
+    try {
+      const videoResult = await loadVideo(blob);
+      return createVideoEntityData(videoResult, position, filename);
+    } catch (err) {
+      console.error("Failed to load video from URL:", err);
+      return null;
+    }
+  }
+
+  if (isImageMimeType(mimeType)) {
+    if (mimeType === "image/svg+xml") {
+      try {
+        const text = await blob.text();
+        const svgBlob = new Blob([text], { type: "image/svg+xml" });
+        const rasterResult = await rasterizeSvg(text);
+        return createSvgEntityData(rasterResult, svgBlob, position, filename);
+      } catch (err) {
+        console.error("Failed to load SVG from URL:", err);
+        return null;
+      }
+    }
+
+    if (mimeType === "image/gif") {
+      try {
+        const gifResult = await decodeGif(blob);
+        if (gifResult.frames.length > 1) {
+          return createGifEntityData(gifResult, blob, position, filename);
+        }
+      } catch {
+        // Fall through to static image
+      }
+    }
+
+    try {
+      const bitmap = await createImageBitmap(blob);
+      return createImageEntityData(bitmap, position, filename);
+    } catch (err) {
+      console.error("Failed to load image from URL:", err);
+      return null;
+    }
+  }
+
+  console.warn(`Unsupported MIME type from URL: ${mimeType}`);
   return null;
 }
 
