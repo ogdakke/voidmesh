@@ -239,6 +239,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       canvasStore.setFancyDelete(v ?? !reduced);
     });
+    preferences.getHaptics().then((v) => canvasStore.setHaptics(v));
     preferences.getCustomPalettes().then((palettes) => paletteStore.setPalettes(palettes));
   }, []);
 

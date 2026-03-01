@@ -11,6 +11,7 @@ import clsx from "clsx";
 import { Enlarge, Reduce } from "iconoir-react";
 import { useLayout } from "#context/use-layout.ts";
 import { haptic } from "#lib/haptic.ts";
+import { canvasStore } from "#engine";
 
 interface BottomBarContextValue<T extends string> {
   items: T[];
@@ -94,7 +95,7 @@ export function MobileBottomBar<T extends string>({
           className={"bottom-bar-item"}
           data-active={isFullscreen ? true : undefined}
           onClick={() => {
-            haptic();
+            haptic({ wantsHaptic: canvasStore.getState().haptics });
             toggleFullscreen();
           }}
           aria-label={`Toggle fullscreen ${isFullscreen ? "off" : "on"}`}

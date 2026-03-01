@@ -25,4 +25,10 @@ export const preferences = {
   async setCustomPalettes(palettes: ColorPalette[]): Promise<void> {
     await storage.setItem("customPalettes", palettes);
   },
+  async getHaptics(): Promise<boolean> {
+    return (await storage.getItem<boolean>("haptics")) ?? true;
+  },
+  async setHaptics(enabled: boolean): Promise<void> {
+    await storage.setItem("haptics", enabled);
+  },
 };

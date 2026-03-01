@@ -39,9 +39,9 @@ import { toastManager } from "../ui/toast/toast-manager.ts";
 import { UndoRedoButtons } from "./undo-redo.tsx";
 import "./infinite-canvas.css";
 
-const DesktopSettings = lazy(() => import("#components/settings-drawer/desktop-settings.tsx"));
+const DesktopSettings = lazy(() => import("#components/settings/settings.desktop.tsx"));
 const CanvasContextMenu = lazy(() => import("./canvas-context-menu.tsx"));
-const SettingsDrawer = lazy(() => import("../settings-drawer/settings-drawer.tsx"));
+const SettingsDrawer = lazy(() => import("../settings/settings.mobile.tsx"));
 const About = lazy(() => import("../about/index.tsx"));
 
 /** Label overlay for selected entity - positioned by direct DOM manipulation in game loop */

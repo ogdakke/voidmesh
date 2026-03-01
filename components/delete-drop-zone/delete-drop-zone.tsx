@@ -3,6 +3,7 @@ import { Xmark } from "iconoir-react";
 import { useEntityDrag } from "#hooks/use-entity-drag.ts";
 import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
 import { haptic } from "#lib/haptic.ts";
+import { canvasStore } from "#engine";
 import "./delete-drop-zone.css";
 
 /** Pixels around the drop zone that trigger proximity feedback */
@@ -45,7 +46,7 @@ export function DeleteDropZone() {
 
     const handleTouchEnd = () => {
       if (isOverRef.current) {
-        haptic();
+        haptic({ wantsHaptic: canvasStore.getState().haptics });
         deleteEntity();
         isOverRef.current = false;
         zone.removeAttribute("data-over");

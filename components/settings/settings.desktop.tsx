@@ -1,30 +1,24 @@
-import { Button } from "#ui/button/button.tsx";
-import { Checkbox } from "#ui/checkbox/index.tsx";
-import { Modal } from "#ui/modal/modal.tsx";
-import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
 import { useCanvas } from "#context/use-canvas.ts";
 import { useStudioFile } from "#hooks/use-studio-file.ts";
-import { FloppyDiskArrowIn, Import, MoreVert, NavArrowRight } from "iconoir-react";
-import { useState, type ChangeEvent } from "react";
-import "./desktop-settings.css";
-import { shareOrCopyUrl } from "./share.ts";
+import { Button } from "#ui/button/button.tsx";
+import { Modal } from "#ui/modal/modal.tsx";
+import { FloppyDiskArrowIn, Import, MoreVert } from "iconoir-react";
+import { useState } from "react";
+import "./settings.desktop.css";
+import {
+  FancyDeleteToggle,
+  FeedbackLink,
+  LinkItem,
+  ShareLink,
+  SnapToGridToggle,
+} from "./settings.shared.tsx";
 
 export default function DesktopSettings() {
   const [isOpen, setIsOpen] = useState(false);
-  const { snapToGrid, handleSnapToGridChange, fancyDelete, handleFancyDeleteChange } =
-    useCanvasActions();
   const { entities } = useCanvas();
   const { exportStudioFile, importStudioFile, isExporting, isImporting } = useStudioFile();
 
   const isLoading = isExporting || isImporting;
-
-  const handleSnapChange = (e: ChangeEvent<HTMLInputElement>) => {
-    handleSnapToGridChange(e.target.checked);
-  };
-
-  const handleFancyChange = (e: ChangeEvent<HTMLInputElement>) => {
-    handleFancyDeleteChange(e.target.checked);
-  };
 
   return (
     <div className="desktop-settings">
@@ -48,34 +42,21 @@ export default function DesktopSettings() {
           <h3 className="desktop-settings-title">Settings</h3>
           <hr className="divider" />
           <div className="desktop-settings-switch">
-            <Checkbox name="snap_to_grid" checked={snapToGrid} onChange={handleSnapChange} switch>
-              Snap to Grid
-            </Checkbox>
+            <SnapToGridToggle />
           </div>
           <div className="desktop-settings-switch">
-            <Checkbox name="fancy_delete" checked={fancyDelete} onChange={handleFancyChange} switch>
-              Fancy deletions
-            </Checkbox>
+            <FancyDeleteToggle />
           </div>
           <hr className="divider" />
-          <div className="field-label flex">
-            <button
-              className="desktop-settings-ext-item desktop-settings-button"
-              type="button"
-              onClick={shareOrCopyUrl}
-            >
-              <span>Share</span>
-              <NavArrowRight />
-            </button>
+          <div className="desktop-settings-ext-item field-label">
+            <LinkItem>
+              <ShareLink />
+            </LinkItem>
           </div>
-          <div className="field-label">
-            <a
-              href={`mailto:dw@danielwargh.com?subject=${encodeURIComponent("Feedback on voidmesh")}`}
-              className="desktop-settings-ext-item desktop-settings-link"
-            >
-              <span>Send feedback</span>
-              <NavArrowRight />
-            </a>
+          <div className="desktop-settings-ext-item field-label">
+            <LinkItem>
+              <FeedbackLink className="desktop-settings-link" />
+            </LinkItem>
           </div>
           <hr className="divider" />
           <div className="desktop-settings-studio-buttons">

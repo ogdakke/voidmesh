@@ -571,6 +571,12 @@ export function useCanvasActions() {
     preferences.setFancyDelete(enabled);
   };
 
+  // Haptic feedback toggle (persists to storage)
+  const handleHapticsChange = (enabled: boolean) => {
+    canvasStore.setHaptics(enabled);
+    preferences.setHaptics(enabled);
+  };
+
   const handleSizeChange = (value: number | null) => {
     if (value !== null) {
       updateSelectedEntityParams({ size: value });
@@ -624,6 +630,8 @@ export function useCanvasActions() {
     handleSnapToGridChange,
     fancyDelete: storeSnapshot.fancyDelete,
     handleFancyDeleteChange,
+    haptics: storeSnapshot.haptics,
+    handleHapticsChange,
 
     // Bulk update helper
     updateSelectedEntities,

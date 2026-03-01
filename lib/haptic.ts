@@ -38,9 +38,12 @@ function hasVibrate(nav: Navigator): nav is Navigator {
  *
  * <Button onClick={haptic}>Haptic</Button>
  */
-export function haptic(pattern?: VibratePattern) {
+export function haptic({
+  pattern,
+  wantsHaptic,
+}: { pattern?: VibratePattern; wantsHaptic?: boolean } = {}) {
   try {
-    if (!supportsHaptic()) return;
+    if (wantsHaptic === false || !supportsHaptic()) return;
 
     if (hasVibrate(navigator)) {
       navigator.vibrate(pattern ?? 50);

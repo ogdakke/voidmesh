@@ -1433,7 +1433,7 @@ export class GameLoop {
     entityDragVisual.activateDrag(finalState.selectedEntityIds);
 
     // Haptic feedback
-    haptic();
+    haptic({ wantsHaptic: canvasStore.getState().haptics });
   }
 
   // ============================================================================
