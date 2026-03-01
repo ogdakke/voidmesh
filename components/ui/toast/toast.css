@@ -3,12 +3,15 @@
     position: fixed;
     z-index: 1;
     width: clamp(250px, 100%, calc(100vw - var(--spacing-3)));
-    padding: var(--spacing);
+    padding: 0 var(--spacing);
     bottom: calc(env(safe-area-inset-bottom, 0) + 1rem);
     left: 50%;
     transform: translateX(-50%);
     top: auto;
     right: auto;
+    pointer-events: none;
+    -webkit-user-select: none;
+    user-select: none;
 
     @media (min-width: 500px) {
       bottom: 2rem;
@@ -36,6 +39,9 @@
         var(--toast-swipe-movement-y)
     );
     position: absolute;
+    pointer-events: auto;
+    -webkit-user-select: auto;
+    user-select: auto;
     right: 0;
     margin: 0 auto;
     box-sizing: border-box;
