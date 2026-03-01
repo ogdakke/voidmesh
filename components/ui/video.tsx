@@ -1,20 +1,39 @@
-import { useCallback, useEffect, useRef, type ComponentProps } from "react";
+import { useCallback, useEffect, useRef, useState, type ComponentProps } from "react";
+
+const codecType = {
+  av1: "video/mp4; codecs=av01.0.05M.08",
+  "av1/opus": "video/mp4; codecs=av01.0.05M.08,opus",
+  h264: "video/mp4; codecs=avc1.4D401E",
+  "h264/aac": "video/mp4; codecs=avc1.4D401E,mp4a.40.2",
+  hevc: "video/mp4; codecs=hvc1",
+} as const;
+
+interface VideoSource {
+  src: string;
+  codec: keyof typeof codecType;
+}
 
 interface VideoProps extends Omit<ComponentProps<"video">, "src" | "preload" | "children"> {
-  src: string;
+  src: string | VideoSource[];
   /** Load immediately instead of waiting for viewport intersection. */
   eager?: boolean;
 }
 
 export function Video({ src, eager, autoPlay, muted, onClick, ...rest }: VideoProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [active, setActive] = useState(false);
+  const hasSources = typeof src !== "string";
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
     const activate = () => {
-      video.src = src;
+      if (hasSources) {
+        setActive(true);
+      } else {
+        video.src = src;
+      }
       video.load();
       if (autoPlay) video.play();
     };
@@ -35,7 +54,7 @@ export function Video({ src, eager, autoPlay, muted, onClick, ...rest }: VideoPr
 
     observer.observe(video);
     return () => observer.disconnect();
-  }, [src, eager, autoPlay]);
+  }, [src, eager, autoPlay, hasSources]);
 
   const handleClick = useCallback<React.MouseEventHandler<HTMLVideoElement>>(
     (e) => {
@@ -58,6 +77,10 @@ export function Video({ src, eager, autoPlay, muted, onClick, ...rest }: VideoPr
       muted={muted}
       onClick={handleClick}
       {...rest}
-    />
+    >
+      {active && hasSources
+        ? src.map((s) => <source key={s.src} src={s.src} type={codecType[s.codec]} />)
+        : null}
+    </video>
   );
 }

@@ -14,6 +14,13 @@ export default defineConfig(({ mode }) => {
       watch: {
         ignored: ["**/opensrc/**"],
       },
+      proxy: {
+        "/m/": {
+          target: env.ASSET_URL,
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/m\//, "/media/"),
+        },
+      },
     },
     preview: {
       proxy: {

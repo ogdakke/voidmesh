@@ -22,7 +22,16 @@ export function Updates() {
           <>
             <figure>
               <Video
-                src="https://2qb6b1mvwcbadvhf.public.blob.vercel-storage.com/fancy_delete_update_1_compressed.mp4"
+                src={[
+                  {
+                    src: "/m/fancy_delete_update_1_av1_qp50.mp4",
+                    codec: "av1",
+                  },
+                  {
+                    src: "/m/fancy_delete_update_1_compressed.mp4",
+                    codec: "h264",
+                  },
+                ]}
                 muted
                 autoPlay
                 loop
