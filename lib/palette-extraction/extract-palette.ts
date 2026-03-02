@@ -5,6 +5,7 @@
 import type { ColorPalette, RGBA } from "#types/canvas.ts";
 import { MAX_PALETTE_COLORS } from "#types/canvas.ts";
 import { config } from "#config";
+import { ColorSpace } from "#types/enums.ts";
 import { kMeans, type RGB } from "./kmeans.ts";
 
 export interface PaletteExtractionOptions {
@@ -18,6 +19,8 @@ export interface PaletteExtractionOptions {
   skipTransparent?: boolean;
   /** Alpha threshold for transparent pixel detection (default: 0.1) */
   alphaThreshold?: number;
+  /** Color space for pixel sampling (default: srgb) */
+  colorSpace?: ColorSpace;
 }
 
 const DEFAULT_OPTIONS: Required<PaletteExtractionOptions> = {
@@ -26,6 +29,7 @@ const DEFAULT_OPTIONS: Required<PaletteExtractionOptions> = {
   iterations: 10,
   skipTransparent: true,
   alphaThreshold: 0.1,
+  colorSpace: ColorSpace.srgb,
 };
 
 /**
@@ -72,6 +76,7 @@ async function loadImage(
 function getPixelData(
   image: HTMLImageElement | ImageBitmap,
   sampleSize: number,
+  colorSpace: ColorSpace,
 ): { data: Uint8ClampedArray; width: number; height: number } {
   const srcWidth = image instanceof HTMLImageElement ? image.naturalWidth : image.width;
   const srcHeight = image instanceof HTMLImageElement ? image.naturalHeight : image.height;
@@ -98,7 +103,10 @@ function getPixelData(
 
   // Create offscreen canvas and draw
   const canvas = new OffscreenCanvas(targetWidth, targetHeight);
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const ctx = canvas.getContext("2d", {
+    willReadFrequently: true,
+    colorSpace: colorSpace,
+  });
   if (!ctx) {
     throw new Error("Failed to get canvas 2D context");
   }
@@ -144,7 +152,7 @@ export async function extractPaletteFromImage(
 
   // Load and sample image
   const image = await loadImage(source);
-  const { data } = getPixelData(image, opts.sampleSize);
+  const { data } = getPixelData(image, opts.sampleSize, opts.colorSpace);
 
   // Extract pixels as RGB, optionally skipping transparent ones
   const pixels: RGB[] = [];

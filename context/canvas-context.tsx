@@ -17,7 +17,6 @@ import {
   type ShaderParams,
   type ColorPalette,
   type PostProcessParams,
-  type RGBA,
   ShaderType,
   Shape,
   DitheringKind,
@@ -26,12 +25,12 @@ import {
   MediaType,
   isGifEntity,
 } from "#types/canvas.ts";
-import { getPalettePreset, isAsyncPalette } from "../components/palette-preset/palette-presets.ts";
-import type { InfiniteCanvasRenderer } from "../renderer/canvas-renderer.ts";
-import type { DeserializeResult } from "../lib/serialization/types.ts";
-import { type ImageExportOptions, getImageExtension } from "../renderer/export-formats.ts";
+import { getPalettePreset, isAsyncPalette } from "#components/palette-preset/palette-presets.ts";
+import type { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
+import type { DeserializeResult } from "#lib/serialization/types.ts";
+import { type ImageExportOptions, getImageExtension } from "#renderer/export-formats.ts";
 import { canvasStore, gameLoop } from "#engine";
-import { hexToRgba, rgbaToHex } from "#lib/color-utils.ts";
+
 import { toastManager } from "#components/ui/toast/toast-manager.ts";
 import { hints } from "#components/ui/hint/hint-manager.ts";
 import { extractOriginalPalette8, extractOriginalPalette16 } from "#lib/media-loader.ts";
@@ -42,6 +41,7 @@ import { paletteStore } from "#lib/palette-store.ts";
 import { logger } from "#lib/client.logger.ts";
 import { deepMerge } from "#lib/deep-merge.ts";
 import { applyShaderDefaults } from "#lib/shader-defaults.ts";
+import { ColorSpace } from "#types/enums.ts";
 import type { PartialDeep } from "type-fest";
 
 // --- Resource ownership for undo/redo cleanup ---
@@ -90,9 +90,7 @@ const shaderUrlParams = {
   shape: parseAsStringLiteral(Object.values(Shape)).withDefault(config.defaults.shaderParams.shape),
   preserveColors: parseAsBoolean.withDefault(config.defaults.shaderParams.preserveColors),
   showOriginal: parseAsBoolean.withDefault(config.defaults.shaderParams.showOriginal),
-  eagerness: parseAsFloat.withDefault(config.defaults.shaderParams.blobs!.eagerness),
-  background: parseAsString.withDefault(rgbaToHex(config.defaults.shaderParams.background)),
-  color: parseAsString.withDefault(rgbaToHex(config.defaults.shaderParams.color)),
+  eagerness: parseAsFloat.withDefault(config.defaults.shaderParams.blobs.eagerness),
   scale: parseAsFloat.withDefault(config.defaults.shaderParams.scale),
   intensity: parseAsFloat.withDefault(config.defaults.shaderParams.intensity),
   ditheringKind: parseAsStringLiteral(Object.values(DitheringKind)).withDefault(
@@ -100,36 +98,35 @@ const shaderUrlParams = {
   ),
   // Palette support: preset ID or comma-separated hex colors
   preset: parseAsString.withDefault(config.asyncPalettes[0]), // Preset ID (e.g., "gameboy", "cga")
-  palette: parseAsString, // Custom palette as comma-separated hex (e.g., "0f380f,306230,8bac0f")
   // Post-processing params
-  ppEnabled: parseAsBoolean.withDefault(config.defaults.shaderParams.postProcess!.enabled),
+  ppEnabled: parseAsBoolean.withDefault(config.defaults.shaderParams.postProcess.enabled),
   ppGrainEnabled: parseAsBoolean.withDefault(
-    config.defaults.shaderParams.postProcess!.grain!.enabled,
+    config.defaults.shaderParams.postProcess.grain.enabled,
   ),
-  ppGrainSize: parseAsFloat.withDefault(config.defaults.shaderParams.postProcess!.grain!.size),
+  ppGrainSize: parseAsFloat.withDefault(config.defaults.shaderParams.postProcess.grain.size),
   ppGrainIntensity: parseAsFloat.withDefault(
-    config.defaults.shaderParams.postProcess!.grain!.intensity,
+    config.defaults.shaderParams.postProcess.grain.intensity,
   ),
   ppBloomEnabled: parseAsBoolean.withDefault(
-    config.defaults.shaderParams.postProcess!.bloom!.enabled,
+    config.defaults.shaderParams.postProcess.bloom.enabled,
   ),
   ppBloomThreshold: parseAsFloat.withDefault(
-    config.defaults.shaderParams.postProcess!.bloom!.threshold,
+    config.defaults.shaderParams.postProcess.bloom.threshold,
   ),
   ppBloomIntensity: parseAsFloat.withDefault(
-    config.defaults.shaderParams.postProcess!.bloom!.intensity,
+    config.defaults.shaderParams.postProcess.bloom.intensity,
   ),
   ppBloomFilterRadius: parseAsInteger.withDefault(
-    config.defaults.shaderParams.postProcess!.bloom!.filterRadius,
+    config.defaults.shaderParams.postProcess.bloom.filterRadius,
   ),
   ppChromaticEnabled: parseAsBoolean.withDefault(
-    config.defaults.shaderParams.postProcess!.chromaticAberration!.enabled,
+    config.defaults.shaderParams.postProcess.chromaticAberration.enabled,
   ),
   ppChromaticOffset: parseAsFloat.withDefault(
-    config.defaults.shaderParams.postProcess!.chromaticAberration!.offset,
+    config.defaults.shaderParams.postProcess.chromaticAberration.offset,
   ),
   ppBloomSoftness: parseAsFloat.withDefault(
-    config.defaults.shaderParams.postProcess!.bloom!.softness!,
+    config.defaults.shaderParams.postProcess.bloom.softness,
   ),
   // ASCII shader params
   asciiKind: parseAsStringLiteral(Object.values(AsciiKind)).withDefault(
@@ -138,44 +135,24 @@ const shaderUrlParams = {
   asciiInvert: parseAsBoolean.withDefault(config.defaults.shaderParams.ascii.invert),
   // Glass shader params
   glassKind: parseAsStringLiteral(Object.values(GlassKind)).withDefault(
-    config.defaults.shaderParams.glass!.kind,
+    config.defaults.shaderParams.glass.kind,
   ),
-  angle: parseAsFloat.withDefault(config.defaults.shaderParams.glass!.angle),
-  caustic: parseAsFloat.withDefault(config.defaults.shaderParams.glass!.caustic),
-  frostiness: parseAsFloat.withDefault(config.defaults.shaderParams.glass!.frostiness),
-  highlight: parseAsFloat.withDefault(config.defaults.shaderParams.glass!.highlight),
-  dispersion: parseAsFloat.withDefault(config.defaults.shaderParams.glass!.dispersion),
-  flow: parseAsFloat.withDefault(config.defaults.shaderParams.glass!.flow),
+  angle: parseAsFloat.withDefault(config.defaults.shaderParams.glass.angle),
+  caustic: parseAsFloat.withDefault(config.defaults.shaderParams.glass.caustic),
+  frostiness: parseAsFloat.withDefault(config.defaults.shaderParams.glass.frostiness),
+  highlight: parseAsFloat.withDefault(config.defaults.shaderParams.glass.highlight),
+  dispersion: parseAsFloat.withDefault(config.defaults.shaderParams.glass.dispersion),
+  flow: parseAsFloat.withDefault(config.defaults.shaderParams.glass.flow),
 };
 
 /**
  * Convert comma-separated hex colors to ColorPalette
  */
-function parsePaletteFromUrl(
-  paletteStr: string | null,
-  presetId: string | null,
-): ColorPalette | undefined {
+function parsePaletteFromUrl(presetId: string | null): ColorPalette | undefined {
   // First check if a preset is specified
   if (presetId) {
     const preset = getPalettePreset(presetId);
     if (preset) return preset;
-  }
-
-  // Parse custom palette from comma-separated hex
-  if (paletteStr) {
-    const hexColors = paletteStr.split(",").filter((s) => s.length > 0);
-    if (hexColors.length >= 2) {
-      const colors: RGBA[] = hexColors.map((hex) => {
-        // Add # if missing
-        const fullHex = hex.startsWith("#") ? hex : `#${hex}`;
-        return hexToRgba(fullHex);
-      });
-      return {
-        name: "Custom",
-        shortName: "Custom",
-        colors,
-      };
-    }
   }
 
   return undefined;
@@ -197,9 +174,7 @@ function paletteToUrlParams(palette: ColorPalette | undefined): {
     return { preset: palette.id, palette: null };
   }
 
-  // Custom palette: convert to comma-separated hex (without #)
-  const hexColors = palette.colors.map((rgba) => rgbaToHex(rgba).replace("#", ""));
-  return { preset: null, palette: hexColors.join(",") };
+  return { preset: null, palette: null };
 }
 
 export type { CanvasContextValue } from "./use-canvas.ts";
@@ -246,7 +221,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   // Helper: Build shader params from URL state
   const buildShaderParamsFromUrl = (): ShaderParams => {
     // Parse palette from URL params (now at root level)
-    const palette = parsePaletteFromUrl(renderState.palette, renderState.preset);
+    const palette = parsePaletteFromUrl(renderState.preset);
 
     // Build post-process params
     const postProcess: PostProcessParams = {
@@ -274,10 +249,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       shape: renderState.shape,
       preserveColors: renderState.preserveColors,
       showOriginal: renderState.showOriginal,
-      background: hexToRgba(
-        renderState.background || rgbaToHex(config.defaults.shaderParams.background),
-      ),
-      color: hexToRgba(renderState.color || rgbaToHex(config.defaults.shaderParams.color)),
+      background: config.defaults.shaderParams.background,
+      color: config.defaults.shaderParams.color,
       scale: renderState.scale,
       intensity: renderState.intensity,
       blobs: {
@@ -323,14 +296,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           shape: null,
           preserveColors: null,
           showOriginal: null,
-          background: null,
-          color: null,
           eagerness: null,
           scale: null,
           intensity: null,
           ditheringKind: null,
           preset: null,
-          palette: null,
           ppEnabled: null,
           angle: null,
           caustic: null,
@@ -390,8 +360,6 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       shape: entity.shaderParams.shape,
       preserveColors: entity.shaderParams.preserveColors,
       showOriginal: entity.shaderParams.showOriginal,
-      background: rgbaToHex(entity.shaderParams.background),
-      color: rgbaToHex(entity.shaderParams.color),
       eagerness:
         entity.shaderParams.blobs?.eagerness ?? config.defaults.shaderParams.blobs!.eagerness,
       scale: entity.shaderParams.scale,
@@ -408,7 +376,6 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       asciiKind: entity.shaderParams.ascii?.kind ?? config.defaults.shaderParams.ascii.kind,
       asciiInvert: entity.shaderParams.ascii?.invert ?? config.defaults.shaderParams.ascii.invert,
       preset: paletteParams.preset,
-      palette: paletteParams.palette,
       ppEnabled: pp?.enabled ?? ppDefaults.enabled,
       ppGrainEnabled: pp?.grain?.enabled ?? ppDefaults.grain!.enabled,
       ppGrainSize: pp?.grain?.size ?? ppDefaults.grain!.size,
@@ -438,6 +405,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   // Renderer reference for cleanup
   const rendererRef = useRef<InfiniteCanvasRenderer | null>(null);
   const [rendererState, setRendererState] = useState<InfiniteCanvasRenderer | null>(null);
+  const [colorSpace, setColorSpace] = useState<ColorSpace>(ColorSpace.srgb);
 
   // Viewport operations - delegate to store
   const setViewport = (newViewport: Viewport) => {
@@ -520,7 +488,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       const targetPreset = renderState.preset;
 
       // Extract 8-color palette first (fast)
-      extractOriginalPalette8(entity.imageBitmap)
+      extractOriginalPalette8(entity.imageBitmap, colorSpace)
         .then((palette8) => {
           const currentEntity = canvasStore.getState().entities.get(id);
           if (!currentEntity) return; // Entity was deleted
@@ -544,7 +512,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         .catch((err) => logger.warn("Failed to extract 8-color palette:", err));
 
       // Extract 16-color palette in background (slower)
-      extractOriginalPalette16(entity.imageBitmap)
+      extractOriginalPalette16(entity.imageBitmap, colorSpace)
         .then((palette16) => {
           const currentEntity = canvasStore.getState().entities.get(id);
           if (!currentEntity) return; // Entity was deleted
@@ -768,8 +736,6 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       shape: entity.shaderParams.shape,
       preserveColors: entity.shaderParams.preserveColors,
       showOriginal: entity.shaderParams.showOriginal,
-      background: rgbaToHex(entity.shaderParams.background),
-      color: rgbaToHex(entity.shaderParams.color),
       eagerness:
         entity.shaderParams.blobs?.eagerness ?? config.defaults.shaderParams.blobs!.eagerness,
       scale: entity.shaderParams.scale,
@@ -789,7 +755,6 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         entity.shaderParams.glass?.dispersion ?? config.defaults.shaderParams.glass!.dispersion,
       flow: entity.shaderParams.glass?.flow ?? config.defaults.shaderParams.glass!.flow,
       preset: paletteParams.preset,
-      palette: paletteParams.palette,
       ppEnabled: pp?.enabled ?? ppDefaults.enabled,
       ppGrainEnabled: pp?.grain?.enabled ?? ppDefaults.grain!.enabled,
       ppGrainSize: pp?.grain?.size ?? ppDefaults.grain!.size,
@@ -1022,10 +987,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     // Build shader params from URL
     const shaderType =
       shaderUrlParams.shader.parse(parsedParams.shader ?? "") ?? config.defaults.shader;
-    const palette = parsePaletteFromUrl(
-      shaderUrlParams.palette.parse(parsedParams.palette ?? ""),
-      shaderUrlParams.preset.parse(parsedParams.preset ?? ""),
-    );
+    const palette = parsePaletteFromUrl(shaderUrlParams.preset.parse(parsedParams.preset ?? ""));
 
     // Parse post-process params
     const ppDefaults = config.defaults.shaderParams.postProcess!;
@@ -1034,38 +996,38 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       grain: {
         enabled:
           shaderUrlParams.ppGrainEnabled.parse(parsedParams.ppGrainEnabled ?? "") ??
-          ppDefaults.grain!.enabled,
+          ppDefaults.grain.enabled,
         size:
           shaderUrlParams.ppGrainSize.parse(parsedParams.ppGrainSize ?? "") ??
-          ppDefaults.grain!.size,
+          ppDefaults.grain.size,
         intensity:
           shaderUrlParams.ppGrainIntensity.parse(parsedParams.ppGrainIntensity ?? "") ??
-          ppDefaults.grain!.intensity,
+          ppDefaults.grain.intensity,
       },
       bloom: {
         enabled:
           shaderUrlParams.ppBloomEnabled.parse(parsedParams.ppBloomEnabled ?? "") ??
-          ppDefaults.bloom!.enabled,
+          ppDefaults.bloom.enabled,
         threshold:
           shaderUrlParams.ppBloomThreshold.parse(parsedParams.ppBloomThreshold ?? "") ??
-          ppDefaults.bloom!.threshold,
+          ppDefaults.bloom.threshold,
         intensity:
           shaderUrlParams.ppBloomIntensity.parse(parsedParams.ppBloomIntensity ?? "") ??
-          ppDefaults.bloom!.intensity,
+          ppDefaults.bloom.intensity,
         filterRadius:
           shaderUrlParams.ppBloomFilterRadius.parse(parsedParams.ppBloomFilterRadius ?? "") ??
-          ppDefaults.bloom!.filterRadius,
+          ppDefaults.bloom.filterRadius,
         softness:
           shaderUrlParams.ppBloomSoftness.parse(parsedParams.ppBloomSoftness ?? "") ??
-          ppDefaults.bloom!.softness,
+          ppDefaults.bloom.softness,
       },
       chromaticAberration: {
         enabled:
           shaderUrlParams.ppChromaticEnabled.parse(parsedParams.ppChromaticEnabled ?? "") ??
-          ppDefaults.chromaticAberration!.enabled,
+          ppDefaults.chromaticAberration.enabled,
         offset:
           shaderUrlParams.ppChromaticOffset.parse(parsedParams.ppChromaticOffset ?? "") ??
-          ppDefaults.chromaticAberration!.offset,
+          ppDefaults.chromaticAberration.offset,
       },
     };
 
@@ -1080,14 +1042,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       showOriginal:
         shaderUrlParams.showOriginal.parse(parsedParams.showOriginal ?? "") ??
         config.defaults.shaderParams.showOriginal,
-      background: hexToRgba(
-        shaderUrlParams.background.parse(parsedParams.background ?? "") ||
-          rgbaToHex(config.defaults.shaderParams.background),
-      ),
-      color: hexToRgba(
-        shaderUrlParams.color.parse(parsedParams.color ?? "") ||
-          rgbaToHex(config.defaults.shaderParams.color),
-      ),
+      background: config.defaults.shaderParams.background,
+      color: config.defaults.shaderParams.color,
       scale:
         shaderUrlParams.scale.parse(parsedParams.scale ?? "") ?? config.defaults.shaderParams.scale,
       intensity:
@@ -1096,12 +1052,12 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       blobs: {
         eagerness:
           shaderUrlParams.eagerness.parse(parsedParams.eagerness ?? "") ??
-          config.defaults.shaderParams.blobs!.eagerness,
+          config.defaults.shaderParams.blobs.eagerness,
       },
       dithering: {
         kind:
           shaderUrlParams.ditheringKind.parse(parsedParams.ditheringKind ?? "") ??
-          config.defaults.shaderParams.dithering!.kind,
+          config.defaults.shaderParams.dithering.kind,
       },
       ascii: {
         kind:
@@ -1114,25 +1070,25 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       glass: {
         kind:
           shaderUrlParams.glassKind.parse(parsedParams.glassKind ?? "") ??
-          config.defaults.shaderParams.glass!.kind,
+          config.defaults.shaderParams.glass.kind,
         angle:
           shaderUrlParams.angle.parse(parsedParams.angle ?? "") ??
-          config.defaults.shaderParams.glass!.angle,
+          config.defaults.shaderParams.glass.angle,
         caustic:
           shaderUrlParams.caustic.parse(parsedParams.caustic ?? "") ??
-          config.defaults.shaderParams.glass!.caustic,
+          config.defaults.shaderParams.glass.caustic,
         frostiness:
           shaderUrlParams.frostiness.parse(parsedParams.frostiness ?? "") ??
-          config.defaults.shaderParams.glass!.frostiness,
+          config.defaults.shaderParams.glass.frostiness,
         highlight:
           shaderUrlParams.highlight.parse(parsedParams.highlight ?? "") ??
-          config.defaults.shaderParams.glass!.highlight,
+          config.defaults.shaderParams.glass.highlight,
         dispersion:
           shaderUrlParams.dispersion.parse(parsedParams.dispersion ?? "") ??
-          config.defaults.shaderParams.glass!.dispersion,
+          config.defaults.shaderParams.glass.dispersion,
         flow:
           shaderUrlParams.flow.parse(parsedParams.flow ?? "") ??
-          config.defaults.shaderParams.glass!.flow,
+          config.defaults.shaderParams.glass.flow,
       },
       palette: palette ?? config.defaults.shaderParams.palette,
       postProcess,
@@ -1217,6 +1173,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   const registerRenderer = (renderer: InfiniteCanvasRenderer) => {
     rendererRef.current = renderer;
     setRendererState(renderer);
+    setColorSpace(renderer.colorConfig.supportsP3 ? ColorSpace.displayP3 : ColorSpace.srgb);
     gameLoop.setRenderer(renderer);
   };
 
@@ -1279,12 +1236,12 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
   // Serialization API — lazy-loads the serialization module
   const serializeCanvas = async (): Promise<Blob> => {
-    const { serialize } = await import("../lib/serialization/index.ts");
+    const { serialize } = await import("#lib/serialization/index.ts");
     return serialize();
   };
 
   const deserializeCanvas = async (source: Blob | ArrayBuffer): Promise<DeserializeResult> => {
-    const { deserialize, getMaxCounters } = await import("../lib/serialization/index.ts");
+    const { deserialize, getMaxCounters } = await import("#lib/serialization/index.ts");
     const result = await deserialize(source);
 
     // Update ID counters to avoid collisions with future entities
@@ -1321,6 +1278,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     updateSelectedEntityParams,
     registerRenderer,
     renderer: rendererState,
+    colorSpace,
     copySelectedEntityToClipboard,
     saveSelectedEntityToFile,
     serializeCanvas,

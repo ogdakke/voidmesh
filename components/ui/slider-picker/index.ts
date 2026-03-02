@@ -1,4 +1,3 @@
-// oxlint-disable react/only-export-components -- barrel file: re-exports components + hooks from separate source files
 export {
   SliderPicker,
   SliderPickerWindow,

@@ -1,5 +1,6 @@
 import { config, type GridConfig } from "#config";
 import { logger } from "#lib/client.logger.ts";
+import { setGpuContext } from "./gpu-color-space.ts";
 import type { RenderState } from "../engine/canvas-store.ts";
 import { disintegrationController } from "../engine/disintegration-controller.ts";
 import { entityDragVisual } from "../engine/entity-drag-visual.ts";
@@ -19,9 +20,11 @@ import {
   type Viewport,
 } from "#types/canvas.ts";
 import compositionShaderSource from "./composition.wgsl?raw";
+import { CopyPass } from "./copy-pass.ts";
 import { DisintegrationParticleSystem } from "./disintegration-particles.ts";
 import dotGridShaderSource from "./dot-grid.wgsl?raw";
 import { ExportService } from "./export-service.ts";
+import { detectGpuColorConfig, type GpuColorConfig } from "./gpu-color-space.ts";
 import { ProcessingPipeline } from "./processing-pipeline.ts";
 import selectionRectShaderSource from "./selection-rect.wgsl?raw";
 import { AsciiShader } from "./shaders/ascii-shader.ts";
@@ -40,6 +43,7 @@ export class InfiniteCanvasRenderer {
   #device: GPUDevice | null = null;
   #context: GPUCanvasContext | null = null;
   #canvasFormat!: GPUTextureFormat;
+  #colorConfig!: GpuColorConfig;
 
   // Dot grid pipeline
   #gridPipeline: GPURenderPipeline | null = null;
@@ -153,6 +157,9 @@ export class InfiniteCanvasRenderer {
   // Processing pipeline (adjustments, post-processing, bloom)
   #processingPipeline: ProcessingPipeline | null = null;
 
+  // Copy pass for showOriginal (rgba8unorm source → rgba16float output)
+  #passthroughCopyPass: CopyPass | null = null;
+
   // Shader registry and context for delegated shader passes
   #shaderRegistry: ShaderRegistry | null = null;
   #shaderContext: ShaderContext | null = null;
@@ -171,6 +178,10 @@ export class InfiniteCanvasRenderer {
 
   get isReady(): boolean {
     return this.#device !== null && this.#gridPipeline !== null;
+  }
+
+  get colorConfig(): GpuColorConfig {
+    return this.#colorConfig;
   }
 
   getFrameStats() {
@@ -221,15 +232,20 @@ export class InfiniteCanvasRenderer {
       throw new Error("WebGPU context not available");
     }
 
-    this.#canvasFormat = navigator.gpu.getPreferredCanvasFormat();
+    // Detect GPU color space capability and set module-level flag for color-utils
+    this.#colorConfig = detectGpuColorConfig(this.#device);
+    setGpuContext(this.#device, this.#colorConfig.canvasFormat, this.#colorConfig.canvasColorSpace);
+
+    this.#canvasFormat = this.#colorConfig.canvasFormat;
     this.#context.configure({
       device: this.#device,
       format: this.#canvasFormat,
+      colorSpace: this.#colorConfig.canvasColorSpace,
       alphaMode: "premultiplied",
     });
 
     // Initialize texture pool
-    this.#texturePool = new TexturePool(this.#device);
+    this.#texturePool = new TexturePool(this.#device, this.#colorConfig.intermediateFormat);
 
     this.#createGridPipeline();
     this.#createCompositionPipeline();
@@ -245,6 +261,8 @@ export class InfiniteCanvasRenderer {
       sampler: this.#entityShaderSampler!,
       sortedPaletteCache: this.#sortedPaletteCache,
       texturePool: this.#texturePool,
+      intermediateFormat: this.#colorConfig.intermediateFormat,
+      supportsP3: this.#colorConfig.supportsP3,
     };
 
     this.#shaderRegistry = new ShaderRegistry();
@@ -271,8 +289,13 @@ export class InfiniteCanvasRenderer {
     );
 
     this.#createSelectionRectPipeline();
-    this.#processingPipeline = new ProcessingPipeline(this.#device);
+    this.#processingPipeline = new ProcessingPipeline(
+      this.#device,
+      this.#colorConfig.intermediateFormat,
+      this.#colorConfig.supportsP3,
+    );
     this.#processingPipeline.initialize();
+    this.#passthroughCopyPass = new CopyPass(this.#device, this.#colorConfig.intermediateFormat);
 
     // Initialize export service with callbacks into renderer
     this.#exportService = new ExportService(
@@ -280,6 +303,7 @@ export class InfiniteCanvasRenderer {
       this.#texturePool,
       (entity, source, output) => this.#applyShaderToTexture(entity, source, output),
       (video, w, h) => this.#getVideoFrameSource(video, w, h),
+      this.#colorConfig,
     );
 
     // Initialize disintegration particle system
@@ -690,7 +714,7 @@ export class InfiniteCanvasRenderer {
         : this.#device.createTexture({
             label: `Blur output texture`,
             size: [width, height],
-            format: "rgba8unorm",
+            format: this.#colorConfig.intermediateFormat,
             usage: preProcessUsage,
           });
 
@@ -704,7 +728,7 @@ export class InfiniteCanvasRenderer {
         : this.#device.createTexture({
             label: `Adjustments output texture`,
             size: [width, height],
-            format: "rgba8unorm",
+            format: this.#colorConfig.intermediateFormat,
             usage: preProcessUsage,
           });
 
@@ -739,7 +763,7 @@ export class InfiniteCanvasRenderer {
         : this.#device.createTexture({
             label: `Post-process intermediate texture`,
             size: [width, height],
-            format: "rgba8unorm",
+            format: this.#colorConfig.intermediateFormat,
             usage: intermediateUsage,
           });
 
@@ -937,7 +961,9 @@ export class InfiniteCanvasRenderer {
       this.#videoUploadCanvas.height !== height
     ) {
       this.#videoUploadCanvas = new OffscreenCanvas(width, height);
-      this.#videoUploadCtx = this.#videoUploadCanvas.getContext("2d");
+      this.#videoUploadCtx = this.#videoUploadCanvas.getContext("2d", {
+        colorSpace: this.#colorConfig.textureColorSpace,
+      });
     }
     this.#videoUploadCtx!.drawImage(video, 0, 0, width, height);
     return this.#videoUploadCanvas;
@@ -1027,7 +1053,7 @@ export class InfiniteCanvasRenderer {
 
       this.#device.queue.copyExternalImageToTexture(
         { source: externalSource },
-        { texture: sourceTexture },
+        { texture: sourceTexture, colorSpace: this.#colorConfig.textureColorSpace },
         [width, height],
       );
 
@@ -1056,23 +1082,16 @@ export class InfiniteCanvasRenderer {
       outputTexture = this.#device.createTexture({
         label: `Entity ${entity.id} processed texture`,
         size: [width, height],
-        format: "rgba8unorm",
+        format: this.#colorConfig.intermediateFormat,
         usage: outputUsage,
       });
     }
 
-    // If showOriginal is enabled, bypass shader processing and copy source directly
+    // If showOriginal is enabled, bypass shader processing and blit source directly.
+    // Uses CopyPass render pass instead of copyTextureToTexture because
+    // source (rgba8unorm) and output (rgba16float) formats are not copy-compatible.
     if (entity.shaderParams.showOriginal) {
-      const encoder = this.#device.createCommandEncoder({
-        label: `Entity ${entity.id} passthrough encoder`,
-      });
-
-      encoder.copyTextureToTexture({ texture: sourceTexture }, { texture: outputTexture }, [
-        width,
-        height,
-      ]);
-
-      this.#device.queue.submit([encoder.finish()]);
+      this.#passthroughCopyPass!.execute(sourceTexture, outputTexture);
 
       // Cache and return (source texture stays in #entitySourceTextures)
       this.#entityTextures.set(entity.id, outputTexture);
@@ -1605,6 +1624,7 @@ export class InfiniteCanvasRenderer {
     // Destroy processing pipeline
     this.#processingPipeline?.destroy();
     this.#processingPipeline = null;
+    this.#passthroughCopyPass = null;
 
     // Destroy shader registry
     this.#shaderRegistry?.destroy();

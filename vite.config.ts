@@ -1,6 +1,7 @@
 import { resolve } from "path";
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
+import basicSsl from "@vitejs/plugin-basic-ssl";
 import imagePlugin from "./plugins/vite-plugin-image.ts";
 import wgslMinifyPlugin from "./plugins/vite-plugin-wgsl-minify.ts";
 
@@ -12,7 +13,7 @@ export default defineConfig(({ mode }) => {
     appType: "spa",
     server: {
       watch: {
-        ignored: ["**/opensrc/**"],
+        ignored: ["**/opensrc/**", "**/.vendor/**"],
       },
       proxy: {
         "/m/": {
@@ -32,6 +33,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     plugins: [
+      !!env.HTTPS && basicSsl(),
       wgslMinifyPlugin(),
       imagePlugin({ widths: [768, 1152] }),
       react({
@@ -45,7 +47,7 @@ export default defineConfig(({ mode }) => {
       emptyOutDir: true,
       sourcemap: process.env.NODE_ENV !== "production",
       rolldownOptions: {
-        external: ["opensrc/"],
+        external: ["opensrc/", ".vendor/"],
       },
     },
     optimizeDeps: {

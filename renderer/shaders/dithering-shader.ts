@@ -66,7 +66,7 @@ export class DitheringShader extends ShaderPass {
         {
           binding: 2,
           visibility: GPUShaderStage.COMPUTE,
-          storageTexture: { access: "write-only", format: "rgba8unorm" },
+          storageTexture: { access: "write-only", format: this.ctx.intermediateFormat },
         },
         {
           binding: 3,
@@ -176,7 +176,7 @@ export class DitheringShader extends ShaderPass {
       : device.createTexture({
           label: `Compute output intermediate texture`,
           size: [width, height],
-          format: "rgba8unorm",
+          format: this.ctx.intermediateFormat,
           usage: computeUsage,
         });
 

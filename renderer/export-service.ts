@@ -1,7 +1,9 @@
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
 import { isVideoEntity } from "#types/canvas.ts";
 import { getFrameAtTime } from "../lib/gif-decoder.ts";
+import { CopyPass } from "./copy-pass.ts";
 import { type ImageExportOptions, getImageMimeType } from "./export-formats.ts";
+import type { GpuColorConfig } from "./gpu-color-space.ts";
 import type { TexturePool } from "./texture-pool.ts";
 
 export type ApplyShaderFn = (
@@ -21,27 +23,27 @@ export class ExportService {
   #texturePool: TexturePool | null;
   #applyShader: ApplyShaderFn;
   #getVideoFrameSource: GetVideoFrameSourceFn;
+  #copyPass: CopyPass;
+  #colorConfig: GpuColorConfig;
 
   constructor(
     device: GPUDevice,
     texturePool: TexturePool | null,
     applyShader: ApplyShaderFn,
     getVideoFrameSource: GetVideoFrameSourceFn,
+    colorConfig: GpuColorConfig,
   ) {
     this.#device = device;
     this.#texturePool = texturePool;
     this.#applyShader = applyShader;
     this.#getVideoFrameSource = getVideoFrameSource;
+    this.#copyPass = new CopyPass(device);
+    this.#colorConfig = colorConfig;
   }
 
   /**
    * Read texture pixels to CPU memory via staging buffer.
-   * Used by export methods to get pixel data from GPU textures.
-   *
-   * @param texture - Source texture to read from (must have COPY_SRC usage)
-   * @param width - Width of the texture
-   * @param height - Height of the texture
-   * @returns Pixel data as Uint8ClampedArray (RGBA format)
+   * Expects an rgba8unorm texture (use CopyPass to convert from rgba16float first).
    */
   async #readTextureToPixelData(
     texture: GPUTexture,
@@ -92,13 +94,44 @@ export class ExportService {
   }
 
   /**
+   * Convert an rgba16float shader output to 8-bit pixel data via CopyPass,
+   * then create an ImageBitmap for export (P3 or sRGB based on GPU capability).
+   */
+  async #convertToImageBitmap(
+    shaderOutput: GPUTexture,
+    width: number,
+    height: number,
+  ): Promise<ImageBitmap | null> {
+    // Create rgba8unorm staging texture for readback
+    const stagingTexture = this.#device.createTexture({
+      label: "Export staging texture (rgba8unorm)",
+      size: [width, height],
+      format: "rgba8unorm",
+      usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+
+    // GPU-side format conversion: rgba16float → rgba8unorm (values clamped to [0,1])
+    this.#copyPass.execute(shaderOutput, stagingTexture);
+
+    const data = await this.#readTextureToPixelData(stagingTexture, width, height);
+    stagingTexture.destroy();
+
+    const imageData = new ImageData(data, width, height, {
+      colorSpace: this.#colorConfig.textureColorSpace,
+    });
+    const offscreen = new OffscreenCanvas(width, height);
+    const ctx = offscreen.getContext("2d", { colorSpace: this.#colorConfig.textureColorSpace });
+    if (!ctx) {
+      return null;
+    }
+
+    ctx.putImageData(imageData, 0, 0);
+    return await createImageBitmap(offscreen);
+  }
+
+  /**
    * Render a video entity at a specific timestamp to an ImageBitmap.
    * Used for video export - more efficient than Blob for encoding multiple frames.
-   *
-   * @param entity - Video entity to render
-   * @param timestampSeconds - Time in seconds to render
-   * @param videoOverride - Optional video element to use instead of entity's video (for export isolation)
-   * @returns ImageBitmap of the rendered frame, or null if failed
    */
   async renderVideoFrameAtTime(
     entity: ShaderCanvasEntity,
@@ -175,7 +208,9 @@ export class ExportService {
 
   /**
    * Shared helper: apply shader to a source image and return the result as ImageBitmap.
-   * Handles texture acquisition from pool, shader application, GPU readback, and cleanup.
+   * Source textures stay rgba8unorm (uploaded images are 8-bit).
+   * Output textures use the intermediate format (shader processing precision).
+   * CopyPass converts to rgba8unorm for readback.
    */
   async #renderSourceToImageBitmap(
     entity: ShaderCanvasEntity,
@@ -183,65 +218,59 @@ export class ExportService {
     width: number,
     height: number,
   ): Promise<ImageBitmap | null> {
-    // Acquire textures from pool (avoids per-frame GPU allocation churn)
     const sourceUsage =
       GPUTextureUsage.TEXTURE_BINDING |
       GPUTextureUsage.COPY_DST |
       GPUTextureUsage.RENDER_ATTACHMENT;
     const outputUsage =
-      GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST;
+      GPUTextureUsage.TEXTURE_BINDING |
+      GPUTextureUsage.RENDER_ATTACHMENT |
+      GPUTextureUsage.COPY_SRC |
+      GPUTextureUsage.COPY_DST;
 
-    const sourceTexture = this.#texturePool
-      ? this.#texturePool.acquire(width, height, sourceUsage, `Export source texture`)
-      : this.#device.createTexture({
-          label: `Export source texture`,
-          size: [width, height],
-          format: "rgba8unorm",
-          usage: sourceUsage,
-        });
+    const sourceTexture = this.#device.createTexture({
+      label: "Export source texture",
+      size: [width, height],
+      format: "rgba8unorm",
+      usage: sourceUsage,
+    });
 
-    this.#device.queue.copyExternalImageToTexture({ source }, { texture: sourceTexture }, [
-      width,
-      height,
-    ]);
+    this.#device.queue.copyExternalImageToTexture(
+      { source },
+      { texture: sourceTexture, colorSpace: this.#colorConfig.textureColorSpace },
+      [width, height],
+    );
 
+    // Output texture uses intermediate format (shader processing precision)
     const outputTexture = this.#texturePool
-      ? this.#texturePool.acquire(width, height, outputUsage, `Export output texture`)
+      ? this.#texturePool.acquire(width, height, outputUsage, "Export output texture")
       : this.#device.createTexture({
-          label: `Export output texture`,
+          label: "Export output texture",
           size: [width, height],
-          format: "rgba8unorm",
+          format: this.#colorConfig.intermediateFormat,
           usage: outputUsage,
         });
 
     this.#applyShader(entity, sourceTexture, outputTexture);
 
-    const data = await this.#readTextureToPixelData(outputTexture, width, height);
+    const bitmap = await this.#convertToImageBitmap(outputTexture, width, height);
 
-    // Release textures back to pool for reuse by the next frame
+    // Cleanup
+    sourceTexture.destroy();
     if (this.#texturePool) {
-      this.#texturePool.release(sourceTexture, width, height, sourceUsage);
       this.#texturePool.release(outputTexture, width, height, outputUsage);
     } else {
-      sourceTexture.destroy();
       outputTexture.destroy();
     }
 
-    const imageData = new ImageData(data, width, height);
-    const offscreen = new OffscreenCanvas(width, height);
-    const ctx = offscreen.getContext("2d");
-    if (!ctx) {
-      return null;
-    }
-
-    ctx.putImageData(imageData, 0, 0);
-    return await createImageBitmap(offscreen);
+    return bitmap;
   }
 
   /**
    * Render an entity to a Blob for export/clipboard.
    * This renders just the entity's shader output without viewport transforms.
    * Supports PNG (default, lossless) and JPEG (lossy, smaller files).
+   * PNG/JPEG are exported with P3 ICC profile via P3 OffscreenCanvas.
    */
   async renderEntityToBlob(
     entity: ShaderCanvasEntity,
@@ -250,9 +279,9 @@ export class ExportService {
     const width = entity.originalSize.width;
     const height = entity.originalSize.height;
 
-    // Create source texture from ImageBitmap
+    // Source texture: rgba8unorm (uploaded images are 8-bit)
     const sourceTexture = this.#device.createTexture({
-      label: `Export source texture`,
+      label: "Export source texture",
       size: [width, height],
       format: "rgba8unorm",
       usage:
@@ -263,33 +292,46 @@ export class ExportService {
 
     this.#device.queue.copyExternalImageToTexture(
       { source: entity.imageBitmap },
-      { texture: sourceTexture },
+      { texture: sourceTexture, colorSpace: this.#colorConfig.textureColorSpace },
       [width, height],
     );
 
-    // Create output texture for shader result
-    // Needs COPY_SRC for readback, COPY_DST for compute shader path (copies from intermediate texture)
+    // Output texture uses intermediate format (shader processing precision)
     const outputTexture = this.#device.createTexture({
-      label: `Export output texture`,
+      label: "Export output texture",
       size: [width, height],
-      format: "rgba8unorm",
+      format: this.#colorConfig.intermediateFormat,
       usage:
-        GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST,
+        GPUTextureUsage.TEXTURE_BINDING |
+        GPUTextureUsage.RENDER_ATTACHMENT |
+        GPUTextureUsage.COPY_SRC |
+        GPUTextureUsage.COPY_DST,
     });
 
-    // Apply shader using unified method (handles both compute and fragment shader paths)
+    // Apply shader (handles both compute and fragment shader paths)
     this.#applyShader(entity, sourceTexture, outputTexture);
 
-    // Read pixel data from output texture
-    const data = await this.#readTextureToPixelData(outputTexture, width, height);
+    // Convert rgba16float → rgba8unorm via CopyPass, then read back as P3 ImageData
+    const stagingTexture = this.#device.createTexture({
+      label: "Export staging texture (rgba8unorm)",
+      size: [width, height],
+      format: "rgba8unorm",
+      usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
 
-    // Create ImageData and draw to canvas
-    const imageData = new ImageData(data, width, height);
+    this.#copyPass.execute(outputTexture, stagingTexture);
+
+    const data = await this.#readTextureToPixelData(stagingTexture, width, height);
+
+    const imageData = new ImageData(data, width, height, {
+      colorSpace: this.#colorConfig.textureColorSpace,
+    });
     const offscreen = new OffscreenCanvas(width, height);
-    const ctx = offscreen.getContext("2d");
+    const ctx = offscreen.getContext("2d", { colorSpace: this.#colorConfig.textureColorSpace });
     if (!ctx) {
       sourceTexture.destroy();
       outputTexture.destroy();
+      stagingTexture.destroy();
       return null;
     }
 
@@ -298,7 +340,9 @@ export class ExportService {
     // Cleanup
     sourceTexture.destroy();
     outputTexture.destroy();
+    stagingTexture.destroy();
 
+    // PNG/JPEG will embed the appropriate ICC profile from the canvas color space
     const mimeType = options ? getImageMimeType(options.format) : "image/png";
     return await offscreen.convertToBlob({
       type: mimeType,

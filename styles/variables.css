@@ -88,7 +88,7 @@
     rgb(100% 100% 100% / 0.5625) 75%, rgb(100% 100% 100% / 0.66015625) 81.25%,
     rgb(100% 100% 100% / 0.765625) 87.5%, rgb(100% 100% 100% / 0.87890625) 93.75%,
     rgb(100% 100% 100%) 100%;
-  --mask: light-dark(var(--mask-light), var(--mask-dark));
+  --mask: var(--mask-light);
 
   --studio-background: light-dark(#fafafa, #060608);
   --content-radius: var(--radius-xl);
@@ -271,6 +271,7 @@
     --lightness-1600: 100%;
 
     --popover-shadow: 0 8px 20px rgba(0 0 0 / 0.5);
+    --mask: var(--mask-dark);
   }
 }
 

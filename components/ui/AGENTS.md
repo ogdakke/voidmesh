@@ -10,7 +10,7 @@ Also: `ui-util.ts` — shared UI utility helpers.
 
 ### Notable Implementations
 
-- `color-picker/` — Split into desktop/mobile variants (`color-picker.desktop.tsx`, `color-picker.mobile.tsx`) with shared context (`color-picker-context.tsx`) and hook (`use-color-picker.ts`). `swatch.tsx` is the clickable color swatch trigger.
+- `color-picker/` — Custom GPU-accelerated color picker using OKLCH as working color space. `color-area.tsx` + `color-area-gpu.ts` + `color-area.wgsl` = 2D lightness×chroma picker rendered via WebGPU. `color-slider.tsx` exports `HueSlider` (0-360°) and `AlphaSlider` (0-1). `color-value-input.tsx` = CSS color string input (hex or `color(display-p3 ...)`). `eyedropper.tsx` = Browser EyeDropper API. `color-picker-context.tsx` = OKLCH state management with imperative DOM broadcasting during scrubbing (zero React re-renders, rAF-throttled onChange). Desktop popup (`color-picker-popup.tsx`) and mobile drawer (`color-picker-drawer.tsx`) containers. `swatch.tsx` is the clickable trigger.
 - `field/` — Labeled form field wrapper with CSS. Used for settings and knob panels.
 - `image.tsx` — Responsive `<picture>` component consuming `?img` Vite plugin output (srcset, thumbhash blur-up).
 - `video.tsx` — Lazy-loading video component with intersection observer.

@@ -1,4 +1,5 @@
 import type { RGBA, ShaderCanvasEntity } from "#types/canvas.ts";
+import { ColorSpace } from "#types/enums.ts";
 import { sortPaletteByLuminance } from "#lib/color-utils.ts";
 import type { TexturePool } from "../texture-pool.ts";
 
@@ -16,6 +17,10 @@ export interface ShaderContext {
   sortedPaletteCache: { original: readonly RGBA[]; sorted: RGBA[] } | null;
   /** Texture pool for intermediate textures (used by compute shaders) */
   texturePool: TexturePool | null;
+  /** Intermediate texture format for the rendering pipeline */
+  intermediateFormat: GPUTextureFormat;
+  /** Whether the GPU is rendering in Display P3 color space */
+  supportsP3: boolean;
 }
 
 export abstract class ShaderPass {
@@ -78,6 +83,9 @@ export abstract class ShaderPass {
     f[14] = params.background[2];
     f[15] = params.background[3];
 
+    // Color space flag (offset 72 / u[18])
+    u[18] = this.ctx.supportsP3 ? 1 : 0;
+
     // Palette data (offset 64 bytes / 16 floats)
     const palette = params.palette;
     if (palette && palette.colors.length >= 2) {
@@ -85,7 +93,12 @@ export abstract class ShaderPass {
       if (this.ctx.sortedPaletteCache?.original === palette.colors) {
         sortedColors = this.ctx.sortedPaletteCache.sorted;
       } else {
-        sortedColors = sortPaletteByLuminance(palette.colors);
+        const [background, ...rest] = palette.colors;
+        const sortedRest = sortPaletteByLuminance(
+          rest,
+          this.ctx.supportsP3 ? ColorSpace.displayP3 : ColorSpace.srgb,
+        );
+        sortedColors = [background!, ...sortedRest];
         this.ctx.sortedPaletteCache = {
           original: palette.colors,
           sorted: sortedColors,
@@ -163,7 +176,7 @@ export abstract class ShaderPass {
       fragment: {
         module: shaderModule,
         entryPoint: "fs_main",
-        targets: [{ format: "rgba8unorm" }],
+        targets: [{ format: this.ctx.intermediateFormat }],
       },
       primitive: { topology: "triangle-list" },
     });

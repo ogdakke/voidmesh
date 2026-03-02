@@ -548,6 +548,7 @@ export function EntityParams() {
     handlePreserveColorsChange,
     handleSizeChange,
   } = useCanvasActions();
+  const { colorSpace } = useCanvas();
   const customPalettes = usePaletteStore();
 
   // Get control values with mixed awareness
@@ -571,6 +572,7 @@ export function EntityParams() {
             <ColorPalette
               onValueChange={handlePaletteChange}
               palette={palette.value ?? undefined}
+              colorSpace={colorSpace}
               onDelete={
                 palette.value?.id && isUserPalette(palette.value.id)
                   ? () => handleDeletePalette(palette.value.id!)

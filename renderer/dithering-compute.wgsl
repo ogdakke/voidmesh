@@ -14,14 +14,14 @@ struct Uniforms {
   // Extended palette data (offset 64+)
   paletteCount: u32,       // Number of colors in palette (2-16) (offset 64)
   _pad0: u32,              // Padding for alignment (offset 68)
-  _pad1: u32,              // Padding for alignment (offset 72)
+  is_p3: u32,              // 1 = Display P3, 0 = sRGB (offset 72)
   _pad2: u32,              // Padding for alignment (offset 76)
   palette: array<vec4f, 16>, // Color palette (offset 80, 256 bytes)
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var inputTexture: texture_2d<f32>;
-@group(0) @binding(2) var outputTexture: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(2) var outputTexture: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(3) var<storage, read_write> errorBuffer: array<vec4f>;
 
 // Calculate buffer index from 2D position
@@ -29,9 +29,10 @@ fn getErrorIndex(x: u32, y: u32, width: u32) -> u32 {
   return y * width + x;
 }
 
-// Calculate brightness using ITU-R BT.601 luminance formula
+// Calculate brightness using color-space-appropriate luminance coefficients
 fn luminance(c: vec3f) -> f32 {
-  return dot(c, vec3f(0.299, 0.587, 0.114));
+  let coeffs = select(vec3f(0.2126, 0.7152, 0.0722), vec3f(0.2290, 0.6917, 0.0793), uniforms.is_p3 != 0u);
+  return dot(c, coeffs);
 }
 
 // Quantize a value to 0 or 1
@@ -40,13 +41,13 @@ fn quantize(value: f32) -> f32 {
 }
 
 // Find the nearest color in the palette using squared Euclidean distance
-fn findNearestPaletteColor(rgb: vec3f) -> vec3f {
+fn findNearestPaletteColor(rgb: vec3f) -> vec4f {
   var minDist = 1e10;
-  var nearestColor = uniforms.palette[0].rgb;
+  var nearestColor = uniforms.palette[0];
 
   for (var i = 0u; i < uniforms.paletteCount; i++) {
-    let paletteColor = uniforms.palette[i].rgb;
-    let diff = rgb - paletteColor;
+    let paletteColor = uniforms.palette[i];
+    let diff = rgb - paletteColor.rgb;
     let dist = dot(diff, diff); // squared Euclidean distance
     if (dist < minDist) {
       minDist = dist;
@@ -345,19 +346,19 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
       let adjustedB = pow(pixel.b, max(uniforms.intensity, 0.01)) + accumulatedError.b;
       let adjustedColor = vec3f(adjustedR, adjustedG, adjustedB);
 
-      // Find nearest palette color
-      let quantizedColor = findNearestPaletteColor(adjustedColor);
+      // Find nearest palette color (returns rgba including alpha)
+      let quantized = findNearestPaletteColor(adjustedColor);
 
       // Calculate RGB error
-      let errorR = adjustedColor.r - quantizedColor.r;
-      let errorG = adjustedColor.g - quantizedColor.g;
-      let errorB = adjustedColor.b - quantizedColor.b;
+      let errorR = adjustedColor.r - quantized.r;
+      let errorG = adjustedColor.g - quantized.g;
+      let errorB = adjustedColor.b - quantized.b;
       let error = vec4f(errorR, errorG, errorB, 0.0);
 
       // Diffuse error to neighbors
       diffuseError(error, x, rowY, width, height, serpentine);
 
-      outputColor = vec4f(quantizedColor, pixel.a);
+      outputColor = quantized;
     } else {
       // Classic 2-color dithering (backward compatible)
       let gray = luminance(pixel.rgb);

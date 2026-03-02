@@ -11,7 +11,7 @@ struct DownsampleUniforms {
   use_threshold: u32,     // Whether to apply threshold (1 = yes, 0 = no)
   threshold: f32,         // Brightness threshold (0-1)
   soft_knee: f32,         // Soft knee for smooth threshold transition
-  _pad0: f32,
+  is_p3: u32,
   _pad1: f32,
 }
 
@@ -35,9 +35,10 @@ fn to_srgb(v: vec3f) -> vec3f {
   return pow(v, vec3f(1.0 / 2.2));
 }
 
-// Calculate luminance from RGB
+// Calculate luminance from RGB using color-space-appropriate coefficients
 fn luminance(col: vec3f) -> f32 {
-  return dot(col, vec3f(0.2126, 0.7152, 0.0722));
+  let coeffs = select(vec3f(0.2126, 0.7152, 0.0722), vec3f(0.2290, 0.6917, 0.0793), uniforms.is_p3 != 0u);
+  return dot(col, coeffs);
 }
 
 // Karis average - prevents fireflies (overly bright subpixels)

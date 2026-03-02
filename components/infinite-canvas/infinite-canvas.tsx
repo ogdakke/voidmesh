@@ -148,9 +148,12 @@ export function InfiniteCanvas() {
   useEffect(() => {
     if (isReady || !isSupported) {
       appLoader.dismiss();
-      console.log(`canvas ready in: ${new Date().getTime() - appLoader.startTime}ms`);
+      console.info(`canvas ready`, {
+        durationMs: new Date().getTime() - appLoader.startTime,
+        p3: renderer?.colorConfig.supportsP3,
+      });
     }
-  }, [isReady, isSupported]);
+  }, [isReady, isSupported, renderer?.colorConfig.supportsP3]);
 
   // Initialize game loop
   useEffect(() => {

@@ -13,7 +13,7 @@ struct Uniforms {
   background: vec4f,       // Unused (offset 48)
   paletteCount: u32,       // Unused (offset 64)
   _pad0: u32,
-  _pad1: u32,
+  is_p3: u32,
   _pad2: u32,
   palette: array<vec4f, 16>,
 }
@@ -153,7 +153,8 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   let edgeFactor = 1.0 - smoothstep(0.0, edgeWidth, edgeDist);
 
   // Subtle additive highlight at cell edges, controlled by highlight knob
-  let bgLuminance = dot(sampledColor.rgb, vec3f(0.299, 0.587, 0.114));
+  let coeffs = select(vec3f(0.2126, 0.7152, 0.0722), vec3f(0.2290, 0.6917, 0.0793), uniforms.is_p3 != 0u);
+  let bgLuminance = dot(sampledColor.rgb, coeffs);
   let edgeHighlight = edgeFactor * uniforms.highlight * 0.12 * bgLuminance;
 
   // --- Step 5: Caustic brightness (dome focuses light toward cell center) ---

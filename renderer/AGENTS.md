@@ -6,8 +6,10 @@ WebGPU rendering and export pipelines. Turns engine state into pixels.
 
 - `canvas-renderer.ts` (~55KB) — `InfiniteCanvasRenderer`. WebGPU adapter/device/context init, entity source textures, shader dispatch via `ShaderRegistry`, composition pipeline (viewport transform + entity layering), grid, selection rects, disintegration overlays. Entry point: `render(state: RenderState)`. Also exposes `startDisintegration()` / `cancelDisintegration()` for the fancy delete feature.
 - `processing-pipeline.ts` (~47KB) — `ProcessingPipeline`. Pre-processing (adjustments: brightness/contrast/saturation, Dual Kawase blur) and post-processing (grain, vignette, bloom via multi-pass downsample/upsample, chromatic aberration). Operates per-entity before composition.
-- `texture-pool.ts` — GPU texture recycling to avoid allocation churn during shader ping-pong.
-- `export-service.ts` — `ExportService`. Reads GPU textures back to CPU for image export (PNG/JPEG). Uses staging buffers with 256-byte row alignment.
+- `gpu-color-space.ts` — `detectGpuColorConfig()`. Probes Display P3 support at init, returns frozen `GpuColorConfig` (supportsP3, canvasFormat, canvasColorSpace, intermediateFormat, textureColorSpace).
+- `copy-pass.ts` + `copy-pass.wgsl` — `CopyPass`. Full-screen format conversion (rgba16float ↔ rgba8unorm) for export readback and showOriginal passthrough.
+- `texture-pool.ts` — GPU texture recycling. Parameterized by `GPUTextureFormat` (receives `intermediateFormat` from renderer).
+- `export-service.ts` — `ExportService`. Reads GPU textures back to CPU for image export (PNG/JPEG). Uses `CopyPass` for rgba16float→rgba8unorm conversion, color-space-aware texture operations.
 - `video-exporter.ts` (~19KB) — WebCodecs H.264 encoding + mediabunny muxing via Web Worker.
 - `video-export.worker.ts` (~10KB) — Worker receiving encoded `VideoFrame` chunks, muxes into MP4/MOV.
 - `gif-export.ts` — GIF export via gifenc on main thread. Palette sampling, Floyd-Steinberg dithering, frame encoding.
@@ -17,7 +19,15 @@ WebGPU rendering and export pipelines. Turns engine state into pixels.
 
 ### WGSL Shaders (in this directory)
 
-23 `.wgsl` files. Effect shaders: `dithering.wgsl`, `dithering-compute.wgsl`, `ascii.wgsl`, `halftone.wgsl`, `melt.wgsl`, `blobs.wgsl`, `glass-fluted.wgsl`, `glass-frosted.wgsl`, `glass-flowing.wgsl`. Post-processing: `bloom-downsample.wgsl`, `bloom-upsample.wgsl`, `kawase-downsample.wgsl`, `kawase-upsample.wgsl`, `adjustments.wgsl`, `post-process.wgsl`. Composition: `composition.wgsl`, `dot-grid.wgsl`, `selection-rect.wgsl`, `texture-mix.wgsl`. Disintegration: `disintegration-spawn.wgsl`, `disintegration-update.wgsl`, `disintegration-render.wgsl`. Imported via `?raw` Vite suffix (minified in production by `vite-plugin-wgsl-minify`).
+25 `.wgsl` files. Effect shaders: `dithering.wgsl`, `dithering-compute.wgsl`, `ascii.wgsl`, `halftone.wgsl`, `melt.wgsl`, `blobs.wgsl`, `glass-fluted.wgsl`, `glass-frosted.wgsl`, `glass-flowing.wgsl`. Post-processing: `bloom-downsample.wgsl`, `bloom-upsample.wgsl`, `kawase-downsample.wgsl`, `kawase-upsample.wgsl`, `adjustments.wgsl`, `post-process.wgsl`. Composition: `composition.wgsl`, `dot-grid.wgsl`, `selection-rect.wgsl`, `texture-mix.wgsl`. Disintegration: `disintegration-spawn.wgsl`, `disintegration-update.wgsl`, `disintegration-render.wgsl`. Imported via `?raw` Vite suffix (minified in production by `vite-plugin-wgsl-minify`).
+
+## Color Space
+
+At init, `detectGpuColorConfig()` probes Display P3 support. The result configures the entire pipeline:
+
+- **P3-capable**: canvas = `rgba16float` + `display-p3`, intermediates = `rgba16float`
+- **sRGB fallback**: canvas = preferred format + `srgb`, intermediates = `rgba16float`
+- Luminance calculations use `is_p3` uniform flag to select correct coefficients (P3 `0.2290/0.6917/0.0793` vs BT.709 `0.2126/0.7152/0.0722`)
 
 ## Rendering Pipeline (per frame)
 

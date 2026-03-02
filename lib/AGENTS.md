@@ -15,7 +15,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `palette-store.ts` — User palette CRUD (persisted via unstorage).
 - `touch-scroll/` — Physics-based momentum scrolling. `VelocityTracker`, `Scroller`, `SpringBack`.
 - `client.logger.ts` — Logger with levels. `console.log`/`debug` stripped in production via Vite/oxc config.
-- `color-utils.ts` — Hex/RGBA conversion, luminance sorting.
+- `color-utils.ts` — OKLCH color model (`OklchColor`, conversion pipeline OKLCH↔OKLab↔LMS↔Linear P3/sRGB), gamut clamping (`clampChromaToP3`), CSS parsing/formatting (`cssToOklch`, `oklchToCss`, `oklchToP3Css`), hex shorthand support, color-space-aware luminance and palette sorting (accept `ColorSpace` enum param).
 - `entity-placement.ts` — Drop position calculation for new entities.
 - `deep-merge.ts` — Deep object merge for `PartialDeep<ShaderParams>`.
 - `shader-defaults.ts` — Applies `shaderDefaults` from config on shader type switch.
@@ -30,5 +30,5 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 ## Anti-Patterns
 
 - Do not import React here. `store.ts` provides hooks integration but has no React import itself.
-- Do not add GPU-specific code. Rendering utilities belong in `renderer/`.
+- Do not add GPU-specific code. Rendering utilities belong in `renderer/`. Color-space-dependent functions accept a `ColorSpace` enum parameter instead of reading GPU state.
 - Do not import from `engine/`, `renderer/`, `context/`, `components/`, or `hooks/`.

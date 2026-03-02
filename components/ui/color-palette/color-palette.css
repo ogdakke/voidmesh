@@ -20,6 +20,7 @@
     display: flex;
     gap: var(--spacing-1);
     overflow-x: auto;
+    overflow-y: hidden;
     scrollbar-gutter: stable;
     --fade-range-start: 6px;
     --fade-range-end: 20px;

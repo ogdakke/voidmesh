@@ -17,6 +17,7 @@
   },
   "scripts": {
     "dev": "vite dev",
+    "dev:https": "HTTPS=1 vite dev --host",
     "build": "vite build",
     "preview": "vite preview",
     "test": "bun run --bun vitest run",
@@ -58,6 +59,7 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@typescript/native-preview": "^7.0.0-dev.20260228.1",
+    "@vitejs/plugin-basic-ssl": "^2.1.4",
     "@vitejs/plugin-react": "^5.1.4",
     "@webgpu/types": "^0.1.69",
     "babel-plugin-react-compiler": "^1.0.0",
