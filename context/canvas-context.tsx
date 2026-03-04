@@ -732,7 +732,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     for (const { entity, mediaSource, imageBitmap } of clones) {
       const id = `entity-${nextIdRef.current++}`;
       const zIndex = nextZIndexRef.current++;
-      const name = `${entity.name} copy`;
+      const baseName = entity.name;
+      const entities = canvasStore.getState().entities;
+      let n = 1;
+      while (entities.values().some((e) => e.name === `${baseName} (${n})`)) n++;
+      const name = `${baseName} (${n})`;
 
       const clone = {
         ...entity,
