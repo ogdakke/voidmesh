@@ -57,6 +57,31 @@ fn linear_to_gamma(c: f32) -> f32 {
   return select(1.055 * pow(c, 1.0 / 2.4) - 0.055, 12.92 * c, c <= 0.0031308);
 }
 
+// Check if OKLCH color is within sRGB gamut
+fn is_in_srgb(l: f32, c: f32, h_deg: f32) -> bool {
+  let lab = oklch_to_oklab(l, c, h_deg);
+  let lms = oklab_to_lms(lab.x, lab.y, lab.z);
+  let rgb = lms_to_linear_srgb(lms);
+  let lo = min(rgb.x, min(rgb.y, rgb.z));
+  let hi = max(rgb.x, max(rgb.y, rgb.z));
+  return lo >= 0.0 && hi <= 1.0;
+}
+
+// Binary search for the max sRGB chroma at a given lightness and hue
+fn srgb_boundary_chroma(l: f32, h_deg: f32) -> f32 {
+  var lo = 0.0;
+  var hi = 0.37;
+  for (var i = 0; i < 16; i++) {
+    let mid = (lo + hi) * 0.5;
+    if (is_in_srgb(l, mid, h_deg)) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  return (lo + hi) * 0.5;
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   let l = 1.0 - in.uv.y; // top = lightness 1, bottom = 0
@@ -75,11 +100,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   // Hard clamp to gamut (no binary search needed for preview)
   rgb_lin = clamp(rgb_lin, vec3f(0.0), vec3f(1.0));
 
-  let rgb = vec3f(
+  var rgb = vec3f(
     linear_to_gamma(rgb_lin.x),
     linear_to_gamma(rgb_lin.y),
     linear_to_gamma(rgb_lin.z),
   );
+
+  // sRGB gamut boundary line (P3 mode only)
+  if (uniforms.use_p3 > 0.5) {
+    let bc = srgb_boundary_chroma(l, uniforms.hue);
+    let signed_dist = c - bc;
+    let fw = fwidth(signed_dist);
+    let line = 1.0 - smoothstep(0.0, fw * 1.5, abs(signed_dist));
+    rgb = mix(rgb, vec3f(1.0), line * 0.7);
+  }
 
   return vec4f(rgb, 1.0);
 }

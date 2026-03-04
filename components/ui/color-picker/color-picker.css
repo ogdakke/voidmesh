@@ -64,11 +64,11 @@
 
 .color-picker-popup {
   width: min(92vw, 280px);
-  padding: var(--spacing-3);
+  padding: var(--spacing-2);
   background: var(--floating-background);
   backdrop-filter: var(--floating-backdrop);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
@@ -231,6 +231,9 @@
 
   @media screen and (width >= 768px) {
     border-radius: var(--radius-lg);
+    line-height: initial;
+    font-size: var(--text);
+    font-weight: 500;
   }
 }
 
@@ -273,8 +276,13 @@
   gap: var(--spacing-2);
   align-items: center;
 
+  &:has(.color-picker__eyedropper) {
+    .ui-button[data-variant="destructive"] {
+      height: calc(9 * var(--spacing));
+    }
+  }
+
   .ui-button[data-variant="destructive"] {
     width: 100%;
-    height: calc(9 * var(--spacing));
   }
 }

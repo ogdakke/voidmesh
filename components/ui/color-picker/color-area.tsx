@@ -3,9 +3,6 @@ import { MAX_CHROMA } from "#lib/color-utils.ts";
 import { useColorPicker, useRegisterElement } from "./use-color-picker";
 import { colorAreaGpu } from "./color-area-gpu";
 
-const CANVAS_W = 160;
-const CANVAS_H = 100;
-
 export function ColorArea() {
   const {
     state: { oklch },
@@ -40,28 +37,45 @@ export function ColorArea() {
   // Render canvas via GPU when hue changes (non-scrubbing renders)
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    const container = containerRef.current;
+    if (!canvas || !container) return;
 
     const render = () => {
+      // Sync canvas resolution to physical display pixels
+      const dpr = devicePixelRatio;
+      const { width, height } = container.getBoundingClientRect();
+      const w = Math.round(width * dpr);
+      const h = Math.round(height * dpr);
+      if (w > 0 && h > 0 && (canvas.width !== w || canvas.height !== h)) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+
       if (colorAreaGpu.init()) {
         colorAreaGpu.render(canvas, oklch.h);
       }
     };
 
-    // Render immediately (works when canvas is already visible, e.g. desktop popover)
     render();
 
     // Re-render when canvas enters viewport (handles drawer slide-in animation on mobile,
     // where the initial render's WebGPU texture may not composite correctly)
-    const observer = new IntersectionObserver(
+    const io = new IntersectionObserver(
       ([entry]) => {
         if (entry?.isIntersecting) render();
       },
       { threshold: 0.01 },
     );
-    observer.observe(canvas);
+    io.observe(canvas);
 
-    return () => observer.disconnect();
+    // Re-render on container resize (window resize, layout changes)
+    const ro = new ResizeObserver(() => render());
+    ro.observe(container);
+
+    return () => {
+      io.disconnect();
+      ro.disconnect();
+    };
   }, [oklch.h]);
 
   const updateFromPointer = (clientX: number, clientY: number) => {
@@ -137,7 +151,7 @@ export function ColorArea() {
       data-active={isDragging || undefined}
       style={{ "--x": String(thumbX), "--y": String(thumbY) } as React.CSSProperties}
     >
-      <canvas ref={canvasRef} width={CANVAS_W} height={CANVAS_H} className="color-area__canvas" />
+      <canvas ref={canvasRef} className="color-area__canvas" />
       <div className="color-area__thumb" />
     </div>
   );
