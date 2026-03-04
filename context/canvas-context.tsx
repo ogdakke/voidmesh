@@ -450,17 +450,17 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       };
     }
 
-    // Type assertion needed because Omit<ShaderCanvasEntity, ...> loses discriminated union narrowing
-    const newEntity = {
+    const newEntity: ShaderCanvasEntity = {
       ...entity,
       id,
       name,
       zIndex,
       shaderType: renderState.shader as ShaderType,
       shaderParams,
+      mediaSource: entity.mediaSource as any,
       textureDirty: true,
       edited: false,
-    } as ShaderCanvasEntity;
+    };
 
     canvasStore.addEntity(newEntity);
 
@@ -586,8 +586,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     if (!entity) return;
 
     // Clone the entity but keep the video element reference (we need it for restore)
-    // Type assertion needed because spread loses discriminated union narrowing
-    const entityCopy = {
+    const entityCopy: ShaderCanvasEntity = {
       ...entity,
       position: { ...entity.position },
       size: { ...entity.size },
@@ -596,8 +595,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         ? structuredClone(entity.originalPalettes)
         : undefined,
       // Keep mediaSource as-is (references to videoElement/imageBitmap are needed for restore)
-      mediaSource: entity.mediaSource,
-    } as ShaderCanvasEntity;
+      mediaSource: entity.mediaSource as any,
+    };
 
     // Capture playback state before pausing (entityCopy.playback is a shared reference)
     const wasPlaying = entity.playback?.isPlaying ?? false;
@@ -738,7 +737,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       while (entities.values().some((e) => e.name === `${baseName} (${n})`)) n++;
       const name = `${baseName} (${n})`;
 
-      const clone = {
+      const clone: ShaderCanvasEntity = {
         ...entity,
         id,
         zIndex,
@@ -746,7 +745,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         position: { x: entity.position.x + 30, y: entity.position.y + 30 },
         size: { ...entity.size },
         originalSize: { ...entity.originalSize },
-        mediaSource,
+        mediaSource: mediaSource as any,
         imageBitmap,
         shaderParams: structuredClone(entity.shaderParams),
         originalPalettes: entity.originalPalettes
@@ -757,7 +756,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         textureDirty: true,
         selected: false,
         edited: false,
-      } as ShaderCanvasEntity;
+      };
 
       canvasStore.addEntity(clone);
       newIds.push(id);
