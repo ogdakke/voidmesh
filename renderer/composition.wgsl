@@ -30,6 +30,8 @@ struct EntityUniforms {
 @group(0) @binding(2) var entityTexture: texture_2d<f32>;
 @group(0) @binding(3) var entitySampler: sampler;
 
+const BORDER_PX: f32 = 2.0;
+
 struct VertexOutput {
   @builtin(position) position: vec4f,
   @location(0) uv: vec2f,
@@ -101,8 +103,19 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
   let scaledSize = entity.size * entity.scale;
   let scaleOffset = (entity.size - scaledSize) * 0.5;
 
+  // Expand quad outward for outside selection/debug borders
+  let border_px = BORDER_PX;
+  let needsBorder = (entity.isSelected == 1u) || (entity.debugMode == 1u);
+  let borderExpand = select(
+    vec2f(0.0),
+    vec2f(border_px / (scaledSize.x * viewport.zoom), border_px / (scaledSize.y * viewport.zoom)),
+    needsBorder
+  );
+  let expandedLocalPos = localPos * (vec2f(1.0) + 2.0 * borderExpand) - borderExpand;
+  let expandedUV = uv * (vec2f(1.0) + 2.0 * borderExpand) - borderExpand;
+
   // Transform to entity space: scale by (visually scaled) size, rotate, translate
-  var worldPos = localPos * scaledSize;
+  var worldPos = expandedLocalPos * scaledSize;
 
   // Apply rotation around scaled entity center
   let center = scaledSize * 0.5;
@@ -131,7 +144,7 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
 
   var output: VertexOutput;
   output.position = vec4f(clipPos, 0.0, 1.0);
-  output.uv = uv;
+  output.uv = expandedUV;
   output.size = scaledSize;
   return output;
 }
@@ -140,31 +153,25 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
 // Also handles disintegration dissolve-to-dust effect when disintProgress > 0
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
-    // Sample texture first (uniform control flow required for textureSample)
-    let textureColor = textureSample(entityTexture, entitySampler, input.uv);
+    // Sample texture (clamp UV for expanded border region)
+    let textureColor = textureSample(entityTexture, entitySampler, clamp(input.uv, vec2f(0.0), vec2f(1.0)));
+
+    // Outside border: UV is outside [0,1] when quad is expanded for selection/debug
+    let inBorder = input.uv.x < 0.0 || input.uv.x > 1.0 || input.uv.y < 0.0 || input.uv.y > 1.0;
 
     // --- Disintegration effect ---
     if (entity.disintProgress > 0.0) {
+        if (inBorder) { discard; }
         return disintegrate(input, textureColor);
     }
 
-    // Calculate 5 screen-pixel border in UV space (zoom-compensated)
-    let border_w = 5.0;
-    // 1 screen pixel = 1 / (entity_size_in_world * zoom) in UV space
-    let screenPixelWidth = 1.0 / (input.size.x * viewport.zoom) * border_w;
-    let screenPixelHeight = 1.0 / (input.size.y * viewport.zoom) * border_w;
-    let isNearEdgeX = input.uv.x < screenPixelWidth || input.uv.x > (1.0 - screenPixelWidth);
-    let isNearEdgeY = input.uv.y < screenPixelHeight || input.uv.y > (1.0 - screenPixelHeight);
-    let isNearEdge = isNearEdgeX || isNearEdgeY;
-
     // Debug mode border (red) - highest priority
-    if (entity.debugMode == 1u && isNearEdge) {
+    if (entity.debugMode == 1u && inBorder) {
         return vec4f(1.0, 0.0, 0.0, 1.0); // Red
     }
 
     // Selection border (blue)
-    if (entity.isSelected == 1u && isNearEdge) {
-        // rgba(0.09998, 129.99, 255)
+    if (entity.isSelected == 1u && inBorder) {
         return vec4f(0, 0.509, 1, 1.0); // Blue
     }
 

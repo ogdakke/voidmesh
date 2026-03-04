@@ -373,14 +373,14 @@ export const config = {
   /** Selection rectangle styling for drag-to-select */
   selectionRectangle: {
     borderColor: [59 / 255, 130 / 255, 246 / 255, 1] satisfies RGBA, // Same as entity selection border
-    backgroundColor: [59 / 255, 130 / 255, 246 / 255, 0.1] satisfies RGBA,
-    borderWidth: 5,
+    backgroundColor: [59 / 255, 130 / 255, 246 / 255, 0.25] satisfies RGBA,
+    borderWidth: 2,
   },
   /** Multi-select bounding box styling (border only, no fill) */
   multiSelectBoundingBox: {
     borderColor: [59 / 255, 130 / 255, 246 / 255, 1] satisfies RGBA,
     backgroundColor: [0, 0, 0, 0] satisfies RGBA, // Transparent - border only
-    borderWidth: 5,
+    borderWidth: 2,
   },
   rendering: {
     gridUniformSize: GRID_UNIFORM_SIZE,

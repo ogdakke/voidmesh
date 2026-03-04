@@ -83,10 +83,10 @@ fn computeRectColor(worldPos: vec2f, rectData: RectData, aaWidth: f32) -> vec4f 
   // Compute alpha for fill (inside rectangle)
   let fillAlpha = 1.0 - smoothstep(-aaWidth, aaWidth, dist);
 
-  // Compute alpha for border (on the edge)
-  let innerEdge = -borderWidthWorld;
-  let borderAlpha = smoothstep(innerEdge - aaWidth, innerEdge + aaWidth, dist)
-                  * (1.0 - smoothstep(-aaWidth, aaWidth, dist));
+  // Compute alpha for border (outside the edge)
+  let outerEdge = borderWidthWorld;
+  let borderAlpha = smoothstep(-aaWidth, aaWidth, dist)
+                  * (1.0 - smoothstep(outerEdge - aaWidth, outerEdge + aaWidth, dist));
 
   // Combine fill and border (border takes precedence)
   let fillContrib = rectData.fillColor * fillAlpha * (1.0 - borderAlpha);

@@ -99,6 +99,17 @@
         }
       ]
     },
+    "WGSL/WESL": {
+      "language_servers": ["wgsl_analyzer"],
+      "format_on_save": "on",
+      "formatter": [
+        {
+          "language_server": {
+            "name": "wgsl_analyzer"
+          }
+        }
+      ]
+    },
     "Markdown": {
       "format_on_save": "on",
       "formatter": [
