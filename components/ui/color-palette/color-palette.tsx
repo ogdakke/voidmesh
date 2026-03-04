@@ -24,6 +24,8 @@ interface ColorPaletteProps extends ComponentProps<"div"> {
   canDelete?: boolean;
   /** Color space for CSS output (default: srgb) */
   colorSpace?: ColorSpace;
+  /** When true, display palette in reversed order (lightest first) */
+  reversed?: boolean;
 }
 
 /**
@@ -36,16 +38,23 @@ export function ColorPalette({
   onDelete,
   canDelete,
   colorSpace = ColorSpace.srgb,
+  reversed = false,
   ...props
 }: ColorPaletteProps) {
   const colors = palette?.colors ?? [];
+  const displayColors = reversed ? [...colors].reverse() : colors;
   const canRemove = colors.length > 2;
   const canAdd = colors.length < MAX_PALETTE_COLORS;
 
-  const handleColorChange = (cssColor: string, index: number) => {
+  /** Map display index to storage index */
+  const toStorageIndex = (displayIndex: number) =>
+    reversed ? colors.length - 1 - displayIndex : displayIndex;
+
+  const handleColorChange = (cssColor: string, displayIndex: number) => {
     const currentColors = palette?.colors ?? [];
+    const storageIndex = toStorageIndex(displayIndex);
     const newColors = [...currentColors];
-    newColors[index] = cssColorToRGBA(cssColor);
+    newColors[storageIndex] = cssColorToRGBA(cssColor);
     const preserveId = palette && isUserPalette(palette.id);
     onChange({
       ...palette,
@@ -70,11 +79,12 @@ export function ColorPalette({
     });
   };
 
-  const handleRemoveColor = (index: number) => {
+  const handleRemoveColor = (displayIndex: number) => {
     const currentColors = palette?.colors ?? [];
     if (currentColors.length <= 2) return;
+    const storageIndex = toStorageIndex(displayIndex);
     const newColors = [...currentColors];
-    newColors.splice(index, 1);
+    newColors.splice(storageIndex, 1);
     const preserveId = palette && isUserPalette(palette.id);
     onChange({
       ...palette,
@@ -103,7 +113,7 @@ export function ColorPalette({
         {colors.length}/{MAX_PALETTE_COLORS}
       </span>
       <div className="color-palette__colors fade-mask-x" style={{ "--box-padding": "40px" } as any}>
-        {colors.map((rgba, i) => (
+        {displayColors.map((rgba, i) => (
           <div key={i} className="color-palette__item">
             <ColorPickerPreset
               value={rgbaToCss(rgba, colorSpace)}
