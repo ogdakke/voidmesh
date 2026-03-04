@@ -25,6 +25,7 @@ import { Keybind } from "../keyboard-shortcuts/keybind.tsx";
 import { useCanvas } from "#context/use-canvas.ts";
 import { MaterialSymbolsFlipToFrontRounded } from "../icons/flip-to-front.tsx";
 import { MaterialSymbolsFlipToBackRounded } from "../icons/flip-to-back.tsx";
+import { IonDuplicateOutline } from "../icons/duplicate.tsx";
 import { config } from "#config";
 import { logger } from "#lib/client.logger.ts";
 import { AsciiMenuKnobs } from "../ascii-knobs.tsx";
@@ -186,6 +187,7 @@ function CanvasContextMenuItems({
     pasteEntityParams,
     handleBringToFront,
     handleSendToBack,
+    duplicateEntities,
     resetEntityToDefaults,
     snapToGrid,
     handleSnapToGridChange,
@@ -671,6 +673,14 @@ function CanvasContextMenuItems({
         <MaterialSymbolsFlipToBackRounded className="menu-icon-left" />
         Send to Back{isMultiple && ` (${selectionCount})`}
         <Keybind keybindId="send_to_back" />
+      </ContextMenu.Item>
+      <ContextMenu.Item
+        className="menu-item menu-item--icon-left menu-item--icon-right"
+        onClick={() => duplicateEntities()}
+      >
+        <IonDuplicateOutline className="menu-icon-left" />
+        Duplicate{isMultiple && ` (${selectionCount})`}
+        <Keybind keybindId="duplicate_entity" />
       </ContextMenu.Item>
       <ContextMenu.Separator className="menu-separator" />
       <ContextMenu.Item

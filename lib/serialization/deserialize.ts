@@ -209,11 +209,12 @@ async function deserializeEntity(
     case "image": {
       const bytes = zipEntries[serialized.mediaFile];
       if (!bytes) throw new Error(`Missing media file: ${serialized.mediaFile}`);
+      const imageBlob = new Blob([bytes.slice()]);
       const bitmap = await bytesToImageBitmap(bytes);
       return {
         ...base,
         imageBitmap: bitmap,
-        mediaSource: { type: "image" as const, imageBitmap: bitmap },
+        mediaSource: { type: "image" as const, imageBitmap: bitmap, blob: imageBlob },
       };
     }
 
@@ -224,6 +225,7 @@ async function deserializeEntity(
       const ext = serialized.mediaFile.split(".").pop() ?? "mp4";
       const mimeType = MIME_BY_EXT[ext] ?? "video/mp4";
 
+      const videoBlob = new Blob([bytes.slice()], { type: mimeType });
       const savedTime = serialized.playback?.currentTime ?? 0;
       const { videoElement, initialFrame, duration } = await bytesToVideoElement(
         bytes,
@@ -237,6 +239,7 @@ async function deserializeEntity(
         mediaSource: {
           type: "video" as const,
           videoElement,
+          blob: videoBlob,
           duration,
           fps: serialized.fps,
         },

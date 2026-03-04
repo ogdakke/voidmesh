@@ -131,6 +131,7 @@ export function createTestEntity(options: CreateEntityOptions = {}): ShaderCanva
     const mediaSource: MediaSourceVideo = {
       type: "video",
       videoElement,
+      blob: new Blob(["mock-video"], { type: "video/mp4" }),
       duration: options.videoDuration ?? 10,
       fps: options.videoFps ?? 30,
     };
@@ -172,6 +173,7 @@ export function createTestEntity(options: CreateEntityOptions = {}): ShaderCanva
   const mediaSource: MediaSourceImage = {
     type: "image",
     imageBitmap: mockBitmap,
+    blob: new Blob(["mock-image"], { type: "image/png" }),
   };
   return { ...baseProps, mediaSource };
 }

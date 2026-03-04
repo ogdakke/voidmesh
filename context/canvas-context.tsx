@@ -33,7 +33,11 @@ import { canvasStore, gameLoop } from "#engine";
 
 import { toastManager } from "#components/ui/toast/toast-manager.ts";
 import { hints } from "#components/ui/hint/hint-manager.ts";
-import { extractOriginalPalette8, extractOriginalPalette16 } from "#lib/media-loader.ts";
+import {
+  extractOriginalPalette8,
+  extractOriginalPalette16,
+  cloneMediaSource,
+} from "#lib/media-loader.ts";
 import { Command, undo } from "#lib/undo.ts";
 import { config } from "#config";
 import { preferences } from "#lib/storage.ts";
@@ -446,17 +450,17 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       };
     }
 
-    // Type assertion needed because Omit<ShaderCanvasEntity, ...> loses discriminated union narrowing
-    const newEntity = {
+    const newEntity: ShaderCanvasEntity = {
       ...entity,
       id,
       name,
       zIndex,
       shaderType: renderState.shader as ShaderType,
       shaderParams,
+      mediaSource: entity.mediaSource as any,
       textureDirty: true,
       edited: false,
-    } as ShaderCanvasEntity;
+    };
 
     canvasStore.addEntity(newEntity);
 
@@ -582,8 +586,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     if (!entity) return;
 
     // Clone the entity but keep the video element reference (we need it for restore)
-    // Type assertion needed because spread loses discriminated union narrowing
-    const entityCopy = {
+    const entityCopy: ShaderCanvasEntity = {
       ...entity,
       position: { ...entity.position },
       size: { ...entity.size },
@@ -592,8 +595,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         ? structuredClone(entity.originalPalettes)
         : undefined,
       // Keep mediaSource as-is (references to videoElement/imageBitmap are needed for restore)
-      mediaSource: entity.mediaSource,
-    } as ShaderCanvasEntity;
+      mediaSource: entity.mediaSource as any,
+    };
 
     // Capture playback state before pausing (entityCopy.playback is a shared reference)
     const wasPlaying = entity.playback?.isPlaying ?? false;
@@ -704,6 +707,85 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         description: `Send to back ${id}`,
       }),
     );
+  };
+
+  const duplicateEntities = async (): Promise<string[]> => {
+    const selected = canvasStore.getSelectedEntities();
+    if (selected.length === 0) return [];
+
+    // Clone all media sources in parallel (async: creates independent video elements, bitmaps, etc.)
+    const clones = await Promise.all(
+      selected.map(async (entity) => {
+        const { mediaSource, imageBitmap } = await cloneMediaSource(
+          entity.mediaSource,
+          entity.imageBitmap,
+        );
+        return { entity, mediaSource, imageBitmap };
+      }),
+    );
+
+    const newIds: string[] = [];
+    const useTransaction = clones.length > 1;
+    if (useTransaction) undo.beginTransaction();
+
+    for (const { entity, mediaSource, imageBitmap } of clones) {
+      const id = `entity-${nextIdRef.current++}`;
+      const zIndex = nextZIndexRef.current++;
+      const baseName = entity.name;
+      const entities = canvasStore.getState().entities;
+      let n = 1;
+      while (entities.values().some((e) => e.name === `${baseName} (${n})`)) n++;
+      const name = `${baseName} (${n})`;
+
+      const clone: ShaderCanvasEntity = {
+        ...entity,
+        id,
+        zIndex,
+        name,
+        position: { x: entity.position.x + 30, y: entity.position.y + 30 },
+        size: { ...entity.size },
+        originalSize: { ...entity.originalSize },
+        mediaSource: mediaSource as any,
+        imageBitmap,
+        shaderParams: structuredClone(entity.shaderParams),
+        originalPalettes: entity.originalPalettes
+          ? structuredClone(entity.originalPalettes)
+          : undefined,
+        playback: entity.playback ? { ...entity.playback, isPlaying: false } : undefined,
+        texture: undefined,
+        textureDirty: true,
+        selected: false,
+        edited: false,
+      };
+
+      canvasStore.addEntity(clone);
+      newIds.push(id);
+
+      const ownerToken = claimResourceOwnership(clone.id);
+      undo.add(
+        Command.create({
+          undo: () => {
+            if (clone.mediaSource.type === MediaType.video) {
+              clone.mediaSource.videoElement.pause();
+            } else if (isGifEntity(clone) && clone.playback) {
+              clone.playback.isPlaying = false;
+            }
+            rendererRef.current?.removeEntityTexture(clone.id);
+            canvasStore.removeEntity(clone.id);
+          },
+          execute: () => {
+            canvasStore.addEntity(clone);
+          },
+          onEvict: () => tryCleanupEntityResources(clone, ownerToken),
+          description: `Duplicate entity ${entity.name}`,
+        }),
+      );
+    }
+
+    if (useTransaction) undo.commitTransaction(`Duplicate ${selected.length} entities`);
+
+    canvasStore.replaceSelection(newIds);
+    return newIds;
   };
 
   const getContextOpenEntity = () => {
@@ -1280,6 +1362,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     moveEntity,
     bringToFront,
     sendToBack,
+    duplicateEntities,
     selectedShaderType,
     selectedEntityParams,
     updateSelectedShaderType,
