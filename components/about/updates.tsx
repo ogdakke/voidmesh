@@ -3,6 +3,7 @@ import { Image } from "#ui/image.tsx";
 import { Video } from "#ui/video.tsx";
 import type { PropsWithChildren } from "react";
 import saveFeature from "#media/save_feature_img.webp?img";
+import p3Feature from "#media/feature_p3_color_picker.jpg?img";
 import flowingExample from "#media/flowing_example_updates.webp?img";
 import { MoreVert } from "iconoir-react";
 
@@ -15,6 +16,39 @@ export function Updates() {
   return (
     <section>
       <h1>Updates</h1>
+      <Update>
+        <UpdatesTitle date="2026-03-04">P3 Color Space</UpdatesTitle>
+        <p>
+          Display P3 is now the default color space on supported browsers and displays. This means
+          colors will look more vibrant and accurate, if your hardware supports it.
+        </p>
+        {isMobile ? (
+          <>
+            <figure>
+              <Image
+                {...p3Feature}
+                className="fullsize"
+                alt="New color picker supporting display P3 color space"
+              />
+              <figcaption>
+                In the new color picker, you can see the SRGB color space outlined, and outside it,
+                the wider range of colors.
+              </figcaption>
+            </figure>
+          </>
+        ) : null}
+        <br />
+        <p>Some other notable changes:</p>
+        <ul>
+          <li>
+            <strong>first color is always treated</strong> as the background
+          </li>
+          <li>
+            You can also use hex colors in the input, so it's easier to paste colors from elsewhere
+          </li>
+          <li>Transparency is now supported for palette colors</li>
+        </ul>
+      </Update>
       <Update>
         <UpdatesTitle date="2026-02-28">Fancy deletions</UpdatesTitle>
         <p>Try deleting something from the canvas, added something a little extra 🫰</p>
