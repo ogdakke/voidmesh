@@ -62,11 +62,14 @@
     }
 
     :where(ul) {
-      color: var(--text-secondary);
-      padding-left: var(--spacing-4);
       display: flex;
       flex-direction: column;
       gap: var(--spacing-1);
+      margin: var(--spacing) 0;
+
+      @media screen and (width >= 768px) {
+        padding-left: var(--spacing-4);
+      }
     }
 
     :where(img) {

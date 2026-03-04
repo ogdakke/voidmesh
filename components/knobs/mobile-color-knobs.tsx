@@ -49,7 +49,7 @@ export function MobileColorKnobs() {
   const { handlePaletteChange, handlePaletteUpload, handleDeletePalette, selectedEntity } =
     useCanvasActions();
   const customPalettes = usePaletteStore();
-  const { updateSelectedEntityParams } = useCanvas();
+  const { updateSelectedEntityParams, colorSpace } = useCanvas();
   const paletteParam = useParamValue("palette", config.defaults.shaderParams.palette);
   const preserveColors = useParamValue(
     "preserveColors",
@@ -252,6 +252,7 @@ export function MobileColorKnobs() {
         <ColorPalette
           palette={paletteParam.value ?? undefined}
           onValueChange={handlePaletteChange}
+          colorSpace={colorSpace}
           onDelete={
             paletteParam.value?.id && isUserPalette(paletteParam.value.id)
               ? () => handleDeletePalette(paletteParam.value!.id!)

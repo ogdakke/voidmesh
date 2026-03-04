@@ -4,12 +4,14 @@
  */
 export class TexturePool {
   #device: GPUDevice;
+  #format: GPUTextureFormat;
   #pool: Map<string, { texture: GPUTexture; lastUsedFrame: number }[]> = new Map();
   #currentFrame = 0;
   #staleFrameThreshold = 60; // Clean up textures unused for 60 frames
 
-  constructor(device: GPUDevice) {
+  constructor(device: GPUDevice, format: GPUTextureFormat) {
     this.#device = device;
+    this.#format = format;
   }
 
   /**
@@ -36,7 +38,7 @@ export class TexturePool {
     return this.#device.createTexture({
       label: label ?? `Pooled texture ${key}`,
       size: [width, height],
-      format: "rgba8unorm",
+      format: this.#format,
       usage,
     });
   }

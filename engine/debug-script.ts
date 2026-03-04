@@ -1,4 +1,5 @@
-import { GlassKind } from "#types/canvas.ts";
+import { palettes } from "#lib/config/palettes.config.ts";
+import { GlassKind, ShaderType } from "#types/canvas.ts";
 import type { CanvasStore } from "./canvas-store";
 
 export async function debugCanvas(store: CanvasStore) {
@@ -46,8 +47,9 @@ export async function debugCanvas(store: CanvasStore) {
         enabled: true,
         grain: { enabled: false, intensity: 0.1, size: 1 },
       },
+      palette: palettes.winter,
     },
-    shaderType: "glass",
+    shaderType: ShaderType.ascii,
     size: { width: imageBitmap.width, height: imageBitmap.height },
     zIndex: 0,
     textureDirty: true,

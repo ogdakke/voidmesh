@@ -4,7 +4,7 @@ Per-effect shader passes. Each shader type gets a class extending `ShaderPass`.
 
 ## Key Files
 
-- `shader-pass.ts` — Abstract base class. Defines `ShaderContext` (device, uniform buffer, sampler, palette cache, texture pool). Provides `writeUniforms()` (common 336-byte layout), `createPipeline()`, `execute()` (render pass submission). Subclasses implement `getShaderSource()` and `writeVariantUniforms()`.
+- `shader-pass.ts` — Abstract base class. Defines `ShaderContext` (device, uniform buffer, sampler, palette cache, texture pool, `intermediateFormat`, `supportsP3`). Provides `writeUniforms()` (common 336-byte layout including `is_p3` flag at u[18]), `createPipeline()`, `execute()` (render pass submission). Subclasses implement `getShaderSource()` and `writeVariantUniforms()`.
 - `shader-registry.ts` — `ShaderRegistry`. Maps `ShaderType` -> `ShaderPass` instances. `applyShader()` dispatches. `applyShaderChain()` runs multiple passes with ping-pong textures.
 - `dithering-shader.ts` — Most complex. Has BOTH a fragment pipeline (ordered dithering: Bayer, noise) and a compute pipeline (error diffusion: Floyd-Steinberg, Atkinson, etc.). Error buffers cached per entity dimensions.
 - `ascii-shader.ts` — Uses MSDF font atlas (extra texture binding). Async init for atlas loading.
@@ -23,7 +23,9 @@ Per-effect shader passes. Each shader type gets a class extending `ShaderPass`.
 
 - Simple shaders: ~20 lines. Extend `ShaderPass`, import WGSL, write variant uniform at `uintView[7]` / `floatView[7]`.
 - Complex shaders (dithering, ascii) override `initialize()`, `createBindGroupLayout()`, `createBindGroup()`, and/or `execute()`.
-- All shaders share the same 336-byte uniform layout. Common uniforms (size, intensity, scale, shape, colors, palette) written by base class `writeUniforms()`.
+- All shaders share the same 336-byte uniform layout. Common uniforms (size, intensity, scale, shape, colors, palette, `is_p3`) written by base class `writeUniforms()`.
+- Render pipeline targets use `ctx.intermediateFormat` (not hardcoded `rgba8unorm`).
+- Luminance: use `select()` between BT.709 and P3 coefficients based on `uniforms.is_p3`.
 
 ## Anti-Patterns
 

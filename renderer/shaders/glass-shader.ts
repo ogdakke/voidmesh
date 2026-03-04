@@ -44,7 +44,7 @@ export class GlassShader extends ShaderPass {
       fragment: {
         module: flutedModule,
         entryPoint: "fs_main",
-        targets: [{ format: "rgba8unorm" }],
+        targets: [{ format: this.ctx.intermediateFormat }],
       },
       primitive: { topology: "triangle-list" },
     });
@@ -65,7 +65,7 @@ export class GlassShader extends ShaderPass {
       fragment: {
         module: flowingModule,
         entryPoint: "fs_main",
-        targets: [{ format: "rgba8unorm" }],
+        targets: [{ format: this.ctx.intermediateFormat }],
       },
       primitive: { topology: "triangle-list" },
     });

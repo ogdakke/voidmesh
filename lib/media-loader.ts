@@ -1,4 +1,5 @@
 import type { ShaderCanvasEntity, Point, ColorPalette } from "#types/canvas.ts";
+import type { ColorSpace } from "#types/enums.ts";
 import { logger } from "./client.logger.ts";
 import { config } from "./config/index.ts";
 import { extractPaletteFromImage } from "./palette-extraction/index.ts";
@@ -530,11 +531,15 @@ export async function loadMediaFromBlob(
 /**
  * Extract 8-color palette from an image (fast)
  */
-export async function extractOriginalPalette8(bitmap: ImageBitmap): Promise<ColorPalette> {
+export async function extractOriginalPalette8(
+  bitmap: ImageBitmap,
+  colorSpace: ColorSpace,
+): Promise<ColorPalette> {
   const palette = await extractPaletteFromImage(bitmap, {
     colorCount: 8,
     sampleSize: 80, // Smaller sample for speed
     iterations: 8,
+    colorSpace,
   });
   return {
     id: "original-8",
@@ -547,11 +552,15 @@ export async function extractOriginalPalette8(bitmap: ImageBitmap): Promise<Colo
 /**
  * Extract 16-color palette from an image (slower, higher quality)
  */
-export async function extractOriginalPalette16(bitmap: ImageBitmap): Promise<ColorPalette> {
+export async function extractOriginalPalette16(
+  bitmap: ImageBitmap,
+  colorSpace: ColorSpace,
+): Promise<ColorPalette> {
   const palette = await extractPaletteFromImage(bitmap, {
     colorCount: 16,
     sampleSize: 100,
     iterations: 10,
+    colorSpace,
   });
   return {
     id: "original-16",

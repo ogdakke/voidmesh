@@ -24,7 +24,7 @@ Note: `KeybindProvider` wraps outside `App()` at the root render level.
 
 ## Patterns
 
-- `canvas-context.tsx` uses nuqs for URL-synced state — entity params round-trip through URL query parameters.
+- `canvas-context.tsx` uses nuqs for URL-synced state — entity params round-trip through URL query parameters. Color/background/palette URL params removed; colors always sourced from config defaults (only `presetId` remains for palette URL sync).
 - Resource ownership for undo: `resourceOwners` Map tracks which undo command may cleanup media resources on stack eviction.
 - Entity deletion triggers disintegration animation (if `fancyDelete` enabled): renderer snapshots the texture, entity is removed immediately, overlay plays independently. Undo cancels the overlay.
 - `fancyDelete` preference defaults to `true` unless `prefers-reduced-motion: reduce` is active.

@@ -13,7 +13,7 @@ struct Uniforms {
   // Extended palette data (offset 64+)
   paletteCount: u32,       // Number of colors in palette (2-16) (offset 64)
   _pad0: u32,              // Padding for alignment (offset 68)
-  _pad1: u32,              // Padding for alignment (offset 72)
+  is_p3: u32,              // 1 = Display P3, 0 = sRGB (offset 72)
   _pad2: u32,              // Padding for alignment (offset 76)
   palette: array<vec4f, 16>, // Color palette (offset 80, 256 bytes)
 }
@@ -108,9 +108,10 @@ fn quantize(value: f32, threshold: f32) -> f32 {
   return select(0.0, 1.0, value >= threshold);
 }
 
-// Calculate brightness using ITU-R BT.601 luminance formula
+// Calculate brightness using color-space-appropriate luminance coefficients
 fn luminance(c: vec3f) -> f32 {
-  return dot(c, vec3f(0.299, 0.587, 0.114));
+  let coeffs = select(vec3f(0.2126, 0.7152, 0.0722), vec3f(0.2290, 0.6917, 0.0793), uniforms.is_p3 != 0u);
+  return dot(c, coeffs);
 }
 
 // Find the nearest color in the palette using squared Euclidean distance
@@ -254,6 +255,8 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
     // Find the two bracketing colors from palette based on luminance
     var lowerColor = uniforms.palette[0].rgb;
     var upperColor = uniforms.palette[0].rgb;
+    var lowerAlpha = uniforms.palette[0].a;
+    var upperAlpha = uniforms.palette[0].a;
     var lowerLum = -0.01;
     var upperLum = 1.01;
 
@@ -261,14 +264,17 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
     for (var i = 0u; i < uniforms.paletteCount; i++) {
       let palColor = uniforms.palette[i].rgb;
       let palLum = luminance(palColor);
+      let palAlpha = uniforms.palette[i].a;
 
       if (palLum <= lum && palLum > lowerLum) {
         lowerLum = palLum;
         lowerColor = palColor;
+        lowerAlpha = palAlpha;
       }
       if (palLum >= lum && palLum < upperLum) {
         upperLum = palLum;
         upperColor = palColor;
+        upperAlpha = palAlpha;
       }
     }
 
@@ -281,8 +287,9 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
     // Use threshold to dither between the two bracketing colors
     let dithered = select(0.0, 1.0, blendFactor >= threshold);
     let finalColor = mix(lowerColor, upperColor, dithered);
+    let finalAlpha = mix(lowerAlpha, upperAlpha, dithered);
 
-    outColor = vec4f(finalColor, sourceColor.a);
+    outColor = vec4f(finalColor, finalAlpha);
   } else {
     // Classic 2-color dithering (backward compatible)
     let gray = luminance(sourceColor.rgb);

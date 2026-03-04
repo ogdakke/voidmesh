@@ -97,6 +97,7 @@ export function useCanvasActions() {
     updateEntity,
     removeEntity,
     renderer,
+    colorSpace,
     setRenderStateFromURL,
   } = useCanvas();
   const { bringToFront, sendToBack } = useCanvas();
@@ -303,7 +304,7 @@ export function useCanvasActions() {
     } else return;
 
     try {
-      const palette = await extractPaletteFromImage(file, { colorCount: 16 });
+      const palette = await extractPaletteFromImage(file, { colorCount: 16, colorSpace });
 
       const entities = canvasStore.getSelectedEntities();
       if (entities.length === 0) return;

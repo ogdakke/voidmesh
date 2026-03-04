@@ -1,32 +1,17 @@
 import { type ComponentProps } from "react";
-import { ColorPicker } from "../color-picker/color-picker.tsx";
+import { ColorPickerPreset } from "../color-picker/color-picker.tsx";
 import { Button } from "../button/index.tsx";
 import { Plus, Trash } from "iconoir-react";
-import type { RGBA, ColorPalette as ColorPaletteType } from "#types/canvas.ts";
+import type { ColorPalette as ColorPaletteType } from "#types/canvas.ts";
 import { MAX_PALETTE_COLORS } from "#types/canvas.ts";
-import { hexToNormalizedRGBA } from "#lib/color-utils.ts";
+import { cssColorToRGBA, rgbaToCss } from "#lib/color-utils.ts";
+import { ColorSpace } from "#types/enums.ts";
 import { config } from "#config";
 import { isUserPalette } from "#components/palette-preset/palette-presets.ts";
 import { undo } from "#lib/undo.ts";
 import clsx from "clsx";
 import "./color-palette.css";
 import "../form/form.css";
-
-/**
- * Convert normalized RGBA [0-1] to 6-digit hex string with # prefix
- */
-function rgbaToHex6(rgba: RGBA): string {
-  const r = Math.round(rgba[0] * 255)
-    .toString(16)
-    .padStart(2, "0");
-  const g = Math.round(rgba[1] * 255)
-    .toString(16)
-    .padStart(2, "0");
-  const b = Math.round(rgba[2] * 255)
-    .toString(16)
-    .padStart(2, "0");
-  return `#${r}${g}${b}`;
-}
 
 interface ColorPaletteProps extends ComponentProps<"div"> {
   /** Current palette (controlled) */
@@ -37,6 +22,8 @@ interface ColorPaletteProps extends ComponentProps<"div"> {
   onDelete?: () => void;
   /** Whether the delete button should be shown (true for user-created palettes) */
   canDelete?: boolean;
+  /** Color space for CSS output (default: srgb) */
+  colorSpace?: ColorSpace;
 }
 
 /**
@@ -48,19 +35,17 @@ export function ColorPalette({
   onValueChange: onChange,
   onDelete,
   canDelete,
+  colorSpace = ColorSpace.srgb,
   ...props
 }: ColorPaletteProps) {
   const colors = palette?.colors ?? [];
   const canRemove = colors.length > 2;
   const canAdd = colors.length < MAX_PALETTE_COLORS;
 
-  const handleColorChange = (hex: string, index: number) => {
+  const handleColorChange = (cssColor: string, index: number) => {
     const currentColors = palette?.colors ?? [];
     const newColors = [...currentColors];
-    const rgba = hexToNormalizedRGBA(hex);
-    // Preserve existing alpha from the palette color
-    rgba[3] = currentColors[index]?.[3] ?? 1;
-    newColors[index] = rgba;
+    newColors[index] = cssColorToRGBA(cssColor);
     const preserveId = palette && isUserPalette(palette.id);
     onChange({
       ...palette,
@@ -120,12 +105,13 @@ export function ColorPalette({
       <div className="color-palette__colors fade-mask-x" style={{ "--box-padding": "40px" } as any}>
         {colors.map((rgba, i) => (
           <div key={i} className="color-palette__item">
-            <ColorPicker
-              value={rgbaToHex6(rgba)}
-              onChange={(hex) => handleColorChange(hex, i)}
+            <ColorPickerPreset
+              value={rgbaToCss(rgba, colorSpace)}
+              onChange={(color) => handleColorChange(color, i)}
               onChangeStart={() => undo.beginTransaction()}
               onChangeEnd={() => undo.commitTransaction("Change palette color")}
               onRemove={canRemove ? () => handleRemoveColor(i) : undefined}
+              colorSpace={colorSpace}
             />
           </div>
         ))}

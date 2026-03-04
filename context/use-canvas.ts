@@ -13,6 +13,7 @@ import type { DeserializeResult } from "../lib/serialization/types.ts";
 import type { SetValues, Options } from "nuqs";
 import type { PartialDeep } from "type-fest";
 import { createEnum } from "#types/index.ts";
+import type { ColorSpace } from "#types/enums.ts";
 
 export const DebugType = createEnum({
   /** load the debug image */
@@ -59,6 +60,9 @@ export interface CanvasContextValue {
   // Renderer registration
   registerRenderer: (renderer: InfiniteCanvasRenderer) => void;
   renderer: InfiniteCanvasRenderer | null;
+
+  // Color space detected from GPU capabilities
+  colorSpace: ColorSpace;
 
   // Export functions (copy: single only PNG, save: supports multi + format options)
   copySelectedEntityToClipboard: () => Promise<boolean>;

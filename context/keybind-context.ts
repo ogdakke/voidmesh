@@ -1,4 +1,3 @@
-// oxlint-disable react/only-export-components -- no React components in this file; only exports store, hooks, and utilities
 import { logger } from "#lib/client.logger.ts";
 import { Store } from "#lib/store.ts";
 import { isMacOS, isWindows } from "#lib/util.ts";

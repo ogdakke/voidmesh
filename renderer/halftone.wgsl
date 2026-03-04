@@ -12,7 +12,7 @@ struct Uniforms {
   // Extended palette data (offset 64+)
   paletteCount: u32,       // Number of colors in palette (offset 64)
   _pad0: u32,              // Padding for alignment (offset 68)
-  _pad1: u32,              // Padding for alignment (offset 72)
+  is_p3: u32,              // 1 = Display P3, 0 = sRGB (offset 72)
   _pad2: u32,              // Padding for alignment (offset 76)
   palette: array<vec4f, 16>, // Color palette (offset 80, 256 bytes)
 }
@@ -21,9 +21,10 @@ struct Uniforms {
 @group(0) @binding(1) var sourceTexture: texture_2d<f32>;
 @group(0) @binding(2) var sourceSampler: sampler;
 
-// Calculate brightness using ITU-R BT.601 luminance formula
+// Calculate brightness using color-space-appropriate luminance coefficients
 fn luminance(c: vec3f) -> f32 {
-  return dot(c, vec3f(0.299, 0.587, 0.114));
+  let coeffs = select(vec3f(0.2126, 0.7152, 0.0722), vec3f(0.2290, 0.6917, 0.0793), uniforms.is_p3 != 0u);
+  return dot(c, coeffs);
 }
 
 // Find the palette color whose luminance best matches the target luminance
@@ -75,8 +76,7 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   let clampedUV = clamp(sampleUV, vec2f(0.0), vec2f(1.0));
   let sourceColor = textureSample(sourceTexture, sourceSampler, clampedUV);
 
-  // Calculate brightness using ITU-R BT.601 luminance formula
-  let rawBrightness = dot(sourceColor.rgb, vec3f(0.299, 0.587, 0.114));
+  let rawBrightness = luminance(sourceColor.rgb);
 
   // Apply intensity to brightness curve (higher intensity = more contrast)
   // Using power curve: intensity > 1 increases contrast, < 1 decreases it

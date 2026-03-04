@@ -17,6 +17,8 @@ const BLOOM_MIP_LEVELS = 5;
 
 export class ProcessingPipeline {
   #device: GPUDevice;
+  #intermediateFormat: GPUTextureFormat;
+  #supportsP3: boolean;
 
   // Adjustments (pre-processing) pipeline
   #adjustmentsPipeline: GPURenderPipeline | null = null;
@@ -88,8 +90,10 @@ export class ProcessingPipeline {
     }
   > = new Map();
 
-  constructor(device: GPUDevice) {
+  constructor(device: GPUDevice, intermediateFormat: GPUTextureFormat, supportsP3: boolean) {
     this.#device = device;
+    this.#intermediateFormat = intermediateFormat;
+    this.#supportsP3 = supportsP3;
   }
 
   initialize(): void {
@@ -156,7 +160,7 @@ export class ProcessingPipeline {
       fragment: {
         module: shaderModule,
         entryPoint: "fs_main",
-        targets: [{ format: "rgba8unorm" }],
+        targets: [{ format: this.#intermediateFormat }],
       },
       primitive: {
         topology: "triangle-list",
@@ -234,7 +238,7 @@ export class ProcessingPipeline {
       fragment: {
         module: downsampleModule,
         entryPoint: "fs_main",
-        targets: [{ format: "rgba8unorm" }],
+        targets: [{ format: this.#intermediateFormat }],
       },
       primitive: {
         topology: "triangle-list",
@@ -280,7 +284,7 @@ export class ProcessingPipeline {
       fragment: {
         module: upsampleModule,
         entryPoint: "fs_main",
-        targets: [{ format: "rgba8unorm" }],
+        targets: [{ format: this.#intermediateFormat }],
       },
       primitive: {
         topology: "triangle-list",
@@ -342,7 +346,7 @@ export class ProcessingPipeline {
       fragment: {
         module: mixModule,
         entryPoint: "fs_main",
-        targets: [{ format: "rgba8unorm" }],
+        targets: [{ format: this.#intermediateFormat }],
       },
       primitive: {
         topology: "triangle-list",
@@ -412,7 +416,7 @@ export class ProcessingPipeline {
       fragment: {
         module: shaderModule,
         entryPoint: "fs_main",
-        targets: [{ format: "rgba8unorm" }],
+        targets: [{ format: this.#intermediateFormat }],
       },
       primitive: {
         topology: "triangle-list",
@@ -489,7 +493,7 @@ export class ProcessingPipeline {
       fragment: {
         module: downsampleModule,
         entryPoint: "fs_main",
-        targets: [{ format: "rgba8unorm" }],
+        targets: [{ format: this.#intermediateFormat }],
       },
       primitive: {
         topology: "triangle-list",
@@ -554,7 +558,7 @@ export class ProcessingPipeline {
         entryPoint: "fs_main",
         targets: [
           {
-            format: "rgba8unorm",
+            format: this.#intermediateFormat,
             blend: {
               // Additive blending: output = src + dst
               color: {
@@ -598,7 +602,7 @@ export class ProcessingPipeline {
       const texture = this.#device.createTexture({
         label: `Bloom mip ${i} (${mipWidth}x${mipHeight})`,
         size: [mipWidth, mipHeight],
-        format: "rgba8unorm",
+        format: this.#intermediateFormat,
         usage:
           GPUTextureUsage.TEXTURE_BINDING |
           GPUTextureUsage.RENDER_ATTACHMENT |
@@ -658,7 +662,7 @@ export class ProcessingPipeline {
       uintView[3] = i === 0 && threshold > 0 ? 1 : 0;
       floatView[4] = threshold;
       floatView[5] = softKnee;
-      floatView[6] = 0;
+      uintView[6] = this.#supportsP3 ? 1 : 0;
       floatView[7] = 0;
 
       this.#device.queue.writeBuffer(this.#bloomDownsampleUniformBuffers[i]!, 0, uniformData);
@@ -846,7 +850,7 @@ export class ProcessingPipeline {
       const texture = this.#device.createTexture({
         label: `Blur mip ${i} (${mipWidth}x${mipHeight})`,
         size: [mipWidth, mipHeight],
-        format: "rgba8unorm",
+        format: this.#intermediateFormat,
         usage:
           GPUTextureUsage.TEXTURE_BINDING |
           GPUTextureUsage.RENDER_ATTACHMENT |
@@ -880,13 +884,13 @@ export class ProcessingPipeline {
     const textureA = this.#device.createTexture({
       label: `Blur blend A (${width}x${height})`,
       size: [width, height],
-      format: "rgba8unorm",
+      format: this.#intermediateFormat,
       usage,
     });
     const textureB = this.#device.createTexture({
       label: `Blur blend B (${width}x${height})`,
       size: [width, height],
-      format: "rgba8unorm",
+      format: this.#intermediateFormat,
       usage,
     });
 
@@ -1378,7 +1382,7 @@ export class ProcessingPipeline {
       const dummyTexture = this.#device.createTexture({
         label: "Dummy bloom texture",
         size: [1, 1],
-        format: "rgba8unorm",
+        format: this.#intermediateFormat,
         usage: GPUTextureUsage.TEXTURE_BINDING,
       });
       bloomTextureView = dummyTexture.createView();

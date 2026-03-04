@@ -1,57 +1,52 @@
-import { useRef } from "react";
-import { EditPencil, Trash } from "iconoir-react";
-import { Menu } from "../menu/menu";
-import { useColorPicker } from "./use-color-picker";
-import { Swatch } from "./swatch";
+import { Trash } from "iconoir-react";
+import { Button } from "../button";
+import { ColorPicker } from "./color-picker";
+import { usePickerClose } from "./use-color-picker";
+import { Field } from "#ui/field/field.tsx";
 
-export default function ColorPickerDesktop() {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const { value, onRemove, label, isDisabled, handleInput, startInteraction, endInteraction } =
-    useColorPicker();
+interface DesktopPresetProps {
+  onRemove?: () => void;
+}
 
-  const openNativePicker = () => {
-    startInteraction();
-    inputRef.current?.click();
+export default function DesktopPreset({ onRemove }: DesktopPresetProps) {
+  const close = usePickerClose();
+
+  const handleRemove = () => {
+    close?.();
+    onRemove?.();
   };
 
   return (
-    <div className="color-picker__wrapper">
-      <Menu.Root>
-        <Menu.Trigger
-          className="color-picker"
-          disabled={isDisabled}
-          data-disabled={isDisabled || undefined}
-        >
-          <Swatch color={value} />
-          {!!label && <span>{label}</span>}
-        </Menu.Trigger>
-        <Menu.Popup side="bottom" align="start">
-          <Menu.Item onClick={openNativePicker}>
-            <Menu.IconLeft>
-              <EditPencil />
-            </Menu.IconLeft>
-            Edit
-          </Menu.Item>
-          {onRemove && (
-            <Menu.Item variant="destructive" onClick={onRemove}>
-              <Menu.IconLeft>
+    <>
+      <ColorPicker.Trigger>
+        <ColorPicker.Swatch />
+      </ColorPicker.Trigger>
+      <ColorPicker.Popup>
+        <ColorPicker.Area />
+        <ColorPicker.HueSlider>
+          <Field.Label>Hue</Field.Label>
+        </ColorPicker.HueSlider>
+        <ColorPicker.AlphaSlider>
+          <Field.Label>Alpha</Field.Label>
+        </ColorPicker.AlphaSlider>
+        <ColorPicker.Footer>
+          <ColorPicker.ValueInput />
+          <div className="color-picker-desktop-actions">
+            <ColorPicker.EyeDropper />
+            {onRemove && (
+              <Button
+                onClick={handleRemove}
+                variant="destructive"
+                aria-label="Remove color"
+                size="md"
+              >
                 <Trash />
-              </Menu.IconLeft>
-              Remove
-            </Menu.Item>
-          )}
-        </Menu.Popup>
-      </Menu.Root>
-      <input
-        ref={inputRef}
-        type="color"
-        className="color-picker__native-input"
-        value={value}
-        onChange={handleInput}
-        onBlur={endInteraction}
-        tabIndex={-1}
-        aria-hidden
-      />
-    </div>
+                <span>Remove</span>
+              </Button>
+            )}
+          </div>
+        </ColorPicker.Footer>
+      </ColorPicker.Popup>
+    </>
   );
 }
