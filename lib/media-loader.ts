@@ -1,4 +1,4 @@
-import type { ShaderCanvasEntity, Point, ColorPalette } from "#types/canvas.ts";
+import type { ShaderCanvasEntity, Point, ColorPalette, MediaSource } from "#types/canvas.ts";
 import type { ColorSpace } from "#types/enums.ts";
 import { logger } from "./client.logger.ts";
 import { config } from "./config/index.ts";
@@ -212,12 +212,13 @@ export async function loadVideo(blob: Blob): Promise<VideoLoadResult> {
  */
 export function createImageEntityData(
   bitmap: ImageBitmap,
+  blob: Blob,
   position: Point = { x: 0, y: 0 },
   filename?: string,
 ): Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string } {
   return {
     name: filename,
-    mediaSource: { type: "image", imageBitmap: bitmap },
+    mediaSource: { type: "image", imageBitmap: bitmap, blob },
     imageBitmap: bitmap,
     position,
     size: { width: bitmap.width, height: bitmap.height },
@@ -380,6 +381,7 @@ export function createSvgEntityData(
  */
 export function createVideoEntityData(
   videoResult: VideoLoadResult,
+  blob: Blob,
   position: Point = { x: 0, y: 0 },
   filename?: string,
 ): Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string } {
@@ -390,6 +392,7 @@ export function createVideoEntityData(
     mediaSource: {
       type: "video",
       videoElement,
+      blob,
       duration,
       fps,
     },
@@ -423,7 +426,7 @@ export async function loadMediaFile(
   if (isVideoFile(file)) {
     try {
       const videoResult = await loadVideo(file);
-      return createVideoEntityData(videoResult, position, file.name);
+      return createVideoEntityData(videoResult, file, position, file.name);
     } catch (err) {
       console.error("Failed to load video:", err);
       return null;
@@ -460,7 +463,7 @@ export async function loadMediaFile(
 
     try {
       const bitmap = await createImageBitmap(file);
-      return createImageEntityData(bitmap, position, file.name);
+      return createImageEntityData(bitmap, file, position, file.name);
     } catch (err) {
       console.error("Failed to load image:", err);
       return null;
@@ -484,7 +487,7 @@ export async function loadMediaFromBlob(
   if (isVideoMimeType(mimeType)) {
     try {
       const videoResult = await loadVideo(blob);
-      return createVideoEntityData(videoResult, position, filename);
+      return createVideoEntityData(videoResult, blob, position, filename);
     } catch (err) {
       console.error("Failed to load video from URL:", err);
       return null;
@@ -517,7 +520,7 @@ export async function loadMediaFromBlob(
 
     try {
       const bitmap = await createImageBitmap(blob);
-      return createImageEntityData(bitmap, position, filename);
+      return createImageEntityData(bitmap, blob, position, filename);
     } catch (err) {
       console.error("Failed to load image from URL:", err);
       return null;
@@ -568,4 +571,60 @@ export async function extractOriginalPalette16(
     shortName: "Original 16",
     colors: palette.colors,
   };
+}
+
+/**
+ * Create a fully independent clone of a media source.
+ * Returns a new media source with its own video element, image bitmaps, etc.
+ */
+export async function cloneMediaSource(
+  source: MediaSource,
+  currentBitmap: ImageBitmap,
+): Promise<{ mediaSource: MediaSource; imageBitmap: ImageBitmap }> {
+  switch (source.type) {
+    case "image": {
+      const bitmap = await createImageBitmap(source.blob);
+      return {
+        mediaSource: { type: "image", imageBitmap: bitmap, blob: source.blob },
+        imageBitmap: bitmap,
+      };
+    }
+
+    case "video": {
+      const videoResult = await loadVideo(source.blob);
+      return {
+        mediaSource: {
+          type: "video",
+          videoElement: videoResult.videoElement,
+          blob: source.blob,
+          duration: source.duration,
+          fps: source.fps,
+        },
+        imageBitmap: videoResult.initialFrame,
+      };
+    }
+
+    case "gif": {
+      const gifResult = await decodeGif(source.blob);
+      return {
+        mediaSource: {
+          type: "gif",
+          frames: gifResult.frames,
+          duration: source.duration,
+          fps: source.fps,
+          blob: source.blob,
+        },
+        imageBitmap: gifResult.frames[0]?.bitmap ?? currentBitmap,
+      };
+    }
+
+    case "svg": {
+      const text = await source.blob.text();
+      const rasterResult = await rasterizeSvg(text);
+      return {
+        mediaSource: { type: "svg", blob: source.blob },
+        imageBitmap: rasterResult.bitmap,
+      };
+    }
+  }
 }

@@ -47,6 +47,7 @@ export interface CanvasContextValue {
   moveEntity: (id: string, delta: Point) => void;
   bringToFront: (id: string) => void;
   sendToBack: (id: string) => void;
+  duplicateEntities: () => Promise<string[]>;
 
   // Shader params for selected entity (first entity's values when multi-select)
   selectedShaderType: ShaderType;

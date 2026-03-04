@@ -344,10 +344,17 @@ export const MediaType = createEnum({
 
 export type MediaType = typeof MediaType.infer;
 
-export type MediaSourceImage = { type: typeof MediaType.image; imageBitmap: ImageBitmap };
+export type MediaSourceImage = {
+  type: typeof MediaType.image;
+  imageBitmap: ImageBitmap;
+  /** Original source data for lossless duplication */
+  blob: Blob;
+};
 export type MediaSourceVideo = {
   type: typeof MediaType.video;
   videoElement: HTMLVideoElement;
+  /** Original source data for lossless duplication */
+  blob: Blob;
   duration: number;
   fps: number | null;
 };

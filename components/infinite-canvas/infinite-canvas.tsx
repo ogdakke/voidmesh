@@ -119,6 +119,7 @@ export function InfiniteCanvas() {
     toggleReversePalette,
     handleBringToFront,
     handleSendToBack,
+    duplicateEntities,
     selectedEntity,
     resetEntityToDefaults,
     snapToGrid,
@@ -522,6 +523,11 @@ export function InfiniteCanvas() {
     handleSendToBack();
   };
 
+  const duplicateShortcutHandler = (e: KeyboardEvent) => {
+    e.preventDefault();
+    duplicateEntities();
+  };
+
   // Select all entities
   const selectAllShortcutHandler = (e: KeyboardEvent) => {
     e.preventDefault();
@@ -835,6 +841,22 @@ export function InfiniteCanvas() {
       group: "selection",
       label: "Send to back",
       action: sendToBackShortcutHandler,
+    },
+    {
+      id: "duplicate_entity",
+      bind: (bb) => bb.withMeta().and.key("d"),
+      platform: "macos",
+      group: "selection",
+      label: "Duplicate selected",
+      action: duplicateShortcutHandler,
+    },
+    {
+      id: "duplicate_entity",
+      bind: (bb) => bb.withCtrl().and.key("d"),
+      platform: "other",
+      group: "selection",
+      label: "Duplicate selected",
+      action: duplicateShortcutHandler,
     },
     {
       id: "select_all",

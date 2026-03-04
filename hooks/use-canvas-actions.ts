@@ -100,7 +100,7 @@ export function useCanvasActions() {
     colorSpace,
     setRenderStateFromURL,
   } = useCanvas();
-  const { bringToFront, sendToBack } = useCanvas();
+  const { bringToFront, sendToBack, duplicateEntities } = useCanvas();
 
   // Subscribe to store for entity change detection (selectionVersion increments on entity updates)
   const storeSnapshot = useSyncExternalStore(
@@ -641,6 +641,7 @@ export function useCanvasActions() {
     pasteEntityParams,
     handleBringToFront,
     handleSendToBack,
+    duplicateEntities,
     resetEntityToDefaults,
     handleSizeChange,
     snapToGrid: storeSnapshot.snapToGrid,

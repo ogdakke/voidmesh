@@ -14,7 +14,7 @@ export async function debugCanvas(store: CanvasStore) {
   store.addEntity({
     id: entityId,
     name: "Debug Image",
-    mediaSource: { type: "image", imageBitmap },
+    mediaSource: { type: "image", imageBitmap, blob },
     imageBitmap,
     originalSize: { width: imageBitmap.width, height: imageBitmap.height },
     position: { x: -400, y: -600 },
