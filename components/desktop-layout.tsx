@@ -13,54 +13,37 @@ export default function DesktopLayout() {
     storage: localStorage,
   });
 
-  const { isFullscreen, setFullscreen } = useLayout();
+  const { setFullscreen, registerPanelToggle } = useLayout();
   const leftPanelRef = usePanelRef();
   const rightPanelRef = usePanelRef();
   const leftCollapsedRef = useRef(false);
   const rightCollapsedRef = useRef(false);
 
-  // Sync fullscreen state when panels are restored from localStorage on mount
-  const hasInitRef = useRef(false);
+  // Register direct panel toggle — syncing with external imperative API
   useEffect(() => {
-    if (hasInitRef.current) return;
-    hasInitRef.current = true;
-    const bothCollapsed =
-      leftPanelRef.current?.isCollapsed() && rightPanelRef.current?.isCollapsed();
-    if (bothCollapsed) {
-      setFullscreen(true);
-    }
-  }, [leftPanelRef, rightPanelRef, setFullscreen]);
+    registerPanelToggle(() => {
+      const shouldCollapse =
+        !leftPanelRef.current?.isCollapsed() || !rightPanelRef.current?.isCollapsed();
+      if (shouldCollapse) {
+        leftPanelRef.current?.collapse();
+        rightPanelRef.current?.collapse();
+      } else {
+        leftPanelRef.current?.expand();
+        rightPanelRef.current?.expand();
+      }
+    });
+    return () => registerPanelToggle(null);
+  }, [registerPanelToggle, leftPanelRef, rightPanelRef]);
 
-  // Collapse/expand panels when fullscreen state changes
-  useEffect(() => {
-    if (isFullscreen) {
-      leftPanelRef.current?.collapse();
-      rightPanelRef.current?.collapse();
-    } else {
-      leftPanelRef.current?.expand();
-      rightPanelRef.current?.expand();
-    }
-  }, [isFullscreen, leftPanelRef, rightPanelRef]);
-
-  // Track panel collapse state via onResize — exit fullscreen if user manually expands a panel
+  // Unidirectional: panel resize → fullscreen state (fires on mount too)
   const handleLeftResize = (size: { inPixels: number }) => {
-    const wasCollapsed = leftCollapsedRef.current;
-    const isCollapsed = size.inPixels <= 8;
-    leftCollapsedRef.current = isCollapsed;
-
-    if (wasCollapsed && !isCollapsed && isFullscreen) {
-      setFullscreen(false);
-    }
+    leftCollapsedRef.current = size.inPixels <= 8;
+    setFullscreen(leftCollapsedRef.current && rightCollapsedRef.current);
   };
 
   const handleRightResize = (size: { inPixels: number }) => {
-    const wasCollapsed = rightCollapsedRef.current;
-    const isCollapsed = size.inPixels === 0;
-    rightCollapsedRef.current = isCollapsed;
-
-    if (wasCollapsed && !isCollapsed && isFullscreen) {
-      setFullscreen(false);
-    }
+    rightCollapsedRef.current = size.inPixels <= 8;
+    setFullscreen(leftCollapsedRef.current && rightCollapsedRef.current);
   };
 
   return (
@@ -70,6 +53,7 @@ export default function DesktopLayout() {
       onLayoutChanged={onLayoutChanged}
     >
       <ResizablePanel
+        id="left"
         panelRef={leftPanelRef}
         collapsible
         collapsedSize={8}
@@ -81,7 +65,7 @@ export default function DesktopLayout() {
       </ResizablePanel>
       <ResizableHandle className="handle resize-handle--left" />
 
-      <ResizablePanel>
+      <ResizablePanel id="center">
         <div className="content">
           <Canvas />
           <MediaControls />
@@ -90,6 +74,7 @@ export default function DesktopLayout() {
       <ResizableHandle className="handle resize-handle--right" />
 
       <ResizablePanel
+        id="right"
         panelRef={rightPanelRef}
         collapsible
         collapsedSize={8}

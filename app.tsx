@@ -1,6 +1,6 @@
 import { IconoirProvider } from "iconoir-react";
 import { NuqsAdapter } from "nuqs/adapters/react";
-import React, { lazy, Suspense, useState, type PropsWithChildren } from "react";
+import React, { lazy, Suspense, useRef, useState, type PropsWithChildren } from "react";
 import ReactDOM from "react-dom/client";
 import { logger } from "#lib/client.logger.ts";
 import { ToastProvider } from "#ui/toast/toast.tsx";
@@ -38,7 +38,22 @@ export default function App() {
   const showMobileLayout = (isSmallScreen && !isTouch) || isMostProbablyTablet || isMobile;
 
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const toggleFullscreen = () => setIsFullscreen((prev) => !prev);
+  const panelToggleRef = useRef<(() => void) | null>(null);
+
+  const registerPanelToggle = (toggle: (() => void) | null) => {
+    panelToggleRef.current = toggle;
+  };
+
+  const toggleFullscreen = () => {
+    if (panelToggleRef.current) {
+      // Desktop: directly toggle panels; onResize will update isFullscreen
+      panelToggleRef.current();
+    } else {
+      // Mobile: no panels, just toggle the flag
+      setIsFullscreen((prev) => !prev);
+    }
+  };
+
   const setFullscreen = (value: boolean) => setIsFullscreen(value);
 
   return (
@@ -49,7 +64,9 @@ export default function App() {
         <CanvasProvider>
           <VideoExportProvider>
             <ExportQueueProvider>
-              <LayoutProvider value={{ isFullscreen, toggleFullscreen, setFullscreen }}>
+              <LayoutProvider
+                value={{ isFullscreen, toggleFullscreen, setFullscreen, registerPanelToggle }}
+              >
                 <Suspense fallback={null}>
                   {showMobileLayout ? <MobileLayout /> : <DesktopLayout />}
                 </Suspense>
