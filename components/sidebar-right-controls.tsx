@@ -546,6 +546,7 @@ export function EntityParams() {
     handlePaletteUpload,
     handleDeletePalette,
     handlePreserveColorsChange,
+    handleReversePaletteChange,
     handleSizeChange,
   } = useCanvasActions();
   const { colorSpace } = useCanvas();
@@ -555,6 +556,10 @@ export function EntityParams() {
   const preserveColors = useParamValue(
     "preserveColors",
     config.defaults.shaderParams.preserveColors,
+  );
+  const reversePalette = useParamValue(
+    "reversePalette",
+    config.defaults.shaderParams.reversePalette,
   );
   const size = useParamValue("size", config.defaults.shaderParams.size);
   const palette = useParamValue("palette", config.defaults.shaderParams.palette);
@@ -573,6 +578,7 @@ export function EntityParams() {
               onValueChange={handlePaletteChange}
               palette={palette.value ?? undefined}
               colorSpace={colorSpace}
+              reversed={!!reversePalette.value}
               onDelete={
                 palette.value?.id && isUserPalette(palette.value.id)
                   ? () => handleDeletePalette(palette.value.id!)
@@ -608,6 +614,21 @@ export function EntityParams() {
             }}
           >
             Preserve colors
+          </Checkbox>
+        </div>
+      )}
+      {reversePalette.isSupported && (
+        <div className="sidebar-row reverse-palette-row">
+          <Checkbox
+            name="reverse_palette"
+            checked={!!reversePalette.value}
+            indeterminate={reversePalette.isMixed}
+            onChange={(e) => {
+              const newValue = reversePalette.isMixed ? true : e.target.checked;
+              handleReversePaletteChange(newValue);
+            }}
+          >
+            Reverse palette
           </Checkbox>
         </div>
       )}

@@ -14,7 +14,7 @@ export interface ShaderContext {
   /** Default sampler (linear, clamp-to-edge) */
   sampler: GPUSampler;
   /** Mutable palette sorting cache (shared to avoid per-frame re-sorting) */
-  sortedPaletteCache: { original: readonly RGBA[]; sorted: RGBA[] } | null;
+  sortedPaletteCache: { original: readonly RGBA[]; reversed: boolean; sorted: RGBA[] } | null;
   /** Texture pool for intermediate textures (used by compute shaders) */
   texturePool: TexturePool | null;
   /** Intermediate texture format for the rendering pipeline */
@@ -90,10 +90,15 @@ export abstract class ShaderPass {
     const palette = params.palette;
     if (palette && palette.colors.length >= 2) {
       let sortedColors: RGBA[];
-      if (this.ctx.sortedPaletteCache?.original === palette.colors) {
+      const reversed = !!params.reversePalette;
+      if (
+        this.ctx.sortedPaletteCache?.original === palette.colors &&
+        this.ctx.sortedPaletteCache.reversed === reversed
+      ) {
         sortedColors = this.ctx.sortedPaletteCache.sorted;
       } else {
-        const [background, ...rest] = palette.colors;
+        const colors = reversed ? [...palette.colors].reverse() : palette.colors;
+        const [background, ...rest] = colors;
         const sortedRest = sortPaletteByLuminance(
           rest,
           this.ctx.supportsP3 ? ColorSpace.displayP3 : ColorSpace.srgb,
@@ -101,6 +106,7 @@ export abstract class ShaderPass {
         sortedColors = [background!, ...sortedRest];
         this.ctx.sortedPaletteCache = {
           original: palette.colors,
+          reversed,
           sorted: sortedColors,
         };
       }

@@ -28,6 +28,7 @@ export async function debugCanvas(store: CanvasStore) {
         invert: false,
       },
       preserveColors: true,
+      reversePalette: false,
       showOriginal: false,
       shape: "circle",
       scale: 1.0,

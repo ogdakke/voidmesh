@@ -405,6 +405,20 @@ export function useCanvasActions() {
     handlePreserveColorsChange(!currentValue);
   };
 
+  // Reverse palette toggle
+  const handleReversePaletteChange = (e: React.ChangeEvent<HTMLInputElement> | boolean) => {
+    updateSelectedEntityParams({
+      reversePalette: typeof e === "boolean" ? e : e.target.checked,
+    });
+  };
+
+  const toggleReversePalette = () => {
+    const currentValue = selectionState.paramValues.reversePalette?.isUniform
+      ? (selectionState.paramValues.reversePalette.value as boolean)
+      : false;
+    handleReversePaletteChange(!currentValue);
+  };
+
   /**
    * Delete selected entities (supports multi-select)
    */
@@ -619,6 +633,8 @@ export function useCanvasActions() {
     toggleShowOriginal,
     handlePreserveColorsChange,
     togglePreserveColors,
+    handleReversePaletteChange,
+    toggleReversePalette,
     deleteEntity,
     copyEntity,
     copyEntityParams,

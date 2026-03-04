@@ -179,6 +179,7 @@ function CanvasContextMenuItems({
     handlePaletteChange,
     handleShowOriginalChange,
     handlePreserveColorsChange,
+    handleReversePaletteChange,
     deleteEntity,
     copyEntity,
     copyEntityParams,
@@ -240,6 +241,7 @@ function CanvasContextMenuItems({
   // Get palette info with multi-select support
   const paletteParam = useParamValue("palette", null);
   const preserveColorsParam = useParamValue("preserveColors", null);
+  const reversePaletteParam = useParamValue("reversePalette", null);
 
   const triggerPaletteUpload = () => {
     paletteInputRef.current?.click();
@@ -330,6 +332,7 @@ function CanvasContextMenuItems({
   // Compute mixed state for checkboxes
   const showOriginalMixed = isMultiple && !selectionState.paramValues.showOriginal?.isUniform;
   const preserveColorsMixed = isMultiple && !selectionState.paramValues.preserveColors?.isUniform;
+  const reversePaletteMixed = isMultiple && !selectionState.paramValues.reversePalette?.isUniform;
 
   return (
     <>
@@ -509,6 +512,29 @@ function CanvasContextMenuItems({
           </ContextMenu.CheckboxItemIndicator>
           Preserve Colors{preserveColorsMixed && " (Mixed)"}
           <Keybind keybindId={"toggle_preserve_colors"} />
+        </ContextMenu.CheckboxItem>
+      )}
+
+      {/* Reverse Palette Checkbox - with mixed state visual indicator */}
+      {reversePaletteParam.isSupported && (
+        <ContextMenu.CheckboxItem
+          className="menu-checkbox-item menu-item--icon-right"
+          checked={
+            reversePaletteMixed
+              ? false
+              : ((selectionState.paramValues.reversePalette?.value as boolean) ?? false)
+          }
+          data-mixed={reversePaletteMixed ? "" : undefined}
+          onCheckedChange={(checked) => {
+            const newValue = reversePaletteMixed ? true : checked;
+            handleReversePaletteChange(newValue);
+          }}
+        >
+          <ContextMenu.CheckboxItemIndicator className="menu-checkbox-indicator">
+            {reversePaletteMixed ? <Minus /> : <Check />}
+          </ContextMenu.CheckboxItemIndicator>
+          Reverse Palette{reversePaletteMixed && " (Mixed)"}
+          <Keybind keybindId={"toggle_reverse_palette"} />
         </ContextMenu.CheckboxItem>
       )}
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Plus, QuestionMark } from "iconoir-react";
+import { DropletHalf, Plus, QuestionMark } from "iconoir-react";
 import { useCanvas } from "#context/use-canvas.ts";
 import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
 import { useParamValue } from "#hooks/use-param-value.ts";
@@ -19,8 +19,8 @@ import {
   SliderPickerMixedItem,
   SliderPickerOptions,
   SliderPickerWindow,
-} from "../ui/slider-picker/index.ts";
-import { ColorPalette } from "../ui/color-palette/color-palette.tsx";
+} from "#ui/slider-picker/index.ts";
+import { ColorPalette } from "#ui/color-palette/color-palette.tsx";
 import { PaletteUpload } from "../palette-upload/index.ts";
 import { ColorPaletteThumbnail } from "../color-palette-thumbnail/index.ts";
 import "./knobs.css";
@@ -29,6 +29,7 @@ import clsx from "clsx";
 
 // Special IDs for non-palette items
 const PRESERVE_COLORS_ID = "__preserve_colors__";
+const REVERSE_PALETTE_ID = "__reverse_palette__";
 const UPLOAD_MODE_ID = "__upload__";
 
 /** Mobile-specific palette list item with label and nullable palette for upload/toggle buttons */
@@ -36,7 +37,7 @@ interface MobilePaletteItem {
   id: string;
   palette: ColorPaletteType | null;
   /** extract is when user uploads an image where we then extract a palette from it */
-  type: PaletteListItem["type"] | "extract" | "preserveColors";
+  type: PaletteListItem["type"] | "extract" | "preserveColors" | "reversePalette";
   label: string;
   shortLabel: string;
   toggleable?: {
@@ -54,6 +55,10 @@ export function MobileColorKnobs() {
   const preserveColors = useParamValue(
     "preserveColors",
     config.defaults.shaderParams.preserveColors,
+  );
+  const reversePalette = useParamValue(
+    "reversePalette",
+    config.defaults.shaderParams.reversePalette,
   );
 
   // Track selected item ID
@@ -97,6 +102,11 @@ export function MobileColorKnobs() {
     updateSelectedEntityParams({ preserveColors: value });
   };
 
+  const handleReversePaletteChange = (checked: boolean) => {
+    const value = reversePalette.isMixed ? true : checked;
+    updateSelectedEntityParams({ reversePalette: value });
+  };
+
   // Build the palette list using centralized function + mobile-specific buttons
   const paletteList: MobilePaletteItem[] = (() => {
     const items = buildPaletteList(customPalettes, selectedEntity?.originalPalettes);
@@ -114,6 +124,21 @@ export function MobileColorKnobs() {
           onCheckedChange: handlePreserveColorsChange,
         },
       },
+      ...(reversePalette.isSupported
+        ? [
+            {
+              id: REVERSE_PALETTE_ID,
+              palette: null,
+              type: "reversePalette" as const,
+              label: "Reverse Palette",
+              shortLabel: "Reverse",
+              toggleable: {
+                checked: reversePalette.isMixed ? false : !!reversePalette.value,
+                onCheckedChange: handleReversePaletteChange,
+              },
+            },
+          ]
+        : []),
       {
         id: UPLOAD_MODE_ID,
         palette: null,
@@ -135,6 +160,7 @@ export function MobileColorKnobs() {
   const isUploadMode = selectedId === UPLOAD_MODE_ID;
   const selectedItem = paletteList.find((item) => item.id === selectedId);
   const isPreserveColorsSelected = selectedId === PRESERVE_COLORS_ID;
+  const isReversePaletteSelected = selectedId === REVERSE_PALETTE_ID;
 
   // Handle palette selection
   const handleValueChange = (id: string) => {
@@ -148,6 +174,8 @@ export function MobileColorKnobs() {
       showFloatingLabel("Upload");
     } else if (id === PRESERVE_COLORS_ID) {
       showFloatingLabel("Preserve Colors");
+    } else if (id === REVERSE_PALETTE_ID) {
+      showFloatingLabel("Reverse Palette");
     }
   };
 
@@ -217,7 +245,11 @@ export function MobileColorKnobs() {
                   type="button"
                   tabIndex={-1}
                   className="ui-button"
-                  data-variant={item.type === "extract" ? "secondary" : "quiet"}
+                  data-variant={
+                    item.type === "extract" || item.type === "reversePalette"
+                      ? "secondary"
+                      : "quiet"
+                  }
                   aria-labelledby={item.id}
                   {...(item.toggleable
                     ? {
@@ -226,11 +258,9 @@ export function MobileColorKnobs() {
                       }
                     : {})}
                 >
-                  {item.type === "extract" ? (
-                    <Plus />
-                  ) : item.toggleable ? null : (
-                    <ColorPaletteThumbnail palette={item.palette!} />
-                  )}
+                  {item.type === "extract" ? <Plus /> : null}
+                  {item.palette ? <ColorPaletteThumbnail palette={item.palette} /> : null}
+                  {item.type === "reversePalette" ? <DropletHalf /> : null}
                 </button>
                 <span id={item.id} className="mobile-style-knobs__label">
                   {item.shortLabel}
@@ -247,12 +277,15 @@ export function MobileColorKnobs() {
         <PaletteUpload onUpload={handlePaletteUpload} variant="mobile" />
       ) : isPreserveColorsSelected ? (
         <PreserveColors on={preserveColors.value} isMixed={preserveColors.isMixed} />
+      ) : isReversePaletteSelected ? (
+        <ReversePaletteInfo on={reversePalette.value} isMixed={reversePalette.isMixed} />
       ) : // show nothing if mixed
       paletteParam.isMixed ? null : (
         <ColorPalette
           palette={paletteParam.value ?? undefined}
           onValueChange={handlePaletteChange}
           colorSpace={colorSpace}
+          reversed={!!reversePalette.value}
           onDelete={
             paletteParam.value?.id && isUserPalette(paletteParam.value.id)
               ? () => handleDeletePalette(paletteParam.value!.id!)
@@ -281,6 +314,25 @@ function PreserveColors({ on, isMixed }: { on: boolean; isMixed: boolean }) {
         <span>Preserve Colors Mode</span>
       </p>
       <p className="preserve-colors-hint">Original colors with the palette’s background</p>
+    </div>
+  );
+}
+
+function ReversePaletteInfo({ on, isMixed }: { on: boolean; isMixed: boolean }) {
+  return (
+    <div className="mobile-color__preserve-colors">
+      <p className="preserve-colors-label">
+        <span
+          key={`${on}${isMixed}`}
+          className={clsx("preserve-colors-status", {
+            "preserve-colors-status--on": on,
+            "preserve-colors-status--off": !on,
+            "preserve-colors-status--mixed": isMixed,
+          })}
+        />
+        <span>Reverse Palette</span>
+      </p>
+      <p className="preserve-colors-hint">Lightest color becomes the background</p>
     </div>
   );
 }

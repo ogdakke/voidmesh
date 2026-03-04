@@ -288,6 +288,8 @@ export interface ShaderParams {
   /** RGBA background color normalized to [0-1] */
   background: [number, number, number, number];
   preserveColors: boolean;
+  /** When true, reverses palette order so lightest color becomes background */
+  reversePalette: boolean;
   /** When true, bypass all shader processing and show original image/video */
   showOriginal: boolean;
   /** Particle scale factor (0.1 - 3.0). Reusable across shaders. */

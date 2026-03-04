@@ -116,7 +116,8 @@ export class InfiniteCanvasRenderer {
 
   // Palette sorting cache - avoid re-sorting every frame
   // Stores { original: RGBA[], sorted: RGBA[] } to detect when palette changes
-  #sortedPaletteCache: { original: readonly RGBA[]; sorted: RGBA[] } | null = null;
+  #sortedPaletteCache: { original: readonly RGBA[]; reversed: boolean; sorted: RGBA[] } | null =
+    null;
 
   // Reusable canvas for Firefox-compatible video frame upload
   #videoUploadCanvas: OffscreenCanvas | null = null;

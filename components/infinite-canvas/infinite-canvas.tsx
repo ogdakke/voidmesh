@@ -116,6 +116,7 @@ export function InfiniteCanvas() {
     deleteEntity,
     toggleShowOriginal,
     togglePreserveColors,
+    toggleReversePalette,
     handleBringToFront,
     handleSendToBack,
     selectedEntity,
@@ -740,6 +741,13 @@ export function InfiniteCanvas() {
       group: "selection",
       action: togglePreserveColors,
       label: "Toggle preserve colors",
+    },
+    {
+      id: "toggle_reverse_palette",
+      bind: "r",
+      group: "selection",
+      action: toggleReversePalette,
+      label: "Toggle reverse palette",
     },
     {
       bind: (bb) => bb.withBind("f").withSensitive(false),

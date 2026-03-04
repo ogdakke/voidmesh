@@ -89,6 +89,7 @@ const shaderUrlParams = {
   size: parseAsInteger.withDefault(config.defaults.shaderParams.size),
   shape: parseAsStringLiteral(Object.values(Shape)).withDefault(config.defaults.shaderParams.shape),
   preserveColors: parseAsBoolean.withDefault(config.defaults.shaderParams.preserveColors),
+  reversePalette: parseAsBoolean.withDefault(config.defaults.shaderParams.reversePalette),
   showOriginal: parseAsBoolean.withDefault(config.defaults.shaderParams.showOriginal),
   eagerness: parseAsFloat.withDefault(config.defaults.shaderParams.blobs.eagerness),
   scale: parseAsFloat.withDefault(config.defaults.shaderParams.scale),
@@ -248,6 +249,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       size: renderState.size,
       shape: renderState.shape,
       preserveColors: renderState.preserveColors,
+      reversePalette: renderState.reversePalette,
       showOriginal: renderState.showOriginal,
       background: config.defaults.shaderParams.background,
       color: config.defaults.shaderParams.color,
@@ -295,6 +297,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           size: null,
           shape: null,
           preserveColors: null,
+          reversePalette: null,
           showOriginal: null,
           eagerness: null,
           scale: null,
@@ -359,6 +362,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       size: entity.shaderParams.size,
       shape: entity.shaderParams.shape,
       preserveColors: entity.shaderParams.preserveColors,
+      reversePalette: entity.shaderParams.reversePalette,
       showOriginal: entity.shaderParams.showOriginal,
       eagerness:
         entity.shaderParams.blobs?.eagerness ?? config.defaults.shaderParams.blobs!.eagerness,
@@ -735,6 +739,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       size: entity.shaderParams.size,
       shape: entity.shaderParams.shape,
       preserveColors: entity.shaderParams.preserveColors,
+      reversePalette: entity.shaderParams.reversePalette,
       showOriginal: entity.shaderParams.showOriginal,
       eagerness:
         entity.shaderParams.blobs?.eagerness ?? config.defaults.shaderParams.blobs!.eagerness,
@@ -1039,6 +1044,9 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       preserveColors:
         shaderUrlParams.preserveColors.parse(parsedParams.preserveColors ?? "") ??
         config.defaults.shaderParams.preserveColors,
+      reversePalette:
+        shaderUrlParams.reversePalette.parse(parsedParams.reversePalette ?? "") ??
+        config.defaults.shaderParams.reversePalette,
       showOriginal:
         shaderUrlParams.showOriginal.parse(parsedParams.showOriginal ?? "") ??
         config.defaults.shaderParams.showOriginal,

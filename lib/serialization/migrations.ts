@@ -8,14 +8,16 @@ type Migration = (doc: Record<string, unknown>) => Record<string, unknown>;
  * Key is the SOURCE version.
  */
 const migrations: Record<number, Migration> = {
-  // Example: version 1 -> 2 migration
-  // 1: (doc) => {
-  //   for (const entity of (doc.entities as any[])) {
-  //     entity.opacity = entity.opacity ?? 1.0;
-  //   }
-  //   doc.version = 2;
-  //   return doc;
-  // },
+  // Version 1 -> 2: Add reversePalette field to ShaderParams
+  1: (doc) => {
+    for (const entity of doc.entities as any[]) {
+      if (entity.shaderParams) {
+        entity.shaderParams.reversePalette = entity.shaderParams.reversePalette ?? false;
+      }
+    }
+    doc.version = 2;
+    return doc;
+  },
 };
 
 /**
