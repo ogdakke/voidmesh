@@ -98,7 +98,8 @@
     env(safe-area-inset-bottom, 0) + var(--mobile-controls-h) + var(--bottom-bar-height) +
       var(--spacing-2)
   );
-  --floating-background: color-mix(in srgb, canvas 90%, transparent);
+  --input-bg: light-dark(var(--gray-100), var(--gray-50));
+  --floating-background: color-mix(in srgb, var(--input-bg) 90%, transparent);
   --floating-backdrop: blur(12px);
 }
 

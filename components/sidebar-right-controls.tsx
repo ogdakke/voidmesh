@@ -273,7 +273,7 @@ export function BlobParams() {
         step={0.01}
         value={eagerness.value}
         onValueChange={handleEagernessChange}
-        onPointerDown={() => {
+        onInteractionStart={() => {
           undo.beginTransaction();
         }}
         onValueCommitted={() => {
@@ -375,7 +375,7 @@ export function GlassParamsControl() {
               step={1}
               value={angle.value}
               onValueChange={handleAngleChange}
-              onPointerDown={() => undo.beginTransaction()}
+              onInteractionStart={() => undo.beginTransaction()}
               onValueCommitted={() => undo.commitTransaction()}
               showValue={!angle.isMixed}
             />
@@ -389,7 +389,7 @@ export function GlassParamsControl() {
               step={0.01}
               value={caustic.value}
               onValueChange={handleCausticChange}
-              onPointerDown={() => undo.beginTransaction()}
+              onInteractionStart={() => undo.beginTransaction()}
               onValueCommitted={() => undo.commitTransaction()}
               showValue={!caustic.isMixed}
             />
@@ -407,7 +407,7 @@ export function GlassParamsControl() {
               step={0.01}
               value={frostiness.value}
               onValueChange={handleFrostinessChange}
-              onPointerDown={() => undo.beginTransaction()}
+              onInteractionStart={() => undo.beginTransaction()}
               onValueCommitted={() => undo.commitTransaction()}
               showValue={!frostiness.isMixed}
             />
@@ -421,7 +421,7 @@ export function GlassParamsControl() {
               step={0.01}
               value={highlight.value}
               onValueChange={handleHighlightChange}
-              onPointerDown={() => undo.beginTransaction()}
+              onInteractionStart={() => undo.beginTransaction()}
               onValueCommitted={() => undo.commitTransaction()}
               showValue={!highlight.isMixed}
             />
@@ -438,7 +438,7 @@ export function GlassParamsControl() {
             step={0.01}
             value={flow.value}
             onValueChange={handleFlowChange}
-            onPointerDown={() => undo.beginTransaction()}
+            onInteractionStart={() => undo.beginTransaction()}
             onValueCommitted={() => undo.commitTransaction()}
             showValue={!flow.isMixed}
           />
@@ -453,7 +453,7 @@ export function GlassParamsControl() {
           step={0.01}
           value={dispersion.value}
           onValueChange={handleDispersionChange}
-          onPointerDown={() => undo.beginTransaction()}
+          onInteractionStart={() => undo.beginTransaction()}
           onValueCommitted={() => undo.commitTransaction()}
           showValue={!dispersion.isMixed}
         />
@@ -497,7 +497,7 @@ export function EffectParams({ show }: { show?: "scale" | "intensity" }) {
             step={0.1}
             value={scaleParam.value ?? undefined}
             onValueChange={handleScaleChange}
-            onPointerDown={() => {
+            onInteractionStart={() => {
               undo.beginTransaction();
             }}
             onValueCommitted={() => {
@@ -523,7 +523,7 @@ export function EffectParams({ show }: { show?: "scale" | "intensity" }) {
             step={0.1}
             value={intensity.value ?? undefined}
             onValueChange={handleIntensityChange}
-            onPointerDown={() => {
+            onInteractionStart={() => {
               undo.beginTransaction();
             }}
             onValueCommitted={() => {

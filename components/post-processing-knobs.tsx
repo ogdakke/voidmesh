@@ -89,7 +89,7 @@ function GrainKnobs() {
             step={config.postProcessing.grain.size.step}
             value={grainSize.value}
             onValueChange={handleGrainSizeChange}
-            onPointerDown={() => undo.beginTransaction()}
+            onInteractionStart={() => undo.beginTransaction()}
             onValueCommitted={() => undo.commitTransaction()}
             showValue={!grainSize.isMixed}
           />
@@ -103,7 +103,7 @@ function GrainKnobs() {
             step={config.postProcessing.grain.intensity.step}
             value={grainIntensity.value}
             onValueChange={handleGrainIntensityChange}
-            onPointerDown={() => undo.beginTransaction()}
+            onInteractionStart={() => undo.beginTransaction()}
             onValueCommitted={() => undo.commitTransaction()}
             showValue={!grainIntensity.isMixed}
           />
@@ -165,7 +165,7 @@ function ChromaticAberrationKnobs() {
             step={config.postProcessing.chromaticAberration.offset.step}
             value={chromaticOffset.value}
             onValueChange={handleChromaticOffsetChange}
-            onPointerDown={() => undo.beginTransaction()}
+            onInteractionStart={() => undo.beginTransaction()}
             onValueCommitted={() => undo.commitTransaction()}
             showValue={!chromaticOffset.isMixed}
           />
@@ -245,7 +245,7 @@ function BloomKnobs() {
             step={config.postProcessing.bloom.threshold.step}
             value={bloomThreshold.value}
             onValueChange={handleBloomThresholdChange}
-            onPointerDown={() => undo.beginTransaction()}
+            onInteractionStart={() => undo.beginTransaction()}
             onValueCommitted={() => undo.commitTransaction()}
             showValue={!bloomThreshold.isMixed}
           />
@@ -259,7 +259,7 @@ function BloomKnobs() {
             step={config.postProcessing.bloom.intensity.step}
             value={bloomIntensity.value}
             onValueChange={handleBloomIntensityChange}
-            onPointerDown={() => undo.beginTransaction()}
+            onInteractionStart={() => undo.beginTransaction()}
             onValueCommitted={() => undo.commitTransaction()}
             showValue={!bloomIntensity.isMixed}
           />
@@ -273,7 +273,7 @@ function BloomKnobs() {
             step={config.postProcessing.bloom.filterRadius.step}
             value={bloomFilterRadius.value}
             onValueChange={handleBloomFilterRadiusChange}
-            onPointerDown={() => undo.beginTransaction()}
+            onInteractionStart={() => undo.beginTransaction()}
             onValueCommitted={() => undo.commitTransaction()}
             showValue={!bloomFilterRadius.isMixed}
           />
@@ -287,7 +287,7 @@ function BloomKnobs() {
             step={config.postProcessing.bloom.softness.step}
             value={bloomSoftness.value}
             onValueChange={handleBloomSoftnessChange}
-            onPointerDown={() => undo.beginTransaction()}
+            onInteractionStart={() => undo.beginTransaction()}
             onValueCommitted={() => undo.commitTransaction()}
             showValue={!bloomSoftness.isMixed}
           />

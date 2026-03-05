@@ -41,7 +41,7 @@ export function AdjustmentsKnobs() {
           step={config.adjustments.brightness.step}
           value={brightness.value}
           onValueChange={(v) => handleAdjustmentChange("brightness", v)}
-          onPointerDown={() => undo.beginTransaction()}
+          onInteractionStart={() => undo.beginTransaction()}
           onValueCommitted={() => undo.commitTransaction()}
           showValue={!brightness.isMixed}
         />
@@ -55,7 +55,7 @@ export function AdjustmentsKnobs() {
           step={config.adjustments.contrast.step}
           value={contrast.value}
           onValueChange={(v) => handleAdjustmentChange("contrast", v)}
-          onPointerDown={() => undo.beginTransaction()}
+          onInteractionStart={() => undo.beginTransaction()}
           onValueCommitted={() => undo.commitTransaction()}
           showValue={!contrast.isMixed}
         />
@@ -69,7 +69,7 @@ export function AdjustmentsKnobs() {
           step={config.adjustments.saturation.step}
           value={saturation.value}
           onValueChange={(v) => handleAdjustmentChange("saturation", v)}
-          onPointerDown={() => undo.beginTransaction()}
+          onInteractionStart={() => undo.beginTransaction()}
           onValueCommitted={() => undo.commitTransaction()}
           showValue={!saturation.isMixed}
         />
@@ -83,7 +83,7 @@ export function AdjustmentsKnobs() {
           step={config.adjustments.blur.step}
           value={blur.value}
           onValueChange={(v) => handleAdjustmentChange("blur", v)}
-          onPointerDown={() => undo.beginTransaction()}
+          onInteractionStart={() => undo.beginTransaction()}
           onValueCommitted={() => undo.commitTransaction()}
           showValue={!blur.isMixed}
         />

@@ -1,13 +1,36 @@
 @layer components {
   .slider-field {
     position: relative;
+    display: grid;
+    grid-template-rows: 1fr;
+    grid-template-columns: 1fr;
+    align-items: center;
+    z-index: 0;
+
+    & label {
+      grid-row: 1 / -1;
+      grid-column: 1 / -1;
+      z-index: 1;
+      pointer-events: none;
+      padding-left: var(--spacing-3);
+      width: fit-content;
+      margin: 0;
+      color: var(--gray-1200);
+      text-box: trim-both cap alphabetic;
+    }
+
+    & .slider-root {
+      grid-row: 1 / -1;
+      grid-column: 1 / -1;
+    }
   }
   .slider-root {
+    position: relative;
     width: 100%;
-    --slider-h: 1.25rem;
-    --slider-radius: var(--radius);
-    --slider-bg: light-dark(var(--gray-100), var(--background));
-    --slider-indicator-bg: light-dark(var(--background), canvas);
+    --slider-h: 2rem;
+    --slider-radius: 10px;
+    --slider-bg: light-dark(var(--gray-100), var(--gray-50));
+    --slider-indicator-bg: light-dark(var(--gray-200), var(--gray-100));
     --slider-padding: 2px;
   }
   .slider-control {
@@ -28,35 +51,85 @@
     border-radius: var(--slider-radius);
     -webkit-user-select: none;
     user-select: none;
+    overflow: clip;
+    container-type: inline-size;
   }
 
   .slider-value {
-    position: absolute;
-    top: 0;
-    right: 0.5rem;
-    mix-blend-mode: difference;
-    z-index: 99;
+    color: var(--gray-1200);
+    grid-row: 1 / -1;
+    grid-column: 1 / -1;
+    justify-self: end;
+    padding-inline-end: var(--spacing-3);
+    z-index: 1;
+    background: none;
+    border: none;
+    text-align: right;
+    width: 5ch;
+    cursor: text;
+    font-size: var(--text-sm);
+    font-variant-numeric: tabular-nums;
+    border-bottom: 1px solid transparent;
+
+    &:focus-visible {
+      outline: none;
+    }
+    @media (hover: hover) {
+      &:hover {
+        text-decoration: underline;
+      }
+      &:focus {
+        text-decoration: none;
+      }
+    }
+
+    @media screen and (width <= 768px) {
+      font-size: 1rem;
+    }
   }
 
   .slider-indicator {
-    border-radius: var(--slider-radius);
     background: var(--slider-indicator-bg);
     -webkit-user-select: none;
     user-select: none;
-    box-shadow: inset 0 0 0 1px var(--border);
   }
 
   .slider-thumb {
-    width: 0.5rem;
-    height: var(--slider-h);
+    --w: 3px;
+    --offset: calc(2 * var(--w));
+    /* Thumb is at (position * 100cqi). Pull left by offset, but never past the left edge. */
+    transform: translateX(
+      max(calc(-1 * var(--offset)), calc(2 * var(--w) - var(--slider-position, 0.5) * 100cqi))
+    );
+    /* 1 when thumb is under the label or value, 0 otherwise */
+    --label-overlap: clamp(
+      0,
+      calc((var(--label-fraction, 0) + 0.025 - var(--slider-position, 0.5)) * 99999),
+      1
+    );
+    --value-overlap: clamp(
+      0,
+      calc((var(--slider-position, 0.5) - 1 + var(--value-fraction, 0) + 0.025) * 99999),
+      1
+    );
+    opacity: 0.2;
+    --overlap: max(var(--label-overlap), var(--value-overlap));
+    transition:
+      opacity 0.15s ease-out,
+      scale 0.15s ease-out;
+    width: var(--w);
+    height: calc(0.5 * var(--slider-h));
     border-radius: var(--radius-sm);
-    background: white;
-    outline: 1px solid var(--gray-300);
+    background: var(--gray-1200);
     -webkit-user-select: none;
     user-select: none;
 
     &:has(:focus-visible) {
       outline: 2px solid var(--primary);
+      outline-offset: 2px;
+    }
+    &[data-dragging] {
+      opacity: calc(1 - 0.8 * var(--overlap));
     }
   }
 }

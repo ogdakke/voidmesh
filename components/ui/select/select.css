@@ -30,7 +30,7 @@
     outline: 0;
     border: 1px solid var(--gray-50);
     border-radius: var(--radius);
-    background-color: canvas;
+    background-color: light-dark(var(--gray-100), var(--gray-50));
     font-family: inherit;
     font-size: 1rem;
     line-height: 1.5rem;
@@ -218,7 +218,7 @@
 
   .select-scroll_arrow {
     width: 100%;
-    background: canvas;
+    background: var(--input-bg);
     z-index: 1;
     text-align: center;
     cursor: default;
