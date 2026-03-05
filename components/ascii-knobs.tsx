@@ -18,36 +18,32 @@ export function AsciiKnobs() {
   if (!asciiKind.isSupported) return null;
 
   return (
-    <>
-      <div className="sidebar-row ascii-kind-row">
-        <Select
-          label="Character Set"
-          value={asciiKind.isMixed ? undefined : (asciiKind.value ?? AsciiKind.standard)}
-          onValueChange={handleAsciiKindChange}
-          formatValue={asciiKind.isMixed ? <span className="select-mixed">Mixed</span> : undefined}
-          name="ascii-kind"
-          items={optionsWithNull({ options: ASCII_KIND_OPTIONS })}
-        >
-          {ASCII_KIND_OPTIONS.map((kind) => (
-            <SelectItem key={kind.value} value={kind.value}>
-              {kind.label}
-            </SelectItem>
-          ))}
-        </Select>
-      </div>
-      <div className="sidebar-row ascii-invert-row">
-        <Toggle
-          pressed={!!asciiInvert.value}
-          onPressedChange={(pressed) => {
-            const newValue = asciiInvert.isMixed ? true : pressed;
-            handleAsciiInvertChange(newValue);
-          }}
-          title="Invert brightness"
-        >
-          <Brightness /> Invert
-        </Toggle>
-      </div>
-    </>
+    <div className="sidebar-row ascii-kind-row">
+      <Select
+        label="Character Set"
+        value={asciiKind.isMixed ? undefined : (asciiKind.value ?? AsciiKind.standard)}
+        onValueChange={handleAsciiKindChange}
+        formatValue={asciiKind.isMixed ? <span className="select-mixed">Mixed</span> : undefined}
+        name="ascii-kind"
+        items={optionsWithNull({ options: ASCII_KIND_OPTIONS })}
+      >
+        {ASCII_KIND_OPTIONS.map((kind) => (
+          <SelectItem key={kind.value} value={kind.value}>
+            {kind.label}
+          </SelectItem>
+        ))}
+      </Select>
+      <Toggle
+        pressed={!!asciiInvert.value}
+        onPressedChange={(pressed) => {
+          const newValue = asciiInvert.isMixed ? true : pressed;
+          handleAsciiInvertChange(newValue);
+        }}
+        title="Invert brightness"
+      >
+        <Brightness />
+      </Toggle>
+    </div>
   );
 }
 

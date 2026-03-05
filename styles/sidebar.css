@@ -355,3 +355,20 @@
   grid-auto-flow: column;
   gap: var(--spacing-2);
 }
+
+.ascii-kind-row {
+  grid-auto-flow: column;
+  gap: var(--spacing-3);
+  grid-template-columns: 1fr auto;
+
+  .ui-toggle {
+    align-self: end;
+    width: calc(9 * var(--spacing));
+    height: calc(9 * var(--spacing));
+    padding: 0;
+    svg {
+      width: 1.5rem;
+      height: 1.5rem;
+    }
+  }
+}
