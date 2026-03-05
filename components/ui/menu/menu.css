@@ -68,10 +68,6 @@
     }
   }
 
-  .menu-arrow-fill {
-    fill: canvas;
-  }
-
   .menu-arrow-outer-stroke {
     @media (prefers-color-scheme: light) {
       fill: var(--gray-200);
