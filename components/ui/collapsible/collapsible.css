@@ -5,10 +5,6 @@
     justify-content: center;
   }
 
-  .collapsible-depth-1 {
-    padding-left: var(--spacing-2);
-  }
-
   .collapsible-trigger {
     display: flex;
     align-items: center;
@@ -54,6 +50,14 @@
 
     &[data-panel-open] :where(svg) {
       transform: rotate(90deg);
+    }
+  }
+
+  .collapsible-depth-1 {
+    padding-left: var(--spacing-2);
+
+    & .collapsible-trigger {
+      margin-inline-end: var(--spacing);
     }
   }
 

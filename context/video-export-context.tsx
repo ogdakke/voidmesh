@@ -36,7 +36,7 @@ const DEFAULT_EXPORT_OPTIONS: ExportOptionsState = {
   advanced: {
     resolution: "original",
     bitrate: undefined,
-    gifMaxWidth: 256,
+    gifMaxWidth: 250,
     gifDither: "floyd_steinberg",
   },
 };

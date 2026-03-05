@@ -1,11 +1,11 @@
 import { AsciiKind, ASCII_KIND_OPTIONS } from "#types/canvas.ts";
 import { useCanvasActions, useParamValue } from "../hooks/use-canvas-actions.ts";
 import { Select, SelectItem } from "./ui/select/index.tsx";
-import { Checkbox } from "./ui/checkbox/index.tsx";
+import { Toggle } from "./ui/toggle/index.tsx";
 import { optionsWithNull } from "./ui/ui-util.ts";
 import { config } from "#config";
 import { ContextMenu } from "@base-ui/react/context-menu";
-import { NavArrowRight, Circle, Check } from "iconoir-react";
+import { Brightness, NavArrowRight, Circle, Check } from "iconoir-react";
 
 // Desktop Sidebar version
 export function AsciiKnobs() {
@@ -36,17 +36,16 @@ export function AsciiKnobs() {
         </Select>
       </div>
       <div className="sidebar-row ascii-invert-row">
-        <Checkbox
-          name="ascii_invert"
-          checked={!!asciiInvert.value}
-          indeterminate={asciiInvert.isMixed}
-          onChange={(e) => {
-            const newValue = asciiInvert.isMixed ? true : e.target.checked;
+        <Toggle
+          pressed={!!asciiInvert.value}
+          onPressedChange={(pressed) => {
+            const newValue = asciiInvert.isMixed ? true : pressed;
             handleAsciiInvertChange(newValue);
           }}
+          title="Invert brightness"
         >
-          Invert brightness
-        </Checkbox>
+          <Brightness /> Invert
+        </Toggle>
       </div>
     </>
   );

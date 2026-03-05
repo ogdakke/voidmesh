@@ -592,9 +592,10 @@ export function useCanvasActions() {
     preferences.setHaptics(enabled);
   };
 
-  const handleSizeChange = (value: number | null) => {
-    if (value !== null) {
-      updateSelectedEntityParams({ size: value });
+  const handleSizeChange = (value: number | number[]) => {
+    const val = Array.isArray(value) ? value[0] : value;
+    if (val !== undefined) {
+      updateSelectedEntityParams({ size: val });
     }
   };
 

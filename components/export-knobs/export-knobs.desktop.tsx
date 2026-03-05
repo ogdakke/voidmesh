@@ -4,8 +4,8 @@
  * Uses export queue system for non-blocking concurrent exports
  */
 
-import { useEffect, useRef, useState, type ChangeEvent } from "react";
-import { NavArrowRight } from "iconoir-react";
+import { useEffect, useRef, useState } from "react";
+import { NavArrowRight, SoundHigh } from "iconoir-react";
 import { useExportQueue } from "#context/use-export-queue.ts";
 import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
 import { isAnimatedEntity } from "#types/canvas.ts";
@@ -19,9 +19,8 @@ import {
 import { type ImageExportFormat, IMAGE_FORMAT_OPTIONS } from "#renderer/export-formats.ts";
 import { config } from "#config";
 import { Select, SelectItem } from "#ui/select/index.tsx";
-import { Checkbox } from "#ui/checkbox/index.tsx";
+import { Toggle } from "#ui/toggle/index.tsx";
 import { Slider } from "#ui/slider/index.tsx";
-import { NumberField } from "#ui/number-field/number-field.tsx";
 import {
   Collapsible,
   CollapsibleContent,
@@ -30,6 +29,7 @@ import {
 import "#styles/sidebar.css";
 import { ExportSaveButtons } from "./export-knobs.shared.tsx";
 import { exportUiConstants } from "./export-knobs.lib.ts";
+import "./export-knobs.css";
 
 const { ui: exportUiConfig } = config.videoExporting;
 const { FORMAT_OPTIONS, QUALITY_OPTIONS, RESOLUTION_OPTIONS, GIF_DITHER_OPTIONS } =
@@ -81,8 +81,8 @@ export function ExportSettingsKnobs() {
   };
 
   // Include audio handler
-  const handleIncludeAudioChange = (e: ChangeEvent<HTMLInputElement>) => {
-    updateExportOptions({ includeAudio: e.target.checked });
+  const handleIncludeAudioChange = (pressed: boolean) => {
+    updateExportOptions({ includeAudio: pressed });
   };
 
   // FPS change handler
@@ -103,10 +103,11 @@ export function ExportSettingsKnobs() {
   };
 
   // GIF max width handler
-  const handleGifMaxWidthChange = (value: number | null) => {
-    if (value !== null) {
+  const handleGifMaxWidthChange = (value: number | number[]) => {
+    const val = Array.isArray(value) ? value[0] : value;
+    if (val !== undefined) {
       updateExportOptions({
-        advanced: { gifMaxWidth: value },
+        advanced: { gifMaxWidth: val },
       });
     }
   };
@@ -161,20 +162,6 @@ export function ExportSettingsKnobs() {
         </div>
       )}
 
-      {/* Include Audio - only for formats that support it */}
-      {supportsAudio && (
-        <div className="sidebar-row">
-          <Checkbox
-            name="include_audio"
-            checked={exportOptions.includeAudio}
-            onChange={handleIncludeAudioChange}
-            switch
-          >
-            Include audio
-          </Checkbox>
-        </div>
-      )}
-
       {/* Advanced settings collapsible */}
       <Collapsible className="collapsible-depth-1">
         <CollapsibleTrigger>
@@ -182,6 +169,19 @@ export function ExportSettingsKnobs() {
           Advanced
         </CollapsibleTrigger>
         <CollapsibleContent>
+          {/* Include Audio - only for formats that support it */}
+          {supportsAudio && (
+            <div className="sidebar-row">
+              <Toggle
+                pressed={exportOptions.includeAudio}
+                onPressedChange={handleIncludeAudioChange}
+                title="Include audio"
+              >
+                <SoundHigh /> Include Audio
+              </Toggle>
+            </div>
+          )}
+
           {/* FPS - GIFs have lower max due to format limitations */}
           <div className="sidebar-row">
             <Slider
@@ -221,15 +221,16 @@ export function ExportSettingsKnobs() {
           {/* GIF-specific options */}
           {isGif && (
             <>
-              <div className="sidebar-row">
-                <NumberField
+              <div className="sidebar-row gif-export-slider">
+                <Slider
                   label="Max Width"
                   name="gif-max-width"
                   value={exportOptions.advanced.gifMaxWidth}
                   onValueChange={handleGifMaxWidthChange}
                   min={exportUiConfig.gifMaxWidth.min}
                   max={exportUiConfig.gifMaxWidth.max}
-                  enableScrubArea
+                  step={exportUiConfig.gifMaxWidth.step}
+                  showValue
                 />
               </div>
               <div className="sidebar-row">
