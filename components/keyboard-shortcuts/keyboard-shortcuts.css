@@ -27,9 +27,6 @@
 .keybind-section {
   padding: var(--spacing-3);
   border-top: 1px solid var(--border);
-  :where(h2) {
-    font-size: var(--text);
-  }
 }
 
 .keybind-section:first-of-type {
