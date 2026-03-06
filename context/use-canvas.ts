@@ -1,6 +1,7 @@
 import { createContext, use, useSyncExternalStore } from "react";
 import { canvasStore } from "#engine";
 import type {
+  ColorPalette,
   Viewport,
   ShaderCanvasEntity,
   Point,
@@ -79,6 +80,14 @@ export interface CanvasContextValue {
   // url state
   setRenderState: SetValues<any>;
   setRenderStateFromURL: (params: URLSearchParams) => void;
+  applyEffectsToSelection: (data: {
+    shaderType: ShaderType;
+    shaderParams: ShaderParams;
+    originalPalettes?: {
+      palette8?: ColorPalette;
+      palette16?: ColorPalette;
+    };
+  }) => void;
   setDebugType: (
     value: DebugType | ((old: DebugType | null) => DebugType | null) | null,
     options?: Options,

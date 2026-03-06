@@ -202,7 +202,7 @@
   }
 
   .toast_description {
-    font-size: 0.925rem;
+    font-size: var(--text-sm);
     line-height: 1.25rem;
     margin: 0;
   }

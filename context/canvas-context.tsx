@@ -25,7 +25,14 @@ import {
   MediaType,
   isGifEntity,
 } from "#types/canvas.ts";
-import { getPalettePreset, isAsyncPalette } from "#components/palette-preset/palette-presets.ts";
+import {
+  getPalettePreset,
+  isAsyncPalette,
+  isUserPalette,
+  generatePaletteId,
+  generatePaletteName,
+  generatePaletteShortName,
+} from "#components/palette-preset/palette-presets.ts";
 import type { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
 import type { DeserializeResult } from "#lib/serialization/types.ts";
 import { type ImageExportOptions, getImageExtension } from "#renderer/export-formats.ts";
@@ -1063,6 +1070,128 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  /**
+   * Clone a non-preset palette for paste, giving it a unique ID in the palette store.
+   * Returns the new palette, or null if the palette is a preset (shared by design).
+   */
+  const clonePaletteForPaste = (palette: ColorPalette | undefined): ColorPalette | null => {
+    if (!palette?.id) return null;
+    // Preset palettes are shared — no cloning needed
+    if (getPalettePreset(palette.id)) return null;
+    // User palettes (cstm_*, ext_*) and async palettes (original-8, original-16)
+    // must be cloned with a new unique ID
+    if (!isUserPalette(palette.id) && !isAsyncPalette(palette.id)) return null;
+
+    const existing = paletteStore.getPalettes();
+    const newPalette: ColorPalette = {
+      id: generatePaletteId("custom"),
+      name: generatePaletteName("custom", existing),
+      shortName: generatePaletteShortName("custom", existing),
+      colors: structuredClone(palette.colors),
+    };
+    paletteStore.addPalette(newPalette);
+    return newPalette;
+  };
+
+  // Apply effects data directly to selected entities (from clipboard JSON)
+  const applyEffectsToSelection = (data: {
+    shaderType: ShaderType;
+    shaderParams: ShaderParams;
+    originalPalettes?: {
+      palette8?: ColorPalette;
+      palette16?: ColorPalette;
+    };
+  }) => {
+    const entities = canvasStore.getSelectedEntities();
+    if (entities.length === 0) return;
+
+    const { shaderType, shaderParams } = data;
+
+    if (entities.length === 1) {
+      const entity = entities[0]!;
+      const previousShaderType = entity.shaderType;
+      const previousParams = structuredClone(entity.shaderParams);
+
+      // Clone non-preset palette so target gets its own independent copy
+      const clonedPalette = clonePaletteForPaste(shaderParams.palette);
+      const pastedParams = clonedPalette
+        ? { ...shaderParams, palette: clonedPalette }
+        : shaderParams;
+
+      const updates: Partial<ShaderCanvasEntity> = {
+        shaderType,
+        shaderParams: pastedParams,
+        textureDirty: true,
+      };
+
+      canvasStore.updateEntity(entity.id, updates);
+      syncEntityToUrl({ ...entity, shaderType, shaderParams: pastedParams });
+
+      undo.add(
+        Command.create({
+          undo: () => {
+            if (clonedPalette) paletteStore.removePalette(clonedPalette.id!);
+            canvasStore.updateEntity(entity.id, {
+              shaderType: previousShaderType,
+              shaderParams: previousParams,
+              textureDirty: true,
+            });
+            syncEntityToUrl({
+              ...entity,
+              shaderType: previousShaderType,
+              shaderParams: previousParams,
+            });
+          },
+          execute: () => {
+            if (clonedPalette) paletteStore.addPalette(clonedPalette);
+            canvasStore.updateEntity(entity.id, updates);
+            syncEntityToUrl({ ...entity, shaderType, shaderParams: pastedParams });
+          },
+          description: "Paste effects",
+        }),
+      );
+    } else {
+      undo.beginTransaction();
+      for (const entity of entities) {
+        const previousShaderType = entity.shaderType;
+        const previousParams = structuredClone(entity.shaderParams);
+
+        // Each entity gets its own cloned palette to stay independent
+        const clonedPalette = clonePaletteForPaste(shaderParams.palette);
+        const pastedParams = clonedPalette
+          ? { ...shaderParams, palette: clonedPalette }
+          : shaderParams;
+
+        const updates: Partial<ShaderCanvasEntity> = {
+          shaderType,
+          shaderParams: pastedParams,
+          textureDirty: true,
+        };
+
+        canvasStore.updateEntity(entity.id, updates);
+
+        undo.add(
+          Command.create({
+            undo: () => {
+              if (clonedPalette) paletteStore.removePalette(clonedPalette.id!);
+              canvasStore.updateEntity(entity.id, {
+                shaderType: previousShaderType,
+                shaderParams: previousParams,
+                textureDirty: true,
+              });
+            },
+            execute: () => {
+              if (clonedPalette) paletteStore.addPalette(clonedPalette);
+              canvasStore.updateEntity(entity.id, updates);
+            },
+            description: `Paste effects to ${entity.id}`,
+          }),
+        );
+      }
+      undo.commitTransaction(`Paste effects to ${entities.length} entities`);
+    }
+  };
+
   // Set render state from pasted URL - applies to selected entities directly
   const setRenderStateFromURL = (params: URLSearchParams) => {
     const entities = canvasStore.getSelectedEntities();
@@ -1377,6 +1506,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     getContextOpenEntity,
     setRenderState,
     setRenderStateFromURL,
+    applyEffectsToSelection,
     setDebugType,
   };
 

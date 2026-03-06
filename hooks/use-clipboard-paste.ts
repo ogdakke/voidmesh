@@ -32,12 +32,24 @@ export function useClipboardPaste(
         return;
       }
 
-      // Then check for text/URLs
+      // Then check for text (voidmesh effects JSON or URLs)
       for (const item of items) {
         if (item.type === "text/plain") {
           e.preventDefault();
           item.getAsString((text) => {
             const trimmed = text.trim();
+            // Check for voidmesh effects JSON
+            if (trimmed.startsWith("{")) {
+              try {
+                const parsed = JSON.parse(trimmed);
+                if (parsed?.__voidmesh === true) {
+                  onPaste([trimmed]);
+                  return;
+                }
+              } catch {
+                // Not valid JSON, fall through to URL check
+              }
+            }
             if (URL.canParse(trimmed)) {
               onPaste([trimmed]);
             }

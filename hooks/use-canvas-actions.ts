@@ -99,6 +99,7 @@ export function useCanvasActions() {
     renderer,
     colorSpace,
     setRenderStateFromURL,
+    applyEffectsToSelection,
   } = useCanvas();
   const { bringToFront, sendToBack, duplicateEntities } = useCanvas();
 
@@ -474,26 +475,66 @@ export function useCanvasActions() {
     }
   };
 
-  /** copy entity params from the selected entity */
+  /** Copy entity effects (shader type, params, palettes) as JSON to clipboard */
   const copyEntityParams = () => {
-    // copy the url, as that is how users can paste params
-    navigator.clipboard.writeText(window.location.href).catch((e) => {
-      logger.error(e);
-      toastManager.add({
-        title: "Failed to copy effects",
-        type: "destructive",
+    const entities = canvasStore.getSelectedEntities();
+    if (entities.length === 0) return;
+    const entity = entities[0]!;
+
+    const data = {
+      __voidmesh: true as const,
+      version: 1,
+      shaderType: entity.shaderType,
+      shaderParams: structuredClone(entity.shaderParams),
+      originalPalettes: entity.originalPalettes
+        ? structuredClone(entity.originalPalettes)
+        : undefined,
+    };
+
+    navigator.clipboard
+      .writeText(JSON.stringify(data))
+      .then(() => {
+        toastManager.add({
+          title: "Effects copied to clipboard",
+          description: "Now you can paste them on other files",
+        });
+      })
+      .catch((e) => {
+        logger.error(e);
+        toastManager.add({
+          title: "Failed to copy effects",
+          type: "destructive",
+        });
       });
-    });
   };
 
   /**
-   * Paste params to all selected entities (supports multi-select)
+   * Paste effects to all selected entities (supports multi-select).
+   * Tries voidmesh JSON first, falls back to URL-based params.
    */
   const pasteEntityParams = async () => {
-    const clipboard = await navigator.clipboard.readText();
-    if (URL.canParse(clipboard)) {
-      const url = new URL(clipboard);
-      // setRenderStateFromURL now handles both single and multi-select
+    const text = await navigator.clipboard.readText();
+
+    // Try voidmesh effects JSON first
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed?.__voidmesh === true) {
+        applyEffectsToSelection(parsed);
+        const entityCount = canvasStore.getSelectedEntities().length;
+        if (entityCount > 1) {
+          toastManager.add({
+            title: `Applied effects to ${entityCount} entities`,
+          });
+        }
+        return;
+      }
+    } catch {
+      // Not JSON, try URL fallback
+    }
+
+    // URL fallback (legacy sharing)
+    if (URL.canParse(text)) {
+      const url = new URL(text);
       setRenderStateFromURL(url.searchParams);
 
       const entityCount = canvasStore.getSelectedEntities().length;
@@ -504,8 +545,7 @@ export function useCanvasActions() {
       }
     } else {
       toastManager.add({
-        title: "Invalid URL",
-        description: "Please paste a valid URL",
+        title: "No effects or URL found in clipboard",
         type: "destructive",
       });
     }

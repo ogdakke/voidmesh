@@ -19,7 +19,8 @@ function isStudioFile(file: File): boolean {
 }
 
 export function useImageInput({ containerRef, multipleFiles = true }: UseImageInputOptions) {
-  const { addEntity, setRenderStateFromURL, deserializeCanvas } = useCanvas();
+  const { addEntity, setRenderStateFromURL, applyEffectsToSelection, deserializeCanvas } =
+    useCanvas();
   const isLoadingRef = useRef(false);
   const isMobile = useIsMobile();
   const bottomInset = isMobile ? config.canvas.mobile.bottomInset : 0;
@@ -54,13 +55,27 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
       await addFilesToCanvas(files.slice(0, maxFiles), addEntity, container, bottomInset);
     }
 
-    // Handle pasted URLs
+    // Handle pasted URLs or voidmesh effects JSON
     if (urls.length > 0) {
       const maxUrls = multipleFiles ? urls.length : 1;
       const urlsToProcess = urls.slice(0, maxUrls);
       const entityIds: string[] = [];
 
       for (const urlString of urlsToProcess) {
+        // Check for voidmesh effects JSON
+        if (urlString.startsWith("{")) {
+          try {
+            const parsed = JSON.parse(urlString);
+            if (parsed?.__voidmesh === true) {
+              applyEffectsToSelection(parsed);
+              toastManager.add({ title: "Applied effects from clipboard" });
+              continue;
+            }
+          } catch {
+            // Not valid JSON, fall through to URL handling
+          }
+        }
+
         const url = new URL(urlString);
         if (url.origin === window.origin && url.searchParams.size > 0) {
           toastManager.add({ title: "Got params from pasted link" });

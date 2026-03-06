@@ -35,7 +35,6 @@ import {
 } from "react";
 import { Button } from "../ui/button/index.tsx";
 import { DropZone } from "../ui/dropzone/index.tsx";
-import { toastManager } from "../ui/toast/toast-manager.ts";
 import { UndoRedoButtons } from "./undo-redo.tsx";
 import "./infinite-canvas.css";
 
@@ -120,6 +119,9 @@ export function InfiniteCanvas() {
     handleBringToFront,
     handleSendToBack,
     duplicateEntities,
+    copyEntity,
+    copyEntityParams,
+    pasteEntityParams,
     selectedEntity,
     resetEntityToDefaults,
     snapToGrid,
@@ -410,32 +412,9 @@ export function InfiniteCanvas() {
     handleZoomReset();
   };
 
-  // Copy entity to clipboard - single-selection only
-  const copyEntityShortcutHandler = async function (e: KeyboardEvent) {
-    const entities = canvasStore.getSelectedEntities();
-    if (entities.length !== 1 || !renderer) return;
-    const selectedEntity = entities[0]!;
-
+  const copyEntityShortcutHandler = (e: KeyboardEvent) => {
     e.preventDefault();
-
-    try {
-      // create clipboard item immediately to not make safari complain
-      const clipboardItem = new ClipboardItem({
-        "image/png": (async () => {
-          const blob = await renderer.renderEntityToBlob(selectedEntity);
-          if (blob) return blob;
-          throw new Error("Failed to render entity to blob");
-        })(),
-      });
-      await navigator.clipboard.write([clipboardItem]);
-      toastManager.add({ title: "Image copied to clipboard" });
-    } catch (err) {
-      logger.error("Failed to copy to clipboard:", err);
-      toastManager.add({
-        title: "Failed to copy image to clipboard",
-        description: "Try saving it instead",
-      });
-    }
+    copyEntity(e);
   };
 
   const toggleDebugModeShortcutHandler = async function toggleDebugModeShortcutHandler() {
@@ -827,6 +806,28 @@ export function InfiniteCanvas() {
       group: "selection",
       label: "Paste a shared link to copy parameters from another image",
       action: () => {},
+    },
+    {
+      id: "copy_effects",
+      bind: (bb) => bb.withMeta().and.withCtrl().and.key("c"),
+      platform: "macos",
+      group: "selection",
+      label: "Copy effects",
+      action: (e: KeyboardEvent) => {
+        e.preventDefault();
+        copyEntityParams();
+      },
+    },
+    {
+      id: "copy_effects",
+      bind: (bb) => bb.withCtrl().and.withAlt().and.key("c"),
+      platform: "other",
+      group: "selection",
+      label: "Copy effects",
+      action: (e: KeyboardEvent) => {
+        e.preventDefault();
+        copyEntityParams();
+      },
     },
     {
       id: "bring_to_front",
