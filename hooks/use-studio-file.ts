@@ -8,12 +8,12 @@ export async function importStudioWithToasts(
   deserializeCanvas: (source: Blob | ArrayBuffer) => Promise<DeserializeResult>,
 ): Promise<DeserializeResult> {
   return toastManager.promise(deserializeCanvas(source), {
-    loading: { title: "Importing vdmsh file…" },
+    loading: { title: "Importing voidmesh workspace..." },
     success: (r) => {
       if (r.errors.length > 0) {
         const total = r.entityCount + r.errors.length;
         return {
-          title: `Failed to import ${r.errors.length} of ${total} entities`,
+          title: `Failed to import ${r.errors.length} of ${total} files`,
           type: ToastType.destructive,
         };
       }
@@ -37,7 +37,7 @@ export function useStudioFile() {
     setIsExporting(true);
     try {
       const blob = await toastManager.promise(serializeCanvas(), {
-        loading: { title: "Exporting vdmsh file…" },
+        loading: { title: "Exporting voidmesh workspace..." },
         success: () => ({ title: "Exported successfully" }),
         error: (err) => ({
           title: "Export failed",

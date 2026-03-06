@@ -334,6 +334,11 @@ export class SliderEngine {
   // ── Wheel Input ─────────────────────────────────────────────────────
 
   handleWheel(deltaX: number, deltaY: number): void {
+    // If a snap animation was in progress, revert to pre-snap offset so the
+    // partial snap doesn't pull the slider toward a tick during scrolling.
+    if (this.#phase === "snap") {
+      this.#offset = this.#snapStartOffset;
+    }
     this.#stopAnimation();
     // Cancel pending commit so consecutive wheel input stays in the same transaction
     if (this.#commitTimer !== null) {
@@ -347,7 +352,13 @@ export class SliderEngine {
     }
 
     // Use deltaX if nonzero, else deltaY (supports both horizontal scroll and vertical scroll gestures)
-    const delta = Math.abs(deltaX) > Math.abs(deltaY) ? deltaX : deltaY;
+    const raw = Math.abs(deltaX) > Math.abs(deltaY) ? deltaX : deltaY;
+
+    // When pixelsPerStep < tickSpacing, raw wheel deltas are disproportionately
+    // large relative to value steps. Scale down so wheel sensitivity matches
+    // the slider's intended precision.
+    const wheelScale = Math.min(1, this.#pixelsPerStep / this.#tickSpacing);
+    const delta = raw * wheelScale;
 
     let newOffset = this.#offset + delta;
 
