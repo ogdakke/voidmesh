@@ -91,7 +91,7 @@ describe("SidebarRight", () => {
       expect(screen.getByRole("button", { name: /reset/i })).toBeInTheDocument();
     });
 
-    test("shows show original checkbox", async () => {
+    test("shows show original toggle", async () => {
       const { canvas } = renderWithCanvas(<SidebarRight />, { skip: skipProviders });
 
       act(() => {
@@ -99,9 +99,9 @@ describe("SidebarRight", () => {
         canvas.selectEntity(id);
       });
 
-      await waitFor(() => screen.queryByText(/show original/i) !== null);
+      await waitFor(() => screen.queryByTitle(/show original/i) !== null);
 
-      expect(screen.getByText(/show original/i)).toBeInTheDocument();
+      expect(screen.getByTitle(/show original/i)).toBeInTheDocument();
     });
   });
 
@@ -227,7 +227,7 @@ describe("EntityParams", () => {
     expect(screen.getByText(/mixed palettes/i)).toBeInTheDocument();
   });
 
-  test("shows placeholder 'Mixed' for mixed size", async () => {
+  test("shows 'Mixed' label for mixed size", async () => {
     renderWithProviders(
       <EntitySetup
         entities={[{ shaderParams: { size: 10 } }, { shaderParams: { size: 30 } }]}
@@ -240,13 +240,13 @@ describe("EntityParams", () => {
     );
 
     await waitFor(() => {
-      return screen.queryByPlaceholderText(/mixed/i) !== null;
+      return screen.queryByText(/size.*mixed/i) !== null;
     });
 
-    expect(screen.getByPlaceholderText(/mixed/i)).toBeInTheDocument();
+    expect(screen.getByText(/size.*mixed/i)).toBeInTheDocument();
   });
 
-  test("shows indeterminate checkbox for mixed preserveColors", async () => {
+  test("shows preserve colors toggle for mixed preserveColors", async () => {
     renderWithProviders(
       <EntitySetup
         entities={[
@@ -262,14 +262,10 @@ describe("EntityParams", () => {
     );
 
     await waitFor(() => {
-      return screen.queryByText(/preserve colors/i) !== null;
+      return screen.queryByTitle(/preserve colors/i) !== null;
     });
 
-    // Find the preserve colors checkbox
-    const checkbox = screen.getByRole("checkbox", { name: /preserve colors/i });
-    expect(checkbox).toBeInTheDocument();
-    // The checkbox should have native indeterminate property (set via ref in checkbox component)
-    expect((checkbox as HTMLInputElement).indeterminate).toBe(true);
+    expect(screen.getByTitle(/preserve colors/i)).toBeInTheDocument();
   });
 });
 

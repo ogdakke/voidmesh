@@ -24,7 +24,7 @@
       height: 1.125rem;
       margin: 0;
       cursor: pointer;
-      accent-color: var(--primary);
+      accent-color: var(--input-bg);
       border-radius: var(--radius);
 
       &:focus-visible {
@@ -39,6 +39,7 @@
       &[switch] {
         width: auto;
         min-width: 1.125rem;
+        accent-color: var(--primary);
       }
     }
 

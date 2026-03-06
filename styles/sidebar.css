@@ -96,8 +96,13 @@
 }
 
 .show-original-row {
-  grid-template-columns: 1fr auto;
-  gap: var(--spacing-6);
+  grid-template-columns: auto 1fr;
+  font-size: var(--text-sm);
+
+  & .ui-button {
+    width: fit-content;
+    justify-self: end;
+  }
 }
 
 .controls {
@@ -344,4 +349,26 @@
 
 .select-select {
   width: 100%;
+}
+
+.palette-toggles {
+  grid-auto-flow: column;
+  gap: var(--spacing-2);
+}
+
+.ascii-kind-row {
+  grid-auto-flow: column;
+  gap: var(--spacing-3);
+  grid-template-columns: 1fr auto;
+
+  .ui-toggle {
+    align-self: end;
+    width: calc(9 * var(--spacing));
+    height: calc(9 * var(--spacing));
+    padding: 0;
+    svg {
+      width: 1.5rem;
+      height: 1.5rem;
+    }
+  }
 }

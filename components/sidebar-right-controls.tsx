@@ -1,12 +1,11 @@
 import { type ChangeEvent } from "react";
-import { FloppyDiskArrowIn, Import, NavArrowRight } from "iconoir-react";
+import { DropletHalf, Eye, FloppyDiskArrowIn, Import, NavArrowRight, Palette } from "iconoir-react";
 import { useCanvas } from "../context/use-canvas.ts";
 import { SHADER_TYPE_OPTIONS, GlassKind, GLASS_KIND_OPTIONS } from "#types/canvas.ts";
 import { useCanvasActions, useParamValue } from "../hooks/use-canvas-actions.ts";
-import { NumberField } from "./ui/number-field/number-field.tsx";
 import { Button } from "./ui/button/index.tsx";
 import { Select, SelectItem } from "./ui/select/index.tsx";
-import { Checkbox } from "./ui/checkbox/index.tsx";
+import { Toggle } from "./ui/toggle/index.tsx";
 import { Slider } from "./ui/slider/index.tsx";
 import { Hint } from "./ui/hint/hint.tsx";
 import { ColorPalette } from "./ui/color-palette/color-palette.tsx";
@@ -105,19 +104,18 @@ export const SidebarRightControls = ({ className, compact }: SidebarRightControl
                 />
               </div>
               <div className="sidebar-row show-original-row">
-                <Checkbox
-                  name="show_original"
-                  checked={showOriginalEnabled.value}
-                  indeterminate={showOriginalEnabled.isMixed}
-                  onChange={(e) => {
+                <Toggle
+                  pressed={!!showOriginalEnabled.value}
+                  onPressedChange={(pressed) => {
                     // If mixed, clicking sets all to true; otherwise toggle
-                    const newValue = showOriginalEnabled.isMixed ? true : e.target.checked;
+                    const newValue = showOriginalEnabled.isMixed ? true : pressed;
                     handleShowOriginalChange(newValue);
                   }}
+                  title="Show original"
                 >
-                  Show original
-                </Checkbox>
-                <Button variant="quiet" size="sm" onClick={resetEntityToDefaults}>
+                  <Eye /> Original
+                </Toggle>
+                <Button variant="secondary" size="sm" onClick={resetEntityToDefaults}>
                   Reset
                 </Button>
               </div>
@@ -601,45 +599,41 @@ export function EntityParams() {
           />
         </div>
       )}
-      {preserveColors.isSupported && (
-        <div className="sidebar-row preserve-colors-row">
-          <Checkbox
-            name="preserve_colors"
-            checked={!!preserveColors.value}
-            indeterminate={preserveColors.isMixed}
-            onChange={(e) => {
-              // If mixed, clicking sets all to true; otherwise toggle
-              const newValue = preserveColors.isMixed ? true : e.target.checked;
-              handlePreserveColorsChange(newValue);
-            }}
-          >
-            Preserve colors
-          </Checkbox>
+      {preserveColors.isSupported || reversePalette.isSupported ? (
+        <div className="sidebar-row palette-toggles">
+          {preserveColors.isSupported && (
+            <Toggle
+              pressed={!!preserveColors.value}
+              onPressedChange={(pressed) => {
+                const newValue = preserveColors.isMixed ? true : pressed;
+                handlePreserveColorsChange(newValue);
+              }}
+              title="Preserve colors"
+            >
+              <Palette /> Preserve
+            </Toggle>
+          )}
+          {reversePalette.isSupported && (
+            <Toggle
+              pressed={!!reversePalette.value}
+              onPressedChange={(pressed) => {
+                const newValue = reversePalette.isMixed ? true : pressed;
+                handleReversePaletteChange(newValue);
+              }}
+              title="Reverse palette"
+            >
+              <DropletHalf /> Reverse
+            </Toggle>
+          )}
         </div>
-      )}
-      {reversePalette.isSupported && (
-        <div className="sidebar-row reverse-palette-row">
-          <Checkbox
-            name="reverse_palette"
-            checked={!!reversePalette.value}
-            indeterminate={reversePalette.isMixed}
-            onChange={(e) => {
-              const newValue = reversePalette.isMixed ? true : e.target.checked;
-              handleReversePaletteChange(newValue);
-            }}
-          >
-            Reverse palette
-          </Checkbox>
-        </div>
-      )}
+      ) : null}
       <div className="sidebar-row size-row">
-        <NumberField
-          label="Size"
+        <Slider
+          label={size.isMixed ? "Size (Mixed)" : "Size"}
           name="size"
           value={size.value}
-          placeholder={size.isMixed ? "Mixed" : undefined}
           onValueChange={handleSizeChange}
-          onChangeStart={() => {
+          onInteractionStart={() => {
             undo.beginTransaction();
           }}
           onValueCommitted={() => {
@@ -647,8 +641,8 @@ export function EntityParams() {
           }}
           max={100}
           min={1}
-          enableScrubArea
-          allowWheelScrub
+          step={1}
+          showValue={!size.isMixed}
         />
       </div>
       <ShapeKnobs />

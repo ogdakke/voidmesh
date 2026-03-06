@@ -1,11 +1,12 @@
 import { AsciiKind, ASCII_KIND_OPTIONS } from "#types/canvas.ts";
 import { useCanvasActions, useParamValue } from "../hooks/use-canvas-actions.ts";
 import { Select, SelectItem } from "./ui/select/index.tsx";
-import { Checkbox } from "./ui/checkbox/index.tsx";
+import { Toggle } from "./ui/toggle/index.tsx";
 import { optionsWithNull } from "./ui/ui-util.ts";
 import { config } from "#config";
 import { ContextMenu } from "@base-ui/react/context-menu";
-import { NavArrowRight, Circle, Check } from "iconoir-react";
+import { Brightness, NavArrowRight, Circle, Check } from "iconoir-react";
+import { IonInvertMode } from "./icons/invert.tsx";
 
 // Desktop Sidebar version
 export function AsciiKnobs() {
@@ -18,37 +19,32 @@ export function AsciiKnobs() {
   if (!asciiKind.isSupported) return null;
 
   return (
-    <>
-      <div className="sidebar-row ascii-kind-row">
-        <Select
-          label="Character Set"
-          value={asciiKind.isMixed ? undefined : (asciiKind.value ?? AsciiKind.standard)}
-          onValueChange={handleAsciiKindChange}
-          formatValue={asciiKind.isMixed ? <span className="select-mixed">Mixed</span> : undefined}
-          name="ascii-kind"
-          items={optionsWithNull({ options: ASCII_KIND_OPTIONS })}
-        >
-          {ASCII_KIND_OPTIONS.map((kind) => (
-            <SelectItem key={kind.value} value={kind.value}>
-              {kind.label}
-            </SelectItem>
-          ))}
-        </Select>
-      </div>
-      <div className="sidebar-row ascii-invert-row">
-        <Checkbox
-          name="ascii_invert"
-          checked={!!asciiInvert.value}
-          indeterminate={asciiInvert.isMixed}
-          onChange={(e) => {
-            const newValue = asciiInvert.isMixed ? true : e.target.checked;
-            handleAsciiInvertChange(newValue);
-          }}
-        >
-          Invert brightness
-        </Checkbox>
-      </div>
-    </>
+    <div className="sidebar-row ascii-kind-row">
+      <Select
+        label="Character Set"
+        value={asciiKind.isMixed ? undefined : (asciiKind.value ?? AsciiKind.standard)}
+        onValueChange={handleAsciiKindChange}
+        formatValue={asciiKind.isMixed ? <span className="select-mixed">Mixed</span> : undefined}
+        name="ascii-kind"
+        items={optionsWithNull({ options: ASCII_KIND_OPTIONS })}
+      >
+        {ASCII_KIND_OPTIONS.map((kind) => (
+          <SelectItem key={kind.value} value={kind.value}>
+            {kind.label}
+          </SelectItem>
+        ))}
+      </Select>
+      <Toggle
+        pressed={!!asciiInvert.value}
+        onPressedChange={(pressed) => {
+          const newValue = asciiInvert.isMixed ? true : pressed;
+          handleAsciiInvertChange(newValue);
+        }}
+        title="Invert brightness"
+      >
+        <IonInvertMode />
+      </Toggle>
+    </div>
   );
 }
 

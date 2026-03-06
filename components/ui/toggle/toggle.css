@@ -1,0 +1,87 @@
+@layer components {
+  .ui-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.25em;
+    height: 2em;
+    min-width: 2em;
+    padding: 0 0.5em;
+    margin: 0;
+    outline: 0;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    background: transparent;
+    font-family: inherit;
+    font-size: inherit;
+    font-weight: 500;
+    line-height: 1;
+    color: var(--gray-900);
+    white-space: nowrap;
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: pointer;
+    transition: border-color 150ms ease-out;
+
+    @media (prefers-color-scheme: dark) {
+      color: var(--gray-1200);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      transition: none;
+    }
+
+    /* Hover */
+    @media (hover: hover) {
+      &:hover:not([data-disabled]) {
+        background: var(--gray-200);
+        color: var(--color);
+
+        @media (prefers-color-scheme: dark) {
+          background: var(--gray-100);
+        }
+      }
+    }
+
+    /* Pressed */
+    &[data-pressed] {
+      background: var(--input-bg);
+      color: var(--color);
+    }
+
+    /* Focus */
+    &:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+    }
+
+    /* Disabled */
+    &[data-disabled] {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    /* Icons */
+    svg {
+      width: 1em;
+      height: 1em;
+      flex-shrink: 0;
+      pointer-events: none;
+    }
+  }
+
+  /* Outline variant */
+  .ui-toggle[data-variant="outline"] {
+    border-color: var(--border);
+
+    @media (hover: hover) {
+      &:hover:not([data-disabled]) {
+        background: var(--gray-100);
+
+        @media (prefers-color-scheme: dark) {
+          background: var(--gray-50);
+        }
+      }
+    }
+  }
+}

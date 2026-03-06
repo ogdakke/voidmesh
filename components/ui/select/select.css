@@ -41,7 +41,7 @@
 
     @media (hover: hover) {
       &:hover {
-        background-color: var(--gray-100);
+        background-color: light-dark(var(--gray-200), var(--gray-100));
       }
     }
 

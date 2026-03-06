@@ -27,7 +27,7 @@ import { Checkbox } from "#ui/checkbox/checkbox.tsx";
 import { config } from "#config";
 import { exportUiConstants } from "./export-knobs.lib";
 import { Slider } from "#ui/slider/slider.tsx";
-import { NumberField } from "#ui/number-field/number-field.tsx";
+import "./export-knobs.css";
 
 const { ui: exportUiConfig } = config.videoExporting;
 const { FORMAT_OPTIONS, QUALITY_OPTIONS, RESOLUTION_OPTIONS, GIF_DITHER_OPTIONS } =
@@ -88,10 +88,11 @@ function MobileExportSettingsKnobs() {
     });
   };
 
-  const handleGifMaxWidthChange = (value: number | null) => {
-    if (value !== null) {
+  const handleGifMaxWidthChange = (value: number | number[]) => {
+    const val = Array.isArray(value) ? value[0] : value;
+    if (val !== undefined) {
       updateExportOptions({
-        advanced: { gifMaxWidth: value },
+        advanced: { gifMaxWidth: val },
       });
     }
   };
@@ -212,15 +213,16 @@ function MobileExportSettingsKnobs() {
 
           {isGif && (
             <>
-              <div className="mobile-row">
-                <NumberField
+              <div className="mobile-row gif-export-slider">
+                <Slider
                   label="Max Width"
                   name="gif-max-width"
                   value={exportOptions.advanced.gifMaxWidth}
                   onValueChange={handleGifMaxWidthChange}
                   min={exportUiConfig.gifMaxWidth.min}
                   max={exportUiConfig.gifMaxWidth.max}
-                  enableScrubArea
+                  step={exportUiConfig.gifMaxWidth.step}
+                  showValue
                 />
               </div>
               <div className="mobile-row">
