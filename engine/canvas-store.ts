@@ -54,6 +54,16 @@ export interface CanvasState {
   // Mobile entity drag state (transient)
   /** Whether a mobile long-press entity drag is currently active */
   entityDragActive: boolean;
+
+  // Mobile action layer state (transient)
+  /** Whether the mobile action layer (radial context menu) is active */
+  actionLayerActive: boolean;
+  /** Entity IDs targeted by the action layer */
+  actionLayerEntityIds: ReadonlySet<string>;
+  /** Touch origin in CSS viewport coordinates (set on activation) */
+  actionLayerTouchOrigin: { x: number; y: number };
+  /** Version counter for action layer state changes */
+  actionLayerVersion: number;
 }
 
 // Snapshot types for selective subscriptions
@@ -79,6 +89,13 @@ export interface DragSnapshot {
   version: number;
 }
 
+export interface ActionLayerSnapshot {
+  active: boolean;
+  entityIds: ReadonlySet<string>;
+  touchOrigin: { x: number; y: number };
+  version: number;
+}
+
 export interface PlaybackSnapshot {
   entityId: string | null;
   currentTime: number;
@@ -98,6 +115,10 @@ export interface RenderState {
   dragSelectBounds: Bounds | null;
   /** Multi-select bounding box in world coordinates (null if < 2 entities selected) */
   multiSelectBounds: Bounds | null;
+  /** Whether the mobile action layer is active (renderer applies blur overlay) */
+  actionLayerActive: boolean;
+  /** Entity IDs to keep sharp when action layer blur is active */
+  actionLayerEntityIds: ReadonlySet<string>;
 }
 
 export interface ParamResult<T> {
@@ -132,6 +153,7 @@ export class CanvasStore extends Store<CanvasState> {
   readonly getSelectionSnapshot: () => SelectionSnapshot;
   readonly getPlaybackSnapshot: () => PlaybackSnapshot;
   readonly getDragSnapshot: () => DragSnapshot;
+  readonly getActionLayerSnapshot: () => ActionLayerSnapshot;
 
   constructor() {
     super({
@@ -156,6 +178,10 @@ export class CanvasStore extends Store<CanvasState> {
       playbackVersion: 0,
       dragVersion: 0,
       entityDragActive: false,
+      actionLayerActive: false,
+      actionLayerEntityIds: new Set(),
+      actionLayerTouchOrigin: { x: 0, y: 0 },
+      actionLayerVersion: 0,
     });
 
     this.#logger = logger;
@@ -217,6 +243,13 @@ export class CanvasStore extends Store<CanvasState> {
     this.getDragSnapshot = this.createSnapshot("dragVersion", (s) => ({
       entityDragActive: s.entityDragActive,
       version: s.dragVersion,
+    }));
+
+    this.getActionLayerSnapshot = this.createSnapshot("actionLayerVersion", (s) => ({
+      active: s.actionLayerActive,
+      entityIds: s.actionLayerEntityIds,
+      touchOrigin: s.actionLayerTouchOrigin,
+      version: s.actionLayerVersion,
     }));
   }
 
@@ -493,6 +526,18 @@ export class CanvasStore extends Store<CanvasState> {
     this.notify();
   }
 
+  setActionLayerActive(
+    active: boolean,
+    entityIds?: ReadonlySet<string>,
+    touchOrigin?: { x: number; y: number },
+  ): void {
+    this.state.actionLayerActive = active;
+    this.state.actionLayerEntityIds = entityIds ?? new Set();
+    if (touchOrigin) this.state.actionLayerTouchOrigin = touchOrigin;
+    this.state.actionLayerVersion++;
+    this.notify();
+  }
+
   setMultiSelectMode(enabled: boolean): void {
     this.state.multiSelectMode = enabled;
     this.notifySelectionChange();
@@ -748,6 +793,8 @@ export class CanvasStore extends Store<CanvasState> {
       // dragSelectBounds and multiSelectBounds are set by game-loop after calling this method
       dragSelectBounds: null,
       multiSelectBounds: null,
+      actionLayerActive: this.state.actionLayerActive,
+      actionLayerEntityIds: this.state.actionLayerEntityIds,
     };
   }
 
