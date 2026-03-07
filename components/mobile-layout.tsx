@@ -26,6 +26,7 @@ import { useParamValue } from "#hooks/use-param-value.ts";
 import { isAnimatedEntity } from "#types/canvas.ts";
 import { canvasStore } from "#engine";
 import { useEntityDrag } from "#hooks/use-entity-drag.ts";
+import { toastManager } from "#ui/toast/toast-manager.ts";
 
 function MobileActionLayer() {
   const { saveSelectedEntityToFile, renderer } = useCanvas();
@@ -40,6 +41,12 @@ function MobileActionLayer() {
       for (const entity of animated) {
         addToQueue(entity, renderer);
       }
+      const n = animated.length;
+      const count = `${n} ${n === 1 ? "file" : "files"}`;
+      toastManager.add({
+        title: `Exporting ${count}`,
+        description: "See progress in exports tab",
+      });
     } else {
       saveSelectedEntityToFile();
     }
