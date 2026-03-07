@@ -51,9 +51,14 @@ interface RingPosition {
 
 /**
  * Compute ring positions for N buttons.
- * Order: top-center, then alternating left/right.
+ * Order: center of arc, then alternating left/right.
+ * @param baseAngle - Center angle of the arc (default: -π/2 = upward)
  */
-function computeRingPositions(count: number, radius: number): RingPosition[] {
+function computeRingPositions(
+  count: number,
+  radius: number,
+  baseAngle: number = -Math.PI / 2,
+): RingPosition[] {
   if (count === 0) return [];
   const positions: RingPosition[] = [];
   const spread = Math.PI / (count + 1);
@@ -61,11 +66,11 @@ function computeRingPositions(count: number, radius: number): RingPosition[] {
   for (let i = 0; i < count; i++) {
     let angle: number;
     if (i === 0) {
-      angle = -Math.PI / 2;
+      angle = baseAngle;
     } else {
       const offset = Math.ceil(i / 2);
       const side = i % 2 === 1 ? -1 : 1;
-      angle = -Math.PI / 2 + side * offset * spread;
+      angle = baseAngle + side * offset * spread;
     }
     positions.push({
       x: Math.cos(angle) * radius,
@@ -82,36 +87,58 @@ function getEnvPx(envVar: string): number {
   return parseFloat(value) || 0;
 }
 
-function clampRingCenter(
-  cx: number,
-  cy: number,
-  positions: RingPosition[],
-): { x: number; y: number } {
+/**
+ * Compute the optimal arc base angle so all buttons stay within the safe area.
+ * Returns -π/2 (upward) when buttons fit. Otherwise, binary-searches for the
+ * minimum rotation from the default toward the center of available space —
+ * just enough to bring all buttons in bounds without over-rotating.
+ */
+function computeArcAngle(cx: number, cy: number, count: number, radius: number): number {
   const { edgeInset, buttonSize } = config.actionLayer;
   const pad = buttonSize / 2 + edgeInset;
 
-  // Account for PWA safe areas (status bar, home indicator)
   const safeTop = getEnvPx("--safe-area-top");
   const safeBottom = getEnvPx("--safe-area-bottom");
   const safeLeft = getEnvPx("--safe-area-left");
   const safeRight = getEnvPx("--safe-area-right");
 
-  // Compute actual extents from button positions (relative to center)
-  let minX = 0;
-  let maxX = 0;
-  let minY = 0;
-  let maxY = 0;
-  for (const pos of positions) {
-    if (pos.x < minX) minX = pos.x;
-    if (pos.x > maxX) maxX = pos.x;
-    if (pos.y < minY) minY = pos.y;
-    if (pos.y > maxY) maxY = pos.y;
-  }
+  const minX = pad + safeLeft;
+  const maxX = window.innerWidth - pad - safeRight;
+  const minY = pad + safeTop;
+  const maxY = window.innerHeight - pad - safeBottom;
 
-  return {
-    x: Math.max(pad + safeLeft - minX, Math.min(window.innerWidth - maxX - pad - safeRight, cx)),
-    y: Math.max(pad + safeTop - minY, Math.min(window.innerHeight - maxY - pad - safeBottom, cy)),
+  const allFit = (baseAngle: number): boolean => {
+    const positions = computeRingPositions(count, radius, baseAngle);
+    return positions.every(
+      (p) => cx + p.x >= minX && cx + p.x <= maxX && cy + p.y >= minY && cy + p.y <= maxY,
+    );
   };
+
+  const defaultAngle = -Math.PI / 2;
+  if (allFit(defaultAngle)) return defaultAngle;
+
+  // Target: angle toward center of safe rect (guaranteed to have most space)
+  const safeCenterX = (minX + maxX) / 2;
+  const safeCenterY = (minY + maxY) / 2;
+  const targetAngle = Math.atan2(safeCenterY - cy, safeCenterX - cx);
+
+  // Shortest angular path from default to target
+  let diff = targetAngle - defaultAngle;
+  if (diff > Math.PI) diff -= 2 * Math.PI;
+  if (diff < -Math.PI) diff += 2 * Math.PI;
+
+  // Binary search: find the minimum rotation (t ∈ [0,1]) where all buttons fit
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 12; i++) {
+    const mid = (lo + hi) / 2;
+    if (allFit(defaultAngle + mid * diff)) {
+      hi = mid;
+    } else {
+      lo = mid;
+    }
+  }
+  return defaultAngle + hi * diff;
 }
 
 // ============================================================================
@@ -138,12 +165,12 @@ function Root({ children }: PropsWithChildren) {
   // Always computed — touchOrigin retains its last value when deactivated,
   // so the layout stays valid for exit animations.
   const { buttonRingRadius, fingerClearanceOffset } = config.actionLayer;
-  const positions = computeRingPositions(items.length, buttonRingRadius);
-  const rawCenter = {
+  const center = {
     x: storeTouchOrigin.x,
     y: storeTouchOrigin.y - fingerClearanceOffset,
   };
-  const center = clampRingCenter(rawCenter.x, rawCenter.y, positions);
+  const baseAngle = computeArcAngle(center.x, center.y, items.length, buttonRingRadius);
+  const positions = computeRingPositions(items.length, buttonRingRadius, baseAngle);
   const ringLayout = { center, positions, touchOrigin: storeTouchOrigin };
 
   // Gate hover state by active — stale values from previous activation are harmless
@@ -235,6 +262,9 @@ function Root({ children }: PropsWithChildren) {
       window.removeEventListener("touchmove", handleTouchMove);
       window.removeEventListener("touchend", handleTouchEnd, { capture: true });
     };
+    // `center` and `positions` are derived from `storeTouchOrigin` (stable ref via
+    // useSyncExternalStore) and frozen config. React Compiler memoizes them.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [active, center, positions, storeTouchOrigin, items]);
 
   const contextValue: ActionLayerContextValue = { register };
@@ -328,7 +358,11 @@ function ActionLayerOverlay({
       )}
 
       {config.actionLayer.debug && (
-        <DebugOverlaySvg center={center} touchOrigin={ringLayout.touchOrigin} />
+        <DebugOverlaySvg
+          center={center}
+          touchOrigin={ringLayout.touchOrigin}
+          positions={ringLayout.positions}
+        />
       )}
     </div>
   );
@@ -361,9 +395,11 @@ function Item({ onAction, label, children }: ItemProps) {
 function DebugOverlaySvg({
   center,
   touchOrigin,
+  positions,
 }: {
   center: { x: number; y: number };
   touchOrigin: { x: number; y: number };
+  positions: RingPosition[];
 }) {
   const { safeZoneRadius, buttonRingRadius, buttonSize, buttonHitPadding, deadzone } =
     config.actionLayer;
@@ -397,7 +433,7 @@ function DebugOverlaySvg({
       />
       <circle cx={touchOrigin.x} cy={touchOrigin.y} r={4} fill="rgba(255,0,0,0.5)" />
       <circle cx={center.x} cy={center.y} r={4} fill="rgba(0,255,0,0.5)" />
-      {computeRingPositions(5, buttonRingRadius).map((pos, i) => (
+      {positions.map((pos, i) => (
         <circle
           key={i}
           cx={center.x + pos.x}
