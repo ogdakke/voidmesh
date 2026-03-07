@@ -1,8 +1,14 @@
-import { useRef, useState, useEffect, type PropsWithChildren } from "react";
-import { cssToOklch, MAX_CHROMA, oklchToCss, type OklchColor } from "#lib/color-utils.ts";
+import { startTransition, useRef, useState, useEffect, type PropsWithChildren } from "react";
+import { cssToOklch, MAX_CHROMA, type OklchColor } from "#lib/color-utils.ts";
 import { ColorSpace } from "#types/enums.ts";
 import { colorAreaGpu } from "./color-area-gpu";
 import { ColorPickerContext, type ColorPickerContextValue } from "./use-color-picker";
+import {
+  ColorValueFormat,
+  detectColorValueFormat,
+  formatOklchForValueFormat,
+  getAvailableColorValueFormats,
+} from "./color-value-formats";
 
 export interface ColorPickerRootProps {
   /** CSS color string, e.g. "color(display-p3 0.5 0.3 0.8 / 0.5)" or "#ff0000" */
@@ -11,7 +17,7 @@ export interface ColorPickerRootProps {
   onChangeStart?: () => void;
   onChangeEnd?: () => void;
   disabled?: boolean;
-  /** Color space for CSS output (default: srgb) */
+  /** Picker capability hint used to enable Display P3-specific UI/output */
   colorSpace?: ColorSpace;
 }
 
@@ -24,19 +30,30 @@ export function Root({
   colorSpace = ColorSpace.srgb,
   children,
 }: PropsWithChildren<ColorPickerRootProps>) {
+  const supportsP3 = colorSpace === ColorSpace.displayP3;
+  const availableFormats = getAvailableColorValueFormats({ supportsP3 }).map(
+    (definition) => definition.id,
+  );
+  const getInitialSelectedFormat = () =>
+    detectColorValueFormat(value, { supportsP3 }) ??
+    (supportsP3 ? ColorValueFormat.p3 : ColorValueFormat.hex);
+
   const [oklch, setOklchState] = useState<OklchColor>(() => cssToOklch(value));
+  const [selectedFormat, setSelectedFormatState] = useState(getInitialSelectedFormat);
 
   // Ref tracks latest oklch — source of truth during scrubbing
   const oklchRef = useRef(oklch);
+  const selectedFormatRef = useRef(selectedFormat);
 
   const isInteractingRef = useRef(false);
   const lastEmittedRef = useRef(value);
   const onChangeRef = useRef(onChange);
-  // oxlint-disable-next-line react-hooks-js/refs -- callback ref pattern
-  onChangeRef.current = onChange;
   const onChangeEndRef = useRef(onChangeEnd);
-  // oxlint-disable-next-line react-hooks-js/refs -- callback ref pattern
-  onChangeEndRef.current = onChangeEnd;
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+    onChangeEndRef.current = onChangeEnd;
+  }, [onChange, onChangeEnd]);
 
   // ── Element registry for imperative DOM updates during scrubbing ────
 
@@ -120,9 +137,20 @@ export function Root({
 
     // Genuinely different external value — accept it
     lastEmittedRef.current = value;
-    setOklchState(parsed);
     oklchRef.current = parsed;
+    startTransition(() => {
+      setOklchState(parsed);
+    });
   }, [value]);
+
+  useEffect(() => {
+    const nextFormat = supportsP3 ? selectedFormatRef.current : ColorValueFormat.hex;
+    if (selectedFormatRef.current === nextFormat) return;
+    selectedFormatRef.current = nextFormat;
+    startTransition(() => {
+      setSelectedFormatState(nextFormat);
+    });
+  }, [supportsP3]);
 
   // ── rAF-throttled emission: at most one onChange per frame ─────────
 
@@ -137,7 +165,7 @@ export function Root({
         const pending = pendingEmitRef.current;
         pendingEmitRef.current = null;
         if (pending !== null) {
-          const css = oklchToCss(pending, colorSpace);
+          const css = formatOklchForValueFormat(pending, selectedFormatRef.current);
           lastEmittedRef.current = css;
           onChangeRef.current(css);
         }
@@ -171,11 +199,17 @@ export function Root({
     scheduleEmit(color);
   };
 
-  const setCssValue = (css: string) => {
-    const parsed = cssToOklch(css);
-    oklchRef.current = parsed;
-    setOklchState(parsed);
-    scheduleEmit(parsed);
+  const setCssValue = (css: string, color?: OklchColor) => {
+    const nextColor = color ?? cssToOklch(css);
+    oklchRef.current = nextColor;
+    setOklchState(nextColor);
+    scheduleEmit(nextColor);
+  };
+
+  const setSelectedFormat = (format: ColorValueFormat) => {
+    if (!availableFormats.includes(format) || selectedFormatRef.current === format) return;
+    selectedFormatRef.current = format;
+    setSelectedFormatState(format);
   };
 
   const startCssRef = useRef("");
@@ -184,7 +218,7 @@ export function Root({
     if (!isInteractingRef.current) {
       isInteractingRef.current = true;
       prevHueRef.current = oklchRef.current.h;
-      startCssRef.current = oklchToCss(oklchRef.current, colorSpace);
+      startCssRef.current = formatOklchForValueFormat(oklchRef.current, selectedFormatRef.current);
       onChangeStart?.();
     }
   };
@@ -200,7 +234,7 @@ export function Root({
       }
       const pending = pendingEmitRef.current ?? oklchRef.current;
       pendingEmitRef.current = null;
-      const css = oklchToCss(pending, colorSpace);
+      const css = formatOklchForValueFormat(pending, selectedFormatRef.current);
       lastEmittedRef.current = css;
 
       // Only emit if the color actually changed during this interaction
@@ -225,12 +259,19 @@ export function Root({
 
   // ── Context value ─────────────────────────────────────────────────
 
-  const cssValue = oklchToCss(oklch, colorSpace);
+  const cssValue = formatOklchForValueFormat(oklch, selectedFormat);
 
   const ctx: ColorPickerContextValue = {
     state: { oklch, cssValue },
-    actions: { setChannel, setOklch, setCssValue, startInteraction, endInteraction },
-    meta: { isDisabled: disabled, colorSpace },
+    actions: {
+      setChannel,
+      setOklch,
+      setCssValue,
+      setSelectedFormat,
+      startInteraction,
+      endInteraction,
+    },
+    meta: { isDisabled: disabled, supportsP3, selectedFormat, availableFormats },
     registerElement,
   };
 

@@ -347,6 +347,22 @@ export function cssColorToRGBA(cssString: string): [number, number, number, numb
 }
 
 /**
+ * Parse a supported CSS color and convert it into normalized RGBA values
+ * in the requested target color space.
+ */
+export function cssColorToRGBAInColorSpace(
+  cssString: string,
+  colorSpace: ColorSpace,
+): [number, number, number, number] {
+  const parsed = cssToOklch(cssString);
+  const [r, g, b] =
+    colorSpace === ColorSpace.displayP3
+      ? oklchToP3Rgb(parsed.l, parsed.c, parsed.h)
+      : oklchToSrgbRgb(parsed.l, parsed.c, parsed.h);
+  return [r, g, b, parsed.a];
+}
+
+/**
  * Convert normalized RGBA to CSS color string in display-p3 space.
  * Outputs `color(display-p3 r g b)` or `color(display-p3 r g b / a)` when alpha < 1.
  */

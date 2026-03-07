@@ -1,6 +1,6 @@
 import { createContext, use, useEffect } from "react";
 import type { OklchColor } from "#lib/color-utils.ts";
-import type { ColorSpace } from "#types/enums.ts";
+import type { ColorValueFormat } from "./color-value-formats";
 
 export interface ColorPickerState {
   oklch: OklchColor;
@@ -10,14 +10,17 @@ export interface ColorPickerState {
 export interface ColorPickerActions {
   setChannel: (channel: "l" | "c" | "h" | "a", value: number) => void;
   setOklch: (oklch: OklchColor) => void;
-  setCssValue: (css: string) => void;
+  setCssValue: (css: string, color?: OklchColor) => void;
+  setSelectedFormat: (format: ColorValueFormat) => void;
   startInteraction: () => void;
   endInteraction: () => void;
 }
 
 export interface ColorPickerMeta {
   isDisabled: boolean;
-  colorSpace: ColorSpace;
+  supportsP3: boolean;
+  selectedFormat: ColorValueFormat;
+  availableFormats: readonly ColorValueFormat[];
 }
 
 /** Register a DOM element for imperative updates during scrubbing */
