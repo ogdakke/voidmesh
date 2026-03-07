@@ -1,0 +1,19 @@
+@layer components {
+  .copy-paste-drawer {
+    max-height: calc(240px + env(safe-area-inset-bottom, 0px));
+
+    .drawer-content {
+      display: flex;
+      flex-direction: column;
+    }
+  }
+
+  .copy-paste-drawer-actions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-2);
+    padding: var(--spacing-3);
+    margin-top: auto;
+    padding-bottom: max(env(safe-area-inset-bottom, var(--spacing-3)), var(--spacing-3));
+  }
+}

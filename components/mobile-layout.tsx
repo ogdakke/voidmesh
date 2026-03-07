@@ -3,10 +3,10 @@ import {
   ColorFilter,
   Component,
   ControlSlider,
+  Copy,
   Download,
   MediaVideo,
   Palette,
-  PasteClipboard,
 } from "iconoir-react";
 import { Canvas } from "./canvas";
 import { MediaControls } from "./infinite-canvas/media-controls.tsx";
@@ -15,6 +15,7 @@ import { BottomBarItem, MobileBottomBar } from "./mobile-bottom/mobile-bottom-ba
 import { items, type BarItem } from "./mobile-bottom/bar-items.ts";
 import { DeleteDropZone } from "./delete-drop-zone/delete-drop-zone.tsx";
 import { ActionLayer } from "./action-layer/action-layer.tsx";
+import { CopyPasteDrawer } from "./action-layer/copy-paste-drawer.tsx";
 import { IonDuplicateOutline } from "./icons/duplicate.tsx";
 import { Drawer } from "#ui/drawer/index.tsx";
 import { useCanvas } from "#context/use-canvas.ts";
@@ -30,8 +31,9 @@ import { toastManager } from "#ui/toast/toast-manager.ts";
 
 function MobileActionLayer() {
   const { saveSelectedEntityToFile, renderer } = useCanvas();
-  const { pasteEntityParams, duplicateEntities } = useCanvasActions();
+  const { duplicateEntities } = useCanvasActions();
   const { addToQueue } = useExportQueue();
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   const handleSave = () => {
     // Check if the selected entity is animated — export instead of save
@@ -57,17 +59,20 @@ function MobileActionLayer() {
   const hasAnimated = selectedEntities.some(isAnimatedEntity);
 
   return (
-    <ActionLayer.Root>
-      <ActionLayer.Item onAction={pasteEntityParams} label="Paste Effects">
-        <PasteClipboard />
-      </ActionLayer.Item>
-      <ActionLayer.Item onAction={duplicateEntities} label="Duplicate">
-        <IonDuplicateOutline />
-      </ActionLayer.Item>
-      <ActionLayer.Item onAction={handleSave} label={hasAnimated ? "Export" : "Save"}>
-        {hasAnimated ? <MediaVideo /> : <Download />}
-      </ActionLayer.Item>
-    </ActionLayer.Root>
+    <>
+      <ActionLayer.Root>
+        <ActionLayer.Item onAction={() => setDrawerOpen(true)} label="Copy/Paste Effects">
+          <Copy />
+        </ActionLayer.Item>
+        <ActionLayer.Item onAction={duplicateEntities} label="Duplicate">
+          <IonDuplicateOutline />
+        </ActionLayer.Item>
+        <ActionLayer.Item onAction={handleSave} label={hasAnimated ? "Export" : "Save"}>
+          {hasAnimated ? <MediaVideo /> : <Download />}
+        </ActionLayer.Item>
+      </ActionLayer.Root>
+      <CopyPasteDrawer open={drawerOpen} onOpenChange={setDrawerOpen} />
+    </>
   );
 }
 
