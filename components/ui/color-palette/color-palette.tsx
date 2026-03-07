@@ -4,7 +4,7 @@ import { Button } from "../button/index.tsx";
 import { Plus, Trash } from "iconoir-react";
 import type { ColorPalette as ColorPaletteType } from "#types/canvas.ts";
 import { MAX_PALETTE_COLORS } from "#types/canvas.ts";
-import { cssColorToRGBA, rgbaToCss } from "#lib/color-utils.ts";
+import { cssColorToRGBAInColorSpace, rgbaToCss } from "#lib/color-utils.ts";
 import { ColorSpace } from "#types/enums.ts";
 import { config } from "#config";
 import { isUserPalette } from "#components/palette-preset/palette-presets.ts";
@@ -54,7 +54,7 @@ export function ColorPalette({
     const currentColors = palette?.colors ?? [];
     const storageIndex = toStorageIndex(displayIndex);
     const newColors = [...currentColors];
-    newColors[storageIndex] = cssColorToRGBA(cssColor);
+    newColors[storageIndex] = cssColorToRGBAInColorSpace(cssColor, colorSpace);
     const preserveId = palette && isUserPalette(palette.id);
     onChange({
       ...palette,

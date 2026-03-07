@@ -1,4 +1,9 @@
-import { luminance, sortPaletteByLuminance } from "#lib/color-utils.ts";
+import {
+  cssColorToRGBAInColorSpace,
+  luminance,
+  rgbaToCss,
+  sortPaletteByLuminance,
+} from "#lib/color-utils.ts";
 import { ColorSpace } from "#types/enums.ts";
 import { describe, expect, test } from "vitest";
 
@@ -128,5 +133,14 @@ describe("sortPaletteByLuminance", () => {
       const lumCurr = luminance(curr[0], curr[1], curr[2], ColorSpace.srgb);
       expect(lumCurr).toBeGreaterThanOrEqual(lumPrev);
     }
+  });
+});
+
+describe("cssColorToRGBAInColorSpace", () => {
+  test("converts hex input into display-p3 RGBA for P3-backed storage", () => {
+    const rgba = cssColorToRGBAInColorSpace("#ff789a", ColorSpace.displayP3);
+    expect(rgbaToCss(rgba, ColorSpace.displayP3)).toMatch(/^color\(display-p3 /);
+    expect(rgba[0]).not.toBeCloseTo(1, 4);
+    expect(rgba[1]).not.toBeCloseTo(0.470588, 4);
   });
 });
