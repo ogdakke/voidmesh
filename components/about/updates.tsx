@@ -3,7 +3,7 @@ import { Image } from "#ui/image.tsx";
 import { Video } from "#ui/video.tsx";
 import type { PropsWithChildren } from "react";
 import saveFeature from "#media/save_feature_img.webp?img";
-import p3Feature from "#media/feature_p3_color_picker.jpg?img";
+import p3Feature from "#media/feature_color_picker_with_space_select.jpg?img";
 import flowingExample from "#media/flowing_example_updates.webp?img";
 import { MoreVert } from "iconoir-react";
 
@@ -16,6 +16,32 @@ export function Updates() {
   return (
     <section>
       <h1>Updates</h1>
+      <Update>
+        <UpdatesTitle date="2026-03-07">Mobile context menu</UpdatesTitle>
+        <p>Now you can do more actions that were already available on desktop on mobile as well!</p>
+        {isMobile ? (
+          <>
+            <figure>
+              <Video
+                className="video"
+                src={[
+                  { src: "/m/feature_context_menu_av1_qp50.mp4", codec: "av1" },
+                  { src: "/m/feature_context_menu_compressed.mp4", codec: "h264" },
+                ]}
+                placeholder="y/cJDQIHiZV5B7inZoWYl/qXiW+4"
+                muted
+                autoPlay
+                loop
+                playsInline
+                style={{ aspectRatio: "3/4" }}
+              />
+              <figcaption>
+                Duplicate, copy/paste effects, and save are now available on long press
+              </figcaption>
+            </figure>
+          </>
+        ) : null}
+      </Update>
       <Update>
         <UpdatesTitle date="2026-03-04">P3 Color Space</UpdatesTitle>
         <p>
@@ -41,11 +67,9 @@ export function Updates() {
         <p>Some other notable changes:</p>
         <ul>
           <li>
-            <strong>first color is always treated</strong> as the background
+            <strong>First color in the palette is always treated</strong> as the background
           </li>
-          <li>
-            You can also use hex colors in the input, so it's easier to paste colors from elsewhere
-          </li>
+          <li>You can also change the color format to hex</li>
           <li>Transparency is now supported for palette colors</li>
         </ul>
       </Update>
@@ -59,15 +83,15 @@ export function Updates() {
                 className="video"
                 src={[
                   {
-                    src: "/m/fancy_delete_update_1_av1_qp50.mp4",
+                    src: "/m/fancy_delete_with_context_menu_mobile_av1_qp50.mp4",
                     codec: "av1",
                   },
                   {
-                    src: "/m/fancy_delete_update_1_compressed.mp4",
+                    src: "/m/fancy_delete_with_context_menu_mobile_compressed.mp4",
                     codec: "h264",
                   },
                 ]}
-                placeholder="w/cBBwAGikV/qGNVqJZlSZdpll/J+YkJ"
+                placeholder="yfcFBwAJeHeNdXlxeapXx1d0ByoElWAI"
                 muted
                 autoPlay
                 loop
