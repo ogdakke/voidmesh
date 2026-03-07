@@ -112,6 +112,7 @@ export class InfiniteCanvasRenderer {
   > = new Map();
 
   #gridConfig: GridConfig = config.rendering.grid.default;
+  #actionLayerTintColor: [number, number, number] = config.actionLayer.dimColor.dark;
 
   // Texture pool for eliminating per-frame allocation churn
   #texturePool: TexturePool | null = null;
@@ -172,6 +173,10 @@ export class InfiniteCanvasRenderer {
     input: GPUTexture;
     output: GPUTexture;
   } | null = null;
+  // Blur result caching: skip re-running Kawase when content hasn't changed
+  #actionLayerBlurCacheValid = false;
+  #actionLayerLastBlurIntensity = -1;
+  #actionLayerBlitBindGroupCached: GPUBindGroup | null = null;
 
   // Copy pass for showOriginal (rgba8unorm source → rgba16float output)
   #passthroughCopyPass: CopyPass | null = null;
@@ -623,11 +628,13 @@ export class InfiniteCanvasRenderer {
       return cached;
     }
 
-    // Destroy old textures
+    // Destroy old textures and invalidate caches
     if (cached) {
       cached.input.destroy();
       cached.output.destroy();
     }
+    this.#actionLayerBlurCacheValid = false;
+    this.#actionLayerBlitBindGroupCached = null;
 
     const usage =
       GPUTextureUsage.TEXTURE_BINDING |
@@ -676,7 +683,7 @@ export class InfiniteCanvasRenderer {
 
     this.#actionLayerBlitUniformBuffer = this.#device.createBuffer({
       label: "Action layer blit uniforms",
-      size: 16, // vec4f: dim + padding
+      size: 32, // 2x vec4f: tint_amount + blend + pad, tint_color
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
@@ -1290,6 +1297,7 @@ export class InfiniteCanvasRenderer {
     // Uses caching to avoid per-frame allocations
     const entityBindGroups: GPUBindGroup[] = [];
     const actionLayerBindGroups: GPUBindGroup[] = [];
+    let hasAnimatingContent = false;
 
     // Compute viewport world bounds once for culling (with buffer to prevent pop-in)
     const viewportBounds = getViewportWorldBounds(
@@ -1312,6 +1320,9 @@ export class InfiniteCanvasRenderer {
       // For playing animated media, always consider texture dirty (frame changes every render)
       const isPlayingMedia = isAnimatedEntity(entity) && entity.playback?.isPlaying;
       const textureWasDirty = entity.textureDirty || isPlayingMedia;
+      if (isPlayingMedia || this.needsContinuousRenderForEntity(entity)) {
+        hasAnimatingContent = true;
+      }
 
       // Render entity to texture if needed (this has its own submission for dirty textures)
       const entityTexture = this.renderEntityToTexture(entity);
@@ -1478,36 +1489,52 @@ export class InfiniteCanvasRenderer {
       // Get or create intermediate textures for full-screen blur
       const blurTextures = this.#getOrCreateActionLayerBlurTextures(width, height);
       if (blurTextures) {
-        // Copy swapchain → input texture
-        encoder.copyTextureToTexture(
-          { texture },
-          { texture: blurTextures.input },
-          { width, height },
-        );
+        // Only re-run the expensive Kawase blur pipeline when content has actually changed
+        const blurNeedsUpdate =
+          !this.#actionLayerBlurCacheValid ||
+          Math.abs(blurIntensity - this.#actionLayerLastBlurIntensity) > 0.001 ||
+          state.dirty ||
+          hasAnimatingContent;
 
-        // Kawase blur: input → output
-        this.#processingPipeline.encodeFullScreenBlur(
-          encoder,
-          blurTextures.input,
-          blurTextures.output,
-          width,
-          height,
-        );
+        if (blurNeedsUpdate) {
+          // Copy swapchain → input texture
+          encoder.copyTextureToTexture(
+            { texture },
+            { texture: blurTextures.input },
+            { width, height },
+          );
 
-        // Blit blurred+dimmed result to swapchain (alpha-blended with original)
-        const dimFactor = 1 - config.actionLayer.dimOpacity * blurIntensity;
-        const uniformData = new Float32Array([dimFactor, blurIntensity, 0, 0]);
+          // Kawase blur: input → output
+          this.#processingPipeline.encodeFullScreenBlur(
+            encoder,
+            blurTextures.input,
+            blurTextures.output,
+            width,
+            height,
+          );
+
+          this.#actionLayerBlurCacheValid = true;
+          this.#actionLayerLastBlurIntensity = blurIntensity;
+        }
+
+        // Always update uniforms (intensity may change during fade animation)
+        const tintAmount = config.actionLayer.dimOpacity * blurIntensity;
+        const [tr, tg, tb] = this.#actionLayerTintColor;
+        const uniformData = new Float32Array([tintAmount, blurIntensity, 0, 0, tr, tg, tb, 0]);
         this.#device.queue.writeBuffer(this.#actionLayerBlitUniformBuffer, 0, uniformData);
 
-        const blitBindGroup = this.#device.createBindGroup({
-          label: "Action layer blit bind group",
-          layout: this.#actionLayerBlitBindGroupLayout,
-          entries: [
-            { binding: 0, resource: blurTextures.output.createView() },
-            { binding: 1, resource: this.#actionLayerBlitSampler },
-            { binding: 2, resource: { buffer: this.#actionLayerBlitUniformBuffer } },
-          ],
-        });
+        // Cache blit bind group (only recreate when textures change)
+        if (!this.#actionLayerBlitBindGroupCached) {
+          this.#actionLayerBlitBindGroupCached = this.#device.createBindGroup({
+            label: "Action layer blit bind group",
+            layout: this.#actionLayerBlitBindGroupLayout,
+            entries: [
+              { binding: 0, resource: blurTextures.output.createView() },
+              { binding: 1, resource: this.#actionLayerBlitSampler },
+              { binding: 2, resource: { buffer: this.#actionLayerBlitUniformBuffer } },
+            ],
+          });
+        }
 
         const blitPass = encoder.beginRenderPass({
           label: "Action layer blit pass",
@@ -1520,10 +1547,16 @@ export class InfiniteCanvasRenderer {
           ],
         });
         blitPass.setPipeline(this.#actionLayerBlitPipeline);
-        blitPass.setBindGroup(0, blitBindGroup);
+        blitPass.setBindGroup(0, this.#actionLayerBlitBindGroupCached);
         blitPass.draw(3);
         blitPass.end();
       }
+    }
+
+    // Reset blur cache when action layer blur is no longer rendering
+    if (blurIntensity <= 0.01) {
+      this.#actionLayerBlurCacheValid = false;
+      this.#actionLayerLastBlurIntensity = -1;
     }
 
     // Always render action layer entities on top (sharp, after blur or normally)
@@ -1615,6 +1648,10 @@ export class InfiniteCanvasRenderer {
    */
   setGridConfig(config: Partial<GridConfig>): void {
     this.#gridConfig = { ...this.#gridConfig, ...config };
+  }
+
+  setActionLayerTint(color: [number, number, number]): void {
+    this.#actionLayerTintColor = color;
   }
 
   /**
@@ -1889,6 +1926,8 @@ export class InfiniteCanvasRenderer {
       this.#actionLayerBlurTextures.output.destroy();
       this.#actionLayerBlurTextures = null;
     }
+    this.#actionLayerBlurCacheValid = false;
+    this.#actionLayerBlitBindGroupCached = null;
     this.#actionLayerBlitUniformBuffer?.destroy();
     this.#actionLayerBlitPipeline = null;
     this.#actionLayerBlitBindGroupLayout = null;

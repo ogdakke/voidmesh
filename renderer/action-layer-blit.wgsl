@@ -3,10 +3,11 @@
 // Used to composite the blurred+dimmed background for the action layer overlay.
 
 struct Params {
-  dim: f32,       // Brightness multiplier (0 = black, 1 = full brightness)
-  blend: f32,     // Blend factor (0 = show original, 1 = fully blurred+dimmed)
+  tint_amount: f32, // How much to mix toward tint color (0 = none, 1 = fully tinted)
+  blend: f32,       // Blend factor (0 = show original, 1 = fully blurred+tinted)
   _pad0: f32,
   _pad1: f32,
+  tint_color: vec4f, // RGB tint color (dark mode: black, light mode: white), w unused
 }
 
 @group(0) @binding(0) var src_texture: texture_2d<f32>;
@@ -28,6 +29,7 @@ fn fs_main(@builtin(position) frag_coord: vec4f) -> @location(0) vec4f {
   let dims = vec2f(textureDimensions(src_texture));
   let uv = frag_coord.xy / dims;
   let blurred = textureSample(src_texture, src_sampler, uv);
-  // Output alpha = blend factor; pipeline alpha-blending mixes with original canvas
-  return vec4f(blurred.rgb * params.dim, params.blend);
+  // Mix blurred content toward tint color, then alpha-blend with original canvas
+  let tinted = mix(blurred.rgb, params.tint_color.rgb, params.tint_amount);
+  return vec4f(tinted, params.blend);
 }

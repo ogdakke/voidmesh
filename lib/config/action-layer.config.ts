@@ -34,8 +34,14 @@ export interface ActionLayerConfig {
 
   /** Kawase blur strength at full activation (0-1) */
   blurIntensity: number;
-  /** Dim overlay opacity at full activation (0-1) */
+  /** Kawase blur offset */
+  blurOffset: number;
+  /** Kawase blur levels */
+  blurLevels: number;
+  /** Dim/tint overlay opacity at full activation (0-1) */
   dimOpacity: number;
+  /** Tint color for the blur overlay per theme [r, g, b] in 0-1 range */
+  dimColor: { dark: [number, number, number]; light: [number, number, number] };
   /** Duration for blur fade-in (ms) */
   blurFadeInMs: number;
   /** Duration for blur fade-out when exiting safe zone (ms) */
@@ -71,7 +77,10 @@ export const actionLayerDefaults: ActionLayerConfig = {
   ringFollowFactor: 0.08,
 
   blurIntensity: 0.9,
-  dimOpacity: 0.025,
+  blurOffset: 1,
+  blurLevels: 4,
+  dimOpacity: 0.05,
+  dimColor: { dark: [0, 0, 0], light: [1, 1, 1] },
   blurFadeInMs: 200,
   blurFadeOutMs: 100,
 

@@ -231,17 +231,14 @@ class ActionLayerController {
    */
   updateSafeZoneProgress(progress: number): void {
     const { blurFadeStart } = config.actionLayer;
-    if (progress > blurFadeStart) {
-      const fadeProgress = (progress - blurFadeStart) / (1 - blurFadeStart);
-      this.#blurTarget = 1 - fadeProgress;
-      this.#blurStartValue = this.#blurIntensity;
-      this.#blurStartTime = performance.now();
-    } else if (this.#blurTarget < 1) {
-      // Moving back toward center — restore full blur
-      this.#blurTarget = 1;
-      this.#blurStartValue = this.#blurIntensity;
-      this.#blurStartTime = performance.now();
-    }
+    const newTarget =
+      progress > blurFadeStart ? 1 - (progress - blurFadeStart) / (1 - blurFadeStart) : 1;
+
+    if (newTarget === this.#blurTarget) return;
+
+    this.#blurTarget = newTarget;
+    this.#blurStartValue = this.#blurIntensity;
+    this.#blurStartTime = performance.now();
   }
 
   /** Get entity offset from rubber-banding (screen-space CSS pixels). */
