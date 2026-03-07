@@ -12,7 +12,12 @@ import {
   snapToGrid,
 } from "../lib/canvas-math.ts";
 import { config, type TouchConfig } from "../lib/config/index.ts";
-import { Scroller, SpringBack, VelocityTracker } from "../lib/touch-scroll/index.ts";
+import {
+  DampedSpring2D,
+  Scroller,
+  SpringBack,
+  VelocityTracker,
+} from "../lib/touch-scroll/index.ts";
 import type { InfiniteCanvasRenderer } from "../renderer/canvas-renderer.ts";
 import {
   DragTargetType,
@@ -141,16 +146,13 @@ export class GameLoop {
   };
 
   /** Catch-up spring for compensating deadzone distance on action layer → drag transition */
-  #dragCatchUp = {
-    active: false,
-    offsetX: 0,
-    offsetY: 0,
-    velocityX: 0,
-    velocityY: 0,
-    lastTime: 0,
-    zetaOmega: 0,
-    omegaD: 0,
-  };
+  #dragCatchUp = { spring: new DampedSpring2D(), active: false, lastTime: 0 };
+
+  /** Snap-settle spring: animates entity to nearest grid point after catch-up completes */
+  #snapSettle = { spring: new DampedSpring2D(), active: false, lastTime: 0 };
+
+  /** Entity IDs for springs that continue after finger lift (catch-up / snap-settle) */
+  #springEntityIds: ReadonlySet<string> | null = null;
 
   /** Reusable velocity trackers for momentum scrolling (avoids GC) */
   private readonly velocityTrackerX = new VelocityTracker();
@@ -344,6 +346,9 @@ export class GameLoop {
     // 5d. Advance drag catch-up spring (deadzone compensation after action layer → drag)
     const dragCatchUpActive = this.#tickDragCatchUp(now);
 
+    // 5d2. Advance snap-settle spring (grid alignment after catch-up)
+    const snapSettleActive = this.#tickSnapSettle(now);
+
     // 5e. Advance disintegration animations
     const disintegrationActive = disintegrationController.tick(now);
 
@@ -364,6 +369,7 @@ export class GameLoop {
       dragVisualActive ||
       actionLayerActive ||
       dragCatchUpActive ||
+      snapSettleActive ||
       disintegrationActive ||
       (this.inputState.pointerDown && !!this.dragTarget) ||
       this.dragSelect?.isActive;
@@ -639,58 +645,108 @@ export class GameLoop {
   #tickDragCatchUp(now: number): boolean {
     if (!this.#dragCatchUp.active) return false;
 
-    const catchUpDt = (now - this.#dragCatchUp.lastTime) / 1000;
+    const dt = (now - this.#dragCatchUp.lastTime) / 1000;
     this.#dragCatchUp.lastTime = now;
 
-    if (catchUpDt <= 0) return true;
+    const delta = this.#dragCatchUp.spring.step(dt);
+    this.#moveEntitiesRaw(delta);
 
-    const { zetaOmega, omegaD } = this.#dragCatchUp;
-    const decay = Math.exp(-zetaOmega * catchUpDt);
-    const cosD = Math.cos(omegaD * catchUpDt);
-    const sinD = Math.sin(omegaD * catchUpDt);
+    // Start snap-settle early: when remaining catch-up offset is small enough
+    // that the snap-settle spring can absorb it (avoids waiting for the long tail)
+    const offset = this.#dragCatchUp.spring.offset;
+    const remainingSmall = Math.abs(offset.x) < 1 && Math.abs(offset.y) < 1;
 
-    const prevX = this.#dragCatchUp.offsetX;
-    const prevY = this.#dragCatchUp.offsetY;
+    if (!this.#dragCatchUp.spring.active || (remainingSmall && canvasStore.getState().snapToGrid)) {
+      this.#moveEntitiesRaw(this.#dragCatchUp.spring.flush());
+      this.#dragCatchUp.active = false;
 
-    // X axis (target = 0)
-    const aX = this.#dragCatchUp.offsetX;
-    const bX = (this.#dragCatchUp.velocityX + zetaOmega * aX) / omegaD;
-    this.#dragCatchUp.offsetX = decay * (aX * cosD + bX * sinD);
-    this.#dragCatchUp.velocityX =
-      decay * ((bX * omegaD - aX * zetaOmega) * cosD - (aX * omegaD + bX * zetaOmega) * sinD);
-
-    // Y axis (target = 0)
-    const aY = this.#dragCatchUp.offsetY;
-    const bY = (this.#dragCatchUp.velocityY + zetaOmega * aY) / omegaD;
-    this.#dragCatchUp.offsetY = decay * (aY * cosD + bY * sinD);
-    this.#dragCatchUp.velocityY =
-      decay * ((bY * omegaD - aY * zetaOmega) * cosD - (aY * omegaD + bY * zetaOmega) * sinD);
-
-    // Apply spring delta as additional entity movement
-    const springDelta = {
-      x: prevX - this.#dragCatchUp.offsetX,
-      y: prevY - this.#dragCatchUp.offsetY,
-    };
-    if (this.dragTarget?.type === DragTargetType.multiSelection) {
-      this.moveSelectedEntities(springDelta);
-    } else if (this.dragTarget?.type === DragTargetType.entity && this.dragTarget.entityId) {
-      canvasStore.moveEntity(this.dragTarget.entityId, springDelta);
+      // If snap-to-grid is on, spring to nearest grid point
+      if (canvasStore.getState().snapToGrid) {
+        this.#initSnapSettle();
+      }
+      return false;
     }
 
-    // Settle check
-    if (
-      Math.abs(this.#dragCatchUp.offsetX) < 0.01 &&
-      Math.abs(this.#dragCatchUp.offsetY) < 0.01 &&
-      Math.abs(this.#dragCatchUp.velocityX) < 0.01 &&
-      Math.abs(this.#dragCatchUp.velocityY) < 0.01
-    ) {
-      const remaining = { x: this.#dragCatchUp.offsetX, y: this.#dragCatchUp.offsetY };
-      if (this.dragTarget?.type === DragTargetType.multiSelection) {
-        this.moveSelectedEntities(remaining);
-      } else if (this.dragTarget?.type === DragTargetType.entity && this.dragTarget.entityId) {
-        canvasStore.moveEntity(this.dragTarget.entityId, remaining);
+    return true;
+  }
+
+  /** Move current drag target entities without snap-to-grid (raw world-space delta).
+   *  Falls back to #springEntityIds when dragTarget is null (finger lifted, spring still running). */
+  #moveEntitiesRaw(delta: Point): void {
+    if (this.dragTarget?.type === DragTargetType.multiSelection) {
+      for (const entityId of canvasStore.getSelectedEntityIds()) {
+        canvasStore.moveEntity(entityId, delta);
       }
-      this.#dragCatchUp.active = false;
+    } else if (this.dragTarget?.type === DragTargetType.entity && this.dragTarget.entityId) {
+      canvasStore.moveEntity(this.dragTarget.entityId, delta);
+    } else if (this.#springEntityIds) {
+      for (const entityId of this.#springEntityIds) {
+        canvasStore.moveEntity(entityId, delta);
+      }
+    }
+  }
+
+  /** Get the anchor entity ID for snap calculations (works during and after drag) */
+  #getAnchorEntityId(): string | undefined {
+    if (this.dragTarget?.type === DragTargetType.multiSelection) {
+      return canvasStore.getSelectedEntityIds().values().next().value;
+    }
+    if (this.dragTarget?.type === DragTargetType.entity) {
+      return this.dragTarget.entityId;
+    }
+    return this.#springEntityIds?.values().next().value;
+  }
+
+  /** Initialize snap-settle spring to animate entity to nearest grid point */
+  #initSnapSettle(): void {
+    const anchorId = this.#getAnchorEntityId();
+    if (!anchorId) return;
+
+    const anchor = canvasStore.getState().entities.get(anchorId);
+    if (!anchor) return;
+
+    const gridSize = this.getSnapGridSize();
+    const snapped = snapToGrid(anchor.position, gridSize);
+    const dx = snapped.x - anchor.position.x;
+    const dy = snapped.y - anchor.position.y;
+
+    // Already on grid — skip settle
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) {
+      this.snapAccumulator = { ...snapped };
+      this.#springEntityIds = null;
+      return;
+    }
+
+    // Fast, slightly-underdamped spring (snappy grid click)
+    this.#snapSettle.spring.start({ x: dx, y: dy }, { x: 0, y: 0 }, 0.1, 0.9);
+    this.#snapSettle.active = true;
+    this.#snapSettle.lastTime = performance.now();
+  }
+
+  /** Advance snap-settle spring. Returns true while animating. */
+  #tickSnapSettle(now: number): boolean {
+    if (!this.#snapSettle.active) return false;
+
+    const dt = (now - this.#snapSettle.lastTime) / 1000;
+    this.#snapSettle.lastTime = now;
+
+    const delta = this.#snapSettle.spring.step(dt);
+    this.#moveEntitiesRaw(delta);
+
+    if (!this.#snapSettle.spring.active) {
+      // Flush remaining offset to land exactly on grid
+      this.#moveEntitiesRaw(this.#snapSettle.spring.flush());
+      this.#snapSettle.active = false;
+
+      // Initialize snapAccumulator at the grid-aligned position for clean handoff
+      const anchorId = this.#getAnchorEntityId();
+      if (anchorId) {
+        const anchor = canvasStore.getState().entities.get(anchorId);
+        if (anchor) {
+          this.snapAccumulator = { ...anchor.position };
+        }
+      }
+      this.#springEntityIds = null;
       return false;
     }
 
@@ -1785,18 +1841,16 @@ export class GameLoop {
 
         // Initialize catch-up spring (same spring feel as action layer)
         const { entitySpringResponse, entitySpringDamping } = config.actionLayer;
-        const omega = (2 * Math.PI) / entitySpringResponse;
-        const zeta = entitySpringDamping;
-        this.#dragCatchUp = {
-          active: true,
-          offsetX: catchUpX,
-          offsetY: catchUpY,
-          velocityX: 0,
-          velocityY: 0,
-          lastTime: performance.now(),
-          zetaOmega: zeta * omega,
-          omegaD: omega * Math.sqrt(1 - zeta * zeta),
-        };
+        this.#dragCatchUp.spring.start(
+          { x: catchUpX, y: catchUpY },
+          { x: 0, y: 0 },
+          entitySpringResponse,
+          entitySpringDamping,
+        );
+        this.#dragCatchUp.active = true;
+        this.#dragCatchUp.lastTime = performance.now();
+        // Save entity IDs so springs can continue after finger lift
+        this.#springEntityIds = new Set(canvasStore.getSelectedEntityIds());
 
         actionLayerController.transitionToDrag();
         canvasStore.setActionLayerActive(false);
@@ -1817,7 +1871,15 @@ export class GameLoop {
           y: ((touch.y - lastPos.y) * dpr) / viewport.zoom,
         };
 
-        if (this.dragTarget?.type === DragTargetType.multiSelection) {
+        if (this.#dragCatchUp.active || this.#snapSettle.active) {
+          // During catch-up or snap-settle: bypass snap for smooth animation
+          if (this.#snapSettle.active) {
+            // Finger moved during snap-settle — cancel it, hand off to normal snap
+            this.#snapSettle.active = false;
+            this.snapAccumulator = null;
+          }
+          this.#moveEntitiesRaw(worldDelta);
+        } else if (this.dragTarget?.type === DragTargetType.multiSelection) {
           this.moveSelectedEntities(worldDelta);
         } else if (this.dragTarget?.type === DragTargetType.entity && this.dragTarget.entityId) {
           if (canvasStore.getState().snapToGrid) {
@@ -1952,7 +2014,14 @@ export class GameLoop {
         // Entity drag complete — just drop it. No tap handling, no momentum.
         canvasStore.setEntityDragActive(false);
         entityDragVisual.release();
-        this.#dragCatchUp.active = false;
+        // Let catch-up and snap-settle springs continue after finger lift —
+        // #springEntityIds preserves the target entities, #moveEntitiesRaw falls back to it.
+        // If snap-to-grid is on and no settle is running yet, start one now.
+        if (this.#dragCatchUp.active && canvasStore.getState().snapToGrid) {
+          this.#moveEntitiesRaw(this.#dragCatchUp.spring.flush());
+          this.#dragCatchUp.active = false;
+          this.#initSnapSettle();
+        }
       } else if (!isCancelled && this.touchState.isPinching) {
         // Pinch ended (both fingers lifted) — trigger zoom momentum
         this.triggerZoomMomentum();
@@ -2178,7 +2247,10 @@ export class GameLoop {
     };
     this.dragTarget = null;
     this.snapAccumulator = null;
-    this.#dragCatchUp.active = false;
+    // Let catch-up/snap-settle springs continue (they use #springEntityIds, not dragTarget)
+    if (!this.#dragCatchUp.active && !this.#snapSettle.active) {
+      this.#springEntityIds = null;
+    }
     this.doubleTapHoldZoom = {
       isCandidate: false,
       isZooming: false,
