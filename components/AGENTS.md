@@ -45,3 +45,4 @@ const param = useParamValue("path.to.param", defaultValue);
 - Do not put business logic in components. Param mutation logic belongs in `hooks/use-canvas-actions.ts` or `context/canvas-context.tsx`.
 - Do not add new top-level knob files without wiring into `sidebar-right-controls.tsx`.
 - Do not forget to ensure consistency between the 3 surfaces, mobile, desktop sidebar and desktop context menu.
+- Do not use `useCallback` or `useMemo` — React Compiler handles memoization automatically.

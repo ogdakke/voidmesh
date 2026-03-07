@@ -3,7 +3,12 @@
   inset: 0;
   z-index: 100;
   pointer-events: none;
-  --safe-zone-progress: 0;
+  display: block;
+  transition: display 200ms allow-discrete;
+
+  &[hidden] {
+    display: none;
+  }
 }
 
 .action-layer-ring {
@@ -13,7 +18,7 @@
 }
 
 .action-layer-button {
-  --_size: calc(9 * var(--spacing));
+  --_size: calc(10 * var(--spacing));
 
   position: absolute;
   display: flex;
@@ -29,24 +34,34 @@
   color: var(--color);
   cursor: pointer;
   pointer-events: none;
-  transform: translate(-50%, -50%) scale(var(--button-scale, 0));
-  transform-origin: center;
-  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
-  will-change: transform;
   font-size: 1.25rem;
   line-height: 1;
+
+  translate: -50% -50%;
+  scale: 1;
+  opacity: 1;
+  filter: blur(0px);
+  transition:
+    translate 200ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    scale 200ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    opacity 200ms ease-out,
+    filter 200ms ease-out;
+
+  /* Entry: animate from ring center outward */
+  @starting-style {
+    translate: calc(-50% - var(--_pos-x)) calc(-50% - var(--_pos-y));
+    scale: 0;
+    opacity: 0;
+    filter: blur(8px);
+  }
 
   svg {
     width: 1.25rem;
     height: 1.25rem;
   }
 
-  [data-active] & {
-    --button-scale: calc(1 - max(0, (var(--safe-zone-progress) - 0.7)) / 0.3);
-  }
-
   &[data-hovered] {
-    --button-scale: 1.15 !important;
+    scale: 1.15;
     background: var(--floating-background);
     filter: brightness(1.05);
     box-shadow:
@@ -57,6 +72,16 @@
   @media (prefers-reduced-motion: reduce) {
     transition: none;
   }
+}
+
+/* Exit: collapse back to ring center */
+[hidden] > .action-layer-ring > .action-layer-button {
+  translate: calc(-50% - var(--_pos-x)) calc(-50% - var(--_pos-y));
+  scale: 0;
+  opacity: 0;
+  filter: blur(8px);
+  transition-timing-function: ease-in;
+  transition-duration: 150ms;
 }
 
 .action-layer-tooltip {

@@ -140,7 +140,7 @@ export class GameLoop {
     isActionLayerActive: false,
   };
 
-  /** Catch-up spring for compensating deadzone distance when transitioning action layer → drag */
+  /** Catch-up spring for compensating deadzone distance on action layer → drag transition */
   #dragCatchUp = {
     active: false,
     offsetX: 0,
@@ -341,7 +341,10 @@ export class GameLoop {
     // 5c. Advance action layer animations (rubber-band, blur)
     const actionLayerActive = actionLayerController.tick(now);
 
-    // 5d. Advance disintegration animations
+    // 5d. Advance drag catch-up spring (deadzone compensation after action layer → drag)
+    const dragCatchUpActive = this.#tickDragCatchUp(now);
+
+    // 5e. Advance disintegration animations
     const disintegrationActive = disintegrationController.tick(now);
 
     // 6. Add selection bounds to render state (managed by game-loop, not store)
@@ -360,6 +363,7 @@ export class GameLoop {
       zoomMomentumActive ||
       dragVisualActive ||
       actionLayerActive ||
+      dragCatchUpActive ||
       disintegrationActive ||
       (this.inputState.pointerDown && !!this.dragTarget) ||
       this.dragSelect?.isActive;
@@ -629,6 +633,68 @@ export class GameLoop {
     this.lastZoomMomentumOffset = 0;
     this.zoomMomentumFocalPoint = null;
     this.zoomSpringBoundary = 1;
+  }
+
+  /** Advance the drag catch-up spring. Returns true while animating. */
+  #tickDragCatchUp(now: number): boolean {
+    if (!this.#dragCatchUp.active) return false;
+
+    const catchUpDt = (now - this.#dragCatchUp.lastTime) / 1000;
+    this.#dragCatchUp.lastTime = now;
+
+    if (catchUpDt <= 0) return true;
+
+    const { zetaOmega, omegaD } = this.#dragCatchUp;
+    const decay = Math.exp(-zetaOmega * catchUpDt);
+    const cosD = Math.cos(omegaD * catchUpDt);
+    const sinD = Math.sin(omegaD * catchUpDt);
+
+    const prevX = this.#dragCatchUp.offsetX;
+    const prevY = this.#dragCatchUp.offsetY;
+
+    // X axis (target = 0)
+    const aX = this.#dragCatchUp.offsetX;
+    const bX = (this.#dragCatchUp.velocityX + zetaOmega * aX) / omegaD;
+    this.#dragCatchUp.offsetX = decay * (aX * cosD + bX * sinD);
+    this.#dragCatchUp.velocityX =
+      decay * ((bX * omegaD - aX * zetaOmega) * cosD - (aX * omegaD + bX * zetaOmega) * sinD);
+
+    // Y axis (target = 0)
+    const aY = this.#dragCatchUp.offsetY;
+    const bY = (this.#dragCatchUp.velocityY + zetaOmega * aY) / omegaD;
+    this.#dragCatchUp.offsetY = decay * (aY * cosD + bY * sinD);
+    this.#dragCatchUp.velocityY =
+      decay * ((bY * omegaD - aY * zetaOmega) * cosD - (aY * omegaD + bY * zetaOmega) * sinD);
+
+    // Apply spring delta as additional entity movement
+    const springDelta = {
+      x: prevX - this.#dragCatchUp.offsetX,
+      y: prevY - this.#dragCatchUp.offsetY,
+    };
+    if (this.dragTarget?.type === DragTargetType.multiSelection) {
+      this.moveSelectedEntities(springDelta);
+    } else if (this.dragTarget?.type === DragTargetType.entity && this.dragTarget.entityId) {
+      canvasStore.moveEntity(this.dragTarget.entityId, springDelta);
+    }
+
+    // Settle check
+    if (
+      Math.abs(this.#dragCatchUp.offsetX) < 0.01 &&
+      Math.abs(this.#dragCatchUp.offsetY) < 0.01 &&
+      Math.abs(this.#dragCatchUp.velocityX) < 0.01 &&
+      Math.abs(this.#dragCatchUp.velocityY) < 0.01
+    ) {
+      const remaining = { x: this.#dragCatchUp.offsetX, y: this.#dragCatchUp.offsetY };
+      if (this.dragTarget?.type === DragTargetType.multiSelection) {
+        this.moveSelectedEntities(remaining);
+      } else if (this.dragTarget?.type === DragTargetType.entity && this.dragTarget.entityId) {
+        canvasStore.moveEntity(this.dragTarget.entityId, remaining);
+      }
+      this.#dragCatchUp.active = false;
+      return false;
+    }
+
+    return true;
   }
 
   private processInput(): void {
@@ -1281,6 +1347,9 @@ export class GameLoop {
 
   /** Get bounding box of all selected entities (for multi-select visual) */
   getMultiSelectBounds(): Bounds | null {
+    // Hide during action layer (context menu) — rect doesn't track entity rubber-band offset
+    if (actionLayerController.isActive()) return null;
+
     // During subtractive drag-select, show bounds of CURRENT selection
     // (updates in real-time as entities are deselected)
     if (this.dragSelect?.isActive && this.dragSelect.mode === "subtractive") {
@@ -1716,7 +1785,7 @@ export class GameLoop {
         const catchUpX = totalMoveX - worldOffset.x;
         const catchUpY = totalMoveY - worldOffset.y;
 
-        // Initialize catch-up spring (same params as action layer entity spring)
+        // Initialize catch-up spring (same spring feel as action layer)
         const { entitySpringResponse, entitySpringDamping } = config.actionLayer;
         const omega = (2 * Math.PI) / entitySpringResponse;
         const zeta = entitySpringDamping;
@@ -1757,68 +1826,6 @@ export class GameLoop {
             this.moveEntitySnapped(this.dragTarget.entityId, worldDelta);
           } else {
             canvasStore.moveEntity(this.dragTarget.entityId, worldDelta);
-          }
-        }
-      }
-
-      // Advance drag catch-up spring (compensates for deadzone distance loss)
-      if (this.#dragCatchUp.active) {
-        const now = performance.now();
-        const catchUpDt = (now - this.#dragCatchUp.lastTime) / 1000;
-        this.#dragCatchUp.lastTime = now;
-
-        if (catchUpDt > 0) {
-          const { zetaOmega, omegaD } = this.#dragCatchUp;
-          const decay = Math.exp(-zetaOmega * catchUpDt);
-          const cosD = Math.cos(omegaD * catchUpDt);
-          const sinD = Math.sin(omegaD * catchUpDt);
-
-          const prevX = this.#dragCatchUp.offsetX;
-          const prevY = this.#dragCatchUp.offsetY;
-
-          // X axis (target = 0)
-          const aX = this.#dragCatchUp.offsetX;
-          const bX = (this.#dragCatchUp.velocityX + zetaOmega * aX) / omegaD;
-          this.#dragCatchUp.offsetX = decay * (aX * cosD + bX * sinD);
-          this.#dragCatchUp.velocityX =
-            decay * ((bX * omegaD - aX * zetaOmega) * cosD - (aX * omegaD + bX * zetaOmega) * sinD);
-
-          // Y axis (target = 0)
-          const aY = this.#dragCatchUp.offsetY;
-          const bY = (this.#dragCatchUp.velocityY + zetaOmega * aY) / omegaD;
-          this.#dragCatchUp.offsetY = decay * (aY * cosD + bY * sinD);
-          this.#dragCatchUp.velocityY =
-            decay * ((bY * omegaD - aY * zetaOmega) * cosD - (aY * omegaD + bY * zetaOmega) * sinD);
-
-          // Apply spring delta as additional entity movement
-          const springDelta = {
-            x: prevX - this.#dragCatchUp.offsetX,
-            y: prevY - this.#dragCatchUp.offsetY,
-          };
-          if (this.dragTarget?.type === DragTargetType.multiSelection) {
-            this.moveSelectedEntities(springDelta);
-          } else if (this.dragTarget?.type === DragTargetType.entity && this.dragTarget.entityId) {
-            canvasStore.moveEntity(this.dragTarget.entityId, springDelta);
-          }
-
-          // Settle check
-          if (
-            Math.abs(this.#dragCatchUp.offsetX) < 0.01 &&
-            Math.abs(this.#dragCatchUp.offsetY) < 0.01 &&
-            Math.abs(this.#dragCatchUp.velocityX) < 0.01 &&
-            Math.abs(this.#dragCatchUp.velocityY) < 0.01
-          ) {
-            // Apply remaining offset
-            const remaining = { x: this.#dragCatchUp.offsetX, y: this.#dragCatchUp.offsetY };
-            if (this.dragTarget?.type === DragTargetType.multiSelection) {
-              this.moveSelectedEntities(remaining);
-            } else if (
-              this.dragTarget?.type === DragTargetType.entity &&
-              this.dragTarget.entityId
-            ) {
-              canvasStore.moveEntity(this.dragTarget.entityId, remaining);
-            }
-            this.#dragCatchUp.active = false;
           }
         }
       }

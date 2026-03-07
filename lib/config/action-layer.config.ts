@@ -13,8 +13,10 @@ export interface ActionLayerConfig {
   /** Maximum number of action buttons */
   maxButtons: number;
 
-  /** Finger movement deadzone before safe-zone progress starts (CSS px) */
+  /** Finger movement deadzone before entity starts tracking (CSS px) */
   deadzone: number;
+  /** Maximum entity rubber-band offset (CSS px) */
+  entityRubberBandMax: number;
   /** Spring response for button appear animation (seconds) */
   buttonAppearSpring: number;
   /** Spring response for button hover scale-up (seconds) */
@@ -23,8 +25,6 @@ export interface ActionLayerConfig {
   buttonHoverScale: number;
   /** Spring response for entity rubber-band dismiss (seconds, higher = slower) */
   entityRubberBandSpring: number;
-  /** Maximum entity rubber-band offset (CSS px) */
-  entityRubberBandMax: number;
   /** Entity spring response time during active phase (seconds, lower = snappier) */
   entitySpringResponse: number;
   /** Entity spring damping ratio during active phase (0-1, <1 = springy, 1 = critical) */
@@ -54,20 +54,20 @@ export interface ActionLayerConfig {
 
 export const actionLayerDefaults: ActionLayerConfig = {
   safeZoneRadius: 120,
-  buttonRingRadius: 70,
+  buttonRingRadius: 80,
   fingerClearanceOffset: 0,
   buttonSize: 48,
   buttonHitPadding: 12,
   maxButtons: 5,
 
-  deadzone: 74,
+  deadzone: 30,
+  entityRubberBandMax: 80,
   buttonAppearSpring: 0.2,
   buttonHoverSpring: 0.15,
   buttonHoverScale: 1.15,
   entityRubberBandSpring: 0.25,
-  entityRubberBandMax: 35,
-  entitySpringResponse: 0.1,
-  entitySpringDamping: 0.75,
+  entitySpringResponse: 0.45,
+  entitySpringDamping: 0.95,
   ringFollowFactor: 0.08,
 
   blurIntensity: 0.9,
@@ -78,6 +78,6 @@ export const actionLayerDefaults: ActionLayerConfig = {
   buttonShrinkStart: 0.9,
   blurFadeStart: 0.6,
 
-  edgeInset: 20,
-  debug: "default",
+  edgeInset: 8,
+  debug: undefined,
 };

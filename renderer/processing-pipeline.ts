@@ -1259,9 +1259,9 @@ export class ProcessingPipeline {
       return;
     }
 
-    // Fixed blur params for action layer: 3 levels, offset 1.0 (soft, wide blur)
-    const levels = 4;
-    const offset = 2.0;
+    // Fixed blur params for action layer
+    const levels = 3;
+    const offset = 1.5;
 
     const mipChain = this.#getOrCreateBlurMipChain(width, height);
     if (mipChain.length === 0) return;

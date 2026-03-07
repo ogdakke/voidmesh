@@ -5,7 +5,7 @@ import { Toggle } from "./ui/toggle/index.tsx";
 import { optionsWithNull } from "./ui/ui-util.ts";
 import { config } from "#config";
 import { ContextMenu } from "@base-ui/react/context-menu";
-import { Brightness, NavArrowRight, Circle, Check } from "iconoir-react";
+import { NavArrowRight, Circle, Check } from "iconoir-react";
 import { IonInvertMode } from "./icons/invert.tsx";
 
 // Desktop Sidebar version

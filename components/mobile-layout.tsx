@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import {
   ColorFilter,
   Component,
@@ -25,13 +25,14 @@ import { useLayout } from "#context/use-layout.ts";
 import { useParamValue } from "#hooks/use-param-value.ts";
 import { isAnimatedEntity } from "#types/canvas.ts";
 import { canvasStore } from "#engine";
+import { useEntityDrag } from "#hooks/use-entity-drag.ts";
 
 function MobileActionLayer() {
   const { saveSelectedEntityToFile, renderer } = useCanvas();
   const { pasteEntityParams, duplicateEntities } = useCanvasActions();
   const { addToQueue } = useExportQueue();
 
-  const handleSave = useCallback(() => {
+  const handleSave = () => {
     // Check if the selected entity is animated — export instead of save
     const selectedEntities = canvasStore.getSelectedEntities();
     const animated = selectedEntities.filter(isAnimatedEntity);
@@ -42,7 +43,7 @@ function MobileActionLayer() {
     } else {
       saveSelectedEntityToFile();
     }
-  }, [saveSelectedEntityToFile, renderer, addToQueue]);
+  };
 
   // Determine label based on selection type
   const selectedEntities = canvasStore.getSelectedEntities();
@@ -66,6 +67,7 @@ function MobileActionLayer() {
 function MobileFloat() {
   const [activeItem, setActiveItem] = useState<BarItem | null>(items.at(0)!);
   const { multiSelectMode, selectedEntityIds } = useCanvas();
+  const { entityDragActive } = useEntityDrag();
   const { isFullscreen } = useLayout();
   const { active: actionLayerActive } = useActionLayer();
   const palette = useParamValue("palette", null);
@@ -94,7 +96,9 @@ function MobileFloat() {
     <div className="mobile-float">
       <MobileActionLayer />
       <DeleteDropZone />
-      {!isFullscreen && !multiSelectMode && !actionLayerActive && <MediaControls />}
+      {!isFullscreen && !multiSelectMode && !actionLayerActive && !entityDragActive && (
+        <MediaControls />
+      )}
       {!isFullscreen && (
         <div className="mobile-controls-container">
           <MobileControls activeItem={activeItem} />

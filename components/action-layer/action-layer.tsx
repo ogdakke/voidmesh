@@ -4,7 +4,6 @@ import {
   useContext,
   useEffect,
   useRef,
-  useCallback,
   useState,
   type PropsWithChildren,
   type ReactNode,
@@ -76,13 +75,29 @@ function computeRingPositions(count: number, radius: number): RingPosition[] {
   return positions;
 }
 
-function clampRingCenter(cx: number, cy: number): { x: number; y: number } {
-  const { edgeInset, buttonRingRadius, buttonSize } = config.actionLayer;
-  // Margin accounts for full ring extent: radius + half button + inset
-  const margin = buttonRingRadius + buttonSize / 2 + edgeInset;
+function clampRingCenter(
+  cx: number,
+  cy: number,
+  positions: RingPosition[],
+): { x: number; y: number } {
+  const { edgeInset, buttonSize } = config.actionLayer;
+  const pad = buttonSize / 2 + edgeInset;
+
+  // Compute actual extents from button positions (relative to center)
+  let minX = 0;
+  let maxX = 0;
+  let minY = 0;
+  let maxY = 0;
+  for (const pos of positions) {
+    if (pos.x < minX) minX = pos.x;
+    if (pos.x > maxX) maxX = pos.x;
+    if (pos.y < minY) minY = pos.y;
+    if (pos.y > maxY) maxY = pos.y;
+  }
+
   return {
-    x: Math.max(margin, Math.min(window.innerWidth - margin, cx)),
-    y: Math.max(margin, Math.min(window.innerHeight - margin, cy)),
+    x: Math.max(pad - minX, Math.min(window.innerWidth - maxX - pad, cx)),
+    y: Math.max(pad - minY, Math.min(window.innerHeight - maxY - pad, cy)),
   };
 }
 
@@ -95,55 +110,44 @@ function Root({ children }: PropsWithChildren) {
   const [items, setItems] = useState<RegisteredItem[]>([]);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const hoveredIndexRef = useRef<number | null>(null);
-  const overlayRef = useRef<HTMLDivElement>(null);
   const ringRef = useRef<HTMLDivElement>(null);
   const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [tooltipLabel, setTooltipLabel] = useState<string | null>(null);
 
-  const register = useCallback((item: RegisteredItem) => {
+  const register = (item: RegisteredItem) => {
     setItems((prev) => [...prev, item]);
     return () => {
       setItems((prev) => prev.filter((i) => i !== item));
     };
-  }, []);
+  };
 
-  // Compute ring layout from reactive store state (not singleton reads)
-  const ringLayout = (() => {
-    if (!active) return null;
+  // Compute ring layout from reactive store state (not singleton reads).
+  // Always computed — touchOrigin retains its last value when deactivated,
+  // so the layout stays valid for exit animations.
+  const { buttonRingRadius, fingerClearanceOffset } = config.actionLayer;
+  const positions = computeRingPositions(items.length, buttonRingRadius);
+  const rawCenter = {
+    x: storeTouchOrigin.x,
+    y: storeTouchOrigin.y - fingerClearanceOffset,
+  };
+  const center = clampRingCenter(rawCenter.x, rawCenter.y, positions);
+  const ringLayout = { center, positions, touchOrigin: storeTouchOrigin };
 
-    const { buttonRingRadius, fingerClearanceOffset } = config.actionLayer;
-
-    const rawCenter = {
-      x: storeTouchOrigin.x,
-      y: storeTouchOrigin.y - fingerClearanceOffset,
-    };
-    const center = clampRingCenter(rawCenter.x, rawCenter.y);
-    const positions = computeRingPositions(items.length, buttonRingRadius);
-
-    return { center, positions, touchOrigin: storeTouchOrigin };
-  })();
-
-  // Reset hover state when deactivating
-  useEffect(() => {
-    if (!active) {
-      // Use queueMicrotask to avoid sync setState-in-effect lint error
-      queueMicrotask(() => {
-        hoveredIndexRef.current = null;
-        setHoveredIndex(null);
-        setTooltipLabel(null);
-      });
-    }
-  }, [active]);
+  // Gate hover state by active — stale values from previous activation are harmless
+  const effectiveHoveredIndex = active ? hoveredIndex : null;
+  const effectiveTooltipLabel = active ? tooltipLabel : null;
 
   // Touch event handlers
   useEffect(() => {
-    if (!active || !ringLayout) return;
+    if (!active) return;
+
+    // Reset ref from previous activation so a no-move touchend doesn't fire a stale action
+    hoveredIndexRef.current = null;
 
     const { safeZoneRadius, buttonSize, buttonHitPadding, ringFollowFactor, deadzone } =
       config.actionLayer;
-    const touchOrigin = ringLayout.touchOrigin;
+    const touchOrigin = storeTouchOrigin;
     const hitRadius = buttonSize / 2 + buttonHitPadding;
-    const { center, positions } = ringLayout;
 
     const getHoveredButton = (touchX: number, touchY: number): number | null => {
       const entityOffset = actionLayerController.getEntityOffset();
@@ -176,24 +180,11 @@ function Root({ children }: PropsWithChildren) {
         ring.style.left = `${center.x + ringOffsetX}px`;
         ring.style.top = `${center.y + ringOffsetY}px`;
       }
-      const refs = buttonRefs.current;
-
       const newHovered = getHoveredButton(touch.clientX, touch.clientY);
       if (newHovered !== hoveredIndexRef.current) {
         hoveredIndexRef.current = newHovered;
         setHoveredIndex(newHovered);
         setTooltipLabel(newHovered !== null ? (items[newHovered]?.label ?? null) : null);
-
-        // Direct DOM updates for button hover state (avoid re-render)
-        for (let i = 0; i < refs.length; i++) {
-          const btn = refs[i];
-          if (!btn) continue;
-          if (i === newHovered) {
-            btn.setAttribute("data-hovered", "");
-          } else {
-            btn.removeAttribute("data-hovered");
-          }
-        }
       }
 
       // Safe zone progress (deadzone-aware)
@@ -205,11 +196,6 @@ function Root({ children }: PropsWithChildren) {
       const progress = Math.min(1, effectiveDist / effectiveRadius);
 
       actionLayerController.updateSafeZoneProgress(progress);
-
-      const overlay = overlayRef.current;
-      if (overlay) {
-        overlay.style.setProperty("--safe-zone-progress", String(progress));
-      }
     };
 
     const handleTouchEnd = () => {
@@ -236,27 +222,25 @@ function Root({ children }: PropsWithChildren) {
       window.removeEventListener("touchmove", handleTouchMove);
       window.removeEventListener("touchend", handleTouchEnd, { capture: true });
     };
-  }, [active, ringLayout, items]);
+  }, [active, center, positions, storeTouchOrigin, items]);
 
   const contextValue: ActionLayerContextValue = { register };
 
   return (
     <ActionLayerContext.Provider value={contextValue}>
       {children}
-      {active &&
-        ringLayout &&
-        createPortal(
-          <ActionLayerOverlay
-            ref={overlayRef}
-            ringRef={ringRef}
-            buttonRefs={buttonRefs}
-            items={items}
-            ringLayout={ringLayout}
-            hoveredIndex={hoveredIndex}
-            tooltipLabel={tooltipLabel}
-          />,
-          document.body,
-        )}
+      {createPortal(
+        <ActionLayerOverlay
+          ringRef={ringRef}
+          buttonRefs={buttonRefs}
+          items={items}
+          ringLayout={ringLayout}
+          hoveredIndex={effectiveHoveredIndex}
+          tooltipLabel={effectiveTooltipLabel}
+          hidden={!active}
+        />,
+        document.body,
+      )}
     </ActionLayerContext.Provider>
   );
 }
@@ -276,16 +260,22 @@ interface OverlayProps {
   tooltipLabel: string | null;
   ringRef: React.RefObject<HTMLDivElement | null>;
   buttonRefs: React.RefObject<(HTMLButtonElement | null)[]>;
+  hidden: boolean;
 }
 
-function ActionLayerOverlayInner(
-  { items, ringLayout, hoveredIndex, tooltipLabel, ringRef, buttonRefs }: OverlayProps,
-  ref: React.ForwardedRef<HTMLDivElement>,
-) {
+function ActionLayerOverlay({
+  items,
+  ringLayout,
+  hoveredIndex,
+  tooltipLabel,
+  ringRef,
+  buttonRefs,
+  hidden,
+}: OverlayProps) {
   const { center, positions } = ringLayout;
 
   return (
-    <div ref={ref} className="action-layer-overlay" data-active="">
+    <div className="action-layer-overlay" hidden={hidden || undefined}>
       <div
         ref={ringRef}
         className="action-layer-ring"
@@ -302,10 +292,14 @@ function ActionLayerOverlayInner(
               }}
               className="action-layer-button"
               data-hovered={hoveredIndex === i ? "" : undefined}
-              style={{
-                left: `${pos.x}px`,
-                top: `${pos.y}px`,
-              }}
+              style={
+                {
+                  left: `${pos.x}px`,
+                  top: `${pos.y}px`,
+                  "--_pos-x": `${pos.x}px`,
+                  "--_pos-y": `${pos.y}px`,
+                } as React.CSSProperties
+              }
               aria-label={item.label}
             >
               {item.icon}
@@ -327,10 +321,6 @@ function ActionLayerOverlayInner(
   );
 }
 
-// Use forwardRef for the overlay ref
-import { forwardRef } from "react";
-const ActionLayerOverlay = forwardRef(ActionLayerOverlayInner);
-
 // ============================================================================
 // ActionLayer.Item
 // ============================================================================
@@ -349,14 +339,6 @@ function Item({ onAction, label, children }: ItemProps) {
   }, [register, label, onAction, children]);
 
   return null;
-}
-
-// ============================================================================
-// ActionLayer.Tooltip
-// ============================================================================
-
-function Tooltip() {
-  return null; // Rendered by Root
 }
 
 // ============================================================================
@@ -429,10 +411,6 @@ function DebugOverlaySvg({
   );
 }
 
-function DebugOverlay() {
-  return null; // Rendered conditionally inside Root
-}
-
 // ============================================================================
 // Export
 // ============================================================================
@@ -440,6 +418,4 @@ function DebugOverlay() {
 export const ActionLayer = {
   Root,
   Item,
-  Tooltip,
-  DebugOverlay,
 };

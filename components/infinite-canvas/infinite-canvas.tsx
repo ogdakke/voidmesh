@@ -121,7 +121,6 @@ export function InfiniteCanvas() {
     duplicateEntities,
     copyEntity,
     copyEntityParams,
-    pasteEntityParams,
     selectedEntity,
     resetEntityToDefaults,
     snapToGrid,

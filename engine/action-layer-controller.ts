@@ -51,10 +51,20 @@ class ActionLayerController {
 
   // Entity IDs targeted by this activation (persists through dismiss for renderer)
   #entityIds: ReadonlySet<string> = new Set();
+  // When true, tick() returns true once more from idle so the renderer re-sorts entities
+  #needsFinalFrame = false;
 
   /** Advance animations. Returns true if still animating. */
   tick(now: number): boolean {
-    if (this.#phase === ActionLayerPhase.idle) return false;
+    if (this.#phase === ActionLayerPhase.idle) {
+      // After dismiss completes, return true once more so the renderer runs a final frame
+      // with hasEntity() returning false — moving entities back to normal draw order.
+      if (this.#needsFinalFrame) {
+        this.#needsFinalFrame = false;
+        return true;
+      }
+      return false;
+    }
 
     let animating = false;
 
@@ -147,7 +157,8 @@ class ActionLayerController {
       if (valX === null && valY === null && this.#blurIntensity === this.#blurTarget) {
         this.#phase = ActionLayerPhase.idle;
         this.#entityIds = new Set();
-        return false;
+        this.#needsFinalFrame = true;
+        return true;
       }
     }
 
@@ -197,8 +208,7 @@ class ActionLayerController {
     const rawDist = Math.sqrt(rawDx * rawDx + rawDy * rawDy);
     const { deadzone, entityRubberBandMax } = config.actionLayer;
 
-    // Inside deadzone: entity stays put (target 0). Finger can reach buttons freely.
-    // Outside deadzone: entity starts moving, conveying "drag further to enter drag mode".
+    // Inside deadzone: entity stays put (absorbs finger jitter near buttons)
     if (rawDist <= deadzone) {
       this.#targetOffsetX = 0;
       this.#targetOffsetY = 0;
