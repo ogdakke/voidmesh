@@ -300,17 +300,27 @@ class AppLightbox extends HTMLElement {
 
     if (!src) return;
 
-    this.#image.alt = alt || this.#thumbnailImg?.alt || "";
+    this.#image.alt = alt || thumbnail?.alt || "";
 
-    // Show thumbnail immediately while full image loads
-    if (thumbnail?.src) {
-      this.#image.src = thumbnail.src;
+    if (thumbnail) {
+      // Use currentSrc — the URL the browser actually loaded (respects <picture>/<source>)
+      this.#image.src = thumbnail.currentSrc || thumbnail.src;
+
+      // Set dimensions from thumbnail so the lightbox image isn't 0x0 while loading
+      if (thumbnail.naturalWidth && thumbnail.naturalHeight) {
+        this.#image.width = thumbnail.naturalWidth;
+        this.#image.height = thumbnail.naturalHeight;
+        this.#image.style.aspectRatio = `${thumbnail.naturalWidth} / ${thumbnail.naturalHeight}`;
+      }
 
       const fullImage = new Image();
       fullImage.src = src;
       fullImage.onload = () => {
         if (this.#image) {
           this.#image.src = src;
+          this.#image.width = fullImage.naturalWidth;
+          this.#image.height = fullImage.naturalHeight;
+          this.#image.style.aspectRatio = `${fullImage.naturalWidth} / ${fullImage.naturalHeight}`;
         }
       };
     } else {
