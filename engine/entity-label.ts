@@ -1,5 +1,6 @@
 import type { RenderState } from "./canvas-store.ts";
 import { entityDragVisual } from "./entity-drag-visual.ts";
+import { actionLayerController } from "./action-layer-controller.ts";
 
 /**
  * Entity label positioning controller.
@@ -84,11 +85,18 @@ class EntityLabelController {
     }
 
     const dpr = window.devicePixelRatio || 1;
-    const left =
+    let left =
       ((entity.position.x + entity.size.width / 2 - viewport.offset.x) * viewport.zoom) / dpr;
 
     const safeAreaInsetTop = this.#isInStandalonePWAMode ? (this.#getSafeAreaInsetTop() ?? 0) : 0;
-    const top = ((entity.position.y - viewport.offset.y) * viewport.zoom) / dpr - safeAreaInsetTop;
+    let top = ((entity.position.y - viewport.offset.y) * viewport.zoom) / dpr - safeAreaInsetTop;
+
+    // Apply action layer rubber-band offset (CSS pixels)
+    if (actionLayerController.isActive()) {
+      const offset = actionLayerController.getEntityOffset();
+      left += offset.x;
+      top += offset.y;
+    }
 
     // Use transform for GPU-composited positioning (no layout thrash).
     // Only write if position actually changed (number comparison).

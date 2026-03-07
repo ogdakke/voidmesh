@@ -15,6 +15,7 @@ import type { PartialDeep } from "type-fest";
 import type { easings } from "../canvas-math";
 import { palettes } from "./palettes.config";
 import { DecelerationRate } from "../touch-scroll";
+import { type ActionLayerConfig, actionLayerDefaults } from "./action-layer.config";
 
 // ============================================================================
 // Shader Feature Definitions (for multi-select param intersection)
@@ -623,7 +624,10 @@ export const config = {
       bitrate: { min: 1000, max: 50000, step: 100 }, // kbps
     },
   },
+  actionLayer: actionLayerDefaults,
 };
+
+export type { ActionLayerConfig };
 
 /** Reference resolution for bitrate scaling (1920×1080 = 2,073,600 pixels) */
 const PIXELS_1080P = 1920 * 1080;

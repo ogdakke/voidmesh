@@ -23,3 +23,4 @@ export {
   type DecelerationRateValue,
 } from "./scroller.ts";
 export { SpringBack, type SpringBackValue } from "./spring-back.ts";
+export { DampedSpring2D } from "./damped-spring.ts";

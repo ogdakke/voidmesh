@@ -174,6 +174,9 @@ export function InfiniteCanvas() {
       } else {
         renderer?.setGridConfig(config.rendering.grid.default);
       }
+      renderer.setActionLayerTint(
+        darkTheme ? config.actionLayer.dimColor.dark : config.actionLayer.dimColor.light,
+      );
       registerRenderer(renderer);
       gameLoop.start();
     }

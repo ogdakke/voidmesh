@@ -1238,6 +1238,48 @@ export class ProcessingPipeline {
   }
 
   /**
+   * Encode Kawase blur passes into an existing command encoder.
+   * Used for full-screen action layer blur (separate from per-entity blur).
+   * Input and output must be in intermediateFormat.
+   */
+  encodeFullScreenBlur(
+    encoder: GPUCommandEncoder,
+    inputTexture: GPUTexture,
+    outputTexture: GPUTexture,
+    width: number,
+    height: number,
+  ): void {
+    if (
+      !this.#blurDownsamplePipeline ||
+      !this.#blurUpsamplePipeline ||
+      !this.#blurDownsampleBindGroupLayout ||
+      !this.#blurUpsampleBindGroupLayout ||
+      !this.#blurSampler
+    ) {
+      return;
+    }
+
+    // Fixed blur params for action layer
+    const levels = config.actionLayer.blurLevels;
+    const offset = config.actionLayer.blurOffset;
+
+    const mipChain = this.#getOrCreateBlurMipChain(width, height);
+    if (mipChain.length === 0) return;
+
+    this.#encodeBlurPasses(
+      encoder,
+      inputTexture,
+      outputTexture,
+      mipChain,
+      levels,
+      offset,
+      width,
+      height,
+      0,
+    );
+  }
+
+  /**
    * Apply adjustments (brightness, contrast, saturation) to a texture.
    * This is a pre-processing step before the main shader.
    */

@@ -73,6 +73,12 @@
       transition-duration: calc(var(--drawer-swipe-strength) * 400ms);
     }
 
+    :where(.drawer-title) {
+      text-align: center;
+      font-size: var(--text);
+      margin-bottom: var(--spacing);
+    }
+
     & .drawer-handle {
       height: 6px;
       width: 42px;

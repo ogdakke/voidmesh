@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Xmark } from "iconoir-react";
 import { useEntityDrag } from "#hooks/use-entity-drag.ts";
+import { useActionLayer } from "#hooks/use-action-layer.ts";
 import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
 import { haptic } from "#lib/haptic.ts";
 import { canvasStore } from "#engine";
@@ -11,12 +12,14 @@ const DELETE_ZONE_PROXIMITY_PX = 20;
 
 export function DeleteDropZone() {
   const { entityDragActive } = useEntityDrag();
+  const { active: actionLayerActive } = useActionLayer();
+  const showZone = entityDragActive || actionLayerActive;
   const { deleteEntity } = useCanvasActions();
   const zoneRef = useRef<HTMLDivElement>(null);
   const isOverRef = useRef(false);
 
   useEffect(() => {
-    if (!entityDragActive) return;
+    if (!showZone) return;
     const zone = zoneRef.current;
     if (!zone) return;
 
@@ -62,13 +65,13 @@ export function DeleteDropZone() {
       zone.removeAttribute("data-over");
       isOverRef.current = false;
     };
-  }, [entityDragActive, deleteEntity]);
+  }, [showZone, deleteEntity]);
 
   return (
     <div
       ref={zoneRef}
       className="mobile-delete-drop-zone"
-      data-drag-active={entityDragActive || undefined}
+      data-drag-active={showZone || undefined}
       aria-label="Drop to delete"
     >
       <Xmark />

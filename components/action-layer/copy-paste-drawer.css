@@ -1,0 +1,44 @@
+@layer components {
+  .copy-paste-drawer {
+    max-height: calc(380px + env(safe-area-inset-bottom, 0px));
+
+    .drawer-content {
+      display: flex;
+      flex-direction: column;
+      padding: var(--spacing-3);
+      gap: var(--spacing-2);
+    }
+
+    p {
+      background: light-dark(var(--tint), var(--tint-100));
+      color: light-dark(var(--tint-200), var(--tint-1400));
+      border: 1px solid light-dark(var(--tint-900), var(--tint));
+      padding: var(--spacing) var(--spacing-2);
+      border-radius: var(--radius-lg);
+      font-size: var(--text-sm);
+
+      :where(svg) {
+        display: inline-block;
+        vertical-align: middle;
+        width: 1.25em;
+        height: 1.25em;
+      }
+    }
+  }
+
+  .copy-paste-drawer-actions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-2);
+    margin-top: auto;
+    padding-bottom: max(env(safe-area-inset-bottom, var(--spacing-3)), var(--spacing-3));
+
+    & .bottom {
+      display: flex;
+      gap: var(--spacing-2);
+      & button {
+        flex: 1;
+      }
+    }
+  }
+}

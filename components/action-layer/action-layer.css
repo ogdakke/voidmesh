@@ -1,0 +1,125 @@
+.action-layer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+  display: block;
+  transition: display 200ms allow-discrete;
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+.action-layer-ring {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
+.action-layer-button {
+  --_size: calc(10 * var(--spacing));
+
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--_size);
+  height: var(--_size);
+  border-radius: 50%;
+  border: none;
+  background: var(--floating-background);
+  backdrop-filter: var(--floating-backdrop);
+  box-shadow: var(--popover-shadow);
+  color: var(--color);
+  cursor: pointer;
+  pointer-events: none;
+  font-size: 1.25rem;
+  line-height: 1;
+
+  translate: -50% -50%;
+  scale: 1;
+  opacity: 1;
+  filter: blur(0px);
+  transition:
+    translate 200ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    scale 200ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    opacity 200ms ease-out,
+    filter 200ms ease-out;
+
+  /* Entry: animate from ring center outward */
+  @starting-style {
+    translate: calc(-50% - var(--_pos-x)) calc(-50% - var(--_pos-y));
+    scale: 0.72;
+    opacity: 0;
+    filter: blur(8px);
+  }
+
+  svg {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
+
+  &[data-hovered] {
+    scale: 1.15;
+    background: var(--floating-background);
+    filter: brightness(1.05);
+    box-shadow:
+      var(--popover-shadow),
+      0 0 0 1px var(--border-75);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+}
+
+/* Exit: collapse back to ring center */
+[hidden] > .action-layer-ring > .action-layer-button {
+  translate: calc(-50% - var(--_pos-x)) calc(-50% - var(--_pos-y));
+  scale: 0.7;
+  opacity: 0;
+  filter: blur(8px);
+  transition-timing-function: ease-in;
+  transition-duration: 150ms;
+}
+
+.action-layer-tooltip {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + var(--spacing) * 12);
+  left: 50%;
+  transform: translateX(-50%) translateY(calc(-2.5 * var(--spacing)));
+  opacity: 0;
+  padding: var(--spacing) var(--spacing-2);
+  border-radius: var(--radius-button);
+  background: var(--floating-background);
+  backdrop-filter: var(--floating-backdrop);
+  box-shadow: var(--popover-shadow);
+  color: var(--color);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  transition:
+    opacity 150ms ease,
+    transform 150ms ease;
+  z-index: 101;
+
+  &[data-visible] {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+}
+
+.action-layer-debug {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 102;
+}
