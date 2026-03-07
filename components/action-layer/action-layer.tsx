@@ -75,6 +75,13 @@ function computeRingPositions(count: number, radius: number): RingPosition[] {
   return positions;
 }
 
+/** Read a CSS env() value as a number (px). Returns 0 if unsupported. */
+function getEnvPx(envVar: string): number {
+  const el = document.documentElement;
+  const value = getComputedStyle(el).getPropertyValue(envVar);
+  return parseFloat(value) || 0;
+}
+
 function clampRingCenter(
   cx: number,
   cy: number,
@@ -82,6 +89,12 @@ function clampRingCenter(
 ): { x: number; y: number } {
   const { edgeInset, buttonSize } = config.actionLayer;
   const pad = buttonSize / 2 + edgeInset;
+
+  // Account for PWA safe areas (status bar, home indicator)
+  const safeTop = getEnvPx("--safe-area-top");
+  const safeBottom = getEnvPx("--safe-area-bottom");
+  const safeLeft = getEnvPx("--safe-area-left");
+  const safeRight = getEnvPx("--safe-area-right");
 
   // Compute actual extents from button positions (relative to center)
   let minX = 0;
@@ -96,8 +109,8 @@ function clampRingCenter(
   }
 
   return {
-    x: Math.max(pad - minX, Math.min(window.innerWidth - maxX - pad, cx)),
-    y: Math.max(pad - minY, Math.min(window.innerHeight - maxY - pad, cy)),
+    x: Math.max(pad + safeLeft - minX, Math.min(window.innerWidth - maxX - pad - safeRight, cx)),
+    y: Math.max(pad + safeTop - minY, Math.min(window.innerHeight - maxY - pad - safeBottom, cy)),
   };
 }
 

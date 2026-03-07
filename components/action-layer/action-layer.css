@@ -50,7 +50,7 @@
   /* Entry: animate from ring center outward */
   @starting-style {
     translate: calc(-50% - var(--_pos-x)) calc(-50% - var(--_pos-y));
-    scale: 0;
+    scale: 0.72;
     opacity: 0;
     filter: blur(8px);
   }
@@ -77,7 +77,7 @@
 /* Exit: collapse back to ring center */
 [hidden] > .action-layer-ring > .action-layer-button {
   translate: calc(-50% - var(--_pos-x)) calc(-50% - var(--_pos-y));
-  scale: 0;
+  scale: 0.7;
   opacity: 0;
   filter: blur(8px);
   transition-timing-function: ease-in;
@@ -86,7 +86,7 @@
 
 .action-layer-tooltip {
   position: fixed;
-  top: max(env(safe-area-inset-top, 0px), var(--spacing));
+  top: calc(env(safe-area-inset-top, 0px) + var(--spacing) * 12);
   left: 50%;
   transform: translateX(-50%) translateY(calc(-2.5 * var(--spacing)));
   opacity: 0;

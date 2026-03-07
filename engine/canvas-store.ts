@@ -60,7 +60,7 @@ export interface CanvasState {
   actionLayerActive: boolean;
   /** Entity IDs targeted by the action layer */
   actionLayerEntityIds: ReadonlySet<string>;
-  /** Touch origin in CSS viewport coordinates (set on activation) */
+  /** Touch origin in CSS viewport coordinates (raw finger position) */
   actionLayerTouchOrigin: { x: number; y: number };
   /** Version counter for action layer state changes */
   actionLayerVersion: number;

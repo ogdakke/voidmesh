@@ -1529,9 +1529,7 @@ export class GameLoop {
     const finalState = canvasStore.getState();
     entityDragVisual.activateDrag(finalState.selectedEntityIds);
 
-    // Activate the action layer instead of entity drag
-    // Use pointerDownPosition (set once on touchStart, not updated during pan)
-    // to ensure the ring appears exactly where the finger first touched.
+    // Activate the action layer at the finger's position
     const touchPos = this.inputState.pointerDownPosition ?? this.touchState.lastTouchPosition;
     if (touchPos) {
       actionLayerController.activate(touchPos, finalState.selectedEntityIds);

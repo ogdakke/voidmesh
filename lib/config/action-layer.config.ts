@@ -79,5 +79,5 @@ export const actionLayerDefaults: ActionLayerConfig = {
   blurFadeStart: 0.6,
 
   edgeInset: 8,
-  debug: undefined,
+  debug: "default",
 };
