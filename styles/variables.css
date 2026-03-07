@@ -167,6 +167,8 @@
   --red-1500: oklch(from var(--red) var(--lightness-1500) var(--chroma-1500) h);
   --red-1600: oklch(from var(--red) var(--lightness-1600) var(--chroma-1600) h);
 
+  --tint-100: oklch(from var(--tint) var(--lightness-100) var(--chroma-100) h);
+  --tint-200: oklch(from var(--tint) var(--lightness-200) var(--chroma-200) h);
   --tint-300: oklch(from var(--tint) var(--lightness-300) var(--chroma-300) h);
   --tint-400: oklch(from var(--tint) var(--lightness-400) var(--chroma-400) h);
   --tint-500: oklch(from var(--tint) var(--lightness-500) var(--chroma-500) h);
