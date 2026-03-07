@@ -6,11 +6,13 @@ import "./about.css";
 export function AboutSection({ children }: { children?: ReactNode }) {
   return (
     <section className="about-section">
-      <h1>Voidmesh</h1>
-      <p>
-        Apply dithering, halftone, ASCII and more effects to videos, GIFs, and images. Everything
-        runs locally in your browser—nothing gets uploaded.
-      </p>
+      <div className="about-hero">
+        <h1>Voidmesh</h1>
+        <p className="about-tagline">
+          Apply dithering, halftone, ASCII and more effects to videos, GIFs, and images. Everything
+          runs locally in your browser—nothing gets uploaded.
+        </p>
+      </div>
       <Image {...houseBurning} alt="Burning house ASCII" />
       <h2>Effects</h2>
       <dl className="about__effects">
@@ -44,7 +46,7 @@ export function AboutSection({ children }: { children?: ReactNode }) {
         </div>
         <div>
           <dt>Flowing Glass</dt>
-          <dd>(experimental) A living, breathing, turbulent glass</dd>
+          <dd>A living, breathing, turbulent glass</dd>
         </div>
       </dl>
       {children}
@@ -54,19 +56,16 @@ export function AboutSection({ children }: { children?: ReactNode }) {
 
 export function Footer() {
   return (
-    <footer>
+    <footer className="about-footer">
       <p>
         Made by{" "}
         <a href="https://x.com/ogdakke" target="_blank">
           Daniel
         </a>
-        .
-        <br />
-        Source code available on{" "}
+        {" · "}
         <a href="https://github.com/ogdakke/voidmesh" target="_blank">
-          GitHub
+          Source
         </a>
-        .
       </p>
     </footer>
   );
@@ -75,16 +74,28 @@ export function Footer() {
 export function FeatureSection() {
   return (
     <section className="about-section">
-      <h1>Features</h1>
-      <ul>
-        <li>Works on videos, images, GIFs, and SVGs</li>
+      <h2>Features</h2>
+      <ul className="about-features">
         <li>
-          Color palettes—Game Boy, CGA, sepia, or extract from any image. Custom palettes are saved
-          locally in your browser.
+          <strong>Any media</strong>
+          <span>Videos, images, GIFs, and SVGs</span>
         </li>
-        <li>Post-processing—film grain, bloom, chromatic aberration</li>
-        <li>Export to MP4, MOV, or GIF</li>
-        <li>Save your work to a file, and continue later</li>
+        <li>
+          <strong>Color palettes</strong>
+          <span>Game Boy, CGA, sepia, or extract from any image</span>
+        </li>
+        <li>
+          <strong>Post-processing</strong>
+          <span>Film grain, bloom, chromatic aberration</span>
+        </li>
+        <li>
+          <strong>Export</strong>
+          <span>MP4, MOV, or GIF</span>
+        </li>
+        <li>
+          <strong>Save &amp; resume</strong>
+          <span>Save your canvas to a file, continue later</span>
+        </li>
       </ul>
     </section>
   );

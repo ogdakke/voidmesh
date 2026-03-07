@@ -13,6 +13,8 @@ import { useIsMobile, useIsTouch } from "./hooks/use-is-mobile.ts";
 import useMediaQuery from "./hooks/use-media-query";
 import { PostHogProvider } from "@posthog/react";
 import type { PostHogConfig } from "posthog-js";
+import { Agentation } from "agentation";
+
 import "./styles/app.css";
 
 const options: Partial<PostHogConfig> = {
@@ -95,6 +97,7 @@ ReactDOM.createRoot(document.getElementById("root")!, {
         </KeybindProvider>
       </NuqsAdapter>
     </AnalyticsProvider>
+    {import.meta.env.DEV && <Agentation />}
   </React.StrictMode>,
 );
 

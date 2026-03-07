@@ -1,55 +1,67 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 
-const THRESHOLD = Array.from({ length: 6 }, (_, i) => i / 5);
-
 export function useCarouselDots(containerRef: RefObject<HTMLElement | null>) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [count, setCount] = useState(0);
-  const observerRef = useRef<IntersectionObserver | null>(null);
+  const [progress, setProgress] = useState<number[]>([]);
+  const cleanupRef = useRef<(() => void) | null>(null);
 
-  // Set up observer. Uses a ref-callback style: the parent calls `attach(el)`
-  // once the DOM element is available (e.g. after a portal mounts).
   const attach = (container: HTMLElement | null) => {
-    // Tear down previous observer
-    observerRef.current?.disconnect();
-    observerRef.current = null;
+    cleanupRef.current?.();
+    cleanupRef.current = null;
 
     if (!container) {
       setCount(0);
+      setProgress([]);
       return;
     }
 
     const sections = container.querySelectorAll<HTMLElement>(":scope > section");
     setCount(sections.length);
+    setProgress(Array.from({ length: sections.length }, (_, i) => (i === 0 ? 1 : 0)));
 
-    const observer = new IntersectionObserver(
-      (entries) => {
-        let bestEntry: IntersectionObserverEntry | null = null;
-        for (const entry of entries) {
-          if (entry.isIntersecting && entry.intersectionRatio > 0) {
-            if (!bestEntry || entry.intersectionRatio > bestEntry.intersectionRatio) {
-              bestEntry = entry;
-            }
+    let rafId = 0;
+    const onScroll = () => {
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        const containerWidth = container.clientWidth;
+        if (containerWidth === 0) return;
+
+        const scrollLeft = container.scrollLeft;
+        const newProgress: number[] = [];
+        let bestIdx = 0;
+        let bestVal = 0;
+
+        for (let i = 0; i < sections.length; i++) {
+          const section = sections[i]!;
+          const sectionLeft = section.offsetLeft - container.offsetLeft;
+          const sectionWidth = section.offsetWidth;
+
+          const visibleStart = Math.max(sectionLeft, scrollLeft);
+          const visibleEnd = Math.min(sectionLeft + sectionWidth, scrollLeft + containerWidth);
+          const visible = Math.max(0, visibleEnd - visibleStart);
+          const ratio = visible / containerWidth;
+
+          newProgress.push(ratio);
+          if (ratio > bestVal) {
+            bestVal = ratio;
+            bestIdx = i;
           }
         }
-        if (bestEntry) {
-          const idx = Array.from(sections).indexOf(bestEntry.target as HTMLElement);
-          if (idx !== -1) setActiveIndex(idx);
-        }
-      },
-      {
-        root: container,
-        rootMargin: "0px -40% 0px -40%",
-        threshold: THRESHOLD,
-      },
-    );
 
-    for (const section of sections) observer.observe(section);
-    observerRef.current = observer;
+        setProgress(newProgress);
+        setActiveIndex(bestIdx);
+      });
+    };
+
+    container.addEventListener("scroll", onScroll, { passive: true });
+    cleanupRef.current = () => {
+      cancelAnimationFrame(rafId);
+      container.removeEventListener("scroll", onScroll);
+    };
   };
 
-  // Clean up on unmount
-  useEffect(() => () => observerRef.current?.disconnect(), []);
+  useEffect(() => () => cleanupRef.current?.(), []);
 
   const scrollTo = (index: number) => {
     const container = containerRef.current;
@@ -58,5 +70,5 @@ export function useCarouselDots(containerRef: RefObject<HTMLElement | null>) {
     sections[index]?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
   };
 
-  return { activeIndex, count, scrollTo, attach };
+  return { activeIndex, count, progress, scrollTo, attach };
 }

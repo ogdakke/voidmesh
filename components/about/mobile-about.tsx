@@ -13,7 +13,7 @@ export interface MobileAboutProps extends ComponentProps<"div"> {}
 export default function MobileAbout(props: MobileAboutProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const { activeIndex, count, scrollTo, attach } = useCarouselDots(containerRef);
+  const { activeIndex, count, progress, scrollTo, attach } = useCarouselDots(containerRef);
 
   const contentRef = (el: HTMLDivElement | null) => {
     containerRef.current = el;
@@ -46,6 +46,7 @@ export default function MobileAbout(props: MobileAboutProps) {
                   className="carousel-dot"
                   aria-label={`Go to section ${i + 1}`}
                   aria-current={i === activeIndex}
+                  style={{ "--dot-progress": progress[i] ?? 0 } as React.CSSProperties}
                   onClick={() => scrollTo(i)}
                 />
               ))}

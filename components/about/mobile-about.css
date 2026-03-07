@@ -90,17 +90,23 @@
 
 .carousel-dot {
   all: unset;
+  --dot-progress: 0;
+  --_p: clamp(0, var(--dot-progress), 1);
+  position: relative;
   width: var(--dot-size);
   height: var(--dot-size);
-  border-radius: var(--radius-button);
-  background: var(--gray-50);
   cursor: pointer;
-  transition: transform 0.2s ease-out;
-  transform: scale(0.86);
 
-  &[aria-current="true"] {
-    background: var(--gray-1100);
-    transform: scale(1.1);
+  &::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 50%;
+    translate: -50% 0;
+    width: calc(var(--dot-size) + var(--dot-size) * var(--_p));
+    height: 100%;
+    border-radius: var(--radius-button);
+    background: color-mix(in oklch, var(--gray-1100) calc(var(--_p) * 100%), var(--gray-500));
   }
 
   &:focus-visible {

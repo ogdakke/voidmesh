@@ -363,10 +363,8 @@ export function InfiniteCanvas() {
   };
 
   // Play/pause media - works for both video and GIF
-  const playPauseShortcutHandler = async (e: KeyboardEvent) => {
+  const playPauseShortcutHandler = async (_e: KeyboardEvent) => {
     if (mediaActions.isIdle()) return;
-    e.preventDefault();
-    e.stopPropagation();
     // Blur DropZone button to prevent it capturing spacebar, but not the canvas container
     if (
       document.activeElement instanceof HTMLElement &&
@@ -386,7 +384,6 @@ export function InfiniteCanvas() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== " " || e.repeat) return;
-      e.preventDefault();
       gameLoop.setSpaceHeld(true);
       setIsSpaceHeld(true);
     };
