@@ -73,8 +73,8 @@ function computeRingPositions(
       angle = baseAngle + side * offset * spread;
     }
     positions.push({
-      x: Math.cos(angle) * radius,
-      y: Math.sin(angle) * radius,
+      x: Math.round(Math.cos(angle) * radius * 100) / 100,
+      y: Math.round(Math.sin(angle) * radius * 100) / 100,
     });
   }
   return positions;
