@@ -13,9 +13,10 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `serialization/` — `.vdmsh` zip format (fflate). Versioned manifest with migrations.
 - `palette-extraction/` — K-means clustering for color palettes.
 - `palette-store.ts` — User palette CRUD (persisted via unstorage).
-- `touch-scroll/` — Physics-based momentum scrolling. `VelocityTracker`, `Scroller`, `SpringBack`.
+- `touch-scroll/` — Physics-based momentum scrolling. `VelocityTracker`, `Scroller`, `SpringBack`, `DampedSpring2D` (2D underdamped harmonic oscillator for catch-up springs and rubber-band returns).
 - `client.logger.ts` — Logger with levels. `console.log`/`debug` stripped in production via Vite/oxc config.
-- `color-utils.ts` — OKLCH color model (`OklchColor`, conversion pipeline OKLCH↔OKLab↔LMS↔Linear P3/sRGB), gamut clamping (`clampChromaToP3`), CSS parsing/formatting (`cssToOklch`, `oklchToCss`, `oklchToP3Css`), hex shorthand support, color-space-aware luminance and palette sorting (accept `ColorSpace` enum param).
+- `color-utils.ts` — OKLCH color model (`OklchColor`, conversion pipeline OKLCH↔OKLab↔LMS↔Linear P3/sRGB), gamut clamping, CSS parsing/formatting, color-space-aware luminance and palette sorting.
+- `config/action-layer.config.ts` — `ActionLayerConfig` interface and defaults for the mobile radial context menu (safe zone, springs, blur, buttons).
 - `entity-placement.ts` — Drop position calculation for new entities.
 - `deep-merge.ts` — Deep object merge for `PartialDeep<ShaderParams>`.
 - `shader-defaults.ts` — Applies `shaderDefaults` from config on shader type switch.

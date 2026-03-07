@@ -12,6 +12,7 @@ React UI layer. Feature-specific panels, the canvas viewport, and layout shells.
 - `export-knobs/` Export format/quality/resolution controls, separated into `export-knobs.desktop.tsx`, `export-knobs.mobile.tsx`, `export-knobs.shared.tsx` (shared components) and `export-knobs.lib.ts` (non-tsx shared code).
 - `*-knobs.tsx` — Per-shader parameter panels (dithering, ascii, glass, shape, adjustments, post-processing).
 - `knobs/` — Shared knob sub-components: `style-knobs.tsx`, `params-knobs.tsx`, `post-process-knobs.tsx`.
+- `action-layer/` — Mobile radial context menu. `action-layer.tsx` renders touch-activated button ring with spring animations. `copy-paste-drawer.tsx` for effects copy/paste.
 - `delete-drop-zone/` — Mobile drag-to-delete drop zone (appears during entity drag).
 - `about/` — About dialog with desktop/mobile variants and updates section.
 - `settings-drawer/` — Settings panel. `desktop-settings.tsx` for sidebar, `settings-drawer.tsx` for mobile. `share.ts` for URL sharing.

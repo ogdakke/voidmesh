@@ -4,8 +4,8 @@ WebGPU rendering and export pipelines. Turns engine state into pixels.
 
 ## Key Files
 
-- `canvas-renderer.ts` (~55KB) — `InfiniteCanvasRenderer`. WebGPU adapter/device/context init, entity source textures, shader dispatch via `ShaderRegistry`, composition pipeline (viewport transform + entity layering), grid, selection rects, disintegration overlays. Entry point: `render(state: RenderState)`. Also exposes `startDisintegration()` / `cancelDisintegration()` for the fancy delete feature.
-- `processing-pipeline.ts` (~47KB) — `ProcessingPipeline`. Pre-processing (adjustments: brightness/contrast/saturation, Dual Kawase blur) and post-processing (grain, vignette, bloom via multi-pass downsample/upsample, chromatic aberration). Operates per-entity before composition.
+- `canvas-renderer.ts` (~69KB) — `InfiniteCanvasRenderer`. WebGPU adapter/device/context init, entity source textures, shader dispatch via `ShaderRegistry`, composition pipeline (viewport transform + entity layering), grid, selection rects, disintegration overlays, action layer blur overlay. Entry point: `render(state: RenderState)`.
+- `processing-pipeline.ts` (~49KB) — `ProcessingPipeline`. Pre-processing (adjustments: brightness/contrast/saturation, Dual Kawase blur) and post-processing (grain, vignette, bloom via multi-pass downsample/upsample, chromatic aberration). Operates per-entity before composition. Also exposes `encodeFullScreenBlur()` for the action layer blur overlay.
 - `gpu-color-space.ts` — `detectGpuColorConfig()`. Probes Display P3 support at init, returns frozen `GpuColorConfig` (supportsP3, canvasFormat, canvasColorSpace, intermediateFormat, textureColorSpace).
 - `copy-pass.ts` + `copy-pass.wgsl` — `CopyPass`. Full-screen format conversion (rgba16float ↔ rgba8unorm) for export readback and showOriginal passthrough.
 - `texture-pool.ts` — GPU texture recycling. Parameterized by `GPUTextureFormat` (receives `intermediateFormat` from renderer).
@@ -19,7 +19,7 @@ WebGPU rendering and export pipelines. Turns engine state into pixels.
 
 ### WGSL Shaders (in this directory)
 
-25 `.wgsl` files. Effect shaders: `dithering.wgsl`, `dithering-compute.wgsl`, `ascii.wgsl`, `halftone.wgsl`, `melt.wgsl`, `blobs.wgsl`, `glass-fluted.wgsl`, `glass-frosted.wgsl`, `glass-flowing.wgsl`. Post-processing: `bloom-downsample.wgsl`, `bloom-upsample.wgsl`, `kawase-downsample.wgsl`, `kawase-upsample.wgsl`, `adjustments.wgsl`, `post-process.wgsl`. Composition: `composition.wgsl`, `dot-grid.wgsl`, `selection-rect.wgsl`, `texture-mix.wgsl`. Disintegration: `disintegration-spawn.wgsl`, `disintegration-update.wgsl`, `disintegration-render.wgsl`. Imported via `?raw` Vite suffix (minified in production by `vite-plugin-wgsl-minify`).
+26 `.wgsl` files covering effects, post-processing, composition, disintegration, and action layer overlay (`action-layer-blit.wgsl`). Imported via `?raw` Vite suffix (minified in production by `vite-plugin-wgsl-minify`).
 
 ## Color Space
 
@@ -34,8 +34,9 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 1. `GameLoop` calls `renderer.render(state)` each frame
 2. For each visible entity: upload source texture if dirty, apply shader via `ShaderRegistry.applyShader()`, apply pre/post processing via `ProcessingPipeline`
 3. Composite all processed entities onto canvas with viewport transform
-4. Render grid overlay, selection rectangles, drag visuals
-5. Render disintegration particle overlays for any active "fancy delete" animations
+4. If action layer active: blur+dim canvas, re-render targeted entities sharp on top
+5. Render grid overlay, selection rectangles, drag visuals
+6. Render disintegration particle overlays for any active "fancy delete" animations
 
 ## GPU Resource Management
 
