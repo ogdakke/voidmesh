@@ -261,6 +261,9 @@ function Root({ children }: PropsWithChildren) {
     return () => {
       window.removeEventListener("touchmove", handleTouchMove);
       window.removeEventListener("touchend", handleTouchEnd, { capture: true });
+      // Clear hover state so next activation doesn't flash a stale button
+      setHoveredIndex(null);
+      setTooltipLabel(null);
     };
     // `center` and `positions` are derived from `storeTouchOrigin` (stable ref via
     // useSyncExternalStore) and frozen config. React Compiler memoizes them.
