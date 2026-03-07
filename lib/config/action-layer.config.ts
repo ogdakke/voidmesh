@@ -60,7 +60,7 @@ export const actionLayerDefaults: ActionLayerConfig = {
   buttonHitPadding: 12,
   maxButtons: 5,
 
-  deadzone: 30,
+  deadzone: 70,
   entityRubberBandMax: 80,
   buttonAppearSpring: 0.2,
   buttonHoverSpring: 0.15,
@@ -71,7 +71,7 @@ export const actionLayerDefaults: ActionLayerConfig = {
   ringFollowFactor: 0.08,
 
   blurIntensity: 0.9,
-  dimOpacity: 0.05,
+  dimOpacity: 0.025,
   blurFadeInMs: 200,
   blurFadeOutMs: 100,
 
@@ -79,5 +79,5 @@ export const actionLayerDefaults: ActionLayerConfig = {
   blurFadeStart: 0.6,
 
   edgeInset: 8,
-  debug: "default",
+  debug: undefined, //"default",
 };
