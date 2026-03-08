@@ -186,11 +186,24 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
     isProcessingRef.current = true;
     updateJob(nextJob.id, { status: "processing" });
 
-    // Show progress toast (persistent until done)
-    const toastId = toastManager.add({
+    // Show progress toast (persistent until done, with cancel action)
+    let toastId!: string;
+    const cancelFromToast = () => {
+      cancelledJobIdRef.current = nextJob.id;
+      if (currentVideoHandleRef.current) {
+        currentVideoHandleRef.current.cancel();
+      }
+      updateJob(nextJob.id, { status: "cancelled" });
+      toastManager.close(toastId);
+    };
+    toastId = toastManager.add({
       title: `Upscaling ${nextJob.entityName}`,
       description: getMediaLabel(nextJob.type) === "image" ? "Processing..." : "Starting...",
       timeout: 0,
+      actionProps: {
+        children: "Cancel",
+        onClick: cancelFromToast,
+      },
     });
     jobToastIdsRef.current.set(nextJob.id, toastId);
 
@@ -232,6 +245,7 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
           title: `Upscaled ${nextJob.entityName}`,
           description: "Added to canvas",
           timeout: 4000,
+          actionProps: { children: null },
         });
       }
 

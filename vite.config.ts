@@ -13,7 +13,7 @@ export default defineConfig(({ mode }) => {
     appType: "spa",
     server: {
       watch: {
-        ignored: ["**/opensrc/**", "**/.vendor/**", "**/.claude/**"],
+        ignored: ["**/opensrc/**", ".vendor/**", ".claude/**"],
       },
       proxy: {
         "/m/": {
