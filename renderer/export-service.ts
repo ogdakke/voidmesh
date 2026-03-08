@@ -1,5 +1,4 @@
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
-import { isVideoEntity } from "#types/canvas.ts";
 import { getFrameAtTime } from "../lib/gif-decoder.ts";
 import { CopyPass } from "./copy-pass.ts";
 import { type ImageExportOptions, getImageMimeType } from "./export-formats.ts";
@@ -12,17 +11,10 @@ export type ApplyShaderFn = (
   outputTexture: GPUTexture,
 ) => void;
 
-export type GetVideoFrameSourceFn = (
-  video: HTMLVideoElement,
-  width: number,
-  height: number,
-) => OffscreenCanvas;
-
 export class ExportService {
   #device: GPUDevice;
   #texturePool: TexturePool | null;
   #applyShader: ApplyShaderFn;
-  #getVideoFrameSource: GetVideoFrameSourceFn;
   #copyPass: CopyPass;
   #colorConfig: GpuColorConfig;
 
@@ -30,13 +22,11 @@ export class ExportService {
     device: GPUDevice,
     texturePool: TexturePool | null,
     applyShader: ApplyShaderFn,
-    getVideoFrameSource: GetVideoFrameSourceFn,
     colorConfig: GpuColorConfig,
   ) {
     this.#device = device;
     this.#texturePool = texturePool;
     this.#applyShader = applyShader;
-    this.#getVideoFrameSource = getVideoFrameSource;
     this.#copyPass = new CopyPass(device);
     this.#colorConfig = colorConfig;
   }
@@ -130,58 +120,16 @@ export class ExportService {
   }
 
   /**
-   * Render a video entity at a specific timestamp to an ImageBitmap.
-   * Used for video export - more efficient than Blob for encoding multiple frames.
+   * Render a decoded video frame through shaders.
+   * Used by the export and upscale pipelines with WebCodecs-decoded frames.
    */
-  async renderVideoFrameAtTime(
+  async renderFrameWithShader(
     entity: ShaderCanvasEntity,
-    timestampSeconds: number,
-    videoOverride?: HTMLVideoElement,
+    frameSource: ImageBitmap | OffscreenCanvas,
+    width: number,
+    height: number,
   ): Promise<ImageBitmap | null> {
-    if (!isVideoEntity(entity)) {
-      return null;
-    }
-
-    const video = videoOverride ?? entity.mediaSource.videoElement;
-
-    // Seek to target timestamp and wait for seeked event
-    video.currentTime = Math.min(timestampSeconds, video.duration);
-    await new Promise<void>((resolve) => {
-      const onSeeked = () => {
-        video.removeEventListener("seeked", onSeeked);
-        resolve();
-      };
-      video.addEventListener("seeked", onSeeked);
-    });
-
-    return this.#renderSourceToImageBitmap(
-      entity,
-      this.#getVideoFrameSource(video, entity.originalSize.width, entity.originalSize.height),
-      entity.originalSize.width,
-      entity.originalSize.height,
-    );
-  }
-
-  /**
-   * Render the current video frame through shaders WITHOUT seeking.
-   * Used for playback-based export: the video is playing and RVFC has
-   * confirmed a new decoded frame is available. This avoids B-frame
-   * issues that occur when seeking a paused video frame-by-frame.
-   */
-  async renderCurrentVideoFrame(
-    entity: ShaderCanvasEntity,
-    video: HTMLVideoElement,
-  ): Promise<ImageBitmap | null> {
-    if (!isVideoEntity(entity)) {
-      return null;
-    }
-
-    return this.#renderSourceToImageBitmap(
-      entity,
-      this.#getVideoFrameSource(video, entity.originalSize.width, entity.originalSize.height),
-      entity.originalSize.width,
-      entity.originalSize.height,
-    );
+    return this.#renderSourceToImageBitmap(entity, frameSource, width, height);
   }
 
   /**

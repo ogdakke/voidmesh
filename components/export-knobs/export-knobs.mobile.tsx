@@ -11,7 +11,7 @@ import {
   type ImageExportFormat,
   IMAGE_FORMAT_OPTIONS,
 } from "#renderer/export-formats.ts";
-import { isAnimatedEntity } from "#types/canvas.ts";
+import { isAnimatedEntity, isVideoEntity } from "#types/canvas.ts";
 import { Button } from "#ui/button/button.tsx";
 import {
   Collapsible,
@@ -57,7 +57,11 @@ function MobileExportSettingsKnobs() {
   const formatOptions = FORMAT_OPTIONS;
 
   const isGif = exportOptions.format === "gif";
-  const supportsAudio = formatSupportsAudio(exportOptions.format);
+  const entityHasAudio =
+    firstAnimatedEntity &&
+    isVideoEntity(firstAnimatedEntity) &&
+    firstAnimatedEntity.mediaSource.hasAudio;
+  const supportsAudio = formatSupportsAudio(exportOptions.format) && entityHasAudio;
 
   const handleFormatChange = (e: ChangeEvent<HTMLSelectElement>) => {
     const format = e.target.value as ExportFormat;

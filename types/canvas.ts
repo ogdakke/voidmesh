@@ -357,6 +357,8 @@ export type MediaSourceVideo = {
   blob: Blob;
   duration: number;
   fps: number | null;
+  /** Whether the source video contains an audio track */
+  hasAudio: boolean;
 };
 export type MediaSourceGif = {
   type: typeof MediaType.gif;

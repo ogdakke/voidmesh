@@ -71,18 +71,20 @@ export function VideoExportProvider({ children }: PropsWithChildren) {
     if (!entity) return;
 
     let fps: number | null = null;
+    let hasAudio = false;
     if (isVideoEntity(entity)) {
       fps = entity.mediaSource.fps;
+      hasAudio = entity.mediaSource.hasAudio;
     } else if (isGifEntity(entity)) {
       fps = entity.mediaSource.fps;
     }
 
-    if (fps !== null && fps > 0) {
-      setExportOptions((prev) => {
-        if (prev.fps === fps) return prev;
-        return { ...prev, fps };
-      });
-    }
+    setExportOptions((prev) => {
+      const nextFps = fps !== null && fps > 0 ? fps : prev.fps;
+      const nextIncludeAudio = hasAudio ? prev.includeAudio : false;
+      if (prev.fps === nextFps && prev.includeAudio === nextIncludeAudio) return prev;
+      return { ...prev, fps: nextFps, includeAudio: nextIncludeAudio };
+    });
   };
 
   return (

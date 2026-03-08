@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { NavArrowRight, SoundHigh } from "iconoir-react";
 import { useExportQueue } from "#context/use-export-queue.ts";
 import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
-import { isAnimatedEntity } from "#types/canvas.ts";
+import { isAnimatedEntity, isVideoEntity } from "#types/canvas.ts";
 import {
   type ExportFormat,
   type QualityPreset,
@@ -60,7 +60,11 @@ export function ExportSettingsKnobs() {
   const formatOptions = FORMAT_OPTIONS;
 
   const isGif = exportOptions.format === "gif";
-  const supportsAudio = formatSupportsAudio(exportOptions.format);
+  const entityHasAudio =
+    firstAnimatedEntity &&
+    isVideoEntity(firstAnimatedEntity) &&
+    firstAnimatedEntity.mediaSource.hasAudio;
+  const supportsAudio = formatSupportsAudio(exportOptions.format) && entityHasAudio;
 
   // Format change handler
   const handleFormatChange = (value: string | null) => {

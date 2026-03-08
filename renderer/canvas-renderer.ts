@@ -329,7 +329,6 @@ export class InfiniteCanvasRenderer {
       this.#device,
       this.#texturePool,
       (entity, source, output) => this.#applyShaderToTexture(entity, source, output),
-      (video, w, h) => this.#getVideoFrameSource(video, w, h),
       this.#colorConfig,
     );
 
@@ -1800,26 +1799,16 @@ export class InfiniteCanvasRenderer {
   }
 
   /**
-   * Render a video entity at a specific timestamp to an ImageBitmap.
-   * Delegates to ExportService.
+   * Render a decoded frame through shaders.
+   * Used by export and upscale pipelines with WebCodecs-decoded frames.
    */
-  async renderVideoFrameAtTime(
+  async renderFrameWithShader(
     entity: ShaderCanvasEntity,
-    timestampSeconds: number,
-    videoOverride?: HTMLVideoElement,
+    frameSource: ImageBitmap | OffscreenCanvas,
+    width: number,
+    height: number,
   ): Promise<ImageBitmap | null> {
-    return this.#exportService!.renderVideoFrameAtTime(entity, timestampSeconds, videoOverride);
-  }
-
-  /**
-   * Render the current video frame through shaders WITHOUT seeking.
-   * Delegates to ExportService.
-   */
-  async renderCurrentVideoFrame(
-    entity: ShaderCanvasEntity,
-    video: HTMLVideoElement,
-  ): Promise<ImageBitmap | null> {
-    return this.#exportService!.renderCurrentVideoFrame(entity, video);
+    return this.#exportService!.renderFrameWithShader(entity, frameSource, width, height);
   }
 
   /**

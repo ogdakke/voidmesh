@@ -134,6 +134,7 @@ export function createTestEntity(options: CreateEntityOptions = {}): ShaderCanva
       blob: new Blob(["mock-video"], { type: "video/mp4" }),
       duration: options.videoDuration ?? 10,
       fps: options.videoFps ?? 30,
+      hasAudio: false,
     };
     const playback: PlaybackState = {
       isPlaying: false,

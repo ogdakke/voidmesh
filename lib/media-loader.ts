@@ -37,6 +37,7 @@ export interface VideoLoadResult {
   width: number;
   height: number;
   duration: number;
+  hasAudio: boolean;
   fps: number | null;
 }
 
@@ -193,9 +194,11 @@ export async function loadVideo(blob: Blob): Promise<VideoLoadResult> {
     logger.error("Failed to autoplay video", e);
   });
 
-  // Detect fps by observing the already-playing video
-  // This doesn't interfere with playback - just watches frames as they render
-  const fps = await detectVideoFps(video);
+  // Detect fps and probe for audio track in parallel
+  const [fps, hasAudio] = await Promise.all([
+    detectVideoFps(video),
+    import("#lib/audio-demux.ts").then(({ hasAudioTrack }) => hasAudioTrack(blob)),
+  ]);
 
   return {
     videoElement: video,
@@ -204,6 +207,7 @@ export async function loadVideo(blob: Blob): Promise<VideoLoadResult> {
     height,
     duration: video.duration,
     fps,
+    hasAudio,
   };
 }
 
@@ -385,7 +389,7 @@ export function createVideoEntityData(
   position: Point = { x: 0, y: 0 },
   filename?: string,
 ): Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string } {
-  const { videoElement, initialFrame, width, height, duration, fps } = videoResult;
+  const { videoElement, initialFrame, width, height, duration, fps, hasAudio } = videoResult;
 
   return {
     name: filename,
@@ -395,6 +399,7 @@ export function createVideoEntityData(
       blob,
       duration,
       fps,
+      hasAudio,
     },
     imageBitmap: initialFrame,
     position,
@@ -599,6 +604,7 @@ export async function cloneMediaSource(
           blob: source.blob,
           duration: source.duration,
           fps: source.fps,
+          hasAudio: videoResult.hasAudio,
         },
         imageBitmap: videoResult.initialFrame,
       };

@@ -27,6 +27,23 @@ export interface DemuxedAudio {
 }
 
 /**
+ * Quick probe: does this blob contain an audio track?
+ * Much cheaper than full demuxAudio — only reads container metadata.
+ */
+export async function hasAudioTrack(blob: Blob): Promise<boolean> {
+  const input = new Input({
+    source: new BlobSource(blob),
+    formats: ALL_FORMATS,
+  });
+  try {
+    const track = await input.getPrimaryAudioTrack();
+    return track !== null;
+  } finally {
+    input.dispose();
+  }
+}
+
+/**
  * Extract audio track from a video blob using mediabunny's demuxer.
  * Returns null if the video has no audio track.
  */

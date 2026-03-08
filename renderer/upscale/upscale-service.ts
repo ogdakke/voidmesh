@@ -13,6 +13,7 @@ import {
   type EncodeProgress,
 } from "#renderer/frame-encoder.ts";
 import type { GifFrame } from "#types/canvas.ts";
+import { createFrameIterator } from "#lib/video-demux.ts";
 import { logger } from "#lib/client.logger.ts";
 
 /**
@@ -169,7 +170,7 @@ export class UpscaleService {
 
   /**
    * Upscale a video by 2x: decode frames → upscale each → re-encode to MP4/MOV.
-   * Setup is async (loading video, extracting audio). Returns a handle immediately;
+   * Setup is async (demuxing video + audio). Returns a handle immediately;
    * the progress iterable and result promise resolve once setup completes.
    */
   upscaleVideo(source: Blob, opts?: UpscaleVideoOptions): FrameEncoderHandle {
@@ -189,29 +190,22 @@ export class UpscaleService {
       rejectResult = reject;
     });
 
-    // Async pipeline: setup video + audio → build renderFrame → start encoding
+    // Async pipeline: demux video + audio → build renderFrame → start encoding
     const pipelinePromise = this.#setupVideoUpscale(source, includeAudio).then(
-      ({ video, blobUrl, audioData }) => {
+      ({ demux, audioData }) => {
         if (outerCancelled) {
-          video.src = "";
-          URL.revokeObjectURL(blobUrl);
+          demux.dispose();
           throw new Error("Upscale cancelled");
         }
 
-        const outputWidth = video.videoWidth * 2;
-        const outputHeight = video.videoHeight * 2;
+        const outputWidth = demux.width * 2;
+        const outputHeight = demux.height * 2;
 
-        const renderFrame = async (timestampSeconds: number): Promise<ImageBitmap> => {
-          video.currentTime = timestampSeconds;
-          await new Promise<void>((resolve) => {
-            const onSeeked = () => {
-              video.removeEventListener("seeked", onSeeked);
-              resolve();
-            };
-            video.addEventListener("seeked", onSeeked);
-          });
+        const { iterator: frameIterator } = createFrameIterator(demux, fps);
 
-          const frameBitmap = await createImageBitmap(video);
+        const renderFrame = async (_timestampSeconds: number): Promise<ImageBitmap> => {
+          const { value: frameBitmap, done } = await frameIterator.next();
+          if (done || !frameBitmap) throw new Error("No more video frames");
           const upscaled = await this.upscale(frameBitmap, upscaleOpts);
           frameBitmap.close();
           return upscaled;
@@ -221,20 +215,17 @@ export class UpscaleService {
           width: outputWidth,
           height: outputHeight,
           fps,
-          duration: video.duration,
+          duration: demux.duration,
           format,
           quality,
           audioData,
         });
 
-        // Cleanup video on completion or error
+        // Cleanup demux on completion or error
         handle.result
           .then(() => {})
           .catch(() => {})
-          .finally(() => {
-            video.src = "";
-            URL.revokeObjectURL(blobUrl);
-          });
+          .finally(() => demux.dispose());
 
         return handle;
       },
@@ -278,35 +269,25 @@ export class UpscaleService {
     };
   }
 
-  /** Load video element + extract audio from blob. Cleans up blob URL on error. */
+  /** Demux video + extract audio from blob. */
   async #setupVideoUpscale(
     source: Blob,
     includeAudio: boolean,
   ): Promise<{
-    video: HTMLVideoElement;
-    blobUrl: string;
+    demux: import("#lib/video-demux.ts").VideoDemuxHandle;
     audioData: import("#lib/audio-demux.ts").DemuxedAudio | null;
   }> {
-    const blobUrl = URL.createObjectURL(source);
+    const { demuxVideo } = await import("#lib/video-demux.ts");
+    const demux = await demuxVideo(source);
 
     try {
-      const video = document.createElement("video");
-      video.muted = true;
-      video.preload = "auto";
-      video.src = blobUrl;
-
-      await new Promise<void>((resolve, reject) => {
-        video.onloadedmetadata = () => resolve();
-        video.onerror = () => reject(new Error("Failed to load video"));
-      });
-
       const audioData = includeAudio
         ? await import("#lib/audio-demux.ts").then(({ demuxAudio }) => demuxAudio(source))
         : null;
 
-      return { video, blobUrl, audioData };
+      return { demux, audioData };
     } catch (err) {
-      URL.revokeObjectURL(blobUrl);
+      demux.dispose();
       throw err;
     }
   }
