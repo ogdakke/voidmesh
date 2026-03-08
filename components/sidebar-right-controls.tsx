@@ -92,9 +92,6 @@ export const SidebarRightControls = ({ className, compact }: SidebarRightControl
                     : "Drop or paste images, videos and links for editing"}
                 </p>
               </div>
-              <div className="sidebar-row last-row">
-                <Hint className="sidebar-hint--no-selection" />
-              </div>
             </>
           )}
           {hasSelection && (
@@ -217,8 +214,7 @@ export const SidebarRightControls = ({ className, compact }: SidebarRightControl
         </div>
       )}
 
-      <div className="last-row sidebar-row">
-        <Hint className="sidebar-hint--image-selected" />
+      <div className="last-row">
         {/* Export queue panel - shows all queued/active exports */}
         <ExportQueuePanel />
       </div>

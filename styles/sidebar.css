@@ -44,6 +44,7 @@
   flex-direction: column;
   gap: var(--spacing-2);
   margin-top: auto;
+  padding-block-end: 8px;
 }
 
 .export-row {
