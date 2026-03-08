@@ -41,23 +41,18 @@ export async function exportGif(
   outWidth = Math.floor(outWidth / 2) * 2 || 2;
   outHeight = Math.floor(outHeight / 2) * 2 || 2;
 
-  // Phase 1: Generate global palette by sampling frames
-  emitProgress({
-    frame: 0,
-    totalFrames,
-    percent: 0,
-    stage: "encoding",
-    message: "Generating color palette...",
-  });
-
-  const sampleInterval = Math.max(1, Math.floor(totalFrames / 20));
-  const sampledPixels: Uint8ClampedArray[] = [];
+  // Phase 1: Render all frames once and extract pixel data.
+  // renderFrame is backed by a one-shot frame iterator (WebCodecs decoder),
+  // so each frame can only be consumed once. We render upfront and reuse
+  // the pixel data for both palette sampling and GIF encoding.
   const canvas = new OffscreenCanvas(outWidth, outHeight);
-  const ctx = canvas.getContext("2d")!;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
 
-  for (let i = 0; i < totalFrames; i += sampleInterval) {
+  const framePixels: ImageData[] = [];
+
+  for (let i = 0; i < totalFrames; i++) {
     if (isCancelled()) throw new Error("Export cancelled");
 
     const timestampSeconds = i / fps;
@@ -65,19 +60,30 @@ export async function exportGif(
     ctx.drawImage(bitmap, 0, 0, outWidth, outHeight);
     bitmap.close();
 
-    const imageData = ctx.getImageData(0, 0, outWidth, outHeight);
-    sampledPixels.push(imageData.data);
+    framePixels.push(ctx.getImageData(0, 0, outWidth, outHeight));
 
     emitProgress({
-      frame: i,
+      frame: i + 1,
       totalFrames,
-      percent: (i / totalFrames) * 0.15, // 0-15% for palette sampling
+      percent: ((i + 1) / totalFrames) * 0.15, // 0-15% for rendering
       stage: "encoding",
-      message: "Sampling frames for palette...",
+      message: `Rendering frame ${i + 1}/${totalFrames}...`,
     });
+
+    // Yield to event loop periodically
+    if (i % 5 === 0) {
+      await new Promise((r) => setTimeout(r, 0));
+    }
   }
 
-  // Concatenate sampled pixels and quantize
+  // Phase 2: Generate global palette by sampling rendered frames
+  const sampleInterval = Math.max(1, Math.floor(totalFrames / 20));
+  const sampledPixels: Uint8ClampedArray[] = [];
+
+  for (let i = 0; i < totalFrames; i += sampleInterval) {
+    sampledPixels.push(framePixels[i]!.data);
+  }
+
   const totalSamplePixels = sampledPixels.reduce((sum, p) => sum + p.length, 0);
   const allPixels = new Uint8Array(totalSamplePixels);
   let offset = 0;
@@ -90,7 +96,7 @@ export async function exportGif(
 
   logger.debug(`[gif-export] Generated palette with ${palette.length} colors`);
 
-  // Phase 2: Encode each frame
+  // Phase 3: Encode each frame from stored pixel data
   const gif = GIFEncoder();
 
   // Calculate frame delays in centiseconds
@@ -101,13 +107,7 @@ export async function exportGif(
   for (let i = 0; i < totalFrames; i++) {
     if (isCancelled()) throw new Error("Export cancelled");
 
-    const timestampSeconds = i / fps;
-    const bitmap = await renderFrame(timestampSeconds);
-
-    ctx.drawImage(bitmap, 0, 0, outWidth, outHeight);
-    bitmap.close();
-
-    const imageData = ctx.getImageData(0, 0, outWidth, outHeight);
+    const imageData = framePixels[i]!;
 
     // Apply Floyd-Steinberg dithering
     if (useDither) {
