@@ -692,7 +692,7 @@ function CanvasContextMenuItems({
       </ContextMenu.Item>
       <ContextMenu.Item
         className="menu-item menu-item--icon-left"
-        onClick={() => deleteEntity()}
+        onClick={() => deleteEntity(undefined, "context_menu")}
         data-variant="destructive"
       >
         <Trash className="menu-icon-left" />

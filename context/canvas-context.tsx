@@ -49,6 +49,7 @@ import { Command, undo } from "#lib/undo.ts";
 import { config } from "#config";
 import { preferences } from "#lib/storage.ts";
 import { paletteStore } from "#lib/palette-store.ts";
+import { analytics } from "#lib/analytics.ts";
 import { logger } from "#lib/client.logger.ts";
 import { deepMerge } from "#lib/deep-merge.ts";
 import { applyShaderDefaults } from "#lib/shader-defaults.ts";
@@ -470,6 +471,9 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     };
 
     canvasStore.addEntity(newEntity);
+    analytics.track("entity.added", {
+      media_type: newEntity.mediaSource.type as string,
+    });
 
     // Add undo support for entity creation
     const ownerToken = claimResourceOwnership(newEntity.id);
@@ -719,6 +723,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   const duplicateEntities = async (): Promise<string[]> => {
     const selected = canvasStore.getSelectedEntities();
     if (selected.length === 0) return [];
+
+    analytics.track("entity.duplicated", { entity_count: selected.length });
 
     // Clone all media sources in parallel (async: creates independent video elements, bitmaps, etc.)
     const clones = await Promise.all(

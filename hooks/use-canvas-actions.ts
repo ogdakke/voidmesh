@@ -5,6 +5,7 @@ import {
   isUserPalette,
 } from "#components/palette-preset/palette-presets.ts";
 import { toastManager } from "#components/ui/toast/toast-manager.ts";
+import { analytics } from "#lib/analytics.ts";
 import { logger } from "#lib/client.logger.ts";
 import { config, getCommonFeatures, glassKindResets } from "#config";
 import { paletteStore } from "#lib/palette-store.ts";
@@ -160,6 +161,12 @@ export function useCanvasActions() {
     if (!value || !hasSelection) return;
 
     const targetShaderType = value as ShaderType;
+    const entities = canvasStore.getSelectedEntities();
+    analytics.track("shader.changed", {
+      from: entities.length === 1 ? (entities[0]!.shaderType as string) : "mixed",
+      to: targetShaderType as string,
+      entity_count: entities.length,
+    });
 
     updateSelectedEntities((entity) => {
       // If already using this shader, just mark dirty (no param changes)
@@ -423,9 +430,14 @@ export function useCanvasActions() {
   /**
    * Delete selected entities (supports multi-select)
    */
-  const deleteEntity = (e?: KeyboardEvent) => {
+  const deleteEntity = (
+    e?: KeyboardEvent,
+    source: "keyboard" | "context_menu" | "drop_zone" = "keyboard",
+  ) => {
     const entities = canvasStore.getSelectedEntities();
     if (entities.length === 0) return;
+
+    analytics.track("entity.deleted", { method: source, entity_count: entities.length });
 
     e?.preventDefault(); // Prevent browser back navigation
 

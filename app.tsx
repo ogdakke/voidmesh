@@ -1,6 +1,6 @@
 import { IconoirProvider } from "iconoir-react";
 import { NuqsAdapter } from "nuqs/adapters/react";
-import React, { lazy, Suspense, useRef, useState, type PropsWithChildren } from "react";
+import React, { lazy, Suspense, useEffect, useRef, useState, type PropsWithChildren } from "react";
 import ReactDOM from "react-dom/client";
 import { logger } from "#lib/client.logger.ts";
 import { ToastProvider } from "#ui/toast/toast.tsx";
@@ -11,8 +11,10 @@ import { LayoutProvider } from "./context/layout-context.tsx";
 import { VideoExportProvider } from "./context/video-export-context.tsx";
 import { useIsMobile, useIsTouch } from "./hooks/use-is-mobile.ts";
 import useMediaQuery from "./hooks/use-media-query";
-import { PostHogProvider } from "@posthog/react";
+import { PostHogProvider, usePostHog } from "@posthog/react";
 import type { PostHogConfig } from "posthog-js";
+import { analytics } from "#lib/analytics.ts";
+import { PostHogAnalyticsProvider } from "#lib/analytics-posthog.ts";
 import { Agentation } from "agentation";
 
 import "./styles/app.css";
@@ -101,12 +103,31 @@ ReactDOM.createRoot(document.getElementById("root")!, {
   </React.StrictMode>,
 );
 
+function PostHogBridge() {
+  const posthog = usePostHog();
+  useEffect(() => {
+    const provider = new PostHogAnalyticsProvider(posthog);
+    analytics.addProvider(provider);
+    return () => analytics.removeProvider(provider);
+  }, [posthog]);
+  return null;
+}
+
+if (import.meta.env.DEV) {
+  analytics.addProvider({
+    track(event, properties) {
+      console.log("[analytics]", event, properties);
+    },
+  });
+}
+
 function AnalyticsProvider({ children }: PropsWithChildren) {
   if (typeof window !== "undefined" && window.location.hostname === "localhost") {
     return children;
   }
   return (
     <PostHogProvider apiKey={import.meta.env.VITE_PUBLIC_POSTHOG_KEY!} options={options}>
+      <PostHogBridge />
       {children}
     </PostHogProvider>
   );
