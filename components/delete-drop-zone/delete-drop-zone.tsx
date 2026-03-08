@@ -50,7 +50,7 @@ export function DeleteDropZone() {
     const handleTouchEnd = () => {
       if (isOverRef.current) {
         haptic({ wantsHaptic: canvasStore.getState().haptics });
-        deleteEntity();
+        deleteEntity(undefined, "drop_zone");
         isOverRef.current = false;
         zone.removeAttribute("data-over");
       }

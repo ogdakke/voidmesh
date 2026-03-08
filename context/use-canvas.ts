@@ -53,7 +53,6 @@ export interface CanvasContextValue {
   // Shader params for selected entity (first entity's values when multi-select)
   selectedShaderType: ShaderType;
   selectedEntityParams: ShaderParams | null;
-  updateSelectedShaderType: (shaderType: ShaderType) => void;
   updateSelectedEntityParams: (
     updates: PartialDeep<ShaderParams>,
     options?: { skipUndo?: boolean },

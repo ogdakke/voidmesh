@@ -1,3 +1,4 @@
+import { analytics } from "#lib/analytics.ts";
 import { logger } from "#lib/client.logger.ts";
 import {
   boundsIntersect,
@@ -1591,6 +1592,9 @@ export class GameLoop {
       actionLayerController.activate(touchPos, finalState.selectedEntityIds);
       canvasStore.setActionLayerActive(true, finalState.selectedEntityIds, touchPos);
       this.touchState.isActionLayerActive = true;
+      analytics.track("action_layer.opened", {
+        entity_count: finalState.selectedEntityIds.size,
+      });
     }
 
     // Haptic feedback

@@ -10,6 +10,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { config } from "#config";
+import { analytics } from "#lib/analytics.ts";
 import { actionLayerController } from "#engine";
 import { useActionLayer } from "#hooks/use-action-layer.ts";
 import "./action-layer.css";
@@ -245,7 +246,11 @@ function Root({ children }: PropsWithChildren) {
       // Fire button action if finger was on one
       const hovered = hoveredIndexRef.current;
       if (hovered !== null) {
-        items[hovered]?.onAction();
+        const item = items[hovered];
+        if (item) {
+          analytics.track("action_layer.button_selected", { button: item.label });
+          item.onAction();
+        }
         // Cancel immediately so entities return to normal render order on the next frame.
         // The game loop's dismiss() (bubble phase) becomes a no-op since phase is already idle.
         actionLayerController.cancel();

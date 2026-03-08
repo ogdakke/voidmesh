@@ -5,6 +5,7 @@ import {
   isUserPalette,
 } from "#components/palette-preset/palette-presets.ts";
 import { toastManager } from "#components/ui/toast/toast-manager.ts";
+import { analytics } from "#lib/analytics.ts";
 import { logger } from "#lib/client.logger.ts";
 import { config, getCommonFeatures, glassKindResets } from "#config";
 import { paletteStore } from "#lib/palette-store.ts";
@@ -157,7 +158,7 @@ export function useCanvasActions() {
   // Shader type change with sensible defaults (supports multi-select)
   // Per-entity logic: applies shader-specific defaults via applyShaderDefaults
   const handleShaderTypeChange = (value: string | null) => {
-    if (!value || !hasSelection) return;
+    if (!value) return;
 
     const targetShaderType = value as ShaderType;
 
@@ -423,9 +424,14 @@ export function useCanvasActions() {
   /**
    * Delete selected entities (supports multi-select)
    */
-  const deleteEntity = (e?: KeyboardEvent) => {
+  const deleteEntity = (
+    e?: KeyboardEvent,
+    source: "keyboard" | "context_menu" | "drop_zone" = "keyboard",
+  ) => {
     const entities = canvasStore.getSelectedEntities();
     if (entities.length === 0) return;
+
+    analytics.track("entity.deleted", { method: source, entity_count: entities.length });
 
     e?.preventDefault(); // Prevent browser back navigation
 

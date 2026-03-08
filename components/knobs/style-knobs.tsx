@@ -11,6 +11,7 @@ import {
 } from "#types/canvas.ts";
 import { useCanvas } from "#context/use-canvas.ts";
 import { useCanvasActions, useParamValue } from "#hooks/use-canvas-actions.ts";
+import { analytics } from "#lib/analytics.ts";
 import { config } from "#config";
 import {
   SliderPicker,
@@ -21,6 +22,7 @@ import {
 } from "#components/ui/slider-picker/index.ts";
 import "./knobs.css";
 import { undo } from "#lib/undo.ts";
+import { canvasStore } from "#engine";
 import { QuestionMark } from "iconoir-react";
 
 // ============================================================================
@@ -636,14 +638,21 @@ function MobileShapeStyleKnobs() {
 // ============================================================================
 
 export function MobileStyleKnobs() {
-  const { selectedShaderType, updateSelectedShaderType } = useCanvas();
-  const { selectionState, handleShowOriginalChange } = useCanvasActions();
+  const { selectedShaderType } = useCanvas();
+  const {
+    selectionState,
+    handleShowOriginalChange,
+    handleShaderTypeChange: changeShaderType,
+  } = useCanvasActions();
 
   // Floating label state
   const [floatingLabel, setFloatingLabel] = useState<string | null>(null);
   const floatingLabelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isShaderMixed = !selectionState.hasUniformShader;
+
+  // Track shader type at interaction start for analytics
+  const shaderAtStartRef = useRef<string | null>(null);
 
   // Show original state for toggle-on-reselect
   const showOriginal = useParamValue("showOriginal", config.defaults.shaderParams.showOriginal);
@@ -671,13 +680,14 @@ export function MobileStyleKnobs() {
   };
 
   const handleShaderTypeChange = (value: string) => {
-    updateSelectedShaderType(value as ShaderType);
+    changeShaderType(value);
     const option = SHADER_TYPE_OPTIONS.find((o) => o.value === value);
     if (option) showFloatingLabel(option.label);
   };
 
   const handleInteractionStart = () => {
     undo.beginTransaction();
+    shaderAtStartRef.current = isShaderMixed ? "mixed" : selectedShaderType;
     if (isShaderMixed) {
       showFloatingLabel("Mixed");
     } else {
@@ -686,8 +696,17 @@ export function MobileStyleKnobs() {
     }
   };
 
-  const handleValueCommit = () => {
+  const handleValueCommit = (value: string) => {
     undo.commitTransaction();
+    const from = shaderAtStartRef.current;
+    if (from && from !== value) {
+      const entities = canvasStore.getSelectedEntities();
+      analytics.track("shader.changed", {
+        from,
+        to: value,
+        entity_count: entities.length,
+      });
+    }
   };
 
   // checked=true means shader is active (not showing original)
