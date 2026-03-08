@@ -23,6 +23,7 @@ interface RegisteredItem {
   label: string;
   onAction: () => void;
   icon: ReactNode;
+  order: number;
 }
 
 interface ActionLayerContextValue {
@@ -156,7 +157,7 @@ function Root({ children }: PropsWithChildren) {
   const [tooltipLabel, setTooltipLabel] = useState<string | null>(null);
 
   const register = (item: RegisteredItem) => {
-    setItems((prev) => [...prev, item]);
+    setItems((prev) => [...prev, item].sort((a, b) => a.order - b.order));
     return () => {
       setItems((prev) => prev.filter((i) => i !== item));
     };
@@ -383,15 +384,17 @@ function ActionLayerOverlay({
 interface ItemProps {
   onAction: () => void;
   label: string;
+  /** Explicit sort order for deterministic ring layout (lower = first) */
+  order?: number;
   children: ReactNode;
 }
 
-function Item({ onAction, label, children }: ItemProps) {
+function Item({ onAction, label, order = 0, children }: ItemProps) {
   const { register } = useActionLayerContext();
 
   useEffect(() => {
-    return register({ label, onAction, icon: children });
-  }, [register, label, onAction, children]);
+    return register({ label, onAction, icon: children, order });
+  }, [register, label, onAction, children, order]);
 
   return null;
 }

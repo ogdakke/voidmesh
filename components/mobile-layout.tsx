@@ -64,16 +64,16 @@ function MobileActionLayer() {
   return (
     <>
       <ActionLayer.Root>
-        <ActionLayer.Item onAction={() => setDrawerOpen(true)} label="Copy/Paste Effects">
+        <ActionLayer.Item order={0} onAction={() => setDrawerOpen(true)} label="Copy/Paste Effects">
           <Copy />
         </ActionLayer.Item>
-        <ActionLayer.Item onAction={duplicateEntities} label="Duplicate">
+        <ActionLayer.Item order={1} onAction={duplicateEntities} label="Duplicate">
           <IonDuplicateOutline />
         </ActionLayer.Item>
-        <ActionLayer.Item onAction={() => setUpscaleDrawerOpen(true)} label="Upscale 2×">
+        <ActionLayer.Item order={2} onAction={() => setUpscaleDrawerOpen(true)} label="Upscale 2×">
           <ScaleFrameEnlarge />
         </ActionLayer.Item>
-        <ActionLayer.Item onAction={handleSave} label={hasAnimated ? "Export" : "Save"}>
+        <ActionLayer.Item order={3} onAction={handleSave} label={hasAnimated ? "Export" : "Save"}>
           {hasAnimated ? <MediaVideo /> : <Download />}
         </ActionLayer.Item>
       </ActionLayer.Root>
