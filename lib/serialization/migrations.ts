@@ -18,6 +18,15 @@ const migrations: Record<number, Migration> = {
     doc.version = 2;
     return doc;
   },
+
+  // Version 2 -> 3: Add hasAudio field to video entities
+  // Since migrations only operate on manifest JSON (no media blobs),
+  // we leave hasAudio undefined here. Deserialization probes the actual
+  // blob for legacy files where hasAudio is missing.
+  2: (doc) => {
+    doc.version = 3;
+    return doc;
+  },
 };
 
 /**

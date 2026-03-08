@@ -65,6 +65,8 @@ export interface SerializedVideoEntity extends SerializedEntityBase {
   duration: number;
   /** Detected frame rate (null if unknown) */
   fps: number | null;
+  /** Whether the source video contains an audio track (added in v3) */
+  hasAudio: boolean;
   /** Playback state at time of save */
   playback: SerializedPlaybackState;
 }

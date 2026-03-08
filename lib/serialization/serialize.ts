@@ -105,6 +105,7 @@ async function serializeEntity(entity: ShaderCanvasEntity): Promise<EntitySerial
           mediaFile: path,
           duration: entity.mediaSource.duration,
           fps: entity.mediaSource.fps,
+          hasAudio: entity.mediaSource.hasAudio,
           playback: serializePlayback(entity.playback),
         },
         mediaEntries,

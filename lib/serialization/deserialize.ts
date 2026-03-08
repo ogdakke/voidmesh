@@ -233,6 +233,11 @@ async function deserializeEntity(
         savedTime,
       );
 
+      // v3+ files have hasAudio in the manifest; legacy files need a probe
+      const hasAudio =
+        serialized.hasAudio ??
+        (await import("#lib/audio-demux.ts").then(({ hasAudioTrack }) => hasAudioTrack(videoBlob)));
+
       return {
         ...base,
         imageBitmap: initialFrame,
@@ -242,9 +247,7 @@ async function deserializeEntity(
           blob: videoBlob,
           duration,
           fps: serialized.fps,
-          hasAudio: await import("#lib/audio-demux.ts").then(({ hasAudioTrack }) =>
-            hasAudioTrack(videoBlob),
-          ),
+          hasAudio,
         },
         playback: toPlaybackState(serialized.playback),
       };
