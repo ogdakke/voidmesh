@@ -42,11 +42,6 @@ function MobileActionLayer() {
     const selectedIds = canvasStore.getSelectedEntities().map((e) => e.id);
     if (selectedIds.length > 0) {
       addToUpscaleQueue(selectedIds);
-      const n = selectedIds.length;
-      toastManager.add({
-        title: `Upscaling ${n === 1 ? "file" : `${n} files`}`,
-        description: "The upscaled version will appear on the canvas",
-      });
     }
   };
 

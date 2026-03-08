@@ -22,6 +22,7 @@ import {
 } from "#lib/media-loader.ts";
 import { encodeGifFromFrames } from "#lib/gif-encoder.ts";
 import { logger } from "#lib/client.logger.ts";
+import { toastManager } from "#ui/toast/toast-manager.ts";
 import type { FrameEncoderHandle } from "#renderer/frame-encoder.ts";
 
 // ============================================================================
@@ -131,6 +132,8 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
 
   // Store entity snapshots for pending jobs (entity may be modified/deleted while queued)
   const jobEntitySnapshotsRef = useRef<Map<string, ShaderCanvasEntity>>(new Map());
+  // Toast IDs for progress updates (jobId → toastId)
+  const jobToastIdsRef = useRef<Map<string, string>>(new Map());
 
   /** Get or create upscale service (lazy, persists across jobs for GPU cache) */
   const getUpscaleService = (): UpscaleService | null => {
@@ -174,6 +177,14 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
     setState((prev) => ({ ...prev, currentJobId: nextJob.id }));
     updateJob(nextJob.id, { status: "processing" });
 
+    // Show progress toast (persistent until done)
+    const toastId = toastManager.add({
+      title: `Upscaling ${nextJob.entityName}`,
+      description: getMediaLabel(nextJob.type) === "image" ? "Processing..." : "Starting...",
+      timeout: 0,
+    });
+    jobToastIdsRef.current.set(nextJob.id, toastId);
+
     try {
       const entity = jobEntitySnapshotsRef.current.get(nextJob.id);
       if (!entity) throw new Error("Entity snapshot not found for job");
@@ -205,21 +216,48 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
 
       logger.info(`Upscale completed: ${entity.name} → ${resultEntityId}`);
 
+      // Update toast to show completion
+      const doneToastId = jobToastIdsRef.current.get(nextJob.id);
+      if (doneToastId) {
+        toastManager.update(doneToastId, {
+          title: `Upscaled ${nextJob.entityName}`,
+          description: "Added to canvas",
+          timeout: 4000,
+        });
+      }
+
       // Auto-remove completed job after a short delay
       setTimeout(() => removeJob(nextJob.id), 3000);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Upscale failed";
+      const errToastId = jobToastIdsRef.current.get(nextJob.id);
       if (message !== "Upscale cancelled") {
         logger.error(`Upscale failed: ${nextJob.entityName}`, err);
         updateJob(nextJob.id, { status: "failed", error: message });
+        if (errToastId) {
+          toastManager.update(errToastId, {
+            title: `Upscale failed`,
+            description: message,
+            timeout: 5000,
+          });
+        }
+      } else if (errToastId) {
+        toastManager.close(errToastId);
       }
     } finally {
+      jobToastIdsRef.current.delete(nextJob.id);
       currentVideoHandleRef.current = null;
       isProcessingRef.current = false;
       cancelledJobIdRef.current = null;
       jobEntitySnapshotsRef.current.delete(nextJob.id);
       setState((prev) => ({ ...prev, currentJobId: null }));
     }
+  };
+
+  /** Update toast description for a job (throttled naturally by frame callbacks) */
+  const updateToastProgress = (jobId: string, description: string) => {
+    const tid = jobToastIdsRef.current.get(jobId);
+    if (tid) toastManager.update(tid, { description });
   };
 
   // -- Image upscale --
@@ -292,6 +330,7 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
           stage: "upscaling",
         },
       });
+      updateToastProgress(job.id, `Upscaling frame ${frame}/${total}`);
     });
 
     if (cancelledJobIdRef.current === job.id) {
@@ -302,6 +341,7 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
     updateJob(job.id, {
       progress: { frame: totalFrames, totalFrames, percent: 0.7, stage: "encoding" },
     });
+    updateToastProgress(job.id, "Encoding GIF...");
 
     const outW = upscaledFrames[0]!.bitmap.width;
     const outH = upscaledFrames[0]!.bitmap.height;
@@ -365,14 +405,22 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
     // Consume progress
     for await (const p of handle.progress) {
       if (cancelledJobIdRef.current === job.id) break;
+      const stage = p.stage === "muxing" ? "encoding" : "upscaling";
       updateJob(job.id, {
         progress: {
           frame: p.frame,
           totalFrames: p.totalFrames,
           percent: p.percent * 0.85,
-          stage: p.stage === "muxing" ? "encoding" : "upscaling",
+          stage,
         },
       });
+      const pct = Math.round(p.percent * 100);
+      updateToastProgress(
+        job.id,
+        stage === "encoding"
+          ? `Encoding video... ${pct}%`
+          : `Upscaling frame ${p.frame}/${p.totalFrames}`,
+      );
     }
 
     if (cancelledJobIdRef.current === job.id) {
@@ -385,6 +433,7 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
     updateJob(job.id, {
       progress: { frame: 0, totalFrames: 0, percent: 0.9, stage: "loading" },
     });
+    updateToastProgress(job.id, "Loading video...");
 
     // Load the upscaled video to create a playable entity
     const videoResult = await loadVideo(videoBlob);

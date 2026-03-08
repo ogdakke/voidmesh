@@ -1,8 +1,9 @@
 /**
- * GIF Encoding utility — encodes GifFrame[] into a GIF Blob using gifenc.
+ * GIF Encoding utility — encodes GifFrame[] into a GIF Blob via a Web Worker.
  *
- * Palette is quantized from downsampled (128×128) frames for efficiency.
- * Used by the upscale queue to re-encode upscaled GIF frames.
+ * All heavy work (palette quantization, applyPalette, LZW compression) runs
+ * off the main thread. Input bitmaps are cloned before transfer so callers
+ * retain ownership of the originals.
  */
 
 import type { GifFrame } from "#types/canvas.ts";
@@ -22,45 +23,30 @@ export async function encodeGifFromFrames(
   height: number,
   onProgress?: (frame: number, total: number) => void,
 ): Promise<Blob> {
-  const { GIFEncoder, quantize, applyPalette } = await import("gifenc");
+  // Clone bitmaps so originals stay valid for entity creation
+  const clonedBitmaps = await Promise.all(frames.map((f) => createImageBitmap(f.bitmap)));
+  const delays = frames.map((f) => f.delay);
 
-  // Sample frames at reduced resolution for palette generation (saves ~60× memory)
-  const sampleSize = 128;
-  const sampleCanvas = new OffscreenCanvas(sampleSize, sampleSize);
-  const sampleCtx = sampleCanvas.getContext("2d")!;
-  const sampleInterval = Math.max(1, Math.floor(frames.length / 20));
-  const sampledPixels: Uint8ClampedArray[] = [];
+  const worker = new Worker(new URL("./gif-encoder-worker.ts", import.meta.url), {
+    type: "module",
+  });
 
-  for (let i = 0; i < frames.length; i += sampleInterval) {
-    sampleCtx.drawImage(frames[i]!.bitmap, 0, 0, sampleSize, sampleSize);
-    sampledPixels.push(sampleCtx.getImageData(0, 0, sampleSize, sampleSize).data);
-  }
+  return new Promise<Blob>((resolve, reject) => {
+    worker.onmessage = (e: MessageEvent) => {
+      if (e.data.type === "progress") {
+        onProgress?.(e.data.frame, e.data.total);
+      } else if (e.data.type === "done") {
+        resolve(new Blob([e.data.bytes], { type: "image/gif" }));
+        worker.terminate();
+      }
+    };
 
-  const combined = new Uint8Array(sampledPixels.reduce((s, p) => s + p.length, 0));
-  let offset = 0;
-  for (const p of sampledPixels) {
-    combined.set(p, offset);
-    offset += p.length;
-  }
-  const palette = quantize(combined, 128);
+    worker.onerror = (err) => {
+      reject(new Error(`GIF encoding failed: ${err.message}`));
+      worker.terminate();
+    };
 
-  // Encode frames at full resolution
-  const canvas = new OffscreenCanvas(width, height);
-  const ctx = canvas.getContext("2d")!;
-  const gif = GIFEncoder();
-
-  for (let i = 0; i < frames.length; i++) {
-    const frame = frames[i]!;
-    ctx.drawImage(frame.bitmap, 0, 0);
-    const pixels = ctx.getImageData(0, 0, width, height).data;
-    const indexed = applyPalette(pixels, palette);
-    gif.writeFrame(indexed, width, height, {
-      palette,
-      delay: Math.round(frame.delay),
-    });
-    onProgress?.(i + 1, frames.length);
-  }
-
-  gif.finish();
-  return new Blob([gif.bytes()], { type: "image/gif" });
+    // Transfer cloned bitmaps to the worker (zero-copy)
+    worker.postMessage({ bitmaps: clonedBitmaps, delays, width, height }, clonedBitmaps);
+  });
 }
