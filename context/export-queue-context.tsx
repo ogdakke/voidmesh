@@ -3,7 +3,7 @@
  *
  * Key features:
  * - Queue multiple exports that process sequentially (avoids GPU contention)
- * - Video element cloning to isolate export from preview playback
+ * - WebCodecs-based frame decoding via mediabunny (no HTMLVideoElement seeking)
  * - Non-blocking exports that allow continued canvas editing
  * - Auto-download on completion
  * - Audio demuxed from source and sent to worker for muxing (no FFmpeg needed)
@@ -23,6 +23,7 @@ import {
 import { isAnimatedEntity, MediaType, type ShaderCanvasEntity } from "#types/canvas.ts";
 import type { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
 import type { DemuxedAudio } from "#lib/audio-demux.ts";
+import { createFrameIterator, type VideoDemuxHandle } from "#lib/video-demux.ts";
 import { logger } from "#lib/client.logger.ts";
 import { useVideoExportContext } from "./use-video-export.ts";
 import type { ExportOptionsState, ExportOptionsUpdate } from "./video-export-context.tsx";
@@ -94,36 +95,6 @@ function generateJobId(): string {
   return `export-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-/**
- * Create a cloned video element for export.
- * This isolates export seeking from the preview playback.
- */
-async function createVideoClone(videoElement: HTMLVideoElement): Promise<HTMLVideoElement> {
-  const clone = document.createElement("video");
-  clone.src = videoElement.src;
-  clone.muted = true;
-  clone.playsInline = true;
-  clone.preload = "auto";
-
-  await new Promise<void>((resolve, reject) => {
-    const onLoaded = () => {
-      clone.removeEventListener("loadeddata", onLoaded);
-      clone.removeEventListener("error", onError);
-      resolve();
-    };
-    const onError = () => {
-      clone.removeEventListener("loadeddata", onLoaded);
-      clone.removeEventListener("error", onError);
-      reject(new Error("Failed to load video clone"));
-    };
-    clone.addEventListener("loadeddata", onLoaded);
-    clone.addEventListener("error", onError);
-    clone.load();
-  });
-
-  return clone;
-}
-
 export function ExportQueueProvider({ children }: PropsWithChildren) {
   const [state, setState] = useState<ExportQueueState>({
     jobs: [],
@@ -135,7 +106,7 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
 
   // Track current export handle for cancellation
   const currentHandleRef = useRef<VideoExportHandle | null>(null);
-  const currentVideoCloneRef = useRef<HTMLVideoElement | null>(null);
+  const currentDemuxRef = useRef<VideoDemuxHandle | null>(null);
   const isProcessingRef = useRef(false);
   const cancelledJobIdRef = useRef<string | null>(null);
 
@@ -192,34 +163,43 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
       let renderFrame: (timestampSeconds: number) => Promise<ImageBitmap>;
 
       if (entity.mediaSource.type === MediaType.video) {
-        // Video path: clone video element for export isolation
-        const videoClone = await createVideoClone(entity.mediaSource.videoElement);
-        currentVideoCloneRef.current = videoClone;
+        // Video path: decode frames via WebCodecs (mediabunny)
+        const { demuxVideo } = await import("#lib/video-demux.ts");
+        const demux = await demuxVideo(entity.mediaSource.blob);
+        currentDemuxRef.current = demux;
 
+        // Use demux duration for consistent frame counts between decoder and encoder
         animatedSource = {
           width: entity.originalSize.width,
           height: entity.originalSize.height,
-          duration: entity.mediaSource.duration,
-          videoElement: videoClone,
+          duration: demux.duration,
         };
+
+        const fps = nextJob.options.fps ?? 30;
+        const { iterator: frameIterator } = createFrameIterator(demux, fps);
 
         renderFrame = async (timestampSeconds: number): Promise<ImageBitmap> => {
           if (shouldAnimateShaderTime) {
             entitySnapshot.shaderParams.time = initialShaderTime + timestampSeconds;
           }
-          const bitmap = videoClone.paused
-            ? await renderer.renderVideoFrameAtTime(entitySnapshot, timestampSeconds, videoClone)
-            : await renderer.renderCurrentVideoFrame(entitySnapshot, videoClone);
+          const { value: frameBitmap, done } = await frameIterator.next();
+          if (done || !frameBitmap) throw new Error("No more video frames");
+          const bitmap = await renderer.renderFrameWithShader(
+            entitySnapshot,
+            frameBitmap,
+            entity.originalSize.width,
+            entity.originalSize.height,
+          );
+          frameBitmap.close();
           if (!bitmap) throw new Error("Failed to render frame");
           return bitmap;
         };
       } else {
-        // GIF path: no video clone needed
+        // GIF path: frames are pre-decoded, no demuxing needed
         animatedSource = {
           width: entity.originalSize.width,
           height: entity.originalSize.height,
           duration: entity.mediaSource.duration,
-          videoElement: null,
         };
 
         renderFrame = async (timestampSeconds: number): Promise<ImageBitmap> => {
@@ -255,8 +235,7 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
         });
 
         const { demuxAudio } = await import("#lib/audio-demux.ts");
-        const videoBlob = await fetch(entity.mediaSource.videoElement.src).then((r) => r.blob());
-        audioData = await demuxAudio(videoBlob);
+        audioData = await demuxAudio(entity.mediaSource.blob);
         if (!audioData) {
           throw new Error("Audio extraction returned no audio track from source video");
         }
@@ -308,9 +287,9 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
       }
     } finally {
       currentHandleRef.current = null;
-      if (currentVideoCloneRef.current) {
-        currentVideoCloneRef.current.src = "";
-        currentVideoCloneRef.current = null;
+      if (currentDemuxRef.current) {
+        currentDemuxRef.current.dispose();
+        currentDemuxRef.current = null;
       }
       isProcessingRef.current = false;
       cancelledJobIdRef.current = null;
@@ -483,8 +462,8 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
       if (currentHandleRef.current) {
         currentHandleRef.current.cancel();
       }
-      if (currentVideoCloneRef.current) {
-        currentVideoCloneRef.current.src = "";
+      if (currentDemuxRef.current) {
+        currentDemuxRef.current.dispose();
       }
     };
   }, []);
