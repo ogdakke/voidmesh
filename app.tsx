@@ -6,6 +6,7 @@ import { logger } from "#lib/client.logger.ts";
 import { ToastProvider } from "#ui/toast/toast.tsx";
 import { CanvasProvider } from "./context/canvas-context.tsx";
 import { ExportQueueProvider } from "./context/export-queue-context.tsx";
+import { UpscaleQueueProvider } from "./context/upscale-queue-context.tsx";
 import { KeybindProvider } from "./context/keybind-provider.tsx";
 import { LayoutProvider } from "./context/layout-context.tsx";
 import { VideoExportProvider } from "./context/video-export-context.tsx";
@@ -66,13 +67,15 @@ export default function App() {
         <CanvasProvider>
           <VideoExportProvider>
             <ExportQueueProvider>
-              <LayoutProvider
-                value={{ isFullscreen, toggleFullscreen, setFullscreen, registerPanelToggle }}
-              >
-                <Suspense fallback={null}>
-                  {showMobileLayout ? <MobileLayout /> : <DesktopLayout />}
-                </Suspense>
-              </LayoutProvider>
+              <UpscaleQueueProvider>
+                <LayoutProvider
+                  value={{ isFullscreen, toggleFullscreen, setFullscreen, registerPanelToggle }}
+                >
+                  <Suspense fallback={null}>
+                    {showMobileLayout ? <MobileLayout /> : <DesktopLayout />}
+                  </Suspense>
+                </LayoutProvider>
+              </UpscaleQueueProvider>
             </ExportQueueProvider>
           </VideoExportProvider>
         </CanvasProvider>

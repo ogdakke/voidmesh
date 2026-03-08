@@ -1484,45 +1484,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           });
 
           console.log("[Upscale] Re-encoding GIF...");
-          const { GIFEncoder, quantize, applyPalette } = await import("gifenc");
+          const { encodeGifFromFrames } = await import("#lib/gif-encoder.ts");
           const outW = upscaledFrames[0]!.bitmap.width;
           const outH = upscaledFrames[0]!.bitmap.height;
-
-          // Sample frames at reduced resolution for palette generation
-          const sampleSize = 128;
-          const sampleCanvas = new OffscreenCanvas(sampleSize, sampleSize);
-          const sampleCtx = sampleCanvas.getContext("2d")!;
-          const sampleInterval = Math.max(1, Math.floor(upscaledFrames.length / 20));
-          const sampledPixels: Uint8ClampedArray[] = [];
-          for (let i = 0; i < upscaledFrames.length; i += sampleInterval) {
-            sampleCtx.drawImage(upscaledFrames[i]!.bitmap, 0, 0, sampleSize, sampleSize);
-            sampledPixels.push(sampleCtx.getImageData(0, 0, sampleSize, sampleSize).data);
-          }
-          const combined = new Uint8Array(sampledPixels.reduce((s, p) => s + p.length, 0));
-          let offset = 0;
-          for (const p of sampledPixels) {
-            combined.set(p, offset);
-            offset += p.length;
-          }
-          const palette = quantize(combined, 128);
-
-          // Encode frames at full resolution
-          const canvas = new OffscreenCanvas(outW, outH);
-          const ctx = canvas.getContext("2d")!;
-          const gif = GIFEncoder();
-          for (const frame of upscaledFrames) {
-            ctx.drawImage(frame.bitmap, 0, 0);
-            const pixels = ctx.getImageData(0, 0, outW, outH).data;
-            const indexed = applyPalette(pixels, palette);
-            gif.writeFrame(indexed, outW, outH, {
-              palette,
-              delay: Math.round(frame.delay),
-            });
-            frame.bitmap.close();
-          }
-          gif.finish();
-
-          const outputBlob = new Blob([gif.bytes()], { type: "image/gif" });
+          const outputBlob = await encodeGifFromFrames(upscaledFrames, outW, outH);
+          for (const frame of upscaledFrames) frame.bitmap.close();
           downloadBlob(outputBlob, `upscaled-${outW}x${outH}.gif`);
 
           return `${decoded.width}x${decoded.height} → ${outW}x${outH}, ${decoded.frames.length} frames`;

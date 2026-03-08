@@ -18,6 +18,7 @@ import { DitheringKnobs } from "./dithering-knobs.tsx";
 import { ShapeKnobs } from "./shape-knobs.tsx";
 import { DesktopExportKnobs } from "./export-knobs/export-knobs.desktop.tsx";
 import { ExportQueuePanel } from "./export-queue-panel.tsx";
+import { UpscaleQueuePanel } from "./upscale-queue-panel.tsx";
 import { DesktopTimeSlider } from "./desktop-time-slider/desktop-time-slider.tsx";
 import { undo } from "#lib/undo.ts";
 import { config } from "#config";
@@ -173,15 +174,18 @@ export const SidebarRightControls = ({ className, compact }: SidebarRightControl
             </>
           )}
           {hasSelection && (
-            <Collapsible>
-              <CollapsibleTrigger className="sidebar-collapsible-trigger">
-                <NavArrowRight />
-                Export
-              </CollapsibleTrigger>
-              <CollapsibleContent className="exports-content">
-                <DesktopExportKnobs />
-              </CollapsibleContent>
-            </Collapsible>
+            <>
+              <UpscaleQueuePanel />
+              <Collapsible>
+                <CollapsibleTrigger className="sidebar-collapsible-trigger">
+                  <NavArrowRight />
+                  Export
+                </CollapsibleTrigger>
+                <CollapsibleContent className="exports-content">
+                  <DesktopExportKnobs />
+                </CollapsibleContent>
+              </Collapsible>
+            </>
           )}
         </div>
       </div>

@@ -7,6 +7,7 @@ import {
   Download,
   MediaVideo,
   Palette,
+  ScaleFrameEnlarge,
 } from "iconoir-react";
 import { Canvas } from "./canvas";
 import { MediaControls } from "./infinite-canvas/media-controls.tsx";
@@ -21,6 +22,7 @@ import { Drawer } from "#ui/drawer/index.tsx";
 import { useCanvas } from "#context/use-canvas.ts";
 import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
 import { useExportQueue } from "#context/use-export-queue.ts";
+import { useUpscaleQueue } from "#context/use-upscale-queue.ts";
 import { useActionLayer } from "#hooks/use-action-layer.ts";
 import { useLayout } from "#context/use-layout.ts";
 import { useParamValue } from "#hooks/use-param-value.ts";
@@ -33,7 +35,20 @@ function MobileActionLayer() {
   const { saveSelectedEntityToFile, renderer } = useCanvas();
   const { duplicateEntities } = useCanvasActions();
   const { addToQueue } = useExportQueue();
+  const { addToUpscaleQueue } = useUpscaleQueue();
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  const handleUpscale = () => {
+    const selectedIds = canvasStore.getSelectedEntities().map((e) => e.id);
+    if (selectedIds.length > 0) {
+      addToUpscaleQueue(selectedIds);
+      const n = selectedIds.length;
+      toastManager.add({
+        title: `Upscaling ${n === 1 ? "file" : `${n} files`}`,
+        description: "The upscaled version will appear on the canvas",
+      });
+    }
+  };
 
   const handleSave = () => {
     // Check if the selected entity is animated — export instead of save
@@ -66,6 +81,9 @@ function MobileActionLayer() {
         </ActionLayer.Item>
         <ActionLayer.Item onAction={duplicateEntities} label="Duplicate">
           <IonDuplicateOutline />
+        </ActionLayer.Item>
+        <ActionLayer.Item onAction={handleUpscale} label="Upscale 2×">
+          <ScaleFrameEnlarge />
         </ActionLayer.Item>
         <ActionLayer.Item onAction={handleSave} label={hasAnimated ? "Export" : "Save"}>
           {hasAnimated ? <MediaVideo /> : <Download />}

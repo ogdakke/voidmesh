@@ -1,0 +1,141 @@
+/**
+ * Upscale Queue Panel — Shows queued upscale jobs with progress.
+ */
+
+import { Xmark, WarningCircle, NavArrowRight, ScaleFrameEnlarge } from "iconoir-react";
+import { canvasStore } from "#engine";
+import { useUpscaleQueue } from "#context/use-upscale-queue.ts";
+import type { UpscaleJob, UpscaleJobStatus } from "#context/upscale-queue-context.tsx";
+import { Button } from "#ui/button/index.tsx";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "#ui/collapsible/collapsible.tsx";
+import "#styles/sidebar.css";
+
+function StatusIcon({ status }: { status: UpscaleJobStatus }) {
+  switch (status) {
+    case "failed":
+    case "cancelled":
+      return <WarningCircle className="export-progress__icon export-progress__icon--failed" />;
+    default:
+      return null;
+  }
+}
+
+function getStatusLabel(job: UpscaleJob): string {
+  switch (job.status) {
+    case "queued":
+      return "Queued";
+    case "processing":
+      if (job.progress?.stage === "upscaling") {
+        if (job.progress.totalFrames > 1) {
+          return `Upscaling ${job.progress.frame}/${job.progress.totalFrames}`;
+        }
+        return "Upscaling...";
+      }
+      if (job.progress?.stage === "encoding") {
+        return "Encoding...";
+      }
+      if (job.progress?.stage === "loading") {
+        return "Loading...";
+      }
+      return "Processing...";
+    case "completed":
+      return "Added to canvas";
+    case "failed":
+      return job.error || "Failed";
+    case "cancelled":
+      return "Cancelled";
+    default:
+      return "Unknown";
+  }
+}
+
+function UpscaleJobItem({ job }: { job: UpscaleJob }) {
+  const { cancelJob } = useUpscaleQueue();
+
+  const isActive = job.status === "processing";
+  const canCancel = job.status === "queued" || job.status === "processing";
+  const percent = job.progress?.percent ?? 0;
+
+  return (
+    <div className="export-progress">
+      <div className="export-progress__header">
+        <StatusIcon status={job.status} />
+        <span className="export-progress__label" title={job.entityName}>
+          {job.entityName}
+        </span>
+        {canCancel && (
+          <Button
+            variant="quiet"
+            className="export-progress__cancel"
+            onClick={() => cancelJob(job.id)}
+            aria-label="Cancel upscale"
+          >
+            <Xmark />
+          </Button>
+        )}
+      </div>
+
+      {isActive && (
+        <div className="export-progress__bar">
+          <div className="export-progress__fill" style={{ width: `${percent * 100}%` }} />
+        </div>
+      )}
+
+      <span className="export-progress__status">{getStatusLabel(job)}</span>
+    </div>
+  );
+}
+
+export function UpscaleQueuePanel() {
+  const { state, addToUpscaleQueue, isUpscaling, clearCompleted, getQueueStats } =
+    useUpscaleQueue();
+
+  const stats = getQueueStats();
+  const hasJobs = state.jobs.length > 0;
+  const hasFailedOrCancelled = stats.failed > 0;
+
+  const handleUpscale = () => {
+    const selectedIds = [...canvasStore.getState().selectedEntityIds];
+    if (selectedIds.length > 0) {
+      addToUpscaleQueue(selectedIds);
+    }
+  };
+
+  const queueCount = stats.queued + stats.processing;
+  const title = queueCount > 0 ? `Upscale (${queueCount})` : "Upscale";
+
+  return (
+    <Collapsible defaultOpen={hasJobs}>
+      <CollapsibleTrigger className="sidebar-collapsible-trigger">
+        <NavArrowRight />
+        {title}
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="sidebar-row upscale-empty" hidden={hasJobs || undefined}>
+          <p className="sidebar-text">Upscale selected images and videos to 2× resolution</p>
+          <Button variant="secondary" onClick={handleUpscale} disabled={isUpscaling}>
+            <ScaleFrameEnlarge /> <span>Upscale 2×</span>
+          </Button>
+        </div>
+        <div className="upscale-jobs" hidden={!hasJobs || undefined}>
+          {hasFailedOrCancelled && (
+            <div className="export-queue-header">
+              <Button variant="quiet" size="sm" onClick={clearCompleted}>
+                Clear
+              </Button>
+            </div>
+          )}
+          <div className="export-queue-list">
+            {state.jobs.toReversed().map((job) => (
+              <UpscaleJobItem key={job.id} job={job} />
+            ))}
+          </div>
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
