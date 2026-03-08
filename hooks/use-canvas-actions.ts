@@ -158,15 +158,9 @@ export function useCanvasActions() {
   // Shader type change with sensible defaults (supports multi-select)
   // Per-entity logic: applies shader-specific defaults via applyShaderDefaults
   const handleShaderTypeChange = (value: string | null) => {
-    if (!value || !hasSelection) return;
+    if (!value) return;
 
     const targetShaderType = value as ShaderType;
-    const entities = canvasStore.getSelectedEntities();
-    analytics.track("shader.changed", {
-      from: entities.length === 1 ? (entities[0]!.shaderType as string) : "mixed",
-      to: targetShaderType as string,
-      entity_count: entities.length,
-    });
 
     updateSelectedEntities((entity) => {
       // If already using this shader, just mark dirty (no param changes)

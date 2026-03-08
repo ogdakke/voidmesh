@@ -6,6 +6,7 @@ import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import React, { useEffect, useRef, useState } from "react";
 import { useCanvas } from "#context/use-canvas.ts";
+import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
 import type { CanvasContextValue } from "#context/canvas-context.tsx";
 import { canvasStore } from "#engine";
 import { createEntityInput } from "../helpers/test-entity.ts";
@@ -541,11 +542,12 @@ describe("Undo/Redo", () => {
 });
 
 describe("Multi-select operations", () => {
-  test("updateSelectedShaderType updates all selected entities", async () => {
+  test("handleShaderTypeChange updates all selected entities", async () => {
     const entityIds: string[] = [];
 
     function TestComponent() {
-      const { addEntity, updateSelectedShaderType } = useCanvas();
+      const { addEntity } = useCanvas();
+      const { handleShaderTypeChange } = useCanvasActions();
       const [phase, setPhase] = useState<"add" | "select" | "update" | "done">("add");
 
       useEffect(() => {
@@ -561,10 +563,10 @@ describe("Multi-select operations", () => {
           canvasStore.replaceSelection(entityIds);
           setPhase("update");
         } else if (phase === "update") {
-          updateSelectedShaderType(ShaderType.ascii);
+          handleShaderTypeChange(ShaderType.ascii);
           setPhase("done");
         }
-      }, [addEntity, updateSelectedShaderType, phase]);
+      }, [addEntity, handleShaderTypeChange, phase]);
 
       return <div data-testid="test">Phase: {phase}</div>;
     }

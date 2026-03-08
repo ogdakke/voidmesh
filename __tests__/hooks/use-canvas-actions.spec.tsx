@@ -138,12 +138,12 @@ describe("selectionState computation", () => {
 
 describe("handleShaderTypeChange", () => {
   test("returns early if no selection", async () => {
-    // Use canvas.updateSelectedShaderType directly - it returns early if no selection
-    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
+    // handleShaderTypeChange returns early if no selection
+    const { actions } = renderWithCanvas(undefined, { skip: skipProviders });
 
     // Should not throw when called with no selection
     act(() => {
-      canvas.updateSelectedShaderType(ShaderType.dithering);
+      actions.handleShaderTypeChange(ShaderType.dithering);
     });
 
     // No entities exist, so nothing to check
@@ -151,7 +151,7 @@ describe("handleShaderTypeChange", () => {
   });
 
   test("applies shader type change to selected entity", async () => {
-    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
     let entityId: string = "";
 
     act(() => {
@@ -160,7 +160,7 @@ describe("handleShaderTypeChange", () => {
     });
 
     act(() => {
-      canvas.updateSelectedShaderType(ShaderType.dithering);
+      actions.handleShaderTypeChange(ShaderType.dithering);
     });
 
     await waitFor(() => {
@@ -172,7 +172,7 @@ describe("handleShaderTypeChange", () => {
   });
 
   test("updates shader type for multiple selected entities", async () => {
-    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
     let entityIds: string[] = [];
 
     act(() => {
@@ -184,7 +184,7 @@ describe("handleShaderTypeChange", () => {
     });
 
     act(() => {
-      canvas.updateSelectedShaderType(ShaderType.ascii);
+      actions.handleShaderTypeChange(ShaderType.ascii);
     });
 
     await waitFor(() => {

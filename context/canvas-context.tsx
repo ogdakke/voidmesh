@@ -52,7 +52,6 @@ import { paletteStore } from "#lib/palette-store.ts";
 import { analytics } from "#lib/analytics.ts";
 import { logger } from "#lib/client.logger.ts";
 import { deepMerge } from "#lib/deep-merge.ts";
-import { applyShaderDefaults } from "#lib/shader-defaults.ts";
 import { ColorSpace } from "#types/enums.ts";
 import type { PartialDeep } from "type-fest";
 
@@ -823,152 +822,6 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     return entity?.shaderParams ?? null;
   })();
 
-  // Helper to sync entity params to URL (for sharing feature)
-  const syncEntityToUrl = (entity: ShaderCanvasEntity) => {
-    const paletteParams = paletteToUrlParams(entity.shaderParams.palette);
-    const ppDefaults = config.defaults.shaderParams.postProcess!;
-    const pp = entity.shaderParams.postProcess;
-
-    setRenderState({
-      shader: entity.shaderType,
-      size: entity.shaderParams.size,
-      shape: entity.shaderParams.shape,
-      preserveColors: entity.shaderParams.preserveColors,
-      reversePalette: entity.shaderParams.reversePalette,
-      showOriginal: entity.shaderParams.showOriginal,
-      eagerness:
-        entity.shaderParams.blobs?.eagerness ?? config.defaults.shaderParams.blobs!.eagerness,
-      scale: entity.shaderParams.scale,
-      intensity: entity.shaderParams.intensity,
-      ditheringKind:
-        entity.shaderParams.dithering?.kind ?? config.defaults.shaderParams.dithering!.kind,
-      asciiKind: entity.shaderParams.ascii?.kind ?? config.defaults.shaderParams.ascii.kind,
-      asciiInvert: entity.shaderParams.ascii?.invert ?? config.defaults.shaderParams.ascii.invert,
-      angle: entity.shaderParams.glass?.angle ?? config.defaults.shaderParams.glass!.angle,
-      caustic: entity.shaderParams.glass?.caustic ?? config.defaults.shaderParams.glass!.caustic,
-      glassKind: entity.shaderParams.glass?.kind ?? config.defaults.shaderParams.glass!.kind,
-      frostiness:
-        entity.shaderParams.glass?.frostiness ?? config.defaults.shaderParams.glass!.frostiness,
-      highlight:
-        entity.shaderParams.glass?.highlight ?? config.defaults.shaderParams.glass!.highlight,
-      dispersion:
-        entity.shaderParams.glass?.dispersion ?? config.defaults.shaderParams.glass!.dispersion,
-      flow: entity.shaderParams.glass?.flow ?? config.defaults.shaderParams.glass!.flow,
-      preset: paletteParams.preset,
-      ppEnabled: pp?.enabled ?? ppDefaults.enabled,
-      ppGrainEnabled: pp?.grain?.enabled ?? ppDefaults.grain!.enabled,
-      ppGrainSize: pp?.grain?.size ?? ppDefaults.grain!.size,
-      ppGrainIntensity: pp?.grain?.intensity ?? ppDefaults.grain!.intensity,
-      ppBloomEnabled: pp?.bloom?.enabled ?? ppDefaults.bloom!.enabled,
-      ppBloomThreshold: pp?.bloom?.threshold ?? ppDefaults.bloom!.threshold,
-      ppBloomIntensity: pp?.bloom?.intensity ?? ppDefaults.bloom!.intensity,
-      ppBloomFilterRadius: pp?.bloom?.filterRadius ?? ppDefaults.bloom!.filterRadius,
-      ppBloomSoftness: pp?.bloom?.softness ?? ppDefaults.bloom!.softness,
-      ppChromaticEnabled:
-        pp?.chromaticAberration?.enabled ?? ppDefaults.chromaticAberration!.enabled,
-      ppChromaticOffset: pp?.chromaticAberration?.offset ?? ppDefaults.chromaticAberration!.offset,
-    }).catch((e) => logger.error(e));
-  };
-
-  // Update shader type - DIRECT entity update (no URL race condition)
-  // Applies shader-specific defaults via applyShaderDefaults
-  const updateSelectedShaderType = (shaderType: ShaderType) => {
-    const entities = canvasStore.getSelectedEntities();
-    if (entities.length === 0) return;
-
-    if (entities.length === 1) {
-      // Single selection: update entity directly
-      const entity = entities[0]!;
-      const previousShaderType = entity.shaderType;
-      const previousParams = structuredClone(entity.shaderParams);
-
-      // Skip if already using this shader (no changes needed)
-      if (entity.shaderType === shaderType) {
-        canvasStore.updateEntity(entity.id, { textureDirty: true });
-        return;
-      }
-
-      // Apply sensible defaults for the new shader
-      const newParams = applyShaderDefaults(entity.shaderParams, entity.shaderType, shaderType);
-
-      canvasStore.updateEntity(entity.id, {
-        shaderType,
-        shaderParams: newParams,
-        textureDirty: true,
-      });
-
-      // Sync to URL for sharing
-      syncEntityToUrl({ ...entity, shaderType, shaderParams: newParams });
-
-      undo.add(
-        Command.create({
-          undo: () => {
-            canvasStore.updateEntity(entity.id, {
-              shaderType: previousShaderType,
-              shaderParams: previousParams,
-              textureDirty: true,
-            });
-            syncEntityToUrl({
-              ...entity,
-              shaderType: previousShaderType,
-              shaderParams: previousParams,
-            });
-          },
-          execute: () => {
-            canvasStore.updateEntity(entity.id, {
-              shaderType,
-              shaderParams: newParams,
-              textureDirty: true,
-            });
-            syncEntityToUrl({ ...entity, shaderType, shaderParams: newParams });
-          },
-          description: `Change shader type to ${shaderType}`,
-        }),
-      );
-    } else {
-      // Multi-select: update all with transaction
-      undo.beginTransaction();
-      for (const entity of entities) {
-        const prevShaderType = entity.shaderType;
-        const previousParams = structuredClone(entity.shaderParams);
-
-        // Skip param changes if already using this shader
-        if (entity.shaderType === shaderType) {
-          canvasStore.updateEntity(entity.id, { textureDirty: true });
-          continue;
-        }
-
-        // Apply sensible defaults for the new shader
-        const newParams = applyShaderDefaults(entity.shaderParams, entity.shaderType, shaderType);
-
-        canvasStore.updateEntity(entity.id, {
-          shaderType,
-          shaderParams: newParams,
-          textureDirty: true,
-        });
-
-        undo.add(
-          Command.create({
-            undo: () =>
-              canvasStore.updateEntity(entity.id, {
-                shaderType: prevShaderType,
-                shaderParams: previousParams,
-                textureDirty: true,
-              }),
-            execute: () =>
-              canvasStore.updateEntity(entity.id, {
-                shaderType,
-                shaderParams: newParams,
-                textureDirty: true,
-              }),
-            description: `Change shader for ${entity.id}`,
-          }),
-        );
-      }
-      undo.commitTransaction(`Change shader type for ${entities.length} entities`);
-    }
-  };
-
   // Update shader params - DIRECT entity update (no URL race condition)
   const updateSelectedEntityParams = (
     params: PartialDeep<ShaderParams>,
@@ -993,26 +846,19 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         textureDirty: true,
       });
 
-      // Sync to URL for sharing
-      syncEntityToUrl({ ...entity, shaderParams: newParams });
-
       if (!skipUndo) {
         undo.add(
           Command.create({
-            undo: () => {
+            undo: () =>
               canvasStore.updateEntity(entity.id, {
                 shaderParams: previousParams!,
                 textureDirty: true,
-              });
-              syncEntityToUrl({ ...entity, shaderParams: previousParams! });
-            },
-            execute: () => {
+              }),
+            execute: () =>
               canvasStore.updateEntity(entity.id, {
                 shaderParams: newParams,
                 textureDirty: true,
-              });
-              syncEntityToUrl({ ...entity, shaderParams: newParams });
-            },
+              }),
             description: "Update shader params",
           }),
         );
@@ -1131,7 +977,6 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       };
 
       canvasStore.updateEntity(entity.id, updates);
-      syncEntityToUrl({ ...entity, shaderType, shaderParams: pastedParams });
 
       undo.add(
         Command.create({
@@ -1142,16 +987,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
               shaderParams: previousParams,
               textureDirty: true,
             });
-            syncEntityToUrl({
-              ...entity,
-              shaderType: previousShaderType,
-              shaderParams: previousParams,
-            });
           },
           execute: () => {
             if (clonedPalette) paletteStore.addPalette(clonedPalette);
             canvasStore.updateEntity(entity.id, updates);
-            syncEntityToUrl({ ...entity, shaderType, shaderParams: pastedParams });
           },
           description: "Paste effects",
         }),
@@ -1331,31 +1170,20 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         textureDirty: true,
       });
 
-      // Sync to URL for sharing
-      syncEntityToUrl({ ...entity, shaderType, shaderParams });
-
       undo.add(
         Command.create({
-          undo: () => {
+          undo: () =>
             canvasStore.updateEntity(entity.id, {
               shaderType: previousShaderType,
               shaderParams: previousParams,
               textureDirty: true,
-            });
-            syncEntityToUrl({
-              ...entity,
-              shaderType: previousShaderType,
-              shaderParams: previousParams,
-            });
-          },
-          execute: () => {
+            }),
+          execute: () =>
             canvasStore.updateEntity(entity.id, {
               shaderType,
               shaderParams,
               textureDirty: true,
-            });
-            syncEntityToUrl({ ...entity, shaderType, shaderParams });
-          },
+            }),
           description: "Paste URL params",
         }),
       );
@@ -1500,7 +1328,6 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     duplicateEntities,
     selectedShaderType,
     selectedEntityParams,
-    updateSelectedShaderType,
     updateSelectedEntityParams,
     registerRenderer,
     renderer: rendererState,

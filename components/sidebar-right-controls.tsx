@@ -3,6 +3,8 @@ import { DropletHalf, Eye, FloppyDiskArrowIn, Import, NavArrowRight, Palette } f
 import { useCanvas } from "../context/use-canvas.ts";
 import { SHADER_TYPE_OPTIONS, GlassKind, GLASS_KIND_OPTIONS } from "#types/canvas.ts";
 import { useCanvasActions, useParamValue } from "../hooks/use-canvas-actions.ts";
+import { analytics } from "#lib/analytics.ts";
+import { canvasStore } from "#engine";
 import { Button } from "./ui/button/index.tsx";
 import { Select, SelectItem } from "./ui/select/index.tsx";
 import { Toggle } from "./ui/toggle/index.tsx";
@@ -231,11 +233,22 @@ export function ShaderSelect({
   handleShaderTypeChange,
   isShaderMixed,
 }: ShaderSelectProps) {
+  const handleChange = (value: string | null) => {
+    if (!value || value === shaderType) return;
+    const entities = canvasStore.getSelectedEntities();
+    analytics.track("shader.changed", {
+      from: isShaderMixed ? "mixed" : shaderType,
+      to: value,
+      entity_count: entities.length,
+    });
+    handleShaderTypeChange(value);
+  };
+
   return (
     <Select
       label="Style"
       value={shaderType}
-      onValueChange={handleShaderTypeChange}
+      onValueChange={handleChange}
       formatValue={isShaderMixed ? <span className="select-mixed">Mixed</span> : undefined}
       name="shader-type"
       items={SHADER_TYPE_OPTIONS}
