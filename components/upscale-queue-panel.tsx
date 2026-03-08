@@ -80,7 +80,14 @@ function UpscaleJobItem({ job }: { job: UpscaleJob }) {
       </div>
 
       {isActive && (
-        <div className="export-progress__bar">
+        <div
+          className="export-progress__bar"
+          role="progressbar"
+          aria-valuenow={Math.round(percent * 100)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label={`Upscaling ${job.entityName}`}
+        >
           <div className="export-progress__fill" style={{ width: `${percent * 100}%` }} />
         </div>
       )}
@@ -109,7 +116,7 @@ export function UpscaleQueuePanel() {
   const title = queueCount > 0 ? `Upscale (${queueCount})` : "Upscale";
 
   return (
-    <Collapsible defaultOpen={hasJobs}>
+    <Collapsible defaultOpen={false}>
       <CollapsibleTrigger className="sidebar-collapsible-trigger">
         <NavArrowRight />
         {title}

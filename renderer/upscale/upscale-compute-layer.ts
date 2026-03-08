@@ -21,8 +21,15 @@ export class UpscaleComputeLayer {
     height: number,
   ) {
     this.#label = label;
-    this.#workgroupsX = Math.floor(width / WORKGROUP_SIZE);
-    this.#workgroupsY = Math.floor(height / WORKGROUP_SIZE);
+
+    if (width % WORKGROUP_SIZE !== 0 || height % WORKGROUP_SIZE !== 0) {
+      throw new Error(
+        `UpscaleComputeLayer "${label}": dimensions ${width}×${height} must be multiples of ${WORKGROUP_SIZE}`,
+      );
+    }
+
+    this.#workgroupsX = width / WORKGROUP_SIZE;
+    this.#workgroupsY = height / WORKGROUP_SIZE;
 
     const shaderModule = device.createShaderModule({
       label: `${label}-shader`,

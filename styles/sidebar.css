@@ -326,6 +326,10 @@
   background: var(--primary);
   border-radius: var(--radius-sm);
   transition: width 0.1s ease-out;
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
 }
 
 .export-progress__status {

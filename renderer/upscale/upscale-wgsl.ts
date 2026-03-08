@@ -292,7 +292,7 @@ struct VertexShaderOutput {
 
   let bicubic = textureSample(inputTexture, ourSampler, input.tex_coord);
 
-  return bicubic + vec4f(value0, value1, value2, value2);
+  return bicubic + vec4f(value0, value1, value2, 0.0);
 }`;
 }
 

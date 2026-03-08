@@ -114,7 +114,6 @@ export class UpscaleService {
     cached.network.displayLayer.encode(encoder, cached.outputTexture);
 
     this.#device.queue.submit([encoder.finish()]);
-    await this.#device.queue.onSubmittedWorkDone();
 
     // Read back output texture, cropping to actual 2x dimensions
     const outputWidth = cached.paddedWidth * 2;
@@ -137,7 +136,7 @@ export class UpscaleService {
   async upscaleGif(
     frames: GifFrame[],
     opts?: UpscaleOptions,
-    onProgress?: (frame: number, total: number) => void,
+    onProgress?: (frame: number, total: number) => boolean | void,
   ): Promise<GifFrame[]> {
     const total = frames.length;
     const upscaledFrames: GifFrame[] = [];
@@ -155,7 +154,12 @@ export class UpscaleService {
       });
 
       cumulativeTimestamp += frame.delay;
-      onProgress?.(i + 1, total);
+
+      // onProgress returns true to signal cancellation
+      if (onProgress?.(i + 1, total) === true) {
+        for (const f of upscaledFrames) f.bitmap.close();
+        throw new Error("Upscale cancelled");
+      }
     }
 
     logger.debug(`[upscale] GIF upscaled: ${total} frames`);
@@ -225,10 +229,8 @@ export class UpscaleService {
 
         // Cleanup video on completion or error
         handle.result
-          .then(
-            () => {},
-            () => {},
-          )
+          .then(() => {})
+          .catch(() => {})
           .finally(() => {
             video.src = "";
             URL.revokeObjectURL(blobUrl);

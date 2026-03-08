@@ -134,6 +134,8 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
   const jobEntitySnapshotsRef = useRef<Map<string, ShaderCanvasEntity>>(new Map());
   // Toast IDs for progress updates (jobId → toastId)
   const jobToastIdsRef = useRef<Map<string, string>>(new Map());
+  // Auto-removal timeouts (cleared on unmount)
+  const removalTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   /** Get or create upscale service (lazy, persists across jobs for GPU cache) */
   const getUpscaleService = (): UpscaleService | null => {
@@ -167,14 +169,21 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
   const processNextJob = async () => {
     if (isProcessingRef.current) return;
 
-    const nextJob = state.jobs.find((job) => job.status === "queued");
-    if (!nextJob) {
-      setState((prev) => ({ ...prev, currentJobId: null }));
-      return;
-    }
+    // Read latest jobs via setState callback to avoid stale closure
+    const nextJob = await new Promise<UpscaleJob | null>((resolve) => {
+      setState((prev) => {
+        const found = prev.jobs.find((job) => job.status === "queued");
+        if (!found) {
+          resolve(null);
+          return { ...prev, currentJobId: null };
+        }
+        resolve(found);
+        return { ...prev, currentJobId: found.id };
+      });
+    });
+    if (!nextJob) return;
 
     isProcessingRef.current = true;
-    setState((prev) => ({ ...prev, currentJobId: nextJob.id }));
     updateJob(nextJob.id, { status: "processing" });
 
     // Show progress toast (persistent until done)
@@ -227,7 +236,12 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
       }
 
       // Auto-remove completed job after a short delay
-      setTimeout(() => removeJob(nextJob.id), 3000);
+      const completedJobId = nextJob.id;
+      const timer = setTimeout(() => {
+        removalTimersRef.current.delete(completedJobId);
+        removeJob(completedJobId);
+      }, 3000);
+      removalTimersRef.current.set(completedJobId, timer);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Upscale failed";
       const errToastId = jobToastIdsRef.current.get(nextJob.id);
@@ -321,7 +335,7 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
     );
 
     const upscaledFrames = await service.upscaleGif(clonedFrames, undefined, (frame, total) => {
-      if (cancelledJobIdRef.current === job.id) return;
+      if (cancelledJobIdRef.current === job.id) return true;
       updateJob(job.id, {
         progress: {
           frame,
@@ -332,11 +346,6 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
       });
       updateToastProgress(job.id, `Upscaling frame ${frame}/${total}`);
     });
-
-    if (cancelledJobIdRef.current === job.id) {
-      for (const f of upscaledFrames) f.bitmap.close();
-      throw new Error("Upscale cancelled");
-    }
 
     updateJob(job.id, {
       progress: { frame: totalFrames, totalFrames, percent: 0.7, stage: "encoding" },
@@ -509,11 +518,21 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
         createdAt: Date.now(),
       });
 
-      // Snapshot entity state at queue time
-      jobEntitySnapshotsRef.current.set(jobId, {
+      // Snapshot entity state at queue time — clone ImageBitmap so it survives
+      // if the source entity is deleted while the job is queued
+      const snapshot: ShaderCanvasEntity = {
         ...entity,
+        imageBitmap: entity.imageBitmap,
         shaderParams: structuredClone(entity.shaderParams),
-      });
+      };
+      if (type === "image") {
+        // Clone bitmap asynchronously — store a placeholder and replace
+        void createImageBitmap(entity.imageBitmap).then((cloned) => {
+          const existing = jobEntitySnapshotsRef.current.get(jobId);
+          if (existing) existing.imageBitmap = cloned;
+        });
+      }
+      jobEntitySnapshotsRef.current.set(jobId, snapshot);
     }
 
     setState((prev) => ({
@@ -580,11 +599,16 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
 
   // Cleanup on unmount
   useEffect(() => {
+    const videoHandle = currentVideoHandleRef;
+    const timers = removalTimersRef;
+    const service = upscaleServiceRef;
     return () => {
-      if (currentVideoHandleRef.current) {
-        currentVideoHandleRef.current.cancel();
+      videoHandle.current?.cancel();
+      for (const timer of timers.current.values()) {
+        clearTimeout(timer);
       }
-      upscaleServiceRef.current?.destroy();
+      timers.current.clear();
+      service.current?.destroy();
     };
   }, []);
 

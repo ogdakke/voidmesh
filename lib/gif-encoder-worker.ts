@@ -20,7 +20,7 @@ self.onmessage = async (e: MessageEvent<EncodeRequest>) => {
   // Sample frames at reduced resolution for palette generation
   const sampleSize = 128;
   const sampleCanvas = new OffscreenCanvas(sampleSize, sampleSize);
-  const sampleCtx = sampleCanvas.getContext("2d")!;
+  const sampleCtx = sampleCanvas.getContext("2d", { willReadFrequently: true })!;
   const sampleInterval = Math.max(1, Math.floor(bitmaps.length / 20));
   const sampledPixels: Uint8ClampedArray[] = [];
 
@@ -39,7 +39,7 @@ self.onmessage = async (e: MessageEvent<EncodeRequest>) => {
 
   // Encode frames at full resolution
   const canvas = new OffscreenCanvas(width, height);
-  const ctx = canvas.getContext("2d")!;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
   const gif = GIFEncoder();
 
   for (let i = 0; i < bitmaps.length; i++) {
