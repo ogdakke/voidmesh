@@ -205,6 +205,10 @@ export class InfiniteCanvasRenderer {
     return this.#colorConfig;
   }
 
+  get device(): GPUDevice | null {
+    return this.#device;
+  }
+
   getFrameStats() {
     return {
       renderTime: this.#lastRenderTime,

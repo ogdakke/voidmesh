@@ -62,7 +62,7 @@ function computeRingPositions(
 ): RingPosition[] {
   if (count === 0) return [];
   const positions: RingPosition[] = [];
-  const spread = Math.PI / (count + 1);
+  const spread = Math.PI / count;
 
   for (let i = 0; i < count; i++) {
     let angle: number;

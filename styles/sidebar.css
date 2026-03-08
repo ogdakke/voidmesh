@@ -199,6 +199,44 @@
   font-size: var(--text-xs);
 }
 
+.upscale-empty {
+  --_in-dur: 180ms;
+  --_out-dur: 120ms;
+  gap: 0.5rem;
+  display: grid;
+  opacity: 1;
+  transform: scale(1);
+  filter: blur(0);
+  transition:
+    opacity var(--_in-dur) ease-out,
+    transform var(--_in-dur) ease-out,
+    filter var(--_in-dur) ease-out,
+    display var(--_in-dur) ease-out allow-discrete;
+
+  @starting-style {
+    opacity: 0;
+    transform: scale(0.97);
+    filter: blur(3px);
+  }
+
+  &[hidden] {
+    display: none;
+    opacity: 0;
+    transform: scale(0.97);
+    filter: blur(3px);
+    transition:
+      opacity var(--_out-dur) ease-in,
+      transform var(--_out-dur) ease-in,
+      filter var(--_out-dur) ease-in,
+      display var(--_out-dur) ease-in allow-discrete;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    --_in-dur: 0ms;
+    --_out-dur: 0ms;
+  }
+}
+
 .no-selection-message {
   color: var(--text-accent);
   font-size: var(--text-sm);
@@ -225,6 +263,7 @@
 
 /* Export progress indicator */
 .export-progress {
+  --_transition-dur: 150ms;
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
@@ -233,6 +272,23 @@
   background: light-dark(var(--gray-100), var(--accent));
   border-radius: var(--radius);
   min-width: 0;
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  filter: blur(0);
+  transition:
+    opacity var(--_transition-dur) ease-out,
+    transform var(--_transition-dur) ease-out,
+    filter var(--_transition-dur) ease-out;
+
+  @starting-style {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
+    filter: blur(2px);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    --_transition-dur: 0ms;
+  }
 }
 
 .export-progress__header {
@@ -270,6 +326,10 @@
   background: var(--primary);
   border-radius: var(--radius-sm);
   transition: width 0.1s ease-out;
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
 }
 
 .export-progress__status {
@@ -315,6 +375,43 @@
 .hint-text {
   color: var(--gray-900);
   font-size: var(--text-xs);
+}
+
+.upscale-jobs {
+  --_in-dur: 180ms;
+  --_out-dur: 120ms;
+  display: block;
+  opacity: 1;
+  transform: scale(1);
+  filter: blur(0);
+  transition:
+    opacity var(--_in-dur) ease-out,
+    transform var(--_in-dur) ease-out,
+    filter var(--_in-dur) ease-out,
+    display var(--_in-dur) ease-out allow-discrete;
+
+  @starting-style {
+    opacity: 0;
+    transform: scale(0.97);
+    filter: blur(3px);
+  }
+
+  &[hidden] {
+    display: none;
+    opacity: 0;
+    transform: scale(0.97);
+    filter: blur(3px);
+    transition:
+      opacity var(--_out-dur) ease-in,
+      transform var(--_out-dur) ease-in,
+      filter var(--_out-dur) ease-in,
+      display var(--_out-dur) ease-in allow-discrete;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    --_in-dur: 0ms;
+    --_out-dur: 0ms;
+  }
 }
 
 /* Export queue */

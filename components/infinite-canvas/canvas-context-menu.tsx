@@ -2,6 +2,7 @@ import { canvasStore } from "#engine";
 import { useImageInput } from "#hooks/use-image-input.ts";
 import { useCanvasActions, useParamValue } from "#hooks/use-canvas-actions.ts";
 import { useExportQueue } from "#context/use-export-queue.ts";
+import { useUpscaleQueue } from "#context/use-upscale-queue.ts";
 import { type ShaderCanvasEntity, SHADER_TYPE_OPTIONS, isAnimatedEntity } from "#types/canvas.ts";
 import {
   NavArrowRight,
@@ -17,6 +18,7 @@ import {
   JpgFormat,
   Import,
   FloppyDiskArrowIn,
+  ScaleFrameEnlarge,
 } from "iconoir-react";
 import { type RefObject, type PropsWithChildren, useRef, useState } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
@@ -195,6 +197,7 @@ function CanvasContextMenuItems({
 
   const { saveSelectedEntityToFile, renderer, entities } = useCanvas();
   const { addToQueue } = useExportQueue();
+  const { addToUpscaleQueue } = useUpscaleQueue();
   const { exportStudioFile, importStudioFile } = useStudioFile();
 
   // Single selected entity for display (undefined if multi-selected)
@@ -226,6 +229,18 @@ function CanvasContextMenuItems({
       }
     } else if (contextOpenEntity && isAnimatedEntity(contextOpenEntity)) {
       addToQueue(contextOpenEntity, renderer);
+    }
+  };
+
+  // Upscale selected entities
+  const handleUpscale = () => {
+    const entityIds = isMultiple
+      ? frozenEntities.map((e) => e.id)
+      : contextOpenEntity
+        ? [contextOpenEntity.id]
+        : [];
+    if (entityIds.length > 0) {
+      addToUpscaleQueue(entityIds);
     }
   };
 
@@ -681,6 +696,10 @@ function CanvasContextMenuItems({
         <IonDuplicateOutline className="menu-icon-left" />
         Duplicate{isMultiple && ` (${selectionCount})`}
         <Keybind keybindId="duplicate_entity" />
+      </ContextMenu.Item>
+      <ContextMenu.Item className="menu-item menu-item--icon-left" onClick={handleUpscale}>
+        <ScaleFrameEnlarge className="menu-icon-left" />
+        Upscale 2×{isMultiple && ` (${selectionCount})`}
       </ContextMenu.Item>
       <ContextMenu.Separator className="menu-separator" />
       <ContextMenu.Item

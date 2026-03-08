@@ -51,6 +51,7 @@ import { preferences } from "#lib/storage.ts";
 import { paletteStore } from "#lib/palette-store.ts";
 import { analytics } from "#lib/analytics.ts";
 import { logger } from "#lib/client.logger.ts";
+import { downloadBlob } from "#lib/download.ts";
 import { deepMerge } from "#lib/deep-merge.ts";
 import { ColorSpace } from "#types/enums.ts";
 import type { PartialDeep } from "type-fest";
@@ -1271,16 +1272,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         const blob = await renderer.renderEntityToBlob(entity, options);
         if (!blob) continue;
 
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
         const hash = Date.now().toString(32);
         const name = entity.name.includes(".") // probably a file with a name already
           ? `${hash}-${entity.name.substring(0, entity.name.lastIndexOf("."))}`
           : `${hash}-${entity.name.replaceAll(" ", "-")}`;
-        link.download = `${name}.${extension}`;
-        link.href = url;
-        link.click();
-        URL.revokeObjectURL(url);
+        downloadBlob(blob, `${name}.${extension}`);
       } catch (err) {
         logger.error("Failed to save entity:", err);
       }
@@ -1384,12 +1380,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
       (window as any).__CANVAS__.save = async (filename = "canvas.vdmsh") => {
         const blob = await ctx.current.serializeCanvas();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = filename;
-        a.click();
-        URL.revokeObjectURL(url);
+        downloadBlob(blob, filename);
         console.log(`[Canvas] Saved as ${filename}`);
       };
 
