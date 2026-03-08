@@ -10,6 +10,7 @@ import { CanvasProvider, type CanvasContextValue } from "#context/canvas-context
 import { useCanvas } from "#context/use-canvas.ts";
 import { VideoExportProvider } from "#context/video-export-context.tsx";
 import { ExportQueueProvider } from "#context/export-queue-context.tsx";
+import { UpscaleQueueProvider } from "#context/upscale-queue-context.tsx";
 import { KeybindProvider } from "#context/keybind-provider.tsx";
 import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
 
@@ -60,6 +61,8 @@ function createAllProvidersWrapper(options: RenderWithProvidersOptions = {}) {
     let wrapped = children;
 
     // Wrap from innermost to outermost (reverse order of App)
+    wrapped = <UpscaleQueueProvider>{wrapped}</UpscaleQueueProvider>;
+
     if (!skip.exportQueue) {
       wrapped = <ExportQueueProvider>{wrapped}</ExportQueueProvider>;
     }
