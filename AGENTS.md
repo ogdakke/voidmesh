@@ -18,7 +18,7 @@ React 19 + Compiler, rolldown-vite 7, WebGPU, TypeScript (strict), Bun, oxlint +
 
 ## Path Aliases (package.json `imports`)
 
-`#engine` -> `engine/index.ts`, `#config` -> `lib/config/index.ts`, `#lib/*`, `#types/*`, `#renderer/*`, `#hooks/*`, `#components/*`, `#context/*`, `#ui/*` -> `components/ui/*`, `#media/*` -> `media/*`.
+`#engine` -> `engine/index.ts`, `#config` -> `lib/config/index.ts`, `#lib/*`, `#types/*`, `#renderer/*`, `#hooks/*`, `#components/*`, `#context/*`, `#ui/*` -> `components/ui/*`, `#media/*` -> `media/*`, `#weights/*` -> `weights/*`.
 
 ## Lint & Typecheck
 
@@ -44,11 +44,15 @@ bun run lint:all    # oxlint with type-checking. Always run after changes.
 
 ## Export Pipeline
 
-Video: WebCodecs H.264 + mediabunny muxer in Web Worker (MP4/MOV only). GIF: gifenc on main thread. No WebM. Audio: demuxed via mediabunny, passed as raw AAC packets.
+Video: WebCodecs H.264 + mediabunny muxer in Web Worker (MP4/MOV only). GIF: gifenc in Web Worker (`lib/gif-encoder-worker.ts`). No WebM. Audio: demuxed via mediabunny, passed as raw AAC packets.
+
+## Upscale Pipeline
+
+WebGPU compute-based 2x upscaling via Anime4K CNN models. `renderer/upscale/` contains the GPU network, `context/upscale-queue-context.tsx` manages job queue. Supports image, GIF, and video entities. Model weights in `weights/` (JSON), loaded at runtime. 3 sizes (S/M/L) × 3 content variants (rl/an/3d).
 
 ## Provider Composition (app.tsx)
 
-`NuqsAdapter > KeybindProvider > IconoirProvider > ToastProvider > CanvasProvider > VideoExportProvider > ExportQueueProvider > LayoutProvider`
+`NuqsAdapter > KeybindProvider > IconoirProvider > ToastProvider > CanvasProvider > VideoExportProvider > ExportQueueProvider > UpscaleQueueProvider > LayoutProvider`
 
 ## Vite Plugins (plugins/)
 

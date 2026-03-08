@@ -12,8 +12,22 @@ WebGPU rendering and export pipelines. Turns engine state into pixels.
 - `export-service.ts` — `ExportService`. Reads GPU textures back to CPU for image export (PNG/JPEG). Uses `CopyPass` for rgba16float→rgba8unorm conversion, color-space-aware texture operations.
 - `video-exporter.ts` (~19KB) — WebCodecs H.264 encoding + mediabunny muxing via Web Worker.
 - `video-export.worker.ts` (~10KB) — Worker receiving encoded `VideoFrame` chunks, muxes into MP4/MOV.
-- `gif-export.ts` — GIF export via gifenc on main thread. Palette sampling, Floyd-Steinberg dithering, frame encoding.
+- `gif-export.ts` — GIF export orchestration. Palette sampling, Floyd-Steinberg dithering, frame encoding (actual work in `lib/gif-encoder-worker.ts`).
+- `frame-encoder.ts` — Shared core for encoding ImageBitmap sequences into video blobs via Web Worker. Used by both video export and upscale pipelines. Handles WebCodecs init, mediabunny muxing, progress async generator, cancel, audio passthrough.
+- `progress-channel.ts` — Push-to-pull async generator bridge for progress reporting. Used by frame-encoder and video-exporter.
 - `export-formats.ts` — Format/quality/resolution type definitions.
+
+### Upscale (`upscale/`)
+
+WebGPU compute-based 2x image upscaling using Anime4K CNN models (ported from WebSR). No ML runtime — pure WGSL compute shaders.
+
+- `upscale-service.ts` (~12KB) — `UpscaleService`. Orchestrates upscaling: loads weights, builds GPU network, processes images/GIFs/videos. Caches networks by model+dimensions. Uses `FrameEncoder` for video re-encoding.
+- `upscale-network.ts` (~13KB) — `UpscaleNetwork`. Builds compute pipeline graph from weight layers. Creates GPU buffers, bind groups, compute passes. Single `commandEncoder.finish()` submission per frame.
+- `upscale-compute-layer.ts` — Individual compute dispatch layer (conv3x4, conv8x4, etc.).
+- `upscale-display-layer.ts` — Final render pass: sub-pixel shuffle + bicubic residual to produce 2x output.
+- `upscale-wgsl.ts` (~10KB) — WGSL shader templates for each layer type. Generated at build time per-layer config.
+- `upscale-types.ts` — Types: `ModelSize` (s/m/l), `ContentVariant` (rl/an/3d), layer configs.
+- `upscale-weights.ts` — Lazy weight loader from `weights/*.json` via `#weights/*` alias.
 
 - `disintegration-particles.ts` — `DisintegrationParticleSystem`. GPU compute particle system for entity delete animations. Compute shaders spawn + update particles; instanced rendering draws them. Manages per-overlay GPU buffers (particle storage, uniforms, bind groups).
 
@@ -56,6 +70,7 @@ All shaders share a 336-byte uniform buffer. First 64 bytes are common (size, in
 - Do not call `device.queue.submit()` outside of shader pass `execute()` methods except in the compositor.
 - WGSL files must use `?raw` import suffix for Vite. Minified in production builds via `miniray` (WGSL minifier).
 - Export: GPU device cannot be transferred to workers. Main thread renders frames; worker encodes/muxes.
+- Do not create new upscale model layer types without updating both `upscale-wgsl.ts` templates and `ComputeLayerConfig.type` union.
 
 ## Dependencies
 

@@ -21,6 +21,9 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `deep-merge.ts` — Deep object merge for `PartialDeep<ShaderParams>`.
 - `shader-defaults.ts` — Applies `shaderDefaults` from config on shader type switch.
 - `gif-decoder.ts` — Binary search frame lookup by timestamp.
+- `gif-encoder.ts` — GIF encoding orchestrator. Clones input bitmaps and delegates heavy work (palette quantization, LZW compression) to `gif-encoder-worker.ts`.
+- `gif-encoder-worker.ts` — Web Worker for off-main-thread GIF encoding via gifenc.
+- `download.ts` — `downloadBlob()` utility for triggering browser file downloads.
 - `storage.ts` — Browser storage abstraction (unstorage). `preferences` object for persisted user settings (snapToGrid, fancyDelete, custom palettes).
 
 ## Patterns

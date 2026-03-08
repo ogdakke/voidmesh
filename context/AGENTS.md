@@ -11,13 +11,15 @@ React context providers wiring subsystems together. The "glue" layer between eng
 - `use-video-export.ts`, `use-export-queue.ts` — Hooks for the export contexts.
 - `keybind-context.ts` (~17KB) — `KeybindStore extends Store`. Keyboard shortcut registration with hierarchical contexts (global > canvas > selection). Builder pattern for binds.
 - `keybind-provider.tsx` — `KeybindProvider` wraps the keybind context.
+- `upscale-queue-context.tsx` (~20KB) — `UpscaleQueueProvider`. Manages background upscaling jobs. Queues requests, processes sequentially (GPU single-threaded), creates new entities from results. Supports image, GIF, and video. Sorts by padded dimensions for GPU cache hits. Progress toasts with cancel support.
+- `use-upscale-queue.ts` — `UpscaleQueueContext` definition and `useUpscaleQueue()` hook.
 - `layout-context.tsx` — Layout state (fullscreen mode).
 - `use-layout.ts` — Hook for layout context.
 
 ## Provider Composition (app.tsx)
 
 ```
-NuqsAdapter > KeybindProvider > IconoirProvider > ToastProvider > CanvasProvider > VideoExportProvider > ExportQueueProvider > LayoutProvider
+NuqsAdapter > KeybindProvider > IconoirProvider > ToastProvider > CanvasProvider > VideoExportProvider > ExportQueueProvider > UpscaleQueueProvider > LayoutProvider
 ```
 
 Note: `KeybindProvider` wraps outside `App()` at the root render level.
