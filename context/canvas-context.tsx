@@ -50,6 +50,7 @@ import { config } from "#config";
 import { preferences } from "#lib/storage.ts";
 import { paletteStore } from "#lib/palette-store.ts";
 import { logger } from "#lib/client.logger.ts";
+import { downloadBlob } from "#lib/download.ts";
 import { deepMerge } from "#lib/deep-merge.ts";
 import { applyShaderDefaults } from "#lib/shader-defaults.ts";
 import { ColorSpace } from "#types/enums.ts";
@@ -1394,6 +1395,186 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setRendererState(renderer);
     setColorSpace(renderer.colorConfig.supportsP3 ? ColorSpace.displayP3 : ColorSpace.srgb);
     gameLoop.setRenderer(renderer);
+
+    // Expose upscale service for devtools testing (DEV only)
+    if (import.meta.env.DEV && renderer.device) {
+      import("#renderer/upscale/upscale-service.ts").then(({ UpscaleService }) => {
+        const service = new UpscaleService(renderer.device!);
+        (window as any).__upscaleService = service;
+        (window as any).__upscale = async (
+          imageUrl: string,
+          opts?: { size?: "s" | "m" | "l"; variant?: "rl" | "an" | "3d" },
+        ) => {
+          const response = await fetch(imageUrl);
+          const blob = await response.blob();
+          const bitmap = await createImageBitmap(blob);
+          const result = await service.upscale(bitmap, opts);
+          bitmap.close();
+
+          // Download result as PNG
+          const canvas = new OffscreenCanvas(result.width, result.height);
+          const ctx = canvas.getContext("2d")!;
+          ctx.drawImage(result, 0, 0);
+          const outputBlob = await canvas.convertToBlob({ type: "image/png" });
+          downloadBlob(outputBlob, `upscaled-${result.width}x${result.height}.png`);
+
+          const summary = `${bitmap.width}x${bitmap.height} → ${result.width}x${result.height}`;
+          result.close();
+          return summary;
+        };
+        (window as any).__upscaleFile = async (opts?: {
+          size?: "s" | "m" | "l";
+          variant?: "rl" | "an" | "3d";
+        }) => {
+          // @ts-expect-error -- File System Access API not in all TS lib types
+          const [handle] = await window.showOpenFilePicker({
+            types: [
+              {
+                description: "Images",
+                accept: { "image/*": [".png", ".jpg", ".jpeg", ".webp", ".avif", ".gif", ".bmp"] },
+              },
+            ],
+          });
+          const file = await handle.getFile();
+          const bitmap = await createImageBitmap(file);
+          const result = await service.upscale(bitmap, opts);
+          const inputW = bitmap.width;
+          const inputH = bitmap.height;
+          bitmap.close();
+
+          const canvas = new OffscreenCanvas(result.width, result.height);
+          const ctx = canvas.getContext("2d")!;
+          ctx.drawImage(result, 0, 0);
+          const outputBlob = await canvas.convertToBlob({ type: "image/png" });
+          downloadBlob(outputBlob, `upscaled-${result.width}x${result.height}.png`);
+
+          const summary = `${inputW}x${inputH} → ${result.width}x${result.height}`;
+          result.close();
+          return summary;
+        };
+
+        // GIF upscaling: file picker → decode → upscale all frames → re-encode → download
+        (window as any).__upscaleGif = async (opts?: {
+          size?: "s" | "m" | "l";
+          variant?: "rl" | "an" | "3d";
+        }) => {
+          // @ts-expect-error -- File System Access API not in all TS lib types
+          const [handle] = await window.showOpenFilePicker({
+            types: [
+              {
+                description: "GIF Images",
+                accept: { "image/gif": [".gif"] },
+              },
+            ],
+          });
+          const file = await handle.getFile();
+
+          console.log("[Upscale] Decoding GIF...");
+          const { decodeGif } = await import("#lib/gif-decoder.ts");
+          const decoded = await decodeGif(file);
+          console.log(
+            `[Upscale] GIF decoded: ${decoded.frames.length} frames, ${decoded.width}x${decoded.height}`,
+          );
+
+          console.log("[Upscale] Upscaling frames...");
+          const upscaledFrames = await service.upscaleGif(decoded.frames, opts, (frame, total) => {
+            if (frame % 5 === 0 || frame === total) {
+              console.log(`[Upscale] Frame ${frame}/${total}`);
+            }
+          });
+
+          console.log("[Upscale] Re-encoding GIF...");
+          const { GIFEncoder, quantize, applyPalette } = await import("gifenc");
+          const outW = upscaledFrames[0]!.bitmap.width;
+          const outH = upscaledFrames[0]!.bitmap.height;
+
+          // Sample frames at reduced resolution for palette generation
+          const sampleSize = 128;
+          const sampleCanvas = new OffscreenCanvas(sampleSize, sampleSize);
+          const sampleCtx = sampleCanvas.getContext("2d")!;
+          const sampleInterval = Math.max(1, Math.floor(upscaledFrames.length / 20));
+          const sampledPixels: Uint8ClampedArray[] = [];
+          for (let i = 0; i < upscaledFrames.length; i += sampleInterval) {
+            sampleCtx.drawImage(upscaledFrames[i]!.bitmap, 0, 0, sampleSize, sampleSize);
+            sampledPixels.push(sampleCtx.getImageData(0, 0, sampleSize, sampleSize).data);
+          }
+          const combined = new Uint8Array(sampledPixels.reduce((s, p) => s + p.length, 0));
+          let offset = 0;
+          for (const p of sampledPixels) {
+            combined.set(p, offset);
+            offset += p.length;
+          }
+          const palette = quantize(combined, 128);
+
+          // Encode frames at full resolution
+          const canvas = new OffscreenCanvas(outW, outH);
+          const ctx = canvas.getContext("2d")!;
+          const gif = GIFEncoder();
+          for (const frame of upscaledFrames) {
+            ctx.drawImage(frame.bitmap, 0, 0);
+            const pixels = ctx.getImageData(0, 0, outW, outH).data;
+            const indexed = applyPalette(pixels, palette);
+            gif.writeFrame(indexed, outW, outH, {
+              palette,
+              delay: Math.round(frame.delay),
+            });
+            frame.bitmap.close();
+          }
+          gif.finish();
+
+          const outputBlob = new Blob([gif.bytes()], { type: "image/gif" });
+          downloadBlob(outputBlob, `upscaled-${outW}x${outH}.gif`);
+
+          return `${decoded.width}x${decoded.height} → ${outW}x${outH}, ${decoded.frames.length} frames`;
+        };
+
+        // Video upscaling: file picker → upscale all frames → re-encode → download
+        (window as any).__upscaleVideo = async (opts?: {
+          size?: "s" | "m" | "l";
+          variant?: "rl" | "an" | "3d";
+          fps?: number;
+          format?: "mp4" | "mov";
+          quality?: "high" | "medium" | "low";
+          includeAudio?: boolean;
+        }) => {
+          // @ts-expect-error -- File System Access API not in all TS lib types
+          const [handle] = await window.showOpenFilePicker({
+            types: [
+              {
+                description: "Video Files",
+                accept: { "video/*": [".mp4", ".mov", ".webm", ".mkv", ".avi"] },
+              },
+            ],
+          });
+          const file = await handle.getFile();
+          console.log(
+            `[Upscale] Video selected: ${file.name} (${(file.size / 1024 / 1024).toFixed(1)}MB)`,
+          );
+
+          const encoderHandle = service.upscaleVideo(file, opts);
+
+          // Log progress
+          (async () => {
+            for await (const p of encoderHandle.progress) {
+              if (p.frame % 10 === 0 || p.stage === "done") {
+                console.log(
+                  `[Upscale] ${p.stage}: frame ${p.frame}/${p.totalFrames} (${Math.round(p.percent * 100)}%)`,
+                );
+              }
+            }
+          })();
+
+          const blob = await encoderHandle.result;
+          downloadBlob(blob, `upscaled.${opts?.format ?? "mp4"}`);
+
+          return `Upscaled video: ${(blob.size / 1024 / 1024).toFixed(1)}MB`;
+        };
+
+        console.log(
+          "[Upscale] Service ready. Use __upscale(url), __upscaleFile(), __upscaleGif(), or __upscaleVideo() to test.",
+        );
+      });
+    }
   };
 
   // Export functions
@@ -1437,16 +1618,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         const blob = await renderer.renderEntityToBlob(entity, options);
         if (!blob) continue;
 
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
         const hash = Date.now().toString(32);
         const name = entity.name.includes(".") // probably a file with a name already
           ? `${hash}-${entity.name.substring(0, entity.name.lastIndexOf("."))}`
           : `${hash}-${entity.name.replaceAll(" ", "-")}`;
-        link.download = `${name}.${extension}`;
-        link.href = url;
-        link.click();
-        URL.revokeObjectURL(url);
+        downloadBlob(blob, `${name}.${extension}`);
       } catch (err) {
         logger.error("Failed to save entity:", err);
       }
@@ -1551,12 +1727,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
       (window as any).__CANVAS__.save = async (filename = "canvas.vdmsh") => {
         const blob = await ctx.current.serializeCanvas();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = filename;
-        a.click();
-        URL.revokeObjectURL(url);
+        downloadBlob(blob, filename);
         console.log(`[Canvas] Saved as ${filename}`);
       };
 

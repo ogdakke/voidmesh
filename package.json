@@ -13,7 +13,8 @@
     "#context/*": "./context/*",
     "#config": "./lib/config/index.ts",
     "#media/*": "./media/*",
-    "#styles/*": "./styles/*"
+    "#styles/*": "./styles/*",
+    "#weights/*": "./weights/*"
   },
   "scripts": {
     "dev": "vite dev",
