@@ -77,12 +77,23 @@ export async function demuxVideo(videoBlob: Blob): Promise<VideoDemuxHandle> {
     const repeatCtx = repeatCanvas.getContext("2d")!;
     let hasFrame = false;
 
-    for await (const sample of sink.samplesAtTimestamps(timestamps)) {
+    // Count expected outputs to pad if the sink yields fewer samples
+    const timestampArray = Array.isArray(timestamps) ? timestamps : [...timestamps];
+    let yieldCount = 0;
+    // Buffer leading nulls — timestamps before the first decodable frame
+    // (e.g. video with start_time > 0) will produce nulls that we backfill
+    // once the first real frame arrives.
+    let leadingNulls = 0;
+
+    for await (const sample of sink.samplesAtTimestamps(timestampArray)) {
       if (!sample) {
-        // Timestamp has no frame (e.g. past the last frame) — repeat the last valid frame
-        if (hasFrame) {
-          yield await createImageBitmap(repeatCanvas);
+        if (!hasFrame) {
+          // Buffer leading nulls — we'll backfill once the first frame arrives
+          leadingNulls++;
+          continue;
         }
+        yield await createImageBitmap(repeatCanvas);
+        yieldCount++;
         continue;
       }
       const source = sample.toCanvasImageSource();
@@ -91,9 +102,28 @@ export async function demuxVideo(videoBlob: Blob): Promise<VideoDemuxHandle> {
 
       // Stash a copy for potential repeat
       repeatCtx.drawImage(bitmap, 0, 0);
-      hasFrame = true;
+
+      if (!hasFrame) {
+        hasFrame = true;
+        // Backfill leading nulls with the first decoded frame
+        for (let i = 0; i < leadingNulls; i++) {
+          yield await createImageBitmap(repeatCanvas);
+          yieldCount++;
+        }
+      }
 
       yield bitmap;
+      yieldCount++;
+    }
+
+    if (!hasFrame) {
+      throw new Error("No decodable frames found in video");
+    }
+
+    // Pad remaining frames if sink yielded fewer samples than timestamps
+    while (yieldCount < timestampArray.length) {
+      yield await createImageBitmap(repeatCanvas);
+      yieldCount++;
     }
   }
 
