@@ -17,12 +17,12 @@ import { items, type BarItem } from "./mobile-bottom/bar-items.ts";
 import { DeleteDropZone } from "./delete-drop-zone/delete-drop-zone.tsx";
 import { ActionLayer } from "./action-layer/action-layer.tsx";
 import { CopyPasteDrawer } from "./action-layer/copy-paste-drawer.tsx";
+import { UpscaleDrawer } from "./action-layer/upscale-drawer.tsx";
 import { IonDuplicateOutline } from "./icons/duplicate.tsx";
 import { Drawer } from "#ui/drawer/index.tsx";
 import { useCanvas } from "#context/use-canvas.ts";
 import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
 import { useExportQueue } from "#context/use-export-queue.ts";
-import { useUpscaleQueue } from "#context/use-upscale-queue.ts";
 import { useActionLayer } from "#hooks/use-action-layer.ts";
 import { useLayout } from "#context/use-layout.ts";
 import { useParamValue } from "#hooks/use-param-value.ts";
@@ -35,15 +35,8 @@ function MobileActionLayer() {
   const { saveSelectedEntityToFile, renderer } = useCanvas();
   const { duplicateEntities } = useCanvasActions();
   const { addToQueue } = useExportQueue();
-  const { addToUpscaleQueue } = useUpscaleQueue();
   const [drawerOpen, setDrawerOpen] = useState(false);
-
-  const handleUpscale = () => {
-    const selectedIds = canvasStore.getSelectedEntities().map((e) => e.id);
-    if (selectedIds.length > 0) {
-      addToUpscaleQueue(selectedIds);
-    }
-  };
+  const [upscaleDrawerOpen, setUpscaleDrawerOpen] = useState(false);
 
   const handleSave = () => {
     // Check if the selected entity is animated — export instead of save
@@ -77,7 +70,7 @@ function MobileActionLayer() {
         <ActionLayer.Item onAction={duplicateEntities} label="Duplicate">
           <IonDuplicateOutline />
         </ActionLayer.Item>
-        <ActionLayer.Item onAction={handleUpscale} label="Upscale 2×">
+        <ActionLayer.Item onAction={() => setUpscaleDrawerOpen(true)} label="Upscale 2×">
           <ScaleFrameEnlarge />
         </ActionLayer.Item>
         <ActionLayer.Item onAction={handleSave} label={hasAnimated ? "Export" : "Save"}>
@@ -85,6 +78,7 @@ function MobileActionLayer() {
         </ActionLayer.Item>
       </ActionLayer.Root>
       <CopyPasteDrawer open={drawerOpen} onOpenChange={setDrawerOpen} />
+      <UpscaleDrawer open={upscaleDrawerOpen} onOpenChange={setUpscaleDrawerOpen} />
     </>
   );
 }

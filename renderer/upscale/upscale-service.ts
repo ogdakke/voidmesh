@@ -48,7 +48,7 @@ export class UpscaleService {
    * for subsequent calls with the same model config and padded dimensions.
    */
   async upscale(source: ImageBitmap, opts?: UpscaleOptions): Promise<ImageBitmap> {
-    const size: ModelSize = opts?.size ?? "s";
+    const size: ModelSize = opts?.size ?? "m";
     const variant: ContentVariant = opts?.variant ?? "rl";
 
     const origWidth = source.width;

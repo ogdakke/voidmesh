@@ -372,11 +372,6 @@
   padding-top: var(--spacing);
 }
 
-.hint-text {
-  color: var(--gray-900);
-  font-size: var(--text-xs);
-}
-
 .upscale-jobs {
   --_in-dur: 180ms;
   --_out-dur: 120ms;

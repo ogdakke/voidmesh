@@ -14,6 +14,7 @@ import { useCanvas } from "./use-canvas.ts";
 import { canvasStore } from "#engine";
 import { MediaType, type ShaderCanvasEntity } from "#types/canvas.ts";
 import { UpscaleService } from "#renderer/upscale/upscale-service.ts";
+import type { ModelSize, ContentVariant } from "#renderer/upscale/upscale-types.ts";
 import {
   createImageEntityData,
   createGifEntityData,
@@ -28,6 +29,13 @@ import type { FrameEncoderHandle } from "#renderer/frame-encoder.ts";
 // ============================================================================
 // Types
 // ============================================================================
+
+export interface UpscaleSettings {
+  size: ModelSize;
+  variant: ContentVariant;
+}
+
+const DEFAULT_UPSCALE_SETTINGS: UpscaleSettings = { size: "m", variant: "rl" };
 
 export type UpscaleJobType = "image" | "gif" | "video";
 export type UpscaleJobStatus = "queued" | "processing" | "completed" | "failed" | "cancelled";
@@ -71,6 +79,8 @@ export interface UpscaleQueueContextValue {
   clearCompleted: () => void;
   getQueueStats: () => QueueStats;
   isUpscaling: boolean;
+  upscaleSettings: UpscaleSettings;
+  setUpscaleSettings: (updates: Partial<UpscaleSettings>) => void;
 }
 
 // ============================================================================
@@ -124,6 +134,13 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
     jobs: [],
     currentJobId: null,
   });
+
+  const [upscaleSettings, setUpscaleSettingsState] =
+    useState<UpscaleSettings>(DEFAULT_UPSCALE_SETTINGS);
+
+  const setUpscaleSettings = (updates: Partial<UpscaleSettings>) => {
+    setUpscaleSettingsState((prev) => ({ ...prev, ...updates }));
+  };
 
   const isProcessingRef = useRef(false);
   const cancelledJobIdRef = useRef<string | null>(null);
@@ -299,7 +316,7 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
       progress: { frame: 0, totalFrames: 1, percent: 0, stage: "upscaling" },
     });
 
-    const upscaledBitmap = await service.upscale(entity.imageBitmap);
+    const upscaledBitmap = await service.upscale(entity.imageBitmap, upscaleSettings);
 
     if (cancelledJobIdRef.current === job.id) {
       upscaledBitmap.close();
@@ -348,18 +365,22 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
       })),
     );
 
-    const upscaledFrames = await service.upscaleGif(clonedFrames, undefined, (frame, total) => {
-      if (cancelledJobIdRef.current === job.id) return true;
-      updateJob(job.id, {
-        progress: {
-          frame,
-          totalFrames: total,
-          percent: (frame / total) * 0.7,
-          stage: "upscaling",
-        },
-      });
-      updateToastProgress(job.id, `Upscaling frame ${frame}/${total}`);
-    });
+    const upscaledFrames = await service.upscaleGif(
+      clonedFrames,
+      upscaleSettings,
+      (frame, total) => {
+        if (cancelledJobIdRef.current === job.id) return true;
+        updateJob(job.id, {
+          progress: {
+            frame,
+            totalFrames: total,
+            percent: (frame / total) * 0.7,
+            stage: "upscaling",
+          },
+        });
+        updateToastProgress(job.id, `Upscaling frame ${frame}/${total}`);
+      },
+    );
 
     updateJob(job.id, {
       progress: { frame: totalFrames, totalFrames, percent: 0.7, stage: "encoding" },
@@ -419,7 +440,10 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
     });
 
     const sourceBlob = entity.mediaSource.blob;
-    const handle = service.upscaleVideo(sourceBlob);
+    const handle = service.upscaleVideo(sourceBlob, {
+      size: upscaleSettings.size,
+      variant: upscaleSettings.variant,
+    });
     currentVideoHandleRef.current = handle;
 
     // Prevent unhandled rejection if cancelled
@@ -635,6 +659,8 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
         clearCompleted,
         getQueueStats,
         isUpscaling: state.currentJobId !== null,
+        upscaleSettings,
+        setUpscaleSettings,
       }}
     >
       {children}

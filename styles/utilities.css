@@ -9,4 +9,8 @@
   .pb-1 {
     padding-bottom: var(--spacing);
   }
+  .hint-text {
+    color: var(--gray-900);
+    font-size: var(--text-xs);
+  }
 }

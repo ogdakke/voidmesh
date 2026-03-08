@@ -6,13 +6,27 @@ import { Xmark, WarningCircle, NavArrowRight, ScaleFrameEnlarge } from "iconoir-
 import { canvasStore } from "#engine";
 import { useUpscaleQueue } from "#context/use-upscale-queue.ts";
 import type { UpscaleJob, UpscaleJobStatus } from "#context/upscale-queue-context.tsx";
+import type { ModelSize, ContentVariant } from "#renderer/upscale/upscale-types.ts";
 import { Button } from "#ui/button/index.tsx";
+import { Select, SelectItem } from "#ui/select/index.tsx";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "#ui/collapsible/collapsible.tsx";
 import "#styles/sidebar.css";
+
+const MODEL_SIZE_OPTIONS = [
+  { value: "s", label: "Fast" },
+  { value: "m", label: "Balanced" },
+  { value: "l", label: "Quality" },
+];
+
+const CONTENT_VARIANT_OPTIONS = [
+  { value: "rl", label: "Photo" },
+  { value: "an", label: "Anime" },
+  { value: "3d", label: "3D Render" },
+];
 
 function StatusIcon({ status }: { status: UpscaleJobStatus }) {
   switch (status) {
@@ -98,8 +112,15 @@ function UpscaleJobItem({ job }: { job: UpscaleJob }) {
 }
 
 export function UpscaleQueuePanel() {
-  const { state, addToUpscaleQueue, isUpscaling, clearCompleted, getQueueStats } =
-    useUpscaleQueue();
+  const {
+    state,
+    addToUpscaleQueue,
+    isUpscaling,
+    clearCompleted,
+    getQueueStats,
+    upscaleSettings,
+    setUpscaleSettings,
+  } = useUpscaleQueue();
 
   const stats = getQueueStats();
   const hasJobs = state.jobs.length > 0;
@@ -122,6 +143,38 @@ export function UpscaleQueuePanel() {
         {title}
       </CollapsibleTrigger>
       <CollapsibleContent>
+        <div className="sidebar-row">
+          <Select
+            label="Model"
+            value={upscaleSettings.size}
+            onValueChange={(value) => setUpscaleSettings({ size: value as ModelSize })}
+            name="upscale-model-size"
+            items={MODEL_SIZE_OPTIONS}
+          >
+            {MODEL_SIZE_OPTIONS.map(({ value, label }) => (
+              <SelectItem key={value} value={value}>
+                {label}
+              </SelectItem>
+            ))}
+          </Select>
+          <p className="hint-text">Higher quality produces sharper details but takes longer</p>
+        </div>
+        <div className="sidebar-row">
+          <Select
+            label="Content"
+            value={upscaleSettings.variant}
+            onValueChange={(value) => setUpscaleSettings({ variant: value as ContentVariant })}
+            name="upscale-content-variant"
+            items={CONTENT_VARIANT_OPTIONS}
+          >
+            {CONTENT_VARIANT_OPTIONS.map(({ value, label }) => (
+              <SelectItem key={value} value={value}>
+                {label}
+              </SelectItem>
+            ))}
+          </Select>
+          <p className="hint-text">Match this to your source material</p>
+        </div>
         <div className="sidebar-row upscale-empty" hidden={hasJobs || undefined}>
           <p className="sidebar-text">Upscale selected images and videos to 2× resolution</p>
           <Button variant="secondary" onClick={handleUpscale} disabled={isUpscaling}>
