@@ -4,6 +4,7 @@ export function useCarouselDots(containerRef: RefObject<HTMLElement | null>) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [count, setCount] = useState(0);
   const [progress, setProgress] = useState<number[]>([]);
+  const [ids, setIds] = useState<string[]>([]);
   const cleanupRef = useRef<(() => void) | null>(null);
 
   const attach = (container: HTMLElement | null) => {
@@ -13,14 +14,33 @@ export function useCarouselDots(containerRef: RefObject<HTMLElement | null>) {
     if (!container) {
       setCount(0);
       setProgress([]);
+      setIds([]);
       return;
     }
 
     const sections = container.querySelectorAll<HTMLElement>(":scope > section");
+    const sectionIds = Array.from(sections, (s) => s.id);
     setCount(sections.length);
+    setIds(sectionIds);
     setProgress(Array.from({ length: sections.length }, (_, i) => (i === 0 ? 1 : 0)));
 
+    // Scroll to hash on open
+    const hash = window.location.hash.slice(1);
+    if (hash) {
+      const idx = sectionIds.indexOf(hash);
+      if (idx !== -1) {
+        requestAnimationFrame(() => {
+          sections[idx]?.scrollIntoView({
+            behavior: "instant",
+            inline: "center",
+            block: "nearest",
+          });
+        });
+      }
+    }
+
     let rafId = 0;
+    let lastActiveIdx = 0;
     const onScroll = () => {
       cancelAnimationFrame(rafId);
       rafId = requestAnimationFrame(() => {
@@ -51,6 +71,12 @@ export function useCarouselDots(containerRef: RefObject<HTMLElement | null>) {
 
         setProgress(newProgress);
         setActiveIndex(bestIdx);
+
+        if (bestIdx !== lastActiveIdx) {
+          lastActiveIdx = bestIdx;
+          const id = sectionIds[bestIdx];
+          if (id) history.replaceState(null, "", `#${id}`);
+        }
       });
     };
 
@@ -70,5 +96,5 @@ export function useCarouselDots(containerRef: RefObject<HTMLElement | null>) {
     sections[index]?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
   };
 
-  return { activeIndex, count, progress, scrollTo, attach };
+  return { activeIndex, count, progress, ids, scrollTo, attach };
 }

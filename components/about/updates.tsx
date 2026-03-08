@@ -1,4 +1,3 @@
-import { useIsMobile } from "#hooks/use-is-mobile.ts";
 import { Image } from "#ui/image.tsx";
 import { Video } from "#ui/video.tsx";
 import type { PropsWithChildren } from "react";
@@ -11,36 +10,31 @@ function formatDate(isoDate: string): string {
   return Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(isoDate));
 }
 
-export function Updates() {
-  const isMobile = useIsMobile();
+export function Updates({ id }: { id?: string }) {
   return (
-    <section>
+    <section id={id}>
       <h1>Updates</h1>
       <Update>
         <UpdatesTitle date="2026-03-07">Mobile context menu</UpdatesTitle>
         <p>Now you can do more actions that were already available on desktop on mobile as well!</p>
-        {isMobile ? (
-          <>
-            <figure>
-              <Video
-                className="video"
-                src={[
-                  { src: "/m/feature_context_menu_av1_qp50.mp4", codec: "av1" },
-                  { src: "/m/feature_context_menu_compressed.mp4", codec: "h264" },
-                ]}
-                placeholder="y/cJDQIHiZV5B7inZoWYl/qXiW+4"
-                muted
-                autoPlay
-                loop
-                playsInline
-                style={{ aspectRatio: "3/4" }}
-              />
-              <figcaption>
-                Duplicate, copy/paste effects, and save are now available on long press
-              </figcaption>
-            </figure>
-          </>
-        ) : null}
+        <figure>
+          <Video
+            className="video"
+            src={[
+              { src: "/m/feature_context_menu_av1_qp50.mp4", codec: "av1" },
+              { src: "/m/feature_context_menu_compressed.mp4", codec: "h264" },
+            ]}
+            placeholder="y/cJDQIHiZV5B7inZoWYl/qXiW+4"
+            muted
+            autoPlay
+            loop
+            playsInline
+            style={{ aspectRatio: "3/4" }}
+          />
+          <figcaption>
+            Duplicate, copy/paste effects, and save are now available on long press
+          </figcaption>
+        </figure>
       </Update>
       <Update>
         <UpdatesTitle date="2026-03-04">P3 Color Space</UpdatesTitle>
@@ -48,21 +42,17 @@ export function Updates() {
           Display P3 is now the default color space on supported browsers and displays. This means
           colors will look more vibrant and accurate, if your hardware supports it.
         </p>
-        {isMobile ? (
-          <>
-            <figure>
-              <Image
-                {...p3Feature}
-                className="fullsize"
-                alt="New color picker supporting display P3 color space"
-              />
-              <figcaption>
-                In the new color picker, you can see the SRGB color space outlined, and outside it,
-                the wider range of colors.
-              </figcaption>
-            </figure>
-          </>
-        ) : null}
+        <figure>
+          <Image
+            {...p3Feature}
+            className="fullsize"
+            alt="New color picker supporting display P3 color space"
+          />
+          <figcaption>
+            In the new color picker, you can see the SRGB color space outlined, and outside it, the
+            wider range of colors.
+          </figcaption>
+        </figure>
         <br />
         <p>Some other notable changes:</p>
         <ul>
@@ -76,70 +66,61 @@ export function Updates() {
       <Update>
         <UpdatesTitle date="2026-02-28">Fancy deletions</UpdatesTitle>
         <p>Try deleting something from the canvas, added something a little extra 🫰</p>
-        {isMobile ? (
-          <>
-            <figure>
-              <Video
-                className="video"
-                src={[
-                  {
-                    src: "/m/fancy_delete_with_context_menu_mobile_av1_qp50.mp4",
-                    codec: "av1",
-                  },
-                  {
-                    src: "/m/fancy_delete_with_context_menu_mobile_compressed.mp4",
-                    codec: "h264",
-                  },
-                ]}
-                placeholder="yfcFBwAJeHeNdXlxeapXx1d0ByoElWAI"
-                muted
-                autoPlay
-                loop
-                playsInline
-                style={{ aspectRatio: "1" }}
-              />
-              <figcaption>
-                You can turn this effect off from the preferences menu (
-                <MoreVert
-                  role="presentation"
-                  style={{
-                    display: "inline-block",
-                    background: "light-dark(var(--gray-100), var(--gray-50))",
-                    borderRadius: "99px",
-                    width: "1.5em",
-                    height: "1.5em",
-                    marginInline: "4px",
-                    padding: "2px",
-                    verticalAlign: "top",
-                  }}
-                />
-                )
-              </figcaption>
-            </figure>
-          </>
-        ) : null}
+        <figure>
+          <Video
+            className="video"
+            src={[
+              {
+                src: "/m/fancy_delete_with_context_menu_mobile_av1_qp50.mp4",
+                codec: "av1",
+              },
+              {
+                src: "/m/fancy_delete_with_context_menu_mobile_compressed.mp4",
+                codec: "h264",
+              },
+            ]}
+            placeholder="yfcFBwAJeHeNdXlxeapXx1d0ByoElWAI"
+            muted
+            autoPlay
+            loop
+            playsInline
+            style={{ aspectRatio: "1" }}
+          />
+          <figcaption>
+            You can turn this effect off from the preferences menu (
+            <MoreVert
+              role="presentation"
+              style={{
+                display: "inline-block",
+                background: "light-dark(var(--gray-100), var(--gray-50))",
+                borderRadius: "99px",
+                width: "1.5em",
+                height: "1.5em",
+                marginInline: "4px",
+                padding: "2px",
+                verticalAlign: "top",
+              }}
+            />
+            )
+          </figcaption>
+        </figure>
       </Update>
       <Update>
         <UpdatesTitle date="2026-02-18">Saving is available!</UpdatesTitle>
         <p>
           Save your canvas and all media in it to a file for easily continuing editing your files.
         </p>
-        {isMobile ? (
-          <>
-            <figure>
-              <Image
-                {...saveFeature}
-                className="fullsize"
-                alt="Where to find the preferences menu on mobile"
-              />
-              <figcaption>
-                You can export and import the ".vdmsh" file from the preferences menu
-              </figcaption>
-            </figure>
-          </>
-        ) : null}
+        <figure>
+          <Image
+            {...saveFeature}
+            className="fullsize"
+            alt="Where to find the preferences menu on mobile"
+          />
+          <figcaption>
+            You can export and import the ".vdmsh" file from the preferences menu
+          </figcaption>
+        </figure>
       </Update>
-      <hr className="divider" />
       <Update>
         <UpdatesTitle date="2026-02-16">Flowing Glass Shader</UpdatesTitle>
         <p>

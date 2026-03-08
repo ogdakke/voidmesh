@@ -49,7 +49,7 @@
 
     :where(h2) {
       font-size: var(--text-lg);
-      margin-top: var(--spacing-4);
+      margin-top: var(--spacing-8);
       margin-bottom: var(--spacing-2);
       font-weight: 500;
     }
@@ -87,9 +87,8 @@
     }
 
     :where(footer) {
-      margin-top: auto;
-      padding-top: var(--spacing-3);
-      /*border-top: 1px solid var(--border);*/
+      margin-block-start: auto;
+      padding-block-start: var(--spacing-3);
       color: var(--gray-1000);
       font-size: var(--text-sm);
     }
@@ -99,6 +98,21 @@
     display: flex;
     flex-direction: column;
     gap: var(--spacing);
+
+    :where(h1) {
+      display: flex;
+      align-items: center;
+      gap: var(--spacing-2);
+    }
+  }
+
+  .about-logo {
+    border-radius: 50%;
+    height: calc(8 * var(--spacing));
+    width: calc(8 * var(--spacing));
+    min-height: unset;
+    margin: 0;
+    object-fit: cover;
   }
 
   .about-tagline {
@@ -174,10 +188,26 @@
   .update {
     content-visibility: auto;
     contain-intrinsic-size: auto 500px;
+    padding-block: var(--spacing-4);
+    border-block-start: 1px solid var(--border);
+  }
 
+  .update:first-of-type {
+    padding-block-start: 0;
+    border-block-start: none;
+  }
+
+  .update {
     :where(video) {
       border-radius: var(--radius-lg);
+      margin-top: var(--spacing-4);
     }
+  }
+
+  :where(.divider) {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin-block: var(--spacing-4);
   }
 
   .updates-title {
@@ -195,6 +225,7 @@
   .update figcaption {
     font-size: var(--text-sm);
     color: var(--gray-900);
+    margin-block-start: var(--spacing-2);
   }
 
   @keyframes section-blur {
@@ -228,6 +259,101 @@
     100% {
       --fade-top: 50px;
       --fade-bottom: 0px;
+    }
+  }
+
+  .about-carousel {
+    overflow-y: hidden;
+    overflow-x: scroll;
+    scroll-snap-type: x mandatory;
+    scroll-behavior: smooth;
+    scrollbar-width: none;
+
+    & > section {
+      min-width: 100%;
+      box-sizing: border-box;
+      scroll-snap-align: center;
+      scroll-snap-stop: always;
+      padding: var(--spacing-4) max(var(--spacing-4), calc((100% - 700px) / 2));
+      padding-bottom: var(--spacing-10);
+      overflow-y: auto;
+
+      mask-image: var(--mask);
+
+      animation: scroll-fade linear both;
+      animation-timeline: scroll(self);
+
+      :where(a) {
+        text-decoration: underline;
+      }
+    }
+  }
+
+  .carousel-dots {
+    --dot-size: 9px;
+    --dots-in-dur: 250ms;
+    --dots-in-delay: 300ms;
+    position: absolute;
+    bottom: var(--spacing-4);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+    height: 24px;
+    padding: 0 var(--spacing-3);
+    background: light-dark(
+      color-mix(in srgb, var(--gray-200) 80%, transparent),
+      color-mix(in srgb, var(--gray-100) 60%, transparent)
+    );
+    backdrop-filter: blur(8px);
+    border-radius: var(--radius-button);
+    width: fit-content;
+    opacity: 1;
+    filter: blur(0px);
+    transition:
+      opacity var(--dots-in-dur) ease-out var(--dots-in-delay),
+      transform var(--dots-in-dur) cubic-bezier(0.34, 1.56, 0.64, 1) var(--dots-in-delay),
+      filter var(--dots-in-dur) ease-out var(--dots-in-delay);
+
+    @starting-style {
+      opacity: 0;
+      transform: translateX(-50%) translateY(16px) scale(0.76);
+      filter: blur(4px);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      --dots-in-dur: 0ms;
+      --dots-in-delay: 0ms;
+    }
+  }
+
+  .carousel-dot {
+    all: unset;
+    --dot-progress: 0;
+    --_p: clamp(0, var(--dot-progress), 1);
+    position: relative;
+    width: var(--dot-size);
+    height: var(--dot-size);
+    cursor: pointer;
+
+    &::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 50%;
+      translate: -50% 0;
+      width: calc(var(--dot-size) + var(--dot-size) * var(--_p));
+      height: 100%;
+      border-radius: var(--radius-button);
+      background: color-mix(in oklch, var(--gray-1100) calc(var(--_p) * 100%), var(--gray-500));
+    }
+
+    &:focus-visible {
+      outline: 1px solid var(--gray-1400);
+      outline-offset: 2px;
     }
   }
 }

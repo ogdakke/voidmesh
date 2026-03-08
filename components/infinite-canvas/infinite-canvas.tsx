@@ -38,10 +38,11 @@ import { DropZone } from "../ui/dropzone/index.tsx";
 import { UndoRedoButtons } from "./undo-redo.tsx";
 import "./infinite-canvas.css";
 
-const DesktopSettings = lazy(() => import("#components/settings/settings.desktop.tsx"));
+import DesktopSettings from "#components/settings/settings.desktop.tsx";
+import SettingsDrawer from "../settings/settings.mobile.tsx";
+import About from "../about/index.tsx";
+
 const CanvasContextMenu = lazy(() => import("./canvas-context-menu.tsx"));
-const SettingsDrawer = lazy(() => import("../settings/settings.mobile.tsx"));
-const About = lazy(() => import("../about/index.tsx"));
 
 /** Label overlay for selected entity - positioned by direct DOM manipulation in game loop */
 function EntityLabel({
@@ -949,9 +950,7 @@ export function InfiniteCanvas() {
           {!isMobile && (
             <>
               <div className="infinite-canvas__top-left">
-                <Suspense>
-                  <DesktopSettings />
-                </Suspense>
+                <DesktopSettings />
               </div>
               <div className="infinite-canvas__top-right">
                 <Button
@@ -970,9 +969,7 @@ export function InfiniteCanvas() {
           {!(isMobile && isFullscreen) && (
             <InfiniteCanvasToolRow>
               <div className="left-controls">
-                <Suspense>
-                  <About className="infinite-canvas__keyboard-shortcuts" />
-                </Suspense>
+                <About className="infinite-canvas__keyboard-shortcuts" />
                 <UndoRedoButtons />
               </div>
               <div className="infinite-canvas__controls">
@@ -1018,11 +1015,7 @@ export function InfiniteCanvas() {
                     isMobile={false}
                   />
                 )}
-                {isMobile && (
-                  <Suspense>
-                    <SettingsDrawer />
-                  </Suspense>
-                )}
+                {isMobile && <SettingsDrawer />}
                 <ViewportZoom onZoomReset={handleZoomReset} />
               </div>
             </InfiniteCanvasToolRow>

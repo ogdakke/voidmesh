@@ -1,31 +1,3 @@
-.about-drawer-content {
-  overflow-y: hidden;
-  overflow-x: scroll;
-  scroll-snap-type: x mandatory;
-  scroll-behavior: smooth;
-  scrollbar-width: none;
-
-  & > section {
-    min-width: 100%;
-    scroll-snap-align: center;
-    scroll-snap-stop: always;
-    padding: var(--spacing-4);
-    padding-bottom: var(--spacing-10);
-    overflow-y: auto;
-
-    mask-image: var(--mask);
-
-    animation:
-      section-blur linear both,
-      scroll-fade linear both;
-    animation-timeline: view(x), scroll(self);
-
-    :where(a) {
-      text-decoration: underline;
-    }
-  }
-}
-
 .about-modal[open] {
   width: 100%;
   height: 100%;
@@ -47,70 +19,18 @@
   z-index: 2;
 }
 
-.carousel-dots {
-  --dot-size: 9px;
-  --dots-in-dur: 250ms;
-  --dots-in-delay: 300ms;
-  position: absolute;
-  bottom: calc(var(--spacing-4) + env(safe-area-inset-bottom, 0px));
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 1;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 10px;
-  height: 24px;
-  padding: 0 var(--spacing-2);
-  background: light-dark(
-    color-mix(in srgb, var(--gray-200) 80%, transparent),
-    color-mix(in srgb, var(--gray-100) 60%, transparent)
-  );
-  backdrop-filter: blur(8px);
-  border-radius: var(--radius-button);
-  width: fit-content;
-  opacity: 1;
-  filter: blur(0px);
-  transition:
-    opacity var(--dots-in-dur) ease-out var(--dots-in-delay),
-    transform var(--dots-in-dur) ease-out var(--dots-in-delay),
-    filter var(--dots-in-dur) ease-out var(--dots-in-delay);
-
-  @starting-style {
-    opacity: 0;
-    transform: translateX(-50%) translateY(16px) scale(0.76);
-    filter: blur(4px);
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    --dots-in-dur: 0ms;
-    --dots-in-delay: 0ms;
-  }
+.about-modal .about-carousel > section > h2:first-child {
+  font-size: var(--text-xl);
+  margin-top: 0;
 }
 
-.carousel-dot {
-  all: unset;
-  --dot-progress: 0;
-  --_p: clamp(0, var(--dot-progress), 1);
-  position: relative;
-  width: var(--dot-size);
-  height: var(--dot-size);
-  cursor: pointer;
+.about-modal .about-carousel > section {
+  animation:
+    section-blur linear both,
+    scroll-fade linear both;
+  animation-timeline: view(x), scroll(self);
+}
 
-  &::after {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 50%;
-    translate: -50% 0;
-    width: calc(var(--dot-size) + var(--dot-size) * var(--_p));
-    height: 100%;
-    border-radius: var(--radius-button);
-    background: color-mix(in oklch, var(--gray-1100) calc(var(--_p) * 100%), var(--gray-500));
-  }
-
-  &:focus-visible {
-    outline: 1px solid var(--gray-1400);
-    outline-offset: 2px;
-  }
+.about-modal .carousel-dots {
+  bottom: calc(var(--spacing-4) + env(safe-area-inset-bottom, 0px));
 }

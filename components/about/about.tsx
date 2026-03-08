@@ -3,11 +3,14 @@ import { Image } from "#ui/image.tsx";
 import houseBurning from "../../media/house_burning_ascii.webp?img";
 import "./about.css";
 
-export function AboutSection({ children }: { children?: ReactNode }) {
+export function AboutSection({ children, id }: { children?: ReactNode; id?: string }) {
   return (
-    <section className="about-section">
+    <section className="about-section" id={id}>
       <div className="about-hero">
-        <h1>Voidmesh</h1>
+        <h1>
+          <img src="/favicon.webp" alt="" width={32} height={32} className="about-logo" />
+          Voidmesh
+        </h1>
         <p className="about-tagline">
           Apply dithering, halftone, ASCII and more effects to videos, GIFs, and images. Everything
           runs locally in your browser—nothing gets uploaded.
@@ -71,9 +74,9 @@ export function Footer() {
   );
 }
 
-export function FeatureSection() {
+export function FeatureSection({ id }: { id?: string }) {
   return (
-    <section className="about-section">
+    <section className="about-section" id={id}>
       <h2>Features</h2>
       <ul className="about-features">
         <li>
