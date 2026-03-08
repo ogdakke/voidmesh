@@ -242,6 +242,9 @@ async function deserializeEntity(
           blob: videoBlob,
           duration,
           fps: serialized.fps,
+          hasAudio: await import("#lib/audio-demux.ts").then(({ hasAudioTrack }) =>
+            hasAudioTrack(videoBlob),
+          ),
         },
         playback: toPlaybackState(serialized.playback),
       };

@@ -237,7 +237,7 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
         const { demuxAudio } = await import("#lib/audio-demux.ts");
         audioData = await demuxAudio(entity.mediaSource.blob);
         if (!audioData) {
-          throw new Error("Audio extraction returned no audio track from source video");
+          logger.warn("[export] Source video has no audio track, exporting without audio");
         }
       }
 
