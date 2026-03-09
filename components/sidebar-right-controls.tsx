@@ -9,7 +9,6 @@ import { Button } from "./ui/button/index.tsx";
 import { Select, SelectItem } from "./ui/select/index.tsx";
 import { Toggle } from "./ui/toggle/index.tsx";
 import { Slider } from "./ui/slider/index.tsx";
-import { Hint } from "./ui/hint/hint.tsx";
 import { ColorPalette } from "./ui/color-palette/color-palette.tsx";
 import { ColorPalettePresets } from "./palette-preset/color-palette-presets.tsx";
 import { PaletteUpload } from "./palette-upload/index.ts";
