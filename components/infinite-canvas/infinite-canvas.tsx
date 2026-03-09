@@ -331,21 +331,27 @@ export function InfiniteCanvas() {
     });
   };
 
-  // Center viewport on initial mount so world (0,0) is at screen center
+  // Center viewport on initial mount so world (0,0) is at screen center.
+  // Deferred to rAF so panel layout has settled (first load without saved
+  // layout triggers a resize that the ResizeObserver can't compensate for
+  // because prevSizeRef is still null).
   const hasInitializedRef = useRef(false);
   useEffect(() => {
     if (hasInitializedRef.current) return;
     const container = containerRef.current;
     if (!container) return;
 
-    hasInitializedRef.current = true;
-    const initialOffset = calculateCenteredOffset(
-      container.clientWidth,
-      container.clientHeight,
-      1, // Initial zoom is 1
-      window.devicePixelRatio,
-    );
-    setViewport({ offset: initialOffset, zoom: 1 });
+    const id = requestAnimationFrame(() => {
+      hasInitializedRef.current = true;
+      const initialOffset = calculateCenteredOffset(
+        container.clientWidth,
+        container.clientHeight,
+        1, // Initial zoom is 1
+        window.devicePixelRatio,
+      );
+      setViewport({ offset: initialOffset, zoom: 1 });
+    });
+    return () => cancelAnimationFrame(id);
   }, [setViewport]);
 
   // Media scrub handlers - works for both video and GIF

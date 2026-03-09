@@ -44,7 +44,9 @@ import {
   extractOriginalPalette8,
   extractOriginalPalette16,
   cloneMediaSource,
+  createImageEntityData,
 } from "#lib/media-loader.ts";
+import defaultImgUrl from "#media/default.jpeg";
 import { Command, undo } from "#lib/undo.ts";
 import { config } from "#config";
 import { preferences } from "#lib/storage.ts";
@@ -560,6 +562,38 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
     return id;
   };
+
+  // Add default image if canvas is empty on mount
+  const addEntityRef = useRef(addEntity);
+  addEntityRef.current = addEntity;
+
+  useEffect(() => {
+    if (canvasStore.getState().entities.size > 0) return;
+
+    let cancelled = false;
+
+    (async () => {
+      const response = await fetch(defaultImgUrl);
+      const blob = await response.blob();
+      const bitmap = await createImageBitmap(blob);
+
+      if (cancelled || canvasStore.getState().entities.size > 0) {
+        bitmap.close();
+        return;
+      }
+
+      const entityData = createImageEntityData(bitmap, blob, {
+        x: -bitmap.width / 2,
+        y: -bitmap.height / 2,
+      });
+
+      addEntityRef.current(entityData, "default.jpeg");
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const updateEntity = (id: string, updates: Partial<ShaderCanvasEntity>) => {
     const entity = state.entities.get(id);
