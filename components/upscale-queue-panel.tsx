@@ -75,7 +75,7 @@ function UpscaleJobItem({ job }: { job: UpscaleJob }) {
   const percent = job.progress?.percent ?? 0;
 
   return (
-    <div className="export-progress">
+    <div className="export-progress" style={{ viewTransitionName: `upscale-${job.id}` }}>
       <div className="export-progress__header">
         <StatusIcon status={job.status} />
         <span className="export-progress__label" title={job.entityName}>

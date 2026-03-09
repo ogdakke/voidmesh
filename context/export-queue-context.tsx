@@ -10,6 +10,7 @@
  */
 
 import { useState, useRef, useEffect, type PropsWithChildren } from "react";
+import { flushSync } from "react-dom";
 import { ExportQueueContext } from "./use-export-queue.ts";
 import {
   exportVideo,
@@ -120,11 +121,20 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
 
   /** Remove a job from the queue */
   const removeJob = (jobId: string) => {
-    setState((prev) => ({
-      ...prev,
-      jobs: prev.jobs.filter((job) => job.id !== jobId),
-      currentJobId: prev.currentJobId === jobId ? null : prev.currentJobId,
-    }));
+    const remove = () => {
+      flushSync(() => {
+        setState((prev) => ({
+          ...prev,
+          jobs: prev.jobs.filter((job) => job.id !== jobId),
+          currentJobId: prev.currentJobId === jobId ? null : prev.currentJobId,
+        }));
+      });
+    };
+    if ("startViewTransition" in document) {
+      document.startViewTransition(remove);
+    } else {
+      remove();
+    }
   };
 
   /** Process the next job in the queue */
@@ -409,20 +419,30 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
 
   /** Clear completed/failed jobs */
   const clearCompleted = () => {
-    setState((prev) => {
-      const remainingJobs = prev.jobs.filter(
-        (job) =>
-          job.status !== "completed" && job.status !== "failed" && job.status !== "cancelled",
-      );
-      const currentJobRemoved =
-        prev.currentJobId !== null && !remainingJobs.some((job) => job.id === prev.currentJobId);
+    const clear = () => {
+      flushSync(() => {
+        setState((prev) => {
+          const remainingJobs = prev.jobs.filter(
+            (job) =>
+              job.status !== "completed" && job.status !== "failed" && job.status !== "cancelled",
+          );
+          const currentJobRemoved =
+            prev.currentJobId !== null &&
+            !remainingJobs.some((job) => job.id === prev.currentJobId);
 
-      return {
-        ...prev,
-        jobs: remainingJobs,
-        currentJobId: currentJobRemoved ? null : prev.currentJobId,
-      };
-    });
+          return {
+            ...prev,
+            jobs: remainingJobs,
+            currentJobId: currentJobRemoved ? null : prev.currentJobId,
+          };
+        });
+      });
+    };
+    if ("startViewTransition" in document) {
+      document.startViewTransition(clear);
+    } else {
+      clear();
+    }
   };
 
   /** Get queue statistics */
