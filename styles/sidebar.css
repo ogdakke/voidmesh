@@ -407,6 +407,9 @@
   gap: var(--spacing-3);
   grid-template-columns: 1fr auto;
 
+  .select-select {
+    min-width: auto;
+  }
   .ui-toggle {
     align-self: end;
     width: calc(9 * var(--spacing));

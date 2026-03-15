@@ -24,10 +24,10 @@ import {
 import { isAnimatedEntity, MediaType, type ShaderCanvasEntity } from "#types/canvas.ts";
 import type { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
 import type { DemuxedAudio } from "#lib/audio-demux.ts";
-import { createFrameIterator, type VideoDemuxHandle } from "#lib/video-demux.ts";
 import { logger } from "#lib/client.logger.ts";
 import { useVideoExportContext } from "./use-video-export.ts";
 import type { ExportOptionsState, ExportOptionsUpdate } from "./video-export-context.tsx";
+import type { VideoDemuxHandle } from "#lib/video-demux.ts";
 
 /** Export job status */
 export type ExportJobStatus = "queued" | "processing" | "completed" | "failed" | "cancelled";
@@ -174,7 +174,7 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
 
       if (entity.mediaSource.type === MediaType.video) {
         // Video path: decode frames via WebCodecs (mediabunny)
-        const { demuxVideo } = await import("#lib/video-demux.ts");
+        const { demuxVideo, createFrameIterator } = await import("#lib/video-demux.ts");
         const demux = await demuxVideo(entity.mediaSource.blob);
         currentDemuxRef.current = demux;
 

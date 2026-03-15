@@ -1,9 +1,10 @@
 import { resolve } from "path";
 import { defineConfig, loadEnv } from "vite";
-import react from "@vitejs/plugin-react";
+import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import basicSsl from "@vitejs/plugin-basic-ssl";
 import imagePlugin from "./plugins/vite-plugin-image.ts";
 import wgslMinifyPlugin from "./plugins/vite-plugin-wgsl-minify.ts";
+import babel from "@rolldown/plugin-babel";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
@@ -36,10 +37,10 @@ export default defineConfig(({ mode }) => {
       !!env.HTTPS && basicSsl(),
       wgslMinifyPlugin(),
       imagePlugin({ widths: [768, 1152] }),
-      react({
-        babel: {
-          plugins: ["babel-plugin-react-compiler"],
-        },
+      react(),
+      // @ts-expect-error something is off with the types here
+      babel({
+        presets: [reactCompilerPreset()],
       }),
     ],
 
