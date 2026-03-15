@@ -204,12 +204,6 @@
     }
   }
 
-  :where(.divider) {
-    border: none;
-    border-top: 1px solid var(--border);
-    margin-block: var(--spacing-4);
-  }
-
   .updates-title {
     display: grid;
     grid-auto-flow: column;
