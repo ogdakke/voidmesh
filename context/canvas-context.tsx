@@ -22,6 +22,7 @@ import {
   DitheringKind,
   AsciiKind,
   GlassKind,
+  GlitchKind,
   MediaType,
   isGifEntity,
 } from "#types/canvas.ts";
@@ -156,6 +157,11 @@ const shaderUrlParams = {
   highlight: parseAsFloat.withDefault(config.defaults.shaderParams.glass.highlight),
   dispersion: parseAsFloat.withDefault(config.defaults.shaderParams.glass.dispersion),
   flow: parseAsFloat.withDefault(config.defaults.shaderParams.glass.flow),
+  // Glitch shader params
+  glitchKind: parseAsStringLiteral(Object.values(GlitchKind)).withDefault(
+    config.defaults.shaderParams.glitch.kind,
+  ),
+  glitchAngle: parseAsFloat.withDefault(config.defaults.shaderParams.glitch.angle),
 };
 
 /**
@@ -286,6 +292,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         dispersion: renderState.dispersion,
         flow: renderState.flow,
       },
+      glitch: {
+        kind: renderState.glitchKind,
+        angle: renderState.glitchAngle,
+      },
       palette: palette ?? config.defaults.shaderParams.palette,
       postProcess,
     };
@@ -336,6 +346,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           ppChromaticOffset: null,
           asciiKind: null,
           asciiInvert: null,
+          glitchKind: null,
+          glitchAngle: null,
         }).catch((e) => logger.error(e));
       }
       return;
@@ -391,6 +403,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         entity.shaderParams.dithering?.kind ?? config.defaults.shaderParams.dithering!.kind,
       asciiKind: entity.shaderParams.ascii?.kind ?? config.defaults.shaderParams.ascii.kind,
       asciiInvert: entity.shaderParams.ascii?.invert ?? config.defaults.shaderParams.ascii.invert,
+      glitchKind: entity.shaderParams.glitch?.kind ?? config.defaults.shaderParams.glitch.kind,
+      glitchAngle: entity.shaderParams.glitch?.angle ?? config.defaults.shaderParams.glitch.angle,
       preset: paletteParams.preset,
       ppEnabled: pp?.enabled ?? ppDefaults.enabled,
       ppGrainEnabled: pp?.grain?.enabled ?? ppDefaults.grain!.enabled,
@@ -1154,6 +1168,14 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         flow:
           shaderUrlParams.flow.parse(parsedParams.flow ?? "") ??
           config.defaults.shaderParams.glass.flow,
+      },
+      glitch: {
+        kind:
+          shaderUrlParams.glitchKind.parse(parsedParams.glitchKind ?? "") ??
+          config.defaults.shaderParams.glitch.kind,
+        angle:
+          shaderUrlParams.glitchAngle.parse(parsedParams.glitchAngle ?? "") ??
+          config.defaults.shaderParams.glitch.angle,
       },
       palette: palette ?? config.defaults.shaderParams.palette,
       postProcess,

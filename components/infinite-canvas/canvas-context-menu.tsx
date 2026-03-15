@@ -33,6 +33,7 @@ import { logger } from "#lib/client.logger.ts";
 import { AsciiMenuKnobs } from "../ascii-knobs.tsx";
 import { DitheringMenuKnobs } from "../dithering-knobs.tsx";
 import { GlassMenuKnobs } from "../glass-knobs.tsx";
+import { GlitchMenuKnobs } from "../glitch-knobs.tsx";
 import { ShapeMenuKnobs } from "../shape-knobs.tsx";
 import { buildPaletteList } from "../palette-preset/palette-presets.ts";
 import { usePaletteStore } from "#lib/palette-store.ts";
@@ -427,6 +428,9 @@ function CanvasContextMenuItems({
 
       {/* Glass Type (only for glass - auto-hides via isSupported) */}
       <GlassMenuKnobs />
+
+      {/* Glitch Type (only for glitch - auto-hides via isSupported) */}
+      <GlitchMenuKnobs />
 
       {/* Palette section - only for shaders that support palettes */}
       {paletteParam.isSupported && (

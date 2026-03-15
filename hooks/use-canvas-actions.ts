@@ -7,7 +7,7 @@ import {
 import { toastManager } from "#components/ui/toast/toast-manager.ts";
 import { analytics } from "#lib/analytics.ts";
 import { logger } from "#lib/client.logger.ts";
-import { config, getCommonFeatures, glassKindResets } from "#config";
+import { config, getCommonFeatures, glassKindResets, glitchKindResets } from "#config";
 import { paletteStore } from "#lib/palette-store.ts";
 import { applyShaderDefaults } from "#lib/shader-defaults.ts";
 import { preferences } from "#lib/storage.ts";
@@ -20,6 +20,7 @@ import {
   AsciiKind,
   DitheringKind,
   GlassKind,
+  GlitchKind,
   ShaderType,
   type ColorPalette,
   type SelectionState,
@@ -212,16 +213,27 @@ export function useCanvasActions() {
     });
   };
 
-  // Glass kind change — applies per-kind param resets from glassKindResets config
+  // Glass kind change — applies complete per-kind param resets
   const handleGlassKindChange = (value: string | null) => {
     if (!value) return;
 
     const kind = value as GlassKind;
-    const resets = glassKindResets[kind];
 
     updateSelectedEntityParams({
+      ...glassKindResets[kind],
       glass: { kind },
-      ...resets,
+    });
+  };
+
+  // Glitch kind change — applies complete per-kind param resets
+  const handleGlitchKindChange = (value: string | null) => {
+    if (!value) return;
+
+    const kind = value as GlitchKind;
+
+    updateSelectedEntityParams({
+      ...glitchKindResets[kind],
+      glitch: { kind },
     });
   };
 
@@ -673,6 +685,7 @@ export function useCanvasActions() {
     handleAsciiKindChange,
     handleAsciiInvertChange,
     handleGlassKindChange,
+    handleGlitchKindChange,
     handlePaletteChange,
     handlePaletteUpload,
     handleDeletePalette,

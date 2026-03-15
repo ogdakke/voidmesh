@@ -98,6 +98,7 @@ const AllSlideyParamsInOrder = [
     precision: 2,
   },
   { value: "glass.angle", label: "Angle", range: config.shaderParams.angle, precision: 0 },
+  { value: "glitch.angle", label: "Angle", range: config.shaderParams.angle, precision: 0 },
   { value: "glass.caustic", label: "Caustic", range: config.shaderParams.caustic, precision: 2 },
   {
     value: "glass.frostiness",
@@ -201,6 +202,7 @@ export function ParamsKnobs() {
     "blobs.eagerness": useParamValue("blobs.eagerness", null),
     time: useParamValue("time", null),
     "glass.angle": useParamValue("glass.angle", null),
+    "glitch.angle": useParamValue("glitch.angle", null),
     "glass.caustic": useParamValue("glass.caustic", null),
     "glass.frostiness": useParamValue("glass.frostiness", null),
     "glass.highlight": useParamValue("glass.highlight", null),

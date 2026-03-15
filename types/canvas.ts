@@ -37,6 +37,7 @@ export const ShaderType = createEnum({
   dithering: "dithering",
   ascii: "ascii",
   glass: "glass",
+  glitch: "glitch",
 });
 /** Shader types available for entity processing */
 export type ShaderType = typeof ShaderType.infer;
@@ -94,6 +95,7 @@ export const SHADER_TYPE_OPTIONS = [
   { value: ShaderType.dithering, label: "Dithering" },
   { value: ShaderType.ascii, label: "ASCII" },
   { value: ShaderType.glass, label: "Glass" },
+  { value: ShaderType.glitch, label: "Glitch" },
 ];
 
 /** ASCII character set types */
@@ -279,6 +281,31 @@ export interface GlassParams {
   flow: number;
 }
 
+/** Glitch effect subtypes */
+export const GlitchKind = createEnum({
+  channelShift: "channelShift",
+  scanline: "scanline",
+  blockCorrupt: "blockCorrupt",
+  pixelSmear: "pixelSmear",
+});
+/** Glitch effect subtype */
+export type GlitchKind = typeof GlitchKind.infer;
+
+export const GLITCH_KIND_OPTIONS = [
+  { value: GlitchKind.channelShift, label: "Channel Shift" },
+  { value: GlitchKind.scanline, label: "Scanline" },
+  { value: GlitchKind.blockCorrupt, label: "Block Corrupt" },
+  { value: GlitchKind.pixelSmear, label: "Pixel Smear" },
+];
+
+/** Parameters for the glitch shader */
+export interface GlitchParams {
+  /** Which glitch algorithm to use */
+  kind: GlitchKind;
+  /** Direction angle in degrees (0-360). Used by channelShift and pixelSmear. */
+  angle: number;
+}
+
 /** Shader parameters for an entity */
 export interface ShaderParams {
   size: number;
@@ -304,6 +331,8 @@ export interface ShaderParams {
   ascii?: AsciiParams;
   /** Parameters for the glass shader (only used when shaderType is 'glass') */
   glass?: GlassParams;
+  /** Parameters for the glitch shader (only used when shaderType is 'glitch') */
+  glitch?: GlitchParams;
   /** Color palette for multi-color effects (used by all shaders) */
   palette?: ColorPalette;
   /** Post-processing effects (grain, bloom, chromatic aberration) */
