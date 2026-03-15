@@ -1,4 +1,4 @@
-import { describe, test, expect, vi } from "vitest";
+import { describe, test, expect, vi } from "vite-plus/test";
 import { Store, shallowEqual } from "#lib/store.ts";
 
 // Concrete implementation for testing

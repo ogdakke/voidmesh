@@ -1,7 +1,7 @@
 /**
  * Tests for keybind-context
  */
-import { describe, test, expect, vi } from "vitest";
+import { describe, test, expect, vi } from "vite-plus/test";
 import { screen, fireEvent } from "@testing-library/react";
 import React, { useEffect } from "react";
 import { useKeybind, useKeybinds, type KeybindStore } from "#context/keybind-context.ts";

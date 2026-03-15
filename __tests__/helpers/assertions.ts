@@ -5,7 +5,7 @@
  * involving the canvas store, entities, and shader parameters.
  */
 import type { GetParamByPath, ParamPaths, ShaderType } from "#types/canvas.ts";
-import { expect } from "vitest";
+import { expect } from "vite-plus/test";
 import { canvasStore } from "#engine";
 
 /**

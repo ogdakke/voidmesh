@@ -2,7 +2,7 @@
  * Tests for canvas-context-menu component
  * Tests the context menu with multi-select support
  */
-import { describe, test, expect, beforeEach, afterEach } from "vitest";
+import { describe, test, expect, beforeEach, afterEach } from "vite-plus/test";
 import { screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React, { useRef } from "react";

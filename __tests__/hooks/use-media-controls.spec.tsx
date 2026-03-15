@@ -10,7 +10,7 @@
  * - paused: Animated entity selected, not playing
  * - playing: Playing
  */
-import { describe, test, expect, beforeEach, afterEach } from "vitest";
+import { describe, test, expect, beforeEach, afterEach } from "vite-plus/test";
 import { act } from "@testing-library/react";
 import React, { type ReactNode } from "react";
 import { canvasStore } from "#engine";

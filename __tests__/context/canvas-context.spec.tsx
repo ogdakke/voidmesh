@@ -2,7 +2,7 @@
  * Tests for canvas-context
  * Tests the CanvasProvider and useCanvas hook with the actual canvasStore
  */
-import { describe, test, expect, beforeEach, afterEach } from "vitest";
+import { describe, test, expect, beforeEach, afterEach } from "vite-plus/test";
 import { screen, waitFor } from "@testing-library/react";
 import React, { useEffect, useRef, useState } from "react";
 import { useCanvas } from "#context/use-canvas.ts";

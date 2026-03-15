@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from "vitest";
+import { describe, test, expect, beforeEach, afterEach } from "vite-plus/test";
 import { canvasStore } from "#engine";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
 import { createTestEntity, resetEntityCounter } from "../helpers/test-entity.ts";

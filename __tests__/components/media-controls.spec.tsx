@@ -4,7 +4,7 @@
  * Focuses on the frozen state behavior for exit animations
  * and immediate updates when switching between media entities.
  */
-import { describe, test, expect, beforeEach, afterEach } from "vitest";
+import { describe, test, expect, beforeEach, afterEach } from "vite-plus/test";
 import { screen, act } from "@testing-library/react";
 import { MediaControls } from "../../components/infinite-canvas/media-controls.tsx";
 import { renderWithCanvas } from "../helpers/render-with-providers.tsx";

@@ -2,7 +2,7 @@
  * Tests for use-param-value hook
  * Tests the useParamValue hook with multi-select support
  */
-import { describe, test, expect, beforeEach, afterEach } from "vitest";
+import { describe, test, expect, beforeEach, afterEach } from "vite-plus/test";
 import { waitFor } from "@testing-library/react";
 import React, { useEffect, useState } from "react";
 import { useParamValue, type ParamResult } from "#hooks/use-param-value.ts";

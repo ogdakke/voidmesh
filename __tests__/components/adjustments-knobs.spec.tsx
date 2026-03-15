@@ -1,7 +1,7 @@
 /**
  * Tests for AdjustmentsKnobs component
  */
-import { describe, test, expect, beforeEach, afterEach } from "vitest";
+import { describe, test, expect, beforeEach, afterEach } from "vite-plus/test";
 import { screen, waitFor, act } from "@testing-library/react";
 import { AdjustmentsKnobs } from "../../components/adjustments-knobs.tsx";
 import { canvasStore } from "#engine";

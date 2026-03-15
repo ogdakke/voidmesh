@@ -1,7 +1,7 @@
 /**
  * Tests for touch scroll utilities (iOS-like momentum scrolling)
  */
-import { describe, test, expect, beforeEach } from "vitest";
+import { describe, test, expect, beforeEach } from "vite-plus/test";
 import { VelocityTracker, Scroller, DecelerationRate } from "#lib/touch-scroll/index.ts";
 
 describe("VelocityTracker", () => {

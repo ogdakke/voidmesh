@@ -5,7 +5,7 @@
  * only fire when focus is NOT on a form control outside the canvas,
  * allowing native widget behavior in sidebar controls.
  */
-import { describe, test, expect, beforeEach, afterEach } from "vitest";
+import { describe, test, expect, beforeEach, afterEach } from "vite-plus/test";
 import { KeybindStore } from "#context/keybind-context.ts";
 
 describe("KeybindStore focus region", () => {

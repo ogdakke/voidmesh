@@ -1,5 +1,5 @@
 import { resolve } from "path";
-import { defineConfig, loadEnv } from "vite";
+import { defineConfig, loadEnv } from "vite-plus";
 import react from "@vitejs/plugin-react";
 import basicSsl from "@vitejs/plugin-basic-ssl";
 import imagePlugin from "./plugins/vite-plugin-image.ts";
@@ -9,6 +9,84 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
 
   return {
+    staged: {
+      "*": "vp check --fix"
+    },
+    fmt: {
+      "ignorePatterns": ["opensrc/"],
+    },
+    lint: {
+      "plugins": [
+        "react",
+        "import",
+        "jsx-a11y",
+        "promise"
+      ],
+      "ignorePatterns": [
+        "opensrc/"
+      ],
+      "jsPlugins": [
+        {
+          "name": "react-hooks-js",
+          "specifier": "eslint-plugin-react-hooks"
+        }
+      ],
+      "rules": {
+        "react-hooks/unsupported-syntax": "error",
+        "react-hooks/use-memo": "error",
+        "react-hooks/void-use-memo": "error",
+        "react-hooks/incompatible-library": "error",
+        "react/rules-of-hooks": "error",
+        "react/no-direct-mutation-state": "error",
+        "react/jsx-no-duplicate-props": "error",
+        "react/jsx-key": "error",
+        "react/no-children-prop": "warn",
+        "react/no-danger": "warn",
+        "react/jsx-no-script-url": "error",
+        "react/no-render-return-value": "warn",
+        "react/no-string-refs": "warn",
+        "react/no-is-mounted": "warn",
+        "react/require-render-return": "error",
+        "react/no-unknown-property": "warn",
+        "react-hooks-js/set-state-in-render": "error",
+        "react-hooks-js/immutability": "error",
+        "react-hooks-js/refs": "error",
+        "react-hooks-js/purity": "error",
+        "react-hooks-js/hooks": "error",
+        "react-hooks-js/set-state-in-effect": "error",
+        "react-hooks-js/globals": "error",
+        "react-hooks-js/error-boundaries": "error",
+        "react-hooks-js/preserve-manual-memoization": "error",
+        "react-hooks-js/unsupported-syntax": "error",
+        "react-hooks-js/component-hook-factories": "error",
+        "react-hooks-js/static-components": "error",
+        "react-hooks-js/use-memo": "error",
+        "react-hooks-js/void-use-memo": "error",
+        "react-hooks-js/incompatible-library": "error",
+        "react/only-export-components": "warn"
+      },
+      "overrides": [
+        {
+          "files": [
+            "**/__tests__/**",
+            "**/*.spec.tsx",
+            "**/*.spec.ts",
+            "**/*.test.tsx",
+            "**/*.test.ts"
+          ],
+          "rules": {
+            "react-hooks-js/globals": "off",
+            "react-hooks-js/set-state-in-effect": "off",
+            "react-hooks-js/refs": "off",
+            "react/only-export-components": "off"
+          }
+        }
+      ],
+      "options": {
+        "typeAware": true,
+        "typeCheck": true
+      }
+    },
     publicDir: resolve(__dirname, "public"),
     appType: "spa",
     server: {
@@ -42,7 +120,7 @@ export default defineConfig(({ mode }) => {
         },
       }),
     ],
-
+  
     build: {
       emptyOutDir: true,
       sourcemap: process.env.NODE_ENV !== "production",
@@ -54,5 +132,5 @@ export default defineConfig(({ mode }) => {
       entries: ["index.html"],
       include: ["mediabunny", "gifenc"],
     },
-  };
+  }
 });

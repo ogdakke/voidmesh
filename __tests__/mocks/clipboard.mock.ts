@@ -4,7 +4,7 @@
  * Provides a mock implementation of the Clipboard API that can be used
  * in tests to verify clipboard operations without actual system clipboard access.
  */
-import { vi, type Mock } from "vitest";
+import { vi, type Mock } from "vite-plus/test";
 
 export interface ClipboardMock {
   /** Mock for clipboard.write() - writing ClipboardItems */

@@ -2,7 +2,7 @@
  * Tests for use-canvas-actions hook
  * Tests the useCanvasActions hook with multi-select support
  */
-import { describe, test, expect, beforeEach, afterEach } from "vitest";
+import { describe, test, expect, beforeEach, afterEach } from "vite-plus/test";
 import { waitFor, act } from "@testing-library/react";
 import { canvasStore } from "#engine";
 import { createEntityInput } from "../helpers/test-entity.ts";

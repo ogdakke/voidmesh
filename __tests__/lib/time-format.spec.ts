@@ -1,7 +1,7 @@
 /**
  * Tests for media time formatting utilities
  */
-import { describe, test, expect } from "vitest";
+import { describe, test, expect } from "vite-plus/test";
 import { formatMediaTime, formatMediaTimeParts } from "#lib/time-format.ts";
 
 describe("formatMediaTime", () => {

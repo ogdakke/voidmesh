@@ -2,7 +2,7 @@
  * Tests for copy/paste effects functionality
  * Tests the clipboard-based effects transfer between entities
  */
-import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, test, expect, beforeEach, afterEach, vi } from "vite-plus/test";
 import { waitFor, act } from "@testing-library/react";
 import { canvasStore } from "#engine";
 import { createEntityInput } from "../helpers/test-entity.ts";

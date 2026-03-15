@@ -5,7 +5,7 @@ import {
   sortPaletteByLuminance,
 } from "#lib/color-utils.ts";
 import { ColorSpace } from "#types/enums.ts";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "vite-plus/test";
 
 describe("luminance", () => {
   test("returns 0 for black", () => {

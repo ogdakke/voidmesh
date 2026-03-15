@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach, vi } from "vitest";
+import { describe, expect, test, beforeEach, vi } from "vite-plus/test";
 import type { ColorPalette } from "#types/canvas.ts";
 
 // Mock storage before importing palette-store

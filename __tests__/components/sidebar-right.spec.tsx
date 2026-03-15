@@ -2,7 +2,7 @@
  * Tests for sidebar-right component
  * Tests the sidebar with shader parameter controls and multi-select support
  */
-import { describe, test, expect, beforeEach, afterEach } from "vitest";
+import { describe, test, expect, beforeEach, afterEach } from "vite-plus/test";
 import { screen, waitFor, act } from "@testing-library/react";
 import React from "react";
 import { SidebarRight } from "../../components/sidebar-right.tsx";

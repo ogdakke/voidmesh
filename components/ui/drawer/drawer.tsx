@@ -1,11 +1,10 @@
-// oxlint-disable react/only-export-components -- compound component: sub-components are internal, only the namespace object is exported
 import type {
   DrawerPopupProps,
   DrawerContentProps,
   DrawerTitleProps,
   DrawerCloseProps,
 } from "@base-ui/react/drawer";
-import { DrawerPreview as BaseDrawer } from "@base-ui/react/drawer";
+import { Drawer as BaseDrawer } from "@base-ui/react/drawer";
 import clsx from "clsx";
 import "./drawer.css";
 

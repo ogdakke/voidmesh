@@ -1,5 +1,5 @@
 import { blurParamToKawaseParams, MAX_BLUR_MIP_LEVELS } from "#config";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "vite-plus/test";
 
 describe("blurParamToKawaseParams", () => {
   test("returns 0 levels for blur value 0", () => {

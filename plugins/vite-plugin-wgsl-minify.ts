@@ -1,4 +1,4 @@
-import type { Plugin, ResolvedConfig } from "vite";
+import type { Plugin, ResolvedConfig } from "vite-plus";
 import { readFileSync } from "fs";
 import { initialize, minify, type InitializeOptions, type MinifyOptions } from "miniray";
 

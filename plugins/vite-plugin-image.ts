@@ -1,4 +1,4 @@
-import type { Plugin, ResolvedConfig } from "vite";
+import type { Plugin, ResolvedConfig } from "vite-plus";
 import sharp from "sharp";
 import { rgbaToThumbHash } from "thumbhash";
 import { basename, extname } from "path";
