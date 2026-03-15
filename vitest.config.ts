@@ -1,9 +1,14 @@
 import { defineConfig } from "vitest/config";
-import react from "@vitejs/plugin-react";
+import react, { reactCompilerPreset } from "@vitejs/plugin-react";
+import babel from "@rolldown/plugin-babel";
 
 export default defineConfig({
-  // @ts-expect-error TODO: vite-rolldown has some issues here
-  plugins: [react({ babel: { plugins: ["babel-plugin-react-compiler"] } })],
+  plugins: [
+    react(),
+    babel({
+      presets: [reactCompilerPreset()],
+    }),
+  ],
   test: {
     environment: "happy-dom",
     setupFiles: ["./__tests__/setup/happydom.ts", "./__tests__/setup/testing-library.ts"],
