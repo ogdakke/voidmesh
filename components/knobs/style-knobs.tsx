@@ -7,6 +7,7 @@ import {
   DitheringKind,
   AsciiKind,
   GlassKind,
+  GlitchKind,
   Shape,
 } from "#types/canvas.ts";
 import { useCanvas } from "#context/use-canvas.ts";
@@ -36,6 +37,7 @@ const shaderIconMap: Record<ShaderType, () => ReactNode> = {
   [ShaderType.halftone]: () => <span>H</span>,
   [ShaderType.melt]: () => <span>M</span>,
   [ShaderType.glass]: () => <span>G</span>,
+  [ShaderType.glitch]: () => <span>X</span>,
 };
 
 // ============================================================================
@@ -533,6 +535,137 @@ function MobileGlassStyleKnobs() {
 }
 
 // ============================================================================
+// Glitch Kind Items
+// ============================================================================
+
+const GLITCH_ITEMS: MobileStyleItem<GlitchKind>[] = [
+  {
+    value: GlitchKind.channelShift,
+    label: "Channel Shift",
+    shortLabel: "Channel",
+    icon: () => <span>C</span>,
+  },
+  {
+    value: GlitchKind.scanline,
+    label: "Scanline",
+    shortLabel: "Scan",
+    icon: () => <span>S</span>,
+  },
+  {
+    value: GlitchKind.blockCorrupt,
+    label: "Block Corrupt",
+    shortLabel: "Block",
+    icon: () => <span>B</span>,
+  },
+  {
+    value: GlitchKind.pixelSmear,
+    label: "Pixel Smear",
+    shortLabel: "Smear",
+    icon: () => <span>P</span>,
+  },
+];
+
+// ============================================================================
+// Mobile Glitch Style Knobs
+// ============================================================================
+
+function MobileGlitchStyleKnobs() {
+  const { handleGlitchKindChange } = useCanvasActions();
+  const glitchKind = useParamValue("glitch.kind", config.defaults.shaderParams.glitch!.kind);
+
+  // Floating label state
+  const [floatingLabel, setFloatingLabel] = useState<string | null>(null);
+  const floatingLabelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showFloatingLabel = (text: string) => {
+    if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
+    setFloatingLabel(text);
+    floatingLabelTimeoutRef.current = setTimeout(
+      () => setFloatingLabel(null),
+      config.ui.floatingParamLabelHideTimeoutMs,
+    );
+  };
+
+  useEffect(
+    () => () => {
+      if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
+    },
+    [],
+  );
+
+  const handleValueChange = (value: string) => {
+    handleGlitchKindChange(value);
+    const item = GLITCH_ITEMS.find((i) => i.value === value);
+    if (item) showFloatingLabel(item.label);
+  };
+
+  const handleInteractionStart = () => {
+    undo.beginTransaction();
+    if (glitchKind.isMixed) {
+      showFloatingLabel("Mixed");
+    } else {
+      const item = GLITCH_ITEMS.find((i) => i.value === glitchKind.value);
+      if (item) showFloatingLabel(item.label);
+    }
+  };
+
+  const handleValueCommit = () => {
+    undo.commitTransaction();
+  };
+
+  if (!glitchKind.isSupported) return null;
+
+  return (
+    <>
+      {floatingLabel &&
+        createPortal(
+          <div className="mobile-style-knobs__floating-label" data-visible>
+            {floatingLabel}
+          </div>,
+          document.body,
+        )}
+
+      <SliderPicker
+        value={glitchKind.isMixed ? "" : glitchKind.value}
+        onValueChange={handleValueChange}
+        onInteractionStart={handleInteractionStart}
+        onValueCommit={handleValueCommit}
+        className="mobile-style-knobs"
+      >
+        <SliderPickerWindow className="mobile-style-knobs__window">
+          <SliderPickerOptions
+            className="mobile-style-knobs__options"
+            aria-label="Glitch type selection"
+          >
+            {glitchKind.isMixed && (
+              <SliderPickerMixedItem className="mobile-style-knobs__item">
+                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                  <QuestionMark />
+                </button>
+                <span className="mobile-style-knobs__label">Mixed</span>
+              </SliderPickerMixedItem>
+            )}
+            {GLITCH_ITEMS.map((item) => (
+              <SliderPickerItem
+                key={item.value}
+                value={item.value}
+                className="mobile-style-knobs__item"
+              >
+                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                  {item.icon()}
+                </button>
+                <span className="mobile-style-knobs__label">{item.shortLabel}</span>
+              </SliderPickerItem>
+            ))}
+          </SliderPickerOptions>
+          <div className="mobile-style-knobs__highlight" aria-hidden="true" />
+        </SliderPickerWindow>
+      </SliderPicker>
+    </>
+  );
+}
+
+// ============================================================================
 // Mobile Shape Style Knobs
 // ============================================================================
 
@@ -771,6 +904,7 @@ export function MobileStyleKnobs() {
       <MobileDitheringStyleKnobs />
       <MobileAsciiStyleKnobs />
       <MobileGlassStyleKnobs />
+      <MobileGlitchStyleKnobs />
       <MobileShapeStyleKnobs />
     </>
   );

@@ -32,6 +32,7 @@ import { AsciiShader } from "./shaders/ascii-shader.ts";
 import { BlobsShader } from "./shaders/blobs-shader.ts";
 import { DitheringShader } from "./shaders/dithering-shader.ts";
 import { GlassShader } from "./shaders/glass-shader.ts";
+import { GlitchShader } from "./shaders/glitch-shader.ts";
 import { HalftoneShader } from "./shaders/halftone-shader.ts";
 import { MeltShader } from "./shaders/melt-shader.ts";
 import type { ShaderContext } from "./shaders/shader-pass.ts";
@@ -304,6 +305,7 @@ export class InfiniteCanvasRenderer {
       [ShaderType.blobs, new BlobsShader(this.#shaderContext)] as const,
       [ShaderType.melt, new MeltShader(this.#shaderContext)] as const,
       [ShaderType.glass, new GlassShader(this.#shaderContext)] as const,
+      [ShaderType.glitch, new GlitchShader(this.#shaderContext)] as const,
       [ShaderType.ascii, asciiShader] as const,
       [ShaderType.dithering, new DitheringShader(this.#shaderContext)] as const,
     ];
@@ -1685,6 +1687,9 @@ export class InfiniteCanvasRenderer {
       | import("./shaders/dithering-shader.ts").DitheringShader
       | undefined;
     ditheringShader?.removeEntity(entityId);
+
+    // Remove time tracking for this entity (glass shader)
+    this.#getGlassShader()?.removeEntity(entityId);
 
     // Clear any errors for this entity
     this.#entityErrors.delete(entityId);

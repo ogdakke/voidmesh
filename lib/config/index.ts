@@ -10,6 +10,7 @@ import {
   ShaderType,
   type RGBA,
   GlassKind,
+  GlitchKind,
 } from "#types/canvas.ts";
 import type { PartialDeep } from "type-fest";
 import type { easings } from "../canvas-math";
@@ -124,6 +125,21 @@ export const shaderFeatures: Record<ShaderType, ShaderFeature> = {
     ] as const,
     colorMode: "palette",
   },
+  glitch: {
+    params: [
+      "size",
+      "intensity",
+      "scale",
+      "preserveColors",
+      "reversePalette",
+      "showOriginal",
+      "glitch",
+      "palette",
+      "adjustments",
+      "postProcess",
+    ] as const,
+    colorMode: "palette",
+  },
 };
 
 // ============================================================================
@@ -183,14 +199,41 @@ export const shaderDefaults: Record<ShaderType, ShaderDefaultsConfig> = {
       glass: { angle: 0, caustic: 0.1 },
     },
   },
+  glitch: {
+    resetParams: {
+      size: 25,
+      intensity: 1,
+      scale: 1.0,
+      preserveColors: true,
+      adjustments: { blur: 0 },
+    },
+    mergeParams: {
+      glitch: { kind: GlitchKind.channelShift, angle: 0 },
+    },
+  },
 };
 
 /**
  * Per-glass-kind param resets applied when switching glass sub-types.
- * Only includes params that need to differ from the base glass defaults.
+ * Every kind must specify all tunable params (size, intensity, scale, blur)
+ * to ensure clean resets when switching between kinds.
  */
-export const glassKindResets: Partial<Record<GlassKind, PartialDeep<ShaderParams>>> = {
-  [GlassKind.flowing]: { adjustments: { blur: 0 }, size: 40, intensity: 4, scale: 1.55 },
+export const glassKindResets: Record<GlassKind, PartialDeep<ShaderParams>> = {
+  [GlassKind.fluted]: { size: 20, intensity: 1, scale: 1, adjustments: { blur: 10 } },
+  [GlassKind.frostedVoronoi]: { size: 20, intensity: 1, scale: 1, adjustments: { blur: 10 } },
+  [GlassKind.flowing]: { size: 40, intensity: 4, scale: 1.55, adjustments: { blur: 0 } },
+};
+
+/**
+ * Per-glitch-kind param resets applied when switching glitch sub-types.
+ * Every kind must specify all tunable params (size, intensity, scale)
+ * to ensure clean resets when switching between kinds.
+ */
+export const glitchKindResets: Record<GlitchKind, PartialDeep<ShaderParams>> = {
+  [GlitchKind.channelShift]: { size: 25, intensity: 1, scale: 1 },
+  [GlitchKind.blockCorrupt]: { size: 8, intensity: 2, scale: 1 },
+  [GlitchKind.pixelSmear]: { size: 50, intensity: 2, scale: 1 },
+  [GlitchKind.scanline]: { size: 3, intensity: 1, scale: 1 },
 };
 
 /** Error diffusion algorithms do NOT support scale parameter */
@@ -266,6 +309,17 @@ export const paramVisibilityRules: Partial<
     { param: "glass.highlight", isVisible: (p) => p.glass?.kind === GlassKind.frostedVoronoi },
     { param: "glass.flow", isVisible: (p) => p.glass?.kind === GlassKind.flowing },
     { param: "time", isVisible: (p) => p.glass?.kind === GlassKind.flowing },
+  ],
+  glitch: [
+    {
+      param: "glitch.angle",
+      isVisible: (p) =>
+        p.glitch?.kind === GlitchKind.channelShift || p.glitch?.kind === GlitchKind.pixelSmear,
+    },
+    {
+      param: "scale",
+      isVisible: (p) => p.glitch?.kind !== GlitchKind.channelShift,
+    },
   ],
 };
 
@@ -469,6 +523,10 @@ export const config = {
         dispersion: 0.6,
         flow: 0.5,
         kind: GlassKind.frostedVoronoi,
+      },
+      glitch: {
+        kind: GlitchKind.channelShift,
+        angle: 0,
       },
       palette: palettes.blackAndWhite,
       postProcess: {

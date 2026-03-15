@@ -1,7 +1,13 @@
 import { type ChangeEvent } from "react";
 import { DropletHalf, Eye, FloppyDiskArrowIn, Import, NavArrowRight, Palette } from "iconoir-react";
 import { useCanvas } from "../context/use-canvas.ts";
-import { SHADER_TYPE_OPTIONS, GlassKind, GLASS_KIND_OPTIONS } from "#types/canvas.ts";
+import {
+  SHADER_TYPE_OPTIONS,
+  GlassKind,
+  GLASS_KIND_OPTIONS,
+  GlitchKind,
+  GLITCH_KIND_OPTIONS,
+} from "#types/canvas.ts";
 import { useCanvasActions, useParamValue } from "../hooks/use-canvas-actions.ts";
 import { analytics } from "#lib/analytics.ts";
 import { canvasStore } from "#engine";
@@ -138,6 +144,8 @@ export const SidebarRightControls = ({ className, compact }: SidebarRightControl
                   <BlobParams />
 
                   <GlassParamsControl />
+
+                  <GlitchParamsControl />
 
                   <DitheringKnobs />
 
@@ -297,6 +305,7 @@ export function BlobParams() {
 
 export function GlassParamsControl() {
   const { updateSelectedEntityParams } = useCanvas();
+  const { handleGlassKindChange } = useCanvasActions();
   const glassKind = useParamValue("glass.kind", config.defaults.shaderParams.glass!.kind);
   const angle = useParamValue("glass.angle", config.defaults.shaderParams.glass!.angle);
   const caustic = useParamValue("glass.caustic", config.defaults.shaderParams.glass!.caustic);
@@ -310,10 +319,6 @@ export function GlassParamsControl() {
     config.defaults.shaderParams.glass!.dispersion,
   );
   const flow = useParamValue("glass.flow", config.defaults.shaderParams.glass!.flow);
-
-  const handleGlassKindChange = (value: string | null) => {
-    if (value) updateSelectedEntityParams({ glass: { kind: value as GlassKind } });
-  };
 
   const handleAngleChange = (value: number) => {
     if (value !== undefined) {
@@ -468,6 +473,60 @@ export function GlassParamsControl() {
           showValue={!dispersion.isMixed}
         />
       </div>
+    </>
+  );
+}
+
+export function GlitchParamsControl() {
+  const { updateSelectedEntityParams } = useCanvas();
+  const { handleGlitchKindChange } = useCanvasActions();
+  const glitchKind = useParamValue("glitch.kind", config.defaults.shaderParams.glitch!.kind);
+  const angle = useParamValue("glitch.angle", config.defaults.shaderParams.glitch!.angle);
+
+  const handleAngleChange = (value: number) => {
+    if (value !== undefined) {
+      updateSelectedEntityParams({ glitch: { angle: value } });
+    }
+  };
+
+  if (!glitchKind.isSupported) return null;
+
+  const showAngle =
+    glitchKind.value === GlitchKind.channelShift || glitchKind.value === GlitchKind.pixelSmear;
+
+  return (
+    <>
+      <div className="sidebar-row">
+        <Select
+          name="glitch-kind"
+          label="Glitch Type"
+          value={glitchKind.isMixed ? "" : (glitchKind.value ?? GlitchKind.channelShift)}
+          onValueChange={handleGlitchKindChange}
+          items={GLITCH_KIND_OPTIONS}
+        >
+          {GLITCH_KIND_OPTIONS.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </Select>
+      </div>
+      {showAngle && (
+        <div className="sidebar-row">
+          <Slider
+            name="glitch-angle"
+            label={angle.isMixed ? "Angle (Mixed)" : "Angle"}
+            min={0}
+            max={360}
+            step={1}
+            value={angle.value}
+            onValueChange={handleAngleChange}
+            onInteractionStart={() => undo.beginTransaction()}
+            onValueCommitted={() => undo.commitTransaction()}
+            showValue={!angle.isMixed}
+          />
+        </div>
+      )}
     </>
   );
 }
