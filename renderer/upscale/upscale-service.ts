@@ -13,8 +13,9 @@ import {
   type EncodeProgress,
 } from "#renderer/frame-encoder.ts";
 import type { GifFrame } from "#types/canvas.ts";
-import { createFrameIterator } from "#lib/video-demux.ts";
 import { logger } from "#lib/client.logger.ts";
+import type { VideoDemuxHandle } from "#lib/video-demux.ts";
+import type { DemuxedAudio } from "#lib/audio-demux.ts";
 
 /**
  * WebGPU image upscaling service using Anime4K CNN-2x models.
@@ -192,11 +193,12 @@ export class UpscaleService {
 
     // Async pipeline: demux video + audio → build renderFrame → start encoding
     const pipelinePromise = this.#setupVideoUpscale(source, includeAudio).then(
-      ({ demux, audioData }) => {
+      async ({ demux, audioData }) => {
         if (outerCancelled) {
           demux.dispose();
           throw new Error("Upscale cancelled");
         }
+        const { createFrameIterator } = await import("#lib/video-demux.ts");
 
         const outputWidth = demux.width * 2;
         const outputHeight = demux.height * 2;
@@ -274,8 +276,8 @@ export class UpscaleService {
     source: Blob,
     includeAudio: boolean,
   ): Promise<{
-    demux: import("#lib/video-demux.ts").VideoDemuxHandle;
-    audioData: import("#lib/audio-demux.ts").DemuxedAudio | null;
+    demux: VideoDemuxHandle;
+    audioData: DemuxedAudio | null;
   }> {
     const { demuxVideo } = await import("#lib/video-demux.ts");
     const demux = await demuxVideo(source);

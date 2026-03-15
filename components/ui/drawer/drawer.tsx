@@ -5,7 +5,7 @@ import type {
   DrawerTitleProps,
   DrawerCloseProps,
 } from "@base-ui/react/drawer";
-import { DrawerPreview as BaseDrawer } from "@base-ui/react/drawer";
+import { Drawer as BaseDrawer } from "@base-ui/react/drawer";
 import clsx from "clsx";
 import "./drawer.css";
 
