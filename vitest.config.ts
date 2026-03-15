@@ -5,6 +5,7 @@ import babel from "@rolldown/plugin-babel";
 export default defineConfig({
   plugins: [
     react(),
+    // @ts-expect-error something is off with the types here
     babel({
       presets: [reactCompilerPreset()],
     }),
