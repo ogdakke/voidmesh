@@ -1,5 +1,6 @@
 .desktop-time-slider {
   padding: 0;
+  margin-block-end: 8px;
 }
 
 .desktop-time-slider__label {
