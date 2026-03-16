@@ -3,6 +3,10 @@ import halftoneShaderSource from "../halftone.wgsl?raw";
 import { ShaderPass } from "./shader-pass.ts";
 
 export class HalftoneShader extends ShaderPass {
+  override supportsDepth(): boolean {
+    return true;
+  }
+
   getShaderSource(): string {
     return halftoneShaderSource;
   }

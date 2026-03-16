@@ -14,13 +14,15 @@ struct Uniforms {
   paletteCount: u32,       // Number of colors in palette (offset 64)
   _pad0: u32,              // Padding for alignment (offset 68)
   is_p3: u32,              // 1 = Display P3, 0 = sRGB (offset 72)
-  _pad2: u32,              // Padding for alignment (offset 76)
+  hasDepth: u32,              // Padding for alignment (offset 76)
   palette: array<vec4f, 16>, // Color palette (offset 80, 256 bytes)
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var sourceTexture: texture_2d<f32>;
 @group(0) @binding(2) var sourceSampler: sampler;
+@group(0) @binding(3) var depthTexture: texture_2d<f32>;
+@group(0) @binding(4) var depthSampler: sampler;
 
 // Calculate brightness using color-space-appropriate luminance coefficients
 fn luminance(c: vec3f) -> f32 {
@@ -111,13 +113,23 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
     // Calculate brightness
     let luma = luminance(sourceColor.rgb);
 
-    // Calculate how far this cell's shape drips down
-    let offY = luma * uniforms.cellSize * 2.0 * uniforms.intensity;
+    // Depth modulation: sample depth unconditionally (uniform control flow)
+    // hasDepth packing: bit 0 = enabled, bit 1 = invert, bits 16-31 = influence
+    let rawDepth = textureSample(depthTexture, depthSampler, clampedUV).r;
+    let depthEnabled = (uniforms.hasDepth & 1u) == 1u;
+    let depthInvert = (uniforms.hasDepth & 2u) != 0u;
+    let depthInfluence = f32(uniforms.hasDepth >> 16u) / 65535.0;
+    let meltDepth = select(rawDepth, 1.0 - rawDepth, depthInvert);
+    let depthMod = mix(0.4, 1.6, meltDepth);
+    let depthScale = select(1.0, mix(1.0, depthMod, depthInfluence), depthEnabled);
+
+    // Calculate how far this cell's shape drips down (depth modulates drip distance)
+    let offY = luma * uniforms.cellSize * 2.0 * uniforms.intensity * depthScale;
     let meltedCenter = vec2f(checkCellCenter.x, checkCellCenter.y + offY);
 
-    // Calculate shape size
+    // Calculate shape size (depth modulates radius)
     let maxRadius = uniforms.cellSize * 0.5;
-    let shapeRadius = luma * maxRadius * uniforms.scale;
+    let shapeRadius = luma * maxRadius * uniforms.scale * depthScale;
 
     // Distance from pixel to melted shape center
     let toCenter = pixelPos - meltedCenter;

@@ -705,6 +705,7 @@ function CanvasContextMenuItems({
         <ScaleFrameEnlarge className="menu-icon-left" />
         Upscale 2×{isMultiple && ` (${selectionCount})`}
       </ContextMenu.Item>
+      {!isMultiple && <DepthMenuItems entityId={contextOpenEntity.id} />}
       <ContextMenu.Separator className="menu-separator" />
       <ContextMenu.Item
         className="menu-item menu-item--icon-left"
@@ -723,5 +724,74 @@ function CanvasContextMenuItems({
         <Keybind keybindId={"delete_entity"} className="menu-icon-right" />
       </ContextMenu.Item>
     </>
+  );
+}
+
+function DepthMenuItems({ entityId }: { entityId: string }) {
+  const { estimateDepth, hasDepthMap, clearDepthMap, updateSelectedEntityParams } = useCanvas();
+  const depthInvert = useParamValue("depth.invert", false);
+  const depthShowDepth = useParamValue("depth.showDepth", false);
+  const hasDepth = hasDepthMap(entityId);
+
+  const handleGenerate = async () => {
+    await estimateDepth(entityId);
+  };
+
+  const handleClear = () => {
+    clearDepthMap(entityId);
+  };
+
+  const handleToggleInvert = () => {
+    updateSelectedEntityParams({ depth: { invert: !depthInvert.value } });
+  };
+
+  const handleToggleShowDepth = () => {
+    updateSelectedEntityParams({ depth: { showDepth: !depthShowDepth.value } });
+  };
+
+  return (
+    <ContextMenu.SubmenuRoot>
+      <ContextMenu.SubmenuTrigger className="menu-submenu-trigger">
+        Depth
+        <NavArrowRight />
+      </ContextMenu.SubmenuTrigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Positioner className="menu-positioner" sideOffset={SIDE_OFFSET}>
+          <ContextMenu.Popup className="menu-submenu-popup">
+            {!hasDepth ? (
+              <ContextMenu.Item className="menu-item" onClick={handleGenerate}>
+                Generate Depth Map
+              </ContextMenu.Item>
+            ) : (
+              <>
+                <ContextMenu.Item className="menu-item" onClick={handleClear}>
+                  Clear Depth Map
+                </ContextMenu.Item>
+                <ContextMenu.CheckboxItem
+                  className="menu-checkbox-item"
+                  checked={!!depthInvert.value}
+                  onCheckedChange={handleToggleInvert}
+                >
+                  <ContextMenu.CheckboxItemIndicator className="menu-checkbox-indicator">
+                    <Check />
+                  </ContextMenu.CheckboxItemIndicator>
+                  Invert
+                </ContextMenu.CheckboxItem>
+                <ContextMenu.CheckboxItem
+                  className="menu-checkbox-item"
+                  checked={!!depthShowDepth.value}
+                  onCheckedChange={handleToggleShowDepth}
+                >
+                  <ContextMenu.CheckboxItemIndicator className="menu-checkbox-indicator">
+                    <Check />
+                  </ContextMenu.CheckboxItemIndicator>
+                  Visualize
+                </ContextMenu.CheckboxItem>
+              </>
+            )}
+          </ContextMenu.Popup>
+        </ContextMenu.Positioner>
+      </ContextMenu.Portal>
+    </ContextMenu.SubmenuRoot>
   );
 }

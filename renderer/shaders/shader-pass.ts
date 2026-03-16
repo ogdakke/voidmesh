@@ -29,6 +29,11 @@ export abstract class ShaderPass {
 
   constructor(protected readonly ctx: ShaderContext) {}
 
+  /** Whether this shader uses depth map data. Override to return true for depth-aware shaders. */
+  supportsDepth(): boolean {
+    return false;
+  }
+
   /** Whether this shader needs re-rendering every frame for the given entity (e.g., time-based animation). */
   needsContinuousRender(_entity: ShaderCanvasEntity): boolean {
     return false;
@@ -86,6 +91,10 @@ export abstract class ShaderPass {
     // Color space flag (offset 72 / u[18])
     u[18] = this.ctx.supportsP3 ? 1 : 0;
 
+    // Depth available flag (offset 76 / u[19]) — set by execute(), default 0
+    // This is written here as 0; canvas-renderer sets it to 1 when a depth texture is provided
+    u[19] = 0;
+
     // Palette data (offset 64 bytes / 16 floats)
     const palette = params.palette;
     if (palette && palette.colors.length >= 2) {
@@ -139,27 +148,44 @@ export abstract class ShaderPass {
     }
   }
 
-  /** Create bind group layout. Default: 3 bindings (uniform, texture, sampler). Override for more. */
+  /** Create bind group layout. Default: 3 bindings (uniform, texture, sampler). Adds depth bindings when supportsDepth(). Override for more. */
   protected createBindGroupLayout(): GPUBindGroupLayout {
-    return this.ctx.device.createBindGroupLayout({
-      label: `${this.constructor.name} bind group layout`,
-      entries: [
+    const entries: GPUBindGroupLayoutEntry[] = [
+      {
+        binding: 0,
+        visibility: GPUShaderStage.FRAGMENT,
+        buffer: { type: "uniform" },
+      },
+      {
+        binding: 1,
+        visibility: GPUShaderStage.FRAGMENT,
+        texture: { sampleType: "float" },
+      },
+      {
+        binding: 2,
+        visibility: GPUShaderStage.FRAGMENT,
+        sampler: { type: "filtering" },
+      },
+    ];
+
+    if (this.supportsDepth()) {
+      entries.push(
         {
-          binding: 0,
-          visibility: GPUShaderStage.FRAGMENT,
-          buffer: { type: "uniform" },
-        },
-        {
-          binding: 1,
+          binding: 3,
           visibility: GPUShaderStage.FRAGMENT,
           texture: { sampleType: "float" },
         },
         {
-          binding: 2,
+          binding: 4,
           visibility: GPUShaderStage.FRAGMENT,
           sampler: { type: "filtering" },
         },
-      ],
+      );
+    }
+
+    return this.ctx.device.createBindGroupLayout({
+      label: `${this.constructor.name} bind group layout`,
+      entries,
     });
   }
 
@@ -189,15 +215,27 @@ export abstract class ShaderPass {
   }
 
   /** Create bind group for a source texture. Override for extra bindings (ASCII). */
-  createBindGroup(sourceTextureView: GPUTextureView): GPUBindGroup {
+  createBindGroup(
+    sourceTextureView: GPUTextureView,
+    depthTextureView?: GPUTextureView,
+  ): GPUBindGroup {
+    const entries: GPUBindGroupEntry[] = [
+      { binding: 0, resource: { buffer: this.ctx.uniformBuffer } },
+      { binding: 1, resource: sourceTextureView },
+      { binding: 2, resource: this.ctx.sampler },
+    ];
+
+    if (this.supportsDepth() && depthTextureView) {
+      entries.push(
+        { binding: 3, resource: depthTextureView },
+        { binding: 4, resource: this.ctx.sampler },
+      );
+    }
+
     return this.ctx.device.createBindGroup({
       label: `${this.constructor.name} bind group`,
       layout: this.bindGroupLayout!,
-      entries: [
-        { binding: 0, resource: { buffer: this.ctx.uniformBuffer } },
-        { binding: 1, resource: sourceTextureView },
-        { binding: 2, resource: this.ctx.sampler },
-      ],
+      entries,
     });
   }
 
@@ -205,13 +243,29 @@ export abstract class ShaderPass {
    * Execute this shader pass: write uniforms, create bind group, submit render pass.
    * Override for compute shaders (DitheringShader) or error handling (AsciiShader).
    */
-  execute(entity: ShaderCanvasEntity, sourceTexture: GPUTexture, outputTexture: GPUTexture): void {
+  execute(
+    entity: ShaderCanvasEntity,
+    sourceTexture: GPUTexture,
+    outputTexture: GPUTexture,
+    depthTexture?: GPUTexture,
+  ): void {
     if (!this.pipeline) return;
 
     this.writeUniforms(entity);
+
+    // Pack depth params into u[19] after writeUniforms (which defaults it to 0)
+    // Bit layout: bit 0 = hasDepth, bit 1 = invert, bits 16-31 = influence (0-65535 → 0.0-1.0)
+    if (this.supportsDepth() && depthTexture) {
+      const depth = entity.shaderParams.depth;
+      const influence = depth?.influence ?? 1.0;
+      const invert = depth?.invert ?? false;
+      this.ctx.uintView[19] = 1 | (invert ? 2 : 0) | (Math.round(influence * 65535) << 16);
+    }
+
     this.ctx.device.queue.writeBuffer(this.ctx.uniformBuffer, 0, this.ctx.uniformData);
 
-    const bindGroup = this.createBindGroup(sourceTexture.createView());
+    const depthView = this.supportsDepth() && depthTexture ? depthTexture.createView() : undefined;
+    const bindGroup = this.createBindGroup(sourceTexture.createView(), depthView);
 
     const encoder = this.ctx.device.createCommandEncoder({
       label: `${this.constructor.name} encoder`,

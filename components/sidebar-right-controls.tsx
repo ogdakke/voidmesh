@@ -26,6 +26,7 @@ import { ShapeKnobs } from "./shape-knobs.tsx";
 import { DesktopExportKnobs } from "./export-knobs/export-knobs.desktop.tsx";
 import { ExportQueuePanel } from "./export-queue-panel.tsx";
 import { UpscaleQueuePanel } from "./upscale-queue-panel.tsx";
+import { DepthKnobs } from "./depth-knobs.tsx";
 import { DesktopTimeSlider } from "./desktop-time-slider/desktop-time-slider.tsx";
 import { undo } from "#lib/undo.ts";
 import { config } from "#config";
@@ -154,6 +155,16 @@ export const SidebarRightControls = ({ className, compact }: SidebarRightControl
                   <EffectParams />
 
                   <EntityParams />
+                </CollapsibleContent>
+              </Collapsible>
+              <hr className="divider" />
+              <Collapsible>
+                <CollapsibleTrigger className="sidebar-collapsible-trigger">
+                  <NavArrowRight className="collapsible-icon" />
+                  Depth
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <DepthKnobs />
                 </CollapsibleContent>
               </Collapsible>
               <hr className="divider" />

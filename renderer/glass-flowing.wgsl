@@ -15,13 +15,15 @@ struct Uniforms {
   paletteCount: u32,       // Unused (offset 64)
   _pad0: u32,
   _pad1: u32,
-  _pad2: u32,
+  hasDepth: u32,
   palette: array<vec4f, 16>,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var sourceTexture: texture_2d<f32>;
 @group(0) @binding(2) var sourceSampler: sampler;
+@group(0) @binding(3) var depthTexture: texture_2d<f32>;
+@group(0) @binding(4) var depthSampler: sampler;
 
 const PI: f32 = 3.14159265;
 const TAU: f32 = 6.28318530;
@@ -167,7 +169,17 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   // --- Step 2: Edge-sharpened refraction displacement ---
   // Apply tanh to the gradient magnitude: compresses gentle slopes, sharpens
   // the transition at wave edges where glass bends light most dramatically.
-  let refractionScale = uniforms.intensity * 0.015;
+  // Depth modulation: sample depth unconditionally (uniform control flow)
+  // hasDepth packing: bit 0 = enabled, bit 1 = invert, bits 16-31 = influence
+  let rawDepth = textureSample(depthTexture, depthSampler, uv).r;
+  let depthEnabled = (uniforms.hasDepth & 1u) == 1u;
+  let depthInvert = (uniforms.hasDepth & 2u) != 0u;
+  let depthInfluence = f32(uniforms.hasDepth >> 16u) / 65535.0;
+  let flowingDepth = select(rawDepth, 1.0 - rawDepth, depthInvert);
+  let depthMod = mix(0.4, 1.6, flowingDepth);
+  let depthScale = select(1.0, mix(1.0, depthMod, depthInfluence), depthEnabled);
+
+  let refractionScale = uniforms.intensity * 0.015 * depthScale;
   let gradMag = length(vec2f(grad_x, grad_y));
   let gradDir = select(vec2f(0.0), vec2f(grad_x, grad_y) / gradMag, gradMag > 1e-6);
   let normFactor = max(freq * amplitude, 0.001);

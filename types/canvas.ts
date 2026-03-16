@@ -343,6 +343,18 @@ export interface ShaderParams {
   time?: number;
   /** Whether time auto-increments during rendering. Per-entity. */
   timeAutoPlay?: boolean;
+  /** Depth estimation parameters */
+  depth?: DepthParams;
+}
+
+/** Parameters for depth-aware effects */
+export interface DepthParams {
+  /** How much depth modulates shader effect (0 = none, 1 = full) */
+  influence: number;
+  /** Invert depth mapping (swap near/far) */
+  invert: boolean;
+  /** Show raw depth map as grayscale overlay (for debugging/visualization) */
+  showDepth?: boolean;
 }
 
 export type ParamPaths = Paths<ShaderParams>;

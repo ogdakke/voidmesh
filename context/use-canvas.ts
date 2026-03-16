@@ -91,6 +91,11 @@ export interface CanvasContextValue {
     value: DebugType | ((old: DebugType | null) => DebugType | null) | null,
     options?: Options,
   ) => Promise<URLSearchParams>;
+
+  // Depth estimation
+  estimateDepth: (entityId: string) => Promise<void>;
+  hasDepthMap: (entityId: string) => boolean;
+  clearDepthMap: (entityId: string) => void;
 }
 
 export const CanvasContext = createContext<CanvasContextValue | null>(null);

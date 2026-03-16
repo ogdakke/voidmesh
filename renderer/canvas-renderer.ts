@@ -39,6 +39,7 @@ import type { ShaderContext } from "./shaders/shader-pass.ts";
 import { ShaderRegistry } from "./shaders/shader-registry.ts";
 import { TexturePool } from "./texture-pool.ts";
 import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
+import { DepthService } from "./depth/depth-service.ts";
 
 export class InfiniteCanvasRenderer {
   readonly canvas: HTMLCanvasElement;
@@ -97,6 +98,11 @@ export class InfiniteCanvasRenderer {
       height: number;
     }
   > = new Map();
+
+  // Depth estimation
+  #depthService: DepthService | null = null;
+  #entityDepthTextures: Map<string, GPUTexture> = new Map();
+  #fallbackDepthTexture: GPUTexture | null = null;
 
   // Entity composition cache (uniform buffers, bind groups, texture views)
   // These are invalidated when entity texture changes
@@ -550,6 +556,20 @@ export class InfiniteCanvasRenderer {
       addressModeU: "clamp-to-edge",
       addressModeV: "clamp-to-edge",
     });
+
+    // 1x1 mid-gray fallback depth texture (used when no depth map is available)
+    this.#fallbackDepthTexture = this.#device.createTexture({
+      label: "Fallback depth texture (1x1 mid-gray)",
+      size: [1, 1],
+      format: "r8unorm",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    this.#device.queue.writeTexture(
+      { texture: this.#fallbackDepthTexture },
+      new Uint8Array([128]),
+      { bytesPerRow: 1 },
+      [1, 1],
+    );
   }
 
   #createSelectionRectPipeline(): void {
@@ -908,8 +928,17 @@ export class InfiniteCanvasRenderer {
       mainShaderOutputTexture = postProcessIntermediateTexture;
     }
 
-    // Apply shader via registry (all 6 shader types are registered)
-    this.#shaderRegistry!.applyShader(entity, shaderSourceTexture, mainShaderOutputTexture);
+    // Look up depth texture for this entity (fallback to 1x1 mid-gray)
+    const depthTexture =
+      this.#entityDepthTextures.get(entity.id) ?? this.#fallbackDepthTexture ?? undefined;
+
+    // Apply shader via registry (all 7 shader types are registered)
+    this.#shaderRegistry!.applyShader(
+      entity,
+      shaderSourceTexture,
+      mainShaderOutputTexture,
+      depthTexture,
+    );
 
     // Release pre-processing output textures back to pool (if used)
     if (blurOutputTexture) {
@@ -1225,6 +1254,17 @@ export class InfiniteCanvasRenderer {
         format: this.#colorConfig.intermediateFormat,
         usage: outputUsage,
       });
+    }
+
+    // If showDepth is enabled and we have a depth map, render depth as grayscale.
+    // Uses CopyPass like showOriginal — depth texture (rgba8unorm) → output (rgba16float).
+    if (entity.shaderParams.depth?.showDepth) {
+      const depthTex = this.#entityDepthTextures.get(entity.id);
+      if (depthTex) {
+        this.#passthroughCopyPass!.execute(depthTex, outputTexture);
+        this.#entityTextures.set(entity.id, outputTexture);
+        return outputTexture;
+      }
     }
 
     // If showOriginal is enabled, bypass shader processing and blit source directly.
@@ -1675,6 +1715,13 @@ export class InfiniteCanvasRenderer {
       this.#entitySourceTextures.delete(entityId);
     }
 
+    // Remove depth texture
+    const depthTexture = this.#entityDepthTextures.get(entityId);
+    if (depthTexture) {
+      depthTexture.destroy();
+      this.#entityDepthTextures.delete(entityId);
+    }
+
     // Remove composition cache (uniform buffer, bind group, texture view)
     const cached = this.#entityCompositionCache.get(entityId);
     if (cached) {
@@ -1873,6 +1920,69 @@ export class InfiniteCanvasRenderer {
     return entity.shaderParams.timeAutoPlay !== false;
   }
 
+  // ── Depth estimation ──────────────────────────────────────────────
+
+  /** Whether a depth map exists for an entity. */
+  hasDepthMap(entityId: string): boolean {
+    return this.#entityDepthTextures.has(entityId);
+  }
+
+  /** Remove depth map for an entity, freeing GPU memory. */
+  clearDepthMap(entityId: string): void {
+    const texture = this.#entityDepthTextures.get(entityId);
+    if (texture) {
+      texture.destroy();
+      this.#entityDepthTextures.delete(entityId);
+    }
+  }
+
+  /**
+   * Generate a depth map for an entity from its source image.
+   * The depth map is stored as a GPU texture and used by depth-aware shaders.
+   */
+  async estimateDepth(entityId: string, source: ImageBitmap): Promise<void> {
+    if (!this.#device) return;
+
+    // Lazy-create depth service
+    if (!this.#depthService) {
+      this.#depthService = new DepthService();
+    }
+
+    try {
+      const depthBitmap = await this.#depthService.estimateDepth(source);
+
+      // Upload depth map to GPU as r8unorm texture
+      const depthTexture = this.#device.createTexture({
+        label: `Depth map for ${entityId}`,
+        size: [depthBitmap.width, depthBitmap.height],
+        format: "rgba8unorm",
+        usage:
+          GPUTextureUsage.TEXTURE_BINDING |
+          GPUTextureUsage.COPY_DST |
+          GPUTextureUsage.RENDER_ATTACHMENT,
+      });
+
+      this.#device.queue.copyExternalImageToTexture(
+        { source: depthBitmap },
+        { texture: depthTexture },
+        [depthBitmap.width, depthBitmap.height],
+      );
+
+      depthBitmap.close();
+
+      // Clean up any existing depth texture for this entity
+      this.clearDepthMap(entityId);
+      this.#entityDepthTextures.set(entityId, depthTexture);
+
+      logger.info(
+        `Depth map generated for entity ${entityId} (${depthTexture.width}x${depthTexture.height})`,
+      );
+    } catch (error) {
+      logger.error("Depth estimation failed:", error);
+      throw error;
+    }
+  }
+
   destroy(): void {
     // Destroy entity textures
     for (const texture of this.#entityTextures.values()) {
@@ -1885,6 +1995,16 @@ export class InfiniteCanvasRenderer {
       cached.texture.destroy();
     }
     this.#entitySourceTextures.clear();
+
+    // Destroy depth textures
+    for (const texture of this.#entityDepthTextures.values()) {
+      texture.destroy();
+    }
+    this.#entityDepthTextures.clear();
+    this.#fallbackDepthTexture?.destroy();
+    this.#fallbackDepthTexture = null;
+    this.#depthService?.destroy();
+    this.#depthService = null;
 
     // Destroy entity composition cache
     for (const cached of this.#entityCompositionCache.values()) {

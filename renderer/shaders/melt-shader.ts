@@ -3,6 +3,10 @@ import meltShaderSource from "../melt.wgsl?raw";
 import { ShaderPass } from "./shader-pass.ts";
 
 export class MeltShader extends ShaderPass {
+  override supportsDepth(): boolean {
+    return true;
+  }
+
   getShaderSource(): string {
     return meltShaderSource;
   }

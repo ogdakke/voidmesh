@@ -25,10 +25,11 @@ export class ShaderRegistry {
     entity: ShaderCanvasEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
+    depthTexture?: GPUTexture,
   ): void {
     const pass = this.#passes.get(entity.shaderType);
     if (!pass) throw new Error(`Shader pass not registered: ${entity.shaderType}`);
-    pass.execute(entity, sourceTexture, outputTexture);
+    pass.execute(entity, sourceTexture, outputTexture, depthTexture);
   }
 
   /**
@@ -45,12 +46,13 @@ export class ShaderRegistry {
     outputTexture: GPUTexture,
     chain: ShaderType[],
     texturePool: TexturePool,
+    depthTexture?: GPUTexture,
   ): void {
     if (chain.length === 0) return;
     if (chain.length === 1) {
       const pass = this.#passes.get(chain[0]!);
       if (!pass) throw new Error(`Shader pass not registered: ${chain[0]}`);
-      pass.execute(entity, sourceTexture, outputTexture);
+      pass.execute(entity, sourceTexture, outputTexture, depthTexture);
       return;
     }
 
@@ -79,7 +81,7 @@ export class ShaderRegistry {
       const isLast = i === chain.length - 1;
       const writeTo = isLast ? outputTexture : pingPong;
 
-      pass.execute(entity, readFrom, writeTo);
+      pass.execute(entity, readFrom, writeTo, depthTexture);
 
       // Next pass reads from what we just wrote
       readFrom = writeTo;

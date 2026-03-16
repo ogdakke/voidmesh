@@ -5,6 +5,10 @@ import glassFrostedSource from "../glass-frosted.wgsl?raw";
 import { ShaderPass } from "./shader-pass.ts";
 
 export class GlassShader extends ShaderPass {
+  override supportsDepth(): boolean {
+    return true;
+  }
+
   #flutedPipeline: GPURenderPipeline | null = null;
   #flowingPipeline: GPURenderPipeline | null = null;
 
@@ -96,16 +100,17 @@ export class GlassShader extends ShaderPass {
     entity: ShaderCanvasEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
+    depthTexture?: GPUTexture,
   ): void {
     const glassKind = entity.shaderParams.glass?.kind ?? GlassKind.frostedVoronoi;
 
     if (glassKind === GlassKind.fluted) {
-      this.#executeFluted(entity, sourceTexture, outputTexture);
+      this.#executeFluted(entity, sourceTexture, outputTexture, depthTexture);
     } else if (glassKind === GlassKind.flowing) {
-      this.#executeFlowing(entity, sourceTexture, outputTexture);
+      this.#executeFlowing(entity, sourceTexture, outputTexture, depthTexture);
     } else {
       // Frosted uses the default pipeline (this.pipeline)
-      super.execute(entity, sourceTexture, outputTexture);
+      super.execute(entity, sourceTexture, outputTexture, depthTexture);
     }
   }
 
@@ -113,13 +118,21 @@ export class GlassShader extends ShaderPass {
     entity: ShaderCanvasEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
+    depthTexture?: GPUTexture,
   ): void {
     if (!this.#flutedPipeline) return;
 
     this.writeUniforms(entity);
+    if (depthTexture) {
+      const depth = entity.shaderParams.depth;
+      const influence = depth?.influence ?? 1.0;
+      const invert = depth?.invert ?? false;
+      this.ctx.uintView[19] = 1 | (invert ? 2 : 0) | (Math.round(influence * 65535) << 16);
+    }
     this.ctx.device.queue.writeBuffer(this.ctx.uniformBuffer, 0, this.ctx.uniformData);
 
-    const bindGroup = this.createBindGroup(sourceTexture.createView());
+    const depthView = depthTexture ? depthTexture.createView() : undefined;
+    const bindGroup = this.createBindGroup(sourceTexture.createView(), depthView);
 
     const encoder = this.ctx.device.createCommandEncoder({
       label: "GlassShader fluted encoder",
@@ -149,13 +162,21 @@ export class GlassShader extends ShaderPass {
     entity: ShaderCanvasEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
+    depthTexture?: GPUTexture,
   ): void {
     if (!this.#flowingPipeline) return;
 
     this.writeUniforms(entity);
+    if (depthTexture) {
+      const depth = entity.shaderParams.depth;
+      const influence = depth?.influence ?? 1.0;
+      const invert = depth?.invert ?? false;
+      this.ctx.uintView[19] = 1 | (invert ? 2 : 0) | (Math.round(influence * 65535) << 16);
+    }
     this.ctx.device.queue.writeBuffer(this.ctx.uniformBuffer, 0, this.ctx.uniformData);
 
-    const bindGroup = this.createBindGroup(sourceTexture.createView());
+    const depthView = depthTexture ? depthTexture.createView() : undefined;
+    const bindGroup = this.createBindGroup(sourceTexture.createView(), depthView);
 
     const encoder = this.ctx.device.createCommandEncoder({
       label: "GlassShader flowing encoder",

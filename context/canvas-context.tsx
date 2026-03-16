@@ -1251,6 +1251,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setRendererState(renderer);
     setColorSpace(renderer.colorConfig.supportsP3 ? ColorSpace.displayP3 : ColorSpace.srgb);
     gameLoop.setRenderer(renderer);
+
+    // Expose renderer for debug depth testing
+    if (import.meta.env.DEV) {
+      (window as unknown as Record<string, unknown>).__renderer = renderer;
+    }
   };
 
   // Export functions
@@ -1359,6 +1364,17 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setRenderStateFromURL,
     applyEffectsToSelection,
     setDebugType,
+    estimateDepth: async (entityId: string) => {
+      const entity = canvasStore.getState().entities.get(entityId);
+      if (!entity || !rendererRef.current) return;
+      await rendererRef.current.estimateDepth(entityId, entity.imageBitmap);
+      canvasStore.updateEntity(entityId, { textureDirty: true });
+    },
+    hasDepthMap: (entityId: string) => rendererRef.current?.hasDepthMap(entityId) ?? false,
+    clearDepthMap: (entityId: string) => {
+      rendererRef.current?.clearDepthMap(entityId);
+      canvasStore.updateEntity(entityId, { textureDirty: true });
+    },
   };
 
   // Expose canvas context to window for dev console debugging

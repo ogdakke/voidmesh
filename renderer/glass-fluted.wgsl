@@ -14,13 +14,15 @@ struct Uniforms {
   paletteCount: u32,       // Unused (offset 64)
   _pad0: u32,
   _pad1: u32,
-  _pad2: u32,
+  hasDepth: u32,
   palette: array<vec4f, 16>,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var sourceTexture: texture_2d<f32>;
 @group(0) @binding(2) var sourceSampler: sampler;
+@group(0) @binding(3) var depthTexture: texture_2d<f32>;
+@group(0) @binding(4) var depthSampler: sampler;
 
 const PI: f32 = 3.14159265;
 const TAU: f32 = 6.28318530;
@@ -72,10 +74,19 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   let edgeSlope = tanh(sharpness * sin(phase));
   let refraction = -edgeSlope * uniforms.intensity * curvature * 0.015;
 
-  // Apply displacement perpendicular to ridges
-  // In rotated space, displacement is along x-axis; rotate back to screen space
-  let dx = refraction * cosA;
-  let dy = refraction * sinA;
+  // Depth modulation: sample depth unconditionally (uniform control flow)
+  // hasDepth packing: bit 0 = enabled, bit 1 = invert, bits 16-31 = influence
+  let rawDepth = textureSample(depthTexture, depthSampler, uv).r;
+  let depthEnabled = (uniforms.hasDepth & 1u) == 1u;
+  let depthInvert = (uniforms.hasDepth & 2u) != 0u;
+  let depthInfluence = f32(uniforms.hasDepth >> 16u) / 65535.0;
+  let flutedDepth = select(rawDepth, 1.0 - rawDepth, depthInvert);
+  let depthMod = mix(0.4, 1.6, flutedDepth);
+  let depthScale = select(1.0, mix(1.0, depthMod, depthInfluence), depthEnabled);
+
+  // Apply displacement perpendicular to ridges (depth modulates refraction)
+  let dx = refraction * cosA * depthScale;
+  let dy = refraction * sinA * depthScale;
 
   // --- Chromatic dispersion (prism RGB splitting) ---
   // Green samples at base displaced UV; red and blue offset symmetrically

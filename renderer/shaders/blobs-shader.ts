@@ -3,6 +3,10 @@ import blobsShaderSource from "../blobs.wgsl?raw";
 import { ShaderPass } from "./shader-pass.ts";
 
 export class BlobsShader extends ShaderPass {
+  override supportsDepth(): boolean {
+    return true;
+  }
+
   getShaderSource(): string {
     return blobsShaderSource;
   }
