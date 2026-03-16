@@ -13,13 +13,15 @@ struct Uniforms {
   paletteCount: u32,       // Number of palette colors (offset 64)
   _pad0: u32,
   is_p3: u32,              // 1 = Display P3, 0 = sRGB (offset 72)
-  _pad2: u32,
+  hasDepth: u32,           // Depth params packed: bit 0=enabled, bit 1=invert, bits 16-31=influence (offset 76)
   palette: array<vec4f, 16>,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var sourceTexture: texture_2d<f32>;
 @group(0) @binding(2) var sourceSampler: sampler;
+@group(0) @binding(3) var depthTexture: texture_2d<f32>;
+@group(0) @binding(4) var depthSampler: sampler;
 
 // ---- Hash functions for pseudo-random patterns ----
 
@@ -72,14 +74,27 @@ fn loadAtUV(uv: vec2f) -> vec4f {
   return textureLoad(sourceTexture, coord, 0);
 }
 
+// ---- Depth modulation ----
+
+fn getDepthScale(uv: vec2f) -> f32 {
+  let rawDepth = textureSample(depthTexture, depthSampler, clamp(uv, vec2f(0.0), vec2f(1.0))).r;
+  let depthEnabled = (uniforms.hasDepth & 1u) == 1u;
+  let depthInvert = (uniforms.hasDepth & 2u) != 0u;
+  let depthInfluence = f32(uniforms.hasDepth >> 16u) / 65535.0;
+  let depth = select(rawDepth, 1.0 - rawDepth, depthInvert);
+  let depthMod = mix(0.4, 1.6, depth);
+  return select(1.0, mix(1.0, depthMod, depthInfluence), depthEnabled);
+}
+
 // ---- Glitch variants ----
 
 fn channelShift(uv: vec2f) -> vec4f {
   let angleRad = uniforms.angle * 3.14159265 / 180.0;
   let dir = vec2f(cos(angleRad), sin(angleRad));
+  let dScale = getDepthScale(uv);
 
-  // Base shift amount scales with intensity and size
-  let baseShift = uniforms.intensity * uniforms.cellSize / uniforms.resolution;
+  // Base shift amount scales with intensity, size, and depth
+  let baseShift = uniforms.intensity * uniforms.cellSize / uniforms.resolution * dScale;
 
   // Per-channel shift directions (static)
   let rShift = baseShift * dir * 1.0;
@@ -98,6 +113,7 @@ fn scanlineDisplace(uv: vec2f) -> vec4f {
   let pixelY = uv.y * uniforms.resolution.y;
   let bandSize = max(uniforms.cellSize, 1.0);
   let bandIndex = floor(pixelY / bandSize);
+  let dScale = getDepthScale(uv);
 
   // Hash per band (static)
   let h = hash21(vec2f(bandIndex, 0.0));
@@ -106,7 +122,7 @@ fn scanlineDisplace(uv: vec2f) -> vec4f {
   let threshold = 1.0 - uniforms.intensity * 0.6;
   let bandActive = step(threshold, h); // 1.0 if h >= threshold, else 0.0
   let strength = select(0.0, (h - threshold) / max(1.0 - threshold, 0.001), h > threshold);
-  let displacement = bandActive * (hash21(vec2f(bandIndex + 100.0, 0.0)) - 0.5) * 2.0 * strength * uniforms.scale * 0.15;
+  let displacement = bandActive * (hash21(vec2f(bandIndex + 100.0, 0.0)) - 0.5) * 2.0 * strength * uniforms.scale * 0.15 * dScale;
 
   // Add subtle per-scanline jitter
   let lineJitter = hash11(bandIndex * 7.31) * 0.002 * uniforms.intensity;
@@ -118,13 +134,14 @@ fn scanlineDisplace(uv: vec2f) -> vec4f {
 fn blockCorrupt(uv: vec2f) -> vec4f {
   let blockSize = max(uniforms.cellSize, 1.0);
   let blockCoord = floor(uv * uniforms.resolution / blockSize);
+  let dScale = getDepthScale(uv);
 
   // Determine if this block is corrupted (static)
   let h = hash31(vec3f(blockCoord, 0.0));
   let corruptThreshold = 1.0 - uniforms.intensity * 0.4;
 
   // Compute displaced UV (always computed, conditionally used via mix)
-  let strength = select(0.0, (h - corruptThreshold) / max(1.0 - corruptThreshold, 0.001), h > corruptThreshold);
+  let strength = select(0.0, (h - corruptThreshold) / max(1.0 - corruptThreshold, 0.001), h > corruptThreshold) * dScale;
   let displaceHash = vec2f(
     hash31(vec3f(blockCoord + 50.0, 0.0)) - 0.5,
     hash31(vec3f(blockCoord + 150.0, 0.0)) - 0.5,
@@ -160,9 +177,10 @@ fn blockCorrupt(uv: vec2f) -> vec4f {
 fn pixelSmear(uv: vec2f) -> vec4f {
   let angleRad = uniforms.angle * 3.14159265 / 180.0;
   let dir = vec2f(cos(angleRad), sin(angleRad));
+  let dScale = getDepthScale(uv);
 
-  // Smear length in UV space
-  let smearLength = uniforms.cellSize * uniforms.scale / uniforms.resolution;
+  // Smear length in UV space (modulated by depth)
+  let smearLength = uniforms.cellSize * uniforms.scale / uniforms.resolution * dScale;
 
   let sourceColor = textureSample(sourceTexture, sourceSampler, uv);
   let sourceLum = luminance(sourceColor.rgb);

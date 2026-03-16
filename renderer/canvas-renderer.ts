@@ -336,7 +336,17 @@ export class InfiniteCanvasRenderer {
     this.#exportService = new ExportService(
       this.#device,
       this.#texturePool,
-      (entity, source, output) => this.#applyShaderToTexture(entity, source, output),
+      (entity, source, output) => {
+        // Handle showDepth visualization in export (depth map rendered as grayscale)
+        if (entity.shaderParams.depth?.showDepth) {
+          const depthTex = this.#entityDepthTextures.get(entity.id);
+          if (depthTex) {
+            this.#passthroughCopyPass!.execute(depthTex, output);
+            return;
+          }
+        }
+        this.#applyShaderToTexture(entity, source, output);
+      },
       this.#colorConfig,
     );
 
@@ -962,6 +972,7 @@ export class InfiniteCanvasRenderer {
         entity,
         postProcessIntermediateTexture,
         outputTexture,
+        depthTexture,
       );
 
       // Release intermediate texture back to pool
@@ -1934,6 +1945,106 @@ export class InfiniteCanvasRenderer {
       texture.destroy();
       this.#entityDepthTextures.delete(entityId);
     }
+  }
+
+  /**
+   * Read a depth texture back to CPU as an ImageBitmap.
+   * Used for serialization and undo of clearDepthMap.
+   */
+  async getDepthTextureBitmap(entityId: string): Promise<ImageBitmap | null> {
+    const texture = this.#entityDepthTextures.get(entityId);
+    if (!texture || !this.#device) return null;
+
+    const width = texture.width;
+    const height = texture.height;
+    const bytesPerRow = Math.ceil((width * 4) / 256) * 256;
+    const bufferSize = bytesPerRow * height;
+
+    const stagingBuffer = this.#device.createBuffer({
+      label: `Depth readback staging ${entityId}`,
+      size: bufferSize,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    });
+
+    const encoder = this.#device.createCommandEncoder({ label: `Depth readback ${entityId}` });
+    encoder.copyTextureToBuffer({ texture }, { buffer: stagingBuffer, bytesPerRow }, [
+      width,
+      height,
+    ]);
+    this.#device.queue.submit([encoder.finish()]);
+
+    await this.#device.queue.onSubmittedWorkDone();
+    await stagingBuffer.mapAsync(GPUMapMode.READ);
+
+    const data = new Uint8ClampedArray(width * height * 4);
+    const src = new Uint8ClampedArray(stagingBuffer.getMappedRange());
+    for (let y = 0; y < height; y++) {
+      const srcOffset = y * bytesPerRow;
+      const dstOffset = y * width * 4;
+      data.set(src.subarray(srcOffset, srcOffset + width * 4), dstOffset);
+    }
+
+    stagingBuffer.unmap();
+    stagingBuffer.destroy();
+
+    const imageData = new ImageData(data, width, height);
+    const canvas = new OffscreenCanvas(width, height);
+    const ctx = canvas.getContext("2d")!;
+    ctx.putImageData(imageData, 0, 0);
+    return createImageBitmap(canvas);
+  }
+
+  /**
+   * Clone a depth texture from one entity to another (GPU-side copy).
+   * Used when duplicating entities.
+   */
+  cloneDepthTexture(sourceEntityId: string, targetEntityId: string): void {
+    const sourceTexture = this.#entityDepthTextures.get(sourceEntityId);
+    if (!sourceTexture || !this.#device) return;
+
+    const cloned = this.#device.createTexture({
+      label: `Depth map for ${targetEntityId}`,
+      size: [sourceTexture.width, sourceTexture.height],
+      format: sourceTexture.format,
+      usage: sourceTexture.usage,
+    });
+
+    const encoder = this.#device.createCommandEncoder({ label: `Clone depth ${targetEntityId}` });
+    encoder.copyTextureToTexture({ texture: sourceTexture }, { texture: cloned }, [
+      sourceTexture.width,
+      sourceTexture.height,
+    ]);
+    this.#device.queue.submit([encoder.finish()]);
+
+    this.#entityDepthTextures.set(targetEntityId, cloned);
+  }
+
+  /**
+   * Upload a depth ImageBitmap as a GPU texture for an entity.
+   * Used for deserialization and undo of clearDepthMap.
+   */
+  uploadDepthBitmap(entityId: string, bitmap: ImageBitmap): void {
+    if (!this.#device) return;
+
+    // Clean up any existing depth texture
+    this.clearDepthMap(entityId);
+
+    const depthTexture = this.#device.createTexture({
+      label: `Depth map for ${entityId}`,
+      size: [bitmap.width, bitmap.height],
+      format: "rgba8unorm",
+      usage:
+        GPUTextureUsage.TEXTURE_BINDING |
+        GPUTextureUsage.COPY_DST |
+        GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+
+    this.#device.queue.copyExternalImageToTexture({ source: bitmap }, { texture: depthTexture }, [
+      bitmap.width,
+      bitmap.height,
+    ]);
+
+    this.#entityDepthTextures.set(entityId, depthTexture);
   }
 
   /**

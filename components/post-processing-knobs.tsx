@@ -33,6 +33,9 @@ export function PostProcessingKnobs() {
 
       {/* Chromatic Aberration Section */}
       <ChromaticAberrationKnobs />
+
+      {/* Depth of Field Section */}
+      <DepthOfFieldKnobs />
     </>
   );
 }
@@ -168,6 +171,115 @@ function ChromaticAberrationKnobs() {
             onInteractionStart={() => undo.beginTransaction()}
             onValueCommitted={() => undo.commitTransaction()}
             showValue={!chromaticOffset.isMixed}
+          />
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+function DepthOfFieldKnobs() {
+  const { updateSelectedEntityParams } = useCanvas();
+  const dofEnabled = useParamValue(
+    "postProcess.depthOfField.enabled",
+    ppDefaults.depthOfField.enabled,
+  );
+  const focalDepth = useParamValue(
+    "postProcess.depthOfField.focalDepth",
+    ppDefaults.depthOfField.focalDepth,
+  );
+  const focalRange = useParamValue(
+    "postProcess.depthOfField.focalRange",
+    ppDefaults.depthOfField.focalRange,
+  );
+  const blurStrength = useParamValue(
+    "postProcess.depthOfField.blurStrength",
+    ppDefaults.depthOfField.blurStrength,
+  );
+
+  function handleDofEnabledChange(e: ChangeEvent<HTMLInputElement>) {
+    updateSelectedEntityParams({
+      postProcess: { depthOfField: { enabled: e.target.checked } },
+    });
+  }
+
+  function handleFocalDepthChange(value: number | number[]) {
+    const val = Array.isArray(value) ? value[0] : value;
+    if (val !== undefined)
+      updateSelectedEntityParams({ postProcess: { depthOfField: { focalDepth: val } } });
+  }
+
+  function handleFocalRangeChange(value: number | number[]) {
+    const val = Array.isArray(value) ? value[0] : value;
+    if (val !== undefined)
+      updateSelectedEntityParams({ postProcess: { depthOfField: { focalRange: val } } });
+  }
+
+  function handleBlurStrengthChange(value: number | number[]) {
+    const val = Array.isArray(value) ? value[0] : value;
+    if (val !== undefined)
+      updateSelectedEntityParams({ postProcess: { depthOfField: { blurStrength: val } } });
+  }
+
+  return (
+    <Collapsible
+      className="collapsible-depth-1"
+      key={`dof-${!!dofEnabled.value}`}
+      defaultOpen={!!dofEnabled.value}
+    >
+      <CollapsibleGroup>
+        <CollapsibleTrigger>
+          <NavArrowRight />
+          Depth of Field{dofEnabled.isMixed ? " (Mixed)" : ""}
+        </CollapsibleTrigger>
+        <CollapsibleCheckbox
+          checked={dofEnabled.value}
+          indeterminate={dofEnabled.isMixed}
+          onChange={handleDofEnabledChange}
+          aria-label="Enable depth of field effect"
+        />
+      </CollapsibleGroup>
+      <CollapsibleContent>
+        <div className="sidebar-row">
+          <Slider
+            name="dof-focal-depth"
+            label={focalDepth.isMixed ? "Focus (Mixed)" : "Focus"}
+            min={config.postProcessing.depthOfField.focalDepth.min}
+            max={config.postProcessing.depthOfField.focalDepth.max}
+            step={config.postProcessing.depthOfField.focalDepth.step}
+            value={focalDepth.value}
+            onValueChange={handleFocalDepthChange}
+            onInteractionStart={() => undo.beginTransaction()}
+            onValueCommitted={() => undo.commitTransaction()}
+            showValue={!focalDepth.isMixed}
+          />
+        </div>
+        <div className="sidebar-row">
+          <Slider
+            name="dof-focal-range"
+            label={focalRange.isMixed ? "Range (Mixed)" : "Range"}
+            min={config.postProcessing.depthOfField.focalRange.min}
+            max={config.postProcessing.depthOfField.focalRange.max}
+            step={config.postProcessing.depthOfField.focalRange.step}
+            value={focalRange.value}
+            onValueChange={handleFocalRangeChange}
+            onInteractionStart={() => undo.beginTransaction()}
+            onValueCommitted={() => undo.commitTransaction()}
+            showValue={!focalRange.isMixed}
+          />
+        </div>
+        <div className="sidebar-row">
+          <Slider
+            name="dof-blur-strength"
+            label={blurStrength.isMixed ? "Strength (Mixed)" : "Strength"}
+            min={config.postProcessing.depthOfField.blurStrength.min}
+            max={config.postProcessing.depthOfField.blurStrength.max}
+            step={config.postProcessing.depthOfField.blurStrength.step}
+            value={blurStrength.value}
+            onValueChange={handleBlurStrengthChange}
+            onInteractionStart={() => undo.beginTransaction()}
+            onValueCommitted={() => undo.commitTransaction()}
+            showValue={!blurStrength.isMixed}
           />
         </div>
       </CollapsibleContent>

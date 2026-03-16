@@ -74,9 +74,24 @@ export async function deserialize(source: Blob | ArrayBuffer): Promise<Deseriali
 
   // 4. Decode all entities BEFORE clearing canvas (so we don't destroy existing
   //    state if decoding fails entirely)
+  const depthBitmaps = new Map<string, ImageBitmap>();
   const entityPromises = doc.entities.map(async (serialized) => {
     try {
-      return await deserializeEntity(serialized, zipEntries, warnings);
+      const entity = await deserializeEntity(serialized, zipEntries, warnings);
+
+      // Load depth map if present in archive
+      const depthPath = `depth/${serialized.id}.png`;
+      const depthBytes = zipEntries[depthPath];
+      if (depthBytes) {
+        try {
+          const depthBitmap = await bytesToImageBitmap(depthBytes);
+          depthBitmaps.set(serialized.id, depthBitmap);
+        } catch {
+          warnings.push(`Entity "${serialized.name}": failed to load depth map`);
+        }
+      }
+
+      return entity;
     } catch (err) {
       errors.push({
         entityId: serialized.id,
@@ -134,6 +149,7 @@ export async function deserialize(source: Blob | ArrayBuffer): Promise<Deseriali
     entityCount: validEntities.length,
     warnings,
     errors,
+    depthBitmaps: depthBitmaps.size > 0 ? depthBitmaps : undefined,
   };
 }
 

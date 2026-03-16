@@ -90,6 +90,19 @@ export class ProcessingPipeline {
     }
   > = new Map();
 
+  // Depth-of-field mip chain textures (cached per entity dimensions)
+  #dofMipChainCache: Map<
+    string,
+    {
+      textures: GPUTexture[];
+      width: number;
+      height: number;
+    }
+  > = new Map();
+  // Fallback 1x1 textures for when DoF is disabled (depth + blur placeholders)
+  #fallbackDepthTexture: GPUTexture | null = null;
+  #fallbackDofBlurTexture: GPUTexture | null = null;
+
   constructor(device: GPUDevice, intermediateFormat: GPUTextureFormat, supportsP3: boolean) {
     this.#device = device;
     this.#intermediateFormat = intermediateFormat;
@@ -384,7 +397,33 @@ export class ProcessingPipeline {
           visibility: GPUShaderStage.FRAGMENT,
           texture: { sampleType: "float" },
         },
+        {
+          // Depth texture (for depth-of-field)
+          binding: 4,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: "float" },
+        },
+        {
+          // DoF blur texture (pre-computed Kawase blur of source)
+          binding: 5,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: "float" },
+        },
       ],
+    });
+
+    // Create 1x1 fallback textures for when DoF is disabled
+    this.#fallbackDepthTexture = this.#device.createTexture({
+      label: "Fallback depth texture (post-process)",
+      size: [1, 1],
+      format: this.#intermediateFormat,
+      usage: GPUTextureUsage.TEXTURE_BINDING,
+    });
+    this.#fallbackDofBlurTexture = this.#device.createTexture({
+      label: "Fallback DoF blur texture",
+      size: [1, 1],
+      format: this.#intermediateFormat,
+      usage: GPUTextureUsage.TEXTURE_BINDING,
     });
 
     this.#postProcessUniformBuffer = this.#device.createBuffer({
@@ -618,6 +657,229 @@ export class ProcessingPipeline {
 
     this.#bloomMipChainCache.set(key, { textures, width, height });
     return textures;
+  }
+
+  /** Number of Kawase blur levels for depth-of-field */
+  static readonly #DOF_BLUR_LEVELS = 4;
+
+  /**
+   * Get or create DoF mip chain textures for given dimensions.
+   */
+  #getOrCreateDofMipChain(width: number, height: number): GPUTexture[] {
+    const key = `${width}x${height}`;
+    const cached = this.#dofMipChainCache.get(key);
+    if (cached) return cached.textures;
+
+    const textures: GPUTexture[] = [];
+    let mipWidth = Math.floor(width / 2);
+    let mipHeight = Math.floor(height / 2);
+
+    for (let i = 0; i < ProcessingPipeline.#DOF_BLUR_LEVELS; i++) {
+      mipWidth = Math.max(1, mipWidth);
+      mipHeight = Math.max(1, mipHeight);
+
+      const texture = this.#device.createTexture({
+        label: `DoF mip ${i} (${mipWidth}x${mipHeight})`,
+        size: [mipWidth, mipHeight],
+        format: this.#intermediateFormat,
+        usage:
+          GPUTextureUsage.TEXTURE_BINDING |
+          GPUTextureUsage.RENDER_ATTACHMENT |
+          GPUTextureUsage.COPY_SRC,
+      });
+
+      textures.push(texture);
+      mipWidth = Math.floor(mipWidth / 2);
+      mipHeight = Math.floor(mipHeight / 2);
+    }
+
+    this.#dofMipChainCache.set(key, { textures, width, height });
+    return textures;
+  }
+
+  /**
+   * Render DoF blur using Kawase downsample/upsample.
+   * Returns the blurred texture at full resolution.
+   */
+  #renderDofBlur(sourceTexture: GPUTexture, width: number, height: number): GPUTexture | null {
+    if (
+      !this.#blurDownsamplePipeline ||
+      !this.#blurUpsamplePipeline ||
+      !this.#blurDownsampleBindGroupLayout ||
+      !this.#blurUpsampleBindGroupLayout ||
+      !this.#blurSampler
+    ) {
+      return null;
+    }
+
+    const levels = ProcessingPipeline.#DOF_BLUR_LEVELS;
+    const mipChain = this.#getOrCreateDofMipChain(width, height);
+    if (mipChain.length === 0) return null;
+
+    const offset = 0.3; // Fixed Kawase offset for DoF blur
+
+    // Write downsample uniforms
+    let srcWidth = width;
+    let srcHeight = height;
+    for (let i = 0; i < levels; i++) {
+      const uniformData = new ArrayBuffer(config.rendering.blurUniformSize);
+      const floatView = new Float32Array(uniformData);
+      floatView[0] = srcWidth;
+      floatView[1] = srcHeight;
+      floatView[2] = offset;
+      floatView[3] = 0;
+
+      this.#device.queue.writeBuffer(this.#blurDownsampleUniformBuffers[i]!, 0, uniformData);
+
+      srcWidth = Math.max(1, Math.floor(srcWidth / 2));
+      srcHeight = Math.max(1, Math.floor(srcHeight / 2));
+    }
+
+    // Write upsample uniforms
+    let bufIdx = 0;
+    for (let i = levels - 1; i > 0; i--) {
+      const dstMip = mipChain[i - 1]!;
+      const uniformData = new ArrayBuffer(config.rendering.blurUniformSize);
+      const floatView = new Float32Array(uniformData);
+      floatView[0] = dstMip.width;
+      floatView[1] = dstMip.height;
+      floatView[2] = offset;
+      floatView[3] = 0;
+
+      this.#device.queue.writeBuffer(this.#blurUpsampleUniformBuffers[bufIdx]!, 0, uniformData);
+      bufIdx++;
+    }
+
+    // Final upsample: mip[0] -> full resolution output
+    // We need a full-res texture for the final upsample target
+    const dofOutputTexture = this.#device.createTexture({
+      label: "DoF blur output",
+      size: [width, height],
+      format: this.#intermediateFormat,
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+
+    {
+      const uniformData = new ArrayBuffer(config.rendering.blurUniformSize);
+      const floatView = new Float32Array(uniformData);
+      floatView[0] = width;
+      floatView[1] = height;
+      floatView[2] = offset;
+      floatView[3] = 0;
+
+      this.#device.queue.writeBuffer(this.#blurUpsampleUniformBuffers[bufIdx]!, 0, uniformData);
+    }
+
+    const encoder = this.#device.createCommandEncoder({ label: "DoF blur encoder" });
+
+    // Downsample passes
+    let srcTexture = sourceTexture;
+    for (let i = 0; i < levels; i++) {
+      const dstTexture = mipChain[i]!;
+
+      const bindGroup = this.#device.createBindGroup({
+        label: `DoF downsample bind group level ${i}`,
+        layout: this.#blurDownsampleBindGroupLayout,
+        entries: [
+          { binding: 0, resource: { buffer: this.#blurDownsampleUniformBuffers[i]! } },
+          { binding: 1, resource: srcTexture.createView() },
+          { binding: 2, resource: this.#blurSampler },
+        ],
+      });
+
+      const pass = encoder.beginRenderPass({
+        label: `DoF downsample pass level ${i}`,
+        colorAttachments: [
+          {
+            view: dstTexture.createView(),
+            loadOp: "clear",
+            storeOp: "store",
+            clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          },
+        ],
+      });
+
+      pass.setPipeline(this.#blurDownsamplePipeline);
+      pass.setBindGroup(0, bindGroup);
+      pass.setViewport(0, 0, dstTexture.width, dstTexture.height, 0, 1);
+      pass.draw(3);
+      pass.end();
+
+      srcTexture = dstTexture;
+    }
+
+    // Upsample passes
+    bufIdx = 0;
+    for (let i = levels - 1; i > 0; i--) {
+      const srcMip = mipChain[i]!;
+      const dstMip = mipChain[i - 1]!;
+
+      const bindGroup = this.#device.createBindGroup({
+        label: `DoF upsample bind group level ${i}`,
+        layout: this.#blurUpsampleBindGroupLayout,
+        entries: [
+          { binding: 0, resource: { buffer: this.#blurUpsampleUniformBuffers[bufIdx]! } },
+          { binding: 1, resource: srcMip.createView() },
+          { binding: 2, resource: this.#blurSampler },
+        ],
+      });
+
+      const pass = encoder.beginRenderPass({
+        label: `DoF upsample pass level ${i}`,
+        colorAttachments: [
+          {
+            view: dstMip.createView(),
+            loadOp: "clear",
+            storeOp: "store",
+            clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          },
+        ],
+      });
+
+      pass.setPipeline(this.#blurUpsamplePipeline);
+      pass.setBindGroup(0, bindGroup);
+      pass.setViewport(0, 0, dstMip.width, dstMip.height, 0, 1);
+      pass.draw(3);
+      pass.end();
+
+      bufIdx++;
+    }
+
+    // Final upsample: mip[0] -> full resolution output
+    {
+      const srcMip = mipChain[0]!;
+      const bindGroup = this.#device.createBindGroup({
+        label: "DoF final upsample bind group",
+        layout: this.#blurUpsampleBindGroupLayout,
+        entries: [
+          { binding: 0, resource: { buffer: this.#blurUpsampleUniformBuffers[bufIdx]! } },
+          { binding: 1, resource: srcMip.createView() },
+          { binding: 2, resource: this.#blurSampler },
+        ],
+      });
+
+      const pass = encoder.beginRenderPass({
+        label: "DoF final upsample pass",
+        colorAttachments: [
+          {
+            view: dofOutputTexture.createView(),
+            loadOp: "clear",
+            storeOp: "store",
+            clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          },
+        ],
+      });
+
+      pass.setPipeline(this.#blurUpsamplePipeline);
+      pass.setBindGroup(0, bindGroup);
+      pass.setViewport(0, 0, width, height, 0, 1);
+      pass.draw(3);
+      pass.end();
+    }
+
+    this.#device.queue.submit([encoder.finish()]);
+
+    return dofOutputTexture;
   }
 
   /**
@@ -1351,18 +1613,22 @@ export class ProcessingPipeline {
     const bloom = postProcess?.bloom ?? defaults.bloom!;
     const chromaticAberration = postProcess?.chromaticAberration ?? defaults.chromaticAberration!;
 
+    const dofDefaults = defaults.depthOfField!;
+
     // Build enabled flags (check both existence and enabled property)
     let flags = 0;
     if (postProcess?.grain?.enabled) flags |= 1; // FLAG_GRAIN
     if (postProcess?.bloom?.enabled) flags |= 2; // FLAG_BLOOM
     if (postProcess?.chromaticAberration?.enabled) flags |= 4; // FLAG_CHROMATIC
+    if (postProcess?.depthOfField?.enabled) flags |= 8; // FLAG_DOF
 
     const f = this.#postProcessFloatView;
     const u = this.#postProcessUintView;
 
     // Layout: resolution(8) + grain_size(4) + grain_intensity(4) + bloom_threshold(4) +
     //         bloom_intensity(4) + bloom_filter_radius(4) + chromatic_offset(4) +
-    //         enabled_flags(4) + time(4) + padding(24) = 64 bytes
+    //         enabled_flags(4) + time(4) + dof_focal_depth(4) + dof_focal_range(4) +
+    //         dof_blur_strength(4) + padding(12) = 64 bytes
     f[0] = width; // resolution.x
     f[1] = height; // resolution.y
     f[2] = grain.size; // grain_size
@@ -1373,6 +1639,10 @@ export class ProcessingPipeline {
     f[7] = chromaticAberration.offset; // chromatic_offset
     u[8] = flags; // enabled_flags
     f[9] = this.#postProcessTime; // time (for animated grain)
+    // Per-field fallbacks: depthOfField may be a partial object (e.g. { enabled: true } only)
+    f[10] = postProcess?.depthOfField?.focalDepth ?? dofDefaults.focalDepth; // dof_focal_depth
+    f[11] = postProcess?.depthOfField?.focalRange ?? dofDefaults.focalRange; // dof_focal_range
+    f[12] = postProcess?.depthOfField?.blurStrength ?? dofDefaults.blurStrength; // dof_blur_strength
     // Padding fills the rest to 64 bytes
   }
 
@@ -1384,6 +1654,7 @@ export class ProcessingPipeline {
     entity: ShaderCanvasEntity,
     inputTexture: GPUTexture,
     outputTexture: GPUTexture,
+    depthTexture?: GPUTexture,
   ): void {
     if (
       !this.#postProcessPipeline ||
@@ -1414,27 +1685,32 @@ export class ProcessingPipeline {
       );
     }
 
-    // If no bloom texture was generated, create a 1x1 black texture as placeholder
-    // (the shader expects a texture at binding 3)
-    let bloomTextureView: GPUTextureView;
-    if (bloomTexture) {
-      bloomTextureView = bloomTexture.createView();
-    } else {
-      // Use a dummy 1x1 texture (create once and reuse would be better, but this works)
-      const dummyTexture = this.#device.createTexture({
-        label: "Dummy bloom texture",
-        size: [1, 1],
-        format: this.#intermediateFormat,
-        usage: GPUTextureUsage.TEXTURE_BINDING,
-      });
-      bloomTextureView = dummyTexture.createView();
+    // Run DoF blur pipeline if DoF is enabled and depth is available
+    let dofBlurTexture: GPUTexture | null = null;
+    const dofDefaults = defaults.depthOfField!;
+    const dofBlurStrength = postProcess?.depthOfField?.blurStrength ?? dofDefaults.blurStrength;
+    if (postProcess?.depthOfField?.enabled && dofBlurStrength > 0 && depthTexture) {
+      dofBlurTexture = this.#renderDofBlur(inputTexture, width, height);
     }
+
+    // If no bloom texture was generated, use fallback 1x1 texture
+    const bloomTextureView = bloomTexture
+      ? bloomTexture.createView()
+      : this.#fallbackDofBlurTexture!.createView();
+
+    // Depth and DoF blur texture views (fallback to 1x1 when disabled)
+    const depthTextureView = depthTexture
+      ? depthTexture.createView()
+      : this.#fallbackDepthTexture!.createView();
+    const dofBlurTextureView = dofBlurTexture
+      ? dofBlurTexture.createView()
+      : this.#fallbackDofBlurTexture!.createView();
 
     // Update uniforms
     this.#updatePostProcessUniforms(entity);
     this.#device.queue.writeBuffer(this.#postProcessUniformBuffer, 0, this.#postProcessUniformData);
 
-    // Create bind group with bloom texture
+    // Create bind group with all textures
     const bindGroup = this.#device.createBindGroup({
       label: "Post-process bind group",
       layout: this.#postProcessBindGroupLayout,
@@ -1443,6 +1719,8 @@ export class ProcessingPipeline {
         { binding: 1, resource: inputTexture.createView() },
         { binding: 2, resource: this.#postProcessSampler },
         { binding: 3, resource: bloomTextureView },
+        { binding: 4, resource: depthTextureView },
+        { binding: 5, resource: dofBlurTextureView },
       ],
     });
 
@@ -1469,6 +1747,11 @@ export class ProcessingPipeline {
     pass.end();
 
     this.#device.queue.submit([encoder.finish()]);
+
+    // Clean up transient DoF blur texture
+    if (dofBlurTexture) {
+      dofBlurTexture.destroy();
+    }
 
     // Increment time for animated grain
     this.#postProcessTime += 0.016; // ~60fps increment
@@ -1506,6 +1789,20 @@ export class ProcessingPipeline {
       }
     }
     this.#bloomMipChainCache.clear();
+
+    // Destroy DoF mip chain textures
+    for (const cached of this.#dofMipChainCache.values()) {
+      for (const texture of cached.textures) {
+        texture.destroy();
+      }
+    }
+    this.#dofMipChainCache.clear();
+
+    // Destroy fallback textures
+    this.#fallbackDepthTexture?.destroy();
+    this.#fallbackDofBlurTexture?.destroy();
+    this.#fallbackDepthTexture = null;
+    this.#fallbackDofBlurTexture = null;
 
     // Clear pipeline references
     this.#adjustmentsPipeline = null;

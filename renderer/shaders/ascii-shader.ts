@@ -21,6 +21,10 @@ export class AsciiShader extends ShaderPass {
   /** Track reported errors to avoid duplicate notifications */
   #reportedErrors: Set<string> = new Set();
 
+  override supportsDepth(): boolean {
+    return true;
+  }
+
   override getShaderSource(): string {
     return asciiShaderSource;
   }
@@ -76,7 +80,7 @@ export class AsciiShader extends ShaderPass {
     this.ctx.uintView[7] = ASCII_KIND_INDEX[asciiKind];
   }
 
-  /** Override: 5 bindings (adds atlas texture + atlas sampler) */
+  /** Override: 7 bindings (uniform, source, sampler, depth tex/sampler at 3-4, atlas tex/sampler at 5-6) */
   protected override createBindGroupLayout(): GPUBindGroupLayout {
     return this.ctx.device.createBindGroupLayout({
       label: "ASCII shader bind group layout",
@@ -106,12 +110,25 @@ export class AsciiShader extends ShaderPass {
           visibility: GPUShaderStage.FRAGMENT,
           sampler: { type: "filtering" },
         },
+        {
+          binding: 5,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: "float" },
+        },
+        {
+          binding: 6,
+          visibility: GPUShaderStage.FRAGMENT,
+          sampler: { type: "filtering" },
+        },
       ],
     });
   }
 
-  /** Override: includes atlas texture and sampler at bindings 3, 4 */
-  override createBindGroup(sourceTextureView: GPUTextureView): GPUBindGroup {
+  /** Override: depth at bindings 3-4, atlas at bindings 5-6 */
+  override createBindGroup(
+    sourceTextureView: GPUTextureView,
+    depthTextureView?: GPUTextureView,
+  ): GPUBindGroup {
     return this.ctx.device.createBindGroup({
       label: "ASCII shader bind group",
       layout: this.bindGroupLayout!,
@@ -119,8 +136,10 @@ export class AsciiShader extends ShaderPass {
         { binding: 0, resource: { buffer: this.ctx.uniformBuffer } },
         { binding: 1, resource: sourceTextureView },
         { binding: 2, resource: this.ctx.sampler },
-        { binding: 3, resource: this.#atlasTexture!.createView() },
-        { binding: 4, resource: this.#atlasSampler! },
+        { binding: 3, resource: depthTextureView ?? sourceTextureView },
+        { binding: 4, resource: this.ctx.sampler },
+        { binding: 5, resource: this.#atlasTexture!.createView() },
+        { binding: 6, resource: this.#atlasSampler! },
       ],
     });
   }
@@ -129,6 +148,7 @@ export class AsciiShader extends ShaderPass {
     entity: ShaderCanvasEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
+    depthTexture?: GPUTexture,
   ): void {
     if (!this.#atlasTexture || !this.#atlasSampler) {
       const errorMsg = "ASCII atlas not loaded";
@@ -138,7 +158,7 @@ export class AsciiShader extends ShaderPass {
       }
       return;
     }
-    super.execute(entity, sourceTexture, outputTexture);
+    super.execute(entity, sourceTexture, outputTexture, depthTexture);
   }
 
   /** Clear error state for an entity (e.g., when entity is removed) */

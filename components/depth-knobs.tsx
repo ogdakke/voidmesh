@@ -31,8 +31,8 @@ export function DepthKnobs() {
     }
   };
 
-  const handleClearDepth = () => {
-    clearDepthMap(entityId);
+  const handleClearDepth = async () => {
+    await clearDepthMap(entityId);
   };
 
   const handleInfluenceChange = (value: number | number[]) => {

@@ -19,7 +19,7 @@ struct Uniforms {
   paletteCount: u32,       // Number of colors in palette (offset 64)
   asciiInvert: u32,        // Invert brightness mapping (offset 68)
   is_p3: u32,              // 1 = Display P3, 0 = sRGB (offset 72)
-  _pad2: u32,              // Padding for alignment (offset 76)
+  hasDepth: u32,           // Depth params packed: bit 0=enabled, bit 1=invert, bits 16-31=influence (offset 76)
   palette: array<vec4f, 16>, // Color palette (offset 80, 256 bytes)
 }
 
@@ -30,8 +30,10 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var sourceTexture: texture_2d<f32>;
 @group(0) @binding(2) var sourceSampler: sampler;
-@group(0) @binding(3) var atlasTexture: texture_2d<f32>;
-@group(0) @binding(4) var atlasSampler: sampler;
+@group(0) @binding(3) var depthTexture: texture_2d<f32>;
+@group(0) @binding(4) var depthSampler: sampler;
+@group(0) @binding(5) var atlasTexture: texture_2d<f32>;
+@group(0) @binding(6) var atlasSampler: sampler;
 
 // ============================================================================
 // MSDF Atlas Constants
@@ -280,18 +282,28 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   let sampleUV = cellCenter / uniforms.resolution;
   let clampedUV = clamp(sampleUV, vec2f(0.0), vec2f(1.0));
   let sourceColor = textureSample(sourceTexture, sourceSampler, clampedUV);
-  
+
+  // Depth modulation: sample unconditionally (uniform control flow)
+  let rawDepth = textureSample(depthTexture, depthSampler, clampedUV).r;
+  let depthEnabled = (uniforms.hasDepth & 1u) == 1u;
+  let depthInvert = (uniforms.hasDepth & 2u) != 0u;
+  let depthInfluence = f32(uniforms.hasDepth >> 16u) / 65535.0;
+  let depth = select(rawDepth, 1.0 - rawDepth, depthInvert);
+  let depthMod = mix(0.4, 1.6, depth);
+  let depthScale = select(1.0, mix(1.0, depthMod, depthInfluence), depthEnabled);
+
   // Calculate brightness
   let rawBrightness = luminance(sourceColor.rgb);
-  
+
   // Apply intensity curve (higher intensity = more contrast)
   let brightness = pow(rawBrightness, max(uniforms.intensity, 0.01));
-  
-  // Apply invert if enabled
+
+  // Apply invert if enabled, then modulate by depth (closer = denser characters)
   var finalBrightness = brightness;
   if (uniforms.asciiInvert == 1u) {
     finalBrightness = 1.0 - brightness;
   }
+  finalBrightness = clamp(finalBrightness * depthScale, 0.0, 1.0);
   
   // Get the glyph index for this brightness level
   let glyphIndex = getGlyphIndex(finalBrightness);

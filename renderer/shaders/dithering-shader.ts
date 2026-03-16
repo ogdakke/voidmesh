@@ -22,6 +22,10 @@ const DITHERING_KIND_INDEX: Record<DitheringKind, number> = {
 };
 
 export class DitheringShader extends ShaderPass {
+  override supportsDepth(): boolean {
+    return true;
+  }
+
   // Compute pipeline for error diffusion
   #computePipeline: GPUComputePipeline | null = null;
   #computeBindGroupLayout: GPUBindGroupLayout | null = null;
@@ -136,6 +140,7 @@ export class DitheringShader extends ShaderPass {
     entity: ShaderCanvasEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
+    depthTexture?: GPUTexture,
   ): void {
     const ditheringKind = entity.shaderParams.dithering?.kind ?? DitheringKind.bayer4x4;
 
@@ -143,7 +148,7 @@ export class DitheringShader extends ShaderPass {
       this.#executeCompute(entity, sourceTexture, outputTexture);
     } else {
       // Ordered dithering uses the standard fragment shader path
-      super.execute(entity, sourceTexture, outputTexture);
+      super.execute(entity, sourceTexture, outputTexture, depthTexture);
     }
   }
 

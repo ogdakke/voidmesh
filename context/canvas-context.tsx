@@ -162,6 +162,9 @@ const shaderUrlParams = {
     config.defaults.shaderParams.glitch.kind,
   ),
   glitchAngle: parseAsFloat.withDefault(config.defaults.shaderParams.glitch.angle),
+  // Depth params
+  depthInfluence: parseAsFloat.withDefault(config.defaults.shaderParams.depth.influence),
+  depthInvert: parseAsBoolean.withDefault(config.defaults.shaderParams.depth.invert),
 };
 
 /**
@@ -296,6 +299,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         kind: renderState.glitchKind,
         angle: renderState.glitchAngle,
       },
+      depth: {
+        influence: renderState.depthInfluence,
+        invert: renderState.depthInvert,
+      },
       palette: palette ?? config.defaults.shaderParams.palette,
       postProcess,
     };
@@ -348,6 +355,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           asciiInvert: null,
           glitchKind: null,
           glitchAngle: null,
+          depthInfluence: null,
+          depthInvert: null,
         }).catch((e) => logger.error(e));
       }
       return;
@@ -405,6 +414,9 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       asciiInvert: entity.shaderParams.ascii?.invert ?? config.defaults.shaderParams.ascii.invert,
       glitchKind: entity.shaderParams.glitch?.kind ?? config.defaults.shaderParams.glitch.kind,
       glitchAngle: entity.shaderParams.glitch?.angle ?? config.defaults.shaderParams.glitch.angle,
+      depthInfluence:
+        entity.shaderParams.depth?.influence ?? config.defaults.shaderParams.depth.influence,
+      depthInvert: entity.shaderParams.depth?.invert ?? config.defaults.shaderParams.depth.invert,
       preset: paletteParams.preset,
       ppEnabled: pp?.enabled ?? ppDefaults.enabled,
       ppGrainEnabled: pp?.grain?.enabled ?? ppDefaults.grain!.enabled,
@@ -787,6 +799,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
       canvasStore.addEntity(clone);
       newIds.push(id);
+
+      // Clone depth texture if the original entity has one
+      if (rendererRef.current?.hasDepthMap(entity.id)) {
+        rendererRef.current.cloneDepthTexture(entity.id, clone.id);
+      }
 
       const ownerToken = claimResourceOwnership(clone.id);
       undo.add(
@@ -1177,6 +1194,14 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           shaderUrlParams.glitchAngle.parse(parsedParams.glitchAngle ?? "") ??
           config.defaults.shaderParams.glitch.angle,
       },
+      depth: {
+        influence:
+          shaderUrlParams.depthInfluence.parse(parsedParams.depthInfluence ?? "") ??
+          config.defaults.shaderParams.depth.influence,
+        invert:
+          shaderUrlParams.depthInvert.parse(parsedParams.depthInvert ?? "") ??
+          config.defaults.shaderParams.depth.invert,
+      },
       palette: palette ?? config.defaults.shaderParams.palette,
       postProcess,
     };
@@ -1313,7 +1338,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   // Serialization API — lazy-loads the serialization module
   const serializeCanvas = async (): Promise<Blob> => {
     const { serialize } = await import("#lib/serialization/index.ts");
-    return serialize();
+    return serialize({
+      getDepthBitmap: async (entityId) =>
+        rendererRef.current?.getDepthTextureBitmap(entityId) ?? null,
+    });
   };
 
   const deserializeCanvas = async (source: Blob | ArrayBuffer): Promise<DeserializeResult> => {
@@ -1325,6 +1353,15 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     nextIdRef.current = maxId + 1;
     nextZIndexRef.current = maxZIndex + 1;
     nextImageNumberRef.current = result.entityCount + 1;
+
+    // Upload depth bitmaps to renderer
+    if (result.depthBitmaps && rendererRef.current) {
+      for (const [entityId, bitmap] of result.depthBitmaps) {
+        rendererRef.current.uploadDepthBitmap(entityId, bitmap);
+        bitmap.close();
+        canvasStore.updateEntity(entityId, { textureDirty: true });
+      }
+    }
 
     return result;
   };
@@ -1366,14 +1403,57 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setDebugType,
     estimateDepth: async (entityId: string) => {
       const entity = canvasStore.getState().entities.get(entityId);
-      if (!entity || !rendererRef.current) return;
-      await rendererRef.current.estimateDepth(entityId, entity.imageBitmap);
+      const renderer = rendererRef.current;
+      if (!entity || !renderer) return;
+
+      await renderer.estimateDepth(entityId, entity.imageBitmap);
       canvasStore.updateEntity(entityId, { textureDirty: true });
+
+      undo.add(
+        Command.create({
+          undo: () => {
+            renderer.clearDepthMap(entityId);
+            canvasStore.updateEntity(entityId, { textureDirty: true });
+          },
+          execute: async () => {
+            const e = canvasStore.getState().entities.get(entityId);
+            if (e) {
+              await renderer.estimateDepth(entityId, e.imageBitmap);
+              canvasStore.updateEntity(entityId, { textureDirty: true });
+            }
+          },
+          description: `Generate depth map for ${entityId}`,
+        }),
+      );
     },
     hasDepthMap: (entityId: string) => rendererRef.current?.hasDepthMap(entityId) ?? false,
-    clearDepthMap: (entityId: string) => {
-      rendererRef.current?.clearDepthMap(entityId);
+    clearDepthMap: async (entityId: string) => {
+      const renderer = rendererRef.current;
+      if (!renderer) return;
+
+      // Save depth bitmap before clearing so we can restore on undo
+      const savedBitmap = await renderer.getDepthTextureBitmap(entityId);
+      renderer.clearDepthMap(entityId);
       canvasStore.updateEntity(entityId, { textureDirty: true });
+
+      undo.add(
+        Command.create({
+          undo: () => {
+            if (savedBitmap) {
+              renderer.uploadDepthBitmap(entityId, savedBitmap);
+              canvasStore.updateEntity(entityId, { textureDirty: true });
+            }
+          },
+          execute: () => {
+            renderer.clearDepthMap(entityId);
+            canvasStore.updateEntity(entityId, { textureDirty: true });
+          },
+          onEvict: () => {
+            savedBitmap?.close();
+          },
+          description: `Clear depth map for ${entityId}`,
+        }),
+      );
     },
   };
 

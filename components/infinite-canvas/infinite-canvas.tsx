@@ -110,8 +110,16 @@ export function InfiniteCanvas() {
   const textRef = useRef<HTMLSpanElement>(null);
   const perfRef = useRef<HTMLDivElement>(null);
 
-  const { registerRenderer, selectedEntityIds, multiSelectMode, setViewport, setDebugType } =
-    useCanvas();
+  const {
+    registerRenderer,
+    selectedEntityIds,
+    multiSelectMode,
+    setViewport,
+    setDebugType,
+    estimateDepth,
+    clearDepthMap,
+    updateSelectedEntityParams,
+  } = useCanvas();
   const {
     deleteEntity,
     toggleShowOriginal,
@@ -888,6 +896,41 @@ export function InfiniteCanvas() {
       group: "canvas",
       label: "Clear selection",
       action: clearSelectionShortcutHandler,
+    },
+    {
+      id: "generate_depth",
+      bind: (bb) => bb.withShift().and.key("d"),
+      group: "selection",
+      label: "Generate depth map",
+      action: () => {
+        const selected = canvasStore.getSelectedEntities();
+        if (selected.length === 1) estimateDepth(selected[0]!.id);
+      },
+    },
+    {
+      id: "clear_depth",
+      bind: (bb) => bb.withShift().and.withAlt().and.key("d"),
+      group: "selection",
+      label: "Clear depth map",
+      action: () => {
+        const selected = canvasStore.getSelectedEntities();
+        if (selected.length === 1) clearDepthMap(selected[0]!.id);
+      },
+    },
+    {
+      id: "toggle_depth_visualization",
+      bind: (bb) => bb.withAlt().and.key("d"),
+      group: "selection",
+      label: "Toggle depth visualization",
+      action: () => {
+        const selected = canvasStore.getSelectedEntities();
+        if (selected.length === 1) {
+          const entity = selected[0]!;
+          updateSelectedEntityParams({
+            depth: { showDepth: !entity.shaderParams.depth?.showDepth },
+          });
+        }
+      },
     },
   ]);
 

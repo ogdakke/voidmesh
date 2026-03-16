@@ -737,8 +737,8 @@ function DepthMenuItems({ entityId }: { entityId: string }) {
     await estimateDepth(entityId);
   };
 
-  const handleClear = () => {
-    clearDepthMap(entityId);
+  const handleClear = async () => {
+    await clearDepthMap(entityId);
   };
 
   const handleToggleInvert = () => {

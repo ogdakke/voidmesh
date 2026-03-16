@@ -262,7 +262,7 @@ export class ExportService {
         GPUTextureUsage.COPY_DST,
     });
 
-    // Apply shader or passthrough original based on showOriginal toggle
+    // Apply shader or passthrough original/depth based on toggle state
     if (entity.shaderParams.showOriginal) {
       this.#passthroughCopyPass.execute(sourceTexture, outputTexture);
     } else {

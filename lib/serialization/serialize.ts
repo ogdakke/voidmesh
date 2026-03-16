@@ -5,14 +5,20 @@ import { detectVideoExtension, imageBitmapToBytes, videoElementToBytes } from ".
 import type { SerializedEntity, SerializedPlaybackState, StudioManifest } from "./types.ts";
 import { CURRENT_VERSION } from "./version.ts";
 
+export interface SerializeOptions {
+  /** Optional callback to read a depth texture back as an ImageBitmap for an entity */
+  getDepthBitmap?: (entityId: string) => Promise<ImageBitmap | null>;
+}
+
 /**
  * Serialize the current canvas state into a .studio zip archive (Blob).
  *
  * The archive contains:
  *   manifest.json  — viewport + entity metadata
  *   media/         — original media files (images, videos, GIF frames)
+ *   depth/         — depth maps as grayscale PNGs (optional)
  */
-export async function serialize(): Promise<Blob> {
+export async function serialize(options?: SerializeOptions): Promise<Blob> {
   const state = canvasStore.getState();
   const entities = Array.from(state.entities.values());
 
@@ -28,6 +34,16 @@ export async function serialize(): Promise<Blob> {
       const { serialized, mediaEntries } = await serializeEntity(entity);
       serializedEntities.push(serialized);
       Object.assign(zipEntries, mediaEntries);
+
+      // Save depth map if available
+      if (options?.getDepthBitmap) {
+        const depthBitmap = await options.getDepthBitmap(entity.id);
+        if (depthBitmap) {
+          const depthBytes = await imageBitmapToBytes(depthBitmap);
+          depthBitmap.close();
+          zipEntries[`depth/${entity.id}.png`] = depthBytes;
+        }
+      }
     }),
   );
 

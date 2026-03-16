@@ -215,6 +215,18 @@ export interface ChromaticAberrationParams {
   offset: number;
 }
 
+/** Depth-of-field effect parameters */
+export interface DepthOfFieldParams {
+  /** Whether depth-of-field effect is enabled */
+  enabled: boolean;
+  /** Depth value in focus (0 = near, 1 = far, default: 0.5) */
+  focalDepth: number;
+  /** Width of the in-focus zone (0 = razor thin, 1 = full range, default: 0.2) */
+  focalRange: number;
+  /** Maximum blur amount for out-of-focus areas (0 = none, 1 = maximum, default: 0.5) */
+  blurStrength: number;
+}
+
 /** Post-processing effects configuration */
 export interface PostProcessParams {
   /** Master enable for post-processing */
@@ -225,6 +237,8 @@ export interface PostProcessParams {
   bloom?: BloomParams | null;
   /** Chromatic aberration effect (optional) */
   chromaticAberration?: ChromaticAberrationParams | null;
+  /** Depth-of-field effect (optional, requires depth map) */
+  depthOfField?: DepthOfFieldParams | null;
 }
 
 // ============================================================================

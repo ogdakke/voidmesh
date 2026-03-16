@@ -95,7 +95,7 @@ export interface CanvasContextValue {
   // Depth estimation
   estimateDepth: (entityId: string) => Promise<void>;
   hasDepthMap: (entityId: string) => boolean;
-  clearDepthMap: (entityId: string) => void;
+  clearDepthMap: (entityId: string) => Promise<void>;
 }
 
 export const CanvasContext = createContext<CanvasContextValue | null>(null);

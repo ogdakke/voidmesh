@@ -547,6 +547,7 @@ export const config = {
           softness: 0.1,
         },
         chromaticAberration: { enabled: false, offset: 2 },
+        depthOfField: { enabled: false, focalDepth: 0.5, focalRange: 0.2, blurStrength: 0.5 },
       } satisfies PostProcessParams,
       adjustments: {
         brightness: 0.5,
@@ -595,6 +596,11 @@ export const config = {
     },
     chromaticAberration: {
       offset: { min: 0, max: 10, step: 1 },
+    },
+    depthOfField: {
+      focalDepth: { min: 0, max: 1, step: 0.01 },
+      focalRange: { min: 0.01, max: 1, step: 0.01 },
+      blurStrength: { min: 0, max: 1, step: 0.01 },
     },
   },
   adjustments: {

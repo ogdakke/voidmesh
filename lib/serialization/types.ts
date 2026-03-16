@@ -106,6 +106,8 @@ export interface DeserializeResult {
   entityCount: number;
   warnings: string[];
   errors: { entityId: string; entityName: string; error: string }[];
+  /** Depth map bitmaps keyed by entity ID (present if archive contained depth maps) */
+  depthBitmaps?: Map<string, ImageBitmap>;
 }
 
 // ============================================================================

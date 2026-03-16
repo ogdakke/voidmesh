@@ -14,13 +14,15 @@ struct Uniforms {
   paletteCount: u32,       // Number of colors in palette (2-16) (offset 64)
   _pad0: u32,              // Padding for alignment (offset 68)
   is_p3: u32,              // 1 = Display P3, 0 = sRGB (offset 72)
-  _pad2: u32,              // Padding for alignment (offset 76)
+  hasDepth: u32,           // Depth params packed: bit 0=enabled, bit 1=invert, bits 16-31=influence (offset 76)
   palette: array<vec4f, 16>, // Color palette (offset 80, 256 bytes)
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var sourceTexture: texture_2d<f32>;
 @group(0) @binding(2) var sourceSampler: sampler;
+@group(0) @binding(3) var depthTexture: texture_2d<f32>;
+@group(0) @binding(4) var depthSampler: sampler;
 
 // Bayer 2x2 matrix (values 0-3, normalized to 0-1)
 fn bayer2x2(pos: vec2u) -> f32 {
@@ -219,12 +221,23 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   let clampedUV = clamp(sampleUV, vec2f(0.0), vec2f(1.0));
   let sourceColor = textureSample(sourceTexture, sourceSampler, clampedUV);
 
+  // Depth modulation: sample unconditionally (uniform control flow)
+  let rawDepth = textureSample(depthTexture, depthSampler, clampedUV).r;
+  let depthEnabled = (uniforms.hasDepth & 1u) == 1u;
+  let depthInvert = (uniforms.hasDepth & 2u) != 0u;
+  let depthInfluence = f32(uniforms.hasDepth >> 16u) / 65535.0;
+  let depth = select(rawDepth, 1.0 - rawDepth, depthInvert);
+  let depthMod = mix(0.4, 1.6, depth);
+  let depthScale = select(1.0, mix(1.0, depthMod, depthInfluence), depthEnabled);
+
   // Pattern scale: larger scale = larger pattern, smaller scale = finer pattern
   // Scale of 1.0 means 1:1 pixel mapping to pattern
   let patternScale = max(uniforms.scale, 0.1);
 
-  // Get dither threshold for this pixel
-  let threshold = getThreshold(pixelPos, patternScale);
+  // Get dither threshold for this pixel, biased by depth
+  // Near areas (depthScale > 1): lower threshold → more foreground pixels (denser)
+  // Far areas (depthScale < 1): higher threshold → more background pixels (sparser)
+  let threshold = clamp(getThreshold(pixelPos, patternScale) / depthScale, 0.0, 1.0);
 
   var outColor: vec4f;
 

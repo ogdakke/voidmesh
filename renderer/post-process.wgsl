@@ -1,5 +1,6 @@
 // Post-processing effects shader
-// Applies grain, bloom (from pre-computed texture), and chromatic aberration per-entity
+// Applies grain, bloom (from pre-computed texture), chromatic aberration,
+// and depth-of-field (from pre-computed blur + depth texture) per-entity
 
 // Uniform buffer layout (64 bytes, 16-byte aligned)
 struct PostProcessUniforms {
@@ -10,22 +11,27 @@ struct PostProcessUniforms {
   bloom_intensity: f32,        // offset 20 (mix strength, ~0.04 is subtle)
   bloom_filter_radius: f32,    // offset 24 (UV-space radius for upsample filter)
   chromatic_offset: f32,       // offset 28
-  enabled_flags: u32,          // offset 32 (bit0: grain, bit1: bloom, bit2: chromatic aberration)
+  enabled_flags: u32,          // offset 32 (bit0: grain, bit1: bloom, bit2: chromatic, bit3: dof)
   time: f32,                   // offset 36 (for animated grain)
-  _pad0: f32,                  // offset 40
-  _pad1: f32,                  // offset 44
-  _pad2: vec4f,                // offset 48 (padding to 64 bytes)
+  dof_focal_depth: f32,        // offset 40 (depth value in focus, 0-1)
+  dof_focal_range: f32,        // offset 44 (width of in-focus zone, 0-1)
+  dof_blur_strength: f32,      // offset 48 (max blur mix amount, 0-1)
+  _pad0: f32,                  // offset 52
+  _pad1: vec2f,                // offset 56 (padding to 64 bytes)
 }
 
 // Flag bit positions
 const FLAG_GRAIN: u32 = 1u;
 const FLAG_BLOOM: u32 = 2u;
 const FLAG_CHROMATIC: u32 = 4u;
+const FLAG_DOF: u32 = 8u;
 
 @group(0) @binding(0) var<uniform> uniforms: PostProcessUniforms;
 @group(0) @binding(1) var sourceTexture: texture_2d<f32>;
 @group(0) @binding(2) var sourceSampler: sampler;
 @group(0) @binding(3) var bloomTexture: texture_2d<f32>;
+@group(0) @binding(4) var depthTexture: texture_2d<f32>;
+@group(0) @binding(5) var dofBlurTexture: texture_2d<f32>;
 
 // Hash function for pseudo-random noise
 fn hash(p: vec2f) -> f32 {
@@ -82,6 +88,10 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   let uv = fragCoord.xy / uniforms.resolution;
   let flags = uniforms.enabled_flags;
 
+  // Sample depth and DoF blur unconditionally (uniform control flow)
+  let depthValue = textureSample(depthTexture, sourceSampler, uv).r;
+  let dofBlurColor = textureSample(dofBlurTexture, sourceSampler, uv).rgb;
+
   // Early exit if no effects enabled
   if (flags == 0u) {
     return textureSample(sourceTexture, sourceSampler, uv);
@@ -95,6 +105,13 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
     color = chromaticAberration(uv);
   } else {
     color = textureSample(sourceTexture, sourceSampler, uv).rgb;
+  }
+
+  // Apply depth-of-field (mix sharp/blurred based on depth distance from focal plane)
+  if ((flags & FLAG_DOF) != 0u && uniforms.dof_blur_strength > 0.0) {
+    let distance = abs(depthValue - uniforms.dof_focal_depth);
+    let coc = smoothstep(0.0, max(uniforms.dof_focal_range, 0.001), distance) * uniforms.dof_blur_strength;
+    color = mix(color, dofBlurColor, coc);
   }
 
   // Apply bloom from pre-computed bloom texture (additive blend)

@@ -98,6 +98,33 @@ const PostProcessParamsInOrder = [
     max: config.postProcessing.chromaticAberration.offset.max,
     defaultValue: ppDefaults.chromaticAberration.offset,
   },
+  {
+    value: "postProcess.depthOfField.focalDepth",
+    label: "DoF Focus",
+    effect: "depthOfField" as const,
+    param: "focalDepth",
+    min: config.postProcessing.depthOfField.focalDepth.min,
+    max: config.postProcessing.depthOfField.focalDepth.max,
+    defaultValue: ppDefaults.depthOfField.focalDepth,
+  },
+  {
+    value: "postProcess.depthOfField.focalRange",
+    label: "DoF Range",
+    effect: "depthOfField" as const,
+    param: "focalRange",
+    min: config.postProcessing.depthOfField.focalRange.min,
+    max: config.postProcessing.depthOfField.focalRange.max,
+    defaultValue: ppDefaults.depthOfField.focalRange,
+  },
+  {
+    value: "postProcess.depthOfField.blurStrength",
+    label: "DoF Strength",
+    effect: "depthOfField" as const,
+    param: "blurStrength",
+    min: config.postProcessing.depthOfField.blurStrength.min,
+    max: config.postProcessing.depthOfField.blurStrength.max,
+    defaultValue: ppDefaults.depthOfField.blurStrength,
+  },
 ] as const satisfies {
   value: ParamPaths;
   label: string;
@@ -123,6 +150,10 @@ export function PostProcessMobileKnobs() {
     "postProcess.chromaticAberration.enabled",
     ppDefaults.chromaticAberration.enabled,
   );
+  const dofEnabled = useParamValue(
+    "postProcess.depthOfField.enabled",
+    ppDefaults.depthOfField.enabled,
+  );
 
   // Read current values for all parameters
   const grainSize = useParamValue("postProcess.grain.size", ppDefaults.grain.size);
@@ -138,6 +169,18 @@ export function PostProcessMobileKnobs() {
     "postProcess.chromaticAberration.offset",
     ppDefaults.chromaticAberration.offset,
   );
+  const dofFocalDepth = useParamValue(
+    "postProcess.depthOfField.focalDepth",
+    ppDefaults.depthOfField.focalDepth,
+  );
+  const dofFocalRange = useParamValue(
+    "postProcess.depthOfField.focalRange",
+    ppDefaults.depthOfField.focalRange,
+  );
+  const dofBlurStrength = useParamValue(
+    "postProcess.depthOfField.blurStrength",
+    ppDefaults.depthOfField.blurStrength,
+  );
 
   // Map effect to enabled state
   const getEnabledState = (effect: PostProcessParam["effect"]): boolean => {
@@ -148,6 +191,8 @@ export function PostProcessMobileKnobs() {
         return bloomEnabled.value ?? false;
       case "chromaticAberration":
         return chromaticEnabled.value ?? false;
+      case "depthOfField":
+        return dofEnabled.value ?? false;
     }
   };
 
@@ -160,6 +205,8 @@ export function PostProcessMobileKnobs() {
         return bloomEnabled.isMixed;
       case "chromaticAberration":
         return chromaticEnabled.isMixed;
+      case "depthOfField":
+        return dofEnabled.isMixed;
       default:
         effect satisfies never;
         return false;
@@ -180,6 +227,11 @@ export function PostProcessMobileKnobs() {
       case "chromaticAberration":
         updateSelectedEntityParams({
           postProcess: { chromaticAberration: { enabled: value } },
+        });
+        break;
+      case "depthOfField":
+        updateSelectedEntityParams({
+          postProcess: { depthOfField: { enabled: value } },
         });
         break;
       default:
@@ -204,6 +256,12 @@ export function PostProcessMobileKnobs() {
         return bloomSoftness.value ?? param.defaultValue;
       case "postProcess.chromaticAberration.offset":
         return chromaticOffset.value ?? param.defaultValue;
+      case "postProcess.depthOfField.focalDepth":
+        return dofFocalDepth.value ?? param.defaultValue;
+      case "postProcess.depthOfField.focalRange":
+        return dofFocalRange.value ?? param.defaultValue;
+      case "postProcess.depthOfField.blurStrength":
+        return dofBlurStrength.value ?? param.defaultValue;
       default:
         param satisfies never;
         return 0;
@@ -227,6 +285,12 @@ export function PostProcessMobileKnobs() {
         return bloomSoftness.isMixed;
       case "postProcess.chromaticAberration.offset":
         return chromaticOffset.isMixed;
+      case "postProcess.depthOfField.focalDepth":
+        return dofFocalDepth.isMixed;
+      case "postProcess.depthOfField.focalRange":
+        return dofFocalRange.isMixed;
+      case "postProcess.depthOfField.blurStrength":
+        return dofBlurStrength.isMixed;
       default:
         param satisfies never;
         return false;
@@ -259,6 +323,21 @@ export function PostProcessMobileKnobs() {
       case "postProcess.chromaticAberration.offset":
         updateSelectedEntityParams({
           postProcess: { chromaticAberration: { offset: actualValue } },
+        });
+        break;
+      case "postProcess.depthOfField.focalDepth":
+        updateSelectedEntityParams({
+          postProcess: { depthOfField: { focalDepth: actualValue } },
+        });
+        break;
+      case "postProcess.depthOfField.focalRange":
+        updateSelectedEntityParams({
+          postProcess: { depthOfField: { focalRange: actualValue } },
+        });
+        break;
+      case "postProcess.depthOfField.blurStrength":
+        updateSelectedEntityParams({
+          postProcess: { depthOfField: { blurStrength: actualValue } },
         });
         break;
       default:

@@ -11,6 +11,10 @@ const GLITCH_KIND_INDEX: Record<string, number> = {
 };
 
 export class GlitchShader extends ShaderPass {
+  override supportsDepth(): boolean {
+    return true;
+  }
+
   getShaderSource(): string {
     return glitchShaderSource;
   }
