@@ -168,10 +168,13 @@ const shaderUrlParams = {
  * Convert comma-separated hex colors to ColorPalette
  */
 function parsePaletteFromUrl(presetId: string | null): ColorPalette | undefined {
-  // First check if a preset is specified
   if (presetId) {
     const preset = getPalettePreset(presetId);
     if (preset) return preset;
+
+    // Check custom/extracted palettes in paletteStore
+    const customPalette = paletteStore.getPalettes().find((p) => p.id === presetId);
+    if (customPalette) return customPalette;
   }
 
   return undefined;
