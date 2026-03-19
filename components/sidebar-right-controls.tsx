@@ -681,7 +681,8 @@ export function EntityParams() {
               }}
               title="Preserve colors"
             >
-              <Palette /> Preserve
+              <span className="palette-icon" data-pressed={!!preserveColors.value || undefined} />{" "}
+              Preserve
             </Toggle>
           )}
           {reversePalette.isSupported && (

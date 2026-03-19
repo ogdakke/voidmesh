@@ -34,7 +34,7 @@
 
 /* Preserve colors toggle with color wheel gradient */
 .mobile-color-knobs__item[data-type="preserveColors"] .ui-button {
-  background: conic-gradient(in hsl longer hue, red 0 100%);
+  background: var(--color-wheel);
   border: none;
   padding: 0;
   filter: drop-shadow(0 2px 4px #0000001f);
@@ -42,7 +42,7 @@
 
 .mobile-style-knobs__item[data-type="preserveColors"][data-toggleable]:not([data-checked]) {
   .ui-button {
-    background: conic-gradient(in hsl longer hue, red 0 100%);
+    background: var(--color-wheel);
     filter: drop-shadow(0 2px 4px #0000001f) saturate(0);
   }
 }

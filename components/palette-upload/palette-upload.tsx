@@ -47,7 +47,7 @@ export function PaletteUpload({ onUpload, variant = "desktop" }: PaletteUploadPr
       />
       <Button variant="quiet" size="sm" onClick={() => inputRef.current?.click()}>
         <Palette />
-        <span>Load Separate Palette</span>
+        <span>Extract Palette from Image</span>
       </Button>
     </>
   );

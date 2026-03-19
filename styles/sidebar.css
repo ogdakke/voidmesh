@@ -326,7 +326,7 @@
 }
 
 .palette-row {
-  gap: var(--spacing);
+  gap: var(--spacing-2);
 }
 
 /* Multi-select mixed state styles */
@@ -419,5 +419,18 @@
       width: 1.5rem;
       height: 1.5rem;
     }
+  }
+}
+
+.palette-icon {
+  width: 1em;
+  height: 1em;
+  background: var(--color-wheel);
+  border-radius: 50%;
+  filter: grayscale(1);
+  transition: filter 0.1s ease-out;
+
+  &[data-pressed] {
+    filter: none;
   }
 }

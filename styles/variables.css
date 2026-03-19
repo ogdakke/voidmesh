@@ -106,6 +106,7 @@
       light-dark(#fff, #2a2a2a) 0% 50%
     )
     0 0 / 12px 12px;
+  --color-wheel: conic-gradient(in hsl longer hue, red 0 100%);
 }
 
 /* colors */

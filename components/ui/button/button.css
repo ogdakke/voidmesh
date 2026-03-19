@@ -174,7 +174,19 @@
   /* Quiet variant - transparent with subtle hover */
   .ui-button[data-variant="quiet"] {
     border-color: transparent;
-    background: transparent;
+    --btn-gradient-to: transparent;
+    background: linear-gradient(to top, var(--btn-gradient-to), transparent);
+
+    @media (hover: hover) {
+      &:hover:not([data-disabled]) {
+        background: linear-gradient(to top, var(--btn-gradient-to), var(--gray-50));
+        --btn-gradient-to: var(--gray-200);
+
+        @media (prefers-color-scheme: dark) {
+          --btn-gradient-to: var(--gray-75);
+        }
+      }
+    }
   }
 
   /* Destructive variant - red */
