@@ -1,15 +1,17 @@
-import { Popover } from "@base-ui/react/popover";
+import { Popover, type PopoverTriggerProps } from "@base-ui/react/popover";
 import { type PropsWithChildren } from "react";
 import { useColorPicker } from "./use-color-picker";
+import clsx from "clsx";
 
-export function Trigger({ children }: PropsWithChildren) {
+export function Trigger({ children, ...props }: PopoverTriggerProps) {
   const {
     meta: { isDisabled },
   } = useColorPicker();
 
   return (
     <Popover.Trigger
-      className="color-picker"
+      {...props}
+      className={clsx("color-picker", props.className)}
       disabled={isDisabled}
       data-disabled={isDisabled || undefined}
     >

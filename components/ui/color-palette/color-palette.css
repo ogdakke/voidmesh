@@ -22,8 +22,9 @@
     overflow-x: auto;
     overflow-y: hidden;
     scrollbar-gutter: stable;
-    --fade-range-start: 6px;
-    --fade-range-end: 20px;
+    scrollbar-width: none;
+    margin-inline: calc(-1 * var(--spacing-2)) 0;
+    padding-inline: var(--spacing-2);
   }
 
   .color-palette__actions {

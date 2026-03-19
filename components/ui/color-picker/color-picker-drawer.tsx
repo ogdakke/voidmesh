@@ -1,15 +1,18 @@
 import { type PropsWithChildren } from "react";
 import { Drawer } from "../drawer";
 import { useColorPicker } from "./use-color-picker";
+import type { DrawerTriggerProps } from "@base-ui/react";
+import clsx from "clsx";
 
-export function DrawerTrigger({ children }: PropsWithChildren) {
+export function DrawerTrigger({ children, ...props }: DrawerTriggerProps) {
   const {
     meta: { isDisabled },
   } = useColorPicker();
 
   return (
     <Drawer.Trigger
-      className="color-picker"
+      {...props}
+      className={clsx("color-picker", props.className)}
       disabled={isDisabled}
       data-disabled={isDisabled || undefined}
     >

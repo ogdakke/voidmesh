@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
 import { Canvas } from "./canvas";
 import { MediaControls } from "./infinite-canvas/media-controls.tsx";
@@ -16,8 +16,8 @@ export default function DesktopLayout() {
   const { setFullscreen, registerPanelToggle } = useLayout();
   const leftPanelRef = usePanelRef();
   const rightPanelRef = usePanelRef();
-  const leftCollapsedRef = useRef(false);
-  const rightCollapsedRef = useRef(false);
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [rightCollapsed, setRightCollapsed] = useState(false);
 
   // Register direct panel toggle — syncing with external imperative API
   useEffect(() => {
@@ -37,13 +37,13 @@ export default function DesktopLayout() {
 
   // Unidirectional: panel resize → fullscreen state (fires on mount too)
   const handleLeftResize = (size: { inPixels: number }) => {
-    leftCollapsedRef.current = size.inPixels <= 8;
-    setFullscreen(leftCollapsedRef.current && rightCollapsedRef.current);
+    setLeftCollapsed(size.inPixels <= 8);
+    setFullscreen(leftCollapsed && rightCollapsed);
   };
 
   const handleRightResize = (size: { inPixels: number }) => {
-    rightCollapsedRef.current = size.inPixels <= 8;
-    setFullscreen(leftCollapsedRef.current && rightCollapsedRef.current);
+    setRightCollapsed(size.inPixels <= 8);
+    setFullscreen(leftCollapsed && rightCollapsed);
   };
 
   return (
@@ -60,6 +60,7 @@ export default function DesktopLayout() {
         minSize={200}
         maxSize={300}
         onResize={handleLeftResize}
+        data-collapsed={leftCollapsed || undefined}
       >
         <SidebarLeft />
       </ResizablePanel>
@@ -82,6 +83,7 @@ export default function DesktopLayout() {
         maxSize={320}
         defaultSize={320}
         onResize={handleRightResize}
+        data-collapsed={rightCollapsed || undefined}
       >
         <SidebarRight />
       </ResizablePanel>

@@ -92,7 +92,7 @@
 
   --studio-background: light-dark(#fafafa, #060608);
   --content-radius: var(--radius-xl);
-  --mobile-controls-h: 160px;
+  --mobile-controls-h: 180px;
   --bottom-bar-height: 54px;
   --canvas-bottom: calc(
     env(safe-area-inset-bottom, 0) + var(--mobile-controls-h) + var(--bottom-bar-height) +
@@ -101,6 +101,11 @@
   --input-bg: light-dark(var(--gray-100), var(--gray-50));
   --floating-background: color-mix(in srgb, var(--input-bg) 90%, transparent);
   --floating-backdrop: blur(12px);
+  --checker-bg: repeating-conic-gradient(
+      light-dark(#e0e0e0, #404040) 0% 25%,
+      light-dark(#fff, #2a2a2a) 0% 50%
+    )
+    0 0 / 12px 12px;
 }
 
 /* colors */

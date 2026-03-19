@@ -214,7 +214,7 @@
   }
 
   .ui-button[data-disabled] {
-    --btn-gradient-to: var(--gray-200);
+    background: var(--gray-200);
     cursor: not-allowed;
     color: var(--gray-700);
     transition: none;

@@ -1,6 +1,36 @@
 @import "./primitives.css";
 @import "./utilities.css";
 
+@property --fade-mask-l {
+  syntax: "<percentage>";
+  inherits: false;
+  initial-value: 0%;
+}
+
+@property --fade-mask-r {
+  syntax: "<percentage>";
+  inherits: false;
+  initial-value: 10%;
+}
+
+@keyframes fade-mask-x-left {
+  from {
+    --fade-mask-l: 0%;
+  }
+  to {
+    --fade-mask-l: var(--fade-mask-size, 10%);
+  }
+}
+
+@keyframes fade-mask-x-right {
+  from {
+    --fade-mask-r: var(--fade-mask-size, 10%);
+  }
+  to {
+    --fade-mask-r: 0%;
+  }
+}
+
 @layer global {
   .app-sidebar {
     height: 100%;
@@ -257,43 +287,30 @@
     }
 
     .fade-mask-x {
-      --box-padding: 24px;
-      --fade-gradient: var(--mask);
-      :where(.fade-mask-x > :first-child) {
-        margin-left: calc(-1 * var(--box-padding));
-      }
-      :where(.fade-mask-x > :last-child) {
-        margin-right: calc(-1 * var(--box-padding));
-      }
-    }
-    .fade-mask-x::after,
-    .fade-mask-x::before {
-      content: "";
-      position: sticky;
-      top: 0;
-      height: 100%;
-      width: var(--box-padding);
-      flex-shrink: 0;
-      z-index: 1;
-      pointer-events: none;
-      opacity: 0;
-      animation: scroll linear;
-      animation-timeline: scroll(x);
-      animation-fill-mode: both;
-    }
-
-    .fade-mask-x::before {
-      left: 0;
-      background: linear-gradient(270deg, var(--fade-gradient));
-      animation-range: var(--fade-range-start, 20px) var(--fade-range-end, 50px);
-    }
-
-    .fade-mask-x::after {
-      right: 0;
-      background: linear-gradient(90deg, var(--fade-gradient));
-      animation-direction: reverse;
-      animation-range: calc(100% - var(--fade-range-end, 50px))
-        calc(100% - var(--fade-range-start, 20px));
+      --fade-mask-size: 10%;
+      --fade-mask-l: 0%;
+      --fade-mask-r: var(--fade-mask-size);
+      mask-image: linear-gradient(
+        to right,
+        transparent,
+        black var(--fade-mask-l),
+        black calc(100% - var(--fade-mask-r)),
+        transparent
+      );
+      -webkit-mask-image: linear-gradient(
+        to right,
+        transparent,
+        black var(--fade-mask-l),
+        black calc(100% - var(--fade-mask-r)),
+        transparent
+      );
+      animation:
+        fade-mask-x-left linear both,
+        fade-mask-x-right linear both;
+      animation-timeline: scroll(self x);
+      animation-range:
+        0px var(--fade-range-end, 30px),
+        calc(100% - var(--fade-range-end, 30px)) 100%;
     }
   }
 
@@ -346,6 +363,12 @@
 
     @media (prefers-reduced-motion: reduce) {
       --icon-crossfade-dur: 0s;
+    }
+  }
+
+  [data-collapsed]:is(#left, #right) {
+    .app-sidebar {
+      display: none;
     }
   }
 

@@ -9,7 +9,11 @@
 }
 
 .mobile-color__palette {
-  padding: 0 var(--spacing-2) var(--spacing-2);
+  padding: var(--spacing-2);
+  background: color-mix(in srgb, var(--gray-50) 60%, transparent);
+  backdrop-filter: blur(8px);
+  border-radius: var(--radius-xl);
+  margin: 0 var(--spacing-2) var(--spacing-2);
 
   .field-label {
     font-size: var(--text-xxs);
@@ -63,7 +67,7 @@
 
 .mobile-color__preserve-colors {
   font-size: var(--text-sm);
-  padding: var(--spacing-2) var(--spacing) var(--spacing-2) var(--spacing);
+  padding: var(--spacing-2);
   background: color-mix(in srgb, var(--gray-50) 60%, transparent);
   backdrop-filter: blur(8px);
   border-radius: var(--radius-xl);
@@ -80,6 +84,7 @@
   grid-template-columns: auto 1fr;
   align-items: center;
   gap: var(--spacing);
+  margin-block-end: var(--spacing);
 }
 
 .preserve-colors-hint {

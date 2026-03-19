@@ -112,7 +112,7 @@ export function ColorPalette({
       <span className="field-label color-palette__count">
         {colors.length}/{MAX_PALETTE_COLORS}
       </span>
-      <div className="color-palette__colors fade-mask-x" style={{ "--box-padding": "40px" } as any}>
+      <div className="color-palette__colors fade-mask-x">
         {displayColors.map((rgba, i) => (
           <div key={i} className="color-palette__item">
             <ColorPickerPreset
@@ -127,17 +127,24 @@ export function ColorPalette({
         ))}
       </div>
       <div className="color-palette__actions">
-        {canAdd && (
-          <Button onClick={handleAddColor} className="color-palette__add-btn" variant="primary">
-            <Plus />
-          </Button>
-        )}
+        <Button
+          onClick={handleAddColor}
+          className="color-palette__add-btn"
+          variant="primary"
+          disabled={!canAdd}
+          title="Add color"
+          aria-label="Add color"
+        >
+          <Plus />
+        </Button>
+
         {canDelete && onDelete && (
           <Button
             onClick={onDelete}
             className="color-palette__delete-btn"
             variant="destructive"
             aria-label="Delete palette"
+            title="Delete palette"
           >
             <Trash />
           </Button>

@@ -12,23 +12,16 @@
   -webkit-tap-highlight-color: transparent;
   cursor: pointer;
 
+  &:focus-visible .color-picker__swatch {
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
+  }
+
   &[data-disabled] {
     opacity: 0.5;
     cursor: not-allowed;
     pointer-events: none;
   }
-}
-
-/* ── Shared ─────────────────────────────────────────────────────────── */
-
-.color-picker,
-.color-picker-popup,
-.color-picker__drawer-body {
-  --checker-bg: repeating-conic-gradient(
-      light-dark(#e0e0e0, #404040) 0% 25%,
-      light-dark(#fff, #2a2a2a) 0% 50%
-    )
-    0 0 / 12px 12px;
 }
 
 /* ── Swatch ─────────────────────────────────────────────────────────── */

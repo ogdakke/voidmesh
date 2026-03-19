@@ -18,7 +18,7 @@ export default function DesktopPreset({ onRemove }: DesktopPresetProps) {
 
   return (
     <>
-      <ColorPicker.Trigger>
+      <ColorPicker.Trigger title="Edit color">
         <ColorPicker.Swatch />
       </ColorPicker.Trigger>
       <ColorPicker.Popup>

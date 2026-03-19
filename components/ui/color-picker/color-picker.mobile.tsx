@@ -18,7 +18,7 @@ export default function MobilePreset({ onRemove }: MobilePresetProps) {
 
   return (
     <>
-      <ColorPicker.DrawerTrigger>
+      <ColorPicker.DrawerTrigger title="Edit color">
         <ColorPicker.Swatch />
       </ColorPicker.DrawerTrigger>
       <ColorPicker.DrawerPopup>
