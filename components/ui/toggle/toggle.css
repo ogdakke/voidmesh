@@ -6,11 +6,11 @@
     gap: 0.25em;
     height: 2em;
     min-width: 2em;
-    padding: 0 0.5em;
+    padding: 0 0.75em;
     margin: 0;
     outline: 0;
     border: 1px solid transparent;
-    border-radius: var(--radius);
+    border-radius: var(--radius-button);
     background: transparent;
     font-family: inherit;
     font-size: inherit;
@@ -32,7 +32,7 @@
     }
 
     /* Hover */
-    @media (hover: hover) {
+    @media (hover: hover) and (pointer: fine) {
       &:hover:not([data-disabled]) {
         background: var(--gray-200);
         color: var(--color);
@@ -47,6 +47,11 @@
     &[data-pressed] {
       background: var(--input-bg);
       color: var(--color);
+      box-shadow: 0px 0px 0px 1px var(--border) inset;
+
+      @media (prefers-color-scheme: dark) {
+        box-shadow: 0px 0px 0px 1px var(--gray-100) inset;
+      }
     }
 
     /* Focus */
