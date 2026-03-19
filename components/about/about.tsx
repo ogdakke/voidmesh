@@ -32,6 +32,10 @@ export function AboutSection({ children, id }: { children?: ReactNode; id?: stri
           <dd>Convert to text characters</dd>
         </div>
         <div>
+          <dt>Glass</dt>
+          <dd>Fluted, frosted, and flowing</dd>
+        </div>
+        <div>
           <dt>Blobs</dt>
           <dd>Liquid, organic shapes</dd>
         </div>
@@ -40,16 +44,8 @@ export function AboutSection({ children, id }: { children?: ReactNode; id?: stri
           <dd>Dripping, melted look</dd>
         </div>
         <div>
-          <dt>Fluted Glass</dt>
-          <dd>Lines with refraction and caustics</dd>
-        </div>
-        <div>
-          <dt>Frosted Glass</dt>
-          <dd>Frosty, blurred glass</dd>
-        </div>
-        <div>
-          <dt>Flowing Glass</dt>
-          <dd>A living, breathing, turbulent glass</dd>
+          <dt>Glitch</dt>
+          <dd>Channel shift, scanlines, block corruption, and pixel smear</dd>
         </div>
       </dl>
       {children}
@@ -85,7 +81,7 @@ export function FeatureSection({ id }: { id?: string }) {
         </li>
         <li>
           <strong>Color palettes</strong>
-          <span>Game Boy, CGA, sepia, or extract from any image</span>
+          <span>Game Boy, CGA, sepia and more, or extract from any image</span>
         </li>
         <li>
           <strong>Post-processing</strong>
@@ -93,11 +89,11 @@ export function FeatureSection({ id }: { id?: string }) {
         </li>
         <li>
           <strong>Export</strong>
-          <span>MP4, MOV, or GIF</span>
+          <span>PNG, JPG, MP4, MOV, or GIF</span>
         </li>
         <li>
           <strong>Save &amp; resume</strong>
-          <span>Save your canvas to a file, continue later</span>
+          <span>Save your workspace to a file, continue later</span>
         </li>
       </ul>
     </section>
