@@ -4,7 +4,7 @@
     --tick-h: 2.5rem;
     --slider-tick-color: light-dark(var(--gray-500), var(--gray-100));
     --slider-highlight-color: light-dark(var(--gray-900), var(--gray-1100));
-    --slider-major-tick-color: light-dark(var(--gray-700), var(--gray-300));
+    --slider-major-tick-color: light-dark(var(--gray-700), var(--gray-500));
     -webkit-user-select: none;
     user-select: none;
     touch-action: none;
@@ -16,7 +16,7 @@
 
     @media screen and (max-width: 768px) {
       --tick-h: 3rem;
-      padding-top: var(--spacing-2);
+      padding-top: var(--spacing-4);
     }
   }
 
