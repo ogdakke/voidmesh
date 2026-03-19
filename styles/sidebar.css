@@ -404,7 +404,7 @@
 
 .ascii-kind-row {
   grid-auto-flow: column;
-  gap: var(--spacing-3);
+  gap: var(--spacing-2);
   grid-template-columns: 1fr auto;
 
   .select-select {
