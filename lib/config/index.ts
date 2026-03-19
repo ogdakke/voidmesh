@@ -186,13 +186,13 @@ export const shaderDefaults: Record<ShaderType, ShaderDefaultsConfig> = {
   },
   glass: {
     resetParams: {
-      size: 20,
+      size: 6,
       intensity: 1.0,
       scale: 1.0,
       postProcess: { enabled: true, chromaticAberration: { enabled: true, offset: 6 } },
       glass: { angle: 0, caustic: 0.1 },
       adjustments: {
-        blur: 10,
+        blur: 3,
       },
     },
     mergeParams: {
@@ -219,8 +219,8 @@ export const shaderDefaults: Record<ShaderType, ShaderDefaultsConfig> = {
  * to ensure clean resets when switching between kinds.
  */
 export const glassKindResets: Record<GlassKind, PartialDeep<ShaderParams>> = {
-  [GlassKind.fluted]: { size: 20, intensity: 1, scale: 1, adjustments: { blur: 10 } },
-  [GlassKind.frostedVoronoi]: { size: 20, intensity: 1, scale: 1, adjustments: { blur: 10 } },
+  [GlassKind.fluted]: { size: 20, intensity: 1, scale: 1, adjustments: { blur: 5 } },
+  [GlassKind.frostedVoronoi]: { size: 6, intensity: 1, scale: 1, adjustments: { blur: 3 } },
   [GlassKind.flowing]: { size: 40, intensity: 4, scale: 1.55, adjustments: { blur: 0 } },
 };
 
@@ -534,8 +534,8 @@ export const config = {
         grain: { enabled: true, size: 1, intensity: 0.12 },
         bloom: {
           enabled: true,
-          threshold: 0.3,
-          intensity: 0.3,
+          threshold: 0.5,
+          intensity: 0.15,
           filterRadius: 21,
           softness: 0.1,
         },
@@ -593,7 +593,7 @@ export const config = {
     brightness: { min: 0, max: 1, step: 0.01, default: 0.5 },
     contrast: { min: 0, max: 1, step: 0.01, default: 0.5 },
     saturation: { min: 0, max: 1, step: 0.01, default: 0.5 },
-    blur: { min: 0, max: 30, step: 0.1, default: 0 },
+    blur: { min: 0, max: 60, step: 0.1, default: 0 },
   },
   shaderParams: {
     size: { min: 1, max: 100, step: 1, default: 1 },
@@ -745,7 +745,7 @@ export interface KawaseBlurParams {
 const BLUR_BLEND_ZONE_FRACTION = 0.3;
 
 /**
- * Convert blur slider value (0-30) to Dual Kawase parameters with
+ * Convert blur slider value (0-60) to Dual Kawase parameters with
  * cross-level blending for smooth transitions at breakpoint boundaries.
  *
  * The blur radius grows exponentially with each level (each level doubles
@@ -766,7 +766,7 @@ export function blurParamToKawaseParams(value: number): KawaseBlurParams {
   // Piecewise-linear mapping: each range maps to one level.
   // Ranges grow wider at higher values because each additional
   // level doubles the blur radius (exponential growth).
-  const breakpoints = [0.1, 1, 3, 7, 12, 18, 24, 30];
+  const breakpoints = [0.3, 2, 6, 14, 24, 36, 48, 60];
 
   for (let i = 0; i < breakpoints.length; i++) {
     const lo = i === 0 ? 0 : breakpoints[i - 1]!;
