@@ -69,7 +69,7 @@
       0 0 0 0.5px oklch(0.66 0.19 251.62);
   }
 
-  &:not([data-selected]) {
+  &:where(:not([data-selected])) {
     .ui-button {
       background: var(--gray-50);
       border-color: transparent;

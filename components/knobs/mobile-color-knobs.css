@@ -23,11 +23,13 @@
 /* Override button styling for palette thumbnails */
 .mobile-color-knobs__item .ui-button {
   padding: 2px;
+  background: transparent;
 }
 
 /* Plus/upload button uses secondary variant styling */
-.mobile-color-knobs__item[data-type="upload"] .ui-button {
+.mobile-color-knobs__item:is([data-type="extract"], [data-type="reversePalette"]) .ui-button {
   padding: 0;
+  background: var(--gray-50);
 }
 
 /* Preserve colors toggle with color wheel gradient */
@@ -35,12 +37,13 @@
   background: conic-gradient(in hsl longer hue, red 0 100%);
   border: none;
   padding: 0;
+  filter: drop-shadow(0 2px 4px #0000001f);
 }
 
 .mobile-style-knobs__item[data-type="preserveColors"][data-toggleable]:not([data-checked]) {
   .ui-button {
     background: conic-gradient(in hsl longer hue, red 0 100%);
-    filter: saturate(0);
+    filter: drop-shadow(0 2px 4px #0000001f) saturate(0);
   }
 }
 

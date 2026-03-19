@@ -1,4 +1,5 @@
 import type { ColorPalette } from "#types/canvas.ts";
+import clsx from "clsx";
 import "./color-palette-thumbnail.css";
 
 interface ColorPaletteThumbnailProps {
@@ -26,7 +27,7 @@ export function ColorPaletteThumbnail({ palette, className }: ColorPaletteThumbn
 
   return (
     <div
-      className={className ? `color-palette-thumbnail ${className}` : "color-palette-thumbnail"}
+      className={clsx("color-palette-thumbnail", className)}
       style={{ gridTemplateColumns: `repeat(${gridColumns}, 1fr)` }}
     >
       {colors.map((rgba, i) => {
