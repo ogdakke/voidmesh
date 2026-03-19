@@ -112,7 +112,7 @@ function MobileFloat() {
   };
 
   return (
-    <div className="mobile-float">
+    <div className="mobile-float" data-fullscreen={isFullscreen || undefined}>
       <MobileActionLayer />
       <DeleteDropZone />
       {!isFullscreen && !multiSelectMode && !actionLayerActive && !entityDragActive && (

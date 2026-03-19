@@ -108,7 +108,7 @@
   &[data-toggleable][data-selected]:not([data-checked]),
   &:not([data-checked])[data-toggleable] {
     .mobile-style-knobs__label {
-      color: var(--gray-500);
+      color: var(--gray-800);
     }
   }
 }
