@@ -1,5 +1,5 @@
 import { type ChangeEvent } from "react";
-import { DropletHalf, Eye, FloppyDiskArrowIn, Import, NavArrowRight, Palette } from "iconoir-react";
+import { DropletHalf, Eye, FloppyDiskArrowIn, Import, NavArrowRight } from "iconoir-react";
 import { useCanvas } from "../context/use-canvas.ts";
 import {
   SHADER_TYPE_OPTIONS,
