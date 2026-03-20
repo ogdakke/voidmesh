@@ -20,7 +20,7 @@
     "dev": "vite dev",
     "dev:https": "HTTPS=1 vite dev --host",
     "build": "vite build",
-    "sourcemap": "posthog-cli sourcemap inject -d ./dist/assets && posthog-cli sourcemap upload -d ./dist/assets --release-name voidmesh",
+    "sourcemap": "posthog-cli sourcemap inject -d ./dist/assets && posthog-cli sourcemap upload -d ./dist/assets --release-name voidmesh --delete-after",
     "preview": "vite preview",
     "test": "bun run --bun vitest run",
     "lint:all": "oxlint . --type-aware --type-check",
