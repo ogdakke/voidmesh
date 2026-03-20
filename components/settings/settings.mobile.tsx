@@ -63,7 +63,7 @@ export default function SettingsDrawer() {
             {entities.length > 0 && (
               <Button variant="primary" onClick={exportStudioFile} disabled={isLoading}>
                 <FloppyDiskArrowIn />
-                <span>Export voidmesh File</span>
+                <span>Save workspace</span>
               </Button>
             )}
             <Button
@@ -72,7 +72,7 @@ export default function SettingsDrawer() {
               disabled={isLoading}
             >
               <Import />
-              <span>Import voidmesh File</span>
+              <span>Open workspace</span>
             </Button>
           </div>
         </div>

@@ -199,7 +199,7 @@ function CanvasContextMenuItems({
   const { saveSelectedEntityToFile, renderer, entities } = useCanvas();
   const { addToQueue } = useExportQueue();
   const { addToUpscaleQueue } = useUpscaleQueue();
-  const { exportStudioFile, importStudioFile } = useStudioFile();
+  const { exportStudioFile, saveAsStudioFile, importStudioFile } = useStudioFile();
 
   // Single selected entity for display (undefined if multi-selected)
   const selectedEntity = (() => {
@@ -308,21 +308,31 @@ function CanvasContextMenuItems({
         </ContextMenu.Item>
         <ContextMenu.Separator className="menu-separator" />
         {hasEntities && (
-          <ContextMenu.Item
-            className="menu-item menu-item--icon-left menu-item--icon-right"
-            onClick={exportStudioFile}
-          >
-            <FloppyDiskArrowIn className="menu-icon-left" />
-            Export voidmesh File
-            <Keybind keybindId="save_studio" />
-          </ContextMenu.Item>
+          <>
+            <ContextMenu.Item
+              className="menu-item menu-item--icon-left menu-item--icon-right"
+              onClick={exportStudioFile}
+            >
+              <FloppyDiskArrowIn className="menu-icon-left" />
+              Save workspace
+              <Keybind keybindId="save_studio" />
+            </ContextMenu.Item>
+            <ContextMenu.Item
+              className="menu-item menu-item--icon-left menu-item--icon-right"
+              onClick={saveAsStudioFile}
+            >
+              <FloppyDiskArrowIn className="menu-icon-left" />
+              Save workspace as...
+              <Keybind keybindId="save_as_studio" />
+            </ContextMenu.Item>
+          </>
         )}
         <ContextMenu.Item
           className="menu-item menu-item--icon-left menu-item--icon-right"
           onClick={() => importStudioFile()}
         >
           <Import className="menu-icon-left" />
-          Import voidmesh File
+          Open workspace
           <Keybind keybindId="open_studio" />
         </ContextMenu.Item>
         <ContextMenu.Separator className="menu-separator" />

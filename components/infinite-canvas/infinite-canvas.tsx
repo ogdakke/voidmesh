@@ -188,7 +188,7 @@ export function InfiniteCanvas() {
   const { handleDrop } = useImageInput({ containerRef, multipleFiles: true });
 
   // Studio file save/load
-  const { exportStudioFile, importStudioFile } = useStudioFile();
+  const { exportStudioFile, saveAsStudioFile, importStudioFile } = useStudioFile();
 
   // Observe container size changes and trigger re-render
   useCanvasContainerResize(containerRef);
@@ -531,6 +531,11 @@ export function InfiniteCanvas() {
     exportStudioFile();
   };
 
+  const handleSaveAsStudio = (e: KeyboardEvent) => {
+    e.preventDefault();
+    saveAsStudioFile();
+  };
+
   const handleImportStudio = (e: KeyboardEvent) => {
     e.preventDefault();
     importStudioFile();
@@ -551,7 +556,7 @@ export function InfiniteCanvas() {
       bind: (bb) => bb.withMeta().and.key("s"),
       platform: "macos",
       group: "global",
-      label: "Save voidmesh file",
+      label: "Save workspace",
       action: handleExportStudio,
     },
     {
@@ -559,15 +564,31 @@ export function InfiniteCanvas() {
       bind: (bb) => bb.withCtrl().and.key("s"),
       platform: "other",
       group: "global",
-      label: "Save voidmesh file",
+      label: "Save workspace",
       action: handleExportStudio,
+    },
+    {
+      id: "save_as_studio",
+      bind: (bb) => bb.withShift().and.withMeta().and.key("s"),
+      platform: "macos",
+      group: "global",
+      label: "Save workspace as...",
+      action: handleSaveAsStudio,
+    },
+    {
+      id: "save_as_studio",
+      bind: (bb) => bb.withShift().and.withCtrl().and.key("s"),
+      platform: "other",
+      group: "global",
+      label: "Save workspace as...",
+      action: handleSaveAsStudio,
     },
     {
       id: "open_studio",
       bind: (bb) => bb.withMeta().and.key("o"),
       platform: "macos",
       group: "global",
-      label: "Open voidmesh file",
+      label: "Open workspace",
       action: handleImportStudio,
     },
     {
@@ -575,7 +596,7 @@ export function InfiniteCanvas() {
       bind: (bb) => bb.withCtrl().and.key("o"),
       platform: "other",
       group: "global",
-      label: "Open voidmesh file",
+      label: "Open workspace",
       action: handleImportStudio,
     },
     {
