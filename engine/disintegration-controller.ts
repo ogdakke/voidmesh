@@ -1,6 +1,11 @@
 import type { Point } from "#types/canvas.ts";
 import { easings } from "../lib/canvas-math.ts";
 import { canvasStore } from "./canvas-store.ts";
+import {
+  scheduler as defaultScheduler,
+  type AnimationScheduler,
+  type AnimationHandle,
+} from "../lib/animation-scheduler.ts";
 
 export interface DisintegrationOverlay {
   id: string;
@@ -26,10 +31,17 @@ const STAGGER_DELAY_MS = 0;
  *
  * The entity is removed from the store immediately on deletion.
  * This controller drives the visual overlay that plays independently.
+ * Self-registers with AnimationScheduler to keep the render loop alive.
  */
 class DisintegrationController {
+  #scheduler: AnimationScheduler;
   #overlays = new Map<string, DisintegrationOverlay>();
   #staggerIndex = 0;
+  #handle: AnimationHandle | null = null;
+
+  constructor(scheduler: AnimationScheduler) {
+    this.#scheduler = scheduler;
+  }
 
   /** Register a new disintegration overlay. */
   addOverlay(
@@ -53,35 +65,27 @@ class DisintegrationController {
     });
 
     canvasStore.setContainerDirty();
+
+    // Register with scheduler if not already active
+    if (!this.#handle?.isActive) {
+      this.#handle = this.#scheduler.custom({
+        tag: "disintegration",
+        tick: (now) => {
+          // Evict completed overlays
+          for (const [overlayId, overlay] of this.#overlays) {
+            if (now >= overlay.startTime && now - overlay.startTime >= overlay.duration) {
+              this.#overlays.delete(overlayId);
+            }
+          }
+          return this.#overlays.size > 0;
+        },
+      });
+    }
   }
 
   /** Reset stagger counter. Call before a batch of deletions. */
   resetStagger(): void {
     this.#staggerIndex = 0;
-  }
-
-  /**
-   * Advance all animations. Returns completed overlay IDs (caller cleans up GPU resources).
-   * Returns true if any animation is still active.
-   */
-  tick(now: number): boolean {
-    if (this.#overlays.size === 0) return false;
-
-    const completed: string[] = [];
-
-    for (const [id, overlay] of this.#overlays) {
-      if (now < overlay.startTime) continue;
-      const elapsed = now - overlay.startTime;
-      if (elapsed >= overlay.duration) {
-        completed.push(id);
-      }
-    }
-
-    for (const id of completed) {
-      this.#overlays.delete(id);
-    }
-
-    return this.#overlays.size > 0;
   }
 
   /** Get eased progress for an overlay (0 = not started, 0→1 = animating). */
@@ -119,4 +123,4 @@ class DisintegrationController {
 }
 
 /** Singleton instance */
-export const disintegrationController = new DisintegrationController();
+export const disintegrationController = new DisintegrationController(defaultScheduler);

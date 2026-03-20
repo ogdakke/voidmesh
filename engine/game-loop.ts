@@ -30,7 +30,6 @@ import {
 } from "#types/canvas.ts";
 import { createEnum } from "#types/index.ts";
 import { canvasStore } from "./canvas-store.ts";
-import { disintegrationController } from "./disintegration-controller.ts";
 import { entityDragVisual } from "./entity-drag-visual.ts";
 import { actionLayerController } from "./action-layer-controller.ts";
 import { entityLabel } from "./entity-label.ts";
@@ -344,9 +343,6 @@ export class GameLoop {
     // 4b. Advance action layer animations (rubber-band, blur)
     const actionLayerActive = actionLayerController.tick(now);
 
-    // 4d. Advance disintegration animations
-    const disintegrationActive = disintegrationController.tick(now);
-
     // 5. Snapshot render state AFTER all ticks so the viewport reflects
     // this frame's animation/momentum/input updates, not the previous frame's.
     const renderState = canvasStore.getRenderState();
@@ -366,7 +362,6 @@ export class GameLoop {
       momentumActive ||
       zoomMomentumActive ||
       actionLayerActive ||
-      disintegrationActive ||
       (this.inputState.pointerDown && !!this.dragTarget) ||
       this.dragSelect?.isActive;
 
