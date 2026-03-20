@@ -1,6 +1,12 @@
 import { SpringBack } from "#lib/touch-scroll/spring-back.ts";
 import { config } from "#config";
+import { canvasStore } from "./canvas-store.ts";
 import type { Point } from "#types/canvas.ts";
+import {
+  scheduler as defaultScheduler,
+  type AnimationScheduler,
+  type AnimationHandle,
+} from "../lib/animation-scheduler.ts";
 
 const enum ActionLayerPhase {
   idle,
@@ -11,13 +17,15 @@ const enum ActionLayerPhase {
 
 /**
  * Controls entity rubber-banding and blur animation for the mobile action layer.
- * Singleton ticked per frame in GameLoop (same pattern as EntityDragVisualController).
+ * Self-registers with AnimationScheduler (no external tick() needed).
  *
  * Phases:
  *   idle → active → transitioning_to_drag | dismissing → idle
  */
 class ActionLayerController {
+  #scheduler: AnimationScheduler;
   #phase = ActionLayerPhase.idle as ActionLayerPhase;
+  #handle: AnimationHandle | null = null;
 
   // Dismiss springs (screen-space offsets, one-shot spring-back to 0)
   #dismissSpringX = new SpringBack();
@@ -51,118 +59,9 @@ class ActionLayerController {
 
   // Entity IDs targeted by this activation (persists through dismiss for renderer)
   #entityIds: ReadonlySet<string> = new Set();
-  // When true, tick() returns true once more from idle so the renderer re-sorts entities
-  #needsFinalFrame = false;
 
-  /** Advance animations. Returns true if still animating. */
-  tick(now: number): boolean {
-    if (this.#phase === ActionLayerPhase.idle) {
-      // After dismiss completes, return true once more so the renderer runs a final frame
-      // with hasEntity() returning false — moving entities back to normal draw order.
-      if (this.#needsFinalFrame) {
-        this.#needsFinalFrame = false;
-        return true;
-      }
-      return false;
-    }
-
-    let animating = false;
-
-    // Animate blur intensity toward target
-    if (this.#blurIntensity !== this.#blurTarget) {
-      const duration =
-        this.#blurTarget > this.#blurStartValue
-          ? config.actionLayer.blurFadeInMs
-          : config.actionLayer.blurFadeOutMs;
-      const elapsed = now - this.#blurStartTime;
-      const t = Math.min(1, elapsed / Math.max(1, duration));
-      this.#blurIntensity = this.#blurStartValue + (this.#blurTarget - this.#blurStartValue) * t;
-      if (t >= 1) {
-        this.#blurIntensity = this.#blurTarget;
-      }
-      animating = true;
-    }
-
-    // Active phase: exact analytical damped harmonic oscillator (unconditionally stable)
-    if (this.#phase === ActionLayerPhase.active) {
-      if (this.#lastTickTime === 0) {
-        this.#lastTickTime = now;
-        return true;
-      }
-
-      const dt = (now - this.#lastTickTime) / 1000; // no cap needed — exact solution handles any dt
-      this.#lastTickTime = now;
-
-      if (dt > 0) {
-        const decay = Math.exp(-this.#zetaOmega * dt);
-        const cosD = Math.cos(this.#omegaD * dt);
-        const sinD = Math.sin(this.#omegaD * dt);
-
-        // Solve X axis: displacement A from target, coefficient B from velocity
-        const aX = this.#currentOffsetX - this.#targetOffsetX;
-        const bX = (this.#velocityX + this.#zetaOmega * aX) / this.#omegaD;
-        this.#currentOffsetX = this.#targetOffsetX + decay * (aX * cosD + bX * sinD);
-        this.#velocityX =
-          decay *
-          ((bX * this.#omegaD - aX * this.#zetaOmega) * cosD -
-            (aX * this.#omegaD + bX * this.#zetaOmega) * sinD);
-
-        // Solve Y axis
-        const aY = this.#currentOffsetY - this.#targetOffsetY;
-        const bY = (this.#velocityY + this.#zetaOmega * aY) / this.#omegaD;
-        this.#currentOffsetY = this.#targetOffsetY + decay * (aY * cosD + bY * sinD);
-        this.#velocityY =
-          decay *
-          ((bY * this.#omegaD - aY * this.#zetaOmega) * cosD -
-            (aY * this.#omegaD + bY * this.#zetaOmega) * sinD);
-      }
-
-      // Keep ticking while spring has meaningful motion
-      const dx = this.#targetOffsetX - this.#currentOffsetX;
-      const dy = this.#targetOffsetY - this.#currentOffsetY;
-      if (
-        Math.abs(dx) > 0.05 ||
-        Math.abs(dy) > 0.05 ||
-        Math.abs(this.#velocityX) > 0.05 ||
-        Math.abs(this.#velocityY) > 0.05
-      ) {
-        animating = true;
-      }
-    }
-
-    // Dismiss/transition phase: one-shot SpringBack to origin
-    if (
-      this.#phase === ActionLayerPhase.dismissing ||
-      this.#phase === ActionLayerPhase.transitioning_to_drag
-    ) {
-      const elapsed = now - this.#dismissSpringStartTime;
-      const valX = this.#dismissSpringX.value(elapsed);
-      const valY = this.#dismissSpringY.value(elapsed);
-
-      if (valX !== null) {
-        this.#currentOffsetX = valX.offset;
-        animating = true;
-      } else {
-        this.#currentOffsetX = 0;
-      }
-
-      if (valY !== null) {
-        this.#currentOffsetY = valY.offset;
-        animating = true;
-      } else {
-        this.#currentOffsetY = 0;
-      }
-
-      // If all animations settled, return to idle
-      if (valX === null && valY === null && this.#blurIntensity === this.#blurTarget) {
-        this.#phase = ActionLayerPhase.idle;
-        this.#entityIds = new Set();
-        this.#needsFinalFrame = true;
-        return true;
-      }
-    }
-
-    return animating;
+  constructor(scheduler: AnimationScheduler) {
+    this.#scheduler = scheduler;
   }
 
   /** Activate the action layer. */
@@ -196,6 +95,8 @@ class ActionLayerController {
     this.#blurStartValue = this.#blurIntensity;
     this.#blurTarget = 1;
     this.#blurStartTime = performance.now();
+
+    this.#registerAnimation();
   }
 
   /** Update finger position during active phase. Sets spring target. */
@@ -321,6 +222,8 @@ class ActionLayerController {
 
   /** Immediately reset to idle. */
   cancel(): void {
+    this.#handle?.cancel();
+    this.#handle = null;
     this.#phase = ActionLayerPhase.idle;
     this.#currentOffsetX = 0;
     this.#currentOffsetY = 0;
@@ -335,6 +238,113 @@ class ActionLayerController {
     this.#dismissSpringX.reset();
     this.#dismissSpringY.reset();
   }
+
+  #registerAnimation(): void {
+    this.#handle?.cancel();
+    this.#handle = this.#scheduler.custom({
+      tag: "action-layer",
+      tick: (now) => {
+        if (this.#phase === ActionLayerPhase.idle) return false;
+
+        let animating = false;
+
+        // Animate blur intensity toward target
+        if (this.#blurIntensity !== this.#blurTarget) {
+          const duration =
+            this.#blurTarget > this.#blurStartValue
+              ? config.actionLayer.blurFadeInMs
+              : config.actionLayer.blurFadeOutMs;
+          const elapsed = now - this.#blurStartTime;
+          const t = Math.min(1, elapsed / Math.max(1, duration));
+          this.#blurIntensity =
+            this.#blurStartValue + (this.#blurTarget - this.#blurStartValue) * t;
+          if (t >= 1) {
+            this.#blurIntensity = this.#blurTarget;
+          }
+          animating = true;
+        }
+
+        // Active phase: exact analytical damped harmonic oscillator
+        if (this.#phase === ActionLayerPhase.active) {
+          if (this.#lastTickTime === 0) {
+            this.#lastTickTime = now;
+            return true;
+          }
+
+          const dt = (now - this.#lastTickTime) / 1000;
+          this.#lastTickTime = now;
+
+          if (dt > 0) {
+            const decay = Math.exp(-this.#zetaOmega * dt);
+            const cosD = Math.cos(this.#omegaD * dt);
+            const sinD = Math.sin(this.#omegaD * dt);
+
+            const aX = this.#currentOffsetX - this.#targetOffsetX;
+            const bX = (this.#velocityX + this.#zetaOmega * aX) / this.#omegaD;
+            this.#currentOffsetX = this.#targetOffsetX + decay * (aX * cosD + bX * sinD);
+            this.#velocityX =
+              decay *
+              ((bX * this.#omegaD - aX * this.#zetaOmega) * cosD -
+                (aX * this.#omegaD + bX * this.#zetaOmega) * sinD);
+
+            const aY = this.#currentOffsetY - this.#targetOffsetY;
+            const bY = (this.#velocityY + this.#zetaOmega * aY) / this.#omegaD;
+            this.#currentOffsetY = this.#targetOffsetY + decay * (aY * cosD + bY * sinD);
+            this.#velocityY =
+              decay *
+              ((bY * this.#omegaD - aY * this.#zetaOmega) * cosD -
+                (aY * this.#omegaD + bY * this.#zetaOmega) * sinD);
+          }
+
+          const dx = this.#targetOffsetX - this.#currentOffsetX;
+          const dy = this.#targetOffsetY - this.#currentOffsetY;
+          if (
+            Math.abs(dx) > 0.05 ||
+            Math.abs(dy) > 0.05 ||
+            Math.abs(this.#velocityX) > 0.05 ||
+            Math.abs(this.#velocityY) > 0.05
+          ) {
+            animating = true;
+          }
+        }
+
+        // Dismiss/transition phase: one-shot SpringBack to origin
+        if (
+          this.#phase === ActionLayerPhase.dismissing ||
+          this.#phase === ActionLayerPhase.transitioning_to_drag
+        ) {
+          const elapsed = now - this.#dismissSpringStartTime;
+          const valX = this.#dismissSpringX.value(elapsed);
+          const valY = this.#dismissSpringY.value(elapsed);
+
+          if (valX !== null) {
+            this.#currentOffsetX = valX.offset;
+            animating = true;
+          } else {
+            this.#currentOffsetX = 0;
+          }
+
+          if (valY !== null) {
+            this.#currentOffsetY = valY.offset;
+            animating = true;
+          } else {
+            this.#currentOffsetY = 0;
+          }
+
+          // If all animations settled, return to idle
+          if (valX === null && valY === null && this.#blurIntensity === this.#blurTarget) {
+            this.#phase = ActionLayerPhase.idle;
+            this.#entityIds = new Set();
+            // Trigger one more render so the renderer re-sorts entities
+            canvasStore.setContainerDirty();
+            return false;
+          }
+        }
+
+        return animating;
+      },
+    });
+  }
 }
 
 /** Asymptotic rubber-band: diminishing returns as delta grows. */
@@ -344,4 +354,4 @@ function rubberBand(delta: number, max: number): number {
 }
 
 /** Singleton instance */
-export const actionLayerController = new ActionLayerController();
+export const actionLayerController = new ActionLayerController(defaultScheduler);

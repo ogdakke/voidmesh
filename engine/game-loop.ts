@@ -320,9 +320,6 @@ export class GameLoop {
     // 4. Process input (hover detection, drag updates)
     this.processInput();
 
-    // 4b. Advance action layer animations (rubber-band, blur)
-    const actionLayerActive = actionLayerController.tick(now);
-
     // 5. Snapshot render state AFTER all ticks so the viewport reflects
     // this frame's animation/momentum/input updates, not the previous frame's.
     const renderState = canvasStore.getRenderState();
@@ -339,7 +336,6 @@ export class GameLoop {
       hasPlayingMedia ||
       hasContinuousShaderRender ||
       scheduler.hasActive ||
-      actionLayerActive ||
       (this.inputState.pointerDown && !!this.dragTarget) ||
       this.dragSelect?.isActive;
 
