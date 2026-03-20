@@ -7,15 +7,15 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="theme-color" content="#fff" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#000" media="(prefers-color-scheme: dark)" />
-    <link rel="robots" href="/robots.txt" />
+    <link rel="canonical" href="https://voidmesh.xyz/" />
     <link rel="icon" href="/favicon.ico" sizes="32x32" />
     <link rel="icon" type="image/png" sizes="512x512" href="/favicon.webp" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.json" />
-    <title>Voidmesh</title>
+    <title>Voidmesh — Shader Effects for Images, Videos & GIFs</title>
     <meta
       name="description"
-      content="Add dithering, halftone, glass and other effects to videos/images/gifs, all locally in your browser."
+      content="Voidmesh lets you add dithering, halftone, glass, ASCII and other shader effects to images, videos and GIFs on an infinite canvas — all locally in your browser."
     />
     <meta name="author" content="Daniel Wargh" />
     <!-- Twitter -->
@@ -40,7 +40,31 @@
       property="og:description"
       content="Add dithering, halftone, glass and other effects to videos/images/gifs, all locally in your browser."
     />
+    <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Voidmesh" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "Voidmesh",
+        "url": "https://voidmesh.xyz",
+        "description": "Add dithering, halftone, glass, ASCII and other shader effects to images, videos and GIFs — all locally in your browser.",
+        "applicationCategory": "DesignApplication",
+        "operatingSystem": "Any",
+        "browserRequirements": "Requires WebGPU support",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        },
+        "author": {
+          "@type": "Person",
+          "name": "Daniel Wargh"
+        },
+        "image": "https://voidmesh.xyz/m/og/og.webp"
+      }
+    </script>
 
     <link rel="stylesheet" href="./styles/reset.css" />
     <link rel="stylesheet" href="./styles/globals.css" />
