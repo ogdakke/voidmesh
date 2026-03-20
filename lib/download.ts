@@ -1,5 +1,6 @@
 import { fileHandleStore } from "#lib/files/file-handle.ts";
 import { generateFunFilename } from "#lib/files/random-filename.ts";
+import { isMobileWebKit } from "#lib/util.ts";
 import { logger } from "./client.logger";
 
 const VDMSH_FILE_TYPE: FilePickerAcceptType = {
@@ -105,7 +106,9 @@ export async function openFile(): Promise<File | null> {
   return new Promise<File | null>((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = ".studio,.zip,.vdmsh,application/vdmsh";
+    if (!isMobileWebKit()) {
+      input.accept = ".studio,.zip,.vdmsh,application/vdmsh";
+    }
     input.onchange = () => {
       resolve(input.files?.[0] ?? null);
     };
