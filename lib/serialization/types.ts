@@ -1,4 +1,4 @@
-import type { PlaybackState, ShaderParams } from "#types/canvas.ts";
+import type { ColorPalette, PlaybackState, ShaderParams } from "#types/canvas.ts";
 
 // ============================================================================
 // Document Envelope
@@ -16,6 +16,8 @@ export interface StudioManifest {
   viewport: SerializedViewport;
   /** All entities on the canvas, sorted by zIndex */
   entities: SerializedEntity[];
+  /** Custom/extracted palettes referenced by entities (v4+) */
+  palettes?: ColorPalette[];
 }
 
 // ============================================================================
@@ -49,6 +51,8 @@ interface SerializedEntityBase {
   edited: boolean;
   shaderType: string;
   shaderParams: ShaderParams;
+  /** Palette extracted from source image (v4+) */
+  originalPalette?: ColorPalette;
 }
 
 export interface SerializedImageEntity extends SerializedEntityBase {

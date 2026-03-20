@@ -1,6 +1,8 @@
 import { canvasStore } from "#engine";
-import type { ShaderCanvasEntity } from "#types/canvas.ts";
+import { config } from "#config";
+import type { ColorPalette, ShaderCanvasEntity } from "#types/canvas.ts";
 import { zipSync } from "fflate";
+import { paletteStore } from "../palette-store.ts";
 import { detectVideoExtension, imageBitmapToBytes, videoElementToBytes } from "./media.ts";
 import type { SerializedEntity, SerializedPlaybackState, StudioManifest } from "./types.ts";
 import { CURRENT_VERSION } from "./version.ts";
@@ -34,6 +36,9 @@ export async function serialize(): Promise<Blob> {
   // Re-sort after parallel processing (order may have been scrambled)
   serializedEntities.sort((a, b) => a.zIndex - b.zIndex);
 
+  // Collect custom/extracted palettes referenced by entities
+  const referencedPalettes = collectReferencedPalettes(entities);
+
   const manifest: StudioManifest = {
     type: "studio-canvas",
     version: CURRENT_VERSION,
@@ -43,6 +48,7 @@ export async function serialize(): Promise<Blob> {
       zoom: state.viewport.zoom,
     },
     entities: serializedEntities,
+    ...(referencedPalettes.length > 0 && { palettes: referencedPalettes }),
   };
 
   // Add manifest to zip
@@ -53,10 +59,6 @@ export async function serialize(): Promise<Blob> {
   const zipped = zipSync(zipEntries, { level: 6 });
   return new Blob([zipped.buffer as ArrayBuffer], { type: "application/zip" });
 }
-
-// ============================================================================
-// Per-entity serialization
-// ============================================================================
 
 interface EntitySerializeResult {
   serialized: SerializedEntity;
@@ -79,6 +81,9 @@ async function serializeEntity(entity: ShaderCanvasEntity): Promise<EntitySerial
     edited: entity.edited,
     shaderType: entity.shaderType,
     shaderParams: structuredClone(entity.shaderParams),
+    ...(entity.originalPalette && {
+      originalPalette: structuredClone(entity.originalPalette),
+    }),
   };
 
   const mediaEntries: Record<string, Uint8Array> = {};
@@ -148,4 +153,28 @@ function serializePlayback(playback: ShaderCanvasEntity["playback"]): Serialized
     playbackRate: playback?.playbackRate ?? 1,
     isPlaying: playback?.isPlaying ?? false,
   };
+}
+
+function isUserPaletteId(id: string | undefined): id is string {
+  if (!id) return false;
+  const { custom, extracted } = config.paletteIdPrefix;
+  return id.startsWith(custom) || id.startsWith(extracted);
+}
+
+/** Collect custom/extracted palettes referenced by entities from the palette store */
+function collectReferencedPalettes(entities: ShaderCanvasEntity[]): ColorPalette[] {
+  const referencedIds = new Set<string>();
+  for (const entity of entities) {
+    const paletteId = entity.shaderParams.palette?.id;
+    if (isUserPaletteId(paletteId)) {
+      referencedIds.add(paletteId);
+    }
+  }
+
+  if (referencedIds.size === 0) return [];
+
+  const storePalettes = paletteStore.getPalettes();
+  return storePalettes
+    .filter((p) => p.id != null && referencedIds.has(p.id))
+    .map((p) => structuredClone(p));
 }

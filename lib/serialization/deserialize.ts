@@ -5,6 +5,7 @@ import { config } from "#config";
 import { deepMerge } from "../deep-merge.ts";
 import { decodeGif } from "../gif-decoder.ts";
 import { rasterizeSvg } from "../media-loader.ts";
+import { paletteStore } from "../palette-store.ts";
 import { bytesToImageBitmap, bytesToVideoElement } from "./media.ts";
 import { runMigrations } from "./migrations.ts";
 import type { DeserializeResult, SerializedEntity, StudioManifest } from "./types.ts";
@@ -72,7 +73,17 @@ export async function deserialize(source: Blob | ArrayBuffer): Promise<Deseriali
     );
   }
 
-  // 4. Decode all entities BEFORE clearing canvas (so we don't destroy existing
+  // 4. Import custom/extracted palettes that don't already exist locally
+  if (doc.palettes?.length) {
+    const existingIds = new Set(paletteStore.getPalettes().map((p) => p.id));
+    for (const palette of doc.palettes) {
+      if (palette.id && !existingIds.has(palette.id)) {
+        paletteStore.addPalette(palette);
+      }
+    }
+  }
+
+  // 5. Decode all entities BEFORE clearing canvas (so we don't destroy existing
   //    state if decoding fails entirely)
   const entityPromises = doc.entities.map(async (serialized) => {
     try {
@@ -100,26 +111,26 @@ export async function deserialize(source: Blob | ArrayBuffer): Promise<Deseriali
     };
   }
 
-  // 5. Pause all existing animated entities before clearing
+  // 6. Pause all existing animated entities before clearing
   for (const entity of canvasStore.getState().entities.values()) {
     if (entity.mediaSource.type === "video") {
       entity.mediaSource.videoElement.pause();
     }
   }
 
-  // 6. Clear canvas and restore viewport
+  // 7. Clear canvas and restore viewport
   canvasStore.reset();
   canvasStore.setViewport({
     offset: { x: doc.viewport.offset.x, y: doc.viewport.offset.y },
     zoom: doc.viewport.zoom,
   });
 
-  // 7. Add decoded entities sequentially (maintains zIndex ordering from manifest)
+  // 8. Add decoded entities sequentially (maintains zIndex ordering from manifest)
   for (const entity of validEntities) {
     canvasStore.addEntity(entity);
   }
 
-  // 8. Resume playback for entities that were playing when saved
+  // 9. Resume playback for entities that were playing when saved
   for (const entity of validEntities) {
     if (!entity.playback?.isPlaying) continue;
     if (entity.mediaSource.type === "video") {
@@ -203,6 +214,9 @@ async function deserializeEntity(
     shaderParams,
     textureDirty: true as const,
     selected: false as const,
+    ...(serialized.originalPalette && {
+      originalPalette: serialized.originalPalette,
+    }),
   };
 
   switch (serialized.mediaType) {

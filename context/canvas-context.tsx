@@ -1282,6 +1282,18 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     nextZIndexRef.current = maxZIndex + 1;
     nextImageNumberRef.current = result.entityCount + 1;
 
+    // Re-extract original palettes for entities that don't have them (legacy v3 files)
+    for (const entity of canvasStore.getState().entities.values()) {
+      if (entity.originalPalette) continue;
+      extractOriginalPalette(entity.imageBitmap, colorSpace)
+        .then((palette) => {
+          const current = canvasStore.getState().entities.get(entity.id);
+          if (!current) return;
+          canvasStore.updateEntity(entity.id, { originalPalette: palette });
+        })
+        .catch((err) => logger.warn("Failed to extract palette on deserialize:", err));
+    }
+
     return result;
   };
 

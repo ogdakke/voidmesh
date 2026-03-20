@@ -27,6 +27,14 @@ const migrations: Record<number, Migration> = {
     doc.version = 3;
     return doc;
   },
+
+  // Version 3 -> 4: Add originalPalette to entities and palettes to manifest.
+  // Both fields are optional so no data transform needed — old files simply
+  // won't have them. originalPalette will be re-extracted in the context layer.
+  3: (doc) => {
+    doc.version = 4;
+    return doc;
+  },
 };
 
 /**
