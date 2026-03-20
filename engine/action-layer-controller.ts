@@ -22,7 +22,7 @@ const enum ActionLayerPhase {
  * Phases:
  *   idle → active → transitioning_to_drag | dismissing → idle
  */
-class ActionLayerController {
+export class ActionLayerController {
   #scheduler: AnimationScheduler;
   #phase = ActionLayerPhase.idle as ActionLayerPhase;
   #handle: AnimationHandle | null = null;
@@ -195,6 +195,12 @@ class ActionLayerController {
     // Stop active spring
     this.#velocityX = 0;
     this.#velocityY = 0;
+
+    // Ensure animation is running for transition phase (may have been removed
+    // by scheduler if active-phase spring settled before transition started)
+    if (!this.#handle?.isActive) {
+      this.#registerAnimation();
+    }
   }
 
   /** Dismiss the action layer. Spring entity back to origin, fade blur. */
@@ -218,6 +224,11 @@ class ActionLayerController {
     this.#blurStartValue = this.#blurIntensity;
     this.#blurTarget = 0;
     this.#blurStartTime = performance.now();
+
+    // Ensure animation is running for dismiss phase
+    if (!this.#handle?.isActive) {
+      this.#registerAnimation();
+    }
   }
 
   /** Immediately reset to idle. */
@@ -246,8 +257,6 @@ class ActionLayerController {
       tick: (now) => {
         if (this.#phase === ActionLayerPhase.idle) return false;
 
-        let animating = false;
-
         // Animate blur intensity toward target
         if (this.#blurIntensity !== this.#blurTarget) {
           const duration =
@@ -261,7 +270,6 @@ class ActionLayerController {
           if (t >= 1) {
             this.#blurIntensity = this.#blurTarget;
           }
-          animating = true;
         }
 
         // Active phase: exact analytical damped harmonic oscillator
@@ -304,7 +312,6 @@ class ActionLayerController {
             Math.abs(this.#velocityX) > 0.05 ||
             Math.abs(this.#velocityY) > 0.05
           ) {
-            animating = true;
           }
         }
 
@@ -319,14 +326,12 @@ class ActionLayerController {
 
           if (valX !== null) {
             this.#currentOffsetX = valX.offset;
-            animating = true;
           } else {
             this.#currentOffsetX = 0;
           }
 
           if (valY !== null) {
             this.#currentOffsetY = valY.offset;
-            animating = true;
           } else {
             this.#currentOffsetY = 0;
           }
@@ -341,7 +346,11 @@ class ActionLayerController {
           }
         }
 
-        return animating;
+        // Stay alive while phase is non-idle. The old game-loop model called
+        // tick() every frame regardless; returning false only skipped rendering.
+        // In the scheduler model, returning false REMOVES the animation, which
+        // would prevent dismiss/transitionToDrag from being picked up later.
+        return true;
       },
     });
   }

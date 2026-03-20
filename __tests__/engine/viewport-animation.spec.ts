@@ -1,0 +1,119 @@
+import { describe, test, expect, beforeEach } from "vitest";
+import { AnimationScheduler } from "#lib/animation-scheduler.ts";
+import {
+  ViewportAnimationController,
+  type ViewportStore,
+} from "../../engine/viewport-animation.ts";
+import type { Viewport } from "#types/canvas.ts";
+
+describe("ViewportAnimationController", () => {
+  let scheduler: AnimationScheduler;
+  let controller: ViewportAnimationController;
+  let viewport: Viewport;
+  let store: ViewportStore;
+
+  /** Mock container with clientWidth/clientHeight for screen center calculation */
+  const mockContainer = {
+    clientWidth: 800,
+    clientHeight: 600,
+  } as HTMLElement;
+
+  beforeEach(() => {
+    scheduler = new AnimationScheduler();
+    viewport = { offset: { x: 0, y: 0 }, zoom: 1 };
+    store = {
+      getViewport: () => ({ offset: { ...viewport.offset }, zoom: viewport.zoom }),
+      setViewport: (v) => {
+        viewport = { offset: { ...v.offset }, zoom: v.zoom };
+      },
+    };
+    controller = new ViewportAnimationController(scheduler, store);
+    controller.setContainer(mockContainer);
+  });
+
+  test("animateTo transitions viewport over duration", () => {
+    const target: Viewport = { offset: { x: 100, y: 100 }, zoom: 2 };
+    controller.animateTo(target, { duration: 300 });
+
+    scheduler.tick(0);
+    scheduler.tick(300);
+
+    expect(viewport.zoom).toBeCloseTo(2, 1);
+  });
+
+  test("animateTo without container sets viewport instantly", () => {
+    const noContainerCtrl = new ViewportAnimationController(scheduler, store);
+    // No setContainer call
+    const target: Viewport = { offset: { x: 50, y: 50 }, zoom: 3 };
+    noContainerCtrl.animateTo(target);
+
+    expect(viewport.offset.x).toBeCloseTo(50);
+    expect(viewport.offset.y).toBeCloseTo(50);
+    expect(viewport.zoom).toBeCloseTo(3);
+    expect(noContainerCtrl.isAnimating).toBe(false);
+  });
+
+  test("cancel stops animation mid-flight", () => {
+    const target: Viewport = { offset: { x: 200, y: 0 }, zoom: 1 };
+    controller.animateTo(target, { duration: 300 });
+
+    scheduler.tick(0);
+    scheduler.tick(150); // halfway
+    controller.cancel();
+
+    expect(controller.isAnimating).toBe(false);
+
+    // Viewport should be frozen at halfway point, not at target
+    const frozenZoom = viewport.zoom;
+    scheduler.tick(300);
+    expect(viewport.zoom).toBe(frozenZoom); // unchanged after cancel
+  });
+
+  test("new animateTo cancels previous animation", () => {
+    const target1: Viewport = { offset: { x: 100, y: 0 }, zoom: 1 };
+    const target2: Viewport = { offset: { x: 200, y: 0 }, zoom: 1 };
+
+    controller.animateTo(target1, { duration: 300 });
+    scheduler.tick(0);
+    scheduler.tick(100); // partway through first
+
+    controller.animateTo(target2, { duration: 300 });
+    scheduler.tick(100); // start second
+    scheduler.tick(400); // complete second
+
+    // Should be at target2, not target1
+    expect(viewport.zoom).toBeCloseTo(1);
+  });
+
+  test("onComplete fires when animation finishes", () => {
+    let completed = false;
+    const target: Viewport = { offset: { x: 50, y: 50 }, zoom: 2 };
+    controller.animateTo(target, { duration: 200, onComplete: () => (completed = true) });
+
+    scheduler.tick(0);
+    expect(completed).toBe(false);
+    scheduler.tick(200);
+    expect(completed).toBe(true);
+  });
+
+  test("animateTo to same viewport is a no-op", () => {
+    let completed = false;
+    const target: Viewport = { offset: { x: 0, y: 0 }, zoom: 1 }; // same as initial
+    controller.animateTo(target, { onComplete: () => (completed = true) });
+
+    // onComplete fires immediately, no animation started
+    expect(completed).toBe(true);
+    expect(controller.isAnimating).toBe(false);
+  });
+
+  test("isAnimating reflects animation state", () => {
+    expect(controller.isAnimating).toBe(false);
+
+    controller.animateTo({ offset: { x: 100, y: 0 }, zoom: 2 }, { duration: 100 });
+    expect(controller.isAnimating).toBe(true);
+
+    scheduler.tick(0);
+    scheduler.tick(100);
+    expect(controller.isAnimating).toBe(false);
+  });
+});
