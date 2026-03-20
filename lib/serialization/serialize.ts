@@ -92,7 +92,7 @@ function compressInWorker(manifest: string, mediaEntries: SerializeMediaEntry[])
   return new Promise<Blob>((resolve, reject) => {
     worker.onmessage = (e: MessageEvent) => {
       if (e.data.type === "done") {
-        resolve(new Blob([e.data.zip.buffer as ArrayBuffer], { type: "application/zip" }));
+        resolve(new Blob([e.data.zip.buffer as ArrayBuffer], { type: "application/vdmsh" }));
       } else if (e.data.type === "error") {
         reject(new Error(e.data.message));
       }

@@ -4,7 +4,7 @@ import { logger } from "./client.logger";
 
 const VDMSH_FILE_TYPE: FilePickerAcceptType = {
   description: "Voidmesh workspace",
-  accept: { "application/octet-stream": [".vdmsh"] },
+  accept: { "application/vdmsh": [".vdmsh"] },
 };
 
 /** Trigger a browser download of a Blob with the given filename. */
@@ -105,7 +105,7 @@ export async function openFile(): Promise<File | null> {
   return new Promise<File | null>((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = ".studio,.zip,.vdmsh";
+    input.accept = ".studio,.zip,.vdmsh,application/vdmsh";
     input.onchange = () => {
       resolve(input.files?.[0] ?? null);
     };
