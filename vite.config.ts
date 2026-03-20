@@ -46,7 +46,7 @@ export default defineConfig(({ mode }) => {
 
     build: {
       emptyOutDir: true,
-      sourcemap: process.env.NODE_ENV !== "production",
+      sourcemap: true,
       rolldownOptions: {
         external: ["opensrc/", ".vendor/"],
       },
