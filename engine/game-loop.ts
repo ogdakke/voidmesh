@@ -341,10 +341,7 @@ export class GameLoop {
     // 4. Process input (hover detection, drag updates)
     this.processInput();
 
-    // 4b. Advance drag visual spring animation
-    const dragVisualActive = entityDragVisual.tick(now);
-
-    // 4c. Advance action layer animations (rubber-band, blur)
+    // 4b. Advance action layer animations (rubber-band, blur)
     const actionLayerActive = actionLayerController.tick(now);
 
     // 4d. Advance disintegration animations
@@ -368,7 +365,6 @@ export class GameLoop {
       scheduler.hasActive ||
       momentumActive ||
       zoomMomentumActive ||
-      dragVisualActive ||
       actionLayerActive ||
       disintegrationActive ||
       (this.inputState.pointerDown && !!this.dragTarget) ||
