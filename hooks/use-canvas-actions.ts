@@ -504,9 +504,7 @@ export function useCanvasActions() {
       version: 1,
       shaderType: entity.shaderType,
       shaderParams: structuredClone(entity.shaderParams),
-      originalPalettes: entity.originalPalettes
-        ? structuredClone(entity.originalPalettes)
-        : undefined,
+      originalPalette: entity.originalPalette ? structuredClone(entity.originalPalette) : undefined,
     };
 
     navigator.clipboard
@@ -674,7 +672,7 @@ export function useCanvasActions() {
     isMultiSelect,
     selectedEntity,
     selectedEntities,
-    originalPalettes: selectedEntity?.originalPalettes,
+    originalPalette: selectedEntity?.originalPalette,
 
     // Selection state for UI components
     selectionState,

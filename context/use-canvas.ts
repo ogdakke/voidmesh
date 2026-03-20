@@ -82,10 +82,7 @@ export interface CanvasContextValue {
   applyEffectsToSelection: (data: {
     shaderType: ShaderType;
     shaderParams: ShaderParams;
-    originalPalettes?: {
-      palette8?: ColorPalette;
-      palette16?: ColorPalette;
-    };
+    originalPalette?: ColorPalette;
   }) => void;
   setDebugType: (
     value: DebugType | ((old: DebugType | null) => DebugType | null) | null,

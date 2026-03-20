@@ -537,43 +537,22 @@ export async function loadMediaFromBlob(
 }
 
 /**
- * Extract 8-color palette from an image (fast)
+ * Extract 6-color palette from an image
  */
-export async function extractOriginalPalette8(
+export async function extractOriginalPalette(
   bitmap: ImageBitmap,
   colorSpace: ColorSpace,
 ): Promise<ColorPalette> {
   const palette = await extractPaletteFromImage(bitmap, {
-    colorCount: 8,
-    sampleSize: 80, // Smaller sample for speed
-    iterations: 8,
-    colorSpace,
-  });
-  return {
-    id: "original-8",
-    name: "Original Palette 8",
-    shortName: "Original 8",
-    colors: palette.colors,
-  };
-}
-
-/**
- * Extract 16-color palette from an image (slower, higher quality)
- */
-export async function extractOriginalPalette16(
-  bitmap: ImageBitmap,
-  colorSpace: ColorSpace,
-): Promise<ColorPalette> {
-  const palette = await extractPaletteFromImage(bitmap, {
-    colorCount: 16,
+    colorCount: 6,
     sampleSize: 100,
     iterations: 10,
     colorSpace,
   });
   return {
-    id: "original-16",
-    name: "Original Palette 16",
-    shortName: "Original 16",
+    id: "original",
+    name: "Original",
+    shortName: "Original",
     colors: palette.colors,
   };
 }

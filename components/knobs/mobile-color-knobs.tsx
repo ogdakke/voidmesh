@@ -109,7 +109,7 @@ export function MobileColorKnobs() {
 
   // Build the palette list using centralized function + mobile-specific buttons
   const paletteList: MobilePaletteItem[] = (() => {
-    const items = buildPaletteList(customPalettes, selectedEntity?.originalPalettes);
+    const items = buildPaletteList(customPalettes, selectedEntity?.originalPalette);
 
     // Prepend preserveColors toggle and upload button (mobile-only), then add labels
     return [

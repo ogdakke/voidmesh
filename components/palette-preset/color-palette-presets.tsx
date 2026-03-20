@@ -13,11 +13,8 @@ interface ColorPalettePresetsProps {
   selectedPaletteId: string | null;
   /** Callback when a preset is selected */
   onSelectPalette: (palette: ColorPalette) => void;
-  /** Original palettes extracted from the current entity's image (if any) */
-  originalPalettes?: {
-    palette8?: ColorPalette;
-    palette16?: ColorPalette;
-  };
+  /** Original palette extracted from the current entity's image (if any) */
+  originalPalette?: ColorPalette;
   /** User-created palettes (custom + extracted from uploads) */
   customPalettes?: ColorPalette[];
   /** Whether multiple entities have different palettes */
@@ -27,12 +24,12 @@ interface ColorPalettePresetsProps {
 export function ColorPalettePresets({
   selectedPaletteId,
   onSelectPalette,
-  originalPalettes,
+  originalPalette,
   customPalettes = [],
   isMixed = false,
 }: ColorPalettePresetsProps) {
   // Build combined palette list using centralized function
-  const paletteList = buildPaletteList(customPalettes, originalPalettes);
+  const paletteList = buildPaletteList(customPalettes, originalPalette);
 
   // Handler to convert value back to palette object
   const handleValueChange = (value: string | null) => {

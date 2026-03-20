@@ -24,7 +24,7 @@ export interface PaletteExtractionOptions {
 }
 
 const DEFAULT_OPTIONS: Required<PaletteExtractionOptions> = {
-  colorCount: 16,
+  colorCount: 6,
   sampleSize: 100,
   iterations: 10,
   skipTransparent: true,

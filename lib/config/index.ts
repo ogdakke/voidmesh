@@ -560,7 +560,7 @@ export const config = {
    * Async palette preset IDs - these are extracted from entity images
    * and not available as static presets
    */
-  asyncPalettes: ["original-8", "original-16"] as const,
+  asyncPalettes: ["original"] as const,
 
   /**
    * ID used for custom palettes (uploaded or manually edited).

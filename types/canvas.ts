@@ -434,11 +434,8 @@ type ShaderCanvasEntityBase = {
   /** Video playback state (only for video entities) */
   playback?: PlaybackState;
 
-  /** Original palettes extracted from source image (images only) */
-  originalPalettes?: {
-    palette8?: ColorPalette; // 8 colors, extracted first
-    palette16?: ColorPalette; // 16 colors, extracted in background
-  };
+  /** Original palette extracted from source image (images only) */
+  originalPalette?: ColorPalette;
 
   /** Shader type to apply */
   shaderType: ShaderType;

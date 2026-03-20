@@ -123,7 +123,7 @@ describe("copyEntityParams", () => {
     expect(parsed.shaderParams.palette.colors[1]).toEqual([1, 0, 0, 1]);
   });
 
-  test("includes originalPalettes when present", async () => {
+  test("includes originalPalette when present", async () => {
     const writeTextSpy = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
 
     const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
@@ -131,16 +131,14 @@ describe("copyEntityParams", () => {
     act(() => {
       const id = canvas.addEntity(createEntityInput());
       canvasStore.updateEntity(id, {
-        originalPalettes: {
-          palette8: {
-            id: "original-8",
-            name: "Extracted 8",
-            shortName: "E8",
-            colors: Array.from(
-              { length: 8 },
-              (_, i) => [i / 7, 0, 0, 1] as [number, number, number, number],
-            ),
-          },
+        originalPalette: {
+          id: "original",
+          name: "Original",
+          shortName: "Original",
+          colors: Array.from(
+            { length: 6 },
+            (_, i) => [i / 5, 0, 0, 1] as [number, number, number, number],
+          ),
         },
       });
       canvas.selectEntity(id);
@@ -151,9 +149,9 @@ describe("copyEntityParams", () => {
     });
 
     const parsed = JSON.parse(writeTextSpy.mock.calls[0]![0]);
-    expect(parsed.originalPalettes).toBeDefined();
-    expect(parsed.originalPalettes.palette8.colors).toHaveLength(8);
-    expect(parsed.originalPalettes.palette8.id).toBe("original-8");
+    expect(parsed.originalPalette).toBeDefined();
+    expect(parsed.originalPalette.colors).toHaveLength(6);
+    expect(parsed.originalPalette.id).toBe("original");
   });
 
   test("copies first entity params when multiple selected", async () => {
@@ -378,33 +376,29 @@ describe("pasteEntityParams", () => {
     expect(entity2?.shaderParams.size).toBe(20);
   });
 
-  test("does not overwrite target originalPalettes with source data", async () => {
-    const sourceOriginalPalettes = {
-      palette8: {
-        id: "original-8",
-        name: "Source Extracted 8",
-        shortName: "SE8",
-        colors: Array.from(
-          { length: 8 },
-          (_, i) => [i / 7, 0, 0, 1] as [number, number, number, number],
-        ),
-      },
+  test("does not overwrite target originalPalette with source data", async () => {
+    const sourceOriginalPalette = {
+      id: "original",
+      name: "Source Original",
+      shortName: "Original",
+      colors: Array.from(
+        { length: 6 },
+        (_, i) => [i / 5, 0, 0, 1] as [number, number, number, number],
+      ),
     };
 
-    const targetOriginalPalettes = {
-      palette8: {
-        id: "original-8",
-        name: "Target Extracted 8",
-        shortName: "TE8",
-        colors: Array.from(
-          { length: 8 },
-          (_, i) => [0, i / 7, 0, 1] as [number, number, number, number],
-        ),
-      },
+    const targetOriginalPalette = {
+      id: "original",
+      name: "Target Original",
+      shortName: "Original",
+      colors: Array.from(
+        { length: 6 },
+        (_, i) => [0, i / 5, 0, 1] as [number, number, number, number],
+      ),
     };
 
     vi.spyOn(navigator.clipboard, "readText").mockResolvedValue(
-      makeClipboardData({ originalPalettes: sourceOriginalPalettes }),
+      makeClipboardData({ originalPalette: sourceOriginalPalette }),
     );
 
     const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
@@ -412,7 +406,7 @@ describe("pasteEntityParams", () => {
 
     act(() => {
       entityId = canvas.addEntity(createEntityInput());
-      canvasStore.updateEntity(entityId, { originalPalettes: targetOriginalPalettes });
+      canvasStore.updateEntity(entityId, { originalPalette: targetOriginalPalette });
       canvas.selectEntity(entityId);
     });
 
@@ -425,10 +419,10 @@ describe("pasteEntityParams", () => {
       return entity?.shaderType === ShaderType.dithering;
     });
 
-    // Target's own originalPalettes must be preserved
+    // Target's own originalPalette must be preserved
     const entity = canvasStore.getState().entities.get(entityId)!;
-    expect(entity.originalPalettes?.palette8?.name).toBe("Target Extracted 8");
-    expect(entity.originalPalettes?.palette8?.colors[0]).toEqual([0, 0, 0, 1]);
+    expect(entity.originalPalette?.name).toBe("Target Original");
+    expect(entity.originalPalette?.colors[0]).toEqual([0, 0, 0, 1]);
   });
 
   test("falls back to URL-based paste for valid URLs", async () => {
@@ -751,12 +745,12 @@ describe("paste palette isolation", () => {
 
   test("pasting async palette converts to custom palette", async () => {
     const asyncPalette: ColorPalette = {
-      id: "original-8",
-      name: "Extracted 8",
-      shortName: "E8",
+      id: "original",
+      name: "Original",
+      shortName: "Original",
       colors: Array.from(
-        { length: 8 },
-        (_, i) => [i / 7, 0, 0, 1] as [number, number, number, number],
+        { length: 6 },
+        (_, i) => [i / 5, 0, 0, 1] as [number, number, number, number],
       ),
     };
 
@@ -786,10 +780,10 @@ describe("paste palette isolation", () => {
     });
 
     const entity = canvasStore.getState().entities.get(entityId)!;
-    // Should be converted to a custom palette, not "original-8"
-    expect(entity.shaderParams.palette?.id).not.toBe("original-8");
+    // Should be converted to a custom palette, not "original"
+    expect(entity.shaderParams.palette?.id).not.toBe("original");
     expect(entity.shaderParams.palette?.id?.startsWith("cstm_")).toBe(true);
-    expect(entity.shaderParams.palette?.colors).toHaveLength(8);
+    expect(entity.shaderParams.palette?.colors).toHaveLength(6);
   });
 
   test("pasting preset palette does NOT clone — shares preset ID", async () => {

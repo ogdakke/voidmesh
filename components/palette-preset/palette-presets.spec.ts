@@ -137,18 +137,11 @@ describe("palette-presets utilities", () => {
       colors: [[0, 0, 1, 1]],
     };
 
-    const originalPalette8: ColorPalette = {
-      id: "original-8",
-      name: "Original 8",
-      shortName: "Original 8",
+    const originalPalette: ColorPalette = {
+      id: "original",
+      name: "Original",
+      shortName: "Original",
       colors: [[0, 1, 0, 1]],
-    };
-
-    const originalPalette16: ColorPalette = {
-      id: "original-16",
-      name: "Original 16",
-      shortName: "Original 16",
-      colors: [[0, 1, 1, 1]],
     };
 
     test("returns presets when no custom/original palettes", () => {
@@ -176,25 +169,20 @@ describe("palette-presets utilities", () => {
       expect(list[0]!.type).toBe("extracted");
     });
 
-    test("puts original palettes last", () => {
-      const list = buildPaletteList([], { palette8: originalPalette8 });
+    test("puts original palette last", () => {
+      const list = buildPaletteList([], originalPalette);
       const last = list[list.length - 1]!;
       expect(last.type).toBe("original");
     });
 
-    test("includes both original palettes when provided", () => {
-      const list = buildPaletteList([], {
-        palette8: originalPalette8,
-        palette16: originalPalette16,
-      });
+    test("includes original palette when provided", () => {
+      const list = buildPaletteList([], originalPalette);
       const originals = list.filter((item) => item.type === "original");
-      expect(originals).toHaveLength(2);
+      expect(originals).toHaveLength(1);
     });
 
     test("maintains correct order: custom, presets, original", () => {
-      const list = buildPaletteList([customPalette], {
-        palette8: originalPalette8,
-      });
+      const list = buildPaletteList([customPalette], originalPalette);
       const types = list.map((item) => item.type);
       const customIdx = types.indexOf("custom");
       const presetIdx = types.indexOf("preset");
@@ -205,9 +193,7 @@ describe("palette-presets utilities", () => {
     });
 
     test("all items have required properties", () => {
-      const list = buildPaletteList([customPalette], {
-        palette8: originalPalette8,
-      });
+      const list = buildPaletteList([customPalette], originalPalette);
       for (const item of list) {
         expect(item.id).toBeDefined();
         expect(typeof item.id).toBe("string");

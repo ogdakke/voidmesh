@@ -342,7 +342,7 @@ function CanvasContextMenuItems({
   }
 
   // Build palette list using shared palette store + entity's original palettes
-  const paletteList = buildPaletteList(customPalettes, contextOpenEntity?.originalPalettes);
+  const paletteList = buildPaletteList(customPalettes, contextOpenEntity?.originalPalette);
 
   // Map to the expected format for radio items
   const presets = paletteList.map((item) => item.palette);

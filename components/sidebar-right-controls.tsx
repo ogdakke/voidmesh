@@ -664,7 +664,7 @@ export function EntityParams() {
           <ColorPalettePresets
             selectedPaletteId={palette.value?.id ?? null}
             onSelectPalette={handlePaletteChange}
-            originalPalettes={selectedEntity?.originalPalettes}
+            originalPalette={selectedEntity?.originalPalette}
             customPalettes={customPalettes}
             isMixed={palette.isMixed}
           />

@@ -41,11 +41,7 @@ import { canvasStore, gameLoop } from "#engine";
 
 import { toastManager } from "#components/ui/toast/toast-manager.ts";
 import { hints } from "#components/ui/hint/hint-manager.ts";
-import {
-  extractOriginalPalette8,
-  extractOriginalPalette16,
-  cloneMediaSource,
-} from "#lib/media-loader.ts";
+import { extractOriginalPalette, cloneMediaSource } from "#lib/media-loader.ts";
 import { Command, undo } from "#lib/undo.ts";
 import { config } from "#config";
 import { preferences } from "#lib/storage.ts";
@@ -365,11 +361,9 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     // 1. The entity actually has the async palette extracted
     // 2. The entity's current palette matches the async preset (not a custom palette)
     // This prevents custom palettes from being overwritten when the URL's preset param
-    // is missing and defaults to "original-8"
+    // is missing and defaults to "original"
     if (isAsyncPalette(renderState.preset)) {
-      const hasAsyncPalette =
-        (renderState.preset === "original-8" && entity.originalPalettes?.palette8) ||
-        (renderState.preset === "original-16" && entity.originalPalettes?.palette16);
+      const hasAsyncPalette = renderState.preset === "original" && entity.originalPalette;
 
       // Only apply async preset if entity palette actually uses it (has matching ID)
       // Skip if entity has a custom palette (id: undefined)
@@ -523,56 +517,25 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       // Capture the preset at add-time (in case URL changes before extraction completes)
       const targetPreset = renderState.preset;
 
-      // Extract 8-color palette first (fast)
-      extractOriginalPalette8(entity.imageBitmap, colorSpace)
-        .then((palette8) => {
+      extractOriginalPalette(entity.imageBitmap, colorSpace)
+        .then((palette) => {
           const currentEntity = canvasStore.getState().entities.get(id);
           if (!currentEntity) return; // Entity was deleted
 
-          // Update originalPalettes
-          canvasStore.updateEntity(id, {
-            originalPalettes: { ...currentEntity.originalPalettes, palette8 },
-          });
+          canvasStore.updateEntity(id, { originalPalette: palette });
 
-          // If this entity should use original-8, apply it to shaderParams now
-          if (targetPreset === "original-8") {
+          // If this entity should use original palette, apply it to shaderParams now
+          if (targetPreset === "original") {
             canvasStore.updateEntity(id, {
               shaderParams: {
                 ...currentEntity.shaderParams,
-                palette: palette8,
+                palette,
               },
               textureDirty: true,
             });
           }
         })
-        .catch((err) => logger.warn("Failed to extract 8-color palette:", err));
-
-      // Extract 16-color palette in background (slower)
-      extractOriginalPalette16(entity.imageBitmap, colorSpace)
-        .then((palette16) => {
-          const currentEntity = canvasStore.getState().entities.get(id);
-          if (!currentEntity) return; // Entity was deleted
-
-          // Update originalPalettes
-          canvasStore.updateEntity(id, {
-            originalPalettes: {
-              ...currentEntity.originalPalettes,
-              palette16,
-            },
-          });
-
-          // If this entity should use original-16, apply it to shaderParams now
-          if (targetPreset === "original-16") {
-            canvasStore.updateEntity(id, {
-              shaderParams: {
-                ...currentEntity.shaderParams,
-                palette: palette16,
-              },
-              textureDirty: true,
-            });
-          }
-        })
-        .catch((err) => logger.warn("Failed to extract 16-color palette:", err));
+        .catch((err) => logger.warn("Failed to extract palette:", err));
     }
 
     return id;
@@ -619,9 +582,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       position: { ...entity.position },
       size: { ...entity.size },
       shaderParams: structuredClone(entity.shaderParams),
-      originalPalettes: entity.originalPalettes
-        ? structuredClone(entity.originalPalettes)
-        : undefined,
+      originalPalette: entity.originalPalette ? structuredClone(entity.originalPalette) : undefined,
       // Keep mediaSource as-is (references to videoElement/imageBitmap are needed for restore)
       mediaSource: entity.mediaSource as any,
     };
@@ -778,8 +739,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         mediaSource: mediaSource as any,
         imageBitmap,
         shaderParams: structuredClone(entity.shaderParams),
-        originalPalettes: entity.originalPalettes
-          ? structuredClone(entity.originalPalettes)
+        originalPalette: entity.originalPalette
+          ? structuredClone(entity.originalPalette)
           : undefined,
         playback: entity.playback ? { ...entity.playback, isPlaying: false } : undefined,
         texture: undefined,
@@ -948,7 +909,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     if (!palette?.id) return null;
     // Preset palettes are shared — no cloning needed
     if (getPalettePreset(palette.id)) return null;
-    // User palettes (cstm_*, ext_*) and async palettes (original-8, original-16)
+    // User palettes (cstm_*, ext_*) and async palettes (original)
     // must be cloned with a new unique ID
     if (!isUserPalette(palette.id) && !isAsyncPalette(palette.id)) return null;
 
@@ -967,10 +928,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   const applyEffectsToSelection = (data: {
     shaderType: ShaderType;
     shaderParams: ShaderParams;
-    originalPalettes?: {
-      palette8?: ColorPalette;
-      palette16?: ColorPalette;
-    };
+    originalPalette?: ColorPalette;
   }) => {
     const entities = canvasStore.getSelectedEntities();
     if (entities.length === 0) return;

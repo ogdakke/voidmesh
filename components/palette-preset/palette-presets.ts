@@ -94,7 +94,7 @@ export interface PaletteListItem {
  */
 export function buildPaletteList(
   customPalettes: ColorPalette[] = [],
-  originalPalettes?: { palette8?: ColorPalette; palette16?: ColorPalette },
+  originalPalette?: ColorPalette,
 ): PaletteListItem[] {
   const items: PaletteListItem[] = [];
 
@@ -116,18 +116,11 @@ export function buildPaletteList(
     });
   }
 
-  // 3. Original palettes extracted from source image
-  if (originalPalettes?.palette8) {
+  // 3. Original palette extracted from source image
+  if (originalPalette) {
     items.push({
       id: config.asyncPalettes[0],
-      palette: originalPalettes.palette8,
-      type: "original",
-    });
-  }
-  if (originalPalettes?.palette16) {
-    items.push({
-      id: config.asyncPalettes[1],
-      palette: originalPalettes.palette16,
+      palette: originalPalette,
       type: "original",
     });
   }
