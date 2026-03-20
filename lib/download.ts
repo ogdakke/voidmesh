@@ -106,11 +106,7 @@ export async function openFile(): Promise<File | null> {
   return new Promise<File | null>((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
-    if (isMobileWebKit()) {
-      // iOS ignores custom extensions — use archive MIME types to skip
-      // the Photos/Camera prompt and go straight to the Files picker.
-      input.accept = "application/zip,application/x-zip-compressed,application/vdmsh";
-    } else {
+    if (!isMobileWebKit()) {
       input.accept = ".studio,.zip,.vdmsh,application/vdmsh";
     }
 
