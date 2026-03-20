@@ -4,7 +4,7 @@ Canonical domain type definitions. Shared across all subsystems. Bottom of the d
 
 ## Key Files
 
-- `canvas.ts` (~17KB) — Core domain model: `Point`, `Size`, `Bounds`, `Viewport`, `ShaderCanvasEntity`, `ShaderParams`, `PostProcessParams`, `AdjustmentsParams`, `PlaybackState`, `ColorPalette`, `RGBA`. All enum-like discriminants: `ShaderType`, `DitheringKind`, `AsciiKind`, `GlassKind`, `Shape`, `MediaType`, `DragTargetType`. Type guards: `isVideoEntity()`, `isGifEntity()`, `isAnimatedEntity()`, `isSvgEntity()`. Utility types: `ParamPaths`, `GetParamByPath<P>`.
+- `canvas.ts` (~17KB) — Core domain model. Entity types, shader params, viewport, palettes, all `createEnum()` discriminants, type guards, and utility types like `ParamPaths`.
 - `index.ts` — `createEnum()` factory function and utility types (`Thunk`, `ThunkSync`, `EnumOf`).
 - `gifenc.d.ts` — Type declarations for the untyped `gifenc` npm package.
 - `eyedropper.d.ts` — Type declarations for the browser EyeDropper API

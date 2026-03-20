@@ -4,16 +4,13 @@ Reusable, domain-agnostic UI components. No canvas/shader/entity knowledge.
 
 ## Contents
 
-`button`, `checkbox`, `collapsible`, `color-palette`, `color-picker`, `drawer`, `dropzone`, `field`, `form`, `hint`, `image`, `infinite-slider`, `menu`, `modal`, `native-select`, `number-field`, `resizable` (file-level), `select`, `slider`, `slider-picker`, `tick-slider`, `time-slider`, `toast`, `video`.
-
-Also: `ui-util.ts` — shared UI utility helpers.
+~25 domain-agnostic primitives: inputs, selectors, sliders, popovers, modals, drawers, toasts, and overlays.
 
 ### Notable Implementations
 
-- `color-picker/` — Custom GPU-accelerated color picker using OKLCH as working color space. `color-area.tsx` + `color-area-gpu.ts` + `color-area.wgsl` = 2D lightness×chroma picker rendered via WebGPU. `color-slider.tsx` exports `HueSlider` (0-360°) and `AlphaSlider` (0-1). `color-value-input.tsx` = CSS color string input with P3/Hex format selector. `color-value-formats.ts` = `ColorValueFormat` enum, format detection/normalization/formatting. `eyedropper.tsx` = Browser EyeDropper API. `color-picker-context.tsx` = OKLCH state management with imperative DOM broadcasting during scrubbing (zero React re-renders, rAF-throttled onChange), tracks `selectedFormat` for value output. Desktop popup (`color-picker-popup.tsx`) and mobile drawer (`color-picker-drawer.tsx`) containers. `swatch.tsx` is the clickable trigger.
-- `field/` — Labeled form field wrapper with CSS. Used for settings and knob panels.
-- `image.tsx` — Responsive `<picture>` component consuming `?img` Vite plugin output (srcset, thumbhash blur-up).
-- `video.tsx` — Lazy-loading video component with intersection observer.
+- `color-picker/` — GPU-accelerated OKLCH picker. WebGPU 2D lightness×chroma area, hue/alpha sliders, format selector, eyedropper. Zero-render scrubbing via imperative DOM.
+- `image.tsx` — Responsive `<picture>` component consuming `?img` Vite plugin output.
+- `video.tsx` — Lazy-loading video with intersection observer.
 
 ## Patterns
 

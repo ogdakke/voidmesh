@@ -1,6 +1,22 @@
 # Voidmesh
 
-Infinite canvas app with real-time WebGPU shader effects. Users drop images/videos/GIFs onto a canvas, apply shader effects (dithering, halftone, ascii, glass, blobs, melt), and export results.
+Infinite canvas app with real-time WebGPU shader effects. Users drop images/videos/GIFs onto a canvas, apply shader effects (dithering, halftone, ascii, glass, blobs, melt, glitch), and export results.
+
+## Domain Glossary
+
+- **Entity** — A media item on the canvas (image, video, GIF, SVG). Has position, size, rotation, z-index in world coordinates. Each entity has one active shader effect and its own params. Type: `ShaderCanvasEntity`.
+- **Shader / Effect** — WebGPU rendering algorithm that stylizes an entity. 7 types: dithering, halftone, ascii, glass, blobs, melt, glitch. Each is a `ShaderPass` subclass in `renderer/shaders/`.
+- **Kind** — Sub-variant within a shader type. E.g. dithering has 12 kinds (bayer4x4, floydSteinberg…), glass has 3, glitch has 4, ascii has 4.
+- **Knobs** — UI panels for editing shader parameters. Each shader type has its own `*-knobs.tsx`. Read/write params via `useParamValue()` hook.
+- **Palette** — 2–16 colors for quantization. Types: preset (built-in), custom (`cstm_` prefix), extracted (`ext_` prefix), original (auto-extracted 6-color per entity).
+- **Preserve Colors** — Boolean. True: per-channel RGB processing. False: monochrome. All shaders except glass.
+- **Adjustments** — Pre-processing effects applied before shader: brightness, contrast, saturation, blur.
+- **Post-processing** — Effects applied after shader: grain, bloom, chromatic aberration.
+- **Viewport** — Camera state: offset (world-space position) + zoom. Defines visible portion of the infinite canvas.
+- **World Space / Screen Space** — World coordinates = infinite canvas system. Screen coordinates = CSS pixels. Viewport maps world → screen.
+- **Action Layer** — Mobile-only overlay triggered by long-press. Shows action buttons; rest of canvas blurred.
+- **Disintegration** — Particle break-apart animation on entity deletion. Toggled by "fancy delete" setting.
+- **Workspace** — Full saved canvas state (entities, viewport, palettes). Persisted as `.vdmsh` zip files.
 
 ## Architecture
 
@@ -65,7 +81,7 @@ Static media images live in `media/` (not `public/media/`). Import via `#media/*
 
 ## Serialization
 
-`.vdmsh` zip files via fflate. See `lib/serialization/` for format docs.
+`.vdmsh` zip files (`application/vdmsh` MIME type) via fflate. Media encoding and compression runs in a Web Worker (`lib/serialization/serialize-worker.ts`). Supports file handle saving (File System Access API) for in-place overwrites. See `lib/serialization/` for format docs.
 
 <!-- opensrc:start -->
 

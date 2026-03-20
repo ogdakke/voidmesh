@@ -4,8 +4,8 @@ WebGPU rendering and export pipelines. Turns engine state into pixels.
 
 ## Key Files
 
-- `canvas-renderer.ts` (~69KB) — `InfiniteCanvasRenderer`. WebGPU adapter/device/context init, entity source textures, shader dispatch via `ShaderRegistry`, composition pipeline (viewport transform + entity layering), grid, selection rects, disintegration overlays, action layer blur overlay. Entry point: `render(state: RenderState)`.
-- `processing-pipeline.ts` (~49KB) — `ProcessingPipeline`. Pre-processing (adjustments: brightness/contrast/saturation, Dual Kawase blur) and post-processing (grain, vignette, bloom via multi-pass downsample/upsample, chromatic aberration). Operates per-entity before composition. Also exposes `encodeFullScreenBlur()` for the action layer blur overlay.
+- `canvas-renderer.ts` (~69KB) — Main renderer. WebGPU setup, entity textures, shader dispatch, composition, overlays.
+- `processing-pipeline.ts` (~49KB) — Per-entity pre/post-processing: adjustments, blur, bloom, grain, chromatic aberration. Also provides action layer blur.
 - `gpu-color-space.ts` — `detectGpuColorConfig()`. Probes Display P3 support at init, returns frozen `GpuColorConfig` (supportsP3, canvasFormat, canvasColorSpace, intermediateFormat, textureColorSpace).
 - `copy-pass.ts` + `copy-pass.wgsl` — `CopyPass`. Full-screen format conversion (rgba16float ↔ rgba8unorm) for export readback and showOriginal passthrough.
 - `texture-pool.ts` — GPU texture recycling. Parameterized by `GPUTextureFormat` (receives `intermediateFormat` from renderer).
@@ -33,7 +33,7 @@ WebGPU compute-based 2x image upscaling using Anime4K CNN models (ported from We
 
 ### WGSL Shaders (in this directory)
 
-26 `.wgsl` files covering effects, post-processing, composition, disintegration, and action layer overlay (`action-layer-blit.wgsl`). Imported via `?raw` Vite suffix (minified in production by `vite-plugin-wgsl-minify`).
+~25 `.wgsl` files for effects, post-processing, composition, and overlays. Imported via `?raw`; minified in production.
 
 ## Color Space
 

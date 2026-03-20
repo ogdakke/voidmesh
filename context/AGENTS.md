@@ -6,7 +6,7 @@ React context providers wiring subsystems together. The "glue" layer between eng
 
 - `canvas-context.tsx` (~52KB) — `CanvasProvider`. Main orchestrator. Bridges URL query state (nuqs) to canvas state, entity CRUD with undo support, renderer registration, image export (copy/save). Largest, most complex file in the codebase.
 - `use-canvas.ts` — `CanvasContext` definition and `useCanvas()` hook. Also `useViewport()` for performance-isolated viewport subscriptions.
-- `export-queue-context.tsx` (~16KB) — `ExportQueueProvider`. Concurrent video export jobs (queue-based, sequential to avoid GPU contention). Auto-download on completion.
+- `export-queue-context.tsx` (~16KB) — Sequential video export queue with auto-download.
 - `video-export-context.tsx` — Export options state (format, quality, resolution).
 - `use-video-export.ts`, `use-export-queue.ts` — Hooks for the export contexts.
 - `keybind-context.ts` (~17KB) — `KeybindStore extends Store`. Keyboard shortcut registration with hierarchical contexts (global > canvas > selection). Builder pattern for binds.

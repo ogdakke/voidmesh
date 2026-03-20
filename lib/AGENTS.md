@@ -4,27 +4,24 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 
 ## Key Files
 
-- `config/index.ts` (~25KB) — Central config. `ShaderFeature` definitions (which params each shader supports), `shaderDefaults` (reset/merge on shader switch), `paramVisibilityRules` (conditional param visibility), rendering constants, export settings. Imported as `#config`.
-- `canvas-math.ts` (~15KB) — Coordinate transforms (`screenToWorld`, `worldToScreen`, `zoomToPoint`), bounds intersection, viewport matrix, grid level calculation, snap-to-grid. Pure functions on `Point`/`Viewport`/`Bounds`.
+- `config/index.ts` (~25KB) — Central config: feature definitions, defaults, visibility rules, rendering/export settings. Imported as `#config`.
+- `canvas-math.ts` (~15KB) — Coordinate transforms, bounds math, viewport matrices, grid calculations.
 - `store.ts` — `Store<T>` base class for `useSyncExternalStore`. Provides `createSnapshot(versionKey, create)` and `getComputed(key, versionKey, compute)` with structural sharing via `shallowEqual`.
 - `undo.ts` — Command pattern. `Command.create({ execute, undo, onEvict })`. `Undo` class with size limits and transaction grouping. Singleton: `undo`.
-- `media-loader.ts` — Loads images (`File -> ImageBitmap`), videos (`File -> HTMLVideoElement + frame`), GIFs (`File -> decoded frames`), SVGs (`File -> rasterized ImageBitmap`). SVGs are rasterized to 1024px on longest axis via `rasterizeSvg()`. Palette extraction, frame rate detection.
+- `media-loader.ts` — Loads/parses images, videos, GIFs, SVGs. Extracts palettes and frame rates.
 - `app-loader.ts` — Controls the HTML loading screen. `setText()` updates status text, `dismiss()` hides with min-display guarantee.
-- `serialization/` — `.vdmsh` zip format (fflate). Versioned manifest with migrations.
+- `serialization/` — `.vdmsh` zip format with versioning and migrations. Encoding/compression in Web Worker.
+- `files/file-handle.ts` — File System Access API handle storage for in-place workspace saving (Chromium only).
+- `files/random-filename.ts` + `files/filename-words.ts` — Random filename generation for workspace files.
 - `palette-extraction/` — K-means clustering for color palettes.
 - `palette-store.ts` — User palette CRUD (persisted via unstorage).
-- `touch-scroll/` — Physics-based momentum scrolling. `VelocityTracker`, `Scroller`, `SpringBack`, `DampedSpring2D` (2D underdamped harmonic oscillator for catch-up springs and rubber-band returns).
+- `touch-scroll/` — Physics-based momentum scrolling with springs and velocity tracking.
 - `client.logger.ts` — Logger with levels. `console.log`/`debug` stripped in production via Vite/oxc config.
-- `color-utils.ts` — OKLCH color model (`OklchColor`, conversion pipeline OKLCH↔OKLab↔LMS↔Linear P3/sRGB), gamut clamping, CSS parsing/formatting, color-space-aware luminance and palette sorting.
-- `config/action-layer.config.ts` — `ActionLayerConfig` interface and defaults for the mobile radial context menu (safe zone, springs, blur, buttons).
-- `entity-placement.ts` — Drop position calculation for new entities.
-- `deep-merge.ts` — Deep object merge for `PartialDeep<ShaderParams>`.
-- `shader-defaults.ts` — Applies `shaderDefaults` from config on shader type switch.
-- `gif-decoder.ts` — Binary search frame lookup by timestamp.
-- `gif-encoder.ts` — GIF encoding orchestrator. Clones input bitmaps and delegates heavy work (palette quantization, LZW compression) to `gif-encoder-worker.ts`.
-- `gif-encoder-worker.ts` — Web Worker for off-main-thread GIF encoding via gifenc.
-- `download.ts` — `downloadBlob()` utility for triggering browser file downloads.
-- `storage.ts` — Browser storage abstraction (unstorage). `preferences` object for persisted user settings (snapToGrid, fancyDelete, custom palettes).
+- `color-utils.ts` — OKLCH color model, gamut clamping, CSS parsing, color-space-aware luminance.
+- `gif-encoder.ts` + `gif-encoder-worker.ts` — GIF encoding via gifenc in Web Worker.
+- `download.ts` — File downloads and file picker (with iOS compatibility).
+- `storage.ts` — Browser storage abstraction (unstorage) for persisted preferences.
+- Also: `config/action-layer.config.ts`, `entity-placement.ts`, `deep-merge.ts`, `shader-defaults.ts`, `gif-decoder.ts`.
 
 ## Patterns
 

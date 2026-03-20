@@ -4,19 +4,15 @@ Custom React hooks bridging engine/renderer state to components.
 
 ## Key Files
 
-- `use-canvas-actions.ts` (~20KB) — Selection state computation (`SelectionState`), shader type switching with defaults, palette operations (extract, add/remove/rename, user palette CRUD), multi-select param intersection logic. Also exposes `fancyDelete` toggle and `snapToGrid` toggle.
+- `use-canvas-actions.ts` (~20KB) — Selection state, shader switching, palette operations, multi-select param merging.
 - `use-canvas-renderer.ts` — `InfiniteCanvasRenderer` lifecycle (init, cleanup, error handling). Polls for canvas element changes.
 - `use-entity-cycling.ts` — Arrow-key entity cycling and focus management.
-- `use-media-controls.ts` (~11KB) — Video/GIF playback controls (play/pause, seek, loop, rate).
+- `use-media-controls.ts` (~11KB) — Video/GIF playback controls.
 - `use-image-input.ts` — File input for image/video/GIF upload. Validates types, loads media, creates entities.
 - `use-param-value.ts` — `useParamValue<T>(path, default)`. Reads shader param for selected entities. Returns `{ value, isSupported, isMixed, update }`. Used by all knob components.
 - `use-clipboard-paste.ts` — Ctrl+V paste handling.
-- `use-canvas-container-resize.ts` — ResizeObserver for canvas container.
-- `use-action-layer.ts` — `ActionLayerSnapshot` subscription via `useSyncExternalStore`.
-- `use-is-mobile.ts` — Touch/mobile detection (`useIsMobile()`, `useIsTouch()`).
-- `use-media-query.ts` — CSS media query hook.
-- `use-carousel-dots.ts` — Carousel navigation for mobile knob panels.
-- `use-studio-file.ts` — `.vdmsh` file open/save via serialization module.
+- Also: `use-canvas-container-resize.ts`, `use-action-layer.ts`, `use-is-mobile.ts`, `use-media-query.ts`, `use-carousel-dots.ts`.
+- `use-studio-file.ts` — `.vdmsh` file open/save via serialization module. Supports file handle saving (save to same file without re-picking on Chromium).
 
 ## Patterns
 

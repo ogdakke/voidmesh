@@ -6,10 +6,11 @@ Per-effect shader passes. Each shader type gets a class extending `ShaderPass`.
 
 - `shader-pass.ts` — Abstract base class. Defines `ShaderContext` (device, uniform buffer, sampler, palette cache, texture pool, `intermediateFormat`, `supportsP3`). Provides `writeUniforms()` (common 336-byte layout including `is_p3` flag at u[18]), `createPipeline()`, `execute()` (render pass submission). Subclasses implement `getShaderSource()` and `writeVariantUniforms()`.
 - `shader-registry.ts` — `ShaderRegistry`. Maps `ShaderType` -> `ShaderPass` instances. `applyShader()` dispatches. `applyShaderChain()` runs multiple passes with ping-pong textures.
-- `dithering-shader.ts` — Most complex. Has BOTH a fragment pipeline (ordered dithering: Bayer, noise) and a compute pipeline (error diffusion: Floyd-Steinberg, Atkinson, etc.). Error buffers cached per entity dimensions.
-- `ascii-shader.ts` — Uses MSDF font atlas (extra texture binding). Async init for atlas loading.
-- `glass-shader.ts` — Three variants (fluted, frosted Voronoi, flowing). Uses `GlassKind` to select WGSL source.
-- `blobs-shader.ts`, `halftone-shader.ts`, `melt-shader.ts` — Simple passes. Override `getShaderSource()` and `writeVariantUniforms()` only.
+- `dithering-shader.ts` — Most complex. Fragment pipeline (ordered) and compute pipeline (error diffusion). Error buffers cached per entity.
+- `ascii-shader.ts` — Uses MSDF font atlas. Async atlas init.
+- `glass-shader.ts` — Three variants selected via `GlassKind`.
+- `glitch-shader.ts` — Simple pass. Maps `GlitchKind` to uniform index.
+- `blobs-shader.ts`, `halftone-shader.ts`, `melt-shader.ts` — Simple passes.
 
 ## Adding a New Shader
 
