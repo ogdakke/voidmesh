@@ -49,12 +49,12 @@ export default function DesktopSettingsContent({
         <div className="desktop-settings-studio-buttons">
           <Button variant="quiet" onClick={() => importStudioFile(onClose)} disabled={isLoading}>
             <Import />
-            <span>Import voidmesh File</span>
+            <span>Open workspace</span>
           </Button>
           {entities.length > 0 && (
             <Button variant="primary" onClick={exportStudioFile} disabled={isLoading}>
               <FloppyDiskArrowIn />
-              <span>Export voidmesh File</span>
+              <span>Save workspace</span>
             </Button>
           )}
         </div>

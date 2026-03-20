@@ -1,6 +1,7 @@
 import { toastManager } from "#components/ui/toast/toast-manager.ts";
 import { config } from "#config";
 import { addFilesToCanvas, addUrlToCanvas, fitEntitiesToView } from "#lib/entity-placement.ts";
+import { fileHandleStore } from "#lib/files/file-handle.ts";
 import { wait } from "#lib/util.ts";
 import { useRef } from "react";
 import { useCanvas } from "../context/use-canvas.ts";
@@ -150,6 +151,19 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
     if (dataTransfer.files.length > 0) {
       const studioFile = Array.from(dataTransfer.files).find(isStudioFile);
       if (studioFile) {
+        // Capture file handle from drop for "save to same file" on Chromium
+        if (fileHandleStore.supportsFileSystemAccess) {
+          const items = Array.from(dataTransfer.items);
+          const studioItem = items.find(
+            (item) => item.kind === "file" && item.getAsFile()?.name === studioFile.name,
+          );
+          if (studioItem) {
+            const handle = await studioItem.getAsFileSystemHandle();
+            if (handle?.kind === "file") {
+              fileHandleStore.handle = handle as FileSystemFileHandle;
+            }
+          }
+        }
         await importStudioWithToasts(studioFile, deserializeCanvas);
         isLoadingRef.current = false;
         return;

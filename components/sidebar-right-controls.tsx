@@ -207,7 +207,7 @@ export const SidebarRightControls = ({ className, compact }: SidebarRightControl
               disabled={isExporting || isImporting}
             >
               <FloppyDiskArrowIn />
-              <span>Export voidmesh File</span>
+              <span>Save workspace</span>
             </Button>
           )}
           <Button
@@ -216,7 +216,7 @@ export const SidebarRightControls = ({ className, compact }: SidebarRightControl
             disabled={isExporting || isImporting}
           >
             <Import />
-            <span>Import voidmesh File</span>
+            <span>Open workspace</span>
           </Button>
         </div>
       )}

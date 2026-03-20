@@ -73,7 +73,7 @@ export interface CanvasContextValue {
   getContextOpenEntity: () => ShaderCanvasEntity | undefined;
 
   // Serialization
-  serializeCanvas: () => Promise<Blob>;
+  serializeCanvas: () => Promise<Blob | null>;
   deserializeCanvas: (source: Blob | ArrayBuffer) => Promise<DeserializeResult>;
 
   // url state

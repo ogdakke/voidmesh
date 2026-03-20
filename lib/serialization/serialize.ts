@@ -1,71 +1,130 @@
 import { canvasStore } from "#engine";
 import { config } from "#config";
 import type { ColorPalette, ShaderCanvasEntity } from "#types/canvas.ts";
-import { zipSync } from "fflate";
 import { paletteStore } from "../palette-store.ts";
-import { detectVideoExtension, imageBitmapToBytes, videoElementToBytes } from "./media.ts";
-import type { SerializedEntity, SerializedPlaybackState, StudioManifest } from "./types.ts";
+import { detectVideoExtension, videoElementToBytes } from "./media.ts";
+import type {
+  SerializeMediaEntry,
+  SerializedEntity,
+  SerializedPlaybackState,
+  StudioManifest,
+} from "./types.ts";
 import { CURRENT_VERSION } from "./version.ts";
 
+/** Synchronous flag — prevents overlapping saves even when React state hasn't flushed yet. */
+let isSaving = false;
+
+export function getIsSaving(): boolean {
+  return isSaving;
+}
+
 /**
- * Serialize the current canvas state into a .studio zip archive (Blob).
+ * Serialize the current canvas state into a .vdmsh zip archive (Blob).
  *
- * The archive contains:
- *   manifest.json  — viewport + entity metadata
- *   media/         — original media files (images, videos, GIF frames)
+ * Heavy work (PNG encoding + zip compression) runs in a Web Worker.
+ * The main thread only prepares entity metadata and collects transferable media data.
+ * Concurrent calls are rejected (returns null) to prevent queuing redundant saves.
  */
-export async function serialize(): Promise<Blob> {
-  const state = canvasStore.getState();
-  const entities = Array.from(state.entities.values());
+export async function serialize(): Promise<Blob | null> {
+  if (isSaving) return null;
+  isSaving = true;
 
-  // Sort by zIndex for deterministic output
-  entities.sort((a, b) => a.zIndex - b.zIndex);
+  try {
+    const state = canvasStore.getState();
+    const entities = Array.from(state.entities.values());
 
-  // Build manifest entries and zip file entries in parallel
-  const zipEntries: Record<string, Uint8Array> = {};
-  const serializedEntities: SerializedEntity[] = [];
+    // Sort by zIndex for deterministic output
+    entities.sort((a, b) => a.zIndex - b.zIndex);
 
-  await Promise.all(
-    entities.map(async (entity) => {
-      const { serialized, mediaEntries } = await serializeEntity(entity);
-      serializedEntities.push(serialized);
-      Object.assign(zipEntries, mediaEntries);
-    }),
-  );
+    // Prepare entity metadata and media data in parallel (main thread)
+    const serializedEntities: SerializedEntity[] = [];
+    const mediaEntries: SerializeMediaEntry[] = [];
 
-  // Re-sort after parallel processing (order may have been scrambled)
-  serializedEntities.sort((a, b) => a.zIndex - b.zIndex);
+    await Promise.all(
+      entities.map(async (entity) => {
+        const { serialized, media } = await prepareEntity(entity);
+        serializedEntities.push(serialized);
+        mediaEntries.push(media);
+      }),
+    );
 
-  // Collect custom/extracted palettes referenced by entities
-  const referencedPalettes = collectReferencedPalettes(entities);
+    // Re-sort after parallel processing (order may have been scrambled)
+    serializedEntities.sort((a, b) => a.zIndex - b.zIndex);
 
-  const manifest: StudioManifest = {
-    type: "studio-canvas",
-    version: CURRENT_VERSION,
-    createdAt: new Date().toISOString(),
-    viewport: {
-      offset: { x: state.viewport.offset.x, y: state.viewport.offset.y },
-      zoom: state.viewport.zoom,
-    },
-    entities: serializedEntities,
-    ...(referencedPalettes.length > 0 && { palettes: referencedPalettes }),
-  };
+    // Collect custom/extracted palettes referenced by entities
+    const referencedPalettes = collectReferencedPalettes(entities);
 
-  // Add manifest to zip
-  const manifestJson = JSON.stringify(manifest, null, 2);
-  zipEntries["manifest.json"] = new TextEncoder().encode(manifestJson);
+    const manifest: StudioManifest = {
+      type: "studio-canvas",
+      version: CURRENT_VERSION,
+      createdAt: new Date().toISOString(),
+      viewport: {
+        offset: { x: state.viewport.offset.x, y: state.viewport.offset.y },
+        zoom: state.viewport.zoom,
+      },
+      entities: serializedEntities,
+      ...(referencedPalettes.length > 0 && { palettes: referencedPalettes }),
+    };
 
-  // Create zip archive
-  const zipped = zipSync(zipEntries, { level: 6 });
-  return new Blob([zipped.buffer as ArrayBuffer], { type: "application/zip" });
+    const manifestJson = JSON.stringify(manifest, null, 2);
+
+    // Delegate PNG encoding + zip compression to worker
+    return await compressInWorker(manifestJson, mediaEntries);
+  } finally {
+    isSaving = false;
+  }
 }
 
-interface EntitySerializeResult {
+let serializeWorker: Worker | null = null;
+
+function getSerializeWorker(): Worker {
+  if (!serializeWorker) {
+    serializeWorker = new Worker(new URL("./serialize-worker.ts", import.meta.url), {
+      type: "module",
+    });
+  }
+  return serializeWorker;
+}
+
+function compressInWorker(manifest: string, mediaEntries: SerializeMediaEntry[]): Promise<Blob> {
+  const worker = getSerializeWorker();
+
+  return new Promise<Blob>((resolve, reject) => {
+    worker.onmessage = (e: MessageEvent) => {
+      if (e.data.type === "done") {
+        resolve(new Blob([e.data.zip.buffer as ArrayBuffer], { type: "application/vdmsh" }));
+      } else if (e.data.type === "error") {
+        reject(new Error(e.data.message));
+      }
+    };
+
+    worker.onerror = (err) => {
+      reject(new Error(`Serialization worker failed: ${err.message}`));
+      // Worker is broken — discard so next save creates a fresh one
+      serializeWorker?.terminate();
+      serializeWorker = null;
+    };
+
+    // Build transfer list for zero-copy posting
+    const transferList: Transferable[] = [];
+    for (const entry of mediaEntries) {
+      if (entry.type === "imageBitmap") {
+        transferList.push(entry.bitmap!);
+      } else {
+        transferList.push(entry.bytes!.buffer);
+      }
+    }
+
+    worker.postMessage({ manifest, mediaEntries }, transferList);
+  });
+}
+
+interface PreparedEntity {
   serialized: SerializedEntity;
-  mediaEntries: Record<string, Uint8Array>;
+  media: SerializeMediaEntry;
 }
 
-async function serializeEntity(entity: ShaderCanvasEntity): Promise<EntitySerializeResult> {
+async function prepareEntity(entity: ShaderCanvasEntity): Promise<PreparedEntity> {
   const base = {
     id: entity.id,
     name: entity.name,
@@ -86,23 +145,22 @@ async function serializeEntity(entity: ShaderCanvasEntity): Promise<EntitySerial
     }),
   };
 
-  const mediaEntries: Record<string, Uint8Array> = {};
-
   switch (entity.mediaSource.type) {
     case "image": {
       const path = `media/${entity.id}.png`;
-      mediaEntries[path] = await imageBitmapToBytes(entity.imageBitmap);
+      // Clone bitmap — transfer destroys the source, entity still needs it for rendering
+      const cloned = await createImageBitmap(entity.imageBitmap);
       return {
         serialized: { ...base, mediaType: "image", mediaFile: path },
-        mediaEntries,
+        media: { path, type: "imageBitmap", bitmap: cloned },
       };
     }
 
     case "video": {
+      // Fetch blob URL bytes on main thread (blob URLs don't work in workers)
       const bytes = await videoElementToBytes(entity.mediaSource.videoElement);
       const ext = detectVideoExtension(bytes);
       const path = `media/${entity.id}.${ext}`;
-      mediaEntries[path] = bytes;
       return {
         serialized: {
           ...base,
@@ -113,14 +171,13 @@ async function serializeEntity(entity: ShaderCanvasEntity): Promise<EntitySerial
           hasAudio: entity.mediaSource.hasAudio,
           playback: serializePlayback(entity.playback),
         },
-        mediaEntries,
+        media: { path, type: "bytes", bytes },
       };
     }
 
     case "gif": {
       const bytes = new Uint8Array(await entity.mediaSource.blob.arrayBuffer());
       const path = `media/${entity.id}.gif`;
-      mediaEntries[path] = bytes;
       return {
         serialized: {
           ...base,
@@ -130,17 +187,16 @@ async function serializeEntity(entity: ShaderCanvasEntity): Promise<EntitySerial
           fps: entity.mediaSource.fps,
           playback: serializePlayback(entity.playback),
         },
-        mediaEntries,
+        media: { path, type: "bytes", bytes },
       };
     }
 
     case "svg": {
       const bytes = new Uint8Array(await entity.mediaSource.blob.arrayBuffer());
       const path = `media/${entity.id}.svg`;
-      mediaEntries[path] = bytes;
       return {
         serialized: { ...base, mediaType: "svg", mediaFile: path },
-        mediaEntries,
+        media: { path, type: "bytes", bytes },
       };
     }
   }

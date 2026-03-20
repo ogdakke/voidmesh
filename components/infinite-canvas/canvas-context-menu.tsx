@@ -199,7 +199,7 @@ function CanvasContextMenuItems({
   const { saveSelectedEntityToFile, renderer, entities } = useCanvas();
   const { addToQueue } = useExportQueue();
   const { addToUpscaleQueue } = useUpscaleQueue();
-  const { exportStudioFile, importStudioFile } = useStudioFile();
+  const { exportStudioFile, saveAsStudioFile, importStudioFile } = useStudioFile();
 
   // Single selected entity for display (undefined if multi-selected)
   const selectedEntity = (() => {
@@ -307,24 +307,46 @@ function CanvasContextMenuItems({
           <Keybind keybindId="paste_canvas" />
         </ContextMenu.Item>
         <ContextMenu.Separator className="menu-separator" />
-        {hasEntities && (
-          <ContextMenu.Item
-            className="menu-item menu-item--icon-left menu-item--icon-right"
-            onClick={exportStudioFile}
-          >
-            <FloppyDiskArrowIn className="menu-icon-left" />
-            Export voidmesh File
-            <Keybind keybindId="save_studio" />
-          </ContextMenu.Item>
-        )}
-        <ContextMenu.Item
-          className="menu-item menu-item--icon-left menu-item--icon-right"
-          onClick={() => importStudioFile()}
-        >
-          <Import className="menu-icon-left" />
-          Import voidmesh File
-          <Keybind keybindId="open_studio" />
-        </ContextMenu.Item>
+        <ContextMenu.SubmenuRoot>
+          <ContextMenu.SubmenuTrigger className="menu-submenu-trigger">
+            Save/Open workspace...
+            <NavArrowRight />
+          </ContextMenu.SubmenuTrigger>
+          <ContextMenu.Portal>
+            <ContextMenu.Positioner className="menu-positioner" sideOffset={SIDE_OFFSET}>
+              <ContextMenu.Popup className="menu-submenu-popup">
+                {hasEntities && (
+                  <>
+                    <ContextMenu.Item
+                      className="menu-item menu-item--icon-left menu-item--icon-right"
+                      onClick={exportStudioFile}
+                    >
+                      <FloppyDiskArrowIn className="menu-icon-left" />
+                      Save
+                      <Keybind keybindId="save_studio" />
+                    </ContextMenu.Item>
+                    <ContextMenu.Item
+                      className="menu-item menu-item--icon-left menu-item--icon-right"
+                      onClick={saveAsStudioFile}
+                    >
+                      <FloppyDiskArrowIn className="menu-icon-left" />
+                      Save as...
+                      <Keybind keybindId="save_as_studio" />
+                    </ContextMenu.Item>
+                  </>
+                )}
+                <ContextMenu.Item
+                  className="menu-item menu-item--icon-left menu-item--icon-right"
+                  onClick={() => importStudioFile()}
+                >
+                  <Import className="menu-icon-left" />
+                  Open
+                  <Keybind keybindId="open_studio" />
+                </ContextMenu.Item>
+              </ContextMenu.Popup>
+            </ContextMenu.Positioner>
+          </ContextMenu.Portal>
+        </ContextMenu.SubmenuRoot>
         <ContextMenu.Separator className="menu-separator" />
         <ContextMenu.CheckboxItem
           className="menu-checkbox-item menu-item--icon-right"

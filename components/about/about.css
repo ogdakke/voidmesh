@@ -216,6 +216,24 @@
     }
   }
 
+  .update-note {
+    display: flex;
+    align-items: start;
+    gap: var(--spacing-2);
+    padding: var(--spacing-3);
+    margin-top: var(--spacing-3);
+    border-radius: var(--radius-lg);
+    background: var(--amber-300);
+    color: var(--amber-1500);
+    font-size: var(--text-sm);
+    border: 1px solid var(--amber);
+
+    :where(svg) {
+      flex-shrink: 0;
+      margin-top: 4px;
+    }
+  }
+
   .update figcaption {
     font-size: var(--text-sm);
     color: var(--gray-900);
