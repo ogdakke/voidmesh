@@ -8,9 +8,9 @@ const MAX_RECTS: u32 = 4u;
 struct RectData {
   // Rectangle bounds in world coordinates (x, y, width, height)
   rect: vec4f,
-  // Fill color (RGBA, premultiplied alpha)
+  // Fill color (RGBA, straight alpha)
   fillColor: vec4f,
-  // Border color (RGBA, premultiplied alpha)
+  // Border color (RGBA, straight alpha)
   borderColor: vec4f,
   // Border width in screen pixels (padded to vec4 for alignment)
   borderWidth: vec4f, // only .x is used
@@ -35,13 +35,11 @@ struct Uniforms {
 
 struct VertexOutput {
   @builtin(position) position: vec4f,
-  @location(0) fragCoord: vec2f,
 }
 
 // Fullscreen triangle vertex shader
 @vertex
 fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
-  // Generate fullscreen triangle covering clip space
   var pos = array<vec2f, 3>(
     vec2f(-1.0, -1.0),
     vec2f(3.0, -1.0),
@@ -50,70 +48,61 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
 
   var out: VertexOutput;
   out.position = vec4f(pos[vertexIndex], 0.0, 1.0);
-  // Convert to pixel coordinates for fragment shader
-  out.fragCoord = (pos[vertexIndex] * 0.5 + 0.5) * uniforms.resolution;
-  // Flip Y since WebGPU has origin at top-left
-  out.fragCoord.y = uniforms.resolution.y - out.fragCoord.y;
   return out;
 }
 
 // Compute the contribution of a single rectangle at the given world position
-fn computeRectColor(worldPos: vec2f, rectData: RectData, aaWidth: f32) -> vec4f {
-  let rectPos = rectData.rect.xy;
+fn computeRectColor(worldPos: vec2f, rectData: RectData) -> vec4f {
+  let rectMin = rectData.rect.xy;
   let rectSize = rectData.rect.zw;
 
-  // Skip if rectangle has no size
   if (rectSize.x <= 0.0 || rectSize.y <= 0.0) {
     return vec4f(0.0);
   }
 
-  // Compute distance to rectangle edge (signed distance field)
-  // Positive = outside, negative = inside
-  let halfSize = rectSize * 0.5;
-  let center = rectPos + halfSize;
-  let localPos = worldPos - center;
-  let d = abs(localPos) - halfSize;
-  let outsideDist = length(max(d, vec2f(0.0)));
-  let insideDist = min(max(d.x, d.y), 0.0);
-  let dist = outsideDist + insideDist;
+  let rectMax = rectMin + rectSize;
+  let bw = rectData.borderWidth.x / uniforms.zoom;
 
-  // Convert border width from screen pixels to world units
-  let borderWidthWorld = rectData.borderWidth.x / uniforms.zoom;
+  // Outer bounds (border extends outward from rectangle edge)
+  let outerMin = rectMin - vec2f(bw);
+  let outerMax = rectMax + vec2f(bw);
 
-  // Compute alpha for fill (inside rectangle)
-  let fillAlpha = 1.0 - smoothstep(-aaWidth, aaWidth, dist);
+  // Outside everything — early out
+  if (worldPos.x < outerMin.x || worldPos.x > outerMax.x ||
+      worldPos.y < outerMin.y || worldPos.y > outerMax.y) {
+    return vec4f(0.0);
+  }
 
-  // Compute alpha for border (outside the edge)
-  let outerEdge = borderWidthWorld;
-  let borderAlpha = smoothstep(-aaWidth, aaWidth, dist)
-                  * (1.0 - smoothstep(outerEdge - aaWidth, outerEdge + aaWidth, dist));
+  // Inside fill region
+  let inFill = worldPos.x >= rectMin.x && worldPos.x <= rectMax.x &&
+               worldPos.y >= rectMin.y && worldPos.y <= rectMax.y;
 
-  // Combine fill and border (border takes precedence)
-  let fillContrib = rectData.fillColor * fillAlpha * (1.0 - borderAlpha);
-  let borderContrib = rectData.borderColor * borderAlpha;
+  let fill = rectData.fillColor;
+  let border = rectData.borderColor;
 
-  return fillContrib + borderContrib;
+  if (inFill) {
+    let a = fill.a;
+    return vec4f(fill.rgb * a, a);
+  }
+
+  // In border region (between outer and inner bounds)
+  let a = border.a;
+  return vec4f(border.rgb * a, a);
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-  // Convert screen position to world coordinates
-  let screenPos = in.fragCoord;
+  // Use @builtin(position) directly — exact pixel coordinates, no interpolation
+  let screenPos = in.position.xy;
   let worldPos = screenPos / uniforms.zoom + uniforms.offset;
 
-  // Anti-aliasing width: 1 screen pixel in world units
-  let aaWidth = 1.0 / uniforms.zoom;
-
-  // Accumulate color from all active rectangles using alpha blending
   var finalColor = vec4f(0.0);
 
   for (var i = 0u; i < uniforms.rectCount && i < MAX_RECTS; i++) {
-    let rectColor = computeRectColor(worldPos, uniforms.rects[i], aaWidth);
-    // Alpha blend: out = src + dst * (1 - src.a)
+    let rectColor = computeRectColor(worldPos, uniforms.rects[i]);
     finalColor = rectColor + finalColor * (1.0 - rectColor.a);
   }
 
-  // Discard fully transparent pixels
   if (finalColor.a < 0.001) {
     discard;
   }

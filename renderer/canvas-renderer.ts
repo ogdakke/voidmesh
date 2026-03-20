@@ -114,6 +114,8 @@ export class InfiniteCanvasRenderer {
 
   #gridConfig: GridConfig = config.rendering.grid.default;
   #actionLayerTintColor: [number, number, number] = config.actionLayer.dimColor.dark;
+  #selectionRectConfig = config.selectionRectangle.light;
+  #multiSelectBoundingBoxConfig = config.multiSelectBoundingBox.light;
 
   // Texture pool for eliminating per-frame allocation churn
   #texturePool: TexturePool | null = null;
@@ -769,15 +771,15 @@ export class InfiniteCanvasRenderer {
       v[base + 1] = rect.bounds.y;
       v[base + 2] = rect.bounds.width;
       v[base + 3] = rect.bounds.height;
-      // fillColor: vec4f (premultiplied alpha)
-      v[base + 4] = fillColor[0] * fillColor[3];
-      v[base + 5] = fillColor[1] * fillColor[3];
-      v[base + 6] = fillColor[2] * fillColor[3];
+      // fillColor: vec4f (straight alpha — shader handles blending)
+      v[base + 4] = fillColor[0];
+      v[base + 5] = fillColor[1];
+      v[base + 6] = fillColor[2];
       v[base + 7] = fillColor[3];
-      // borderColor: vec4f (premultiplied alpha)
-      v[base + 8] = borderColor[0] * borderColor[3];
-      v[base + 9] = borderColor[1] * borderColor[3];
-      v[base + 10] = borderColor[2] * borderColor[3];
+      // borderColor: vec4f (straight alpha — shader handles blending)
+      v[base + 8] = borderColor[0];
+      v[base + 9] = borderColor[1];
+      v[base + 10] = borderColor[2];
       v[base + 11] = borderColor[3];
       // borderWidth: vec4f (only .x used, rest padding)
       v[base + 12] = rect.config.borderWidth;
@@ -1595,14 +1597,14 @@ export class InfiniteCanvasRenderer {
     if (state.dragSelectBounds) {
       selectionRects.push({
         bounds: state.dragSelectBounds,
-        config: config.selectionRectangle,
+        config: this.#selectionRectConfig,
       });
     }
 
     if (state.multiSelectBounds) {
       selectionRects.push({
         bounds: state.multiSelectBounds,
-        config: config.multiSelectBoundingBox,
+        config: this.#multiSelectBoundingBoxConfig,
       });
     }
 
@@ -1657,6 +1659,14 @@ export class InfiniteCanvasRenderer {
 
   setActionLayerTint(color: [number, number, number]): void {
     this.#actionLayerTintColor = color;
+  }
+
+  setSelectionRectConfig(
+    selectionRect: typeof config.selectionRectangle.light,
+    multiSelectBox: typeof config.multiSelectBoundingBox.light,
+  ): void {
+    this.#selectionRectConfig = selectionRect;
+    this.#multiSelectBoundingBoxConfig = multiSelectBox;
   }
 
   /**

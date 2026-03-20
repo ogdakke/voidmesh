@@ -172,7 +172,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
 
     // Selection border (blue)
     if (entity.isSelected == 1u && inBorder) {
-        return vec4f(0, 0.509, 1, 1.0); // Blue
+        return vec4f(59.0/255.0, 130.0/255.0, 246.0/255.0, 1.0); // #3B82F6
     }
 
     // Normal texture

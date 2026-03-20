@@ -419,23 +419,37 @@ export const DEFAULT_GRID_CONFIG_DARK: GridConfig = {
 };
 
 const DEFAULT_MAX_STORAGE_BUFFER_SIZE_BYTES = 128 * 1024 * 1024; // 128 MiB
-
+const SELECTION_BORDER_COLOR = [59 / 255, 130 / 255, 246 / 255, 1] satisfies RGBA;
 /** application config */
 export const config = {
   ui: {
     floatingParamLabelHideTimeoutMs: 800,
   },
-  /** Selection rectangle styling for drag-to-select */
+  /** Selection rectangle styling for drag-to-select (themed) */
   selectionRectangle: {
-    borderColor: [59 / 255, 130 / 255, 246 / 255, 1] satisfies RGBA, // Same as entity selection border
-    backgroundColor: [59 / 255, 130 / 255, 246 / 255, 0.25] satisfies RGBA,
-    borderWidth: 2,
+    light: {
+      borderColor: SELECTION_BORDER_COLOR,
+      backgroundColor: [0, 0.1, 1, 0.15] satisfies RGBA,
+      borderWidth: 2,
+    },
+    dark: {
+      borderColor: SELECTION_BORDER_COLOR,
+      backgroundColor: [59 / 255, 130 / 255, 246 / 255, 0.25] satisfies RGBA,
+      borderWidth: 2,
+    },
   },
-  /** Multi-select bounding box styling (border only, no fill) */
+  /** Multi-select bounding box styling (border only, no fill, themed) */
   multiSelectBoundingBox: {
-    borderColor: [59 / 255, 130 / 255, 246 / 255, 1] satisfies RGBA,
-    backgroundColor: [0, 0, 0, 0] satisfies RGBA, // Transparent - border only
-    borderWidth: 2,
+    light: {
+      borderColor: SELECTION_BORDER_COLOR,
+      backgroundColor: [0, 0, 0, 0] satisfies RGBA,
+      borderWidth: 2,
+    },
+    dark: {
+      borderColor: SELECTION_BORDER_COLOR,
+      backgroundColor: [0, 0, 0, 0] satisfies RGBA,
+      borderWidth: 2,
+    },
   },
   rendering: {
     gridUniformSize: GRID_UNIFORM_SIZE,
@@ -456,8 +470,8 @@ export const config = {
     /** Viewport culling buffer as fraction of viewport size (0.1 = 10% margin on each side) */
     cullingBufferFraction: 0.1,
     // /** Zoom constraints */
-    minZoom: 0.1,
-    maxZoom: 5,
+    minZoom: 0.01,
+    maxZoom: 10,
     staggerMultiplier: 60,
     /** Gap between entities in grid layout (world pixels) */
     gridGap: 40,

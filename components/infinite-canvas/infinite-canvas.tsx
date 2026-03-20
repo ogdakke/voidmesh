@@ -178,6 +178,10 @@ export function InfiniteCanvas() {
       renderer.setActionLayerTint(
         darkTheme ? config.actionLayer.dimColor.dark : config.actionLayer.dimColor.light,
       );
+      renderer.setSelectionRectConfig(
+        darkTheme ? config.selectionRectangle.dark : config.selectionRectangle.light,
+        darkTheme ? config.multiSelectBoundingBox.dark : config.multiSelectBoundingBox.light,
+      );
       registerRenderer(renderer);
       gameLoop.start();
     }
