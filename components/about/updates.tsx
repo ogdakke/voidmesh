@@ -4,16 +4,84 @@ import type { PropsWithChildren } from "react";
 import saveFeature from "#media/save_feature_img.webp?img";
 import p3Feature from "#media/feature_color_picker_with_space_select.jpg?img";
 import flowingExample from "#media/flowing_example_updates.webp?img";
-import { MoreVert } from "iconoir-react";
+import { InfoCircle, MoreVert } from "iconoir-react";
+import { fileHandleStore } from "#lib/files/file-handle.ts";
+import { Keybind } from "#components/keyboard-shortcuts/keybind.tsx";
+import { useIsMobile } from "#hooks/use-is-mobile.ts";
 
 function formatDate(isoDate: string): string {
   return Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(isoDate));
 }
 
+function PreferencesMenu() {
+  return (
+    <MoreVert
+      role="presentation"
+      style={{
+        display: "inline-block",
+        background: "light-dark(var(--gray-100), var(--gray-50))",
+        borderRadius: "99px",
+        width: "1.5em",
+        height: "1.5em",
+        marginInline: "4px",
+        padding: "2px",
+        verticalAlign: "top",
+      }}
+    />
+  );
+}
+
 export function Updates({ id }: { id?: string }) {
+  const isMobile = useIsMobile();
   return (
     <section id={id}>
       <h1>Updates</h1>
+      <Update>
+        <UpdatesTitle date="2026-03-20">Better saving</UpdatesTitle>
+        <p>
+          Saving just got a lot smoother. Use <strong>Save</strong> to write directly to your file
+          without being asked where to save every time.{" "}
+          {!isMobile && (
+            <>
+              Use <strong>Save as...</strong> when you want to pick a new location.
+            </>
+          )}
+        </p>
+        <ul>
+          {isMobile ? (
+            <li>
+              Open preferences <PreferencesMenu />, tap <strong>Open workspace</strong> and choose
+              file.
+            </li>
+          ) : (
+            <>
+              <li>
+                <Keybind keybindId="save_studio" style={{ display: "inline-flex" }} /> saves
+                instantly to the same file
+              </li>
+              <li>
+                <Keybind keybindId="save_as_studio" style={{ display: "inline-flex" }} /> lets you
+                pick a new file name or location
+              </li>
+            </>
+          )}
+          <li>
+            Opening a workspace also remembers the file, so your next save goes right back to it
+          </li>
+          <li>
+            You can for example store workspace files in cloud storage of your choice, and sync your
+            workspaces to many devices
+          </li>
+        </ul>
+        {!fileHandleStore.supportsFileSystemAccess && (
+          <Note>
+            <InfoCircle />
+            Your browser doesn't support saving directly to files. For the best experience, use
+            Chrome, Edge or other Chromium-based browsers. You are still able to save your
+            workspace, but it will download a new file every time.
+          </Note>
+        )}
+      </Update>
       <Update>
         <UpdatesTitle date="2026-03-08">Upscaling</UpdatesTitle>
         <p>
@@ -95,20 +163,7 @@ export function Updates({ id }: { id?: string }) {
           />
           <figcaption>
             You can turn this effect off from the preferences menu (
-            <MoreVert
-              role="presentation"
-              style={{
-                display: "inline-block",
-                background: "light-dark(var(--gray-100), var(--gray-50))",
-                borderRadius: "99px",
-                width: "1.5em",
-                height: "1.5em",
-                marginInline: "4px",
-                padding: "2px",
-                verticalAlign: "top",
-              }}
-            />
-            )
+            <PreferencesMenu />)
           </figcaption>
         </figure>
       </Update>
@@ -162,4 +217,8 @@ function UpdatesTitle({ children, date }: PropsWithChildren<UpdatesTitleProps>) 
       <span className="date">{formatDate(date)}</span>
     </div>
   );
+}
+
+function Note({ children }: PropsWithChildren) {
+  return <p className="update-note">{children}</p>;
 }
