@@ -36,6 +36,7 @@ import { actionLayerController } from "./action-layer-controller.ts";
 import { entityLabel } from "./entity-label.ts";
 import { perfOverlay } from "./perf-overlay.ts";
 import { viewportAnimation } from "./viewport-animation.ts";
+import { scheduler } from "../lib/animation-scheduler.ts";
 import { haptic } from "#lib/haptic.ts";
 
 export interface InputState {
@@ -326,8 +327,8 @@ export class GameLoop {
       }
     }
 
-    // 3. Update viewport animation (returns true if animation is active)
-    const animationActive = viewportAnimation.tick(now);
+    // 3. Advance all scheduler-managed animations (viewport, etc.)
+    scheduler.tick(now);
 
     // 3b. Process momentum scrolling (touch fling)
     const momentumActive = this.processMomentumScrolling(now);
@@ -368,7 +369,7 @@ export class GameLoop {
       renderState.dirty ||
       hasPlayingMedia ||
       hasContinuousShaderRender ||
-      animationActive ||
+      scheduler.hasActive ||
       momentumActive ||
       zoomMomentumActive ||
       dragVisualActive ||

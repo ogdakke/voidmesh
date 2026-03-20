@@ -2,6 +2,11 @@ import { canvasStore } from "./canvas-store.ts";
 import type { Point, Viewport } from "#types/canvas.ts";
 import { lerpExp, lerpPoint, easings, type EasingFunction } from "../lib/canvas-math.ts";
 import { config } from "../lib/config/index.ts";
+import {
+  scheduler as defaultScheduler,
+  type AnimationScheduler,
+  type AnimationHandle,
+} from "../lib/animation-scheduler.ts";
 
 export interface ViewportAnimationOptions {
   /** Animation duration in milliseconds (default: 300) */
@@ -12,19 +17,9 @@ export interface ViewportAnimationOptions {
   onComplete?: () => void;
 }
 
-interface AnimationState {
-  /** World point that was at screen center at animation start */
-  startWorldCenter: Point;
-  /** World point that should be at screen center at animation end */
-  endWorldCenter: Point;
-  startZoom: number;
-  endZoom: number;
-  /** Screen center in device pixels (needed to calculate offset from world center) */
-  screenCenter: Point;
-  startTime: number;
-  duration: number;
-  easing: EasingFunction;
-  onComplete?: () => void;
+export interface ViewportStore {
+  setViewport(viewport: Viewport): void;
+  getViewport(): Viewport;
 }
 
 /**
@@ -51,15 +46,23 @@ function getOffsetForWorldCenter(worldCenter: Point, zoom: number, screenCenter:
 /**
  * Viewport animation controller.
  * Manages smooth transitions between viewport states.
- * Integrates with the game loop for 60fps updates.
  *
  * Uses screen-space interpolation: interpolates the world center point
  * and zoom separately, then derives offset. This ensures the viewport
  * follows a straight visual path regardless of zoom changes.
+ *
+ * Delegates timing to AnimationScheduler (no tick() method).
  */
-class ViewportAnimationController {
-  #animation: AnimationState | null = null;
+export class ViewportAnimationController {
+  #scheduler: AnimationScheduler;
+  #store: ViewportStore;
+  #handle: AnimationHandle | null = null;
   #container: HTMLElement | null = null;
+
+  constructor(scheduler: AnimationScheduler, store: ViewportStore) {
+    this.#scheduler = scheduler;
+    this.#store = store;
+  }
 
   /**
    * Set the container element (needed for screen size calculations).
@@ -85,15 +88,15 @@ class ViewportAnimationController {
 
     if (!this.#container) {
       // No container set, fall back to instant update
-      canvasStore.setViewport(target);
+      this.#store.setViewport(target);
       onComplete?.();
       return;
     }
 
-    const currentViewport = canvasStore.getViewport();
+    const currentViewport = this.#store.getViewport();
 
     // Skip animation if already at target
-    if (this.#viewportsEqual(currentViewport, target)) {
+    if (viewportsEqual(currentViewport, target)) {
       onComplete?.();
       return;
     }
@@ -104,21 +107,29 @@ class ViewportAnimationController {
       y: (this.#container.clientHeight * dpr) / 2,
     };
 
-    // Calculate world centers for start and end viewports
     const startWorldCenter = getWorldCenter(currentViewport, screenCenter);
     const endWorldCenter = getWorldCenter(target, screenCenter);
+    const startZoom = currentViewport.zoom;
+    const endZoom = target.zoom;
 
-    this.#animation = {
-      startWorldCenter,
-      endWorldCenter,
-      startZoom: currentViewport.zoom,
-      endZoom: target.zoom,
-      screenCenter,
-      startTime: performance.now(),
+    this.#handle = this.#scheduler.tween({
+      from: 0,
+      to: 1,
       duration,
       easing,
+      tag: "viewport",
+      onUpdate: (t) => {
+        const currentZoom = lerpExp(startZoom, endZoom, t);
+        const currentWorldCenter = lerpPoint(startWorldCenter, endWorldCenter, t);
+        const currentOffset = getOffsetForWorldCenter(
+          currentWorldCenter,
+          currentZoom,
+          screenCenter,
+        );
+        this.#store.setViewport({ offset: currentOffset, zoom: currentZoom });
+      },
       onComplete,
-    };
+    });
   }
 
   /**
@@ -126,72 +137,26 @@ class ViewportAnimationController {
    * Viewport stays at its current position.
    */
   cancel(): void {
-    if (this.#animation) {
-      this.#animation = null;
-    }
+    this.#handle?.cancel();
+    this.#handle = null;
   }
 
-  /**
-   * Check if an animation is currently running.
-   */
+  /** Check if an animation is currently running. */
   get isAnimating(): boolean {
-    return this.#animation !== null;
-  }
-
-  /**
-   * Update the animation. Called by game loop each frame.
-   * @param now Current timestamp (from performance.now())
-   * @returns true if animation is active and viewport was updated
-   */
-  tick(now: number): boolean {
-    if (!this.#animation) return false;
-
-    const {
-      startWorldCenter,
-      endWorldCenter,
-      startZoom,
-      endZoom,
-      screenCenter,
-      startTime,
-      duration,
-      easing,
-      onComplete,
-    } = this.#animation;
-
-    const elapsed = now - startTime;
-    const rawProgress = elapsed / duration;
-
-    if (rawProgress >= 1) {
-      // Animation complete - set final viewport
-      const finalOffset = getOffsetForWorldCenter(endWorldCenter, endZoom, screenCenter);
-      canvasStore.setViewport({ offset: finalOffset, zoom: endZoom });
-      this.#animation = null;
-      onComplete?.();
-      return true;
-    }
-
-    // Apply easing
-    const t = easing(rawProgress);
-
-    // Interpolate zoom exponentially (perceptually uniform) and world center linearly
-    const currentZoom = lerpExp(startZoom, endZoom, t);
-    const currentWorldCenter = lerpPoint(startWorldCenter, endWorldCenter, t);
-
-    // Calculate offset from interpolated values
-    const currentOffset = getOffsetForWorldCenter(currentWorldCenter, currentZoom, screenCenter);
-
-    canvasStore.setViewport({ offset: currentOffset, zoom: currentZoom });
-    return true;
-  }
-
-  #viewportsEqual(a: Viewport, b: Viewport, epsilon = 0.0001): boolean {
-    return (
-      Math.abs(a.offset.x - b.offset.x) < epsilon &&
-      Math.abs(a.offset.y - b.offset.y) < epsilon &&
-      Math.abs(a.zoom - b.zoom) < epsilon
-    );
+    return this.#handle?.isActive ?? false;
   }
 }
 
+function viewportsEqual(a: Viewport, b: Viewport, epsilon = 0.0001): boolean {
+  return (
+    Math.abs(a.offset.x - b.offset.x) < epsilon &&
+    Math.abs(a.offset.y - b.offset.y) < epsilon &&
+    Math.abs(a.zoom - b.zoom) < epsilon
+  );
+}
+
 // Singleton instance
-export const viewportAnimation = new ViewportAnimationController();
+export const viewportAnimation = new ViewportAnimationController(defaultScheduler, {
+  setViewport: (v) => canvasStore.setViewport(v),
+  getViewport: () => canvasStore.getViewport(),
+});
