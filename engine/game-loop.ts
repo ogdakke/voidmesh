@@ -165,12 +165,8 @@ export class GameLoop {
   private readonly scrollerX = new Scroller(config.touch.decelerationRate);
   private readonly scrollerY = new Scroller(config.touch.decelerationRate);
 
-  /** Whether momentum scrolling is currently active */
-  private momentumActive = false;
-  /** Time when momentum scrolling started */
-  private momentumStartTime = 0;
-  /** Last momentum offset to calculate delta */
-  private lastMomentumOffset: Point = { x: 0, y: 0 };
+  /** Handle for active momentum scrolling animation */
+  #momentumHandle: import("../lib/animation-scheduler.ts").AnimationHandle | null = null;
 
   /** Reusable velocity tracker for zoom rate in log(zoom) space */
   private readonly velocityTrackerZoom = new VelocityTracker();
@@ -181,20 +177,10 @@ export class GameLoop {
   /** Spring-back for elastic bounce at zoom boundaries */
   private readonly springBackZoom = new SpringBack();
 
-  /** Whether zoom momentum (fling or spring) is currently active */
-  private zoomMomentumActive = false;
-  /** Time when zoom momentum fling started */
-  private zoomMomentumStartTime = 0;
-  /** Last zoom momentum offset (log-space) to calculate delta */
-  private lastZoomMomentumOffset = 0;
+  /** Handle for active zoom momentum animation */
+  #zoomMomentumHandle: import("../lib/animation-scheduler.ts").AnimationHandle | null = null;
   /** Screen-space focal point for zoom momentum (last pinch center) */
   private zoomMomentumFocalPoint: Point | null = null;
-  /** Whether spring-back phase is active (after fling overshoots boundary) */
-  private zoomSpringActive = false;
-  /** Time when spring-back started */
-  private zoomSpringStartTime = 0;
-  /** The zoom boundary value the spring is settling toward */
-  private zoomSpringBoundary = 1;
 
   /** Touch sensitivity configuration */
   #touchConfig: TouchConfig = { ...config.touch };
@@ -331,12 +317,6 @@ export class GameLoop {
     // 3. Advance all scheduler-managed animations (viewport, etc.)
     scheduler.tick(now);
 
-    // 3b. Process momentum scrolling (touch fling)
-    const momentumActive = this.processMomentumScrolling(now);
-
-    // 3c. Process zoom momentum (pinch fling + spring-back)
-    const zoomMomentumActive = this.processZoomMomentum(now);
-
     // 4. Process input (hover detection, drag updates)
     this.processInput();
 
@@ -359,8 +339,6 @@ export class GameLoop {
       hasPlayingMedia ||
       hasContinuousShaderRender ||
       scheduler.hasActive ||
-      momentumActive ||
-      zoomMomentumActive ||
       actionLayerActive ||
       (this.inputState.pointerDown && !!this.dragTarget) ||
       this.dragSelect?.isActive;
@@ -394,42 +372,6 @@ export class GameLoop {
    * Called each frame to update viewport position during fling.
    * @returns true if momentum is active, false otherwise
    */
-  private processMomentumScrolling(now: number): boolean {
-    if (!this.momentumActive) {
-      return false;
-    }
-
-    const elapsed = now - this.momentumStartTime;
-    const valX = this.scrollerX.value(elapsed);
-    const valY = this.scrollerY.value(elapsed);
-
-    // Continue if either axis is still animating
-    if (valX || valY) {
-      // Calculate delta from last frame for each axis independently
-      // Negate to match live panning direction (content follows finger)
-      const deltaX = valX ? -(valX.offset - this.lastMomentumOffset.x) : 0;
-      const deltaY = valY ? -(valY.offset - this.lastMomentumOffset.y) : 0;
-
-      const viewport = canvasStore.getViewport();
-      const dpr = window.devicePixelRatio || 1;
-      canvasStore.panBy({
-        x: (deltaX * dpr) / viewport.zoom,
-        y: (deltaY * dpr) / viewport.zoom,
-      });
-
-      // Update offset for each axis only if still active
-      this.lastMomentumOffset = {
-        x: valX ? valX.offset : this.lastMomentumOffset.x,
-        y: valY ? valY.offset : this.lastMomentumOffset.y,
-      };
-      return true;
-    } else {
-      // Both axes complete
-      this.cancelMomentum();
-      return false;
-    }
-  }
-
   /** Stop any active momentum scrolling and zoom momentum (public API for external callers) */
   stopMomentum(): void {
     this.cancelMomentum();
@@ -438,11 +380,10 @@ export class GameLoop {
 
   /** Cancel any active momentum scrolling */
   private cancelMomentum(): void {
-    this.momentumActive = false;
+    this.#momentumHandle?.cancel();
+    this.#momentumHandle = null;
     this.scrollerX.reset();
     this.scrollerY.reset();
-    this.momentumStartTime = 0;
-    this.lastMomentumOffset = { x: 0, y: 0 };
   }
 
   /**
@@ -470,166 +411,129 @@ export class GameLoop {
     const currentZoom = canvasStore.getViewport().zoom;
     const boundary = clampZoom(currentZoom);
 
+    // State for the custom animation closure
+    let isFling = currentZoom === boundary;
+    let flingStartTime = performance.now();
+    let lastFlingOffset = 0;
+    let springStartTime = performance.now();
+    let springBoundary = boundary;
+
     if (currentZoom !== boundary) {
       // Out of bounds — go directly to spring-back toward the nearest limit
       const logOvershoot = Math.log(currentZoom) - Math.log(boundary);
       this.springBackZoom.reset();
       this.springBackZoom.absorb(vel, logOvershoot, zoomConfig.springResponse);
-      this.zoomMomentumActive = false;
-      this.zoomSpringActive = true;
-      this.zoomSpringStartTime = performance.now();
-      this.zoomSpringBoundary = boundary;
-      return;
-    }
-
-    // In bounds — start fling if velocity is high enough
-    if (Math.abs(vel) > zoomConfig.velocityThreshold) {
+      isFling = false;
+      springBoundary = boundary;
+    } else if (Math.abs(vel) > zoomConfig.velocityThreshold) {
+      // In bounds — start fling
       const clampedVel = Math.max(-zoomConfig.maxVelocity, Math.min(zoomConfig.maxVelocity, vel));
-
       this.scrollerZoom.reset();
       this.scrollerZoom.setDecelerationRate(zoomConfig.decelerationRate);
       this.scrollerZoom.fling(clampedVel * zoomConfig.velocityScale);
-
-      this.zoomMomentumActive = true;
-      this.zoomSpringActive = false;
-      this.zoomMomentumStartTime = performance.now();
-      this.lastZoomMomentumOffset = 0;
-    }
-  }
-
-  /**
-   * Process zoom momentum animation (fling + spring-back at boundaries).
-   * Operates in log(zoom) space for perceptually uniform deceleration.
-   * @returns true if zoom momentum is active, false otherwise
-   */
-  private processZoomMomentum(now: number): boolean {
-    if (!this.zoomMomentumActive && !this.zoomSpringActive) {
-      return false;
+      isFling = true;
+    } else {
+      // No momentum needed
+      return;
     }
 
-    const focalPoint = this.zoomMomentumFocalPoint;
-    if (!focalPoint || !this.container) {
-      this.cancelZoomMomentum();
-      return false;
-    }
-
-    const rect = this.container.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-
-    if (this.zoomMomentumActive) {
-      // Fling phase: exponential deceleration in log-space
-      const elapsed = now - this.zoomMomentumStartTime;
-      const val = this.scrollerZoom.value(elapsed);
-
-      if (!val) {
-        this.cancelZoomMomentum();
-        return false;
-      }
-
-      const logDelta = val.offset - this.lastZoomMomentumOffset;
-      this.lastZoomMomentumOffset = val.offset;
-
-      const viewport = canvasStore.getViewport();
-      const newZoomUnclamped = viewport.zoom * Math.exp(logDelta);
-      const newZoom = clampZoom(newZoomUnclamped);
-
-      // Check if fling hit or overshot a boundary
-      if (newZoom !== newZoomUnclamped) {
-        // Transition to spring-back: bounce elastically from the boundary
-        const overshootLog = Math.log(newZoomUnclamped) - Math.log(newZoom);
-        this.springBackZoom.reset();
-        this.springBackZoom.absorb(
-          val.velocity,
-          overshootLog,
-          this.#touchConfig.zoomMomentum.springResponse,
-        );
-        this.zoomMomentumActive = false;
-        this.zoomSpringActive = true;
-        this.zoomSpringStartTime = now;
-        this.zoomSpringBoundary = newZoom;
-
-        // Apply the clamped zoom for this frame
-        const worldBefore = screenToWorld(focalPoint, viewport, rect, dpr);
-        canvasStore.setViewport({ ...viewport, zoom: newZoom });
-        const worldAfter = screenToWorld(focalPoint, canvasStore.getViewport(), rect, dpr);
-        canvasStore.panBy({
-          x: worldBefore.x - worldAfter.x,
-          y: worldBefore.y - worldAfter.y,
-        });
-        return true;
-      }
-
-      // Apply zoom toward focal point
-      const worldBefore = screenToWorld(focalPoint, viewport, rect, dpr);
-      canvasStore.setViewport({ ...viewport, zoom: newZoom });
-      const worldAfter = screenToWorld(focalPoint, canvasStore.getViewport(), rect, dpr);
-      canvasStore.panBy({
-        x: worldBefore.x - worldAfter.x,
-        y: worldBefore.y - worldAfter.y,
-      });
-      return true;
-    }
-
-    if (this.zoomSpringActive) {
-      // Spring-back phase: damped oscillation toward boundary
-      const elapsed = now - this.zoomSpringStartTime;
-      const val = this.springBackZoom.value(elapsed);
-
-      if (!val) {
-        // Spring settled — snap exactly to boundary
-        const viewport = canvasStore.getViewport();
-        if (viewport.zoom !== this.zoomSpringBoundary) {
-          const worldBefore = screenToWorld(focalPoint, viewport, rect, dpr);
-          canvasStore.setViewport({
-            ...viewport,
-            zoom: this.zoomSpringBoundary,
-          });
-          const worldAfter = screenToWorld(focalPoint, canvasStore.getViewport(), rect, dpr);
-          canvasStore.panBy({
-            x: worldBefore.x - worldAfter.x,
-            y: worldBefore.y - worldAfter.y,
-          });
+    this.cancelZoomMomentum();
+    this.#zoomMomentumHandle = scheduler.custom({
+      tag: "zoom-momentum",
+      tick: (now) => {
+        const fp = this.zoomMomentumFocalPoint;
+        if (!fp || !this.container) {
+          this.cancelZoomMomentum();
+          return false;
         }
-        this.cancelZoomMomentum();
-        return false;
-      }
 
-      // Spring offset is in log-space relative to boundary
-      // Allow oscillation past the near boundary (that's the bounce) but
-      // clamp at the opposite boundary as a safety net
-      const viewport = canvasStore.getViewport();
-      const springZoom = this.zoomSpringBoundary * Math.exp(val.offset);
-      const { minZoom, maxZoom } = config.canvas;
-      const oppositeClamp =
-        this.zoomSpringBoundary <= minZoom
-          ? Math.max(0, Math.min(maxZoom, springZoom)) // springing from min — don't exceed max
-          : Math.max(minZoom, springZoom); // springing from max — don't go below min
-      const clampedZoom = oppositeClamp;
+        const rect = this.container.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
 
-      const worldBefore = screenToWorld(focalPoint, viewport, rect, dpr);
-      canvasStore.setViewport({ ...viewport, zoom: clampedZoom });
-      const worldAfter = screenToWorld(focalPoint, canvasStore.getViewport(), rect, dpr);
-      canvasStore.panBy({
-        x: worldBefore.x - worldAfter.x,
-        y: worldBefore.y - worldAfter.y,
-      });
-      return true;
-    }
+        if (isFling) {
+          // Fling phase: exponential deceleration in log-space
+          const elapsed = now - flingStartTime;
+          const val = this.scrollerZoom.value(elapsed);
 
-    return false;
+          if (!val) {
+            this.cancelZoomMomentum();
+            return false;
+          }
+
+          const logDelta = val.offset - lastFlingOffset;
+          lastFlingOffset = val.offset;
+
+          const viewport = canvasStore.getViewport();
+          const newZoomUnclamped = viewport.zoom * Math.exp(logDelta);
+          const newZoom = clampZoom(newZoomUnclamped);
+
+          // Check if fling hit or overshot a boundary
+          if (newZoom !== newZoomUnclamped) {
+            // Transition to spring-back
+            const overshootLog = Math.log(newZoomUnclamped) - Math.log(newZoom);
+            this.springBackZoom.reset();
+            this.springBackZoom.absorb(val.velocity, overshootLog, zoomConfig.springResponse);
+            isFling = false;
+            springStartTime = now;
+            springBoundary = newZoom;
+
+            const worldBefore = screenToWorld(fp, viewport, rect, dpr);
+            canvasStore.setViewport({ ...viewport, zoom: newZoom });
+            const worldAfter = screenToWorld(fp, canvasStore.getViewport(), rect, dpr);
+            canvasStore.panBy({ x: worldBefore.x - worldAfter.x, y: worldBefore.y - worldAfter.y });
+            return true;
+          }
+
+          // Apply zoom toward focal point
+          const worldBefore = screenToWorld(fp, viewport, rect, dpr);
+          canvasStore.setViewport({ ...viewport, zoom: newZoom });
+          const worldAfter = screenToWorld(fp, canvasStore.getViewport(), rect, dpr);
+          canvasStore.panBy({ x: worldBefore.x - worldAfter.x, y: worldBefore.y - worldAfter.y });
+          return true;
+        }
+
+        // Spring-back phase: damped oscillation toward boundary
+        const elapsed = now - springStartTime;
+        const val = this.springBackZoom.value(elapsed);
+
+        if (!val) {
+          // Spring settled — snap exactly to boundary
+          const viewport = canvasStore.getViewport();
+          if (viewport.zoom !== springBoundary) {
+            const worldBefore = screenToWorld(fp, viewport, rect, dpr);
+            canvasStore.setViewport({ ...viewport, zoom: springBoundary });
+            const worldAfter = screenToWorld(fp, canvasStore.getViewport(), rect, dpr);
+            canvasStore.panBy({ x: worldBefore.x - worldAfter.x, y: worldBefore.y - worldAfter.y });
+          }
+          this.cancelZoomMomentum();
+          return false;
+        }
+
+        // Spring offset is in log-space relative to boundary
+        const viewport = canvasStore.getViewport();
+        const springZoom = springBoundary * Math.exp(val.offset);
+        const { minZoom, maxZoom } = config.canvas;
+        const clampedZoom =
+          springBoundary <= minZoom
+            ? Math.max(0, Math.min(maxZoom, springZoom))
+            : Math.max(minZoom, springZoom);
+
+        const worldBefore = screenToWorld(fp, viewport, rect, dpr);
+        canvasStore.setViewport({ ...viewport, zoom: clampedZoom });
+        const worldAfter = screenToWorld(fp, canvasStore.getViewport(), rect, dpr);
+        canvasStore.panBy({ x: worldBefore.x - worldAfter.x, y: worldBefore.y - worldAfter.y });
+        return true;
+      },
+    });
   }
 
   /** Cancel any active zoom momentum and spring-back */
   private cancelZoomMomentum(): void {
-    this.zoomMomentumActive = false;
-    this.zoomSpringActive = false;
+    this.#zoomMomentumHandle?.cancel();
+    this.#zoomMomentumHandle = null;
     this.scrollerZoom.reset();
     this.springBackZoom.reset();
-    this.zoomMomentumStartTime = 0;
-    this.zoomSpringStartTime = 0;
-    this.lastZoomMomentumOffset = 0;
     this.zoomMomentumFocalPoint = null;
-    this.zoomSpringBoundary = 1;
   }
 
   /** Start catch-up spring animation via scheduler */
@@ -2108,9 +2012,40 @@ export class GameLoop {
       // Apply velocity scale for snappier momentum
       this.scrollerX.fling(clampedVelX * this.#touchConfig.velocityScale);
       this.scrollerY.fling(clampedVelY * this.#touchConfig.velocityScale);
-      this.momentumActive = true;
-      this.momentumStartTime = performance.now();
-      this.lastMomentumOffset = { x: 0, y: 0 };
+
+      this.cancelMomentum();
+      const startTime = performance.now();
+      let lastOffset = { x: 0, y: 0 };
+
+      this.#momentumHandle = scheduler.custom({
+        tag: "momentum",
+        tick: (now) => {
+          const elapsed = now - startTime;
+          const valX = this.scrollerX.value(elapsed);
+          const valY = this.scrollerY.value(elapsed);
+
+          if (valX || valY) {
+            const deltaX = valX ? -(valX.offset - lastOffset.x) : 0;
+            const deltaY = valY ? -(valY.offset - lastOffset.y) : 0;
+
+            const viewport = canvasStore.getViewport();
+            const dpr = window.devicePixelRatio || 1;
+            canvasStore.panBy({
+              x: (deltaX * dpr) / viewport.zoom,
+              y: (deltaY * dpr) / viewport.zoom,
+            });
+
+            lastOffset = {
+              x: valX ? valX.offset : lastOffset.x,
+              y: valY ? valY.offset : lastOffset.y,
+            };
+            return true;
+          }
+
+          this.cancelMomentum();
+          return false;
+        },
+      });
     }
   }
 
