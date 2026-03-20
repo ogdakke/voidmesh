@@ -303,11 +303,11 @@ export class GameLoop {
 
     let hasPlayingMedia = false;
     let hasContinuousShaderRender = false;
-    // 2. get state
-    const renderState = canvasStore.getRenderState();
 
-    // 3. Advance GIF playback and update video time for all playing animated entities
-    for (const entity of renderState.entities) {
+    // 2. Advance GIF playback and update video time for all playing animated entities.
+    // Uses entity refs directly — getRenderState() is deferred until after all ticks
+    // so the viewport snapshot reflects this frame's updates, not the previous frame's.
+    for (const entity of canvasStore.getState().entities.values()) {
       if (entity.mediaSource.type === MediaType.gif && entity.playback?.isPlaying) {
         canvasStore.advanceGifPlayback(entity.id, deltaSeconds);
         // Notify playback subscribers for real-time time display updates
@@ -326,32 +326,36 @@ export class GameLoop {
       }
     }
 
-    // 4. Update viewport animation (returns true if animation is active)
+    // 3. Update viewport animation (returns true if animation is active)
     const animationActive = viewportAnimation.tick(now);
 
-    // 4b. Process momentum scrolling (touch fling)
+    // 3b. Process momentum scrolling (touch fling)
     const momentumActive = this.processMomentumScrolling(now);
 
-    // 4c. Process zoom momentum (pinch fling + spring-back)
+    // 3c. Process zoom momentum (pinch fling + spring-back)
     const zoomMomentumActive = this.processZoomMomentum(now);
 
-    // 5. Process input (hover detection, drag updates)
+    // 4. Process input (hover detection, drag updates)
     this.processInput();
 
-    // 5b. Advance drag visual spring animation
+    // 4b. Advance drag visual spring animation
     const dragVisualActive = entityDragVisual.tick(now);
 
-    // 5c. Advance action layer animations (rubber-band, blur)
+    // 4c. Advance action layer animations (rubber-band, blur)
     const actionLayerActive = actionLayerController.tick(now);
 
-    // 5d. Advance drag catch-up spring (deadzone compensation after action layer → drag)
+    // 4d. Advance drag catch-up spring (deadzone compensation after action layer → drag)
     const dragCatchUpActive = this.#tickDragCatchUp(now);
 
-    // 5d2. Advance snap-settle spring (grid alignment after catch-up)
+    // 4e. Advance snap-settle spring (grid alignment after catch-up)
     const snapSettleActive = this.#tickSnapSettle(now);
 
-    // 5e. Advance disintegration animations
+    // 4f. Advance disintegration animations
     const disintegrationActive = disintegrationController.tick(now);
+
+    // 5. Snapshot render state AFTER all ticks so the viewport reflects
+    // this frame's animation/momentum/input updates, not the previous frame's.
+    const renderState = canvasStore.getRenderState();
 
     // 6. Add selection bounds to render state (managed by game-loop, not store)
     renderState.dragSelectBounds = this.getDragSelectBounds();

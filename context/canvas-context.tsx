@@ -517,25 +517,30 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       // Capture the preset at add-time (in case URL changes before extraction completes)
       const targetPreset = renderState.preset;
 
-      extractOriginalPalette(entity.imageBitmap, colorSpace)
-        .then((palette) => {
-          const currentEntity = canvasStore.getState().entities.get(id);
-          if (!currentEntity) return; // Entity was deleted
+      // Defer extraction to a macrotask so the synchronous OffscreenCanvas +
+      // K-means work doesn't block the microtask queue and starve the
+      // fit-to-view animation that starts right after entity addition.
+      setTimeout(() => {
+        extractOriginalPalette(entity.imageBitmap, colorSpace)
+          .then((palette) => {
+            const currentEntity = canvasStore.getState().entities.get(id);
+            if (!currentEntity) return; // Entity was deleted
 
-          canvasStore.updateEntity(id, { originalPalette: palette });
+            canvasStore.updateEntity(id, { originalPalette: palette });
 
-          // If this entity should use original palette, apply it to shaderParams now
-          if (targetPreset === "original") {
-            canvasStore.updateEntity(id, {
-              shaderParams: {
-                ...currentEntity.shaderParams,
-                palette,
-              },
-              textureDirty: true,
-            });
-          }
-        })
-        .catch((err) => logger.warn("Failed to extract palette:", err));
+            // If this entity should use original palette, apply it to shaderParams now
+            if (targetPreset === "original") {
+              canvasStore.updateEntity(id, {
+                shaderParams: {
+                  ...currentEntity.shaderParams,
+                  palette,
+                },
+                textureDirty: true,
+              });
+            }
+          })
+          .catch((err) => logger.warn("Failed to extract palette:", err));
+      }, 0);
     }
 
     return id;
