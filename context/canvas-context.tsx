@@ -1267,7 +1267,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   };
 
   // Serialization API — lazy-loads the serialization module
-  const serializeCanvas = async (): Promise<Blob> => {
+  const serializeCanvas = async (): Promise<Blob | null> => {
     const { serialize } = await import("#lib/serialization/index.ts");
     return serialize();
   };
@@ -1352,6 +1352,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       // Serialization API — delegates to context methods via ref for fresh access
       (window as any).__CANVAS__.serialize = async () => {
         const blob = await ctx.current.serializeCanvas();
+        if (!blob) {
+          console.log("[Canvas] Save already in progress, skipped");
+          return null;
+        }
         const sizeMB = (blob.size / (1024 * 1024)).toFixed(2);
         const entityCount = canvasStore.getState().entities.size;
         console.log(`[Canvas] Serialized ${entityCount} entities → ${sizeMB} MB`);
@@ -1375,6 +1379,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
       (window as any).__CANVAS__.save = async (filename = "canvas.vdmsh") => {
         const blob = await ctx.current.serializeCanvas();
+        if (!blob) {
+          console.log("[Canvas] Save already in progress, skipped");
+          return;
+        }
         downloadBlob(blob, filename);
         console.log(`[Canvas] Saved as ${filename}`);
       };

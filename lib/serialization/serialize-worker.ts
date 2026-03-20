@@ -7,16 +7,11 @@
  * Posts the final zip bytes back (transferred).
  */
 
-interface MediaEntry {
-  path: string;
-  type: "imageBitmap" | "bytes";
-  bitmap?: ImageBitmap;
-  bytes?: Uint8Array;
-}
+import type { SerializeMediaEntry } from "./types.ts";
 
 interface SerializeRequest {
   manifest: string;
-  mediaEntries: MediaEntry[];
+  mediaEntries: SerializeMediaEntry[];
 }
 
 self.onmessage = async (e: MessageEvent<SerializeRequest>) => {

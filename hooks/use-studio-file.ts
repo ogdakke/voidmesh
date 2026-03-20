@@ -11,6 +11,15 @@ import {
 } from "#lib/download.ts";
 import { fileHandleStore } from "#lib/files/file-handle.ts";
 import { generateFunFilename } from "#lib/files/random-filename.ts";
+import { getIsSaving } from "#lib/serialization/serialize.ts";
+import { createEnum } from "#types/index.ts";
+
+export const StudioFileStatus = createEnum({
+  idle: "idle",
+  saving: "saving",
+  opening: "opening",
+});
+export type StudioFileStatus = typeof StudioFileStatus.infer;
 
 export async function importStudioWithToasts(
   source: Blob | ArrayBuffer,
@@ -37,18 +46,20 @@ export async function importStudioWithToasts(
 }
 
 async function serializeAndSave(
-  serializeCanvas: () => Promise<Blob>,
+  serializeCanvas: () => Promise<Blob | null>,
   handle: FileSystemFileHandle,
   name: string,
 ): Promise<string> {
   const blob = await serializeCanvas();
+  if (!blob) throw new Error("Save already in progress");
   const ok = await writeToHandle(blob, handle);
   if (!ok) throw new Error("Failed to write to file");
   return name;
 }
 
-async function serializeAndDownload(serializeCanvas: () => Promise<Blob>): Promise<string> {
+async function serializeAndDownload(serializeCanvas: () => Promise<Blob | null>): Promise<string> {
   const blob = await serializeCanvas();
+  if (!blob) throw new Error("Save already in progress");
   const name = await generateFunFilename();
   downloadBlob(blob, name);
   return name;
@@ -56,12 +67,13 @@ async function serializeAndDownload(serializeCanvas: () => Promise<Blob>): Promi
 
 export function useStudioFile() {
   const { serializeCanvas, deserializeCanvas } = useCanvas();
-  const [isExporting, setIsExporting] = useState(false);
-  const [isImporting, setIsImporting] = useState(false);
+  const [status, setStatus] = useState<StudioFileStatus>(StudioFileStatus.idle);
+
+  const isBusy = status !== StudioFileStatus.idle;
 
   const exportStudioFile = async () => {
-    if (isExporting || isImporting) return;
-    setIsExporting(true);
+    if (isBusy || getIsSaving()) return;
+    setStatus(StudioFileStatus.saving);
 
     try {
       // If we have an existing handle, request write permission during the user
@@ -135,13 +147,13 @@ export function useStudioFile() {
     } catch {
       // Error already displayed by toastManager.promise
     } finally {
-      setIsExporting(false);
+      setStatus(StudioFileStatus.idle);
     }
   };
 
   const saveAsStudioFile = async () => {
-    if (isExporting || isImporting) return;
-    setIsExporting(true);
+    if (isBusy || getIsSaving()) return;
+    setStatus(StudioFileStatus.saving);
 
     try {
       // Picker must happen during user gesture, before any async work
@@ -185,18 +197,18 @@ export function useStudioFile() {
     } catch {
       // Error already displayed by toastManager.promise
     } finally {
-      setIsExporting(false);
+      setStatus(StudioFileStatus.idle);
     }
   };
 
   const importStudioFile = (onSuccess?: () => void) => {
-    if (isExporting || isImporting) return;
+    if (isBusy) return;
 
-    setIsImporting(true);
+    setStatus(StudioFileStatus.opening);
     openFile()
       .then(async (file) => {
         if (!file) {
-          setIsImporting(false);
+          setStatus(StudioFileStatus.idle);
           return;
         }
         try {
@@ -205,11 +217,11 @@ export function useStudioFile() {
         } catch {
           // Error already displayed by importStudioWithToasts
         } finally {
-          setIsImporting(false);
+          setStatus(StudioFileStatus.idle);
         }
       })
       .catch(() => {
-        setIsImporting(false);
+        setStatus(StudioFileStatus.idle);
       });
   };
 
@@ -217,7 +229,8 @@ export function useStudioFile() {
     exportStudioFile,
     saveAsStudioFile,
     importStudioFile,
-    isExporting,
-    isImporting,
+    status,
+    isExporting: status === StudioFileStatus.saving,
+    isImporting: status === StudioFileStatus.opening,
   };
 }

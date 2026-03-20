@@ -24,8 +24,13 @@ export function downloadBlob(blob: Blob, filename: string): void {
 export async function writeToHandle(blob: Blob, handle: FileSystemFileHandle): Promise<boolean> {
   try {
     const writable = await handle.createWritable();
-    await writable.write(blob);
-    await writable.close();
+    try {
+      await writable.write(blob);
+      await writable.close();
+    } catch (writeErr) {
+      await writable.abort();
+      throw writeErr;
+    }
     return true;
   } catch (error) {
     logger.error(error);

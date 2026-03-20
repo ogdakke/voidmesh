@@ -113,6 +113,18 @@ export interface DeserializeResult {
 }
 
 // ============================================================================
+// Serialize Worker
+// ============================================================================
+
+/** Media data passed between main thread and serialization worker. */
+export interface SerializeMediaEntry {
+  path: string;
+  type: "imageBitmap" | "bytes";
+  bitmap?: ImageBitmap;
+  bytes?: Uint8Array;
+}
+
+// ============================================================================
 // Type Guards
 // ============================================================================
 
