@@ -12,6 +12,7 @@ import {
 import { fileHandleStore } from "#lib/files/file-handle.ts";
 import { generateFunFilename } from "#lib/files/random-filename.ts";
 import { getIsSaving } from "#lib/serialization/serialize.ts";
+import { logger } from "#lib/client.logger.ts";
 import { createEnum } from "#types/index.ts";
 
 export const StudioFileStatus = createEnum({
@@ -208,19 +209,24 @@ export function useStudioFile() {
     openFile()
       .then(async (file) => {
         if (!file) {
+          logger.debug("[importStudioFile] No file returned from picker");
           setStatus(StudioFileStatus.idle);
           return;
         }
+        logger.debug(
+          `[importStudioFile] Opening: ${file.name} (${file.size} bytes, type: "${file.type}")`,
+        );
         try {
           const result = await importStudioWithToasts(file, deserializeCanvas);
           if (result.success) onSuccess?.();
-        } catch {
-          // Error already displayed by importStudioWithToasts
+        } catch (err) {
+          logger.error("[importStudioFile] Import failed:", err);
         } finally {
           setStatus(StudioFileStatus.idle);
         }
       })
-      .catch(() => {
+      .catch((err) => {
+        logger.error("[importStudioFile] openFile() failed:", err);
         setStatus(StudioFileStatus.idle);
       });
   };

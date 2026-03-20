@@ -109,14 +109,31 @@ export async function openFile(): Promise<File | null> {
     if (!isMobileWebKit()) {
       input.accept = ".studio,.zip,.vdmsh,application/vdmsh";
     }
-    input.onchange = () => {
-      resolve(input.files?.[0] ?? null);
+
+    let resolved = false;
+    const done = (file: File | null) => {
+      if (resolved) return;
+      resolved = true;
+      window.removeEventListener("focus", onFocus);
+      if (file) {
+        logger.debug(`[openFile] Selected: ${file.name} (${file.size} bytes, ${file.type})`);
+      } else {
+        logger.debug("[openFile] Cancelled or no file selected");
+      }
+      resolve(file);
     };
+
+    input.onchange = () => {
+      done(input.files?.[0] ?? null);
+    };
+
+    // Cancel detection: when the picker closes without selection, the window
+    // regains focus. Use a longer timeout on mobile — iOS is slow to fire onchange.
+    const cancelTimeout = isMobileWebKit() ? 1000 : 300;
     const onFocus = () => {
       setTimeout(() => {
-        if (!input.files?.length) resolve(null);
-        window.removeEventListener("focus", onFocus);
-      }, 300);
+        if (!resolved) done(null);
+      }, cancelTimeout);
     };
     window.addEventListener("focus", onFocus);
     input.click();
