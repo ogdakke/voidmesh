@@ -500,7 +500,7 @@ export function GlitchParamsControl() {
         <Select
           name="glitch-kind"
           label="Glitch Type"
-          value={glitchKind.isMixed ? "" : (glitchKind.value ?? GlitchKind.channelShift)}
+          value={glitchKind.isMixed ? "Mixed" : (glitchKind.value ?? GlitchKind.channelShift)}
           onValueChange={handleGlitchKindChange}
           items={GLITCH_KIND_OPTIONS}
         >
