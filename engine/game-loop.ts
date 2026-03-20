@@ -329,7 +329,6 @@ export class GameLoop {
     renderState.multiSelectBounds = this.getMultiSelectBounds();
 
     // 7. Determine if we need to render this frame
-    // Render when: first frame, dirty flag is set, media playing, viewport animating, momentum scrolling, dragging entity/selection, drag-selecting, or drag visual animating
     const needsRender =
       !this.firstFrameRendered ||
       renderState.dirty ||
@@ -363,11 +362,6 @@ export class GameLoop {
     this.animationFrameId = requestAnimationFrame(this.tick);
   };
 
-  /**
-   * Process momentum scrolling animation.
-   * Called each frame to update viewport position during fling.
-   * @returns true if momentum is active, false otherwise
-   */
   /** Stop any active momentum scrolling and zoom momentum (public API for external callers) */
   stopMomentum(): void {
     this.cancelMomentum();

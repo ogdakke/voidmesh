@@ -165,10 +165,7 @@ describe("AnimationScheduler", () => {
 
       s.cancelByTag("remove");
 
-      // One animation remains (untagged)
-      const values: number[] = [];
-      s.tween({ from: 0, to: 0, duration: 0, onUpdate: () => {} }); // probe
-      // Better: just check hasActive
+      // Untagged animation remains
       expect(s.hasActive).toBe(true);
     });
 
