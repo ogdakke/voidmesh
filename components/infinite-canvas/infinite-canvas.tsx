@@ -203,7 +203,6 @@ export function InfiniteCanvas() {
     if (e.pointerType === "touch") return;
 
     containerRef.current?.focus();
-    logger.debug("pointer down");
     gameLoop.handlePointerDown({ x: e.clientX, y: e.clientY }, e.shiftKey);
   };
 

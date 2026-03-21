@@ -1,26 +1,16 @@
 import { describe, test, expect, beforeEach, vi, afterEach } from "vitest";
-import { AnimationScheduler } from "#lib/animation-scheduler.ts";
 import { MomentumController, type MomentumDeps } from "../../engine/momentum-controller.ts";
 import { config } from "#config";
+import { TestClock } from "../helpers/test-clock.ts";
 
 describe("MomentumController", () => {
-  let scheduler: AnimationScheduler;
+  let clock: TestClock;
   let controller: MomentumController;
   let deps: MomentumDeps;
   let viewport: { offset: { x: number; y: number }; zoom: number };
-  let perfSpy: ReturnType<typeof vi.spyOn>;
-  let now: number;
-
-  function advanceBy(ms: number): void {
-    now += ms;
-    perfSpy.mockReturnValue(now);
-    scheduler.tick(now);
-  }
 
   beforeEach(() => {
-    now = 1000;
-    perfSpy = vi.spyOn(performance, "now").mockReturnValue(now);
-    scheduler = new AnimationScheduler();
+    clock = new TestClock();
     viewport = { offset: { x: 0, y: 0 }, zoom: 1 };
 
     deps = {
@@ -36,11 +26,11 @@ describe("MomentumController", () => {
       getDpr: vi.fn(() => 1),
     };
 
-    controller = new MomentumController(scheduler, deps);
+    controller = new MomentumController(clock.scheduler, deps);
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
+    clock.restore();
   });
 
   // ── Pan momentum ────────────────────────────────────────────────────────
@@ -50,12 +40,12 @@ describe("MomentumController", () => {
       const threshold = config.touch.velocityThreshold;
       controller.triggerScroll({ x: threshold + 1, y: 0 });
 
-      expect(scheduler.hasActive).toBe(true);
+      expect(clock.scheduler.hasActive).toBe(true);
 
       // Advance a few frames
-      advanceBy(16);
-      advanceBy(16);
-      advanceBy(16);
+      clock.advanceBy(16);
+      clock.advanceBy(16);
+      clock.advanceBy(16);
 
       expect(deps.panBy).toHaveBeenCalled();
     });
@@ -64,21 +54,21 @@ describe("MomentumController", () => {
       const threshold = config.touch.velocityThreshold;
       controller.triggerScroll({ x: threshold * 0.5, y: threshold * 0.5 });
 
-      expect(scheduler.hasActive).toBe(false);
+      expect(clock.scheduler.hasActive).toBe(false);
       expect(deps.panBy).not.toHaveBeenCalled();
     });
 
     test("stopScroll cancels active momentum", () => {
       const threshold = config.touch.velocityThreshold;
       controller.triggerScroll({ x: threshold + 1, y: 0 });
-      expect(scheduler.hasActive).toBe(true);
+      expect(clock.scheduler.hasActive).toBe(true);
 
       controller.stopScroll();
-      expect(scheduler.hasActive).toBe(false);
+      expect(clock.scheduler.hasActive).toBe(false);
 
       // Advance more — panBy should not be called after stop
       (deps.panBy as ReturnType<typeof vi.fn>).mockClear();
-      advanceBy(16);
+      clock.advanceBy(16);
       expect(deps.panBy).not.toHaveBeenCalled();
     });
 
@@ -88,11 +78,11 @@ describe("MomentumController", () => {
 
       // Advance many frames until settled
       for (let i = 0; i < 500; i++) {
-        advanceBy(16);
-        if (!scheduler.hasActive) break;
+        clock.advanceBy(16);
+        if (!clock.scheduler.hasActive) break;
       }
 
-      expect(scheduler.hasActive).toBe(false);
+      expect(clock.scheduler.hasActive).toBe(false);
     });
   });
 
@@ -103,9 +93,9 @@ describe("MomentumController", () => {
       const threshold = config.touch.zoomMomentum.velocityThreshold;
       controller.triggerZoom(threshold + 1, { x: 400, y: 300 });
 
-      expect(scheduler.hasActive).toBe(true);
+      expect(clock.scheduler.hasActive).toBe(true);
 
-      advanceBy(16);
+      clock.advanceBy(16);
       expect(deps.setViewport).toHaveBeenCalled();
     });
 
@@ -113,7 +103,7 @@ describe("MomentumController", () => {
       const threshold = config.touch.zoomMomentum.velocityThreshold;
       controller.triggerZoom(threshold * 0.5, { x: 400, y: 300 });
 
-      expect(scheduler.hasActive).toBe(false);
+      expect(clock.scheduler.hasActive).toBe(false);
     });
 
     test("springs back when zoom is out of bounds", () => {
@@ -123,15 +113,15 @@ describe("MomentumController", () => {
       // Even with zero velocity, should spring back
       controller.triggerZoom(0, { x: 400, y: 300 });
 
-      expect(scheduler.hasActive).toBe(true);
+      expect(clock.scheduler.hasActive).toBe(true);
 
       // Advance until settled
       for (let i = 0; i < 500; i++) {
-        advanceBy(16);
-        if (!scheduler.hasActive) break;
+        clock.advanceBy(16);
+        if (!clock.scheduler.hasActive) break;
       }
 
-      expect(scheduler.hasActive).toBe(false);
+      expect(clock.scheduler.hasActive).toBe(false);
       // Zoom should have converged toward the boundary
       expect(viewport.zoom).toBeCloseTo(config.canvas.maxZoom, 0);
     });
@@ -139,10 +129,10 @@ describe("MomentumController", () => {
     test("stopZoom cancels active zoom momentum", () => {
       const threshold = config.touch.zoomMomentum.velocityThreshold;
       controller.triggerZoom(threshold + 1, { x: 400, y: 300 });
-      expect(scheduler.hasActive).toBe(true);
+      expect(clock.scheduler.hasActive).toBe(true);
 
       controller.stopZoom();
-      expect(scheduler.hasActive).toBe(false);
+      expect(clock.scheduler.hasActive).toBe(false);
     });
   });
 
@@ -155,10 +145,10 @@ describe("MomentumController", () => {
 
       controller.triggerScroll({ x: scrollThreshold + 1, y: 0 });
       controller.triggerZoom(zoomThreshold + 1, { x: 400, y: 300 });
-      expect(scheduler.hasActive).toBe(true);
+      expect(clock.scheduler.hasActive).toBe(true);
 
       controller.stopAll();
-      expect(scheduler.hasActive).toBe(false);
+      expect(clock.scheduler.hasActive).toBe(false);
     });
   });
 });

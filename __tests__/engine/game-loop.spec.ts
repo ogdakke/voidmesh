@@ -1,0 +1,716 @@
+import { describe, test, expect, beforeEach, vi, afterEach } from "vitest";
+import { AnimationScheduler } from "#lib/animation-scheduler.ts";
+import { screenToWorld } from "../../lib/canvas-math.ts";
+import { GameLoop, SpacePanMode, type GameLoopDeps } from "../../engine/game-loop.ts";
+import { canvasStore } from "../../engine/canvas-store.ts";
+import { setupCanvasTest } from "../helpers/test-setup.ts";
+import { createTestEntity } from "../helpers/test-entity.ts";
+import { createMockGameLoopDeps } from "../helpers/game-loop-deps.mock.ts";
+import type { Point } from "#types/canvas.ts";
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+const CONTAINER_WIDTH = 800;
+const CONTAINER_HEIGHT = 600;
+
+function createMockContainer(): HTMLElement {
+  const el = document.createElement("div");
+  el.getBoundingClientRect = () => new DOMRect(0, 0, CONTAINER_WIDTH, CONTAINER_HEIGHT);
+  Object.defineProperty(el, "clientWidth", { value: CONTAINER_WIDTH });
+  Object.defineProperty(el, "clientHeight", { value: CONTAINER_HEIGHT });
+  return el;
+}
+
+function createGameLoop(deps: GameLoopDeps): GameLoop {
+  const gl = new GameLoop(deps);
+  gl.setContainer(createMockContainer());
+  return gl;
+}
+
+/**
+ * Add an entity at a known world position.
+ * With default viewport (offset 0, zoom 1, DPR 1, container at 0,0),
+ * screen coords === world coords, so the entity is hit-testable at (x, y).
+ */
+function addEntity(
+  x: number,
+  y: number,
+  width = 200,
+  height = 150,
+  opts: { id?: string; locked?: boolean } = {},
+): string {
+  const entity = createTestEntity({
+    id: opts.id,
+    position: { x, y },
+    size: { width, height },
+    locked: opts.locked,
+  });
+  canvasStore.addEntity(entity);
+  return entity.id;
+}
+
+/** Simulate a complete click (pointer down + up at same position) */
+function click(gl: GameLoop, point: Point, shiftKey = false): void {
+  gl.handlePointerDown(point, shiftKey);
+  gl.handlePointerUp(point);
+}
+
+// ── Setup ───────────────────────────────────────────────────────────────────
+
+let gl: GameLoop;
+let deps: GameLoopDeps;
+let cleanupCanvas: () => void;
+
+beforeEach(() => {
+  cleanupCanvas = setupCanvasTest();
+  canvasStore.setViewport({ offset: { x: 0, y: 0 }, zoom: 1 });
+  deps = createMockGameLoopDeps(new AnimationScheduler());
+  gl = createGameLoop(deps);
+  Object.defineProperty(window, "devicePixelRatio", { value: 1, configurable: true });
+});
+
+afterEach(() => {
+  cleanupCanvas();
+  vi.restoreAllMocks();
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Desktop Pointer Interactions
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Desktop pointer interactions", () => {
+  describe("Click to select", () => {
+    test("click on entity selects it", () => {
+      const id = addEntity(100, 100);
+      click(gl, { x: 150, y: 150 });
+      expect(canvasStore.getSelectedEntityIds().has(id)).toBe(true);
+    });
+
+    test("click on already-selected entity keeps it selected", () => {
+      const id = addEntity(100, 100);
+      click(gl, { x: 150, y: 150 });
+      click(gl, { x: 150, y: 150 });
+      expect(canvasStore.getSelectedEntityIds().has(id)).toBe(true);
+      expect(canvasStore.getSelectedEntityIds().size).toBe(1);
+    });
+
+    test("click on empty space clears selection", () => {
+      const id = addEntity(100, 100);
+      click(gl, { x: 150, y: 150 });
+      expect(canvasStore.getSelectedEntityIds().has(id)).toBe(true);
+      click(gl, { x: 500, y: 500 });
+      expect(canvasStore.getSelectedEntityIds().size).toBe(0);
+    });
+
+    test("click on entity replaces existing multi-selection", () => {
+      const id1 = addEntity(100, 100);
+      const id2 = addEntity(400, 100);
+
+      click(gl, { x: 150, y: 150 });
+      click(gl, { x: 450, y: 150 }, true);
+      expect(canvasStore.getSelectedEntityIds().size).toBe(2);
+
+      click(gl, { x: 150, y: 150 });
+      expect(canvasStore.getSelectedEntityIds().size).toBe(1);
+      expect(canvasStore.getSelectedEntityIds().has(id1)).toBe(true);
+      expect(canvasStore.getSelectedEntityIds().has(id2)).toBe(false);
+    });
+  });
+
+  describe("Shift+click", () => {
+    test("shift+click on unselected entity adds to selection", () => {
+      const id1 = addEntity(100, 100);
+      const id2 = addEntity(400, 100);
+
+      click(gl, { x: 150, y: 150 });
+      click(gl, { x: 450, y: 150 }, true);
+      expect(canvasStore.getSelectedEntityIds().has(id1)).toBe(true);
+      expect(canvasStore.getSelectedEntityIds().has(id2)).toBe(true);
+    });
+
+    test("shift+click on selected entity removes from selection", () => {
+      const id1 = addEntity(100, 100);
+      const id2 = addEntity(400, 100);
+
+      click(gl, { x: 150, y: 150 });
+      click(gl, { x: 450, y: 150 }, true);
+      expect(canvasStore.getSelectedEntityIds().size).toBe(2);
+
+      click(gl, { x: 150, y: 150 }, true);
+      expect(canvasStore.getSelectedEntityIds().has(id1)).toBe(false);
+      expect(canvasStore.getSelectedEntityIds().has(id2)).toBe(true);
+    });
+  });
+
+  describe("Entity drag", () => {
+    test("short click does NOT trigger drag (stays as click)", () => {
+      const id = addEntity(100, 100);
+
+      gl.handlePointerDown({ x: 150, y: 150 });
+      gl.handlePointerMove({ x: 151, y: 151 });
+      gl.handlePointerUp({ x: 151, y: 151 });
+
+      expect(canvasStore.getSelectedEntityIds().has(id)).toBe(true);
+    });
+
+    test("pointer down on entity starts possible drag visual", () => {
+      addEntity(100, 100);
+      gl.handlePointerDown({ x: 150, y: 150 });
+      expect(deps.dragVisual.startPossibleDrag).toHaveBeenCalled();
+    });
+
+    test("pointer up releases drag visual", () => {
+      addEntity(100, 100);
+      gl.handlePointerDown({ x: 150, y: 150 });
+      gl.handlePointerUp({ x: 150, y: 150 });
+      expect(deps.dragVisual.release).toHaveBeenCalled();
+    });
+  });
+
+  describe("Drag-select rectangle", () => {
+    test("drag on empty space creates drag-select bounds", () => {
+      addEntity(100, 100, 100, 100);
+
+      gl.handlePointerDown({ x: 500, y: 500 });
+      gl.handlePointerMove({ x: 600, y: 600 });
+
+      const bounds = gl.getDragSelectBounds();
+      expect(bounds).not.toBeNull();
+      expect(bounds?.width).toBe(100);
+      expect(bounds?.height).toBe(100);
+    });
+
+    test("drag-select clears when pointer up", () => {
+      gl.handlePointerDown({ x: 500, y: 500 });
+      gl.handlePointerMove({ x: 600, y: 600 });
+      expect(gl.getDragSelectBounds()).not.toBeNull();
+
+      gl.handlePointerUp({ x: 600, y: 600 });
+      expect(gl.getDragSelectBounds()).toBeNull();
+    });
+
+    test("drag-select in replace mode clears previous selection", () => {
+      const id1 = addEntity(100, 100, 100, 100);
+      click(gl, { x: 150, y: 150 });
+      expect(canvasStore.getSelectedEntityIds().has(id1)).toBe(true);
+
+      gl.handlePointerDown({ x: 500, y: 500 });
+      expect(canvasStore.getSelectedEntityIds().size).toBe(0);
+    });
+
+    test("shift+drag with existing selection uses subtractive mode", () => {
+      addEntity(100, 100, 100, 100);
+      click(gl, { x: 150, y: 150 });
+      expect(canvasStore.getSelectedEntityIds().size).toBe(1);
+
+      gl.handlePointerDown({ x: 500, y: 500 }, true);
+      expect(gl.getDragSelectMode()).toBe("subtractive");
+      gl.handlePointerUp({ x: 600, y: 600 });
+    });
+  });
+
+  describe("Click on multi-selection", () => {
+    test("click on entity in multi-selection collapses to single on pointerUp", () => {
+      const id1 = addEntity(100, 100);
+      addEntity(400, 100);
+
+      click(gl, { x: 150, y: 150 });
+      click(gl, { x: 450, y: 150 }, true);
+      expect(canvasStore.getSelectedEntityIds().size).toBe(2);
+
+      click(gl, { x: 150, y: 150 });
+      expect(canvasStore.getSelectedEntityIds().size).toBe(1);
+      expect(canvasStore.getSelectedEntityIds().has(id1)).toBe(true);
+    });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Wheel Zoom/Pan
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Wheel zoom/pan", () => {
+  test("wheel without ctrlKey pans viewport", () => {
+    const before = canvasStore.getViewport();
+    gl.handleWheel(50, 30, { x: 400, y: 300 }, false);
+    const after = canvasStore.getViewport();
+
+    expect(after.offset.x).toBeGreaterThan(before.offset.x);
+    expect(after.offset.y).toBeGreaterThan(before.offset.y);
+    expect(after.zoom).toBe(before.zoom);
+  });
+
+  test("wheel with ctrlKey zooms viewport", () => {
+    const before = canvasStore.getViewport();
+    gl.handleWheel(0, -10, { x: 400, y: 300 }, true);
+    const after = canvasStore.getViewport();
+
+    expect(after.zoom).toBeGreaterThan(before.zoom);
+  });
+
+  test("ctrl+wheel zooms toward mouse position", () => {
+    const mousePoint = { x: 200, y: 150 };
+    const worldBefore = { x: mousePoint.x, y: mousePoint.y };
+
+    gl.handleWheel(0, -10, mousePoint, true);
+
+    const v = canvasStore.getViewport();
+    const rect = new DOMRect(0, 0, CONTAINER_WIDTH, CONTAINER_HEIGHT);
+    const worldAfter = screenToWorld(mousePoint, v, rect, 1);
+
+    expect(worldAfter.x).toBeCloseTo(worldBefore.x, 1);
+    expect(worldAfter.y).toBeCloseTo(worldBefore.y, 1);
+  });
+
+  test("wheel cancels active viewport animation", () => {
+    gl.handleWheel(10, 10, { x: 400, y: 300 }, false);
+    expect(deps.viewportAnimation.cancel).toHaveBeenCalled();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Space+Drag Pan
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Space+drag pan", () => {
+  test("setSpaceHeld(true) sets spacePanMode to ready", () => {
+    gl.setSpaceHeld(true);
+    expect(gl.spacePanMode).toBe(SpacePanMode.ready);
+  });
+
+  test("setSpaceHeld(false) resets to idle", () => {
+    gl.setSpaceHeld(true);
+    gl.setSpaceHeld(false);
+    expect(gl.spacePanMode).toBe(SpacePanMode.idle);
+  });
+
+  test("pointer down in ready mode transitions to panning and pans viewport", () => {
+    gl.setSpaceHeld(true);
+    const before = canvasStore.getViewport();
+    gl.handlePointerDown({ x: 400, y: 300 });
+    expect(gl.spacePanMode).toBe(SpacePanMode.panning);
+
+    gl.handlePointerMove({ x: 350, y: 250 });
+    const after = canvasStore.getViewport();
+    expect(after.offset.x).not.toBe(before.offset.x);
+    expect(after.offset.y).not.toBe(before.offset.y);
+  });
+
+  test("pointer up in panning transitions to panned", () => {
+    gl.setSpaceHeld(true);
+    gl.handlePointerDown({ x: 400, y: 300 });
+    gl.handlePointerUp({ x: 350, y: 250 });
+    expect(gl.spacePanMode).toBe(SpacePanMode.panned);
+  });
+
+  test("space+drag does not select entities", () => {
+    addEntity(100, 100);
+    gl.setSpaceHeld(true);
+    gl.handlePointerDown({ x: 150, y: 150 });
+    gl.handlePointerUp({ x: 150, y: 150 });
+
+    expect(canvasStore.getSelectedEntityIds().size).toBe(0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Touch Tap Detection
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Touch tap detection", () => {
+  test("tap on entity selects it", () => {
+    const id = addEntity(100, 100);
+
+    gl.handleTouchStart([{ x: 150, y: 150 }]);
+    gl.handleTouchEnd([], false);
+
+    expect(canvasStore.getSelectedEntityIds().has(id)).toBe(true);
+  });
+
+  test("tap on empty space clears selection", () => {
+    const id = addEntity(100, 100);
+    gl.handleTouchStart([{ x: 150, y: 150 }]);
+    gl.handleTouchEnd([], false);
+    expect(canvasStore.getSelectedEntityIds().has(id)).toBe(true);
+
+    gl.handleTouchStart([{ x: 500, y: 500 }]);
+    gl.handleTouchEnd([], false);
+    expect(canvasStore.getSelectedEntityIds().size).toBe(0);
+  });
+
+  test("double-tap on entity triggers zoom-to-fit", () => {
+    addEntity(100, 100);
+
+    gl.handleTouchStart([{ x: 150, y: 150 }]);
+    gl.handleTouchEnd([], false);
+
+    gl.handleTouchStart([{ x: 150, y: 150 }]);
+    gl.handleTouchEnd([], false);
+
+    expect(deps.viewportAnimation.animateTo).toHaveBeenCalled();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Touch Single-Finger Pan
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Single-finger pan", () => {
+  test("touch pan moves viewport", () => {
+    const before = canvasStore.getViewport();
+
+    gl.handleTouchStart([{ x: 400, y: 300 }]);
+    gl.handleTouchMove([{ x: 350, y: 250 }]);
+
+    const after = canvasStore.getViewport();
+    expect(after.offset.x).toBeGreaterThan(before.offset.x);
+    expect(after.offset.y).toBeGreaterThan(before.offset.y);
+  });
+
+  test("swipe triggers momentum on touchEnd", () => {
+    const before = canvasStore.getViewport();
+
+    gl.handleTouchStart([{ x: 400, y: 300 }]);
+    gl.handleTouchMove([{ x: 350, y: 300 }]);
+    gl.handleTouchMove([{ x: 300, y: 300 }]);
+    gl.handleTouchMove([{ x: 200, y: 300 }]);
+    gl.handleTouchEnd([], false);
+
+    // Pan happened during the swipe itself
+    const after = canvasStore.getViewport();
+    expect(after.offset.x).not.toBe(before.offset.x);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Pinch-to-Zoom
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Pinch-to-zoom", () => {
+  test("two-finger pinch changes zoom", () => {
+    const before = canvasStore.getViewport();
+    expect(before.zoom).toBe(1);
+
+    gl.handleTouchStart([
+      { x: 350, y: 300 },
+      { x: 450, y: 300 },
+    ]);
+    gl.handleTouchMove([
+      { x: 300, y: 300 },
+      { x: 500, y: 300 },
+    ]);
+
+    const after = canvasStore.getViewport();
+    expect(after.zoom).toBe(2);
+  });
+
+  test("pinch zooms toward center between fingers", () => {
+    const center = { x: 400, y: 300 };
+
+    gl.handleTouchStart([
+      { x: center.x - 50, y: center.y },
+      { x: center.x + 50, y: center.y },
+    ]);
+    gl.handleTouchMove([
+      { x: center.x - 100, y: center.y },
+      { x: center.x + 100, y: center.y },
+    ]);
+
+    const v = canvasStore.getViewport();
+    const rect = new DOMRect(0, 0, CONTAINER_WIDTH, CONTAINER_HEIGHT);
+    const worldAfter = screenToWorld(center, v, rect, 1);
+    expect(worldAfter.x).toBeCloseTo(center.x, 1);
+    expect(worldAfter.y).toBeCloseTo(center.y, 1);
+  });
+
+  test("second finger cancels long-press timer", () => {
+    vi.useFakeTimers();
+    addEntity(100, 100);
+
+    // Single finger starts long-press timer
+    gl.handleTouchStart([{ x: 150, y: 150 }]);
+
+    // Second finger should cancel it
+    gl.handleTouchStart([
+      { x: 150, y: 150 },
+      { x: 300, y: 300 },
+    ]);
+
+    // Advance past long-press delay — should NOT activate
+    const longPressDelay = gl.getTouchConfig().longPressDelay;
+    vi.advanceTimersByTime(longPressDelay + 10);
+    expect(deps.actionLayer.activate).not.toHaveBeenCalled();
+
+    gl.handleTouchEnd([], false);
+    vi.useRealTimers();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Context Menu
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Context menu", () => {
+  test("right-click on entity selects it", () => {
+    const id = addEntity(100, 100);
+    gl.handleContextMenu({ x: 150, y: 150 });
+    expect(canvasStore.getSelectedEntityIds().has(id)).toBe(true);
+  });
+
+  test("right-click on selected entity in multi-selection preserves selection", () => {
+    const id1 = addEntity(100, 100);
+    const id2 = addEntity(400, 100);
+
+    click(gl, { x: 150, y: 150 });
+    click(gl, { x: 450, y: 150 }, true);
+    expect(canvasStore.getSelectedEntityIds().size).toBe(2);
+
+    gl.handleContextMenu({ x: 150, y: 150 });
+    expect(canvasStore.getSelectedEntityIds().size).toBe(2);
+    expect(canvasStore.getSelectedEntityIds().has(id1)).toBe(true);
+    expect(canvasStore.getSelectedEntityIds().has(id2)).toBe(true);
+  });
+
+  test("right-click on empty space clears selection", () => {
+    addEntity(100, 100);
+    click(gl, { x: 150, y: 150 });
+    expect(canvasStore.getSelectedEntityIds().size).toBe(1);
+
+    gl.handleContextMenu({ x: 500, y: 500 });
+    expect(canvasStore.getSelectedEntityIds().size).toBe(0);
+  });
+
+  test("handleContextMenuClose resets context flag", () => {
+    addEntity(100, 100);
+    gl.handleContextMenu({ x: 150, y: 150 });
+    gl.handleContextMenuClose();
+
+    click(gl, { x: 500, y: 500 });
+    expect(canvasStore.getSelectedEntityIds().size).toBe(0);
+  });
+
+  test("right-click cancels drag visual from preceding pointerDown", () => {
+    addEntity(100, 100);
+
+    // pointerDown starts possible drag visual
+    gl.handlePointerDown({ x: 150, y: 150 });
+    expect(deps.dragVisual.startPossibleDrag).toHaveBeenCalled();
+
+    // Context menu should cancel drag visual
+    gl.handleContextMenu({ x: 150, y: 150 });
+    expect(deps.dragVisual.cancel).toHaveBeenCalled();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Long-Press and Action Layer (requires fake timers)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Long-press and action layer", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test("long-press on entity activates action layer after delay", () => {
+    addEntity(100, 100);
+
+    gl.handleTouchStart([{ x: 150, y: 150 }]);
+
+    const longPressDelay = gl.getTouchConfig().longPressDelay;
+    vi.advanceTimersByTime(longPressDelay + 10);
+
+    expect(deps.actionLayer.activate).toHaveBeenCalled();
+  });
+
+  test("finger movement beyond threshold cancels long-press", () => {
+    addEntity(100, 100);
+
+    gl.handleTouchStart([{ x: 150, y: 150 }]);
+
+    const moveThreshold = gl.getTouchConfig().longPressMoveThreshold;
+    gl.handleTouchMove([{ x: 150 + moveThreshold + 5, y: 150 }]);
+
+    const longPressDelay = gl.getTouchConfig().longPressDelay;
+    vi.advanceTimersByTime(longPressDelay + 10);
+
+    expect(deps.actionLayer.activate).not.toHaveBeenCalled();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Multi-Touch Gesture Transitions
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Multi-touch gesture transitions", () => {
+  test("pan → pinch zoom → pan: remaining finger continues panning after zoom", () => {
+    const before = canvasStore.getViewport();
+
+    // Phase 1: single finger pan
+    gl.handleTouchStart([{ x: 400, y: 300 }]);
+    gl.handleTouchMove([{ x: 350, y: 250 }]);
+    const afterPan1 = canvasStore.getViewport();
+    expect(afterPan1.offset.x).not.toBe(before.offset.x);
+    expect(afterPan1.offset.y).not.toBe(before.offset.y);
+
+    // Phase 2: add second finger → pinch zoom
+    gl.handleTouchStart([
+      { x: 350, y: 250 },
+      { x: 450, y: 250 },
+    ]);
+    const zoomBefore = canvasStore.getViewport().zoom;
+    gl.handleTouchMove([
+      { x: 300, y: 250 },
+      { x: 500, y: 250 },
+    ]);
+    const afterZoom = canvasStore.getViewport();
+    expect(afterZoom.zoom).toBeGreaterThan(zoomBefore);
+
+    // Phase 3: lift second finger → back to single-finger pan
+    gl.handleTouchEnd([{ x: 300, y: 250 }]);
+    const afterLift = canvasStore.getViewport();
+
+    // Move the remaining finger further
+    gl.handleTouchMove([{ x: 250, y: 200 }]);
+    const afterPan2 = canvasStore.getViewport();
+    expect(afterPan2.offset.x).not.toBe(afterLift.offset.x);
+    expect(afterPan2.offset.y).not.toBe(afterLift.offset.y);
+
+    gl.handleTouchEnd([], false);
+  });
+
+  test("entity drag → pinch zoom → entity drag: remaining finger continues moving entity", () => {
+    vi.useFakeTimers();
+    const id = addEntity(100, 100);
+
+    // Phase 1: long-press to trigger action layer
+    gl.handleTouchStart([{ x: 150, y: 150 }]);
+    const longPressDelay = gl.getTouchConfig().longPressDelay;
+    vi.advanceTimersByTime(longPressDelay + 10);
+    // Action layer should now be active
+    expect(deps.actionLayer.activate).toHaveBeenCalled();
+
+    // Drag beyond safe zone to transition from action layer to entity drag
+    const safeZoneRadius = 120;
+    gl.handleTouchMove([{ x: 150 + safeZoneRadius + 20, y: 150 }]);
+    expect(deps.actionLayer.transitionToDrag).toHaveBeenCalled();
+
+    // Phase 2: add second finger for pinch zoom
+    gl.handleTouchStart([
+      { x: 150 + safeZoneRadius + 20, y: 150 },
+      { x: 400, y: 300 },
+    ]);
+    const zoomBefore = canvasStore.getViewport().zoom;
+
+    // Pinch outward
+    gl.handleTouchMove([
+      { x: 100, y: 150 },
+      { x: 500, y: 300 },
+    ]);
+    const afterZoom = canvasStore.getViewport();
+    expect(afterZoom.zoom).not.toBe(zoomBefore);
+
+    // Phase 3: lift second finger — remaining finger should continue entity drag
+    gl.handleTouchEnd([{ x: 100, y: 150 }]);
+
+    // Move remaining finger — entity should move
+    const entityBefore = canvasStore.getState().entities.get(id);
+    const posBefore = { x: entityBefore?.position.x, y: entityBefore?.position.y };
+    gl.handleTouchMove([{ x: 50, y: 150 }]);
+    const entityAfter = canvasStore.getState().entities.get(id);
+    expect(entityAfter?.position.x).not.toBe(posBefore.x);
+
+    gl.handleTouchEnd([], false);
+    vi.useRealTimers();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Action Layer + Second Finger
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Action layer cancellation on second finger", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test("second finger cancels action layer and allows zoom", () => {
+    addEntity(100, 100);
+
+    // Long-press to activate action layer
+    gl.handleTouchStart([{ x: 150, y: 150 }]);
+    const longPressDelay = gl.getTouchConfig().longPressDelay;
+    vi.advanceTimersByTime(longPressDelay + 10);
+    expect(deps.actionLayer.activate).toHaveBeenCalled();
+
+    // Add second finger — should cancel action layer
+    gl.handleTouchStart([
+      { x: 150, y: 150 },
+      { x: 400, y: 300 },
+    ]);
+    expect(deps.actionLayer.cancel).toHaveBeenCalled();
+
+    // Pinch should work
+    const zoomBefore = canvasStore.getViewport().zoom;
+    gl.handleTouchMove([
+      { x: 100, y: 150 },
+      { x: 500, y: 300 },
+    ]);
+    const afterZoom = canvasStore.getViewport();
+    expect(afterZoom.zoom).not.toBe(zoomBefore);
+
+    gl.handleTouchEnd([], false);
+  });
+
+  test("second finger cancels drag visual when action layer is active", () => {
+    addEntity(100, 100);
+
+    // Long-press to activate action layer (which also activates drag visual)
+    gl.handleTouchStart([{ x: 150, y: 150 }]);
+    const longPressDelay = gl.getTouchConfig().longPressDelay;
+    vi.advanceTimersByTime(longPressDelay + 10);
+    expect(deps.dragVisual.activateDrag).toHaveBeenCalled();
+
+    // Add second finger — drag visual should be cancelled
+    gl.handleTouchStart([
+      { x: 150, y: 150 },
+      { x: 400, y: 300 },
+    ]);
+    expect(deps.dragVisual.cancel).toHaveBeenCalled();
+
+    gl.handleTouchEnd([], false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Locked Entities
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Locked entities", () => {
+  test("click on locked entity does not select it", () => {
+    addEntity(100, 100, 200, 150, { locked: true });
+    click(gl, { x: 150, y: 150 });
+    expect(canvasStore.getSelectedEntityIds().size).toBe(0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Start/Stop
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Start/stop", () => {
+  test("isTouchActive returns false when no touches active", () => {
+    expect(gl.isTouchActive()).toBe(false);
+  });
+
+  test("stopMomentum does not throw when no momentum active", () => {
+    expect(() => gl.stopMomentum()).not.toThrow();
+  });
+});
