@@ -15,6 +15,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `files/random-filename.ts` + `files/filename-words.ts` — Random filename generation for workspace files.
 - `palette-extraction/` — K-means clustering for color palettes.
 - `palette-store.ts` — User palette CRUD (persisted via unstorage).
+- `animation-scheduler.ts` — `AnimationScheduler`. Tick-driven scheduler for tweens, 2D springs, and custom animations. Handles lifecycle (cancel, complete callbacks), tag-based cancellation. Singleton: `scheduler`.
 - `touch-scroll/` — Physics-based momentum scrolling with springs and velocity tracking.
 - `client.logger.ts` — Logger with levels. `console.log`/`debug` stripped in production via Vite/oxc config.
 - `color-utils.ts` — OKLCH color model, gamut clamping, CSS parsing, color-space-aware luminance.
@@ -25,7 +26,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 
 ## Patterns
 
-- Pure functions where possible. No side effects, no singletons (except `undo`, `logger`, `paletteStore`).
+- Pure functions where possible. No side effects, no singletons (except `undo`, `logger`, `paletteStore`, `scheduler`).
 - Config is a frozen object. Do not mutate at runtime.
 
 ## Anti-Patterns

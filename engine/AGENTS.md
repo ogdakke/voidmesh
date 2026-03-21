@@ -7,6 +7,7 @@ Canvas state management and input processing. This is the "model + controller" l
 - `canvas-store.ts` — Central canvas state: viewport, entities, selection, version counters. Singleton.
 - `game-loop.ts` (~86KB) — Main input/animation loop. Handles pointer, touch, pinch, drag, pan. Ticks per-frame controllers.
 - `action-layer-controller.ts` — Mobile action layer physics and phase state machine. Singleton.
+- `momentum-controller.ts` — Pan/zoom fling physics (exponential deceleration, elastic spring-back at zoom bounds). Injected deps for testability.
 - `disintegration-controller.ts` — Timing + spatial data for entity delete animations. GPU resources live in renderer. Singleton.
 - `viewport-animation.ts` — Eased viewport transitions (zoom-to-fit, pan-to-entity).
 - `entity-drag-visual.ts` — Canvas2D overlays for entity drag feedback.
@@ -24,7 +25,8 @@ Canvas state management and input processing. This is the "model + controller" l
 ## Patterns
 
 - State mutated imperatively through `CanvasStore` methods, then `notify()` triggers React re-renders via the appropriate version counter.
-- `GameLoop` holds references to both `canvasStore` and `InfiniteCanvasRenderer` but does NOT own them. Receives renderer via `setRenderer()`.
+- `GameLoop` uses dependency injection (`GameLoopDeps`) for testability. Default deps created via `createDefaultDeps()`. Receives renderer via `setRenderer()`.
+- `MomentumController` also uses DI (`MomentumDeps`) — inject viewport/pan callbacks for unit testing without a real canvas.
 - Touch handling uses a state machine: `TouchGestureState` tracks active touches, pinch distance, long-press timers.
 - Space+drag panning uses `SpacePanMode` enum (`idle` → `ready` → `panning` → `panned`).
 - Per-frame controllers (disintegration, drag visuals, action layer) are ticked each frame; return `true` while animations are active to keep the render loop running.
@@ -38,4 +40,4 @@ Canvas state management and input processing. This is the "model + controller" l
 
 ## Dependencies
 
-Imports from `#lib/canvas-math.ts`, `#config`, `#types/canvas.ts`, `#lib/touch-scroll/`, `#lib/gif-decoder.ts`. Does NOT import from `renderer/` except for the `InfiniteCanvasRenderer` type (game-loop needs the reference).
+Imports from `#lib/canvas-math.ts`, `#config`, `#types/canvas.ts`, `#lib/touch-scroll/`, `#lib/gif-decoder.ts`, `#lib/animation-scheduler.ts`. Does NOT import from `renderer/` except for the `InfiniteCanvasRenderer` type (game-loop needs the reference).
