@@ -1532,6 +1532,15 @@ export class InfiniteCanvasRenderer {
           targetView,
           `label-${entity.id}`,
           uiScale,
+          undefined,
+          {
+            offsetX: viewport.offset.x,
+            offsetY: viewport.offset.y,
+            zoom: viewport.zoom,
+            width,
+            height,
+            dpr,
+          },
         );
       }
     }
@@ -1653,6 +1662,15 @@ export class InfiniteCanvasRenderer {
           targetView,
           `label-${entity.id}`,
           uiScale,
+          undefined,
+          {
+            offsetX: viewport.offset.x,
+            offsetY: viewport.offset.y,
+            zoom: viewport.zoom,
+            width,
+            height,
+            dpr,
+          },
         );
       }
     }

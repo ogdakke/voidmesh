@@ -42,6 +42,43 @@ export interface SlugGlyph {
   bounds: Bounds;
 }
 
+const LINE_EPSILON = 0.125;
+
+function lineToQuadratic(x0: number, y0: number, x1: number, y1: number): QuadCurve {
+  const mx = (x0 + x1) / 2;
+  const my = (y0 + y1) / 2;
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+
+  // The vendor text-shaper prep turns lines into perfectly degenerate quadratics.
+  // That interacts badly with Slug's root eligibility logic on diagonal segments and
+  // shows up as scanline dropouts. Keep axis-aligned lines exact, but bow diagonal
+  // lines by an imperceptible amount so they behave like ordinary quadratics.
+  if (Math.abs(dx) > 0.1 && Math.abs(dy) > 0.1) {
+    const length = Math.hypot(dx, dy);
+    if (length > 0) {
+      const invLength = LINE_EPSILON / length;
+      return {
+        p0x: x0,
+        p0y: y0,
+        p1x: mx - dy * invLength,
+        p1y: my + dx * invLength,
+        p2x: x1,
+        p2y: y1,
+      };
+    }
+  }
+
+  return {
+    p0x: x0,
+    p0y: y0,
+    p1x: mx,
+    p1y: my,
+    p2x: x1,
+    p2y: y1,
+  };
+}
+
 /**
  * Extract quadratic bezier curves from a glyph path.
  * Line segments are converted to degenerate quadratics.
@@ -73,16 +110,7 @@ export function extractCurves(font: Font, glyphId: number) {
           curY = cmd.y;
           break;
         }
-        const mx = (curX + cmd.x) / 2;
-        const my = (curY + cmd.y) / 2;
-        curves.push({
-          p0x: curX,
-          p0y: curY,
-          p1x: mx,
-          p1y: my,
-          p2x: cmd.x,
-          p2y: cmd.y,
-        });
+        curves.push(lineToQuadratic(curX, curY, cmd.x, cmd.y));
         curX = cmd.x;
         curY = cmd.y;
         break;
@@ -147,16 +175,7 @@ export function extractCurves(font: Font, glyphId: number) {
         const cdx = startX - curX;
         const cdy = startY - curY;
         if (Math.abs(cdx) > 0.1 || Math.abs(cdy) > 0.1) {
-          const mx = (curX + startX) / 2;
-          const my = (curY + startY) / 2;
-          curves.push({
-            p0x: curX,
-            p0y: curY,
-            p1x: mx,
-            p1y: my,
-            p2x: startX,
-            p2y: startY,
-          });
+          curves.push(lineToQuadratic(curX, curY, startX, startY));
         }
         curX = startX;
         curY = startY;

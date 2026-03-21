@@ -74,7 +74,7 @@ export class UIRenderer {
   #interactionDirty = false;
 
   constructor(device: GPUDevice, canvasFormat: GPUTextureFormat, viewportUniformBuffer: GPUBuffer) {
-    this.#textRenderer = new TextRenderer(device, canvasFormat, viewportUniformBuffer);
+    this.#textRenderer = new TextRenderer(device, canvasFormat);
     this.#boxPipeline = new UIBoxPipeline(device, canvasFormat, viewportUniformBuffer);
     this.#iconPipeline = new UIIconPipeline(device, canvasFormat, viewportUniformBuffer);
     this.#iconCache = new UIIconCache(device);
@@ -150,6 +150,15 @@ export class UIRenderer {
     viewport?: ViewportInfo,
   ): void {
     if (!this.#ready || !this.#measurer) return;
+    if (viewport) {
+      this.#textRenderer.setViewport({
+        offsetX: viewport.offsetX,
+        offsetY: viewport.offsetY,
+        zoom: viewport.zoom,
+        width: viewport.width,
+        height: viewport.height,
+      });
+    }
 
     const now = performance.now();
 
