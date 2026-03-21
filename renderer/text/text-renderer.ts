@@ -4,6 +4,15 @@ import vertexShaderSource from "./text-vertex.wgsl?raw";
 import fragmentShaderSource from "./text-fragment.wgsl?raw";
 
 const TEX_WIDTH = 4096;
+const TEXT_UNIFORM_FLOATS = 20;
+
+interface TextViewport {
+  offsetX: number;
+  offsetY: number;
+  zoom: number;
+  width: number;
+  height: number;
+}
 
 interface TextItem {
   text: string | null;
@@ -29,12 +38,12 @@ interface TextItem {
 export class TextRenderer {
   #device: GPUDevice;
   #canvasFormat: GPUTextureFormat;
-  #viewportUniformBuffer: GPUBuffer;
 
   #pipeline: GPURenderPipeline | null = null;
   #bindGroupLayout: GPUBindGroupLayout | null = null;
   #font: Font | null = null;
   #ready = false;
+  #viewport: TextViewport | null = null;
 
   // Per-frame text queue
   #queue: TextItem[] = [];
@@ -43,10 +52,9 @@ export class TextRenderer {
   // (destroyed at the start of the next frame, after submit has completed)
   #pendingDestroy: Array<GPUBuffer | GPUTexture> = [];
 
-  constructor(device: GPUDevice, canvasFormat: GPUTextureFormat, viewportUniformBuffer: GPUBuffer) {
+  constructor(device: GPUDevice, canvasFormat: GPUTextureFormat) {
     this.#device = device;
     this.#canvasFormat = canvasFormat;
-    this.#viewportUniformBuffer = viewportUniformBuffer;
   }
 
   async initialize(): Promise<void> {
@@ -140,6 +148,10 @@ export class TextRenderer {
     return this.#font;
   }
 
+  setViewport(viewport: TextViewport): void {
+    this.#viewport = viewport;
+  }
+
   /** Clear the text queue for a new frame and release previous frame's GPU resources. */
   begin(): void {
     // Destroy resources from the previous frame (submit has completed by now)
@@ -202,48 +214,81 @@ export class TextRenderer {
     const slugData = item.slugData ?? prepareText(font, item.text!, item.fontSize);
     if (slugData.indices.length === 0) return;
 
+    if (!this.#viewport) return;
+
     const scale = font.scaleForSize(item.fontSize);
     const totalWidth = slugData.totalAdvance * scale;
     const descender = font.descender * scale; // negative value
 
     // Position: centered horizontally on worldX
     const offsetX = item.worldX - totalWidth / 2;
-    // Y-flip: slug vertices are Y-up, world space is Y-down.
-    // After negating vertex Y, text spans from -ascender (top) to -descender (bottom).
-    // Position so the bottom of the text sits at worldY.
+    // Keep the vendor Y-up local glyph space intact and bake the placement into the
+    // Slug MVP matrix. worldY denotes the bottom text edge in world-space coordinates.
     const offsetY = item.worldY + descender;
 
-    // Apply world-space offset, Y-flip, and custom color to vertices
+    // Copy reference vertex data and inject custom color only.
     const verts = new Float32Array(slugData.vertices.length);
     for (let i = 0; i < slugData.vertices.length; i += 20) {
-      // pos.xy: object-space position (flip Y)
-      verts[i] = slugData.vertices[i]! + offsetX;
-      verts[i + 1] = -slugData.vertices[i + 1]! + offsetY;
-      // pos.zw: vertex normal (flip normal Y)
+      verts[i] = slugData.vertices[i]!;
+      verts[i + 1] = slugData.vertices[i + 1]!;
       verts[i + 2] = slugData.vertices[i + 2]!;
-      verts[i + 3] = -slugData.vertices[i + 3]!;
-      // tex (offsets 4-7): em-space coords + packed glyph data — unchanged
+      verts[i + 3] = slugData.vertices[i + 3]!;
       verts[i + 4] = slugData.vertices[i + 4]!;
       verts[i + 5] = slugData.vertices[i + 5]!;
       verts[i + 6] = slugData.vertices[i + 6]!;
       verts[i + 7] = slugData.vertices[i + 7]!;
-      // jac (offsets 8-11): inverse Jacobian d(em)/d(obj)
-      // Flipping obj Y means d(em)/d(obj_y) negates
       verts[i + 8] = slugData.vertices[i + 8]!;
       verts[i + 9] = slugData.vertices[i + 9]!;
-      verts[i + 10] = -slugData.vertices[i + 10]!;
-      verts[i + 11] = -slugData.vertices[i + 11]!;
-      // bnd (offsets 12-15): band transform — unchanged (em-space)
+      verts[i + 10] = slugData.vertices[i + 10]!;
+      verts[i + 11] = slugData.vertices[i + 11]!;
       verts[i + 12] = slugData.vertices[i + 12]!;
       verts[i + 13] = slugData.vertices[i + 13]!;
       verts[i + 14] = slugData.vertices[i + 14]!;
       verts[i + 15] = slugData.vertices[i + 15]!;
-      // col (offsets 16-19): custom color
       verts[i + 16] = item.r;
       verts[i + 17] = item.g;
       verts[i + 18] = item.b;
       verts[i + 19] = item.a;
     }
+
+    const sx = (2 * this.#viewport.zoom) / this.#viewport.width;
+    const sy = (-2 * this.#viewport.zoom) / this.#viewport.height;
+    const tx = sx * offsetX - this.#viewport.offsetX * sx - 1;
+    const ty = sy * offsetY - this.#viewport.offsetY * sy + 1;
+
+    const uniformData = new Float32Array(TEXT_UNIFORM_FLOATS);
+    uniformData.set(
+      [
+        sx,
+        0,
+        0,
+        tx,
+        0,
+        -sy,
+        0,
+        ty,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        this.#viewport.width,
+        this.#viewport.height,
+        0,
+        0,
+      ],
+      0,
+    );
+
+    const uniformBuffer = this.#device.createBuffer({
+      label: "Text uniforms",
+      size: uniformData.byteLength,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    this.#device.queue.writeBuffer(uniformBuffer, 0, uniformData);
 
     const vertexBuffer = this.#device.createBuffer({
       label: "Text vertex buffer",
@@ -289,7 +334,7 @@ export class TextRenderer {
       label: "Text bind group",
       layout: this.#bindGroupLayout!,
       entries: [
-        { binding: 0, resource: { buffer: this.#viewportUniformBuffer } },
+        { binding: 0, resource: { buffer: uniformBuffer } },
         { binding: 1, resource: curveTexture.createView() },
         { binding: 2, resource: bandTexture.createView() },
       ],
@@ -314,7 +359,7 @@ export class TextRenderer {
     pass.end();
 
     // Defer destruction — resources must stay alive until after submit()
-    this.#pendingDestroy.push(vertexBuffer, indexBuffer, curveTexture, bandTexture);
+    this.#pendingDestroy.push(uniformBuffer, vertexBuffer, indexBuffer, curveTexture, bandTexture);
   }
 
   destroy(): void {

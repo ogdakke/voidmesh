@@ -22,7 +22,7 @@ const BLUE: UIColor = { r: 0.27, g: 0.53, b: 0.96, a: 1 };
 const RED: UIColor = { r: 0.9, g: 0.25, b: 0.3, a: 1 };
 const AMBER: UIColor = { r: 0.95, g: 0.75, b: 0.28, a: 1 };
 
-const BG_DARK: UIBackground = { type: "solid", color: { r: 0.14, g: 0.14, b: 0.17, a: 0.96 } };
+const BG_DARK: UIBackground = { type: "solid", color: { r: 0.14, g: 0.14, b: 0.17, a: 1 } };
 const BG_CARD: UIBackground = { type: "solid", color: { r: 0.18, g: 0.18, b: 0.2, a: 0.92 } };
 const BG_BLUE: UIBackground = {
   type: "gradient",
@@ -135,6 +135,54 @@ function StatRow(props: Record<string, unknown>): UIElement {
   );
 }
 
+const TARGET_GLYPHS = "W A V Z / v w";
+const STRESS_GLYPHS = "WWW AAA VVV ZZZ /// vvv www";
+const SPECIMEN_ROWS = [
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+  "abcdefghijklmnopqrstuvwxyz",
+  "0123456789",
+  "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
+];
+
+function SpecimenCard(props: Record<string, unknown>): UIElement {
+  const { title, background, color } = props;
+  const textColor = color as UIColor;
+  const content: UIElement[] = [
+    <text key="title" fontSize={15} color={textColor}>
+      {title as string}
+    </text>,
+    <text key="targets" fontSize={28} color={textColor}>
+      {TARGET_GLYPHS}
+    </text>,
+    <text key="stress" fontSize={20} color={textColor}>
+      {STRESS_GLYPHS}
+    </text>,
+  ];
+
+  for (const [index, row] of SPECIMEN_ROWS.entries()) {
+    content.push(
+      <text key={`specimen-row-${index}`} fontSize={18} color={textColor}>
+        {row}
+      </text>,
+    );
+  }
+
+  return (
+    <box
+      direction="col"
+      gap={8}
+      padding={edges(14)}
+      background={background as UIBackground}
+      borderRadius={4}
+      borderWidth={2}
+      borderColor={{ r: 0.25, g: 0.25, b: 0.3, a: 0.35 }}
+      minWidth={540}
+    >
+      {content}
+    </box>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Screen-space debug panel (fixed size regardless of zoom)
 // ---------------------------------------------------------------------------
@@ -233,51 +281,66 @@ export function buildDebugOverlay(zoom: number): UIElement {
   return (
     <box key="debug-root" draggable>
       {/* World-space content (scales with zoom, draggable via root) */}
-      <box
-        direction="col"
-        gap={16}
-        padding={edges(24)}
-        background={{
-          type: "gradient",
-          top: { r: 0.08, g: 0.12, b: 0.2, a: 0.95 },
-          bottom: { r: 0.05, g: 0.08, b: 0.15, a: 0.95 },
-        }}
-        borderRadius={4}
-        borderWidth={2}
-        borderColor={{ r: 0.2, g: 0.35, b: 0.6, a: 0.6 }}
-      >
-        <box direction="row" gap={12} align="center">
-          <icon icon={Drag} size={24} tint={{ r: 0.4, g: 0.6, b: 1, a: 0.7 }} />
-          <text fontSize={20} color={WHITE}>
-            World-Space UI
+      <box direction="row" gap={16} align="start">
+        <box
+          direction="col"
+          gap={16}
+          padding={edges(24)}
+          background={{
+            type: "gradient",
+            top: { r: 0.08, g: 0.12, b: 0.2, a: 0.95 },
+            bottom: { r: 0.05, g: 0.08, b: 0.15, a: 0.95 },
+          }}
+          borderRadius={4}
+          borderWidth={2}
+          borderColor={{ r: 0.2, g: 0.35, b: 0.6, a: 0.6 }}
+        >
+          <box direction="row" gap={12} align="center">
+            <icon icon={Drag} size={24} tint={{ r: 0.4, g: 0.6, b: 1, a: 0.7 }} />
+            <text fontSize={20} color={WHITE}>
+              World-Space UI
+            </text>
+          </box>
+
+          <text fontSize={14} color={GRAY}>
+            This element lives in world space.
           </text>
+          <text fontSize={14} color={GRAY}>
+            Zoom in/out to see it scale. Drag to move.
+          </text>
+
+          <box direction="row" gap={10} align="center">
+            <Button
+              label="World Button"
+              background={BG_BLUE}
+              icon={Star}
+              onClick={() => console.log("[CanvasUI] World button clicked")}
+            />
+            <Button
+              label="Another"
+              background={BG_GREEN}
+              icon={Heart}
+              onClick={() => console.log("[CanvasUI] Another clicked")}
+            />
+          </box>
         </box>
 
-        <text fontSize={14} color={GRAY}>
-          This element lives in world space.
-        </text>
-        <text fontSize={14} color={GRAY}>
-          Zoom in/out to see it scale. Drag to move.
-        </text>
-
-        <box direction="row" gap={10} align="center">
-          <Button
-            label="World Button"
-            background={BG_BLUE}
-            icon={Star}
-            onClick={() => console.log("[CanvasUI] World button clicked")}
+        <box direction="col" gap={12}>
+          <SpecimenCard
+            title="Font Specimen · White on Black"
+            background={{ type: "solid", color: { r: 0.03, g: 0.03, b: 0.04, a: 0.98 } }}
+            color={WHITE}
           />
-          <Button
-            label="Another"
-            background={BG_GREEN}
-            icon={Heart}
-            onClick={() => console.log("[CanvasUI] Another clicked")}
+          <SpecimenCard
+            title="Font Specimen · Black on White"
+            background={{ type: "solid", color: { r: 0.96, g: 0.96, b: 0.95, a: 0.98 } }}
+            color={BLACK}
           />
         </box>
       </box>
 
       {/* Screen-space debug panel (fixed to viewport, always on top) */}
-      <box position="fixed" left={80} bottom={40} zIndex={100}>
+      <box position="fixed" left={40} bottom={40} zIndex={100}>
         {buildDebugUI(zoom)}
       </box>
     </box>

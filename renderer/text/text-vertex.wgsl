@@ -1,5 +1,39 @@
-// Slug text vertex shader adapted for voidmesh viewport matrix
-// Based on Eric Lengyel's Slug algorithm (MIT License, 2017)
+// ===================================================
+// Reference vertex shader for the Slug algorithm ported to WGSL
+// This code is made available under the MIT License.
+// Copyright 2017, by Eric Lengyel.
+// ===================================================
+
+// The per-vertex input data consists of 5 attributes all having 4 floating-point components:
+//
+// 0 - pos
+// 1 - tex
+// 2 - jac
+// 3 - bnd
+// 4 - col
+
+// pos.xy = object-space vertex coordinates.
+// pos.zw = object-space normal vector.
+
+// tex.xy = em-space sample coordinates.
+
+// tex.z = location of glyph data in band texture (interpreted as integer):
+
+// | 31                         24 | 23                         16 | 15                          8 | 7                           0 |
+// +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+// |           y coordinate of glyph data in band texture          |           x coordinate of glyph data in band texture          |
+// +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+
+// tex.w = max band indexes and flags (interpreted as integer):
+
+// | 31                         24 | 23                         16 | 15                          8 | 7                           0 |
+// +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+// | 0   0   0 | E | 0   0   0   0 |           band max y          | 0   0   0   0   0   0   0   0 |           band max x          |
+// +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+
+// jac = inverse Jacobian matrix entries (00, 01, 10, 11).
+// bnd = (band scale x, band scale y, band offset x, band offset y).
+// col = vertex color (red, green, blue, alpha).
 
 struct SlugUnpackResult {
     vbnd: vec4<f32>,
@@ -14,66 +48,75 @@ fn SlugUnpack(tex: vec4<f32>, bnd: vec4<f32>) -> SlugUnpackResult {
         i32(g.y & 0xFFFFu),
         i32(g.y >> 16u)
     );
-    return SlugUnpackResult(bnd, vgly);
+    let vbnd = bnd;
+    return SlugUnpackResult(vbnd, vgly);
 }
 
-struct ViewportUniforms {
-    matrix_row0: vec4f,
-    matrix_row1: vec4f,
-    matrix_row2: vec4f,
-    resolution: vec2f,
-    zoom: f32,
-    _padding: f32,
+struct SlugDilateResult {
+    texcoord: vec2<f32>,
+    vpos: vec2<f32>,
 }
 
-@group(0) @binding(0) var<uniform> viewport: ViewportUniforms;
+fn SlugDilate(pos: vec4<f32>, tex: vec4<f32>, jac: vec4<f32>, m0: vec4<f32>, m1: vec4<f32>, m3: vec4<f32>, dim: vec2<f32>) -> SlugDilateResult {
+    let n = normalize(pos.zw);
+    let s = dot(m3.xy, pos.xy) + m3.w;
+    let t = dot(m3.xy, n);
+
+    let u = (s * dot(m0.xy, n) - t * (dot(m0.xy, pos.xy) + m0.w)) * dim.x;
+    let v = (s * dot(m1.xy, n) - t * (dot(m1.xy, pos.xy) + m1.w)) * dim.y;
+
+    let s2 = s * s;
+    let st = s * t;
+    let uv = u * u + v * v;
+    let d = pos.zw * (s2 * (st + sqrt(uv)) / (uv - st * st));
+
+    let vpos = pos.xy + d;
+    let texcoord = vec2<f32>(tex.x + dot(d, jac.xy), tex.y + dot(d, jac.zw));
+    return SlugDilateResult(texcoord, vpos);
+}
+
+struct ParamStruct {
+    slug_matrix: array<vec4<f32>, 4>,                // The four rows of the MVP matrix.
+    slug_viewport: vec4<f32>,                        // The viewport dimensions, in pixels.
+};
+
+@group(0) @binding(0) var<uniform> params: ParamStruct;
 
 struct VertexInput {
-    @location(0) pos: vec4<f32>,
-    @location(1) tex: vec4<f32>,
-    @location(2) jac: vec4<f32>,
-    @location(3) bnd: vec4<f32>,
-    @location(4) col: vec4<f32>,
+    @location(0) pos: vec4<f32>,                     // attrib[0]
+    @location(1) tex: vec4<f32>,                     // attrib[1]
+    @location(2) jac: vec4<f32>,                     // attrib[2]
+    @location(3) bnd: vec4<f32>,                     // attrib[3]
+    @location(4) col: vec4<f32>,                     // attrib[4]
 };
 
 struct VertexStruct {
-    @builtin(position) position: vec4<f32>,
-    @location(0) color: vec4<f32>,
-    @location(1) texcoord: vec2<f32>,
-    @location(2) @interpolate(flat) banding: vec4<f32>,
-    @location(3) @interpolate(flat) glyph: vec4<i32>,
+    @builtin(position) position: vec4<f32>,              // Clip-space vertex position.
+    @location(0) color: vec4<f32>,                       // Vertex color.
+    @location(1) texcoord: vec2<f32>,                    // Em-space sample coordinates.
+    @location(2) @interpolate(flat) banding: vec4<f32>,  // Band scale and offset, constant over glyph.
+    @location(3) @interpolate(flat) glyph: vec4<i32>,    // (glyph data x coord, glyph data y coord, band max x, band max y and flags), constant over glyph.
 };
 
 @vertex
 fn main(attrib: VertexInput) -> VertexStruct {
     var vresult: VertexStruct;
 
-    // Dilate glyph quad outward by ~1 pixel to prevent edge clipping.
-    // Expand along the vertex normal in world space, then adjust
-    // em-space coords via the inverse Jacobian.
-    let n = normalize(attrib.pos.zw);
-    let pixelSize = 1.0 / viewport.zoom;
-    let d = n * pixelSize;
+    // Apply dynamic dilation to vertex position. Returns new em-space sample position.
 
-    let worldPos = attrib.pos.xy + d;
-    vresult.texcoord = vec2<f32>(
-        attrib.tex.x + dot(d, attrib.jac.xy),
-        attrib.tex.y + dot(d, attrib.jac.zw)
-    );
+    let dilateResult = SlugDilate(attrib.pos, attrib.tex, attrib.jac, params.slug_matrix[0], params.slug_matrix[1], params.slug_matrix[3], params.slug_viewport.xy);
+    vresult.texcoord = dilateResult.texcoord;
+    let p = dilateResult.vpos;
 
-    // Apply viewport transform (world to clip space)
-    let m0 = viewport.matrix_row0;
-    let m1 = viewport.matrix_row1;
-    let m2 = viewport.matrix_row2;
+    // Apply MVP matrix to dilated vertex position.
 
-    let clipPos = vec2f(
-        m0.x * worldPos.x + m1.x * worldPos.y + m2.x,
-        m0.y * worldPos.x + m1.y * worldPos.y + m2.y
-    );
+    vresult.position.x = p.x * params.slug_matrix[0].x + p.y * params.slug_matrix[0].y + params.slug_matrix[0].w;
+    vresult.position.y = p.x * params.slug_matrix[1].x + p.y * params.slug_matrix[1].y + params.slug_matrix[1].w;
+    vresult.position.z = p.x * params.slug_matrix[2].x + p.y * params.slug_matrix[2].y + params.slug_matrix[2].w;
+    vresult.position.w = p.x * params.slug_matrix[3].x + p.y * params.slug_matrix[3].y + params.slug_matrix[3].w;
 
-    vresult.position = vec4f(clipPos, 0.0, 1.0);
+    // Unpack or pass through remaining vertex data.
 
-    // Unpack glyph metadata
     let unpackResult = SlugUnpack(attrib.tex, attrib.bnd);
     vresult.banding = unpackResult.vbnd;
     vresult.glyph = unpackResult.vgly;
