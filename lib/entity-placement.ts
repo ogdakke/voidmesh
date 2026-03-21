@@ -16,21 +16,56 @@ import { logger } from "./client.logger.ts";
 type EntityData = Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string };
 type AddEntityFn = (entity: EntityData, filename?: string) => string;
 
+interface LayoutOptions {
+  gap: number;
+  maxColumns: number;
+}
+
+export type LayoutAlgorithm = (sizes: Size[], options: LayoutOptions) => Point[];
+
 /**
- * Calculate grid positions for multiple entities.
- * Uses uniform cell sizes based on the largest entity dimensions.
- * Entities are centered within their cells.
- * Grid is centered around the provided anchor point.
+ * Shelf-packing layout: pack items left-to-right into rows.
+ * Wraps to a new row after maxColumns items.
+ * Items are top-aligned within each row.
  */
-export function calculateGridPositions(
+export const shelfLayout: LayoutAlgorithm = (sizes, { gap, maxColumns }) => {
+  const positions: Point[] = [];
+  let x = 0;
+  let y = 0;
+  let shelfHeight = 0;
+  let colCount = 0;
+
+  for (const size of sizes) {
+    if (colCount > 0 && colCount >= maxColumns) {
+      y += shelfHeight + gap;
+      x = 0;
+      shelfHeight = 0;
+      colCount = 0;
+    }
+    positions.push({ x, y });
+    x += size.width + gap;
+    shelfHeight = Math.max(shelfHeight, size.height);
+    colCount++;
+  }
+
+  return positions;
+};
+
+/**
+ * Calculate layout positions for multiple entities.
+ * Sorts by area (biggest first), runs shelf-packing, then centers around anchor.
+ * Returns positions in the same order as input sizes.
+ */
+export function calculateLayout(
   sizes: Size[],
   anchor: Point,
-  options?: { gap?: number; maxColumns?: number },
+  options?: { gap?: number; maxColumns?: number; algorithm?: LayoutAlgorithm },
 ): Point[] {
-  const gap = options?.gap ?? config.canvas.gridGap;
-  const maxColumns = options?.maxColumns ?? config.canvas.maxGridColumns;
-
   if (sizes.length === 0) return [];
+
+  const gap = options?.gap ?? config.canvas.layoutGap;
+  const maxColumns = options?.maxColumns ?? config.canvas.maxGridColumns;
+  const algorithm = options?.algorithm ?? shelfLayout;
 
   if (sizes.length === 1) {
     return [
@@ -41,39 +76,49 @@ export function calculateGridPositions(
     ];
   }
 
-  // Find max dimensions for uniform cell sizing
-  let maxWidth = 0;
-  let maxHeight = 0;
-  for (const size of sizes) {
-    maxWidth = Math.max(maxWidth, size.width);
-    maxHeight = Math.max(maxHeight, size.height);
+  // Sort indices by area descending (biggest first)
+  const indices = Array.from({ length: sizes.length }, (_, i) => i);
+  indices.sort((a, b) => {
+    const areaA = sizes[a]!.width * sizes[a]!.height;
+    const areaB = sizes[b]!.width * sizes[b]!.height;
+    return areaB - areaA;
+  });
+
+  const sortedSizes = indices.map((i) => sizes[i]!);
+
+  const effectiveColumns = Math.min(maxColumns, sizes.length);
+
+  // Run layout algorithm (produces positions relative to 0,0)
+  const sortedPositions = algorithm(sortedSizes, { gap, maxColumns: effectiveColumns });
+
+  // Compute bounding box
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i < sortedPositions.length; i++) {
+    const pos = sortedPositions[i]!;
+    const size = sortedSizes[i]!;
+    minX = Math.min(minX, pos.x);
+    minY = Math.min(minY, pos.y);
+    maxX = Math.max(maxX, pos.x + size.width);
+    maxY = Math.max(maxY, pos.y + size.height);
   }
 
-  const columns = Math.min(maxColumns, sizes.length);
-  const rows = Math.ceil(sizes.length / columns);
+  // Translate so bounding box center = anchor
+  const offsetX = anchor.x - (minX + maxX) / 2;
+  const offsetY = anchor.y - (minY + maxY) / 2;
 
-  // Total grid dimensions (cells + gaps between them)
-  const totalWidth = columns * maxWidth + (columns - 1) * gap;
-  const totalHeight = rows * maxHeight + (rows - 1) * gap;
-
-  // Grid top-left so grid is centered on anchor
-  const gridOriginX = anchor.x - totalWidth / 2;
-  const gridOriginY = anchor.y - totalHeight / 2;
-
-  return sizes.map((size, index) => {
-    const col = index % columns;
-    const row = Math.floor(index / columns);
-
-    // Cell top-left position
-    const cellX = gridOriginX + col * (maxWidth + gap);
-    const cellY = gridOriginY + row * (maxHeight + gap);
-
-    // Center entity within cell
-    return {
-      x: cellX + (maxWidth - size.width) / 2,
-      y: cellY + (maxHeight - size.height) / 2,
+  // Un-shuffle back to original input order
+  const result: Point[] = new Array(sizes.length);
+  for (let i = 0; i < indices.length; i++) {
+    result[indices[i]!] = {
+      x: sortedPositions[i]!.x + offsetX,
+      y: sortedPositions[i]!.y + offsetY,
     };
-  });
+  }
+
+  return result;
 }
 
 /**
@@ -154,7 +199,7 @@ export async function addFilesToCanvas(
   const rect = container.getBoundingClientRect();
   const centerWorld = getViewportCenter(viewport, rect, window.devicePixelRatio);
 
-  const positions = calculateGridPositions(
+  const positions = calculateLayout(
     loaded.map((l) => l.data.size),
     centerWorld,
   );

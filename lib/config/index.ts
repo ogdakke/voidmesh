@@ -473,8 +473,8 @@ export const config = {
     minZoom: 0.01,
     maxZoom: 10,
     staggerMultiplier: 60,
-    /** Gap between entities in grid layout (world pixels) */
-    gridGap: 40,
+    /** Gap between entities in layout (world pixels). Equals SNAP_GRID_SIZE (1 snap cell). */
+    layoutGap: 125,
     /** Maximum columns in grid layout */
     maxGridColumns: 4,
     /** Mobile layout insets (CSS pixels) */
