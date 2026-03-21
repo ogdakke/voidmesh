@@ -197,14 +197,6 @@ export class UIRenderer {
       viewport,
     );
 
-    // 3. Render in z-index layers (boxes→icons→text per layer)
-    // Collect distinct z-index values across all element types
-    const zLevels = new Set<number>();
-    for (const b of layout.boxes) zLevels.add(b.zIndex);
-    for (const ic of layout.icons) zLevels.add(ic.zIndex);
-    for (const t of layout.texts) zLevels.add(t.zIndex);
-    const sortedZ = [...zLevels].sort((a, b) => a - b);
-
     // Track icon preload state
     for (const layoutIcon of layout.icons) {
       if (!this.#iconCache.has(layoutIcon.svg)) {
@@ -212,35 +204,88 @@ export class UIRenderer {
       }
     }
 
-    // Render each z-layer: boxes first, then icons, then text
-    for (const z of sortedZ) {
-      const layerBoxes = layout.boxes.filter((b) => b.zIndex === z);
-      if (layerBoxes.length > 0) {
-        this.#boxPipeline.render(layerBoxes, encoder, targetView);
+    type RenderCommand =
+      | { kind: "box"; order: number; zIndex: number; item: (typeof layout.boxes)[number] }
+      | { kind: "icon"; order: number; zIndex: number; item: (typeof layout.icons)[number] }
+      | { kind: "text"; order: number; zIndex: number; item: (typeof layout.texts)[number] };
+
+    const commands: RenderCommand[] = [
+      ...layout.boxes.map((item) => ({
+        kind: "box" as const,
+        order: item.order,
+        zIndex: item.zIndex,
+        item,
+      })),
+      ...layout.icons.map((item) => ({
+        kind: "icon" as const,
+        order: item.order,
+        zIndex: item.zIndex,
+        item,
+      })),
+      ...layout.texts.map((item) => ({
+        kind: "text" as const,
+        order: item.order,
+        zIndex: item.zIndex,
+        item,
+      })),
+    ].sort((a, b) => a.zIndex - b.zIndex || a.order - b.order);
+
+    let boxBatch: typeof layout.boxes = [];
+    let iconBatch: typeof layout.icons = [];
+    let hasQueuedText = false;
+
+    const flushBoxes = () => {
+      if (boxBatch.length === 0) return;
+      this.#boxPipeline.render(boxBatch, encoder, targetView);
+      boxBatch = [];
+    };
+
+    const flushIcons = () => {
+      if (iconBatch.length === 0) return;
+      this.#iconPipeline.render(iconBatch, this.#iconCache, encoder, targetView);
+      iconBatch = [];
+    };
+
+    const flushText = () => {
+      if (!hasQueuedText) return;
+      this.#textRenderer.flush(encoder, targetView);
+      hasQueuedText = false;
+    };
+
+    for (const command of commands) {
+      if (command.kind === "box") {
+        flushIcons();
+        flushText();
+        boxBatch.push(command.item);
+        continue;
       }
 
-      const layerIcons = layout.icons.filter((ic) => ic.zIndex === z);
-      if (layerIcons.length > 0) {
-        this.#iconPipeline.render(layerIcons, this.#iconCache, encoder, targetView);
+      if (command.kind === "icon") {
+        flushBoxes();
+        flushText();
+        iconBatch.push(command.item);
+        continue;
       }
 
-      const layerTexts = layout.texts.filter((t) => t.zIndex === z);
-      for (const t of layerTexts) {
-        this.#textRenderer.drawText(
-          t.slugData as ReturnType<typeof prepareText>,
-          t.x,
-          t.y,
-          t.fontSize,
-          t.color.r,
-          t.color.g,
-          t.color.b,
-          t.color.a * t.opacity,
-        );
-      }
-      if (layerTexts.length > 0) {
-        this.#textRenderer.flush(encoder, targetView);
-      }
+      flushBoxes();
+      flushIcons();
+      const t = command.item;
+      this.#textRenderer.drawText(
+        t.slugData as ReturnType<typeof prepareText>,
+        t.x,
+        t.y,
+        t.fontSize,
+        t.color.r,
+        t.color.g,
+        t.color.b,
+        t.color.a * t.opacity,
+      );
+      hasQueuedText = true;
     }
+
+    flushBoxes();
+    flushIcons();
+    flushText();
 
     // 6. Prune exited nodes
     pruneExitedNodes(root);
