@@ -20,21 +20,70 @@ export interface UIEdges {
   left: number;
 }
 
+export interface UIThemeValue<T> {
+  type: "theme";
+  light: T;
+  dark: T;
+}
+
+export type UIColorValue = UIColor | string | UIThemeValue<UIColor | string>;
+
+export interface UISolidBackground {
+  type: "solid";
+  color: UIColorValue;
+}
+
+export interface UIGradientBackground {
+  type: "gradient";
+  top: UIColorValue;
+  bottom: UIColorValue;
+}
+
 export type UIBackground =
-  | { type: "solid"; color: UIColor }
-  | { type: "gradient"; top: UIColor; bottom: UIColor };
+  | UISolidBackground
+  | UIGradientBackground
+  | UIThemeValue<UISolidBackground | UIGradientBackground>;
+
+export function rgba(r: number, g: number, b: number, a = 1): UIColor {
+  return { r, g, b, a };
+}
+
+export function lightDark<T>(light: T, dark: T): UIThemeValue<T> {
+  return { type: "theme", light, dark };
+}
+
+export function solid(color: UIColorValue): UISolidBackground {
+  return { type: "solid", color };
+}
+
+export function gradient(top: UIColorValue, bottom: UIColorValue): UIGradientBackground {
+  return { type: "gradient", top, bottom };
+}
 
 // ---------------------------------------------------------------------------
 // Animation / transition config
 // ---------------------------------------------------------------------------
 
 export interface TweenConfig {
+  type?: "tween";
   duration: number; // ms
   easing: (t: number) => number;
   delay?: number;
 }
 
-export type AnimateConfig = Record<string, TweenConfig>;
+export interface SpringConfig {
+  type: "spring";
+  response?: number; // seconds, lower = snappier
+  delay?: number;
+}
+
+export type MotionConfig = TweenConfig | SpringConfig;
+
+export type AnimateConfig = Record<string, MotionConfig>;
+
+export function spring(response = 0.32, delay?: number): SpringConfig {
+  return { type: "spring", response, delay };
+}
 
 // ---------------------------------------------------------------------------
 // Event types
@@ -63,7 +112,7 @@ export type UIDragHandler = (event: UIDragEvent) => void;
 
 export interface StateStyle {
   background?: UIBackground;
-  borderColor?: UIColor;
+  borderColor?: UIColorValue;
   borderWidth?: number;
   borderRadius?: number;
   opacity?: number;
@@ -97,7 +146,7 @@ export interface BoxElementProps {
   background?: UIBackground;
   borderRadius?: number;
   borderWidth?: number;
-  borderColor?: UIColor;
+  borderColor?: UIColorValue;
   opacity?: number;
   width?: number;
   height?: number;
@@ -116,7 +165,7 @@ export interface BoxElementProps {
   hover?: StateStyle;
   active?: StateStyle;
   // Transitions for state style properties (interpolates on state change)
-  transition?: Record<string, TweenConfig>;
+  transition?: Record<string, MotionConfig>;
   // Event handlers
   onClick?: UIEventHandler;
   onPointerDown?: UIEventHandler;
@@ -130,7 +179,7 @@ export interface BoxElementProps {
 export interface TextElementProps {
   key?: string | number;
   fontSize: number;
-  color: UIColor;
+  color: UIColorValue;
   opacity?: number;
   children?: string;
 }
@@ -142,7 +191,7 @@ export interface IconElementProps {
   /** React icon component (e.g. from iconoir-react). Converted to SVG string automatically. */
   icon?: ReactIconComponent;
   size: number;
-  tint?: UIColor;
+  tint?: UIColorValue;
   opacity?: number;
   animate?: AnimateConfig;
 }

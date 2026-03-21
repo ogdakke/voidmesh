@@ -15,12 +15,13 @@
 import type {
   UIEdges,
   UIColor,
+  UIColorValue,
   UIBackground,
   AnimateConfig,
-  TweenConfig,
   StateStyle,
 } from "./elements.ts";
 import type { SceneNode } from "./scene-node.ts";
+import type { UIResolvedBackground, UIStyleResolver } from "./style-resolver.ts";
 
 // ---------------------------------------------------------------------------
 // Text measurement interface (decouples layout from GPU text rendering)
@@ -78,7 +79,7 @@ export interface UILayoutBox {
   y: number;
   width: number;
   height: number;
-  background: UIBackground;
+  background: UIResolvedBackground;
   borderRadius: number;
   borderWidth: number;
   borderColor: UIColor;
@@ -110,6 +111,12 @@ export interface UILayoutIcon {
   zIndex: number;
 }
 
+interface UITransform {
+  scale: number;
+  translateX: number;
+  translateY: number;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -117,6 +124,34 @@ export interface UILayoutIcon {
 const ZERO_EDGES: UIEdges = { top: 0, right: 0, bottom: 0, left: 0 };
 const WHITE = { r: 1, g: 1, b: 1, a: 1 };
 const TRANSPARENT = { r: 0, g: 0, b: 0, a: 0 };
+const IDENTITY_TRANSFORM: UITransform = { scale: 1, translateX: 0, translateY: 0 };
+
+function transformX(transform: UITransform, x: number): number {
+  return x * transform.scale + transform.translateX;
+}
+
+function transformY(transform: UITransform, y: number): number {
+  return y * transform.scale + transform.translateY;
+}
+
+function transformSize(transform: UITransform, value: number): number {
+  return value * transform.scale;
+}
+
+function scaleAround(
+  transform: UITransform,
+  pivotX: number,
+  pivotY: number,
+  scale: number,
+): UITransform {
+  if (scale === 1) return transform;
+
+  return {
+    scale: transform.scale * scale,
+    translateX: transform.translateX + transform.scale * pivotX * (1 - scale),
+    translateY: transform.translateY + transform.scale * pivotY * (1 - scale),
+  };
+}
 
 function resolvePadding(raw: unknown, scale: number): UIEdges {
   if (raw == null) return ZERO_EDGES;
@@ -141,7 +176,7 @@ function resolveAnimatedProps(node: SceneNode, now: number): Record<string, numb
   for (const [prop, config] of Object.entries(animate)) {
     const target = node.props[prop];
     if (typeof target !== "number") continue;
-    resolved[prop] = node.resolveAnimatedValue(prop, target, config as TweenConfig, now);
+    resolved[prop] = node.resolveAnimatedValue(prop, target, config, now);
   }
   return resolved;
 }
@@ -179,16 +214,22 @@ function getStateStyle(node: SceneNode): StateStyle | undefined {
   return undefined;
 }
 
-function getEffectiveBackground(node: SceneNode): UIBackground | undefined {
+function getEffectiveBackground(
+  node: SceneNode,
+  styleResolver: UIStyleResolver,
+): UIResolvedBackground | undefined {
   const state = getStateStyle(node);
-  if (state?.background) return state.background;
-  return node.props["background"] as UIBackground | undefined;
+  if (state?.background) return styleResolver.resolveBackground(state.background);
+  return styleResolver.resolveBackground(node.props["background"] as UIBackground | undefined);
 }
 
-function getEffectiveBorderColor(node: SceneNode): UIColor {
+function getEffectiveBorderColor(node: SceneNode, styleResolver: UIStyleResolver): UIColor {
   const state = getStateStyle(node);
-  if (state?.borderColor) return state.borderColor;
-  return (node.props["borderColor"] as UIColor) ?? TRANSPARENT;
+  if (state?.borderColor) return styleResolver.resolveColor(state.borderColor, TRANSPARENT);
+  return styleResolver.resolveColor(
+    node.props["borderColor"] as UIColorValue | undefined,
+    TRANSPARENT,
+  );
 }
 
 function getEffectiveOpacity(node: SceneNode, animated: Record<string, number>): number {
@@ -202,7 +243,7 @@ function getEffectiveOpacity(node: SceneNode, animated: Record<string, number>):
 function resolveVisualScale(node: SceneNode, now: number): number {
   const state = getStateStyle(node);
   const targetScale = state?.scale ?? 1;
-  const transition = node.props["transition"] as Record<string, TweenConfig> | undefined;
+  const transition = node.props["transition"] as AnimateConfig | undefined;
   if (transition?.["scale"]) {
     return node.resolveAnimatedValue("_visualScale", targetScale, transition["scale"], now);
   }
@@ -350,23 +391,32 @@ function position(
   y: number,
   now: number,
   scale: number,
+  styleResolver: UIStyleResolver,
+  transform: UITransform,
   result: UILayoutResult,
   parentZIndex = 0,
   viewport?: ViewportInfo,
 ): void {
   const animated = resolveAnimatedProps(node, now);
-  node.layout.x = x;
-  node.layout.y = y;
+  const offsetX = node.dragOffset.x;
+  const offsetY = node.dragOffset.y;
+  const resolvedX = x + offsetX;
+  const resolvedY = y + offsetY;
+  node.layout.x = resolvedX;
+  node.layout.y = resolvedY;
 
   switch (node.type) {
     case "text": {
       if (node.layout.width <= 0) break;
       const opacity = getEffectiveOpacity(node, animated);
-      const color = (node.props["color"] as UIColor) ?? WHITE;
+      const color = styleResolver.resolveColor(
+        node.props["color"] as UIColorValue | undefined,
+        WHITE,
+      );
       result.texts.push({
-        x: x + node.layout.width / 2,
-        y: y + node.layout.height,
-        fontSize: getScaled(node, "fontSize", animated, 14, scale),
+        x: transformX(transform, resolvedX + node.layout.width / 2),
+        y: transformY(transform, resolvedY + node.layout.height),
+        fontSize: transformSize(transform, getScaled(node, "fontSize", animated, 14, scale)),
         color,
         opacity,
         slugData: node.textCache?.slugData,
@@ -382,12 +432,15 @@ function position(
       if (node.layout.width <= 0) break;
       const opacity = getEffectiveOpacity(node, animated);
       const svg = node.props["svg"] as string;
-      const tint = (node.props["tint"] as UIColor) ?? WHITE;
+      const tint = styleResolver.resolveColor(
+        node.props["tint"] as UIColorValue | undefined,
+        WHITE,
+      );
       result.icons.push({
-        x,
-        y,
-        width: node.layout.width,
-        height: node.layout.height,
+        x: transformX(transform, resolvedX),
+        y: transformY(transform, resolvedY),
+        width: transformSize(transform, node.layout.width),
+        height: transformSize(transform, node.layout.height),
         svg,
         tint,
         opacity,
@@ -400,44 +453,54 @@ function position(
     case "anchor": {
       const zIndex = parentZIndex + ((node.props["zIndex"] as number | undefined) ?? 0);
       const opacity = getEffectiveOpacity(node, animated);
-      const background = getEffectiveBackground(node);
+      const background = getEffectiveBackground(node, styleResolver);
       const stateStyle = getStateStyle(node);
       const visualScale = resolveVisualScale(node, now);
-
-      // Track emit start indices for visual scale transform
-      const boxStart = result.boxes.length;
-      const textStart = result.texts.length;
-      const iconStart = result.icons.length;
+      const nodeTransform = scaleAround(
+        transform,
+        resolvedX + node.layout.width / 2,
+        resolvedY + node.layout.height / 2,
+        visualScale,
+      );
 
       if (background) {
         result.boxes.push({
-          x,
-          y,
-          width: node.layout.width,
-          height: node.layout.height,
+          x: transformX(nodeTransform, resolvedX),
+          y: transformY(nodeTransform, resolvedY),
+          width: transformSize(nodeTransform, node.layout.width),
+          height: transformSize(nodeTransform, node.layout.height),
           background,
-          borderRadius:
+          borderRadius: transformSize(
+            nodeTransform,
             stateStyle?.borderRadius !== undefined
               ? stateStyle.borderRadius * scale
               : getScaled(node, "borderRadius", animated, 0, scale),
-          borderWidth:
+          ),
+          borderWidth: transformSize(
+            nodeTransform,
             stateStyle?.borderWidth !== undefined
               ? stateStyle.borderWidth * scale
               : getScaled(node, "borderWidth", animated, 0, scale),
-          borderColor: getEffectiveBorderColor(node),
+          ),
+          borderColor: getEffectiveBorderColor(node, styleResolver),
           opacity,
           zIndex,
         });
       }
 
-      positionChildren(node, x, y, now, scale, animated, result, zIndex, viewport);
-
-      // Apply visual scale transform to all entries emitted by this subtree
-      if (visualScale !== 1) {
-        const cx = x + node.layout.width / 2;
-        const cy = y + node.layout.height / 2;
-        applyScaleToEntries(result, boxStart, textStart, iconStart, cx, cy, visualScale);
-      }
+      positionChildren(
+        node,
+        resolvedX,
+        resolvedY,
+        now,
+        scale,
+        styleResolver,
+        nodeTransform,
+        animated,
+        result,
+        zIndex,
+        viewport,
+      );
       break;
     }
   }
@@ -449,6 +512,8 @@ function positionChildren(
   parentY: number,
   now: number,
   scale: number,
+  styleResolver: UIStyleResolver,
+  transform: UITransform,
   animated: Record<string, number>,
   result: UILayoutResult,
   parentZIndex = 0,
@@ -546,7 +611,18 @@ function positionChildren(
         } else {
           childY = contentY;
         }
-        position(child, mainCursor, childY, now, scale, result, parentZIndex, viewport);
+        position(
+          child,
+          mainCursor,
+          childY,
+          now,
+          scale,
+          styleResolver,
+          transform,
+          result,
+          parentZIndex,
+          viewport,
+        );
         mainCursor += child.layout.width + justifyGap;
       } else {
         let childX: number;
@@ -557,14 +633,36 @@ function positionChildren(
         } else {
           childX = contentX;
         }
-        position(child, childX, mainCursor, now, scale, result, parentZIndex, viewport);
+        position(
+          child,
+          childX,
+          mainCursor,
+          now,
+          scale,
+          styleResolver,
+          transform,
+          result,
+          parentZIndex,
+          viewport,
+        );
         mainCursor += child.layout.height + justifyGap;
       }
     }
 
     for (const child of flowChildren) {
       if (child.layout.width <= 0 && child.layout.height <= 0) {
-        position(child, contentX, contentY, now, scale, result, parentZIndex, viewport);
+        position(
+          child,
+          contentX,
+          contentY,
+          now,
+          scale,
+          styleResolver,
+          transform,
+          result,
+          parentZIndex,
+          viewport,
+        );
       }
     }
   }
@@ -587,7 +685,18 @@ function positionChildren(
     else if (bottom !== undefined)
       childY = parentY + parent.layout.height - child.layout.height - bottom * scale;
 
-    position(child, childX, childY, now, scale, result, parentZIndex, viewport);
+    position(
+      child,
+      childX,
+      childY,
+      now,
+      scale,
+      styleResolver,
+      transform,
+      result,
+      parentZIndex,
+      viewport,
+    );
   }
 
   // --- Fixed children (positioned relative to viewport) ---
@@ -613,45 +722,19 @@ function positionChildren(
       if (top !== undefined) childY = vpTop + top * screenScale;
       else if (bottom !== undefined) childY = vpBottom - child.layout.height - bottom * screenScale;
 
-      position(child, childX, childY, now, screenScale, result, parentZIndex, viewport);
+      position(
+        child,
+        childX,
+        childY,
+        now,
+        screenScale,
+        styleResolver,
+        transform,
+        result,
+        parentZIndex,
+        viewport,
+      );
     }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Visual scale transform (for :active press effect)
-// ---------------------------------------------------------------------------
-
-function applyScaleToEntries(
-  result: UILayoutResult,
-  boxStart: number,
-  textStart: number,
-  iconStart: number,
-  cx: number,
-  cy: number,
-  s: number,
-): void {
-  for (let i = boxStart; i < result.boxes.length; i++) {
-    const b = result.boxes[i]!;
-    b.x = cx + (b.x - cx) * s;
-    b.y = cy + (b.y - cy) * s;
-    b.width *= s;
-    b.height *= s;
-    b.borderRadius *= s;
-    b.borderWidth *= s;
-  }
-  for (let i = textStart; i < result.texts.length; i++) {
-    const t = result.texts[i]!;
-    t.x = cx + (t.x - cx) * s;
-    t.y = cy + (t.y - cy) * s;
-    t.fontSize *= s;
-  }
-  for (let i = iconStart; i < result.icons.length; i++) {
-    const ic = result.icons[i]!;
-    ic.x = cx + (ic.x - cx) * s;
-    ic.y = cy + (ic.y - cy) * s;
-    ic.width *= s;
-    ic.height *= s;
   }
 }
 
@@ -677,6 +760,7 @@ export function computeLayout(
   anchorY: number,
   measurer: TextMeasurer,
   now: number,
+  styleResolver: UIStyleResolver,
   anchors?: Map<string, AnchorTarget>,
   scale = 1,
   viewport?: ViewportInfo,
@@ -722,7 +806,18 @@ export function computeLayout(
 
       const rootX = resolvedX - root.layout.width / 2;
       const rootY = resolvedY - root.layout.height;
-      position(root, rootX, rootY, now, scale, result, 0, viewport);
+      position(
+        root,
+        rootX,
+        rootY,
+        now,
+        scale,
+        styleResolver,
+        IDENTITY_TRANSFORM,
+        result,
+        0,
+        viewport,
+      );
       sortByZIndex(result);
       return result;
     }
@@ -730,13 +825,9 @@ export function computeLayout(
 
   measure(root, measurer, now, scale, viewport);
 
-  // Apply drag offset for draggable elements
-  const dragX = root.dragOffset.x;
-  const dragY = root.dragOffset.y;
-
-  const rootX = anchorX - root.layout.width / 2 + dragX;
-  const rootY = anchorY - root.layout.height + dragY;
-  position(root, rootX, rootY, now, scale, result, 0, viewport);
+  const rootX = anchorX - root.layout.width / 2;
+  const rootY = anchorY - root.layout.height;
+  position(root, rootX, rootY, now, scale, styleResolver, IDENTITY_TRANSFORM, result, 0, viewport);
   sortByZIndex(result);
 
   return result;
