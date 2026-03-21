@@ -19,7 +19,6 @@ import {
   easings,
   zoomToPoint,
 } from "#lib/canvas-math.ts";
-import { logger } from "#lib/client.logger.ts";
 import { undo } from "#lib/undo.ts";
 import { Check, Drag, Enlarge, Reduce, Square3dFromCenter } from "iconoir-react";
 import {
@@ -203,7 +202,6 @@ export function InfiniteCanvas() {
     if (e.pointerType === "touch") return;
 
     containerRef.current?.focus();
-    logger.debug("pointer down");
     gameLoop.handlePointerDown({ x: e.clientX, y: e.clientY }, e.shiftKey);
   };
 

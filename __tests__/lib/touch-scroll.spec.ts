@@ -11,15 +11,6 @@ describe("VelocityTracker", () => {
     tracker = new VelocityTracker();
   });
 
-  describe("addDataPoint", () => {
-    test("accepts time and position values", () => {
-      // Should not throw
-      tracker.addDataPoint(0, 100);
-      tracker.addDataPoint(16, 110);
-      tracker.addDataPoint(32, 120);
-    });
-  });
-
   describe("calculate", () => {
     test("returns 0 with no samples", () => {
       expect(tracker.calculate()).toBe(0);

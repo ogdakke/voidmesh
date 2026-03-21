@@ -1,6 +1,11 @@
 import { SpringBack } from "../lib/touch-scroll/spring-back.ts";
 import { config } from "../lib/config/index.ts";
 import { canvasStore } from "./canvas-store.ts";
+import {
+  scheduler as defaultScheduler,
+  type AnimationScheduler,
+  type AnimationHandle,
+} from "../lib/animation-scheduler.ts";
 
 const enum DragVisualPhase {
   idle,
@@ -12,7 +17,7 @@ const enum DragVisualPhase {
 /**
  * Entity drag visual feedback controller.
  * Manages spring-based scale animations for drag gestures.
- * Follows the same singleton pattern as EntityLabelController and ViewportAnimationController.
+ * Self-registers with AnimationScheduler (no external tick() needed).
  *
  * Phases:
  *   idle → possibleDrag → dragging → releasing → idle
@@ -22,40 +27,19 @@ const enum DragVisualPhase {
  * On release, entities spring back to exactly 1.0.
  */
 class EntityDragVisualController {
+  #scheduler: AnimationScheduler;
   #phase = DragVisualPhase.idle as DragVisualPhase;
   #spring = new SpringBack();
   #springStartTime = 0;
   #currentScale = 1;
   #targetScale = 1;
   #possibleDragTimerId: ReturnType<typeof setTimeout> | null = null;
+  #handle: AnimationHandle | null = null;
   /** Entity IDs with active visual (single entity during possibleDrag, full selection during drag) */
   #entityIds = new Set<string>();
 
-  /** Advance spring animation. Returns true if still animating (caller adds to needsRender). */
-  tick(now: number): boolean {
-    if (this.#phase === DragVisualPhase.idle) return false;
-
-    const elapsed = now - this.#springStartTime;
-    const springValue = this.#spring.value(elapsed);
-
-    if (springValue === null) {
-      // Spring settled
-      this.#currentScale = this.#targetScale;
-      if (this.#phase === DragVisualPhase.releasing) {
-        this.#phase = DragVisualPhase.idle;
-        this.#entityIds.clear();
-        // Force one more render frame for label cleanup
-        canvasStore.setContainerDirty();
-        return false;
-      }
-      // possibleDrag or dragging phase — spring settled but phase continues
-      return false;
-    }
-
-    // Clamp scale to prevent extreme overshoot from spring dynamics
-    const rawScale = this.#targetScale + springValue.offset;
-    this.#currentScale = Math.max(0.8, Math.min(rawScale, 1.05));
-    return true;
+  constructor(scheduler: AnimationScheduler) {
+    this.#scheduler = scheduler;
   }
 
   /** Get visual scale for an entity. Returns 1.0 if entity has no active visual. */
@@ -83,6 +67,7 @@ class EntityDragVisualController {
   ): void {
     // Reset any in-progress animation
     this.#clearTimer();
+    this.#cancelAnimation();
     this.#spring.reset();
     this.#currentScale = 1;
     this.#targetScale = 1;
@@ -128,6 +113,7 @@ class EntityDragVisualController {
     this.#spring.absorb(currentVelocity, distance, config.touch.dragVisual.popBackSpring);
     this.#springStartTime = performance.now();
     this.#phase = DragVisualPhase.dragging;
+    this.#registerAnimation();
   }
 
   /**
@@ -149,6 +135,7 @@ class EntityDragVisualController {
       this.#targetScale = 1;
       this.#entityIds.clear();
       this.#spring.reset();
+      this.#cancelAnimation();
       // Force a render frame so the label can clean up its drag mode class
       canvasStore.setContainerDirty();
       return;
@@ -158,6 +145,7 @@ class EntityDragVisualController {
     this.#spring.absorb(currentVelocity, distance, config.touch.dragVisual.releaseSpring);
     this.#springStartTime = performance.now();
     this.#phase = DragVisualPhase.releasing;
+    this.#registerAnimation();
   }
 
   /** Immediately reset to idle. Called when gesture is cancelled (pan, multi-touch, etc.). */
@@ -169,6 +157,7 @@ class EntityDragVisualController {
     this.#targetScale = 1;
     this.#entityIds.clear();
     this.#spring.reset();
+    this.#cancelAnimation();
     // Force a render frame so entities return to normal scale and label cleans up
     if (wasActive) {
       canvasStore.setContainerDirty();
@@ -186,6 +175,43 @@ class EntityDragVisualController {
     this.#spring.absorb(0, distance, scaleDownSpring);
     this.#springStartTime = performance.now();
     this.#phase = DragVisualPhase.possibleDrag;
+    this.#registerAnimation();
+  }
+
+  #registerAnimation(): void {
+    this.#cancelAnimation();
+    this.#handle = this.#scheduler.custom({
+      tag: "drag-visual",
+      tick: (now) => {
+        if (this.#phase === DragVisualPhase.idle) return false;
+
+        const elapsed = now - this.#springStartTime;
+        const springValue = this.#spring.value(elapsed);
+
+        if (springValue === null) {
+          // Spring settled
+          this.#currentScale = this.#targetScale;
+          if (this.#phase === DragVisualPhase.releasing) {
+            this.#phase = DragVisualPhase.idle;
+            this.#entityIds.clear();
+            canvasStore.setContainerDirty();
+            return false;
+          }
+          // possibleDrag or dragging phase — spring settled but phase continues
+          return false;
+        }
+
+        // Clamp scale to prevent extreme overshoot from spring dynamics
+        const rawScale = this.#targetScale + springValue.offset;
+        this.#currentScale = Math.max(0.8, Math.min(rawScale, 1.05));
+        return true;
+      },
+    });
+  }
+
+  #cancelAnimation(): void {
+    this.#handle?.cancel();
+    this.#handle = null;
   }
 
   /** Get current spring velocity in units/ms (matching SpringBack.absorb's expected input). */
@@ -206,4 +232,4 @@ class EntityDragVisualController {
 }
 
 /** Singleton instance */
-export const entityDragVisual = new EntityDragVisualController();
+export const entityDragVisual = new EntityDragVisualController(defaultScheduler);
