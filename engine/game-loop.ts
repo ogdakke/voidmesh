@@ -27,7 +27,7 @@ import { createEnum } from "#types/index.ts";
 import { canvasStore, type CanvasState } from "./canvas-store.ts";
 import { entityDragVisual } from "./entity-drag-visual.ts";
 import { actionLayerController } from "./action-layer-controller.ts";
-import { entityLabel } from "./entity-label.ts";
+
 import { perfOverlay } from "./perf-overlay.ts";
 import { viewportAnimation } from "./viewport-animation.ts";
 import { MomentumController, type MomentumDeps } from "./momentum-controller.ts";
@@ -40,7 +40,6 @@ function createDefaultDeps() {
     viewportAnimation,
     actionLayer: actionLayerController,
     dragVisual: entityDragVisual,
-    label: entityLabel,
     perf: perfOverlay,
     haptic,
     analytics,
@@ -231,15 +230,6 @@ export class GameLoop {
     this.#resizeObserver.observe(container, { box: "border-box" });
 
     this.#deps.viewportAnimation.setContainer(container);
-    this.#deps.label.setContainer(container);
-  }
-
-  setLabelElement(element: HTMLDivElement): void {
-    this.#deps.label.setLabelElement(element);
-  }
-
-  setTextElement(element: HTMLSpanElement): void {
-    this.#deps.label.setTextElement(element);
   }
 
   setPerfElement(element: HTMLElement): void {
@@ -344,14 +334,10 @@ export class GameLoop {
       hasContinuousShaderRender ||
       this.#deps.scheduler.hasActive ||
       (this.#inputState.pointerDown && !!this.#dragTarget) ||
-      this.#dragSelect?.isActive;
+      this.#dragSelect?.isActive ||
+      this.#renderer?.hasActiveUIAnimations;
 
-    // 8. Update entity label position (only when rendering)
-    if (needsRender) {
-      this.#deps.label.tick(renderState);
-    }
-
-    // 9. Render only when needed (skip idle frames)
+    // 8. Render only when needed (skip idle frames)
     if (this.#renderer?.isReady && needsRender) {
       if (renderState.debugMode) performance.mark("studio-render-start");
       this.#renderer.render(renderState);
@@ -497,8 +483,12 @@ export class GameLoop {
     const dpr = window.devicePixelRatio || 1;
     const worldPoint = screenToWorld(pointerPosition, viewport, rect, dpr);
 
-    // Update hover state
-    if (!pointerDown) {
+    // Forward pointer move to UI (hover tracking + drag)
+    const uiConsumedMove =
+      this.#renderer?.handleUIPointerEvent("move", worldPoint.x, worldPoint.y) ?? false;
+
+    // Update entity hover state (skip if UI consumed the event)
+    if (!pointerDown && !uiConsumedMove) {
       const hoveredId = this.findEntityAtPoint(worldPoint, state);
       canvasStore.setHoveredEntity(hoveredId);
     }
@@ -648,6 +638,11 @@ export class GameLoop {
     const worldPoint = screenToWorld(screenPoint, viewport, rect, dpr);
 
     this.#inputState.lastWorldPoint = worldPoint;
+
+    // UI hit test — canvas UI elements take priority over entities
+    if (this.#renderer?.handleUIPointerEvent("down", worldPoint.x, worldPoint.y)) {
+      return;
+    }
 
     const entityId = this.findEntityAtPoint(worldPoint, state);
     const multiSelectBounds = this.computeMultiSelectBounds(state);
@@ -862,6 +857,15 @@ export class GameLoop {
       this.#dragSelect = null;
       this.#deps.dragVisual.release();
       return;
+    }
+
+    // Dispatch pointer up to UI elements
+    if (this.#container) {
+      const rect = this.#container.getBoundingClientRect();
+      const viewport = canvasStore.getViewport();
+      const upDpr = window.devicePixelRatio || 1;
+      const upWorld = screenToWorld(screenPoint, viewport, rect, upDpr);
+      this.#renderer?.handleUIPointerEvent("up", upWorld.x, upWorld.y);
     }
 
     // Complete drag-select if active

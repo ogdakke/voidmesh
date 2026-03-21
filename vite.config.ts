@@ -41,6 +41,7 @@ export default defineConfig(({ mode }) => {
       // @ts-expect-error something is off with the types here
       babel({
         presets: [reactCompilerPreset()],
+        exclude: /renderer\/ui\/.*\.tsx$/,
       }),
     ],
 

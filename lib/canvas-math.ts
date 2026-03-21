@@ -496,4 +496,11 @@ export const easings = {
 
   /** Ease out expo (exponential deceleration) */
   easeOutExpo: (t: number): number => (t === 1 ? 1 : 1 - Math.pow(2, -10 * t)),
+
+  /** Ease out with overshoot (back easing) */
+  easeOutBack: (t: number): number => {
+    const c1 = 1.70158;
+    const c3 = c1 + 1;
+    return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+  },
 } as const;

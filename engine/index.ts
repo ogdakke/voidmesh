@@ -16,6 +16,5 @@ export { viewportAnimation } from "./viewport-animation.ts";
 export type { ViewportAnimationOptions } from "./viewport-animation.ts";
 
 export { disintegrationController } from "./disintegration-controller.ts";
-export { entityLabel } from "./entity-label.ts";
 export { perfOverlay } from "./perf-overlay.ts";
 export type { FrameStats } from "./perf-overlay.ts";
