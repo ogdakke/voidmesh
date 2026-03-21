@@ -204,6 +204,9 @@
     font-size: 0.975rem;
     line-height: 1.25rem;
     margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .toast_description {
