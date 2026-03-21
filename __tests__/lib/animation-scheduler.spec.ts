@@ -200,7 +200,7 @@ describe("AnimationScheduler", () => {
         velocity: { x: 0, y: 0 },
         response: 0.1,
         damping: 0.8,
-        onUpdate: (d) => deltas.push({ ...d }),
+        onUpdate: (dx, dy) => deltas.push({ x: dx, y: dy }),
       });
 
       s.tick(0); // initializes lastTime
@@ -213,15 +213,15 @@ describe("AnimationScheduler", () => {
     });
 
     test("eventually settles and fires onComplete with flush", () => {
-      let flushDelta: Point | null = null;
+      let flushed = false;
       s.spring2D({
         offset: { x: 10, y: 0 },
         velocity: { x: 0, y: 0 },
         response: 0.05,
         damping: 0.9,
         onUpdate: () => {},
-        onComplete: (flush) => {
-          flushDelta = flush;
+        onComplete: () => {
+          flushed = true;
         },
       });
 
@@ -235,7 +235,7 @@ describe("AnimationScheduler", () => {
       }
 
       expect(s.hasActive).toBe(false);
-      expect(flushDelta).not.toBeNull();
+      expect(flushed).toBe(true);
     });
 
     test("can be cancelled mid-flight", () => {
@@ -340,8 +340,8 @@ describe("AnimationScheduler", () => {
     });
 
     test("catch-up → snap-settle handoff pattern", () => {
-      const catchUpDeltas: Point[] = [];
-      const settleDeltas: Point[] = [];
+      let catchUpCount = 0;
+      let settleCount = 0;
 
       // Simulate catch-up spring that completes quickly
       s.spring2D({
@@ -349,7 +349,7 @@ describe("AnimationScheduler", () => {
         velocity: { x: 0, y: 0 },
         response: 0.03,
         damping: 0.95,
-        onUpdate: (d) => catchUpDeltas.push({ ...d }),
+        onUpdate: () => catchUpCount++,
         onComplete: () => {
           // Start snap-settle on completion
           s.spring2D({
@@ -358,7 +358,7 @@ describe("AnimationScheduler", () => {
             response: 0.03,
             damping: 0.95,
             tag: "snap-settle",
-            onUpdate: (d) => settleDeltas.push({ ...d }),
+            onUpdate: () => settleCount++,
           });
         },
       });
@@ -371,8 +371,8 @@ describe("AnimationScheduler", () => {
         if (!s.hasActive) break;
       }
 
-      expect(catchUpDeltas.length).toBeGreaterThan(0);
-      expect(settleDeltas.length).toBeGreaterThan(0);
+      expect(catchUpCount).toBeGreaterThan(0);
+      expect(settleCount).toBeGreaterThan(0);
       expect(s.hasActive).toBe(false);
     });
   });

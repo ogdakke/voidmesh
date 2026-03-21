@@ -29,11 +29,13 @@ export interface Spring2DConfig {
   response: number;
   /** Damping ratio (0–1, where 1 = critical). Must be < 1. */
   damping: number;
+  /** Sleep threshold: spring settles when offset+velocity drop below this (default 0.01) */
+  settleThreshold?: number;
   tag?: string;
-  /** Called each step with the delta to apply */
-  onUpdate: (delta: Point) => void;
-  /** Called when settled, with remaining flush delta */
-  onComplete?: (flush: Point) => void;
+  /** Called each step with the delta to apply (scalars, no allocation) */
+  onUpdate: (dx: number, dy: number) => void;
+  /** Called when settled, with remaining flush delta (scalars, no allocation) */
+  onComplete?: (flushX: number, flushY: number) => void;
 }
 
 // ── Custom ─────────────────────────────────────────────────────────────────
@@ -67,8 +69,7 @@ interface Spring2DAnimation {
   tag: string | undefined;
   spring: DampedSpring2D;
   lastTime: number | null;
-  onUpdate: (delta: Point) => void;
-  /** Normalized to () => void in #tickSpring (captures flush value) */
+  onUpdate: (dx: number, dy: number) => void;
   onComplete: (() => void) | undefined;
   cancelled: boolean;
 }
@@ -119,7 +120,13 @@ export class AnimationScheduler {
   spring2D(config: Spring2DConfig): AnimationHandle {
     const id = this.#nextId++;
     const spring = new DampedSpring2D();
-    spring.start(config.offset, config.velocity, config.response, config.damping);
+    spring.start(
+      config.offset,
+      config.velocity,
+      config.response,
+      config.damping,
+      config.settleThreshold,
+    );
     const userOnComplete = config.onComplete;
     const anim: Spring2DAnimation = {
       type: "spring2d",
@@ -128,8 +135,12 @@ export class AnimationScheduler {
       spring,
       lastTime: null,
       onUpdate: config.onUpdate,
-      // Populated by #tickSpring when settled (wraps userOnComplete with flush delta)
-      onComplete: userOnComplete ? () => userOnComplete(spring.flush()) : undefined,
+      onComplete: userOnComplete
+        ? () => {
+            spring.flush();
+            userOnComplete(spring.deltaX, spring.deltaY);
+          }
+        : undefined,
       cancelled: false,
     };
     this.#animations.set(id, anim);
@@ -217,14 +228,11 @@ export class AnimationScheduler {
     const dt = (now - anim.lastTime) / 1000;
     anim.lastTime = now;
 
-    const delta = anim.spring.step(dt);
-    anim.onUpdate(delta);
+    const spring = anim.spring;
+    spring.step(dt);
+    anim.onUpdate(spring.deltaX, spring.deltaY);
 
-    if (!anim.spring.active) {
-      return true;
-    }
-
-    return false;
+    return !spring.active;
   }
 
   #makeHandle(id: number, anim: Animation): AnimationHandle {
