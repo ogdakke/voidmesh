@@ -24,7 +24,7 @@ import {
   type Viewport,
 } from "#types/canvas.ts";
 import { createEnum } from "#types/index.ts";
-import { canvasStore } from "./canvas-store.ts";
+import { canvasStore, type CanvasState } from "./canvas-store.ts";
 import { entityDragVisual } from "./entity-drag-visual.ts";
 import { actionLayerController } from "./action-layer-controller.ts";
 import { entityLabel } from "./entity-label.ts";
@@ -253,8 +253,8 @@ export class GameLoop {
   stop(): void {
     this.running = false;
     this.lastFrameTime = null;
-    this.cancelLongPressTimer();
-    this.cancelDoubleTapTimer();
+    this.#cancelLongPressTimer();
+    this.#cancelDoubleTapTimer();
     if (this.animationFrameId !== null) {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = null;
@@ -579,10 +579,7 @@ export class GameLoop {
     }
   }
 
-  private findEntityAtPoint(
-    worldPoint: Point,
-    state: ReturnType<typeof canvasStore.getState>,
-  ): string | null {
+  private findEntityAtPoint(worldPoint: Point, state: CanvasState): string | null {
     const sortedEntities = state.entities
       .values()
       .toArray()
@@ -792,7 +789,7 @@ export class GameLoop {
   }
 
   /** Compute bounding box of all selected entities (for input hit testing) */
-  private computeMultiSelectBounds(state: ReturnType<typeof canvasStore.getState>): Bounds | null {
+  private computeMultiSelectBounds(state: CanvasState): Bounds | null {
     if (state.selectedEntityIds.size <= 1) return null;
 
     let minX = Infinity,
@@ -1047,10 +1044,7 @@ export class GameLoop {
   }
 
   /** Find all entity IDs that intersect with the given bounds */
-  private findEntitiesIntersectingBounds(
-    bounds: Bounds,
-    state: ReturnType<typeof canvasStore.getState>,
-  ): string[] {
+  private findEntitiesIntersectingBounds(bounds: Bounds, state: CanvasState): string[] {
     const result: string[] = [];
 
     for (const [id, entity] of state.entities) {
@@ -1077,7 +1071,7 @@ export class GameLoop {
   }
 
   /** Compute bounding box for a set of entity IDs */
-  private computeBoundsForEntityIds(entityIds: Set<string>): Bounds | null {
+  #computeBoundsForEntityIds(entityIds: Set<string>): Bounds | null {
     if (entityIds.size <= 1) return null;
 
     const state = canvasStore.getState();
@@ -1116,7 +1110,7 @@ export class GameLoop {
     // (updates in real-time as entities are deselected)
     if (this.dragSelect?.isActive && this.dragSelect.mode === "subtractive") {
       const currentSelection = canvasStore.getSelectedEntityIds();
-      return this.computeBoundsForEntityIds(new Set(currentSelection));
+      return this.#computeBoundsForEntityIds(new Set(currentSelection));
     }
 
     // Don't show multi-select bounds during other drag-select modes
@@ -1161,12 +1155,10 @@ export class GameLoop {
     };
   }
 
-  // ============================================================================
-  // Long-Press Entity Drag (Mobile)
-  // ============================================================================
+  // MARK: Long-Press Entity Drag (Mobile)
 
   /** Cancel any pending double-tap delayed action timer */
-  private cancelDoubleTapTimer(): void {
+  #cancelDoubleTapTimer(): void {
     if (this.doubleTapTimerId !== null) {
       clearTimeout(this.doubleTapTimerId);
       this.doubleTapTimerId = null;
@@ -1174,7 +1166,7 @@ export class GameLoop {
   }
 
   /** Handle double-tap on an entity: zoom-to-fit or toggle back to saved viewport */
-  private handleDoubleTapOnEntity(entityId: string): void {
+  #handleDoubleTapOnEntity(entityId: string): void {
     if (!this.container) return;
 
     // Ensure the entity is selected
@@ -1222,7 +1214,7 @@ export class GameLoop {
   }
 
   /** Cancel any pending long-press timer. Releases drag visual with spring animation if active. */
-  private cancelLongPressTimer(): void {
+  #cancelLongPressTimer(): void {
     const timerId = this.touchState.longPressTimerId;
     if (timerId !== null) {
       clearTimeout(timerId);
@@ -1235,7 +1227,7 @@ export class GameLoop {
   }
 
   /** Activate entity drag mode after long-press timer fires */
-  private activateLongPressDrag(): void {
+  #activateLongPressDrag(): void {
     this.touchState.longPressTimerId = null;
 
     const entityId = this.touchState.longPressEntityId;
@@ -1306,19 +1298,17 @@ export class GameLoop {
     haptic({ wantsHaptic: canvasStore.getState().haptics });
   }
 
-  // ============================================================================
-  // Touch Gesture Handlers (Mobile)
-  // ============================================================================
+  // MARK: Touch Gesture Handlers (Mobile)
 
   /** Calculate distance between two touch points */
-  private getTouchDistance(touch1: Point, touch2: Point): number {
+  #getTouchDistance(touch1: Point, touch2: Point): number {
     const dx = touch2.x - touch1.x;
     const dy = touch2.y - touch1.y;
     return Math.sqrt(dx * dx + dy * dy);
   }
 
   /** Calculate center point between two touches */
-  private getTouchCenter(touch1: Point, touch2: Point): Point {
+  #getTouchCenter(touch1: Point, touch2: Point): Point {
     return {
       x: (touch1.x + touch2.x) / 2,
       y: (touch1.y + touch2.y) / 2,
@@ -1369,7 +1359,7 @@ export class GameLoop {
       if (entityId) {
         this.touchState.longPressEntityId = entityId;
         this.touchState.longPressTimerId = setTimeout(() => {
-          this.activateLongPressDrag();
+          this.#activateLongPressDrag();
         }, this.#touchConfig.longPressDelay);
 
         // If entity is already part of a multi-selection, scale all selected entities
@@ -1394,7 +1384,7 @@ export class GameLoop {
           this.doubleTapHoldZoom.isCandidate = true;
           this.doubleTapHoldZoom.anchorPoint = { x: touch.x, y: touch.y };
           // Cancel any pending delayed action from the first tap
-          this.cancelDoubleTapTimer();
+          this.#cancelDoubleTapTimer();
         }
       }
     } else if (touches.length === 2) {
@@ -1403,7 +1393,7 @@ export class GameLoop {
       const touch2 = touches[1]!;
 
       // Cancel any pending long-press timer (keep isDraggingEntity if already active)
-      this.cancelLongPressTimer();
+      this.#cancelLongPressTimer();
 
       // Cancel action layer if active (second finger cancels it)
       if (this.touchState.isActionLayerActive) {
@@ -1426,9 +1416,9 @@ export class GameLoop {
       this.touchState.isPanning = false;
       this.touchState.isPinching = true;
       this.touchState.hadMultiTouch = true;
-      this.touchState.initialPinchDistance = this.getTouchDistance(touch1, touch2);
+      this.touchState.initialPinchDistance = this.#getTouchDistance(touch1, touch2);
       this.touchState.initialZoom = canvasStore.getViewport().zoom;
-      this.touchState.pinchCenter = this.getTouchCenter(touch1, touch2);
+      this.touchState.pinchCenter = this.#getTouchCenter(touch1, touch2);
       this.touchState.lastPinchCenter = this.touchState.pinchCenter;
 
       // Seed zoom velocity tracker for momentum on pinch end
@@ -1469,7 +1459,7 @@ export class GameLoop {
         this.touchState.isPanning = false;
 
         // Cancel long-press timer (safety)
-        this.cancelLongPressTimer();
+        this.#cancelLongPressTimer();
 
         // Clear last-tap state so a third tap doesn't chain
         this.lastTapTime = 0;
@@ -1611,7 +1601,7 @@ export class GameLoop {
           const dx = touch.x - downPos.x;
           const dy = touch.y - downPos.y;
           if (Math.sqrt(dx * dx + dy * dy) > this.#touchConfig.longPressMoveThreshold) {
-            this.cancelLongPressTimer();
+            this.#cancelLongPressTimer();
           }
         }
       }
@@ -1641,8 +1631,8 @@ export class GameLoop {
       const touch2 = touches[1]!;
 
       // Calculate current pinch state
-      const currentDistance = this.getTouchDistance(touch1, touch2);
-      const currentCenter = this.getTouchCenter(touch1, touch2);
+      const currentDistance = this.#getTouchDistance(touch1, touch2);
+      const currentCenter = this.#getTouchCenter(touch1, touch2);
 
       // Handle zoom
       if (this.touchState.initialPinchDistance && this.touchState.initialZoom) {
@@ -1728,8 +1718,8 @@ export class GameLoop {
         this.triggerZoomMomentum();
       } else if (!isCancelled && this.touchState.isPanning && !this.touchState.hadMultiTouch) {
         // Detect tap vs swipe: tap triggers selection/playback, swipe triggers momentum
-        if (this.detectTouchTap()) {
-          this.handleTouchTap();
+        if (this.#detectTouchTap()) {
+          this.#handleTouchTap();
         } else {
           this.#momentum.triggerScroll({
             x: this.velocityTrackerX.calculate(),
@@ -1738,9 +1728,9 @@ export class GameLoop {
         }
       }
       // Cancel any pending long-press timer
-      this.cancelLongPressTimer();
+      this.#cancelLongPressTimer();
       // Reset touch state (but keep momentum running)
-      this.resetTouchState();
+      this.#resetTouchState();
     } else if (remainingTouches.length === 1) {
       // Went from two fingers to one — trigger zoom momentum BEFORE resetting state
       // (browsers fire sequential touchend events, so this is the real "pinch end")
@@ -1784,7 +1774,7 @@ export class GameLoop {
   }
 
   /** Detect if the current touch gesture was a tap (not a swipe) */
-  private detectTouchTap(): boolean {
+  #detectTouchTap(): boolean {
     const downPos = this.inputState.pointerDownPosition;
     const lastPos = this.touchState.lastTouchPosition;
     if (!downPos || !lastPos) return false;
@@ -1799,11 +1789,11 @@ export class GameLoop {
   }
 
   /** Handle a tap gesture — select/deselect entities, toggle playback, or double-tap zoom */
-  private handleTouchTap(): void {
+  #handleTouchTap(): void {
     if (!this.container) return;
 
     // Cancel any pending delayed single-tap action (playback toggle from a previous tap)
-    this.cancelDoubleTapTimer();
+    this.#cancelDoubleTapTimer();
 
     const tapPosition = this.touchState.lastTouchPosition;
     if (!tapPosition) return;
@@ -1840,7 +1830,7 @@ export class GameLoop {
 
       if (entityId) {
         // Double-tap on entity → zoom to fit (or toggle back)
-        this.handleDoubleTapOnEntity(entityId);
+        this.#handleDoubleTapOnEntity(entityId);
         return;
       }
 
@@ -1892,8 +1882,8 @@ export class GameLoop {
   }
 
   /** Reset all touch state */
-  private resetTouchState(): void {
-    this.cancelLongPressTimer();
+  #resetTouchState(): void {
+    this.#cancelLongPressTimer();
     // Clear drag state before resetting (guard: only notify store if drag was active)
     if (this.touchState.isDraggingEntity) {
       canvasStore.setEntityDragActive(false);
