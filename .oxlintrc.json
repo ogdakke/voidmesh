@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "import", "jsx-a11y", "promise"],
+  "plugins": ["react", "import", "jsx-a11y", "promise", "vitest"],
   "ignorePatterns": ["opensrc/"],
   "jsPlugins": [
     {
@@ -52,6 +52,7 @@
         "**/*.test.ts"
       ],
       "rules": {
+        "vitest/expect-expect": "warn",
         "react-hooks-js/globals": "off",
         "react-hooks-js/set-state-in-effect": "off",
         "react-hooks-js/refs": "off",
