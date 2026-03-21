@@ -1,7 +1,15 @@
 /** @jsxImportSource ./jsx */
-import type { UIElement, UIColor, UIBackground, StateStyle } from "./elements.ts";
+import type {
+  UIElement,
+  UIColor,
+  UIBackground,
+  UIEventHandler,
+  StateStyle,
+  ReactIconComponent,
+} from "./elements.ts";
 import { edges } from "./elements.ts";
 import { easings } from "../../lib/canvas-math.ts";
+import { Check, Xmark, Star, Heart, Settings, Drag } from "iconoir-react";
 
 // ---------------------------------------------------------------------------
 // Colors
@@ -39,32 +47,34 @@ const ACTIVE_PRESS: StateStyle = { scale: 0.94 };
 const _HOVER_BLUE_BORDER: StateStyle = { borderColor: BLUE, borderWidth: 1 };
 const SCALE_TRANSITION = { scale: { duration: 120, easing: easings.easeOutCubic } };
 
-// Icons
-const ICON_CHECK = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
-const ICON_X = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
-const ICON_STAR = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
-const ICON_HEART = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
-const ICON_SETTINGS = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
-const ICON_DRAG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12L4 4M4 4V8M4 4H8"/><path d="M12 12L20 4M20 4V8M20 4H16"/><path d="M12 12L4 20M4 20V16M4 20H8"/><path d="M12 12L20 20M20 20V16M20 20H16"/></svg>`;
-
 // ---------------------------------------------------------------------------
 // Button component — with :active press effect
 // ---------------------------------------------------------------------------
 
 function Button(props: Record<string, unknown>): UIElement {
-  const { label, background, color, iconSvg, onClick: _onClick, ...rest } = props;
+  const {
+    label,
+    background,
+    color,
+    icon: iconProp,
+    onClick: _onClick,
+    children: _children,
+    ...rest
+  } = props;
   const bg = (background as UIBackground) ?? BG_BLUE;
   const textColor = (color as UIColor) ?? WHITE;
 
-  const children: UIElement[] = [];
-  if (iconSvg) {
-    children.push(<icon svg={iconSvg as string} size={14} tint={textColor} />);
+  const content: UIElement[] = [];
+  if (iconProp) {
+    content.push(<icon icon={iconProp as ReactIconComponent} size={14} tint={textColor} />);
   }
-  children.push(
-    <text fontSize={12} color={textColor}>
-      {label as string}
-    </text>,
-  );
+  if (label) {
+    content.push(
+      <text fontSize={12} color={textColor}>
+        {label as string}
+      </text>,
+    );
+  }
 
   return (
     <box
@@ -78,9 +88,9 @@ function Button(props: Record<string, unknown>): UIElement {
       hover={HOVER_BRIGHTEN}
       active={ACTIVE_PRESS}
       transition={SCALE_TRANSITION}
-      onClick={_onClick as import("./elements.ts").UIEventHandler}
+      onClick={_onClick as UIEventHandler}
     >
-      {children}
+      {content}
     </box>
   );
 }
@@ -142,7 +152,7 @@ export function buildDebugUI(zoom: number): UIElement {
       borderColor={{ r: 0.25, g: 0.25, b: 0.3, a: 0.5 }}
     >
       <box direction="row" gap={8} align="center">
-        <icon svg={ICON_SETTINGS} size={18} tint={BLUE} />
+        <icon icon={Settings} size={18} tint={BLUE} />
         <text fontSize={16} color={WHITE}>
           UI Engine Stress Test
         </text>
@@ -154,20 +164,20 @@ export function buildDebugUI(zoom: number): UIElement {
         <Button
           label="Primary"
           background={BG_BLUE}
-          iconSvg={ICON_CHECK}
+          icon={Check}
           onClick={() => console.log("[CanvasUI] Primary clicked")}
         />
         <Button
           label="Success"
           background={BG_GREEN}
-          iconSvg={ICON_CHECK}
+          icon={Check}
           onClick={() => console.log("[CanvasUI] Success clicked")}
         />
         <Button
           label="Danger"
           background={BG_RED}
           color={WHITE}
-          iconSvg={ICON_X}
+          icon={Xmark}
           onClick={() => console.log("[CanvasUI] Danger clicked")}
         />
       </box>
@@ -176,7 +186,7 @@ export function buildDebugUI(zoom: number): UIElement {
         <Button
           label="Purple"
           background={BG_PURPLE}
-          iconSvg={ICON_STAR}
+          icon={Star}
           onClick={() => console.log("[CanvasUI] Purple clicked")}
         />
         <Button
@@ -189,7 +199,7 @@ export function buildDebugUI(zoom: number): UIElement {
 
       <box direction="col" gap={6} padding={edges(10)} background={BG_CARD} borderRadius={8}>
         <box direction="row" gap={6} align="center">
-          <icon svg={ICON_HEART} size={14} tint={RED} />
+          <icon icon={Heart} size={14} tint={RED} />
           <text fontSize={13} color={WHITE}>
             Statistics
           </text>
@@ -216,53 +226,59 @@ export function buildDebugUI(zoom: number): UIElement {
 }
 
 // ---------------------------------------------------------------------------
-// World-space UI (stays fixed on the canvas, scales with zoom)
+// Unified debug UI — world-space panel + screen-space overlay in one tree
 // ---------------------------------------------------------------------------
 
-export function buildWorldSpaceUI(): UIElement {
+export function buildDebugOverlay(zoom: number): UIElement {
   return (
-    <box
-      key="world-card"
-      direction="col"
-      gap={16}
-      padding={edges(24)}
-      background={{
-        type: "gradient",
-        top: { r: 0.08, g: 0.12, b: 0.2, a: 0.95 },
-        bottom: { r: 0.05, g: 0.08, b: 0.15, a: 0.95 },
-      }}
-      borderRadius={16}
-      borderWidth={2}
-      borderColor={{ r: 0.2, g: 0.35, b: 0.6, a: 0.6 }}
-      draggable={true}
-    >
-      <box direction="row" gap={12} align="center">
-        <icon svg={ICON_DRAG} size={24} tint={{ r: 0.4, g: 0.6, b: 1, a: 0.7 }} />
-        <text fontSize={20} color={WHITE}>
-          World-Space UI
+    <box key="debug-root" draggable>
+      {/* World-space content (scales with zoom, draggable via root) */}
+      <box
+        direction="col"
+        gap={16}
+        padding={edges(24)}
+        background={{
+          type: "gradient",
+          top: { r: 0.08, g: 0.12, b: 0.2, a: 0.95 },
+          bottom: { r: 0.05, g: 0.08, b: 0.15, a: 0.95 },
+        }}
+        borderRadius={4}
+        borderWidth={2}
+        borderColor={{ r: 0.2, g: 0.35, b: 0.6, a: 0.6 }}
+      >
+        <box direction="row" gap={12} align="center">
+          <icon icon={Drag} size={24} tint={{ r: 0.4, g: 0.6, b: 1, a: 0.7 }} />
+          <text fontSize={20} color={WHITE}>
+            World-Space UI
+          </text>
+        </box>
+
+        <text fontSize={14} color={GRAY}>
+          This element lives in world space.
         </text>
+        <text fontSize={14} color={GRAY}>
+          Zoom in/out to see it scale. Drag to move.
+        </text>
+
+        <box direction="row" gap={10} align="center">
+          <Button
+            label="World Button"
+            background={BG_BLUE}
+            icon={Star}
+            onClick={() => console.log("[CanvasUI] World button clicked")}
+          />
+          <Button
+            label="Another"
+            background={BG_GREEN}
+            icon={Heart}
+            onClick={() => console.log("[CanvasUI] Another clicked")}
+          />
+        </box>
       </box>
 
-      <text fontSize={14} color={GRAY}>
-        This element lives in world space.
-      </text>
-      <text fontSize={14} color={GRAY}>
-        Zoom in/out to see it scale. Drag to move.
-      </text>
-
-      <box direction="row" gap={10} align="center">
-        <Button
-          label="World Button"
-          background={BG_BLUE}
-          iconSvg={ICON_STAR}
-          onClick={() => console.log("[CanvasUI] World button clicked")}
-        />
-        <Button
-          label="Another"
-          background={BG_GREEN}
-          iconSvg={ICON_HEART}
-          onClick={() => console.log("[CanvasUI] Another clicked")}
-        />
+      {/* Screen-space debug panel (fixed to viewport, always on top) */}
+      <box position="fixed" left={80} bottom={40} zIndex={100}>
+        {buildDebugUI(zoom)}
       </box>
     </box>
   );

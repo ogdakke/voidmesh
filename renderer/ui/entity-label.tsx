@@ -10,6 +10,9 @@ const DRAG_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height
 // Warning icon SVG (triangle with exclamation mark)
 const WARNING_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v6" stroke="rgb(60,35,5)"/><circle cx="12" cy="16" r="0.5" fill="rgb(60,35,5)" stroke="rgb(60,35,5)"/><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke="rgb(60,35,5)"/></svg>`;
 
+/** All icon SVGs used in entity labels, for preloading. */
+export const ENTITY_LABEL_ICONS = [DRAG_ICON_SVG, WARNING_ICON_SVG];
+
 const BG_PRIMARY: UIBackground = {
   type: "gradient",
   top: { r: 0.27, g: 0.53, b: 0.96, a: 0.92 },

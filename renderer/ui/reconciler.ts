@@ -17,34 +17,6 @@
 import type { UIElement, ComponentFn } from "./elements.ts";
 import { SceneNode } from "./scene-node.ts";
 
-// Layout-affecting props — when these change, mark layout dirty
-const LAYOUT_PROPS = new Set([
-  "direction",
-  "gap",
-  "padding",
-  "align",
-  "justifyContent",
-  "flexGrow",
-  "width",
-  "height",
-  "minWidth",
-  "minHeight",
-  "maxWidth",
-  "maxHeight",
-  "position",
-  "left",
-  "top",
-  "right",
-  "bottom",
-  "fontSize",
-  "content",
-  "size",
-  "svg",
-  "entityId",
-  "edge",
-  "offset",
-]);
-
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -117,10 +89,7 @@ function reconcileNode(element: UIElement, existing: SceneNode | null): SceneNod
   }
 
   // Update existing node
-  const propsChanged = updateProps(existing, element.props);
-  if (propsChanged) {
-    existing.markLayoutDirty();
-  }
+  updateProps(existing, element.props);
 
   // Transition from entering to active
   if (existing.phase === "entering") {
@@ -135,21 +104,9 @@ function reconcileNode(element: UIElement, existing: SceneNode | null): SceneNod
   return existing;
 }
 
-/** Update a node's props. Returns true if any layout-affecting prop changed. */
-function updateProps(node: SceneNode, newProps: Record<string, unknown>): boolean {
-  // Referential equality — nothing changed
-  if (node.props === newProps) return false;
-
-  let layoutChanged = false;
-  for (const key of LAYOUT_PROPS) {
-    if (node.props[key] !== newProps[key]) {
-      layoutChanged = true;
-      break;
-    }
-  }
-
+/** Update a node's props. */
+function updateProps(node: SceneNode, newProps: Record<string, unknown>): void {
   node.props = newProps;
-  return layoutChanged;
 }
 
 /** Reconcile children of a parent node against the element's children. */
