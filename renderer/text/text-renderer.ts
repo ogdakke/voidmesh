@@ -194,6 +194,7 @@ export class TextRenderer {
     for (const item of this.#queue) {
       this.#renderItem(encoder, swapchainView, item);
     }
+    this.#queue.length = 0;
   }
 
   #renderItem(encoder: GPUCommandEncoder, swapchainView: GPUTextureView, item: TextItem): void {

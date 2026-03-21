@@ -7,11 +7,13 @@ export class UIIconPipeline {
   #pipeline!: GPURenderPipeline;
   #bindGroupLayout!: GPUBindGroupLayout;
   #sampler!: GPUSampler;
-  #uniformBuffer!: GPUBuffer;
   #uniformArrayBuffer: ArrayBuffer = new ArrayBuffer(32); // 2 x vec4f = 32 bytes
   #uniformFloats: Float32Array = new Float32Array(this.#uniformArrayBuffer);
   #viewportUniformBuffer: GPUBuffer;
   #canvasFormat: GPUTextureFormat;
+
+  // Per-icon staging buffers (destroyed at start of next frame)
+  #pendingDestroy: GPUBuffer[] = [];
 
   constructor(device: GPUDevice, canvasFormat: GPUTextureFormat, viewportUniformBuffer: GPUBuffer) {
     this.#device = device;
@@ -25,11 +27,6 @@ export class UIIconPipeline {
       minFilter: "linear",
       addressModeU: "clamp-to-edge",
       addressModeV: "clamp-to-edge",
-    });
-
-    this.#uniformBuffer = this.#device.createBuffer({
-      size: 32, // 2 x vec4f
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
     this.#bindGroupLayout = this.#device.createBindGroupLayout({
@@ -96,6 +93,12 @@ export class UIIconPipeline {
     });
   }
 
+  /** Clean up staging buffers from the previous frame. Call at start of frame. */
+  begin(): void {
+    for (const buf of this.#pendingDestroy) buf.destroy();
+    this.#pendingDestroy.length = 0;
+  }
+
   /**
    * Render icons. One draw call per icon.
    * Skips icons whose textures aren't cached yet.
@@ -122,13 +125,21 @@ export class UIIconPipeline {
       this.#uniformFloats[5] = icon.tint.g;
       this.#uniformFloats[6] = icon.tint.b;
       this.#uniformFloats[7] = icon.tint.a * icon.opacity;
-      this.#device.queue.writeBuffer(this.#uniformBuffer, 0, this.#uniformArrayBuffer);
+
+      // Fresh buffer per icon to avoid clobbering (same pattern as UIBoxPipeline)
+      const uniformBuffer = this.#device.createBuffer({
+        label: "UI icon uniforms (staging)",
+        size: 32,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      this.#device.queue.writeBuffer(uniformBuffer, 0, this.#uniformArrayBuffer);
+      this.#pendingDestroy.push(uniformBuffer);
 
       const bindGroup = this.#device.createBindGroup({
         layout: this.#bindGroupLayout,
         entries: [
           { binding: 0, resource: { buffer: this.#viewportUniformBuffer } },
-          { binding: 1, resource: { buffer: this.#uniformBuffer } },
+          { binding: 1, resource: { buffer: uniformBuffer } },
           { binding: 2, resource: texture.createView() },
           { binding: 3, resource: this.#sampler },
         ],
@@ -152,6 +163,7 @@ export class UIIconPipeline {
   }
 
   destroy(): void {
-    this.#uniformBuffer.destroy();
+    for (const buf of this.#pendingDestroy) buf.destroy();
+    this.#pendingDestroy.length = 0;
   }
 }

@@ -2,6 +2,10 @@
 // Canvas UI Element Types
 // ---------------------------------------------------------------------------
 
+import type { ComponentType } from "react";
+
+export type ReactIconComponent = ComponentType<Record<string, unknown>>;
+
 export interface UIColor {
   r: number;
   g: number;
@@ -101,7 +105,8 @@ export interface BoxElementProps {
   minHeight?: number;
   maxWidth?: number;
   maxHeight?: number;
-  position?: "relative" | "absolute";
+  position?: "relative" | "absolute" | "fixed";
+  zIndex?: number;
   left?: number;
   top?: number;
   right?: number;
@@ -132,7 +137,10 @@ export interface TextElementProps {
 
 export interface IconElementProps {
   key?: string | number;
-  svg: string;
+  /** Raw SVG string. Provide either `svg` or `icon`, not both. */
+  svg?: string;
+  /** React icon component (e.g. from iconoir-react). Converted to SVG string automatically. */
+  icon?: ReactIconComponent;
   size: number;
   tint?: UIColor;
   opacity?: number;

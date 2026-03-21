@@ -4,12 +4,13 @@ import { UIBoxPipeline } from "./ui-box-pipeline.ts";
 import { UIIconPipeline } from "./ui-icon-pipeline.ts";
 import { UIIconCache } from "./ui-icon-cache.ts";
 import { prepareText } from "../text/slug.ts";
-import type { UIElement, UIPointerEvent } from "./elements.ts";
+import type { UIElement, UIPointerEvent, UIDragEvent } from "./elements.ts";
 import { SceneNode, hasActiveAnimations } from "./scene-node.ts";
 import { reconcile, pruneExitedNodes } from "./reconciler.ts";
 import {
   computeLayout,
   type AnchorTarget,
+  type ViewportInfo,
   type TextMeasurer,
   type TextMetrics,
 } from "./ui-layout.ts";
@@ -78,7 +79,7 @@ export class UIRenderer {
     this.#iconPipeline = new UIIconPipeline(device, canvasFormat, viewportUniformBuffer);
     this.#iconCache = new UIIconCache(device);
     this.#iconCache.onTextureReady = () => {
-      this.#hasPendingIcons = false;
+      this.#hasPendingIcons = true;
     };
   }
 
@@ -99,6 +100,11 @@ export class UIRenderer {
     return this.#ready;
   }
 
+  /** Preload icon SVGs so they're cached before first render. */
+  async preloadIcons(svgs: string[]): Promise<void> {
+    await this.#iconCache.preloadAll(svgs);
+  }
+
   get hasActiveAnimations(): boolean {
     if (this.#justBecameReady) return true;
     if (this.#interactionDirty) return true;
@@ -113,16 +119,10 @@ export class UIRenderer {
   begin(): void {
     this.#textRenderer.begin();
     this.#boxPipeline.begin();
+    this.#iconPipeline.begin();
     this.#justBecameReady = false;
     this.#interactionDirty = false;
-  }
-
-  /**
-   * Flush accumulated text to the GPU.
-   * Call once per frame after all render() calls.
-   */
-  flush(encoder: GPUCommandEncoder, targetView: GPUTextureView): void {
-    this.#textRenderer.flush(encoder, targetView);
+    this.#hasPendingIcons = false;
   }
 
   /**
@@ -136,6 +136,7 @@ export class UIRenderer {
    * @param sceneKey   Key for retaining separate scene graph roots
    * @param scale      Size multiplier (dpr/zoom for screen-space, 1 for world-space)
    * @param anchors    Entity bounds for anchor resolution
+   * @param viewport   Viewport info for resolving position: "fixed" elements
    */
   render(
     tree: UIElement,
@@ -146,6 +147,7 @@ export class UIRenderer {
     sceneKey?: string,
     scale = 1,
     anchors?: Map<string, AnchorTarget>,
+    viewport?: ViewportInfo,
   ): void {
     if (!this.#ready || !this.#measurer) return;
 
@@ -169,31 +171,60 @@ export class UIRenderer {
     }
 
     // 2. Layout (with scale)
-    const layout = computeLayout(root, anchorX, anchorY, this.#measurer, now, anchors, scale);
+    const layout = computeLayout(
+      root,
+      anchorX,
+      anchorY,
+      this.#measurer,
+      now,
+      anchors,
+      scale,
+      viewport,
+    );
 
-    // 3. Render boxes (uses staging buffer per batch to avoid clobbering)
-    this.#boxPipeline.render(layout.boxes, encoder, targetView);
+    // 3. Render in z-index layers (boxes→icons→text per layer)
+    // Collect distinct z-index values across all element types
+    const zLevels = new Set<number>();
+    for (const b of layout.boxes) zLevels.add(b.zIndex);
+    for (const ic of layout.icons) zLevels.add(ic.zIndex);
+    for (const t of layout.texts) zLevels.add(t.zIndex);
+    const sortedZ = [...zLevels].sort((a, b) => a - b);
 
-    // 4. Render icons
+    // Track icon preload state
     for (const layoutIcon of layout.icons) {
       if (!this.#iconCache.has(layoutIcon.svg)) {
         this.#hasPendingIcons = true;
       }
     }
-    this.#iconPipeline.render(layout.icons, this.#iconCache, encoder, targetView);
 
-    // 5. Queue text (flushed once at end of frame)
-    for (const t of layout.texts) {
-      this.#textRenderer.drawText(
-        t.slugData as ReturnType<typeof prepareText>,
-        t.x,
-        t.y,
-        t.fontSize,
-        t.color.r,
-        t.color.g,
-        t.color.b,
-        t.color.a * t.opacity,
-      );
+    // Render each z-layer: boxes first, then icons, then text
+    for (const z of sortedZ) {
+      const layerBoxes = layout.boxes.filter((b) => b.zIndex === z);
+      if (layerBoxes.length > 0) {
+        this.#boxPipeline.render(layerBoxes, encoder, targetView);
+      }
+
+      const layerIcons = layout.icons.filter((ic) => ic.zIndex === z);
+      if (layerIcons.length > 0) {
+        this.#iconPipeline.render(layerIcons, this.#iconCache, encoder, targetView);
+      }
+
+      const layerTexts = layout.texts.filter((t) => t.zIndex === z);
+      for (const t of layerTexts) {
+        this.#textRenderer.drawText(
+          t.slugData as ReturnType<typeof prepareText>,
+          t.x,
+          t.y,
+          t.fontSize,
+          t.color.r,
+          t.color.g,
+          t.color.b,
+          t.color.a * t.opacity,
+        );
+      }
+      if (layerTexts.length > 0) {
+        this.#textRenderer.flush(encoder, targetView);
+      }
     }
 
     // 6. Prune exited nodes
@@ -216,9 +247,7 @@ export class UIRenderer {
       this.#dragNode.dragOffset.x += dx;
       this.#dragNode.dragOffset.y += dy;
       this.#dragLastWorld = { x: worldX, y: worldY };
-      const onDrag = this.#dragNode.props["onDrag"] as
-        | ((e: import("./elements.ts").UIDragEvent) => void)
-        | undefined;
+      const onDrag = this.#dragNode.props["onDrag"] as ((e: UIDragEvent) => void) | undefined;
       onDrag?.({ worldX, worldY, deltaX: dx, deltaY: dy });
       this.#interactionDirty = true;
       return true;

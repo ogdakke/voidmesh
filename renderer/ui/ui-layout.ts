@@ -12,7 +12,14 @@
 // size regardless of canvas zoom level. Authors write in CSS-like pixel values.
 //
 
-import type { UIEdges, AnimateConfig, TweenConfig, StateStyle } from "./elements.ts";
+import type {
+  UIEdges,
+  UIColor,
+  UIBackground,
+  AnimateConfig,
+  TweenConfig,
+  StateStyle,
+} from "./elements.ts";
 import type { SceneNode } from "./scene-node.ts";
 
 // ---------------------------------------------------------------------------
@@ -44,6 +51,19 @@ export interface AnchorTarget {
 }
 
 // ---------------------------------------------------------------------------
+// Viewport info (for position: "fixed" elements)
+// ---------------------------------------------------------------------------
+
+export interface ViewportInfo {
+  offsetX: number;
+  offsetY: number;
+  zoom: number;
+  width: number; // canvas width in device pixels
+  height: number; // canvas height in device pixels
+  dpr: number;
+}
+
+// ---------------------------------------------------------------------------
 // Layout result types (consumed by rendering pipelines)
 // ---------------------------------------------------------------------------
 
@@ -58,23 +78,25 @@ export interface UILayoutBox {
   y: number;
   width: number;
   height: number;
-  background: import("./elements.ts").UIBackground;
+  background: UIBackground;
   borderRadius: number;
   borderWidth: number;
-  borderColor: import("./elements.ts").UIColor;
+  borderColor: UIColor;
   opacity: number;
+  zIndex: number;
 }
 
 export interface UILayoutText {
   x: number;
   y: number;
   fontSize: number;
-  color: import("./elements.ts").UIColor;
+  color: UIColor;
   opacity: number;
   slugData: unknown;
   totalWidth: number;
   ascender: number;
   descender: number;
+  zIndex: number;
 }
 
 export interface UILayoutIcon {
@@ -83,8 +105,9 @@ export interface UILayoutIcon {
   width: number;
   height: number;
   svg: string;
-  tint: import("./elements.ts").UIColor;
+  tint: UIColor;
   opacity: number;
+  zIndex: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -156,16 +179,16 @@ function getStateStyle(node: SceneNode): StateStyle | undefined {
   return undefined;
 }
 
-function getEffectiveBackground(node: SceneNode): import("./elements.ts").UIBackground | undefined {
+function getEffectiveBackground(node: SceneNode): UIBackground | undefined {
   const state = getStateStyle(node);
   if (state?.background) return state.background;
-  return node.props["background"] as import("./elements.ts").UIBackground | undefined;
+  return node.props["background"] as UIBackground | undefined;
 }
 
-function getEffectiveBorderColor(node: SceneNode): import("./elements.ts").UIColor {
+function getEffectiveBorderColor(node: SceneNode): UIColor {
   const state = getStateStyle(node);
   if (state?.borderColor) return state.borderColor;
-  return (node.props["borderColor"] as import("./elements.ts").UIColor) ?? TRANSPARENT;
+  return (node.props["borderColor"] as UIColor) ?? TRANSPARENT;
 }
 
 function getEffectiveOpacity(node: SceneNode, animated: Record<string, number>): number {
@@ -190,7 +213,13 @@ function resolveVisualScale(node: SceneNode, now: number): number {
 // Pass 1: Measure (bottom-up)
 // ---------------------------------------------------------------------------
 
-function measure(node: SceneNode, measurer: TextMeasurer, now: number, scale: number): void {
+function measure(
+  node: SceneNode,
+  measurer: TextMeasurer,
+  now: number,
+  scale: number,
+  viewport?: ViewportInfo,
+): void {
   const animated = resolveAnimatedProps(node, now);
 
   switch (node.type) {
@@ -247,9 +276,11 @@ function measure(node: SceneNode, measurer: TextMeasurer, now: number, scale: nu
       // Measure children first
       const flowChildren: SceneNode[] = [];
       for (const child of node.children) {
-        measure(child, measurer, now, scale);
         const pos = child.props["position"] as string | undefined;
-        if (pos !== "absolute" && child.phase !== "exiting") {
+        // Fixed children use screen-space scale
+        const childScale = pos === "fixed" && viewport ? viewport.dpr / viewport.zoom : scale;
+        measure(child, measurer, now, childScale, viewport);
+        if (pos !== "absolute" && pos !== "fixed" && child.phase !== "exiting") {
           flowChildren.push(child);
         }
       }
@@ -320,6 +351,8 @@ function position(
   now: number,
   scale: number,
   result: UILayoutResult,
+  parentZIndex = 0,
+  viewport?: ViewportInfo,
 ): void {
   const animated = resolveAnimatedProps(node, now);
   node.layout.x = x;
@@ -329,7 +362,7 @@ function position(
     case "text": {
       if (node.layout.width <= 0) break;
       const opacity = getEffectiveOpacity(node, animated);
-      const color = (node.props["color"] as import("./elements.ts").UIColor) ?? WHITE;
+      const color = (node.props["color"] as UIColor) ?? WHITE;
       result.texts.push({
         x: x + node.layout.width / 2,
         y: y + node.layout.height,
@@ -340,6 +373,7 @@ function position(
         totalWidth: node.textCache?.totalWidth ?? 0,
         ascender: node.textCache?.ascender ?? 0,
         descender: node.textCache?.descender ?? 0,
+        zIndex: parentZIndex,
       });
       break;
     }
@@ -348,7 +382,7 @@ function position(
       if (node.layout.width <= 0) break;
       const opacity = getEffectiveOpacity(node, animated);
       const svg = node.props["svg"] as string;
-      const tint = (node.props["tint"] as import("./elements.ts").UIColor) ?? WHITE;
+      const tint = (node.props["tint"] as UIColor) ?? WHITE;
       result.icons.push({
         x,
         y,
@@ -357,12 +391,14 @@ function position(
         svg,
         tint,
         opacity,
+        zIndex: parentZIndex,
       });
       break;
     }
 
     case "box":
     case "anchor": {
+      const zIndex = parentZIndex + ((node.props["zIndex"] as number | undefined) ?? 0);
       const opacity = getEffectiveOpacity(node, animated);
       const background = getEffectiveBackground(node);
       const stateStyle = getStateStyle(node);
@@ -390,10 +426,11 @@ function position(
               : getScaled(node, "borderWidth", animated, 0, scale),
           borderColor: getEffectiveBorderColor(node),
           opacity,
+          zIndex,
         });
       }
 
-      positionChildren(node, x, y, now, scale, animated, result);
+      positionChildren(node, x, y, now, scale, animated, result, zIndex, viewport);
 
       // Apply visual scale transform to all entries emitted by this subtree
       if (visualScale !== 1) {
@@ -414,6 +451,8 @@ function positionChildren(
   scale: number,
   animated: Record<string, number>,
   result: UILayoutResult,
+  parentZIndex = 0,
+  viewport?: ViewportInfo,
 ): void {
   if (parent.children.length === 0) return;
 
@@ -430,11 +469,14 @@ function positionChildren(
 
   const flowChildren: SceneNode[] = [];
   const absoluteChildren: SceneNode[] = [];
+  const fixedChildren: SceneNode[] = [];
 
   for (const child of parent.children) {
     const pos = child.props["position"] as string | undefined;
     if (pos === "absolute") {
       absoluteChildren.push(child);
+    } else if (pos === "fixed") {
+      fixedChildren.push(child);
     } else {
       flowChildren.push(child);
     }
@@ -504,7 +546,7 @@ function positionChildren(
         } else {
           childY = contentY;
         }
-        position(child, mainCursor, childY, now, scale, result);
+        position(child, mainCursor, childY, now, scale, result, parentZIndex, viewport);
         mainCursor += child.layout.width + justifyGap;
       } else {
         let childX: number;
@@ -515,14 +557,14 @@ function positionChildren(
         } else {
           childX = contentX;
         }
-        position(child, childX, mainCursor, now, scale, result);
+        position(child, childX, mainCursor, now, scale, result, parentZIndex, viewport);
         mainCursor += child.layout.height + justifyGap;
       }
     }
 
     for (const child of flowChildren) {
       if (child.layout.width <= 0 && child.layout.height <= 0) {
-        position(child, contentX, contentY, now, scale, result);
+        position(child, contentX, contentY, now, scale, result, parentZIndex, viewport);
       }
     }
   }
@@ -545,13 +587,36 @@ function positionChildren(
     else if (bottom !== undefined)
       childY = parentY + parent.layout.height - child.layout.height - bottom * scale;
 
-    position(child, childX, childY, now, scale, result);
+    position(child, childX, childY, now, scale, result, parentZIndex, viewport);
+  }
+
+  // --- Fixed children (positioned relative to viewport) ---
+  if (viewport && fixedChildren.length > 0) {
+    const screenScale = viewport.dpr / viewport.zoom;
+    const vpLeft = viewport.offsetX;
+    const vpTop = viewport.offsetY;
+    const vpRight = viewport.offsetX + viewport.width / viewport.zoom;
+    const vpBottom = viewport.offsetY + viewport.height / viewport.zoom;
+
+    for (const child of fixedChildren) {
+      const left = child.props["left"] as number | undefined;
+      const top = child.props["top"] as number | undefined;
+      const right = child.props["right"] as number | undefined;
+      const bottom = child.props["bottom"] as number | undefined;
+
+      let childX = vpLeft;
+      let childY = vpTop;
+
+      if (left !== undefined) childX = vpLeft + left * screenScale;
+      else if (right !== undefined) childX = vpRight - child.layout.width - right * screenScale;
+
+      if (top !== undefined) childY = vpTop + top * screenScale;
+      else if (bottom !== undefined) childY = vpBottom - child.layout.height - bottom * screenScale;
+
+      position(child, childX, childY, now, screenScale, result, parentZIndex, viewport);
+    }
   }
 }
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Visual scale transform (for :active press effect)
@@ -604,6 +669,7 @@ function applyScaleToEntries(
  * @param now      Current timestamp for animations
  * @param anchors  Optional map of entity IDs to their world-space bounds
  * @param scale    Size multiplier (dpr/zoom for screen-space, 1 for world-space)
+ * @param viewport Viewport info for resolving position: "fixed" elements
  */
 export function computeLayout(
   root: SceneNode,
@@ -613,6 +679,7 @@ export function computeLayout(
   now: number,
   anchors?: Map<string, AnchorTarget>,
   scale = 1,
+  viewport?: ViewportInfo,
 ): UILayoutResult {
   const result: UILayoutResult = { boxes: [], texts: [], icons: [] };
 
@@ -624,7 +691,7 @@ export function computeLayout(
       const edge = (root.props["edge"] as string) ?? "top";
       const offset = (root.props["offset"] as { x: number; y: number }) ?? { x: 0, y: 0 };
 
-      measure(root, measurer, now, scale);
+      measure(root, measurer, now, scale, viewport);
 
       let resolvedX: number;
       let resolvedY: number;
@@ -655,12 +722,13 @@ export function computeLayout(
 
       const rootX = resolvedX - root.layout.width / 2;
       const rootY = resolvedY - root.layout.height;
-      position(root, rootX, rootY, now, scale, result);
+      position(root, rootX, rootY, now, scale, result, 0, viewport);
+      sortByZIndex(result);
       return result;
     }
   }
 
-  measure(root, measurer, now, scale);
+  measure(root, measurer, now, scale, viewport);
 
   // Apply drag offset for draggable elements
   const dragX = root.dragOffset.x;
@@ -668,7 +736,15 @@ export function computeLayout(
 
   const rootX = anchorX - root.layout.width / 2 + dragX;
   const rootY = anchorY - root.layout.height + dragY;
-  position(root, rootX, rootY, now, scale, result);
+  position(root, rootX, rootY, now, scale, result, 0, viewport);
+  sortByZIndex(result);
 
   return result;
+}
+
+/** Stable-sort all layout arrays by z-index (preserves document order for equal z-indices). */
+function sortByZIndex(result: UILayoutResult): void {
+  if (result.boxes.length > 1) result.boxes.sort((a, b) => a.zIndex - b.zIndex);
+  if (result.texts.length > 1) result.texts.sort((a, b) => a.zIndex - b.zIndex);
+  if (result.icons.length > 1) result.icons.sort((a, b) => a.zIndex - b.zIndex);
 }

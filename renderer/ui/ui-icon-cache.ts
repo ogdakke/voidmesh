@@ -49,6 +49,11 @@ export class UIIconCache {
     void this.#rasterizeAndUpload(svg);
   }
 
+  /** Preload multiple SVGs and wait for all to finish. */
+  async preloadAll(svgs: string[]): Promise<void> {
+    await Promise.all(svgs.map((svg) => this.getTexture(svg)));
+  }
+
   /** Destroy all cached textures. */
   destroy(): void {
     for (const texture of this.#cache.values()) {

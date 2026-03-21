@@ -50,7 +50,6 @@ export class SceneNode {
 
   // Layout
   layout: LayoutRect = { x: 0, y: 0, width: 0, height: 0 };
-  layoutDirty = true;
 
   // Text measurement cache (invalidated when content/fontSize change)
   textCache: {
@@ -143,15 +142,6 @@ export class SceneNode {
       if (!tween.done) return true;
     }
     return false;
-  }
-
-  /** Mark layout as dirty up to the root. */
-  markLayoutDirty(): void {
-    let node: SceneNode | null = this;
-    while (node && !node.layoutDirty) {
-      node.layoutDirty = true;
-      node = node.parent;
-    }
   }
 
   /** Begin exit phase. The node stays in the tree until exit animation completes. */

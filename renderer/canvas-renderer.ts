@@ -43,7 +43,7 @@ import { resolveWlurOverlayRuntimeConfig, type WlurOverlayConfig } from "./wlur-
 import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
 import { UIRenderer } from "./ui/ui-renderer.ts";
 import { buildEntityLabel } from "./ui/entity-label.tsx";
-import { buildDebugUI, buildWorldSpaceUI } from "./ui/debug-ui.tsx";
+import { buildDebugOverlay } from "./ui/debug-ui.tsx";
 
 type GpuTimingPhase =
   | "frame"
@@ -1995,30 +1995,25 @@ export class InfiniteCanvasRenderer {
 
     // Debug UI overlay (stress test for canvas UI engine)
     if (debugMode && uiReady) {
-      // Screen-space panel (fixed size regardless of zoom)
-      const debugUI = buildDebugUI(viewport.zoom);
-      const debugWorldX = viewport.offset.x + 160 * uiScale;
-      const debugWorldY = viewport.offset.y + (height * 0.95) / viewport.zoom;
+      const debugUI = buildDebugOverlay(viewport.zoom);
       this.#uiRenderer!.render(
         debugUI,
-        debugWorldX,
-        debugWorldY,
+        400, // world-space anchor X
+        -100, // world-space anchor Y
         encoder,
         targetView,
         "debug-ui",
-        uiScale,
+        1, // world-space scale
+        undefined,
+        {
+          offsetX: viewport.offset.x,
+          offsetY: viewport.offset.y,
+          zoom: viewport.zoom,
+          width,
+          height,
+          dpr,
+        },
       );
-
-      // World-space panel (scales with zoom, draggable)
-      const worldUI = buildWorldSpaceUI();
-      const worldUIX = 400;
-      const worldUIY = -100;
-      this.#uiRenderer!.render(worldUI, worldUIX, worldUIY, encoder, targetView, "debug-world-ui");
-    }
-
-    // Flush accumulated UI text
-    if (uiReady) {
-      this.#uiRenderer!.flush(encoder, targetView);
     }
     this.#writeGpuTimestampMarker(encoder, gpuCapture, "action-layer-sharp", "end");
     markPhaseEnd("action-layer-sharp");

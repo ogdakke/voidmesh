@@ -12,11 +12,16 @@
 import type {
   UIElement,
   ComponentFn,
+  ReactIconComponent,
   BoxElementProps,
   TextElementProps,
   IconElementProps,
   AnchorElementProps,
 } from "../elements.ts";
+import { iconSvgFrom } from "../icon-from-react.ts";
+
+// Cache: React component → SVG string (avoids re-rendering on every JSX call)
+const iconSvgCache = new WeakMap<object, string>();
 
 // ---------------------------------------------------------------------------
 // JSX namespace — TypeScript uses this for type-checking JSX expressions
@@ -94,6 +99,20 @@ export function jsx(
   if (type === "text" && children.length === 1 && children[0]!.type === "__text_content__") {
     rest["content"] = children[0]!.props["content"];
     return { type, props: rest, key: key ?? (rest["key"] as string | number | null) ?? null };
+  }
+
+  // For icon elements, resolve React component to SVG string
+  if (type === "icon" && rest["icon"] && !rest["svg"]) {
+    const component = rest["icon"] as ReactIconComponent;
+    let svg = iconSvgCache.get(component);
+    if (!svg) {
+      // Render white so the GPU tint (multiply) can recolor freely.
+      // Without this, iconoir's `currentColor` defaults to black → tint has no effect.
+      svg = iconSvgFrom(component, { color: "#ffffff" });
+      iconSvgCache.set(component, svg);
+    }
+    rest["svg"] = svg;
+    delete rest["icon"];
   }
 
   // For elements with children, attach them

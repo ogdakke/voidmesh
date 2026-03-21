@@ -93,10 +93,6 @@ export class UIBoxPipeline {
     });
   }
 
-  /**
-   * Encode render passes for the given boxes.
-   * Batches up to 16 boxes per draw call.
-   */
   /** Clean up staging buffers from the previous frame. Call at start of frame. */
   begin(): void {
     for (const buf of this.#pendingDestroy) buf.destroy();
