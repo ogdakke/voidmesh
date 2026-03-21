@@ -58,5 +58,5 @@ export async function debugCanvas(store: CanvasStore) {
   });
 
   // Auto-select the debug entity
-  // store.setSelectedEntity(entityId);
+  store.setSelectedEntity(entityId);
 }

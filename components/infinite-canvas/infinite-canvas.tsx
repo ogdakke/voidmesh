@@ -40,7 +40,6 @@ import {
   useRef,
   useState,
   type PropsWithChildren,
-  type RefObject,
 } from "react";
 import { Button } from "../ui/button/index.tsx";
 import { DropZone } from "../ui/dropzone/index.tsx";
@@ -52,24 +51,6 @@ import SettingsDrawer from "../settings/settings.mobile.tsx";
 import About from "../about/index.tsx";
 
 const CanvasContextMenu = lazy(() => import("./canvas-context-menu.tsx"));
-
-/** Label overlay for selected entity - positioned by direct DOM manipulation in game loop */
-function EntityLabel({
-  labelRef,
-  textRef,
-}: {
-  labelRef: RefObject<HTMLDivElement | null>;
-  textRef: RefObject<HTMLSpanElement | null>;
-}) {
-  // Game loop updates transform, opacity, and text span content directly (no React re-renders per frame).
-  // The Drag icon is always in the DOM, hidden by default, shown via CSS class toggle.
-  return (
-    <div ref={labelRef} className="infinite-canvas__entity-label">
-      <Drag className="infinite-canvas__entity-label-icon" />
-      <span ref={textRef} />
-    </div>
-  );
-}
 
 function CenterCanvasControl({
   onCenterCanvas,
@@ -115,8 +96,6 @@ function ViewportZoom({ onZoomReset }: { onZoomReset: () => void }) {
 export function InfiniteCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const labelRef = useRef<HTMLDivElement>(null);
-  const textRef = useRef<HTMLSpanElement>(null);
   const perfRef = useRef<HTMLDivElement>(null);
 
   const {
@@ -174,10 +153,8 @@ export function InfiniteCanvas() {
 
   // Initialize game loop
   useEffect(() => {
-    if (!containerRef.current || !labelRef.current || !textRef.current || !perfRef.current) return;
+    if (!containerRef.current || !perfRef.current) return;
     gameLoop.setContainer(containerRef.current);
-    gameLoop.setLabelElement(labelRef.current);
-    gameLoop.setTextElement(textRef.current);
     gameLoop.setPerfElement(perfRef.current);
   }, []);
 
@@ -909,7 +886,6 @@ export function InfiniteCanvas() {
           </div>
         )}
         <div className="infinite-canvas__overlay">
-          <EntityLabel labelRef={labelRef} textRef={textRef} />
           <div
             ref={perfRef}
             className="infinite-canvas__perf-overlay"

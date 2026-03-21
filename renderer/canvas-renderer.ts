@@ -41,6 +41,9 @@ import { ShaderRegistry } from "./shaders/shader-registry.ts";
 import { TexturePool } from "./texture-pool.ts";
 import { resolveWlurOverlayRuntimeConfig, type WlurOverlayConfig } from "./wlur-overlay.ts";
 import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
+import { UIRenderer } from "./ui/ui-renderer.ts";
+import { buildEntityLabel } from "./ui/entity-label.tsx";
+import { buildDebugUI, buildWorldSpaceUI } from "./ui/debug-ui.tsx";
 
 type GpuTimingPhase =
   | "frame"
@@ -100,6 +103,9 @@ export class InfiniteCanvasRenderer {
   #entityUniformData = new ArrayBuffer(config.rendering.entityUniformSize);
   #entityFloatView = new Float32Array(this.#entityUniformData);
   #entityUintView = new Uint32Array(this.#entityUniformData);
+
+  // UI renderer (text, boxes, icons via Slug + SDF + texture quads)
+  #uiRenderer: UIRenderer | null = null;
 
   #entityShaderBindGroupLayout: GPUBindGroupLayout | null = null;
   #entityShaderUniformBuffer: GPUBuffer | null = null;
@@ -270,6 +276,16 @@ export class InfiniteCanvasRenderer {
     return this.#device;
   }
 
+  /** True if UI animations need another frame to complete. */
+  get hasActiveUIAnimations(): boolean {
+    return this.#uiRenderer?.hasActiveAnimations ?? false;
+  }
+
+  /** Forward pointer events to the UI renderer for hit testing. Returns true if consumed. */
+  handleUIPointerEvent(type: "down" | "up" | "move", worldX: number, worldY: number): boolean {
+    return this.#uiRenderer?.handlePointerEvent(type, worldX, worldY) ?? false;
+  }
+
   getFrameStats() {
     return {
       renderTime: this.#lastRenderTime,
@@ -420,6 +436,14 @@ export class InfiniteCanvasRenderer {
     // Initialize disintegration particle system
     this.#particleSystem = new DisintegrationParticleSystem(this.#device);
     await this.#particleSystem.initialize(this.#canvasFormat, this.#viewportUniformBuffer!);
+
+    // Initialize UI renderer (non-blocking — labels appear once font is loaded)
+    this.#uiRenderer = new UIRenderer(
+      this.#device,
+      this.#canvasFormat,
+      this.#viewportUniformBuffer!,
+    );
+    this.#uiRenderer.initialize().catch((e) => logger.error("UI renderer init failed:", e));
 
     // Set up ResizeObserver to cache canvas dimensions (avoids getBoundingClientRect in render loop)
     this.#resizeObserver = new ResizeObserver((entries) => {
@@ -1600,6 +1624,7 @@ export class InfiniteCanvasRenderer {
 
     // Update canvas size if needed (uses cached dimensions from ResizeObserver)
     const dpr = window.devicePixelRatio || 1;
+    const uiScale = dpr / viewport.zoom;
     const width = Math.floor(this.#cachedCanvasWidth * dpr);
     const height = Math.floor(this.#cachedCanvasHeight * dpr);
 
@@ -1626,8 +1651,8 @@ export class InfiniteCanvasRenderer {
 
     // Pre-process entities: render to textures and prepare bind groups
     // Uses caching to avoid per-frame allocations
-    const entityBindGroups: GPUBindGroup[] = [];
-    const actionLayerBindGroups: GPUBindGroup[] = [];
+    const entityBindGroups: { bindGroup: GPUBindGroup; entity: ShaderCanvasEntity }[] = [];
+    const actionLayerBindGroups: { bindGroup: GPUBindGroup; entity: ShaderCanvasEntity }[] = [];
     let hasAnimatingContent = false;
     markPhaseStart("entity-prep");
 
@@ -1751,9 +1776,9 @@ export class InfiniteCanvasRenderer {
 
       // Action layer entities are drawn AFTER blur (not in main pass) to avoid halo
       if (actionLayerControllerActive && actionLayerController.hasEntity(entity.id)) {
-        actionLayerBindGroups.push(bindGroup);
+        actionLayerBindGroups.push({ bindGroup, entity });
       } else {
-        entityBindGroups.push(bindGroup);
+        entityBindGroups.push({ bindGroup, entity });
       }
     }
     markPhaseEnd("entity-prep");
@@ -1794,16 +1819,22 @@ export class InfiniteCanvasRenderer {
     this.#writeGpuTimestampMarker(encoder, gpuCapture, "grid-pass", "end");
     markPhaseEnd("grid-pass");
 
-    // Pass 2: Render all entities (batched into same encoder)
+    // Pass 2: Render entities + interleaved labels (z-ordered)
+    // Labels render immediately after their parent entity so higher-z entities occlude them.
+    const uiReady = this.#uiRenderer?.isReady;
+    if (uiReady) {
+      this.#uiRenderer!.begin();
+    }
+
     markPhaseStart("entity-pass");
     this.#writeGpuTimestampMarker(encoder, gpuCapture, "entity-pass", "start");
-    for (const bindGroup of entityBindGroups) {
+    for (const { bindGroup, entity } of entityBindGroups) {
       const entityPass = encoder.beginRenderPass({
         label: "Entity composition pass",
         colorAttachments: [
           {
             view: targetView,
-            loadOp: "load", // Preserve previous content
+            loadOp: "load",
             storeOp: "store",
           },
         ],
@@ -1811,8 +1842,26 @@ export class InfiniteCanvasRenderer {
 
       entityPass.setPipeline(this.#compositionPipeline);
       entityPass.setBindGroup(0, bindGroup);
-      entityPass.draw(6); // 2 triangles = 6 vertices
+      entityPass.draw(6);
       entityPass.end();
+
+      // Render label for this entity immediately after its composition pass
+      if (uiReady && selectedEntityIds.has(entity.id)) {
+        const isDragging = entityDragVisual.isDragPhase();
+        const label = buildEntityLabel(entity, isDragging);
+        const labelWorldX = entity.position.x + entity.size.width / 2;
+        const gap = 8 * uiScale;
+        const labelWorldY = entity.position.y - gap;
+        this.#uiRenderer!.render(
+          label,
+          labelWorldX,
+          labelWorldY,
+          encoder,
+          targetView,
+          `label-${entity.id}`,
+          uiScale,
+        );
+      }
     }
     this.#writeGpuTimestampMarker(encoder, gpuCapture, "entity-pass", "end");
     markPhaseEnd("entity-pass");
@@ -1909,7 +1958,7 @@ export class InfiniteCanvasRenderer {
     // Always render action layer entities on top (sharp, after blur or normally)
     markPhaseStart("action-layer-sharp");
     this.#writeGpuTimestampMarker(encoder, gpuCapture, "action-layer-sharp", "start");
-    for (const bindGroup of actionLayerBindGroups) {
+    for (const { bindGroup, entity } of actionLayerBindGroups) {
       const sharpPass = encoder.beginRenderPass({
         label: "Action layer sharp entity pass",
         colorAttachments: [
@@ -1924,6 +1973,52 @@ export class InfiniteCanvasRenderer {
       sharpPass.setBindGroup(0, bindGroup);
       sharpPass.draw(6);
       sharpPass.end();
+
+      // Render label for action layer entity
+      if (uiReady && selectedEntityIds.has(entity.id)) {
+        const isDragging = entityDragVisual.isDragPhase();
+        const label = buildEntityLabel(entity, isDragging);
+        const labelWorldX = entity.position.x + entity.size.width / 2;
+        const gap = 8 * uiScale;
+        const labelWorldY = entity.position.y - gap;
+        this.#uiRenderer!.render(
+          label,
+          labelWorldX,
+          labelWorldY,
+          encoder,
+          targetView,
+          `label-${entity.id}`,
+          uiScale,
+        );
+      }
+    }
+
+    // Debug UI overlay (stress test for canvas UI engine)
+    if (debugMode && uiReady) {
+      // Screen-space panel (fixed size regardless of zoom)
+      const debugUI = buildDebugUI(viewport.zoom);
+      const debugWorldX = viewport.offset.x + 160 * uiScale;
+      const debugWorldY = viewport.offset.y + (height * 0.95) / viewport.zoom;
+      this.#uiRenderer!.render(
+        debugUI,
+        debugWorldX,
+        debugWorldY,
+        encoder,
+        targetView,
+        "debug-ui",
+        uiScale,
+      );
+
+      // World-space panel (scales with zoom, draggable)
+      const worldUI = buildWorldSpaceUI();
+      const worldUIX = 400;
+      const worldUIY = -100;
+      this.#uiRenderer!.render(worldUI, worldUIX, worldUIY, encoder, targetView, "debug-world-ui");
+    }
+
+    // Flush accumulated UI text
+    if (uiReady) {
+      this.#uiRenderer!.flush(encoder, targetView);
     }
     this.#writeGpuTimestampMarker(encoder, gpuCapture, "action-layer-sharp", "end");
     markPhaseEnd("action-layer-sharp");
@@ -2353,6 +2448,10 @@ export class InfiniteCanvasRenderer {
     this.#disintegrationOverlays.clear();
     this.#particleSystem?.destroy();
     this.#particleSystem = null;
+
+    // Destroy UI renderer
+    this.#uiRenderer?.destroy();
+    this.#uiRenderer = null;
 
     // Destroy processing pipeline
     this.#processingPipeline?.destroy();

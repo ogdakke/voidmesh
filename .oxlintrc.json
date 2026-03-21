@@ -41,6 +41,18 @@
   },
   "overrides": [
     {
+      "files": ["renderer/ui/**/*.tsx"],
+      "rules": {
+        "react/no-unknown-property": "off",
+        "react/rules-of-hooks": "off",
+        "react/only-export-components": "off",
+        "react-hooks-js/purity": "off",
+        "react-hooks-js/hooks": "off",
+        "react-hooks-js/globals": "off",
+        "react-hooks-js/static-components": "off"
+      }
+    },
+    {
       "files": [
         "**/__tests__/**",
         "**/*.spec.tsx",

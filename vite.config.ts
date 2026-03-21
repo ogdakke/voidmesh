@@ -41,6 +41,7 @@ export default defineConfig(({ mode }) => {
       react(),
       babel({
         presets: [reactCompilerPreset()],
+        exclude: /renderer\/ui\/.*\.tsx$/,
       }),
       VitePWA({
         strategies: "generateSW",
