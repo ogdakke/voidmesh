@@ -6,8 +6,9 @@
 // Traverses depth-first in reverse child order (front-most first).
 // Only returns nodes that have event handlers (interactive nodes).
 //
-// Fixed-position children are checked regardless of parent bounds,
-// since they are positioned relative to the viewport, not the parent.
+// Fixed-position children are checked regardless of parent bounds.
+// Other children are also allowed to overflow parent bounds because the
+// canvas UI system does not currently implement clipping.
 //
 
 import type { SceneNode } from "./scene-node.ts";
@@ -42,10 +43,6 @@ export function hitTest(root: SceneNode, worldX: number, worldY: number): SceneN
     }
   }
 
-  // Non-fixed children require point to be inside parent bounds
-  const inside = worldX >= x && worldX <= x + width && worldY >= y && worldY <= y + height;
-  if (!inside) return null;
-
   for (let i = root.children.length - 1; i >= 0; i--) {
     const child = root.children[i]!;
     if (child.props["position"] !== "fixed") {
@@ -55,7 +52,8 @@ export function hitTest(root: SceneNode, worldX: number, worldY: number): SceneN
   }
 
   // No child hit — check if this node is interactive
-  if (isInteractive(root)) return root;
+  const inside = worldX >= x && worldX <= x + width && worldY >= y && worldY <= y + height;
+  if (inside && isInteractive(root)) return root;
 
   return null;
 }

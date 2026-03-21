@@ -75,6 +75,7 @@ export interface UILayoutResult {
 }
 
 export interface UILayoutBox {
+  order: number;
   x: number;
   y: number;
   width: number;
@@ -88,6 +89,7 @@ export interface UILayoutBox {
 }
 
 export interface UILayoutText {
+  order: number;
   x: number;
   y: number;
   fontSize: number;
@@ -101,6 +103,7 @@ export interface UILayoutText {
 }
 
 export interface UILayoutIcon {
+  order: number;
   x: number;
   y: number;
   width: number;
@@ -115,6 +118,10 @@ interface UITransform {
   scale: number;
   translateX: number;
   translateY: number;
+}
+
+interface OrderCounter {
+  value: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -393,6 +400,7 @@ function position(
   scale: number,
   styleResolver: UIStyleResolver,
   transform: UITransform,
+  orderCounter: OrderCounter,
   result: UILayoutResult,
   parentZIndex = 0,
   viewport?: ViewportInfo,
@@ -414,6 +422,7 @@ function position(
         WHITE,
       );
       result.texts.push({
+        order: orderCounter.value++,
         x: transformX(transform, resolvedX + node.layout.width / 2),
         y: transformY(transform, resolvedY + node.layout.height),
         fontSize: transformSize(transform, getScaled(node, "fontSize", animated, 14, scale)),
@@ -437,6 +446,7 @@ function position(
         WHITE,
       );
       result.icons.push({
+        order: orderCounter.value++,
         x: transformX(transform, resolvedX),
         y: transformY(transform, resolvedY),
         width: transformSize(transform, node.layout.width),
@@ -465,6 +475,7 @@ function position(
 
       if (background) {
         result.boxes.push({
+          order: orderCounter.value++,
           x: transformX(nodeTransform, resolvedX),
           y: transformY(nodeTransform, resolvedY),
           width: transformSize(nodeTransform, node.layout.width),
@@ -496,6 +507,7 @@ function position(
         scale,
         styleResolver,
         nodeTransform,
+        orderCounter,
         animated,
         result,
         zIndex,
@@ -514,6 +526,7 @@ function positionChildren(
   scale: number,
   styleResolver: UIStyleResolver,
   transform: UITransform,
+  orderCounter: OrderCounter,
   animated: Record<string, number>,
   result: UILayoutResult,
   parentZIndex = 0,
@@ -619,6 +632,7 @@ function positionChildren(
           scale,
           styleResolver,
           transform,
+          orderCounter,
           result,
           parentZIndex,
           viewport,
@@ -641,6 +655,7 @@ function positionChildren(
           scale,
           styleResolver,
           transform,
+          orderCounter,
           result,
           parentZIndex,
           viewport,
@@ -659,6 +674,7 @@ function positionChildren(
           scale,
           styleResolver,
           transform,
+          orderCounter,
           result,
           parentZIndex,
           viewport,
@@ -693,6 +709,7 @@ function positionChildren(
       scale,
       styleResolver,
       transform,
+      orderCounter,
       result,
       parentZIndex,
       viewport,
@@ -730,6 +747,7 @@ function positionChildren(
         screenScale,
         styleResolver,
         transform,
+        orderCounter,
         result,
         parentZIndex,
         viewport,
@@ -766,6 +784,7 @@ export function computeLayout(
   viewport?: ViewportInfo,
 ): UILayoutResult {
   const result: UILayoutResult = { boxes: [], texts: [], icons: [] };
+  const orderCounter: OrderCounter = { value: 0 };
 
   // If root is an anchor node, resolve its position from entity bounds
   if (root.type === "anchor" && anchors) {
@@ -814,6 +833,7 @@ export function computeLayout(
         scale,
         styleResolver,
         IDENTITY_TRANSFORM,
+        orderCounter,
         result,
         0,
         viewport,
@@ -827,7 +847,19 @@ export function computeLayout(
 
   const rootX = anchorX - root.layout.width / 2;
   const rootY = anchorY - root.layout.height;
-  position(root, rootX, rootY, now, scale, styleResolver, IDENTITY_TRANSFORM, result, 0, viewport);
+  position(
+    root,
+    rootX,
+    rootY,
+    now,
+    scale,
+    styleResolver,
+    IDENTITY_TRANSFORM,
+    orderCounter,
+    result,
+    0,
+    viewport,
+  );
   sortByZIndex(result);
 
   return result;
@@ -835,7 +867,10 @@ export function computeLayout(
 
 /** Stable-sort all layout arrays by z-index (preserves document order for equal z-indices). */
 function sortByZIndex(result: UILayoutResult): void {
-  if (result.boxes.length > 1) result.boxes.sort((a, b) => a.zIndex - b.zIndex);
-  if (result.texts.length > 1) result.texts.sort((a, b) => a.zIndex - b.zIndex);
-  if (result.icons.length > 1) result.icons.sort((a, b) => a.zIndex - b.zIndex);
+  const compare = (a: { zIndex: number; order: number }, b: { zIndex: number; order: number }) =>
+    a.zIndex - b.zIndex || a.order - b.order;
+
+  if (result.boxes.length > 1) result.boxes.sort(compare);
+  if (result.texts.length > 1) result.texts.sort(compare);
+  if (result.icons.length > 1) result.icons.sort(compare);
 }
