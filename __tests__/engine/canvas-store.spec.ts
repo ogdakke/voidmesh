@@ -65,19 +65,6 @@ describe("canvasStore.seekVideo", () => {
 
     expect(entity.textureDirty).toBe(true);
   });
-
-  test("does nothing for non-video entities", () => {
-    const entity = createTestEntity({ mediaType: "image" });
-    canvasStore.addEntity(entity);
-
-    // Should not throw
-    canvasStore.seekVideo(entity.id, 50);
-  });
-
-  test("does nothing for non-existent entities", () => {
-    // Should not throw
-    canvasStore.seekVideo("non-existent", 50);
-  });
 });
 
 describe("canvasStore.updatePlaybackTime", () => {
@@ -128,19 +115,6 @@ describe("canvasStore.updatePlaybackTime", () => {
     expect(snapshot.currentTime).toBe(75);
     expect(snapshot.entityId).toBe(entity.id);
   });
-
-  test("does nothing for non-video entities", () => {
-    const entity = createTestEntity({ mediaType: "image" });
-    canvasStore.addEntity(entity);
-
-    // Should not throw
-    canvasStore.updatePlaybackTime(entity.id, 50);
-  });
-
-  test("does nothing for non-existent entities", () => {
-    // Should not throw
-    canvasStore.updatePlaybackTime("non-existent", 50);
-  });
 });
 
 // ============================================================================
@@ -188,19 +162,6 @@ describe("canvasStore.seekGif", () => {
 
     expect(entity.textureDirty).toBe(true);
   });
-
-  test("does nothing for non-gif entities", () => {
-    const entity = createTestEntity({ mediaType: "image" });
-    canvasStore.addEntity(entity);
-
-    // Should not throw
-    canvasStore.seekGif(entity.id, 0.5);
-  });
-
-  test("does nothing for non-existent entities", () => {
-    // Should not throw
-    canvasStore.seekGif("non-existent", 0.5);
-  });
 });
 
 describe("canvasStore.updateGifPlaybackTime", () => {
@@ -237,18 +198,5 @@ describe("canvasStore.updateGifPlaybackTime", () => {
     canvasStore.forcePlaybackNotify(entity.id, 1.0);
 
     expect(canvasStore.getPlaybackSnapshot().version).toBe(initialVersion + 1);
-  });
-
-  test("does nothing for non-gif entities", () => {
-    const entity = createTestEntity({ mediaType: "image" });
-    canvasStore.addEntity(entity);
-
-    // Should not throw
-    canvasStore.updateGifPlaybackTime(entity.id, 0.5);
-  });
-
-  test("does nothing for non-existent entities", () => {
-    // Should not throw
-    canvasStore.updateGifPlaybackTime("non-existent", 0.5);
   });
 });

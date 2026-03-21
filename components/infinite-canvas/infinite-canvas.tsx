@@ -19,7 +19,6 @@ import {
   easings,
   zoomToPoint,
 } from "#lib/canvas-math.ts";
-import { logger } from "#lib/client.logger.ts";
 import { undo } from "#lib/undo.ts";
 import { Check, Drag, Enlarge, Reduce, Square3dFromCenter } from "iconoir-react";
 import {

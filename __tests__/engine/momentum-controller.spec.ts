@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, vi, afterEach } from "vitest";
+import { describe, test, expect, beforeEach, vi, afterEach, type Mock } from "vitest";
 import { MomentumController, type MomentumDeps } from "../../engine/momentum-controller.ts";
 import { config } from "#config";
 import { TestClock } from "../helpers/test-clock.ts";
@@ -67,7 +67,7 @@ describe("MomentumController", () => {
       expect(clock.scheduler.hasActive).toBe(false);
 
       // Advance more — panBy should not be called after stop
-      (deps.panBy as ReturnType<typeof vi.fn>).mockClear();
+      (deps.panBy as Mock).mockClear();
       clock.advanceBy(16);
       expect(deps.panBy).not.toHaveBeenCalled();
     });
