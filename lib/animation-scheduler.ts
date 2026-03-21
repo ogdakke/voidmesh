@@ -90,6 +90,7 @@ const linear: EasingFunction = (t) => t;
 
 export class AnimationScheduler {
   #animations = new Map<number, Animation>();
+  #completed: Animation[] = [];
   #nextId = 0;
 
   get hasActive(): boolean {
@@ -162,8 +163,6 @@ export class AnimationScheduler {
   }
 
   tick(now: number): void {
-    const completed: Animation[] = [];
-
     for (const anim of this.#animations.values()) {
       if (anim.cancelled) {
         this.#animations.delete(anim.id);
@@ -181,15 +180,16 @@ export class AnimationScheduler {
       }
 
       if (done && !anim.cancelled) {
-        completed.push(anim);
+        this.#completed.push(anim);
         this.#animations.delete(anim.id);
       }
     }
 
     // Fire onComplete callbacks after iteration (safe to start new animations)
-    for (const anim of completed) {
+    for (const anim of this.#completed) {
       anim.onComplete?.();
     }
+    this.#completed.length = 0;
   }
 
   #tickTween(anim: TweenAnimation, now: number): boolean {

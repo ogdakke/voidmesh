@@ -66,7 +66,8 @@ export class MomentumController {
     this.#scrollerY.fling(clampedVelY * velocityScale);
 
     const startTime = performance.now();
-    let lastOffset = { x: 0, y: 0 };
+    let lastOffsetX = 0;
+    let lastOffsetY = 0;
 
     this.#scrollHandle = this.#scheduler.custom({
       tag: "momentum",
@@ -76,8 +77,8 @@ export class MomentumController {
         const valY = this.#scrollerY.value(elapsed);
 
         if (valX || valY) {
-          const deltaX = valX ? -(valX.offset - lastOffset.x) : 0;
-          const deltaY = valY ? -(valY.offset - lastOffset.y) : 0;
+          const deltaX = valX ? -(valX.offset - lastOffsetX) : 0;
+          const deltaY = valY ? -(valY.offset - lastOffsetY) : 0;
 
           const viewport = this.#deps.getViewport();
           const dpr = this.#deps.getDpr();
@@ -86,10 +87,8 @@ export class MomentumController {
             y: (deltaY * dpr) / viewport.zoom,
           });
 
-          lastOffset = {
-            x: valX ? valX.offset : lastOffset.x,
-            y: valY ? valY.offset : lastOffset.y,
-          };
+          if (valX) lastOffsetX = valX.offset;
+          if (valY) lastOffsetY = valY.offset;
           return true;
         }
 

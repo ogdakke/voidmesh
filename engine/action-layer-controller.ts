@@ -116,6 +116,11 @@ export class ActionLayerController {
       return;
     }
 
+    // Re-register if the scheduler removed us (spring settled while finger was still)
+    if (!this.#handle?.isActive) {
+      this.#registerAnimation();
+    }
+
     // Subtract deadzone from distance, preserve direction
     const effectiveDist = rawDist - deadzone;
     const scale = effectiveDist / rawDist;
@@ -304,14 +309,19 @@ export class ActionLayerController {
                 (aY * this.#omegaD + bY * this.#zetaOmega) * sinD);
           }
 
+          // Spring settled: no meaningful motion — let scheduler remove us.
+          // updateFingerPosition / dismiss / transitionToDrag will re-register
+          // if the user moves again or the phase changes.
           const dx = this.#targetOffsetX - this.#currentOffsetX;
           const dy = this.#targetOffsetY - this.#currentOffsetY;
           if (
-            Math.abs(dx) > 0.05 ||
-            Math.abs(dy) > 0.05 ||
-            Math.abs(this.#velocityX) > 0.05 ||
-            Math.abs(this.#velocityY) > 0.05
+            Math.abs(dx) <= 0.05 &&
+            Math.abs(dy) <= 0.05 &&
+            Math.abs(this.#velocityX) <= 0.05 &&
+            Math.abs(this.#velocityY) <= 0.05 &&
+            this.#blurIntensity === this.#blurTarget
           ) {
+            return false;
           }
         }
 
@@ -346,10 +356,6 @@ export class ActionLayerController {
           }
         }
 
-        // Stay alive while phase is non-idle. The old game-loop model called
-        // tick() every frame regardless; returning false only skipped rendering.
-        // In the scheduler model, returning false REMOVES the animation, which
-        // would prevent dismiss/transitionToDrag from being picked up later.
         return true;
       },
     });
