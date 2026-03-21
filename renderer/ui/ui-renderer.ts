@@ -15,6 +15,7 @@ import {
   type TextMetrics,
 } from "./ui-layout.ts";
 import { hitTest } from "./hit-test.ts";
+import { UIStyleResolver } from "./style-resolver.ts";
 
 // ---------------------------------------------------------------------------
 // SlugTextMeasurer — bridges TextMeasurer interface to Slug algorithm
@@ -55,6 +56,7 @@ export class UIRenderer {
   #boxPipeline: UIBoxPipeline;
   #iconPipeline: UIIconPipeline;
   #iconCache: UIIconCache;
+  #styleResolver: UIStyleResolver;
 
   #font: Font | null = null;
   #measurer: SlugTextMeasurer | null = null;
@@ -78,6 +80,7 @@ export class UIRenderer {
     this.#boxPipeline = new UIBoxPipeline(device, canvasFormat, viewportUniformBuffer);
     this.#iconPipeline = new UIIconPipeline(device, canvasFormat, viewportUniformBuffer);
     this.#iconCache = new UIIconCache(device);
+    this.#styleResolver = new UIStyleResolver();
     this.#iconCache.onTextureReady = () => {
       this.#hasPendingIcons = true;
     };
@@ -109,6 +112,7 @@ export class UIRenderer {
     if (this.#justBecameReady) return true;
     if (this.#interactionDirty) return true;
     if (this.#hasPendingIcons) return true;
+    if (this.#styleResolver.isDirty) return true;
     for (const root of this.#sceneRoots.values()) {
       if (hasActiveAnimations(root)) return true;
     }
@@ -123,6 +127,7 @@ export class UIRenderer {
     this.#justBecameReady = false;
     this.#interactionDirty = false;
     this.#hasPendingIcons = false;
+    this.#styleResolver.markClean();
   }
 
   /**
@@ -186,6 +191,7 @@ export class UIRenderer {
       anchorY,
       this.#measurer,
       now,
+      this.#styleResolver,
       anchors,
       scale,
       viewport,
@@ -344,6 +350,7 @@ export class UIRenderer {
     this.#boxPipeline.destroy();
     this.#iconPipeline.destroy();
     this.#iconCache.destroy();
+    this.#styleResolver.destroy();
     this.#font = null;
     this.#measurer = null;
     this.#ready = false;
