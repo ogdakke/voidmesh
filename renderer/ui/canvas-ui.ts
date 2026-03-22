@@ -12,7 +12,7 @@ import type { PerfOverlaySnapshot } from "../../engine/perf-overlay.ts";
 import type { UIRenderer } from "./ui-renderer.ts";
 import type { ContextMenuActions } from "./context-menu-actions.ts";
 import type { CanvasContextMenuProps } from "./components/canvas-context-menu.tsx";
-import { CanvasContextMenu } from "./components/canvas-context-menu.tsx";
+import { CanvasContextMenu, SHOW_SAFE_POLYGON_DEBUG } from "./components/canvas-context-menu.tsx";
 import { PerfHud } from "./debug-ui.tsx";
 import { contextMenuController } from "./context-menu-controller.ts";
 
@@ -22,7 +22,7 @@ import { contextMenuController } from "./context-menu-controller.ts";
 
 type ContextMenuLiveProps = Omit<
   CanvasContextMenuProps,
-  "state" | "actions" | "menuX" | "menuY" | "activeSubmenuId"
+  "state" | "actions" | "menuX" | "menuY" | "activeSubmenuId" | "screenScale" | "debugTick"
 >;
 
 type ViewportInfo = {
@@ -39,6 +39,8 @@ type ContextMenuSceneInputs = {
   activeSubmenuId: string | null;
   menuX: number;
   menuY: number;
+  screenScale: number;
+  debugTick: number;
   props: ContextMenuLiveProps | null;
   state: Readonly<CanvasContextMenuProps["state"]> | null;
 };
@@ -52,6 +54,10 @@ function sameContextMenuInputs(
 ): boolean {
   if (current === next) return true;
   if (!current || !next) return false;
+
+  // Force re-reconciliation every frame when debug overlay is active
+  // so the polygon/trough/exit point update during pointer moves
+  if (SHOW_SAFE_POLYGON_DEBUG && contextMenuController.submenu.isOpen) return false;
 
   return (
     current.actions === next.actions &&
@@ -75,6 +81,7 @@ class CanvasUI {
   #contextMenuProps: ContextMenuLiveProps | null = null;
   #lastPerfSnapshot: PerfOverlaySnapshot | null = null;
   #perfVisible = false;
+  #debugTick = 0;
   #lastContextMenuInputs: ContextMenuSceneInputs | null = null;
   #contextMenuVisible = false;
 
@@ -160,13 +167,20 @@ class CanvasUI {
         const menuX = ((cmState.worldX - viewport.offset.x) * viewport.zoom) / dpr;
         const menuY = ((cmState.worldY - viewport.offset.y) * viewport.zoom) / dpr;
 
+        // Increment debugTick every frame when debug overlay is active to
+        // break React Compiler memoization for the debug-only singleton reads.
+        const debugTick =
+          SHOW_SAFE_POLYGON_DEBUG && contextMenuController.submenu.isOpen ? ++this.#debugTick : 0;
+
         nextContextMenuInputs = {
           state: cmState,
           actions,
           props,
           menuX,
           menuY,
+          screenScale: dpr / viewport.zoom,
           activeSubmenuId: contextMenuController.activeSubmenuId,
+          debugTick,
         };
       }
     }
@@ -232,6 +246,8 @@ class CanvasUI {
             menuX: nextInputs.menuX,
             menuY: nextInputs.menuY,
             activeSubmenuId: nextInputs.activeSubmenuId,
+            screenScale: nextInputs.screenScale,
+            debugTick: nextInputs.debugTick,
           }),
         );
         this.#contextMenuVisible = true;
