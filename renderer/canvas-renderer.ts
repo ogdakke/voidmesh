@@ -1691,7 +1691,9 @@ export class InfiniteCanvasRenderer {
 
     const perfSnapshot = perfOverlay.getSnapshot();
 
-    // World-space debug UI stress scene — anchored to a static canvas position
+    // World-space debug UI stress scene — anchored to a static canvas position.
+    // It should behave like any other object on the canvas: fixed in world space
+    // and visually larger/smaller as the camera zoom changes.
     if (uiReady) {
       const showDebugOverlay = debugMode && canvasUI.debugType === "ui";
       if (showDebugOverlay) {
@@ -1718,7 +1720,7 @@ export class InfiniteCanvasRenderer {
           DEBUG_OVERLAY_WORLD_Y,
           encoder,
           targetView,
-          uiScale,
+          dpr,
           undefined,
           {
             offsetX: viewport.offset.x,
