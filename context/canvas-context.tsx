@@ -59,6 +59,7 @@ import { deepMerge } from "#lib/deep-merge.ts";
 import { applyShaderDefaults } from "#lib/shader-defaults.ts";
 import { extractPaletteFromImage } from "#lib/palette-extraction/index.ts";
 import { ColorSpace } from "#types/enums.ts";
+import { canvasUI } from "#renderer/ui/canvas-ui.ts";
 import type { PartialDeep } from "type-fest";
 import {
   createDefaultWlurOverlayDebugConfig,
@@ -231,6 +232,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         .then(({ debugCanvas }) => debugCanvas(canvasStore))
         .catch(console.error);
     }
+    canvasUI.setDebugType(debugType);
     canvasStore.setDebugMode(debug);
   }, [debugType, debug]);
 

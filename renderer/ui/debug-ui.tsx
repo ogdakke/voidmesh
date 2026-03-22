@@ -6,7 +6,7 @@ import type {
   ReactIconComponent,
 } from "./elements.ts";
 import { edges, gradient, lightDark, solid, spring } from "./elements.ts";
-import { Box, Text, Icon } from "./primitives.tsx";
+import { Box, Text, Icon, Polyline } from "./primitives.tsx";
 import { memo } from "react";
 import {
   Check,
@@ -1001,34 +1001,10 @@ function FpsSparkline({ history, fps }: { history: number[]; fps: number }) {
     return Math.round((index / (points.length - 1)) * (width - 3));
   };
 
-  const segments: Array<{ key: string; left: number; top: number; width: number; height: number }> =
-    [];
-
-  for (let i = 1; i < points.length; i++) {
-    const prevX = xFor(i - 1);
-    const nextX = xFor(i);
-    const prevY = yFor(points[i - 1]!);
-    const nextY = yFor(points[i]!);
-
-    segments.push({
-      key: `spark-h-${i}`,
-      left: prevX,
-      top: prevY,
-      width: Math.max(1, nextX - prevX + 1),
-      height: 2,
-    });
-
-    segments.push({
-      key: `spark-v-${i}`,
-      left: nextX,
-      top: Math.min(prevY, nextY),
-      width: 2,
-      height: Math.max(2, Math.abs(nextY - prevY) + 2),
-    });
-  }
-
-  const latestX = xFor(points.length - 1);
-  const latestY = yFor(points[points.length - 1]!);
+  const linePoints = points.map((point, index) => ({
+    x: xFor(index),
+    y: yFor(point),
+  }));
 
   return (
     <Box
@@ -1057,24 +1033,26 @@ function FpsSparkline({ history, fps }: { history: number[]; fps: number }) {
         height={1}
         background={solid(HUD_GRAPH_GRID)}
       />
-      {segments.map((segment) => (
-        <Box
-          key={segment.key}
-          position="absolute"
-          left={segment.left}
-          top={segment.top}
-          width={segment.width}
-          height={segment.height}
-          background={solid(HUD_GRAPH_LINE)}
-        />
-      ))}
+      <Polyline
+        position="absolute"
+        left={0}
+        top={0}
+        zIndex={1}
+        width={width}
+        height={height}
+        points={linePoints}
+        stroke={HUD_GRAPH_LINE}
+        strokeWidth={2}
+        strokeLineCap="round"
+      />
       <Box
         position="absolute"
-        left={latestX - 1}
-        top={latestY - 1}
+        left={linePoints[linePoints.length - 1]!.x - 1}
+        top={linePoints[linePoints.length - 1]!.y - 1}
         width={4}
         height={4}
         borderRadius={999}
+        zIndex={2}
         background={solid(HUD_GRAPH_LINE)}
       />
     </Box>

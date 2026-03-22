@@ -201,6 +201,58 @@ export interface IconElementProps {
   animate?: AnimateConfig;
 }
 
+export interface UILinePoint {
+  x: number;
+  y: number;
+}
+
+export interface LineElementProps {
+  key?: string | number;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  stroke?: UIColorValue;
+  strokeWidth?: number;
+  strokeLineCap?: "butt" | "round" | "square";
+  opacity?: number;
+  width?: number;
+  height?: number;
+  minWidth?: number;
+  minHeight?: number;
+  maxWidth?: number;
+  maxHeight?: number;
+  position?: "relative" | "absolute" | "fixed";
+  zIndex?: number;
+  left?: number;
+  top?: number;
+  right?: number;
+  bottom?: number;
+  animate?: AnimateConfig;
+}
+
+export interface PolylineElementProps {
+  key?: string | number;
+  points: UILinePoint[];
+  stroke?: UIColorValue;
+  strokeWidth?: number;
+  strokeLineCap?: "butt" | "round" | "square";
+  opacity?: number;
+  width: number;
+  height: number;
+  minWidth?: number;
+  minHeight?: number;
+  maxWidth?: number;
+  maxHeight?: number;
+  position?: "relative" | "absolute" | "fixed";
+  zIndex?: number;
+  left?: number;
+  top?: number;
+  right?: number;
+  bottom?: number;
+  animate?: AnimateConfig;
+}
+
 export interface AnchorElementProps {
   key?: string | number;
   entityId: string;

@@ -80,6 +80,7 @@ class CanvasUI {
   #contextMenuActions: ContextMenuActions | null = null;
   #contextMenuProps: ContextMenuLiveProps | null = null;
   #lastPerfSnapshot: PerfOverlaySnapshot | null = null;
+  #debugType: string | null = null;
   #perfVisible = false;
   #debugTick = 0;
   #lastContextMenuInputs: ContextMenuSceneInputs | null = null;
@@ -105,6 +106,10 @@ class CanvasUI {
     this.#contextMenuProps = props;
   }
 
+  setDebugType(debugType: string | null): void {
+    this.#debugType = debugType;
+  }
+
   // ---------------------------------------------------------------------------
   // State queries
   // ---------------------------------------------------------------------------
@@ -115,6 +120,10 @@ class CanvasUI {
 
   get hasActiveAnimations(): boolean {
     return this.#uiRenderer?.hasActiveAnimations ?? false;
+  }
+
+  get debugType(): string | null {
+    return this.#debugType;
   }
 
   // ---------------------------------------------------------------------------
