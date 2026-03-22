@@ -5,7 +5,7 @@ import type {
   StateStyle,
   ReactIconComponent,
 } from "./elements.ts";
-import { edges, gradient, lightDark, solid, spring } from "./elements.ts";
+import { blur, edges, gradient, lightDark, solid, spring } from "./elements.ts";
 import { Box, Text, Icon, Polyline } from "./primitives.tsx";
 import { memo } from "react";
 import {
@@ -36,6 +36,7 @@ type ButtonProps = {
   label?: string;
   background?: UIBackground;
   color?: UIColorValue;
+  borderColor?: UIColorValue;
   icon?: ReactIconComponent;
   onClick?: UIEventHandler;
 };
@@ -81,6 +82,7 @@ type ButtonSpec = {
   icon?: ReactIconComponent;
   background?: UIBackground;
   color?: UIColorValue;
+  borderColor?: UIColorValue;
 };
 
 type MenuItemSpec = {
@@ -94,32 +96,109 @@ type MenuItemSpec = {
 
 const WHITE: UIColorValue = "#ffffff";
 const BLACK: UIColorValue = "#101218";
-const MUTED: UIColorValue = lightDark("#5f6777", "#9aa4b5");
-const PANEL_TEXT: UIColorValue = lightDark("#151924", "#f5f7fb");
-const PANEL_BORDER: UIColorValue = lightDark("rgba(20, 26, 38, 0.12)", "rgba(255, 255, 255, 0.12)");
-const DIVIDER: UIColorValue = lightDark("rgba(16, 22, 34, 0.12)", "rgba(255, 255, 255, 0.08)");
-const PANEL_BG = solid(lightDark("rgba(248, 249, 252, 0.94)", "rgba(16, 18, 24, 0.94)"));
-const CARD_BG = solid(lightDark("rgba(255, 255, 255, 0.78)", "rgba(29, 33, 43, 0.82)"));
-const WINDOW_BG = solid(lightDark("rgba(247, 248, 252, 0.96)", "rgba(20, 22, 30, 0.96)"));
-const WINDOW_ALT_BG = solid(lightDark("rgba(255, 255, 255, 0.9)", "rgba(24, 27, 37, 0.9)"));
-const PRIMARY_BG = gradient("var(--tint-900)", "var(--tint-1100)");
-const SUCCESS_BG = gradient("#66cf9a", "#2fa46d");
-const DANGER_BG = solid("#e7565f");
-const ACCENT_BG = gradient("#a26dff", "#7747e8");
-const SUNSET_BG = gradient("#ffb36b", "#ff6f61");
-const SKY_BG = gradient("#7ec8ff", "#4b7bff");
-const OUTLINE_BG = solid("rgba(0, 0, 0, 0)");
-const WORLD_PANEL_BG = lightDark(gradient("#dfeaff", "#c4d7ff"), gradient("#13233f", "#0b1326"));
-const WORLD_PANEL_BORDER = lightDark("rgba(72, 103, 168, 0.28)", "rgba(97, 136, 224, 0.45)");
+const SUBTLE_BACKDROP_BLUR = 4;
+const MUTED: UIColorValue = lightDark("var(--gray-700)", "var(--gray-1300)");
+const PANEL_TEXT: UIColorValue = lightDark("var(--gray-900)", "var(--gray-1500)");
+const PANEL_TEXT_SOFT: UIColorValue = lightDark("var(--gray-800)", "var(--gray-1400)");
+const PANEL_BORDER: UIColorValue = lightDark("rgba(20, 26, 38, 0.12)", "rgba(255, 255, 255, 0.16)");
+const DIVIDER: UIColorValue = lightDark("rgba(16, 22, 34, 0.12)", "rgba(255, 255, 255, 0.12)");
+const PANEL_BG = solid(
+  lightDark(
+    "rgba(255, 255, 255, 0.88)",
+    "color-mix(in oklch, var(--gray-200) 34%, var(--floating-background))",
+  ),
+);
+const CARD_BG = gradient(
+  lightDark(
+    "rgba(255, 255, 255, 0.82)",
+    "color-mix(in oklch, var(--gray-200) 26%, var(--input-bg))",
+  ),
+  lightDark(
+    "rgba(248, 249, 252, 0.94)",
+    "color-mix(in oklch, var(--gray-100) 14%, var(--input-bg))",
+  ),
+);
+const WINDOW_BG = gradient(
+  lightDark(
+    "rgba(255, 255, 255, 0.94)",
+    "color-mix(in oklch, var(--gray-200) 40%, var(--floating-background))",
+  ),
+  lightDark(
+    "rgba(247, 248, 252, 0.98)",
+    "color-mix(in oklch, var(--gray-100) 20%, var(--floating-background))",
+  ),
+);
+const WINDOW_ALT_BG = gradient(
+  lightDark(
+    "rgba(245, 249, 255, 0.96)",
+    "color-mix(in oklch, var(--gray-200) 24%, color-mix(in oklch, var(--primary-25) 38%, var(--floating-background)))",
+  ),
+  lightDark(
+    "rgba(255, 255, 255, 0.94)",
+    "color-mix(in oklch, var(--gray-100) 16%, color-mix(in oklch, var(--primary-25) 20%, var(--floating-background)))",
+  ),
+);
+const PRIMARY_BG = gradient("var(--primary-lighter)", "var(--primary)");
+const SUCCESS_BG = gradient("var(--green-400)", "var(--green-700)");
+const DANGER_BG = gradient("var(--destructive-lighter)", "var(--destructive)");
+const ACCENT_BG = gradient("var(--amber-300)", "var(--amber-700)");
+const SUNSET_BG = gradient("var(--amber-400)", "var(--amber-800)");
+const SKY_BG = gradient("var(--gray-200)", "var(--gray-500)");
+const OUTLINE_BG = gradient("var(--background)", "var(--input-bg)");
+const SOFT_PRIMARY_BG = solid(
+  lightDark(
+    "color-mix(in oklch, var(--primary-25) 72%, white)",
+    "color-mix(in oklch, var(--primary-25) 88%, rgba(255, 255, 255, 0.14))",
+  ),
+);
+const SOFT_AMBER_BG = solid(
+  lightDark(
+    "color-mix(in oklch, var(--amber-100) 74%, white)",
+    "color-mix(in oklch, var(--amber-100) 82%, rgba(255, 255, 255, 0.12))",
+  ),
+);
+const SOFT_SUCCESS_BG = solid(
+  lightDark(
+    "color-mix(in oklch, var(--green-100) 72%, white)",
+    "color-mix(in oklch, var(--green-100) 84%, rgba(255, 255, 255, 0.12))",
+  ),
+);
+const WORLD_PANEL_BG = gradient(
+  lightDark(
+    "color-mix(in oklch, var(--primary-25) 82%, white)",
+    "color-mix(in oklch, var(--primary-25) 55%, rgba(12, 18, 32, 0.96))",
+  ),
+  lightDark(
+    "color-mix(in oklch, var(--primary-25) 58%, var(--input-bg))",
+    "color-mix(in oklch, var(--primary-25) 28%, rgba(9, 14, 26, 0.96))",
+  ),
+);
+const WORLD_PANEL_BORDER: UIColorValue = lightDark(
+  "rgba(72, 103, 168, 0.22)",
+  "rgba(121, 154, 245, 0.42)",
+);
 const HOVER_STYLE: StateStyle = { opacity: 0.96, scale: 1.02 };
 const ACTIVE_STYLE: StateStyle = { scale: 0.96 };
 const SPRING_SCALE = { scale: spring(0.24) };
-const HUD_BG = solid(lightDark("rgba(248, 250, 252, 0.95)", "rgba(14, 17, 23, 0.94)"));
-const HUD_BORDER = lightDark("rgba(20, 26, 38, 0.12)", "rgba(255, 255, 255, 0.1)");
-const HUD_GRAPH_BG = solid(lightDark("rgba(15, 23, 42, 0.06)", "rgba(255, 255, 255, 0.05)"));
-const HUD_GRAPH_GRID = lightDark("rgba(15, 23, 42, 0.08)", "rgba(255, 255, 255, 0.08)");
-const HUD_VALUE = lightDark("#111827", "#f5f7fb");
-const HUD_LABEL = lightDark("#667085", "#98a2b3");
+const HUD_BG = solid(
+  lightDark(
+    "rgba(255, 255, 255, 0.82)",
+    "color-mix(in oklch, var(--gray-200) 32%, var(--floating-background))",
+  ),
+);
+const HUD_BORDER: UIColorValue = lightDark("rgba(20, 26, 38, 0.12)", "rgba(255, 255, 255, 0.16)");
+const HUD_GRAPH_BG = solid(
+  lightDark(
+    "rgba(15, 23, 42, 0.05)",
+    "color-mix(in oklch, var(--gray-200) 18%, rgba(8, 12, 20, 0.88))",
+  ),
+);
+const HUD_GRAPH_GRID: UIColorValue = lightDark(
+  "rgba(15, 23, 42, 0.08)",
+  "rgba(255, 255, 255, 0.12)",
+);
+const HUD_VALUE: UIColorValue = lightDark("var(--gray-900)", "var(--gray-1500)");
+const HUD_LABEL: UIColorValue = lightDark("var(--gray-700)", "var(--gray-1300)");
 const HUD_GRAPH_LINE: UIColorValue = "var(--primary)";
 
 const TARGET_GLYPHS = "W A V Z / v w";
@@ -131,25 +210,72 @@ const SPECIMEN_ROWS = [
   "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
 ];
 const SWATCH_SETS = [
-  ["#101218", "#30406e", "#4b7bff", "#83c6ff", "#f5f7fb"],
-  ["#120c18", "#473063", "#8e56ff", "#d58fff", "#fff1ff"],
-  ["#17110d", "#7f4f24", "#d89b5c", "#ffd6a5", "#fff5e6"],
+  ["var(--gray-1600)", "var(--gray-1100)", "var(--primary)", "var(--green-600)", "var(--gray-50)"],
+  ["var(--gray-1500)", "var(--primary-50)", "var(--primary)", "var(--amber-500)", "var(--gray-50)"],
+  [
+    "var(--gray-1400)",
+    "var(--destructive-50)",
+    "var(--amber)",
+    "var(--green-500)",
+    "var(--gray-50)",
+  ],
 ];
 const ACTION_ROWS: ButtonSpec[][] = [
   [
-    { label: "Import", icon: Import, background: PRIMARY_BG },
-    { label: "Snapshot", icon: Download, background: SKY_BG },
-    { label: "Save", icon: FloppyDiskArrowIn, background: SUCCESS_BG },
+    { label: "Import", icon: Import, background: PRIMARY_BG, borderColor: "var(--primary)" },
+    {
+      label: "Snapshot",
+      icon: Download,
+      background: SKY_BG,
+      color: PANEL_TEXT,
+      borderColor: "var(--border)",
+    },
+    {
+      label: "Save",
+      icon: FloppyDiskArrowIn,
+      background: SUCCESS_BG,
+      borderColor: "var(--green-600)",
+    },
   ],
   [
-    { label: "Duplicate", icon: Copy, background: ACCENT_BG },
-    { label: "Inject", icon: MediaImagePlus, background: SUNSET_BG },
-    { label: "Inspect", icon: InfoCircle, background: OUTLINE_BG, color: "var(--tint-1000)" },
+    {
+      label: "Duplicate",
+      icon: Copy,
+      background: ACCENT_BG,
+      color: BLACK,
+      borderColor: "var(--amber-500)",
+    },
+    {
+      label: "Inject",
+      icon: MediaImagePlus,
+      background: SUNSET_BG,
+      color: BLACK,
+      borderColor: "var(--amber-700)",
+    },
+    {
+      label: "Inspect",
+      icon: InfoCircle,
+      background: OUTLINE_BG,
+      color: PANEL_TEXT,
+      borderColor: "var(--border)",
+    },
   ],
   [
-    { label: "Undo", icon: Undo, background: CARD_BG, color: PANEL_TEXT },
-    { label: "Redo", icon: Redo, background: CARD_BG, color: PANEL_TEXT },
-    { label: "Delete", icon: Trash, background: DANGER_BG },
+    {
+      label: "Undo",
+      icon: Undo,
+      background: OUTLINE_BG,
+      color: PANEL_TEXT,
+      borderColor: "var(--border)",
+    },
+    {
+      label: "Redo",
+      icon: Redo,
+      background: OUTLINE_BG,
+      color: PANEL_TEXT,
+      borderColor: "var(--border)",
+    },
+    { label: "Delete", icon: Trash, background: DANGER_BG, borderColor: "var(--destructive-50)" },
   ],
 ];
 const MENU_ITEMS: MenuItemSpec[] = [
@@ -160,11 +286,11 @@ const MENU_ITEMS: MenuItemSpec[] = [
   { label: "Discard stack", hint: "Del", icon: Trash, destructive: true },
 ];
 const STATUS_BADGES = [
-  { label: "Retained", background: PRIMARY_BG },
-  { label: "TSX", background: SUCCESS_BG },
-  { label: "WebGPU", background: ACCENT_BG },
-  { label: "World", background: SKY_BG },
-  { label: "Drag", background: solid("#f0bf47"), color: BLACK },
+  { label: "Retained", background: SOFT_PRIMARY_BG, color: PANEL_TEXT },
+  { label: "TSX", background: SOFT_SUCCESS_BG, color: PANEL_TEXT },
+  { label: "WebGPU", background: SOFT_AMBER_BG, color: PANEL_TEXT },
+  { label: "World", background: SKY_BG, color: PANEL_TEXT },
+  { label: "Drag", background: SOFT_AMBER_BG, color: PANEL_TEXT },
 ];
 
 function clamp(value: number, min: number, max: number): number {
@@ -183,9 +309,10 @@ function formatCompactFps(value: number): string {
   return value > 0 ? `${Math.round(value)}` : "--";
 }
 
-function Button({ label, background, color, icon: iconProp, onClick }: ButtonProps) {
+function Button({ label, background, color, borderColor, icon: iconProp, onClick }: ButtonProps) {
   const bg = background ?? PRIMARY_BG;
   const textColor = color ?? WHITE;
+  const stroke = borderColor ?? (bg === OUTLINE_BG ? "var(--border)" : "transparent");
 
   return (
     <Box
@@ -193,7 +320,9 @@ function Button({ label, background, color, icon: iconProp, onClick }: ButtonPro
       gap={6}
       padding={edges(6, 12)}
       background={bg}
-      borderRadius={6}
+      borderRadius={999}
+      borderWidth={1}
+      borderColor={stroke}
       align="center"
       hover={HOVER_STYLE}
       active={ACTIVE_STYLE}
@@ -215,7 +344,9 @@ function Badge({ label, background, color }: BadgeProps) {
     <Box
       padding={edges(3, 8)}
       background={background ?? ACCENT_BG}
-      borderRadius={10}
+      borderRadius={999}
+      borderWidth={1}
+      borderColor={lightDark("rgba(15, 23, 42, 0.06)", "rgba(255, 255, 255, 0.14)")}
       hover={HOVER_STYLE}
       active={ACTIVE_STYLE}
       transition={SPRING_SCALE}
@@ -229,7 +360,7 @@ function Badge({ label, background, color }: BadgeProps) {
 
 function SectionEyebrow({ label }: { label: string }) {
   return (
-    <Text fontSize={10} color={MUTED}>
+    <Text fontSize={11} color={MUTED}>
       {label}
     </Text>
   );
@@ -242,7 +373,7 @@ function StatRow({ label, value, stacked = false, valueMaxWidth }: StatRowProps)
         <Text fontSize={10} color={MUTED}>
           {label}
         </Text>
-        <Text fontSize={11} color={PANEL_TEXT} maxWidth={valueMaxWidth}>
+        <Text fontSize={12} color={PANEL_TEXT_SOFT} maxWidth={valueMaxWidth}>
           {value}
         </Text>
       </Box>
@@ -273,19 +404,19 @@ function MiniStat({
   return (
     <Box
       direction="col"
-      gap={4}
-      padding={edges(10)}
+      gap={6}
+      padding={edges(12)}
       minWidth={104}
       background={background}
-      borderRadius={8}
+      borderRadius={12}
       borderWidth={1}
       borderColor={PANEL_BORDER}
       flexGrow={1}
     >
-      <Text fontSize={10} color={MUTED}>
+      <Text fontSize={11} color={MUTED}>
         {label}
       </Text>
-      <Text fontSize={16} color={PANEL_TEXT}>
+      <Text fontSize={18} color={PANEL_TEXT}>
         {value}
       </Text>
     </Box>
@@ -319,12 +450,14 @@ function MeterRow({
       </Box>
       <Box
         width={180}
-        height={10}
-        padding={2}
-        background={solid(lightDark("rgba(18, 22, 32, 0.08)", "rgba(255, 255, 255, 0.08)"))}
+        height={12}
+        padding={1}
+        background={solid(lightDark("rgba(15, 23, 42, 0.06)", "rgba(255, 255, 255, 0.12)"))}
         borderRadius={999}
+        borderWidth={1}
+        borderColor={lightDark("rgba(15, 23, 42, 0.08)", "rgba(255, 255, 255, 0.14)")}
       >
-        <Box width={fillWidth} height={6} background={fill} borderRadius={999} />
+        <Box width={fillWidth} height={8} background={fill} borderRadius={999} />
       </Box>
     </Box>
   );
@@ -361,6 +494,7 @@ function PanelChrome({
   minWidth,
   background = WINDOW_BG,
   borderColor = PANEL_BORDER,
+  backdropBlur = SUBTLE_BACKDROP_BLUR,
   draggable = true,
   children,
 }: {
@@ -371,31 +505,33 @@ function PanelChrome({
   minWidth?: number;
   background?: UIBackground;
   borderColor?: UIColorValue;
+  backdropBlur?: number;
   draggable?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <Box
       direction="col"
-      gap={12}
-      padding={edges(14)}
+      gap={14}
+      padding={edges(16)}
       width={width}
       minWidth={minWidth}
       background={background}
-      borderRadius={14}
+      backdropFilter={backdropBlur > 0 ? [blur(backdropBlur)] : undefined}
+      borderRadius={18}
       borderWidth={1}
       borderColor={borderColor}
       draggable={draggable}
     >
       <Box direction="row" justifyContent="space-between" align="center">
         <Box direction="row" gap={10} align="center">
-          <Icon icon={icon} size={16} tint="var(--tint-1000)" />
+          <Icon icon={icon} size={16} tint={PANEL_TEXT} />
           <Box direction="col" gap={2}>
-            <Text key="title" fontSize={14} color={PANEL_TEXT}>
+            <Text key="title" fontSize={15} color={PANEL_TEXT}>
               {title}
             </Text>
             {subtitle && (
-              <Text key="subtitle" fontSize={10} color={MUTED}>
+              <Text key="subtitle" fontSize={11} color={MUTED}>
                 {subtitle}
               </Text>
             )}
@@ -411,13 +547,13 @@ function ActionMatrix() {
   return (
     <PanelChrome
       title="Action Matrix"
-      subtitle="Dense control surface"
+      subtitle="Shared buttons, palettes, and chrome"
       icon={Palette}
       width={352}
       background={WINDOW_ALT_BG}
     >
-      <Box direction="col" gap={8}>
-        <Box direction="col" gap={8}>
+      <Box direction="col" gap={10}>
+        <Box direction="col" gap={10}>
           {ACTION_ROWS.map((row, rowIndex) => (
             <Box key={`action-row-${rowIndex}`} direction="row" gap={8} align="center">
               {row.map((item) => (
@@ -427,6 +563,7 @@ function ActionMatrix() {
                   icon={item.icon}
                   background={item.background}
                   color={item.color}
+                  borderColor={item.borderColor}
                   onClick={() => console.log(`[CanvasUI] ${item.label} clicked`)}
                 />
               ))}
@@ -434,19 +571,19 @@ function ActionMatrix() {
           ))}
         </Box>
 
-        <Box direction="row" gap={8}>
-          <Box direction="col" gap={8} flexGrow={1}>
+        <Box direction="row" gap={10}>
+          <Box direction="col" gap={10} flexGrow={1}>
             <SwatchStrip title="Diffusion strip" colors={SWATCH_SETS[0]!} />
             <SwatchStrip title="Neon strip" colors={SWATCH_SETS[1]!} />
           </Box>
-          <Box direction="col" gap={8} flexGrow={1}>
+          <Box direction="col" gap={10} flexGrow={1}>
             <SwatchStrip title="Warm strip" colors={SWATCH_SETS[2]!} />
             <Box
               direction="col"
-              gap={6}
-              padding={edges(10)}
-              background={CARD_BG}
-              borderRadius={10}
+              gap={8}
+              padding={edges(12)}
+              background={SOFT_PRIMARY_BG}
+              borderRadius={12}
               borderWidth={1}
               borderColor={PANEL_BORDER}
             >
@@ -463,7 +600,11 @@ function ActionMatrix() {
 }
 
 function MenuItem({ item }: { item: MenuItemSpec }) {
-  const textColor = item.destructive ? "#ff9a9f" : PANEL_TEXT;
+  const textColor = item.destructive ? "var(--destructive)" : PANEL_TEXT;
+  const selectedText = "var(--gray-50)";
+  const hoverBackground = item.destructive
+    ? solid("var(--destructive-25)")
+    : solid("var(--gray-100)");
 
   return (
     <Box
@@ -472,31 +613,34 @@ function MenuItem({ item }: { item: MenuItemSpec }) {
       align="center"
       padding={edges(8, 10)}
       minWidth={208}
-      background={item.selected ? PRIMARY_BG : OUTLINE_BG}
-      borderRadius={10}
-      hover={{ background: CARD_BG, scale: 1.01 }}
+      background={item.selected ? solid("var(--gray-900)") : undefined}
+      borderRadius={4}
+      hover={{ background: hoverBackground, scale: 1.01 }}
       active={ACTIVE_STYLE}
       transition={SPRING_SCALE}
       onClick={() => console.log(`[CanvasUI] Menu item clicked: ${item.label}`)}
     >
       <Box direction="row" gap={8} align="center">
-        <Icon
-          icon={item.icon}
-          size={14}
-          tint={item.selected ? WHITE : item.destructive ? "#ff9a9f" : "var(--tint-1000)"}
-        />
-        <Text fontSize={11} color={item.selected ? WHITE : textColor}>
+        <Icon icon={item.icon} size={14} tint={item.selected ? selectedText : textColor} />
+        <Text fontSize={11} color={item.selected ? selectedText : textColor}>
           {item.label}
         </Text>
       </Box>
 
       <Box direction="row" gap={8} align="center">
         {item.hint ? (
-          <Text key="hint" fontSize={10} color={item.selected ? "rgba(255,255,255,0.72)" : MUTED}>
+          <Text key="hint" fontSize={10} color={item.selected ? selectedText : MUTED}>
             {item.hint}
           </Text>
         ) : null}
-        {item.hasChild ? <Icon key="child" icon={NavArrowRight} size={12} tint={MUTED} /> : null}
+        {item.hasChild ? (
+          <Icon
+            key="child"
+            icon={NavArrowRight}
+            size={12}
+            tint={item.selected ? selectedText : MUTED}
+          />
+        ) : null}
       </Box>
     </Box>
   );
@@ -509,8 +653,9 @@ function FloatingContextMenu() {
       subtitle="Menu-like overlay in world space"
       icon={QuestionMark}
       width={244}
-      background={solid(lightDark("rgba(255,255,255,0.95)", "rgba(18, 20, 26, 0.95)"))}
-      borderColor={lightDark("rgba(41, 65, 115, 0.18)", "rgba(139, 170, 255, 0.28)")}
+      background={solid("var(--floating-background)")}
+      borderColor="var(--border)"
+      backdropBlur={SUBTLE_BACKDROP_BLUR}
     >
       <Box direction="col" gap={4}>
         {MENU_ITEMS.map((item) => (
@@ -561,10 +706,12 @@ function WindowStack() {
               direction="row"
               gap={8}
               padding={edges(10)}
-              background={solid(lightDark("rgba(255,255,255,0.76)", "rgba(7, 12, 24, 0.42)"))}
+              background={SOFT_AMBER_BG}
               borderRadius={10}
+              borderWidth={1}
+              borderColor="var(--amber-200)"
             >
-              <Icon icon={WarningCircle} size={16} tint="#ff9f5a" />
+              <Icon icon={WarningCircle} size={16} tint="var(--amber-800)" />
               <Text fontSize={11} color={PANEL_TEXT} maxWidth={228}>
                 Push layout until it stops being polite.
               </Text>
@@ -584,6 +731,8 @@ function WindowStack() {
                 label="Queue"
                 icon={Download}
                 background={SKY_BG}
+                color={PANEL_TEXT}
+                borderColor="var(--border)"
                 onClick={() => console.log("[CanvasUI] Prompt rail queue")}
               />
             </Box>
@@ -605,8 +754,8 @@ function SpecimenCard({ title, background, color }: SpecimenCardProps) {
       gap={8}
       padding={edges(14)}
       background={background}
-      borderRadius={4}
-      borderWidth={2}
+      borderRadius={16}
+      borderWidth={1}
       borderColor={PANEL_BORDER}
       minWidth={468}
       draggable
@@ -629,11 +778,7 @@ function SpecimenCard({ title, background, color }: SpecimenCardProps) {
         </Text>
       ))}
       <Box key="specimen-footer" direction="row" gap={6} align="center">
-        <Badge
-          label="Grid-fit"
-          background={solid(lightDark("rgba(17, 24, 39, 0.84)", "rgba(255, 255, 255, 0.16)"))}
-          color={lightDark("#ffffff", "#101218")}
-        />
+        <Badge label="Grid-fit" background={OUTLINE_BG} color={PANEL_TEXT} />
         <Badge label="No DOM" background={SKY_BG} />
         <Badge label="Zoom-linked" background={SUCCESS_BG} />
       </Box>
@@ -650,19 +795,19 @@ function DebugPanel({ zoom, perf }: DebugOverlayProps) {
   return (
     <PanelChrome
       title="UI Engine Stress Test"
-      subtitle="Live perf and layout pressure in world space"
+      subtitle="Live perf inside the floating UI language"
       icon={Settings}
       width={352}
       background={PANEL_BG}
     >
-      <Box direction="col" gap={12}>
-        <Box direction="row" gap={8}>
-          <MiniStat label="FPS" value={fpsValue} background={PRIMARY_BG} />
+      <Box direction="col" gap={14}>
+        <Box direction="row" gap={10}>
+          <MiniStat label="FPS" value={fpsValue} background={SOFT_PRIMARY_BG} />
           <MiniStat label="Median" value={formatMs(perf.renderMedianMs)} />
-          <MiniStat label="P95" value={formatMs(perf.renderP95Ms)} background={SUNSET_BG} />
+          <MiniStat label="P95" value={formatMs(perf.renderP95Ms)} background={SOFT_AMBER_BG} />
         </Box>
 
-        <Box direction="row" gap={8}>
+        <Box direction="row" gap={10}>
           <MiniStat label="Zoom" value={zoomLabel} />
           <MiniStat label="Entities" value={entityLabel} />
           <MiniStat label="Ring" value={frameCountLabel} />
@@ -670,7 +815,7 @@ function DebugPanel({ zoom, perf }: DebugOverlayProps) {
 
         <Box background={solid(DIVIDER)} height={1} />
 
-        <Box direction="col" gap={10}>
+        <Box direction="col" gap={12}>
           <SectionEyebrow label="Frame metrics" />
           <MeterRow
             label="Frame cadence"
@@ -695,20 +840,20 @@ function DebugPanel({ zoom, perf }: DebugOverlayProps) {
           />
         </Box>
 
-        <Box direction="row" gap={8}>
+        <Box direction="row" gap={10}>
           <Box
             direction="col"
-            gap={6}
-            padding={edges(10)}
+            gap={8}
+            padding={edges(12)}
             background={CARD_BG}
-            borderRadius={10}
+            borderRadius={12}
             borderWidth={1}
             borderColor={PANEL_BORDER}
             flexGrow={1}
             flexShrink={1}
           >
             <Box direction="row" gap={6} align="center">
-              <Icon icon={Heart} size={14} tint="#e7565f" />
+              <Icon icon={Heart} size={14} tint="var(--destructive)" />
               <Text fontSize={13} color={PANEL_TEXT}>
                 Frame HUD
               </Text>
@@ -720,17 +865,17 @@ function DebugPanel({ zoom, perf }: DebugOverlayProps) {
 
           <Box
             direction="col"
-            gap={6}
-            padding={edges(10)}
+            gap={8}
+            padding={edges(12)}
             background={CARD_BG}
-            borderRadius={10}
+            borderRadius={12}
             borderWidth={1}
             borderColor={PANEL_BORDER}
             flexGrow={1}
             flexShrink={1}
           >
             <Box direction="row" gap={6} align="center">
-              <Icon icon={Eye} size={14} tint="var(--tint-1000)" />
+              <Icon icon={Eye} size={14} tint={PANEL_TEXT} />
               <Text fontSize={13} color={PANEL_TEXT}>
                 Layout probes
               </Text>
@@ -741,7 +886,7 @@ function DebugPanel({ zoom, perf }: DebugOverlayProps) {
           </Box>
         </Box>
 
-        <Box direction="row" gap={4} align="center">
+        <Box direction="row" gap={6} align="center">
           {STATUS_BADGES.map((badge) => (
             <Badge
               key={badge.label}
@@ -752,7 +897,7 @@ function DebugPanel({ zoom, perf }: DebugOverlayProps) {
           ))}
         </Box>
 
-        <Box direction="row" gap={6} align="center">
+        <Box direction="row" gap={8} align="center">
           <Button
             label="Primary"
             background={PRIMARY_BG}
@@ -763,20 +908,22 @@ function DebugPanel({ zoom, perf }: DebugOverlayProps) {
             label="Danger"
             background={DANGER_BG}
             color={WHITE}
+            borderColor="var(--destructive-50)"
             icon={Xmark}
             onClick={() => console.log("[CanvasUI] Danger clicked")}
           />
           <Button
             label="Questions"
             background={OUTLINE_BG}
-            color="var(--tint-1000)"
+            color={PANEL_TEXT}
+            borderColor="var(--border)"
             icon={QuestionMark}
             onClick={() => console.log("[CanvasUI] Questions clicked")}
           />
         </Box>
 
         <Box direction="row" gap={4} align="center" justifyContent="center">
-          <Text fontSize={9} color={MUTED}>
+          <Text fontSize={10} color={MUTED}>
             No fixed DOM overlay · live perf snapshot · retained scene graph
           </Text>
         </Box>
@@ -795,17 +942,17 @@ function WorldSpacePanel() {
       background={WORLD_PANEL_BG}
       borderColor={WORLD_PANEL_BORDER}
     >
-      <Box direction="col" gap={12}>
+      <Box direction="col" gap={14}>
         <Box position="absolute" right={14} top={14} zIndex={40}>
           <Badge label="Drag me" background={SKY_BG} />
         </Box>
 
         <Box
           direction="col"
-          gap={8}
-          padding={edges(12)}
-          background={solid(lightDark("rgba(255,255,255,0.78)", "rgba(7, 12, 24, 0.42)"))}
-          borderRadius={12}
+          gap={10}
+          padding={edges(14)}
+          background={SOFT_PRIMARY_BG}
+          borderRadius={14}
           borderWidth={1}
           borderColor={WORLD_PANEL_BORDER}
         >
@@ -817,10 +964,10 @@ function WorldSpacePanel() {
 
         <Box
           direction="col"
-          gap={8}
-          padding={edges(12)}
+          gap={10}
+          padding={edges(14)}
           background={CARD_BG}
-          borderRadius={12}
+          borderRadius={14}
           borderWidth={1}
           borderColor={WORLD_PANEL_BORDER}
         >
@@ -835,7 +982,7 @@ function WorldSpacePanel() {
           </Box>
         </Box>
 
-        <Box direction="row" gap={8}>
+        <Box direction="row" gap={10}>
           <MiniStat label="Docks" value="3" background={CARD_BG} />
           <MiniStat label="Windows" value="5" background={CARD_BG} />
           <MiniStat label="Menus" value="1 mock" background={CARD_BG} />
@@ -857,13 +1004,16 @@ function WorldSpacePanel() {
           <Button
             label="Shades"
             background={SKY_BG}
+            color={PANEL_TEXT}
+            borderColor="var(--border)"
             icon={DropletHalf}
             onClick={() => console.log("[CanvasUI] Shades clicked")}
           />
           <Button
             label="Inspect"
             background={OUTLINE_BG}
-            color="var(--tint-1000)"
+            color={PANEL_TEXT}
+            borderColor="var(--border)"
             icon={InfoCircle}
             onClick={() => console.log("[CanvasUI] Inspect clicked")}
           />
@@ -885,18 +1035,18 @@ function DebugOverlay({ zoom, perf }: DebugOverlayProps) {
         <WorldSpacePanel />
         <SpecimenCard
           title="Font Specimen · White on Black"
-          background={solid("#0a0b0e")}
+          background={gradient("#111318", "#050608")}
           color={WHITE}
         />
         <SpecimenCard
           title="Font Specimen · Black on White"
-          background={solid("#f6f4f1")}
+          background={gradient("#f6f4f1", "#ffffff")}
           color={BLACK}
         />
         <SpecimenCard
           title="Font Specimen · Electric Accent"
-          background={gradient("#120a20", "#27113f")}
-          color="#f6f1ff"
+          background={gradient("#2394ff", "#1170d6")}
+          color={WHITE}
         />
       </Box>
 
@@ -914,13 +1064,14 @@ function DebugOverlay({ zoom, perf }: DebugOverlayProps) {
           direction="row"
           gap={8}
           padding={edges(10)}
-          background={solid(lightDark("rgba(255,255,255,0.94)", "rgba(10, 14, 20, 0.94)"))}
+          background={solid("var(--floating-background)")}
+          backdropFilter={[blur(SUBTLE_BACKDROP_BLUR)]}
           borderRadius={12}
           borderWidth={1}
           borderColor={PANEL_BORDER}
           draggable
         >
-          <Icon icon={WarningCircle} size={14} tint="#ff9f5a" />
+          <Icon icon={WarningCircle} size={14} tint="var(--amber-800)" />
           <Text fontSize={11} color={PANEL_TEXT}>
             Faux nested submenu
           </Text>
@@ -1073,6 +1224,7 @@ export const PerfHud = memo(function PerfHud({ perf }: { perf: DebugOverlayStats
         align="center"
         padding={edges(6, 8)}
         background={HUD_BG}
+        backdropFilter={[blur(SUBTLE_BACKDROP_BLUR)]}
         borderRadius={12}
         borderWidth={1}
         borderColor={HUD_BORDER}

@@ -135,6 +135,16 @@ function mergeBounds(a: RectBounds | null, b: RectBounds | null): RectBounds | n
   };
 }
 
+function collectAncestorChain(node: SceneNode | null): SceneNode[] {
+  const chain: SceneNode[] = [];
+  let cursor = node;
+  while (cursor) {
+    chain.push(cursor);
+    cursor = cursor.parent;
+  }
+  return chain;
+}
+
 // ---------------------------------------------------------------------------
 // SlugTextMeasurer — bridges TextMeasurer interface to Slug algorithm
 // ---------------------------------------------------------------------------
@@ -370,6 +380,7 @@ export class UIRenderer {
   begin(): void {
     this.#textRenderer.begin();
     this.#boxPipeline.begin();
+    this.#blurPipeline.begin();
     this.#filterCompositePipeline.begin();
     this.#iconPipeline.begin();
     this.#linePipeline.begin();
@@ -482,10 +493,8 @@ export class UIRenderer {
     if (items.length === 0) return;
 
     let activeTargetPass: GPURenderPassEncoder | null = null;
-    let targetPassDirty = false;
-    let backdropCacheRadius = -1;
-    let backdropBlurTexture: GPUTexture | null = null;
     let backdropSourceTexture: GPUTexture | null = null;
+    const backdropBlurEntries: { radius: number; texture: GPUTexture }[] = [];
 
     if (targetTexture && viewport) {
       backdropSourceTexture = this.#getOrCreateScratchTexture(
@@ -520,10 +529,6 @@ export class UIRenderer {
       if (!activeTargetPass) return;
       activeTargetPass.end();
       activeTargetPass = null;
-      if (targetPassDirty) {
-        backdropCacheRadius = -1;
-        targetPassDirty = false;
-      }
     };
 
     const renderDirectItem = (item: UIRenderItem) => {
@@ -531,19 +536,16 @@ export class UIRenderer {
       if (item.kind === "box") {
         if (!item.data.background && item.data.borderWidth <= 0) return;
         this.#boxPipeline.render([item.data], pass);
-        targetPassDirty = true;
         return;
       }
 
       if (item.kind === "icon") {
         this.#iconPipeline.render([item.data], this.#iconCache, iconPixelScale, pass);
-        targetPassDirty = true;
         return;
       }
 
       if (item.kind === "line") {
         this.#linePipeline.render([item.data], pass);
-        targetPassDirty = true;
         return;
       }
 
@@ -558,33 +560,34 @@ export class UIRenderer {
         item.data.color.a * item.data.opacity,
       );
       this.#textRenderer.flush(pass);
-      targetPassDirty = true;
     };
 
-    const ensureBackdropBlur = (blurRadius: number) => {
-      if (!viewport || !backdropSourceTexture) return false;
+    const getBackdropBlurTexture = (blurRadius: number): GPUTexture | null => {
+      if (!viewport || !backdropSourceTexture) return null;
       endTargetPass();
 
-      if (backdropBlurTexture && Math.abs(backdropCacheRadius - blurRadius) < 0.001) {
-        return true;
+      for (const entry of backdropBlurEntries) {
+        if (Math.abs(entry.radius - blurRadius) < 0.001) {
+          return entry.texture;
+        }
       }
 
-      backdropBlurTexture = this.#getOrCreateScratchTexture(
-        "backdrop-blur",
-        "UI backdrop blur output",
+      const blurTexture = this.#getOrCreateScratchTexture(
+        `backdrop-blur-${backdropBlurEntries.length}`,
+        `UI backdrop blur output ${backdropBlurEntries.length}`,
         viewport.width,
         viewport.height,
       );
       this.#blurPipeline.encodeBlur(
         encoder,
         backdropSourceTexture,
-        backdropBlurTexture,
+        blurTexture,
         viewport.width,
         viewport.height,
         blurRadius,
       );
-      backdropCacheRadius = blurRadius;
-      return true;
+      backdropBlurEntries.push({ radius: blurRadius, texture: blurTexture });
+      return blurTexture;
     };
 
     let itemIndex = 0;
@@ -644,7 +647,6 @@ export class UIRenderer {
             0,
             false,
           );
-          backdropCacheRadius = -1;
         }
 
         itemIndex = subtreeEndIndex;
@@ -652,7 +654,8 @@ export class UIRenderer {
       }
 
       if (item.kind === "box" && item.data.backdropBlurRadius > 0) {
-        if (ensureBackdropBlur(item.data.backdropBlurRadius) && backdropBlurTexture) {
+        const backdropBlurTexture = getBackdropBlurTexture(item.data.backdropBlurRadius);
+        if (backdropBlurTexture) {
           this.#filterCompositePipeline.render(
             encoder,
             targetView,
@@ -666,7 +669,6 @@ export class UIRenderer {
             item.data.borderRadius,
             true,
           );
-          backdropCacheRadius = -1;
         }
       }
 
@@ -817,28 +819,37 @@ export class UIRenderer {
     if (hit !== this.#hoveredNode) {
       const oldNode = this.#hoveredNode;
       const newNode = hit;
+      const oldChain = collectAncestorChain(oldNode);
+      const newChain = collectAncestorChain(newNode);
+      const oldSet = new Set(oldChain);
+      const newSet = new Set(newChain);
 
-      if (oldNode) oldNode.isHovered = false;
-      if (newNode) newNode.isHovered = true;
+      for (const node of oldChain) {
+        if (!newSet.has(node)) {
+          node.isHovered = false;
+        }
+      }
+      for (const node of newChain) {
+        if (!oldSet.has(node)) {
+          node.isHovered = true;
+        }
+      }
       this.#hoveredNode = newNode;
       this.#interactionDirty = true;
 
-      // Fire onHoverLeave on old node and its ancestors (bubble up)
-      if (oldNode) {
-        let cursor: SceneNode | null = oldNode;
-        while (cursor) {
-          const leave = cursor.props["onHoverLeave"] as ((node: SceneNode) => void) | undefined;
-          leave?.(cursor);
-          cursor = cursor.parent;
+      // Fire onHoverLeave for nodes that actually left the hover chain.
+      for (const node of oldChain) {
+        if (!newSet.has(node)) {
+          const leave = node.props["onHoverLeave"] as ((node: SceneNode) => void) | undefined;
+          leave?.(node);
         }
       }
-      // Fire onHoverEnter on new node and its ancestors (bubble up)
-      if (newNode) {
-        let cursor: SceneNode | null = newNode;
-        while (cursor) {
-          const enter = cursor.props["onHoverEnter"] as ((node: SceneNode) => void) | undefined;
-          enter?.(cursor);
-          cursor = cursor.parent;
+
+      // Fire onHoverEnter for nodes that actually entered the hover chain.
+      for (const node of newChain) {
+        if (!oldSet.has(node)) {
+          const enter = node.props["onHoverEnter"] as ((node: SceneNode) => void) | undefined;
+          enter?.(node);
         }
       }
     }

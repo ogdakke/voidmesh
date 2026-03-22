@@ -13,7 +13,7 @@
     box-sizing: border-box;
     padding-block: 0.25rem;
     border-radius: var(--radius-md);
-    backdrop-filter: var(--floating-backdrop);
+    backdrop-filter: var(--floating-backdrop-subtle);
     background: var(--floating-background);
     color: var(--gray-900);
     transform-origin: var(--transform-origin);

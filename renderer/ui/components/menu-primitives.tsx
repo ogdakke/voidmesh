@@ -9,7 +9,7 @@
 import type { ReactNode } from "react";
 import type { SceneNode } from "../scene-node.ts";
 import type { UIEventHandler, UIColorValue, StateStyle } from "../elements.ts";
-import { blur, edges, lightDark, solid, spring } from "../elements.ts";
+import { blur, edges, solid, spring } from "../elements.ts";
 import { Box, Text, Icon } from "../primitives.tsx";
 import { Check, Minus, NavArrowRight } from "iconoir-react";
 
@@ -17,16 +17,18 @@ import { Check, Minus, NavArrowRight } from "iconoir-react";
 // Shared colors and styles (matching menu.css / debug-ui.tsx conventions)
 // ---------------------------------------------------------------------------
 
-const PANEL_TEXT: UIColorValue = lightDark("#151924", "#f5f7fb");
-const PANEL_BG = solid(lightDark("rgba(248, 249, 252, 0.94)", "rgba(16, 18, 24, 0.94)"));
-const PANEL_BORDER: UIColorValue = lightDark("rgba(20, 26, 38, 0.12)", "rgba(255, 255, 255, 0.12)");
-const MUTED: UIColorValue = lightDark("#5f6777", "#9aa4b5");
-const DIVIDER: UIColorValue = lightDark("rgba(16, 22, 34, 0.12)", "rgba(255, 255, 255, 0.08)");
-const DESTRUCTIVE_TEXT: UIColorValue = lightDark("#d93036", "#ff9a9f");
-const DESTRUCTIVE_HOVER = solid(lightDark("rgba(217, 48, 54, 0.1)", "rgba(255, 154, 159, 0.12)"));
-const HIGHLIGHT_BG = solid(lightDark("rgba(0, 0, 0, 0.06)", "rgba(255, 255, 255, 0.08)"));
+const SUBTLE_BACKDROP_BLUR = 4;
+const PANEL_TEXT: UIColorValue = "var(--gray-900)";
+const PANEL_BG = solid("var(--floating-background)");
+const PANEL_BORDER: UIColorValue = "var(--border)";
+const MUTED: UIColorValue = "var(--gray-700)";
+const DIVIDER: UIColorValue = "var(--border-75)";
+const DESTRUCTIVE_TEXT: UIColorValue = "var(--destructive)";
+const DESTRUCTIVE_HOVER = solid("var(--destructive-25)");
+const HIGHLIGHT_BG = solid("var(--gray-100)");
 const ITEM_HOVER: StateStyle = {
   background: HIGHLIGHT_BG,
+  backdropFilter: [blur(SUBTLE_BACKDROP_BLUR)],
 };
 const ITEM_ACTIVE: StateStyle = { scale: 0.98 };
 const ITEM_TRANSITION = { scale: spring(0.24) };
@@ -56,8 +58,8 @@ export function MenuPanel({ children, width, onLayout }: MenuPanelProps) {
       align="stretch"
       padding={edges(4, 4)}
       background={PANEL_BG}
-      backdropFilter={[blur(4)]}
-      borderRadius={8}
+      backdropFilter={[blur(SUBTLE_BACKDROP_BLUR)]}
+      borderRadius={6}
       borderWidth={1}
       borderColor={PANEL_BORDER}
       width={width}
@@ -292,6 +294,7 @@ export function MenuSubmenuTrigger({
       gap={16}
       borderRadius={4}
       background={open ? HIGHLIGHT_BG : undefined}
+      backdropFilter={open ? [blur(SUBTLE_BACKDROP_BLUR)] : undefined}
       hover={ITEM_HOVER}
       onHoverEnter={onHoverEnter}
       onHoverLeave={onHoverLeave}
