@@ -196,10 +196,13 @@ export class UIRenderer {
       scale,
       viewport,
     );
+    const iconPixelScale = viewport?.zoom ?? 1;
 
     // Track icon preload state
     for (const layoutIcon of layout.icons) {
-      if (!this.#iconCache.has(layoutIcon.svg)) {
+      if (
+        !this.#iconCache.has(layoutIcon.svg, layoutIcon.width, layoutIcon.height, iconPixelScale)
+      ) {
         this.#hasPendingIcons = true;
       }
     }
@@ -242,7 +245,7 @@ export class UIRenderer {
 
     const flushIcons = () => {
       if (iconBatch.length === 0) return;
-      this.#iconPipeline.render(iconBatch, this.#iconCache, encoder, targetView);
+      this.#iconPipeline.render(iconBatch, this.#iconCache, iconPixelScale, encoder, targetView);
       iconBatch = [];
     };
 

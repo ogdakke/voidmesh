@@ -106,14 +106,16 @@ export class UIIconPipeline {
   render(
     icons: UILayoutIcon[],
     iconCache: UIIconCache,
+    pixelScale: number,
     encoder: GPUCommandEncoder,
     targetView: GPUTextureView,
   ): void {
     for (const icon of icons) {
-      const texture = iconCache.get(icon.svg);
+      let texture = iconCache.get(icon.svg, icon.width, icon.height, pixelScale);
       if (!texture) {
-        iconCache.preload(icon.svg);
-        continue;
+        iconCache.preload(icon.svg, icon.width, icon.height, pixelScale);
+        texture = iconCache.getFallback(icon.svg, icon.width, icon.height, pixelScale);
+        if (!texture) continue;
       }
 
       // Write icon uniforms: rect + tint
