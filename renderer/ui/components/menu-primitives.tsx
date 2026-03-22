@@ -9,7 +9,7 @@
 import type { ReactNode } from "react";
 import type { SceneNode } from "../scene-node.ts";
 import type { UIEventHandler, UIColorValue, StateStyle } from "../elements.ts";
-import { edges, lightDark, solid, spring } from "../elements.ts";
+import { blur, edges, lightDark, solid, spring } from "../elements.ts";
 import { Box, Text, Icon } from "../primitives.tsx";
 import { Check, Minus, NavArrowRight } from "iconoir-react";
 
@@ -56,6 +56,7 @@ export function MenuPanel({ children, width, onLayout }: MenuPanelProps) {
       align="stretch"
       padding={edges(4, 4)}
       background={PANEL_BG}
+      backdropFilter={[blur(4)]}
       borderRadius={8}
       borderWidth={1}
       borderColor={PANEL_BORDER}
@@ -292,8 +293,6 @@ export function MenuSubmenuTrigger({
       borderRadius={4}
       background={open ? HIGHLIGHT_BG : undefined}
       hover={ITEM_HOVER}
-      active={ITEM_ACTIVE}
-      transition={ITEM_TRANSITION}
       onHoverEnter={onHoverEnter}
       onHoverLeave={onHoverLeave}
     >

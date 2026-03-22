@@ -145,6 +145,7 @@ class CanvasUI {
   render(
     encoder: GPUCommandEncoder,
     targetView: GPUTextureView,
+    targetTexture: GPUTexture,
     viewport: { offset: { x: number; y: number }; zoom: number },
     width: number,
     height: number,
@@ -194,8 +195,23 @@ class CanvasUI {
       }
     }
 
-    this.#renderPerfHudScene(debugMode, perf, encoder, targetView, dpr, viewportInfo);
-    this.#renderContextMenuScene(nextContextMenuInputs, encoder, targetView, dpr, viewportInfo);
+    this.#renderPerfHudScene(
+      debugMode,
+      perf,
+      encoder,
+      targetView,
+      targetTexture,
+      dpr,
+      viewportInfo,
+    );
+    this.#renderContextMenuScene(
+      nextContextMenuInputs,
+      encoder,
+      targetView,
+      targetTexture,
+      dpr,
+      viewportInfo,
+    );
   }
 
   #renderPerfHudScene(
@@ -203,6 +219,7 @@ class CanvasUI {
     perf: PerfOverlaySnapshot,
     encoder: GPUCommandEncoder,
     targetView: GPUTextureView,
+    targetTexture: GPUTexture,
     scale: number,
     viewportInfo: ViewportInfo,
   ): void {
@@ -218,6 +235,7 @@ class CanvasUI {
         0,
         encoder,
         targetView,
+        targetTexture,
         scale,
         undefined,
         viewportInfo,
@@ -236,6 +254,7 @@ class CanvasUI {
     nextInputs: ContextMenuSceneInputs | null,
     encoder: GPUCommandEncoder,
     targetView: GPUTextureView,
+    targetTexture: GPUTexture,
     scale: number,
     viewportInfo: ViewportInfo,
   ): void {
@@ -270,6 +289,7 @@ class CanvasUI {
         0,
         encoder,
         targetView,
+        targetTexture,
         scale,
         undefined,
         viewportInfo,

@@ -163,7 +163,7 @@ export class UIBoxPipeline {
       f32[base + 3] = box.height;
 
       // topColor / bottomColor based on background type
-      if (box.background.type === "gradient") {
+      if (box.background?.type === "gradient") {
         const { top, bottom } = box.background;
         f32[base + 4] = top.r;
         f32[base + 5] = top.g;
@@ -173,7 +173,7 @@ export class UIBoxPipeline {
         f32[base + 9] = bottom.g;
         f32[base + 10] = bottom.b;
         f32[base + 11] = bottom.a;
-      } else {
+      } else if (box.background?.type === "solid") {
         const { r, g, b, a } = box.background.color;
         f32[base + 4] = r;
         f32[base + 5] = g;
@@ -183,6 +183,15 @@ export class UIBoxPipeline {
         f32[base + 9] = g;
         f32[base + 10] = b;
         f32[base + 11] = a;
+      } else {
+        f32[base + 4] = 0;
+        f32[base + 5] = 0;
+        f32[base + 6] = 0;
+        f32[base + 7] = 0;
+        f32[base + 8] = 0;
+        f32[base + 9] = 0;
+        f32[base + 10] = 0;
+        f32[base + 11] = 0;
       }
 
       // borderColor
