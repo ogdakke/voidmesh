@@ -488,6 +488,19 @@ export class GameLoop {
     const uiConsumedMove =
       this.#renderer?.handleUIPointerEvent("move", worldPoint.x, worldPoint.y) ?? false;
 
+    if (contextMenuController.isOpen && contextMenuController.submenu.isOpen) {
+      const inSafeZone = contextMenuController.submenu.handlePointerMove(
+        worldPoint.x,
+        worldPoint.y,
+        1,
+      );
+
+      if (!inSafeZone) {
+        contextMenuController.submenu.close();
+        contextMenuController.activeSubmenuId = null;
+      }
+    }
+
     // Update entity hover state (skip if UI consumed the event)
     if (!pointerDown && !uiConsumedMove) {
       const hoveredId = this.findEntityAtPoint(worldPoint, state);

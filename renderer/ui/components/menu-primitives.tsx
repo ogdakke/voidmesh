@@ -7,6 +7,7 @@
 //
 
 import type { ReactNode } from "react";
+import type { SceneNode } from "../scene-node.ts";
 import type { UIEventHandler, UIColorValue, StateStyle } from "../elements.ts";
 import { edges, lightDark, solid, spring } from "../elements.ts";
 import { Box, Text, Icon } from "../primitives.tsx";
@@ -30,6 +31,9 @@ const ITEM_HOVER: StateStyle = {
 const ITEM_ACTIVE: StateStyle = { scale: 0.98 };
 const ITEM_TRANSITION = { scale: spring(0.24) };
 
+const LEFT_ICON_SLOT = 16;
+const RIGHT_ICON_SLOT = 16;
+
 // Indicator icon size (0.875rem = 14px)
 const INDICATOR_SIZE = 14;
 // Radio dot: 0.5rem indicator container, visually smaller
@@ -42,9 +46,10 @@ const RADIO_DOT_SIZE = 8;
 export interface MenuPanelProps {
   children: ReactNode;
   width?: number;
+  onLayout?: (node: SceneNode) => void;
 }
 
-export function MenuPanel({ children, width }: MenuPanelProps) {
+export function MenuPanel({ children, width, onLayout }: MenuPanelProps) {
   return (
     <Box
       direction="col"
@@ -55,6 +60,7 @@ export function MenuPanel({ children, width }: MenuPanelProps) {
       borderWidth={1}
       borderColor={PANEL_BORDER}
       width={width}
+      onLayout={onLayout}
     >
       {children}
     </Box>
@@ -82,16 +88,16 @@ export function MenuItem({
   disabled = false,
   onClick,
 }: MenuItemProps) {
-  const hasIconRight = hint != null || iconProp != null;
+  const hasIconRight = hint != null;
   const textColor = destructive ? DESTRUCTIVE_TEXT : PANEL_TEXT;
   const hoverStyle = destructive ? { background: DESTRUCTIVE_HOVER } : ITEM_HOVER;
 
   return (
     <Box
       direction="row"
-      justifyContent="space-between"
+      justifyContent={hasIconRight ? "space-between" : "start"}
       align="center"
-      padding={hasIconRight ? edges(8, 8, 8, 16) : edges(8, 32, 8, 16)}
+      padding={edges(8, hasIconRight ? 8 : 32, 8, 16)}
       gap={hasIconRight ? 56 : undefined}
       borderRadius={4}
       opacity={disabled ? 0.5 : 1}
@@ -100,14 +106,21 @@ export function MenuItem({
       transition={ITEM_TRANSITION}
       onClick={disabled ? undefined : onClick}
     >
-      <Text fontSize={14} color={textColor}>
-        {label}
-      </Text>
+      <Box direction="row" align="center" gap={8} flexGrow={1}>
+        <Box width={LEFT_ICON_SLOT} height={LEFT_ICON_SLOT} align="center" justifyContent="center">
+          {iconProp ? <Icon icon={iconProp} size={INDICATOR_SIZE} tint={textColor} /> : null}
+        </Box>
+        <Text fontSize={14} color={textColor}>
+          {label}
+        </Text>
+      </Box>
 
       {hint ? (
-        <Text fontSize={12} color={MUTED}>
-          {hint}
-        </Text>
+        <Box minWidth={RIGHT_ICON_SLOT} height={16} align="center" justifyContent="center">
+          <Text fontSize={12} color={MUTED}>
+            {hint}
+          </Text>
+        </Box>
       ) : null}
     </Box>
   );
@@ -169,9 +182,9 @@ export function MenuCheckboxItem({
   return (
     <Box
       direction="row"
-      justifyContent="space-between"
+      justifyContent={hasIconRight ? "space-between" : "start"}
       align="center"
-      padding={hasIconRight ? edges(8, 8, 8, 32) : edges(8, 32, 8, 32)}
+      padding={hasIconRight ? edges(8, 8, 8, 16) : edges(8, 32, 8, 16)}
       gap={hasIconRight ? 56 : undefined}
       borderRadius={4}
       opacity={disabled ? 0.5 : 1}
@@ -180,21 +193,23 @@ export function MenuCheckboxItem({
       transition={ITEM_TRANSITION}
       onClick={disabled ? undefined : onClick}
     >
-      {/* Indicator positioned at left: 0.5rem (8px) */}
-      {checked || mixed ? (
-        <Box position="absolute" left={8} top={0} bottom={0} align="center" justifyContent="center">
-          <Icon icon={mixed ? Minus : Check} size={INDICATOR_SIZE} tint={PANEL_TEXT} />
+      <Box direction="row" align="center" gap={8} flexGrow={1}>
+        <Box width={LEFT_ICON_SLOT} height={LEFT_ICON_SLOT} align="center" justifyContent="center">
+          {checked || mixed ? (
+            <Icon icon={mixed ? Minus : Check} size={INDICATOR_SIZE} tint={PANEL_TEXT} />
+          ) : null}
         </Box>
-      ) : null}
-
-      <Text fontSize={14} color={PANEL_TEXT}>
-        {label}
-      </Text>
+        <Text fontSize={14} color={PANEL_TEXT}>
+          {label}
+        </Text>
+      </Box>
 
       {hint ? (
-        <Text fontSize={12} color={MUTED}>
-          {hint}
-        </Text>
+        <Box minWidth={RIGHT_ICON_SLOT} height={16} align="center" justifyContent="center">
+          <Text fontSize={12} color={MUTED}>
+            {hint}
+          </Text>
+        </Box>
       ) : null}
     </Box>
   );
@@ -216,7 +231,8 @@ export function MenuRadioItem({ label, selected, disabled = false, onClick }: Me
     <Box
       direction="row"
       align="center"
-      padding={edges(8, 32, 8, 32)}
+      padding={edges(8, 32, 8, 16)}
+      gap={8}
       borderRadius={4}
       opacity={disabled ? 0.5 : 1}
       hover={disabled ? undefined : ITEM_HOVER}
@@ -224,25 +240,16 @@ export function MenuRadioItem({ label, selected, disabled = false, onClick }: Me
       transition={ITEM_TRANSITION}
       onClick={disabled ? undefined : onClick}
     >
-      {/* Radio indicator at left: 0.75rem (12px) */}
-      {selected ? (
-        <Box
-          position="absolute"
-          left={12}
-          top={0}
-          bottom={0}
-          align="center"
-          justifyContent="center"
-        >
+      <Box width={LEFT_ICON_SLOT} height={LEFT_ICON_SLOT} align="center" justifyContent="center">
+        {selected ? (
           <Box
             width={RADIO_DOT_SIZE}
             height={RADIO_DOT_SIZE}
             borderRadius={999}
             background={solid(PANEL_TEXT)}
           />
-        </Box>
-      ) : null}
-
+        ) : null}
+      </Box>
       <Text fontSize={14} color={PANEL_TEXT}>
         {label}
       </Text>
@@ -262,24 +269,28 @@ export function MenuRadioItem({ label, selected, disabled = false, onClick }: Me
 export interface MenuSubmenuTriggerProps {
   label: string;
   children?: ReactNode;
-  onHoverEnter?: (node: import("../scene-node.ts").SceneNode) => void;
-  onHoverLeave?: (node: import("../scene-node.ts").SceneNode) => void;
+  open?: boolean;
+  onHoverEnter?: (node: SceneNode) => void;
+  onHoverLeave?: (node: SceneNode) => void;
 }
 
 export function MenuSubmenuTrigger({
   label,
   children,
+  open = false,
   onHoverEnter,
   onHoverLeave,
 }: MenuSubmenuTriggerProps) {
   return (
     <Box
+      position="relative"
       direction="row"
       justifyContent="space-between"
       align="center"
       padding={edges(8, 16, 8, 16)}
       gap={16}
       borderRadius={4}
+      background={open ? HIGHLIGHT_BG : undefined}
       hover={ITEM_HOVER}
       active={ITEM_ACTIVE}
       transition={ITEM_TRANSITION}
