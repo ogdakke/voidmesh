@@ -121,7 +121,6 @@ fn main(attrib: VertexInput) -> VertexStruct {
     let unpackResult = SlugUnpack(attrib.tex, attrib.bnd);
     vresult.banding = unpackResult.vbnd;
     vresult.glyph = unpackResult.vgly;
-    _ = attrib.col;
     vresult.color = params.text_color;
     return vresult;
 }

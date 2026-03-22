@@ -172,6 +172,7 @@ export interface BoxElementProps {
   /** Auto-clamp position to stay within viewport bounds */
   contain?: "viewport";
   zIndex?: number;
+  offset?: { x: number; y: number };
   left?: number;
   top?: number;
   right?: number;

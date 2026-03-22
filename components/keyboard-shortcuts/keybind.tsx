@@ -1,4 +1,4 @@
-import { useKeybinds } from "#context/keybind-context.ts";
+import { getKeybindSymbolsById, useKeybinds } from "#context/keybind-context.ts";
 import clsx from "clsx";
 import { Fragment, type ComponentProps, type PropsWithChildren } from "react";
 
@@ -10,12 +10,11 @@ export interface KeybindProps extends ComponentProps<"div"> {
 
 export function Keybind({ keybindId, separator, ...props }: PropsWithChildren<KeybindProps>) {
   const keybinds = useKeybinds();
-
-  const bind = keybinds.getById(keybindId);
-  if (!bind) return null;
+  const symbols = getKeybindSymbolsById(keybinds, keybindId);
+  if (!symbols) return null;
   return (
     <div {...props} className={clsx("kbd-shortcut", props.className)}>
-      <RenderKeybind symbols={bind.bind.toSymbols()} separator={separator} />
+      <RenderKeybind symbols={symbols} separator={separator} />
     </div>
   );
 }
