@@ -1685,7 +1685,7 @@ export class InfiniteCanvasRenderer {
         encoder,
         targetView,
         "debug-ui",
-        1, // world-space scale
+        dpr,
         undefined,
         {
           offsetX: viewport.offset.x,
