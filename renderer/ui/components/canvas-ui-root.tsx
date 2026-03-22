@@ -7,8 +7,11 @@
 // live here as children.
 //
 
+import { memo } from "react";
 import type { CanvasContextMenuProps } from "./canvas-context-menu.tsx";
 import { CanvasContextMenu } from "./canvas-context-menu.tsx";
+import type { DebugOverlayStats } from "../debug-ui.tsx";
+import { PerfHud } from "../debug-ui.tsx";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -16,13 +19,20 @@ import { CanvasContextMenu } from "./canvas-context-menu.tsx";
 
 export interface CanvasUIRootProps {
   contextMenu: CanvasContextMenuProps | null;
+  perf: DebugOverlayStats | null;
 }
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-export function CanvasUIRoot({ contextMenu }: CanvasUIRootProps) {
-  if (!contextMenu) return null;
-  return <CanvasContextMenu {...contextMenu} />;
-}
+export const CanvasUIRoot = memo(function CanvasUIRoot({ contextMenu, perf }: CanvasUIRootProps) {
+  if (!contextMenu && !perf) return null;
+
+  return (
+    <>
+      {perf ? <PerfHud perf={perf} /> : null}
+      {contextMenu ? <CanvasContextMenu {...contextMenu} /> : null}
+    </>
+  );
+});

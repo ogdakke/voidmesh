@@ -233,10 +233,6 @@ export class GameLoop {
     this.#deps.viewportAnimation.setContainer(container);
   }
 
-  setPerfElement(element: HTMLElement): void {
-    this.#deps.perf.setElement(element);
-  }
-
   /** Configure touch sensitivity parameters for tuning */
   setTouchConfig(config: Partial<TouchConfig>): void {
     this.#touchConfig = { ...this.#touchConfig, ...config };

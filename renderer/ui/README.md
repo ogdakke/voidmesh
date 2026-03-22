@@ -138,9 +138,9 @@ Layout results are cached per scene key and reused when:
 - `renderVersion` unchanged (no prop/child changes)
 - Anchor position, scale unchanged
 - No active animations or interaction changes
-- Viewport zoom/size unchanged (for `position: "fixed"` elements)
+- Viewport unchanged (for `position: "fixed"` elements)
 
-Panning (viewport offset change only) does **not** invalidate the cache — the GPU viewport uniform handles the shift.
+Panning (viewport offset change only) does **not** invalidate world-space scenes, but it **does** invalidate `position: "fixed"` scenes because those positions are resolved from the current viewport during layout.
 
 ## GPU Rendering
 

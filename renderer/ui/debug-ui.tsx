@@ -7,6 +7,7 @@ import type {
 } from "./elements.ts";
 import { edges, gradient, lightDark, solid, spring } from "./elements.ts";
 import { Box, Text, Icon } from "./primitives.tsx";
+import { memo } from "react";
 import {
   Check,
   Xmark,
@@ -60,6 +61,9 @@ type SpecimenCardProps = {
 
 export interface DebugOverlayStats {
   fps: number;
+  fpsLow1: number;
+  frameWorstMs: number;
+  fpsHistory: number[];
   renderMedianMs: number;
   renderP95Ms: number;
   entityCount: number;
@@ -110,6 +114,13 @@ const WORLD_PANEL_BORDER = lightDark("rgba(72, 103, 168, 0.28)", "rgba(97, 136, 
 const HOVER_STYLE: StateStyle = { opacity: 0.96, scale: 1.02 };
 const ACTIVE_STYLE: StateStyle = { scale: 0.96 };
 const SPRING_SCALE = { scale: spring(0.24) };
+const HUD_BG = solid(lightDark("rgba(248, 250, 252, 0.95)", "rgba(14, 17, 23, 0.94)"));
+const HUD_BORDER = lightDark("rgba(20, 26, 38, 0.12)", "rgba(255, 255, 255, 0.1)");
+const HUD_GRAPH_BG = solid(lightDark("rgba(15, 23, 42, 0.06)", "rgba(255, 255, 255, 0.05)"));
+const HUD_GRAPH_GRID = lightDark("rgba(15, 23, 42, 0.08)", "rgba(255, 255, 255, 0.08)");
+const HUD_VALUE = lightDark("#111827", "#f5f7fb");
+const HUD_LABEL = lightDark("#667085", "#98a2b3");
+const HUD_GRAPH_LINE: UIColorValue = "var(--primary)";
 
 const TARGET_GLYPHS = "W A V Z / v w";
 const STRESS_GLYPHS = "WWW AAA VVV ZZZ /// vvv www";
@@ -162,6 +173,14 @@ function clamp(value: number, min: number, max: number): number {
 
 function formatMs(value: number): string {
   return value > 0 ? `${value.toFixed(1)} ms` : "warming";
+}
+
+function formatCompactMs(value: number): string {
+  return value > 0 ? `${value.toFixed(1)}ms` : "--";
+}
+
+function formatCompactFps(value: number): string {
+  return value > 0 ? `${Math.round(value)}` : "--";
 }
 
 function Button({ label, background, color, icon: iconProp, onClick }: ButtonProps) {
@@ -910,6 +929,187 @@ function DebugOverlay({ zoom, perf }: DebugOverlayProps) {
     </Box>
   );
 }
+
+function PerfMetric({
+  label,
+  value,
+  width,
+  valueColor = HUD_VALUE,
+}: {
+  label: string;
+  value: string;
+  width: number;
+  valueColor?: UIColorValue;
+}) {
+  return (
+    <Box
+      direction="row"
+      gap={4}
+      align="center"
+      justifyContent="space-between"
+      padding={edges(0, 2)}
+      width={width}
+      minWidth={width}
+      maxWidth={width}
+      flexShrink={0}
+    >
+      <Text fontSize={9} color={HUD_LABEL}>
+        {label}
+      </Text>
+      <Text fontSize={10} color={valueColor}>
+        {value}
+      </Text>
+    </Box>
+  );
+}
+
+function FpsSparkline({ history, fps }: { history: number[]; fps: number }) {
+  const width = 152;
+  const height = 24;
+  const points = history.length > 0 ? history : fps > 0 ? [fps] : [];
+
+  if (points.length === 0) {
+    return (
+      <Box
+        width={width}
+        height={height}
+        background={HUD_GRAPH_BG}
+        borderRadius={8}
+        borderWidth={1}
+        borderColor={HUD_BORDER}
+      />
+    );
+  }
+
+  let floor = points[0]!;
+  let ceiling = points[0]!;
+  for (const point of points) {
+    floor = Math.min(floor, point);
+    ceiling = Math.max(ceiling, point);
+  }
+  floor = Math.max(0, floor - 8);
+  ceiling = Math.max(60, ceiling + 4);
+  if (ceiling - floor < 24) floor = Math.max(0, ceiling - 24);
+
+  const yFor = (value: number) => {
+    const normalized = clamp((value - floor) / Math.max(ceiling - floor, 1), 0, 1);
+    return Math.round(height - 4 - normalized * (height - 8));
+  };
+
+  const xFor = (index: number) => {
+    if (points.length === 1) return width - 3;
+    return Math.round((index / (points.length - 1)) * (width - 3));
+  };
+
+  const segments: Array<{ key: string; left: number; top: number; width: number; height: number }> =
+    [];
+
+  for (let i = 1; i < points.length; i++) {
+    const prevX = xFor(i - 1);
+    const nextX = xFor(i);
+    const prevY = yFor(points[i - 1]!);
+    const nextY = yFor(points[i]!);
+
+    segments.push({
+      key: `spark-h-${i}`,
+      left: prevX,
+      top: prevY,
+      width: Math.max(1, nextX - prevX + 1),
+      height: 2,
+    });
+
+    segments.push({
+      key: `spark-v-${i}`,
+      left: nextX,
+      top: Math.min(prevY, nextY),
+      width: 2,
+      height: Math.max(2, Math.abs(nextY - prevY) + 2),
+    });
+  }
+
+  const latestX = xFor(points.length - 1);
+  const latestY = yFor(points[points.length - 1]!);
+
+  return (
+    <Box
+      width={width}
+      height={height}
+      background={HUD_GRAPH_BG}
+      borderRadius={8}
+      borderWidth={1}
+      borderColor={HUD_BORDER}
+      overflow="hidden"
+      position="relative"
+    >
+      <Box
+        position="absolute"
+        left={0}
+        top={6}
+        width={width}
+        height={1}
+        background={solid(HUD_GRAPH_GRID)}
+      />
+      <Box
+        position="absolute"
+        left={0}
+        top={height - 7}
+        width={width}
+        height={1}
+        background={solid(HUD_GRAPH_GRID)}
+      />
+      {segments.map((segment) => (
+        <Box
+          key={segment.key}
+          position="absolute"
+          left={segment.left}
+          top={segment.top}
+          width={segment.width}
+          height={segment.height}
+          background={solid(HUD_GRAPH_LINE)}
+        />
+      ))}
+      <Box
+        position="absolute"
+        left={latestX - 1}
+        top={latestY - 1}
+        width={4}
+        height={4}
+        borderRadius={999}
+        background={solid(HUD_GRAPH_LINE)}
+      />
+    </Box>
+  );
+}
+
+export const PerfHud = memo(function PerfHud({ perf }: { perf: DebugOverlayStats }) {
+  const fpsValue = formatCompactFps(perf.fps);
+  const low1FpsValue = formatCompactFps(perf.fpsLow1);
+  const worstFrameValue = formatCompactMs(perf.frameWorstMs);
+  const entitiesValue = `${perf.renderedCount}/${perf.entityCount}`;
+
+  return (
+    <Box position="fixed" left={12} top={12} zIndex={9500}>
+      <Box
+        direction="row"
+        gap={8}
+        align="center"
+        padding={edges(6, 8)}
+        background={HUD_BG}
+        borderRadius={12}
+        borderWidth={1}
+        borderColor={HUD_BORDER}
+      >
+        <FpsSparkline history={perf.fpsHistory} fps={perf.fps} />
+        <PerfMetric label="FPS" value={fpsValue} width={52} valueColor={HUD_GRAPH_LINE} />
+        <PerfMetric label="1% Low" value={low1FpsValue} width={72} />
+        <PerfMetric label="Worst" value={worstFrameValue} width={82} />
+        <PerfMetric label="Median" value={formatCompactMs(perf.renderMedianMs)} width={88} />
+        <PerfMetric label="P95" value={formatCompactMs(perf.renderP95Ms)} width={78} />
+        <PerfMetric label="Entities" value={entitiesValue} width={72} />
+      </Box>
+    </Box>
+  );
+});
 
 export function DebugUI({ zoom, perf }: DebugOverlayProps) {
   return <DebugPanel zoom={zoom} perf={perf} />;
