@@ -21,6 +21,8 @@ export const DebugType = createEnum({
   load: "load",
   /** just set debug mode */
   default: "default",
+  /** canvas UI stress scene */
+  ui: "ui",
 });
 export type DebugType = typeof DebugType.infer;
 

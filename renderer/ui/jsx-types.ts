@@ -10,6 +10,8 @@ import type {
   BoxElementProps,
   TextElementProps,
   IconElementProps,
+  LineElementProps,
+  PolylineElementProps,
   AnchorElementProps,
 } from "./elements.ts";
 
@@ -20,6 +22,8 @@ declare module "react" {
       "ui-box": BoxElementProps & { children?: React.ReactNode };
       "ui-text": TextElementProps & { children?: string };
       "ui-icon": IconElementProps;
+      "ui-line": LineElementProps;
+      "ui-polyline": PolylineElementProps;
       "ui-anchor": AnchorElementProps & { children?: React.ReactNode };
     }
   }

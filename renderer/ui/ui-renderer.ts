@@ -3,6 +3,7 @@ import type { Font } from "text-shaper";
 import { TextRenderer } from "../text/text-renderer.ts";
 import { UIBoxPipeline } from "./ui-box-pipeline.ts";
 import { UIIconPipeline } from "./ui-icon-pipeline.ts";
+import { UILinePipeline } from "./ui-line-pipeline.ts";
 import { getIconRasterSize, UIIconCache } from "./ui-icon-cache.ts";
 import { prepareText } from "../text/slug.ts";
 import type { UIPointerEvent, UIDragEvent } from "./elements.ts";
@@ -189,6 +190,7 @@ export class UIRenderer {
   #textRenderer: TextRenderer;
   #boxPipeline: UIBoxPipeline;
   #iconPipeline: UIIconPipeline;
+  #linePipeline: UILinePipeline;
   #iconCache: UIIconCache;
   #styleResolver: UIStyleResolver;
 
@@ -215,6 +217,7 @@ export class UIRenderer {
     this.#textRenderer = new TextRenderer(device, canvasFormat);
     this.#boxPipeline = new UIBoxPipeline(device, canvasFormat, viewportUniformBuffer);
     this.#iconPipeline = new UIIconPipeline(device, canvasFormat, viewportUniformBuffer);
+    this.#linePipeline = new UILinePipeline(device, canvasFormat, viewportUniformBuffer);
     this.#iconCache = new UIIconCache(device);
     this.#styleResolver = new UIStyleResolver();
     this.#iconCache.onTextureReady = () => {
@@ -226,6 +229,7 @@ export class UIRenderer {
     await this.#textRenderer.initialize();
     this.#boxPipeline.initialize();
     this.#iconPipeline.initialize();
+    this.#linePipeline.initialize();
 
     this.#font = this.#textRenderer.font;
     if (this.#font) {
@@ -259,6 +263,7 @@ export class UIRenderer {
     this.#textRenderer.begin();
     this.#boxPipeline.begin();
     this.#iconPipeline.begin();
+    this.#linePipeline.begin();
     this.#justBecameReady = false;
     this.#hasPendingIcons = false;
     this.#styleResolver.markClean();
@@ -378,6 +383,7 @@ export class UIRenderer {
 
     let boxBatch: typeof layout.boxes = [];
     let iconBatch: typeof layout.icons = [];
+    let lineBatch: typeof layout.lines = [];
     let hasQueuedText = false;
 
     const flushBoxes = () => {
@@ -390,6 +396,12 @@ export class UIRenderer {
       if (iconBatch.length === 0) return;
       this.#iconPipeline.render(iconBatch, this.#iconCache, iconPixelScale, pass);
       iconBatch = [];
+    };
+
+    const flushLines = () => {
+      if (lineBatch.length === 0) return;
+      this.#linePipeline.render(lineBatch, pass);
+      lineBatch = [];
     };
 
     const flushText = () => {
@@ -409,35 +421,62 @@ export class UIRenderer {
 
     let boxIndex = 0;
     let iconIndex = 0;
+    let lineIndex = 0;
     let textIndex = 0;
 
     while (
       boxIndex < layout.boxes.length ||
       iconIndex < layout.icons.length ||
+      lineIndex < layout.lines.length ||
       textIndex < layout.texts.length
     ) {
       const nextBox = layout.boxes[boxIndex];
       const nextIcon = layout.icons[iconIndex];
+      const nextLine = layout.lines[lineIndex];
       const nextText = layout.texts[textIndex];
 
-      if (isBefore(nextBox, nextIcon) && isBefore(nextBox, nextText)) {
+      if (
+        isBefore(nextBox, nextIcon) &&
+        isBefore(nextBox, nextLine) &&
+        isBefore(nextBox, nextText)
+      ) {
         flushIcons();
+        flushLines();
         flushText();
         boxBatch.push(nextBox!);
         boxIndex++;
         continue;
       }
 
-      if (isBefore(nextIcon, nextBox) && isBefore(nextIcon, nextText)) {
+      if (
+        isBefore(nextIcon, nextBox) &&
+        isBefore(nextIcon, nextLine) &&
+        isBefore(nextIcon, nextText)
+      ) {
         flushBoxes();
+        flushLines();
         flushText();
         iconBatch.push(nextIcon!);
         iconIndex++;
         continue;
       }
 
+      if (
+        isBefore(nextLine, nextBox) &&
+        isBefore(nextLine, nextIcon) &&
+        isBefore(nextLine, nextText)
+      ) {
+        flushBoxes();
+        flushIcons();
+        flushText();
+        lineBatch.push(nextLine!);
+        lineIndex++;
+        continue;
+      }
+
       flushBoxes();
       flushIcons();
+      flushLines();
       const t = nextText!;
       this.#textRenderer.drawText(
         t.slugData as ReturnType<typeof prepareText>,
@@ -455,6 +494,7 @@ export class UIRenderer {
 
     flushBoxes();
     flushIcons();
+    flushLines();
     flushText();
     pass.end();
   }
@@ -620,6 +660,7 @@ export class UIRenderer {
     this.#textRenderer.destroy();
     this.#boxPipeline.destroy();
     this.#iconPipeline.destroy();
+    this.#linePipeline.destroy();
     this.#iconCache.destroy();
     this.#styleResolver.destroy();
     this.#font = null;

@@ -11,6 +11,8 @@ import type {
   BoxElementProps,
   TextElementProps,
   IconElementProps,
+  LineElementProps,
+  PolylineElementProps,
   AnchorElementProps,
 } from "./elements.ts";
 
@@ -27,6 +29,14 @@ export function Text(props: TextElementProps & { children?: string }) {
 
 export function Icon(props: IconElementProps) {
   return <ui-icon {...props} />;
+}
+
+export function Line(props: LineElementProps) {
+  return <ui-line {...props} />;
+}
+
+export function Polyline(props: PolylineElementProps) {
+  return <ui-polyline {...props} />;
 }
 
 export function Anchor(props: AnchorElementProps & { children?: ReactNode }) {

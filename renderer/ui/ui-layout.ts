@@ -19,6 +19,7 @@ import type {
   UIBackground,
   AnimateConfig,
   StateStyle,
+  UILinePoint,
 } from "./elements.ts";
 import type { SceneNode } from "./scene-node.ts";
 import type { UIResolvedBackground, UIStyleResolver } from "./style-resolver.ts";
@@ -82,6 +83,7 @@ export interface UILayoutResult {
   boxes: UILayoutBox[];
   texts: UILayoutText[];
   icons: UILayoutIcon[];
+  lines: UILayoutLine[];
 }
 
 export interface UILayoutBox {
@@ -121,6 +123,20 @@ export interface UILayoutIcon {
   svg: string;
   tint: UIColor;
   opacity: number;
+  zIndex: number;
+}
+
+export interface UILayoutLine {
+  order: number;
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+  stroke: UIColor;
+  strokeWidth: number;
+  opacity: number;
+  startCap: "butt" | "round" | "square";
+  endCap: "butt" | "round" | "square";
   zIndex: number;
 }
 
@@ -183,6 +199,142 @@ function resolvePadding(raw: unknown, scale: number): UIEdges {
     bottom: e.bottom * scale,
     left: e.left * scale,
   };
+}
+
+function readLineCap(value: unknown): "butt" | "round" | "square" {
+  if (value === "butt" || value === "square") return value;
+  return "round";
+}
+
+function readPolylinePoints(node: SceneNode): UILinePoint[] {
+  const points = node.props["points"];
+  if (!Array.isArray(points)) return [];
+  const normalized: UILinePoint[] = [];
+
+  for (let i = 0; i < points.length; i++) {
+    const point = points[i];
+    if (
+      point &&
+      typeof point === "object" &&
+      typeof (point as UILinePoint).x === "number" &&
+      typeof (point as UILinePoint).y === "number"
+    ) {
+      normalized.push({ x: (point as UILinePoint).x, y: (point as UILinePoint).y });
+    }
+  }
+
+  return normalized;
+}
+
+function readLocalLinePoints(node: SceneNode): UILinePoint[] {
+  if (node.type === "line") {
+    const x1 = node.props["x1"];
+    const y1 = node.props["y1"];
+    const x2 = node.props["x2"];
+    const y2 = node.props["y2"];
+    if (
+      typeof x1 === "number" &&
+      typeof y1 === "number" &&
+      typeof x2 === "number" &&
+      typeof y2 === "number"
+    ) {
+      return [
+        { x: x1, y: y1 },
+        { x: x2, y: y2 },
+      ];
+    }
+    return [];
+  }
+
+  return readPolylinePoints(node);
+}
+
+function measureLineLike(
+  node: SceneNode,
+  animated: Record<string, number>,
+  scale: number,
+  constraints: MeasureConstraints,
+): void {
+  const points = readLocalLinePoints(node);
+  const strokeWidth = getScaled(node, "strokeWidth", animated, 1.5, scale);
+  let maxX = 0;
+  let maxY = 0;
+
+  for (let i = 0; i < points.length; i++) {
+    maxX = Math.max(maxX, points[i]!.x * scale);
+    maxY = Math.max(maxY, points[i]!.y * scale);
+  }
+
+  const explicitWidth = node.props["width"] as number | undefined;
+  const explicitHeight = node.props["height"] as number | undefined;
+  const minWidth = node.props["minWidth"] as number | undefined;
+  const minHeight = node.props["minHeight"] as number | undefined;
+  const maxWidth = node.props["maxWidth"] as number | undefined;
+  const maxHeight = node.props["maxHeight"] as number | undefined;
+
+  let width = explicitWidth !== undefined ? explicitWidth * scale : maxX + strokeWidth;
+  let height = explicitHeight !== undefined ? explicitHeight * scale : maxY + strokeWidth;
+
+  if (minWidth !== undefined) width = Math.max(width, minWidth * scale);
+  if (minHeight !== undefined) height = Math.max(height, minHeight * scale);
+  if (maxWidth !== undefined) width = Math.min(width, maxWidth * scale);
+  if (maxHeight !== undefined) height = Math.min(height, maxHeight * scale);
+
+  const clamped = applyAvailableClamp(width, height, constraints);
+  node.layout.width = clamped.width;
+  node.layout.height = clamped.height;
+}
+
+function emitLineSegments(
+  node: SceneNode,
+  resolvedX: number,
+  resolvedY: number,
+  scale: number,
+  transform: UITransform,
+  orderCounter: OrderCounter,
+  result: UILayoutResult,
+  styleResolver: UIStyleResolver,
+  animated: Record<string, number>,
+  zIndex: number,
+): void {
+  const points = readLocalLinePoints(node);
+  if (points.length < 2) return;
+
+  const strokeWidth = transformSize(
+    transform,
+    getScaled(node, "strokeWidth", animated, 1.5, scale),
+  );
+  if (strokeWidth <= 0) return;
+
+  const stroke = styleResolver.resolveColor(
+    node.props["stroke"] as UIColorValue | undefined,
+    WHITE,
+  );
+  const opacity = getEffectiveOpacity(node, animated);
+  const cap = readLineCap(node.props["strokeLineCap"]);
+
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1]!;
+    const next = points[i]!;
+    if (prev.x === next.x && prev.y === next.y) continue;
+
+    const startCap = i === 1 ? cap : "round";
+    const endCap = i === points.length - 1 ? cap : "round";
+
+    result.lines.push({
+      order: orderCounter.value++,
+      startX: transformX(transform, resolvedX + prev.x * scale),
+      startY: transformY(transform, resolvedY + prev.y * scale),
+      endX: transformX(transform, resolvedX + next.x * scale),
+      endY: transformY(transform, resolvedY + next.y * scale),
+      stroke,
+      strokeWidth,
+      opacity,
+      startCap,
+      endCap,
+      zIndex,
+    });
+  }
 }
 
 function resolveAnimatedProps(node: SceneNode, now: number): Record<string, number> {
@@ -460,6 +612,12 @@ function measure(
       return;
     }
 
+    case "line":
+    case "polyline": {
+      measureLineLike(node, animated, scale, constraints);
+      return;
+    }
+
     case "box":
     case "anchor": {
       const direction = (node.props["direction"] as "row" | "col") ?? "col";
@@ -716,6 +874,25 @@ function position(
         opacity,
         zIndex: parentZIndex,
       });
+      break;
+    }
+
+    case "line":
+    case "polyline": {
+      if (node.layout.width <= 0 || node.layout.height <= 0) break;
+      const zIndex = parentZIndex + ((node.props["zIndex"] as number | undefined) ?? 0);
+      emitLineSegments(
+        node,
+        resolvedX,
+        resolvedY,
+        scale,
+        transform,
+        orderCounter,
+        result,
+        styleResolver,
+        animated,
+        zIndex,
+      );
       break;
     }
 
@@ -1133,10 +1310,11 @@ export function computeLayout(
   viewport?: ViewportInfo,
   reusableResult?: UILayoutResult,
 ): UILayoutResult {
-  const result = reusableResult ?? { boxes: [], texts: [], icons: [] };
+  const result = reusableResult ?? { boxes: [], texts: [], icons: [], lines: [] };
   result.boxes.length = 0;
   result.texts.length = 0;
   result.icons.length = 0;
+  result.lines.length = 0;
   const orderCounter: OrderCounter = { value: 0 };
 
   // If root is an anchor node, resolve its position from entity bounds

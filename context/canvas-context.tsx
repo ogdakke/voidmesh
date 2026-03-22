@@ -51,6 +51,7 @@ import { logger } from "#lib/client.logger.ts";
 import { downloadBlob } from "#lib/download.ts";
 import { deepMerge } from "#lib/deep-merge.ts";
 import { ColorSpace } from "#types/enums.ts";
+import { canvasUI } from "#renderer/ui/canvas-ui.ts";
 import type { PartialDeep } from "type-fest";
 
 // --- Resource ownership for undo/redo cleanup ---
@@ -222,6 +223,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         .then(({ debugCanvas }) => debugCanvas(canvasStore))
         .catch(console.error);
     }
+    canvasUI.setDebugType(debugType);
     canvasStore.setDebugMode(debug);
   }, [debugType, debug]);
 

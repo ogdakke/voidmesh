@@ -43,7 +43,11 @@ import { UIRenderer } from "./ui/ui-renderer.ts";
 import { createElement } from "react";
 import { EntityLabel } from "./ui/entity-label.tsx";
 import { canvasUI } from "./ui/canvas-ui.ts";
+import { DebugOverlayUI } from "./ui/debug-ui.tsx";
 import { perfOverlay } from "../engine/perf-overlay.ts";
+
+const DEBUG_OVERLAY_WORLD_X = 560;
+const DEBUG_OVERLAY_WORLD_Y = 360;
 
 export class InfiniteCanvasRenderer {
   readonly canvas: HTMLCanvasElement;
@@ -74,6 +78,9 @@ export class InfiniteCanvasRenderer {
 
   // UI renderer (text, boxes, icons via Slug + SDF + texture quads)
   #uiRenderer: UIRenderer | null = null;
+  #debugOverlayVisible = false;
+  #lastDebugOverlaySnapshot: ReturnType<typeof perfOverlay.getSnapshot> | null = null;
+  #lastDebugOverlayZoom = NaN;
 
   #entityShaderBindGroupLayout: GPUBindGroupLayout | null = null;
   #entityShaderUniformBuffer: GPUBuffer | null = null;
@@ -1682,17 +1689,56 @@ export class InfiniteCanvasRenderer {
       }
     }
 
+    const perfSnapshot = perfOverlay.getSnapshot();
+
+    // World-space debug UI stress scene — anchored to a static canvas position
+    if (uiReady) {
+      const showDebugOverlay = debugMode && canvasUI.debugType === "ui";
+      if (showDebugOverlay) {
+        if (
+          !this.#debugOverlayVisible ||
+          this.#lastDebugOverlaySnapshot !== perfSnapshot ||
+          this.#lastDebugOverlayZoom !== viewport.zoom
+        ) {
+          this.#uiRenderer!.updateScene(
+            "debug-ui",
+            createElement(DebugOverlayUI, {
+              zoom: viewport.zoom,
+              perf: perfSnapshot,
+            }),
+          );
+          this.#debugOverlayVisible = true;
+          this.#lastDebugOverlaySnapshot = perfSnapshot;
+          this.#lastDebugOverlayZoom = viewport.zoom;
+        }
+
+        this.#uiRenderer!.renderScene(
+          "debug-ui",
+          DEBUG_OVERLAY_WORLD_X,
+          DEBUG_OVERLAY_WORLD_Y,
+          encoder,
+          targetView,
+          uiScale,
+          undefined,
+          {
+            offsetX: viewport.offset.x,
+            offsetY: viewport.offset.y,
+            zoom: viewport.zoom,
+            width,
+            height,
+            dpr,
+          },
+        );
+      } else if (this.#debugOverlayVisible) {
+        this.#uiRenderer!.updateScene("debug-ui", null);
+        this.#debugOverlayVisible = false;
+        this.#lastDebugOverlaySnapshot = null;
+        this.#lastDebugOverlayZoom = NaN;
+      }
+    }
+
     // Overlay UI (context menu, perf HUD, etc.) — fixed-position, viewport-anchored
-    canvasUI.render(
-      encoder,
-      targetView,
-      viewport,
-      width,
-      height,
-      dpr,
-      debugMode,
-      perfOverlay.getSnapshot(),
-    );
+    canvasUI.render(encoder, targetView, viewport, width, height, dpr, debugMode, perfSnapshot);
 
     // All UI scenes rendered — clear per-frame interaction dirty flags
     this.#uiRenderer?.endFrame();
