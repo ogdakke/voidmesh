@@ -120,6 +120,8 @@ export class GameLoop {
   #logger = logger;
   #renderer: InfiniteCanvasRenderer | null = null;
   #container: HTMLElement | null = null;
+  #containerRect: DOMRect = new DOMRect(0, 0, 0, 0);
+  #resizeObserver: ResizeObserver | null = null;
   #running = false;
   #animationFrameId: number | null = null;
   #firstFrameRendered = false;
@@ -217,6 +219,17 @@ export class GameLoop {
 
   setContainer(container: HTMLElement): void {
     this.#container = container;
+    this.#containerRect = container.getBoundingClientRect();
+
+    this.#resizeObserver?.disconnect();
+    this.#resizeObserver = new ResizeObserver(() => {
+      this.#containerRect = container.getBoundingClientRect();
+      this.#logger.debug(
+        `[GameLoop] container resized: ${this.#containerRect.width}x${this.#containerRect.height}`,
+      );
+    });
+    this.#resizeObserver.observe(container, { box: "border-box" });
+
     this.#deps.viewportAnimation.setContainer(container);
     this.#deps.label.setContainer(container);
   }
@@ -478,7 +491,7 @@ export class GameLoop {
     const { pointerPosition, pointerDown } = this.#inputState;
     if (!pointerPosition || !this.#container) return;
 
-    const rect = this.#container.getBoundingClientRect();
+    const rect = this.#containerRect;
     const state = canvasStore.getState();
     const viewport = canvasStore.getViewport(); // Always get fresh viewport
     const dpr = window.devicePixelRatio || 1;
@@ -628,7 +641,7 @@ export class GameLoop {
       return;
     }
 
-    const rect = this.#container.getBoundingClientRect();
+    const rect = this.#containerRect;
     const state = canvasStore.getState();
     const viewport = canvasStore.getViewport(); // Always get fresh viewport
     const dpr = window.devicePixelRatio || 1;
@@ -736,7 +749,7 @@ export class GameLoop {
 
     // Update drag-select rectangle if active
     if (this.#dragSelect?.isActive && this.#container) {
-      const rect = this.#container.getBoundingClientRect();
+      const rect = this.#containerRect;
       const viewport = canvasStore.getViewport();
       const dpr = window.devicePixelRatio || 1;
       const worldPoint = screenToWorld(screenPoint, viewport, rect, dpr);
@@ -879,7 +892,7 @@ export class GameLoop {
       if (distanceMoved < CLICK_THRESHOLD) {
         // This was a click, not a drag
         // Check if pointer is still over the same entity
-        const rect = this.#container.getBoundingClientRect();
+        const rect = this.#containerRect;
         const state = canvasStore.getState();
         const viewport = canvasStore.getViewport();
         const dpr = window.devicePixelRatio || 1;
@@ -951,7 +964,7 @@ export class GameLoop {
     if (!this.#container) return;
 
     const viewport = canvasStore.getViewport(); // Always get fresh viewport
-    const rect = this.#container.getBoundingClientRect();
+    const rect = this.#containerRect;
     const dpr = window.devicePixelRatio || 1;
 
     if (ctrlKey) {
@@ -991,7 +1004,7 @@ export class GameLoop {
     this.#inputState.pointerPosition = screenPoint;
     this.#inputState.pointerDownPosition = screenPoint;
 
-    const rect = this.#container.getBoundingClientRect();
+    const rect = this.#containerRect;
     const state = canvasStore.getState();
     const viewport = canvasStore.getViewport(); // Always get fresh viewport
     const dpr = window.devicePixelRatio || 1;
@@ -1351,7 +1364,7 @@ export class GameLoop {
       // Record tap-detection state (don't select yet — wait for touchEnd to distinguish tap vs swipe)
       this.#inputState.pointerDownPosition = { x: touch.x, y: touch.y };
 
-      const rect = this.#container.getBoundingClientRect();
+      const rect = this.#containerRect;
       const state = canvasStore.getState();
       const viewport = canvasStore.getViewport();
       const dpr = window.devicePixelRatio || 1;
@@ -1447,7 +1460,7 @@ export class GameLoop {
     if (!this.#container) return;
 
     const viewport = canvasStore.getViewport();
-    const rect = this.#container.getBoundingClientRect();
+    const rect = this.#containerRect;
     const dpr = window.devicePixelRatio || 1;
 
     // Check for double-tap-hold zoom activation (before main chain)
@@ -1807,7 +1820,7 @@ export class GameLoop {
     const tapPosition = this.#touchState.lastTouchPosition;
     if (!tapPosition) return;
 
-    const rect = this.#container.getBoundingClientRect();
+    const rect = this.#containerRect;
     const state = canvasStore.getState();
     const viewport = canvasStore.getViewport();
     const dpr = window.devicePixelRatio || 1;
@@ -1949,7 +1962,7 @@ export class GameLoop {
       panBy: (d) => canvasStore.panBy(d),
       getViewport: () => canvasStore.getViewport(),
       setViewport: (v) => canvasStore.setViewport(v),
-      getContainerRect: () => this.#container?.getBoundingClientRect() ?? null,
+      getContainerRect: () => (this.#container ? this.#containerRect : null),
       getDpr: () => window.devicePixelRatio || 1,
     };
   }
