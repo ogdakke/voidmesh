@@ -654,13 +654,15 @@ export class UIRenderer {
       cache.scale === scale &&
       cache.anchors === anchors;
 
-    // When only viewport offset changed (panning), reuse the cached layout.
-    // World-space UI positions don't change during a pan — the viewport uniform
-    // in the GPU shaders handles the shift.
+    // World-space UI positions don't change during a pan, but fixed-position UI
+    // is resolved against viewport offset during layout. Fixed scenes therefore
+    // must relayout when viewport offset changes.
     const canReuse =
       structurallyValid &&
       (!dependsOnViewport ||
-        (cache!.viewportZoom === (viewport?.zoom ?? 0) &&
+        (cache!.viewportOffsetX === (viewport?.offsetX ?? 0) &&
+          cache!.viewportOffsetY === (viewport?.offsetY ?? 0) &&
+          cache!.viewportZoom === (viewport?.zoom ?? 0) &&
           cache!.viewportWidth === (viewport?.width ?? 0) &&
           cache!.viewportHeight === (viewport?.height ?? 0) &&
           cache!.viewportDpr === (viewport?.dpr ?? 0)));

@@ -42,7 +42,6 @@ import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
 import { UIRenderer } from "./ui/ui-renderer.ts";
 import { createElement } from "react";
 import { EntityLabel } from "./ui/entity-label.tsx";
-import { DebugOverlayUI } from "./ui/debug-ui.tsx";
 import { canvasUI } from "./ui/canvas-ui.ts";
 import { perfOverlay } from "../engine/perf-overlay.ts";
 
@@ -1683,27 +1682,17 @@ export class InfiniteCanvasRenderer {
       }
     }
 
-    // Debug UI overlay (world-anchored, static on canvas)
-    if (debugMode && uiReady) {
-      this.#uiRenderer!.updateScene(
-        "debug-ui",
-        createElement(DebugOverlayUI, {
-          zoom: viewport.zoom,
-          perf: perfOverlay.getSnapshot(),
-        }),
-      );
-      this.#uiRenderer!.renderScene("debug-ui", 560, 360, encoder, targetView, dpr, undefined, {
-        offsetX: viewport.offset.x,
-        offsetY: viewport.offset.y,
-        zoom: viewport.zoom,
-        width,
-        height,
-        dpr,
-      });
-    }
-
-    // Overlay UI (context menu, etc.) — fixed-position, viewport-anchored
-    canvasUI.render(encoder, targetView, viewport, width, height, dpr);
+    // Overlay UI (context menu, perf HUD, etc.) — fixed-position, viewport-anchored
+    canvasUI.render(
+      encoder,
+      targetView,
+      viewport,
+      width,
+      height,
+      dpr,
+      debugMode,
+      perfOverlay.getSnapshot(),
+    );
 
     // All UI scenes rendered — clear per-frame interaction dirty flags
     this.#uiRenderer?.endFrame();

@@ -2,20 +2,19 @@
 // Canvas UI — Unified overlay UI singleton
 // ---------------------------------------------------------------------------
 //
-// Manages fixed-position overlay UI (context menu, future tooltips/toasts)
+// Manages fixed-position overlay UI (context menu, perf HUD, future tooltips/toasts)
 // as a single React root. The canvas renderer calls render() once per frame;
-// the React layer sets state directly on this singleton.
-//
-// Entity labels and debug overlay are NOT managed here — they have different
-// rendering requirements (world-anchored, per-entity interleaving).
-//
+// the React layer sets state directly on this singleton, but React reconciliation
+// only runs when scene inputs actually change.
 
 import { createElement } from "react";
+import type { PerfOverlaySnapshot } from "../../engine/perf-overlay.ts";
 import type { UIRenderer } from "./ui-renderer.ts";
 import type { ContextMenuActions } from "./context-menu-actions.ts";
 import type { CanvasContextMenuProps } from "./components/canvas-context-menu.tsx";
+import { CanvasContextMenu } from "./components/canvas-context-menu.tsx";
+import { PerfHud } from "./debug-ui.tsx";
 import { contextMenuController } from "./context-menu-controller.ts";
-import { CanvasUIRoot } from "./components/canvas-ui-root.tsx";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -25,6 +24,44 @@ type ContextMenuLiveProps = Omit<
   CanvasContextMenuProps,
   "state" | "actions" | "menuX" | "menuY" | "activeSubmenuId"
 >;
+
+type ViewportInfo = {
+  offsetX: number;
+  offsetY: number;
+  zoom: number;
+  width: number;
+  height: number;
+  dpr: number;
+};
+
+type ContextMenuSceneInputs = {
+  actions: ContextMenuActions | null;
+  activeSubmenuId: string | null;
+  menuX: number;
+  menuY: number;
+  props: ContextMenuLiveProps | null;
+  state: Readonly<CanvasContextMenuProps["state"]> | null;
+};
+
+const PERF_SCENE_KEY = "canvas-ui-perf-hud";
+const CONTEXT_MENU_SCENE_KEY = "canvas-ui-context-menu";
+
+function sameContextMenuInputs(
+  current: ContextMenuSceneInputs | null,
+  next: ContextMenuSceneInputs | null,
+): boolean {
+  if (current === next) return true;
+  if (!current || !next) return false;
+
+  return (
+    current.actions === next.actions &&
+    current.activeSubmenuId === next.activeSubmenuId &&
+    current.menuX === next.menuX &&
+    current.menuY === next.menuY &&
+    current.props === next.props &&
+    current.state === next.state
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Singleton
@@ -36,6 +73,10 @@ class CanvasUI {
   // Context menu state (set from React layer)
   #contextMenuActions: ContextMenuActions | null = null;
   #contextMenuProps: ContextMenuLiveProps | null = null;
+  #lastPerfSnapshot: PerfOverlaySnapshot | null = null;
+  #perfVisible = false;
+  #lastContextMenuInputs: ContextMenuSceneInputs | null = null;
+  #contextMenuVisible = false;
 
   // ---------------------------------------------------------------------------
   // Initialization
@@ -92,10 +133,12 @@ class CanvasUI {
     width: number,
     height: number,
     dpr: number,
+    debugMode: boolean,
+    perf: PerfOverlaySnapshot,
   ): void {
     if (!this.#uiRenderer?.isReady) return;
 
-    const viewportInfo = {
+    const viewportInfo: ViewportInfo = {
       offsetX: viewport.offset.x,
       offsetY: viewport.offset.y,
       zoom: viewport.zoom,
@@ -107,34 +150,106 @@ class CanvasUI {
     // Build context menu position from world coords → CSS-pixel offsets
     // Layout engine handles viewport clamping via contain="viewport"
     const cmState = contextMenuController.state;
-    let contextMenu: CanvasContextMenuProps | null = null;
+    let nextContextMenuInputs: ContextMenuSceneInputs | null = null;
 
-    if (contextMenuController.isOpen && this.#contextMenuActions && this.#contextMenuProps) {
-      // Convert world position to CSS pixels from viewport edge (unclamped)
-      const menuX = ((cmState.worldX - viewport.offset.x) * viewport.zoom) / dpr;
-      const menuY = ((cmState.worldY - viewport.offset.y) * viewport.zoom) / dpr;
+    if (contextMenuController.isOpen) {
+      const actions = this.#contextMenuActions;
+      const props = this.#contextMenuProps;
+      if (actions && props) {
+        // Convert world position to CSS pixels from viewport edge (unclamped)
+        const menuX = ((cmState.worldX - viewport.offset.x) * viewport.zoom) / dpr;
+        const menuY = ((cmState.worldY - viewport.offset.y) * viewport.zoom) / dpr;
 
-      contextMenu = {
-        state: cmState,
-        actions: this.#contextMenuActions,
-        ...this.#contextMenuProps,
-        menuX,
-        menuY,
-        activeSubmenuId: contextMenuController.activeSubmenuId,
-      };
+        nextContextMenuInputs = {
+          state: cmState,
+          actions,
+          props,
+          menuX,
+          menuY,
+          activeSubmenuId: contextMenuController.activeSubmenuId,
+        };
+      }
     }
 
-    this.#uiRenderer.updateScene("canvas-ui", createElement(CanvasUIRoot, { contextMenu }));
-    this.#uiRenderer.renderScene(
-      "canvas-ui",
-      0,
-      0,
-      encoder,
-      targetView,
-      dpr,
-      undefined,
-      viewportInfo,
-    );
+    this.#renderPerfHudScene(debugMode, perf, encoder, targetView, dpr, viewportInfo);
+    this.#renderContextMenuScene(nextContextMenuInputs, encoder, targetView, dpr, viewportInfo);
+  }
+
+  #renderPerfHudScene(
+    debugMode: boolean,
+    perf: PerfOverlaySnapshot,
+    encoder: GPUCommandEncoder,
+    targetView: GPUTextureView,
+    scale: number,
+    viewportInfo: ViewportInfo,
+  ): void {
+    if (debugMode) {
+      if (!this.#perfVisible || this.#lastPerfSnapshot !== perf) {
+        this.#uiRenderer!.updateScene(PERF_SCENE_KEY, createElement(PerfHud, { perf }));
+        this.#lastPerfSnapshot = perf;
+        this.#perfVisible = true;
+      }
+      this.#uiRenderer!.renderScene(
+        PERF_SCENE_KEY,
+        0,
+        0,
+        encoder,
+        targetView,
+        scale,
+        undefined,
+        viewportInfo,
+      );
+      return;
+    }
+
+    if (this.#perfVisible) {
+      this.#uiRenderer!.updateScene(PERF_SCENE_KEY, null);
+      this.#perfVisible = false;
+      this.#lastPerfSnapshot = null;
+    }
+  }
+
+  #renderContextMenuScene(
+    nextInputs: ContextMenuSceneInputs | null,
+    encoder: GPUCommandEncoder,
+    targetView: GPUTextureView,
+    scale: number,
+    viewportInfo: ViewportInfo,
+  ): void {
+    if (!sameContextMenuInputs(this.#lastContextMenuInputs, nextInputs)) {
+      this.#lastContextMenuInputs = nextInputs;
+
+      if (!nextInputs) {
+        this.#uiRenderer!.updateScene(CONTEXT_MENU_SCENE_KEY, null);
+        this.#contextMenuVisible = false;
+      } else {
+        this.#uiRenderer!.updateScene(
+          CONTEXT_MENU_SCENE_KEY,
+          createElement(CanvasContextMenu, {
+            state: nextInputs.state!,
+            actions: nextInputs.actions!,
+            ...nextInputs.props!,
+            menuX: nextInputs.menuX,
+            menuY: nextInputs.menuY,
+            activeSubmenuId: nextInputs.activeSubmenuId,
+          }),
+        );
+        this.#contextMenuVisible = true;
+      }
+    }
+
+    if (this.#contextMenuVisible) {
+      this.#uiRenderer!.renderScene(
+        CONTEXT_MENU_SCENE_KEY,
+        0,
+        0,
+        encoder,
+        targetView,
+        scale,
+        undefined,
+        viewportInfo,
+      );
+    }
   }
 }
 

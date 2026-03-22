@@ -1,9 +1,6 @@
 /**
  * Performance overlay controller.
- * Displays FPS (real frame rate), render time, and entity stats when debug mode is active.
- * Follows the same singleton + cached-DOM-writes pattern as EntityLabelController.
- *
- * Updates text at ~2Hz (every 30 rendered frames) to avoid layout thrash.
+ * Collects FPS history plus render-time percentiles while debug mode is active.
  */
 
 export interface FrameStats {
@@ -14,6 +11,9 @@ export interface FrameStats {
 
 export interface PerfOverlaySnapshot {
   fps: number;
+  fpsLow1: number;
+  frameWorstMs: number;
+  fpsHistory: number[];
   renderMedianMs: number;
   renderP95Ms: number;
   entityCount: number;
@@ -23,8 +23,12 @@ export interface PerfOverlaySnapshot {
 }
 
 const RING_SIZE = 300; // 5 seconds at 60fps
+const SNAPSHOT_INTERVAL_MS = 120;
 const EMPTY_SNAPSHOT: PerfOverlaySnapshot = {
   fps: 0,
+  fpsLow1: 0,
+  frameWorstMs: 0,
+  fpsHistory: [],
   renderMedianMs: 0,
   renderP95Ms: 0,
   entityCount: 0,
@@ -34,8 +38,6 @@ const EMPTY_SNAPSHOT: PerfOverlaySnapshot = {
 };
 
 class PerfOverlayController {
-  #element: HTMLElement | null = null;
-  #cachedText = "";
   #visible = false;
   #snapshot: PerfOverlaySnapshot = EMPTY_SNAPSHOT;
 
@@ -50,14 +52,9 @@ class PerfOverlayController {
   #fpsIndex = 0;
   #fpsCount = 0;
 
-  // Throttle DOM updates (~2Hz at 60fps)
-  #framesSinceUpdate = 0;
+  #lastSnapshotTime = 0;
   #lastEntityCount = 0;
   #lastRenderedCount = 0;
-
-  setElement(element: HTMLElement): void {
-    this.#element = element;
-  }
 
   getSnapshot(): PerfOverlaySnapshot {
     return this.#snapshot;
@@ -68,16 +65,12 @@ class PerfOverlayController {
    * Called by the game loop after every rendered frame.
    */
   tick(stats: FrameStats, debugMode: boolean): void {
-    // Toggle visibility
-    if (debugMode !== this.#visible) {
-      this.#element?.style.setProperty("display", debugMode ? "block" : "none");
-      this.#visible = debugMode;
-      if (!debugMode) {
-        this.#reset();
-        return;
-      }
+    if (!debugMode) {
+      if (this.#visible) this.#reset();
+      this.#visible = false;
+      return;
     }
-    if (!debugMode) return;
+    this.#visible = true;
 
     const now = performance.now();
 
@@ -98,18 +91,23 @@ class PerfOverlayController {
     this.#lastEntityCount = stats.entityCount;
     this.#lastRenderedCount = stats.renderedCount;
 
-    // Update text and summary at ~2Hz
-    this.#framesSinceUpdate++;
-    if (this.#framesSinceUpdate < 30 && this.#snapshot.sampleCount > 0) return;
-    this.#framesSinceUpdate = 0;
+    if (this.#snapshot.sampleCount > 0 && now - this.#lastSnapshotTime < SNAPSHOT_INTERVAL_MS) {
+      return;
+    }
+    this.#lastSnapshotTime = now;
 
     const render = this.#computePercentiles(this.#renderSamples, this.#renderCount);
-    const frame = this.#computePercentiles(this.#fpsSamples, this.#fpsCount);
-    const fps = frame.median > 0 ? Math.round(1000 / frame.median) : 0;
+    const frame = this.#computeFrameStats(this.#fpsSamples, this.#fpsCount);
+    const fps = frame.medianMs > 0 ? Math.round(1000 / frame.medianMs) : 0;
+    const fpsLow1 = frame.p99Ms > 0 ? Math.round(1000 / frame.p99Ms) : 0;
+    const { history: fpsHistory } = this.#extractRecentFpsHistory(120);
 
     const text = `${fps} fps | ${render.median.toFixed(1)}ms med | ${render.p95.toFixed(1)}ms p95 | ${this.#lastRenderedCount}/${this.#lastEntityCount} entities`;
     this.#snapshot = {
       fps,
+      fpsLow1,
+      frameWorstMs: frame.maxMs,
+      fpsHistory,
       renderMedianMs: render.median,
       renderP95Ms: render.p95,
       entityCount: this.#lastEntityCount,
@@ -117,17 +115,11 @@ class PerfOverlayController {
       sampleCount: this.#renderCount,
       text,
     };
-
-    if (this.#element && text !== this.#cachedText) {
-      this.#element.textContent = text;
-      this.#cachedText = text;
-    }
   }
 
   #reset(): void {
-    this.#cachedText = "";
-    this.#framesSinceUpdate = 0;
     this.#lastTickTime = 0;
+    this.#lastSnapshotTime = 0;
     this.#renderIndex = 0;
     this.#renderCount = 0;
     this.#fpsIndex = 0;
@@ -135,9 +127,6 @@ class PerfOverlayController {
     this.#lastEntityCount = 0;
     this.#lastRenderedCount = 0;
     this.#snapshot = EMPTY_SNAPSHOT;
-    if (this.#element) {
-      this.#element.textContent = "";
-    }
   }
 
   #computePercentiles(ring: Float64Array, count: number): { median: number; p95: number } {
@@ -151,6 +140,61 @@ class PerfOverlayController {
       median: filled[Math.floor(count * 0.5)]!,
       p95: filled[Math.floor(count * 0.95)]!,
     };
+  }
+
+  #computeFrameStats(
+    ring: Float64Array,
+    count: number,
+  ): { medianMs: number; p99Ms: number; maxMs: number } {
+    if (count === 0) return { medianMs: 0, p99Ms: 0, maxMs: 0 };
+
+    const filled = new Float64Array(count);
+    filled.set(ring.subarray(0, count));
+    filled.sort();
+
+    return {
+      medianMs: filled[Math.floor(count * 0.5)]!,
+      p99Ms: filled[Math.floor(count * 0.99)]!,
+      maxMs: filled[count - 1]!,
+    };
+  }
+
+  #extractRecentFpsHistory(maxPoints: number): { history: number[] } {
+    if (this.#fpsCount === 0) return { history: [] };
+
+    const rawPoints = this.#fpsCount;
+    const start = this.#fpsCount === RING_SIZE ? this.#fpsIndex : 0;
+    const recent = new Array<number>(rawPoints);
+
+    for (let i = 0; i < rawPoints; i++) {
+      const ringIndex = (start + i) % RING_SIZE;
+      const frameInterval = this.#fpsSamples[ringIndex]!;
+      const fps = frameInterval > 0 ? 1000 / frameInterval : 0;
+      recent[i] = fps;
+    }
+
+    if (recent.length <= maxPoints) {
+      return { history: recent };
+    }
+
+    const bucketSize = recent.length / maxPoints;
+    const history = new Array<number>(maxPoints);
+
+    for (let i = 0; i < maxPoints; i++) {
+      const bucketStart = Math.floor(i * bucketSize);
+      const bucketEnd = Math.max(bucketStart + 1, Math.floor((i + 1) * bucketSize));
+      let total = 0;
+      let count = 0;
+
+      for (let j = bucketStart; j < bucketEnd && j < recent.length; j++) {
+        total += recent[j]!;
+        count++;
+      }
+
+      history[i] = count > 0 ? total / count : 0;
+    }
+
+    return { history };
   }
 }
 
