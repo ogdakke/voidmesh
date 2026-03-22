@@ -263,7 +263,6 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.viewport = { ...viewport, offset: { ...viewport.offset } };
     this.state.viewportDirty = true;
     this.notifyViewportChange();
-    this.#logger.debug("Viewport updated %o, zoom: %f", viewport.offset, viewport.zoom);
   }
 
   panBy(delta: Point): void {
@@ -276,12 +275,6 @@ export class CanvasStore extends Store<CanvasState> {
     };
     this.state.viewportDirty = true;
     this.notifyViewportChange();
-    this.#logger.debug(
-      "Viewport panned by: %o, offset: %o, zoom: %f",
-      delta,
-      this.state.viewport.offset,
-      this.state.viewport.zoom,
-    );
   }
 
   // Entity mutations (only notify selection subscribers)
