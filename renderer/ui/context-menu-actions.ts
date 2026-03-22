@@ -20,6 +20,12 @@ export interface ContextMenuActions {
 
   // Shader / style
   changeShaderType: (type: string) => void;
+  changeShape: (shape: string) => void;
+  changeDitheringKind: (kind: string) => void;
+  changeAsciiKind: (kind: string) => void;
+  toggleAsciiInvert: (checked: boolean) => void;
+  changeGlassKind: (kind: string) => void;
+  changeGlitchKind: (kind: string) => void;
 
   // Palette
   changePalette: (palette: ColorPalette) => void;
@@ -33,6 +39,7 @@ export interface ContextMenuActions {
   // Entity actions
   copyImage: () => void;
   saveAsFormat: (format: ImageExportFormat) => void;
+  saveAll: (animatedEntities: ShaderCanvasEntity[]) => void;
   copyEffects: () => void;
   pasteEffects: () => void;
   bringToFront: () => void;

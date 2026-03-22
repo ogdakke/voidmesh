@@ -5,6 +5,7 @@ import { DebugType, useCanvas, useViewport } from "#context/use-canvas.ts";
 import { useLayout } from "#context/use-layout.ts";
 import { canvasStore, gameLoop, SpacePanMode, viewportAnimation } from "#engine";
 import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
+import { useParamValue } from "#hooks/use-param-value.ts";
 import { useCanvasContainerResize } from "#hooks/use-canvas-container-resize.ts";
 import { useCanvasRenderer } from "#hooks/use-canvas-renderer.ts";
 import { useEntityCycling } from "#hooks/use-entity-cycling.ts";
@@ -13,6 +14,8 @@ import { useIsMobile } from "#hooks/use-is-mobile.ts";
 import { useMediaControlsActions } from "#hooks/use-media-controls.ts";
 import useMediaQuery from "#hooks/use-media-query.ts";
 import { useStudioFile } from "#hooks/use-studio-file.ts";
+import { useExportQueue } from "#context/use-export-queue.ts";
+import { useUpscaleQueue } from "#context/use-upscale-queue.ts";
 import {
   calculateCenteredOffset,
   calculateFitToView,
@@ -28,14 +31,18 @@ import {
   Suspense,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
+  useCallback,
   type PropsWithChildren,
 } from "react";
 import { Button } from "../ui/button/index.tsx";
 import { DropZone } from "../ui/dropzone/index.tsx";
 import { UndoRedoButtons } from "./undo-redo.tsx";
 import "./infinite-canvas.css";
+import { usePaletteStore } from "#lib/palette-store.ts";
+import { logger } from "#lib/client.logger.ts";
 
 import DesktopSettings from "#components/settings/settings.desktop.tsx";
 import SettingsDrawer from "../settings/settings.mobile.tsx";
@@ -45,6 +52,7 @@ import { contextMenuController } from "#renderer/ui/context-menu-controller.ts";
 import type { ContextMenuActions } from "#renderer/ui/context-menu-actions.ts";
 import { canvasUI } from "#renderer/ui/canvas-ui.ts";
 import { imageExportOptionsForFormat } from "#renderer/export-formats.ts";
+import type { Shape } from "#types/canvas.ts";
 
 /** Feature flag: use canvas-rendered context menu instead of DOM-based Base UI menu */
 const USE_CANVAS_CONTEXT_MENU = true;
@@ -104,6 +112,8 @@ export function InfiniteCanvas() {
     setDebugType,
     saveSelectedEntityToFile,
     entities,
+    renderer,
+    updateSelectedEntityParams,
   } = useCanvas();
   const {
     deleteEntity,
@@ -125,17 +135,26 @@ export function InfiniteCanvas() {
     handleShowOriginalChange,
     handlePreserveColorsChange,
     handleReversePaletteChange,
+    handleDitheringKindChange,
+    handleAsciiKindChange,
+    handleAsciiInvertChange,
+    handleGlassKindChange,
+    handleGlitchKindChange,
+    handlePaletteUpload,
     showOriginal,
     preserveColors,
+    selectionState,
   } = useCanvasActions();
   const mediaActions = useMediaControlsActions(selectedEntity);
   const keybindStore = useKeybinds();
+  const { addToQueue } = useExportQueue();
+  const { addToUpscaleQueue } = useUpscaleQueue();
 
   // Entity cycling (ArrowUp/Down navigation)
   const { handleCycleNext, handleCyclePrevious } = useEntityCycling(containerRef);
 
   // Initialize WebGPU renderer
-  const { renderer, isReady, isSupported, error } = useCanvasRenderer(canvasRef);
+  const { renderer: webgpuRenderer, isReady, isSupported, error } = useCanvasRenderer(canvasRef);
 
   const [isSpaceHeld, setIsSpaceHeld] = useState(false);
 
@@ -167,48 +186,140 @@ export function InfiniteCanvas() {
   }, []);
 
   useEffect(() => {
-    if (renderer && isReady) {
+    if (webgpuRenderer && isReady) {
       if (darkTheme) {
-        renderer?.setGridConfig(config.rendering.grid.dark);
+        webgpuRenderer.setGridConfig(config.rendering.grid.dark);
       } else {
-        renderer?.setGridConfig(config.rendering.grid.default);
+        webgpuRenderer.setGridConfig(config.rendering.grid.default);
       }
-      renderer.setActionLayerTint(
+      webgpuRenderer.setActionLayerTint(
         darkTheme ? config.actionLayer.dimColor.dark : config.actionLayer.dimColor.light,
       );
-      renderer.setSelectionRectConfig(
+      webgpuRenderer.setSelectionRectConfig(
         darkTheme ? config.selectionRectangle.dark : config.selectionRectangle.light,
         darkTheme ? config.multiSelectBoundingBox.dark : config.multiSelectBoundingBox.light,
       );
-      registerRenderer(renderer);
+      registerRenderer(webgpuRenderer);
       gameLoop.start();
     }
     return () => gameLoop.stop();
-  }, [renderer, isReady, registerRenderer, darkTheme]);
+  }, [webgpuRenderer, isReady, registerRenderer, darkTheme]);
 
   // Image input handlers (paste, drop, file upload)
-  const { handleDrop } = useImageInput({ containerRef, multipleFiles: true });
+  const { handleDrop, handlePastedItems } = useImageInput({ containerRef, multipleFiles: true });
+
+  const paletteInputRef = useRef<HTMLInputElement>(null);
+  const customPalettes = usePaletteStore();
+  const shapeParam = useParamValue("shape", config.defaults.shaderParams.shape);
+  const ditheringKindParam = useParamValue(
+    "dithering.kind",
+    config.defaults.shaderParams.dithering.kind,
+  );
+  const asciiKindParam = useParamValue("ascii.kind", config.defaults.shaderParams.ascii.kind);
+  const asciiInvertParam = useParamValue("ascii.invert", config.defaults.shaderParams.ascii.invert);
+  const glassKindParam = useParamValue("glass.kind", config.defaults.shaderParams.glass!.kind);
+  const glitchKindParam = useParamValue("glitch.kind", config.defaults.shaderParams.glitch!.kind);
+  const paletteParam = useParamValue("palette", null);
+  const preserveColorsParam = useParamValue("preserveColors", null);
+  const reversePaletteParam = useParamValue("reversePalette", null);
 
   // Studio file save/load
   const { exportStudioFile, saveAsStudioFile, importStudioFile } = useStudioFile();
+
+  const handlePaletteInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    await handlePaletteUpload(e.target.files);
+    e.target.value = "";
+  };
+
+  const getClipboardItems = useCallback(async (): Promise<(File | string)[]> => {
+    const items = await navigator.clipboard.read().catch((error) => {
+      logger.error("Error reading clipboard:", error);
+      return [];
+    });
+
+    const collected: (File | string)[] = [];
+
+    for (const item of items) {
+      for (const type of item.types) {
+        if (type === "text/plain") {
+          const blob = await item.getType(type);
+          const text = await blob.text();
+          if (text.trim().length > 0) {
+            collected.push(text);
+          }
+        }
+
+        if (type.startsWith("image/") || config.supports.video.includes(type)) {
+          const blob = await item.getType(type);
+          collected.push(new File([blob], `clipboard.${type.split("/")[1] ?? "bin"}`, { type }));
+        }
+      }
+    }
+
+    return collected;
+  }, []);
+
+  const handleCanvasPaste = useCallback(async () => {
+    const items = await getClipboardItems();
+    if (items.length > 0) {
+      await handlePastedItems(items);
+    }
+  }, [getClipboardItems, handlePastedItems]);
+
+  const getKeybindHint = useCallback(
+    (id: string): string | undefined => {
+      const bind = keybindStore.getById(id);
+      return bind ? bind.bind.toSymbols().join("") : undefined;
+    },
+    [keybindStore],
+  );
+
+  const showOriginalMixed =
+    selectionState.isMultiple && !selectionState.paramValues.showOriginal?.isUniform;
+  const preserveColorsMixed =
+    selectionState.isMultiple && !selectionState.paramValues.preserveColors?.isUniform;
+  const reversePaletteMixed =
+    selectionState.isMultiple && !selectionState.paramValues.reversePalette?.isUniform;
+
+  const menuHints = useMemo(
+    () => ({
+      bringToFront: getKeybindHint("bring_to_front"),
+      copySelection: getKeybindHint("copy_selection"),
+      deleteEntity: getKeybindHint("delete_entity"),
+      duplicateEntity: getKeybindHint("duplicate_entity"),
+      openStudio: getKeybindHint("open_studio"),
+      pasteCanvas: getKeybindHint("paste_canvas"),
+      pasteSelection: getKeybindHint("paste_selection"),
+      saveAsStudio: getKeybindHint("save_as_studio"),
+      saveStudio: getKeybindHint("save_studio"),
+      sendToBack: getKeybindHint("send_to_back"),
+      togglePreserveColors: getKeybindHint("toggle_preserve_colors"),
+      toggleReversePalette: getKeybindHint("toggle_reverse_palette"),
+      toggleShowOriginal: getKeybindHint("toggle_show_original"),
+      toggleSnapToGrid: getKeybindHint("toggle_snap_to_grid"),
+    }),
+    [getKeybindHint],
+  );
 
   // Wire canvas-rendered context menu actions
   useEffect(() => {
     if (!USE_CANVAS_CONTEXT_MENU) return;
 
     const actions: ContextMenuActions = {
-      paste: () => {
-        // TODO: wire paste from clipboard (same as pasteMenuHandler in DOM menu)
-      },
+      paste: () => void handleCanvasPaste(),
       saveWorkspace: () => exportStudioFile(),
       saveAsWorkspace: () => saveAsStudioFile(),
       openWorkspace: () => importStudioFile(),
       toggleSnapToGrid: (checked) => handleSnapToGridChange(checked),
       changeShaderType: (type) => handleShaderTypeChange(type),
+      changeShape: (shape) => updateSelectedEntityParams({ shape: shape as Shape }),
+      changeDitheringKind: (kind) => handleDitheringKindChange(kind),
+      changeAsciiKind: (kind) => handleAsciiKindChange(kind),
+      toggleAsciiInvert: (checked) => handleAsciiInvertChange(checked),
+      changeGlassKind: (kind) => handleGlassKindChange(kind),
+      changeGlitchKind: (kind) => handleGlitchKindChange(kind),
       changePalette: (palette) => handlePaletteChange(palette),
-      triggerPaletteUpload: () => {
-        // TODO: trigger hidden file input from DOM (needs DOM bridge)
-      },
+      triggerPaletteUpload: () => paletteInputRef.current?.click(),
       toggleShowOriginal: (checked) => handleShowOriginalChange(checked),
       togglePreserveColors: (checked) => handlePreserveColorsChange(checked),
       toggleReversePalette: (checked) => handleReversePaletteChange(checked),
@@ -216,16 +327,26 @@ export function InfiniteCanvas() {
       saveAsFormat: (format) => {
         saveSelectedEntityToFile(imageExportOptionsForFormat(format));
       },
+      saveAll: (animatedEntities) => {
+        void (async () => {
+          await saveSelectedEntityToFile();
+          if (!renderer) return;
+          for (const entity of animatedEntities) {
+            addToQueue(entity, renderer);
+          }
+        })();
+      },
       copyEffects: () => copyEntityParams(),
       pasteEffects: () => pasteEntityParams(),
       bringToFront: () => handleBringToFront(),
       sendToBack: () => handleSendToBack(),
       duplicate: () => duplicateEntities(),
-      upscale: (_entityIds) => {
-        // TODO: wire upscale queue (needs UpscaleQueueContext)
-      },
-      exportAnimated: (_entities) => {
-        // TODO: wire export queue (needs ExportQueueContext)
+      upscale: (entityIds) => addToUpscaleQueue(entityIds),
+      exportAnimated: (entitiesToExport) => {
+        if (!renderer) return;
+        for (const entity of entitiesToExport) {
+          addToQueue(entity, renderer);
+        }
       },
       reset: () => resetEntityToDefaults(),
       deleteEntity: () => deleteEntity(undefined, "context_menu"),
@@ -240,46 +361,142 @@ export function InfiniteCanvas() {
 
     // Set live props for context menu rendering
     canvasUI.contextMenuProps({
+      hints: menuHints,
+      customPalettes,
       snapToGrid,
-      showOriginal,
-      preserveColors,
-      reversePalette: false, // TODO: wire reversePalette from useParamValue
-      shaderType: undefined, // TODO: derive from selection state
-      shaderTypeMixed: false,
-      paletteSupported: false, // TODO: derive from shader type
-      preserveColorsSupported: false,
-      reversePaletteSupported: false,
-      palettes: [],
-      currentPaletteId: undefined,
-      paletteMixed: false,
-      showOriginalMixed: false,
-      preserveColorsMixed: false,
-      reversePaletteMixed: false,
+      showOriginal: {
+        supported: true,
+        value:
+          (selectionState.paramValues.showOriginal?.value as boolean | undefined) ?? showOriginal,
+        mixed: showOriginalMixed,
+      },
+      preserveColors: {
+        supported: preserveColorsParam.isSupported,
+        value:
+          (selectionState.paramValues.preserveColors?.value as boolean | undefined) ??
+          preserveColors,
+        mixed: preserveColorsMixed,
+      },
+      reversePalette: {
+        supported: reversePaletteParam.isSupported,
+        value: (selectionState.paramValues.reversePalette?.value as boolean | undefined) ?? false,
+        mixed: reversePaletteMixed,
+      },
+      asciiInvert: {
+        supported: asciiInvertParam.isSupported,
+        value: asciiInvertParam.value ?? config.defaults.shaderParams.ascii.invert,
+        mixed: selectionState.isMultiple && asciiInvertParam.isMixed,
+      },
+      shaderType: {
+        supported: selectionState.count > 0,
+        value: selectionState.hasUniformShader ? [...selectionState.shaderTypes][0] : undefined,
+        mixed: !selectionState.hasUniformShader,
+        values: [...selectionState.shaderTypes],
+      },
+      shape: {
+        supported: shapeParam.isSupported,
+        value: shapeParam.value ?? config.defaults.shaderParams.shape,
+        mixed: shapeParam.isMixed,
+        values: [...shapeParam.values],
+      },
+      ditheringKind: {
+        supported: ditheringKindParam.isSupported,
+        value: ditheringKindParam.value ?? config.defaults.shaderParams.dithering.kind,
+        mixed: ditheringKindParam.isMixed,
+        values: [...ditheringKindParam.values],
+      },
+      asciiKind: {
+        supported: asciiKindParam.isSupported,
+        value: asciiKindParam.value ?? config.defaults.shaderParams.ascii.kind,
+        mixed: asciiKindParam.isMixed,
+        values: [...asciiKindParam.values],
+      },
+      glassKind: {
+        supported: glassKindParam.isSupported,
+        value: glassKindParam.value ?? config.defaults.shaderParams.glass!.kind,
+        mixed: glassKindParam.isMixed,
+        values: [...glassKindParam.values],
+      },
+      glitchKind: {
+        supported: glitchKindParam.isSupported,
+        value: glitchKindParam.value ?? config.defaults.shaderParams.glitch!.kind,
+        mixed: glitchKindParam.isMixed,
+        values: [...glitchKindParam.values],
+      },
+      currentPaletteId: paletteParam.value?.id,
+      paletteMixed: paletteParam.isMixed,
+      paletteValues: [...paletteParam.values],
       hasEntities: entities.length > 0,
     });
   }, [
+    addToQueue,
+    addToUpscaleQueue,
+    asciiInvertParam.isMixed,
+    asciiInvertParam.isSupported,
+    asciiInvertParam.value,
+    asciiKindParam.isMixed,
+    asciiKindParam.isSupported,
+    asciiKindParam.value,
+    asciiKindParam.values,
+    customPalettes,
+    deleteEntity,
+    ditheringKindParam.isMixed,
+    ditheringKindParam.isSupported,
+    ditheringKindParam.value,
+    ditheringKindParam.values,
+    duplicateEntities,
     exportStudioFile,
-    saveAsStudioFile,
-    importStudioFile,
-    handleSnapToGridChange,
-    handleShaderTypeChange,
+    copyEntityParams,
+    copyEntity,
+    entities.length,
+    glassKindParam.isMixed,
+    glassKindParam.isSupported,
+    glassKindParam.value,
+    glassKindParam.values,
+    glitchKindParam.isMixed,
+    glitchKindParam.isSupported,
+    glitchKindParam.value,
+    glitchKindParam.values,
+    handleAsciiInvertChange,
+    handleAsciiKindChange,
+    handleBringToFront,
+    handleCanvasPaste,
+    handleDitheringKindChange,
+    handleGlassKindChange,
+    handleGlitchKindChange,
     handlePaletteChange,
-    handleShowOriginalChange,
+    handlePaletteUpload,
     handlePreserveColorsChange,
     handleReversePaletteChange,
-    copyEntity,
-    copyEntityParams,
-    pasteEntityParams,
-    handleBringToFront,
     handleSendToBack,
-    duplicateEntities,
-    resetEntityToDefaults,
-    deleteEntity,
-    saveSelectedEntityToFile,
-    snapToGrid,
-    showOriginal,
+    handleShaderTypeChange,
+    handleShowOriginalChange,
+    handleSnapToGridChange,
+    importStudioFile,
+    menuHints,
+    paletteParam.isMixed,
+    paletteParam.value,
+    paletteParam.values,
+    pasteEntityParams,
+    paletteInputRef,
     preserveColors,
-    entities.length,
+    preserveColorsMixed,
+    preserveColorsParam.isSupported,
+    renderer,
+    reversePaletteMixed,
+    reversePaletteParam.isSupported,
+    resetEntityToDefaults,
+    saveSelectedEntityToFile,
+    saveAsStudioFile,
+    selectionState,
+    shapeParam.isMixed,
+    shapeParam.isSupported,
+    shapeParam.value,
+    shapeParam.values,
+    showOriginal,
+    showOriginalMixed,
+    snapToGrid,
+    updateSelectedEntityParams,
   ]);
 
   // Observe container size changes and trigger re-render
@@ -1043,6 +1260,13 @@ export function InfiniteCanvas() {
         onFocus={handleContainerFocus}
         onBlur={handleContainerBlur}
       >
+        <input
+          ref={paletteInputRef}
+          type="file"
+          accept="image/*"
+          onChange={handlePaletteInputChange}
+          style={{ display: "none" }}
+        />
         {isSupported ? (
           <CanvasWrapper onOpenChange={handleContextMenuOpenChange} containerRef={containerRef}>
             <canvas

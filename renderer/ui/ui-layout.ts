@@ -664,6 +664,8 @@ function position(
   const resolvedY = y + offsetY;
   node.layout.x = resolvedX;
   node.layout.y = resolvedY;
+  const onLayout = node.props["onLayout"] as ((node: SceneNode) => void) | undefined;
+  onLayout?.(node);
 
   switch (node.type) {
     case "text": {

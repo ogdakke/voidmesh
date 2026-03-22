@@ -2,12 +2,12 @@
 // Submenu Controller
 // ---------------------------------------------------------------------------
 //
-// Manages open/close timing and safety-polygon hit testing for nested
-// submenu panels in the canvas UI system.
+// Manages open/close timing and safe-polygon hit testing for nested submenu
+// panels in the canvas UI system.
 //
-// Safety polygon algorithm is based on base-ui's safePolygon approach:
-// a quadrilateral from cursor to the near edge of the submenu, plus a
-// "trough" check for direct horizontal movement between trigger and panel.
+// The polygon logic is modeled after Base UI's safePolygon implementation,
+// but it runs against the canvas UI scene graph using the actual laid-out
+// trigger and submenu rects.
 //
 
 import type { SceneNode } from "./scene-node.ts";
@@ -29,65 +29,96 @@ export interface SubmenuPosition {
   side: "left" | "right";
 }
 
-interface Point {
+export interface Point {
   x: number;
   y: number;
+}
+
+export interface SubmenuDebugState {
+  fixedOrigin: Point | null;
+  triggerRect: SubmenuRect | null;
+  submenuRect: SubmenuRect | null;
+  troughRect: SubmenuRect | null;
+  exitPoint: Point | null;
+  polygon: Point[];
 }
 
 // ---------------------------------------------------------------------------
 // Geometry helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Point-in-quadrilateral test via cross-product winding.
- * Vertices must be in order (CW or CCW — we check for consistent sign).
- */
 function isPointInQuadrilateral(
-  px: number,
-  py: number,
-  v0: Point,
-  v1: Point,
-  v2: Point,
-  v3: Point,
+  pointX: number,
+  pointY: number,
+  a: Point,
+  b: Point,
+  c: Point,
+  d: Point,
 ): boolean {
-  const vertices = [v0, v1, v2, v3];
-  let positive = 0;
-  let negative = 0;
+  const vertices = [a, b, c, d];
+  let isInside = false;
 
   for (let i = 0; i < 4; i++) {
-    const a = vertices[i]!;
-    const b = vertices[(i + 1) % 4]!;
-    const cross = (b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x);
+    const current = vertices[i]!;
+    const next = vertices[(i + 1) % 4]!;
+    const intersects =
+      current.y >= pointY !== next.y >= pointY &&
+      pointX <= ((next.x - current.x) * (pointY - current.y)) / (next.y - current.y) + current.x;
 
-    if (cross > 0) positive++;
-    else if (cross < 0) negative++;
-
-    // If we have both positive and negative, point is outside
-    if (positive > 0 && negative > 0) return false;
+    if (intersects) {
+      isInside = !isInside;
+    }
   }
 
-  return true;
+  return isInside;
 }
 
-/**
- * Check if point is inside an axis-aligned rectangle (the "trough"
- * between trigger and submenu for direct horizontal movement).
- */
-function isPointInTrough(
-  px: number,
-  py: number,
-  triggerRect: SubmenuRect,
-  submenuRect: SubmenuRect,
+function isInsideRect(pointX: number, pointY: number, rect: SubmenuRect): boolean {
+  return (
+    pointX >= rect.x &&
+    pointX <= rect.x + rect.width &&
+    pointY >= rect.y &&
+    pointY <= rect.y + rect.height
+  );
+}
+
+function isInsideAxisAlignedRect(
+  pointX: number,
+  pointY: number,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
 ): boolean {
-  // Horizontal extent: from trigger right edge to submenu left edge (or vice versa)
-  const leftEdge = Math.min(triggerRect.x + triggerRect.width, submenuRect.x);
-  const rightEdge = Math.max(triggerRect.x + triggerRect.width, submenuRect.x);
+  const minX = Math.min(x1, x2);
+  const maxX = Math.max(x1, x2);
+  const minY = Math.min(y1, y2);
+  const maxY = Math.max(y1, y2);
 
-  // Use trigger vertical bounds for trough height (more conservative)
-  const troughTop = triggerRect.y;
-  const troughBottom = triggerRect.y + triggerRect.height;
+  return pointX >= minX && pointX <= maxX && pointY >= minY && pointY <= maxY;
+}
 
-  return px >= leftEdge && px <= rightEdge && py >= troughTop && py <= troughBottom;
+function rectFromPoints(x1: number, y1: number, x2: number, y2: number): SubmenuRect {
+  return {
+    x: Math.min(x1, x2),
+    y: Math.min(y1, y2),
+    width: Math.abs(x2 - x1),
+    height: Math.abs(y2 - y1),
+  };
+}
+
+function getFixedAncestorOrigin(node: SceneNode): Point {
+  let cursor: SceneNode | null = node;
+  let fixedAncestor: SceneNode | null = null;
+
+  while (cursor) {
+    if (cursor.props["position"] === "fixed") {
+      fixedAncestor = cursor;
+    }
+    cursor = cursor.parent;
+  }
+
+  return fixedAncestor ? { x: fixedAncestor.layout.x, y: fixedAncestor.layout.y } : { x: 0, y: 0 };
 }
 
 // ---------------------------------------------------------------------------
@@ -95,20 +126,26 @@ function isPointInTrough(
 // ---------------------------------------------------------------------------
 
 const OPEN_DELAY_MS = 100;
-const CURSOR_BUFFER = 0.5;
-const SLOW_SPEED_THRESHOLD = 0.1; // px/ms
+const POLYGON_BUFFER = 0.5;
+const CURSOR_SPEED_THRESHOLD = 0.1; // px/ms
+const CURSOR_SPEED_THRESHOLD_SQUARED = CURSOR_SPEED_THRESHOLD * CURSOR_SPEED_THRESHOLD;
 
 export class SubmenuController {
   #activeTrigger: SceneNode | null = null;
-  #submenuPosition: SubmenuPosition | null = null;
-  #submenuDimensions: { width: number; height: number } | null = null;
   #triggerRect: SubmenuRect | null = null;
+  #submenuRect: SubmenuRect | null = null;
+  #fixedOrigin: Point | null = null;
 
   #openTimer: ReturnType<typeof setTimeout> | null = null;
 
   #isOpen = false;
+  #hasLanded = false;
+  #exitPoint: Point | null = null;
+  #lastPointer: Point | null = null;
+  #lastPointerTime = 0;
+  #debugTroughRect: SubmenuRect | null = null;
+  #debugPolygon: Point[] = [];
 
-  // Callback fired when submenu state changes — consumer should re-render
   onChange: (() => void) | null = null;
 
   get isOpen(): boolean {
@@ -120,189 +157,305 @@ export class SubmenuController {
   }
 
   get submenuPosition(): SubmenuPosition | null {
-    return this.#submenuPosition;
+    if (!this.#submenuRect || !this.#triggerRect) return null;
+
+    const triggerCenterX = this.#triggerRect.x + this.#triggerRect.width / 2;
+    const submenuCenterX = this.#submenuRect.x + this.#submenuRect.width / 2;
+
+    return {
+      x: this.#submenuRect.x,
+      y: this.#submenuRect.y,
+      side: submenuCenterX >= triggerCenterX ? "right" : "left",
+    };
   }
 
-  /**
-   * Check if the submenu is currently open for a specific trigger node.
-   */
+  get debugState(): SubmenuDebugState {
+    const origin = this.#fixedOrigin;
+
+    const toRelativeRect = (rect: SubmenuRect | null): SubmenuRect | null => {
+      if (!rect || !origin) return rect;
+      return {
+        x: rect.x - origin.x,
+        y: rect.y - origin.y,
+        width: rect.width,
+        height: rect.height,
+      };
+    };
+
+    const toRelativePoint = (point: Point | null): Point | null => {
+      if (!point || !origin) return point;
+      return { x: point.x - origin.x, y: point.y - origin.y };
+    };
+
+    return {
+      fixedOrigin: origin,
+      triggerRect: toRelativeRect(this.#triggerRect),
+      submenuRect: toRelativeRect(this.#submenuRect),
+      troughRect: toRelativeRect(this.#debugTroughRect),
+      exitPoint: toRelativePoint(this.#exitPoint),
+      polygon: origin
+        ? this.#debugPolygon.map((point) => ({ x: point.x - origin.x, y: point.y - origin.y }))
+        : this.#debugPolygon,
+    };
+  }
+
   isOpenFor(triggerNode: SceneNode): boolean {
     return this.#isOpen && this.#activeTrigger === triggerNode;
   }
 
-  /**
-   * Open a submenu for the given trigger node.
-   * Computes position based on trigger layout rect and available viewport space.
-   */
-  open(
-    triggerNode: SceneNode,
-    submenuDimensions: { width: number; height: number },
-    viewportRect: SubmenuRect,
-  ): void {
+  open(triggerNode: SceneNode): void {
     this.#clearOpenTimer();
 
-    const alreadyOpen = this.#isOpen;
-
-    // If a submenu is already open, switch immediately (no delay)
-    if (alreadyOpen && this.#activeTrigger !== triggerNode) {
-      this.#doOpen(triggerNode, submenuDimensions, viewportRect);
+    if (this.#isOpen && this.#activeTrigger !== triggerNode) {
+      this.#doOpen(triggerNode);
       return;
     }
 
-    // If already open for this trigger, do nothing
     if (this.isOpenFor(triggerNode)) return;
 
-    // Schedule open with delay
     this.#openTimer = setTimeout(() => {
       this.#openTimer = null;
-      this.#doOpen(triggerNode, submenuDimensions, viewportRect);
+      this.#doOpen(triggerNode);
     }, OPEN_DELAY_MS);
   }
 
-  #doOpen(
-    triggerNode: SceneNode,
-    submenuDimensions: { width: number; height: number },
-    viewportRect: SubmenuRect,
-  ): void {
+  #doOpen(triggerNode: SceneNode): void {
     this.#activeTrigger = triggerNode;
-    this.#submenuDimensions = submenuDimensions;
-
-    // Get trigger layout rect
-    const layout = triggerNode.layout;
+    this.#fixedOrigin = getFixedAncestorOrigin(triggerNode);
     this.#triggerRect = {
-      x: layout.x,
-      y: layout.y,
-      width: layout.width,
-      height: layout.height,
+      x: triggerNode.layout.x,
+      y: triggerNode.layout.y,
+      width: triggerNode.layout.width,
+      height: triggerNode.layout.height,
     };
-
-    // Compute submenu position: prefer right side, fall back to left
-    const rightX = layout.x + layout.width;
-    const leftX = layout.x - submenuDimensions.width;
-
-    const fitsRight = rightX + submenuDimensions.width <= viewportRect.x + viewportRect.width;
-    const fitsLeft = leftX >= viewportRect.x;
-
-    let side: "left" | "right";
-    let x: number;
-    if (fitsRight) {
-      side = "right";
-      x = rightX;
-    } else if (fitsLeft) {
-      side = "left";
-      x = leftX;
-    } else {
-      // Default to right even if it overflows
-      side = "right";
-      x = rightX;
-    }
-
-    // Vertical alignment: align top of submenu with top of trigger
-    let y = layout.y;
-    // Clamp to viewport bottom
-    const bottomOverflow = y + submenuDimensions.height - (viewportRect.y + viewportRect.height);
-    if (bottomOverflow > 0) {
-      y -= bottomOverflow;
-    }
-    // Clamp to viewport top
-    if (y < viewportRect.y) {
-      y = viewportRect.y;
-    }
-
-    this.#submenuPosition = { x, y, side };
+    this.#submenuRect = null;
     this.#isOpen = true;
+    this.#hasLanded = false;
+    this.#exitPoint = null;
+    this.#lastPointer = null;
+    this.#lastPointerTime = 0;
+    this.#debugTroughRect = null;
+    this.#debugPolygon = [];
     this.onChange?.();
   }
 
-  /**
-   * Close the currently open submenu.
-   */
+  syncSubmenuNode(node: SceneNode): void {
+    if (!this.#isOpen) return;
+
+    this.#fixedOrigin = getFixedAncestorOrigin(node);
+    this.#submenuRect = {
+      x: node.layout.x,
+      y: node.layout.y,
+      width: node.layout.width,
+      height: node.layout.height,
+    };
+  }
+
   close(): void {
     this.#clearOpenTimer();
 
     if (!this.#isOpen) return;
 
     this.#activeTrigger = null;
-    this.#submenuPosition = null;
-    this.#submenuDimensions = null;
     this.#triggerRect = null;
+    this.#submenuRect = null;
+    this.#fixedOrigin = null;
     this.#isOpen = false;
+    this.#hasLanded = false;
+    this.#exitPoint = null;
+    this.#lastPointer = null;
+    this.#lastPointerTime = 0;
+    this.#debugTroughRect = null;
+    this.#debugPolygon = [];
     this.onChange?.();
   }
 
-  /**
-   * Handle pointer movement. Returns true if the cursor is in the safe zone
-   * (i.e., the submenu should stay open).
-   */
   handlePointerMove(worldX: number, worldY: number, cursorSpeed: number): boolean {
-    if (!this.#isOpen || !this.#submenuPosition || !this.#submenuDimensions || !this.#triggerRect) {
+    if (!this.#isOpen || !this.#triggerRect) {
       return false;
     }
 
-    // If cursor speed is very slow, it's likely the user stopped moving
-    // toward the submenu — consider closing
-    if (cursorSpeed < SLOW_SPEED_THRESHOLD && cursorSpeed > 0) {
+    const submenuRect = this.#submenuRect;
+    if (!submenuRect) {
+      return true;
+    }
+
+    const submenuPosition = this.submenuPosition;
+    if (!submenuPosition) {
+      return true;
+    }
+
+    const previousPointer = this.#lastPointer;
+    const previousTime = this.#lastPointerTime;
+    this.#lastPointer = { x: worldX, y: worldY };
+    this.#lastPointerTime = performance.now();
+
+    this.#debugTroughRect = null;
+    this.#debugPolygon = [];
+
+    if (isInsideRect(worldX, worldY, submenuRect)) {
+      this.#hasLanded = true;
+      return true;
+    }
+
+    if (isInsideRect(worldX, worldY, this.#triggerRect)) {
+      this.#hasLanded = false;
+      this.#exitPoint = null;
+      return true;
+    }
+
+    if (this.#hasLanded) {
       return false;
     }
 
-    const submenuRect: SubmenuRect = {
-      x: this.#submenuPosition.x,
-      y: this.#submenuPosition.y,
-      width: this.#submenuDimensions.width,
-      height: this.#submenuDimensions.height,
-    };
+    if (this.#exitPoint == null) {
+      if (
+        previousPointer &&
+        isInsideRect(previousPointer.x, previousPointer.y, this.#triggerRect)
+      ) {
+        this.#exitPoint = previousPointer;
+      } else if (previousPointer) {
+        this.#exitPoint = previousPointer;
+      } else {
+        this.#exitPoint = { x: worldX, y: worldY };
+      }
+    }
 
-    // Check if cursor is inside the submenu itself
+    const exitPoint = this.#exitPoint;
+    if (!exitPoint) return false;
+
     if (
-      worldX >= submenuRect.x &&
-      worldX <= submenuRect.x + submenuRect.width &&
-      worldY >= submenuRect.y &&
-      worldY <= submenuRect.y + submenuRect.height
+      (submenuPosition.side === "right" && exitPoint.x <= this.#triggerRect.x + 1) ||
+      (submenuPosition.side === "left" &&
+        exitPoint.x >= this.#triggerRect.x + this.#triggerRect.width - 1)
+    ) {
+      return false;
+    }
+
+    const isFloatingTaller = submenuRect.height > this.#triggerRect.height;
+    const top = (isFloatingTaller ? this.#triggerRect : submenuRect).y;
+    const bottom =
+      (isFloatingTaller ? this.#triggerRect : submenuRect).y +
+      (isFloatingTaller ? this.#triggerRect.height : submenuRect.height);
+
+    this.#debugTroughRect =
+      submenuPosition.side === "right"
+        ? rectFromPoints(
+            this.#triggerRect.x + this.#triggerRect.width - 1,
+            bottom,
+            submenuRect.x + 1,
+            top,
+          )
+        : rectFromPoints(
+            submenuRect.x + submenuRect.width - 1,
+            bottom,
+            this.#triggerRect.x + 1,
+            top,
+          );
+
+    if (
+      isInsideAxisAlignedRect(
+        worldX,
+        worldY,
+        this.#debugTroughRect.x,
+        this.#debugTroughRect.y,
+        this.#debugTroughRect.x + this.#debugTroughRect.width,
+        this.#debugTroughRect.y + this.#debugTroughRect.height,
+      )
     ) {
       return true;
     }
 
-    // Check if cursor is inside the trigger
-    if (
-      worldX >= this.#triggerRect.x &&
-      worldX <= this.#triggerRect.x + this.#triggerRect.width &&
-      worldY >= this.#triggerRect.y &&
-      worldY <= this.#triggerRect.y + this.#triggerRect.height
-    ) {
-      return true;
+    if (cursorSpeed > 0 && cursorSpeed < CURSOR_SPEED_THRESHOLD) {
+      return false;
     }
 
-    // Check trough (direct horizontal path between trigger and submenu)
-    if (isPointInTrough(worldX, worldY, this.#triggerRect, submenuRect)) {
-      return true;
+    if (previousPointer && previousTime > 0) {
+      const elapsed = this.#lastPointerTime - previousTime;
+      if (elapsed > 0) {
+        const deltaX = worldX - previousPointer.x;
+        const deltaY = worldY - previousPointer.y;
+        const distanceSquared = deltaX * deltaX + deltaY * deltaY;
+        const thresholdSquared = elapsed * elapsed * CURSOR_SPEED_THRESHOLD_SQUARED;
+        if (distanceSquared < thresholdSquared) {
+          return false;
+        }
+      }
     }
 
-    // Build safety quadrilateral from cursor to near edge of submenu
-    const nearEdgeX =
-      this.#submenuPosition.side === "right" ? submenuRect.x : submenuRect.x + submenuRect.width;
+    const cursorLeaveFromBottom = exitPoint.y > this.#triggerRect.y + this.#triggerRect.height / 2;
+    const cursorYOffset = isFloatingTaller ? POLYGON_BUFFER / 2 : POLYGON_BUFFER * 4;
 
-    // Two points at cursor position (with small buffer to create a wedge)
-    const cursorTop: Point = { x: worldX, y: worldY - CURSOR_BUFFER };
-    const cursorBottom: Point = { x: worldX, y: worldY + CURSOR_BUFFER };
+    if (submenuPosition.side === "right") {
+      const cursorPointOneY = isFloatingTaller
+        ? exitPoint.y + cursorYOffset
+        : cursorLeaveFromBottom
+          ? exitPoint.y + cursorYOffset
+          : exitPoint.y - cursorYOffset;
+      const cursorPointTwoY = isFloatingTaller
+        ? exitPoint.y - cursorYOffset
+        : cursorLeaveFromBottom
+          ? exitPoint.y + cursorYOffset
+          : exitPoint.y - cursorYOffset;
+      const cursorPointX = exitPoint.x - POLYGON_BUFFER;
+      const commonXTop = cursorLeaveFromBottom
+        ? submenuRect.x + POLYGON_BUFFER
+        : isFloatingTaller
+          ? submenuRect.x + POLYGON_BUFFER
+          : submenuRect.x + submenuRect.width;
+      const commonXBottom = cursorLeaveFromBottom
+        ? isFloatingTaller
+          ? submenuRect.x + POLYGON_BUFFER
+          : submenuRect.x + submenuRect.width
+        : submenuRect.x + POLYGON_BUFFER;
 
-    // Two points at the near edge of the submenu
-    const submenuTop: Point = { x: nearEdgeX, y: submenuRect.y };
-    const submenuBottom: Point = { x: nearEdgeX, y: submenuRect.y + submenuRect.height };
+      this.#debugPolygon = [
+        { x: cursorPointX, y: cursorPointOneY },
+        { x: cursorPointX, y: cursorPointTwoY },
+        { x: commonXTop, y: submenuRect.y },
+        { x: commonXBottom, y: submenuRect.y + submenuRect.height },
+      ];
+    } else {
+      const cursorPointOneY = isFloatingTaller
+        ? exitPoint.y + cursorYOffset
+        : cursorLeaveFromBottom
+          ? exitPoint.y + cursorYOffset
+          : exitPoint.y - cursorYOffset;
+      const cursorPointTwoY = isFloatingTaller
+        ? exitPoint.y - cursorYOffset
+        : cursorLeaveFromBottom
+          ? exitPoint.y + cursorYOffset
+          : exitPoint.y - cursorYOffset;
+      const cursorPointX = exitPoint.x + POLYGON_BUFFER + 1;
+      const commonXTop = cursorLeaveFromBottom
+        ? submenuRect.x + submenuRect.width - POLYGON_BUFFER
+        : isFloatingTaller
+          ? submenuRect.x + submenuRect.width - POLYGON_BUFFER
+          : submenuRect.x;
+      const commonXBottom = cursorLeaveFromBottom
+        ? isFloatingTaller
+          ? submenuRect.x + submenuRect.width - POLYGON_BUFFER
+          : submenuRect.x
+        : submenuRect.x + submenuRect.width - POLYGON_BUFFER;
 
-    // The quad is: cursorTop → submenuTop → submenuBottom → cursorBottom
+      this.#debugPolygon = [
+        { x: commonXTop, y: submenuRect.y },
+        { x: commonXBottom, y: submenuRect.y + submenuRect.height },
+        { x: cursorPointX, y: cursorPointOneY },
+        { x: cursorPointX, y: cursorPointTwoY },
+      ];
+    }
+
     return isPointInQuadrilateral(
       worldX,
       worldY,
-      cursorTop,
-      submenuTop,
-      submenuBottom,
-      cursorBottom,
+      this.#debugPolygon[0]!,
+      this.#debugPolygon[1]!,
+      this.#debugPolygon[2]!,
+      this.#debugPolygon[3]!,
     );
   }
 
-  /**
-   * Cancel any pending open timer.
-   */
   #clearOpenTimer(): void {
     if (this.#openTimer !== null) {
       clearTimeout(this.#openTimer);
@@ -310,16 +463,19 @@ export class SubmenuController {
     }
   }
 
-  /**
-   * Clean up timers.
-   */
   destroy(): void {
     this.#clearOpenTimer();
     this.#isOpen = false;
     this.#activeTrigger = null;
-    this.#submenuPosition = null;
-    this.#submenuDimensions = null;
     this.#triggerRect = null;
+    this.#submenuRect = null;
+    this.#fixedOrigin = null;
+    this.#hasLanded = false;
+    this.#exitPoint = null;
+    this.#lastPointer = null;
+    this.#lastPointerTime = 0;
+    this.#debugTroughRect = null;
+    this.#debugPolygon = [];
     this.onChange = null;
   }
 }

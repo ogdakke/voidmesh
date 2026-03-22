@@ -3,6 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import type { ComponentType } from "react";
+import type { SceneNode } from "./scene-node.ts";
 
 export type ReactIconComponent = ComponentType<Record<string, unknown>>;
 
@@ -170,8 +171,9 @@ export interface BoxElementProps {
   onClick?: UIEventHandler;
   onPointerDown?: UIEventHandler;
   onPointerUp?: UIEventHandler;
-  onHoverEnter?: (node: import("./scene-node.ts").SceneNode) => void;
-  onHoverLeave?: (node: import("./scene-node.ts").SceneNode) => void;
+  onHoverEnter?: (node: SceneNode) => void;
+  onHoverLeave?: (node: SceneNode) => void;
+  onLayout?: (node: SceneNode) => void;
   // Draggable
   draggable?: boolean;
   onDrag?: UIDragHandler;
