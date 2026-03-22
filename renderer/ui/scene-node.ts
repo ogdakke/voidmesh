@@ -299,3 +299,28 @@ export function hasActiveAnimations(root: SceneNode): boolean {
   }
   return false;
 }
+
+/**
+ * Remove exiting nodes whose animations have completed.
+ * Call once per frame after animation resolution.
+ */
+export function pruneExitedNodes(root: SceneNode): boolean {
+  let changed = false;
+  const children = root.children;
+  let writeIndex = 0;
+  for (let i = 0; i < children.length; i++) {
+    const child = children[i]!;
+    if (pruneExitedNodes(child)) {
+      changed = true;
+    }
+    if (child.canPrune) {
+      changed = true;
+    } else {
+      children[writeIndex++] = child;
+    }
+  }
+  if (writeIndex < children.length) {
+    children.length = writeIndex;
+  }
+  return changed;
+}

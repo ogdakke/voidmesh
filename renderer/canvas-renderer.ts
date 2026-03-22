@@ -42,8 +42,9 @@ import { TexturePool } from "./texture-pool.ts";
 import { resolveWlurOverlayRuntimeConfig, type WlurOverlayConfig } from "./wlur-overlay.ts";
 import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
 import { UIRenderer } from "./ui/ui-renderer.ts";
-import { buildEntityLabel } from "./ui/entity-label.tsx";
-import { buildDebugOverlay } from "./ui/debug-ui.tsx";
+import { createElement } from "react";
+import { EntityLabel } from "./ui/entity-label.tsx";
+import { DebugOverlayUI } from "./ui/debug-ui.tsx";
 import { perfOverlay } from "../engine/perf-overlay.ts";
 
 type GpuTimingPhase =
@@ -1849,17 +1850,17 @@ export class InfiniteCanvasRenderer {
       // Render label for this entity immediately after its composition pass
       if (uiReady && selectedEntityIds.has(entity.id)) {
         const isDragging = entityDragVisual.isDragPhase();
-        const label = buildEntityLabel(entity, isDragging);
+        const sceneKey = `label-${entity.id}`;
+        this.#uiRenderer!.updateScene(sceneKey, createElement(EntityLabel, { entity, isDragging }));
         const labelWorldX = entity.position.x + entity.size.width / 2;
         const gap = 8 * uiScale;
         const labelWorldY = entity.position.y - gap;
-        this.#uiRenderer!.render(
-          label,
+        this.#uiRenderer!.renderScene(
+          sceneKey,
           labelWorldX,
           labelWorldY,
           encoder,
           targetView,
-          `label-${entity.id}`,
           uiScale,
           undefined,
           {
@@ -1984,20 +1985,17 @@ export class InfiniteCanvasRenderer {
       sharpPass.draw(6);
       sharpPass.end();
 
-      // Render label for action layer entity
+      // Render label for action layer entity (scene already updated in main pass)
       if (uiReady && selectedEntityIds.has(entity.id)) {
-        const isDragging = entityDragVisual.isDragPhase();
-        const label = buildEntityLabel(entity, isDragging);
         const labelWorldX = entity.position.x + entity.size.width / 2;
         const gap = 8 * uiScale;
         const labelWorldY = entity.position.y - gap;
-        this.#uiRenderer!.render(
-          label,
+        this.#uiRenderer!.renderScene(
+          `label-${entity.id}`,
           labelWorldX,
           labelWorldY,
           encoder,
           targetView,
-          `label-${entity.id}`,
           uiScale,
           undefined,
           {
@@ -2014,17 +2012,19 @@ export class InfiniteCanvasRenderer {
 
     // Debug UI overlay (stress test for canvas UI engine)
     if (debugMode && uiReady) {
-      const debugUI = buildDebugOverlay({
-        zoom: viewport.zoom,
-        perf: perfOverlay.getSnapshot(),
-      });
-      this.#uiRenderer!.render(
-        debugUI,
+      this.#uiRenderer!.updateScene(
+        "debug-ui",
+        createElement(DebugOverlayUI, {
+          zoom: viewport.zoom,
+          perf: perfOverlay.getSnapshot(),
+        }),
+      );
+      this.#uiRenderer!.renderScene(
+        "debug-ui",
         560, // world-space anchor X
         360, // world-space anchor Y
         encoder,
         targetView,
-        "debug-ui",
         dpr,
         undefined,
         {

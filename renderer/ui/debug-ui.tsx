@@ -1,13 +1,12 @@
-/** @jsxImportSource ./jsx */
 import type {
-  UIElement,
   UIColorValue,
   UIBackground,
   UIEventHandler,
   StateStyle,
   ReactIconComponent,
 } from "./elements.ts";
-import { edges, gradient, lightDark, memo, solid, spring } from "./elements.ts";
+import { edges, gradient, lightDark, solid, spring } from "./elements.ts";
+import { Box, Text, Icon } from "./primitives.tsx";
 import {
   Check,
   Xmark,
@@ -16,7 +15,6 @@ import {
   Settings,
   Drag,
   Palette,
-  MoreVert,
   Copy,
   Download,
   InfoCircle,
@@ -33,7 +31,7 @@ import {
   Trash,
 } from "iconoir-react";
 
-type ButtonProps = Record<string, unknown> & {
+type ButtonProps = {
   label?: string;
   background?: UIBackground;
   color?: UIColorValue;
@@ -41,20 +39,20 @@ type ButtonProps = Record<string, unknown> & {
   onClick?: UIEventHandler;
 };
 
-type BadgeProps = Record<string, unknown> & {
+type BadgeProps = {
   label: string;
   background?: UIBackground;
   color?: UIColorValue;
 };
 
-type StatRowProps = Record<string, unknown> & {
+type StatRowProps = {
   label: string;
   value: string;
   stacked?: boolean;
   valueMaxWidth?: number;
 };
 
-type SpecimenCardProps = Record<string, unknown> & {
+type SpecimenCardProps = {
   title: string;
   background: UIBackground;
   color: UIColorValue;
@@ -69,7 +67,7 @@ export interface DebugOverlayStats {
   sampleCount: number;
 }
 
-type DebugOverlayProps = Record<string, unknown> & {
+type DebugOverlayProps = {
   zoom: number;
   perf: DebugOverlayStats;
 };
@@ -166,25 +164,12 @@ function formatMs(value: number): string {
   return value > 0 ? `${value.toFixed(1)} ms` : "warming";
 }
 
-function Button(props: ButtonProps): UIElement {
-  const { label, background, color, icon: iconProp, onClick } = props;
+function Button({ label, background, color, icon: iconProp, onClick }: ButtonProps) {
   const bg = background ?? PRIMARY_BG;
   const textColor = color ?? WHITE;
-  const content: UIElement[] = [];
-
-  if (iconProp) {
-    content.push(<icon icon={iconProp} size={14} tint={textColor} />);
-  }
-  if (label) {
-    content.push(
-      <text fontSize={12} color={textColor}>
-        {label}
-      </text>,
-    );
-  }
 
   return (
-    <box
+    <Box
       direction="row"
       gap={6}
       padding={edges(6, 12)}
@@ -196,14 +181,19 @@ function Button(props: ButtonProps): UIElement {
       transition={SPRING_SCALE}
       onClick={onClick}
     >
-      {content}
-    </box>
+      {iconProp && <Icon icon={iconProp} size={14} tint={textColor} />}
+      {label && (
+        <Text fontSize={12} color={textColor}>
+          {label}
+        </Text>
+      )}
+    </Box>
   );
 }
 
-function Badge({ label, background, color }: BadgeProps): UIElement {
+function Badge({ label, background, color }: BadgeProps) {
   return (
-    <box
+    <Box
       padding={edges(3, 8)}
       background={background ?? ACCENT_BG}
       borderRadius={10}
@@ -211,44 +201,44 @@ function Badge({ label, background, color }: BadgeProps): UIElement {
       active={ACTIVE_STYLE}
       transition={SPRING_SCALE}
     >
-      <text fontSize={10} color={color ?? WHITE}>
+      <Text fontSize={10} color={color ?? WHITE}>
         {label}
-      </text>
-    </box>
+      </Text>
+    </Box>
   );
 }
 
-function SectionEyebrow({ label }: { label: string }): UIElement {
+function SectionEyebrow({ label }: { label: string }) {
   return (
-    <text fontSize={10} color={MUTED}>
+    <Text fontSize={10} color={MUTED}>
       {label}
-    </text>
+    </Text>
   );
 }
 
-function StatRow({ label, value, stacked = false, valueMaxWidth }: StatRowProps): UIElement {
+function StatRow({ label, value, stacked = false, valueMaxWidth }: StatRowProps) {
   if (stacked) {
     return (
-      <box direction="col" gap={2}>
-        <text fontSize={10} color={MUTED}>
+      <Box direction="col" gap={2}>
+        <Text fontSize={10} color={MUTED}>
           {label}
-        </text>
-        <text fontSize={11} color={PANEL_TEXT} maxWidth={valueMaxWidth}>
+        </Text>
+        <Text fontSize={11} color={PANEL_TEXT} maxWidth={valueMaxWidth}>
           {value}
-        </text>
-      </box>
+        </Text>
+      </Box>
     );
   }
 
   return (
-    <box direction="row" gap={8} align="center" justifyContent="space-between">
-      <text fontSize={11} color={MUTED}>
+    <Box direction="row" gap={8} align="center" justifyContent="space-between">
+      <Text fontSize={11} color={MUTED}>
         {label}
-      </text>
-      <text fontSize={11} color={PANEL_TEXT} maxWidth={valueMaxWidth}>
+      </Text>
+      <Text fontSize={11} color={PANEL_TEXT} maxWidth={valueMaxWidth}>
         {value}
-      </text>
-    </box>
+      </Text>
+    </Box>
   );
 }
 
@@ -260,9 +250,9 @@ function MiniStat({
   label: string;
   value: string;
   background?: UIBackground;
-}): UIElement {
+}) {
   return (
-    <box
+    <Box
       direction="col"
       gap={4}
       padding={edges(10)}
@@ -273,13 +263,13 @@ function MiniStat({
       borderColor={PANEL_BORDER}
       flexGrow={1}
     >
-      <text fontSize={10} color={MUTED}>
+      <Text fontSize={10} color={MUTED}>
         {label}
-      </text>
-      <text fontSize={16} color={PANEL_TEXT}>
+      </Text>
+      <Text fontSize={16} color={PANEL_TEXT}>
         {value}
-      </text>
-    </box>
+      </Text>
+    </Box>
   );
 }
 
@@ -295,41 +285,41 @@ function MeterRow({
   max: number;
   formatted: string;
   fill: UIBackground;
-}): UIElement {
+}) {
   const fillWidth = clamp((value / max) * 180, 12, 180);
 
   return (
-    <box direction="col" gap={6}>
-      <box direction="row" justifyContent="space-between" align="center">
-        <text fontSize={10} color={MUTED}>
+    <Box direction="col" gap={6}>
+      <Box direction="row" justifyContent="space-between" align="center">
+        <Text fontSize={10} color={MUTED}>
           {label}
-        </text>
-        <text fontSize={10} color={PANEL_TEXT}>
+        </Text>
+        <Text fontSize={10} color={PANEL_TEXT}>
           {formatted}
-        </text>
-      </box>
-      <box
+        </Text>
+      </Box>
+      <Box
         width={180}
         height={10}
         padding={2}
         background={solid(lightDark("rgba(18, 22, 32, 0.08)", "rgba(255, 255, 255, 0.08)"))}
         borderRadius={999}
       >
-        <box width={fillWidth} height={6} background={fill} borderRadius={999} />
-      </box>
-    </box>
+        <Box width={fillWidth} height={6} background={fill} borderRadius={999} />
+      </Box>
+    </Box>
   );
 }
 
-function SwatchStrip({ title, colors }: { title: string; colors: string[] }): UIElement {
+function SwatchStrip({ title, colors }: { title: string; colors: string[] }) {
   return (
-    <box direction="col" gap={6}>
-      <text fontSize={10} color={MUTED}>
+    <Box direction="col" gap={6}>
+      <Text fontSize={10} color={MUTED}>
         {title}
-      </text>
-      <box direction="row" gap={6}>
+      </Text>
+      <Box direction="row" gap={6}>
         {colors.map((color, index) => (
-          <box
+          <Box
             key={`${title}-${index}`}
             width={24}
             height={24}
@@ -339,8 +329,8 @@ function SwatchStrip({ title, colors }: { title: string; colors: string[] }): UI
             borderColor={PANEL_BORDER}
           />
         ))}
-      </box>
-    </box>
+      </Box>
+    </Box>
   );
 }
 
@@ -354,7 +344,7 @@ function PanelChrome({
   borderColor = PANEL_BORDER,
   draggable = true,
   children,
-}: Record<string, unknown> & {
+}: {
   title: string;
   subtitle?: string;
   icon: ReactIconComponent;
@@ -363,23 +353,10 @@ function PanelChrome({
   background?: UIBackground;
   borderColor?: UIColorValue;
   draggable?: boolean;
-  children: UIElement;
-}): UIElement {
-  const titleContent: UIElement[] = [
-    <text key="title" fontSize={14} color={PANEL_TEXT}>
-      {title}
-    </text>,
-  ];
-  if (subtitle) {
-    titleContent.push(
-      <text key="subtitle" fontSize={10} color={MUTED}>
-        {subtitle}
-      </text>,
-    );
-  }
-
+  children: React.ReactNode;
+}) {
   return (
-    <box
+    <Box
       direction="col"
       gap={12}
       padding={edges(14)}
@@ -391,20 +368,27 @@ function PanelChrome({
       borderColor={borderColor}
       draggable={draggable}
     >
-      <box direction="row" justifyContent="space-between" align="center">
-        <box direction="row" gap={10} align="center">
-          <icon icon={icon} size={16} tint="var(--tint-1000)" />
-          <box direction="col" gap={2}>
-            {titleContent}
-          </box>
-        </box>
-      </box>
+      <Box direction="row" justifyContent="space-between" align="center">
+        <Box direction="row" gap={10} align="center">
+          <Icon icon={icon} size={16} tint="var(--tint-1000)" />
+          <Box direction="col" gap={2}>
+            <Text key="title" fontSize={14} color={PANEL_TEXT}>
+              {title}
+            </Text>
+            {subtitle && (
+              <Text key="subtitle" fontSize={10} color={MUTED}>
+                {subtitle}
+              </Text>
+            )}
+          </Box>
+        </Box>
+      </Box>
       {children}
-    </box>
+    </Box>
   );
 }
 
-const ActionMatrix = memo(function ActionMatrix(): UIElement {
+function ActionMatrix() {
   return (
     <PanelChrome
       title="Action Matrix"
@@ -413,10 +397,10 @@ const ActionMatrix = memo(function ActionMatrix(): UIElement {
       width={352}
       background={WINDOW_ALT_BG}
     >
-      <box direction="col" gap={8}>
-        <box direction="col" gap={8}>
+      <Box direction="col" gap={8}>
+        <Box direction="col" gap={8}>
           {ACTION_ROWS.map((row, rowIndex) => (
-            <box key={`action-row-${rowIndex}`} direction="row" gap={8} align="center">
+            <Box key={`action-row-${rowIndex}`} direction="row" gap={8} align="center">
               {row.map((item) => (
                 <Button
                   key={item.label}
@@ -427,18 +411,18 @@ const ActionMatrix = memo(function ActionMatrix(): UIElement {
                   onClick={() => console.log(`[CanvasUI] ${item.label} clicked`)}
                 />
               ))}
-            </box>
+            </Box>
           ))}
-        </box>
+        </Box>
 
-        <box direction="row" gap={8}>
-          <box direction="col" gap={8} flexGrow={1}>
+        <Box direction="row" gap={8}>
+          <Box direction="col" gap={8} flexGrow={1}>
             <SwatchStrip title="Diffusion strip" colors={SWATCH_SETS[0]!} />
             <SwatchStrip title="Neon strip" colors={SWATCH_SETS[1]!} />
-          </box>
-          <box direction="col" gap={8} flexGrow={1}>
+          </Box>
+          <Box direction="col" gap={8} flexGrow={1}>
             <SwatchStrip title="Warm strip" colors={SWATCH_SETS[2]!} />
-            <box
+            <Box
               direction="col"
               gap={6}
               padding={edges(10)}
@@ -451,31 +435,19 @@ const ActionMatrix = memo(function ActionMatrix(): UIElement {
               <StatRow label="Event routing" value="UI first" />
               <StatRow label="Drag mode" value="retained node" />
               <StatRow label="Layout" value="row + col + abs" />
-            </box>
-          </box>
-        </box>
-      </box>
+            </Box>
+          </Box>
+        </Box>
+      </Box>
     </PanelChrome>
   );
-});
+}
 
-function MenuItem({ item }: { item: MenuItemSpec }): UIElement {
+function MenuItem({ item }: { item: MenuItemSpec }) {
   const textColor = item.destructive ? "#ff9a9f" : PANEL_TEXT;
-  const trailingContent: UIElement[] = [];
-
-  if (item.hint) {
-    trailingContent.push(
-      <text key="hint" fontSize={10} color={item.selected ? "rgba(255,255,255,0.72)" : MUTED}>
-        {item.hint}
-      </text>,
-    );
-  }
-  if (item.hasChild) {
-    trailingContent.push(<icon key="child" icon={NavArrowRight} size={12} tint={MUTED} />);
-  }
 
   return (
-    <box
+    <Box
       direction="row"
       justifyContent="space-between"
       align="center"
@@ -488,25 +460,30 @@ function MenuItem({ item }: { item: MenuItemSpec }): UIElement {
       transition={SPRING_SCALE}
       onClick={() => console.log(`[CanvasUI] Menu item clicked: ${item.label}`)}
     >
-      <box direction="row" gap={8} align="center">
-        <icon
+      <Box direction="row" gap={8} align="center">
+        <Icon
           icon={item.icon}
           size={14}
           tint={item.selected ? WHITE : item.destructive ? "#ff9a9f" : "var(--tint-1000)"}
         />
-        <text fontSize={11} color={item.selected ? WHITE : textColor}>
+        <Text fontSize={11} color={item.selected ? WHITE : textColor}>
           {item.label}
-        </text>
-      </box>
+        </Text>
+      </Box>
 
-      <box direction="row" gap={8} align="center">
-        {trailingContent}
-      </box>
-    </box>
+      <Box direction="row" gap={8} align="center">
+        {item.hint ? (
+          <Text key="hint" fontSize={10} color={item.selected ? "rgba(255,255,255,0.72)" : MUTED}>
+            {item.hint}
+          </Text>
+        ) : null}
+        {item.hasChild ? <Icon key="child" icon={NavArrowRight} size={12} tint={MUTED} /> : null}
+      </Box>
+    </Box>
   );
 }
 
-const FloatingContextMenu = memo(function FloatingContextMenu(): UIElement {
+function FloatingContextMenu() {
   return (
     <PanelChrome
       title="Context Stack"
@@ -516,21 +493,21 @@ const FloatingContextMenu = memo(function FloatingContextMenu(): UIElement {
       background={solid(lightDark("rgba(255,255,255,0.95)", "rgba(18, 20, 26, 0.95)"))}
       borderColor={lightDark("rgba(41, 65, 115, 0.18)", "rgba(139, 170, 255, 0.28)")}
     >
-      <box direction="col" gap={4}>
+      <Box direction="col" gap={4}>
         {MENU_ITEMS.map((item) => (
-          <box key={item.label}>
+          <Box key={item.label}>
             <MenuItem item={item} />
-          </box>
+          </Box>
         ))}
-      </box>
+      </Box>
     </PanelChrome>
   );
-});
+}
 
-const WindowStack = memo(function WindowStack(): UIElement {
+function WindowStack() {
   return (
-    <box width={420} height={540}>
-      <box position="absolute" left={0} top={28} zIndex={10}>
+    <Box width={420} height={540}>
+      <Box position="absolute" left={0} top={28} zIndex={10}>
         <PanelChrome
           title="Signal Deck"
           subtitle="Overlapping windows"
@@ -538,20 +515,20 @@ const WindowStack = memo(function WindowStack(): UIElement {
           width={246}
           background={WINDOW_ALT_BG}
         >
-          <box direction="col" gap={8}>
+          <Box direction="col" gap={8}>
             <StatRow label="Textures" value="pooled" />
             <StatRow label="Icons" value="cached" />
             <StatRow label="Glyphs" value="SDF atlas" />
-            <box direction="row" gap={6}>
+            <Box direction="row" gap={6}>
               <Badge label="hover" background={SKY_BG} />
               <Badge label="active" background={SUCCESS_BG} />
               <Badge label="drag" background={SUNSET_BG} />
-            </box>
-          </box>
+            </Box>
+          </Box>
         </PanelChrome>
-      </box>
+      </Box>
 
-      <box position="absolute" left={124} top={0} zIndex={20}>
+      <Box position="absolute" left={124} top={0} zIndex={20}>
         <PanelChrome
           title="Prompt Rail"
           subtitle="Panel chrome + nested stacks"
@@ -560,24 +537,24 @@ const WindowStack = memo(function WindowStack(): UIElement {
           background={WORLD_PANEL_BG}
           borderColor={WORLD_PANEL_BORDER}
         >
-          <box direction="col" gap={8}>
-            <box
+          <Box direction="col" gap={8}>
+            <Box
               direction="row"
               gap={8}
               padding={edges(10)}
               background={solid(lightDark("rgba(255,255,255,0.76)", "rgba(7, 12, 24, 0.42)"))}
               borderRadius={10}
             >
-              <icon icon={WarningCircle} size={16} tint="#ff9f5a" />
-              <text fontSize={11} color={PANEL_TEXT} maxWidth={228}>
+              <Icon icon={WarningCircle} size={16} tint="#ff9f5a" />
+              <Text fontSize={11} color={PANEL_TEXT} maxWidth={228}>
                 Push layout until it stops being polite.
-              </text>
-            </box>
-            <box direction="row" gap={8}>
+              </Text>
+            </Box>
+            <Box direction="row" gap={8}>
               <MiniStat label="Mode" value="world" background={CARD_BG} />
               <MiniStat label="Chrome" value="stacked" background={CARD_BG} />
-            </box>
-            <box direction="row" gap={8}>
+            </Box>
+            <Box direction="row" gap={8}>
               <Button
                 label="Open"
                 icon={Check}
@@ -590,60 +567,21 @@ const WindowStack = memo(function WindowStack(): UIElement {
                 background={SKY_BG}
                 onClick={() => console.log("[CanvasUI] Prompt rail queue")}
               />
-            </box>
-          </box>
+            </Box>
+          </Box>
         </PanelChrome>
-      </box>
+      </Box>
 
-      <box position="absolute" left={36} top={250} zIndex={30}>
+      <Box position="absolute" left={36} top={250} zIndex={30}>
         <FloatingContextMenu />
-      </box>
-    </box>
+      </Box>
+    </Box>
   );
-});
+}
 
-const SpecimenCard = memo(function SpecimenCard({
-  title,
-  background,
-  color,
-}: SpecimenCardProps): UIElement {
-  const content: UIElement[] = [
-    <box key="floating-tag" position="absolute" right={12} top={12} zIndex={10}>
-      <Badge label="Specimen" background={ACCENT_BG} />
-    </box>,
-    <text key="title" fontSize={15} color={color}>
-      {title}
-    </text>,
-    <text key="targets" fontSize={28} color={color}>
-      {TARGET_GLYPHS}
-    </text>,
-    <text key="stress" fontSize={20} color={color}>
-      {STRESS_GLYPHS}
-    </text>,
-  ];
-
-  for (const [index, row] of SPECIMEN_ROWS.entries()) {
-    content.push(
-      <text key={`specimen-row-${index}`} fontSize={18} color={color}>
-        {row}
-      </text>,
-    );
-  }
-
-  content.push(
-    <box key="specimen-footer" direction="row" gap={6} align="center">
-      <Badge
-        label="Grid-fit"
-        background={solid(lightDark("rgba(17, 24, 39, 0.84)", "rgba(255, 255, 255, 0.16)"))}
-        color={lightDark("#ffffff", "#101218")}
-      />
-      <Badge label="No DOM" background={SKY_BG} />
-      <Badge label="Zoom-linked" background={SUCCESS_BG} />
-    </box>,
-  );
-
+function SpecimenCard({ title, background, color }: SpecimenCardProps) {
   return (
-    <box
+    <Box
       direction="col"
       gap={8}
       padding={edges(14)}
@@ -654,12 +592,37 @@ const SpecimenCard = memo(function SpecimenCard({
       minWidth={468}
       draggable
     >
-      {content}
-    </box>
+      <Box key="floating-tag" position="absolute" right={12} top={12} zIndex={10}>
+        <Badge label="Specimen" background={ACCENT_BG} />
+      </Box>
+      <Text key="title" fontSize={15} color={color}>
+        {title}
+      </Text>
+      <Text key="targets" fontSize={28} color={color}>
+        {TARGET_GLYPHS}
+      </Text>
+      <Text key="stress" fontSize={20} color={color}>
+        {STRESS_GLYPHS}
+      </Text>
+      {SPECIMEN_ROWS.map((row, index) => (
+        <Text key={`specimen-row-${index}`} fontSize={18} color={color}>
+          {row}
+        </Text>
+      ))}
+      <Box key="specimen-footer" direction="row" gap={6} align="center">
+        <Badge
+          label="Grid-fit"
+          background={solid(lightDark("rgba(17, 24, 39, 0.84)", "rgba(255, 255, 255, 0.16)"))}
+          color={lightDark("#ffffff", "#101218")}
+        />
+        <Badge label="No DOM" background={SKY_BG} />
+        <Badge label="Zoom-linked" background={SUCCESS_BG} />
+      </Box>
+    </Box>
   );
-});
+}
 
-function DebugPanel({ zoom, perf }: DebugOverlayProps): UIElement {
+function DebugPanel({ zoom, perf }: DebugOverlayProps) {
   const zoomLabel = `${Math.round(zoom * 100)}%`;
   const frameCountLabel = perf.sampleCount > 0 ? `${perf.sampleCount}/300` : "warming";
   const fpsValue = perf.fps > 0 ? `${perf.fps}` : "warming";
@@ -673,22 +636,22 @@ function DebugPanel({ zoom, perf }: DebugOverlayProps): UIElement {
       width={352}
       background={PANEL_BG}
     >
-      <box direction="col" gap={12}>
-        <box direction="row" gap={8}>
+      <Box direction="col" gap={12}>
+        <Box direction="row" gap={8}>
           <MiniStat label="FPS" value={fpsValue} background={PRIMARY_BG} />
           <MiniStat label="Median" value={formatMs(perf.renderMedianMs)} />
           <MiniStat label="P95" value={formatMs(perf.renderP95Ms)} background={SUNSET_BG} />
-        </box>
+        </Box>
 
-        <box direction="row" gap={8}>
+        <Box direction="row" gap={8}>
           <MiniStat label="Zoom" value={zoomLabel} />
           <MiniStat label="Entities" value={entityLabel} />
           <MiniStat label="Ring" value={frameCountLabel} />
-        </box>
+        </Box>
 
-        <box background={solid(DIVIDER)} height={1} />
+        <Box background={solid(DIVIDER)} height={1} />
 
-        <box direction="col" gap={10}>
+        <Box direction="col" gap={10}>
           <SectionEyebrow label="Frame metrics" />
           <MeterRow
             label="Frame cadence"
@@ -711,10 +674,10 @@ function DebugPanel({ zoom, perf }: DebugOverlayProps): UIElement {
             formatted={formatMs(perf.renderP95Ms)}
             fill={SUNSET_BG}
           />
-        </box>
+        </Box>
 
-        <box direction="row" gap={8}>
-          <box
+        <Box direction="row" gap={8}>
+          <Box
             direction="col"
             gap={6}
             padding={edges(10)}
@@ -725,18 +688,18 @@ function DebugPanel({ zoom, perf }: DebugOverlayProps): UIElement {
             flexGrow={1}
             flexShrink={1}
           >
-            <box direction="row" gap={6} align="center">
-              <icon icon={Heart} size={14} tint="#e7565f" />
-              <text fontSize={13} color={PANEL_TEXT}>
+            <Box direction="row" gap={6} align="center">
+              <Icon icon={Heart} size={14} tint="#e7565f" />
+              <Text fontSize={13} color={PANEL_TEXT}>
                 Frame HUD
-              </text>
-            </box>
+              </Text>
+            </Box>
             <StatRow label="Placement" value="inside panel" stacked valueMaxWidth={140} />
             <StatRow label="Anchor" value="world-space" stacked valueMaxWidth={140} />
             <StatRow label="Events" value="hover + active + drag" stacked valueMaxWidth={140} />
-          </box>
+          </Box>
 
-          <box
+          <Box
             direction="col"
             gap={6}
             padding={edges(10)}
@@ -747,19 +710,19 @@ function DebugPanel({ zoom, perf }: DebugOverlayProps): UIElement {
             flexGrow={1}
             flexShrink={1}
           >
-            <box direction="row" gap={6} align="center">
-              <icon icon={Eye} size={14} tint="var(--tint-1000)" />
-              <text fontSize={13} color={PANEL_TEXT}>
+            <Box direction="row" gap={6} align="center">
+              <Icon icon={Eye} size={14} tint="var(--tint-1000)" />
+              <Text fontSize={13} color={PANEL_TEXT}>
                 Layout probes
-              </text>
-            </box>
+              </Text>
+            </Box>
             <StatRow label="Stacking" value="z-index" stacked valueMaxWidth={140} />
             <StatRow label="Windows" value="overlap" stacked valueMaxWidth={140} />
             <StatRow label="Menu" value="mocked" stacked valueMaxWidth={140} />
-          </box>
-        </box>
+          </Box>
+        </Box>
 
-        <box direction="row" gap={4} align="center">
+        <Box direction="row" gap={4} align="center">
           {STATUS_BADGES.map((badge) => (
             <Badge
               key={badge.label}
@@ -768,9 +731,9 @@ function DebugPanel({ zoom, perf }: DebugOverlayProps): UIElement {
               color={badge.color}
             />
           ))}
-        </box>
+        </Box>
 
-        <box direction="row" gap={6} align="center">
+        <Box direction="row" gap={6} align="center">
           <Button
             label="Primary"
             background={PRIMARY_BG}
@@ -791,19 +754,19 @@ function DebugPanel({ zoom, perf }: DebugOverlayProps): UIElement {
             icon={QuestionMark}
             onClick={() => console.log("[CanvasUI] Questions clicked")}
           />
-        </box>
+        </Box>
 
-        <box direction="row" gap={4} align="center" justifyContent="center">
-          <text fontSize={9} color={MUTED}>
+        <Box direction="row" gap={4} align="center" justifyContent="center">
+          <Text fontSize={9} color={MUTED}>
             No fixed DOM overlay · live perf snapshot · retained scene graph
-          </text>
-        </box>
-      </box>
+          </Text>
+        </Box>
+      </Box>
     </PanelChrome>
   );
 }
 
-const WorldSpacePanel = memo(function WorldSpacePanel(): UIElement {
+function WorldSpacePanel() {
   return (
     <PanelChrome
       title="World-Space District"
@@ -813,12 +776,12 @@ const WorldSpacePanel = memo(function WorldSpacePanel(): UIElement {
       background={WORLD_PANEL_BG}
       borderColor={WORLD_PANEL_BORDER}
     >
-      <box direction="col" gap={12}>
-        <box position="absolute" right={14} top={14} zIndex={40}>
+      <Box direction="col" gap={12}>
+        <Box position="absolute" right={14} top={14} zIndex={40}>
           <Badge label="Drag me" background={SKY_BG} />
-        </box>
+        </Box>
 
-        <box
+        <Box
           direction="col"
           gap={8}
           padding={edges(12)}
@@ -828,12 +791,12 @@ const WorldSpacePanel = memo(function WorldSpacePanel(): UIElement {
           borderColor={WORLD_PANEL_BORDER}
         >
           <SectionEyebrow label="Canvas behavior" />
-          <text fontSize={18} color={PANEL_TEXT} maxWidth={408}>
+          <Text fontSize={18} color={PANEL_TEXT} maxWidth={408}>
             Zoom to scale the whole district. Drag any card to see retained positions stick.
-          </text>
-        </box>
+          </Text>
+        </Box>
 
-        <box
+        <Box
           direction="col"
           gap={8}
           padding={edges(12)}
@@ -843,23 +806,23 @@ const WorldSpacePanel = memo(function WorldSpacePanel(): UIElement {
           borderColor={WORLD_PANEL_BORDER}
         >
           <SectionEyebrow label="Signals" />
-          <box direction="row" gap={6}>
+          <Box direction="row" gap={6}>
             <Badge label="layout" background={PRIMARY_BG} />
             <Badge label="paint" background={SUCCESS_BG} />
-          </box>
-          <box direction="row" gap={6}>
+          </Box>
+          <Box direction="row" gap={6}>
             <Badge label="hit-test" background={ACCENT_BG} />
             <Badge label="stack" background={SUNSET_BG} />
-          </box>
-        </box>
+          </Box>
+        </Box>
 
-        <box direction="row" gap={8}>
+        <Box direction="row" gap={8}>
           <MiniStat label="Docks" value="3" background={CARD_BG} />
           <MiniStat label="Windows" value="5" background={CARD_BG} />
           <MiniStat label="Menus" value="1 mock" background={CARD_BG} />
-        </box>
+        </Box>
 
-        <box direction="row" gap={8} align="center">
+        <Box direction="row" gap={8} align="center">
           <Button
             label="Spawn"
             background={PRIMARY_BG}
@@ -885,21 +848,21 @@ const WorldSpacePanel = memo(function WorldSpacePanel(): UIElement {
             icon={InfoCircle}
             onClick={() => console.log("[CanvasUI] Inspect clicked")}
           />
-        </box>
-      </box>
+        </Box>
+      </Box>
     </PanelChrome>
   );
-});
+}
 
-function DebugOverlay({ zoom, perf }: DebugOverlayProps): UIElement {
+function DebugOverlay({ zoom, perf }: DebugOverlayProps) {
   return (
-    <box key="debug-root" direction="row" gap={18} align="start">
-      <box direction="col" gap={14}>
+    <Box key="debug-root" direction="row" gap={18} align="start">
+      <Box direction="col" gap={14}>
         <DebugPanel zoom={zoom} perf={perf} />
         <ActionMatrix />
-      </box>
+      </Box>
 
-      <box direction="col" gap={12}>
+      <Box direction="col" gap={12}>
         <WorldSpacePanel />
         <SpecimenCard
           title="Font Specimen · White on Black"
@@ -916,19 +879,19 @@ function DebugOverlay({ zoom, perf }: DebugOverlayProps): UIElement {
           background={gradient("#120a20", "#27113f")}
           color="#f6f1ff"
         />
-      </box>
+      </Box>
 
       <WindowStack />
 
-      <box position="absolute" left={412} top={-52} zIndex={60}>
+      <Box position="absolute" left={412} top={-52} zIndex={60}>
         <Badge label="Canvas-native overlay city" background={SUNSET_BG} />
-      </box>
+      </Box>
 
-      <box position="absolute" left={1108} top={116} zIndex={80}>
+      <Box position="absolute" left={1108} top={116} zIndex={80}>
         <FloatingContextMenu />
-      </box>
-      <box position="absolute" left={1132} top={152} zIndex={79}>
-        <box
+      </Box>
+      <Box position="absolute" left={1132} top={152} zIndex={79}>
+        <Box
           direction="row"
           gap={8}
           padding={edges(10)}
@@ -938,20 +901,20 @@ function DebugOverlay({ zoom, perf }: DebugOverlayProps): UIElement {
           borderColor={PANEL_BORDER}
           draggable
         >
-          <icon icon={WarningCircle} size={14} tint="#ff9f5a" />
-          <text fontSize={11} color={PANEL_TEXT}>
+          <Icon icon={WarningCircle} size={14} tint="#ff9f5a" />
+          <Text fontSize={11} color={PANEL_TEXT}>
             Faux nested submenu
-          </text>
-        </box>
-      </box>
-    </box>
+          </Text>
+        </Box>
+      </Box>
+    </Box>
   );
 }
 
-export function buildDebugUI({ zoom, perf }: DebugOverlayProps): UIElement {
+export function DebugUI({ zoom, perf }: DebugOverlayProps) {
   return <DebugPanel zoom={zoom} perf={perf} />;
 }
 
-export function buildDebugOverlay(props: DebugOverlayProps): UIElement {
+export function DebugOverlayUI(props: DebugOverlayProps) {
   return <DebugOverlay {...props} />;
 }
