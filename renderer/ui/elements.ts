@@ -128,7 +128,7 @@ export interface BoxElementProps {
   direction?: "row" | "col";
   gap?: number;
   padding?: UIEdges | number;
-  align?: "start" | "center" | "end";
+  align?: "start" | "center" | "end" | "stretch";
   justifyContent?: "start" | "center" | "end" | "space-between" | "space-around";
   flexGrow?: number;
   flexShrink?: number;
@@ -143,7 +143,18 @@ export interface BoxElementProps {
   minHeight?: number;
   maxWidth?: number;
   maxHeight?: number;
+  overflow?: "visible" | "hidden" | "scroll";
   position?: "relative" | "absolute" | "fixed";
+  /** Anchor-relative placement for absolute children (e.g. submenu to right of trigger) */
+  placement?:
+    | "right-start"
+    | "right-end"
+    | "left-start"
+    | "left-end"
+    | "bottom-start"
+    | "top-start";
+  /** Auto-clamp position to stay within viewport bounds */
+  contain?: "viewport";
   zIndex?: number;
   left?: number;
   top?: number;
@@ -159,6 +170,8 @@ export interface BoxElementProps {
   onClick?: UIEventHandler;
   onPointerDown?: UIEventHandler;
   onPointerUp?: UIEventHandler;
+  onHoverEnter?: (node: import("./scene-node.ts").SceneNode) => void;
+  onHoverLeave?: (node: import("./scene-node.ts").SceneNode) => void;
   // Draggable
   draggable?: boolean;
   onDrag?: UIDragHandler;

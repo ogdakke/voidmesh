@@ -25,6 +25,7 @@ import {
   calculateCenteredOffset,
   calculateFitToView,
   easings,
+  screenToWorld,
   zoomToPoint,
 } from "#lib/canvas-math.ts";
 import { undo } from "#lib/undo.ts";
@@ -49,6 +50,14 @@ import "./infinite-canvas.css";
 import DesktopSettings from "#components/settings/settings.desktop.tsx";
 import SettingsDrawer from "../settings/settings.mobile.tsx";
 import About from "../about/index.tsx";
+
+import { contextMenuController } from "#renderer/ui/context-menu-controller.ts";
+import type { ContextMenuActions } from "#renderer/ui/context-menu-actions.ts";
+import { canvasUI } from "#renderer/ui/canvas-ui.ts";
+import { imageExportOptionsForFormat } from "#renderer/export-formats.ts";
+
+/** Feature flag: use canvas-rendered context menu instead of DOM-based Base UI menu */
+const USE_CANVAS_CONTEXT_MENU = true;
 
 const CanvasContextMenu = lazy(() => import("./canvas-context-menu.tsx"));
 
@@ -206,6 +215,96 @@ export function InfiniteCanvas() {
   // Studio file save/load
   const { exportStudioFile, saveAsStudioFile, importStudioFile } = useStudioFile();
 
+  // Wire canvas-rendered context menu actions
+  useEffect(() => {
+    if (!USE_CANVAS_CONTEXT_MENU) return;
+
+    const actions: ContextMenuActions = {
+      paste: () => {
+        // TODO: wire paste from clipboard (same as pasteMenuHandler in DOM menu)
+      },
+      saveWorkspace: () => exportStudioFile(),
+      saveAsWorkspace: () => saveAsStudioFile(),
+      openWorkspace: () => importStudioFile(),
+      toggleSnapToGrid: (checked) => handleSnapToGridChange(checked),
+      changeShaderType: (type) => handleShaderTypeChange(type),
+      changePalette: (palette) => handlePaletteChange(palette),
+      triggerPaletteUpload: () => {
+        // TODO: trigger hidden file input from DOM (needs DOM bridge)
+      },
+      toggleShowOriginal: (checked) => handleShowOriginalChange(checked),
+      togglePreserveColors: (checked) => handlePreserveColorsChange(checked),
+      toggleReversePalette: (checked) => handleReversePaletteChange(checked),
+      copyImage: () => copyEntity(),
+      saveAsFormat: (format) => {
+        saveSelectedEntityToFile(imageExportOptionsForFormat(format));
+      },
+      copyEffects: () => copyEntityParams(),
+      pasteEffects: () => pasteEntityParams(),
+      bringToFront: () => handleBringToFront(),
+      sendToBack: () => handleSendToBack(),
+      duplicate: () => duplicateEntities(),
+      upscale: (_entityIds) => {
+        // TODO: wire upscale queue (needs UpscaleQueueContext)
+      },
+      exportAnimated: (_entities) => {
+        // TODO: wire export queue (needs ExportQueueContext)
+      },
+      reset: () => resetEntityToDefaults(),
+      deleteEntity: () => deleteEntity(undefined, "context_menu"),
+      close: () => {
+        contextMenuController.close();
+        canvasStore.setContextMenuClosed();
+        gameLoop.handleContextMenuClose();
+      },
+    };
+
+    canvasUI.contextMenuActions(actions);
+
+    // Set live props for context menu rendering
+    canvasUI.contextMenuProps({
+      snapToGrid,
+      showOriginal,
+      preserveColors,
+      reversePalette: false, // TODO: wire reversePalette from useParamValue
+      shaderType: undefined, // TODO: derive from selection state
+      shaderTypeMixed: false,
+      paletteSupported: false, // TODO: derive from shader type
+      preserveColorsSupported: false,
+      reversePaletteSupported: false,
+      palettes: [],
+      currentPaletteId: undefined,
+      paletteMixed: false,
+      showOriginalMixed: false,
+      preserveColorsMixed: false,
+      reversePaletteMixed: false,
+      hasEntities: entities.length > 0,
+    });
+  }, [
+    exportStudioFile,
+    saveAsStudioFile,
+    importStudioFile,
+    handleSnapToGridChange,
+    handleShaderTypeChange,
+    handlePaletteChange,
+    handleShowOriginalChange,
+    handlePreserveColorsChange,
+    handleReversePaletteChange,
+    copyEntity,
+    copyEntityParams,
+    pasteEntityParams,
+    handleBringToFront,
+    handleSendToBack,
+    duplicateEntities,
+    resetEntityToDefaults,
+    deleteEntity,
+    saveSelectedEntityToFile,
+    snapToGrid,
+    showOriginal,
+    preserveColors,
+    entities.length,
+  ]);
+
   // Observe container size changes and trigger re-render
   useCanvasContainerResize(containerRef);
 
@@ -214,6 +313,7 @@ export function InfiniteCanvas() {
     // Skip pointer events for touch - we handle touch separately
     if (e.pointerType === "touch") return;
 
+    if (e.button === 2) return; // Right-click handled by contextmenu event
     containerRef.current?.focus();
     gameLoop.handlePointerDown({ x: e.clientX, y: e.clientY }, e.shiftKey);
   };
@@ -272,6 +372,19 @@ export function InfiniteCanvas() {
 
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
+
+      // Try UI scroll containers first (menu scroll, etc.)
+      const viewport = canvasStore.getViewport();
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      const worldPoint = screenToWorld({ x: e.clientX, y: e.clientY }, viewport, rect, dpr);
+      if (canvasUI.handleWheelEvent(e.deltaX, e.deltaY, worldPoint.x, worldPoint.y)) {
+        return;
+      }
+
+      // Lock viewport when context menu is open — no pan/zoom
+      if (contextMenuController.isOpen) return;
+
       // e.ctrlKey covers trackpad pinch (browser sends ctrlKey=true) and Ctrl+scroll.
       // isMetaHeldRef covers Command+scroll on macOS — for some reason, Command doesn't report metaKey, so we track it separately
       // on wheel events when Command is held, so we track it via keydown/keyup.
@@ -284,7 +397,7 @@ export function InfiniteCanvas() {
     return () => {
       canvas.removeEventListener("wheel", handleWheel);
     };
-    // Re-run when canvas mounts (delayed by Suspense around CanvasContextMenu on desktop)
+    // Re-run when canvas mounts
   }, [isReady]);
 
   // Reset zoom to 100% while keeping the viewport center fixed
@@ -973,9 +1086,11 @@ const CanvasWrapper = ({
 }>) => {
   const isMobile = useIsMobile();
 
-  return isMobile ? (
-    children
-  ) : (
+  if (isMobile || USE_CANVAS_CONTEXT_MENU) {
+    return children;
+  }
+
+  return (
     <Suspense>
       <CanvasContextMenu onOpenChange={onOpenChange} containerRef={containerRef}>
         {children}

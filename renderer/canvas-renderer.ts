@@ -45,6 +45,7 @@ import { UIRenderer } from "./ui/ui-renderer.ts";
 import { createElement } from "react";
 import { EntityLabel } from "./ui/entity-label.tsx";
 import { DebugOverlayUI } from "./ui/debug-ui.tsx";
+import { canvasUI } from "./ui/canvas-ui.ts";
 import { perfOverlay } from "../engine/perf-overlay.ts";
 
 type GpuTimingPhase =
@@ -280,12 +281,17 @@ export class InfiniteCanvasRenderer {
 
   /** True if UI animations need another frame to complete. */
   get hasActiveUIAnimations(): boolean {
-    return this.#uiRenderer?.hasActiveAnimations ?? false;
+    return canvasUI.hasActiveAnimations || (this.#uiRenderer?.hasActiveAnimations ?? false);
   }
 
-  /** Forward pointer events to the UI renderer for hit testing. Returns true if consumed. */
+  /** Forward pointer events to the UI for hit testing. Returns true if consumed. */
   handleUIPointerEvent(type: "down" | "up" | "move", worldX: number, worldY: number): boolean {
-    return this.#uiRenderer?.handlePointerEvent(type, worldX, worldY) ?? false;
+    return canvasUI.handlePointerEvent(type, worldX, worldY);
+  }
+
+  /** Forward wheel events to the UI for scroll containers. Returns true if consumed. */
+  handleUIWheelEvent(deltaX: number, deltaY: number, worldX: number, worldY: number): boolean {
+    return canvasUI.handleWheelEvent(deltaX, deltaY, worldX, worldY);
   }
 
   getFrameStats() {
@@ -446,6 +452,9 @@ export class InfiniteCanvasRenderer {
       this.#viewportUniformBuffer!,
     );
     this.#uiRenderer.initialize().catch((e) => logger.error("UI renderer init failed:", e));
+
+    // Initialize unified canvas UI overlay (context menu, debug, etc.)
+    canvasUI.initialize(this.#uiRenderer);
 
     // Set up ResizeObserver to cache canvas dimensions (avoids getBoundingClientRect in render loop)
     this.#resizeObserver = new ResizeObserver((entries) => {
@@ -2010,7 +2019,7 @@ export class InfiniteCanvasRenderer {
       }
     }
 
-    // Debug UI overlay (stress test for canvas UI engine)
+    // Debug UI overlay (world-anchored, static on canvas)
     if (debugMode && uiReady) {
       this.#uiRenderer!.updateScene(
         "debug-ui",
@@ -2019,26 +2028,23 @@ export class InfiniteCanvasRenderer {
           perf: perfOverlay.getSnapshot(),
         }),
       );
-      this.#uiRenderer!.renderScene(
-        "debug-ui",
-        560, // world-space anchor X
-        360, // world-space anchor Y
-        encoder,
-        targetView,
+      this.#uiRenderer!.renderScene("debug-ui", 560, 360, encoder, targetView, dpr, undefined, {
+        offsetX: viewport.offset.x,
+        offsetY: viewport.offset.y,
+        zoom: viewport.zoom,
+        width,
+        height,
         dpr,
-        undefined,
-        {
-          offsetX: viewport.offset.x,
-          offsetY: viewport.offset.y,
-          zoom: viewport.zoom,
-          width,
-          height,
-          dpr,
-        },
-      );
+      });
     }
     this.#writeGpuTimestampMarker(encoder, gpuCapture, "action-layer-sharp", "end");
     markPhaseEnd("action-layer-sharp");
+
+    // Overlay UI (context menu, etc.) — fixed-position, viewport-anchored
+    canvasUI.render(encoder, targetView, viewport, width, height, dpr);
+
+    // All UI scenes rendered — clear per-frame interaction dirty flags
+    this.#uiRenderer?.endFrame();
 
     // Pass 2b: Render disintegration overlays (on top of entities)
     this.#renderDisintegrationOverlays(encoder, targetView, frameDt);
