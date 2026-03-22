@@ -55,7 +55,7 @@ import { MaterialSymbolsResetImage } from "#components/icons/reset-image.tsx";
 // Constants
 // ---------------------------------------------------------------------------
 
-const SHOW_SAFE_POLYGON_DEBUG = true;
+export const SHOW_SAFE_POLYGON_DEBUG = false;
 
 const IMAGE_FORMAT_ICONS = {
   png: PngFormat,
@@ -119,6 +119,9 @@ export interface CanvasContextMenuProps {
   menuX: number;
   menuY: number;
   activeSubmenuId: string | null;
+  screenScale: number;
+  /** Monotonic counter that changes every frame when debug overlay is active. Breaks Compiler cache for debug-only reads from mutable singletons. */
+  debugTick: number;
 }
 
 interface OptionDefinition {
@@ -164,10 +167,10 @@ function MixedValueGroup({ label, values }: { label: string; values: string[] })
   );
 }
 
-function SafePolygonDebugOverlay() {
+function renderSafePolygonDebug(screenScale: number, _debugTick: number) {
   if (!SHOW_SAFE_POLYGON_DEBUG) return null;
 
-  const debug = contextMenuController.submenu.debugState;
+  const debug = contextMenuController.submenu.getDebugState(screenScale);
   if (!debug.triggerRect || !debug.submenuRect) return null;
 
   return (
@@ -543,6 +546,8 @@ export function CanvasContextMenu({
   menuX,
   menuY,
   activeSubmenuId,
+  screenScale,
+  debugTick,
 }: CanvasContextMenuProps) {
   const { frozenEntity, frozenSelection } = state;
   const isMultiple = frozenSelection?.isMultiple ?? false;
@@ -587,7 +592,7 @@ export function CanvasContextMenu({
             }}
           />
         </MenuPanel>
-        <SafePolygonDebugOverlay />
+        {renderSafePolygonDebug(screenScale, debugTick)}
       </Box>
     );
   }
@@ -824,7 +829,7 @@ export function CanvasContextMenu({
           }}
         />
       </MenuPanel>
-      <SafePolygonDebugOverlay />
+      {renderSafePolygonDebug(screenScale, debugTick)}
     </Box>
   );
 }

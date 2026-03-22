@@ -169,22 +169,23 @@ export class SubmenuController {
     };
   }
 
-  get debugState(): SubmenuDebugState {
+  getDebugState(screenScale: number): SubmenuDebugState {
     const origin = this.#fixedOrigin;
+    const s = screenScale || 1;
 
     const toRelativeRect = (rect: SubmenuRect | null): SubmenuRect | null => {
       if (!rect || !origin) return rect;
       return {
-        x: rect.x - origin.x,
-        y: rect.y - origin.y,
-        width: rect.width,
-        height: rect.height,
+        x: (rect.x - origin.x) / s,
+        y: (rect.y - origin.y) / s,
+        width: rect.width / s,
+        height: rect.height / s,
       };
     };
 
     const toRelativePoint = (point: Point | null): Point | null => {
       if (!point || !origin) return point;
-      return { x: point.x - origin.x, y: point.y - origin.y };
+      return { x: (point.x - origin.x) / s, y: (point.y - origin.y) / s };
     };
 
     return {
@@ -194,7 +195,10 @@ export class SubmenuController {
       troughRect: toRelativeRect(this.#debugTroughRect),
       exitPoint: toRelativePoint(this.#exitPoint),
       polygon: origin
-        ? this.#debugPolygon.map((point) => ({ x: point.x - origin.x, y: point.y - origin.y }))
+        ? this.#debugPolygon.map((point) => ({
+            x: (point.x - origin.x) / s,
+            y: (point.y - origin.y) / s,
+          }))
         : this.#debugPolygon,
     };
   }
@@ -290,8 +294,8 @@ export class SubmenuController {
     this.#lastPointer = { x: worldX, y: worldY };
     this.#lastPointerTime = performance.now();
 
-    this.#debugTroughRect = null;
-    this.#debugPolygon = [];
+    // Always update debug geometry for the overlay visualization
+    this.#updateDebugGeometry(worldX, worldY, submenuRect, submenuPosition);
 
     if (isInsideRect(worldX, worldY, submenuRect)) {
       this.#hasLanded = true;
@@ -338,7 +342,7 @@ export class SubmenuController {
       (isFloatingTaller ? this.#triggerRect : submenuRect).y +
       (isFloatingTaller ? this.#triggerRect.height : submenuRect.height);
 
-    this.#debugTroughRect =
+    const troughRect =
       submenuPosition.side === "right"
         ? rectFromPoints(
             this.#triggerRect.x + this.#triggerRect.width - 1,
@@ -357,10 +361,10 @@ export class SubmenuController {
       isInsideAxisAlignedRect(
         worldX,
         worldY,
-        this.#debugTroughRect.x,
-        this.#debugTroughRect.y,
-        this.#debugTroughRect.x + this.#debugTroughRect.width,
-        this.#debugTroughRect.y + this.#debugTroughRect.height,
+        troughRect.x,
+        troughRect.y,
+        troughRect.x + troughRect.width,
+        troughRect.y + troughRect.height,
       )
     ) {
       return true;
@@ -383,7 +387,26 @@ export class SubmenuController {
       }
     }
 
-    const cursorLeaveFromBottom = exitPoint.y > this.#triggerRect.y + this.#triggerRect.height / 2;
+    const polygon = this.#buildPolygon(exitPoint, submenuRect, submenuPosition);
+    return isPointInQuadrilateral(
+      worldX,
+      worldY,
+      polygon[0]!,
+      polygon[1]!,
+      polygon[2]!,
+      polygon[3]!,
+    );
+  }
+
+  /** Build the 4-point safe-zone polygon from an exit point to the submenu. */
+  #buildPolygon(
+    exitPoint: Point,
+    submenuRect: SubmenuRect,
+    submenuPosition: SubmenuPosition,
+  ): Point[] {
+    const triggerRect = this.#triggerRect!;
+    const isFloatingTaller = submenuRect.height > triggerRect.height;
+    const cursorLeaveFromBottom = exitPoint.y > triggerRect.y + triggerRect.height / 2;
     const cursorYOffset = isFloatingTaller ? POLYGON_BUFFER / 2 : POLYGON_BUFFER * 4;
 
     if (submenuPosition.side === "right") {
@@ -409,51 +432,67 @@ export class SubmenuController {
           : submenuRect.x + submenuRect.width
         : submenuRect.x + POLYGON_BUFFER;
 
-      this.#debugPolygon = [
+      return [
         { x: cursorPointX, y: cursorPointOneY },
         { x: cursorPointX, y: cursorPointTwoY },
         { x: commonXTop, y: submenuRect.y },
         { x: commonXBottom, y: submenuRect.y + submenuRect.height },
-      ];
-    } else {
-      const cursorPointOneY = isFloatingTaller
-        ? exitPoint.y + cursorYOffset
-        : cursorLeaveFromBottom
-          ? exitPoint.y + cursorYOffset
-          : exitPoint.y - cursorYOffset;
-      const cursorPointTwoY = isFloatingTaller
-        ? exitPoint.y - cursorYOffset
-        : cursorLeaveFromBottom
-          ? exitPoint.y + cursorYOffset
-          : exitPoint.y - cursorYOffset;
-      const cursorPointX = exitPoint.x + POLYGON_BUFFER + 1;
-      const commonXTop = cursorLeaveFromBottom
-        ? submenuRect.x + submenuRect.width - POLYGON_BUFFER
-        : isFloatingTaller
-          ? submenuRect.x + submenuRect.width - POLYGON_BUFFER
-          : submenuRect.x;
-      const commonXBottom = cursorLeaveFromBottom
-        ? isFloatingTaller
-          ? submenuRect.x + submenuRect.width - POLYGON_BUFFER
-          : submenuRect.x
-        : submenuRect.x + submenuRect.width - POLYGON_BUFFER;
-
-      this.#debugPolygon = [
-        { x: commonXTop, y: submenuRect.y },
-        { x: commonXBottom, y: submenuRect.y + submenuRect.height },
-        { x: cursorPointX, y: cursorPointOneY },
-        { x: cursorPointX, y: cursorPointTwoY },
       ];
     }
 
-    return isPointInQuadrilateral(
-      worldX,
-      worldY,
-      this.#debugPolygon[0]!,
-      this.#debugPolygon[1]!,
-      this.#debugPolygon[2]!,
-      this.#debugPolygon[3]!,
-    );
+    const cursorPointOneY = isFloatingTaller
+      ? exitPoint.y + cursorYOffset
+      : cursorLeaveFromBottom
+        ? exitPoint.y + cursorYOffset
+        : exitPoint.y - cursorYOffset;
+    const cursorPointTwoY = isFloatingTaller
+      ? exitPoint.y - cursorYOffset
+      : cursorLeaveFromBottom
+        ? exitPoint.y + cursorYOffset
+        : exitPoint.y - cursorYOffset;
+    const cursorPointX = exitPoint.x + POLYGON_BUFFER + 1;
+    const commonXTop = cursorLeaveFromBottom
+      ? submenuRect.x + submenuRect.width - POLYGON_BUFFER
+      : isFloatingTaller
+        ? submenuRect.x + submenuRect.width - POLYGON_BUFFER
+        : submenuRect.x;
+    const commonXBottom = cursorLeaveFromBottom
+      ? isFloatingTaller
+        ? submenuRect.x + submenuRect.width - POLYGON_BUFFER
+        : submenuRect.x
+      : submenuRect.x + submenuRect.width - POLYGON_BUFFER;
+
+    return [
+      { x: commonXTop, y: submenuRect.y },
+      { x: commonXBottom, y: submenuRect.y + submenuRect.height },
+      { x: cursorPointX, y: cursorPointOneY },
+      { x: cursorPointX, y: cursorPointTwoY },
+    ];
+  }
+
+  /** Always compute debug geometry so the overlay tracks the cursor in real time. */
+  #updateDebugGeometry(
+    worldX: number,
+    worldY: number,
+    submenuRect: SubmenuRect,
+    submenuPosition: SubmenuPosition,
+  ): void {
+    const triggerRect = this.#triggerRect!;
+    const isFloatingTaller = submenuRect.height > triggerRect.height;
+    const top = (isFloatingTaller ? triggerRect : submenuRect).y;
+    const bottom =
+      (isFloatingTaller ? triggerRect : submenuRect).y +
+      (isFloatingTaller ? triggerRect.height : submenuRect.height);
+
+    this.#debugTroughRect =
+      submenuPosition.side === "right"
+        ? rectFromPoints(triggerRect.x + triggerRect.width - 1, bottom, submenuRect.x + 1, top)
+        : rectFromPoints(submenuRect.x + submenuRect.width - 1, bottom, triggerRect.x + 1, top);
+
+    // Use actual exit point if available, otherwise use cursor position
+    // so the polygon is always visible and follows the cursor
+    const refPoint = this.#exitPoint ?? { x: worldX, y: worldY };
+    this.#debugPolygon = this.#buildPolygon(refPoint, submenuRect, submenuPosition);
   }
 
   #clearOpenTimer(): void {
