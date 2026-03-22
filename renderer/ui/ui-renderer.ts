@@ -1,12 +1,18 @@
+import type React from "react";
 import type { Font } from "text-shaper";
 import { TextRenderer } from "../text/text-renderer.ts";
 import { UIBoxPipeline } from "./ui-box-pipeline.ts";
 import { UIIconPipeline } from "./ui-icon-pipeline.ts";
 import { getIconRasterSize, UIIconCache } from "./ui-icon-cache.ts";
 import { prepareText } from "../text/slug.ts";
-import type { UIElement, UIPointerEvent, UIDragEvent } from "./elements.ts";
-import { SceneNode, hasActiveAnimations } from "./scene-node.ts";
-import { reconcile, pruneExitedNodes } from "./reconciler.ts";
+import type { UIPointerEvent, UIDragEvent } from "./elements.ts";
+import { SceneNode, hasActiveAnimations, pruneExitedNodes } from "./scene-node.ts";
+import {
+  createCanvasContainer,
+  updateCanvasContainer,
+  unmountCanvasContainer,
+  type CanvasUIFiberRoot,
+} from "./canvas-reconciler.ts";
 import {
   computeLayout,
   type AnchorTarget,
@@ -195,8 +201,8 @@ export class UIRenderer {
   // Retained scene graph roots — one per unique render target
   #sceneRoots = new Map<string, SceneNode>();
   #sceneLayoutCache = new Map<string, LayoutCacheEntry>();
-  #defaultRoot: SceneNode | null = null;
-  #defaultLayoutCache: LayoutCacheEntry | null = null;
+  // React fiber containers — one per scene key
+  #containers = new Map<string, CanvasUIFiberRoot>();
 
   // Interaction tracking
   #hoveredNode: SceneNode | null = null;
@@ -246,7 +252,6 @@ export class UIRenderer {
     for (const root of this.#sceneRoots.values()) {
       if (hasActiveAnimations(root)) return true;
     }
-    if (this.#defaultRoot && hasActiveAnimations(this.#defaultRoot)) return true;
     return false;
   }
 
@@ -262,30 +267,42 @@ export class UIRenderer {
   }
 
   /**
-   * Render a UIElement tree at a world-space anchor position.
-   *
-   * @param tree       UIElement tree (from JSX)
-   * @param anchorX    Center-X in world space
-   * @param anchorY    Bottom-edge Y in world space
-   * @param encoder    GPU command encoder
-   * @param targetView Render target
-   * @param sceneKey   Key for retaining separate scene graph roots
-   * @param scale      Size multiplier (dpr/zoom for screen-space, 1 for world-space)
-   * @param anchors    Entity bounds for anchor resolution
-   * @param viewport   Viewport info for resolving position: "fixed" elements
+   * Update a scene's React element tree. Triggers synchronous React reconciliation
+   * into the SceneNode tree. Call when inputs change, NOT every frame.
    */
-  render(
-    tree: UIElement,
+  updateScene(sceneKey: string, element: React.ReactElement | null): void {
+    let container = this.#containers.get(sceneKey);
+    if (!container) {
+      // Root must be type "box" so the layout engine processes it as a container.
+      // It has no styling — just a transparent wrapper for React's children.
+      const root = new SceneNode("box", null, {});
+      this.#sceneRoots.set(sceneKey, root);
+      container = createCanvasContainer(root);
+      this.#containers.set(sceneKey, container);
+    }
+    updateCanvasContainer(element, container);
+  }
+
+  /**
+   * Render a scene's SceneNode tree at a world-space anchor position.
+   * Performs layout + GPU draw only (no reconciliation).
+   * Can be called multiple times per frame for the same scene key.
+   */
+  renderScene(
+    sceneKey: string,
     anchorX: number,
     anchorY: number,
     encoder: GPUCommandEncoder,
     targetView: GPUTextureView,
-    sceneKey?: string,
     scale = 1,
     anchors?: Map<string, AnchorTarget>,
     viewport?: ViewportInfo,
   ): void {
     if (!this.#ready || !this.#measurer) return;
+
+    const root = this.#sceneRoots.get(sceneKey);
+    if (!root) return;
+
     if (viewport) {
       this.#textRenderer.setViewport({
         offsetX: viewport.offsetX,
@@ -298,21 +315,9 @@ export class UIRenderer {
 
     const now = performance.now();
 
-    // 1. Reconcile
-    let existingRoot: SceneNode | null;
-    if (sceneKey) {
-      existingRoot = this.#sceneRoots.get(sceneKey) ?? null;
-    } else {
-      existingRoot = this.#defaultRoot;
-    }
-
-    const root = reconcile(tree, existingRoot);
-    if (!root) return;
-
-    if (sceneKey) {
-      this.#sceneRoots.set(sceneKey, root);
-    } else {
-      this.#defaultRoot = root;
+    // 1. Prune exited nodes (ghost nodes from removeChild)
+    if (pruneExitedNodes(root)) {
+      root.bumpRenderVersion();
     }
 
     // 2. Layout (with scale)
@@ -328,6 +333,8 @@ export class UIRenderer {
       viewport,
     );
     this.#interactionDirty = false;
+
+    // ── GPU render pass (boxes, icons, text) ──
     const iconPixelScale = viewport?.zoom ?? 1;
 
     // Track icon preload state
@@ -447,11 +454,6 @@ export class UIRenderer {
     flushIcons();
     flushText();
     pass.end();
-
-    // 6. Prune exited nodes
-    if (pruneExitedNodes(root)) {
-      root.bumpRenderVersion();
-    }
   }
 
   // ---------------------------------------------------------------------------
@@ -538,8 +540,6 @@ export class UIRenderer {
   #hitTestAll(worldX: number, worldY: number): SceneNode | null {
     // Check all roots (later-rendered roots are on top)
     const roots = [...this.#sceneRoots.values()];
-    if (this.#defaultRoot) roots.push(this.#defaultRoot);
-
     for (let i = roots.length - 1; i >= 0; i--) {
       const hit = hitTest(roots[i]!, worldX, worldY);
       if (hit) return hit;
@@ -547,14 +547,27 @@ export class UIRenderer {
     return null;
   }
 
-  removeScene(sceneKey: string): void {
-    const root = this.#sceneRoots.get(sceneKey);
-    if (root) root.beginExit();
+  /**
+   * Destroy a scene — unmounts the React container and removes the SceneNode tree.
+   * Call when the scene is no longer needed (e.g. entity deleted).
+   */
+  destroyScene(sceneKey: string): void {
+    const container = this.#containers.get(sceneKey);
+    if (container) {
+      unmountCanvasContainer(container);
+      this.#containers.delete(sceneKey);
+    }
     this.#sceneRoots.delete(sceneKey);
     this.#sceneLayoutCache.delete(sceneKey);
   }
 
   destroy(): void {
+    // Unmount all React containers
+    for (const container of this.#containers.values()) {
+      unmountCanvasContainer(container);
+    }
+    this.#containers.clear();
+
     this.#textRenderer.destroy();
     this.#boxPipeline.destroy();
     this.#iconPipeline.destroy();
@@ -565,8 +578,6 @@ export class UIRenderer {
     this.#ready = false;
     this.#sceneRoots.clear();
     this.#sceneLayoutCache.clear();
-    this.#defaultRoot = null;
-    this.#defaultLayoutCache = null;
     this.#hoveredNode = null;
   }
 
@@ -576,14 +587,12 @@ export class UIRenderer {
     anchorY: number,
     measurer: SlugTextMeasurer,
     now: number,
-    sceneKey: string | undefined,
+    sceneKey: string,
     scale: number,
     anchors: Map<string, AnchorTarget> | undefined,
     viewport: ViewportInfo | undefined,
   ): ReturnType<typeof computeLayout> {
-    const cache = sceneKey
-      ? (this.#sceneLayoutCache.get(sceneKey) ?? null)
-      : this.#defaultLayoutCache;
+    const cache = this.#sceneLayoutCache.get(sceneKey) ?? null;
     const dependsOnViewport = cache?.dependsOnViewport ?? sceneDependsOnViewport(root);
     const structurallyValid =
       !this.#interactionDirty &&
@@ -640,11 +649,7 @@ export class UIRenderer {
       layout,
     };
 
-    if (sceneKey) {
-      this.#sceneLayoutCache.set(sceneKey, nextCache);
-    } else {
-      this.#defaultLayoutCache = nextCache;
-    }
+    this.#sceneLayoutCache.set(sceneKey, nextCache);
 
     return layout;
   }

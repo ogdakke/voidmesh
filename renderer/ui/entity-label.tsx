@@ -1,8 +1,8 @@
-/** @jsxImportSource ./jsx */
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
 import { easings } from "../../lib/canvas-math.ts";
-import type { UIElement, UIBackground, UIColor } from "./elements.ts";
+import type { UIBackground, UIColor } from "./elements.ts";
 import { edges } from "./elements.ts";
+import { Box, Text, Icon } from "./primitives.tsx";
 
 // Drag icon SVG (iconoir "Drag" — 4 arrows pointing outward from center)
 const DRAG_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12L4 4M4 4V8M4 4H8"/><path d="M12 12L20 4M20 4V8M20 4H16"/><path d="M12 12L4 20M4 20V16M4 20H8"/><path d="M12 12L20 20M20 20V16M20 20H16"/></svg>`;
@@ -28,19 +28,23 @@ const BG_WARNING: UIBackground = {
 const TEXT_WHITE: UIColor = { r: 1, g: 1, b: 1, a: 0.9 };
 const TEXT_DARK_AMBER: UIColor = { r: 0.25, g: 0.15, b: 0.02, a: 1.0 };
 
+interface EntityLabelProps {
+  entity: ShaderCanvasEntity;
+  isDragging: boolean;
+}
+
 /**
- * Build a declarative UI element tree for an entity label.
- *
+ * Entity label rendered in the canvas UI scene graph.
  * All sizes are in screen-space pixels — the layout engine handles
  * DPR/zoom scaling automatically via the `scale` parameter.
  */
-export function buildEntityLabel(entity: ShaderCanvasEntity, isDragging: boolean): UIElement {
+export function EntityLabel({ entity, isDragging }: EntityLabelProps) {
   const isWarning = entity.shaderParams.showOriginal;
   const background = isWarning ? BG_WARNING : BG_PRIMARY;
   const textColor = isWarning ? TEXT_DARK_AMBER : TEXT_WHITE;
 
   return (
-    <box
+    <Box
       key={`label-${entity.id}`}
       direction="row"
       gap={4}
@@ -50,7 +54,7 @@ export function buildEntityLabel(entity: ShaderCanvasEntity, isDragging: boolean
       align="center"
     >
       {!isWarning ? (
-        <icon
+        <Icon
           key={`drag-${entity.id}`}
           svg={DRAG_ICON_SVG}
           size={isDragging ? 16 : 0}
@@ -59,11 +63,11 @@ export function buildEntityLabel(entity: ShaderCanvasEntity, isDragging: boolean
           }}
         />
       ) : (
-        <icon key={`warn-${entity.id}`} svg={WARNING_ICON_SVG} size={14} />
+        <Icon key={`warn-${entity.id}`} svg={WARNING_ICON_SVG} size={14} />
       )}
-      <text fontSize={13} color={textColor}>
+      <Text fontSize={13} color={textColor}>
         {isWarning ? `Original: ${entity.name}` : entity.name}
-      </text>
-    </box>
+      </Text>
+    </Box>
   );
 }

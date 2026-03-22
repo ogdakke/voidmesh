@@ -120,18 +120,6 @@ export interface StateStyle {
 }
 
 // ---------------------------------------------------------------------------
-// UIElement — the descriptor produced by JSX (analogous to React.Element)
-// ---------------------------------------------------------------------------
-
-export type ComponentFn = (props: Record<string, unknown>) => UIElement | null;
-
-export interface UIElement {
-  type: string | ComponentFn;
-  props: Record<string, unknown>;
-  key: string | number | null;
-}
-
-// ---------------------------------------------------------------------------
 // Intrinsic element prop types
 // ---------------------------------------------------------------------------
 
@@ -174,7 +162,7 @@ export interface BoxElementProps {
   // Draggable
   draggable?: boolean;
   onDrag?: UIDragHandler;
-  children?: UIElement | UIElement[];
+  children?: unknown;
 }
 
 export interface TextElementProps {
@@ -203,7 +191,7 @@ export interface AnchorElementProps {
   entityId: string;
   edge?: "top" | "bottom" | "left" | "right" | "center";
   offset?: { x: number; y: number };
-  children?: UIElement | UIElement[];
+  children?: unknown;
 }
 
 // ---------------------------------------------------------------------------
@@ -218,59 +206,4 @@ export function edges(top: number, right?: number, bottom?: number, left?: numbe
     return { top, right, bottom: top, left: right };
   }
   return { top, right, bottom, left: left ?? right };
-}
-
-// ---------------------------------------------------------------------------
-// Convenience component functions
-// ---------------------------------------------------------------------------
-
-export function Row(props: Record<string, unknown>): UIElement {
-  return { type: "box", props: { ...props, direction: "row" }, key: null };
-}
-
-export function Col(props: Record<string, unknown>): UIElement {
-  return { type: "box", props: { ...props, direction: "col" }, key: null };
-}
-
-// ---------------------------------------------------------------------------
-// memo — caches the last result of a component function, returning the same
-// UIElement reference when props are shallowly equal. Analogous to React.memo.
-// Components stay as clean JSX; you just wrap the function:
-//
-//   const MyPanel = memo(function MyPanel(props) { return <box>...</box>; });
-// ---------------------------------------------------------------------------
-
-export function memo<P extends Record<string, unknown>>(
-  fn: (props: P) => UIElement | null,
-): (props: P) => UIElement | null {
-  let lastProps: P | null = null;
-  let lastResult: UIElement | null = null;
-
-  return (props: P) => {
-    if (lastProps !== null && shallowEqual(lastProps, props)) {
-      return lastResult;
-    }
-    lastProps = props;
-    lastResult = fn(props);
-    return lastResult;
-  };
-}
-
-function shallowEqual(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
-  if (a === b) return true;
-
-  let aCount = 0;
-  for (const key in a) {
-    if (key === "children") continue;
-    aCount++;
-    if (a[key] !== b[key]) return false;
-  }
-
-  let bCount = 0;
-  for (const key in b) {
-    if (key === "children") continue;
-    bCount++;
-  }
-
-  return aCount === bCount;
 }
