@@ -25,19 +25,17 @@ export class ShaderRegistry {
     entity: ShaderCanvasEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
+    encoder: GPUCommandEncoder,
   ): void {
     const pass = this.#passes.get(entity.shaderType);
     if (!pass) throw new Error(`Shader pass not registered: ${entity.shaderType}`);
-    pass.execute(entity, sourceTexture, outputTexture);
+    pass.execute(entity, sourceTexture, outputTexture, encoder);
   }
 
   /**
    * Execute a chain of shader passes using ping-pong textures.
    * Each pass reads from one texture and writes to the other, alternating.
    * The final result ends up in `outputTexture`.
-   *
-   * @param chain - Ordered list of shader types to apply
-   * @param texturePool - Pool for acquiring intermediate textures
    */
   applyShaderChain(
     entity: ShaderCanvasEntity,
@@ -45,12 +43,13 @@ export class ShaderRegistry {
     outputTexture: GPUTexture,
     chain: ShaderType[],
     texturePool: TexturePool,
+    encoder: GPUCommandEncoder,
   ): void {
     if (chain.length === 0) return;
     if (chain.length === 1) {
       const pass = this.#passes.get(chain[0]!);
       if (!pass) throw new Error(`Shader pass not registered: ${chain[0]}`);
-      pass.execute(entity, sourceTexture, outputTexture);
+      pass.execute(entity, sourceTexture, outputTexture, encoder);
       return;
     }
 
@@ -79,7 +78,7 @@ export class ShaderRegistry {
       const isLast = i === chain.length - 1;
       const writeTo = isLast ? outputTexture : pingPong;
 
-      pass.execute(entity, readFrom, writeTo);
+      pass.execute(entity, readFrom, writeTo, encoder);
 
       // Next pass reads from what we just wrote
       readFrom = writeTo;

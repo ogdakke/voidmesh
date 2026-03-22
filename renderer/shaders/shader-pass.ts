@@ -202,20 +202,23 @@ export abstract class ShaderPass {
   }
 
   /**
-   * Execute this shader pass: write uniforms, create bind group, submit render pass.
+   * Execute this shader pass: write uniforms, create bind group, encode render pass.
+   * When an encoder is provided, encodes into it without submitting.
+   * When omitted, creates an encoder and submits immediately.
    * Override for compute shaders (DitheringShader) or error handling (AsciiShader).
    */
-  execute(entity: ShaderCanvasEntity, sourceTexture: GPUTexture, outputTexture: GPUTexture): void {
+  execute(
+    entity: ShaderCanvasEntity,
+    sourceTexture: GPUTexture,
+    outputTexture: GPUTexture,
+    encoder: GPUCommandEncoder,
+  ): void {
     if (!this.pipeline) return;
 
     this.writeUniforms(entity);
     this.ctx.device.queue.writeBuffer(this.ctx.uniformBuffer, 0, this.ctx.uniformData);
 
     const bindGroup = this.createBindGroup(sourceTexture.createView());
-
-    const encoder = this.ctx.device.createCommandEncoder({
-      label: `${this.constructor.name} encoder`,
-    });
 
     const pass = encoder.beginRenderPass({
       label: `${this.constructor.name} render pass`,
@@ -233,8 +236,6 @@ export abstract class ShaderPass {
     pass.setBindGroup(0, bindGroup);
     pass.draw(3);
     pass.end();
-
-    this.ctx.device.queue.submit([encoder.finish()]);
   }
 
   /** Cleanup GPU resources. Override to clean up additional resources. */

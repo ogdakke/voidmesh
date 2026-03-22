@@ -96,16 +96,16 @@ export class GlassShader extends ShaderPass {
     entity: ShaderCanvasEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
+    encoder: GPUCommandEncoder,
   ): void {
     const glassKind = entity.shaderParams.glass?.kind ?? GlassKind.frostedVoronoi;
 
     if (glassKind === GlassKind.fluted) {
-      this.#executeFluted(entity, sourceTexture, outputTexture);
+      this.#executeFluted(entity, sourceTexture, outputTexture, encoder);
     } else if (glassKind === GlassKind.flowing) {
-      this.#executeFlowing(entity, sourceTexture, outputTexture);
+      this.#executeFlowing(entity, sourceTexture, outputTexture, encoder);
     } else {
-      // Frosted uses the default pipeline (this.pipeline)
-      super.execute(entity, sourceTexture, outputTexture);
+      super.execute(entity, sourceTexture, outputTexture, encoder);
     }
   }
 
@@ -113,6 +113,7 @@ export class GlassShader extends ShaderPass {
     entity: ShaderCanvasEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
+    encoder: GPUCommandEncoder,
   ): void {
     if (!this.#flutedPipeline) return;
 
@@ -120,10 +121,6 @@ export class GlassShader extends ShaderPass {
     this.ctx.device.queue.writeBuffer(this.ctx.uniformBuffer, 0, this.ctx.uniformData);
 
     const bindGroup = this.createBindGroup(sourceTexture.createView());
-
-    const encoder = this.ctx.device.createCommandEncoder({
-      label: "GlassShader fluted encoder",
-    });
 
     const pass = encoder.beginRenderPass({
       label: "GlassShader fluted render pass",
@@ -141,14 +138,13 @@ export class GlassShader extends ShaderPass {
     pass.setBindGroup(0, bindGroup);
     pass.draw(3);
     pass.end();
-
-    this.ctx.device.queue.submit([encoder.finish()]);
   }
 
   #executeFlowing(
     entity: ShaderCanvasEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
+    encoder: GPUCommandEncoder,
   ): void {
     if (!this.#flowingPipeline) return;
 
@@ -156,10 +152,6 @@ export class GlassShader extends ShaderPass {
     this.ctx.device.queue.writeBuffer(this.ctx.uniformBuffer, 0, this.ctx.uniformData);
 
     const bindGroup = this.createBindGroup(sourceTexture.createView());
-
-    const encoder = this.ctx.device.createCommandEncoder({
-      label: "GlassShader flowing encoder",
-    });
 
     const pass = encoder.beginRenderPass({
       label: "GlassShader flowing render pass",
@@ -178,8 +170,6 @@ export class GlassShader extends ShaderPass {
     pass.draw(3);
     pass.end();
 
-    this.ctx.device.queue.submit([encoder.finish()]);
-
     // Auto-increment time per-entity (mutate in-place, no React/undo involvement)
     if (entity.shaderParams.timeAutoPlay !== false) {
       const now = performance.now();
@@ -190,7 +180,6 @@ export class GlassShader extends ShaderPass {
       }
       this.#lastFrameTimes.set(entity.id, now);
     } else {
-      // Reset so we don't get a large jump when resuming
       this.#lastFrameTimes.delete(entity.id);
     }
   }

@@ -843,7 +843,11 @@ export class InfiniteCanvasRenderer {
       GPUTextureUsage.RENDER_ATTACHMENT |
       GPUTextureUsage.COPY_SRC;
 
-    // Pipeline: source -> [blur] -> [adjustments] -> shader -> [post-process]
+    // Single encoder for the entire entity pipeline: blur → adjustments → shader → post-process
+    const encoder = this.#device.createCommandEncoder({
+      label: `Entity ${entity.id} pipeline`,
+    });
+
     let shaderSourceTexture = sourceTexture;
     let blurOutputTexture: GPUTexture | null = null;
     let adjustmentsOutputTexture: GPUTexture | null = null;
@@ -858,7 +862,7 @@ export class InfiniteCanvasRenderer {
             usage: preProcessUsage,
           });
 
-      this.#processingPipeline!.applyBlur(entity, sourceTexture, blurOutputTexture);
+      this.#processingPipeline!.applyBlur(entity, sourceTexture, blurOutputTexture, encoder);
       shaderSourceTexture = blurOutputTexture;
     }
 
@@ -872,22 +876,19 @@ export class InfiniteCanvasRenderer {
             usage: preProcessUsage,
           });
 
-      // Apply adjustments: current source (possibly blurred) -> adjustmentsOutputTexture
       this.#processingPipeline!.applyAdjustments(
         entity,
         shaderSourceTexture,
         adjustmentsOutputTexture,
+        encoder,
       );
       shaderSourceTexture = adjustmentsOutputTexture;
     }
 
-    // Determine the target texture for the main shader
-    // If post-processing is enabled, we render to an intermediate texture first
     let mainShaderOutputTexture = outputTexture;
     let postProcessIntermediateTexture: GPUTexture | null = null;
 
     if (postProcessEnabled) {
-      // Create intermediate texture for main shader output
       const intermediateUsage =
         GPUTextureUsage.TEXTURE_BINDING |
         GPUTextureUsage.RENDER_ATTACHMENT |
@@ -910,8 +911,12 @@ export class InfiniteCanvasRenderer {
       mainShaderOutputTexture = postProcessIntermediateTexture;
     }
 
-    // Apply shader via registry (all 6 shader types are registered)
-    this.#shaderRegistry!.applyShader(entity, shaderSourceTexture, mainShaderOutputTexture);
+    this.#shaderRegistry!.applyShader(
+      entity,
+      shaderSourceTexture,
+      mainShaderOutputTexture,
+      encoder,
+    );
 
     // Release pre-processing output textures back to pool (if used)
     if (blurOutputTexture) {
@@ -929,15 +934,14 @@ export class InfiniteCanvasRenderer {
       }
     }
 
-    // Apply post-processing if enabled
     if (postProcessEnabled && postProcessIntermediateTexture) {
       this.#processingPipeline!.applyPostProcessing(
         entity,
         postProcessIntermediateTexture,
         outputTexture,
+        encoder,
       );
 
-      // Release intermediate texture back to pool
       const intermediateUsage =
         GPUTextureUsage.TEXTURE_BINDING |
         GPUTextureUsage.RENDER_ATTACHMENT |
@@ -949,6 +953,8 @@ export class InfiniteCanvasRenderer {
         postProcessIntermediateTexture.destroy();
       }
     }
+
+    this.#device.queue.submit([encoder.finish()]);
   }
 
   #updateGridUniforms(viewport: Viewport): void {

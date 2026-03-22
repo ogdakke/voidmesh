@@ -631,6 +631,7 @@ export class ProcessingPipeline {
     filterRadius: number,
     threshold: number,
     softness: number,
+    encoder: GPUCommandEncoder,
   ): GPUTexture | null {
     if (
       !this.#bloomDownsamplePipeline ||
@@ -688,11 +689,6 @@ export class ProcessingPipeline {
         upsampleUniformData,
       );
     }
-
-    // Single command encoder for all downsample + upsample passes
-    const encoder = this.#device.createCommandEncoder({
-      label: "Bloom encoder",
-    });
 
     // === Downsample passes ===
     let srcTexture = sourceTexture;
@@ -773,9 +769,6 @@ export class ProcessingPipeline {
       pass.draw(3);
       pass.end();
     }
-
-    // Single submission for all bloom passes
-    this.#device.queue.submit([encoder.finish()]);
 
     return mipChain[0] ?? null;
   }
@@ -1153,7 +1146,12 @@ export class ProcessingPipeline {
    * Supports cross-level blending for smooth transitions at breakpoints.
    * All passes are batched into a single command encoder submission.
    */
-  applyBlur(entity: ShaderCanvasEntity, inputTexture: GPUTexture, outputTexture: GPUTexture): void {
+  applyBlur(
+    entity: ShaderCanvasEntity,
+    inputTexture: GPUTexture,
+    outputTexture: GPUTexture,
+    encoder: GPUCommandEncoder,
+  ): void {
     if (
       !this.#blurDownsamplePipeline ||
       !this.#blurUpsamplePipeline ||
@@ -1180,10 +1178,6 @@ export class ProcessingPipeline {
     if (mipChain.length === 0) return;
 
     if (!needsBlend) {
-      // Fast path: single pipeline run
-      const encoder = this.#device.createCommandEncoder({
-        label: "Blur Kawase encoder",
-      });
       this.#encodeBlurPasses(
         encoder,
         inputTexture,
@@ -1195,17 +1189,12 @@ export class ProcessingPipeline {
         height,
         0,
       );
-      this.#device.queue.submit([encoder.finish()]);
       return;
     }
 
     // Cross-level blending path
     const { textureA, textureB } = this.#getOrCreateBlurBlendTextures(width, height);
-    const encoder = this.#device.createCommandEncoder({
-      label: "Blur Kawase cross-blend encoder",
-    });
 
-    // Run 1: Low-level blur -> textureA (uniform buffers 0..MAX-1)
     this.#encodeBlurPasses(
       encoder,
       inputTexture,
@@ -1217,8 +1206,6 @@ export class ProcessingPipeline {
       height,
       0,
     );
-
-    // Run 2: High-level blur -> textureB (uniform buffers MAX..MAX*2-1)
     this.#encodeBlurPasses(
       encoder,
       inputTexture,
@@ -1230,11 +1217,7 @@ export class ProcessingPipeline {
       height,
       MAX_BLUR_MIP_LEVELS,
     );
-
-    // Run 3: Blend textureA + textureB -> outputTexture
     this.#encodeMixPass(encoder, textureA, textureB, outputTexture, blendFactor, width, height);
-
-    this.#device.queue.submit([encoder.finish()]);
   }
 
   /**
@@ -1282,11 +1265,13 @@ export class ProcessingPipeline {
   /**
    * Apply adjustments (brightness, contrast, saturation) to a texture.
    * This is a pre-processing step before the main shader.
+   * When encoder is provided, encodes into it without submitting.
    */
   applyAdjustments(
     entity: ShaderCanvasEntity,
     inputTexture: GPUTexture,
     outputTexture: GPUTexture,
+    encoder: GPUCommandEncoder,
   ): void {
     if (
       !this.#adjustmentsPipeline ||
@@ -1297,11 +1282,9 @@ export class ProcessingPipeline {
       return;
     }
 
-    // Update uniforms
     this.#updateAdjustmentsUniforms(entity);
     this.#device.queue.writeBuffer(this.#adjustmentsUniformBuffer, 0, this.#adjustmentsUniformData);
 
-    // Create bind group
     const bindGroup = this.#device.createBindGroup({
       label: "Adjustments bind group",
       layout: this.#adjustmentsBindGroupLayout,
@@ -1310,11 +1293,6 @@ export class ProcessingPipeline {
         { binding: 1, resource: inputTexture.createView() },
         { binding: 2, resource: this.#adjustmentsSampler },
       ],
-    });
-
-    // Render adjusted result to output texture
-    const encoder = this.#device.createCommandEncoder({
-      label: "Adjustments encoder",
     });
 
     const pass = encoder.beginRenderPass({
@@ -1333,8 +1311,6 @@ export class ProcessingPipeline {
     pass.setBindGroup(0, bindGroup);
     pass.draw(3);
     pass.end();
-
-    this.#device.queue.submit([encoder.finish()]);
   }
 
   /**
@@ -1384,6 +1360,7 @@ export class ProcessingPipeline {
     entity: ShaderCanvasEntity,
     inputTexture: GPUTexture,
     outputTexture: GPUTexture,
+    encoder: GPUCommandEncoder,
   ): void {
     if (
       !this.#postProcessPipeline ||
@@ -1411,6 +1388,7 @@ export class ProcessingPipeline {
         bloomFilterRadiusToRenderer(bloom.filterRadius),
         bloom.threshold,
         softness,
+        encoder,
       );
     }
 
@@ -1420,7 +1398,6 @@ export class ProcessingPipeline {
     if (bloomTexture) {
       bloomTextureView = bloomTexture.createView();
     } else {
-      // Use a dummy 1x1 texture (create once and reuse would be better, but this works)
       const dummyTexture = this.#device.createTexture({
         label: "Dummy bloom texture",
         size: [1, 1],
@@ -1430,11 +1407,9 @@ export class ProcessingPipeline {
       bloomTextureView = dummyTexture.createView();
     }
 
-    // Update uniforms
     this.#updatePostProcessUniforms(entity);
     this.#device.queue.writeBuffer(this.#postProcessUniformBuffer, 0, this.#postProcessUniformData);
 
-    // Create bind group with bloom texture
     const bindGroup = this.#device.createBindGroup({
       label: "Post-process bind group",
       layout: this.#postProcessBindGroupLayout,
@@ -1444,11 +1419,6 @@ export class ProcessingPipeline {
         { binding: 2, resource: this.#postProcessSampler },
         { binding: 3, resource: bloomTextureView },
       ],
-    });
-
-    // Render post-processed result to output texture
-    const encoder = this.#device.createCommandEncoder({
-      label: "Post-process encoder",
     });
 
     const pass = encoder.beginRenderPass({
@@ -1467,8 +1437,6 @@ export class ProcessingPipeline {
     pass.setBindGroup(0, bindGroup);
     pass.draw(3);
     pass.end();
-
-    this.#device.queue.submit([encoder.finish()]);
 
     // Increment time for animated grain
     this.#postProcessTime += 0.016; // ~60fps increment

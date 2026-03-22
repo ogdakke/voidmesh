@@ -136,14 +136,14 @@ export class DitheringShader extends ShaderPass {
     entity: ShaderCanvasEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
+    encoder: GPUCommandEncoder,
   ): void {
     const ditheringKind = entity.shaderParams.dithering?.kind ?? DitheringKind.bayer4x4;
 
     if (isErrorDiffusion(ditheringKind)) {
-      this.#executeCompute(entity, sourceTexture, outputTexture);
+      this.#executeCompute(entity, sourceTexture, outputTexture, encoder);
     } else {
-      // Ordered dithering uses the standard fragment shader path
-      super.execute(entity, sourceTexture, outputTexture);
+      super.execute(entity, sourceTexture, outputTexture, encoder);
     }
   }
 
@@ -151,6 +151,7 @@ export class DitheringShader extends ShaderPass {
     entity: ShaderCanvasEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
+    encoder: GPUCommandEncoder,
   ): void {
     if (!this.#computePipeline || !this.#computeBindGroupLayout || !this.#computeUniformBuffer) {
       return;
@@ -162,11 +163,9 @@ export class DitheringShader extends ShaderPass {
 
     const errorBuffer = this.#getOrCreateErrorBuffer(entity.id, width, height);
 
-    // Write uniforms (uses same shared uniform data + compute uniform buffer)
     this.writeUniforms(entity);
     device.queue.writeBuffer(this.#computeUniformBuffer, 0, this.ctx.uniformData);
 
-    // Compute shader writes to a storage texture, then copy to output
     const computeUsage =
       GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC;
 
@@ -191,11 +190,6 @@ export class DitheringShader extends ShaderPass {
       ],
     });
 
-    const encoder = device.createCommandEncoder({
-      label: `Entity ${entity.id} compute encoder`,
-    });
-
-    // GPU-native error buffer clear (no CPU transfer)
     encoder.clearBuffer(errorBuffer);
 
     const computePass = encoder.beginComputePass({
@@ -204,17 +198,13 @@ export class DitheringShader extends ShaderPass {
 
     computePass.setPipeline(this.#computePipeline);
     computePass.setBindGroup(0, bindGroup);
-    // Dispatch ceil(height/32) workgroups - 32 threads per workgroup, each handles one row
     computePass.dispatchWorkgroups(Math.ceil(height / 32));
     computePass.end();
 
-    // Copy compute output to the final output texture
     encoder.copyTextureToTexture({ texture: computeOutputTexture }, { texture: outputTexture }, [
       width,
       height,
     ]);
-
-    device.queue.submit([encoder.finish()]);
 
     // Release compute output texture back to pool
     if (pool) {

@@ -129,6 +129,7 @@ export class AsciiShader extends ShaderPass {
     entity: ShaderCanvasEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
+    encoder: GPUCommandEncoder,
   ): void {
     if (!this.#atlasTexture || !this.#atlasSampler) {
       const errorMsg = "ASCII atlas not loaded";
@@ -138,7 +139,7 @@ export class AsciiShader extends ShaderPass {
       }
       return;
     }
-    super.execute(entity, sourceTexture, outputTexture);
+    super.execute(entity, sourceTexture, outputTexture, encoder);
   }
 
   /** Clear error state for an entity (e.g., when entity is removed) */
