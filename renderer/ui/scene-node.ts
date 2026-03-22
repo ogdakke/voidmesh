@@ -274,7 +274,11 @@ export class SceneNode {
   }
 
   bumpRenderVersion(): void {
-    this.renderVersion++;
+    let cursor: SceneNode | null = this;
+    while (cursor) {
+      cursor.renderVersion++;
+      cursor = cursor.parent;
+    }
   }
 
   /** Returns true if this node is exiting and all its exit animations are done. */

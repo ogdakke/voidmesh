@@ -67,6 +67,8 @@ class ContextMenuController {
     entity: ShaderCanvasEntity | undefined,
     selectedEntities: ShaderCanvasEntity[],
   ): void {
+    this.submenu.close();
+    this.#activeSubmenuId = null;
     this.#state = {
       isOpen: true,
       screenX: screenPoint.x,
