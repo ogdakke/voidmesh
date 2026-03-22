@@ -31,7 +31,6 @@ import {
   Suspense,
   useEffect,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
   useCallback,
@@ -266,40 +265,12 @@ export function InfiniteCanvas() {
     }
   }, [getClipboardItems, handlePastedItems]);
 
-  const getKeybindHint = useCallback(
-    (id: string): string | undefined => {
-      const bind = keybindStore.getById(id);
-      return bind ? bind.bind.toSymbols().join("") : undefined;
-    },
-    [keybindStore],
-  );
-
   const showOriginalMixed =
     selectionState.isMultiple && !selectionState.paramValues.showOriginal?.isUniform;
   const preserveColorsMixed =
     selectionState.isMultiple && !selectionState.paramValues.preserveColors?.isUniform;
   const reversePaletteMixed =
     selectionState.isMultiple && !selectionState.paramValues.reversePalette?.isUniform;
-
-  const menuHints = useMemo(
-    () => ({
-      bringToFront: getKeybindHint("bring_to_front"),
-      copySelection: getKeybindHint("copy_selection"),
-      deleteEntity: getKeybindHint("delete_entity"),
-      duplicateEntity: getKeybindHint("duplicate_entity"),
-      openStudio: getKeybindHint("open_studio"),
-      pasteCanvas: getKeybindHint("paste_canvas"),
-      pasteSelection: getKeybindHint("paste_selection"),
-      saveAsStudio: getKeybindHint("save_as_studio"),
-      saveStudio: getKeybindHint("save_studio"),
-      sendToBack: getKeybindHint("send_to_back"),
-      togglePreserveColors: getKeybindHint("toggle_preserve_colors"),
-      toggleReversePalette: getKeybindHint("toggle_reverse_palette"),
-      toggleShowOriginal: getKeybindHint("toggle_show_original"),
-      toggleSnapToGrid: getKeybindHint("toggle_snap_to_grid"),
-    }),
-    [getKeybindHint],
-  );
 
   // Wire canvas-rendered context menu actions
   useEffect(() => {
@@ -361,7 +332,6 @@ export function InfiniteCanvas() {
 
     // Set live props for context menu rendering
     canvasUI.contextMenuProps({
-      hints: menuHints,
       customPalettes,
       snapToGrid,
       showOriginal: {
@@ -427,6 +397,7 @@ export function InfiniteCanvas() {
       paletteMixed: paletteParam.isMixed,
       paletteValues: [...paletteParam.values],
       hasEntities: entities.length > 0,
+      submenuGutter: 4,
     });
   }, [
     addToQueue,
@@ -473,7 +444,6 @@ export function InfiniteCanvas() {
     handleShowOriginalChange,
     handleSnapToGridChange,
     importStudioFile,
-    menuHints,
     paletteParam.isMixed,
     paletteParam.value,
     paletteParam.values,

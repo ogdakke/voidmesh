@@ -19,6 +19,10 @@ export type Keybind<T extends string = string> = BaseBindProperties & {
   bind: BindBuilder<T>;
 };
 
+export interface KeybindLookup {
+  getById(id: string): Keybind<string> | undefined;
+}
+
 type InitialBind<T extends string> = BaseBindProperties & {
   bind: T | ((bp: BindBuilder<T>) => Bind<T>);
 };
@@ -506,6 +510,14 @@ export function useKeybinds() {
   }
 
   return store;
+}
+
+export function getKeybindSymbolsById(
+  keybindLookup: KeybindLookup,
+  id: string,
+): string[] | undefined {
+  const bind = keybindLookup.getById(id);
+  return bind ? bind.bind.toSymbols() : undefined;
 }
 
 export function useKeybindEntries() {

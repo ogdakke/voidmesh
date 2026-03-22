@@ -11,6 +11,7 @@ import type { ContextMenuActions } from "../context-menu-actions.ts";
 import type { ContextMenuState } from "../context-menu-controller.ts";
 import { contextMenuController } from "../context-menu-controller.ts";
 import type { SceneNode } from "../scene-node.ts";
+import type { ReactNode } from "react";
 import type { ColorPalette, ShaderCanvasEntity } from "#types/canvas.ts";
 import {
   ASCII_KIND_OPTIONS,
@@ -21,11 +22,12 @@ import {
   SHAPE_OPTIONS,
   isAnimatedEntity,
 } from "#types/canvas.ts";
-import { IMAGE_FORMAT_OPTIONS } from "#renderer/export-formats.ts";
+import { IMAGE_FORMAT_OPTIONS, type ImageExportFormat } from "#renderer/export-formats.ts";
 import { buildPaletteList } from "#components/palette-preset/palette-presets.ts";
 import { Box } from "../primitives.tsx";
 import { solid } from "../elements.ts";
 import {
+  getSubmenuOffset,
   MenuCheckboxItem,
   MenuGroupLabel,
   MenuItem,
@@ -62,27 +64,6 @@ const IMAGE_FORMAT_ICONS = {
   jpeg: JpgFormat,
 } as const;
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface MenuHints {
-  bringToFront?: string;
-  copySelection?: string;
-  deleteEntity?: string;
-  duplicateEntity?: string;
-  openStudio?: string;
-  pasteCanvas?: string;
-  pasteSelection?: string;
-  saveAsStudio?: string;
-  saveStudio?: string;
-  sendToBack?: string;
-  togglePreserveColors?: string;
-  toggleReversePalette?: string;
-  toggleShowOriginal?: string;
-  toggleSnapToGrid?: string;
-}
-
 interface StringOptionState {
   supported: boolean;
   value: string | undefined;
@@ -99,7 +80,6 @@ interface BooleanOptionState {
 export interface CanvasContextMenuProps {
   state: ContextMenuState;
   actions: ContextMenuActions;
-  hints: MenuHints;
   customPalettes: ColorPalette[];
   snapToGrid: boolean;
   showOriginal: BooleanOptionState;
@@ -116,6 +96,7 @@ export interface CanvasContextMenuProps {
   paletteMixed: boolean;
   paletteValues: ColorPalette[];
   hasEntities: boolean;
+  submenuGutter?: number;
   menuX: number;
   menuY: number;
   activeSubmenuId: string | null;
@@ -140,11 +121,6 @@ function syncSubmenuPanel(node: SceneNode) {
   contextMenuController.submenu.syncSubmenuNode(node);
 }
 
-function closeSubmenu() {
-  contextMenuController.submenu.close();
-  contextMenuController.activeSubmenuId = null;
-}
-
 function withCount(label: string, count: number, isMultiple: boolean): string {
   return isMultiple ? `${label} (${count})` : label;
 }
@@ -160,10 +136,26 @@ function MixedValueGroup({ label, values }: { label: string; values: string[] })
     <>
       <MenuGroupLabel label={label} />
       {values.map((value) => (
-        <MenuItem key={value} label={value} disabled />
+        <MenuItem key={value} disabled>
+          <MenuItem.Label>{value}</MenuItem.Label>
+        </MenuItem>
       ))}
       <MenuSeparator />
     </>
+  );
+}
+
+function SubmenuLayer({ gutter, children }: { gutter: number; children: ReactNode }) {
+  return (
+    <Box
+      position="absolute"
+      placement="right-start"
+      offset={getSubmenuOffset(gutter)}
+      contain="viewport"
+      zIndex={10000}
+    >
+      <MenuPanel onLayout={syncSubmenuPanel}>{children}</MenuPanel>
+    </Box>
   );
 }
 
@@ -238,6 +230,7 @@ function OptionSubmenu({
   submenuId,
   title,
   activeSubmenuId,
+  gutter,
   options,
   optionState,
   mixedLabel,
@@ -246,6 +239,7 @@ function OptionSubmenu({
   submenuId: string;
   title: string;
   activeSubmenuId: string | null;
+  gutter: number;
   options: OptionDefinition[];
   optionState: StringOptionState;
   mixedLabel: string;
@@ -259,27 +253,23 @@ function OptionSubmenu({
 
   return (
     <MenuSubmenuTrigger
-      label={title}
       open={activeSubmenuId === submenuId}
       onHoverEnter={(node) => openSubmenu(submenuId, node)}
     >
+      <MenuSubmenuTrigger.Label>{title}</MenuSubmenuTrigger.Label>
       {activeSubmenuId === submenuId && (
-        <Box position="absolute" placement="right-start" contain="viewport" zIndex={10000}>
-          <MenuPanel onLayout={syncSubmenuPanel}>
-            <MixedValueGroup label={mixedLabel} values={mixedValues} />
-            {options.map((option) => (
-              <MenuRadioItem
-                key={option.value}
-                label={option.label}
-                selected={!optionState.mixed && optionState.value === option.value}
-                onClick={() => {
-                  onSelect(option.value);
-                  closeSubmenu();
-                }}
-              />
-            ))}
-          </MenuPanel>
-        </Box>
+        <SubmenuLayer gutter={gutter}>
+          <MixedValueGroup label={mixedLabel} values={mixedValues} />
+          {options.map((option) => (
+            <MenuRadioItem
+              key={option.value}
+              selected={!optionState.mixed && optionState.value === option.value}
+              onClick={() => onSelect(option.value)}
+            >
+              <MenuRadioItem.Label>{option.label}</MenuRadioItem.Label>
+            </MenuRadioItem>
+          ))}
+        </SubmenuLayer>
       )}
     </MenuSubmenuTrigger>
   );
@@ -287,6 +277,7 @@ function OptionSubmenu({
 
 function PaletteSubmenu({
   activeSubmenuId,
+  gutter,
   currentPaletteId,
   paletteMixed,
   paletteValues,
@@ -294,6 +285,7 @@ function PaletteSubmenu({
   actions,
 }: {
   activeSubmenuId: string | null;
+  gutter: number;
   currentPaletteId: string | undefined;
   paletteMixed: boolean;
   paletteValues: ColorPalette[];
@@ -302,35 +294,33 @@ function PaletteSubmenu({
 }) {
   return (
     <MenuSubmenuTrigger
-      label="Palette Preset"
       open={activeSubmenuId === "palette"}
       onHoverEnter={(node) => openSubmenu("palette", node)}
     >
+      <MenuSubmenuTrigger.Label>Palette Preset</MenuSubmenuTrigger.Label>
       {activeSubmenuId === "palette" && (
-        <Box position="absolute" placement="right-start" contain="viewport" zIndex={10000}>
-          <MenuPanel onLayout={syncSubmenuPanel}>
-            {paletteMixed && paletteValues.length > 0 ? (
-              <>
-                <MenuGroupLabel label="Selection palettes" />
-                {paletteValues.map((palette) => (
-                  <MenuItem key={palette.id ?? palette.name} label={palette.name} disabled />
-                ))}
-                <MenuSeparator />
-              </>
-            ) : null}
-            {palettes.map((palette) => (
-              <MenuRadioItem
-                key={palette.id ?? palette.name}
-                label={palette.name}
-                selected={!paletteMixed && currentPaletteId === palette.id}
-                onClick={() => {
-                  actions.changePalette(palette);
-                  closeSubmenu();
-                }}
-              />
-            ))}
-          </MenuPanel>
-        </Box>
+        <SubmenuLayer gutter={gutter}>
+          {paletteMixed && paletteValues.length > 0 ? (
+            <>
+              <MenuGroupLabel label="Selection palettes" />
+              {paletteValues.map((palette) => (
+                <MenuItem key={palette.id ?? palette.name} disabled>
+                  <MenuItem.Label>{palette.name}</MenuItem.Label>
+                </MenuItem>
+              ))}
+              <MenuSeparator />
+            </>
+          ) : null}
+          {palettes.map((palette) => (
+            <MenuRadioItem
+              key={palette.id ?? palette.name}
+              selected={!paletteMixed && currentPaletteId === palette.id}
+              onClick={() => actions.changePalette(palette)}
+            >
+              <MenuRadioItem.Label>{palette.name}</MenuRadioItem.Label>
+            </MenuRadioItem>
+          ))}
+        </SubmenuLayer>
       )}
     </MenuSubmenuTrigger>
   );
@@ -338,6 +328,7 @@ function PaletteSubmenu({
 
 function SaveAsSubmenu({
   activeSubmenuId,
+  gutter,
   animatedEntities,
   actions,
   hasAnimated,
@@ -346,6 +337,7 @@ function SaveAsSubmenu({
   selectionCount,
 }: {
   activeSubmenuId: string | null;
+  gutter: number;
   animatedEntities: ShaderCanvasEntity[];
   actions: ContextMenuActions;
   hasAnimated: boolean;
@@ -355,62 +347,68 @@ function SaveAsSubmenu({
 }) {
   return (
     <MenuSubmenuTrigger
-      label="Save as..."
       open={activeSubmenuId === "save-as"}
       onHoverEnter={(node) => openSubmenu("save-as", node)}
     >
+      <MenuSubmenuTrigger.Label>Save as...</MenuSubmenuTrigger.Label>
       {activeSubmenuId === "save-as" && (
-        <Box position="absolute" placement="right-start" contain="viewport" zIndex={10000}>
-          <MenuPanel onLayout={syncSubmenuPanel}>
-            {hasAnimated ? (
-              <>
-                {hasMixed ? (
-                  <MenuItem
-                    label="Save All"
-                    icon={Download}
-                    onClick={() => {
-                      actions.saveAll(animatedEntities);
-                      closeSubmenu();
-                    }}
-                  />
-                ) : null}
-                {IMAGE_FORMAT_OPTIONS.map(({ value, label }) => (
-                  <MenuItem
-                    key={value}
-                    label={`Save ${isMultiple ? `${selectionCount} Frames` : "Frame"} (${label})`}
-                    icon={IMAGE_FORMAT_ICONS[value]}
-                    onClick={() => {
-                      actions.saveAsFormat(value);
-                      closeSubmenu();
-                    }}
-                  />
-                ))}
+        <SubmenuLayer gutter={gutter}>
+          {hasAnimated ? (
+            <>
+              {hasMixed ? (
                 <MenuItem
-                  label={`Export${isMultiple && animatedEntities.length > 1 ? ` ${animatedEntities.length}` : ""}`}
-                  icon={MediaVideo}
                   onClick={() => {
-                    actions.exportAnimated(animatedEntities);
-                    closeSubmenu();
+                    actions.saveAll(animatedEntities);
+                    actions.close();
+                  }}
+                >
+                  <MenuItem.Icon>
+                    <Download />
+                  </MenuItem.Icon>
+                  <MenuItem.Label>Save All</MenuItem.Label>
+                </MenuItem>
+              ) : null}
+              {IMAGE_FORMAT_OPTIONS.map(({ value, label }) => (
+                <ImageFormatMenuItem
+                  key={value}
+                  format={value}
+                  label={`Save ${isMultiple ? `${selectionCount} Frames` : "Frame"} (${label})`}
+                  onClick={() => {
+                    actions.saveAsFormat(value);
+                    actions.close();
                   }}
                 />
-              </>
-            ) : (
-              <>
-                {IMAGE_FORMAT_OPTIONS.map(({ value, label }) => (
-                  <MenuItem
-                    key={value}
-                    label={label}
-                    icon={IMAGE_FORMAT_ICONS[value]}
-                    onClick={() => {
-                      actions.saveAsFormat(value);
-                      closeSubmenu();
-                    }}
-                  />
-                ))}
-              </>
-            )}
-          </MenuPanel>
-        </Box>
+              ))}
+              <MenuItem
+                onClick={() => {
+                  actions.exportAnimated(animatedEntities);
+                  actions.close();
+                }}
+              >
+                <MenuItem.Icon>
+                  <MediaVideo />
+                </MenuItem.Icon>
+                <MenuItem.Label>
+                  {`Export${isMultiple && animatedEntities.length > 1 ? ` ${animatedEntities.length}` : ""}`}
+                </MenuItem.Label>
+              </MenuItem>
+            </>
+          ) : (
+            <>
+              {IMAGE_FORMAT_OPTIONS.map(({ value, label }) => (
+                <ImageFormatMenuItem
+                  key={value}
+                  format={value}
+                  label={label}
+                  onClick={() => {
+                    actions.saveAsFormat(value);
+                    actions.close();
+                  }}
+                />
+              ))}
+            </>
+          )}
+        </SubmenuLayer>
       )}
     </MenuSubmenuTrigger>
   );
@@ -418,57 +416,64 @@ function SaveAsSubmenu({
 
 function WorkspaceSubmenu({
   activeSubmenuId,
+  gutter,
   actions,
   hasEntities,
-  hints,
 }: {
   activeSubmenuId: string | null;
+  gutter: number;
   actions: ContextMenuActions;
   hasEntities: boolean;
-  hints: MenuHints;
 }) {
   return (
     <MenuSubmenuTrigger
-      label="Save/Open workspace..."
       open={activeSubmenuId === "workspace"}
       onHoverEnter={(node) => openSubmenu("workspace", node)}
     >
+      <MenuSubmenuTrigger.Label>Save/Open workspace...</MenuSubmenuTrigger.Label>
       {activeSubmenuId === "workspace" && (
-        <Box position="absolute" placement="right-start" contain="viewport" zIndex={10000}>
-          <MenuPanel onLayout={syncSubmenuPanel}>
-            {hasEntities ? (
-              <>
-                <MenuItem
-                  label="Save"
-                  icon={FloppyDiskArrowIn}
-                  hint={hints.saveStudio}
-                  onClick={() => {
-                    actions.saveWorkspace();
-                    actions.close();
-                  }}
-                />
-                <MenuItem
-                  label="Save as..."
-                  icon={FloppyDiskArrowIn}
-                  hint={hints.saveAsStudio}
-                  onClick={() => {
-                    actions.saveAsWorkspace();
-                    actions.close();
-                  }}
-                />
-              </>
-            ) : null}
-            <MenuItem
-              label="Open"
-              icon={Import}
-              hint={hints.openStudio}
-              onClick={() => {
-                actions.openWorkspace();
-                actions.close();
-              }}
-            />
-          </MenuPanel>
-        </Box>
+        <SubmenuLayer gutter={gutter}>
+          {hasEntities ? (
+            <>
+              <MenuItem
+                onClick={() => {
+                  actions.saveWorkspace();
+                  actions.close();
+                }}
+              >
+                <MenuItem.Icon>
+                  <FloppyDiskArrowIn />
+                </MenuItem.Icon>
+                <MenuItem.Label>Save</MenuItem.Label>
+                <MenuItem.Shortcut id="save_studio" />
+              </MenuItem>
+              <MenuItem
+                onClick={() => {
+                  actions.saveAsWorkspace();
+                  actions.close();
+                }}
+              >
+                <MenuItem.Icon>
+                  <FloppyDiskArrowIn />
+                </MenuItem.Icon>
+                <MenuItem.Label>Save as...</MenuItem.Label>
+                <MenuItem.Shortcut id="save_as_studio" />
+              </MenuItem>
+            </>
+          ) : null}
+          <MenuItem
+            onClick={() => {
+              actions.openWorkspace();
+              actions.close();
+            }}
+          >
+            <MenuItem.Icon>
+              <Import />
+            </MenuItem.Icon>
+            <MenuItem.Label>Open</MenuItem.Label>
+            <MenuItem.Shortcut id="open_studio" />
+          </MenuItem>
+        </SubmenuLayer>
       )}
     </MenuSubmenuTrigger>
   );
@@ -476,46 +481,72 @@ function WorkspaceSubmenu({
 
 function EffectsSubmenu({
   activeSubmenuId,
+  gutter,
   actions,
-  hints,
   isMultiple,
 }: {
   activeSubmenuId: string | null;
+  gutter: number;
   actions: ContextMenuActions;
-  hints: MenuHints;
   isMultiple: boolean;
 }) {
   return (
     <MenuSubmenuTrigger
-      label="Copy/Paste as..."
       open={activeSubmenuId === "effects"}
       onHoverEnter={(node) => openSubmenu("effects", node)}
     >
+      <MenuSubmenuTrigger.Label>Copy/Paste as...</MenuSubmenuTrigger.Label>
       {activeSubmenuId === "effects" && (
-        <Box position="absolute" placement="right-start" contain="viewport" zIndex={10000}>
-          <MenuPanel onLayout={syncSubmenuPanel}>
-            <MenuItem
-              label="Copy Effects"
-              icon={Copy}
-              disabled={isMultiple}
-              onClick={() => {
-                actions.copyEffects();
-                actions.close();
-              }}
-            />
-            <MenuItem
-              label="Paste Effects"
-              icon={PasteClipboard}
-              hint={hints.pasteSelection}
-              onClick={() => {
-                actions.pasteEffects();
-                actions.close();
-              }}
-            />
-          </MenuPanel>
-        </Box>
+        <SubmenuLayer gutter={gutter}>
+          <MenuItem
+            disabled={isMultiple}
+            onClick={() => {
+              actions.copyEffects();
+              actions.close();
+            }}
+          >
+            <MenuItem.Icon>
+              <Copy />
+            </MenuItem.Icon>
+            <MenuItem.Label>Copy Effects</MenuItem.Label>
+            <MenuItem.Shortcut id="copy_effects" />
+          </MenuItem>
+          <MenuItem
+            onClick={() => {
+              actions.pasteEffects();
+              actions.close();
+            }}
+          >
+            <MenuItem.Icon>
+              <PasteClipboard />
+            </MenuItem.Icon>
+            <MenuItem.Label>Paste Effects</MenuItem.Label>
+            <MenuItem.Shortcut id="paste_selection" />
+          </MenuItem>
+        </SubmenuLayer>
       )}
     </MenuSubmenuTrigger>
+  );
+}
+
+function ImageFormatMenuItem({
+  format,
+  label,
+  onClick,
+}: {
+  format: ImageExportFormat;
+  label: string;
+  onClick: () => void;
+}) {
+  const FormatIcon = IMAGE_FORMAT_ICONS[format];
+
+  return (
+    <MenuItem onClick={onClick}>
+      <MenuItem.Icon>
+        <FormatIcon />
+      </MenuItem.Icon>
+      <MenuItem.Label>{label}</MenuItem.Label>
+    </MenuItem>
   );
 }
 
@@ -526,7 +557,6 @@ function EffectsSubmenu({
 export function CanvasContextMenu({
   state,
   actions,
-  hints,
   customPalettes,
   snapToGrid,
   showOriginal,
@@ -543,6 +573,7 @@ export function CanvasContextMenu({
   paletteMixed,
   paletteValues,
   hasEntities,
+  submenuGutter = 4,
   menuX,
   menuY,
   activeSubmenuId,
@@ -566,31 +597,34 @@ export function CanvasContextMenu({
       <Box position="fixed" left={menuX} top={menuY} contain="viewport" zIndex={9999}>
         <MenuPanel>
           <MenuItem
-            label="Paste"
-            icon={PasteClipboard}
-            hint={hints.pasteCanvas}
             onClick={() => {
               actions.paste();
               actions.close();
             }}
-          />
+          >
+            <MenuItem.Icon>
+              <PasteClipboard />
+            </MenuItem.Icon>
+            <MenuItem.Label>Paste</MenuItem.Label>
+            <MenuItem.Shortcut id="paste_canvas" />
+          </MenuItem>
           <MenuSeparator />
           <WorkspaceSubmenu
             activeSubmenuId={activeSubmenuId}
+            gutter={submenuGutter}
             actions={actions}
             hasEntities={hasEntities}
-            hints={hints}
           />
           <MenuSeparator />
           <MenuCheckboxItem
-            label="Snap to Grid"
             checked={snapToGrid}
-            hint={hints.toggleSnapToGrid}
             onClick={() => {
               actions.toggleSnapToGrid(!snapToGrid);
-              actions.close();
             }}
-          />
+          >
+            <MenuCheckboxItem.Label>Snap to Grid</MenuCheckboxItem.Label>
+            <MenuCheckboxItem.Shortcut id="toggle_snap_to_grid" />
+          </MenuCheckboxItem>
         </MenuPanel>
         {renderSafePolygonDebug(screenScale, debugTick)}
       </Box>
@@ -611,6 +645,7 @@ export function CanvasContextMenu({
           submenuId="style"
           title="Style"
           activeSubmenuId={activeSubmenuId}
+          gutter={submenuGutter}
           options={SHADER_TYPE_OPTIONS}
           optionState={shaderType}
           mixedLabel="Selection styles"
@@ -623,6 +658,7 @@ export function CanvasContextMenu({
           submenuId="shape"
           title="Shape"
           activeSubmenuId={activeSubmenuId}
+          gutter={submenuGutter}
           options={SHAPE_OPTIONS}
           optionState={shape}
           mixedLabel="Selection shapes"
@@ -632,6 +668,7 @@ export function CanvasContextMenu({
           submenuId="algorithm"
           title="Algorithm"
           activeSubmenuId={activeSubmenuId}
+          gutter={submenuGutter}
           options={DITHERING_KIND_OPTIONS}
           optionState={ditheringKind}
           mixedLabel="Selection algorithms"
@@ -641,6 +678,7 @@ export function CanvasContextMenu({
           submenuId="character-set"
           title="Character Set"
           activeSubmenuId={activeSubmenuId}
+          gutter={submenuGutter}
           options={ASCII_KIND_OPTIONS}
           optionState={asciiKind}
           mixedLabel="Selection character sets"
@@ -648,20 +686,23 @@ export function CanvasContextMenu({
         />
         {asciiInvert.supported ? (
           <MenuCheckboxItem
-            label={`Invert Brightness${asciiInvert.mixed ? " (Mixed)" : ""}`}
             checked={asciiInvert.mixed ? false : asciiInvert.value}
             mixed={asciiInvert.mixed}
             onClick={() => {
               const next = asciiInvert.mixed ? true : !asciiInvert.value;
               actions.toggleAsciiInvert(next);
-              actions.close();
             }}
-          />
+          >
+            <MenuCheckboxItem.Label>
+              {`Invert Brightness${asciiInvert.mixed ? " (Mixed)" : ""}`}
+            </MenuCheckboxItem.Label>
+          </MenuCheckboxItem>
         ) : null}
         <OptionSubmenu
           submenuId="glass-type"
           title="Glass Type"
           activeSubmenuId={activeSubmenuId}
+          gutter={submenuGutter}
           options={GLASS_KIND_OPTIONS}
           optionState={glassKind}
           mixedLabel="Selection glass types"
@@ -671,6 +712,7 @@ export function CanvasContextMenu({
           submenuId="glitch-type"
           title="Glitch Type"
           activeSubmenuId={activeSubmenuId}
+          gutter={submenuGutter}
           options={GLITCH_KIND_OPTIONS}
           optionState={glitchKind}
           mixedLabel="Selection glitch types"
@@ -682,6 +724,7 @@ export function CanvasContextMenu({
             <MenuSeparator />
             <PaletteSubmenu
               activeSubmenuId={activeSubmenuId}
+              gutter={submenuGutter}
               currentPaletteId={currentPaletteId}
               paletteMixed={paletteMixed}
               paletteValues={paletteValues}
@@ -689,73 +732,86 @@ export function CanvasContextMenu({
               actions={actions}
             />
             <MenuItem
-              label="Load Palette..."
               onClick={() => {
                 actions.triggerPaletteUpload();
                 actions.close();
               }}
-            />
+            >
+              <MenuItem.Label>Load Palette...</MenuItem.Label>
+            </MenuItem>
           </>
         ) : null}
 
         <MenuSeparator />
 
         <MenuCheckboxItem
-          label={`Show Original${showOriginal.mixed ? " (Mixed)" : ""}`}
           checked={showOriginal.mixed ? false : showOriginal.value}
           mixed={showOriginal.mixed}
-          hint={hints.toggleShowOriginal}
           onClick={() => {
             const next = showOriginal.mixed ? true : !showOriginal.value;
             actions.toggleShowOriginal(next);
-            actions.close();
           }}
-        />
+        >
+          <MenuCheckboxItem.Label>
+            {`Show Original${showOriginal.mixed ? " (Mixed)" : ""}`}
+          </MenuCheckboxItem.Label>
+          <MenuCheckboxItem.Shortcut id="toggle_show_original" />
+        </MenuCheckboxItem>
 
         {preserveColors.supported ? (
           <MenuCheckboxItem
-            label={`Preserve Colors${preserveColors.mixed ? " (Mixed)" : ""}`}
             checked={preserveColors.mixed ? false : preserveColors.value}
             mixed={preserveColors.mixed}
-            hint={hints.togglePreserveColors}
             onClick={() => {
               const next = preserveColors.mixed ? true : !preserveColors.value;
               actions.togglePreserveColors(next);
-              actions.close();
             }}
-          />
+          >
+            <MenuCheckboxItem.Label>
+              {`Preserve Colors${preserveColors.mixed ? " (Mixed)" : ""}`}
+            </MenuCheckboxItem.Label>
+            <MenuCheckboxItem.Shortcut id="toggle_preserve_colors" />
+          </MenuCheckboxItem>
         ) : null}
 
         {reversePalette.supported ? (
           <MenuCheckboxItem
-            label={`Reverse Palette${reversePalette.mixed ? " (Mixed)" : ""}`}
             checked={reversePalette.mixed ? false : reversePalette.value}
             mixed={reversePalette.mixed}
-            hint={hints.toggleReversePalette}
             onClick={() => {
               const next = reversePalette.mixed ? true : !reversePalette.value;
               actions.toggleReversePalette(next);
-              actions.close();
             }}
-          />
+          >
+            <MenuCheckboxItem.Label>
+              {`Reverse Palette${reversePalette.mixed ? " (Mixed)" : ""}`}
+            </MenuCheckboxItem.Label>
+            <MenuCheckboxItem.Shortcut id="toggle_reverse_palette" />
+          </MenuCheckboxItem>
         ) : null}
 
         <MenuSeparator />
 
         {!isMultiple ? (
           <MenuItem
-            label={frozenEntity && isAnimatedEntity(frozenEntity) ? "Copy Frame" : "Copy Image"}
-            icon={Copy}
-            hint={hints.copySelection}
             onClick={() => {
               actions.copyImage();
               actions.close();
             }}
-          />
+          >
+            <MenuItem.Icon>
+              <Copy />
+            </MenuItem.Icon>
+            <MenuItem.Label>
+              {frozenEntity && isAnimatedEntity(frozenEntity) ? "Copy Frame" : "Copy Image"}
+            </MenuItem.Label>
+            <MenuItem.Shortcut id="copy_selection" />
+          </MenuItem>
         ) : null}
 
         <SaveAsSubmenu
           activeSubmenuId={activeSubmenuId}
+          gutter={submenuGutter}
           animatedEntities={animatedEntities}
           actions={actions}
           hasAnimated={hasAnimated}
@@ -765,69 +821,87 @@ export function CanvasContextMenu({
         />
         <EffectsSubmenu
           activeSubmenuId={activeSubmenuId}
+          gutter={submenuGutter}
           actions={actions}
-          hints={hints}
           isMultiple={isMultiple}
         />
 
         <MenuSeparator />
 
         <MenuItem
-          label={withCount("Bring to Front", selectionCount, isMultiple)}
-          icon={MaterialSymbolsFlipToFrontRounded}
-          hint={hints.bringToFront}
           onClick={() => {
             actions.bringToFront();
             actions.close();
           }}
-        />
+        >
+          <MenuItem.Icon>
+            <MaterialSymbolsFlipToFrontRounded />
+          </MenuItem.Icon>
+          <MenuItem.Label>{withCount("Bring to Front", selectionCount, isMultiple)}</MenuItem.Label>
+          <MenuItem.Shortcut id="bring_to_front" />
+        </MenuItem>
         <MenuItem
-          label={withCount("Send to Back", selectionCount, isMultiple)}
-          icon={MaterialSymbolsFlipToBackRounded}
-          hint={hints.sendToBack}
           onClick={() => {
             actions.sendToBack();
             actions.close();
           }}
-        />
+        >
+          <MenuItem.Icon>
+            <MaterialSymbolsFlipToBackRounded />
+          </MenuItem.Icon>
+          <MenuItem.Label>{withCount("Send to Back", selectionCount, isMultiple)}</MenuItem.Label>
+          <MenuItem.Shortcut id="send_to_back" />
+        </MenuItem>
         <MenuItem
-          label={withCount("Duplicate", selectionCount, isMultiple)}
-          icon={IonDuplicateOutline}
-          hint={hints.duplicateEntity}
           onClick={() => {
             actions.duplicate();
             actions.close();
           }}
-        />
+        >
+          <MenuItem.Icon>
+            <IonDuplicateOutline />
+          </MenuItem.Icon>
+          <MenuItem.Label>{withCount("Duplicate", selectionCount, isMultiple)}</MenuItem.Label>
+          <MenuItem.Shortcut id="duplicate_entity" />
+        </MenuItem>
         <MenuItem
-          label={withCount("Upscale 2×", selectionCount, isMultiple)}
-          icon={ScaleFrameEnlarge}
           onClick={() => {
             actions.upscale(frozenEntities.map((entity) => entity.id));
             actions.close();
           }}
-        />
+        >
+          <MenuItem.Icon>
+            <ScaleFrameEnlarge />
+          </MenuItem.Icon>
+          <MenuItem.Label>{withCount("Upscale 2×", selectionCount, isMultiple)}</MenuItem.Label>
+        </MenuItem>
 
         <MenuSeparator />
 
         <MenuItem
-          label={withCount("Reset", selectionCount, isMultiple)}
-          icon={MaterialSymbolsResetImage}
           onClick={() => {
             actions.reset();
             actions.close();
           }}
-        />
+        >
+          <MenuItem.Icon>
+            <MaterialSymbolsResetImage />
+          </MenuItem.Icon>
+          <MenuItem.Label>{withCount("Reset", selectionCount, isMultiple)}</MenuItem.Label>
+        </MenuItem>
         <MenuItem
-          label={withCount("Delete", selectionCount, isMultiple)}
-          icon={Trash}
           destructive
-          hint={hints.deleteEntity}
           onClick={() => {
             actions.deleteEntity();
             actions.close();
           }}
-        />
+        >
+          <MenuItem.Icon>
+            <Trash />
+          </MenuItem.Icon>
+          <MenuItem.Label>{withCount("Delete", selectionCount, isMultiple)}</MenuItem.Label>
+          <MenuItem.Shortcut id="delete_entity" />
+        </MenuItem>
       </MenuPanel>
       {renderSafePolygonDebug(screenScale, debugTick)}
     </Box>

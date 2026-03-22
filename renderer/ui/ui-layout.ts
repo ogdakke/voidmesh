@@ -76,6 +76,58 @@ interface MeasureConstraints {
   availableHeight?: number;
 }
 
+type PlacementSide = "right" | "left" | "bottom" | "top";
+type PlacementAlign = "start" | "end";
+
+function parsePlacement(placement: string): { side: PlacementSide; align: PlacementAlign } {
+  const dashIdx = placement.indexOf("-");
+  const side = (dashIdx > 0 ? placement.slice(0, dashIdx) : placement) as PlacementSide;
+  const align = (dashIdx > 0 ? placement.slice(dashIdx + 1) : "start") as PlacementAlign;
+  return { side, align };
+}
+
+function resolvePlacedChildPosition(
+  parentX: number,
+  parentY: number,
+  parentWidth: number,
+  parentHeight: number,
+  childWidth: number,
+  childHeight: number,
+  side: PlacementSide,
+  align: PlacementAlign,
+  offset: { x: number; y: number } | undefined,
+  scale: number,
+): { x: number; y: number } {
+  const offsetX = (offset?.x ?? 0) * scale;
+  const offsetY = (offset?.y ?? 0) * scale;
+
+  let x = parentX;
+  let y = parentY;
+
+  switch (side) {
+    case "right":
+      x = parentX + parentWidth + offsetX;
+      break;
+    case "left":
+      x = parentX - childWidth - offsetX;
+      break;
+    case "bottom":
+      y = parentY + parentHeight + offsetY;
+      break;
+    case "top":
+      y = parentY - childHeight - offsetY;
+      break;
+  }
+
+  if (side === "right" || side === "left") {
+    y = (align === "end" ? parentY + parentHeight - childHeight : parentY) + offsetY;
+  } else {
+    x = (align === "end" ? parentX + parentWidth - childWidth : parentX) + offsetX;
+  }
+
+  return { x, y };
+}
+
 // ---------------------------------------------------------------------------
 // Layout result types (consumed by rendering pipelines)
 // ---------------------------------------------------------------------------
@@ -1203,6 +1255,7 @@ function positionChildren(
   // --- Absolute children ---
   for (const child of absoluteChildren) {
     const placement = child.props["placement"] as string | undefined;
+    const offset = child.props["offset"] as { x: number; y: number } | undefined;
     const left = child.props["left"] as number | undefined;
     const top = child.props["top"] as number | undefined;
     const right = child.props["right"] as number | undefined;
@@ -1212,32 +1265,21 @@ function positionChildren(
     let childY = parentY;
 
     if (placement) {
-      // Placement-based positioning — attach to parent edge
-      const dashIdx = placement.indexOf("-");
-      const side = dashIdx > 0 ? placement.slice(0, dashIdx) : placement;
-      const align = dashIdx > 0 ? placement.slice(dashIdx + 1) : "start";
-
-      switch (side) {
-        case "right":
-          childX = parentX + parent.layout.width;
-          break;
-        case "left":
-          childX = parentX - child.layout.width;
-          break;
-        case "bottom":
-          childY = parentY + parent.layout.height;
-          break;
-        case "top":
-          childY = parentY - child.layout.height;
-          break;
-      }
-
-      // Cross-axis alignment
-      if (side === "right" || side === "left") {
-        childY = align === "end" ? parentY + parent.layout.height - child.layout.height : parentY;
-      } else {
-        childX = align === "end" ? parentX + parent.layout.width - child.layout.width : parentX;
-      }
+      const { side, align } = parsePlacement(placement);
+      const resolvedPosition = resolvePlacedChildPosition(
+        parentX,
+        parentY,
+        parent.layout.width,
+        parent.layout.height,
+        child.layout.width,
+        child.layout.height,
+        side,
+        align,
+        offset,
+        scale,
+      );
+      childX = resolvedPosition.x;
+      childY = resolvedPosition.y;
     } else {
       // Manual left/top/right/bottom
       if (left !== undefined) childX = parentX + left * scale;
@@ -1247,6 +1289,11 @@ function positionChildren(
       if (top !== undefined) childY = parentY + top * scale;
       else if (bottom !== undefined)
         childY = parentY + parent.layout.height - child.layout.height - bottom * scale;
+
+      if (offset) {
+        childX += offset.x * scale;
+        childY += offset.y * scale;
+      }
     }
 
     // Viewport containment — auto-clamp to viewport bounds
@@ -1260,12 +1307,33 @@ function positionChildren(
 
       // Flip placement side if overflow
       if (placement) {
-        const dashIdx = placement.indexOf("-");
-        const side = dashIdx > 0 ? placement.slice(0, dashIdx) : placement;
+        const { side, align } = parsePlacement(placement);
         if (side === "right" && childX + child.layout.width > vpR) {
-          childX = parentX - child.layout.width;
+          childX = resolvePlacedChildPosition(
+            parentX,
+            parentY,
+            parent.layout.width,
+            parent.layout.height,
+            child.layout.width,
+            child.layout.height,
+            "left",
+            align,
+            offset,
+            scale,
+          ).x;
         } else if (side === "left" && childX < vpL) {
-          childX = parentX + parent.layout.width;
+          childX = resolvePlacedChildPosition(
+            parentX,
+            parentY,
+            parent.layout.width,
+            parent.layout.height,
+            child.layout.width,
+            child.layout.height,
+            "right",
+            align,
+            offset,
+            scale,
+          ).x;
         }
       }
 
