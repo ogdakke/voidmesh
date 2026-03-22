@@ -63,25 +63,6 @@
   pointer-events: auto;
 }
 
-.infinite-canvas__perf-overlay {
-  position: absolute;
-  top: 8px;
-  left: calc(12 * var(--spacing));
-  padding: 4px 8px;
-  background: var(--gray-50);
-  color: light-dark(oklch(0.49 0.21 254.9), oklch(0.75 0.14 251.13));
-  font-size: var(--text-sm);
-  border-radius: var(--radius);
-  pointer-events: none;
-  z-index: var(--canvas-overlay-z-3);
-  white-space: nowrap;
-
-  @media screen and (max-width: 768px) {
-    top: calc(var(--spacing) * 12);
-    left: 8px;
-  }
-}
-
 .left-controls {
   display: grid;
   grid-auto-flow: column;

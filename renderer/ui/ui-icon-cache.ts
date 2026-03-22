@@ -21,6 +21,13 @@ interface IconRasterSize {
   height: number;
 }
 
+export interface UIIconTextureMatch {
+  texture: GPUTexture;
+  rasterWidth: number;
+  rasterHeight: number;
+  exact: boolean;
+}
+
 const DEFAULT_ICON_SIZE = 48;
 const ICON_OVERSAMPLE = 1.5;
 const ICON_BUCKET_STEP = 16;
@@ -139,6 +146,35 @@ export class UIIconCache {
     return cached.texture;
   }
 
+  getBest(
+    svg: string,
+    width = DEFAULT_ICON_SIZE,
+    height = DEFAULT_ICON_SIZE,
+    pixelScale = 1,
+  ): UIIconTextureMatch | null {
+    const request = this.#createRasterRequest(svg, width, height, pixelScale);
+    const exact = this.#cache.get(request.cacheKey);
+    if (exact) {
+      exact.lastUsedAt = performance.now();
+      return {
+        texture: exact.texture,
+        rasterWidth: exact.rasterWidth,
+        rasterHeight: exact.rasterHeight,
+        exact: true,
+      };
+    }
+
+    const fallback = this.#findClosestVariant(svg, request.rasterWidth, request.rasterHeight);
+    if (!fallback) return null;
+    fallback.lastUsedAt = performance.now();
+    return {
+      texture: fallback.texture,
+      rasterWidth: fallback.rasterWidth,
+      rasterHeight: fallback.rasterHeight,
+      exact: false,
+    };
+  }
+
   /**
    * Get the closest already-cached variant for this SVG while a better-sized
    * texture is still loading. This avoids visible one-frame pop/flicker when
@@ -151,19 +187,7 @@ export class UIIconCache {
     pixelScale = 1,
   ): GPUTexture | null {
     const request = this.#createRasterRequest(svg, width, height, pixelScale);
-    const variants = this.#variantsBySvg.get(svg);
-    if (!variants || variants.size === 0) return null;
-
-    const bestSize = pickClosestIconRasterSize(
-      { width: request.rasterWidth, height: request.rasterHeight },
-      [...variants.values()].map((variant) => ({
-        width: variant.rasterWidth,
-        height: variant.rasterHeight,
-      })),
-    );
-    if (!bestSize) return null;
-
-    const fallback = variants.get(this.#getVariantKey(bestSize.width, bestSize.height));
+    const fallback = this.#findClosestVariant(svg, request.rasterWidth, request.rasterHeight);
     if (!fallback) return null;
     fallback.lastUsedAt = performance.now();
     return fallback.texture;
@@ -225,6 +249,43 @@ export class UIIconCache {
       this.#variantsBySvg.set(cached.svg, variants);
     }
     variants.set(cached.variantKey, cached);
+  }
+
+  #findClosestVariant(
+    svg: string,
+    rasterWidth: number,
+    rasterHeight: number,
+  ): CachedIconTexture | null {
+    const variants = this.#variantsBySvg.get(svg);
+    if (!variants || variants.size === 0) return null;
+
+    let best: CachedIconTexture | null = null;
+    let bestRank = Number.POSITIVE_INFINITY;
+    let bestDelta = Number.POSITIVE_INFINITY;
+    let bestAreaDelta = Number.POSITIVE_INFINITY;
+    const requestedArea = rasterWidth * rasterHeight;
+
+    for (const variant of variants.values()) {
+      const isLargerOrEqual =
+        variant.rasterWidth >= rasterWidth && variant.rasterHeight >= rasterHeight;
+      const rank = isLargerOrEqual ? 0 : 1;
+      const delta =
+        Math.abs(variant.rasterWidth - rasterWidth) + Math.abs(variant.rasterHeight - rasterHeight);
+      const areaDelta = Math.abs(variant.rasterWidth * variant.rasterHeight - requestedArea);
+
+      if (
+        rank < bestRank ||
+        (rank === bestRank && delta < bestDelta) ||
+        (rank === bestRank && delta === bestDelta && areaDelta < bestAreaDelta)
+      ) {
+        best = variant;
+        bestRank = rank;
+        bestDelta = delta;
+        bestAreaDelta = areaDelta;
+      }
+    }
+
+    return best;
   }
 
   #deleteCached(cacheKey: string, cached: CachedIconTexture): void {

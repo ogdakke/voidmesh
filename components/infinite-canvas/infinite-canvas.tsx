@@ -96,7 +96,6 @@ function ViewportZoom({ onZoomReset }: { onZoomReset: () => void }) {
 export function InfiniteCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const perfRef = useRef<HTMLDivElement>(null);
 
   const {
     setViewport,
@@ -153,9 +152,8 @@ export function InfiniteCanvas() {
 
   // Initialize game loop
   useEffect(() => {
-    if (!containerRef.current || !perfRef.current) return;
+    if (!containerRef.current) return;
     gameLoop.setContainer(containerRef.current);
-    gameLoop.setPerfElement(perfRef.current);
   }, []);
 
   useEffect(() => {
@@ -886,12 +884,6 @@ export function InfiniteCanvas() {
           </div>
         )}
         <div className="infinite-canvas__overlay">
-          <div
-            ref={perfRef}
-            className="infinite-canvas__perf-overlay"
-            style={{ display: "none" }}
-          />
-
           {!isMobile && (
             <>
               <div className="infinite-canvas__top-left">

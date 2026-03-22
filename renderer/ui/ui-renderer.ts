@@ -2,7 +2,7 @@ import type { Font } from "text-shaper";
 import { TextRenderer } from "../text/text-renderer.ts";
 import { UIBoxPipeline } from "./ui-box-pipeline.ts";
 import { UIIconPipeline } from "./ui-icon-pipeline.ts";
-import { UIIconCache } from "./ui-icon-cache.ts";
+import { getIconRasterSize, UIIconCache } from "./ui-icon-cache.ts";
 import { prepareText } from "../text/slug.ts";
 import type { UIElement, UIPointerEvent, UIDragEvent } from "./elements.ts";
 import { SceneNode, hasActiveAnimations } from "./scene-node.ts";
@@ -17,6 +17,24 @@ import {
 import { hitTest } from "./hit-test.ts";
 import { UIStyleResolver } from "./style-resolver.ts";
 
+const ICON_RASTER_UPGRADE_THRESHOLD = 1.25;
+
+interface LayoutCacheEntry {
+  renderVersion: number;
+  anchorX: number;
+  anchorY: number;
+  scale: number;
+  dependsOnViewport: boolean;
+  viewportOffsetX: number;
+  viewportOffsetY: number;
+  viewportZoom: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  viewportDpr: number;
+  anchors: Map<string, AnchorTarget> | undefined;
+  layout: ReturnType<typeof computeLayout>;
+}
+
 // ---------------------------------------------------------------------------
 // SlugTextMeasurer — bridges TextMeasurer interface to Slug algorithm
 // ---------------------------------------------------------------------------
@@ -28,21 +46,131 @@ class SlugTextMeasurer implements TextMeasurer {
     this.#font = font;
   }
 
-  measureText(content: string, fontSize: number): TextMetrics {
+  measureText(content: string, fontSize: number, maxWidth?: number): TextMetrics {
+    if (maxWidth !== undefined && Number.isFinite(maxWidth) && maxWidth > 0) {
+      return this.#measureWrappedText(content, fontSize, maxWidth);
+    }
+
     const scale = this.#font.scaleForSize(fontSize);
     const slugData = prepareText(this.#font, content, fontSize);
     const width = slugData.totalAdvance * scale;
     const ascender = this.#font.ascender;
     const descender = this.#font.descender;
-    const height = (ascender - descender) * scale;
+    const lineHeight = (ascender - descender) * scale;
 
     return {
       width,
-      height,
+      height: lineHeight,
       ascender,
       descender,
-      slugData,
-      totalAdvance: slugData.totalAdvance,
+      lineHeight,
+      lines: [{ slugData, width }],
+    };
+  }
+
+  #measureWrappedText(content: string, fontSize: number, maxWidth: number): TextMetrics {
+    const scale = this.#font.scaleForSize(fontSize);
+    const ascender = this.#font.ascender;
+    const descender = this.#font.descender;
+    const lineHeight = (ascender - descender) * scale;
+    const lineCache = new Map<
+      string,
+      { slugData: ReturnType<typeof prepareText>; width: number }
+    >();
+
+    const measureLine = (line: string) => {
+      const cached = lineCache.get(line);
+      if (cached) return cached;
+      const slugData = prepareText(this.#font, line, fontSize);
+      const measured = { slugData, width: slugData.totalAdvance * scale };
+      lineCache.set(line, measured);
+      return measured;
+    };
+
+    const splitLongToken = (token: string): string[] => {
+      if (token.length <= 1) return [token];
+      const parts: string[] = [];
+      let current = "";
+
+      for (const char of token) {
+        const candidate = current + char;
+        if (current.length > 0 && measureLine(candidate).width > maxWidth) {
+          parts.push(current);
+          current = char;
+          continue;
+        }
+        current = candidate;
+      }
+
+      if (current.length > 0) {
+        parts.push(current);
+      }
+
+      return parts;
+    };
+
+    const wrappedLines: string[] = [];
+    const paragraphs = content.split("\n");
+
+    for (const paragraph of paragraphs) {
+      if (paragraph.trim().length === 0) {
+        wrappedLines.push("");
+        continue;
+      }
+
+      const words = paragraph.trim().split(/\s+/);
+      let currentLine = "";
+
+      for (const word of words) {
+        const candidate = currentLine.length > 0 ? `${currentLine} ${word}` : word;
+        if (measureLine(candidate).width <= maxWidth) {
+          currentLine = candidate;
+          continue;
+        }
+
+        if (currentLine.length > 0) {
+          wrappedLines.push(currentLine);
+          currentLine = "";
+        }
+
+        if (measureLine(word).width <= maxWidth) {
+          currentLine = word;
+          continue;
+        }
+
+        const brokenWordParts = splitLongToken(word);
+        const lastIndex = brokenWordParts.length - 1;
+        for (const [partIndex, part] of brokenWordParts.entries()) {
+          if (partIndex === lastIndex) {
+            currentLine = part;
+          } else {
+            wrappedLines.push(part);
+          }
+        }
+      }
+
+      if (currentLine.length > 0) {
+        wrappedLines.push(currentLine);
+      }
+    }
+
+    const lines =
+      wrappedLines.length > 0
+        ? wrappedLines.map((line) => {
+            const measured = measureLine(line);
+            return { slugData: measured.slugData, width: measured.width };
+          })
+        : [{ slugData: measureLine("").slugData, width: 0 }];
+
+    const width = lines.reduce((max, line) => Math.max(max, line.width), 0);
+
+    return {
+      width,
+      height: lineHeight * lines.length,
+      ascender,
+      descender,
+      lineHeight,
+      lines,
     };
   }
 }
@@ -66,7 +194,9 @@ export class UIRenderer {
 
   // Retained scene graph roots — one per unique render target
   #sceneRoots = new Map<string, SceneNode>();
+  #sceneLayoutCache = new Map<string, LayoutCacheEntry>();
   #defaultRoot: SceneNode | null = null;
+  #defaultLayoutCache: LayoutCacheEntry | null = null;
 
   // Interaction tracking
   #hoveredNode: SceneNode | null = null;
@@ -125,7 +255,8 @@ export class UIRenderer {
     this.#boxPipeline.begin();
     this.#iconPipeline.begin();
     this.#justBecameReady = false;
-    this.#interactionDirty = false;
+    // NOTE: interactionDirty is NOT cleared here — it must survive until
+    // #getCachedLayout reads it in render(). Cleared after layout computation.
     this.#hasPendingIcons = false;
     this.#styleResolver.markClean();
   }
@@ -185,53 +316,55 @@ export class UIRenderer {
     }
 
     // 2. Layout (with scale)
-    const layout = computeLayout(
+    const layout = this.#getCachedLayout(
       root,
       anchorX,
       anchorY,
       this.#measurer,
       now,
-      this.#styleResolver,
-      anchors,
+      sceneKey,
       scale,
+      anchors,
       viewport,
     );
+    this.#interactionDirty = false;
     const iconPixelScale = viewport?.zoom ?? 1;
 
     // Track icon preload state
     for (const layoutIcon of layout.icons) {
+      const textureMatch = this.#iconCache.getBest(
+        layoutIcon.svg,
+        layoutIcon.width,
+        layoutIcon.height,
+        iconPixelScale,
+      );
+      if (!textureMatch) {
+        this.#hasPendingIcons = true;
+        continue;
+      }
+
+      const requestedSize = getIconRasterSize(layoutIcon.width, layoutIcon.height, iconPixelScale);
       if (
-        !this.#iconCache.has(layoutIcon.svg, layoutIcon.width, layoutIcon.height, iconPixelScale)
+        !textureMatch.exact &&
+        (requestedSize.width > textureMatch.rasterWidth * ICON_RASTER_UPGRADE_THRESHOLD ||
+          requestedSize.height > textureMatch.rasterHeight * ICON_RASTER_UPGRADE_THRESHOLD)
       ) {
         this.#hasPendingIcons = true;
       }
     }
 
-    type RenderCommand =
-      | { kind: "box"; order: number; zIndex: number; item: (typeof layout.boxes)[number] }
-      | { kind: "icon"; order: number; zIndex: number; item: (typeof layout.icons)[number] }
-      | { kind: "text"; order: number; zIndex: number; item: (typeof layout.texts)[number] };
-
-    const commands: RenderCommand[] = [
-      ...layout.boxes.map((item) => ({
-        kind: "box" as const,
-        order: item.order,
-        zIndex: item.zIndex,
-        item,
-      })),
-      ...layout.icons.map((item) => ({
-        kind: "icon" as const,
-        order: item.order,
-        zIndex: item.zIndex,
-        item,
-      })),
-      ...layout.texts.map((item) => ({
-        kind: "text" as const,
-        order: item.order,
-        zIndex: item.zIndex,
-        item,
-      })),
-    ].sort((a, b) => a.zIndex - b.zIndex || a.order - b.order);
+    // Single shared render pass for all UI drawing.
+    // Three-way merge in strict (zIndex, order) sequence with pipeline switching.
+    const pass = encoder.beginRenderPass({
+      label: "UI pass",
+      colorAttachments: [
+        {
+          view: targetView,
+          loadOp: "load",
+          storeOp: "store",
+        },
+      ],
+    });
 
     let boxBatch: typeof layout.boxes = [];
     let iconBatch: typeof layout.icons = [];
@@ -239,40 +372,63 @@ export class UIRenderer {
 
     const flushBoxes = () => {
       if (boxBatch.length === 0) return;
-      this.#boxPipeline.render(boxBatch, encoder, targetView);
+      this.#boxPipeline.render(boxBatch, pass);
       boxBatch = [];
     };
 
     const flushIcons = () => {
       if (iconBatch.length === 0) return;
-      this.#iconPipeline.render(iconBatch, this.#iconCache, iconPixelScale, encoder, targetView);
+      this.#iconPipeline.render(iconBatch, this.#iconCache, iconPixelScale, pass);
       iconBatch = [];
     };
 
     const flushText = () => {
       if (!hasQueuedText) return;
-      this.#textRenderer.flush(encoder, targetView);
+      this.#textRenderer.flush(pass);
       hasQueuedText = false;
     };
 
-    for (const command of commands) {
-      if (command.kind === "box") {
+    const isBefore = (
+      a: { zIndex: number; order: number } | undefined,
+      b: { zIndex: number; order: number } | undefined,
+    ): boolean => {
+      if (!a) return false;
+      if (!b) return true;
+      return a.zIndex < b.zIndex || (a.zIndex === b.zIndex && a.order <= b.order);
+    };
+
+    let boxIndex = 0;
+    let iconIndex = 0;
+    let textIndex = 0;
+
+    while (
+      boxIndex < layout.boxes.length ||
+      iconIndex < layout.icons.length ||
+      textIndex < layout.texts.length
+    ) {
+      const nextBox = layout.boxes[boxIndex];
+      const nextIcon = layout.icons[iconIndex];
+      const nextText = layout.texts[textIndex];
+
+      if (isBefore(nextBox, nextIcon) && isBefore(nextBox, nextText)) {
         flushIcons();
         flushText();
-        boxBatch.push(command.item);
+        boxBatch.push(nextBox!);
+        boxIndex++;
         continue;
       }
 
-      if (command.kind === "icon") {
+      if (isBefore(nextIcon, nextBox) && isBefore(nextIcon, nextText)) {
         flushBoxes();
         flushText();
-        iconBatch.push(command.item);
+        iconBatch.push(nextIcon!);
+        iconIndex++;
         continue;
       }
 
       flushBoxes();
       flushIcons();
-      const t = command.item;
+      const t = nextText!;
       this.#textRenderer.drawText(
         t.slugData as ReturnType<typeof prepareText>,
         t.x,
@@ -284,14 +440,18 @@ export class UIRenderer {
         t.color.a * t.opacity,
       );
       hasQueuedText = true;
+      textIndex++;
     }
 
     flushBoxes();
     flushIcons();
     flushText();
+    pass.end();
 
     // 6. Prune exited nodes
-    pruneExitedNodes(root);
+    if (pruneExitedNodes(root)) {
+      root.bumpRenderVersion();
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -391,6 +551,7 @@ export class UIRenderer {
     const root = this.#sceneRoots.get(sceneKey);
     if (root) root.beginExit();
     this.#sceneRoots.delete(sceneKey);
+    this.#sceneLayoutCache.delete(sceneKey);
   }
 
   destroy(): void {
@@ -403,7 +564,102 @@ export class UIRenderer {
     this.#measurer = null;
     this.#ready = false;
     this.#sceneRoots.clear();
+    this.#sceneLayoutCache.clear();
     this.#defaultRoot = null;
+    this.#defaultLayoutCache = null;
     this.#hoveredNode = null;
   }
+
+  #getCachedLayout(
+    root: SceneNode,
+    anchorX: number,
+    anchorY: number,
+    measurer: SlugTextMeasurer,
+    now: number,
+    sceneKey: string | undefined,
+    scale: number,
+    anchors: Map<string, AnchorTarget> | undefined,
+    viewport: ViewportInfo | undefined,
+  ): ReturnType<typeof computeLayout> {
+    const cache = sceneKey
+      ? (this.#sceneLayoutCache.get(sceneKey) ?? null)
+      : this.#defaultLayoutCache;
+    const dependsOnViewport = cache?.dependsOnViewport ?? sceneDependsOnViewport(root);
+    const structurallyValid =
+      !this.#interactionDirty &&
+      !this.#styleResolver.isDirty &&
+      !hasActiveAnimations(root) &&
+      cache !== null &&
+      cache.renderVersion === root.renderVersion &&
+      cache.anchorX === anchorX &&
+      cache.anchorY === anchorY &&
+      cache.scale === scale &&
+      cache.anchors === anchors;
+
+    // When only viewport offset changed (panning), reuse the cached layout.
+    // World-space UI positions don't change during a pan — the viewport uniform
+    // in the GPU shaders handles the shift.
+    const canReuse =
+      structurallyValid &&
+      (!dependsOnViewport ||
+        (cache!.viewportZoom === (viewport?.zoom ?? 0) &&
+          cache!.viewportWidth === (viewport?.width ?? 0) &&
+          cache!.viewportHeight === (viewport?.height ?? 0) &&
+          cache!.viewportDpr === (viewport?.dpr ?? 0)));
+
+    if (canReuse) {
+      return cache.layout;
+    }
+
+    const layout = computeLayout(
+      root,
+      anchorX,
+      anchorY,
+      measurer,
+      now,
+      this.#styleResolver,
+      anchors,
+      scale,
+      viewport,
+      cache?.layout,
+    );
+
+    const nextCache: LayoutCacheEntry = {
+      renderVersion: root.renderVersion,
+      anchorX,
+      anchorY,
+      scale,
+      dependsOnViewport,
+      viewportOffsetX: viewport?.offsetX ?? 0,
+      viewportOffsetY: viewport?.offsetY ?? 0,
+      viewportZoom: viewport?.zoom ?? 0,
+      viewportWidth: viewport?.width ?? 0,
+      viewportHeight: viewport?.height ?? 0,
+      viewportDpr: viewport?.dpr ?? 0,
+      anchors,
+      layout,
+    };
+
+    if (sceneKey) {
+      this.#sceneLayoutCache.set(sceneKey, nextCache);
+    } else {
+      this.#defaultLayoutCache = nextCache;
+    }
+
+    return layout;
+  }
+}
+
+function sceneDependsOnViewport(root: SceneNode): boolean {
+  if ((root.props["position"] as string | undefined) === "fixed") {
+    return true;
+  }
+
+  for (let i = 0; i < root.children.length; i++) {
+    if (sceneDependsOnViewport(root.children[i]!)) {
+      return true;
+    }
+  }
+
+  return false;
 }

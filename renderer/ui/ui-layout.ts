@@ -28,7 +28,12 @@ import type { UIResolvedBackground, UIStyleResolver } from "./style-resolver.ts"
 // ---------------------------------------------------------------------------
 
 export interface TextMeasurer {
-  measureText(content: string, fontSize: number): TextMetrics;
+  measureText(content: string, fontSize: number, maxWidth?: number): TextMetrics;
+}
+
+export interface TextMeasuredLine {
+  slugData: unknown;
+  width: number;
 }
 
 export interface TextMetrics {
@@ -36,8 +41,8 @@ export interface TextMetrics {
   height: number;
   ascender: number;
   descender: number;
-  slugData: unknown;
-  totalAdvance: number;
+  lineHeight: number;
+  lines: TextMeasuredLine[];
 }
 
 // ---------------------------------------------------------------------------
@@ -62,6 +67,11 @@ export interface ViewportInfo {
   width: number; // canvas width in device pixels
   height: number; // canvas height in device pixels
   dpr: number;
+}
+
+interface MeasureConstraints {
+  availableWidth?: number;
+  availableHeight?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -177,13 +187,22 @@ function resolvePadding(raw: unknown, scale: number): UIEdges {
 
 function resolveAnimatedProps(node: SceneNode, now: number): Record<string, number> {
   const animate = node.props["animate"] as AnimateConfig | undefined;
-  if (!animate) return {};
+  const resolved = node.scratch.animatedProps;
+  const keys = node.scratch.animatedKeys;
 
-  const resolved: Record<string, number> = {};
-  for (const [prop, config] of Object.entries(animate)) {
+  for (let i = 0; i < keys.length; i++) {
+    delete resolved[keys[i]!];
+  }
+  keys.length = 0;
+
+  if (!animate) return resolved;
+
+  for (const prop in animate) {
+    const config = animate[prop]!;
     const target = node.props[prop];
     if (typeof target !== "number") continue;
     resolved[prop] = node.resolveAnimatedValue(prop, target, config, now);
+    keys.push(prop);
   }
   return resolved;
 }
@@ -246,6 +265,109 @@ function getEffectiveOpacity(node: SceneNode, animated: Record<string, number>):
   return opacity;
 }
 
+function mainSizeOf(node: SceneNode, direction: "row" | "col"): number {
+  return direction === "row" ? node.layout.width : node.layout.height;
+}
+
+function applyAvailableClamp(
+  width: number,
+  height: number,
+  constraints: MeasureConstraints,
+): { width: number; height: number } {
+  let nextWidth = width;
+  let nextHeight = height;
+  if (constraints.availableWidth !== undefined && nextWidth > constraints.availableWidth) {
+    nextWidth = constraints.availableWidth;
+  }
+  if (constraints.availableHeight !== undefined && nextHeight > constraints.availableHeight) {
+    nextHeight = constraints.availableHeight;
+  }
+  return { width: nextWidth, height: nextHeight };
+}
+
+function shrinkChildrenToFit(
+  visible: SceneNode[],
+  direction: "row" | "col",
+  availableMain: number,
+  gap: number,
+  measurer: TextMeasurer,
+  now: number,
+  scale: number,
+  viewport: ViewportInfo | undefined,
+  remaining: SceneNode[],
+  nextRemaining: SceneNode[],
+): void {
+  if (visible.length === 0) return;
+
+  const gapSpace = visible.length > 1 ? (visible.length - 1) * gap : 0;
+  const maxChildrenMain = Math.max(0, availableMain - gapSpace);
+  let childrenMainSize = 0;
+  for (let i = 0; i < visible.length; i++) {
+    childrenMainSize += mainSizeOf(visible[i]!, direction);
+  }
+  if (childrenMainSize <= maxChildrenMain) return;
+
+  let overflow = childrenMainSize - maxChildrenMain;
+  remaining.length = 0;
+  nextRemaining.length = 0;
+  for (let i = 0; i < visible.length; i++) {
+    const child = visible[i]!;
+    if (((child.props["flexShrink"] as number | undefined) ?? 1) > 0) {
+      remaining.push(child);
+    }
+  }
+
+  while (overflow > 0.5 && remaining.length > 0) {
+    let totalShrinkFactor = 0;
+    for (let i = 0; i < remaining.length; i++) {
+      const child = remaining[i]!;
+      totalShrinkFactor +=
+        ((child.props["flexShrink"] as number | undefined) ?? 1) * mainSizeOf(child, direction);
+    }
+    if (totalShrinkFactor <= 0) break;
+
+    let reduced = 0;
+    nextRemaining.length = 0;
+
+    for (const child of remaining) {
+      const currentMain = mainSizeOf(child, direction);
+      const minMain =
+        direction === "row"
+          ? ((child.props["minWidth"] as number | undefined) ?? 0) * scale
+          : ((child.props["minHeight"] as number | undefined) ?? 0) * scale;
+      const shrinkFactor =
+        (((child.props["flexShrink"] as number | undefined) ?? 1) * currentMain) /
+        totalShrinkFactor;
+      const targetMain = Math.max(minMain, currentMain - overflow * shrinkFactor);
+
+      const childConstraints: MeasureConstraints =
+        direction === "row" ? { availableWidth: targetMain } : { availableHeight: targetMain };
+      const pos = child.props["position"] as string | undefined;
+      const childScale = pos === "fixed" && viewport ? viewport.dpr / viewport.zoom : scale;
+      measure(child, measurer, now, childScale, viewport, childConstraints);
+
+      const nextMain = mainSizeOf(child, direction);
+      reduced += Math.max(0, currentMain - nextMain);
+      if (nextMain > minMain + 0.5) {
+        nextRemaining.push(child);
+      }
+    }
+
+    if (reduced <= 0.5) break;
+    overflow -= reduced;
+    remaining.length = 0;
+    for (let i = 0; i < nextRemaining.length; i++) {
+      remaining.push(nextRemaining[i]!);
+    }
+    childrenMainSize = 0;
+    for (let i = 0; i < visible.length; i++) {
+      childrenMainSize += mainSizeOf(visible[i]!, direction);
+    }
+    if (childrenMainSize <= maxChildrenMain) break;
+    overflow = childrenMainSize - maxChildrenMain;
+  }
+}
+
 /** Resolve visual scale with transition support. */
 function resolveVisualScale(node: SceneNode, now: number): number {
   const state = getStateStyle(node);
@@ -267,13 +389,25 @@ function measure(
   now: number,
   scale: number,
   viewport?: ViewportInfo,
+  constraints: MeasureConstraints = {},
 ): void {
   const animated = resolveAnimatedProps(node, now);
+  // Cache for reuse in position() to avoid redundant spring sampling
+  node.scratch.lastAnimated = animated;
+  node.scratch.lastAnimatedTime = now;
 
   switch (node.type) {
     case "text": {
       const content = node.props["content"] as string | undefined;
       const fontSize = getScaled(node, "fontSize", animated, 14, scale);
+      const rawMaxWidth = node.props["maxWidth"] as number | undefined;
+      let maxWidth = rawMaxWidth !== undefined ? rawMaxWidth * scale : undefined;
+      if (constraints.availableWidth !== undefined) {
+        maxWidth =
+          maxWidth !== undefined
+            ? Math.min(maxWidth, constraints.availableWidth)
+            : constraints.availableWidth;
+      }
 
       if (!content || content.length === 0) {
         node.layout.width = 0;
@@ -285,33 +419,44 @@ function measure(
       if (
         node.textCache &&
         node.textCache.content === content &&
-        node.textCache.fontSize === fontSize
+        node.textCache.fontSize === fontSize &&
+        node.textCache.maxWidth === (maxWidth ?? null)
       ) {
         node.layout.width = node.textCache.measuredWidth;
         node.layout.height = node.textCache.measuredHeight;
         return;
       }
 
-      const metrics = measurer.measureText(content, fontSize);
+      const metrics = measurer.measureText(content, fontSize, maxWidth);
       node.layout.width = metrics.width;
       node.layout.height = metrics.height;
+      const cachedLines = new Array(metrics.lines.length);
+      for (let i = 0; i < metrics.lines.length; i++) {
+        const line = metrics.lines[i]!;
+        cachedLines[i] = {
+          slugData: line.slugData,
+          totalWidth: line.width,
+        };
+      }
       node.textCache = {
         content,
         fontSize,
-        slugData: metrics.slugData,
-        totalWidth: metrics.width,
+        maxWidth: maxWidth ?? null,
+        lineHeight: metrics.lineHeight,
         ascender: metrics.ascender,
         descender: metrics.descender,
         measuredWidth: metrics.width,
         measuredHeight: metrics.height,
+        lines: cachedLines,
       };
       return;
     }
 
     case "icon": {
       const size = getScaled(node, "size", animated, 0, scale);
-      node.layout.width = size > 0 ? size : 0;
-      node.layout.height = size > 0 ? size : 0;
+      const clamped = applyAvailableClamp(size > 0 ? size : 0, size > 0 ? size : 0, constraints);
+      node.layout.width = clamped.width;
+      node.layout.height = clamped.height;
       return;
     }
 
@@ -320,25 +465,119 @@ function measure(
       const direction = (node.props["direction"] as "row" | "col") ?? "col";
       const gap = getScaled(node, "gap", animated, 0, scale);
       const padding = resolvePadding(node.props["padding"], scale);
+      const flowChildren = node.scratch.flowChildren;
+      const visibleChildren = node.scratch.visibleChildren;
+      const explicitWidth = node.props["width"] as number | undefined;
+      const explicitHeight = node.props["height"] as number | undefined;
+      const minWidth = node.props["minWidth"] as number | undefined;
+      const minHeight = node.props["minHeight"] as number | undefined;
+      const maxWidth = node.props["maxWidth"] as number | undefined;
+      const maxHeight = node.props["maxHeight"] as number | undefined;
+
+      let availableWidth = constraints.availableWidth;
+      let availableHeight = constraints.availableHeight;
+      if (maxWidth !== undefined) {
+        const scaledMaxWidth = maxWidth * scale;
+        availableWidth =
+          availableWidth !== undefined ? Math.min(availableWidth, scaledMaxWidth) : scaledMaxWidth;
+      }
+      if (maxHeight !== undefined) {
+        const scaledMaxHeight = maxHeight * scale;
+        availableHeight =
+          availableHeight !== undefined
+            ? Math.min(availableHeight, scaledMaxHeight)
+            : scaledMaxHeight;
+      }
+      if (explicitWidth !== undefined) availableWidth = explicitWidth * scale;
+      if (explicitHeight !== undefined) availableHeight = explicitHeight * scale;
+
+      const contentAvailableWidth =
+        availableWidth !== undefined
+          ? Math.max(0, availableWidth - padding.left - padding.right)
+          : undefined;
+      const contentAvailableHeight =
+        availableHeight !== undefined
+          ? Math.max(0, availableHeight - padding.top - padding.bottom)
+          : undefined;
 
       // Measure children first
-      const flowChildren: SceneNode[] = [];
+      flowChildren.length = 0;
       for (const child of node.children) {
         const pos = child.props["position"] as string | undefined;
         // Fixed children use screen-space scale
         const childScale = pos === "fixed" && viewport ? viewport.dpr / viewport.zoom : scale;
-        measure(child, measurer, now, childScale, viewport);
+        const childConstraints: MeasureConstraints =
+          pos === "absolute" || pos === "fixed"
+            ? {}
+            : direction === "col"
+              ? {
+                  availableWidth: contentAvailableWidth,
+                  availableHeight: contentAvailableHeight,
+                }
+              : { availableHeight: contentAvailableHeight };
+        measure(child, measurer, now, childScale, viewport, childConstraints);
         if (pos !== "absolute" && pos !== "fixed" && child.phase !== "exiting") {
           flowChildren.push(child);
         }
       }
 
-      const visible = flowChildren.filter((c) => c.layout.width > 0 || c.layout.height > 0);
-      const visibleCount = visible.length;
+      visibleChildren.length = 0;
+      for (let i = 0; i < flowChildren.length; i++) {
+        const child = flowChildren[i]!;
+        if (child.layout.width > 0 || child.layout.height > 0) {
+          visibleChildren.push(child);
+        }
+      }
+      const visible = visibleChildren;
+      const visibleCount = visibleChildren.length;
 
       let mainSize = 0;
       let crossSize = 0;
 
+      if (direction === "row") {
+        for (const child of visible) {
+          mainSize += child.layout.width;
+          crossSize = Math.max(crossSize, child.layout.height);
+        }
+        if (visibleCount > 1) mainSize += (visibleCount - 1) * gap;
+      } else {
+        for (const child of visible) {
+          mainSize += child.layout.height;
+          crossSize = Math.max(crossSize, child.layout.width);
+        }
+        if (visibleCount > 1) mainSize += (visibleCount - 1) * gap;
+      }
+
+      if (direction === "row" && contentAvailableWidth !== undefined) {
+        shrinkChildrenToFit(
+          visible,
+          direction,
+          contentAvailableWidth,
+          gap,
+          measurer,
+          now,
+          scale,
+          viewport,
+          node.scratch.shrinkChildren,
+          node.scratch.nextShrinkChildren,
+        );
+      } else if (direction === "col" && contentAvailableHeight !== undefined) {
+        shrinkChildrenToFit(
+          visible,
+          direction,
+          contentAvailableHeight,
+          gap,
+          measurer,
+          now,
+          scale,
+          viewport,
+          node.scratch.shrinkChildren,
+          node.scratch.nextShrinkChildren,
+        );
+      }
+
+      mainSize = 0;
+      crossSize = 0;
       if (direction === "row") {
         for (const child of visible) {
           mainSize += child.layout.width;
@@ -364,22 +603,20 @@ function measure(
       }
 
       // Apply explicit sizing (scaled)
-      const explicitWidth = node.props["width"] as number | undefined;
-      const explicitHeight = node.props["height"] as number | undefined;
       if (explicitWidth !== undefined) totalWidth = explicitWidth * scale;
       if (explicitHeight !== undefined) totalHeight = explicitHeight * scale;
 
       // Apply constraints (scaled)
-      const minWidth = node.props["minWidth"] as number | undefined;
-      const minHeight = node.props["minHeight"] as number | undefined;
-      const maxWidth = node.props["maxWidth"] as number | undefined;
-      const maxHeight = node.props["maxHeight"] as number | undefined;
       if (minWidth !== undefined && totalWidth < minWidth * scale) totalWidth = minWidth * scale;
       if (minHeight !== undefined && totalHeight < minHeight * scale)
         totalHeight = minHeight * scale;
       if (maxWidth !== undefined && totalWidth > maxWidth * scale) totalWidth = maxWidth * scale;
       if (maxHeight !== undefined && totalHeight > maxHeight * scale)
         totalHeight = maxHeight * scale;
+
+      const clamped = applyAvailableClamp(totalWidth, totalHeight, constraints);
+      totalWidth = clamped.width;
+      totalHeight = clamped.height;
 
       node.layout.width = totalWidth;
       node.layout.height = totalHeight;
@@ -405,7 +642,11 @@ function position(
   parentZIndex = 0,
   viewport?: ViewportInfo,
 ): void {
-  const animated = resolveAnimatedProps(node, now);
+  // Reuse animated props from measure phase if available and from the same frame
+  const animated =
+    node.scratch.lastAnimated && node.scratch.lastAnimatedTime === now
+      ? node.scratch.lastAnimated
+      : resolveAnimatedProps(node, now);
   const offsetX = node.dragOffset.x;
   const offsetY = node.dragOffset.y;
   const resolvedX = x + offsetX;
@@ -421,19 +662,25 @@ function position(
         node.props["color"] as UIColorValue | undefined,
         WHITE,
       );
-      result.texts.push({
-        order: orderCounter.value++,
-        x: transformX(transform, resolvedX + node.layout.width / 2),
-        y: transformY(transform, resolvedY + node.layout.height),
-        fontSize: transformSize(transform, getScaled(node, "fontSize", animated, 14, scale)),
-        color,
-        opacity,
-        slugData: node.textCache?.slugData,
-        totalWidth: node.textCache?.totalWidth ?? 0,
-        ascender: node.textCache?.ascender ?? 0,
-        descender: node.textCache?.descender ?? 0,
-        zIndex: parentZIndex,
-      });
+      const fontSize = transformSize(transform, getScaled(node, "fontSize", animated, 14, scale));
+      const lineHeight = node.textCache?.lineHeight ?? node.layout.height;
+      const lines = node.textCache?.lines ?? [];
+
+      for (const [index, line] of lines.entries()) {
+        result.texts.push({
+          order: orderCounter.value++,
+          x: transformX(transform, resolvedX + line.totalWidth / 2),
+          y: transformY(transform, resolvedY + lineHeight * (index + 1)),
+          fontSize,
+          color,
+          opacity,
+          slugData: line.slugData,
+          totalWidth: line.totalWidth,
+          ascender: node.textCache?.ascender ?? 0,
+          descender: node.textCache?.descender ?? 0,
+          zIndex: parentZIndex,
+        });
+      }
       break;
     }
 
@@ -545,9 +792,14 @@ function positionChildren(
   const contentWidth = parent.layout.width - padding.left - padding.right;
   const contentHeight = parent.layout.height - padding.top - padding.bottom;
 
-  const flowChildren: SceneNode[] = [];
-  const absoluteChildren: SceneNode[] = [];
-  const fixedChildren: SceneNode[] = [];
+  const flowChildren = parent.scratch.flowChildren;
+  const absoluteChildren = parent.scratch.absoluteChildren;
+  const fixedChildren = parent.scratch.fixedChildren;
+  const visibleChildren = parent.scratch.visibleChildren;
+
+  flowChildren.length = 0;
+  absoluteChildren.length = 0;
+  fixedChildren.length = 0;
 
   for (const child of parent.children) {
     const pos = child.props["position"] as string | undefined;
@@ -561,7 +813,14 @@ function positionChildren(
   }
 
   // --- Flow children ---
-  const visible = flowChildren.filter((c) => c.layout.width > 0 || c.layout.height > 0);
+  visibleChildren.length = 0;
+  for (let i = 0; i < flowChildren.length; i++) {
+    const child = flowChildren[i]!;
+    if (child.layout.width > 0 || child.layout.height > 0) {
+      visibleChildren.push(child);
+    }
+  }
+  const visible = visibleChildren;
 
   if (visible.length > 0) {
     let childrenMainSize = 0;
@@ -782,8 +1041,12 @@ export function computeLayout(
   anchors?: Map<string, AnchorTarget>,
   scale = 1,
   viewport?: ViewportInfo,
+  reusableResult?: UILayoutResult,
 ): UILayoutResult {
-  const result: UILayoutResult = { boxes: [], texts: [], icons: [] };
+  const result = reusableResult ?? { boxes: [], texts: [], icons: [] };
+  result.boxes.length = 0;
+  result.texts.length = 0;
+  result.icons.length = 0;
   const orderCounter: OrderCounter = { value: 0 };
 
   // If root is an anchor node, resolve its position from entity bounds

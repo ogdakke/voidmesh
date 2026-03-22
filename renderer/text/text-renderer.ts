@@ -4,7 +4,14 @@ import vertexShaderSource from "./text-vertex.wgsl?raw";
 import fragmentShaderSource from "./text-fragment.wgsl?raw";
 
 const TEX_WIDTH = 4096;
-const TEXT_UNIFORM_FLOATS = 20;
+const MAX_SLUG_CACHE_BYTES = 32 * 1024 * 1024;
+
+/** Uniform buffer offset alignment required by WebGPU (256 bytes on most GPUs). */
+const UNIFORM_ALIGN = 256;
+/** Number of f32 elements per aligned uniform slot (256 / 4). */
+const UNIFORM_SLOT_FLOATS = UNIFORM_ALIGN / Float32Array.BYTES_PER_ELEMENT;
+/** Maximum text items per frame batch. */
+const MAX_TEXT_BATCH = 256;
 
 interface TextViewport {
   offsetX: number;
@@ -26,6 +33,19 @@ interface TextItem {
   a: number;
 }
 
+interface CachedSlugResources {
+  cacheKey: string;
+  vertexBuffer: GPUBuffer;
+  indexBuffer: GPUBuffer;
+  curveTexture: GPUTexture;
+  curveTextureView: GPUTextureView;
+  bandTexture: GPUTexture;
+  bandTextureView: GPUTextureView;
+  indexCount: number;
+  bytes: number;
+  bindGroup: GPUBindGroup | null;
+}
+
 /**
  * GPU text renderer using the Slug algorithm.
  * Renders resolution-independent vector text directly in the WebGPU pipeline.
@@ -33,7 +53,7 @@ interface TextItem {
  * Usage per frame:
  *   textRenderer.begin()
  *   textRenderer.drawText("Label", worldX, worldY, 14, 1, 1, 1, 1)
- *   textRenderer.flush(encoder, swapchainView)
+ *   textRenderer.flush(pass)
  */
 export class TextRenderer {
   #device: GPUDevice;
@@ -45,12 +65,17 @@ export class TextRenderer {
   #ready = false;
   #viewport: TextViewport | null = null;
 
+  // Batched uniform staging
+  #batchUniformData = new ArrayBuffer(MAX_TEXT_BATCH * UNIFORM_ALIGN);
+  #batchF32View = new Float32Array(this.#batchUniformData);
+  #batchUniformBuffer: GPUBuffer | null = null;
+
   // Per-frame text queue
   #queue: TextItem[] = [];
 
   // GPU resources kept alive between begin() and next begin()
-  // (destroyed at the start of the next frame, after submit has completed)
-  #pendingDestroy: Array<GPUBuffer | GPUTexture> = [];
+  #slugResourceCache = new Map<string, CachedSlugResources>();
+  #slugCacheBytes = 0;
 
   constructor(device: GPUDevice, canvasFormat: GPUTextureFormat) {
     this.#device = device;
@@ -61,13 +86,19 @@ export class TextRenderer {
     const fontData = await fetch("/Inter.ttf").then((r) => r.arrayBuffer());
     this.#font = Font.load(fontData);
 
+    this.#batchUniformBuffer = this.#device.createBuffer({
+      label: "Text batch uniform buffer",
+      size: MAX_TEXT_BATCH * UNIFORM_ALIGN,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+
     this.#bindGroupLayout = this.#device.createBindGroupLayout({
       label: "Text bind group layout",
       entries: [
         {
           binding: 0,
           visibility: GPUShaderStage.VERTEX,
-          buffer: { type: "uniform" },
+          buffer: { type: "uniform", hasDynamicOffset: true },
         },
         {
           binding: 1,
@@ -152,13 +183,10 @@ export class TextRenderer {
     this.#viewport = viewport;
   }
 
-  /** Clear the text queue for a new frame and release previous frame's GPU resources. */
+  /** Clear the text queue for a new frame. */
   begin(): void {
-    // Destroy resources from the previous frame (submit has completed by now)
-    for (const resource of this.#pendingDestroy) {
-      resource.destroy();
-    }
-    this.#pendingDestroy.length = 0;
+    this.#evictSlugResources();
+    this.#currentTextIndex = 0;
     this.#queue.length = 0;
   }
 
@@ -192,33 +220,61 @@ export class TextRenderer {
     }
   }
 
-  /** Build GPU buffers from queued text and encode render passes. */
-  flush(encoder: GPUCommandEncoder, swapchainView: GPUTextureView): void {
+  /** Build GPU buffers from queued text and draw into the provided render pass. */
+  flush(pass: GPURenderPassEncoder): void {
     if (
       !this.#ready ||
       !this.#font ||
       !this.#pipeline ||
-      !this.#bindGroupLayout ||
+      !this.#batchUniformBuffer ||
       this.#queue.length === 0
     )
       return;
 
-    for (const item of this.#queue) {
-      this.#renderItem(encoder, swapchainView, item);
+    // Prepare all uniform data into the staging buffer
+    const drawCalls: { resources: CachedSlugResources; slotIndex: number }[] = [];
+    for (let i = 0; i < this.#queue.length; i++) {
+      const result = this.#prepareItem(this.#queue[i]!);
+      if (result) drawCalls.push(result);
+    }
+
+    if (drawCalls.length === 0) {
+      this.#queue.length = 0;
+      return;
+    }
+
+    // Single writeBuffer for all text uniforms
+    this.#device.queue.writeBuffer(
+      this.#batchUniformBuffer,
+      0,
+      this.#batchUniformData,
+      0,
+      this.#currentTextIndex * UNIFORM_ALIGN,
+    );
+
+    pass.setPipeline(this.#pipeline);
+
+    for (let i = 0; i < drawCalls.length; i++) {
+      const { resources, slotIndex } = drawCalls[i]!;
+      const bindGroup = this.#getTextBindGroup(resources);
+      pass.setBindGroup(0, bindGroup, [slotIndex * UNIFORM_ALIGN]);
+      pass.setVertexBuffer(0, resources.vertexBuffer);
+      pass.setIndexBuffer(resources.indexBuffer, "uint32");
+      pass.drawIndexed(resources.indexCount);
     }
     this.#queue.length = 0;
   }
 
-  #renderItem(encoder: GPUCommandEncoder, swapchainView: GPUTextureView, item: TextItem): void {
-    const font = this.#font!;
-    const slugData = item.slugData ?? prepareText(font, item.text!, item.fontSize);
-    if (slugData.indices.length === 0) return;
+  #prepareItem(item: TextItem): { resources: CachedSlugResources; slotIndex: number } | null {
+    if (!this.#viewport || !this.#font) return null;
+    if (this.#currentTextIndex >= MAX_TEXT_BATCH) return null;
 
-    if (!this.#viewport) return;
+    const slugData = item.slugData ?? prepareText(this.#font, item.text!, item.fontSize);
+    if (slugData.indices.length === 0) return null;
 
-    const scale = font.scaleForSize(item.fontSize);
+    const scale = this.#font.scaleForSize(item.fontSize);
     const totalWidth = slugData.totalAdvance * scale;
-    const descender = font.descender * scale; // negative value
+    const descender = this.#font.descender * scale;
 
     // Position: centered horizontally on worldX
     const offsetX = item.worldX - totalWidth / 2;
@@ -226,76 +282,59 @@ export class TextRenderer {
     // Slug MVP matrix. worldY denotes the bottom text edge in world-space coordinates.
     const offsetY = item.worldY + descender;
 
-    // Copy reference vertex data and inject custom color only.
-    const verts = new Float32Array(slugData.vertices.length);
-    for (let i = 0; i < slugData.vertices.length; i += 20) {
-      verts[i] = slugData.vertices[i]!;
-      verts[i + 1] = slugData.vertices[i + 1]!;
-      verts[i + 2] = slugData.vertices[i + 2]!;
-      verts[i + 3] = slugData.vertices[i + 3]!;
-      verts[i + 4] = slugData.vertices[i + 4]!;
-      verts[i + 5] = slugData.vertices[i + 5]!;
-      verts[i + 6] = slugData.vertices[i + 6]!;
-      verts[i + 7] = slugData.vertices[i + 7]!;
-      verts[i + 8] = slugData.vertices[i + 8]!;
-      verts[i + 9] = slugData.vertices[i + 9]!;
-      verts[i + 10] = slugData.vertices[i + 10]!;
-      verts[i + 11] = slugData.vertices[i + 11]!;
-      verts[i + 12] = slugData.vertices[i + 12]!;
-      verts[i + 13] = slugData.vertices[i + 13]!;
-      verts[i + 14] = slugData.vertices[i + 14]!;
-      verts[i + 15] = slugData.vertices[i + 15]!;
-      verts[i + 16] = item.r;
-      verts[i + 17] = item.g;
-      verts[i + 18] = item.b;
-      verts[i + 19] = item.a;
-    }
-
     const sx = (2 * this.#viewport.zoom) / this.#viewport.width;
     const sy = (-2 * this.#viewport.zoom) / this.#viewport.height;
     const tx = sx * offsetX - this.#viewport.offsetX * sx - 1;
     const ty = sy * offsetY - this.#viewport.offsetY * sy + 1;
 
-    const uniformData = new Float32Array(TEXT_UNIFORM_FLOATS);
-    uniformData.set(
-      [
-        sx,
-        0,
-        0,
-        tx,
-        0,
-        -sy,
-        0,
-        ty,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        1,
-        this.#viewport.width,
-        this.#viewport.height,
-        0,
-        0,
-      ],
-      0,
-    );
+    const slotIndex = this.#currentTextIndex++;
+    const floatOffset = slotIndex * UNIFORM_SLOT_FLOATS;
+    const f = this.#batchF32View;
 
-    const uniformBuffer = this.#device.createBuffer({
-      label: "Text uniforms",
-      size: uniformData.byteLength,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    this.#device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+    f[floatOffset] = sx;
+    f[floatOffset + 1] = 0;
+    f[floatOffset + 2] = 0;
+    f[floatOffset + 3] = tx;
+    f[floatOffset + 4] = 0;
+    f[floatOffset + 5] = -sy;
+    f[floatOffset + 6] = 0;
+    f[floatOffset + 7] = ty;
+    f[floatOffset + 8] = 0;
+    f[floatOffset + 9] = 0;
+    f[floatOffset + 10] = 0;
+    f[floatOffset + 11] = 0;
+    f[floatOffset + 12] = 0;
+    f[floatOffset + 13] = 0;
+    f[floatOffset + 14] = 0;
+    f[floatOffset + 15] = 1;
+    f[floatOffset + 16] = this.#viewport.width;
+    f[floatOffset + 17] = this.#viewport.height;
+    f[floatOffset + 18] = 0;
+    f[floatOffset + 19] = 0;
+    f[floatOffset + 20] = item.r;
+    f[floatOffset + 21] = item.g;
+    f[floatOffset + 22] = item.b;
+    f[floatOffset + 23] = item.a;
+
+    const resources = this.#getOrCreateSlugResources(slugData);
+    return { resources, slotIndex };
+  }
+
+  #getOrCreateSlugResources(slugData: ReturnType<typeof prepareText>): CachedSlugResources {
+    const cacheKey = slugData.cacheKey;
+    const cached = this.#slugResourceCache.get(cacheKey);
+    if (cached) {
+      this.#slugResourceCache.delete(cacheKey);
+      this.#slugResourceCache.set(cacheKey, cached);
+      return cached;
+    }
 
     const vertexBuffer = this.#device.createBuffer({
       label: "Text vertex buffer",
-      size: verts.byteLength,
+      size: slugData.vertices.byteLength,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     });
-    this.#device.queue.writeBuffer(vertexBuffer, 0, verts);
+    this.#device.queue.writeBuffer(vertexBuffer, 0, slugData.vertices);
 
     const indexBuffer = this.#device.createBuffer({
       label: "Text index buffer",
@@ -330,46 +369,89 @@ export class TextRenderer {
       { width: TEX_WIDTH, height: slugData.bandTexHeight },
     );
 
-    const bindGroup = this.#device.createBindGroup({
-      label: "Text bind group",
-      layout: this.#bindGroupLayout!,
-      entries: [
-        { binding: 0, resource: { buffer: uniformBuffer } },
-        { binding: 1, resource: curveTexture.createView() },
-        { binding: 2, resource: bandTexture.createView() },
-      ],
-    });
+    const curveTextureView = curveTexture.createView();
+    const bandTextureView = bandTexture.createView();
 
-    // Render text glyphs
-    const pass = encoder.beginRenderPass({
-      label: "Text render pass",
-      colorAttachments: [
-        {
-          view: swapchainView,
-          loadOp: "load" as const,
-          storeOp: "store" as const,
-        },
-      ],
-    });
-    pass.setPipeline(this.#pipeline!);
-    pass.setBindGroup(0, bindGroup);
-    pass.setVertexBuffer(0, vertexBuffer);
-    pass.setIndexBuffer(indexBuffer, "uint32");
-    pass.drawIndexed(slugData.indices.length);
-    pass.end();
+    const resources: CachedSlugResources = {
+      cacheKey,
+      vertexBuffer,
+      indexBuffer,
+      curveTexture,
+      curveTextureView,
+      bandTexture,
+      bandTextureView,
+      indexCount: slugData.indices.length,
+      bytes:
+        slugData.vertices.byteLength +
+        slugData.indices.byteLength +
+        TEX_WIDTH * slugData.curveTexHeight * 16 +
+        TEX_WIDTH * slugData.bandTexHeight * 16,
+      bindGroup: null,
+    };
 
-    // Defer destruction — resources must stay alive until after submit()
-    this.#pendingDestroy.push(uniformBuffer, vertexBuffer, indexBuffer, curveTexture, bandTexture);
+    this.#slugResourceCache.set(cacheKey, resources);
+    this.#slugCacheBytes += resources.bytes;
+    this.#evictSlugResources(cacheKey);
+    return resources;
   }
 
   destroy(): void {
-    for (const resource of this.#pendingDestroy) {
-      resource.destroy();
+    this.#batchUniformBuffer?.destroy();
+    this.#batchUniformBuffer = null;
+    for (const resource of this.#slugResourceCache.values()) {
+      this.#destroySlugResources(resource);
     }
-    this.#pendingDestroy.length = 0;
+    this.#slugResourceCache.clear();
+    this.#slugCacheBytes = 0;
     this.#pipeline = null;
     this.#bindGroupLayout = null;
     this.#font = null;
     this.#ready = false;
+  }
+
+  #evictSlugResources(preserveKey?: string): void {
+    if (this.#slugCacheBytes <= MAX_SLUG_CACHE_BYTES) return;
+
+    for (const [cacheKey, resource] of this.#slugResourceCache) {
+      if (this.#slugCacheBytes <= MAX_SLUG_CACHE_BYTES) break;
+      if (cacheKey === preserveKey) continue;
+      this.#destroySlugResources(resource);
+      this.#slugResourceCache.delete(cacheKey);
+      this.#slugCacheBytes -= resource.bytes;
+    }
+  }
+
+  #destroySlugResources(resource: CachedSlugResources): void {
+    resource.vertexBuffer.destroy();
+    resource.indexBuffer.destroy();
+    resource.curveTexture.destroy();
+    resource.bandTexture.destroy();
+    resource.bindGroup = null;
+  }
+
+  #currentTextIndex = 0;
+
+  #getTextBindGroup(resources: CachedSlugResources): GPUBindGroup {
+    // One bind group per slug resource — dynamic offset selects the uniform slot.
+    const cached = resources.bindGroup;
+    if (cached) return cached;
+
+    const bindGroup = this.#device.createBindGroup({
+      label: "Text bind group",
+      layout: this.#bindGroupLayout!,
+      entries: [
+        {
+          binding: 0,
+          resource: {
+            buffer: this.#batchUniformBuffer!,
+            size: UNIFORM_ALIGN,
+          },
+        },
+        { binding: 1, resource: resources.curveTextureView },
+        { binding: 2, resource: resources.bandTextureView },
+      ],
+    });
+    resources.bindGroup = bindGroup;
+    return bindGroup;
   }
 }

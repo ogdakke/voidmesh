@@ -10,7 +10,6 @@
 const kLogBandTextureWidth: u32 = 12u;
 
 // It's convenient to have a texel load function to aid in translation to other shader languages.
-
 fn TexelLoad2D_f32(tex: texture_2d<f32>, coords: vec2<i32>) -> vec4<f32> {
     return textureLoad(tex, coords, 0);
 }
