@@ -13,9 +13,12 @@ export class UIBlurPipeline {
   #downsampleBindGroupLayout: GPUBindGroupLayout | null = null;
   #upsampleBindGroupLayout: GPUBindGroupLayout | null = null;
   #mixBindGroupLayout: GPUBindGroupLayout | null = null;
-  #downsampleUniformBuffers: GPUBuffer[] = [];
-  #upsampleUniformBuffers: GPUBuffer[] = [];
-  #mixUniformBuffer: GPUBuffer | null = null;
+  #callSlots: {
+    downsampleUniformBuffers: GPUBuffer[];
+    upsampleUniformBuffers: GPUBuffer[];
+    mixUniformBuffer: GPUBuffer;
+  }[] = [];
+  #callCursor = 0;
   #sampler: GPUSampler | null = null;
   #mipChainCache = new Map<string, GPUTexture[]>();
   #blendTextureCache = new Map<string, { textureA: GPUTexture; textureB: GPUTexture }>();
@@ -60,15 +63,6 @@ export class UIBlurPipeline {
       label: "UI blur downsample bind group layout",
       entries: bindGroupLayoutEntries,
     });
-    for (let i = 0; i < MAX_BLUR_MIP_LEVELS * 2; i++) {
-      this.#downsampleUniformBuffers.push(
-        this.#device.createBuffer({
-          label: `UI blur downsample uniforms ${i}`,
-          size: config.rendering.blurUniformSize,
-          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        }),
-      );
-    }
     this.#downsamplePipeline = this.#device.createRenderPipeline({
       label: "UI blur downsample pipeline",
       layout: this.#device.createPipelineLayout({
@@ -95,15 +89,6 @@ export class UIBlurPipeline {
       label: "UI blur upsample bind group layout",
       entries: bindGroupLayoutEntries,
     });
-    for (let i = 0; i < MAX_BLUR_MIP_LEVELS * 2; i++) {
-      this.#upsampleUniformBuffers.push(
-        this.#device.createBuffer({
-          label: `UI blur upsample uniforms ${i}`,
-          size: config.rendering.blurUniformSize,
-          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        }),
-      );
-    }
     this.#upsamplePipeline = this.#device.createRenderPipeline({
       label: "UI blur upsample pipeline",
       layout: this.#device.createPipelineLayout({
@@ -151,11 +136,6 @@ export class UIBlurPipeline {
         },
       ],
     });
-    this.#mixUniformBuffer = this.#device.createBuffer({
-      label: "UI blur mix uniforms",
-      size: config.rendering.blurUniformSize,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
     this.#mixPipeline = this.#device.createRenderPipeline({
       label: "UI blur mix pipeline",
       layout: this.#device.createPipelineLayout({
@@ -175,6 +155,50 @@ export class UIBlurPipeline {
     });
   }
 
+  begin(): void {
+    this.#callCursor = 0;
+  }
+
+  #getCallSlot(index: number): {
+    downsampleUniformBuffers: GPUBuffer[];
+    upsampleUniformBuffers: GPUBuffer[];
+    mixUniformBuffer: GPUBuffer;
+  } {
+    const existing = this.#callSlots[index];
+    if (existing) return existing;
+
+    const downsampleUniformBuffers: GPUBuffer[] = [];
+    const upsampleUniformBuffers: GPUBuffer[] = [];
+    for (let i = 0; i < MAX_BLUR_MIP_LEVELS * 2; i++) {
+      downsampleUniformBuffers.push(
+        this.#device.createBuffer({
+          label: `UI blur downsample uniforms ${index}:${i}`,
+          size: config.rendering.blurUniformSize,
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        }),
+      );
+      upsampleUniformBuffers.push(
+        this.#device.createBuffer({
+          label: `UI blur upsample uniforms ${index}:${i}`,
+          size: config.rendering.blurUniformSize,
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        }),
+      );
+    }
+
+    const slot = {
+      downsampleUniformBuffers,
+      upsampleUniformBuffers,
+      mixUniformBuffer: this.#device.createBuffer({
+        label: `UI blur mix uniforms ${index}`,
+        size: config.rendering.blurUniformSize,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      }),
+    };
+    this.#callSlots.push(slot);
+    return slot;
+  }
+
   encodeBlur(
     encoder: GPUCommandEncoder,
     inputTexture: GPUTexture,
@@ -190,11 +214,11 @@ export class UIBlurPipeline {
       !this.#downsampleBindGroupLayout ||
       !this.#upsampleBindGroupLayout ||
       !this.#mixBindGroupLayout ||
-      !this.#mixUniformBuffer ||
       !this.#sampler
     ) {
       return;
     }
+    const callSlot = this.#getCallSlot(this.#callCursor++);
 
     const { levelsLow, levelsHigh, offsetLow, offsetHigh, blendFactor } =
       blurParamToKawaseParams(blur);
@@ -216,6 +240,8 @@ export class UIBlurPipeline {
         offset,
         width,
         height,
+        callSlot.downsampleUniformBuffers,
+        callSlot.upsampleUniformBuffers,
         0,
       );
       return;
@@ -231,6 +257,8 @@ export class UIBlurPipeline {
       offsetLow,
       width,
       height,
+      callSlot.downsampleUniformBuffers,
+      callSlot.upsampleUniformBuffers,
       0,
     );
     this.#encodeBlurPasses(
@@ -242,9 +270,20 @@ export class UIBlurPipeline {
       offsetHigh,
       width,
       height,
+      callSlot.downsampleUniformBuffers,
+      callSlot.upsampleUniformBuffers,
       MAX_BLUR_MIP_LEVELS,
     );
-    this.#encodeMixPass(encoder, textureA, textureB, outputTexture, blendFactor, width, height);
+    this.#encodeMixPass(
+      encoder,
+      textureA,
+      textureB,
+      outputTexture,
+      blendFactor,
+      width,
+      height,
+      callSlot.mixUniformBuffer,
+    );
   }
 
   #getOrCreateMipChain(width: number, height: number): GPUTexture[] {
@@ -314,6 +353,8 @@ export class UIBlurPipeline {
     offset: number,
     width: number,
     height: number,
+    downsampleUniformBuffers: GPUBuffer[],
+    upsampleUniformBuffers: GPUBuffer[],
     bufferOffset: number,
   ): void {
     const activeLevels = Math.min(levels, mipChain.length);
@@ -323,11 +364,7 @@ export class UIBlurPipeline {
     let srcHeight = height;
     for (let i = 0; i < activeLevels; i++) {
       const uniformData = new Float32Array([srcWidth, srcHeight, offset, 0]);
-      this.#device.queue.writeBuffer(
-        this.#downsampleUniformBuffers[bufferOffset + i]!,
-        0,
-        uniformData,
-      );
+      this.#device.queue.writeBuffer(downsampleUniformBuffers[bufferOffset + i]!, 0, uniformData);
       srcWidth = Math.max(1, Math.floor(srcWidth / 2));
       srcHeight = Math.max(1, Math.floor(srcHeight / 2));
     }
@@ -337,14 +374,14 @@ export class UIBlurPipeline {
       const dstMip = mipChain[i - 1]!;
       const uniformData = new Float32Array([dstMip.width, dstMip.height, offset, 0]);
       this.#device.queue.writeBuffer(
-        this.#upsampleUniformBuffers[bufferOffset + uniformIndex]!,
+        upsampleUniformBuffers[bufferOffset + uniformIndex]!,
         0,
         uniformData,
       );
       uniformIndex++;
     }
     this.#device.queue.writeBuffer(
-      this.#upsampleUniformBuffers[bufferOffset + uniformIndex]!,
+      upsampleUniformBuffers[bufferOffset + uniformIndex]!,
       0,
       new Float32Array([width, height, offset, 0]),
     );
@@ -356,7 +393,7 @@ export class UIBlurPipeline {
         label: `UI blur downsample bind group ${i}`,
         layout: this.#downsampleBindGroupLayout!,
         entries: [
-          { binding: 0, resource: { buffer: this.#downsampleUniformBuffers[bufferOffset + i]! } },
+          { binding: 0, resource: { buffer: downsampleUniformBuffers[bufferOffset + i]! } },
           { binding: 1, resource: srcTexture.createView() },
           { binding: 2, resource: this.#sampler! },
         ],
@@ -390,7 +427,7 @@ export class UIBlurPipeline {
         entries: [
           {
             binding: 0,
-            resource: { buffer: this.#upsampleUniformBuffers[bufferOffset + uniformIndex]! },
+            resource: { buffer: upsampleUniformBuffers[bufferOffset + uniformIndex]! },
           },
           { binding: 1, resource: srcMip.createView() },
           { binding: 2, resource: this.#sampler! },
@@ -421,7 +458,7 @@ export class UIBlurPipeline {
       entries: [
         {
           binding: 0,
-          resource: { buffer: this.#upsampleUniformBuffers[bufferOffset + uniformIndex]! },
+          resource: { buffer: upsampleUniformBuffers[bufferOffset + uniformIndex]! },
         },
         { binding: 1, resource: mipChain[0]!.createView() },
         { binding: 2, resource: this.#sampler! },
@@ -453,9 +490,10 @@ export class UIBlurPipeline {
     mixFactor: number,
     width: number,
     height: number,
+    mixUniformBuffer: GPUBuffer,
   ): void {
     this.#device.queue.writeBuffer(
-      this.#mixUniformBuffer!,
+      mixUniformBuffer,
       0,
       new Float32Array([width, height, mixFactor, 0]),
     );
@@ -463,7 +501,7 @@ export class UIBlurPipeline {
       label: "UI blur mix bind group",
       layout: this.#mixBindGroupLayout!,
       entries: [
-        { binding: 0, resource: { buffer: this.#mixUniformBuffer! } },
+        { binding: 0, resource: { buffer: mixUniformBuffer } },
         { binding: 1, resource: textureA.createView() },
         { binding: 2, resource: textureB.createView() },
         { binding: 3, resource: this.#sampler! },
@@ -488,12 +526,12 @@ export class UIBlurPipeline {
   }
 
   destroy(): void {
-    for (const buffer of this.#downsampleUniformBuffers) buffer.destroy();
-    for (const buffer of this.#upsampleUniformBuffers) buffer.destroy();
-    this.#downsampleUniformBuffers.length = 0;
-    this.#upsampleUniformBuffers.length = 0;
-    this.#mixUniformBuffer?.destroy();
-    this.#mixUniformBuffer = null;
+    for (const slot of this.#callSlots) {
+      for (const buffer of slot.downsampleUniformBuffers) buffer.destroy();
+      for (const buffer of slot.upsampleUniformBuffers) buffer.destroy();
+      slot.mixUniformBuffer.destroy();
+    }
+    this.#callSlots.length = 0;
     for (const textures of this.#mipChainCache.values()) {
       for (const texture of textures) texture.destroy();
     }

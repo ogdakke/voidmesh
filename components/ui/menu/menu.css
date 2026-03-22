@@ -11,9 +11,9 @@
   .menu-popup,
   .menu-submenu-popup {
     box-sizing: border-box;
-    padding-block: var(--spacing);
-    border-radius: 12px;
-    backdrop-filter: var(--floating-backdrop);
+    padding-block: 0.25rem;
+    border-radius: var(--radius-md);
+    backdrop-filter: var(--floating-backdrop-subtle);
     background: var(--floating-background);
     color: var(--gray-1100);
     transform-origin: var(--transform-origin);
