@@ -3,6 +3,7 @@ import { AnimationScheduler } from "#lib/animation-scheduler.ts";
 import { screenToWorld } from "../../lib/canvas-math.ts";
 import { GameLoop, SpacePanMode, type GameLoopDeps } from "../../engine/game-loop.ts";
 import { canvasStore } from "../../engine/canvas-store.ts";
+import { contextMenuController } from "../../renderer/ui/context-menu-controller.ts";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
 import { createTestEntity } from "../helpers/test-entity.ts";
 import { createMockGameLoopDeps } from "../helpers/game-loop-deps.mock.ts";
@@ -63,6 +64,7 @@ let cleanupCanvas: () => void;
 
 beforeEach(() => {
   cleanupCanvas = setupCanvasTest();
+  contextMenuController.close();
   canvasStore.setViewport({ offset: { x: 0, y: 0 }, zoom: 1 });
   deps = createMockGameLoopDeps(new AnimationScheduler());
   gl = createGameLoop(deps);
@@ -499,6 +501,19 @@ describe("Context menu", () => {
     // Context menu should cancel drag visual
     gl.handleContextMenu({ x: 150, y: 150 });
     expect(deps.dragVisual.cancel).toHaveBeenCalled();
+  });
+
+  test("right-click on the same entity repositions the menu and clears submenu state", () => {
+    addEntity(100, 100, 300, 300);
+
+    gl.handleContextMenu({ x: 150, y: 150 });
+    contextMenuController.activeSubmenuId = "style";
+
+    gl.handleContextMenu({ x: 320, y: 260 });
+
+    expect(contextMenuController.state.screenX).toBe(320);
+    expect(contextMenuController.state.screenY).toBe(260);
+    expect(contextMenuController.activeSubmenuId).toBeNull();
   });
 });
 
