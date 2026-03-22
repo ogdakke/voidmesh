@@ -19,6 +19,7 @@ import type {
   UIBackground,
   AnimateConfig,
   StateStyle,
+  UIFilter,
   UILinePoint,
 } from "./elements.ts";
 import type { SceneNode } from "./scene-node.ts";
@@ -92,11 +93,14 @@ export interface UILayoutBox {
   y: number;
   width: number;
   height: number;
-  background: UIResolvedBackground;
+  background: UIResolvedBackground | null;
   borderRadius: number;
   borderWidth: number;
   borderColor: UIColor;
+  backdropBlurRadius: number;
+  filterBlurRadius: number;
   opacity: number;
+  subtreeEndOrder: number;
   zIndex: number;
 }
 
@@ -199,6 +203,32 @@ function resolvePadding(raw: unknown, scale: number): UIEdges {
     bottom: e.bottom * scale,
     left: e.left * scale,
   };
+}
+
+function getBlurRadius(filters: UIFilter[] | undefined): number {
+  if (!filters || filters.length === 0) return 0;
+  for (let i = filters.length - 1; i >= 0; i--) {
+    const filter = filters[i];
+    if (filter?.type === "blur") {
+      return Math.max(0, filter.radius);
+    }
+  }
+  return 0;
+}
+
+function getAnimatableNumericTarget(
+  props: Record<string, unknown>,
+  property: string,
+): number | undefined {
+  if (property === "filter.blur") {
+    return getBlurRadius(props["filter"] as UIFilter[] | undefined);
+  }
+  if (property === "backdropFilter.blur") {
+    return getBlurRadius(props["backdropFilter"] as UIFilter[] | undefined);
+  }
+
+  const target = props[property];
+  return typeof target === "number" ? target : undefined;
 }
 
 function readLineCap(value: unknown): "butt" | "round" | "square" {
@@ -351,7 +381,7 @@ function resolveAnimatedProps(node: SceneNode, now: number): Record<string, numb
 
   for (const prop in animate) {
     const config = animate[prop]!;
-    const target = node.props[prop];
+    const target = getAnimatableNumericTarget(node.props, prop);
     if (typeof target !== "number") continue;
     resolved[prop] = node.resolveAnimatedValue(prop, target, config, now);
     keys.push(prop);
@@ -399,6 +429,24 @@ function getEffectiveBackground(
   const state = getStateStyle(node);
   if (state?.background) return styleResolver.resolveBackground(state.background);
   return styleResolver.resolveBackground(node.props["background"] as UIBackground | undefined);
+}
+
+function getEffectiveFilterBlur(node: SceneNode, animated: Record<string, number>): number {
+  const state = getStateStyle(node);
+  if ("filter.blur" in animated) {
+    return Math.max(0, animated["filter.blur"]!);
+  }
+  return getBlurRadius((state?.filter ?? node.props["filter"]) as UIFilter[] | undefined);
+}
+
+function getEffectiveBackdropBlur(node: SceneNode, animated: Record<string, number>): number {
+  const state = getStateStyle(node);
+  if ("backdropFilter.blur" in animated) {
+    return Math.max(0, animated["backdropFilter.blur"]!);
+  }
+  return getBlurRadius(
+    (state?.backdropFilter ?? node.props["backdropFilter"]) as UIFilter[] | undefined,
+  );
 }
 
 function getEffectiveBorderColor(node: SceneNode, styleResolver: UIStyleResolver): UIColor {
@@ -901,6 +949,8 @@ function position(
       const zIndex = parentZIndex + ((node.props["zIndex"] as number | undefined) ?? 0);
       const opacity = getEffectiveOpacity(node, animated);
       const background = getEffectiveBackground(node, styleResolver);
+      const backdropBlurRadius = getEffectiveBackdropBlur(node, animated);
+      const filterBlurRadius = getEffectiveFilterBlur(node, animated);
       const stateStyle = getStateStyle(node);
       const visualScale = resolveVisualScale(node, now);
       const nodeTransform = scaleAround(
@@ -910,14 +960,15 @@ function position(
         visualScale,
       );
 
-      if (background) {
-        result.boxes.push({
+      let emittedBox: UILayoutBox | null = null;
+      if (background || backdropBlurRadius > 0 || filterBlurRadius > 0) {
+        emittedBox = {
           order: orderCounter.value++,
           x: transformX(nodeTransform, resolvedX),
           y: transformY(nodeTransform, resolvedY),
           width: transformSize(nodeTransform, node.layout.width),
           height: transformSize(nodeTransform, node.layout.height),
-          background,
+          background: background ?? null,
           borderRadius: transformSize(
             nodeTransform,
             stateStyle?.borderRadius !== undefined
@@ -931,9 +982,13 @@ function position(
               : getScaled(node, "borderWidth", animated, 0, scale),
           ),
           borderColor: getEffectiveBorderColor(node, styleResolver),
+          backdropBlurRadius,
+          filterBlurRadius,
           opacity,
+          subtreeEndOrder: 0,
           zIndex,
-        });
+        };
+        result.boxes.push(emittedBox);
       }
 
       positionChildren(
@@ -950,6 +1005,10 @@ function position(
         zIndex,
         viewport,
       );
+
+      if (emittedBox) {
+        emittedBox.subtreeEndOrder = Math.max(emittedBox.order, orderCounter.value - 1);
+      }
       break;
     }
   }
@@ -1404,4 +1463,5 @@ function sortByZIndex(result: UILayoutResult): void {
   if (result.boxes.length > 1) result.boxes.sort(compare);
   if (result.texts.length > 1) result.texts.sort(compare);
   if (result.icons.length > 1) result.icons.sort(compare);
+  if (result.lines.length > 1) result.lines.sort(compare);
 }

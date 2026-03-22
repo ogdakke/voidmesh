@@ -45,6 +45,13 @@ export type UIBackground =
   | UIGradientBackground
   | UIThemeValue<UISolidBackground | UIGradientBackground>;
 
+export interface UIBlurFilter {
+  type: "blur";
+  radius: number;
+}
+
+export type UIFilter = UIBlurFilter;
+
 export function rgba(r: number, g: number, b: number, a = 1): UIColor {
   return { r, g, b, a };
 }
@@ -59,6 +66,10 @@ export function solid(color: UIColorValue): UISolidBackground {
 
 export function gradient(top: UIColorValue, bottom: UIColorValue): UIGradientBackground {
   return { type: "gradient", top, bottom };
+}
+
+export function blur(radius: number): UIBlurFilter {
+  return { type: "blur", radius };
 }
 
 // ---------------------------------------------------------------------------
@@ -116,6 +127,8 @@ export interface StateStyle {
   borderColor?: UIColorValue;
   borderWidth?: number;
   borderRadius?: number;
+  backdropFilter?: UIFilter[];
+  filter?: UIFilter[];
   opacity?: number;
   scale?: number; // visual scale (1.0 = normal, 0.95 = slightly smaller)
 }
@@ -134,9 +147,11 @@ export interface BoxElementProps {
   flexGrow?: number;
   flexShrink?: number;
   background?: UIBackground;
+  backdropFilter?: UIFilter[];
   borderRadius?: number;
   borderWidth?: number;
   borderColor?: UIColorValue;
+  filter?: UIFilter[];
   opacity?: number;
   width?: number;
   height?: number;

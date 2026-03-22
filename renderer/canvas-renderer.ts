@@ -1876,6 +1876,7 @@ export class InfiniteCanvasRenderer {
           labelWorldY,
           encoder,
           targetView,
+          texture,
           uiScale,
           undefined,
           {
@@ -2011,6 +2012,7 @@ export class InfiniteCanvasRenderer {
           labelWorldY,
           encoder,
           targetView,
+          texture,
           uiScale,
           undefined,
           {
@@ -2059,6 +2061,7 @@ export class InfiniteCanvasRenderer {
           DEBUG_OVERLAY_WORLD_Y,
           encoder,
           targetView,
+          texture,
           dpr,
           undefined,
           {
@@ -2079,7 +2082,17 @@ export class InfiniteCanvasRenderer {
     }
 
     // Overlay UI (context menu, perf HUD, etc.) — fixed-position, viewport-anchored
-    canvasUI.render(encoder, targetView, viewport, width, height, dpr, debugMode, perfSnapshot);
+    canvasUI.render(
+      encoder,
+      targetView,
+      texture,
+      viewport,
+      width,
+      height,
+      dpr,
+      debugMode,
+      perfSnapshot,
+    );
 
     // All UI scenes rendered — clear per-frame interaction dirty flags
     this.#uiRenderer?.endFrame();

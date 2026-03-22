@@ -2,6 +2,8 @@ import type React from "react";
 import type { Font } from "text-shaper";
 import { TextRenderer } from "../text/text-renderer.ts";
 import { UIBoxPipeline } from "./ui-box-pipeline.ts";
+import { UIBlurPipeline } from "./ui-blur-pipeline.ts";
+import { UIFilterCompositePipeline } from "./ui-filter-composite-pipeline.ts";
 import { UIIconPipeline } from "./ui-icon-pipeline.ts";
 import { UILinePipeline } from "./ui-line-pipeline.ts";
 import { getIconRasterSize, UIIconCache } from "./ui-icon-cache.ts";
@@ -17,6 +19,10 @@ import {
 import {
   computeLayout,
   type AnchorTarget,
+  type UILayoutBox,
+  type UILayoutIcon,
+  type UILayoutLine,
+  type UILayoutText,
   type ViewportInfo,
   type TextMeasurer,
   type TextMetrics,
@@ -40,6 +46,93 @@ interface LayoutCacheEntry {
   viewportDpr: number;
   anchors: Map<string, AnchorTarget> | undefined;
   layout: ReturnType<typeof computeLayout>;
+}
+
+type UIRenderItem =
+  | { kind: "box"; data: UILayoutBox }
+  | { kind: "text"; data: UILayoutText }
+  | { kind: "icon"; data: UILayoutIcon }
+  | { kind: "line"; data: UILayoutLine };
+
+interface RectBounds {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+function buildRenderItems(layout: ReturnType<typeof computeLayout>): UIRenderItem[] {
+  const items: UIRenderItem[] = [];
+  for (const box of layout.boxes) items.push({ kind: "box", data: box });
+  for (const text of layout.texts) items.push({ kind: "text", data: text });
+  for (const icon of layout.icons) items.push({ kind: "icon", data: icon });
+  for (const line of layout.lines) items.push({ kind: "line", data: line });
+  items.sort((a, b) => {
+    const z = a.data.zIndex - b.data.zIndex;
+    if (z !== 0) return z;
+    return a.data.order - b.data.order;
+  });
+  return items;
+}
+
+function expandBounds(bounds: RectBounds, amount: number): RectBounds {
+  return {
+    left: bounds.left - amount,
+    top: bounds.top - amount,
+    right: bounds.right + amount,
+    bottom: bounds.bottom + amount,
+  };
+}
+
+function getItemBounds(item: UIRenderItem): RectBounds | null {
+  switch (item.kind) {
+    case "box":
+      return {
+        left: item.data.x,
+        top: item.data.y,
+        right: item.data.x + item.data.width,
+        bottom: item.data.y + item.data.height,
+      };
+    case "icon":
+      return {
+        left: item.data.x,
+        top: item.data.y,
+        right: item.data.x + item.data.width,
+        bottom: item.data.y + item.data.height,
+      };
+    case "line": {
+      const halfStroke = item.data.strokeWidth * 0.5;
+      return {
+        left: Math.min(item.data.startX, item.data.endX) - halfStroke,
+        top: Math.min(item.data.startY, item.data.endY) - halfStroke,
+        right: Math.max(item.data.startX, item.data.endX) + halfStroke,
+        bottom: Math.max(item.data.startY, item.data.endY) + halfStroke,
+      };
+    }
+    case "text": {
+      const estimatedHeight = Math.max(
+        item.data.fontSize,
+        item.data.fontSize - item.data.descender,
+      );
+      return {
+        left: item.data.x - item.data.totalWidth * 0.5,
+        top: item.data.y - estimatedHeight,
+        right: item.data.x + item.data.totalWidth * 0.5,
+        bottom: item.data.y + item.data.fontSize * 0.25,
+      };
+    }
+  }
+}
+
+function mergeBounds(a: RectBounds | null, b: RectBounds | null): RectBounds | null {
+  if (!a) return b;
+  if (!b) return a;
+  return {
+    left: Math.min(a.left, b.left),
+    top: Math.min(a.top, b.top),
+    right: Math.max(a.right, b.right),
+    bottom: Math.max(a.bottom, b.bottom),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -187,12 +280,17 @@ class SlugTextMeasurer implements TextMeasurer {
 // ---------------------------------------------------------------------------
 
 export class UIRenderer {
+  #device: GPUDevice;
+  #canvasFormat: GPUTextureFormat;
   #textRenderer: TextRenderer;
   #boxPipeline: UIBoxPipeline;
+  #blurPipeline: UIBlurPipeline;
+  #filterCompositePipeline: UIFilterCompositePipeline;
   #iconPipeline: UIIconPipeline;
   #linePipeline: UILinePipeline;
   #iconCache: UIIconCache;
   #styleResolver: UIStyleResolver;
+  #scratchTextures = new Map<string, { texture: GPUTexture; width: number; height: number }>();
 
   #font: Font | null = null;
   #measurer: SlugTextMeasurer | null = null;
@@ -214,8 +312,16 @@ export class UIRenderer {
   #interactionDirty = false;
 
   constructor(device: GPUDevice, canvasFormat: GPUTextureFormat, viewportUniformBuffer: GPUBuffer) {
+    this.#device = device;
+    this.#canvasFormat = canvasFormat;
     this.#textRenderer = new TextRenderer(device, canvasFormat);
     this.#boxPipeline = new UIBoxPipeline(device, canvasFormat, viewportUniformBuffer);
+    this.#blurPipeline = new UIBlurPipeline(device, canvasFormat);
+    this.#filterCompositePipeline = new UIFilterCompositePipeline(
+      device,
+      canvasFormat,
+      viewportUniformBuffer,
+    );
     this.#iconPipeline = new UIIconPipeline(device, canvasFormat, viewportUniformBuffer);
     this.#linePipeline = new UILinePipeline(device, canvasFormat, viewportUniformBuffer);
     this.#iconCache = new UIIconCache(device);
@@ -228,6 +334,8 @@ export class UIRenderer {
   async initialize(): Promise<void> {
     await this.#textRenderer.initialize();
     this.#boxPipeline.initialize();
+    this.#blurPipeline.initialize();
+    this.#filterCompositePipeline.initialize();
     this.#iconPipeline.initialize();
     this.#linePipeline.initialize();
 
@@ -262,6 +370,7 @@ export class UIRenderer {
   begin(): void {
     this.#textRenderer.begin();
     this.#boxPipeline.begin();
+    this.#filterCompositePipeline.begin();
     this.#iconPipeline.begin();
     this.#linePipeline.begin();
     this.#justBecameReady = false;
@@ -303,6 +412,7 @@ export class UIRenderer {
     anchorY: number,
     encoder: GPUCommandEncoder,
     targetView: GPUTextureView,
+    targetTexture?: GPUTexture,
     scale = 1,
     anchors?: Map<string, AnchorTarget>,
     viewport?: ViewportInfo,
@@ -368,135 +478,315 @@ export class UIRenderer {
       }
     }
 
-    // Single shared render pass for all UI drawing.
-    // Three-way merge in strict (zIndex, order) sequence with pipeline switching.
+    const items = buildRenderItems(layout);
+    if (items.length === 0) return;
+
+    let activeTargetPass: GPURenderPassEncoder | null = null;
+    let targetPassDirty = false;
+    let backdropCacheRadius = -1;
+    let backdropBlurTexture: GPUTexture | null = null;
+    let backdropSourceTexture: GPUTexture | null = null;
+
+    if (targetTexture && viewport) {
+      backdropSourceTexture = this.#getOrCreateScratchTexture(
+        "backdrop-source",
+        "UI backdrop source",
+        viewport.width,
+        viewport.height,
+      );
+      encoder.copyTextureToTexture(
+        { texture: targetTexture },
+        { texture: backdropSourceTexture },
+        { width: viewport.width, height: viewport.height },
+      );
+    }
+
+    const beginTargetPass = () => {
+      if (activeTargetPass) return activeTargetPass;
+      activeTargetPass = encoder.beginRenderPass({
+        label: "UI pass",
+        colorAttachments: [
+          {
+            view: targetView,
+            loadOp: "load",
+            storeOp: "store",
+          },
+        ],
+      });
+      return activeTargetPass;
+    };
+
+    const endTargetPass = () => {
+      if (!activeTargetPass) return;
+      activeTargetPass.end();
+      activeTargetPass = null;
+      if (targetPassDirty) {
+        backdropCacheRadius = -1;
+        targetPassDirty = false;
+      }
+    };
+
+    const renderDirectItem = (item: UIRenderItem) => {
+      const pass = beginTargetPass();
+      if (item.kind === "box") {
+        if (!item.data.background && item.data.borderWidth <= 0) return;
+        this.#boxPipeline.render([item.data], pass);
+        targetPassDirty = true;
+        return;
+      }
+
+      if (item.kind === "icon") {
+        this.#iconPipeline.render([item.data], this.#iconCache, iconPixelScale, pass);
+        targetPassDirty = true;
+        return;
+      }
+
+      if (item.kind === "line") {
+        this.#linePipeline.render([item.data], pass);
+        targetPassDirty = true;
+        return;
+      }
+
+      this.#textRenderer.drawText(
+        item.data.slugData as ReturnType<typeof prepareText>,
+        item.data.x,
+        item.data.y,
+        item.data.fontSize,
+        item.data.color.r,
+        item.data.color.g,
+        item.data.color.b,
+        item.data.color.a * item.data.opacity,
+      );
+      this.#textRenderer.flush(pass);
+      targetPassDirty = true;
+    };
+
+    const ensureBackdropBlur = (blurRadius: number) => {
+      if (!viewport || !backdropSourceTexture) return false;
+      endTargetPass();
+
+      if (backdropBlurTexture && Math.abs(backdropCacheRadius - blurRadius) < 0.001) {
+        return true;
+      }
+
+      backdropBlurTexture = this.#getOrCreateScratchTexture(
+        "backdrop-blur",
+        "UI backdrop blur output",
+        viewport.width,
+        viewport.height,
+      );
+      this.#blurPipeline.encodeBlur(
+        encoder,
+        backdropSourceTexture,
+        backdropBlurTexture,
+        viewport.width,
+        viewport.height,
+        blurRadius,
+      );
+      backdropCacheRadius = blurRadius;
+      return true;
+    };
+
+    let itemIndex = 0;
+    while (itemIndex < items.length) {
+      const item = items[itemIndex]!;
+
+      if (item.kind === "box" && item.data.filterBlurRadius > 0) {
+        endTargetPass();
+        const subtreeEndIndex = this.#findSubtreeEndIndex(
+          items,
+          itemIndex,
+          item.data.subtreeEndOrder,
+        );
+        const bounds = this.#getSubtreeBounds(items, itemIndex, subtreeEndIndex);
+
+        if (viewport && bounds) {
+          const filterSource = this.#getOrCreateScratchTexture(
+            "filter-source",
+            "UI filter source",
+            viewport.width,
+            viewport.height,
+          );
+          const filterOutput = this.#getOrCreateScratchTexture(
+            "filter-output",
+            "UI filter output",
+            viewport.width,
+            viewport.height,
+          );
+
+          this.#renderItemsToTexture(
+            items,
+            itemIndex,
+            subtreeEndIndex,
+            encoder,
+            filterSource.createView(),
+          );
+          this.#blurPipeline.encodeBlur(
+            encoder,
+            filterSource,
+            filterOutput,
+            viewport.width,
+            viewport.height,
+            item.data.filterBlurRadius,
+          );
+
+          const paddedBounds = expandBounds(bounds, Math.max(2, item.data.filterBlurRadius * 2));
+          this.#filterCompositePipeline.render(
+            encoder,
+            targetView,
+            filterOutput,
+            {
+              x: paddedBounds.left,
+              y: paddedBounds.top,
+              width: paddedBounds.right - paddedBounds.left,
+              height: paddedBounds.bottom - paddedBounds.top,
+            },
+            0,
+            false,
+          );
+          backdropCacheRadius = -1;
+        }
+
+        itemIndex = subtreeEndIndex;
+        continue;
+      }
+
+      if (item.kind === "box" && item.data.backdropBlurRadius > 0) {
+        if (ensureBackdropBlur(item.data.backdropBlurRadius) && backdropBlurTexture) {
+          this.#filterCompositePipeline.render(
+            encoder,
+            targetView,
+            backdropBlurTexture,
+            {
+              x: item.data.x,
+              y: item.data.y,
+              width: item.data.width,
+              height: item.data.height,
+            },
+            item.data.borderRadius,
+            true,
+          );
+          backdropCacheRadius = -1;
+        }
+      }
+
+      renderDirectItem(item);
+      itemIndex++;
+    }
+
+    endTargetPass();
+  }
+
+  #getOrCreateScratchTexture(
+    key: string,
+    label: string,
+    width: number,
+    height: number,
+  ): GPUTexture {
+    const cached = this.#scratchTextures.get(key);
+    if (cached && cached.width === width && cached.height === height) {
+      return cached.texture;
+    }
+
+    cached?.texture.destroy();
+    const texture = this.#device.createTexture({
+      label: `${label} (${width}x${height})`,
+      size: [width, height],
+      format: this.#canvasFormat,
+      usage:
+        GPUTextureUsage.RENDER_ATTACHMENT |
+        GPUTextureUsage.TEXTURE_BINDING |
+        GPUTextureUsage.COPY_DST,
+    });
+    this.#scratchTextures.set(key, { texture, width, height });
+    return texture;
+  }
+
+  #renderItemsToTexture(
+    items: UIRenderItem[],
+    startIndex: number,
+    endIndex: number,
+    encoder: GPUCommandEncoder,
+    targetView: GPUTextureView,
+  ): void {
     const pass = encoder.beginRenderPass({
-      label: "UI pass",
+      label: "UI offscreen subtree pass",
       colorAttachments: [
         {
           view: targetView,
-          loadOp: "load",
+          loadOp: "clear",
           storeOp: "store",
+          clearValue: { r: 0, g: 0, b: 0, a: 0 },
         },
       ],
     });
 
-    let boxBatch: typeof layout.boxes = [];
-    let iconBatch: typeof layout.icons = [];
-    let lineBatch: typeof layout.lines = [];
     let hasQueuedText = false;
-
-    const flushBoxes = () => {
-      if (boxBatch.length === 0) return;
-      this.#boxPipeline.render(boxBatch, pass);
-      boxBatch = [];
-    };
-
-    const flushIcons = () => {
-      if (iconBatch.length === 0) return;
-      this.#iconPipeline.render(iconBatch, this.#iconCache, iconPixelScale, pass);
-      iconBatch = [];
-    };
-
-    const flushLines = () => {
-      if (lineBatch.length === 0) return;
-      this.#linePipeline.render(lineBatch, pass);
-      lineBatch = [];
-    };
-
-    const flushText = () => {
-      if (!hasQueuedText) return;
-      this.#textRenderer.flush(pass);
-      hasQueuedText = false;
-    };
-
-    const isBefore = (
-      a: { zIndex: number; order: number } | undefined,
-      b: { zIndex: number; order: number } | undefined,
-    ): boolean => {
-      if (!a) return false;
-      if (!b) return true;
-      return a.zIndex < b.zIndex || (a.zIndex === b.zIndex && a.order <= b.order);
-    };
-
-    let boxIndex = 0;
-    let iconIndex = 0;
-    let lineIndex = 0;
-    let textIndex = 0;
-
-    while (
-      boxIndex < layout.boxes.length ||
-      iconIndex < layout.icons.length ||
-      lineIndex < layout.lines.length ||
-      textIndex < layout.texts.length
-    ) {
-      const nextBox = layout.boxes[boxIndex];
-      const nextIcon = layout.icons[iconIndex];
-      const nextLine = layout.lines[lineIndex];
-      const nextText = layout.texts[textIndex];
-
-      if (
-        isBefore(nextBox, nextIcon) &&
-        isBefore(nextBox, nextLine) &&
-        isBefore(nextBox, nextText)
-      ) {
-        flushIcons();
-        flushLines();
-        flushText();
-        boxBatch.push(nextBox!);
-        boxIndex++;
+    for (let index = startIndex; index < endIndex; index++) {
+      const item = items[index]!;
+      if (item.kind === "box") {
+        if (!item.data.background && item.data.borderWidth <= 0) continue;
+        if (hasQueuedText) {
+          this.#textRenderer.flush(pass);
+          hasQueuedText = false;
+        }
+        this.#boxPipeline.render([item.data], pass);
+        continue;
+      }
+      if (item.kind === "icon") {
+        if (hasQueuedText) {
+          this.#textRenderer.flush(pass);
+          hasQueuedText = false;
+        }
+        this.#iconPipeline.render([item.data], this.#iconCache, 1, pass);
+        continue;
+      }
+      if (item.kind === "line") {
+        if (hasQueuedText) {
+          this.#textRenderer.flush(pass);
+          hasQueuedText = false;
+        }
+        this.#linePipeline.render([item.data], pass);
         continue;
       }
 
-      if (
-        isBefore(nextIcon, nextBox) &&
-        isBefore(nextIcon, nextLine) &&
-        isBefore(nextIcon, nextText)
-      ) {
-        flushBoxes();
-        flushLines();
-        flushText();
-        iconBatch.push(nextIcon!);
-        iconIndex++;
-        continue;
-      }
-
-      if (
-        isBefore(nextLine, nextBox) &&
-        isBefore(nextLine, nextIcon) &&
-        isBefore(nextLine, nextText)
-      ) {
-        flushBoxes();
-        flushIcons();
-        flushText();
-        lineBatch.push(nextLine!);
-        lineIndex++;
-        continue;
-      }
-
-      flushBoxes();
-      flushIcons();
-      flushLines();
-      const t = nextText!;
       this.#textRenderer.drawText(
-        t.slugData as ReturnType<typeof prepareText>,
-        t.x,
-        t.y,
-        t.fontSize,
-        t.color.r,
-        t.color.g,
-        t.color.b,
-        t.color.a * t.opacity,
+        item.data.slugData as ReturnType<typeof prepareText>,
+        item.data.x,
+        item.data.y,
+        item.data.fontSize,
+        item.data.color.r,
+        item.data.color.g,
+        item.data.color.b,
+        item.data.color.a * item.data.opacity,
       );
       hasQueuedText = true;
-      textIndex++;
     }
 
-    flushBoxes();
-    flushIcons();
-    flushLines();
-    flushText();
+    if (hasQueuedText) {
+      this.#textRenderer.flush(pass);
+    }
     pass.end();
+  }
+
+  #findSubtreeEndIndex(items: UIRenderItem[], startIndex: number, subtreeEndOrder: number): number {
+    let endIndex = startIndex + 1;
+    while (endIndex < items.length && items[endIndex]!.data.order <= subtreeEndOrder) {
+      endIndex++;
+    }
+    return endIndex;
+  }
+
+  #getSubtreeBounds(
+    items: UIRenderItem[],
+    startIndex: number,
+    endIndex: number,
+  ): RectBounds | null {
+    let bounds: RectBounds | null = null;
+    for (let index = startIndex; index < endIndex; index++) {
+      bounds = mergeBounds(bounds, getItemBounds(items[index]!));
+    }
+    return bounds;
   }
 
   // ---------------------------------------------------------------------------
@@ -659,10 +949,16 @@ export class UIRenderer {
 
     this.#textRenderer.destroy();
     this.#boxPipeline.destroy();
+    this.#blurPipeline.destroy();
+    this.#filterCompositePipeline.destroy();
     this.#iconPipeline.destroy();
     this.#linePipeline.destroy();
     this.#iconCache.destroy();
     this.#styleResolver.destroy();
+    for (const entry of this.#scratchTextures.values()) {
+      entry.texture.destroy();
+    }
+    this.#scratchTextures.clear();
     this.#font = null;
     this.#measurer = null;
     this.#ready = false;
