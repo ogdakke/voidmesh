@@ -20,7 +20,7 @@ import {
   type TextMeasurer,
   type TextMetrics,
 } from "./ui-layout.ts";
-import { hitTest } from "./hit-test.ts";
+import { hitTest, findScrollableNode } from "./hit-test.ts";
 import { UIStyleResolver } from "./style-resolver.ts";
 
 const ICON_RASTER_UPGRADE_THRESHOLD = 1.25;
@@ -260,10 +260,13 @@ export class UIRenderer {
     this.#boxPipeline.begin();
     this.#iconPipeline.begin();
     this.#justBecameReady = false;
-    // NOTE: interactionDirty is NOT cleared here — it must survive until
-    // #getCachedLayout reads it in render(). Cleared after layout computation.
     this.#hasPendingIcons = false;
     this.#styleResolver.markClean();
+  }
+
+  /** Call after all renderScene calls for this frame. Clears per-frame dirty flags. */
+  endFrame(): void {
+    this.#interactionDirty = false;
   }
 
   /**
@@ -288,6 +291,7 @@ export class UIRenderer {
    * Performs layout + GPU draw only (no reconciliation).
    * Can be called multiple times per frame for the same scene key.
    */
+  // TODO: GPU scissor clipping for overflow:scroll containers
   renderScene(
     sceneKey: string,
     anchorX: number,
@@ -332,7 +336,6 @@ export class UIRenderer {
       anchors,
       viewport,
     );
-    this.#interactionDirty = false;
 
     // ── GPU render pass (boxes, icons, text) ──
     const iconPixelScale = viewport?.zoom ?? 1;
@@ -482,10 +485,32 @@ export class UIRenderer {
 
     // Update hover state
     if (hit !== this.#hoveredNode) {
-      if (this.#hoveredNode) this.#hoveredNode.isHovered = false;
-      if (hit) hit.isHovered = true;
-      this.#hoveredNode = hit;
+      const oldNode = this.#hoveredNode;
+      const newNode = hit;
+
+      if (oldNode) oldNode.isHovered = false;
+      if (newNode) newNode.isHovered = true;
+      this.#hoveredNode = newNode;
       this.#interactionDirty = true;
+
+      // Fire onHoverLeave on old node and its ancestors (bubble up)
+      if (oldNode) {
+        let cursor: SceneNode | null = oldNode;
+        while (cursor) {
+          const leave = cursor.props["onHoverLeave"] as ((node: SceneNode) => void) | undefined;
+          leave?.(cursor);
+          cursor = cursor.parent;
+        }
+      }
+      // Fire onHoverEnter on new node and its ancestors (bubble up)
+      if (newNode) {
+        let cursor: SceneNode | null = newNode;
+        while (cursor) {
+          const enter = cursor.props["onHoverEnter"] as ((node: SceneNode) => void) | undefined;
+          enter?.(cursor);
+          cursor = cursor.parent;
+        }
+      }
     }
 
     if (type === "down") {
@@ -545,6 +570,30 @@ export class UIRenderer {
       if (hit) return hit;
     }
     return null;
+  }
+
+  /**
+   * Handle a wheel event against all scene roots.
+   * Finds the frontmost scrollable container under the pointer and applies scroll delta.
+   * Returns true if the event was consumed (a scrollable node was found and scroll changed).
+   */
+  handleWheelEvent(_deltaX: number, deltaY: number, worldX: number, worldY: number): boolean {
+    const roots = [...this.#sceneRoots.values()];
+    for (let i = roots.length - 1; i >= 0; i--) {
+      const scrollable = findScrollableNode(roots[i]!, worldX, worldY);
+      if (scrollable) {
+        const maxScroll = Math.max(0, scrollable.contentSize.height - scrollable.layout.height);
+        const oldOffset = scrollable.scrollOffset.y;
+        scrollable.scrollOffset.y = Math.max(0, Math.min(maxScroll, oldOffset + deltaY));
+        if (scrollable.scrollOffset.y !== oldOffset) {
+          this.#interactionDirty = true;
+          return true;
+        }
+        // Scrollable found but at boundary — still consume to prevent canvas pan
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -620,6 +669,9 @@ export class UIRenderer {
       return cache.layout;
     }
 
+    // Note: interactionDirty is NOT cleared here — it must remain true for all
+    // scenes within the same frame. Cleared at the end of all renderScene calls
+    // via the endFrame() method.
     const layout = computeLayout(
       root,
       anchorX,

@@ -28,6 +28,7 @@ import { canvasStore, type CanvasState } from "./canvas-store.ts";
 import { entityDragVisual } from "./entity-drag-visual.ts";
 import { actionLayerController } from "./action-layer-controller.ts";
 
+import { contextMenuController } from "../renderer/ui/context-menu-controller.ts";
 import { perfOverlay } from "./perf-overlay.ts";
 import { viewportAnimation } from "./viewport-animation.ts";
 import { MomentumController, type MomentumDeps } from "./momentum-controller.ts";
@@ -639,6 +640,17 @@ export class GameLoop {
 
     this.#inputState.lastWorldPoint = worldPoint;
 
+    // Context menu click-away dismissal
+    if (contextMenuController.isOpen) {
+      const hitMenu = this.#renderer?.handleUIPointerEvent("down", worldPoint.x, worldPoint.y);
+      if (!hitMenu) {
+        contextMenuController.close();
+        canvasStore.setContextMenuClosed();
+        this.#inputState.contextOpen = false;
+      }
+      return; // Consume either way — don't let the click through to canvas
+    }
+
     // UI hit test — canvas UI elements take priority over entities
     if (this.#renderer?.handleUIPointerEvent("down", worldPoint.x, worldPoint.y)) {
       return;
@@ -729,6 +741,9 @@ export class GameLoop {
   handlePointerMove(screenPoint: Point): void {
     const lastPos = this.#inputState.pointerPosition;
     this.#inputState.pointerPosition = screenPoint;
+
+    // Lock viewport when context menu is open — no panning or drag-select
+    if (contextMenuController.isOpen) return;
 
     if (this.#spacePanMode === SpacePanMode.panning) {
       if (lastPos) {
@@ -959,6 +974,9 @@ export class GameLoop {
   }
 
   handleWheel(deltaX: number, deltaY: number, screenPoint: Point, ctrlKey: boolean): void {
+    // Lock viewport when context menu is open
+    if (contextMenuController.isOpen) return;
+
     // Cancel any viewport animation when user starts panning/zooming
     this.#deps.viewportAnimation.cancel();
     this.#momentum.stopZoom();
@@ -1030,6 +1048,15 @@ export class GameLoop {
       }
       // Always set context open entity (for menu positioning reference)
       canvasStore.setContextOpenEntity(entityId);
+
+      // Open canvas context menu with frozen state
+      const entity = state.entities.get(entityId);
+      contextMenuController.open(
+        screenPoint,
+        worldPoint,
+        entity,
+        canvasStore.getSelectedEntities(),
+      );
     } else {
       this.#inputState.pointerDownEntityId = null;
       this.#inputState.pointerDownWasSelected = false;
@@ -1038,12 +1065,16 @@ export class GameLoop {
       this.#snapAccumulator = null;
       canvasStore.setSelectedEntity(null);
       canvasStore.setContextOpenEntity(null);
+
+      // Open canvas context menu for canvas background (no entity)
+      contextMenuController.open(screenPoint, worldPoint, undefined, []);
     }
   }
 
   handleContextMenuClose(): void {
     // Reset context menu flag when menu closes (via button click or otherwise)
     this.#inputState.contextOpen = false;
+    contextMenuController.close();
     // Keep other input state intact - user may have clicked an action that modified
     // the entity (like send to front/back), and the entity should remain selected
     // and ready for immediate interaction

@@ -491,12 +491,17 @@ function measure(
       if (explicitWidth !== undefined) availableWidth = explicitWidth * scale;
       if (explicitHeight !== undefined) availableHeight = explicitHeight * scale;
 
+      const overflow = node.props["overflow"] as "visible" | "hidden" | "scroll" | undefined;
+      const isScroll = overflow === "scroll";
+
       const contentAvailableWidth =
         availableWidth !== undefined
           ? Math.max(0, availableWidth - padding.left - padding.right)
           : undefined;
-      const contentAvailableHeight =
-        availableHeight !== undefined
+      // For scroll containers, don't constrain children's height — measure them unconstrained
+      const contentAvailableHeight = isScroll
+        ? undefined
+        : availableHeight !== undefined
           ? Math.max(0, availableHeight - padding.top - padding.bottom)
           : undefined;
 
@@ -600,6 +605,12 @@ function measure(
       } else {
         totalWidth = crossSize + padding.left + padding.right;
         totalHeight = mainSize + padding.top + padding.bottom;
+      }
+
+      // For scroll containers, store the unconstrained content size before clamping
+      if (isScroll) {
+        node.contentSize.width = totalWidth;
+        node.contentSize.height = totalHeight;
       }
 
       // Apply explicit sizing (scaled)
@@ -784,11 +795,14 @@ function positionChildren(
   const direction = (parent.props["direction"] as "row" | "col") ?? "col";
   const gap = getScaled(parent, "gap", animated, 0, scale);
   const padding = resolvePadding(parent.props["padding"], scale);
-  const align = (parent.props["align"] as "start" | "center" | "end") ?? "start";
+  const align = (parent.props["align"] as "start" | "center" | "end" | "stretch") ?? "start";
   const justify = (parent.props["justifyContent"] as string) ?? "start";
 
+  const overflow = parent.props["overflow"] as "visible" | "hidden" | "scroll" | undefined;
   const contentX = parentX + padding.left;
   const contentY = parentY + padding.top;
+  // For scroll containers, offset flow children by the scroll position
+  const scrolledContentY = overflow === "scroll" ? contentY - parent.scrollOffset.y : contentY;
   const contentWidth = parent.layout.width - padding.left - padding.right;
   const contentHeight = parent.layout.height - padding.top - padding.bottom;
 
@@ -853,35 +867,38 @@ function positionChildren(
     let justifyGap = gap;
 
     if (totalFlexGrow > 0 || justify === "start") {
-      mainCursor = direction === "row" ? contentX : contentY;
+      mainCursor = direction === "row" ? contentX : scrolledContentY;
     } else if (justify === "center") {
       const remaining = availableMain - childrenMainSize;
-      mainCursor = (direction === "row" ? contentX : contentY) + remaining / 2;
+      mainCursor = (direction === "row" ? contentX : scrolledContentY) + remaining / 2;
     } else if (justify === "end") {
       const remaining = availableMain - childrenMainSize;
-      mainCursor = (direction === "row" ? contentX : contentY) + remaining;
+      mainCursor = (direction === "row" ? contentX : scrolledContentY) + remaining;
     } else if (justify === "space-between" && visible.length > 1) {
-      mainCursor = direction === "row" ? contentX : contentY;
+      mainCursor = direction === "row" ? contentX : scrolledContentY;
       const totalChildSize = childrenMainSize - (visible.length - 1) * gap;
       justifyGap = (availableMain - totalChildSize) / (visible.length - 1);
     } else if (justify === "space-around" && visible.length > 0) {
       const totalChildSize = childrenMainSize - (visible.length - 1) * gap;
       const eachGap = (availableMain - totalChildSize) / (visible.length * 2);
-      mainCursor = (direction === "row" ? contentX : contentY) + eachGap;
+      mainCursor = (direction === "row" ? contentX : scrolledContentY) + eachGap;
       justifyGap = eachGap * 2;
     } else {
-      mainCursor = direction === "row" ? contentX : contentY;
+      mainCursor = direction === "row" ? contentX : scrolledContentY;
     }
 
     for (const child of visible) {
       if (direction === "row") {
         let childY: number;
-        if (align === "center") {
-          childY = contentY + (contentHeight - child.layout.height) / 2;
+        if (align === "stretch") {
+          childY = scrolledContentY;
+          child.layout.height = contentHeight;
+        } else if (align === "center") {
+          childY = scrolledContentY + (contentHeight - child.layout.height) / 2;
         } else if (align === "end") {
-          childY = contentY + contentHeight - child.layout.height;
+          childY = scrolledContentY + contentHeight - child.layout.height;
         } else {
-          childY = contentY;
+          childY = scrolledContentY;
         }
         position(
           child,
@@ -899,7 +916,10 @@ function positionChildren(
         mainCursor += child.layout.width + justifyGap;
       } else {
         let childX: number;
-        if (align === "center") {
+        if (align === "stretch") {
+          childX = contentX;
+          child.layout.width = contentWidth;
+        } else if (align === "center") {
           childX = contentX + (contentWidth - child.layout.width) / 2;
         } else if (align === "end") {
           childX = contentX + contentWidth - child.layout.width;
@@ -928,7 +948,7 @@ function positionChildren(
         position(
           child,
           contentX,
-          contentY,
+          scrolledContentY,
           now,
           scale,
           styleResolver,
@@ -944,6 +964,7 @@ function positionChildren(
 
   // --- Absolute children ---
   for (const child of absoluteChildren) {
+    const placement = child.props["placement"] as string | undefined;
     const left = child.props["left"] as number | undefined;
     const top = child.props["top"] as number | undefined;
     const right = child.props["right"] as number | undefined;
@@ -952,13 +973,70 @@ function positionChildren(
     let childX = parentX;
     let childY = parentY;
 
-    if (left !== undefined) childX = parentX + left * scale;
-    else if (right !== undefined)
-      childX = parentX + parent.layout.width - child.layout.width - right * scale;
+    if (placement) {
+      // Placement-based positioning — attach to parent edge
+      const dashIdx = placement.indexOf("-");
+      const side = dashIdx > 0 ? placement.slice(0, dashIdx) : placement;
+      const align = dashIdx > 0 ? placement.slice(dashIdx + 1) : "start";
 
-    if (top !== undefined) childY = parentY + top * scale;
-    else if (bottom !== undefined)
-      childY = parentY + parent.layout.height - child.layout.height - bottom * scale;
+      switch (side) {
+        case "right":
+          childX = parentX + parent.layout.width;
+          break;
+        case "left":
+          childX = parentX - child.layout.width;
+          break;
+        case "bottom":
+          childY = parentY + parent.layout.height;
+          break;
+        case "top":
+          childY = parentY - child.layout.height;
+          break;
+      }
+
+      // Cross-axis alignment
+      if (side === "right" || side === "left") {
+        childY = align === "end" ? parentY + parent.layout.height - child.layout.height : parentY;
+      } else {
+        childX = align === "end" ? parentX + parent.layout.width - child.layout.width : parentX;
+      }
+    } else {
+      // Manual left/top/right/bottom
+      if (left !== undefined) childX = parentX + left * scale;
+      else if (right !== undefined)
+        childX = parentX + parent.layout.width - child.layout.width - right * scale;
+
+      if (top !== undefined) childY = parentY + top * scale;
+      else if (bottom !== undefined)
+        childY = parentY + parent.layout.height - child.layout.height - bottom * scale;
+    }
+
+    // Viewport containment — auto-clamp to viewport bounds
+    const absContain = child.props["contain"] as string | undefined;
+    if (absContain === "viewport" && viewport) {
+      const vpL = viewport.offsetX;
+      const vpT = viewport.offsetY;
+      const vpR = viewport.offsetX + viewport.width / viewport.zoom;
+      const vpB = viewport.offsetY + viewport.height / viewport.zoom;
+      const margin = 4 * scale;
+
+      // Flip placement side if overflow
+      if (placement) {
+        const dashIdx = placement.indexOf("-");
+        const side = dashIdx > 0 ? placement.slice(0, dashIdx) : placement;
+        if (side === "right" && childX + child.layout.width > vpR) {
+          childX = parentX - child.layout.width;
+        } else if (side === "left" && childX < vpL) {
+          childX = parentX + parent.layout.width;
+        }
+      }
+
+      // Clamp to viewport bounds
+      if (childX + child.layout.width > vpR) childX = vpR - child.layout.width;
+      if (childY + child.layout.height > vpB) childY = vpB - child.layout.height;
+      if (childX < vpL + margin) childX = vpL + margin;
+      if (childY < vpT + margin) childY = vpT + margin;
+    }
 
     position(
       child,
@@ -997,6 +1075,16 @@ function positionChildren(
 
       if (top !== undefined) childY = vpTop + top * screenScale;
       else if (bottom !== undefined) childY = vpBottom - child.layout.height - bottom * screenScale;
+
+      // Viewport containment — auto-clamp to viewport bounds
+      const fixedContain = child.props["contain"] as string | undefined;
+      if (fixedContain === "viewport") {
+        const margin = 4 * screenScale;
+        if (childX + child.layout.width > vpRight) childX = vpRight - child.layout.width;
+        if (childY + child.layout.height > vpBottom) childY = vpBottom - child.layout.height;
+        if (childX < vpLeft + margin) childX = vpLeft + margin;
+        if (childY < vpTop + margin) childY = vpTop + margin;
+      }
 
       position(
         child,

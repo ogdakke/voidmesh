@@ -90,6 +90,10 @@ export class SceneNode {
   // Layout
   layout: LayoutRect = { x: 0, y: 0, width: 0, height: 0 };
 
+  // Scroll state (for overflow: "scroll" containers)
+  scrollOffset: { x: number; y: number } = { x: 0, y: 0 };
+  contentSize: { width: number; height: number } = { width: 0, height: 0 };
+
   // Text measurement cache (invalidated when content/fontSize change)
   textCache: {
     content: string;
