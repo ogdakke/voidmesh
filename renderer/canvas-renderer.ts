@@ -42,6 +42,7 @@ import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
 import { UIRenderer } from "./ui/ui-renderer.ts";
 import { buildEntityLabel } from "./ui/entity-label.tsx";
 import { buildDebugOverlay } from "./ui/debug-ui.tsx";
+import { perfOverlay } from "../engine/perf-overlay.ts";
 
 export class InfiniteCanvasRenderer {
   readonly canvas: HTMLCanvasElement;
@@ -1677,11 +1678,14 @@ export class InfiniteCanvasRenderer {
 
     // Debug UI overlay (stress test for canvas UI engine)
     if (debugMode && uiReady) {
-      const debugUI = buildDebugOverlay(viewport.zoom);
+      const debugUI = buildDebugOverlay({
+        zoom: viewport.zoom,
+        perf: perfOverlay.getSnapshot(),
+      });
       this.#uiRenderer!.render(
         debugUI,
-        400, // world-space anchor X
-        -100, // world-space anchor Y
+        560, // world-space anchor X
+        360, // world-space anchor Y
         encoder,
         targetView,
         "debug-ui",

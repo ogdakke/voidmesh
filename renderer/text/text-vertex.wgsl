@@ -78,6 +78,7 @@ fn SlugDilate(pos: vec4<f32>, tex: vec4<f32>, jac: vec4<f32>, m0: vec4<f32>, m1:
 struct ParamStruct {
     slug_matrix: array<vec4<f32>, 4>,                // The four rows of the MVP matrix.
     slug_viewport: vec4<f32>,                        // The viewport dimensions, in pixels.
+    text_color: vec4<f32>,                           // Per-draw text color.
 };
 
 @group(0) @binding(0) var<uniform> params: ParamStruct;
@@ -120,6 +121,7 @@ fn main(attrib: VertexInput) -> VertexStruct {
     let unpackResult = SlugUnpack(attrib.tex, attrib.bnd);
     vresult.banding = unpackResult.vbnd;
     vresult.glyph = unpackResult.vgly;
-    vresult.color = attrib.col;
+    _ = attrib.col;
+    vresult.color = params.text_color;
     return vresult;
 }

@@ -143,6 +143,7 @@ export interface BoxElementProps {
   align?: "start" | "center" | "end";
   justifyContent?: "start" | "center" | "end" | "space-between" | "space-around";
   flexGrow?: number;
+  flexShrink?: number;
   background?: UIBackground;
   borderRadius?: number;
   borderWidth?: number;
@@ -181,6 +182,7 @@ export interface TextElementProps {
   fontSize: number;
   color: UIColorValue;
   opacity?: number;
+  maxWidth?: number;
   children?: string;
 }
 
@@ -228,4 +230,47 @@ export function Row(props: Record<string, unknown>): UIElement {
 
 export function Col(props: Record<string, unknown>): UIElement {
   return { type: "box", props: { ...props, direction: "col" }, key: null };
+}
+
+// ---------------------------------------------------------------------------
+// memo — caches the last result of a component function, returning the same
+// UIElement reference when props are shallowly equal. Analogous to React.memo.
+// Components stay as clean JSX; you just wrap the function:
+//
+//   const MyPanel = memo(function MyPanel(props) { return <box>...</box>; });
+// ---------------------------------------------------------------------------
+
+export function memo<P extends Record<string, unknown>>(
+  fn: (props: P) => UIElement | null,
+): (props: P) => UIElement | null {
+  let lastProps: P | null = null;
+  let lastResult: UIElement | null = null;
+
+  return (props: P) => {
+    if (lastProps !== null && shallowEqual(lastProps, props)) {
+      return lastResult;
+    }
+    lastProps = props;
+    lastResult = fn(props);
+    return lastResult;
+  };
+}
+
+function shallowEqual(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  if (a === b) return true;
+
+  let aCount = 0;
+  for (const key in a) {
+    if (key === "children") continue;
+    aCount++;
+    if (a[key] !== b[key]) return false;
+  }
+
+  let bCount = 0;
+  for (const key in b) {
+    if (key === "children") continue;
+    bCount++;
+  }
+
+  return aCount === bCount;
 }

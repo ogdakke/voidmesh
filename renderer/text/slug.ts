@@ -234,6 +234,10 @@ export function buildBands(curves: QuadCurve[], bounds: Bounds, bandCount: numbe
 
 const TEX_WIDTH = 4096;
 
+function buildSlugCacheKey(text: string, fontSize: number): string {
+  return `${fontSize}\u0000${text}`;
+}
+
 /**
  * Pack glyph data into GPU textures (RGBA32Float for curves, RGBA32Uint for bands).
  */
@@ -285,8 +289,11 @@ export function packGlyphData(glyphs: SlugGlyph[]) {
     const padded = TEX_WIDTH - (totalBandTexels % TEX_WIDTH);
     if (padded < headerCount && padded < TEX_WIDTH) totalBandTexels += padded;
     totalBandTexels += headerCount;
-    for (const band of [...g.bands.hBands, ...g.bands.vBands]) {
-      totalBandTexels += band.curveIndices.length;
+    for (let i = 0; i < g.bands.hBands.length; i++) {
+      totalBandTexels += g.bands.hBands[i]!.curveIndices.length;
+    }
+    for (let i = 0; i < g.bands.vBands.length; i++) {
+      totalBandTexels += g.bands.vBands[i]!.curveIndices.length;
     }
   }
 
@@ -314,59 +321,75 @@ export function packGlyphData(glyphs: SlugGlyph[]) {
     const glyphStart = bandTexelIdx;
     const glyphCurveStart = glyphCurveStarts[gi]!;
 
-    // Sort curves: h-bands by descending max x, v-bands by descending max y
-    const sortedHBands = g.bands.hBands.map((band) => ({
-      curveIndices: [...band.curveIndices].sort((a, b) => {
+    // Sort curves in-place: h-bands by descending max x, v-bands by descending max y.
+    for (let bandIndex = 0; bandIndex < g.bands.hBands.length; bandIndex++) {
+      g.bands.hBands[bandIndex]!.curveIndices.sort((a, b) => {
         const ca = g.curves[a]!,
           cb = g.curves[b]!;
         return Math.max(cb.p0x, cb.p1x, cb.p2x) - Math.max(ca.p0x, ca.p1x, ca.p2x);
-      }),
-    }));
-    const sortedVBands = g.bands.vBands.map((band) => ({
-      curveIndices: [...band.curveIndices].sort((a, b) => {
+      });
+    }
+    for (let bandIndex = 0; bandIndex < g.bands.vBands.length; bandIndex++) {
+      g.bands.vBands[bandIndex]!.curveIndices.sort((a, b) => {
         const ca = g.curves[a]!,
           cb = g.curves[b]!;
         return Math.max(cb.p0y, cb.p1y, cb.p2y) - Math.max(ca.p0y, ca.p1y, ca.p2y);
-      }),
-    }));
-
-    const allBands = [...sortedHBands, ...sortedVBands];
+      });
+    }
 
     // Calculate offsets: curve lists follow all headers
     let curveListOffset = headerCount;
-    const bandOffsets: number[] = [];
-    for (const band of allBands) {
-      bandOffsets.push(curveListOffset);
+    for (let i = 0; i < hBandCount; i++) {
+      const band = g.bands.hBands[i]!;
+      const tl = glyphStart + i;
+      const tx = tl % TEX_WIDTH;
+      const ty = (tl / TEX_WIDTH) | 0;
+      const di = (ty * TEX_WIDTH + tx) * 4;
+      bandTexData[di] = band.curveIndices.length;
+      bandTexData[di + 1] = curveListOffset;
+      curveListOffset += band.curveIndices.length;
+    }
+    for (let i = 0; i < vBandCount; i++) {
+      const band = g.bands.vBands[i]!;
+      const tl = glyphStart + hBandCount + i;
+      const tx = tl % TEX_WIDTH;
+      const ty = (tl / TEX_WIDTH) | 0;
+      const di = (ty * TEX_WIDTH + tx) * 4;
+      bandTexData[di] = band.curveIndices.length;
+      bandTexData[di + 1] = curveListOffset;
       curveListOffset += band.curveIndices.length;
     }
 
-    // Write band headers
-    for (let i = 0; i < allBands.length; i++) {
-      const tl = glyphStart + i;
-      const tx = tl % TEX_WIDTH,
-        ty = (tl / TEX_WIDTH) | 0;
-      const di = (ty * TEX_WIDTH + tx) * 4;
-      bandTexData[di] = allBands[i]!.curveIndices.length;
-      bandTexData[di + 1] = bandOffsets[i]!;
-    }
-
-    // Write curve index lists (each entry = curve's 2D location in curve texture)
-    for (let i = 0; i < allBands.length; i++) {
-      const band = allBands[i]!;
-      const listStart = glyphStart + bandOffsets[i]!;
+    let listOffset = headerCount;
+    for (let i = 0; i < hBandCount; i++) {
+      const band = g.bands.hBands[i]!;
+      const listStart = glyphStart + listOffset;
       for (let j = 0; j < band.curveIndices.length; j++) {
         const ci = band.curveIndices[j]!;
-        const curveTexel = glyphCurveStart! + ci * 2;
-        const cTexX = curveTexel % TEX_WIDTH;
-        const cTexY = (curveTexel / TEX_WIDTH) | 0;
-
+        const curveTexel = glyphCurveStart + ci * 2;
         const tl = listStart + j;
-        const tx = tl % TEX_WIDTH,
-          ty = (tl / TEX_WIDTH) | 0;
+        const tx = tl % TEX_WIDTH;
+        const ty = (tl / TEX_WIDTH) | 0;
         const di = (ty * TEX_WIDTH + tx) * 4;
-        bandTexData[di] = cTexX;
-        bandTexData[di + 1] = cTexY;
+        bandTexData[di] = curveTexel % TEX_WIDTH;
+        bandTexData[di + 1] = (curveTexel / TEX_WIDTH) | 0;
       }
+      listOffset += band.curveIndices.length;
+    }
+    for (let i = 0; i < vBandCount; i++) {
+      const band = g.bands.vBands[i]!;
+      const listStart = glyphStart + listOffset;
+      for (let j = 0; j < band.curveIndices.length; j++) {
+        const ci = band.curveIndices[j]!;
+        const curveTexel = glyphCurveStart + ci * 2;
+        const tl = listStart + j;
+        const tx = tl % TEX_WIDTH;
+        const ty = (tl / TEX_WIDTH) | 0;
+        const di = (ty * TEX_WIDTH + tx) * 4;
+        bandTexData[di] = curveTexel % TEX_WIDTH;
+        bandTexData[di + 1] = (curveTexel / TEX_WIDTH) | 0;
+      }
+      listOffset += band.curveIndices.length;
     }
 
     bandTexelIdx = glyphStart + curveListOffset;
@@ -394,53 +417,50 @@ export function prepareText(font: Font, text: string, fontSize: number) {
 
   // Process unique glyphs
   const glyphMap = new Map<number, SlugGlyph>();
+  const slugGlyphs: SlugGlyph[] = [];
+  const glyphIndexById = new Map<number, number>();
   for (const { info } of glyphBuffer) {
     if (glyphMap.has(info.glyphId)) continue;
     const result = extractCurves(font, info.glyphId);
     if (!result) continue;
     const bands = buildBands(result.curves, result.bounds);
-    glyphMap.set(info.glyphId, {
+    const glyph = {
       glyphId: info.glyphId,
       curves: result.curves,
       bands,
       bounds: result.bounds,
-    });
+    };
+    glyphMap.set(info.glyphId, glyph);
+    glyphIndexById.set(info.glyphId, slugGlyphs.length);
+    slugGlyphs.push(glyph);
   }
 
-  const slugGlyphs = [...glyphMap.values()];
   const packed = packGlyphData(slugGlyphs);
-
-  // Build per-glyph lookup
-  const glyphDataMap = new Map<
-    number,
-    {
-      glyph: SlugGlyph;
-      glyphLocX: number;
-      glyphLocY: number;
-    }
-  >();
-  for (const [index, glyph] of slugGlyphs.entries()) {
-    glyphDataMap.set(glyph.glyphId, {
-      glyph,
-      ...packed.glyphBandInfo[index]!,
-    });
-  }
 
   // Build vertex/index data
   // 5 attributes × vec4 = 20 floats = 80 bytes per vertex
-  const verts: number[] = [];
-  const idxs: number[] = [];
+  let glyphCount = 0;
+  for (const { info } of glyphBuffer) {
+    if (glyphIndexById.has(info.glyphId)) glyphCount++;
+  }
+  const verts = new Float32Array(glyphCount * 80);
+  const idxs = new Uint32Array(glyphCount * 6);
   let cursorX = 0;
   let quadIdx = 0;
+  let vertOffset = 0;
+  let indexOffset = 0;
 
   for (const { info, position } of glyphBuffer) {
-    const data = glyphDataMap.get(info.glyphId);
-    if (!data) {
+    const glyphIndex = glyphIndexById.get(info.glyphId);
+    if (glyphIndex === undefined) {
       cursorX += position.xAdvance;
       continue;
     }
 
-    const { glyph, glyphLocX, glyphLocY } = data;
+    const glyph = slugGlyphs[glyphIndex]!;
+    const glyphBandInfo = packed.glyphBandInfo[glyphIndex]!;
+    const glyphLocX = glyphBandInfo.glyphLocX;
+    const glyphLocY = glyphBandInfo.glyphLocY;
     const { xMin, yMin, xMax, yMax } = glyph.bounds;
     const w = xMax - xMin;
     const h = yMax - yMin;
@@ -470,54 +490,53 @@ export function prepareText(font: Font, text: string, fontSize: number) {
     // Inverse Jacobian: d(em)/d(obj) = 1/scale (uniform scaling)
     const invScale = 1 / scale;
 
-    // 4 corners: (objX, objY, normX, normY, emX, emY)
-    const corners: [number, number, number, number, number, number][] = [
-      [x0, y0, -1, -1, xMin, yMin],
-      [x1, y0, 1, -1, xMax, yMin],
-      [x1, y1, 1, 1, xMax, yMax],
-      [x0, y1, -1, 1, xMin, yMax],
-    ];
-
-    for (const [px, py, nx, ny, ex, ey] of corners) {
-      verts.push(
-        // pos (location 0): object-space position + normal
-        px,
-        py,
-        nx,
-        ny,
-        // tex (location 1): em-space coords + packed glyph/band data
-        ex,
-        ey,
-        glyphLocPacked,
-        bandMaxPacked,
-        // jac (location 2): inverse Jacobian (d(em)/d(obj))
-        invScale,
-        0,
-        0,
-        invScale,
-        // bnd (location 3): band transform (scale + offset)
-        bandScaleX,
-        bandScaleY,
-        bandOffsetX,
-        bandOffsetY,
-        // col (location 4): vertex color
-        1,
-        1,
-        1,
-        1,
-      );
+    for (let i = 0; i < 4; i++) {
+      const px = i === 0 || i === 3 ? x0 : x1;
+      const py = i < 2 ? y0 : y1;
+      const nx = i === 0 || i === 3 ? -1 : 1;
+      const ny = i < 2 ? -1 : 1;
+      const ex = i === 0 || i === 3 ? xMin : xMax;
+      const ey = i < 2 ? yMin : yMax;
+      verts[vertOffset] = px;
+      verts[vertOffset + 1] = py;
+      verts[vertOffset + 2] = nx;
+      verts[vertOffset + 3] = ny;
+      verts[vertOffset + 4] = ex;
+      verts[vertOffset + 5] = ey;
+      verts[vertOffset + 6] = glyphLocPacked;
+      verts[vertOffset + 7] = bandMaxPacked;
+      verts[vertOffset + 8] = invScale;
+      verts[vertOffset + 9] = 0;
+      verts[vertOffset + 10] = 0;
+      verts[vertOffset + 11] = invScale;
+      verts[vertOffset + 12] = bandScaleX;
+      verts[vertOffset + 13] = bandScaleY;
+      verts[vertOffset + 14] = bandOffsetX;
+      verts[vertOffset + 15] = bandOffsetY;
+      verts[vertOffset + 16] = 1;
+      verts[vertOffset + 17] = 1;
+      verts[vertOffset + 18] = 1;
+      verts[vertOffset + 19] = 1;
+      vertOffset += 20;
     }
 
     const base = quadIdx * 4;
-    idxs.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    idxs[indexOffset] = base;
+    idxs[indexOffset + 1] = base + 1;
+    idxs[indexOffset + 2] = base + 2;
+    idxs[indexOffset + 3] = base;
+    idxs[indexOffset + 4] = base + 2;
+    idxs[indexOffset + 5] = base + 3;
+    indexOffset += 6;
     cursorX += position.xAdvance;
     quadIdx++;
   }
 
   return {
+    cacheKey: buildSlugCacheKey(text, fontSize),
     slugGlyphs,
-    vertices: new Float32Array(verts),
-    indices: new Uint32Array(idxs),
+    vertices: verts,
+    indices: idxs,
     curveTexData: packed.curveTexData,
     bandTexData: packed.bandTexData,
     curveTexHeight: packed.curveTexHeight,

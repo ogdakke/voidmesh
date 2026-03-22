@@ -94,12 +94,16 @@ export class SceneNode {
   textCache: {
     content: string;
     fontSize: number;
-    slugData: unknown;
-    totalWidth: number;
+    maxWidth: number | null;
+    lineHeight: number;
     ascender: number;
     descender: number;
     measuredWidth: number;
     measuredHeight: number;
+    lines: Array<{
+      slugData: unknown;
+      totalWidth: number;
+    }>;
   } | null = null;
 
   // Interaction
@@ -112,6 +116,25 @@ export class SceneNode {
   // Animation
   tweens: Map<string, PropertyTween> = new Map();
   phase: NodePhase = "entering";
+  renderVersion = 1;
+
+  // Scratch storage reused by layout to avoid per-frame allocations.
+  scratch = {
+    flowChildren: [] as SceneNode[],
+    visibleChildren: [] as SceneNode[],
+    absoluteChildren: [] as SceneNode[],
+    fixedChildren: [] as SceneNode[],
+    shrinkChildren: [] as SceneNode[],
+    nextShrinkChildren: [] as SceneNode[],
+    animatedProps: {} as Record<string, number>,
+    animatedKeys: [] as string[],
+    // Cached result from measure phase, reused in position phase
+    lastAnimated: null as Record<string, number> | null,
+    lastAnimatedTime: 0,
+    // Reconciler scratch (reused across frames to avoid Map/Set allocation)
+    keyedOld: new Map<string | number, SceneNode>(),
+    usedKeys: new Set<string | number>(),
+  };
 
   constructor(type: string, key: string | number | null, props: Record<string, unknown>) {
     this.type = type;
@@ -239,8 +262,15 @@ export class SceneNode {
 
   /** Begin exit phase. The node stays in the tree until exit animation completes. */
   beginExit(): void {
-    this.phase = "exiting";
+    if (this.phase !== "exiting") {
+      this.phase = "exiting";
+      this.renderVersion++;
+    }
     // If no tweens are active, the node can be pruned immediately
+  }
+
+  bumpRenderVersion(): void {
+    this.renderVersion++;
   }
 
   /** Returns true if this node is exiting and all its exit animations are done. */

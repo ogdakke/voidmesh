@@ -16,13 +16,15 @@ export class UIBoxPipeline {
 
   #pipeline: GPURenderPipeline | null = null;
   #bindGroupLayout: GPUBindGroupLayout | null = null;
-
-  // Per-batch staging buffers (destroyed at start of next frame)
-  #pendingDestroy: GPUBuffer[] = [];
+  #uniformSlots: Array<{
+    buffer: GPUBuffer;
+    bindGroup: GPUBindGroup;
+  }> = [];
 
   #uniformData = new ArrayBuffer(BOX_UNIFORMS_SIZE);
   #uniformU32View = new Uint32Array(this.#uniformData);
   #uniformF32View = new Float32Array(this.#uniformData);
+  #slotCursor = 0;
 
   constructor(device: GPUDevice, canvasFormat: GPUTextureFormat, viewportUniformBuffer: GPUBuffer) {
     this.#device = device;
@@ -95,55 +97,48 @@ export class UIBoxPipeline {
 
   /** Clean up staging buffers from the previous frame. Call at start of frame. */
   begin(): void {
-    for (const buf of this.#pendingDestroy) buf.destroy();
-    this.#pendingDestroy.length = 0;
+    this.#slotCursor = 0;
   }
 
-  render(boxes: UILayoutBox[], encoder: GPUCommandEncoder, targetView: GPUTextureView): void {
+  render(boxes: UILayoutBox[], pass: GPURenderPassEncoder): void {
     if (boxes.length === 0) return;
     if (!this.#pipeline || !this.#bindGroupLayout) return;
 
-    // Process in batches of MAX_BOXES
+    pass.setPipeline(this.#pipeline);
+
     for (let batchStart = 0; batchStart < boxes.length; batchStart += MAX_BOXES) {
       const batchEnd = Math.min(batchStart + MAX_BOXES, boxes.length);
       const batchCount = batchEnd - batchStart;
 
       this.#writeBoxData(boxes, batchStart, batchCount);
 
-      // Create a fresh uniform buffer per batch to avoid clobbering
-      // when render() is called multiple times per frame
-      const uniformBuffer = this.#device.createBuffer({
-        label: "UI box uniforms (staging)",
-        size: BOX_UNIFORMS_SIZE,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      });
-      this.#device.queue.writeBuffer(uniformBuffer, 0, this.#uniformData, 0, BOX_UNIFORMS_SIZE);
-      this.#pendingDestroy.push(uniformBuffer);
-
-      const bindGroup = this.#device.createBindGroup({
-        layout: this.#bindGroupLayout,
-        entries: [
-          { binding: 0, resource: { buffer: this.#viewportUniformBuffer } },
-          { binding: 1, resource: { buffer: uniformBuffer } },
-        ],
-      });
-
-      const pass = encoder.beginRenderPass({
-        label: `UI box pass (batch ${batchStart})`,
-        colorAttachments: [
-          {
-            view: targetView,
-            loadOp: "load",
-            storeOp: "store",
-          },
-        ],
-      });
-
-      pass.setPipeline(this.#pipeline);
-      pass.setBindGroup(0, bindGroup);
+      const slot = this.#getUniformSlot(this.#slotCursor);
+      this.#slotCursor++;
+      this.#device.queue.writeBuffer(slot.buffer, 0, this.#uniformData, 0, BOX_UNIFORMS_SIZE);
+      pass.setBindGroup(0, slot.bindGroup);
       pass.draw(6, batchCount);
-      pass.end();
     }
+  }
+
+  #getUniformSlot(index: number): { buffer: GPUBuffer; bindGroup: GPUBindGroup } {
+    const existing = this.#uniformSlots[index];
+    if (existing) return existing;
+
+    const buffer = this.#device.createBuffer({
+      label: "UI box uniforms",
+      size: BOX_UNIFORMS_SIZE,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    const bindGroup = this.#device.createBindGroup({
+      layout: this.#bindGroupLayout!,
+      entries: [
+        { binding: 0, resource: { buffer: this.#viewportUniformBuffer } },
+        { binding: 1, resource: { buffer } },
+      ],
+    });
+    const slot = { buffer, bindGroup };
+    this.#uniformSlots.push(slot);
+    return slot;
   }
 
   #writeBoxData(boxes: UILayoutBox[], offset: number, count: number): void {
@@ -205,8 +200,10 @@ export class UIBoxPipeline {
   }
 
   destroy(): void {
-    for (const buf of this.#pendingDestroy) buf.destroy();
-    this.#pendingDestroy.length = 0;
+    for (let i = 0; i < this.#uniformSlots.length; i++) {
+      this.#uniformSlots[i]!.buffer.destroy();
+    }
+    this.#uniformSlots.length = 0;
     this.#pipeline = null;
     this.#bindGroupLayout = null;
   }
