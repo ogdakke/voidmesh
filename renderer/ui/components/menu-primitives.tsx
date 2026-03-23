@@ -16,7 +16,7 @@ import {
 import { getKeybindSymbolsById, keybindStore } from "#context/keybind-context.ts";
 import type { SceneNode } from "../scene-node.ts";
 import type { UIEventHandler, UIColorValue, StateStyle } from "../elements.ts";
-import { blur, edges, solid, spring } from "../elements.ts";
+import { blur, edges, solid } from "../elements.ts";
 import { Box, Text, Icon } from "../primitives.tsx";
 import { Check, Minus, NavArrowRight } from "iconoir-react";
 
@@ -34,8 +34,6 @@ const ITEM_HOVER: StateStyle = {
   background: HIGHLIGHT_BG,
   backdropFilter: [blur(SUBTLE_BACKDROP_BLUR)],
 };
-const ITEM_ACTIVE: StateStyle = { scale: 0.98 };
-const ITEM_TRANSITION = { scale: spring(0.24) };
 
 const ITEM_PADDING_X = 12;
 const ITEM_CONTENT_GAP = 6;
@@ -257,8 +255,6 @@ function MenuRow({
       background={open ? HIGHLIGHT_BG : undefined}
       backdropFilter={open ? [blur(SUBTLE_BACKDROP_BLUR)] : undefined}
       hover={disabled ? undefined : hoverStyle}
-      active={disabled || open ? undefined : ITEM_ACTIVE}
-      transition={ITEM_TRANSITION}
       onClick={disabled ? undefined : onClick}
       onHoverEnter={onHoverEnter}
       onHoverLeave={onHoverLeave}

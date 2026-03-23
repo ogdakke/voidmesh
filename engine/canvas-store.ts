@@ -77,7 +77,6 @@ export interface ViewportSnapshot {
 export interface SelectionSnapshot {
   selectedEntityIds: ReadonlySet<string>;
   hoveredEntityId: string | null;
-  contextOpenEntityId: string | null;
   entities: Map<string, ShaderCanvasEntity>;
   multiSelectMode: boolean;
   snapToGrid: boolean;
@@ -219,7 +218,6 @@ export class CanvasStore extends Store<CanvasState> {
     this.getSelectionSnapshot = this.createSnapshot("selectionVersion", (s) => ({
       selectedEntityIds: s.selectedEntityIds,
       hoveredEntityId: s.hoveredEntityId,
-      contextOpenEntityId: s.contextOpenEntityId,
       entities: s.entities,
       multiSelectMode: s.multiSelectMode,
       snapToGrid: s.snapToGrid,
@@ -505,8 +503,6 @@ export class CanvasStore extends Store<CanvasState> {
     if (id) {
       this.#logger.debug(`context menu opened for entity: ${id}`, this.state.entities.get(id));
     }
-
-    this.notifySelectionChange();
   }
 
   setContextMenuClosed(): void {
@@ -519,8 +515,6 @@ export class CanvasStore extends Store<CanvasState> {
 
     this.state.contextOpenEntityId = null;
     this.state.selectionDirty = true;
-
-    this.notifySelectionChange();
   }
 
   // ============================================================================

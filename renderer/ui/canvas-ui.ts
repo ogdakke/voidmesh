@@ -47,6 +47,112 @@ type ContextMenuSceneInputs = {
 
 const PERF_SCENE_KEY = "canvas-ui-perf-hud";
 const CONTEXT_MENU_SCENE_KEY = "canvas-ui-context-menu";
+const CONTEXT_MENU_ACTION_KEYS = [
+  "paste",
+  "saveWorkspace",
+  "saveAsWorkspace",
+  "openWorkspace",
+  "toggleSnapToGrid",
+  "changeShaderType",
+  "changeShape",
+  "changeDitheringKind",
+  "changeAsciiKind",
+  "toggleAsciiInvert",
+  "changeGlassKind",
+  "changeGlitchKind",
+  "changePalette",
+  "triggerPaletteUpload",
+  "toggleShowOriginal",
+  "togglePreserveColors",
+  "toggleReversePalette",
+  "copyImage",
+  "saveAsFormat",
+  "saveAll",
+  "copyEffects",
+  "pasteEffects",
+  "bringToFront",
+  "sendToBack",
+  "duplicate",
+  "upscale",
+  "exportAnimated",
+  "reset",
+  "deleteEntity",
+  "close",
+] as const satisfies readonly (keyof ContextMenuActions)[];
+
+type BooleanOptionState = CanvasContextMenuProps["showOriginal"];
+type StringOptionState = CanvasContextMenuProps["shape"];
+
+function sameArray<T>(current: readonly T[], next: readonly T[]): boolean {
+  if (current === next) return true;
+  if (current.length !== next.length) return false;
+  for (let index = 0; index < current.length; index++) {
+    if (!Object.is(current[index], next[index])) return false;
+  }
+  return true;
+}
+
+function sameBooleanOptionState(current: BooleanOptionState, next: BooleanOptionState): boolean {
+  return (
+    current.supported === next.supported &&
+    current.value === next.value &&
+    current.mixed === next.mixed
+  );
+}
+
+function sameStringOptionState(current: StringOptionState, next: StringOptionState): boolean {
+  return (
+    current.supported === next.supported &&
+    current.value === next.value &&
+    current.mixed === next.mixed &&
+    sameArray(current.values, next.values)
+  );
+}
+
+function sameContextMenuProps(
+  current: ContextMenuLiveProps | null,
+  next: ContextMenuLiveProps | null,
+): boolean {
+  if (current === next) return true;
+  if (!current || !next) return false;
+
+  return (
+    sameArray(current.customPalettes, next.customPalettes) &&
+    current.snapToGrid === next.snapToGrid &&
+    sameBooleanOptionState(current.showOriginal, next.showOriginal) &&
+    sameBooleanOptionState(current.preserveColors, next.preserveColors) &&
+    sameBooleanOptionState(current.reversePalette, next.reversePalette) &&
+    sameBooleanOptionState(current.asciiInvert, next.asciiInvert) &&
+    sameStringOptionState(current.shaderType, next.shaderType) &&
+    sameStringOptionState(current.shape, next.shape) &&
+    sameStringOptionState(current.ditheringKind, next.ditheringKind) &&
+    sameStringOptionState(current.asciiKind, next.asciiKind) &&
+    sameStringOptionState(current.glassKind, next.glassKind) &&
+    sameStringOptionState(current.glitchKind, next.glitchKind) &&
+    current.currentPaletteId === next.currentPaletteId &&
+    current.paletteMixed === next.paletteMixed &&
+    sameArray(current.paletteValues, next.paletteValues) &&
+    current.hasEntities === next.hasEntities &&
+    current.submenuGutter === next.submenuGutter
+  );
+}
+
+function createContextMenuActionsProxy(
+  getCurrent: () => ContextMenuActions | null,
+): ContextMenuActions {
+  const proxy = {} as ContextMenuActions;
+  const proxyRecord = proxy as Record<keyof ContextMenuActions, (...args: unknown[]) => unknown>;
+
+  for (const key of CONTEXT_MENU_ACTION_KEYS) {
+    proxyRecord[key] = (...args: unknown[]) => {
+      const current = getCurrent();
+      const handler = current?.[key] as ((...handlerArgs: unknown[]) => unknown) | undefined;
+      return handler?.(...args);
+    };
+  }
+
+  return proxy;
+}
 
 function sameContextMenuInputs(
   current: ContextMenuSceneInputs | null,
@@ -60,11 +166,10 @@ function sameContextMenuInputs(
   if (SHOW_SAFE_POLYGON_DEBUG && contextMenuController.submenu.isOpen) return false;
 
   return (
-    current.actions === next.actions &&
     current.activeSubmenuId === next.activeSubmenuId &&
     current.menuX === next.menuX &&
     current.menuY === next.menuY &&
-    current.props === next.props &&
+    sameContextMenuProps(current.props, next.props) &&
     current.state === next.state
   );
 }
@@ -77,7 +182,8 @@ class CanvasUI {
   #uiRenderer: UIRenderer | null = null;
 
   // Context menu state (set from React layer)
-  #contextMenuActions: ContextMenuActions | null = null;
+  #liveContextMenuActions: ContextMenuActions | null = null;
+  #contextMenuActionsProxy = createContextMenuActionsProxy(() => this.#liveContextMenuActions);
   #contextMenuProps: ContextMenuLiveProps | null = null;
   #lastPerfSnapshot: PerfOverlaySnapshot | null = null;
   #debugType: string | null = null;
@@ -99,7 +205,7 @@ class CanvasUI {
   // ---------------------------------------------------------------------------
 
   contextMenuActions(actions: ContextMenuActions): void {
-    this.#contextMenuActions = actions;
+    this.#liveContextMenuActions = actions;
   }
 
   contextMenuProps(props: ContextMenuLiveProps): void {
@@ -170,7 +276,7 @@ class CanvasUI {
     let nextContextMenuInputs: ContextMenuSceneInputs | null = null;
 
     if (contextMenuController.isOpen) {
-      const actions = this.#contextMenuActions;
+      const actions = this.#liveContextMenuActions ? this.#contextMenuActionsProxy : null;
       const props = this.#contextMenuProps;
       if (actions && props) {
         // Convert world position to CSS pixels from viewport edge (unclamped)
