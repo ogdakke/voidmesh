@@ -1,6 +1,10 @@
-import { useCanvas } from "#context/use-canvas.ts";
+import {
+  useCanvasCommands,
+  useCanvasRendererService,
+  useSelectedEntities,
+  useSelectionState,
+} from "#context/use-canvas.ts";
 import { useExportQueue } from "#context/use-export-queue.ts";
-import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
 import { useIsMobile } from "#hooks/use-is-mobile.ts";
 import { type ImageExportFormat, imageExportOptionsForFormat } from "#renderer/export-formats.ts";
 import { isAnimatedEntity } from "#types/canvas.ts";
@@ -11,12 +15,11 @@ import { Copy, Download, MediaVideo } from "iconoir-react";
 export function ExportSaveButtons({ imageFormat }: { imageFormat: ImageExportFormat }) {
   const isMobile = useIsMobile();
   const { exportOptions, addToQueue } = useExportQueue();
-  const { selectionState, selectedEntities } = useCanvasActions();
-  const {
-    saveSelectedEntityToFile: saveToFile,
-    copySelectedEntityToClipboard,
-    renderer,
-  } = useCanvas();
+  const selectionState = useSelectionState();
+  const selectedEntities = useSelectedEntities();
+  const { saveSelectedEntityToFile: saveToFile, copySelectedEntityToClipboard } =
+    useCanvasCommands();
+  const { renderer } = useCanvasRendererService();
 
   const saveSelectedEntityToFile = () => saveToFile(imageExportOptionsForFormat(imageFormat));
 

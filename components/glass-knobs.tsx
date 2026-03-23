@@ -1,5 +1,6 @@
 import { GlassKind, GLASS_KIND_OPTIONS } from "#types/canvas.ts";
-import { useCanvasActions, useParamValue } from "../hooks/use-canvas-actions.ts";
+import { useCanvasCommands, useSelectionState } from "../context/use-canvas.ts";
+import { useParamValue } from "../hooks/use-param-value.ts";
 import { config } from "#config";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { NavArrowRight, Circle } from "iconoir-react";
@@ -8,7 +9,8 @@ const SIDE_OFFSET = 4;
 
 // ============ CONTEXT MENU VERSION ============
 export function GlassMenuKnobs() {
-  const { handleGlassKindChange, selectionState } = useCanvasActions();
+  const { changeGlassKind } = useCanvasCommands();
+  const selectionState = useSelectionState();
   const isMultiple = selectionState.isMultiple;
   const glassKind = useParamValue("glass.kind", config.defaults.shaderParams.glass!.kind);
 
@@ -46,7 +48,7 @@ export function GlassMenuKnobs() {
                   key={option.value}
                   value={option.value}
                   className="menu-radio-item"
-                  onClick={() => handleGlassKindChange(option.value)}
+                  onClick={() => changeGlassKind(option.value)}
                 >
                   <ContextMenu.RadioItemIndicator className="menu-radio-indicator">
                     <Circle fill="currentColor" />

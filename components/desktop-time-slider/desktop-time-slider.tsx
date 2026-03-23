@@ -1,6 +1,10 @@
 import { PauseSolid, PlaySolid } from "iconoir-react";
-import { useCanvas } from "#context/use-canvas.ts";
-import { useParamValue } from "#hooks/use-canvas-actions.ts";
+import {
+  useCanvasCommands,
+  useCanvasRendererService,
+  useSelectedEntityIds,
+} from "#context/use-canvas.ts";
+import { useParamValue } from "#hooks/use-param-value.ts";
 import { canvasStore } from "#engine";
 import { Button } from "#ui/button/index.tsx";
 import { TimeSlider } from "#ui/time-slider/time-slider.tsx";
@@ -9,7 +13,9 @@ import "./desktop-time-slider.css";
 const SKIP_UNDO = { skipUndo: true } as const;
 
 export function DesktopTimeSlider() {
-  const { updateSelectedEntityParams, renderer, selectedEntityIds } = useCanvas();
+  const { updateSelectedEntityParams } = useCanvasCommands();
+  const { renderer } = useCanvasRendererService();
+  const selectedEntityIds = useSelectedEntityIds();
   const timeParam = useParamValue("time", null);
 
   // Get the selected entity directly for per-entity time operations

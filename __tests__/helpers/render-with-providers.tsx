@@ -6,13 +6,12 @@ import { render, type RenderOptions, type RenderResult } from "@testing-library/
 import { withNuqsTestingAdapter, type UrlUpdateEvent } from "nuqs/adapters/testing";
 import { IconoirProvider } from "iconoir-react";
 import { ToastProvider } from "#components/ui/toast/toast.tsx";
-import { CanvasProvider, type CanvasContextValue } from "#context/canvas-context.tsx";
-import { useCanvas } from "#context/use-canvas.ts";
+import { CanvasProvider } from "#context/canvas-context.tsx";
+import { useCanvasCommands, type CanvasCommands } from "#context/use-canvas.ts";
 import { VideoExportProvider } from "#context/video-export-context.tsx";
 import { ExportQueueProvider } from "#context/export-queue-context.tsx";
 import { UpscaleQueueProvider } from "#context/upscale-queue-context.tsx";
 import { KeybindProvider } from "#context/keybind-provider.tsx";
-import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
 
 export interface NuqsTestingOptions {
   /**
@@ -179,10 +178,8 @@ export function renderMinimal(
  * Result type for renderWithCanvas
  */
 export interface RenderWithCanvasResult extends RenderResult {
-  /** Direct access to useCanvas() - call context functions like the real app */
-  canvas: CanvasContextValue;
-  /** Direct access to useCanvasActions() */
-  actions: ReturnType<typeof useCanvasActions>;
+  /** Direct access to useCanvasCommands() */
+  canvas: CanvasCommands;
 }
 
 /**
@@ -190,7 +187,7 @@ export interface RenderWithCanvasResult extends RenderResult {
  * Use this to test like the real app - call canvas.addEntity(), canvas.selectEntity(), etc.
  *
  * @example
- * const { canvas, actions } = renderWithCanvas(<SidebarRight />);
+ * const { canvas } = renderWithCanvas(<SidebarRight />);
  *
  * act(() => {
  *   const id = canvas.addEntity(createEntityInput());
@@ -200,19 +197,17 @@ export interface RenderWithCanvasResult extends RenderResult {
  * expect(screen.getByLabelText(/style/i)).toBeInTheDocument();
  *
  * act(() => {
- *   actions.handleShaderTypeChange(ShaderType.blobs);
+ *   canvas.changeShaderType(ShaderType.blobs);
  * });
  */
 export function renderWithCanvas(
   ui?: React.ReactElement,
   options: RenderWithProvidersOptions = {},
 ): RenderWithCanvasResult {
-  let canvasRef: CanvasContextValue | null = null;
-  let actionsRef: ReturnType<typeof useCanvasActions> | null = null;
+  let canvasRef: CanvasCommands | null = null;
 
   function ContextCapture({ children }: { children?: ReactNode }) {
-    canvasRef = useCanvas();
-    actionsRef = useCanvasActions();
+    canvasRef = useCanvasCommands();
     return <>{children}</>;
   }
 
@@ -226,6 +221,5 @@ export function renderWithCanvas(
   return {
     ...result,
     canvas: canvasRef!,
-    actions: actionsRef!,
   };
 }

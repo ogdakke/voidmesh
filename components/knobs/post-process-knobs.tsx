@@ -1,4 +1,4 @@
-import { useCanvas } from "#context/use-canvas.ts";
+import { useCanvasCommands } from "#context/use-canvas.ts";
 import { useParamValue } from "#hooks/use-param-value.ts";
 import { config } from "#config";
 import { undo } from "#lib/undo.ts";
@@ -114,7 +114,7 @@ export function PostProcessMobileKnobs() {
   const [selectedParam, setSelectedParam] = useState<PostProcessParam>(PostProcessParamsInOrder[0]);
   const [floatingLabel, setFloatingLabel] = useState<string | null>(null);
   const floatingLabelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const { updateSelectedEntityParams } = useCanvas();
+  const { updateSelectedEntityParams } = useCanvasCommands();
 
   // Read enabled states for all effects
   const grainEnabled = useParamValue("postProcess.grain.enabled", ppDefaults.grain.enabled);

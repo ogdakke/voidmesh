@@ -1,7 +1,7 @@
 import { Copy, InfoCircle, PasteClipboard, ShareIos } from "iconoir-react";
+import { useCanvasCommands, useSelectionState } from "#context/use-canvas.ts";
 import { Drawer } from "#ui/drawer/index.tsx";
 import { Button } from "#ui/button/button.tsx";
-import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
 import "./copy-paste-drawer.css";
 import { logger } from "#lib/client.logger.ts";
 import { toastManager } from "#ui/toast/toast-manager.ts";
@@ -12,15 +12,16 @@ interface CopyPasteDrawerProps {
 }
 
 export function CopyPasteDrawer({ open, onOpenChange }: CopyPasteDrawerProps) {
-  const { copyEntityParams, pasteEntityParams, selectionState } = useCanvasActions();
+  const { copySelectionEffects, pasteEffects } = useCanvasCommands();
+  const selectionState = useSelectionState();
 
   const handleCopy = () => {
-    copyEntityParams();
+    copySelectionEffects();
     onOpenChange(false);
   };
 
   const handlePaste = () => {
-    pasteEntityParams();
+    void pasteEffects();
     onOpenChange(false);
   };
 

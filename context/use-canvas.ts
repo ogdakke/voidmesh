@@ -1,20 +1,21 @@
 import { createContext, use, useSyncExternalStore } from "react";
-import { canvasStore } from "#engine";
+import { config } from "#config";
+import { canvasStore, type PreferencesSnapshot } from "#engine";
 import type {
   ColorPalette,
-  Viewport,
-  ShaderCanvasEntity,
   Point,
+  ShaderCanvasEntity,
   ShaderParams,
   ShaderType,
+  Viewport,
 } from "#types/canvas.ts";
-import type { InfiniteCanvasRenderer } from "../renderer/canvas-renderer.ts";
-import type { ImageExportOptions } from "../renderer/export-formats.ts";
-import type { DeserializeResult } from "../lib/serialization/types.ts";
-import type { SetValues, Options } from "nuqs";
-import type { PartialDeep } from "type-fest";
 import { createEnum } from "#types/index.ts";
 import type { ColorSpace } from "#types/enums.ts";
+import type { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
+import type { ImageExportOptions } from "#renderer/export-formats.ts";
+import type { DeserializeResult } from "#lib/serialization/types.ts";
+import type { Options } from "nuqs";
+import type { PartialDeep } from "type-fest";
 
 export const DebugType = createEnum({
   /** load the debug image */
@@ -24,20 +25,10 @@ export const DebugType = createEnum({
 });
 export type DebugType = typeof DebugType.infer;
 
-export interface CanvasContextValue {
-  // Viewport state — use useViewport() or canvasStore.getViewport() (imperative) instead of reading viewport from context
+export interface CanvasCommands {
   setViewport: (viewport: Viewport) => void;
   panBy: (delta: Point) => void;
   resetViewport: () => void;
-
-  // Entity state
-  entities: ShaderCanvasEntity[];
-  /** Multi-select: all selected entity IDs */
-  selectedEntityIds: ReadonlySet<string>;
-  /** Whether multi-select toggle mode is active (touch devices) */
-  multiSelectMode: boolean;
-  contextOpenEntityId: string | null;
-  hoveredEntityId: string | null;
   addEntity: (
     entity: Omit<ShaderCanvasEntity, "id" | "zIndex" | "name">,
     filename?: string,
@@ -49,36 +40,41 @@ export interface CanvasContextValue {
   bringToFront: (id: string) => void;
   sendToBack: (id: string) => void;
   duplicateEntities: () => Promise<string[]>;
-
-  // Shader params for selected entity (first entity's values when multi-select)
-  selectedShaderType: ShaderType;
-  selectedEntityParams: ShaderParams | null;
   updateSelectedEntityParams: (
     updates: PartialDeep<ShaderParams>,
     options?: { skipUndo?: boolean },
   ) => void;
-
-  // Renderer registration
-  registerRenderer: (renderer: InfiniteCanvasRenderer) => void;
-  renderer: InfiniteCanvasRenderer | null;
-
-  // Color space detected from GPU capabilities
-  colorSpace: ColorSpace;
-
-  // Export functions (copy: single only PNG, save: supports multi + format options)
+  changeShaderType: (value: string | null) => void;
+  changeDitheringKind: (value: string | null) => void;
+  changeAsciiKind: (value: string | null) => void;
+  setAsciiInvert: (value: boolean) => void;
+  changeGlassKind: (value: string | null) => void;
+  changeGlitchKind: (value: string | null) => void;
+  changePalette: (palette: ColorPalette) => void;
+  uploadPalette: (files: FileList | File | null) => Promise<void>;
+  deletePalette: (paletteId: string) => void;
+  setShowOriginal: (value: boolean) => void;
+  toggleShowOriginal: () => void;
+  setPreserveColors: (value: boolean) => void;
+  togglePreserveColors: () => void;
+  setReversePalette: (value: boolean) => void;
+  toggleReversePalette: () => void;
+  deleteSelection: (e?: KeyboardEvent, source?: "keyboard" | "context_menu" | "drop_zone") => void;
+  copySelectionImage: (e?: KeyboardEvent) => Promise<void>;
+  copySelectionEffects: () => void;
+  pasteEffects: () => Promise<void>;
+  bringSelectionToFront: () => void;
+  sendSelectionToBack: () => void;
+  resetSelectionToDefaults: () => void;
+  setSnapToGrid: (enabled: boolean) => void;
+  setFancyDelete: (enabled: boolean) => void;
+  setHaptics: (enabled: boolean) => void;
+  changeSize: (value: number | number[]) => void;
   copySelectedEntityToClipboard: () => Promise<boolean>;
   saveSelectedEntityToFile: (options?: ImageExportOptions) => Promise<void>;
-
-  // Utility
-  getContextOpenEntity: () => ShaderCanvasEntity | undefined;
-
-  // Serialization
   serializeCanvas: () => Promise<Blob | null>;
   deserializeCanvas: (source: Blob | ArrayBuffer) => Promise<DeserializeResult>;
-
-  // url state
-  setRenderState: SetValues<any>;
-  setRenderStateFromURL: (params: URLSearchParams) => void;
+  applyUrlState: (params: URLSearchParams) => void;
   applyEffectsToSelection: (data: {
     shaderType: ShaderType;
     shaderParams: ShaderParams;
@@ -90,24 +86,101 @@ export interface CanvasContextValue {
   ) => Promise<URLSearchParams>;
 }
 
-export const CanvasContext = createContext<CanvasContextValue | null>(null);
+export interface CanvasRendererService {
+  registerRenderer: (renderer: InfiniteCanvasRenderer) => void;
+  renderer: InfiniteCanvasRenderer | null;
+  colorSpace: ColorSpace;
+}
 
-export function useCanvas(): CanvasContextValue {
-  const context = use(CanvasContext);
+const CanvasCommandsContext = createContext<CanvasCommands | null>(null);
+const CanvasRendererContext = createContext<CanvasRendererService | null>(null);
+
+export function useCanvasSelector<T>(
+  selector: (state: ReturnType<typeof canvasStore.getState>) => T,
+  equalityFn?: (a: T, b: T) => boolean,
+): T {
+  return useSyncExternalStore(
+    (listener) => canvasStore.subscribeSelector(selector, listener, equalityFn),
+    () => selector(canvasStore.getState()),
+  );
+}
+
+export function useCanvasCommands(): CanvasCommands {
+  const context = use(CanvasCommandsContext);
   if (!context) {
-    throw new Error("useCanvas must be used within CanvasProvider");
+    throw new Error("useCanvasCommands must be used within CanvasProvider");
   }
   return context;
 }
 
-/**
- * Hook that subscribes ONLY to viewport changes.
- * Use this for components that need to re-render when zoom/pan changes (e.g., zoom indicator).
- * Sidebar components should NOT use this hook.
- */
-export function useViewport(): Viewport {
-  const snapshot = useSyncExternalStore(canvasStore.subscribe.bind(canvasStore), () =>
-    canvasStore.getViewportSnapshot(),
-  );
-  return snapshot.viewport;
+export function useCanvasRendererService(): CanvasRendererService {
+  const context = use(CanvasRendererContext);
+  if (!context) {
+    throw new Error("useCanvasRendererService must be used within CanvasProvider");
+  }
+  return context;
 }
+
+export function useViewport(): Viewport {
+  return useCanvasSelector((state) => state.viewport);
+}
+
+export function useSelectedEntityIds(): ReadonlySet<string> {
+  return useCanvasSelector((state) => state.selectedEntityIds);
+}
+
+export function useSelectedEntity(): ShaderCanvasEntity | undefined {
+  return useCanvasSelector(() => canvasStore.getSelectedEntity());
+}
+
+export function useSelectedEntities(): ShaderCanvasEntity[] {
+  return useCanvasSelector(() => canvasStore.getSelectedEntitiesStable());
+}
+
+export function useSelectedEntityParams(): ShaderParams | null {
+  return useCanvasSelector(() => canvasStore.getSelectedEntity()?.shaderParams ?? null);
+}
+
+export function useSelectedShaderType(): ShaderType {
+  return useCanvasSelector(
+    () => canvasStore.getSelectedEntity()?.shaderType ?? config.defaults.shader,
+  );
+}
+
+export function useMultiSelectMode(): boolean {
+  return useCanvasSelector((state) => state.multiSelectMode);
+}
+
+export function useContextOpenEntityId(): string | null {
+  return useCanvasSelector((state) => state.contextOpenEntityId);
+}
+
+export function useEntityCount(): number {
+  return useCanvasSelector((state) => state.entities.size);
+}
+
+export function useHasEntities(): boolean {
+  return useCanvasSelector((state) => state.entities.size > 0);
+}
+
+export function useCanvasPreferences(): PreferencesSnapshot {
+  const snapToGrid = useCanvasSelector((state) => state.snapToGrid);
+  const fancyDelete = useCanvasSelector((state) => state.fancyDelete);
+  const haptics = useCanvasSelector((state) => state.haptics);
+  const version = useCanvasSelector((state) => state.preferencesVersion);
+  return { snapToGrid, fancyDelete, haptics, version };
+}
+
+export function useHasSelection(): boolean {
+  return useCanvasSelector((state) => state.selectedEntityIds.size > 0);
+}
+
+export function useHasUniformSelectedShader(): boolean {
+  return useCanvasSelector(() => canvasStore.getSelectionState().hasUniformShader);
+}
+
+export function useSelectionState() {
+  return useCanvasSelector(() => canvasStore.getSelectionState());
+}
+
+export { CanvasCommandsContext, CanvasRendererContext };

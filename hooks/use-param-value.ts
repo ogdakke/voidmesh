@@ -1,5 +1,5 @@
-import { useSyncExternalStore } from "react";
 import { canvasStore, type ParamResult } from "../engine/index.ts";
+import { useCanvasSelector } from "../context/use-canvas.ts";
 import type { ParamPaths, GetParamByPath } from "#types/canvas.ts";
 
 // Re-export ParamResult from canvas-store for convenience
@@ -42,9 +42,5 @@ export function useParamValue<P extends ParamPaths>(
   path: P,
   defaultValue: GetParamByPath<P> | null,
 ): ParamResult<GetParamByPath<P> | null> {
-  // Snapshot includes getParamResult so the compiler sees the dependency
-  // between the store subscription and the computed result.
-  // Store-level caching with structural sharing ensures stable references.
-  const getSnapshot = () => canvasStore.getParamResult(path, defaultValue);
-  return useSyncExternalStore(canvasStore.subscribe, getSnapshot);
+  return useCanvasSelector(() => canvasStore.getParamResult(path, defaultValue));
 }

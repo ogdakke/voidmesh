@@ -5,7 +5,7 @@ React context providers wiring subsystems together. The "glue" layer between eng
 ## Key Files
 
 - `canvas-context.tsx` (~52KB) — `CanvasProvider`. Main orchestrator. Bridges URL query state (nuqs) to canvas state, entity CRUD with undo support, renderer registration, image export (copy/save). Largest, most complex file in the codebase.
-- `use-canvas.ts` — `CanvasContext` definition and `useCanvas()` hook. Also `useViewport()` for performance-isolated viewport subscriptions.
+- `use-canvas.ts` — Commands/renderer contexts and selector hooks. `useCanvasCommands()` exposes stable mutations, `useCanvasRendererService()` exposes renderer/color-space services, and selector hooks like `useSelectedEntity()` / `useViewport()` provide fine-grained reads.
 - `export-queue-context.tsx` (~16KB) — Sequential video export queue with auto-download.
 - `video-export-context.tsx` — Export options state (format, quality, resolution).
 - `use-video-export.ts`, `use-export-queue.ts` — Hooks for the export contexts.
@@ -37,3 +37,4 @@ Note: `KeybindProvider` wraps outside `App()` at the root render level.
 - Do not add new context providers without updating composition order in `app.tsx`.
 - Do not put rendering logic or GPU calls here. Context orchestrates; renderer executes.
 - Do not mutate `canvasStore` state outside of context callbacks. The context is the intended mutation boundary for React-facing code.
+- Do not reintroduce a broad `useCanvas()` state surface. Keep reads selector-based and mutations command-based.

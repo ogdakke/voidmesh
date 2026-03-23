@@ -6,9 +6,8 @@ import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import { waitFor } from "@testing-library/react";
 import React, { useEffect, useState } from "react";
 import { useParamValue, type ParamResult } from "#hooks/use-param-value.ts";
-import { useCanvas } from "#context/use-canvas.ts";
 import { canvasStore } from "#engine";
-import { createEntityInput, createTestEntity } from "../helpers/test-entity.ts";
+import { createTestEntity } from "../helpers/test-entity.ts";
 import { renderWithProviders } from "../helpers/render-with-providers.tsx";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
 import { ShaderType, DitheringKind, GlassKind } from "#types/canvas.ts";
@@ -155,20 +154,18 @@ describe("useParamValue", () => {
 
   test("returns isSupported=false for unsupported params", async () => {
     let result: ParamResult<number> | null = null;
-    let entityId: string = "";
 
     function TestComponent() {
-      const { addEntity, selectEntity } = useCanvas();
       const [ready, setReady] = useState(false);
 
       useEffect(() => {
         if (!ready) {
-          // Create a dithering entity - blobs.eagerness is not supported
-          entityId = addEntity(createEntityInput({ shaderType: ShaderType.dithering }));
-          selectEntity(entityId);
+          const entity = createTestEntity({ shaderType: ShaderType.dithering });
+          canvasStore.addEntity(entity);
+          canvasStore.replaceSelection([entity.id]);
           setReady(true);
         }
-      }, [addEntity, selectEntity, ready]);
+      }, [ready]);
 
       // blobs param is only supported by blobs shader
       result = useParamValue("blobs.eagerness", 0.5);

@@ -1,4 +1,4 @@
-import { useCanvas } from "#context/use-canvas.ts";
+import { useCanvasCommands, useHasEntities } from "#context/use-canvas.ts";
 import { useIsMobile } from "#hooks/use-is-mobile.ts";
 import { addFilesToCanvas } from "#lib/entity-placement.ts";
 import { MediaImagePlus } from "iconoir-react";
@@ -7,13 +7,13 @@ import { config } from "../lib/config";
 import { Button } from "./ui/button";
 
 export function UploadControls() {
-  const { entities } = useCanvas();
+  const hasEntities = useHasEntities();
   return (
     <div className="mobile-common-knobs pb-1">
       <div className="mobile-row">
         <FileUploadComponent />
       </div>
-      {!entities.length && (
+      {!hasEntities && (
         <div className="mobile-row no-selection-message">
           <p>Add images, videos or GIFs for editing</p>
         </div>
@@ -24,7 +24,7 @@ export function UploadControls() {
 
 export function FileUploadComponent() {
   const inputRef = useRef<HTMLInputElement>(null);
-  const { addEntity } = useCanvas();
+  const { addEntity } = useCanvasCommands();
   const isMobile = useIsMobile();
   const bottomInset = isMobile ? config.canvas.mobile.bottomInset : 0;
 

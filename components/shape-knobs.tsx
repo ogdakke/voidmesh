@@ -1,6 +1,6 @@
 import { Shape, SHAPE_OPTIONS } from "#types/canvas.ts";
-import { useCanvasActions, useParamValue } from "../hooks/use-canvas-actions.ts";
-import { useCanvas } from "../context/use-canvas.ts";
+import { useCanvasCommands, useSelectionState } from "../context/use-canvas.ts";
+import { useParamValue } from "../hooks/use-param-value.ts";
 import { Select, SelectItem } from "./ui/select/index.tsx";
 import { optionsWithNull } from "./ui/ui-util.ts";
 import { config } from "#config";
@@ -11,7 +11,7 @@ const SIDE_OFFSET = 4;
 
 // ============ SIDEBAR VERSION ============
 export function ShapeKnobs() {
-  const { updateSelectedEntityParams } = useCanvas();
+  const { updateSelectedEntityParams } = useCanvasCommands();
   const shape = useParamValue("shape", config.defaults.shaderParams.shape);
 
   if (!shape.isSupported) return null;
@@ -40,8 +40,8 @@ export function ShapeKnobs() {
 
 // ============ CONTEXT MENU VERSION ============
 export function ShapeMenuKnobs() {
-  const { updateSelectedEntityParams } = useCanvas();
-  const { selectionState } = useCanvasActions();
+  const { updateSelectedEntityParams } = useCanvasCommands();
+  const selectionState = useSelectionState();
   const shape = useParamValue("shape", config.defaults.shaderParams.shape);
   const isMultiple = selectionState.isMultiple;
 

@@ -1,5 +1,5 @@
-import { useCanvas } from "../context/use-canvas.ts";
-import { useCanvasActions, useParamValue } from "../hooks/use-canvas-actions.ts";
+import { useCanvasCommands, useSelectionState } from "../context/use-canvas.ts";
+import { useParamValue } from "../hooks/use-param-value.ts";
 import { Slider } from "./ui/slider/index.tsx";
 import { undo } from "#lib/undo.ts";
 import { config } from "#config";
@@ -10,8 +10,8 @@ const adjustDefaults = config.defaults.shaderParams.adjustments!;
 type AdjustmentKey = keyof AdjustmentsParams;
 
 export function AdjustmentsKnobs() {
-  const { updateSelectedEntityParams } = useCanvas();
-  const { selectionState } = useCanvasActions();
+  const { updateSelectedEntityParams } = useCanvasCommands();
+  const selectionState = useSelectionState();
 
   const brightness = useParamValue("adjustments.brightness", adjustDefaults.brightness);
   const contrast = useParamValue("adjustments.contrast", adjustDefaults.contrast);

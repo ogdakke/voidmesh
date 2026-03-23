@@ -4,7 +4,7 @@ import { addFilesToCanvas, addUrlToCanvas, fitEntitiesToView } from "#lib/entity
 import { fileHandleStore } from "#lib/files/file-handle.ts";
 import { wait } from "#lib/util.ts";
 import { useRef } from "react";
-import { useCanvas } from "../context/use-canvas.ts";
+import { useCanvasCommands } from "../context/use-canvas.ts";
 import { canvasStore } from "../engine/canvas-store.ts";
 import { useClipboardPaste } from "./use-clipboard-paste.ts";
 import { useIsMobile } from "./use-is-mobile.ts";
@@ -20,8 +20,8 @@ function isStudioFile(file: File): boolean {
 }
 
 export function useImageInput({ containerRef, multipleFiles = true }: UseImageInputOptions) {
-  const { addEntity, setRenderStateFromURL, applyEffectsToSelection, deserializeCanvas } =
-    useCanvas();
+  const { addEntity, applyUrlState, applyEffectsToSelection, deserializeCanvas } =
+    useCanvasCommands();
   const isLoadingRef = useRef(false);
   const isMobile = useIsMobile();
   const bottomInset = isMobile ? config.canvas.mobile.bottomInset : 0;
@@ -80,7 +80,7 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
         const url = new URL(urlString);
         if (url.origin === window.origin && url.searchParams.size > 0) {
           toastManager.add({ title: "Got params from pasted link" });
-          setRenderStateFromURL(url.searchParams);
+          applyUrlState(url.searchParams);
           continue;
         }
 

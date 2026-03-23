@@ -1,15 +1,16 @@
 import { NavArrowRight } from "iconoir-react";
 import { Checkbox } from "#ui/checkbox/index.tsx";
-import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
+import { useCanvasCommands, useCanvasPreferences } from "#context/use-canvas.ts";
 import { shareOrCopyUrl } from "./share.ts";
 
 export function SnapToGridToggle() {
-  const { snapToGrid, handleSnapToGridChange } = useCanvasActions();
+  const { snapToGrid } = useCanvasPreferences();
+  const { setSnapToGrid } = useCanvasCommands();
   return (
     <Checkbox
       name="snap_to_grid"
       checked={snapToGrid}
-      onChange={(e) => handleSnapToGridChange(e.target.checked)}
+      onChange={(e) => setSnapToGrid(e.target.checked)}
       switch
     >
       Snap to Grid
@@ -18,12 +19,13 @@ export function SnapToGridToggle() {
 }
 
 export function FancyDeleteToggle() {
-  const { fancyDelete, handleFancyDeleteChange } = useCanvasActions();
+  const { fancyDelete } = useCanvasPreferences();
+  const { setFancyDelete } = useCanvasCommands();
   return (
     <Checkbox
       name="fancy_delete"
       checked={fancyDelete}
-      onChange={(e) => handleFancyDeleteChange(e.target.checked)}
+      onChange={(e) => setFancyDelete(e.target.checked)}
       switch
     >
       Fancy deletions
@@ -32,12 +34,13 @@ export function FancyDeleteToggle() {
 }
 
 export function HapticsToggle() {
-  const { haptics, handleHapticsChange } = useCanvasActions();
+  const { haptics } = useCanvasPreferences();
+  const { setHaptics } = useCanvasCommands();
   return (
     <Checkbox
       name="haptics"
       checked={haptics}
-      onChange={(e) => handleHapticsChange(e.target.checked)}
+      onChange={(e) => setHaptics(e.target.checked)}
       switch
     >
       Haptic feedback

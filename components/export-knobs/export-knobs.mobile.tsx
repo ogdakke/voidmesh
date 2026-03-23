@@ -1,7 +1,7 @@
 import { ExportQueuePanel } from "#components/export-queue-panel.tsx";
 import { UploadControls } from "#components/upload-button-controls.tsx";
+import { useSelectedEntities } from "#context/use-canvas.ts";
 import { useExportQueue } from "#context/use-export-queue.ts";
-import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
 import {
   formatSupportsAudio,
   type ExportFormat,
@@ -36,7 +36,7 @@ const { FORMAT_OPTIONS, QUALITY_OPTIONS, RESOLUTION_OPTIONS, GIF_DITHER_OPTIONS 
 /** Mobile export settings - uses native selects for OS-level pickers */
 function MobileExportSettingsKnobs() {
   const { exportOptions, updateExportOptions, syncFpsWithEntity } = useExportQueue();
-  const { selectedEntities } = useCanvasActions();
+  const selectedEntities = useSelectedEntities();
 
   const animatedEntities = selectedEntities.filter(isAnimatedEntity);
   const firstAnimatedEntity = animatedEntities[0] ?? null;
@@ -258,7 +258,7 @@ function MobileExportSettingsKnobs() {
 }
 
 export function MobileExportKnobs() {
-  const { selectedEntities } = useCanvasActions();
+  const selectedEntities = useSelectedEntities();
   const [imageFormat, setImageFormat] = useState<ImageExportFormat>("png");
 
   const hasAnimated = selectedEntities.some(isAnimatedEntity);

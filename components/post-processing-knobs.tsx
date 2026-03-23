@@ -1,6 +1,6 @@
 import type { ChangeEvent } from "react";
-import { useCanvas } from "../context/use-canvas.ts";
-import { useCanvasActions, useParamValue } from "../hooks/use-canvas-actions.ts";
+import { useCanvasCommands, useSelectionState } from "../context/use-canvas.ts";
+import { useParamValue } from "../hooks/use-param-value.ts";
 import { Slider } from "./ui/slider/index.tsx";
 import { undo } from "#lib/undo.ts";
 import { config } from "#config";
@@ -17,7 +17,7 @@ import { NavArrowRight } from "iconoir-react";
 const ppDefaults = config.defaults.shaderParams.postProcess!;
 
 export function PostProcessingKnobs() {
-  const { selectionState } = useCanvasActions();
+  const selectionState = useSelectionState();
   // Feature enabled states (read from the enabled property)
 
   // Early return if no selection
@@ -38,7 +38,7 @@ export function PostProcessingKnobs() {
 }
 
 function GrainKnobs() {
-  const { updateSelectedEntityParams } = useCanvas();
+  const { updateSelectedEntityParams } = useCanvasCommands();
 
   const grainEnabled = useParamValue("postProcess.grain.enabled", ppDefaults.grain.enabled);
 
@@ -114,7 +114,7 @@ function GrainKnobs() {
 }
 
 function ChromaticAberrationKnobs() {
-  const { updateSelectedEntityParams } = useCanvas();
+  const { updateSelectedEntityParams } = useCanvasCommands();
   const chromaticEnabled = useParamValue(
     "postProcess.chromaticAberration.enabled",
     ppDefaults.chromaticAberration.enabled,
@@ -176,7 +176,7 @@ function ChromaticAberrationKnobs() {
 }
 
 function BloomKnobs() {
-  const { updateSelectedEntityParams } = useCanvas();
+  const { updateSelectedEntityParams } = useCanvasCommands();
   // Feature enabled states (read from the enabled property)
   const bloomEnabled = useParamValue("postProcess.bloom.enabled", ppDefaults.bloom.enabled);
 

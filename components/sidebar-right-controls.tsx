@@ -1,6 +1,14 @@
-import { type ChangeEvent } from "react";
+import { memo, type ChangeEvent } from "react";
 import { DropletHalf, Eye, FloppyDiskArrowIn, Import, NavArrowRight } from "iconoir-react";
-import { useCanvas } from "../context/use-canvas.ts";
+import {
+  useCanvasRendererService,
+  useHasEntities,
+  useHasSelection,
+  useHasUniformSelectedShader,
+  useCanvasCommands,
+  useSelectedEntity,
+  useSelectedShaderType,
+} from "../context/use-canvas.ts";
 import {
   SHADER_TYPE_OPTIONS,
   GlassKind,
@@ -8,7 +16,7 @@ import {
   GlitchKind,
   GLITCH_KIND_OPTIONS,
 } from "#types/canvas.ts";
-import { useCanvasActions, useParamValue } from "../hooks/use-canvas-actions.ts";
+import { useParamValue } from "../hooks/use-param-value.ts";
 import { analytics } from "#lib/analytics.ts";
 import { canvasStore } from "#engine";
 import { Button } from "./ui/button/index.tsx";
@@ -48,33 +56,9 @@ interface SidebarRightControlsProps {
 }
 
 export const SidebarRightControls = ({ className, compact }: SidebarRightControlsProps) => {
-  const { updateSelectedEntityParams, entities } = useCanvas();
+  const hasEntities = useHasEntities();
+  const hasSelection = useHasSelection();
   const { exportStudioFile, importStudioFile, isExporting, isImporting } = useStudioFile();
-
-  // Use shared canvas actions hook with selectionState for multi-select
-  const {
-    shaderType: selectedShaderType,
-    handleShaderTypeChange,
-    hasSelection,
-    selectionState,
-    handleShowOriginalChange,
-    resetEntityToDefaults,
-  } = useCanvasActions();
-  const postProcessEnabled = useParamValue(
-    "postProcess.enabled",
-    config.defaults.shaderParams.postProcess.enabled,
-  );
-  const showOriginalEnabled = useParamValue(
-    "showOriginal",
-    config.defaults.shaderParams.showOriginal,
-  );
-
-  // Master enable/disable handler
-  const handlePpEnabledChange = (e: ChangeEvent<HTMLInputElement>) => {
-    updateSelectedEntityParams({
-      postProcess: { enabled: e.target.checked },
-    });
-  };
 
   return (
     <form onSubmit={(e) => e.preventDefault()} className={className}>
@@ -88,137 +72,22 @@ export const SidebarRightControls = ({ className, compact }: SidebarRightControl
           </div>
 
           <hr className="divider" />
-          {!hasSelection && (
-            <>
-              <div className="sidebar-row no-selection-message">
-                <p>
-                  {entities.length > 0
-                    ? "Select an image or video on the canvas to edit it"
-                    : "Drop or paste images, videos and links for editing"}
-                </p>
-              </div>
-            </>
-          )}
-          {hasSelection && (
-            <>
-              <div className="sidebar-row shader-type-row">
-                <ShaderSelect
-                  shaderType={selectedShaderType}
-                  handleShaderTypeChange={handleShaderTypeChange}
-                  isShaderMixed={!selectionState.hasUniformShader}
-                />
-              </div>
-              <div className="sidebar-row show-original-row">
-                <Toggle
-                  pressed={!!showOriginalEnabled.value}
-                  onPressedChange={(pressed) => {
-                    // If mixed, clicking sets all to true; otherwise toggle
-                    const newValue = showOriginalEnabled.isMixed ? true : pressed;
-                    handleShowOriginalChange(newValue);
-                  }}
-                  title="Show original"
-                >
-                  <Eye /> Original
-                </Toggle>
-                <Button variant="secondary" size="sm" onClick={resetEntityToDefaults}>
-                  Reset
-                </Button>
-              </div>
-              <hr className="divider" />
-              <Collapsible>
-                <CollapsibleTrigger className="sidebar-collapsible-trigger">
-                  <NavArrowRight className="collapsible-icon" />
-                  Adjustments
-                </CollapsibleTrigger>
-                <CollapsibleContent>
-                  <AdjustmentsKnobs />
-                </CollapsibleContent>
-              </Collapsible>
-              <hr className="divider" />
-              <Collapsible defaultOpen>
-                <CollapsibleTrigger className="sidebar-collapsible-trigger">
-                  <NavArrowRight className="collapsible-icon" />
-                  Style Parameters
-                </CollapsibleTrigger>
-                <CollapsibleContent>
-                  <BlobParams />
-
-                  <GlassParamsControl />
-
-                  <GlitchParamsControl />
-
-                  <DitheringKnobs />
-
-                  <AsciiKnobs />
-
-                  <EffectParams />
-
-                  <EntityParams />
-                </CollapsibleContent>
-              </Collapsible>
-              <hr className="divider" />
-              <Collapsible
-                key={`pp-${!!postProcessEnabled.value}`}
-                defaultOpen={!!postProcessEnabled.value}
-              >
-                <CollapsibleGroup>
-                  <CollapsibleTrigger className="sidebar-collapsible-trigger">
-                    <NavArrowRight />
-                    Post Processing
-                  </CollapsibleTrigger>
-                  <CollapsibleCheckbox
-                    aria-label="Enable Post Processing"
-                    checked={postProcessEnabled.value}
-                    indeterminate={postProcessEnabled.isMixed}
-                    onChange={handlePpEnabledChange}
-                  />
-                </CollapsibleGroup>
-                <CollapsibleContent>
-                  <PostProcessingKnobs />
-                </CollapsibleContent>
-              </Collapsible>
-            </>
-          )}
-          {hasSelection && (
-            <>
-              <UpscaleQueuePanel />
-              <Collapsible>
-                <CollapsibleTrigger className="sidebar-collapsible-trigger">
-                  <NavArrowRight />
-                  Export
-                </CollapsibleTrigger>
-                <CollapsibleContent className="exports-content">
-                  <DesktopExportKnobs />
-                </CollapsibleContent>
-              </Collapsible>
-            </>
-          )}
+          {!hasSelection && <EmptySelectionMessage hasEntities={hasEntities} />}
+          {hasSelection && <SelectedSidebarSections />}
+          {hasSelection && <SelectionFooterSections />}
         </div>
       </div>
 
       {hasSelection && <DesktopTimeSlider />}
 
       {!hasSelection && (
-        <div className="sidebar-row studio-file-row">
-          {entities.length > 0 && (
-            <Button
-              variant="primary"
-              onClick={exportStudioFile}
-              disabled={isExporting || isImporting}
-            >
-              <FloppyDiskArrowIn />
-              <span>Save workspace</span>
-            </Button>
-          )}
-          <Button
-            variant="secondary"
-            onClick={() => importStudioFile()}
-            disabled={isExporting || isImporting}
-          >
-            <Import />
-            <span>Open workspace</span>
-          </Button>
-        </div>
+        <WorkspaceActions
+          hasEntities={hasEntities}
+          exportStudioFile={exportStudioFile}
+          importStudioFile={importStudioFile}
+          isExporting={isExporting}
+          isImporting={isImporting}
+        />
       )}
 
       <div className="last-row">
@@ -228,6 +97,175 @@ export const SidebarRightControls = ({ className, compact }: SidebarRightControl
     </form>
   );
 };
+
+const EmptySelectionMessage = memo(function EmptySelectionMessage({
+  hasEntities,
+}: {
+  hasEntities: boolean;
+}) {
+  return (
+    <div className="sidebar-row no-selection-message">
+      <p>
+        {hasEntities
+          ? "Select an image or video on the canvas to edit it"
+          : "Drop or paste images, videos and links for editing"}
+      </p>
+    </div>
+  );
+});
+
+const WorkspaceActions = memo(function WorkspaceActions({
+  hasEntities,
+  exportStudioFile,
+  importStudioFile,
+  isExporting,
+  isImporting,
+}: {
+  hasEntities: boolean;
+  exportStudioFile: () => void;
+  importStudioFile: () => void;
+  isExporting: boolean;
+  isImporting: boolean;
+}) {
+  return (
+    <div className="sidebar-row studio-file-row">
+      {hasEntities && (
+        <Button variant="primary" onClick={exportStudioFile} disabled={isExporting || isImporting}>
+          <FloppyDiskArrowIn />
+          <span>Save workspace</span>
+        </Button>
+      )}
+      <Button variant="secondary" onClick={importStudioFile} disabled={isExporting || isImporting}>
+        <Import />
+        <span>Open workspace</span>
+      </Button>
+    </div>
+  );
+});
+
+const SelectedSidebarSections = memo(function SelectedSidebarSections() {
+  return (
+    <>
+      <SelectionHeaderSection />
+      <hr className="divider" />
+      <Collapsible>
+        <CollapsibleTrigger className="sidebar-collapsible-trigger">
+          <NavArrowRight className="collapsible-icon" />
+          Adjustments
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <AdjustmentsKnobs />
+        </CollapsibleContent>
+      </Collapsible>
+      <hr className="divider" />
+      <Collapsible defaultOpen>
+        <CollapsibleTrigger className="sidebar-collapsible-trigger">
+          <NavArrowRight className="collapsible-icon" />
+          Style Parameters
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <BlobParams />
+          <GlassParamsControl />
+          <GlitchParamsControl />
+          <DitheringKnobs />
+          <AsciiKnobs />
+          <EffectParams />
+          <EntityParams />
+        </CollapsibleContent>
+      </Collapsible>
+      <hr className="divider" />
+      <PostProcessingSection />
+    </>
+  );
+});
+
+const SelectionHeaderSection = memo(function SelectionHeaderSection() {
+  const { changeShaderType, setShowOriginal, resetSelectionToDefaults } = useCanvasCommands();
+  const selectedShaderType = useSelectedShaderType();
+  const hasUniformShader = useHasUniformSelectedShader();
+  const showOriginalEnabled = useParamValue(
+    "showOriginal",
+    config.defaults.shaderParams.showOriginal,
+  );
+
+  return (
+    <>
+      <div className="sidebar-row shader-type-row">
+        <ShaderSelect
+          shaderType={selectedShaderType}
+          handleShaderTypeChange={changeShaderType}
+          isShaderMixed={!hasUniformShader}
+        />
+      </div>
+      <div className="sidebar-row show-original-row">
+        <Toggle
+          pressed={!!showOriginalEnabled.value}
+          onPressedChange={(pressed) => {
+            const newValue = showOriginalEnabled.isMixed ? true : pressed;
+            setShowOriginal(newValue);
+          }}
+          title="Show original"
+        >
+          <Eye /> Original
+        </Toggle>
+        <Button variant="secondary" size="sm" onClick={resetSelectionToDefaults}>
+          Reset
+        </Button>
+      </div>
+    </>
+  );
+});
+
+const PostProcessingSection = memo(function PostProcessingSection() {
+  const { updateSelectedEntityParams } = useCanvasCommands();
+  const postProcessEnabled = useParamValue(
+    "postProcess.enabled",
+    config.defaults.shaderParams.postProcess.enabled,
+  );
+
+  const handlePpEnabledChange = (e: ChangeEvent<HTMLInputElement>) => {
+    updateSelectedEntityParams({
+      postProcess: { enabled: e.target.checked },
+    });
+  };
+
+  return (
+    <Collapsible key={`pp-${!!postProcessEnabled.value}`} defaultOpen={!!postProcessEnabled.value}>
+      <CollapsibleGroup>
+        <CollapsibleTrigger className="sidebar-collapsible-trigger">
+          <NavArrowRight />
+          Post Processing
+        </CollapsibleTrigger>
+        <CollapsibleCheckbox
+          aria-label="Enable Post Processing"
+          checked={postProcessEnabled.value}
+          indeterminate={postProcessEnabled.isMixed}
+          onChange={handlePpEnabledChange}
+        />
+      </CollapsibleGroup>
+      <CollapsibleContent>
+        <PostProcessingKnobs />
+      </CollapsibleContent>
+    </Collapsible>
+  );
+});
+
+const SelectionFooterSections = memo(function SelectionFooterSections() {
+  return (
+    <>
+      <UpscaleQueuePanel />
+      <Collapsible>
+        <CollapsibleTrigger className="sidebar-collapsible-trigger">
+          <NavArrowRight />
+          Export
+        </CollapsibleTrigger>
+        <CollapsibleContent className="exports-content">
+          <DesktopExportKnobs />
+        </CollapsibleContent>
+      </Collapsible>
+    </>
+  );
+});
 
 interface ShaderSelectProps {
   shaderType: string;
@@ -270,7 +308,7 @@ export function ShaderSelect({
 }
 
 export function BlobParams() {
-  const { updateSelectedEntityParams } = useCanvas();
+  const { updateSelectedEntityParams } = useCanvasCommands();
   const eagerness = useParamValue("blobs.eagerness", config.defaults.shaderParams.blobs.eagerness);
 
   const handleEagernessChange = (value: number) => {
@@ -304,8 +342,7 @@ export function BlobParams() {
 }
 
 export function GlassParamsControl() {
-  const { updateSelectedEntityParams } = useCanvas();
-  const { handleGlassKindChange } = useCanvasActions();
+  const { updateSelectedEntityParams, changeGlassKind } = useCanvasCommands();
   const glassKind = useParamValue("glass.kind", config.defaults.shaderParams.glass!.kind);
   const angle = useParamValue("glass.angle", config.defaults.shaderParams.glass!.angle);
   const caustic = useParamValue("glass.caustic", config.defaults.shaderParams.glass!.caustic);
@@ -369,7 +406,7 @@ export function GlassParamsControl() {
           name="glass-kind"
           label="Glass Type"
           value={glassKind.isMixed ? "" : (glassKind.value ?? GlassKind.frostedVoronoi)}
-          onValueChange={handleGlassKindChange}
+          onValueChange={changeGlassKind}
           items={GLASS_KIND_OPTIONS}
         >
           {GLASS_KIND_OPTIONS.map((option) => (
@@ -478,8 +515,7 @@ export function GlassParamsControl() {
 }
 
 export function GlitchParamsControl() {
-  const { updateSelectedEntityParams } = useCanvas();
-  const { handleGlitchKindChange } = useCanvasActions();
+  const { updateSelectedEntityParams, changeGlitchKind } = useCanvasCommands();
   const glitchKind = useParamValue("glitch.kind", config.defaults.shaderParams.glitch!.kind);
   const angle = useParamValue("glitch.angle", config.defaults.shaderParams.glitch!.angle);
 
@@ -501,7 +537,7 @@ export function GlitchParamsControl() {
           name="glitch-kind"
           label="Glitch Type"
           value={glitchKind.isMixed ? "Mixed" : (glitchKind.value ?? GlitchKind.channelShift)}
-          onValueChange={handleGlitchKindChange}
+          onValueChange={changeGlitchKind}
           items={GLITCH_KIND_OPTIONS}
         >
           {GLITCH_KIND_OPTIONS.map((option) => (
@@ -532,7 +568,8 @@ export function GlitchParamsControl() {
 }
 
 export function EffectParams({ show }: { show?: "scale" | "intensity" }) {
-  const { updateSelectedEntityParams, selectedShaderType } = useCanvas();
+  const { updateSelectedEntityParams } = useCanvasCommands();
+  const selectedShaderType = useSelectedShaderType();
   const scaleParam = useParamValue("scale", config.defaults.shaderParams.scale);
   const intensity = useParamValue("intensity", config.defaults.shaderParams.intensity);
   const isGlass = selectedShaderType === "glass";
@@ -606,22 +643,77 @@ export function EffectParams({ show }: { show?: "scale" | "intensity" }) {
   );
 }
 
-export function EntityParams() {
-  // Use shared canvas actions hook with selectionState for multi-select
-  const {
-    selectedEntity,
-    selectionState,
-    handlePaletteChange,
-    handlePaletteUpload,
-    handleDeletePalette,
-    handlePreserveColorsChange,
-    handleReversePaletteChange,
-    handleSizeChange,
-  } = useCanvasActions();
-  const { colorSpace } = useCanvas();
-  const customPalettes = usePaletteStore();
+export const EntityParams = memo(function EntityParams() {
+  const hasSelection = useHasSelection();
+  if (!hasSelection) return null;
 
-  // Get control values with mixed awareness
+  return (
+    <>
+      <PaletteEditorSection />
+      <PalettePresetsSection />
+      <PaletteToggleSection />
+      <SizeSection />
+      <ShapeSection />
+    </>
+  );
+});
+
+const PaletteEditorSection = memo(function PaletteEditorSection() {
+  const { changePalette, uploadPalette, deletePalette } = useCanvasCommands();
+  const { colorSpace } = useCanvasRendererService();
+  const reversePalette = useParamValue(
+    "reversePalette",
+    config.defaults.shaderParams.reversePalette,
+  );
+  const palette = useParamValue("palette", config.defaults.shaderParams.palette);
+  if (!palette.isSupported) return null;
+
+  return (
+    <div className="sidebar-row palette-row">
+      {palette.isMixed ? (
+        <span className="palette-mixed">Mixed palettes</span>
+      ) : (
+        <ColorPalette
+          onValueChange={changePalette}
+          palette={palette.value ?? undefined}
+          colorSpace={colorSpace}
+          reversed={!!reversePalette.value}
+          onDelete={
+            palette.value?.id && isUserPalette(palette.value.id)
+              ? () => deletePalette(palette.value.id!)
+              : undefined
+          }
+          canDelete={!!palette.value?.id && isUserPalette(palette.value.id)}
+        />
+      )}
+      <PaletteUpload onUpload={uploadPalette} />
+    </div>
+  );
+});
+
+const PalettePresetsSection = memo(function PalettePresetsSection() {
+  const { changePalette } = useCanvasCommands();
+  const selectedEntity = useSelectedEntity();
+  const customPalettes = usePaletteStore();
+  const palette = useParamValue("palette", config.defaults.shaderParams.palette);
+
+  if (!palette.isSupported) return null;
+
+  return (
+    <div className="sidebar-row">
+      <ColorPalettePresets
+        selectedPaletteId={palette.value?.id ?? null}
+        onSelectPalette={changePalette}
+        originalPalette={selectedEntity?.originalPalette}
+        customPalettes={customPalettes}
+        isMixed={palette.isMixed}
+      />
+    </div>
+  );
+});
+
+const PaletteToggleSection = memo(function PaletteToggleSection() {
+  const { setPreserveColors, setReversePalette } = useCanvasCommands();
   const preserveColors = useParamValue(
     "preserveColors",
     config.defaults.shaderParams.preserveColors,
@@ -630,94 +722,66 @@ export function EntityParams() {
     "reversePalette",
     config.defaults.shaderParams.reversePalette,
   );
-  const size = useParamValue("size", config.defaults.shaderParams.size);
-  const palette = useParamValue("palette", config.defaults.shaderParams.palette);
-  // Early return only if no selection at all
-  if (selectionState.isEmpty) return null;
+
+  if (!preserveColors.isSupported && !reversePalette.isSupported) return null;
 
   return (
-    <>
-      {/* Palette UI - only for shaders that support palettes */}
-      {palette.isSupported && (
-        <div className="sidebar-row palette-row">
-          {palette.isMixed ? (
-            <span className="palette-mixed">Mixed palettes</span>
-          ) : (
-            <ColorPalette
-              onValueChange={handlePaletteChange}
-              palette={palette.value ?? undefined}
-              colorSpace={colorSpace}
-              reversed={!!reversePalette.value}
-              onDelete={
-                palette.value?.id && isUserPalette(palette.value.id)
-                  ? () => handleDeletePalette(palette.value.id!)
-                  : undefined
-              }
-              canDelete={!!palette.value?.id && isUserPalette(palette.value.id)}
-            />
-          )}
-          <PaletteUpload onUpload={handlePaletteUpload} />
-        </div>
-      )}
-      {palette.isSupported && (
-        <div className="sidebar-row">
-          <ColorPalettePresets
-            selectedPaletteId={palette.value?.id ?? null}
-            onSelectPalette={handlePaletteChange}
-            originalPalette={selectedEntity?.originalPalette}
-            customPalettes={customPalettes}
-            isMixed={palette.isMixed}
-          />
-        </div>
-      )}
-      {preserveColors.isSupported || reversePalette.isSupported ? (
-        <div className="sidebar-row palette-toggles">
-          {preserveColors.isSupported && (
-            <Toggle
-              pressed={!!preserveColors.value}
-              onPressedChange={(pressed) => {
-                const newValue = preserveColors.isMixed ? true : pressed;
-                handlePreserveColorsChange(newValue);
-              }}
-              title="Preserve colors"
-            >
-              <span className="palette-icon" data-pressed={!!preserveColors.value || undefined} />{" "}
-              Preserve
-            </Toggle>
-          )}
-          {reversePalette.isSupported && (
-            <Toggle
-              pressed={!!reversePalette.value}
-              onPressedChange={(pressed) => {
-                const newValue = reversePalette.isMixed ? true : pressed;
-                handleReversePaletteChange(newValue);
-              }}
-              title="Reverse palette"
-            >
-              <DropletHalf /> Reverse
-            </Toggle>
-          )}
-        </div>
-      ) : null}
-      <div className="sidebar-row size-row">
-        <Slider
-          label={size.isMixed ? "Size (Mixed)" : "Size"}
-          name="size"
-          value={size.value}
-          onValueChange={handleSizeChange}
-          onInteractionStart={() => {
-            undo.beginTransaction();
+    <div className="sidebar-row palette-toggles">
+      {preserveColors.isSupported && (
+        <Toggle
+          pressed={!!preserveColors.value}
+          onPressedChange={(pressed) => {
+            const newValue = preserveColors.isMixed ? true : pressed;
+            setPreserveColors(newValue);
           }}
-          onValueCommitted={() => {
-            undo.commitTransaction();
+          title="Preserve colors"
+        >
+          <span className="palette-icon" data-pressed={!!preserveColors.value || undefined} />{" "}
+          Preserve
+        </Toggle>
+      )}
+      {reversePalette.isSupported && (
+        <Toggle
+          pressed={!!reversePalette.value}
+          onPressedChange={(pressed) => {
+            const newValue = reversePalette.isMixed ? true : pressed;
+            setReversePalette(newValue);
           }}
-          max={100}
-          min={1}
-          step={1}
-          showValue={!size.isMixed}
-        />
-      </div>
-      <ShapeKnobs />
-    </>
+          title="Reverse palette"
+        >
+          <DropletHalf /> Reverse
+        </Toggle>
+      )}
+    </div>
   );
-}
+});
+
+const SizeSection = memo(function SizeSection() {
+  const { changeSize } = useCanvasCommands();
+  const size = useParamValue("size", config.defaults.shaderParams.size);
+
+  return (
+    <div className="sidebar-row size-row">
+      <Slider
+        label={size.isMixed ? "Size (Mixed)" : "Size"}
+        name="size"
+        value={size.value}
+        onValueChange={changeSize}
+        onInteractionStart={() => {
+          undo.beginTransaction();
+        }}
+        onValueCommitted={() => {
+          undo.commitTransaction();
+        }}
+        max={100}
+        min={1}
+        step={1}
+        showValue={!size.isMixed}
+      />
+    </div>
+  );
+});
+
+const ShapeSection = memo(function ShapeSection() {
+  return <ShapeKnobs />;
+});

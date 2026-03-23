@@ -6,8 +6,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { NavArrowRight, SoundHigh } from "iconoir-react";
+import { useSelectedEntities } from "#context/use-canvas.ts";
 import { useExportQueue } from "#context/use-export-queue.ts";
-import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
 import { isAnimatedEntity, isVideoEntity } from "#types/canvas.ts";
 import {
   type ExportFormat,
@@ -38,7 +38,7 @@ const { FORMAT_OPTIONS, QUALITY_OPTIONS, RESOLUTION_OPTIONS, GIF_DITHER_OPTIONS 
 /** Export settings knobs - format, quality, advanced options */
 export function ExportSettingsKnobs() {
   const { exportOptions, updateExportOptions, syncFpsWithEntity } = useExportQueue();
-  const { selectedEntities } = useCanvasActions();
+  const selectedEntities = useSelectedEntities();
 
   const animatedEntities = selectedEntities.filter(isAnimatedEntity);
   const firstAnimatedEntity = animatedEntities[0] ?? null;
@@ -262,7 +262,7 @@ export function ExportSettingsKnobs() {
 
 /** Combined export knobs for desktop sidebar */
 export function DesktopExportKnobs() {
-  const { selectedEntities } = useCanvasActions();
+  const selectedEntities = useSelectedEntities();
   const [imageFormat, setImageFormat] = useState<ImageExportFormat>("png");
   const hasAnimated = selectedEntities.some(isAnimatedEntity);
 

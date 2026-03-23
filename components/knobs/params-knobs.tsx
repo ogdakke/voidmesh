@@ -1,5 +1,10 @@
-import { useParamValue, type ParamResult } from "#hooks/use-canvas-actions.ts";
-import { useCanvas } from "#context/use-canvas.ts";
+import { useParamValue, type ParamResult } from "#hooks/use-param-value.ts";
+import {
+  useCanvasCommands,
+  useCanvasRendererService,
+  useSelectedEntityIds,
+  useSelectedShaderType,
+} from "#context/use-canvas.ts";
 import { type ParamPaths, type ShaderParams, type ShaderType } from "#types/canvas.ts";
 import { memo, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -191,8 +196,10 @@ export function ParamsKnobs() {
   const [selectedKnob, setSelectedKnob] = useState<SlideyParam>(AllSlideyParamsInOrder.at(0)!);
   const [floatingLabel, setFloatingLabel] = useState<string | null>(null);
   const floatingLabelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const { updateSelectedEntityParams, selectedShaderType, renderer, selectedEntityIds } =
-    useCanvas();
+  const { updateSelectedEntityParams } = useCanvasCommands();
+  const { renderer } = useCanvasRendererService();
+  const selectedEntityIds = useSelectedEntityIds();
+  const selectedShaderType = useSelectedShaderType();
 
   // All param values keyed by path — same hook count/order every render
   const paramValues: ParamValuesRecord = {

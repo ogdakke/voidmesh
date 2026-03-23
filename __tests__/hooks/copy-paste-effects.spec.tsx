@@ -76,7 +76,7 @@ describe("copyEntityParams", () => {
   test("writes JSON with __voidmesh discriminant to clipboard", async () => {
     const writeTextSpy = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
 
-    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
 
     act(() => {
       const id = addEntityWithParams(canvas, ShaderType.dithering, {
@@ -87,7 +87,7 @@ describe("copyEntityParams", () => {
     });
 
     act(() => {
-      actions.copyEntityParams();
+      canvas.copySelectionEffects();
     });
 
     expect(writeTextSpy).toHaveBeenCalledOnce();
@@ -104,7 +104,7 @@ describe("copyEntityParams", () => {
   test("includes full palette with color data", async () => {
     const writeTextSpy = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
 
-    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
 
     act(() => {
       const id = addEntityWithParams(canvas, ShaderType.halftone, {
@@ -114,7 +114,7 @@ describe("copyEntityParams", () => {
     });
 
     act(() => {
-      actions.copyEntityParams();
+      canvas.copySelectionEffects();
     });
 
     const parsed = JSON.parse(writeTextSpy.mock.calls[0]![0]);
@@ -126,7 +126,7 @@ describe("copyEntityParams", () => {
   test("includes originalPalette when present", async () => {
     const writeTextSpy = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
 
-    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
 
     act(() => {
       const id = canvas.addEntity(createEntityInput());
@@ -145,7 +145,7 @@ describe("copyEntityParams", () => {
     });
 
     act(() => {
-      actions.copyEntityParams();
+      canvas.copySelectionEffects();
     });
 
     const parsed = JSON.parse(writeTextSpy.mock.calls[0]![0]);
@@ -157,7 +157,7 @@ describe("copyEntityParams", () => {
   test("copies first entity params when multiple selected", async () => {
     const writeTextSpy = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
 
-    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
 
     act(() => {
       const id1 = addEntityWithParams(canvas, ShaderType.dithering, { size: 10 });
@@ -166,7 +166,7 @@ describe("copyEntityParams", () => {
     });
 
     act(() => {
-      actions.copyEntityParams();
+      canvas.copySelectionEffects();
     });
 
     expect(writeTextSpy).toHaveBeenCalledOnce();
@@ -178,10 +178,10 @@ describe("copyEntityParams", () => {
   test("does nothing when no selection", async () => {
     const writeTextSpy = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
 
-    const { actions } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
 
     act(() => {
-      actions.copyEntityParams();
+      canvas.copySelectionEffects();
     });
 
     expect(writeTextSpy).not.toHaveBeenCalled();
@@ -190,7 +190,7 @@ describe("copyEntityParams", () => {
   test("includes all shader sub-params", async () => {
     const writeTextSpy = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
 
-    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
 
     act(() => {
       const id = canvas.addEntity(createEntityInput());
@@ -227,7 +227,7 @@ describe("copyEntityParams", () => {
     });
 
     act(() => {
-      actions.copyEntityParams();
+      canvas.copySelectionEffects();
     });
 
     const parsed = JSON.parse(writeTextSpy.mock.calls[0]![0]);
@@ -258,7 +258,7 @@ describe("pasteEntityParams", () => {
   test("applies effects from voidmesh JSON to single entity", async () => {
     vi.spyOn(navigator.clipboard, "readText").mockResolvedValue(makeClipboardData());
 
-    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
     let entityId = "";
 
     act(() => {
@@ -267,7 +267,7 @@ describe("pasteEntityParams", () => {
     });
 
     await act(async () => {
-      await actions.pasteEntityParams();
+      await canvas.pasteEffects();
     });
 
     await waitFor(() => {
@@ -286,7 +286,7 @@ describe("pasteEntityParams", () => {
   test("applies effects to all entities in multi-select", async () => {
     vi.spyOn(navigator.clipboard, "readText").mockResolvedValue(makeClipboardData());
 
-    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
     let entityIds: string[] = [];
 
     act(() => {
@@ -299,7 +299,7 @@ describe("pasteEntityParams", () => {
     });
 
     await act(async () => {
-      await actions.pasteEntityParams();
+      await canvas.pasteEffects();
     });
 
     await waitFor(() =>
@@ -317,7 +317,7 @@ describe("pasteEntityParams", () => {
   test("supports undo for single entity paste", async () => {
     vi.spyOn(navigator.clipboard, "readText").mockResolvedValue(makeClipboardData());
 
-    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
     let entityId = "";
 
     act(() => {
@@ -326,7 +326,7 @@ describe("pasteEntityParams", () => {
     });
 
     await act(async () => {
-      await actions.pasteEntityParams();
+      await canvas.pasteEffects();
     });
 
     await waitFor(() => {
@@ -343,7 +343,7 @@ describe("pasteEntityParams", () => {
   test("supports undo for multi-select paste (single undo restores all)", async () => {
     vi.spyOn(navigator.clipboard, "readText").mockResolvedValue(makeClipboardData());
 
-    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
     let entityIds: string[] = [];
 
     act(() => {
@@ -355,7 +355,7 @@ describe("pasteEntityParams", () => {
     });
 
     await act(async () => {
-      await actions.pasteEntityParams();
+      await canvas.pasteEffects();
     });
 
     await waitFor(() =>
@@ -401,7 +401,7 @@ describe("pasteEntityParams", () => {
       makeClipboardData({ originalPalette: sourceOriginalPalette }),
     );
 
-    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
     let entityId = "";
 
     act(() => {
@@ -411,7 +411,7 @@ describe("pasteEntityParams", () => {
     });
 
     await act(async () => {
-      await actions.pasteEntityParams();
+      await canvas.pasteEffects();
     });
 
     await waitFor(() => {
@@ -430,7 +430,7 @@ describe("pasteEntityParams", () => {
       "https://example.com/?shader=ascii&size=33",
     );
 
-    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
     let entityId = "";
 
     act(() => {
@@ -439,7 +439,7 @@ describe("pasteEntityParams", () => {
     });
 
     await act(async () => {
-      await actions.pasteEntityParams();
+      await canvas.pasteEffects();
     });
 
     await waitFor(() => {
@@ -454,7 +454,7 @@ describe("pasteEntityParams", () => {
   test("ignores invalid JSON that is not voidmesh data", async () => {
     vi.spyOn(navigator.clipboard, "readText").mockResolvedValue('{"foo": "bar"}');
 
-    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
     let entityId = "";
 
     act(() => {
@@ -463,7 +463,7 @@ describe("pasteEntityParams", () => {
     });
 
     await act(async () => {
-      await actions.pasteEntityParams();
+      await canvas.pasteEffects();
     });
 
     // Not voidmesh JSON and not a valid URL — entity should be unchanged
@@ -474,7 +474,7 @@ describe("pasteEntityParams", () => {
   test("ignores plain text that is not JSON or URL", async () => {
     vi.spyOn(navigator.clipboard, "readText").mockResolvedValue("hello world");
 
-    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
     let entityId = "";
 
     act(() => {
@@ -483,7 +483,7 @@ describe("pasteEntityParams", () => {
     });
 
     await act(async () => {
-      await actions.pasteEntityParams();
+      await canvas.pasteEffects();
     });
 
     assertShaderType(entityId, ShaderType.halftone);
@@ -499,7 +499,7 @@ describe("copy-paste round trip", () => {
     });
     vi.spyOn(navigator.clipboard, "readText").mockImplementation(async () => clipboardContent);
 
-    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
 
     let sourceId = "";
     let targetId = "";
@@ -550,7 +550,7 @@ describe("copy-paste round trip", () => {
       canvas.selectEntity(sourceId);
     });
     act(() => {
-      actions.copyEntityParams();
+      canvas.copySelectionEffects();
     });
 
     // Paste to target
@@ -558,7 +558,7 @@ describe("copy-paste round trip", () => {
       canvas.selectEntity(targetId);
     });
     await act(async () => {
-      await actions.pasteEntityParams();
+      await canvas.pasteEffects();
     });
 
     await waitFor(() => {
@@ -600,7 +600,7 @@ describe("copy-paste round trip", () => {
     };
     paletteStore.addPalette(userPalette);
 
-    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
 
     // Flush CanvasProvider's async palette hydration before operating on the store
     await act(async () => {});
@@ -620,7 +620,7 @@ describe("copy-paste round trip", () => {
       canvas.selectEntity(sourceId);
     });
     act(() => {
-      actions.copyEntityParams();
+      canvas.copySelectionEffects();
     });
 
     // Paste to target
@@ -628,7 +628,7 @@ describe("copy-paste round trip", () => {
       canvas.selectEntity(targetId);
     });
     await act(async () => {
-      await actions.pasteEntityParams();
+      await canvas.pasteEffects();
     });
 
     await waitFor(() => {
@@ -654,7 +654,7 @@ describe("copy-paste round trip", () => {
     });
     vi.spyOn(navigator.clipboard, "readText").mockImplementation(async () => clipboardContent);
 
-    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
 
     let sourceId = "";
     let targetId = "";
@@ -669,7 +669,7 @@ describe("copy-paste round trip", () => {
       canvas.selectEntity(sourceId);
     });
     act(() => {
-      actions.copyEntityParams();
+      canvas.copySelectionEffects();
     });
 
     // Paste to target
@@ -677,7 +677,7 @@ describe("copy-paste round trip", () => {
       canvas.selectEntity(targetId);
     });
     await act(async () => {
-      await actions.pasteEntityParams();
+      await canvas.pasteEffects();
     });
 
     // Modify target
@@ -720,7 +720,7 @@ describe("paste palette isolation", () => {
     });
     vi.spyOn(navigator.clipboard, "readText").mockResolvedValue(clipboardData);
 
-    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
     let entityId = "";
 
     act(() => {
@@ -729,7 +729,7 @@ describe("paste palette isolation", () => {
     });
 
     await act(async () => {
-      await actions.pasteEntityParams();
+      await canvas.pasteEffects();
     });
 
     await waitFor(() => {
@@ -762,7 +762,7 @@ describe("paste palette isolation", () => {
     });
     vi.spyOn(navigator.clipboard, "readText").mockResolvedValue(clipboardData);
 
-    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
     let entityId = "";
 
     act(() => {
@@ -771,7 +771,7 @@ describe("paste palette isolation", () => {
     });
 
     await act(async () => {
-      await actions.pasteEntityParams();
+      await canvas.pasteEffects();
     });
 
     await waitFor(() => {
@@ -797,7 +797,7 @@ describe("paste palette isolation", () => {
     });
     vi.spyOn(navigator.clipboard, "readText").mockResolvedValue(clipboardData);
 
-    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
     let entityId = "";
 
     act(() => {
@@ -806,7 +806,7 @@ describe("paste palette isolation", () => {
     });
 
     await act(async () => {
-      await actions.pasteEntityParams();
+      await canvas.pasteEffects();
     });
 
     await waitFor(() => {
@@ -838,7 +838,7 @@ describe("paste palette isolation", () => {
     });
     vi.spyOn(navigator.clipboard, "readText").mockResolvedValue(clipboardData);
 
-    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
     let entityIds: string[] = [];
 
     act(() => {
@@ -851,7 +851,7 @@ describe("paste palette isolation", () => {
     });
 
     await act(async () => {
-      await actions.pasteEntityParams();
+      await canvas.pasteEffects();
     });
 
     await waitFor(() =>
@@ -899,7 +899,7 @@ describe("paste palette isolation", () => {
     });
     vi.spyOn(navigator.clipboard, "readText").mockResolvedValue(clipboardData);
 
-    const { canvas, actions } = renderWithCanvas(undefined, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
 
     // Flush CanvasProvider's async palette hydration before operating on the store
     await act(async () => {});
@@ -914,7 +914,7 @@ describe("paste palette isolation", () => {
     });
 
     await act(async () => {
-      await actions.pasteEntityParams();
+      await canvas.pasteEffects();
     });
 
     await waitFor(() => {

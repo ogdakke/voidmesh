@@ -4,7 +4,6 @@ Custom React hooks bridging engine/renderer state to components.
 
 ## Key Files
 
-- `use-canvas-actions.ts` (~20KB) — Selection state, shader switching, palette operations, multi-select param merging.
 - `use-canvas-renderer.ts` — `InfiniteCanvasRenderer` lifecycle (init, cleanup, error handling). Polls for canvas element changes.
 - `use-entity-cycling.ts` — Arrow-key entity cycling and focus management.
 - `use-media-controls.ts` (~11KB) — Video/GIF playback controls.
@@ -16,12 +15,13 @@ Custom React hooks bridging engine/renderer state to components.
 
 ## Patterns
 
-- Hooks needing canvas state use `useCanvas()` from context.
+- Hooks needing canvas state use narrow selector hooks from `context/use-canvas.ts` such as `useSelectedEntity()`, `useSelectedEntities()`, `useSelectionState()`, `useCanvasPreferences()`, and `useViewport()`.
+- Hooks needing mutations use `useCanvasCommands()`. Hooks needing renderer/color-space services use `useCanvasRendererService()`.
 - Hooks needing high-frequency engine state (viewport, playback) use `useSyncExternalStore(canvasStore.subscribe, canvasStore.getXxxSnapshot)` directly for performance.
 - `useParamValue()` is the standard way for knob components to access entity parameters. Handles multi-select uniformity.
 
 ## Anti-Patterns
 
 - Do not put component JSX in hooks. Hooks return data and callbacks, not elements.
-- Do not duplicate `useCanvas()` functionality. Check context first.
+- Do not recreate a broad `useCanvas()`-style state hook. Keep reads fine-grained.
 - Do not subscribe to `canvasStore.subscribe` at full `version` granularity from sidebar components. Use selective snapshots (`viewportVersion`, `selectionVersion`, `playbackVersion`).

@@ -1,10 +1,18 @@
 import { appLoader } from "#lib/app-loader.ts";
 import { config } from "#config";
 import { useKeybinds, useRegisterKeybinds } from "#context/keybind-context.ts";
-import { DebugType, useCanvas, useViewport } from "#context/use-canvas.ts";
+import {
+  DebugType,
+  useCanvasCommands,
+  useCanvasPreferences,
+  useCanvasRendererService,
+  useMultiSelectMode,
+  useSelectedEntity,
+  useSelectedEntityIds,
+  useViewport,
+} from "#context/use-canvas.ts";
 import { useLayout } from "#context/use-layout.ts";
 import { canvasStore, gameLoop, SpacePanMode, viewportAnimation } from "#engine";
-import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
 import { useCanvasContainerResize } from "#hooks/use-canvas-container-resize.ts";
 import { useCanvasRenderer } from "#hooks/use-canvas-renderer.ts";
 import { useEntityCycling } from "#hooks/use-entity-cycling.ts";
@@ -109,23 +117,26 @@ export function InfiniteCanvas() {
   const textRef = useRef<HTMLSpanElement>(null);
   const perfRef = useRef<HTMLDivElement>(null);
 
-  const { registerRenderer, selectedEntityIds, multiSelectMode, setViewport, setDebugType } =
-    useCanvas();
   const {
-    deleteEntity,
+    setViewport,
+    setDebugType,
+    deleteSelection,
     toggleShowOriginal,
     togglePreserveColors,
     toggleReversePalette,
-    handleBringToFront,
-    handleSendToBack,
+    bringSelectionToFront,
+    sendSelectionToBack,
     duplicateEntities,
-    copyEntity,
-    copyEntityParams,
-    selectedEntity,
-    resetEntityToDefaults,
-    snapToGrid,
-    handleSnapToGridChange,
-  } = useCanvasActions();
+    copySelectionImage,
+    copySelectionEffects,
+    resetSelectionToDefaults,
+    setSnapToGrid,
+  } = useCanvasCommands();
+  const { registerRenderer } = useCanvasRendererService();
+  const { snapToGrid } = useCanvasPreferences();
+  const selectedEntity = useSelectedEntity();
+  const selectedEntityIds = useSelectedEntityIds();
+  const multiSelectMode = useMultiSelectMode();
   const mediaActions = useMediaControlsActions(selectedEntity);
   const keybindStore = useKeybinds();
 
@@ -416,7 +427,7 @@ export function InfiniteCanvas() {
 
   const copyEntityShortcutHandler = (e: KeyboardEvent) => {
     e.preventDefault();
-    copyEntity(e);
+    copySelectionImage(e);
   };
 
   const toggleDebugModeShortcutHandler = async function toggleDebugModeShortcutHandler() {
@@ -424,7 +435,7 @@ export function InfiniteCanvas() {
   };
 
   const toggleSnapToGridHandler = function toggleSnapToGridHandler() {
-    handleSnapToGridChange(!snapToGrid);
+    setSnapToGrid(!snapToGrid);
   };
 
   const centerCanvasShortcutHandler = (e: KeyboardEvent) => {
@@ -497,11 +508,11 @@ export function InfiniteCanvas() {
   };
 
   const bringToFrontShortcutHandler = (_e: KeyboardEvent) => {
-    handleBringToFront();
+    bringSelectionToFront();
   };
 
   const sendToBackShortcutHandler = (_e: KeyboardEvent) => {
-    handleSendToBack();
+    sendSelectionToBack();
   };
 
   const duplicateShortcutHandler = (e: KeyboardEvent) => {
@@ -781,7 +792,7 @@ export function InfiniteCanvas() {
       platform: "other",
       group: "selection",
       label: "Delete selected",
-      action: deleteEntity,
+      action: deleteSelection,
     },
     {
       id: "delete_entity",
@@ -789,7 +800,7 @@ export function InfiniteCanvas() {
       platform: "macos",
       group: "selection",
       label: "Delete selected",
-      action: deleteEntity,
+      action: deleteSelection,
     },
     {
       bind: " ",
@@ -838,7 +849,7 @@ export function InfiniteCanvas() {
       label: "Copy effects",
       action: (e: KeyboardEvent) => {
         e.preventDefault();
-        copyEntityParams();
+        copySelectionEffects();
       },
     },
     {
@@ -849,7 +860,7 @@ export function InfiniteCanvas() {
       label: "Copy effects",
       action: (e: KeyboardEvent) => {
         e.preventDefault();
-        copyEntityParams();
+        copySelectionEffects();
       },
     },
     {
@@ -1011,7 +1022,7 @@ export function InfiniteCanvas() {
                   ) : selectedEntityIds.size > 0 ? (
                     <Button
                       className="infinite-canvas__reset"
-                      onClick={resetEntityToDefaults}
+                      onClick={resetSelectionToDefaults}
                       type="button"
                       aria-label="Reset to defaults"
                       variant="secondary"

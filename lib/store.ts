@@ -1,5 +1,6 @@
 type Listener = () => void;
 type Unsubscribe = () => void;
+export type EqualityFn<T> = (a: T, b: T) => boolean;
 
 /**
  * Base store class for React useSyncExternalStore integration.
@@ -34,6 +35,33 @@ export abstract class Store<TState> {
 
   constructor(initialState: TState) {
     this.state = initialState;
+  }
+
+  /** Direct state access for selectors and imperative consumers. */
+  getState(): TState {
+    return this.state;
+  }
+
+  /**
+   * Subscribe to a selected slice of state.
+   * The listener only fires when the selected slice changes per equalityFn.
+   */
+  subscribeSelector<TSlice>(
+    selector: (state: TState) => TSlice,
+    listener: Listener,
+    equalityFn: EqualityFn<TSlice> = Object.is,
+  ): Unsubscribe {
+    let currentSlice = selector(this.state);
+
+    const wrapped = () => {
+      const nextSlice = selector(this.state);
+      if (equalityFn(currentSlice, nextSlice)) return;
+      currentSlice = nextSlice;
+      listener();
+    };
+
+    this.#listeners.add(wrapped);
+    return () => this.#listeners.delete(wrapped);
   }
 
   /** Notify all listeners. Call after state mutations. */

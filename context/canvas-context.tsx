@@ -1,5 +1,11 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { CanvasContext, DebugType, type CanvasContextValue } from "./use-canvas.ts";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  CanvasCommandsContext,
+  CanvasRendererContext,
+  DebugType,
+  type CanvasCommands,
+  type CanvasRendererService,
+} from "./use-canvas.ts";
 import {
   useQueryState,
   parseAsBoolean,
@@ -37,19 +43,21 @@ import {
 import type { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
 import type { DeserializeResult } from "#lib/serialization/types.ts";
 import { type ImageExportOptions, getImageExtension } from "#renderer/export-formats.ts";
-import { canvasStore, gameLoop } from "#engine";
+import { canvasStore, disintegrationController, gameLoop } from "#engine";
 
 import { toastManager } from "#components/ui/toast/toast-manager.ts";
 import { hints } from "#components/ui/hint/hint-manager.ts";
 import { extractOriginalPalette, cloneMediaSource } from "#lib/media-loader.ts";
 import { Command, undo } from "#lib/undo.ts";
-import { config } from "#config";
+import { config, glassKindResets, glitchKindResets } from "#config";
 import { preferences } from "#lib/storage.ts";
 import { paletteStore } from "#lib/palette-store.ts";
 import { analytics } from "#lib/analytics.ts";
 import { logger } from "#lib/client.logger.ts";
 import { downloadBlob } from "#lib/download.ts";
 import { deepMerge } from "#lib/deep-merge.ts";
+import { applyShaderDefaults } from "#lib/shader-defaults.ts";
+import { extractPaletteFromImage } from "#lib/palette-extraction/index.ts";
 import { ColorSpace } from "#types/enums.ts";
 import type { PartialDeep } from "type-fest";
 
@@ -195,8 +203,6 @@ function paletteToUrlParams(palette: ColorPalette | undefined): {
   return { preset: null, palette: null };
 }
 
-export type { CanvasContextValue } from "./use-canvas.ts";
-
 export function CanvasProvider({ children }: { children: ReactNode }) {
   // Debug mode URL param
   const [debugType, setDebugType] = useQueryState(
@@ -206,14 +212,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   const debug = debugType !== null;
   // URL params for selected entity shader settings (for shareable configurations)
   const [renderState, setRenderState] = useQueryStates(shaderUrlParams);
+  const renderStateRef = useRef(renderState);
+  renderStateRef.current = renderState;
   // NOTE: URL param keys were previously used for URL→entity sync
   // Now we update entities directly, so these are no longer needed
-
-  // Subscribe React to store changes (only for UI-relevant state)
-  const state = useSyncExternalStore(
-    canvasStore.subscribe.bind(canvasStore),
-    canvasStore.getSelectionSnapshot.bind(canvasStore),
-  );
 
   // Initialize debug mode with test image when ?debug=true
   useEffect(() => {
@@ -238,62 +240,63 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
   // Helper: Build shader params from URL state
   const buildShaderParamsFromUrl = (): ShaderParams => {
+    const currentRenderState = renderStateRef.current;
     // Parse palette from URL params (now at root level)
-    const palette = parsePaletteFromUrl(renderState.preset);
+    const palette = parsePaletteFromUrl(currentRenderState.preset);
 
     // Build post-process params
     const postProcess: PostProcessParams = {
-      enabled: renderState.ppEnabled,
+      enabled: currentRenderState.ppEnabled,
       grain: {
-        enabled: renderState.ppGrainEnabled,
-        size: renderState.ppGrainSize,
-        intensity: renderState.ppGrainIntensity,
+        enabled: currentRenderState.ppGrainEnabled,
+        size: currentRenderState.ppGrainSize,
+        intensity: currentRenderState.ppGrainIntensity,
       },
       bloom: {
-        enabled: renderState.ppBloomEnabled,
-        threshold: renderState.ppBloomThreshold,
-        intensity: renderState.ppBloomIntensity,
-        filterRadius: renderState.ppBloomFilterRadius,
-        softness: renderState.ppBloomSoftness,
+        enabled: currentRenderState.ppBloomEnabled,
+        threshold: currentRenderState.ppBloomThreshold,
+        intensity: currentRenderState.ppBloomIntensity,
+        filterRadius: currentRenderState.ppBloomFilterRadius,
+        softness: currentRenderState.ppBloomSoftness,
       },
       chromaticAberration: {
-        enabled: renderState.ppChromaticEnabled,
-        offset: renderState.ppChromaticOffset,
+        enabled: currentRenderState.ppChromaticEnabled,
+        offset: currentRenderState.ppChromaticOffset,
       },
     };
 
     return {
-      size: renderState.size,
-      shape: renderState.shape,
-      preserveColors: renderState.preserveColors,
-      reversePalette: renderState.reversePalette,
-      showOriginal: renderState.showOriginal,
+      size: currentRenderState.size,
+      shape: currentRenderState.shape,
+      preserveColors: currentRenderState.preserveColors,
+      reversePalette: currentRenderState.reversePalette,
+      showOriginal: currentRenderState.showOriginal,
       background: config.defaults.shaderParams.background,
       color: config.defaults.shaderParams.color,
-      scale: renderState.scale,
-      intensity: renderState.intensity,
+      scale: currentRenderState.scale,
+      intensity: currentRenderState.intensity,
       blobs: {
-        eagerness: renderState.eagerness,
+        eagerness: currentRenderState.eagerness,
       },
       dithering: {
-        kind: renderState.ditheringKind,
+        kind: currentRenderState.ditheringKind,
       },
       ascii: {
-        kind: renderState.asciiKind,
-        invert: renderState.asciiInvert,
+        kind: currentRenderState.asciiKind,
+        invert: currentRenderState.asciiInvert,
       },
       glass: {
-        kind: renderState.glassKind,
-        angle: renderState.angle,
-        caustic: renderState.caustic,
-        frostiness: renderState.frostiness,
-        highlight: renderState.highlight,
-        dispersion: renderState.dispersion,
-        flow: renderState.flow,
+        kind: currentRenderState.glassKind,
+        angle: currentRenderState.angle,
+        caustic: currentRenderState.caustic,
+        frostiness: currentRenderState.frostiness,
+        highlight: currentRenderState.highlight,
+        dispersion: currentRenderState.dispersion,
+        flow: currentRenderState.flow,
       },
       glitch: {
-        kind: renderState.glitchKind,
-        angle: renderState.glitchAngle,
+        kind: currentRenderState.glitchKind,
+        angle: currentRenderState.glitchAngle,
       },
       palette: palette ?? config.defaults.shaderParams.palette,
       postProcess,
@@ -304,120 +307,124 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   // The old effect had a race condition where `previousSelectedIdRef` was updated async
   // causing param changes to be skipped. Now we update entities directly in the handlers.
 
+  const lastSyncedRenderStateRef = useRef<string>("");
+
   // Push entity params to URL on selection change OR entity param change
   // Clear URL state on multi-select - only sync when single entity selected
   useEffect(() => {
-    const selectedEntities = canvasStore.getSelectedEntities();
+    const syncSelectionToUrl = () => {
+      const selectedEntities = canvasStore.getSelectedEntities();
 
-    // Multi-select or no selection: clear URL params for sharing
-    if (selectedEntities.length !== 1) {
-      // Clear URL params when multi-selecting
-      if (selectedEntities.length > 1) {
-        setRenderState({
-          shader: null,
-          size: null,
-          shape: null,
-          preserveColors: null,
-          reversePalette: null,
-          showOriginal: null,
-          eagerness: null,
-          scale: null,
-          intensity: null,
-          ditheringKind: null,
-          preset: null,
-          ppEnabled: null,
-          angle: null,
-          caustic: null,
-          glassKind: null,
-          frostiness: null,
-          highlight: null,
-          dispersion: null,
-          flow: null,
-          ppGrainEnabled: null,
-          ppGrainSize: null,
-          ppGrainIntensity: null,
-          ppBloomEnabled: null,
-          ppBloomThreshold: null,
-          ppBloomIntensity: null,
-          ppBloomFilterRadius: null,
-          ppBloomSoftness: null,
-          ppChromaticEnabled: null,
-          ppChromaticOffset: null,
-          asciiKind: null,
-          asciiInvert: null,
-          glitchKind: null,
-          glitchAngle: null,
-        }).catch((e) => logger.error(e));
+      if (selectedEntities.length !== 1) {
+        if (selectedEntities.length > 1) {
+          const clearedState = {
+            shader: null,
+            size: null,
+            shape: null,
+            preserveColors: null,
+            reversePalette: null,
+            showOriginal: null,
+            eagerness: null,
+            scale: null,
+            intensity: null,
+            ditheringKind: null,
+            preset: null,
+            ppEnabled: null,
+            angle: null,
+            caustic: null,
+            glassKind: null,
+            frostiness: null,
+            highlight: null,
+            dispersion: null,
+            flow: null,
+            ppGrainEnabled: null,
+            ppGrainSize: null,
+            ppGrainIntensity: null,
+            ppBloomEnabled: null,
+            ppBloomThreshold: null,
+            ppBloomIntensity: null,
+            ppBloomFilterRadius: null,
+            ppBloomSoftness: null,
+            ppChromaticEnabled: null,
+            ppChromaticOffset: null,
+            asciiKind: null,
+            asciiInvert: null,
+            glitchKind: null,
+            glitchAngle: null,
+          };
+          const nextKey = JSON.stringify(clearedState);
+          if (nextKey !== lastSyncedRenderStateRef.current) {
+            lastSyncedRenderStateRef.current = nextKey;
+            setRenderState(clearedState).catch((e) => logger.error(e));
+          }
+        }
+        return;
       }
-      return;
-    }
 
-    const entity = selectedEntities[0]!;
+      const entity = selectedEntities[0]!;
+      let paletteParams = paletteToUrlParams(entity.shaderParams.palette);
+      const currentRenderState = renderStateRef.current;
 
-    // Convert palette to URL params (now at root level)
-    let paletteParams = paletteToUrlParams(entity.shaderParams.palette);
+      if (isAsyncPalette(currentRenderState.preset)) {
+        const hasAsyncPalette = currentRenderState.preset === "original" && entity.originalPalette;
+        const entityPaletteMatchesAsync =
+          entity.shaderParams.palette?.id === currentRenderState.preset;
 
-    // Only preserve async palette preset if:
-    // 1. The entity actually has the async palette extracted
-    // 2. The entity's current palette matches the async preset (not a custom palette)
-    // This prevents custom palettes from being overwritten when the URL's preset param
-    // is missing and defaults to "original"
-    if (isAsyncPalette(renderState.preset)) {
-      const hasAsyncPalette = renderState.preset === "original" && entity.originalPalette;
-
-      // Only apply async preset if entity palette actually uses it (has matching ID)
-      // Skip if entity has a custom palette (id: undefined)
-      const entityPaletteMatchesAsync = entity.shaderParams.palette?.id === renderState.preset;
-
-      if (hasAsyncPalette && entityPaletteMatchesAsync) {
-        paletteParams = { preset: renderState.preset, palette: null };
+        if (hasAsyncPalette && entityPaletteMatchesAsync) {
+          paletteParams = { preset: currentRenderState.preset, palette: null };
+        }
       }
-    }
 
-    // Get post-process params with defaults
-    const ppDefaults = config.defaults.shaderParams.postProcess!;
-    const pp = entity.shaderParams.postProcess;
+      const ppDefaults = config.defaults.shaderParams.postProcess!;
+      const pp = entity.shaderParams.postProcess;
+      const nextState = {
+        shader: entity.shaderType,
+        size: entity.shaderParams.size,
+        shape: entity.shaderParams.shape,
+        preserveColors: entity.shaderParams.preserveColors,
+        reversePalette: entity.shaderParams.reversePalette,
+        showOriginal: entity.shaderParams.showOriginal,
+        eagerness:
+          entity.shaderParams.blobs?.eagerness ?? config.defaults.shaderParams.blobs!.eagerness,
+        scale: entity.shaderParams.scale,
+        intensity: entity.shaderParams.intensity,
+        angle: entity.shaderParams.glass?.angle,
+        caustic: entity.shaderParams.glass?.caustic,
+        glassKind: entity.shaderParams.glass?.kind,
+        frostiness: entity.shaderParams.glass?.frostiness,
+        highlight: entity.shaderParams.glass?.highlight,
+        dispersion: entity.shaderParams.glass?.dispersion,
+        flow: entity.shaderParams.glass?.flow,
+        ditheringKind:
+          entity.shaderParams.dithering?.kind ?? config.defaults.shaderParams.dithering!.kind,
+        asciiKind: entity.shaderParams.ascii?.kind ?? config.defaults.shaderParams.ascii.kind,
+        asciiInvert: entity.shaderParams.ascii?.invert ?? config.defaults.shaderParams.ascii.invert,
+        glitchKind: entity.shaderParams.glitch?.kind ?? config.defaults.shaderParams.glitch.kind,
+        glitchAngle: entity.shaderParams.glitch?.angle ?? config.defaults.shaderParams.glitch.angle,
+        preset: paletteParams.preset,
+        ppEnabled: pp?.enabled ?? ppDefaults.enabled,
+        ppGrainEnabled: pp?.grain?.enabled ?? ppDefaults.grain!.enabled,
+        ppGrainSize: pp?.grain?.size ?? ppDefaults.grain!.size,
+        ppGrainIntensity: pp?.grain?.intensity ?? ppDefaults.grain!.intensity,
+        ppBloomEnabled: pp?.bloom?.enabled ?? ppDefaults.bloom!.enabled,
+        ppBloomThreshold: pp?.bloom?.threshold ?? ppDefaults.bloom!.threshold,
+        ppBloomIntensity: pp?.bloom?.intensity ?? ppDefaults.bloom!.intensity,
+        ppBloomFilterRadius: pp?.bloom?.filterRadius ?? ppDefaults.bloom!.filterRadius,
+        ppBloomSoftness: pp?.bloom?.softness ?? ppDefaults.bloom!.softness,
+        ppChromaticEnabled:
+          pp?.chromaticAberration?.enabled ?? ppDefaults.chromaticAberration!.enabled,
+        ppChromaticOffset:
+          pp?.chromaticAberration?.offset ?? ppDefaults.chromaticAberration!.offset,
+      };
+      const nextKey = JSON.stringify(nextState);
+      if (nextKey === lastSyncedRenderStateRef.current) return;
+      lastSyncedRenderStateRef.current = nextKey;
+      setRenderState(nextState).catch((e) => logger.error(e));
+    };
 
-    setRenderState({
-      shader: entity.shaderType,
-      size: entity.shaderParams.size,
-      shape: entity.shaderParams.shape,
-      preserveColors: entity.shaderParams.preserveColors,
-      reversePalette: entity.shaderParams.reversePalette,
-      showOriginal: entity.shaderParams.showOriginal,
-      eagerness:
-        entity.shaderParams.blobs?.eagerness ?? config.defaults.shaderParams.blobs!.eagerness,
-      scale: entity.shaderParams.scale,
-      intensity: entity.shaderParams.intensity,
-      angle: entity.shaderParams.glass?.angle,
-      caustic: entity.shaderParams.glass?.caustic,
-      glassKind: entity.shaderParams.glass?.kind,
-      frostiness: entity.shaderParams.glass?.frostiness,
-      highlight: entity.shaderParams.glass?.highlight,
-      dispersion: entity.shaderParams.glass?.dispersion,
-      flow: entity.shaderParams.glass?.flow,
-      ditheringKind:
-        entity.shaderParams.dithering?.kind ?? config.defaults.shaderParams.dithering!.kind,
-      asciiKind: entity.shaderParams.ascii?.kind ?? config.defaults.shaderParams.ascii.kind,
-      asciiInvert: entity.shaderParams.ascii?.invert ?? config.defaults.shaderParams.ascii.invert,
-      glitchKind: entity.shaderParams.glitch?.kind ?? config.defaults.shaderParams.glitch.kind,
-      glitchAngle: entity.shaderParams.glitch?.angle ?? config.defaults.shaderParams.glitch.angle,
-      preset: paletteParams.preset,
-      ppEnabled: pp?.enabled ?? ppDefaults.enabled,
-      ppGrainEnabled: pp?.grain?.enabled ?? ppDefaults.grain!.enabled,
-      ppGrainSize: pp?.grain?.size ?? ppDefaults.grain!.size,
-      ppGrainIntensity: pp?.grain?.intensity ?? ppDefaults.grain!.intensity,
-      ppBloomEnabled: pp?.bloom?.enabled ?? ppDefaults.bloom!.enabled,
-      ppBloomThreshold: pp?.bloom?.threshold ?? ppDefaults.bloom!.threshold,
-      ppBloomIntensity: pp?.bloom?.intensity ?? ppDefaults.bloom!.intensity,
-      ppBloomFilterRadius: pp?.bloom?.filterRadius ?? ppDefaults.bloom!.filterRadius,
-      ppBloomSoftness: pp?.bloom?.softness ?? ppDefaults.bloom!.softness,
-      ppChromaticEnabled:
-        pp?.chromaticAberration?.enabled ?? ppDefaults.chromaticAberration!.enabled,
-      ppChromaticOffset: pp?.chromaticAberration?.offset ?? ppDefaults.chromaticAberration!.offset,
-    }).catch((e) => logger.error(e));
-    // Include state.version to re-run when entity params change (not just selection)
-  }, [state.selectedEntityIds, state.entities, state.version, renderState.preset, setRenderState]);
+    syncSelectionToUrl();
+    return canvasStore.subscribe(syncSelectionToUrl);
+  }, [setRenderState]);
 
   /** how many updates the user has done in this session */
   const updatesCount = useRef(0);
@@ -433,6 +440,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   const rendererRef = useRef<InfiniteCanvasRenderer | null>(null);
   const [rendererState, setRendererState] = useState<InfiniteCanvasRenderer | null>(null);
   const [colorSpace, setColorSpace] = useState<ColorSpace>(ColorSpace.srgb);
+  const colorSpaceRef = useRef<ColorSpace>(ColorSpace.srgb);
+  colorSpaceRef.current = colorSpace;
 
   // Viewport operations - delegate to store
   const setViewport = (newViewport: Viewport) => {
@@ -461,7 +470,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
     // Handle async palette presets: use fallback since original palettes
     // are extracted asynchronously (images) or not at all (videos)
-    if (isAsyncPalette(renderState.preset)) {
+    if (isAsyncPalette(renderStateRef.current.preset)) {
       const fallbackPalette: ColorPalette = config.defaults.shaderParams.palette;
       shaderParams = {
         ...shaderParams,
@@ -474,7 +483,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       id,
       name,
       zIndex,
-      shaderType: renderState.shader as ShaderType,
+      shaderType: renderStateRef.current.shader as ShaderType,
       shaderParams,
       mediaSource: entity.mediaSource as any,
       textureDirty: true,
@@ -515,13 +524,13 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       entity.mediaSource.type === MediaType.svg
     ) {
       // Capture the preset at add-time (in case URL changes before extraction completes)
-      const targetPreset = renderState.preset;
+      const targetPreset = renderStateRef.current.preset;
 
       // Defer extraction to a macrotask so the synchronous OffscreenCanvas +
       // K-means work doesn't block the microtask queue and starve the
       // fit-to-view animation that starts right after entity addition.
       setTimeout(() => {
-        extractOriginalPalette(entity.imageBitmap, colorSpace)
+        extractOriginalPalette(entity.imageBitmap, colorSpaceRef.current)
           .then((palette) => {
             const currentEntity = canvasStore.getState().entities.get(id);
             if (!currentEntity) return; // Entity was deleted
@@ -547,7 +556,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   };
 
   const updateEntity = (id: string, updates: Partial<ShaderCanvasEntity>) => {
-    const entity = state.entities.get(id);
+    const entity = canvasStore.getState().entities.get(id);
     if (!entity) return;
 
     // Capture only the fields being changed (before mutation)
@@ -578,7 +587,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
   const removeEntity = (id: string) => {
     // Get entity before removal - deep clone to preserve all data including video element reference
-    const entity = state.entities.get(id);
+    const entity = canvasStore.getState().entities.get(id);
     if (!entity) return;
 
     // Clone the entity but keep the video element reference (we need it for restore)
@@ -689,7 +698,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     if (!entity) return;
 
     const previousZIndex = entity.zIndex;
-    const entities = Array.from(state.entities.values());
+    const entities = Array.from(canvasStore.getState().entities.values());
     const minZIndex = Math.min(...entities.map((e) => e.zIndex), 0);
     const newZIndex = minZIndex - 1;
     canvasStore.updateEntity(id, { zIndex: newZIndex });
@@ -783,28 +792,6 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     canvasStore.replaceSelection(newIds);
     return newIds;
   };
-
-  const getContextOpenEntity = () => {
-    return state.contextOpenEntityId ? state.entities.get(state.contextOpenEntityId) : undefined;
-  };
-
-  // Shader type for selected entity (first entity's type when multi-select)
-  const selectedShaderType = (() => {
-    if (state.selectedEntityIds.size === 0) return renderState.shader;
-    const firstId = state.selectedEntityIds.values().next().value;
-    const entity = firstId ? state.entities.get(firstId) : undefined;
-    // Return first entity's type (UI uses selectionState for mixed detection)
-    return entity?.shaderType ?? renderState.shader;
-  })();
-
-  // Shader params for selected entity (first entity's params when multi-select)
-  const selectedEntityParams = (() => {
-    if (state.selectedEntityIds.size === 0) return null;
-    const firstId = state.selectedEntityIds.values().next().value;
-    const entity = firstId ? state.entities.get(firstId) : undefined;
-    // Return first entity's params (UI uses selectionState for mixed detection)
-    return entity?.shaderParams ?? null;
-  })();
 
   // Update shader params - DIRECT entity update (no URL race condition)
   const updateSelectedEntityParams = (
@@ -903,6 +890,130 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           },
         });
       }, 2000);
+    }
+  };
+
+  const changeShaderType = (value: string | null) => {
+    if (!value) return;
+
+    const targetShaderType = value as ShaderType;
+    const entities = canvasStore.getSelectedEntities();
+    if (entities.length === 0) return;
+
+    if (entities.length === 1) {
+      const entity = entities[0]!;
+      updateEntity(entity.id, {
+        shaderType: targetShaderType,
+        shaderParams:
+          entity.shaderType === targetShaderType
+            ? entity.shaderParams
+            : applyShaderDefaults(entity.shaderParams, entity.shaderType, targetShaderType),
+        textureDirty: true,
+      });
+      return;
+    }
+
+    undo.beginTransaction();
+    for (const entity of entities) {
+      updateEntity(entity.id, {
+        shaderType: targetShaderType,
+        shaderParams:
+          entity.shaderType === targetShaderType
+            ? entity.shaderParams
+            : applyShaderDefaults(entity.shaderParams, entity.shaderType, targetShaderType),
+        textureDirty: true,
+      });
+    }
+    undo.commitTransaction(`Update ${entities.length} entities`);
+  };
+
+  const changeDitheringKind = (value: string | null) => {
+    if (!value) return;
+    updateSelectedEntityParams({ dithering: { kind: value as DitheringKind } });
+  };
+
+  const changeAsciiKind = (value: string | null) => {
+    if (!value) return;
+    const selectedEntityParams = canvasStore.getSelectedEntity()?.shaderParams;
+    updateSelectedEntityParams({
+      ascii: {
+        kind: value as AsciiKind,
+        invert: selectedEntityParams?.ascii?.invert ?? false,
+      },
+    });
+  };
+
+  const setAsciiInvert = (value: boolean) => {
+    const selectedEntityParams = canvasStore.getSelectedEntity()?.shaderParams;
+    updateSelectedEntityParams({
+      ascii: {
+        kind: selectedEntityParams?.ascii?.kind ?? AsciiKind.standard,
+        invert: value,
+      },
+    });
+  };
+
+  const changeGlassKind = (value: string | null) => {
+    if (!value) return;
+    const kind = value as GlassKind;
+    updateSelectedEntityParams({
+      ...glassKindResets[kind],
+      glass: { kind },
+    });
+  };
+
+  const changeGlitchKind = (value: string | null) => {
+    if (!value) return;
+    const kind = value as GlitchKind;
+    updateSelectedEntityParams({
+      ...glitchKindResets[kind],
+      glitch: { kind },
+    });
+  };
+
+  const setShowOriginal = (value: boolean) => {
+    updateSelectedEntityParams({ showOriginal: value });
+  };
+
+  const toggleShowOriginal = () => {
+    const result = canvasStore.getParamResult(
+      "showOriginal",
+      config.defaults.shaderParams.showOriginal,
+    );
+    const currentValue = result.isMixed ? false : !!result.value;
+    setShowOriginal(!currentValue);
+  };
+
+  const setPreserveColors = (value: boolean) => {
+    updateSelectedEntityParams({ preserveColors: value });
+  };
+
+  const togglePreserveColors = () => {
+    const result = canvasStore.getParamResult(
+      "preserveColors",
+      config.defaults.shaderParams.preserveColors,
+    );
+    const currentValue = result.isMixed ? false : !!result.value;
+    setPreserveColors(!currentValue);
+  };
+
+  const setReversePalette = (value: boolean) => {
+    updateSelectedEntityParams({ reversePalette: value });
+  };
+
+  const toggleReversePalette = () => {
+    const result = canvasStore.getParamResult(
+      "reversePalette",
+      config.defaults.shaderParams.reversePalette,
+    );
+    const currentValue = result.isMixed ? false : !!result.value;
+    setReversePalette(!currentValue);
+  };
+
+  const changeSize = (value: number | number[]) => {
+    const nextValue = Array.isArray(value) ? value[0] : value;
+    if (nextValue !== undefined) {
+      updateSelectedEntityParams({ size: nextValue });
     }
   };
 
@@ -1211,6 +1322,333 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const changePalette = (palette: ColorPalette) => {
+    const entities = canvasStore.getSelectedEntities();
+    if (entities.length === 0) return;
+
+    if (palette.id && isUserPalette(palette.id)) {
+      const oldPalette = paletteStore.getPalettes().find((current) => current.id === palette.id);
+      const ownTransaction = !undo.isInTransaction();
+
+      if (ownTransaction) undo.beginTransaction();
+      paletteStore.updatePalette(palette.id, palette);
+      undo.add(
+        Command.create({
+          execute: () => paletteStore.updatePalette(palette.id!, palette),
+          undo: () =>
+            oldPalette ? paletteStore.updatePalette(palette.id!, oldPalette) : undefined,
+          description: "Update custom palette",
+        }),
+      );
+
+      for (const entity of entities) {
+        updateEntity(entity.id, {
+          shaderParams: { ...entity.shaderParams, palette },
+          textureDirty: true,
+        });
+      }
+
+      if (ownTransaction) undo.commitTransaction("Update custom palette");
+      return;
+    }
+
+    if (palette.id === config.customPaletteId) {
+      const existingPalettes = paletteStore.getPalettes();
+      const newId = generatePaletteId("custom");
+      const newName = generatePaletteName("custom", existingPalettes);
+      const newShortName = generatePaletteShortName("custom", existingPalettes);
+      const newPalette: ColorPalette = {
+        ...palette,
+        id: newId,
+        name: newName,
+        shortName: newShortName,
+      };
+      const ownTransaction = !undo.isInTransaction();
+
+      if (ownTransaction) undo.beginTransaction();
+      paletteStore.addPalette(newPalette);
+      undo.add(
+        Command.create({
+          execute: () => paletteStore.addPalette(newPalette),
+          undo: () => paletteStore.removePalette(newId),
+          description: "Create custom palette",
+        }),
+      );
+
+      for (const entity of entities) {
+        updateEntity(entity.id, {
+          shaderParams: { ...entity.shaderParams, palette: newPalette },
+          textureDirty: true,
+        });
+      }
+
+      if (ownTransaction) undo.commitTransaction("Create custom palette");
+      return;
+    }
+
+    updateSelectedEntityParams({ palette });
+  };
+
+  const uploadPalette = async (files: FileList | File | null) => {
+    let file: File | null;
+    if (files instanceof File) {
+      file = files;
+    } else if (files?.[0]) {
+      file = files[0];
+    } else {
+      return;
+    }
+
+    try {
+      const palette = await extractPaletteFromImage(file, {
+        colorCount: 16,
+        colorSpace: colorSpaceRef.current,
+      });
+      const entities = canvasStore.getSelectedEntities();
+      if (entities.length === 0) return;
+
+      const existingPalettes = paletteStore.getPalettes();
+      const name = generatePaletteName("extracted", existingPalettes);
+      const shortName = generatePaletteShortName("extracted", existingPalettes);
+      const newId = generatePaletteId("extracted");
+      const extractedPalette: ColorPalette = {
+        ...palette,
+        id: newId,
+        name,
+        shortName,
+      };
+
+      const ownTransaction = !undo.isInTransaction();
+      if (ownTransaction) undo.beginTransaction();
+      paletteStore.addPalette(extractedPalette);
+      undo.add(
+        Command.create({
+          execute: () => paletteStore.addPalette(extractedPalette),
+          undo: () => paletteStore.removePalette(newId),
+          description: "Extract palette from image",
+        }),
+      );
+
+      for (const entity of entities) {
+        updateEntity(entity.id, {
+          shaderParams: { ...entity.shaderParams, palette: extractedPalette },
+          textureDirty: true,
+        });
+      }
+
+      if (ownTransaction) undo.commitTransaction("Extract palette from image");
+    } catch (err) {
+      logger.error("Failed to extract palette:", err);
+    }
+  };
+
+  const deletePalette = (paletteId: string) => {
+    const entities = canvasStore.getSelectedEntities();
+    if (entities.length === 0) return;
+
+    const oldPalette = paletteStore.getPalettes().find((palette) => palette.id === paletteId);
+    if (!oldPalette) return;
+
+    const ownTransaction = !undo.isInTransaction();
+    if (ownTransaction) undo.beginTransaction();
+    paletteStore.removePalette(paletteId);
+    undo.add(
+      Command.create({
+        execute: () => paletteStore.removePalette(paletteId),
+        undo: () => paletteStore.addPalette(oldPalette),
+        description: "Delete custom palette",
+      }),
+    );
+
+    const fallbackPalette = Object.values(config.palettes)[0]!;
+    for (const entity of entities) {
+      if (entity.shaderParams.palette?.id === paletteId) {
+        updateEntity(entity.id, {
+          shaderParams: { ...entity.shaderParams, palette: fallbackPalette },
+          textureDirty: true,
+        });
+      }
+    }
+
+    if (ownTransaction) undo.commitTransaction("Delete custom palette");
+  };
+
+  const deleteSelection = (
+    e?: KeyboardEvent,
+    source: "keyboard" | "context_menu" | "drop_zone" = "keyboard",
+  ) => {
+    const entities = canvasStore.getSelectedEntities();
+    if (entities.length === 0) return;
+
+    analytics.track("entity.deleted", { method: source, entity_count: entities.length });
+    e?.preventDefault();
+    disintegrationController.resetStagger();
+
+    if (entities.length === 1) {
+      removeEntity(entities[0]!.id);
+      return;
+    }
+
+    undo.beginTransaction();
+    for (const entity of entities) {
+      removeEntity(entity.id);
+    }
+    undo.commitTransaction(`Delete ${entities.length} entities`);
+  };
+
+  const copySelectionImage = async (e?: KeyboardEvent) => {
+    const entities = canvasStore.getSelectedEntities();
+    const renderer = rendererRef.current;
+    if (entities.length !== 1 || !renderer) return;
+
+    const entity = entities[0]!;
+    e?.preventDefault();
+
+    try {
+      const clipboardItem = new ClipboardItem({
+        "image/png": (async () => {
+          const blob = await renderer.renderEntityToBlob(entity);
+          if (blob) return blob;
+          throw new Error("Failed to render entity to blob");
+        })(),
+      });
+      await navigator.clipboard.write([clipboardItem]);
+      toastManager.add({ title: "Image copied to clipboard" });
+    } catch (err) {
+      logger.error("Failed to copy to clipboard:", err);
+      toastManager.add({
+        title: "Failed to copy image to clipboard",
+        description: "Try saving it instead",
+      });
+    }
+  };
+
+  const copySelectionEffects = () => {
+    const entities = canvasStore.getSelectedEntities();
+    if (entities.length === 0) return;
+
+    const entity = entities[0]!;
+    const data = {
+      __voidmesh: true as const,
+      version: 1,
+      shaderType: entity.shaderType,
+      shaderParams: structuredClone(entity.shaderParams),
+      originalPalette: entity.originalPalette ? structuredClone(entity.originalPalette) : undefined,
+    };
+
+    navigator.clipboard
+      .writeText(JSON.stringify(data))
+      .then(() => {
+        toastManager.add({
+          title: "Effects copied to clipboard",
+          description: "Now you can paste them on other files",
+        });
+      })
+      .catch((e) => {
+        logger.error(e);
+        toastManager.add({
+          title: "Failed to copy effects",
+          type: "destructive",
+        });
+      });
+  };
+
+  const pasteEffects = async () => {
+    const text = await navigator.clipboard.readText();
+
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed?.__voidmesh === true) {
+        applyEffectsToSelection(parsed);
+        const entityCount = canvasStore.getSelectedEntities().length;
+        if (entityCount > 1) {
+          toastManager.add({ title: `Applied effects to ${entityCount} entities` });
+        }
+        return;
+      }
+    } catch {
+      // Not JSON, continue to URL fallback.
+    }
+
+    if (URL.canParse(text)) {
+      const url = new URL(text);
+      setRenderStateFromURL(url.searchParams);
+      const entityCount = canvasStore.getSelectedEntities().length;
+      if (entityCount > 1) {
+        toastManager.add({ title: `Applied params to ${entityCount} entities` });
+      }
+      return;
+    }
+
+    toastManager.add({
+      title: "No effects or URL found in clipboard",
+      type: "destructive",
+    });
+  };
+
+  const resetSelectionToDefaults = () => {
+    const entities = canvasStore.getSelectedEntities();
+    if (entities.length === 0) return;
+
+    const defaultParams = structuredClone(config.defaults.shaderParams);
+    const defaultShaderType = config.defaults.shader;
+
+    if (entities.length === 1) {
+      const entity = entities[0]!;
+      updateEntity(entity.id, {
+        shaderType: defaultShaderType,
+        shaderParams: defaultParams,
+        textureDirty: true,
+      });
+      return;
+    }
+
+    undo.beginTransaction();
+    for (const entity of entities) {
+      updateEntity(entity.id, {
+        shaderType: defaultShaderType,
+        shaderParams: structuredClone(config.defaults.shaderParams),
+        textureDirty: true,
+      });
+    }
+    undo.commitTransaction(`Reset ${entities.length} entities to defaults`);
+  };
+
+  const bringSelectionToFront = () => {
+    const entities = canvasStore.getSelectedEntities();
+    if (entities.length === 0) return;
+
+    const sorted = [...entities].sort((a, b) => a.zIndex - b.zIndex);
+    for (const entity of sorted) {
+      bringToFront(entity.id);
+    }
+  };
+
+  const sendSelectionToBack = () => {
+    const entities = canvasStore.getSelectedEntities();
+    if (entities.length === 0) return;
+
+    const sorted = [...entities].sort((a, b) => b.zIndex - a.zIndex);
+    for (const entity of sorted) {
+      sendToBack(entity.id);
+    }
+  };
+
+  const setSnapToGridPreference = (enabled: boolean) => {
+    canvasStore.setSnapToGrid(enabled);
+    preferences.setSnapToGrid(enabled);
+  };
+
+  const setFancyDeletePreference = (enabled: boolean) => {
+    canvasStore.setFancyDelete(enabled);
+    preferences.setFancyDelete(enabled);
+  };
+
+  const setHapticsPreference = (enabled: boolean) => {
+    canvasStore.setHaptics(enabled);
+    preferences.setHaptics(enabled);
+  };
+
   // Renderer registration
   const registerRenderer = (renderer: InfiniteCanvasRenderer) => {
     rendererRef.current = renderer;
@@ -1290,7 +1728,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     // Re-extract original palettes for entities that don't have them (legacy v3 files)
     for (const entity of canvasStore.getState().entities.values()) {
       if (entity.originalPalette) continue;
-      extractOriginalPalette(entity.imageBitmap, colorSpace)
+      extractOriginalPalette(entity.imageBitmap, colorSpaceRef.current)
         .then((palette) => {
           const current = canvasStore.getState().entities.get(entity.id);
           if (!current) return;
@@ -1302,46 +1740,70 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     return result;
   };
 
-  // Convert Map to Array for React components
-  const entities = Array.from(state.entities.values());
+  const commandsRef = useRef<CanvasCommands | null>(null);
+  if (!commandsRef.current) {
+    commandsRef.current = {
+      setViewport,
+      panBy,
+      resetViewport,
+      addEntity,
+      updateEntity,
+      removeEntity,
+      selectEntity,
+      moveEntity,
+      bringToFront,
+      sendToBack,
+      duplicateEntities,
+      updateSelectedEntityParams,
+      changeShaderType,
+      changeDitheringKind,
+      changeAsciiKind,
+      setAsciiInvert,
+      changeGlassKind,
+      changeGlitchKind,
+      changePalette,
+      uploadPalette,
+      deletePalette,
+      setShowOriginal,
+      toggleShowOriginal,
+      setPreserveColors,
+      togglePreserveColors,
+      setReversePalette,
+      toggleReversePalette,
+      deleteSelection,
+      copySelectionImage,
+      copySelectionEffects,
+      pasteEffects,
+      bringSelectionToFront,
+      sendSelectionToBack,
+      resetSelectionToDefaults,
+      setSnapToGrid: setSnapToGridPreference,
+      setFancyDelete: setFancyDeletePreference,
+      setHaptics: setHapticsPreference,
+      changeSize,
+      copySelectedEntityToClipboard,
+      saveSelectedEntityToFile,
+      serializeCanvas,
+      deserializeCanvas,
+      applyUrlState: setRenderStateFromURL,
+      applyEffectsToSelection,
+      setDebugType,
+    };
+  }
+  const commands = commandsRef.current;
 
-  const value: CanvasContextValue = {
-    contextOpenEntityId: state.contextOpenEntityId,
-    setViewport,
-    panBy,
-    resetViewport,
-    entities,
-    selectedEntityIds: state.selectedEntityIds,
-    multiSelectMode: state.multiSelectMode,
-    hoveredEntityId: state.hoveredEntityId,
-    addEntity,
-    updateEntity,
-    removeEntity,
-    selectEntity,
-    moveEntity,
-    bringToFront,
-    sendToBack,
-    duplicateEntities,
-    selectedShaderType,
-    selectedEntityParams,
-    updateSelectedEntityParams,
-    registerRenderer,
-    renderer: rendererState,
-    colorSpace,
-    copySelectedEntityToClipboard,
-    saveSelectedEntityToFile,
-    serializeCanvas,
-    deserializeCanvas,
-    getContextOpenEntity,
-    setRenderState,
-    setRenderStateFromURL,
-    applyEffectsToSelection,
-    setDebugType,
-  };
+  const rendererService = useMemo<CanvasRendererService>(
+    () => ({
+      registerRenderer,
+      renderer: rendererState,
+      colorSpace,
+    }),
+    [rendererState, colorSpace],
+  );
 
   // Expose canvas context to window for dev console debugging
-  const valueRef = useRef(value);
-  valueRef.current = value;
+  const valueRef = useRef(commands);
+  valueRef.current = commands;
   useEffect(() => {
     if (import.meta.env.PROD) return;
     if (typeof window !== "undefined") {
@@ -1349,7 +1811,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       (window as any).__CANVAS__ = {};
       (window as any).__CANVAS__.store = canvasStore;
       (window as any).__CANVAS__.config = config;
-      Object.defineProperty((window as any).__CANVAS__, "context", {
+      Object.defineProperty((window as any).__CANVAS__, "commands", {
         get: () => ctx.current,
         configurable: true,
       });
@@ -1417,5 +1879,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  return <CanvasContext.Provider value={value}>{children}</CanvasContext.Provider>;
+  return (
+    <CanvasCommandsContext.Provider value={commands}>
+      <CanvasRendererContext.Provider value={rendererService}>
+        {children}
+      </CanvasRendererContext.Provider>
+    </CanvasCommandsContext.Provider>
+  );
 }

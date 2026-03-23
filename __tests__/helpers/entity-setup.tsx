@@ -2,9 +2,9 @@
  * Multi-select scenario factory and entity setup utilities for testing
  */
 import React, { useEffect, useState, type ReactNode } from "react";
+import { useCanvasCommands } from "#context/use-canvas.ts";
 import { canvasStore } from "#engine";
 import { createTestEntity, createEntityInput, type CreateEntityOptions } from "./test-entity.ts";
-import { useCanvas } from "#context/use-canvas.ts";
 
 /**
  * Setup multiple entities with optional selection
@@ -79,7 +79,7 @@ export function EntitySetup({
    */
   useStoreDirectly?: boolean;
 }): ReactNode {
-  const { addEntity, selectEntity } = useCanvas();
+  const { addEntity, selectEntity } = useCanvasCommands();
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
