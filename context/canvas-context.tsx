@@ -787,7 +787,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   };
 
   const getContextOpenEntity = () => {
-    return state.contextOpenEntityId ? state.entities.get(state.contextOpenEntityId) : undefined;
+    const contextOpenEntityId = canvasStore.getState().contextOpenEntityId;
+    return contextOpenEntityId
+      ? canvasStore.getState().entities.get(contextOpenEntityId)
+      : undefined;
   };
 
   // Shader type for selected entity (first entity's type when multi-select)
@@ -1308,7 +1311,6 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   const entities = Array.from(state.entities.values());
 
   const value: CanvasContextValue = {
-    contextOpenEntityId: state.contextOpenEntityId,
     setViewport,
     panBy,
     resetViewport,

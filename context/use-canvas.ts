@@ -38,7 +38,6 @@ export interface CanvasContextValue {
   selectedEntityIds: ReadonlySet<string>;
   /** Whether multi-select toggle mode is active (touch devices) */
   multiSelectMode: boolean;
-  contextOpenEntityId: string | null;
   hoveredEntityId: string | null;
   addEntity: (
     entity: Omit<ShaderCanvasEntity, "id" | "zIndex" | "name">,
