@@ -1,8 +1,7 @@
 import type { UILayoutIcon } from "./ui-layout.ts";
-import { getIconRasterSize, type UIIconCache } from "./ui-icon-cache.ts";
+import type { UIIconCache } from "./ui-icon-cache.ts";
 import shaderSource from "./ui-icon.wgsl?raw";
 
-const ICON_RASTER_UPGRADE_THRESHOLD = 1.25;
 const MAX_ICONS = 16;
 
 // IconUniforms layout:
@@ -121,7 +120,7 @@ export class UIIconPipeline {
   render(
     icons: UILayoutIcon[],
     iconCache: UIIconCache,
-    pixelScale: number,
+    _pixelScale: number,
     pass: GPURenderPassEncoder,
   ): void {
     // Resolve textures and group icons by GPU texture
@@ -129,22 +128,12 @@ export class UIIconPipeline {
     const resolved: ResolvedIcon[] = [];
 
     for (const icon of icons) {
-      const textureMatch = iconCache.getBest(icon.svg, icon.width, icon.height, pixelScale);
-      if (!textureMatch) {
-        iconCache.preload(icon.svg, icon.width, icon.height, pixelScale);
+      const texture = iconCache.get(icon.svg, icon.width, icon.height, _pixelScale);
+      if (!texture) {
+        iconCache.preload(icon.svg, icon.width, icon.height, _pixelScale);
         continue;
       }
-
-      const requestedSize = getIconRasterSize(icon.width, icon.height, pixelScale);
-      if (
-        !textureMatch.exact &&
-        (requestedSize.width > textureMatch.rasterWidth * ICON_RASTER_UPGRADE_THRESHOLD ||
-          requestedSize.height > textureMatch.rasterHeight * ICON_RASTER_UPGRADE_THRESHOLD)
-      ) {
-        iconCache.preload(icon.svg, icon.width, icon.height, pixelScale);
-      }
-
-      resolved.push({ icon, texture: textureMatch.texture });
+      resolved.push({ icon, texture });
     }
 
     if (resolved.length === 0) return;

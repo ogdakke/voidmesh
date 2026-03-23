@@ -6,7 +6,7 @@ import { UIBlurPipeline } from "./ui-blur-pipeline.ts";
 import { UIFilterCompositePipeline } from "./ui-filter-composite-pipeline.ts";
 import { UIIconPipeline } from "./ui-icon-pipeline.ts";
 import { UILinePipeline } from "./ui-line-pipeline.ts";
-import { getIconRasterSize, UIIconCache } from "./ui-icon-cache.ts";
+import { UIIconCache } from "./ui-icon-cache.ts";
 import { prepareText } from "../text/slug.ts";
 import type { UIPointerEvent, UIDragEvent } from "./elements.ts";
 import { SceneNode, hasActiveAnimations, pruneExitedNodes } from "./scene-node.ts";
@@ -29,8 +29,6 @@ import {
 } from "./ui-layout.ts";
 import { hitTest, findScrollableNode } from "./hit-test.ts";
 import { UIStyleResolver } from "./style-resolver.ts";
-
-const ICON_RASTER_UPGRADE_THRESHOLD = 1.25;
 
 interface LayoutCacheEntry {
   renderVersion: number;
@@ -468,24 +466,16 @@ export class UIRenderer {
 
     // Track icon preload state
     for (const layoutIcon of layout.icons) {
-      const textureMatch = this.#iconCache.getBest(
-        layoutIcon.svg,
-        layoutIcon.width,
-        layoutIcon.height,
-        iconPixelScale,
-      );
-      if (!textureMatch) {
-        this.#hasPendingIcons = true;
-        continue;
-      }
-
-      const requestedSize = getIconRasterSize(layoutIcon.width, layoutIcon.height, iconPixelScale);
       if (
-        !textureMatch.exact &&
-        (requestedSize.width > textureMatch.rasterWidth * ICON_RASTER_UPGRADE_THRESHOLD ||
-          requestedSize.height > textureMatch.rasterHeight * ICON_RASTER_UPGRADE_THRESHOLD)
+        !this.#iconCache.has(layoutIcon.svg, layoutIcon.width, layoutIcon.height, iconPixelScale)
       ) {
         this.#hasPendingIcons = true;
+        this.#iconCache.preload(
+          layoutIcon.svg,
+          layoutIcon.width,
+          layoutIcon.height,
+          iconPixelScale,
+        );
       }
     }
 
