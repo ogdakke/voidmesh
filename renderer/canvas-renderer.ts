@@ -41,7 +41,7 @@ import { TexturePool } from "./texture-pool.ts";
 import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
 import { UIRenderer } from "./ui/ui-renderer.ts";
 import { createElement } from "react";
-import { EntityLabel } from "./ui/entity-label.tsx";
+import { EntityLabel, ENTITY_LABEL_ICONS } from "./ui/entity-label.tsx";
 import { canvasUI } from "./ui/canvas-ui.ts";
 import { DebugOverlayUI } from "./ui/debug-ui.tsx";
 import { perfOverlay } from "../engine/perf-overlay.ts";
@@ -376,7 +376,12 @@ export class InfiniteCanvasRenderer {
       this.#canvasFormat,
       this.#viewportUniformBuffer!,
     );
-    this.#uiRenderer.initialize().catch((e) => logger.error("UI renderer init failed:", e));
+    this.#uiRenderer
+      .initialize()
+      .then(async () => {
+        await this.#uiRenderer?.preloadIcons(ENTITY_LABEL_ICONS);
+      })
+      .catch((e) => logger.error("UI renderer init failed:", e));
 
     // Initialize unified canvas UI overlay (context menu, debug, etc.)
     canvasUI.initialize(this.#uiRenderer);

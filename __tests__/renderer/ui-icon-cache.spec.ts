@@ -1,38 +1,123 @@
-import { describe, expect, it } from "vitest";
-import { getIconRasterSize, pickClosestIconRasterSize } from "#renderer/ui/ui-icon-cache.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  FIXED_ICON_RASTER_EDGE,
+  getFixedIconRasterSize,
+  UIIconCache,
+} from "#renderer/ui/ui-icon-cache.ts";
 
-describe("getIconRasterSize", () => {
-  it("reuses the same raster bucket for small zoom deltas", () => {
-    expect(getIconRasterSize(24, 24, 10)).toEqual({ width: 368, height: 368 });
-    expect(getIconRasterSize(24, 24, 10.2)).toEqual({ width: 368, height: 368 });
+const TEST_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"></svg>`;
+
+class MockImage {
+  naturalWidth = 24;
+  naturalHeight = 24;
+  width = 24;
+  height = 24;
+  onload: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+
+  set src(_value: string) {
+    queueMicrotask(() => this.onload?.());
+  }
+}
+
+function createMockDevice() {
+  const copyExternalImageToTexture = vi.fn();
+  const createTexture = vi.fn(({ size }: { size: [number, number] }) => ({
+    width: size[0],
+    height: size[1],
+    destroy: vi.fn(),
+    createView: vi.fn(),
+  }));
+
+  return {
+    device: {
+      createTexture,
+      queue: {
+        copyExternalImageToTexture,
+      },
+    } as unknown as GPUDevice,
+    createTexture,
+    copyExternalImageToTexture,
+  };
+}
+
+describe("getFixedIconRasterSize", () => {
+  it("preserves aspect ratio while capping the longest edge", () => {
+    expect(getFixedIconRasterSize(24, 24)).toEqual({
+      width: FIXED_ICON_RASTER_EDGE,
+      height: FIXED_ICON_RASTER_EDGE,
+    });
+    expect(getFixedIconRasterSize(48, 24)).toEqual({
+      width: FIXED_ICON_RASTER_EDGE,
+      height: FIXED_ICON_RASTER_EDGE / 2,
+    });
   });
 
-  it("scales each axis independently for non-square icons", () => {
-    expect(getIconRasterSize(12, 24, 10)).toEqual({ width: 192, height: 368 });
-  });
-
-  it("clamps oversized requests to the configured texture edge", () => {
-    expect(getIconRasterSize(200, 200, 10)).toEqual({ width: 512, height: 512 });
+  it("falls back to the fixed edge for invalid source dimensions", () => {
+    expect(getFixedIconRasterSize(0, 0)).toEqual({
+      width: FIXED_ICON_RASTER_EDGE,
+      height: FIXED_ICON_RASTER_EDGE,
+    });
   });
 });
 
-describe("pickClosestIconRasterSize", () => {
-  it("prefers the nearest larger variant to avoid blur while resizing down", () => {
-    expect(
-      pickClosestIconRasterSize({ width: 256, height: 256 }, [
-        { width: 240, height: 240 },
-        { width: 272, height: 272 },
-        { width: 320, height: 320 },
-      ]),
-    ).toEqual({ width: 272, height: 272 });
+describe("UIIconCache", () => {
+  let createImageBitmapMock: ReturnType<typeof vi.fn>;
+  let createObjectUrlSpy: ReturnType<typeof vi.spyOn>;
+  let revokeObjectUrlSpy: ReturnType<typeof vi.spyOn>;
+  let originalImage: typeof Image;
+
+  beforeEach(() => {
+    originalImage = globalThis.Image;
+    createImageBitmapMock = vi.fn(async (_source, options?: ImageBitmapOptions) => ({
+      width: options?.resizeWidth ?? FIXED_ICON_RASTER_EDGE,
+      height: options?.resizeHeight ?? FIXED_ICON_RASTER_EDGE,
+      close: vi.fn(),
+    }));
+
+    vi.stubGlobal("Image", MockImage);
+    vi.stubGlobal("createImageBitmap", createImageBitmapMock);
+    vi.stubGlobal("GPUTextureUsage", {
+      TEXTURE_BINDING: 1,
+      COPY_DST: 2,
+      RENDER_ATTACHMENT: 4,
+    });
+    createObjectUrlSpy = vi
+      .spyOn(URL, "createObjectURL")
+      .mockImplementation(() => "blob:mock-icon");
+    revokeObjectUrlSpy = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
   });
 
-  it("falls back to the nearest smaller variant when no larger one exists", () => {
-    expect(
-      pickClosestIconRasterSize({ width: 256, height: 256 }, [
-        { width: 192, height: 192 },
-        { width: 240, height: 240 },
-      ]),
-    ).toEqual({ width: 240, height: 240 });
+  afterEach(() => {
+    createObjectUrlSpy.mockRestore();
+    revokeObjectUrlSpy.mockRestore();
+    vi.unstubAllGlobals();
+    globalThis.Image = originalImage;
+    vi.restoreAllMocks();
+  });
+
+  it("creates one texture per SVG regardless of requested size or zoom", async () => {
+    const { device, createTexture, copyExternalImageToTexture } = createMockDevice();
+    const cache = new UIIconCache(device);
+
+    const first = await cache.getTexture(TEST_SVG, 16, 16, 1);
+    const second = await cache.getTexture(TEST_SVG, 16_000, 16_000, 1_000);
+
+    expect(first).toBe(second);
+    expect(createObjectUrlSpy).toHaveBeenCalledTimes(1);
+    expect(createImageBitmapMock).toHaveBeenCalledTimes(1);
+    expect(createTexture).toHaveBeenCalledTimes(1);
+    expect(copyExternalImageToTexture).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats the cached icon as present for any later size request", async () => {
+    const { device } = createMockDevice();
+    const cache = new UIIconCache(device);
+
+    await cache.getTexture(TEST_SVG, 12, 12, 1);
+
+    expect(cache.has(TEST_SVG, 12, 12, 1)).toBe(true);
+    expect(cache.has(TEST_SVG, 1_200, 1_200, 100)).toBe(true);
+    expect(cache.get(TEST_SVG, 2, 2, 0.5)).not.toBeNull();
   });
 });
