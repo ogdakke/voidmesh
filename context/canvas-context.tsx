@@ -893,6 +893,53 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const setSelectedEntityTimeAutoPlay = (playing: boolean) => {
+    const entities = canvasStore.getSelectedEntities();
+    if (entities.length === 0) return;
+
+    for (const entity of entities) {
+      const currentTime = playing
+        ? (entity.shaderParams.time ?? 0)
+        : (rendererRef.current?.getEntityTime(entity) ?? entity.shaderParams.time ?? 0);
+
+      rendererRef.current?.setEntityTimeAutoPlay(entity, playing);
+
+      canvasStore.updateEntity(entity.id, {
+        shaderParams: {
+          ...entity.shaderParams,
+          time: currentTime,
+          timeAutoPlay: playing,
+        },
+        textureDirty: true,
+      });
+    }
+  };
+
+  const syncSelectedEntityTimes = () => {
+    const entities = canvasStore.getSelectedEntities();
+    if (entities.length === 0) return;
+
+    const sourceEntity =
+      entities.find((entity) => entity.shaderParams.timeAutoPlay !== false) ?? entities[0];
+    if (!sourceEntity) return;
+
+    const sourceTime =
+      rendererRef.current?.getEntityTime(sourceEntity) ?? sourceEntity.shaderParams.time ?? 0;
+
+    for (const entity of entities) {
+      rendererRef.current?.setEntityTimeAutoPlay(entity, false);
+
+      canvasStore.updateEntity(entity.id, {
+        shaderParams: {
+          ...entity.shaderParams,
+          time: sourceTime,
+          timeAutoPlay: false,
+        },
+        textureDirty: true,
+      });
+    }
+  };
+
   const changeShaderType = (value: string | null) => {
     if (!value) return;
 
@@ -1755,6 +1802,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       sendToBack,
       duplicateEntities,
       updateSelectedEntityParams,
+      setSelectedEntityTimeAutoPlay,
+      syncSelectedEntityTimes,
       changeShaderType,
       changeDitheringKind,
       changeAsciiKind,

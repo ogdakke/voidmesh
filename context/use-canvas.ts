@@ -44,6 +44,8 @@ export interface CanvasCommands {
     updates: PartialDeep<ShaderParams>,
     options?: { skipUndo?: boolean },
   ) => void;
+  setSelectedEntityTimeAutoPlay: (playing: boolean) => void;
+  syncSelectedEntityTimes: () => void;
   changeShaderType: (value: string | null) => void;
   changeDitheringKind: (value: string | null) => void;
   changeAsciiKind: (value: string | null) => void;

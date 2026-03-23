@@ -1,10 +1,5 @@
 import { useParamValue, type ParamResult } from "#hooks/use-param-value.ts";
-import {
-  useCanvasCommands,
-  useCanvasRendererService,
-  useSelectedEntityIds,
-  useSelectedShaderType,
-} from "#context/use-canvas.ts";
+import { useCanvasCommands, useSelectedShaderType } from "#context/use-canvas.ts";
 import { type ParamPaths, type ShaderParams, type ShaderType } from "#types/canvas.ts";
 import { memo, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -20,9 +15,9 @@ import { InfiniteSlider } from "../ui/infinite-slider/index.ts";
 import { TimeSlider } from "../ui/time-slider/time-slider.tsx";
 import { getEffectiveDefault } from "#lib/get-effective-default.ts";
 import { config } from "#config";
-import { canvasStore } from "#engine";
 import { PauseSolid, PlaySolid } from "iconoir-react";
 import type { PartialDeep } from "type-fest";
+import { useTimeControl } from "#hooks/use-time-control.ts";
 
 // ---------------------------------------------------------------------------
 // Utilities
@@ -197,9 +192,8 @@ export function ParamsKnobs() {
   const [floatingLabel, setFloatingLabel] = useState<string | null>(null);
   const floatingLabelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { updateSelectedEntityParams } = useCanvasCommands();
-  const { renderer } = useCanvasRendererService();
-  const selectedEntityIds = useSelectedEntityIds();
   const selectedShaderType = useSelectedShaderType();
+  const timeControl = useTimeControl();
 
   // All param values keyed by path — same hook count/order every render
   const paramValues: ParamValuesRecord = {
@@ -221,43 +215,10 @@ export function ParamsKnobs() {
     "adjustments.blur": useParamValue("adjustments.blur", null),
   };
 
-  // Get selected entity directly for per-entity time operations
-  const entity = (() => {
-    if (selectedEntityIds.size !== 1) return null;
-    const id = selectedEntityIds.values().next().value;
-    return id ? (canvasStore.getState().entities.get(id) ?? null) : null;
-  })();
-
-  const isTimeAutoPlaying = entity?.shaderParams.timeAutoPlay !== false;
-
-  const handleTimeToggle = (playing: boolean) => {
-    if (!entity || !renderer) return;
-    if (!playing) {
-      const currentTime = renderer.getEntityTime(entity);
-      updateSelectedEntityParams({ time: currentTime }, { skipUndo: true });
-    }
-    renderer.setEntityTimeAutoPlay(entity, playing);
-    updateSelectedEntityParams({ timeAutoPlay: playing }, { skipUndo: true });
-  };
-
   // Generic param change handler — replaces 13 individual callbacks
   const handleParamChange = (param: SlideyParam, uiValue: number) => {
     const actual = fromUiValue(uiValue, param.range.min, param.range.max, param.precision);
     updateSelectedEntityParams(buildParamUpdate(param.value, actual));
-  };
-
-  // Time-specific handlers (not data-driven — different semantics)
-  const handleTimeChange = (time: number) => {
-    if (!entity || !renderer) return;
-    renderer.setEntityTime(entity, time);
-    updateSelectedEntityParams({ time }, { skipUndo: true });
-  };
-
-  const handleTimeInteractionStart = () => {
-    if (!entity || !renderer) return;
-    renderer.setEntityTimeAutoPlay(entity, false);
-    const currentTime = renderer.getEntityTime(entity);
-    updateSelectedEntityParams({ time: currentTime, timeAutoPlay: false }, { skipUndo: true });
   };
 
   // Floating label helpers
@@ -278,7 +239,10 @@ export function ParamsKnobs() {
   );
 
   const handleSliderInteractionStart = () => {
-    const isMixed = paramValues[selectedKnob.value]?.isMixed ?? false;
+    const isMixed =
+      selectedKnob.value === "time"
+        ? timeControl.isMixed
+        : (paramValues[selectedKnob.value]?.isMixed ?? false);
     showFloatingLabel(selectedKnob.label + (isMixed ? " (Mixed)" : ""));
   };
 
@@ -304,12 +268,13 @@ export function ParamsKnobs() {
         paramValues={paramValues}
         selectedKnob={selectedKnob}
         shaderType={selectedShaderType}
-        isTimeAutoPlaying={isTimeAutoPlaying}
-        onTimeToggle={handleTimeToggle}
+        isTimeAutoPlaying={timeControl.isAutoPlaying}
+        onTimeToggle={timeControl.handleToggle}
         onValueChange={(value) => {
           const param = AllSlideyParamsInOrder.find((p) => p.value === value)!;
           setSelectedKnob(param);
-          showFloatingLabel(resolveLabel(param.label, selectedShaderType));
+          const label = resolveLabel(param.label, selectedShaderType);
+          showFloatingLabel(value === "time" && timeControl.isMixed ? `${label} (Mixed)` : label);
         }}
         onInteractionStart={handleSliderInteractionStart}
         onValueCommit={handleSliderValueCommit}
@@ -318,11 +283,11 @@ export function ParamsKnobs() {
       {/* Time slider — driven imperatively at 60fps during autoplay */}
       {selectedKnob.value === "time" && (
         <TimeSlider
-          entity={entity}
-          isAutoPlaying={isTimeAutoPlaying}
-          entityTime={paramValues["time"]?.value ?? 0}
-          onInteractionStart={handleTimeInteractionStart}
-          onValueChange={handleTimeChange}
+          entity={timeControl.entity}
+          isAutoPlaying={timeControl.isAutoPlaying}
+          entityTime={timeControl.entityTime}
+          onInteractionStart={timeControl.handleTimeInteractionStart}
+          onValueChange={timeControl.handleTimeChange}
         />
       )}
 
