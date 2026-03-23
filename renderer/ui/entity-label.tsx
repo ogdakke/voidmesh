@@ -1,4 +1,5 @@
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
+import { Drag, WarningTriangle } from "iconoir-react";
 import { easings } from "../../lib/canvas-math.ts";
 import type { UIBackground, UIColor } from "./elements.ts";
 import { edges } from "./elements.ts";
@@ -56,14 +57,14 @@ export function EntityLabel({ entity, isDragging }: EntityLabelProps) {
       {!isWarning ? (
         <Icon
           key={`drag-${entity.id}`}
-          svg={DRAG_ICON_SVG}
+          icon={Drag}
           size={isDragging ? 16 : 0}
           animate={{
             size: { duration: 150, easing: easings.easeOutBack },
           }}
         />
       ) : (
-        <Icon key={`warn-${entity.id}`} svg={WARNING_ICON_SVG} size={14} />
+        <Icon key={`warn-${entity.id}`} icon={WarningTriangle} size={14} tint={TEXT_DARK_AMBER} />
       )}
       <Text fontSize={13} color={textColor}>
         {isWarning ? `Original: ${entity.name}` : entity.name}

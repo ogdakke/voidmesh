@@ -21,6 +21,7 @@ import type {
   StateStyle,
   UIFilter,
   UILinePoint,
+  UILengthValue,
 } from "./elements.ts";
 import type { SceneNode } from "./scene-node.ts";
 import type { UIResolvedBackground, UIStyleResolver } from "./style-resolver.ts";
@@ -347,20 +348,44 @@ function measureLineLike(
     maxY = Math.max(maxY, points[i]!.y * scale);
   }
 
-  const explicitWidth = node.props["width"] as number | undefined;
-  const explicitHeight = node.props["height"] as number | undefined;
-  const minWidth = node.props["minWidth"] as number | undefined;
-  const minHeight = node.props["minHeight"] as number | undefined;
-  const maxWidth = node.props["maxWidth"] as number | undefined;
-  const maxHeight = node.props["maxHeight"] as number | undefined;
+  const explicitWidth = resolveLength(
+    node.props["width"] as UILengthValue | undefined,
+    scale,
+    constraints.availableWidth,
+  );
+  const explicitHeight = resolveLength(
+    node.props["height"] as UILengthValue | undefined,
+    scale,
+    constraints.availableHeight,
+  );
+  const minWidth = resolveLength(
+    node.props["minWidth"] as UILengthValue | undefined,
+    scale,
+    constraints.availableWidth,
+  );
+  const minHeight = resolveLength(
+    node.props["minHeight"] as UILengthValue | undefined,
+    scale,
+    constraints.availableHeight,
+  );
+  const maxWidth = resolveLength(
+    node.props["maxWidth"] as UILengthValue | undefined,
+    scale,
+    constraints.availableWidth,
+  );
+  const maxHeight = resolveLength(
+    node.props["maxHeight"] as UILengthValue | undefined,
+    scale,
+    constraints.availableHeight,
+  );
 
-  let width = explicitWidth !== undefined ? explicitWidth * scale : maxX + strokeWidth;
-  let height = explicitHeight !== undefined ? explicitHeight * scale : maxY + strokeWidth;
+  let width = explicitWidth ?? maxX + strokeWidth;
+  let height = explicitHeight ?? maxY + strokeWidth;
 
-  if (minWidth !== undefined) width = Math.max(width, minWidth * scale);
-  if (minHeight !== undefined) height = Math.max(height, minHeight * scale);
-  if (maxWidth !== undefined) width = Math.min(width, maxWidth * scale);
-  if (maxHeight !== undefined) height = Math.min(height, maxHeight * scale);
+  if (minWidth !== undefined) width = Math.max(width, minWidth);
+  if (minHeight !== undefined) height = Math.max(height, minHeight);
+  if (maxWidth !== undefined) width = Math.min(width, maxWidth);
+  if (maxHeight !== undefined) height = Math.min(height, maxHeight);
 
   const clamped = applyAvailableClamp(width, height, constraints);
   node.layout.width = clamped.width;
@@ -537,6 +562,23 @@ function applyAvailableClamp(
   return { width: nextWidth, height: nextHeight };
 }
 
+function resolveLength(
+  value: UILengthValue | undefined,
+  scale: number,
+  available?: number,
+): number | undefined {
+  if (typeof value === "number") return value * scale;
+  if (typeof value !== "string") return undefined;
+
+  const trimmed = value.trim();
+  if (!trimmed.endsWith("%")) return undefined;
+
+  const percent = Number.parseFloat(trimmed.slice(0, -1));
+  if (!Number.isFinite(percent) || available === undefined) return undefined;
+
+  return (available * percent) / 100;
+}
+
 function shrinkChildrenToFit(
   visible: SceneNode[],
   direction: "row" | "col",
@@ -585,8 +627,16 @@ function shrinkChildrenToFit(
       const currentMain = mainSizeOf(child, direction);
       const minMain =
         direction === "row"
-          ? ((child.props["minWidth"] as number | undefined) ?? 0) * scale
-          : ((child.props["minHeight"] as number | undefined) ?? 0) * scale;
+          ? (resolveLength(
+              child.props["minWidth"] as UILengthValue | undefined,
+              scale,
+              availableMain,
+            ) ?? 0)
+          : (resolveLength(
+              child.props["minHeight"] as UILengthValue | undefined,
+              scale,
+              availableMain,
+            ) ?? 0);
       const shrinkFactor =
         (((child.props["flexShrink"] as number | undefined) ?? 1) * currentMain) /
         totalShrinkFactor;
@@ -652,8 +702,11 @@ function measure(
     case "text": {
       const content = node.props["content"] as string | undefined;
       const fontSize = getScaled(node, "fontSize", animated, 14, scale);
-      const rawMaxWidth = node.props["maxWidth"] as number | undefined;
-      let maxWidth = rawMaxWidth !== undefined ? rawMaxWidth * scale : undefined;
+      let maxWidth = resolveLength(
+        node.props["maxWidth"] as UILengthValue | undefined,
+        scale,
+        constraints.availableWidth,
+      );
       if (constraints.availableWidth !== undefined) {
         maxWidth =
           maxWidth !== undefined
@@ -725,29 +778,49 @@ function measure(
       const padding = resolvePadding(node.props["padding"], scale);
       const flowChildren = node.scratch.flowChildren;
       const visibleChildren = node.scratch.visibleChildren;
-      const explicitWidth = node.props["width"] as number | undefined;
-      const explicitHeight = node.props["height"] as number | undefined;
-      const minWidth = node.props["minWidth"] as number | undefined;
-      const minHeight = node.props["minHeight"] as number | undefined;
-      const maxWidth = node.props["maxWidth"] as number | undefined;
-      const maxHeight = node.props["maxHeight"] as number | undefined;
+      const explicitWidth = resolveLength(
+        node.props["width"] as UILengthValue | undefined,
+        scale,
+        constraints.availableWidth,
+      );
+      const explicitHeight = resolveLength(
+        node.props["height"] as UILengthValue | undefined,
+        scale,
+        constraints.availableHeight,
+      );
+      const minWidth = resolveLength(
+        node.props["minWidth"] as UILengthValue | undefined,
+        scale,
+        constraints.availableWidth,
+      );
+      const minHeight = resolveLength(
+        node.props["minHeight"] as UILengthValue | undefined,
+        scale,
+        constraints.availableHeight,
+      );
+      const maxWidth = resolveLength(
+        node.props["maxWidth"] as UILengthValue | undefined,
+        scale,
+        constraints.availableWidth,
+      );
+      const maxHeight = resolveLength(
+        node.props["maxHeight"] as UILengthValue | undefined,
+        scale,
+        constraints.availableHeight,
+      );
 
       let availableWidth = constraints.availableWidth;
       let availableHeight = constraints.availableHeight;
       if (maxWidth !== undefined) {
-        const scaledMaxWidth = maxWidth * scale;
         availableWidth =
-          availableWidth !== undefined ? Math.min(availableWidth, scaledMaxWidth) : scaledMaxWidth;
+          availableWidth !== undefined ? Math.min(availableWidth, maxWidth) : maxWidth;
       }
       if (maxHeight !== undefined) {
-        const scaledMaxHeight = maxHeight * scale;
         availableHeight =
-          availableHeight !== undefined
-            ? Math.min(availableHeight, scaledMaxHeight)
-            : scaledMaxHeight;
+          availableHeight !== undefined ? Math.min(availableHeight, maxHeight) : maxHeight;
       }
-      if (explicitWidth !== undefined) availableWidth = explicitWidth * scale;
-      if (explicitHeight !== undefined) availableHeight = explicitHeight * scale;
+      if (explicitWidth !== undefined) availableWidth = explicitWidth;
+      if (explicitHeight !== undefined) availableHeight = explicitHeight;
 
       const overflow = node.props["overflow"] as "visible" | "hidden" | "scroll" | undefined;
       const isScroll = overflow === "scroll";
@@ -770,14 +843,22 @@ function measure(
         // Fixed children use screen-space scale
         const childScale = pos === "fixed" && viewport ? viewport.dpr / viewport.zoom : scale;
         const childConstraints: MeasureConstraints =
-          pos === "absolute" || pos === "fixed"
-            ? {}
-            : direction === "col"
+          pos === "fixed" && viewport
+            ? {
+                availableWidth: viewport.width / viewport.zoom,
+                availableHeight: viewport.height / viewport.zoom,
+              }
+            : pos === "absolute"
               ? {
                   availableWidth: contentAvailableWidth,
                   availableHeight: contentAvailableHeight,
                 }
-              : { availableHeight: contentAvailableHeight };
+              : direction === "col"
+                ? {
+                    availableWidth: contentAvailableWidth,
+                    availableHeight: contentAvailableHeight,
+                  }
+                : { availableHeight: contentAvailableHeight };
         measure(child, measurer, now, childScale, viewport, childConstraints);
         if (pos !== "absolute" && pos !== "fixed" && child.phase !== "exiting") {
           flowChildren.push(child);
@@ -872,16 +953,14 @@ function measure(
       }
 
       // Apply explicit sizing (scaled)
-      if (explicitWidth !== undefined) totalWidth = explicitWidth * scale;
-      if (explicitHeight !== undefined) totalHeight = explicitHeight * scale;
+      if (explicitWidth !== undefined) totalWidth = explicitWidth;
+      if (explicitHeight !== undefined) totalHeight = explicitHeight;
 
       // Apply constraints (scaled)
-      if (minWidth !== undefined && totalWidth < minWidth * scale) totalWidth = minWidth * scale;
-      if (minHeight !== undefined && totalHeight < minHeight * scale)
-        totalHeight = minHeight * scale;
-      if (maxWidth !== undefined && totalWidth > maxWidth * scale) totalWidth = maxWidth * scale;
-      if (maxHeight !== undefined && totalHeight > maxHeight * scale)
-        totalHeight = maxHeight * scale;
+      if (minWidth !== undefined && totalWidth < minWidth) totalWidth = minWidth;
+      if (minHeight !== undefined && totalHeight < minHeight) totalHeight = minHeight;
+      if (maxWidth !== undefined && totalWidth > maxWidth) totalWidth = maxWidth;
+      if (maxHeight !== undefined && totalHeight > maxHeight) totalHeight = maxHeight;
 
       const clamped = applyAvailableClamp(totalWidth, totalHeight, constraints);
       totalWidth = clamped.width;

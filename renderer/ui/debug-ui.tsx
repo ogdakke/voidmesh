@@ -31,6 +31,7 @@ import {
   MediaImagePlus,
   Trash,
 } from "iconoir-react";
+import { useIsMobile } from "#hooks/use-is-mobile.ts";
 
 type ButtonProps = {
   label?: string;
@@ -1114,8 +1115,15 @@ function PerfMetric({
   );
 }
 
-function FpsSparkline({ history, fps }: { history: number[]; fps: number }) {
-  const width = 152;
+function FpsSparkline({
+  history,
+  fps,
+  width = 152,
+}: {
+  history: number[];
+  fps: number;
+  width?: number;
+}) {
   const height = 24;
   const points = history.length > 0 ? history : fps > 0 ? [fps] : [];
 
@@ -1125,7 +1133,7 @@ function FpsSparkline({ history, fps }: { history: number[]; fps: number }) {
         width={width}
         height={height}
         background={HUD_GRAPH_BG}
-        borderRadius={8}
+        borderRadius={3}
         borderWidth={1}
         borderColor={HUD_BORDER}
       />
@@ -1162,7 +1170,7 @@ function FpsSparkline({ history, fps }: { history: number[]; fps: number }) {
       width={width}
       height={height}
       background={HUD_GRAPH_BG}
-      borderRadius={8}
+      borderRadius={3}
       borderWidth={1}
       borderColor={HUD_BORDER}
       overflow="hidden"
@@ -1211,31 +1219,43 @@ function FpsSparkline({ history, fps }: { history: number[]; fps: number }) {
 }
 
 export const PerfHud = memo(function PerfHud({ perf }: { perf: DebugOverlayStats }) {
+  const isMobile = useIsMobile();
   const fpsValue = formatCompactFps(perf.fps);
   const low1FpsValue = formatCompactFps(perf.fpsLow1);
-  const worstFrameValue = formatCompactMs(perf.frameWorstMs);
   const entitiesValue = `${perf.renderedCount}/${perf.entityCount}`;
+  const medianValue = formatCompactMs(perf.renderMedianMs);
+  const p95Value = formatCompactMs(perf.renderP95Ms);
 
   return (
-    <Box position="fixed" left={12} top={12} zIndex={9500}>
-      <Box
-        direction="row"
-        gap={8}
-        align="center"
-        padding={edges(6, 8)}
-        background={HUD_BG}
-        backdropFilter={[blur(SUBTLE_BACKDROP_BLUR)]}
-        borderRadius={12}
-        borderWidth={1}
-        borderColor={HUD_BORDER}
-      >
-        <FpsSparkline history={perf.fpsHistory} fps={perf.fps} />
-        <PerfMetric label="FPS" value={fpsValue} width={52} valueColor={HUD_GRAPH_LINE} />
-        <PerfMetric label="1% Low" value={low1FpsValue} width={72} />
-        <PerfMetric label="Worst" value={worstFrameValue} width={82} />
-        <PerfMetric label="Median" value={formatCompactMs(perf.renderMedianMs)} width={88} />
-        <PerfMetric label="P95" value={formatCompactMs(perf.renderP95Ms)} width={78} />
-        <PerfMetric label="Entities" value={entitiesValue} width={72} />
+    <Box
+      position="fixed"
+      left={isMobile ? 4 : 36}
+      top={isMobile ? 50 : 4}
+      contain="viewport"
+      zIndex={9500}
+    >
+      <Box padding={edges(0, 4)}>
+        <Box
+          direction="col"
+          gap={6}
+          padding={edges(6)}
+          background={HUD_BG}
+          backdropFilter={[blur(SUBTLE_BACKDROP_BLUR)]}
+          borderRadius={10}
+          borderWidth={1}
+          borderColor={HUD_BORDER}
+        >
+          <Box direction="row" gap={8} align="center">
+            <FpsSparkline history={perf.fpsHistory} fps={perf.fps} width={120} />
+            <PerfMetric label="FPS" value={fpsValue} width={52} valueColor={HUD_GRAPH_LINE} />
+            <PerfMetric label="1% Low" value={low1FpsValue} width={72} />
+          </Box>
+          <Box direction="row" gap={8} align="center">
+            <PerfMetric label="Entities" value={entitiesValue} width={72} />
+            <PerfMetric label="Median" value={medianValue} width={88} />
+            <PerfMetric label="P95" value={p95Value} width={78} />
+          </Box>
+        </Box>
       </Box>
     </Box>
   );

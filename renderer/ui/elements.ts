@@ -133,6 +133,8 @@ export interface StateStyle {
   scale?: number; // visual scale (1.0 = normal, 0.95 = slightly smaller)
 }
 
+export type UILengthValue = number | `${number}%`;
+
 // ---------------------------------------------------------------------------
 // Intrinsic element prop types
 // ---------------------------------------------------------------------------
@@ -153,12 +155,12 @@ export interface BoxElementProps {
   borderColor?: UIColorValue;
   filter?: UIFilter[];
   opacity?: number;
-  width?: number;
-  height?: number;
-  minWidth?: number;
-  minHeight?: number;
-  maxWidth?: number;
-  maxHeight?: number;
+  width?: UILengthValue;
+  height?: UILengthValue;
+  minWidth?: UILengthValue;
+  minHeight?: UILengthValue;
+  maxWidth?: UILengthValue;
+  maxHeight?: UILengthValue;
   overflow?: "visible" | "hidden" | "scroll";
   position?: "relative" | "absolute" | "fixed";
   /** Anchor-relative placement for absolute children (e.g. submenu to right of trigger) */
@@ -201,7 +203,7 @@ export interface TextElementProps {
   fontSize: number;
   color: UIColorValue;
   opacity?: number;
-  maxWidth?: number;
+  maxWidth?: UILengthValue;
   children?: string;
 }
 
@@ -232,12 +234,12 @@ export interface LineElementProps {
   strokeWidth?: number;
   strokeLineCap?: "butt" | "round" | "square";
   opacity?: number;
-  width?: number;
-  height?: number;
-  minWidth?: number;
-  minHeight?: number;
-  maxWidth?: number;
-  maxHeight?: number;
+  width?: UILengthValue;
+  height?: UILengthValue;
+  minWidth?: UILengthValue;
+  minHeight?: UILengthValue;
+  maxWidth?: UILengthValue;
+  maxHeight?: UILengthValue;
   position?: "relative" | "absolute" | "fixed";
   zIndex?: number;
   left?: number;
@@ -254,12 +256,12 @@ export interface PolylineElementProps {
   strokeWidth?: number;
   strokeLineCap?: "butt" | "round" | "square";
   opacity?: number;
-  width: number;
-  height: number;
-  minWidth?: number;
-  minHeight?: number;
-  maxWidth?: number;
-  maxHeight?: number;
+  width: UILengthValue;
+  height: UILengthValue;
+  minWidth?: UILengthValue;
+  minHeight?: UILengthValue;
+  maxWidth?: UILengthValue;
+  maxHeight?: UILengthValue;
   position?: "relative" | "absolute" | "fixed";
   zIndex?: number;
   left?: number;
