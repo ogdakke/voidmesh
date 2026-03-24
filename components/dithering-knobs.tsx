@@ -1,5 +1,6 @@
 import { DitheringKind, DITHERING_KIND_OPTIONS } from "#types/canvas.ts";
-import { useCanvasActions, useParamValue } from "../hooks/use-canvas-actions.ts";
+import { useCanvasCommands, useSelectionState } from "../context/use-canvas.ts";
+import { useParamValue } from "../hooks/use-param-value.ts";
 import { Select, SelectItem } from "./ui/select/index.tsx";
 import { optionsWithNull } from "./ui/ui-util.ts";
 import { config } from "#config";
@@ -10,7 +11,7 @@ const SIDE_OFFSET = 4;
 
 // ============ SIDEBAR VERSION ============
 export function DitheringKnobs() {
-  const { handleDitheringKindChange } = useCanvasActions();
+  const { changeDitheringKind } = useCanvasCommands();
   const ditheringKind = useParamValue(
     "dithering.kind",
     config.defaults.shaderParams.dithering.kind,
@@ -23,7 +24,7 @@ export function DitheringKnobs() {
       <Select
         label="Algorithm"
         value={ditheringKind.isMixed ? undefined : (ditheringKind.value ?? DitheringKind.bayer4x4)}
-        onValueChange={handleDitheringKindChange}
+        onValueChange={changeDitheringKind}
         formatValue={
           ditheringKind.isMixed ? <span className="select-mixed">Mixed</span> : undefined
         }
@@ -42,7 +43,8 @@ export function DitheringKnobs() {
 
 // ============ CONTEXT MENU VERSION ============
 export function DitheringMenuKnobs() {
-  const { handleDitheringKindChange, selectionState } = useCanvasActions();
+  const { changeDitheringKind } = useCanvasCommands();
+  const selectionState = useSelectionState();
   const isMultiple = selectionState.isMultiple;
   const ditheringKind = useParamValue(
     "dithering.kind",
@@ -85,7 +87,7 @@ export function DitheringMenuKnobs() {
                   key={option.value}
                   value={option.value}
                   className="menu-radio-item"
-                  onClick={() => handleDitheringKindChange(option.value)}
+                  onClick={() => changeDitheringKind(option.value)}
                 >
                   <ContextMenu.RadioItemIndicator className="menu-radio-indicator">
                     <Circle fill="currentColor" />

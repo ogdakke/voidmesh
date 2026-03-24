@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
 import { Xmark } from "iconoir-react";
+import { useCanvasCommands } from "#context/use-canvas.ts";
 import { useEntityDrag } from "#hooks/use-entity-drag.ts";
 import { useActionLayer } from "#hooks/use-action-layer.ts";
-import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
 import { haptic } from "#lib/haptic.ts";
 import { canvasStore } from "#engine";
 import "./delete-drop-zone.css";
@@ -14,7 +14,7 @@ export function DeleteDropZone() {
   const { entityDragActive } = useEntityDrag();
   const { active: actionLayerActive } = useActionLayer();
   const showZone = entityDragActive || actionLayerActive;
-  const { deleteEntity } = useCanvasActions();
+  const { deleteSelection } = useCanvasCommands();
   const zoneRef = useRef<HTMLDivElement>(null);
   const isOverRef = useRef(false);
 
@@ -50,7 +50,7 @@ export function DeleteDropZone() {
     const handleTouchEnd = () => {
       if (isOverRef.current) {
         haptic({ wantsHaptic: canvasStore.getState().haptics });
-        deleteEntity(undefined, "drop_zone");
+        deleteSelection(undefined, "drop_zone");
         isOverRef.current = false;
         zone.removeAttribute("data-over");
       }
@@ -65,7 +65,7 @@ export function DeleteDropZone() {
       zone.removeAttribute("data-over");
       isOverRef.current = false;
     };
-  }, [showZone, deleteEntity]);
+  }, [showZone, deleteSelection]);
 
   return (
     <div

@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { DropletHalf, Plus, QuestionMark } from "iconoir-react";
-import { useCanvas } from "#context/use-canvas.ts";
-import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
+import {
+  useCanvasCommands,
+  useCanvasRendererService,
+  useSelectedEntity,
+} from "#context/use-canvas.ts";
 import { useParamValue } from "#hooks/use-param-value.ts";
 import { config } from "#config";
 import { undo } from "#lib/undo.ts";
@@ -47,10 +50,11 @@ interface MobilePaletteItem {
 }
 
 export function MobileColorKnobs() {
-  const { handlePaletteChange, handlePaletteUpload, handleDeletePalette, selectedEntity } =
-    useCanvasActions();
+  const { changePalette, uploadPalette, deletePalette, updateSelectedEntityParams } =
+    useCanvasCommands();
+  const selectedEntity = useSelectedEntity();
   const customPalettes = usePaletteStore();
-  const { updateSelectedEntityParams, colorSpace } = useCanvas();
+  const { colorSpace } = useCanvasRendererService();
   const paletteParam = useParamValue("palette", config.defaults.shaderParams.palette);
   const preserveColors = useParamValue(
     "preserveColors",
@@ -168,7 +172,7 @@ export function MobileColorKnobs() {
 
     const item = paletteList.find((p) => p.id === id);
     if (item?.palette) {
-      handlePaletteChange(item.palette);
+      changePalette(item.palette);
       showFloatingLabel(item.label);
     } else if (id === UPLOAD_MODE_ID) {
       showFloatingLabel("Upload");
@@ -274,7 +278,7 @@ export function MobileColorKnobs() {
 
       {/* Conditional content: Upload or ColorPalette editor or preserve colors note */}
       {isUploadMode ? (
-        <PaletteUpload onUpload={handlePaletteUpload} variant="mobile" />
+        <PaletteUpload onUpload={uploadPalette} variant="mobile" />
       ) : isPreserveColorsSelected ? (
         <PreserveColors on={preserveColors.value} isMixed={preserveColors.isMixed} />
       ) : isReversePaletteSelected ? (
@@ -283,12 +287,12 @@ export function MobileColorKnobs() {
       paletteParam.isMixed ? null : (
         <ColorPalette
           palette={paletteParam.value ?? undefined}
-          onValueChange={handlePaletteChange}
+          onValueChange={changePalette}
           colorSpace={colorSpace}
           reversed={!!reversePalette.value}
           onDelete={
             paletteParam.value?.id && isUserPalette(paletteParam.value.id)
-              ? () => handleDeletePalette(paletteParam.value!.id!)
+              ? () => deletePalette(paletteParam.value!.id!)
               : undefined
           }
           canDelete={!!paletteParam.value?.id && isUserPalette(paletteParam.value.id)}

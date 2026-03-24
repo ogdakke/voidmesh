@@ -1,4 +1,4 @@
-import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
+import { useSelectedEntity } from "#context/use-canvas.ts";
 import {
   useMediaControlsActions,
   useFrozenPlaybackTime,
@@ -104,7 +104,7 @@ function MediaSlider({ actions }: { actions: MediaControlsActionsOnly }) {
  * their own subscriptions to playback time and use frozen state for exit animation.
  */
 export function MediaControls() {
-  const { selectedEntity } = useCanvasActions();
+  const selectedEntity = useSelectedEntity();
   const actions = useMediaControlsActions(selectedEntity);
 
   // isIdle checks entity state, not playback time

@@ -1,5 +1,6 @@
 import { AsciiKind, ASCII_KIND_OPTIONS } from "#types/canvas.ts";
-import { useCanvasActions, useParamValue } from "../hooks/use-canvas-actions.ts";
+import { useCanvasCommands, useSelectionState } from "../context/use-canvas.ts";
+import { useParamValue } from "../hooks/use-param-value.ts";
 import { Select, SelectItem } from "./ui/select/index.tsx";
 import { Toggle } from "./ui/toggle/index.tsx";
 import { optionsWithNull } from "./ui/ui-util.ts";
@@ -10,7 +11,7 @@ import { IonInvertMode } from "./icons/invert.tsx";
 
 // Desktop Sidebar version
 export function AsciiKnobs() {
-  const { handleAsciiKindChange, handleAsciiInvertChange } = useCanvasActions();
+  const { changeAsciiKind, setAsciiInvert } = useCanvasCommands();
 
   const asciiKind = useParamValue("ascii.kind", config.defaults.shaderParams.ascii.kind);
   const asciiInvert = useParamValue("ascii.invert", config.defaults.shaderParams.ascii.invert);
@@ -23,7 +24,7 @@ export function AsciiKnobs() {
       <Select
         label="Character Set"
         value={asciiKind.isMixed ? undefined : (asciiKind.value ?? AsciiKind.standard)}
-        onValueChange={handleAsciiKindChange}
+        onValueChange={changeAsciiKind}
         formatValue={asciiKind.isMixed ? <span className="select-mixed">Mixed</span> : undefined}
         name="ascii-kind"
         items={optionsWithNull({ options: ASCII_KIND_OPTIONS })}
@@ -38,7 +39,7 @@ export function AsciiKnobs() {
         pressed={!!asciiInvert.value}
         onPressedChange={(pressed) => {
           const newValue = asciiInvert.isMixed ? true : pressed;
-          handleAsciiInvertChange(newValue);
+          setAsciiInvert(newValue);
         }}
         title="Invert brightness"
       >
@@ -52,7 +53,8 @@ const SIDE_OFFSET = 4;
 
 // desktop context menu version
 export function AsciiMenuKnobs() {
-  const { handleAsciiKindChange, handleAsciiInvertChange, selectionState } = useCanvasActions();
+  const { changeAsciiKind, setAsciiInvert } = useCanvasCommands();
+  const selectionState = useSelectionState();
   const isMultiple = selectionState.isMultiple;
 
   const asciiKind = useParamValue("ascii.kind", config.defaults.shaderParams.ascii.kind);
@@ -97,7 +99,7 @@ export function AsciiMenuKnobs() {
                     key={option.value}
                     value={option.value}
                     className="menu-radio-item"
-                    onClick={() => handleAsciiKindChange(option.value)}
+                    onClick={() => changeAsciiKind(option.value)}
                   >
                     <ContextMenu.RadioItemIndicator className="menu-radio-indicator">
                       <Circle fill="currentColor" />
@@ -118,7 +120,7 @@ export function AsciiMenuKnobs() {
         data-mixed={asciiInvertMixed ? "" : undefined}
         onCheckedChange={(checked) => {
           const newValue = asciiInvertMixed ? true : checked;
-          handleAsciiInvertChange(newValue);
+          setAsciiInvert(newValue);
         }}
       >
         <ContextMenu.CheckboxItemIndicator className="menu-checkbox-indicator">

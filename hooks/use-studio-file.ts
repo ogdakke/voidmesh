@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useCanvas } from "../context/use-canvas.ts";
+import { useCanvasCommands } from "../context/use-canvas.ts";
 import { toastManager, ToastType } from "#components/ui/toast/toast-manager.ts";
 import type { DeserializeResult } from "#lib/serialization/types.ts";
 import {
@@ -67,7 +67,7 @@ async function serializeAndDownload(serializeCanvas: () => Promise<Blob | null>)
 }
 
 export function useStudioFile() {
-  const { serializeCanvas, deserializeCanvas } = useCanvas();
+  const { serializeCanvas, deserializeCanvas } = useCanvasCommands();
   const [status, setStatus] = useState<StudioFileStatus>(StudioFileStatus.idle);
 
   const isBusy = status !== StudioFileStatus.idle;

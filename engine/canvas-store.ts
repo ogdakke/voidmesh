@@ -1,6 +1,6 @@
 import { logger, LogLevel, type Logger } from "#lib/client.logger.ts";
 import { Store } from "#lib/store.ts";
-import { shaderFeatures, paramVisibilityRules } from "#config";
+import { getCommonFeatures, paramVisibilityRules, shaderFeatures } from "#config";
 import {
   type Viewport,
   type ShaderCanvasEntity,
@@ -9,6 +9,7 @@ import {
   type ShaderParams,
   type ParamPaths,
   type GetParamByPath,
+  type SelectionState,
   MediaType,
 } from "#types/canvas.ts";
 import { getFrameAtTime } from "#lib/gif-decoder.ts";
@@ -48,6 +49,7 @@ export interface CanvasState {
   version: number; // Overall version (for backward compat)
   viewportVersion: number; // Incremented only on viewport changes
   selectionVersion: number; // Incremented on selection/entity changes
+  preferencesVersion: number; // Incremented on preference changes
   playbackVersion: number; // Incremented on video time updates (lightweight, isolated)
   dragVersion: number; // Incremented on entity drag state changes (mobile long-press drag)
 
@@ -86,6 +88,13 @@ export interface SelectionSnapshot {
 
 export interface DragSnapshot {
   entityDragActive: boolean;
+  version: number;
+}
+
+export interface PreferencesSnapshot {
+  snapToGrid: boolean;
+  fancyDelete: boolean;
+  haptics: boolean;
   version: number;
 }
 
@@ -143,6 +152,12 @@ export interface ParamResult<T> {
  */
 export class CanvasStore extends Store<CanvasState> {
   #logger: Logger;
+  #selectedEntitiesCache: ShaderCanvasEntity[] = [];
+  #selectionStateCache: { entities: ShaderCanvasEntity[]; value: SelectionState } | null = null;
+  #paramResultCache = new Map<
+    string,
+    { entities: ShaderCanvasEntity[]; value: ParamResult<unknown> }
+  >();
 
   /** Throttle interval for passive playback notifications (hard cap at 60fps) */
   static readonly #PLAYBACK_NOTIFY_INTERVAL_MS = 16.67;
@@ -151,6 +166,14 @@ export class CanvasStore extends Store<CanvasState> {
   // Stable snapshot getters for useSyncExternalStore
   readonly getViewportSnapshot: () => ViewportSnapshot;
   readonly getSelectionSnapshot: () => SelectionSnapshot;
+  readonly getSelectedEntityIdsSnapshot: () => ReadonlySet<string>;
+  readonly getSelectedEntitySnapshot: () => ShaderCanvasEntity | undefined;
+  readonly getSelectedEntitiesSnapshot: () => ShaderCanvasEntity[];
+  readonly getEntityCountSnapshot: () => number;
+  readonly getHasEntitiesSnapshot: () => boolean;
+  readonly getMultiSelectModeSnapshot: () => boolean;
+  readonly getContextOpenEntityIdSnapshot: () => string | null;
+  readonly getPreferencesSnapshot: () => PreferencesSnapshot;
   readonly getPlaybackSnapshot: () => PlaybackSnapshot;
   readonly getDragSnapshot: () => DragSnapshot;
   readonly getActionLayerSnapshot: () => ActionLayerSnapshot;
@@ -175,6 +198,7 @@ export class CanvasStore extends Store<CanvasState> {
       version: 0,
       viewportVersion: 0,
       selectionVersion: 0,
+      preferencesVersion: 0,
       playbackVersion: 0,
       dragVersion: 0,
       entityDragActive: false,
@@ -202,6 +226,43 @@ export class CanvasStore extends Store<CanvasState> {
       fancyDelete: s.fancyDelete,
       haptics: s.haptics,
       version: s.selectionVersion,
+    }));
+
+    this.getSelectedEntityIdsSnapshot = this.createSnapshot(
+      "selectionVersion",
+      (s) => s.selectedEntityIds,
+    );
+
+    this.getSelectedEntitySnapshot = this.createSnapshot("selectionVersion", () =>
+      this.getSelectedEntity(),
+    );
+
+    this.getSelectedEntitiesSnapshot = this.createSnapshot("selectionVersion", () =>
+      this.getComputed("selectedEntities", "selectionVersion", () => this.getSelectedEntities()),
+    );
+
+    this.getEntityCountSnapshot = this.createSnapshot("selectionVersion", (s) => s.entities.size);
+
+    this.getHasEntitiesSnapshot = this.createSnapshot(
+      "selectionVersion",
+      (s) => s.entities.size > 0,
+    );
+
+    this.getMultiSelectModeSnapshot = this.createSnapshot(
+      "selectionVersion",
+      (s) => s.multiSelectMode,
+    );
+
+    this.getContextOpenEntityIdSnapshot = this.createSnapshot(
+      "selectionVersion",
+      (s) => s.contextOpenEntityId,
+    );
+
+    this.getPreferencesSnapshot = this.createSnapshot("preferencesVersion", (s) => ({
+      snapToGrid: s.snapToGrid,
+      fancyDelete: s.fancyDelete,
+      haptics: s.haptics,
+      version: s.preferencesVersion,
     }));
 
     this.getPlaybackSnapshot = this.createSnapshot("playbackVersion", (s) => {
@@ -254,8 +315,8 @@ export class CanvasStore extends Store<CanvasState> {
   }
 
   /** Direct state access for game loop - NO ALLOCATIONS */
-  getState(): CanvasState {
-    return this.state;
+  override getState(): CanvasState {
+    return super.getState();
   }
 
   // Viewport mutations (only notify viewport subscribers)
@@ -287,10 +348,11 @@ export class CanvasStore extends Store<CanvasState> {
   updateEntity(id: string, updates: Partial<ShaderCanvasEntity>): void {
     const entity = this.state.entities.get(id);
     if (entity) {
-      Object.assign(entity, updates);
+      const nextEntity = { ...entity, ...updates } as ShaderCanvasEntity;
+      this.state.entities.set(id, nextEntity);
       this.state.entitiesDirty.add(id);
       this.notifySelectionChange();
-      this.#logger.debug(`Updated entity: ${id}`, { entity, updates });
+      this.#logger.debug(`Updated entity: ${id}`, { entity: nextEntity, updates });
     }
   }
 
@@ -392,6 +454,16 @@ export class CanvasStore extends Store<CanvasState> {
       .filter((e): e is ShaderCanvasEntity => e !== undefined);
   }
 
+  /** Get selected entities with structural sharing for selector subscriptions. */
+  getSelectedEntitiesStable(): ShaderCanvasEntity[] {
+    const next = this.getSelectedEntities();
+    if (sameReferenceArray(this.#selectedEntitiesCache, next)) {
+      return this.#selectedEntitiesCache;
+    }
+    this.#selectedEntitiesCache = next;
+    return next;
+  }
+
   /** Get the count of selected entities */
   getSelectionCount(): number {
     return this.state.selectedEntityIds.size;
@@ -402,6 +474,17 @@ export class CanvasStore extends Store<CanvasState> {
     if (this.state.selectedEntityIds.size !== 1) return undefined;
     const [id] = this.state.selectedEntityIds;
     return id ? this.state.entities.get(id) : undefined;
+  }
+
+  getSelectionState(): SelectionState {
+    const entities = this.getSelectedEntitiesStable();
+    if (this.#selectionStateCache?.entities === entities) {
+      return this.#selectionStateCache.value;
+    }
+
+    const next = computeSelectionState(entities);
+    this.#selectionStateCache = { entities, value: next };
+    return next;
   }
 
   /** Set selected entity (wrapper for replaceSelection for backwards compat) */
@@ -458,9 +541,11 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.version++;
     this.state.selectionVersion++;
     this.state.viewportVersion++;
+    this.state.preferencesVersion++;
     this.state.playbackVersion++;
     // Clear computed cache
     this.clearComputedCache();
+    this.#resetSelectorCaches();
     // Notify all subscribers
     this.notify();
   }
@@ -488,28 +573,28 @@ export class CanvasStore extends Store<CanvasState> {
   toggleSnapToGrid(): void {
     this.state.snapToGrid = !this.state.snapToGrid;
     this.state.version++;
-    this.notifySelectionChange();
+    this.notifyPreferencesChange();
   }
 
   setSnapToGrid(enabled: boolean): void {
     if (this.state.snapToGrid === enabled) return;
     this.state.snapToGrid = enabled;
     this.state.version++;
-    this.notifySelectionChange();
+    this.notifyPreferencesChange();
   }
 
   setFancyDelete(enabled: boolean): void {
     if (this.state.fancyDelete === enabled) return;
     this.state.fancyDelete = enabled;
     this.state.version++;
-    this.notifySelectionChange();
+    this.notifyPreferencesChange();
   }
 
   setHaptics(enabled: boolean): void {
     if (this.state.haptics === enabled) return;
     this.state.haptics = enabled;
     this.state.version++;
-    this.notifySelectionChange();
+    this.notifyPreferencesChange();
   }
 
   setEntityDragActive(active: boolean): void {
@@ -825,6 +910,11 @@ export class CanvasStore extends Store<CanvasState> {
     this.notify();
   }
 
+  private notifyPreferencesChange(): void {
+    this.state.preferencesVersion++;
+    this.notify();
+  }
+
   // ============================================================================
   // Computed Param Results (cached with structural sharing)
   // ============================================================================
@@ -837,16 +927,40 @@ export class CanvasStore extends Store<CanvasState> {
     path: P,
     defaultValue: GetParamByPath<P> | null,
   ): ParamResult<GetParamByPath<P> | null> {
-    return this.getComputed(`param:${path}`, "selectionVersion", () =>
-      this.#computeParamResult(path, defaultValue),
-    );
+    const entities = this.getSelectedEntitiesStable();
+    const cacheKey = `param:${path}`;
+    const cached = this.#paramResultCache.get(cacheKey) as
+      | {
+          entities: ShaderCanvasEntity[];
+          value: ParamResult<GetParamByPath<P> | null>;
+        }
+      | undefined;
+
+    if (cached?.entities === entities) {
+      return cached.value;
+    }
+
+    const next = this.#computeParamResult(path, defaultValue, entities);
+    if (cached && paramResultEqual(cached.value, next)) {
+      this.#paramResultCache.set(cacheKey, {
+        entities,
+        value: cached.value,
+      });
+      return cached.value;
+    }
+
+    this.#paramResultCache.set(cacheKey, {
+      entities,
+      value: next,
+    });
+    return next;
   }
 
   #computeParamResult<P extends ParamPaths>(
     path: P,
     defaultValue: GetParamByPath<P> | null,
+    entities = this.getSelectedEntitiesStable(),
   ): ParamResult<GetParamByPath<P> | null> {
-    const entities = this.getSelectedEntities();
     type T = GetParamByPath<P>;
 
     const pathParts = path.split(".");
@@ -901,6 +1015,12 @@ export class CanvasStore extends Store<CanvasState> {
 
     return { value: firstValue, isMixed, isSupported, values };
   }
+
+  #resetSelectorCaches(): void {
+    this.#selectedEntitiesCache = [];
+    this.#selectionStateCache = null;
+    this.#paramResultCache.clear();
+  }
 }
 
 /**
@@ -913,6 +1033,91 @@ function getNestedValue<T>(params: ShaderParams, pathParts: string[]): T | undef
     current = (current as Record<string, unknown>)[part];
   }
   return current as T | undefined;
+}
+
+function computeSelectionState(entities: ShaderCanvasEntity[]): SelectionState {
+  if (entities.length === 0) {
+    return {
+      entityIds: new Set(),
+      count: 0,
+      isEmpty: true,
+      isSingle: false,
+      isMultiple: false,
+      shaderTypes: new Set(),
+      hasUniformShader: false,
+      commonParams: [],
+      colorMode: "mixed",
+      paramValues: {},
+    };
+  }
+
+  const shaderTypes = new Set(entities.map((entity) => entity.shaderType));
+  const { params: commonParams, colorMode } = getCommonFeatures([...shaderTypes]);
+  const paramValues: Record<string, { isUniform: boolean; value: unknown; values: Set<unknown> }> =
+    {};
+
+  for (const param of commonParams) {
+    const values = new Set(
+      entities.map((entity) => {
+        const value = entity.shaderParams[param];
+        return typeof value === "object" ? JSON.stringify(value) : value;
+      }),
+    );
+    const firstValue = entities[0]?.shaderParams[param];
+    paramValues[param] = {
+      isUniform: values.size === 1,
+      value: values.size === 1 ? (firstValue ?? null) : null,
+      values: new Set(entities.map((entity) => entity.shaderParams[param])),
+    };
+  }
+
+  return {
+    entityIds: new Set(entities.map((entity) => entity.id)),
+    count: entities.length,
+    isEmpty: false,
+    isSingle: entities.length === 1,
+    isMultiple: entities.length > 1,
+    shaderTypes,
+    hasUniformShader: shaderTypes.size === 1,
+    commonParams,
+    colorMode,
+    paramValues: paramValues as SelectionState["paramValues"],
+  };
+}
+
+function sameReferenceArray<T>(a: readonly T[], b: readonly T[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return false;
+  }
+  return true;
+}
+
+function sameValueSet<T>(a: ReadonlySet<T>, b: ReadonlySet<T>): boolean {
+  if (a === b) return true;
+  if (a.size !== b.size) return false;
+
+  const bValues = Array.from(b);
+  outer: for (const valueA of a) {
+    for (let index = 0; index < bValues.length; index += 1) {
+      if (Object.is(valueA, bValues[index])) {
+        continue outer;
+      }
+    }
+    return false;
+  }
+
+  return true;
+}
+
+function paramResultEqual<T>(a: ParamResult<T>, b: ParamResult<T>): boolean {
+  return (
+    a.isMixed === b.isMixed &&
+    a.isSupported === b.isSupported &&
+    Object.is(a.value, b.value) &&
+    sameValueSet(a.values, b.values)
+  );
 }
 
 // Singleton instance

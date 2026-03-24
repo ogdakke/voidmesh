@@ -1,6 +1,14 @@
 import { canvasStore } from "#engine";
+import {
+  useCanvasCommands,
+  useCanvasPreferences,
+  useCanvasRendererService,
+  useHasEntities,
+  useSelectedEntity,
+  useSelectionState,
+} from "#context/use-canvas.ts";
 import { useImageInput } from "#hooks/use-image-input.ts";
-import { useCanvasActions, useParamValue } from "#hooks/use-canvas-actions.ts";
+import { useParamValue } from "#hooks/use-param-value.ts";
 import { useExportQueue } from "#context/use-export-queue.ts";
 import { useUpscaleQueue } from "#context/use-upscale-queue.ts";
 import { type ShaderCanvasEntity, SHADER_TYPE_OPTIONS, isAnimatedEntity } from "#types/canvas.ts";
@@ -24,7 +32,6 @@ import { type RefObject, type PropsWithChildren, useRef, useState } from "react"
 import { ContextMenu } from "@base-ui/react/context-menu";
 import "../ui/menu/menu.css";
 import { Keybind } from "../keyboard-shortcuts/keybind.tsx";
-import { useCanvas } from "#context/use-canvas.ts";
 import { MaterialSymbolsFlipToFrontRounded } from "../icons/flip-to-front.tsx";
 import { MaterialSymbolsFlipToBackRounded } from "../icons/flip-to-back.tsx";
 import { IonDuplicateOutline } from "../icons/duplicate.tsx";
@@ -69,7 +76,7 @@ export default function CanvasContextMenu({
   onOpenChange,
   containerRef,
 }: PropsWithChildren<CanvasContextMenuProps>) {
-  const { handlePaletteUpload } = useCanvasActions();
+  const { uploadPalette } = useCanvasCommands();
   const paletteInputRef = useRef<HTMLInputElement>(null);
   const [frozenEntity, setFrozenEntity] = useState<ShaderCanvasEntity | undefined>(undefined);
   const [frozenSelection, setFrozenSelection] = useState<FrozenSelectionState | null>(null);
@@ -109,7 +116,7 @@ export default function CanvasContextMenu({
   };
 
   const handlePaletteInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    await handlePaletteUpload(e.target.files);
+    await uploadPalette(e.target.files);
     // Reset input to allow selecting the same file again
     e.target.value = "";
   };
@@ -173,40 +180,32 @@ function CanvasContextMenuItems({
   paletteInputRef,
 }: CanvasContextMenuItemsProps) {
   const { handlePastedItems } = useImageInput({ containerRef });
-
-  // Use shared canvas actions hook
   const {
-    showOriginal,
-    preserveColors,
-    selectionState,
-    handleShaderTypeChange,
-    handlePaletteChange,
-    handleShowOriginalChange,
-    handlePreserveColorsChange,
-    handleReversePaletteChange,
-    deleteEntity,
-    copyEntity,
-    copyEntityParams,
-    pasteEntityParams,
-    handleBringToFront,
-    handleSendToBack,
+    changeShaderType,
+    changePalette,
+    setShowOriginal,
+    setPreserveColors,
+    setReversePalette,
+    deleteSelection,
+    copySelectionImage,
+    copySelectionEffects,
+    pasteEffects,
+    bringSelectionToFront,
+    sendSelectionToBack,
     duplicateEntities,
-    resetEntityToDefaults,
-    snapToGrid,
-    handleSnapToGridChange,
-  } = useCanvasActions();
-
-  const { saveSelectedEntityToFile, renderer, entities } = useCanvas();
+    resetSelectionToDefaults,
+    saveSelectedEntityToFile,
+    setSnapToGrid,
+  } = useCanvasCommands();
+  const { snapToGrid } = useCanvasPreferences();
+  const selectionState = useSelectionState();
+  const selectedEntity = useSelectedEntity();
+  const { renderer } = useCanvasRendererService();
+  const hasEntities = useHasEntities();
   const { addToQueue } = useExportQueue();
   const { addToUpscaleQueue } = useUpscaleQueue();
   const { exportStudioFile, saveAsStudioFile, importStudioFile } = useStudioFile();
 
-  // Single selected entity for display (undefined if multi-selected)
-  const selectedEntity = (() => {
-    if (selectionState.isEmpty || selectionState.isMultiple) return undefined;
-    const entities = canvasStore.getSelectedEntities();
-    return entities.length === 1 ? entities[0] : undefined;
-  })();
   const customPalettes = usePaletteStore();
 
   // Use frozen selection for display, live state for actions
@@ -295,7 +294,6 @@ function CanvasContextMenuItems({
 
   // No entity selected - show paste menu, studio file actions, and canvas settings
   if (!contextOpenEntity) {
-    const hasEntities = entities.length > 0;
     return (
       <>
         <ContextMenu.Item
@@ -351,7 +349,7 @@ function CanvasContextMenuItems({
         <ContextMenu.CheckboxItem
           className="menu-checkbox-item menu-item--icon-right"
           checked={snapToGrid}
-          onCheckedChange={handleSnapToGridChange}
+          onCheckedChange={setSnapToGrid}
         >
           <ContextMenu.CheckboxItemIndicator className="menu-checkbox-indicator">
             <Check />
@@ -423,7 +421,7 @@ function CanvasContextMenuItems({
                     key={option.value}
                     value={option.value}
                     className="menu-radio-item"
-                    onClick={() => handleShaderTypeChange(option.value)}
+                    onClick={() => changeShaderType(option.value)}
                   >
                     <ContextMenu.RadioItemIndicator className="menu-radio-indicator">
                       <Circle fill="currentColor" />
@@ -491,7 +489,7 @@ function CanvasContextMenuItems({
                         key={preset.id}
                         value={preset.id}
                         className="menu-radio-item"
-                        onClick={() => handlePaletteChange(preset)}
+                        onClick={() => changePalette(preset)}
                       >
                         <ContextMenu.RadioItemIndicator className="menu-radio-indicator">
                           <Circle fill="currentColor" />
@@ -518,13 +516,13 @@ function CanvasContextMenuItems({
         checked={
           showOriginalMixed
             ? false
-            : ((selectionState.paramValues.showOriginal?.value as boolean) ?? showOriginal)
+            : ((selectionState.paramValues.showOriginal?.value as boolean) ?? false)
         }
         data-mixed={showOriginalMixed ? "" : undefined}
         onCheckedChange={(checked) => {
           // When mixed, clicking sets ALL to true; when uniform, toggle as normal
           const newValue = showOriginalMixed ? true : checked;
-          handleShowOriginalChange(newValue);
+          setShowOriginal(newValue);
         }}
       >
         <ContextMenu.CheckboxItemIndicator className="menu-checkbox-indicator">
@@ -541,13 +539,13 @@ function CanvasContextMenuItems({
           checked={
             preserveColorsMixed
               ? false
-              : ((selectionState.paramValues.preserveColors?.value as boolean) ?? preserveColors)
+              : ((selectionState.paramValues.preserveColors?.value as boolean) ?? false)
           }
           data-mixed={preserveColorsMixed ? "" : undefined}
           onCheckedChange={(checked) => {
             // When mixed, clicking sets ALL to true; when uniform, toggle as normal
             const newValue = preserveColorsMixed ? true : checked;
-            handlePreserveColorsChange(newValue);
+            setPreserveColors(newValue);
           }}
         >
           <ContextMenu.CheckboxItemIndicator className="menu-checkbox-indicator">
@@ -570,7 +568,7 @@ function CanvasContextMenuItems({
           data-mixed={reversePaletteMixed ? "" : undefined}
           onCheckedChange={(checked) => {
             const newValue = reversePaletteMixed ? true : checked;
-            handleReversePaletteChange(newValue);
+            setReversePalette(newValue);
           }}
         >
           <ContextMenu.CheckboxItemIndicator className="menu-checkbox-indicator">
@@ -588,7 +586,7 @@ function CanvasContextMenuItems({
       {!isMultiple && (
         <ContextMenu.Item
           className="menu-item menu-item--icon-left menu-item--icon-right"
-          onClick={() => copyEntity()}
+          onClick={() => copySelectionImage()}
         >
           <Copy className="menu-icon-left" />
           Copy {selectedEntity && isAnimatedEntity(selectedEntity) ? "Frame" : "Image"}
@@ -680,7 +678,7 @@ function CanvasContextMenuItems({
             <ContextMenu.Popup className="menu-submenu-popup">
               <ContextMenu.Item
                 className="menu-item menu-item--icon-left"
-                onClick={() => copyEntityParams()}
+                onClick={() => copySelectionEffects()}
                 disabled={isMultiple}
               >
                 <Copy className="menu-icon-left" />
@@ -688,7 +686,7 @@ function CanvasContextMenuItems({
               </ContextMenu.Item>
               <ContextMenu.Item
                 className="menu-item menu-item--icon-left menu-item--icon-right"
-                onClick={() => pasteEntityParams()}
+                onClick={() => pasteEffects()}
               >
                 <PasteClipboard className="menu-icon-left" />
                 Paste Effects
@@ -701,7 +699,7 @@ function CanvasContextMenuItems({
       <ContextMenu.Separator className="menu-separator" />
       <ContextMenu.Item
         className="menu-item menu-item--icon-left menu-item--icon-right"
-        onClick={handleBringToFront}
+        onClick={bringSelectionToFront}
       >
         <MaterialSymbolsFlipToFrontRounded className="menu-icon-left" />
         Bring to Front{isMultiple && ` (${selectionCount})`}
@@ -709,7 +707,7 @@ function CanvasContextMenuItems({
       </ContextMenu.Item>
       <ContextMenu.Item
         className="menu-item menu-item--icon-left menu-item--icon-right"
-        onClick={handleSendToBack}
+        onClick={sendSelectionToBack}
       >
         <MaterialSymbolsFlipToBackRounded className="menu-icon-left" />
         Send to Back{isMultiple && ` (${selectionCount})`}
@@ -730,14 +728,14 @@ function CanvasContextMenuItems({
       <ContextMenu.Separator className="menu-separator" />
       <ContextMenu.Item
         className="menu-item menu-item--icon-left"
-        onClick={() => resetEntityToDefaults()}
+        onClick={() => resetSelectionToDefaults()}
       >
         <MaterialSymbolsResetImage className="menu-icon-left" />
         Reset{isMultiple && ` (${selectionCount})`}
       </ContextMenu.Item>
       <ContextMenu.Item
         className="menu-item menu-item--icon-left"
-        onClick={() => deleteEntity(undefined, "context_menu")}
+        onClick={() => deleteSelection(undefined, "context_menu")}
         data-variant="destructive"
       >
         <Trash className="menu-icon-left" />

@@ -5,6 +5,7 @@ export type {
   ParamResult,
   DragSnapshot,
   ActionLayerSnapshot,
+  PreferencesSnapshot,
 } from "./canvas-store.ts";
 
 export { actionLayerController } from "./action-layer-controller.ts";

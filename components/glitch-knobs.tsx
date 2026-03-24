@@ -1,5 +1,6 @@
 import { GlitchKind, GLITCH_KIND_OPTIONS } from "#types/canvas.ts";
-import { useCanvasActions, useParamValue } from "../hooks/use-canvas-actions.ts";
+import { useCanvasCommands, useSelectionState } from "../context/use-canvas.ts";
+import { useParamValue } from "../hooks/use-param-value.ts";
 import { config } from "#config";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { NavArrowRight, Circle } from "iconoir-react";
@@ -8,7 +9,8 @@ const SIDE_OFFSET = 4;
 
 // ============ CONTEXT MENU VERSION ============
 export function GlitchMenuKnobs() {
-  const { handleGlitchKindChange, selectionState } = useCanvasActions();
+  const { changeGlitchKind } = useCanvasCommands();
+  const selectionState = useSelectionState();
   const isMultiple = selectionState.isMultiple;
   const glitchKind = useParamValue("glitch.kind", config.defaults.shaderParams.glitch!.kind);
 
@@ -45,7 +47,7 @@ export function GlitchMenuKnobs() {
                   key={option.value}
                   value={option.value}
                   className="menu-radio-item"
-                  onClick={() => handleGlitchKindChange(option.value)}
+                  onClick={() => changeGlitchKind(option.value)}
                 >
                   <ContextMenu.RadioItemIndicator className="menu-radio-indicator">
                     <Circle fill="currentColor" />

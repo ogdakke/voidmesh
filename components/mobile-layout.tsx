@@ -20,8 +20,12 @@ import { CopyPasteDrawer } from "./action-layer/copy-paste-drawer.tsx";
 import { UpscaleDrawer } from "./action-layer/upscale-drawer.tsx";
 import { IonDuplicateOutline } from "./icons/duplicate.tsx";
 import { Drawer } from "#ui/drawer/index.tsx";
-import { useCanvas } from "#context/use-canvas.ts";
-import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
+import {
+  useCanvasCommands,
+  useCanvasRendererService,
+  useMultiSelectMode,
+  useSelectedEntityIds,
+} from "#context/use-canvas.ts";
 import { useExportQueue } from "#context/use-export-queue.ts";
 import { useActionLayer } from "#hooks/use-action-layer.ts";
 import { useLayout } from "#context/use-layout.ts";
@@ -32,8 +36,8 @@ import { useEntityDrag } from "#hooks/use-entity-drag.ts";
 import { toastManager } from "#ui/toast/toast-manager.ts";
 
 function MobileActionLayer() {
-  const { saveSelectedEntityToFile, renderer } = useCanvas();
-  const { duplicateEntities } = useCanvasActions();
+  const { saveSelectedEntityToFile, duplicateEntities } = useCanvasCommands();
+  const { renderer } = useCanvasRendererService();
   const { addToQueue } = useExportQueue();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [upscaleDrawerOpen, setUpscaleDrawerOpen] = useState(false);
@@ -85,7 +89,8 @@ function MobileActionLayer() {
 
 function MobileFloat() {
   const [activeItem, setActiveItem] = useState<BarItem | null>(items.at(0)!);
-  const { multiSelectMode, selectedEntityIds } = useCanvas();
+  const multiSelectMode = useMultiSelectMode();
+  const selectedEntityIds = useSelectedEntityIds();
   const { entityDragActive } = useEntityDrag();
   const { isFullscreen } = useLayout();
   const { active: actionLayerActive } = useActionLayer();

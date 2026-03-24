@@ -164,7 +164,7 @@ describe("BlobParams", () => {
   });
 
   test("renders eagerness slider when blobs shader selected", async () => {
-    const { canvas, actions } = renderWithCanvas(<SidebarRight />, { skip: skipProviders });
+    const { canvas } = renderWithCanvas(<SidebarRight />, { skip: skipProviders });
 
     act(() => {
       const id = canvas.addEntity(createEntityInput());
@@ -173,7 +173,7 @@ describe("BlobParams", () => {
 
     // Change to blobs shader using hook
     act(() => {
-      actions.handleShaderTypeChange(ShaderType.blobs);
+      canvas.changeShaderType(ShaderType.blobs);
     });
 
     await waitFor(() => screen.queryByText(/eagerness/i) !== null);

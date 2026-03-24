@@ -1,4 +1,4 @@
-import { useCanvas } from "#context/use-canvas.ts";
+import { useHasEntities } from "#context/use-canvas.ts";
 import { useStudioFile } from "#hooks/use-studio-file.ts";
 import { Button } from "#ui/button/index.tsx";
 import { Drawer } from "#ui/drawer/index.tsx";
@@ -14,7 +14,7 @@ import {
   SnapToGridToggle,
 } from "./settings.shared.tsx";
 export default function SettingsDrawer() {
-  const { entities } = useCanvas();
+  const hasEntities = useHasEntities();
   const { exportStudioFile, importStudioFile, isExporting, isImporting } = useStudioFile();
   const [open, setOpen] = useState(false);
 
@@ -60,7 +60,7 @@ export default function SettingsDrawer() {
             </LinkItem>
           </div>
           <div className="settings-drawer-studio-buttons">
-            {entities.length > 0 && (
+            {hasEntities && (
               <Button variant="primary" onClick={exportStudioFile} disabled={isLoading}>
                 <FloppyDiskArrowIn />
                 <span>Save workspace</span>

@@ -10,8 +10,12 @@ import {
   GlitchKind,
   Shape,
 } from "#types/canvas.ts";
-import { useCanvas } from "#context/use-canvas.ts";
-import { useCanvasActions, useParamValue } from "#hooks/use-canvas-actions.ts";
+import {
+  useCanvasCommands,
+  useSelectedShaderType,
+  useSelectionState,
+} from "#context/use-canvas.ts";
+import { useParamValue } from "#hooks/use-param-value.ts";
 import { analytics } from "#lib/analytics.ts";
 import { config } from "#config";
 import {
@@ -203,7 +207,7 @@ const SHAPE_ITEMS: MobileStyleItem<Shape>[] = [
 // ============================================================================
 
 function MobileDitheringStyleKnobs() {
-  const { handleDitheringKindChange } = useCanvasActions();
+  const { changeDitheringKind } = useCanvasCommands();
   const ditheringKind = useParamValue(
     "dithering.kind",
     config.defaults.shaderParams.dithering.kind,
@@ -231,7 +235,7 @@ function MobileDitheringStyleKnobs() {
 
   // Show floating label on value change
   const handleValueChange = (value: string) => {
-    handleDitheringKindChange(value);
+    changeDitheringKind(value);
     const item = DITHERING_ITEMS.find((i) => i.value === value);
     if (item) showFloatingLabel(item.label);
   };
@@ -310,7 +314,7 @@ function MobileDitheringStyleKnobs() {
 // ============================================================================
 
 function MobileAsciiStyleKnobs() {
-  const { handleAsciiKindChange } = useCanvasActions();
+  const { changeAsciiKind } = useCanvasCommands();
   const asciiKind = useParamValue("ascii.kind", config.defaults.shaderParams.ascii.kind);
 
   // Floating label state
@@ -335,7 +339,7 @@ function MobileAsciiStyleKnobs() {
 
   // Show floating label on value change
   const handleValueChange = (value: string) => {
-    handleAsciiKindChange(value);
+    changeAsciiKind(value);
     const item = ASCII_ITEMS.find((i) => i.value === value);
     if (item) showFloatingLabel(item.label);
   };
@@ -439,7 +443,7 @@ const GLASS_ITEMS: MobileStyleItem<GlassKind>[] = [
 // ============================================================================
 
 function MobileGlassStyleKnobs() {
-  const { handleGlassKindChange } = useCanvasActions();
+  const { changeGlassKind } = useCanvasCommands();
   const glassKind = useParamValue("glass.kind", config.defaults.shaderParams.glass!.kind);
 
   // Floating label state
@@ -463,7 +467,7 @@ function MobileGlassStyleKnobs() {
   );
 
   const handleValueChange = (value: string) => {
-    handleGlassKindChange(value);
+    changeGlassKind(value);
     const item = GLASS_ITEMS.find((i) => i.value === value);
     if (item) showFloatingLabel(item.label);
   };
@@ -570,7 +574,7 @@ const GLITCH_ITEMS: MobileStyleItem<GlitchKind>[] = [
 // ============================================================================
 
 function MobileGlitchStyleKnobs() {
-  const { handleGlitchKindChange } = useCanvasActions();
+  const { changeGlitchKind } = useCanvasCommands();
   const glitchKind = useParamValue("glitch.kind", config.defaults.shaderParams.glitch!.kind);
 
   // Floating label state
@@ -594,7 +598,7 @@ function MobileGlitchStyleKnobs() {
   );
 
   const handleValueChange = (value: string) => {
-    handleGlitchKindChange(value);
+    changeGlitchKind(value);
     const item = GLITCH_ITEMS.find((i) => i.value === value);
     if (item) showFloatingLabel(item.label);
   };
@@ -670,7 +674,7 @@ function MobileGlitchStyleKnobs() {
 // ============================================================================
 
 function MobileShapeStyleKnobs() {
-  const { updateSelectedEntityParams } = useCanvas();
+  const { updateSelectedEntityParams } = useCanvasCommands();
   const shape = useParamValue("shape", config.defaults.shaderParams.shape);
 
   // Floating label state
@@ -771,12 +775,9 @@ function MobileShapeStyleKnobs() {
 // ============================================================================
 
 export function MobileStyleKnobs() {
-  const { selectedShaderType } = useCanvas();
-  const {
-    selectionState,
-    handleShowOriginalChange,
-    handleShaderTypeChange: changeShaderType,
-  } = useCanvasActions();
+  const selectedShaderType = useSelectedShaderType();
+  const selectionState = useSelectionState();
+  const { setShowOriginal, changeShaderType } = useCanvasCommands();
 
   // Floating label state
   const [floatingLabel, setFloatingLabel] = useState<string | null>(null);
@@ -808,7 +809,7 @@ export function MobileStyleKnobs() {
   const handleShowOriginalToggle = () => {
     // if mixed, set all to true; otherwise toggle
     const newValue = showOriginal.isMixed ? true : !showOriginal.value;
-    handleShowOriginalChange(newValue);
+    setShowOriginal(newValue);
     showFloatingLabel(newValue ? "Show Original On" : "Show Original Off");
   };
 

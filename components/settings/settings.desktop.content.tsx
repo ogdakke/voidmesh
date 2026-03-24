@@ -1,4 +1,4 @@
-import { useCanvas } from "#context/use-canvas.ts";
+import { useHasEntities } from "#context/use-canvas.ts";
 import { useStudioFile } from "#hooks/use-studio-file.ts";
 import { Button } from "#ui/button/button.tsx";
 import { Modal } from "#ui/modal/modal.tsx";
@@ -18,7 +18,7 @@ export default function DesktopSettingsContent({
   isOpen: boolean;
   onClose: () => void;
 }) {
-  const { entities } = useCanvas();
+  const hasEntities = useHasEntities();
   const { exportStudioFile, importStudioFile, isExporting, isImporting } = useStudioFile();
 
   const isLoading = isExporting || isImporting;
@@ -51,7 +51,7 @@ export default function DesktopSettingsContent({
             <Import />
             <span>Open workspace</span>
           </Button>
-          {entities.length > 0 && (
+          {hasEntities && (
             <Button variant="primary" onClick={exportStudioFile} disabled={isLoading}>
               <FloppyDiskArrowIn />
               <span>Save workspace</span>

@@ -1,5 +1,4 @@
-import { useCanvas } from "#context/use-canvas.ts";
-import { useCanvasActions } from "#hooks/use-canvas-actions.ts";
+import { useMultiSelectMode, useSelectedEntityIds } from "#context/use-canvas.ts";
 import type { BarItem } from "./mobile-bottom/bar-items.ts";
 import { MobileStyleKnobs } from "./knobs/style-knobs";
 import { ParamsKnobs } from "./knobs/params-knobs";
@@ -14,8 +13,9 @@ interface MobileControlsProps {
 }
 
 export function MobileControls({ activeItem }: MobileControlsProps) {
-  const { hasSelection } = useCanvasActions();
-  const { multiSelectMode } = useCanvas();
+  const selectedEntityIds = useSelectedEntityIds();
+  const multiSelectMode = useMultiSelectMode();
+  const hasSelection = selectedEntityIds.size > 0;
 
   if (multiSelectMode) {
     return <MultiSelectionControls />;

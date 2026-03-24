@@ -11,7 +11,7 @@
 import { useState, useRef, useEffect, type PropsWithChildren } from "react";
 import { flushSync } from "react-dom";
 import { UpscaleQueueContext } from "./use-upscale-queue.ts";
-import { useCanvas } from "./use-canvas.ts";
+import { useCanvasCommands, useCanvasRendererService } from "./use-canvas.ts";
 import { canvasStore } from "#engine";
 import { MediaType, type ShaderCanvasEntity } from "#types/canvas.ts";
 import { UpscaleService } from "#renderer/upscale/upscale-service.ts";
@@ -129,7 +129,8 @@ async function bitmapToBlob(bitmap: ImageBitmap): Promise<Blob> {
 // ============================================================================
 
 export function UpscaleQueueProvider({ children }: PropsWithChildren) {
-  const { addEntity, renderer } = useCanvas();
+  const { addEntity } = useCanvasCommands();
+  const { renderer } = useCanvasRendererService();
 
   const [state, setState] = useState<UpscaleQueueState>({
     jobs: [],
