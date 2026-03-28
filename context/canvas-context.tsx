@@ -92,6 +92,7 @@ function tryCleanupEntityResources(entity: ShaderCanvasEntity, ownerToken: numbe
     video.src = "";
     video.load();
     URL.revokeObjectURL(videoSrc);
+    entity.imageBitmap.close();
   } else if (isGifEntity(entity)) {
     for (const frame of entity.mediaSource.frames) {
       frame.bitmap.close();

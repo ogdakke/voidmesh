@@ -379,6 +379,7 @@ export type MediaSourceImage = {
   /** Original source data for lossless duplication */
   blob: Blob;
 };
+
 export type MediaSourceVideo = {
   type: typeof MediaType.video;
   videoElement: HTMLVideoElement;
@@ -388,6 +389,12 @@ export type MediaSourceVideo = {
   fps: number | null;
   /** Whether the source video contains an audio track */
   hasAudio: boolean;
+  /** Runtime edit-cache status for exact scrubbing previews */
+  cacheStatus?: "pending" | "partial" | "ready" | "failed";
+  /** Fraction of sweep-tier segments currently available, from 0 to 1 */
+  cacheCoverage?: number;
+  /** Whether the user is actively dragging the scrubber for this entity */
+  isScrubbing?: boolean;
 };
 export type MediaSourceGif = {
   type: typeof MediaType.gif;

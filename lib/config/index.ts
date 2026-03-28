@@ -703,6 +703,8 @@ export type { ActionLayerConfig };
 
 /** Reference resolution for bitrate scaling (1920×1080 = 2,073,600 pixels) */
 const PIXELS_1080P = 1920 * 1080;
+/** Reference resolution for preview sweep scaling (1280×720 = 921,600 pixels) */
+const PIXELS_720P = 1280 * 720;
 
 /**
  * Calculate video bitrate based on resolution (scales from 1080p baseline)
@@ -717,6 +719,32 @@ export function calculateVideoBitrate(width: number, height: number): number {
   const pixelCount = width * height;
   const scale = pixelCount / PIXELS_1080P;
   return Math.round(config.videoExporting.defaults.bitrateBase1080p * scale);
+}
+
+/**
+ * Calculate bitrate for the whole-clip sweep preview cache.
+ *
+ * Targets visually stable scrubbing quality at a much lower cost than export.
+ * Examples:
+ * - 720p: ~6 Mbps
+ * - 1080p: ~13.5 Mbps
+ */
+export function calculatePreviewSweepBitrate(width: number, height: number): number {
+  const pixelCount = width * height;
+  const scale = pixelCount / PIXELS_720P;
+  return Math.max(1_500_000, Math.round(6_000_000 * scale));
+}
+
+/**
+ * Calculate bitrate for the local high-detail preview cache.
+ *
+ * This stays below export defaults but preserves enough detail for source-resolution
+ * local scrubbing near the active region.
+ */
+export function calculatePreviewDetailBitrate(width: number, height: number): number {
+  const pixelCount = width * height;
+  const scale = pixelCount / PIXELS_1080P;
+  return Math.max(4_000_000, Math.round(18_000_000 * scale));
 }
 
 /**

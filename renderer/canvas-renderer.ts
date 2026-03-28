@@ -1421,6 +1421,16 @@ export class InfiniteCanvasRenderer {
     return this.#videoUploadCanvas;
   }
 
+  #getExternalSourceDimensions(source: ImageBitmap | OffscreenCanvas): {
+    width: number;
+    height: number;
+  } {
+    return {
+      width: Math.max(1, source.width),
+      height: Math.max(1, source.height),
+    };
+  }
+
   /**
    * Render an entity's image through its shader to a texture.
    * Returns the texture, caching it for future frames.
@@ -1457,13 +1467,18 @@ export class InfiniteCanvasRenderer {
       GPUTextureUsage.COPY_SRC |
       GPUTextureUsage.RENDER_ATTACHMENT;
 
-    // Get the appropriate source for GPU upload
+    // Get the appropriate source for GPU upload.
+    // Paused videos render from the exact captured bitmap; playing videos still
+    // render from the live media element.
     const externalSource =
       entity.mediaSource.type === "video"
-        ? this.#getVideoFrameSource(entity.mediaSource.videoElement, width, height)
+        ? entity.playback?.isPlaying
+          ? this.#getVideoFrameSource(entity.mediaSource.videoElement, width, height)
+          : entity.imageBitmap
         : entity.mediaSource.type === "image"
           ? entity.mediaSource.imageBitmap
           : entity.imageBitmap;
+    const sourceSize = this.#getExternalSourceDimensions(externalSource);
 
     // Check source texture cache: reuse if source image is unchanged
     const cachedSource = this.#entitySourceTextures.get(entity.id);
@@ -1474,19 +1489,22 @@ export class InfiniteCanvasRenderer {
       !entity.textureDirty &&
       cachedSource &&
       cachedSource.sourceRef === externalSource &&
-      cachedSource.width === width &&
-      cachedSource.height === height
+      cachedSource.width === sourceSize.width &&
+      cachedSource.height === sourceSize.height
     ) {
       // Source image is identical — reuse cached GPU texture, skip upload
       sourceTexture = cachedSource.texture;
     } else {
       // Source changed, dimensions changed, or animated media: need to (re-)upload
-      if (cachedSource && (cachedSource.width !== width || cachedSource.height !== height)) {
+      if (
+        cachedSource &&
+        (cachedSource.width !== sourceSize.width || cachedSource.height !== sourceSize.height)
+      ) {
         // Dimensions changed — destroy old, create new
         cachedSource.texture.destroy();
         sourceTexture = this.#device.createTexture({
           label: `Entity ${entity.id} cached source`,
-          size: [width, height],
+          size: [sourceSize.width, sourceSize.height],
           format: "rgba8unorm",
           usage: sourceUsage,
         });
@@ -1497,7 +1515,7 @@ export class InfiniteCanvasRenderer {
         // First render — create new long-lived source texture
         sourceTexture = this.#device.createTexture({
           label: `Entity ${entity.id} cached source`,
-          size: [width, height],
+          size: [sourceSize.width, sourceSize.height],
           format: "rgba8unorm",
           usage: sourceUsage,
         });
@@ -1506,14 +1524,14 @@ export class InfiniteCanvasRenderer {
       this.#device.queue.copyExternalImageToTexture(
         { source: externalSource },
         { texture: sourceTexture, colorSpace: this.#colorConfig.textureColorSpace },
-        [width, height],
+        [sourceSize.width, sourceSize.height],
       );
 
       this.#entitySourceTextures.set(entity.id, {
         texture: sourceTexture,
         sourceRef: externalSource,
-        width,
-        height,
+        width: sourceSize.width,
+        height: sourceSize.height,
       });
     }
 

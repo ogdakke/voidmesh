@@ -189,8 +189,19 @@ export function useMediaControlsActions(
       entity.mediaSource.type === MediaType.video
         ? entity.mediaSource.videoElement.duration || 0
         : entity.mediaSource.duration;
+    const frameDuration =
+      entity.mediaSource.type === MediaType.video &&
+      typeof entity.mediaSource.fps === "number" &&
+      Number.isFinite(entity.mediaSource.fps) &&
+      entity.mediaSource.fps > 0
+        ? 1 / entity.mediaSource.fps
+        : null;
+    const effectiveDelta =
+      frameDuration && Math.abs(delta) < frameDuration
+        ? Math.sign(delta || 1) * frameDuration
+        : delta;
 
-    let newTime = currentTime + delta;
+    let newTime = currentTime + effectiveDelta;
 
     // Clamp at start, wrap at end (with two-step behavior)
     if (duration > 0) {
@@ -212,6 +223,8 @@ export function useMediaControlsActions(
     logger.debug("[MediaControls] seekRelative()", {
       entityId: entity.id,
       delta,
+      effectiveDelta,
+      frameDuration,
       currentTime,
       newTime,
     });
@@ -237,13 +250,10 @@ export function useMediaControlsActions(
     seekingRef.current = true;
     wasPlayingBeforeSeekRef.current = entity.playback?.isPlaying ?? false;
 
-    // Pause during seek
-    if (wasPlayingBeforeSeekRef.current) {
-      if (isVideoEntity(entity)) {
-        canvasStore.pauseVideo(entity.id);
-      } else if (isGifEntity(entity)) {
-        canvasStore.pauseGif(entity.id);
-      }
+    if (isVideoEntity(entity)) {
+      canvasStore.beginVideoScrub(entity.id);
+    } else if (isGifEntity(entity) && wasPlayingBeforeSeekRef.current) {
+      canvasStore.pauseGif(entity.id);
     }
   };
 
@@ -260,13 +270,10 @@ export function useMediaControlsActions(
 
     seekingRef.current = false;
 
-    // Resume if was playing before seek
-    if (wasPlayingBeforeSeekRef.current) {
-      if (isVideoEntity(entity)) {
-        canvasStore.playVideo(entity.id);
-      } else if (isGifEntity(entity)) {
-        canvasStore.playGif(entity.id);
-      }
+    if (isVideoEntity(entity)) {
+      canvasStore.endVideoScrub(entity.id);
+    } else if (wasPlayingBeforeSeekRef.current && isGifEntity(entity)) {
+      canvasStore.playGif(entity.id);
     }
   };
 
@@ -311,7 +318,7 @@ export function useMediaControlsActions(
           seekingRef: seekingRef.current,
           currentTime: video.currentTime,
         });
-        if (!seekingRef.current) {
+        if (!seekingRef.current && entity.playback?.isPlaying) {
           canvasStore.forcePlaybackNotify(entity.id, video.currentTime);
         }
       };

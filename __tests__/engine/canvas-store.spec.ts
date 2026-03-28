@@ -19,11 +19,12 @@ afterEach(() => {
 // ============================================================================
 
 describe("canvasStore.seekVideo", () => {
-  test("updates video currentTime", () => {
+  test("updates video currentTime", async () => {
     const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
     canvasStore.addEntity(entity);
 
     canvasStore.seekVideo(entity.id, 50);
+    await new Promise((resolve) => setTimeout(resolve, 120));
 
     if (entity.mediaSource.type === "video") {
       expect(entity.mediaSource.videoElement.currentTime).toBe(50);
@@ -39,17 +40,19 @@ describe("canvasStore.seekVideo", () => {
     expect(entity.playback?.currentTime).toBe(50);
   });
 
-  test("clamps to valid range", () => {
+  test("clamps to valid range", async () => {
     const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
     canvasStore.addEntity(entity);
 
     canvasStore.seekVideo(entity.id, 150);
+    await new Promise((resolve) => setTimeout(resolve, 120));
 
     if (entity.mediaSource.type === "video") {
       expect(entity.mediaSource.videoElement.currentTime).toBe(100);
     }
 
     canvasStore.seekVideo(entity.id, -10);
+    await new Promise((resolve) => setTimeout(resolve, 120));
 
     if (entity.mediaSource.type === "video") {
       expect(entity.mediaSource.videoElement.currentTime).toBe(0);
@@ -64,6 +67,62 @@ describe("canvasStore.seekVideo", () => {
     canvasStore.seekVideo(entity.id, 50);
 
     expect(entity.textureDirty).toBe(true);
+  });
+
+  test("marks video entities as scrubbing when scrub starts", () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
+    canvasStore.addEntity(entity);
+
+    canvasStore.beginVideoScrub(entity.id);
+
+    if (entity.mediaSource.type === "video") {
+      expect(entity.mediaSource.isScrubbing).toBe(true);
+    }
+  });
+
+  test("does not touch the video element during active scrubbing", async () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
+    if (entity.mediaSource.type !== "video") {
+      throw new Error("Expected video entity");
+    }
+
+    canvasStore.addEntity(entity);
+
+    canvasStore.beginVideoScrub(entity.id);
+    canvasStore.seekVideo(entity.id, 25);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(entity.mediaSource.videoElement.currentTime).toBe(0);
+  });
+
+  test("does not fall back to native video seeking while scrubbing", () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
+    if (entity.mediaSource.type !== "video") {
+      throw new Error("Expected video entity");
+    }
+
+    canvasStore.addEntity(entity);
+
+    canvasStore.beginVideoScrub(entity.id);
+    canvasStore.seekVideo(entity.id, 25);
+
+    expect(entity.mediaSource.videoElement.currentTime).toBe(0);
+  });
+
+  test("resumes playback when scrub ends after starting from play", async () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
+    canvasStore.addEntity(entity);
+
+    await canvasStore.playVideo(entity.id);
+    canvasStore.beginVideoScrub(entity.id);
+    canvasStore.seekVideo(entity.id, 25);
+    canvasStore.endVideoScrub(entity.id);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    expect(entity.playback?.isPlaying).toBe(true);
+    if (entity.mediaSource.type === "video") {
+      expect(entity.mediaSource.videoElement.currentTime).toBe(25);
+    }
   });
 });
 

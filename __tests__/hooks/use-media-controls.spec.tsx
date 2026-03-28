@@ -492,6 +492,52 @@ describe("useMediaControlsActions hook callbacks", () => {
 
   describe("seekRelative", () => {
     describe("basic forward/backward seeking", () => {
+      test("seekRelative(positive) clamps video seeks up to one frame when delta is smaller", async () => {
+        const { canvas, getActions } = renderWithMediaHooks();
+
+        let videoId: string;
+        await act(async () => {
+          videoId = canvas.addEntity(
+            createEntityInput({ mediaType: "video", videoDuration: 100, videoFps: 24 }),
+          );
+          canvas.selectEntity(videoId);
+        });
+
+        await act(async () => {
+          getActions().seek(50);
+        });
+
+        await act(async () => {
+          getActions().seekRelative(0.001);
+        });
+
+        const entity = canvasStore.getState().entities.get(videoId!);
+        expect(entity?.playback?.currentTime).toBeCloseTo(50 + 1 / 24, 5);
+      });
+
+      test("seekRelative(negative) clamps video seeks up to one frame when delta is smaller", async () => {
+        const { canvas, getActions } = renderWithMediaHooks();
+
+        let videoId: string;
+        await act(async () => {
+          videoId = canvas.addEntity(
+            createEntityInput({ mediaType: "video", videoDuration: 100, videoFps: 24 }),
+          );
+          canvas.selectEntity(videoId);
+        });
+
+        await act(async () => {
+          getActions().seek(50);
+        });
+
+        await act(async () => {
+          getActions().seekRelative(-0.001);
+        });
+
+        const entity = canvasStore.getState().entities.get(videoId!);
+        expect(entity?.playback?.currentTime).toBeCloseTo(50 - 1 / 24, 5);
+      });
+
       test("seekRelative(positive) moves video forward", async () => {
         const { canvas, getActions } = renderWithMediaHooks();
 
@@ -536,6 +582,29 @@ describe("useMediaControlsActions hook callbacks", () => {
 
         const entity = canvasStore.getState().entities.get(videoId!);
         expect(entity?.playback?.currentTime).toBeCloseTo(49.9, 5);
+      });
+
+      test("seekRelative keeps larger video deltas unchanged when already above one frame", async () => {
+        const { canvas, getActions } = renderWithMediaHooks();
+
+        let videoId: string;
+        await act(async () => {
+          videoId = canvas.addEntity(
+            createEntityInput({ mediaType: "video", videoDuration: 100, videoFps: 60 }),
+          );
+          canvas.selectEntity(videoId);
+        });
+
+        await act(async () => {
+          getActions().seek(50);
+        });
+
+        await act(async () => {
+          getActions().seekRelative(0.1);
+        });
+
+        const entity = canvasStore.getState().entities.get(videoId!);
+        expect(entity?.playback?.currentTime).toBeCloseTo(50.1, 5);
       });
 
       test("seekRelative(positive) moves GIF forward", async () => {
@@ -883,6 +952,33 @@ describe("useMediaControlsActions hook callbacks", () => {
 
       const entity = canvasStore.getState().entities.get(videoId!);
       expect(entity?.playback?.isPlaying).toBe(false);
+    });
+
+    test("seekEnd() resumes if the video was playing before seek", async () => {
+      const { canvas, getActions } = renderWithMediaHooks();
+
+      let videoId: string;
+      await act(async () => {
+        videoId = canvas.addEntity(createEntityInput({ mediaType: "video", videoDuration: 100 }));
+        canvas.selectEntity(videoId);
+      });
+
+      await act(async () => {
+        await getActions().play();
+      });
+
+      await act(async () => {
+        getActions().seekStart();
+        getActions().seek(25);
+        getActions().seekEnd();
+      });
+
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      });
+
+      const entity = canvasStore.getState().entities.get(videoId!);
+      expect(entity?.playback?.isPlaying).toBe(true);
     });
   });
 

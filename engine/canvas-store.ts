@@ -11,8 +11,31 @@ import {
   type GetParamByPath,
   type SelectionState,
   MediaType,
+  type MediaSourceVideo,
 } from "#types/canvas.ts";
 import { getFrameAtTime } from "#lib/gif-decoder.ts";
+import {
+  createExactVideoFrameSession,
+  type ExactVideoFrameSession,
+} from "#lib/video-frame-engine.ts";
+import { captureVideoFrame } from "#lib/serialization/media.ts";
+
+const DEFAULT_LOG_LEVEL = import.meta.env.DEV ? LogLevel.INFO : LogLevel.ERROR;
+
+type ExactVideoFrameRequestReason =
+  | "pause-snapshot"
+  | "paused-seek"
+  | "scrub-start"
+  | "scrub-move"
+  | "scrub-settle";
+
+interface PendingExactVideoFrameRequest {
+  time: number;
+  syncVideoElement: boolean;
+  reason: ExactVideoFrameRequestReason;
+  requestId: number;
+  enqueuedAt: number;
+}
 
 export interface CanvasState {
   // Core state
@@ -162,6 +185,14 @@ export class CanvasStore extends Store<CanvasState> {
   /** Throttle interval for passive playback notifications (hard cap at 60fps) */
   static readonly #PLAYBACK_NOTIFY_INTERVAL_MS = 16.67;
   #lastPlaybackNotifyTime = 0;
+  #videoSettleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  #videoFrameSessions = new Map<string, ExactVideoFrameSession>();
+  #videoFrameRequestQueue = new Map<string, PendingExactVideoFrameRequest>();
+  #videoFrameRequestInFlight = new Set<string>();
+  #videoScrubResume = new Map<string, boolean>();
+  #videoSnapshotTokens = new Map<string, number>();
+  #nextVideoSnapshotToken = 0;
+  #nextVideoFrameRequestId = 0;
 
   // Stable snapshot getters for useSyncExternalStore
   readonly getViewportSnapshot: () => ViewportSnapshot;
@@ -338,10 +369,368 @@ export class CanvasStore extends Store<CanvasState> {
     this.notifyViewportChange();
   }
 
+  #clearVideoSettleTimer(entityId: string): void {
+    const timer = this.#videoSettleTimers.get(entityId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.#videoSettleTimers.delete(entityId);
+  }
+
+  #getOrCreateVideoFrameSession(entityId: string): ExactVideoFrameSession | null {
+    const entity = this.state.entities.get(entityId);
+    if (!entity || entity.mediaSource.type !== MediaType.video) {
+      return null;
+    }
+
+    let session = this.#videoFrameSessions.get(entityId);
+    if (!session) {
+      session = createExactVideoFrameSession(
+        entity.mediaSource.blob,
+        entity.mediaSource.duration || entity.mediaSource.videoElement.duration || 0,
+        entity.mediaSource.fps,
+        entityId,
+      );
+      this.#videoFrameSessions.set(entityId, session);
+    }
+
+    return session;
+  }
+
+  #replaceVideoSnapshot(entityId: string, bitmap: ImageBitmap, cacheKey: string | null): void {
+    const entity = this.state.entities.get(entityId);
+    if (!entity || entity.mediaSource.type !== MediaType.video) {
+      bitmap.close();
+      return;
+    }
+
+    const session = this.#videoFrameSessions.get(entityId) ?? null;
+    session?.setDisplayedFrame(cacheKey);
+
+    const previousBitmap = entity.imageBitmap;
+    entity.imageBitmap = bitmap;
+    if (previousBitmap !== bitmap && !(session?.isManagedBitmap(previousBitmap) ?? false)) {
+      previousBitmap.close();
+    }
+  }
+
+  #disposeVideoSource(entityId: string, source: MediaSourceVideo): void {
+    const entity = this.state.entities.get(entityId);
+    const session = this.#videoFrameSessions.get(entityId) ?? null;
+    if (
+      entity?.mediaSource.type === MediaType.video &&
+      !(session?.isManagedBitmap(entity.imageBitmap) ?? false)
+    ) {
+      entity.imageBitmap.close();
+    }
+    this.#clearVideoSettleTimer(entityId);
+    session?.dispose();
+    this.#videoFrameSessions.delete(entityId);
+    this.#videoFrameRequestQueue.delete(entityId);
+    this.#videoFrameRequestInFlight.delete(entityId);
+    this.#videoScrubResume.delete(entityId);
+    this.#videoSnapshotTokens.delete(entityId);
+
+    source.isScrubbing = false;
+  }
+
+  async #seekVideoElement(video: HTMLVideoElement, time: number): Promise<void> {
+    if (Math.abs(video.currentTime - time) < 0.001) return;
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+      const cleanup = () => {
+        video.removeEventListener("seeked", onSeeked);
+        video.removeEventListener("error", onError);
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+      };
+
+      const finish = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        fn();
+      };
+
+      const onSeeked = () => finish(resolve);
+      const onError = () => finish(() => reject(new Error("Failed to seek video")));
+
+      video.addEventListener("seeked", onSeeked, { once: true });
+      video.addEventListener("error", onError, { once: true });
+      timeoutId = setTimeout(() => finish(resolve), 50);
+      video.currentTime = time;
+    });
+  }
+
+  async #syncVideoFrameFromVideoElement(entityId: string, time: number): Promise<void> {
+    const token = ++this.#nextVideoSnapshotToken;
+    this.#videoSnapshotTokens.set(entityId, token);
+
+    const entity = this.state.entities.get(entityId);
+    if (!entity || entity.mediaSource.type !== MediaType.video) return;
+
+    const clampedTime = Math.max(
+      0,
+      Math.min(time, entity.mediaSource.duration || entity.mediaSource.videoElement.duration || 0),
+    );
+
+    try {
+      await this.#seekVideoElement(entity.mediaSource.videoElement, clampedTime);
+      const bitmap = await captureVideoFrame(
+        entity.mediaSource.videoElement,
+        entity.originalSize.width,
+        entity.originalSize.height,
+      );
+      entity.mediaSource.videoElement.currentTime = clampedTime;
+
+      const current = this.state.entities.get(entityId);
+      if (
+        !current ||
+        current.mediaSource.type !== MediaType.video ||
+        this.#videoSnapshotTokens.get(entityId) !== token
+      ) {
+        bitmap.close();
+        return;
+      }
+
+      if (current.playback) {
+        current.playback.currentTime = clampedTime;
+      }
+
+      this.#replaceVideoSnapshot(entityId, bitmap, null);
+      current.textureDirty = true;
+      this.state.entitiesDirty.add(entityId);
+      this.state.playbackVersion++;
+      this.notify();
+    } catch (error) {
+      this.#logger.debug(`Failed to sync video frame for ${entityId}`, {
+        error,
+        time: clampedTime,
+      });
+    }
+  }
+
+  #cancelExactVideoFrameRequests(entityId: string, reason: string): void {
+    const pending = this.#videoFrameRequestQueue.get(entityId);
+    this.#videoFrameRequestQueue.delete(entityId);
+    this.#videoSnapshotTokens.set(entityId, ++this.#nextVideoSnapshotToken);
+
+    if (pending) {
+      this.#logger.info("[video-scrub] Cancelled pending exact frame request", {
+        entityId,
+        requestId: pending.requestId,
+        pendingReason: pending.reason,
+        cancelReason: reason,
+      });
+    }
+  }
+
+  #queueExactVideoFrameRequest(
+    entityId: string,
+    time: number,
+    syncVideoElement: boolean,
+    reason: ExactVideoFrameRequestReason,
+  ): void {
+    const entity = this.state.entities.get(entityId);
+    if (!entity || entity.mediaSource.type !== MediaType.video) return;
+
+    const clampedTime = Math.max(
+      0,
+      Math.min(time, entity.mediaSource.duration || entity.mediaSource.videoElement.duration || 0),
+    );
+    if (syncVideoElement) {
+      entity.mediaSource.videoElement.currentTime = clampedTime;
+    }
+
+    const existing = this.#videoFrameRequestQueue.get(entityId);
+    const request: PendingExactVideoFrameRequest = {
+      time: clampedTime,
+      syncVideoElement: existing?.syncVideoElement ?? syncVideoElement,
+      reason,
+      requestId: ++this.#nextVideoFrameRequestId,
+      enqueuedAt: performance.now(),
+    };
+    this.#videoFrameRequestQueue.set(entityId, request);
+
+    if (existing) {
+      this.#logger.info("[video-scrub] Coalesced exact frame request", {
+        entityId,
+        replacedRequestId: existing.requestId,
+        requestId: request.requestId,
+        reason,
+        time: clampedTime,
+      });
+    }
+
+    if (this.#videoFrameRequestInFlight.has(entityId)) {
+      return;
+    }
+
+    this.#videoFrameRequestInFlight.add(entityId);
+    void this.#drainExactVideoFrameRequests(entityId);
+  }
+
+  async #drainExactVideoFrameRequests(entityId: string): Promise<void> {
+    try {
+      while (true) {
+        const request = this.#videoFrameRequestQueue.get(entityId);
+        if (!request) {
+          return;
+        }
+        this.#videoFrameRequestQueue.delete(entityId);
+        await this.#requestExactVideoFrame(
+          entityId,
+          request.time,
+          request.syncVideoElement,
+          request.reason,
+          request.requestId,
+          request.enqueuedAt,
+        );
+      }
+    } finally {
+      this.#videoFrameRequestInFlight.delete(entityId);
+      if (this.#videoFrameRequestQueue.has(entityId)) {
+        this.#videoFrameRequestInFlight.add(entityId);
+        void this.#drainExactVideoFrameRequests(entityId);
+      }
+    }
+  }
+
+  async #requestExactVideoFrame(
+    entityId: string,
+    time: number,
+    syncVideoElement: boolean,
+    reason: ExactVideoFrameRequestReason,
+    requestId: number,
+    enqueuedAt: number,
+  ): Promise<void> {
+    const token = ++this.#nextVideoSnapshotToken;
+    this.#videoSnapshotTokens.set(entityId, token);
+
+    const entity = this.state.entities.get(entityId);
+    if (!entity || entity.mediaSource.type !== MediaType.video) return;
+
+    const clampedTime = Math.max(
+      0,
+      Math.min(time, entity.mediaSource.duration || entity.mediaSource.videoElement.duration || 0),
+    );
+    this.#logger.info("[video-scrub] Start exact frame request", {
+      entityId,
+      requestId,
+      reason,
+      time: clampedTime,
+      queuedMs: Number((performance.now() - enqueuedAt).toFixed(2)),
+      syncVideoElement,
+    });
+    const session = this.#getOrCreateVideoFrameSession(entityId);
+    if (!session) return;
+
+    try {
+      const startedAt = performance.now();
+      const frame = await session.getFrame(clampedTime);
+      const totalMs = performance.now() - startedAt;
+      const current = this.state.entities.get(entityId);
+      if (
+        !current ||
+        current.mediaSource.type !== MediaType.video ||
+        this.#videoSnapshotTokens.get(entityId) !== token
+      ) {
+        this.#logger.info("[video-scrub] Dropped stale exact frame", {
+          entityId,
+          requestId,
+          reason,
+          time: frame.time,
+          cacheStatus: frame.cacheStatus,
+          totalMs: Number(totalMs.toFixed(2)),
+        });
+        return;
+      }
+
+      if (syncVideoElement) {
+        current.mediaSource.videoElement.currentTime = frame.time;
+      }
+      if (current.playback) {
+        current.playback.currentTime = frame.time;
+      }
+
+      this.#replaceVideoSnapshot(entityId, frame.bitmap, frame.cacheKey);
+      current.textureDirty = true;
+      this.state.entitiesDirty.add(entityId);
+      this.state.playbackVersion++;
+      this.notify();
+      this.#logger.info("[video-scrub] Exact frame ready", {
+        entityId,
+        requestId,
+        reason,
+        requestedTime: clampedTime,
+        resolvedTime: frame.time,
+        cacheStatus: frame.cacheStatus,
+        decodeMs: Number(frame.decodeMs.toFixed(2)),
+        totalMs: Number(totalMs.toFixed(2)),
+      });
+    } catch (error) {
+      this.#logger.warn(`[video-scrub] Failed to decode exact video frame for ${entityId}`, {
+        error,
+        requestId,
+        reason,
+        time: clampedTime,
+      });
+      const current = this.state.entities.get(entityId);
+      if (this.#videoSnapshotTokens.get(entityId) !== token) {
+        this.#logger.info("[video-scrub] Ignoring stale decode failure", {
+          entityId,
+          requestId,
+          reason,
+          time: clampedTime,
+        });
+        return;
+      }
+      if (current?.mediaSource.type === MediaType.video && current.mediaSource.isScrubbing) {
+        this.#logger.info("[video-scrub] Skipping native fallback during scrub", {
+          entityId,
+          requestId,
+          reason,
+          time: clampedTime,
+        });
+        return;
+      }
+      await this.#syncVideoFrameFromVideoElement(entityId, clampedTime);
+    }
+  }
+
+  #pauseVideoInternal(entityId: string, captureSnapshot: boolean): void {
+    const entity = this.state.entities.get(entityId);
+    if (!entity || entity.mediaSource.type !== MediaType.video) return;
+
+    this.#clearVideoSettleTimer(entityId);
+    const video = entity.mediaSource.videoElement;
+    video.pause();
+
+    if (entity.playback) {
+      entity.playback.isPlaying = false;
+      entity.playback.currentTime = video.currentTime;
+    }
+
+    entity.textureDirty = true;
+    this.state.entitiesDirty.add(entityId);
+    this.notifySelectionChange();
+
+    if (captureSnapshot) {
+      this.#queueExactVideoFrameRequest(entityId, video.currentTime, true, "pause-snapshot");
+    }
+  }
+
   // Entity mutations (only notify selection subscribers)
   addEntity(entity: ShaderCanvasEntity): void {
     this.state.entities.set(entity.id, entity);
     this.state.entitiesDirty.add(entity.id);
+    if (entity.mediaSource.type === MediaType.video) {
+      this.#getOrCreateVideoFrameSession(entity.id);
+    }
     this.notifySelectionChange();
   }
 
@@ -368,6 +757,10 @@ export class CanvasStore extends Store<CanvasState> {
   }
 
   removeEntity(id: string): void {
+    const entity = this.state.entities.get(id);
+    if (entity?.mediaSource.type === MediaType.video) {
+      this.#disposeVideoSource(id, entity.mediaSource);
+    }
     this.state.entities.delete(id);
     this.state.entitiesDirty.delete(id);
     // Always mark dirty since entity list changed (needed for undo/redo re-render)
@@ -532,6 +925,11 @@ export class CanvasStore extends Store<CanvasState> {
    * Properly increments versions and notifies subscribers.
    */
   reset(): void {
+    for (const entity of this.state.entities.values()) {
+      if (entity.mediaSource.type === MediaType.video) {
+        this.#disposeVideoSource(entity.id, entity.mediaSource);
+      }
+    }
     this.state.entities.clear();
     this.state.selectedEntityIds = new Set();
     this.state.hoveredEntityId = null;
@@ -549,6 +947,8 @@ export class CanvasStore extends Store<CanvasState> {
     // Clear computed cache
     this.clearComputedCache();
     this.#resetSelectorCaches();
+    this.#videoFrameRequestQueue.clear();
+    this.#videoFrameRequestInFlight.clear();
     // Notify all subscribers
     this.notify();
   }
@@ -558,7 +958,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.version++;
     this.state.viewportDirty = true;
     this.state.debugMode = !this.state.debugMode;
-    this.#logger.setLevel(this.state.debugMode ? LogLevel.DEBUG : LogLevel.ERROR);
+    this.#logger.setLevel(this.state.debugMode ? LogLevel.DEBUG : DEFAULT_LOG_LEVEL);
     this.notifySelectionChange();
     this.#logger.debug(`Debug mode toggled: ${this.state.debugMode}`);
   }
@@ -567,7 +967,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.version++;
     this.state.viewportDirty = true;
     this.state.debugMode = enabled;
-    this.#logger.setLevel(enabled ? LogLevel.DEBUG : LogLevel.ERROR);
+    this.#logger.setLevel(enabled ? LogLevel.DEBUG : DEFAULT_LOG_LEVEL);
     this.notifySelectionChange();
     this.#logger.debug(`Debug mode set to: ${this.state.debugMode}`);
   }
@@ -648,7 +1048,14 @@ export class CanvasStore extends Store<CanvasState> {
     const entity = this.state.entities.get(entityId);
     if (!entity || entity.mediaSource.type !== MediaType.video) return;
 
+    this.#clearVideoSettleTimer(entityId);
+    this.#videoScrubResume.delete(entityId);
+    this.#cancelExactVideoFrameRequests(entityId, "playback-resume");
+    this.#videoSnapshotTokens.set(entityId, ++this.#nextVideoSnapshotToken);
     const video = entity.mediaSource.videoElement;
+    const targetTime = entity.playback?.currentTime ?? video.currentTime;
+    entity.mediaSource.isScrubbing = false;
+    await this.#seekVideoElement(video, targetTime);
     await video.play();
 
     if (entity.playback) {
@@ -660,51 +1067,65 @@ export class CanvasStore extends Store<CanvasState> {
   }
 
   pauseVideo(entityId: string): void {
+    this.#videoScrubResume.delete(entityId);
+    this.#pauseVideoInternal(entityId, true);
+  }
+
+  beginVideoScrub(entityId: string): void {
     const entity = this.state.entities.get(entityId);
     if (!entity || entity.mediaSource.type !== MediaType.video) return;
 
-    const video = entity.mediaSource.videoElement;
-    video.pause();
+    this.#clearVideoSettleTimer(entityId);
+    this.#cancelExactVideoFrameRequests(entityId, "begin-scrub");
+    this.#videoSnapshotTokens.set(entityId, ++this.#nextVideoSnapshotToken);
+    const wasPlaying = entity.playback?.isPlaying ?? !entity.mediaSource.videoElement.paused;
+    this.#videoScrubResume.set(entityId, wasPlaying);
+    this.#pauseVideoInternal(entityId, false);
+    entity.mediaSource.isScrubbing = true;
 
-    if (entity.playback) {
-      entity.playback.isPlaying = false;
-      entity.playback.currentTime = video.currentTime;
-    }
+    const targetTime = entity.playback?.currentTime ?? entity.mediaSource.videoElement.currentTime;
+    this.#queueExactVideoFrameRequest(entityId, targetTime, false, "scrub-start");
 
-    // Snapshot current frame for static display
-    const canvas = new OffscreenCanvas(video.videoWidth, video.videoHeight);
-    const ctx = canvas.getContext("2d");
-    if (ctx) {
-      ctx.drawImage(video, 0, 0);
-      createImageBitmap(canvas)
-        .then((bitmap) => {
-          entity.imageBitmap = bitmap;
-          entity.textureDirty = true;
-          this.state.entitiesDirty.add(entityId);
-          this.notifySelectionChange();
-        })
-        .catch((e) => logger.error(e));
-    }
-
+    entity.textureDirty = true;
     this.state.entitiesDirty.add(entityId);
-    this.notifySelectionChange();
+    this.notify();
   }
 
-  /**
-   * Seek video to a specific time.
-   * Updates video.currentTime, playback state, and marks texture dirty.
-   */
+  endVideoScrub(entityId: string): void {
+    const entity = this.state.entities.get(entityId);
+    if (!entity || entity.mediaSource.type !== MediaType.video) return;
+
+    const targetTime = entity.playback?.currentTime ?? entity.mediaSource.videoElement.currentTime;
+    entity.mediaSource.isScrubbing = false;
+    const shouldResume = this.#videoScrubResume.get(entityId) ?? false;
+    this.#videoScrubResume.delete(entityId);
+    if (shouldResume) {
+      void this.playVideo(entityId);
+      return;
+    }
+
+    this.#queueExactVideoFrameRequest(entityId, targetTime, true, "scrub-settle");
+  }
+
   seekVideo(entityId: string, time: number): void {
     const entity = this.state.entities.get(entityId);
     if (!entity || entity.mediaSource.type !== MediaType.video) return;
 
-    const video = entity.mediaSource.videoElement;
-    // Clamp to valid range
-    const clampedTime = Math.max(0, Math.min(time, video.duration || 0));
-    video.currentTime = clampedTime;
+    const duration = entity.mediaSource.duration || entity.mediaSource.videoElement.duration || 0;
+    const clampedTime = Math.max(0, Math.min(time, duration));
 
     if (entity.playback) {
       entity.playback.currentTime = clampedTime;
+    }
+
+    if (entity.mediaSource.isScrubbing) {
+      this.#queueExactVideoFrameRequest(entityId, clampedTime, false, "scrub-move");
+    } else {
+      if (!entity.playback?.isPlaying) {
+        this.#queueExactVideoFrameRequest(entityId, clampedTime, true, "paused-seek");
+      } else {
+        entity.mediaSource.videoElement.currentTime = clampedTime;
+      }
     }
 
     entity.textureDirty = true;
