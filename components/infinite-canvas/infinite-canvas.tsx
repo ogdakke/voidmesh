@@ -147,6 +147,7 @@ export function InfiniteCanvas() {
   const { renderer, isReady, isSupported, error } = useCanvasRenderer(canvasRef);
 
   const [isSpaceHeld, setIsSpaceHeld] = useState(false);
+  const isMetaHeldRef = useRef(false);
 
   const isMobile = useIsMobile();
   const bottomInset = isMobile ? config.canvas.mobile.bottomInset : 0;
@@ -270,7 +271,10 @@ export function InfiniteCanvas() {
 
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const isZoomModifier = e.ctrlKey || e.metaKey;
+      // e.ctrlKey covers trackpad pinch (browser sends ctrlKey=true) and Ctrl+scroll.
+      // isMetaHeldRef covers Command+scroll on macOS — for some reason, Command doesn't report metaKey, so we track it separately
+      // on wheel events when Command is held, so we track it via keydown/keyup.
+      const isZoomModifier = e.ctrlKey || isMetaHeldRef.current;
       gameLoop.handleWheel(e.deltaX, e.deltaY, { x: e.clientX, y: e.clientY }, isZoomModifier);
     };
 
@@ -397,12 +401,14 @@ export function InfiniteCanvas() {
   // registered first due to React's child-before-parent effect ordering).
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Meta") isMetaHeldRef.current = true;
       if (e.key !== " " || e.repeat) return;
       gameLoop.setSpaceHeld(true);
       setIsSpaceHeld(true);
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "Meta") isMetaHeldRef.current = false;
       if (e.key !== " ") return;
       const wasReady = gameLoop.spacePanMode === SpacePanMode.ready;
       gameLoop.setSpaceHeld(false);
@@ -412,11 +418,18 @@ export function InfiniteCanvas() {
       }
     };
 
+    // Reset meta state on blur (Command+Tab away and back won't fire keyup)
+    const onBlur = () => {
+      isMetaHeldRef.current = false;
+    };
+
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
     };
   }, []);
 
@@ -566,48 +579,21 @@ export function InfiniteCanvas() {
   useRegisterKeybinds("global", [
     {
       id: "save_studio",
-      bind: (bb) => bb.withMeta().and.key("s"),
-      platform: "macos",
-      group: "global",
-      label: "Save workspace",
-      action: handleExportStudio,
-    },
-    {
-      id: "save_studio",
-      bind: (bb) => bb.withCtrl().and.key("s"),
-      platform: "other",
+      bind: (bb) => bb.withMod().and.key("s"),
       group: "global",
       label: "Save workspace",
       action: handleExportStudio,
     },
     {
       id: "save_as_studio",
-      bind: (bb) => bb.withShift().and.withMeta().and.key("s"),
-      platform: "macos",
-      group: "global",
-      label: "Save workspace as...",
-      action: handleSaveAsStudio,
-    },
-    {
-      id: "save_as_studio",
-      bind: (bb) => bb.withShift().and.withCtrl().and.key("s"),
-      platform: "other",
+      bind: (bb) => bb.withShift().and.withMod().and.key("s"),
       group: "global",
       label: "Save workspace as...",
       action: handleSaveAsStudio,
     },
     {
       id: "open_studio",
-      bind: (bb) => bb.withMeta().and.key("o"),
-      platform: "macos",
-      group: "global",
-      label: "Open workspace",
-      action: handleImportStudio,
-    },
-    {
-      id: "open_studio",
-      bind: (bb) => bb.withCtrl().and.key("o"),
-      platform: "other",
+      bind: (bb) => bb.withMod().and.key("o"),
       group: "global",
       label: "Open workspace",
       action: handleImportStudio,
@@ -620,21 +606,13 @@ export function InfiniteCanvas() {
       action: toggleFullscreenShortcutHandler,
     },
     {
-      bind: (bb) => bb.withMeta().key("z"),
+      bind: (bb) => bb.withMod().key("z"),
       group: "global",
-      platform: "macos",
       label: "Undo",
       action: undoShortcutHandler,
     },
     {
-      bind: (bb) => bb.withCtrl().key("z"),
-      group: "global",
-      platform: "other",
-      label: "Undo",
-      action: undoShortcutHandler,
-    },
-    {
-      bind: (bb) => bb.withShift().and.withMeta().and.key("z"),
+      bind: (bb) => bb.withShift().and.withMod().and.key("z"),
       group: "global",
       platform: "macos",
       label: "Redo",
@@ -646,13 +624,6 @@ export function InfiniteCanvas() {
       platform: "other",
       label: "Redo",
       action: redoShortcutHandler,
-    },
-    {
-      id: "toggle_fullscreen",
-      bind: "\\",
-      group: "global",
-      label: "Toggle fullscreen",
-      action: toggleFullscreenShortcutHandler,
     },
     {
       bind: (bb) => bb.withBind("d").withSensitive(false),
@@ -684,47 +655,21 @@ export function InfiniteCanvas() {
       action: toggleSnapToGridHandler,
     },
     {
-      bind: (bb) => bb.withMeta().and.key("0"),
-      platform: "macos",
-      group: "canvas",
-      label: "Zoom to 100%",
-      action: zoomTo100PercentShortcutHandler,
-    },
-    {
-      bind: (bb) => bb.withCtrl().and.key("0"),
-      platform: "other",
+      bind: (bb) => bb.withMod().and.key("0"),
       group: "canvas",
       label: "Zoom to 100%",
       action: zoomTo100PercentShortcutHandler,
     },
     {
       id: "paste_canvas",
-      bind: (bb) => bb.withMeta().and.key("v"),
-      platform: "macos",
-      group: "canvas",
-      label: "Paste image or video, or a link to an image",
-      action: () => {},
-    },
-    {
-      id: "paste_canvas",
-      bind: (bb) => bb.withCtrl().and.key("v"),
-      platform: "other",
+      bind: (bb) => bb.withMod().and.key("v"),
       group: "canvas",
       label: "Paste image or video, or a link to an image",
       action: () => {},
     },
     {
       id: "select_all",
-      bind: (bb) => bb.withMeta().and.key("a"),
-      platform: "macos",
-      group: "canvas",
-      label: "Select all",
-      action: selectAllShortcutHandler,
-    },
-    {
-      id: "select_all",
-      bind: (bb) => bb.withCtrl().and.key("a"),
-      platform: "other",
+      bind: (bb) => bb.withMod().and.key("a"),
       group: "canvas",
       label: "Select all",
       action: selectAllShortcutHandler,
@@ -810,33 +755,14 @@ export function InfiniteCanvas() {
     },
     {
       id: "copy_selection",
-      bind: (bb) => bb.withMeta().and.key("c"),
-      platform: "macos",
+      bind: (bb) => bb.withMod().and.key("c"),
       group: "selection",
       label: "Copy selected",
       action: copyEntityShortcutHandler,
     },
     {
-      id: "copy_selection",
-      bind: (bb) => bb.withCtrl().and.key("c"),
-      platform: "other",
-      group: "selection",
-      label: "Copy selected",
-      action: copyEntityShortcutHandler,
-    },
-
-    {
       id: "paste_selection",
-      bind: (bb) => bb.withMeta().and.key("v"),
-      platform: "macos",
-      group: "selection",
-      label: "Paste a shared link to copy parameters from another image",
-      action: () => {},
-    },
-    {
-      id: "paste_selection",
-      bind: (bb) => bb.withCtrl().and.key("v"),
-      platform: "other",
+      bind: (bb) => bb.withMod().and.key("v"),
       group: "selection",
       label: "Paste a shared link to copy parameters from another image",
       action: () => {},
@@ -879,32 +805,14 @@ export function InfiniteCanvas() {
     },
     {
       id: "duplicate_entity",
-      bind: (bb) => bb.withMeta().and.key("d"),
-      platform: "macos",
-      group: "selection",
-      label: "Duplicate selected",
-      action: duplicateShortcutHandler,
-    },
-    {
-      id: "duplicate_entity",
-      bind: (bb) => bb.withCtrl().and.key("d"),
-      platform: "other",
+      bind: (bb) => bb.withMod().and.key("d"),
       group: "selection",
       label: "Duplicate selected",
       action: duplicateShortcutHandler,
     },
     {
       id: "select_all",
-      bind: (bb) => bb.withMeta().and.key("a"),
-      platform: "macos",
-      group: "selection",
-      label: "Select all",
-      action: selectAllShortcutHandler,
-    },
-    {
-      id: "select_all",
-      bind: (bb) => bb.withCtrl().and.key("a"),
-      platform: "other",
+      bind: (bb) => bb.withMod().and.key("a"),
       group: "selection",
       label: "Select all",
       action: selectAllShortcutHandler,

@@ -152,6 +152,146 @@ describe("useKeybind", () => {
   });
 });
 
+describe("withMod()", () => {
+  test("resolves to metaKey on macOS", () => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+    );
+    const actionMock = vi.fn();
+
+    function TestComponent() {
+      useKeybind("global", {
+        label: "Save",
+        bind: (bb) => bb.withMod().and.key("s"),
+        action: actionMock,
+      });
+      return <div>Test</div>;
+    }
+
+    renderMinimal(<TestComponent />);
+
+    // Cmd+S should fire on macOS
+    fireEvent.keyDown(window, { key: "s", metaKey: true });
+    expect(actionMock).toHaveBeenCalledTimes(1);
+
+    // Ctrl+S should NOT fire on macOS
+    actionMock.mockClear();
+    fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+    expect(actionMock).not.toHaveBeenCalled();
+
+    vi.restoreAllMocks();
+  });
+
+  test("resolves to ctrlKey on non-macOS", () => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    );
+    const actionMock = vi.fn();
+
+    function TestComponent() {
+      useKeybind("global", {
+        label: "Save",
+        bind: (bb) => bb.withMod().and.key("s"),
+        action: actionMock,
+      });
+      return <div>Test</div>;
+    }
+
+    renderMinimal(<TestComponent />);
+
+    // Ctrl+S should fire on Windows
+    fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+    expect(actionMock).toHaveBeenCalledTimes(1);
+
+    // Cmd+S should NOT fire on Windows
+    actionMock.mockClear();
+    fireEvent.keyDown(window, { key: "s", metaKey: true });
+    expect(actionMock).not.toHaveBeenCalled();
+
+    vi.restoreAllMocks();
+  });
+
+  test("works with withShift() combined", () => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+    );
+    const actionMock = vi.fn();
+
+    function TestComponent() {
+      useKeybind("global", {
+        label: "Save As",
+        bind: (bb) => bb.withShift().and.withMod().and.key("s"),
+        action: actionMock,
+      });
+      return <div>Test</div>;
+    }
+
+    renderMinimal(<TestComponent />);
+
+    // Cmd+Shift+S should fire on macOS
+    fireEvent.keyDown(window, { key: "s", metaKey: true, shiftKey: true });
+    expect(actionMock).toHaveBeenCalledTimes(1);
+
+    // Cmd+S without Shift should NOT fire
+    actionMock.mockClear();
+    fireEvent.keyDown(window, { key: "s", metaKey: true });
+    expect(actionMock).not.toHaveBeenCalled();
+
+    vi.restoreAllMocks();
+  });
+
+  test("string format Mod+s parses correctly", () => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+    );
+    const actionMock = vi.fn();
+
+    function TestComponent() {
+      useKeybind("global", {
+        label: "Save",
+        bind: "Mod+s",
+        action: actionMock,
+      });
+      return <div>Test</div>;
+    }
+
+    renderMinimal(<TestComponent />);
+
+    fireEvent.keyDown(window, { key: "s", metaKey: true });
+    expect(actionMock).toHaveBeenCalledTimes(1);
+
+    vi.restoreAllMocks();
+  });
+
+  test("toSymbols() renders platform-appropriate symbol for Mod", () => {
+    let store: KeybindStore | null = null;
+
+    function TestComponent() {
+      store = useKeybinds();
+      useKeybind("global", {
+        id: "mod_test",
+        label: "Mod Test",
+        bind: "Mod+s",
+        action: () => {},
+      });
+      return <div>Test</div>;
+    }
+
+    // Test macOS
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+    );
+    renderMinimal(<TestComponent />);
+
+    const kb = store!.getById("mod_test");
+    expect(kb).toBeDefined();
+    const symbols = kb!.bind.toSymbols();
+    expect(symbols).toContain("⌘");
+
+    vi.restoreAllMocks();
+  });
+});
+
 describe("KeybindStore", () => {
   test("entries() returns all registered keybinds", () => {
     let entries: ReturnType<ReturnType<typeof useKeybinds>["entries"]> = [];
