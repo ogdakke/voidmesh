@@ -45,6 +45,7 @@ interface Bind<T = ""> {
   bind: T;
   keys: string[];
   sensitive: boolean;
+  mod: boolean;
   meta: boolean;
   ctrl: boolean;
   shift: boolean;
@@ -55,6 +56,7 @@ class BindBuilder<TString extends string = ""> {
   bind: TString;
   keys: string[] = [];
   sensitive: boolean;
+  mod: boolean;
   meta: boolean;
   ctrl: boolean;
   shift: boolean;
@@ -63,6 +65,7 @@ class BindBuilder<TString extends string = ""> {
   constructor(bind?: Partial<Omit<Bind<TString>, "keys">>) {
     this.bind = (bind?.bind ?? "") as TString;
     this.sensitive = bind?.sensitive ?? true;
+    this.mod = bind?.mod ?? false;
     this.meta = bind?.meta ?? false;
     this.ctrl = bind?.ctrl ?? false;
     this.shift = bind?.shift ?? false;
@@ -78,6 +81,8 @@ class BindBuilder<TString extends string = ""> {
     const isWin = isWindows();
     const symbols = this.keys.map((key) => {
       switch (key) {
+        case "Mod":
+          return isMac ? "⌘" : "Ctrl";
         case "Meta":
           return isMac ? "⌘" : isWin ? "Win" : "Meta";
         case "Shift":
@@ -119,6 +124,7 @@ class BindBuilder<TString extends string = ""> {
     return new BindBuilder({
       bind: this.bind + separator + key,
       sensitive: this.sensitive,
+      mod: this.mod,
       meta: this.meta,
       ctrl: this.ctrl,
       shift: this.shift,
@@ -130,6 +136,7 @@ class BindBuilder<TString extends string = ""> {
     return new BindBuilder({
       bind: this.bind,
       sensitive,
+      mod: this.mod,
       meta: this.meta,
       ctrl: this.ctrl,
       shift: this.shift,
@@ -141,11 +148,25 @@ class BindBuilder<TString extends string = ""> {
     return new BindBuilder({
       bind: this.bind + bind,
       sensitive: this.sensitive,
+      mod: this.mod,
       meta: this.meta,
       ctrl: this.ctrl,
       shift: this.shift,
       alt: this.alt,
     }) as BindBuilder<TString>;
+  }
+
+  withMod() {
+    const separator = this.#needsSeparator() ? "+" : "";
+    return new BindBuilder({
+      bind: this.bind + separator + "Mod",
+      sensitive: this.sensitive,
+      mod: true,
+      meta: this.meta,
+      ctrl: this.ctrl,
+      shift: this.shift,
+      alt: this.alt,
+    }) as BindBuilder<`${TString}Mod`>;
   }
 
   withMeta() {
@@ -154,6 +175,7 @@ class BindBuilder<TString extends string = ""> {
     return new BindBuilder({
       bind: this.bind + separator + "Meta",
       sensitive: this.sensitive,
+      mod: this.mod,
       meta: true,
       ctrl: this.ctrl,
       shift: this.shift,
@@ -167,6 +189,7 @@ class BindBuilder<TString extends string = ""> {
     return new BindBuilder({
       bind: this.bind + separator + "Ctrl",
       sensitive: this.sensitive,
+      mod: this.mod,
       meta: this.meta,
       ctrl: true,
       shift: this.shift,
@@ -180,6 +203,7 @@ class BindBuilder<TString extends string = ""> {
     return new BindBuilder({
       bind: this.bind + separator + "Shift",
       sensitive: this.sensitive,
+      mod: this.mod,
       meta: this.meta,
       ctrl: this.ctrl,
       shift: true,
@@ -193,6 +217,7 @@ class BindBuilder<TString extends string = ""> {
     return new BindBuilder({
       bind: this.bind + separator + "Alt",
       sensitive: this.sensitive,
+      mod: this.mod,
       meta: this.meta,
       ctrl: this.ctrl,
       shift: this.shift,
@@ -204,6 +229,7 @@ class BindBuilder<TString extends string = ""> {
     return new BindBuilder({
       bind: this.bind + "+",
       sensitive: this.sensitive,
+      mod: this.mod,
       meta: this.meta,
       ctrl: this.ctrl,
       shift: this.shift,
@@ -221,7 +247,9 @@ class BindBuilder<TString extends string = ""> {
 
     const builder = new BindBuilder({ bind: kb });
     for (const key of parts) {
-      if (key === "Meta") {
+      if (key === "Mod") {
+        builder.mod = true;
+      } else if (key === "Meta") {
         builder.withMeta();
       } else if (key === "Ctrl") {
         builder.withCtrl();
@@ -240,6 +268,7 @@ class BindBuilder<TString extends string = ""> {
       bind: this.bind,
       keys: this.keys,
       sensitive: this.sensitive,
+      mod: this.mod,
       meta: this.meta,
       ctrl: this.ctrl,
       shift: this.shift,
@@ -329,14 +358,26 @@ export class KeybindStore extends Store<KeybindStoreState> {
   }
 
   #shouldCallCombination(e: KeyboardEvent, bb: BindBuilder<string>): boolean {
-    // Check Meta, Ctrl, Alt exactly
-    if (bb.meta !== e.metaKey) return false;
-    if (bb.ctrl !== e.ctrlKey) return false;
+    // Resolve mod: maps to Meta on macOS, Ctrl elsewhere
+    const isMac = isMacOS();
+    let expectedMeta = bb.meta;
+    let expectedCtrl = bb.ctrl;
+    if (bb.mod) {
+      if (isMac) {
+        expectedMeta = true;
+      } else {
+        expectedCtrl = true;
+      }
+    }
+
+    if (expectedMeta !== e.metaKey) return false;
+    if (expectedCtrl !== e.ctrlKey) return false;
     if (bb.alt !== e.altKey) return false;
 
     // Find the actual key (non-modifier) in the keybind
     const actualKey = bb.keys.find(
       (key) =>
+        key !== "Mod" &&
         key !== "Meta" &&
         key !== "Command" &&
         key !== "Control" &&
