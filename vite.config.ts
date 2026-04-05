@@ -38,7 +38,6 @@ export default defineConfig(({ mode }) => {
       wgslMinifyPlugin(),
       imagePlugin({ widths: [768, 1152] }),
       react(),
-      // @ts-expect-error something is off with the types here
       babel({
         presets: [reactCompilerPreset()],
       }),
