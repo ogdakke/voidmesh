@@ -2,7 +2,13 @@
   "compilerOptions": {
     // Environment setup & latest features
     "lib": ["ESNext", "DOM", "DOM.Iterable", "DOM.AsyncIterable"],
-    "types": ["vite/client", "@webgpu/types", "@types/bun", "@types/wicg-file-system-access"],
+    "types": [
+      "vite/client",
+      "vite-plugin-pwa/react",
+      "@webgpu/types",
+      "@types/bun",
+      "@types/wicg-file-system-access"
+    ],
     "target": "ESNext",
     "module": "Preserve",
     "moduleDetection": "force",
