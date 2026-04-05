@@ -81,5 +81,5 @@
     "vitest": "^4.1.2",
     "workbox-window": "7.4.0"
   },
-  "packageManager": "bun@1.3.10"
+  "packageManager": "bun@1.3.11"
 }
