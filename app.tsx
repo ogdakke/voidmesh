@@ -4,6 +4,7 @@ import React, { lazy, Suspense, useEffect, useRef, useState, type PropsWithChild
 import ReactDOM from "react-dom/client";
 import { logger } from "#lib/client.logger.ts";
 import { ToastProvider } from "#ui/toast/toast.tsx";
+import { PwaUpdateManager } from "#components/pwa/pwa-update-manager.tsx";
 import { CanvasProvider } from "./context/canvas-context.tsx";
 import { ExportQueueProvider } from "./context/export-queue-context.tsx";
 import { UpscaleQueueProvider } from "./context/upscale-queue-context.tsx";
@@ -66,6 +67,7 @@ export default function App() {
       iconProps={{ color: "currentColor", strokeWidth: 1.5, width: "1em", height: "1em" }}
     >
       <ToastProvider>
+        <PwaUpdateManager />
         <CanvasProvider>
           <VideoExportProvider>
             <ExportQueueProvider>

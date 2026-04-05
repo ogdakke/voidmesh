@@ -37,6 +37,14 @@ export function Updates({ id }: { id?: string }) {
     <section id={id}>
       <h1>Updates</h1>
       <Update>
+        <UpdatesTitle date="2026-04-05">Install the app</UpdatesTitle>
+        <p>
+          Voidmesh can now be installed like an app on supported browsers, and it can keep working
+          even when you're offline. Once it's installed, it feels a bit more at home on your device,
+          and getting the latest version should be smoother too.
+        </p>
+      </Update>
+      <Update>
         <UpdatesTitle date="2026-03-20">Better saving</UpdatesTitle>
         <p>
           Saving just got a lot smoother. Use <strong>Save</strong> to write directly to your file

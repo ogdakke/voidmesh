@@ -1,8 +1,17 @@
+import { resolve } from "path";
 import { defineConfig } from "vitest/config";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      "virtual:pwa-register/react": resolve(
+        __dirname,
+        "./__tests__/mocks/virtual-pwa-register-react.ts",
+      ),
+    },
+  },
   plugins: [
     react(),
     babel({

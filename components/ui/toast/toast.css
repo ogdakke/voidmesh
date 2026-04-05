@@ -231,7 +231,7 @@
     line-height: 1;
     margin-block-end: -2px;
     margin-inline-end: -4px;
-    border-radius: var(--radius);
+    border-radius: var(--radius-lg);
     background-color: var(--gray-200);
     color: var(--gray-1200);
     border: none;

@@ -4,7 +4,9 @@
   "short_name": "Voidmesh",
   "start_url": "/",
   "id": "/",
+  "scope": "/",
   "display": "standalone",
+  "theme_color": "#ffffff",
   "background_color": "#fff",
   "description": "Edit your images and videos with shader effects in your browser",
   "icons": [
