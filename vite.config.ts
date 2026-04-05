@@ -7,8 +7,6 @@ import imagePlugin from "./plugins/vite-plugin-image.ts";
 import wgslMinifyPlugin from "./plugins/vite-plugin-wgsl-minify.ts";
 import babel from "@rolldown/plugin-babel";
 
-const PWA_MEDIA_MATCHER = /^\/(?:m|media)\//;
-
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
 
@@ -88,7 +86,7 @@ export default defineConfig(({ mode }) => {
                 sameOrigin &&
                 request.method === "GET" &&
                 request.destination === "video" &&
-                PWA_MEDIA_MATCHER.test(url.pathname),
+                /^\/(?:m|media)\//.test(url.pathname),
               handler: "StaleWhileRevalidate",
               options: {
                 cacheName: "voidmesh-media-videos",
@@ -106,7 +104,7 @@ export default defineConfig(({ mode }) => {
                 sameOrigin &&
                 request.method === "GET" &&
                 request.destination === "image" &&
-                PWA_MEDIA_MATCHER.test(url.pathname),
+                /^\/(?:m|media)\//.test(url.pathname),
               handler: "StaleWhileRevalidate",
               options: {
                 cacheName: "voidmesh-media-images",
@@ -121,7 +119,7 @@ export default defineConfig(({ mode }) => {
             },
             {
               urlPattern: ({ request, sameOrigin, url }) =>
-                sameOrigin && request.method === "GET" && PWA_MEDIA_MATCHER.test(url.pathname),
+                sameOrigin && request.method === "GET" && /^\/(?:m|media)\//.test(url.pathname),
               handler: "StaleWhileRevalidate",
               options: {
                 cacheName: "voidmesh-media",
