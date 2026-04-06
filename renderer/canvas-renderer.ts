@@ -1,5 +1,6 @@
 import { config, type GridConfig } from "#config";
 import { logger } from "#lib/client.logger.ts";
+import { WlurPass } from "#wlur";
 import { setGpuContext } from "./gpu-color-space.ts";
 import type { RenderState } from "../engine/canvas-store.ts";
 import { actionLayerController } from "../engine/action-layer-controller.ts";
@@ -38,6 +39,7 @@ import { MeltShader } from "./shaders/melt-shader.ts";
 import type { ShaderContext } from "./shaders/shader-pass.ts";
 import { ShaderRegistry } from "./shaders/shader-registry.ts";
 import { TexturePool } from "./texture-pool.ts";
+import { resolveWlurOverlayRuntimeConfig, type WlurOverlayConfig } from "./wlur-overlay.ts";
 import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
 
 export class InfiniteCanvasRenderer {
@@ -183,6 +185,19 @@ export class InfiniteCanvasRenderer {
 
   // Copy pass for showOriginal (rgba8unorm source → rgba16float output)
   #passthroughCopyPass: CopyPass | null = null;
+  #presentCopyPass: CopyPass | null = null;
+
+  // Wlur progressive full-canvas overlay
+  #wlurPass: WlurPass | null = null;
+  #wlurOverlayConfig: WlurOverlayConfig | null = null;
+  #wlurOverlayTextures: {
+    width: number;
+    height: number;
+    input: GPUTexture;
+    output: GPUTexture;
+  } | null = null;
+  #wlurOverlayCacheValid = false;
+  #wlurOverlayCacheKey = "";
 
   // Shader registry and context for delegated shader passes
   #shaderRegistry: ShaderRegistry | null = null;
@@ -270,7 +285,10 @@ export class InfiniteCanvasRenderer {
       format: this.#canvasFormat,
       colorSpace: this.#colorConfig.canvasColorSpace,
       alphaMode: "premultiplied",
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+      usage:
+        GPUTextureUsage.RENDER_ATTACHMENT |
+        GPUTextureUsage.COPY_SRC |
+        GPUTextureUsage.TEXTURE_BINDING,
     });
 
     // Initialize texture pool
@@ -327,6 +345,13 @@ export class InfiniteCanvasRenderer {
     );
     this.#processingPipeline.initialize();
     this.#passthroughCopyPass = new CopyPass(this.#device, this.#colorConfig.intermediateFormat);
+    this.#presentCopyPass = new CopyPass(this.#device, this.#canvasFormat);
+    this.#wlurPass = new WlurPass({
+      device: this.#device,
+      format: this.#colorConfig.intermediateFormat,
+      label: "Wlur",
+    });
+    this.#wlurPass.initialize();
 
     // Initialize export service with callbacks into renderer
     this.#exportService = new ExportService(
@@ -665,6 +690,74 @@ export class InfiniteCanvasRenderer {
 
     this.#actionLayerBlurTextures = { width, height, input, output };
     return this.#actionLayerBlurTextures;
+  }
+
+  #invalidateWlurOverlayCache(): void {
+    this.#wlurOverlayCacheValid = false;
+    this.#wlurOverlayCacheKey = "";
+  }
+
+  #destroyWlurOverlayTextures(): void {
+    if (!this.#wlurOverlayTextures) return;
+
+    this.#wlurOverlayTextures.input.destroy();
+    this.#wlurOverlayTextures.output.destroy();
+    this.#wlurOverlayTextures = null;
+  }
+
+  #getOrCreateWlurOverlayTextures(
+    width: number,
+    height: number,
+  ): { input: GPUTexture; output: GPUTexture } {
+    const cached = this.#wlurOverlayTextures;
+    if (cached && cached.width === width && cached.height === height) {
+      return cached;
+    }
+
+    this.#destroyWlurOverlayTextures();
+    this.#invalidateWlurOverlayCache();
+
+    const usage =
+      GPUTextureUsage.TEXTURE_BINDING |
+      GPUTextureUsage.RENDER_ATTACHMENT |
+      GPUTextureUsage.COPY_DST |
+      GPUTextureUsage.COPY_SRC;
+
+    const input = this.#device!.createTexture({
+      label: `Wlur input (${width}x${height})`,
+      size: [width, height],
+      format: this.#colorConfig.intermediateFormat,
+      usage,
+    });
+
+    const output = this.#device!.createTexture({
+      label: `Wlur output (${width}x${height})`,
+      size: [width, height],
+      format: this.#colorConfig.intermediateFormat,
+      usage,
+    });
+
+    this.#wlurOverlayTextures = { width, height, input, output };
+    return this.#wlurOverlayTextures;
+  }
+
+  #buildWlurOverlayCacheKey(
+    width: number,
+    height: number,
+    resolvedConfig: NonNullable<ReturnType<typeof resolveWlurOverlayRuntimeConfig>>,
+  ): string {
+    const { params, quality } = resolvedConfig;
+    return [
+      width,
+      height,
+      quality.kernelSize,
+      quality.resolutionScale,
+      params.radius,
+      params.offset,
+      params.interpolation,
+      params.direction,
+      params.noise,
+    ].join("|");
   }
 
   #createActionLayerBlitPipeline(): void {
@@ -1487,6 +1580,63 @@ export class InfiniteCanvasRenderer {
       entityPass.end();
     }
 
+    const resolvedWlurOverlay = resolveWlurOverlayRuntimeConfig(
+      this.#wlurOverlayConfig,
+      height,
+      dpr,
+    );
+    if (
+      resolvedWlurOverlay &&
+      this.#wlurPass &&
+      this.#passthroughCopyPass &&
+      this.#presentCopyPass
+    ) {
+      const wlurTextures = this.#getOrCreateWlurOverlayTextures(width, height);
+      const wlurCacheKey = this.#buildWlurOverlayCacheKey(width, height, resolvedWlurOverlay);
+      const wlurNeedsUpdate =
+        !resolvedWlurOverlay.cache ||
+        !this.#wlurOverlayCacheValid ||
+        this.#wlurOverlayCacheKey !== wlurCacheKey ||
+        state.dirty ||
+        hasAnimatingContent;
+
+      this.#wlurPass.updateConfig({
+        quality: resolvedWlurOverlay.quality,
+      });
+
+      if (wlurNeedsUpdate) {
+        if (this.#canvasFormat === this.#colorConfig.intermediateFormat) {
+          encoder.copyTextureToTexture(
+            { texture },
+            { texture: wlurTextures.input },
+            { width, height },
+          );
+        } else {
+          this.#passthroughCopyPass.encode(encoder, texture, wlurTextures.input);
+        }
+
+        this.#wlurPass.encode(
+          encoder,
+          wlurTextures.input,
+          wlurTextures.output,
+          width,
+          height,
+          resolvedWlurOverlay.params,
+        );
+
+        if (resolvedWlurOverlay.cache) {
+          this.#wlurOverlayCacheValid = true;
+          this.#wlurOverlayCacheKey = wlurCacheKey;
+        } else {
+          this.#invalidateWlurOverlayCache();
+        }
+      }
+
+      this.#presentCopyPass.encode(encoder, wlurTextures.output, targetView);
+    } else {
+      this.#invalidateWlurOverlayCache();
+    }
+
     // Pass 2a: Action layer blur overlay
     // Blur+dim everything, then re-render selected entities sharp on top
     const blurIntensity = actionLayerController.getBlurIntensity();
@@ -1661,6 +1811,7 @@ export class InfiniteCanvasRenderer {
    */
   setGridConfig(config: Partial<GridConfig>): void {
     this.#gridConfig = { ...this.#gridConfig, ...config };
+    this.#invalidateWlurOverlayCache();
   }
 
   setActionLayerTint(color: [number, number, number]): void {
@@ -1673,6 +1824,16 @@ export class InfiniteCanvasRenderer {
   ): void {
     this.#selectionRectConfig = selectionRect;
     this.#multiSelectBoundingBoxConfig = multiSelectBox;
+  }
+
+  setWlurOverlay(config: WlurOverlayConfig | null): void {
+    this.#wlurOverlayConfig = config;
+    if (config?.quality) {
+      this.#wlurPass?.updateConfig({ quality: config.quality });
+    } else if (!config) {
+      this.#destroyWlurOverlayTextures();
+    }
+    this.#invalidateWlurOverlayCache();
   }
 
   /**
@@ -1921,6 +2082,12 @@ export class InfiniteCanvasRenderer {
     this.#processingPipeline?.destroy();
     this.#processingPipeline = null;
     this.#passthroughCopyPass = null;
+    this.#presentCopyPass = null;
+    this.#wlurPass?.destroy();
+    this.#wlurPass = null;
+    this.#wlurOverlayConfig = null;
+    this.#destroyWlurOverlayTextures();
+    this.#invalidateWlurOverlayCache();
 
     // Destroy shader registry
     this.#shaderRegistry?.destroy();

@@ -28,6 +28,7 @@ import {
   zoomToPoint,
 } from "#lib/canvas-math.ts";
 import { undo } from "#lib/undo.ts";
+import { createDefaultWlurOverlayConfig } from "#renderer/wlur-overlay.ts";
 import { Check, Drag, Enlarge, Reduce, Square3dFromCenter } from "iconoir-react";
 import {
   lazy,
@@ -193,11 +194,19 @@ export function InfiniteCanvas() {
         darkTheme ? config.selectionRectangle.dark : config.selectionRectangle.light,
         darkTheme ? config.multiSelectBoundingBox.dark : config.multiSelectBoundingBox.light,
       );
+      renderer.setWlurOverlay(
+        createDefaultWlurOverlayConfig({
+          isMobile,
+          // bottomInsetCssPx: bottomInset,
+          tintColor: darkTheme ? [0, 0, 0] : [1, 1, 1],
+          tintAmount: 0.8,
+        }),
+      );
       registerRenderer(renderer);
       gameLoop.start();
     }
     return () => gameLoop.stop();
-  }, [renderer, isReady, registerRenderer, darkTheme]);
+  }, [renderer, isReady, registerRenderer, darkTheme, isMobile, bottomInset]);
 
   // Image input handlers (paste, drop, file upload)
   const { handleDrop } = useImageInput({ containerRef, multipleFiles: true });

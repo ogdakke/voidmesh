@@ -97,53 +97,6 @@
     z-index: 1100;
     pointer-events: none;
     padding-bottom: env(safe-area-inset-bottom, 0);
-
-    &::before {
-      content: "";
-      position: absolute;
-      bottom: 0;
-      left: 0;
-      width: 100%;
-      height: calc(20px + var(--mobile-controls-h));
-      transition: opacity 0.1s ease-out;
-
-      /* prettier-ignore */
-      background-image:
-      linear-gradient(
-        0deg, #fff 0%, #fffffffd 6.25%, #fffffff5 12.5%, #ffffffea 18.75%,
-        #ffffffda 25%, #ffffffc6 31.25%, #ffffffb0 37.5%, #ffffff98 43.75%, #ffffff80 50%,
-        #ffffff67 56.25%, #ffffff4f 62.5%, #ffffff39 68.75%, #ffffff25 75%, #ffffff15 81.25%,
-        #ffffff0a 87.5%, #ffffff02 93.75%, #fff0 100%
-      ),
-      linear-gradient(
-        0deg, #fff 0%, #fffffffd 6.25%, #fffffff5 12.5%, #ffffffea 18.75%,
-        #ffffffda 25%, #ffffffc6 31.25%, #ffffffb0 37.5%, #ffffff98 43.75%, #ffffff80 50%,
-        #ffffff67 56.25%, #ffffff4f 62.5%, #ffffff39 68.75%, #ffffff25 75%, #ffffff15 81.25%,
-        #ffffff0a 87.5%, #ffffff02 93.75%, #fff0 100%
-      );
-
-      @media (prefers-color-scheme: dark) {
-        /* prettier-ignore */
-        background-image:
-        linear-gradient(
-            0deg, #000 0%, #000000fd 6.25%, #000000f5 12.5%, #000000ea 18.75%,
-            #000000da 25%, #000000c6 31.25%, #000000b0 37.5%, #00000098 43.75%,
-            #00000080 50%, #00000067 56.25%, #0000004f 62.5%, #00000039 68.75%,
-            #00000025 75%, #00000015 81.25%, #0000000a 87.5%, #00000002 93.75%,
-            #0000 100%
-        ),
-        linear-gradient(
-            0deg, #000 0%, #000000fd 6.25%, #000000f5 12.5%, #000000ea 18.75%,
-            #000000da 25%, #000000c6 31.25%, #000000b0 37.5%, #00000098 43.75%,
-            #00000080 50%, #00000067 56.25%, #0000004f 62.5%, #00000039 68.75%,
-            #00000025 75%, #00000015 81.25%, #0000000a 87.5%, #00000002 93.75%,
-            #0000 100%
-        );
-      }
-    }
-    &[data-fullscreen]::before {
-      opacity: 0;
-    }
   }
 
   .mobile-float > * {

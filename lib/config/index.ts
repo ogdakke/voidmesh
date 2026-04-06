@@ -480,7 +480,7 @@ export const config = {
     /** Mobile layout insets (CSS pixels) */
     mobile: {
       /** Bottom inset: mobile controls (160) + bottom bar (48) + spacing (8) */
-      bottomInset: 208,
+      bottomInset: 180,
     },
     fitToViewPadding: 0.1, // 10% padding around fit-to-view bounds
     /** Viewport animation settings */

@@ -62,11 +62,13 @@ export class CopyPass {
     });
   }
 
-  /**
-   * Copy source texture (rgba16float) to destination texture (rgba8unorm).
-   * Values are clamped to [0,1] automatically by the GPU format conversion.
-   */
-  execute(source: GPUTexture, destination: GPUTexture): void {
+  encode(
+    encoder: GPUCommandEncoder,
+    source: GPUTexture,
+    destination: GPUTexture | GPUTextureView,
+  ): void {
+    const destinationView = "createView" in destination ? destination.createView() : destination;
+
     const bindGroup = this.#device.createBindGroup({
       label: "CopyPass bind group",
       layout: this.#bindGroupLayout,
@@ -76,15 +78,11 @@ export class CopyPass {
       ],
     });
 
-    const encoder = this.#device.createCommandEncoder({
-      label: "CopyPass encoder",
-    });
-
     const pass = encoder.beginRenderPass({
       label: "CopyPass render pass",
       colorAttachments: [
         {
-          view: destination.createView(),
+          view: destinationView,
           loadOp: "clear",
           storeOp: "store",
           clearValue: { r: 0, g: 0, b: 0, a: 0 },
@@ -96,6 +94,18 @@ export class CopyPass {
     pass.setBindGroup(0, bindGroup);
     pass.draw(3);
     pass.end();
+  }
+
+  /**
+   * Copy source texture (rgba16float) to destination texture (rgba8unorm).
+   * Values are clamped to [0,1] automatically by the GPU format conversion.
+   */
+  execute(source: GPUTexture, destination: GPUTexture): void {
+    const encoder = this.#device.createCommandEncoder({
+      label: "CopyPass encoder",
+    });
+
+    this.encode(encoder, source, destination);
 
     this.#device.queue.submit([encoder.finish()]);
   }
