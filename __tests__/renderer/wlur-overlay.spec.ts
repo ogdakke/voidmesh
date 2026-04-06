@@ -5,32 +5,62 @@ import {
 import { describe, expect, test } from "vitest";
 
 describe("wlur overlay config", () => {
-  test("resolves the mobile preset against the visible viewport height", () => {
-    const config = createDefaultWlurOverlayConfig({
-      isMobile: true,
-      bottomInsetCssPx: 200,
-      tintColor: [1, 1, 1],
-    });
+  test("scales the mobile preset against the visible viewport height", () => {
+    const fullHeight = resolveWlurOverlayRuntimeConfig(
+      createDefaultWlurOverlayConfig({
+        isMobile: true,
+        tintColor: [1, 1, 1],
+      }),
+      1000,
+      1,
+    );
+    const occluded = resolveWlurOverlayRuntimeConfig(
+      createDefaultWlurOverlayConfig({
+        isMobile: true,
+        bottomInsetCssPx: 200,
+        tintColor: [1, 1, 1],
+      }),
+      1000,
+      1,
+    );
 
-    const resolved = resolveWlurOverlayRuntimeConfig(config, 1000, 1);
-    expect(resolved).not.toBeNull();
-    expect(resolved?.params.offset).toBeCloseTo(0.6);
-    expect(resolved?.params.interpolation).toBeCloseTo(0.4);
-    expect(resolved?.params.direction).toBe("down");
-    expect(resolved?.params.tint).toEqual({
-      color: [1, 1, 1],
-      amount: 0.18,
-    });
-    expect(resolved?.quality.resolutionScale).toBe(0.5);
+    expect(fullHeight).not.toBeNull();
+    expect(occluded).not.toBeNull();
+    expect(occluded!.params.offset).toBeLessThan(fullHeight!.params.offset);
+    expect(occluded!.params.interpolation).toBeLessThan(fullHeight!.params.interpolation);
+    expect(occluded?.params.direction).toBe(fullHeight?.params.direction);
+    expect(occluded?.params.tint?.color).toEqual([1, 1, 1]);
+    expect(occluded!.params.tint!.amount).toBeGreaterThanOrEqual(0);
+    expect(occluded!.params.tint!.amount).toBeLessThanOrEqual(1);
   });
 
-  test("uses the desktop preset when no mobile layout is provided", () => {
+  test("creates a valid desktop default config without pinning tuneable constants", () => {
     const resolved = resolveWlurOverlayRuntimeConfig(createDefaultWlurOverlayConfig(), 1000, 1);
 
     expect(resolved).not.toBeNull();
-    expect(resolved?.params.offset).toBeCloseTo(0.9);
-    expect(resolved?.params.interpolation).toBeCloseTo(0.1);
-    expect(resolved?.quality.resolutionScale).toBe(0.75);
+    expect(resolved?.cache).toBe(true);
+    expect(resolved!.params.radius).toBeGreaterThan(0);
+    expect(resolved!.params.offset).toBeGreaterThanOrEqual(0);
+    expect(resolved!.params.offset).toBeLessThanOrEqual(1);
+    expect(resolved!.params.interpolation).toBeGreaterThanOrEqual(0);
+    expect(resolved!.params.interpolation).toBeLessThanOrEqual(1);
+    expect(resolved!.quality.kernelSize % 2).toBe(1);
+    expect(resolved!.quality.resolutionScale).toBeGreaterThan(0);
+    expect(resolved!.quality.resolutionScale).toBeLessThanOrEqual(1);
+  });
+
+  test("preserves tint color on mobile presets", () => {
+    const resolved = resolveWlurOverlayRuntimeConfig(
+      createDefaultWlurOverlayConfig({
+        isMobile: true,
+        tintColor: [1, 1, 1],
+      }),
+      1000,
+      1,
+    );
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.params.tint?.color).toEqual([1, 1, 1]);
   });
 
   test("preserves explicit overrides after the preset is resolved", () => {

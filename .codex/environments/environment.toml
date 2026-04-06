@@ -12,3 +12,8 @@ command = '''
 bun i
 bun dev
 '''
+
+[[actions]]
+name = "test"
+icon = "tool"
+command = "bun run test"
