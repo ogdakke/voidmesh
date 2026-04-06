@@ -198,6 +198,7 @@ export class InfiniteCanvasRenderer {
   } | null = null;
   #wlurOverlayCacheValid = false;
   #wlurOverlayCacheKey = "";
+  #wlurLastQualityKey = "";
 
   // Shader registry and context for delegated shader passes
   #shaderRegistry: ShaderRegistry | null = null;
@@ -288,6 +289,7 @@ export class InfiniteCanvasRenderer {
       usage:
         GPUTextureUsage.RENDER_ATTACHMENT |
         GPUTextureUsage.COPY_SRC |
+        GPUTextureUsage.COPY_DST |
         GPUTextureUsage.TEXTURE_BINDING,
     });
 
@@ -757,6 +759,10 @@ export class InfiniteCanvasRenderer {
       params.interpolation,
       params.direction,
       params.noise,
+      params.curve?.join(",") ?? "",
+      params.tint?.color.join(",") ?? "",
+      params.tint?.amount ?? "",
+      params.tint?.curve?.join(",") ?? "",
     ].join("|");
   }
 
@@ -1600,9 +1606,11 @@ export class InfiniteCanvasRenderer {
         state.dirty ||
         hasAnimatingContent;
 
-      this.#wlurPass.updateConfig({
-        quality: resolvedWlurOverlay.quality,
-      });
+      const qualityKey = `${resolvedWlurOverlay.quality.kernelSize}|${resolvedWlurOverlay.quality.resolutionScale}`;
+      if (qualityKey !== this.#wlurLastQualityKey) {
+        this.#wlurPass.updateConfig({ quality: resolvedWlurOverlay.quality });
+        this.#wlurLastQualityKey = qualityKey;
+      }
 
       if (wlurNeedsUpdate) {
         if (this.#canvasFormat === this.#colorConfig.intermediateFormat) {
@@ -1632,7 +1640,15 @@ export class InfiniteCanvasRenderer {
         }
       }
 
-      this.#presentCopyPass.encode(encoder, wlurTextures.output, targetView);
+      if (this.#canvasFormat === this.#colorConfig.intermediateFormat) {
+        encoder.copyTextureToTexture(
+          { texture: wlurTextures.output },
+          { texture },
+          { width, height },
+        );
+      } else {
+        this.#presentCopyPass!.encode(encoder, wlurTextures.output, targetView);
+      }
     } else {
       this.#invalidateWlurOverlayCache();
     }
@@ -1828,6 +1844,7 @@ export class InfiniteCanvasRenderer {
 
   setWlurOverlay(config: WlurOverlayConfig | null): void {
     this.#wlurOverlayConfig = config;
+    this.#wlurLastQualityKey = "";
     if (config?.quality) {
       this.#wlurPass?.updateConfig({ quality: config.quality });
     } else if (!config) {
@@ -2086,6 +2103,7 @@ export class InfiniteCanvasRenderer {
     this.#wlurPass?.destroy();
     this.#wlurPass = null;
     this.#wlurOverlayConfig = null;
+    this.#wlurLastQualityKey = "";
     this.#destroyWlurOverlayTextures();
     this.#invalidateWlurOverlayCache();
 

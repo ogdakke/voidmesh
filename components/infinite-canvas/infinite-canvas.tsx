@@ -197,15 +197,15 @@ export function InfiniteCanvas() {
       renderer.setWlurOverlay(
         createDefaultWlurOverlayConfig({
           isMobile,
-          tintColor: darkTheme ? [0, 0, 0] : [1, 1, 1],
-          tintAmount: 1,
+          // tintColor: darkTheme ? [0, 0, 0] : [1, 1, 1],
+          // tintAmount: 1,
         }),
       );
       registerRenderer(renderer);
       gameLoop.start();
     }
     return () => gameLoop.stop();
-  }, [renderer, isReady, registerRenderer, darkTheme, isMobile, bottomInset]);
+  }, [renderer, isReady, registerRenderer, darkTheme, isMobile]);
 
   // Image input handlers (paste, drop, file upload)
   const { handleDrop } = useImageInput({ containerRef, multipleFiles: true });
