@@ -1,6 +1,21 @@
 export type WlurDirection = "down" | "up" | "right" | "left";
 
 /**
+ * CSS-compatible cubic-bezier control points.
+ *
+ * This matches the common `cubic-bezier(x1, y1, x2, y2)` shape used by CSS easing tools.
+ * `x1` and `x2` are normalized to `[0, 1]` during resolution.
+ */
+export type WlurCurve = readonly [number, number, number, number];
+
+/**
+ * Curve input accepted by wlur config.
+ *
+ * Use raw CSS-compatible control points like `[0.55, 0, 1, 0.45]`.
+ */
+export type WlurCurveInput = WlurCurve;
+
+/**
  * RGB tint color in normalized linear-ish float space.
  *
  * Each channel is expected in the range `[0, 1]`.
@@ -22,6 +37,13 @@ export interface WlurTint {
    * Values below `0` are clamped to `0`.
    */
   amount: number;
+  /**
+   * Optional curve override for tint intensity.
+   *
+   * Uses the same CSS-compatible cubic-bezier format as `WlurParams.curve`.
+   * When omitted, tint follows the main wlur curve.
+   */
+  curve?: WlurCurveInput;
 }
 
 export interface WlurParams {
@@ -32,6 +54,13 @@ export interface WlurParams {
    * Values below `0` are clamped to `0`.
    */
   radius: number;
+  /**
+   * CSS-compatible cubic-bezier curve applied to the base wlur falloff.
+   *
+   * Accepts `[x1, y1, x2, y2]`.
+   * Defaults to linear when omitted.
+   */
+  curve?: WlurCurveInput;
   /**
    * Normalized point where the directional blur starts.
    *
@@ -100,6 +129,28 @@ export interface WlurWorkingDimensions {
 export const MIN_WLUR_KERNEL_SIZE = 3;
 /** Maximum allowed odd kernel size. */
 export const MAX_WLUR_KERNEL_SIZE = 127;
+/** Number of pre-sampled curve points uploaded to the GPU. */
+export const WLUR_CURVE_LUT_SIZE = 64;
+
+export const DEFAULT_WLUR_CURVE = Object.freeze([0, 0, 1, 1] as const) satisfies WlurCurve;
+
+/**
+ * Common CSS-compatible curve presets for wlur ramps.
+ *
+ * The first five mirror the familiar CSS timing functions.
+ * The overlay presets are tuned for bottom-edge blur/tint overlays:
+ * `overlayQuickFade` concentrates strength nearer the edge,
+ * while `overlayEdgeHold` lets the strong region linger longer before fading.
+ */
+export const WLUR_CURVES = Object.freeze({
+  linear: DEFAULT_WLUR_CURVE,
+  ease: [0.25, 0.1, 0.25, 1] as const,
+  easeIn: [0.42, 0, 1, 1] as const,
+  easeOut: [0, 0, 0.58, 1] as const,
+  easeInOut: [0.42, 0, 0.58, 1] as const,
+  overlayQuickFade: [0.55, 0, 1, 0.45] as const,
+  overlayEdgeHold: [0.28, 0.78, 0.5, 1] as const,
+}) satisfies Record<string, WlurCurve>;
 
 export const DEFAULT_WLUR_PARAMS = Object.freeze({
   radius: 8,
@@ -107,6 +158,7 @@ export const DEFAULT_WLUR_PARAMS = Object.freeze({
   interpolation: 0.4,
   direction: "down",
   noise: 0.1,
+  curve: DEFAULT_WLUR_CURVE,
 } satisfies WlurParams);
 
 export const DEFAULT_WLUR_QUALITY = Object.freeze({

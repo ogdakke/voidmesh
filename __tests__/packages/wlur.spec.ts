@@ -1,9 +1,12 @@
 import {
+  WLUR_CURVES,
   clampWlurParams,
   clampWlurQuality,
   getWlurScratchKey,
   getWlurWorkingDimensions,
   mapWlurFactorAtPoint,
+  resolveWlurCurve,
+  sampleWlurCurve,
 } from "#wlur";
 import { describe, expect, test } from "vitest";
 
@@ -70,6 +73,34 @@ describe("wlur helpers", () => {
         amount: 0,
       },
     });
+  });
+
+  test("accepts numeric bezier tuples for base and tint curves", () => {
+    expect(
+      clampWlurParams({
+        curve: [0.55, 0, 1, 0.45],
+        tint: {
+          color: [1, 1, 1],
+          amount: 1,
+          curve: [0.28, 0.78, 0.5, 1],
+        },
+      }),
+    ).toMatchObject({
+      curve: [0.55, 0, 1, 0.45],
+      tint: {
+        curve: [0.28, 0.78, 0.5, 1],
+      },
+    });
+  });
+
+  test("normalizes invalid curve tuples back to the default linear curve", () => {
+    expect(resolveWlurCurve([NaN, 0, 1, 1])).toEqual(WLUR_CURVES.linear);
+  });
+
+  test("samples CSS-compatible curve presets with different falloff shapes", () => {
+    expect(sampleWlurCurve(WLUR_CURVES.linear, 0.5)).toBeCloseTo(0.5, 2);
+    expect(sampleWlurCurve(WLUR_CURVES.overlayQuickFade, 0.5)).toBeLessThan(0.5);
+    expect(sampleWlurCurve(WLUR_CURVES.overlayEdgeHold, 0.5)).toBeGreaterThan(0.5);
   });
 
   test("normalizes quality", () => {

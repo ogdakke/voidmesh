@@ -1,5 +1,6 @@
 import {
   DEFAULT_WLUR_PARAMS,
+  WLUR_CURVES,
   clampWlurParams,
   clampWlurQuality,
   type WlurParams,
@@ -53,17 +54,17 @@ export interface ResolvedWlurOverlayConfig {
 const MOBILE_OVERLAY_PARAMS = Object.freeze({
   ...DEFAULT_WLUR_PARAMS,
   offset: 0.7,
-  interpolation: 0.5,
+  interpolation: 0.4,
   direction: "down",
-  radius: 64,
+  radius: 80,
 } satisfies WlurParams);
 
 const DESKTOP_OVERLAY_PARAMS = Object.freeze({
   ...DEFAULT_WLUR_PARAMS,
-  offset: 0.9,
-  interpolation: 0.5,
+  offset: 0.95,
+  interpolation: 0.4,
   direction: "down",
-  radius: 40,
+  radius: 30,
 } satisfies WlurParams);
 
 export function createDefaultWlurOverlayConfig(layout: WlurOverlayLayout = {}): WlurOverlayConfig {
@@ -72,7 +73,8 @@ export function createDefaultWlurOverlayConfig(layout: WlurOverlayLayout = {}): 
     layout.tintColor != null
       ? {
           color: layout.tintColor,
-          amount: layout.tintAmount ?? 0.18,
+          amount: layout.tintAmount ?? 1,
+          curve: WLUR_CURVES.ease,
         }
       : undefined;
 
@@ -80,11 +82,7 @@ export function createDefaultWlurOverlayConfig(layout: WlurOverlayLayout = {}): 
     enabled: true,
     cache: true,
     layout,
-    params: {
-      // Voidmesh-specific default: stronger fullscreen overlay than the package baseline.
-      // radius: 40,
-      tint,
-    },
+    params: { tint, curve: WLUR_CURVES.linear },
     quality: {
       kernelSize: 63,
       resolutionScale: isMobile ? 0.5 : 0.75,

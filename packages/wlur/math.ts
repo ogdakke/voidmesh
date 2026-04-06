@@ -9,6 +9,7 @@ import {
   type WlurTintColor,
   type WlurWorkingDimensions,
 } from "./types.ts";
+import { resolveWlurCurve } from "./curve.ts";
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
@@ -50,11 +51,13 @@ export function clampWlurParams(params?: Partial<WlurParams>): WlurParams {
       ? {
           color: clampWlurTintColor(rawTint.color),
           amount: Math.max(0, rawTint.amount),
+          ...(rawTint.curve !== undefined ? { curve: resolveWlurCurve(rawTint.curve) } : {}),
         }
       : undefined;
 
   return {
     radius: Math.max(0, params?.radius ?? DEFAULT_WLUR_PARAMS.radius),
+    ...(params?.curve !== undefined ? { curve: resolveWlurCurve(params.curve) } : {}),
     offset: clamp(params?.offset ?? DEFAULT_WLUR_PARAMS.offset, 0, 1),
     interpolation: clamp(params?.interpolation ?? DEFAULT_WLUR_PARAMS.interpolation, 0, 1),
     direction: resolvedDirection,

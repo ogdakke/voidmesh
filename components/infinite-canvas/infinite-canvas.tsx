@@ -197,9 +197,8 @@ export function InfiniteCanvas() {
       renderer.setWlurOverlay(
         createDefaultWlurOverlayConfig({
           isMobile,
-          // bottomInsetCssPx: bottomInset,
           tintColor: darkTheme ? [0, 0, 0] : [1, 1, 1],
-          tintAmount: 0.8,
+          tintAmount: 1,
         }),
       );
       registerRenderer(renderer);

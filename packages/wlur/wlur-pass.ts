@@ -5,13 +5,21 @@ import {
   getWlurWorkingDimensions,
   wlurDirectionToIndex,
 } from "./math.ts";
+import { createPackedWlurCurveRows, getWlurCurveKey, resolveWlurCurve } from "./curve.ts";
 import {
   createWlurBlurShaderSource,
   createWlurCompositeShaderSource,
   createWlurCopyShaderSource,
   createWlurNoiseShaderSource,
 } from "./shaders.ts";
-import type { WlurParams, WlurPassConfig, WlurQuality, WlurTintColor } from "./types.ts";
+import {
+  WLUR_CURVE_LUT_SIZE,
+  type WlurCurveInput,
+  type WlurParams,
+  type WlurPassConfig,
+  type WlurQuality,
+  type WlurTintColor,
+} from "./types.ts";
 
 interface WlurPassOptions {
   device: GPUDevice;
@@ -34,6 +42,9 @@ export class WlurPass {
   #quality: WlurQuality;
 
   #sampler: GPUSampler | null = null;
+  #curveTexture: GPUTexture | null = null;
+  #curveTextureView: GPUTextureView | null = null;
+  #curveTextureKey = "";
 
   #copyBindGroupLayout: GPUBindGroupLayout | null = null;
   #copyPipeline: GPURenderPipeline | null = null;
@@ -71,6 +82,14 @@ export class WlurPass {
       addressModeU: "clamp-to-edge",
       addressModeV: "clamp-to-edge",
     });
+    this.#curveTexture = this.#device.createTexture({
+      label: `${this.#label} curve LUT`,
+      size: [WLUR_CURVE_LUT_SIZE, 2],
+      format: "rgba8unorm",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    this.#curveTextureView = this.#curveTexture.createView();
+    this.#curveTextureKey = "";
 
     this.#createCopyPipeline();
     this.#createBlurPipelines();
@@ -109,6 +128,7 @@ export class WlurPass {
 
     if (
       !this.#sampler ||
+      !this.#curveTextureView ||
       !this.#copyPipeline ||
       !this.#copyBindGroupLayout ||
       !this.#blurBindGroupLayout ||
@@ -127,6 +147,10 @@ export class WlurPass {
     }
 
     const resolvedParams = clampWlurParams(params);
+    const baseCurve = resolveWlurCurve(resolvedParams.curve);
+    const tintCurve = resolveWlurCurve(resolvedParams.tint?.curve ?? resolvedParams.curve);
+    this.#updateCurveTexture(baseCurve, tintCurve);
+
     if (resolvedParams.radius <= 0.001 && resolvedParams.noise <= 0.001) {
       this.#encodeCopyPass(encoder, inputTexture, outputTexture);
       return;
@@ -230,7 +254,11 @@ export class WlurPass {
     this.#blurYUniformBuffer?.destroy();
     this.#compositeUniformBuffer?.destroy();
     this.#noiseUniformBuffer?.destroy();
+    this.#curveTexture?.destroy();
     this.#sampler = null;
+    this.#curveTexture = null;
+    this.#curveTextureView = null;
+    this.#curveTextureKey = "";
     this.#copyBindGroupLayout = null;
     this.#copyPipeline = null;
     this.#blurBindGroupLayout = null;
@@ -302,6 +330,11 @@ export class WlurPass {
           binding: 2,
           visibility: GPUShaderStage.FRAGMENT,
           sampler: { type: "filtering" },
+        },
+        {
+          binding: 3,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: "float" },
         },
       ],
     });
@@ -387,6 +420,11 @@ export class WlurPass {
           visibility: GPUShaderStage.FRAGMENT,
           sampler: { type: "filtering" },
         },
+        {
+          binding: 4,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: "float" },
+        },
       ],
     });
 
@@ -436,6 +474,11 @@ export class WlurPass {
           visibility: GPUShaderStage.FRAGMENT,
           sampler: { type: "filtering" },
         },
+        {
+          binding: 3,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: "float" },
+        },
       ],
     });
 
@@ -470,7 +513,7 @@ export class WlurPass {
     const workingUsage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT;
     const compositeUsage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT;
 
-    const entry = {
+    const entry: ScratchTextures = {
       scaledInput: this.#device.createTexture({
         label: `${this.#label} scaled input ${working.width}x${working.height}`,
         size: [working.width, working.height],
@@ -509,6 +552,34 @@ export class WlurPass {
       entry.composite.destroy();
     }
     this.#scratchTextures.clear();
+  }
+
+  #updateCurveTexture(
+    baseCurve: WlurCurveInput | undefined,
+    tintCurve: WlurCurveInput | undefined,
+  ): void {
+    if (!this.#curveTexture) return;
+
+    const key = `${getWlurCurveKey(baseCurve)}|${getWlurCurveKey(tintCurve)}`;
+    if (key === this.#curveTextureKey) {
+      return;
+    }
+
+    const data = createPackedWlurCurveRows([baseCurve, tintCurve] as const);
+    this.#device.queue.writeTexture(
+      { texture: this.#curveTexture },
+      data,
+      {
+        bytesPerRow: WLUR_CURVE_LUT_SIZE * 4,
+        rowsPerImage: 2,
+      },
+      {
+        width: WLUR_CURVE_LUT_SIZE,
+        height: 2,
+        depthOrArrayLayers: 1,
+      },
+    );
+    this.#curveTextureKey = key;
   }
 
   #writeBlurUniforms(
@@ -636,6 +707,7 @@ export class WlurPass {
         { binding: 0, resource: { buffer: uniformBuffer } },
         { binding: 1, resource: sourceTexture.createView() },
         { binding: 2, resource: this.#sampler! },
+        { binding: 3, resource: this.#curveTextureView! },
       ],
     });
 
@@ -671,6 +743,7 @@ export class WlurPass {
         { binding: 1, resource: originalTexture.createView() },
         { binding: 2, resource: blurredTexture.createView() },
         { binding: 3, resource: this.#sampler! },
+        { binding: 4, resource: this.#curveTextureView! },
       ],
     });
 
@@ -704,6 +777,7 @@ export class WlurPass {
         { binding: 0, resource: { buffer: this.#noiseUniformBuffer! } },
         { binding: 1, resource: sourceTexture.createView() },
         { binding: 2, resource: this.#sampler! },
+        { binding: 3, resource: this.#curveTextureView! },
       ],
     });
 

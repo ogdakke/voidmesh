@@ -1,3 +1,5 @@
+import { WLUR_CURVE_LUT_SIZE } from "./types.ts";
+
 const fullscreenVertex = `
 struct VertexOutput {
   @builtin(position) position: vec4f,
@@ -11,6 +13,18 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
   out.position = vec4f(uv * 2.0 - 1.0, 0.0, 1.0);
   out.uv = vec2f(uv.x, 1.0 - uv.y);
   return out;
+}
+`;
+
+const curveSampling = (samplerName: string) => `
+const CURVE_LUT_SIZE: f32 = ${WLUR_CURVE_LUT_SIZE}.0;
+const CURVE_TEXTURE_ROWS: f32 = 2.0;
+
+fn sample_curve(curve_texture: texture_2d<f32>, factor: f32, row: f32) -> f32 {
+  let clamped_factor = clamp(factor, 0.0, 1.0);
+  let u = ((clamped_factor * (CURVE_LUT_SIZE - 1.0)) + 0.5) / CURVE_LUT_SIZE;
+  let v = (row + 0.5) / CURVE_TEXTURE_ROWS;
+  return textureSample(curve_texture, ${samplerName}, vec2f(u, v)).r;
 }
 `;
 
@@ -76,16 +90,19 @@ struct BlurParams {
 @group(0) @binding(0) var<uniform> params: BlurParams;
 @group(0) @binding(1) var input_texture: texture_2d<f32>;
 @group(0) @binding(2) var input_sampler: sampler;
+@group(0) @binding(3) var curve_texture: texture_2d<f32>;
 
 ${fullscreenVertex}
 ${mapFactor}
+${curveSampling("input_sampler")}
 
 const KERNEL_SIZE: u32 = ${kernelSize}u;
 const HALF_KERNEL: f32 = ${halfKernel}.0;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-  let factor = map_factor(in.uv, params.effect.y, params.effect.z, params.effect.w);
+  let raw_factor = map_factor(in.uv, params.effect.y, params.effect.z, params.effect.w);
+  let factor = sample_curve(curve_texture, raw_factor, 0.0);
   let radius = factor * params.effect.x * params.config.x;
   let original = textureSample(input_texture, input_sampler, in.uv);
   let sigma = max(radius, 0.001);
@@ -119,16 +136,20 @@ struct CompositeParams {
 @group(0) @binding(1) var original_texture: texture_2d<f32>;
 @group(0) @binding(2) var blurred_texture: texture_2d<f32>;
 @group(0) @binding(3) var tex_sampler: sampler;
+@group(0) @binding(4) var curve_texture: texture_2d<f32>;
 
 ${fullscreenVertex}
 ${mapFactor}
+${curveSampling("tex_sampler")}
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   let original = textureSample(original_texture, tex_sampler, in.uv);
-  let factor = map_factor(in.uv, params.effect.x, params.effect.y, params.effect.z);
+  let raw_factor = map_factor(in.uv, params.effect.x, params.effect.y, params.effect.z);
+  let factor = sample_curve(curve_texture, raw_factor, 0.0);
   let blurred = textureSample(blurred_texture, tex_sampler, in.uv);
-  let tint_strength = factor * params.tint.a;
+  let tint_factor = sample_curve(curve_texture, raw_factor, 1.0);
+  let tint_strength = clamp(tint_factor * params.tint.a, 0.0, 1.0);
   let tinted_blur = vec4f(
     mix(blurred.rgb, params.tint.rgb, tint_strength),
     blurred.a,
@@ -154,9 +175,11 @@ struct NoiseParams {
 @group(0) @binding(0) var<uniform> params: NoiseParams;
 @group(0) @binding(1) var input_texture: texture_2d<f32>;
 @group(0) @binding(2) var input_sampler: sampler;
+@group(0) @binding(3) var curve_texture: texture_2d<f32>;
 
 ${fullscreenVertex}
 ${mapFactor}
+${curveSampling("input_sampler")}
 
 fn overlay(base: f32, blend: f32) -> f32 {
   return select(2.0 * base * blend, 1.0 - 2.0 * (1.0 - base) * (1.0 - blend), base > 0.5);
@@ -169,7 +192,8 @@ fn rand(st: vec2f) -> f32 {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   let color = textureSample(input_texture, input_sampler, in.uv);
-  let factor = map_factor(in.uv, params.effect.x, params.effect.y, params.effect.z);
+  let raw_factor = map_factor(in.uv, params.effect.x, params.effect.y, params.effect.z);
+  let factor = sample_curve(curve_texture, raw_factor, 0.0);
   let strength = min(factor * params.resolution.z, params.resolution.z);
 
   if (strength <= 0.0) {
