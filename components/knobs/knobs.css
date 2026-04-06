@@ -20,9 +20,17 @@
   gap: var(--gap);
   height: 100%;
 
-  /* Padding to center first/last items in the window */
-  padding-inline: calc((100% - var(--item-w)) / 2);
   scroll-padding-inline: calc((100% - var(--item-w)) / 2);
+}
+
+/* Spacer elements to center first/last items in the scroll container.
+   Replaces padding-inline which Safari excludes from scrollable overflow,
+   making pickers with few items (e.g. 3) unable to scroll. */
+.mobile-style-knobs__options::before,
+.mobile-style-knobs__options::after {
+  content: "";
+  flex-shrink: 0;
+  width: calc((100% - var(--item-w)) / 2 - var(--gap));
 }
 
 .mobile-style-knobs__item {
