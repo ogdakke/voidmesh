@@ -28,7 +28,6 @@ import { PaletteUpload } from "../palette-upload/index.ts";
 import { ColorPaletteThumbnail } from "../color-palette-thumbnail/index.ts";
 import "./knobs.css";
 import "./mobile-color-knobs.css";
-import clsx from "clsx";
 
 // Special IDs for non-palette items
 const PRESERVE_COLORS_ID = "__preserve_colors__";
@@ -180,6 +179,8 @@ export function MobileColorKnobs() {
       showFloatingLabel("Preserve Colors");
     } else if (id === REVERSE_PALETTE_ID) {
       showFloatingLabel("Reverse Palette");
+    } else if (id === "") {
+      showFloatingLabel("Mixed Palettes");
     }
   };
 
@@ -225,7 +226,7 @@ export function MobileColorKnobs() {
             aria-label="Color palette selection"
           >
             {paletteParam.isMixed && (
-              <SliderPickerMixedItem className="mobile-style-knobs__item mobile-color-knobs__item">
+              <SliderPickerMixedItem className="mobile-style-knobs__item">
                 <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
                   <QuestionMark />
                 </button>
@@ -276,13 +277,23 @@ export function MobileColorKnobs() {
         </SliderPickerWindow>
       </SliderPicker>
 
-      {/* Conditional content: Upload or ColorPalette editor or preserve colors note */}
+      {/* Conditional content: Upload, toggle picker, or ColorPalette editor */}
       {isUploadMode ? (
         <PaletteUpload onUpload={uploadPalette} variant="mobile" />
       ) : isPreserveColorsSelected ? (
-        <PreserveColors on={preserveColors.value} isMixed={preserveColors.isMixed} />
+        <BooleanSliderPicker
+          value={!!preserveColors.value}
+          isMixed={preserveColors.isMixed}
+          onValueChange={(v) => updateSelectedEntityParams({ preserveColors: v })}
+          ariaLabel="Preserve colors"
+        />
       ) : isReversePaletteSelected ? (
-        <ReversePaletteInfo on={reversePalette.value} isMixed={reversePalette.isMixed} />
+        <BooleanSliderPicker
+          value={!!reversePalette.value}
+          isMixed={reversePalette.isMixed}
+          onValueChange={(v) => updateSelectedEntityParams({ reversePalette: v })}
+          ariaLabel="Reverse palette"
+        />
       ) : // show nothing if mixed
       paletteParam.isMixed ? null : (
         <ColorPalette
@@ -303,40 +314,53 @@ export function MobileColorKnobs() {
   );
 }
 
-function PreserveColors({ on, isMixed }: { on: boolean; isMixed: boolean }) {
+function BooleanSliderPicker({
+  value,
+  isMixed,
+  onValueChange,
+  ariaLabel,
+}: {
+  value: boolean;
+  isMixed: boolean;
+  onValueChange: (value: boolean) => void;
+  ariaLabel: string;
+}) {
   return (
-    <div className="mobile-color__preserve-colors">
-      <p className="preserve-colors-label">
-        <span
-          key={`${on}${isMixed}`}
-          className={clsx("preserve-colors-status", {
-            "preserve-colors-status--on": on,
-            "preserve-colors-status--off": !on,
-            "preserve-colors-status--mixed": isMixed,
-          })}
-        />
-        <span>Preserve Colors Mode</span>
-      </p>
-      <p className="preserve-colors-hint">Original colors with the palette’s background</p>
-    </div>
-  );
-}
-
-function ReversePaletteInfo({ on, isMixed }: { on: boolean; isMixed: boolean }) {
-  return (
-    <div className="mobile-color__preserve-colors">
-      <p className="preserve-colors-label">
-        <span
-          key={`${on}${isMixed}`}
-          className={clsx("preserve-colors-status", {
-            "preserve-colors-status--on": on,
-            "preserve-colors-status--off": !on,
-            "preserve-colors-status--mixed": isMixed,
-          })}
-        />
-        <span>Reverse Palette</span>
-      </p>
-      <p className="preserve-colors-hint">Lightest color becomes the background</p>
-    </div>
+    <SliderPicker
+      value={isMixed ? "" : value ? "on" : "off"}
+      onValueChange={(v) => {
+        if (v === "on") onValueChange(true);
+        else if (v === "off") onValueChange(false);
+      }}
+      onInteractionStart={() => undo.beginTransaction()}
+      onValueCommit={() => undo.commitTransaction()}
+      className="mobile-style-knobs mobile-color-knobs__toggle-picker"
+    >
+      <SliderPickerWindow className="mobile-style-knobs__window">
+        <SliderPickerOptions className="mobile-style-knobs__options" aria-label={ariaLabel}>
+          {isMixed && (
+            <SliderPickerMixedItem className="mobile-style-knobs__item">
+              <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <QuestionMark />
+              </button>
+              <span className="mobile-style-knobs__label">Mixed</span>
+            </SliderPickerMixedItem>
+          )}
+          <SliderPickerItem value="on" className="mobile-style-knobs__item">
+            <button type="button" tabIndex={-1} className="ui-button" data-variant="primary">
+              On
+            </button>
+            <span className="mobile-style-knobs__label">On</span>
+          </SliderPickerItem>
+          <SliderPickerItem value="off" className="mobile-style-knobs__item">
+            <button type="button" tabIndex={-1} className="ui-button" data-variant="primary">
+              Off
+            </button>
+            <span className="mobile-style-knobs__label">Off</span>
+          </SliderPickerItem>
+        </SliderPickerOptions>
+        <div className="mobile-style-knobs__highlight" aria-hidden="true" />
+      </SliderPickerWindow>
+    </SliderPicker>
   );
 }
