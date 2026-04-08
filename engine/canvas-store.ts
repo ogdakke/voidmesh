@@ -361,6 +361,9 @@ export class CanvasStore extends Store<CanvasState> {
     if (entity) {
       entity.position.x += delta.x;
       entity.position.y += delta.y;
+      // Position-only updates still change the composed scene and must invalidate
+      // renderer caches such as the fullscreen wlur overlay during drag.
+      this.state.entitiesDirty.add(id);
     }
   }
 

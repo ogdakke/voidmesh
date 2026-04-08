@@ -1,5 +1,6 @@
 import { config, type GridConfig } from "#config";
 import { logger } from "#lib/client.logger.ts";
+import { WlurPass } from "#wlur";
 import { setGpuContext } from "./gpu-color-space.ts";
 import type { RenderState } from "../engine/canvas-store.ts";
 import { actionLayerController } from "../engine/action-layer-controller.ts";
@@ -38,7 +39,40 @@ import { MeltShader } from "./shaders/melt-shader.ts";
 import type { ShaderContext } from "./shaders/shader-pass.ts";
 import { ShaderRegistry } from "./shaders/shader-registry.ts";
 import { TexturePool } from "./texture-pool.ts";
+import { resolveWlurOverlayRuntimeConfig, type WlurOverlayConfig } from "./wlur-overlay.ts";
 import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
+
+type GpuTimingPhase =
+  | "frame"
+  | "grid-pass"
+  | "entity-pass"
+  | "action-layer-blur"
+  | "action-layer-sharp"
+  | "selection-rects"
+  | "wlur-overlay";
+
+interface GpuTimestampFrameCapture {
+  slotIndex: number;
+}
+
+interface GpuTimestampSlot {
+  querySet: GPUQuerySet;
+  resolveBuffer: GPUBuffer;
+  readBuffer: GPUBuffer;
+  pending: boolean;
+}
+
+const GPU_TIMESTAMP_QUERY_CAPACITY = 14;
+const GPU_TIMESTAMP_SLOT_COUNT = 3;
+const GPU_TIMESTAMP_PHASE_RANGES: Record<GpuTimingPhase, [number, number]> = {
+  frame: [0, 1],
+  "grid-pass": [2, 3],
+  "entity-pass": [4, 5],
+  "wlur-overlay": [6, 7],
+  "action-layer-blur": [8, 9],
+  "action-layer-sharp": [10, 11],
+  "selection-rects": [12, 13],
+};
 
 export class InfiniteCanvasRenderer {
   readonly canvas: HTMLCanvasElement;
@@ -183,6 +217,20 @@ export class InfiniteCanvasRenderer {
 
   // Copy pass for showOriginal (rgba8unorm source → rgba16float output)
   #passthroughCopyPass: CopyPass | null = null;
+  #presentCopyPass: CopyPass | null = null;
+
+  // Wlur progressive full-canvas overlay
+  #wlurPass: WlurPass | null = null;
+  #wlurOverlayConfig: WlurOverlayConfig | null = null;
+  #wlurOverlayTextures: {
+    width: number;
+    height: number;
+    input: GPUTexture;
+    output: GPUTexture;
+  } | null = null;
+  #wlurOverlayCacheValid = false;
+  #wlurOverlayCacheKey = "";
+  #wlurLastQualityKey = "";
 
   // Shader registry and context for delegated shader passes
   #shaderRegistry: ShaderRegistry | null = null;
@@ -195,6 +243,16 @@ export class InfiniteCanvasRenderer {
   #lastRenderTime = 0;
   #lastEntityCount = 0;
   #lastRenderedCount = 0;
+  #gpuTimingSupported = false;
+  #gpuTimestampSlots: GpuTimestampSlot[] = [];
+  #gpuTimestampSlotCursor = 0;
+  #lastGpuFrameTime = 0;
+  #lastGpuGridTime = 0;
+  #lastGpuEntityTime = 0;
+  #lastGpuWlurTime = 0;
+  #lastGpuActionLayerBlurTime = 0;
+  #lastGpuActionLayerSharpTime = 0;
+  #lastGpuSelectionTime = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -217,6 +275,14 @@ export class InfiniteCanvasRenderer {
       renderTime: this.#lastRenderTime,
       entityCount: this.#lastEntityCount,
       renderedCount: this.#lastRenderedCount,
+      gpuSupported: this.#gpuTimingSupported,
+      gpuTime: this.#lastGpuFrameTime,
+      gpuGridTime: this.#lastGpuGridTime,
+      gpuEntityTime: this.#lastGpuEntityTime,
+      gpuWlurTime: this.#lastGpuWlurTime,
+      gpuActionLayerBlurTime: this.#lastGpuActionLayerBlurTime,
+      gpuActionLayerSharpTime: this.#lastGpuActionLayerSharpTime,
+      gpuSelectionTime: this.#lastGpuSelectionTime,
     };
   }
 
@@ -225,6 +291,7 @@ export class InfiniteCanvasRenderer {
     if (!adapter) {
       throw new Error("WebGPU adapter not available");
     }
+    const supportsTimestampQuery = adapter.features.has("timestamp-query");
 
     // Request higher storage buffer limit for large images (error diffusion dithering)
     // The error buffer needs width × height × 4 floats × 4 bytes per pixel
@@ -243,8 +310,10 @@ export class InfiniteCanvasRenderer {
     }
 
     this.#device = await adapter.requestDevice({
+      requiredFeatures: supportsTimestampQuery ? ["timestamp-query"] : [],
       requiredLimits,
     });
+    this.#gpuTimingSupported = supportsTimestampQuery;
 
     this.#device.lost.then((info) => {
       logger.error(`[WebGPU] Device lost: ${info.reason}`, info.message);
@@ -270,7 +339,11 @@ export class InfiniteCanvasRenderer {
       format: this.#canvasFormat,
       colorSpace: this.#colorConfig.canvasColorSpace,
       alphaMode: "premultiplied",
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+      usage:
+        GPUTextureUsage.RENDER_ATTACHMENT |
+        GPUTextureUsage.COPY_SRC |
+        GPUTextureUsage.COPY_DST |
+        GPUTextureUsage.TEXTURE_BINDING,
     });
 
     // Initialize texture pool
@@ -327,6 +400,14 @@ export class InfiniteCanvasRenderer {
     );
     this.#processingPipeline.initialize();
     this.#passthroughCopyPass = new CopyPass(this.#device, this.#colorConfig.intermediateFormat);
+    this.#presentCopyPass = new CopyPass(this.#device, this.#canvasFormat);
+    this.#wlurPass = new WlurPass({
+      device: this.#device,
+      format: this.#colorConfig.intermediateFormat,
+      label: "Wlur",
+    });
+    this.#wlurPass.initialize();
+    this.#createGpuTimestampResources();
 
     // Initialize export service with callbacks into renderer
     this.#exportService = new ExportService(
@@ -665,6 +746,229 @@ export class InfiniteCanvasRenderer {
 
     this.#actionLayerBlurTextures = { width, height, input, output };
     return this.#actionLayerBlurTextures;
+  }
+
+  #invalidateWlurOverlayCache(): void {
+    this.#wlurOverlayCacheValid = false;
+    this.#wlurOverlayCacheKey = "";
+  }
+
+  #destroyWlurOverlayTextures(): void {
+    if (!this.#wlurOverlayTextures) return;
+
+    this.#wlurOverlayTextures.input.destroy();
+    this.#wlurOverlayTextures.output.destroy();
+    this.#wlurOverlayTextures = null;
+  }
+
+  #getOrCreateWlurOverlayTextures(
+    width: number,
+    height: number,
+  ): { input: GPUTexture; output: GPUTexture } {
+    const cached = this.#wlurOverlayTextures;
+    if (cached && cached.width === width && cached.height === height) {
+      return cached;
+    }
+
+    this.#destroyWlurOverlayTextures();
+    this.#invalidateWlurOverlayCache();
+
+    const usage =
+      GPUTextureUsage.TEXTURE_BINDING |
+      GPUTextureUsage.RENDER_ATTACHMENT |
+      GPUTextureUsage.COPY_DST |
+      GPUTextureUsage.COPY_SRC;
+
+    const input = this.#device!.createTexture({
+      label: `Wlur input (${width}x${height})`,
+      size: [width, height],
+      format: this.#colorConfig.intermediateFormat,
+      usage,
+    });
+
+    const output = this.#device!.createTexture({
+      label: `Wlur output (${width}x${height})`,
+      size: [width, height],
+      format: this.#colorConfig.intermediateFormat,
+      usage,
+    });
+
+    this.#wlurOverlayTextures = { width, height, input, output };
+    return this.#wlurOverlayTextures;
+  }
+
+  #buildWlurOverlayCacheKey(
+    width: number,
+    height: number,
+    resolvedConfig: NonNullable<ReturnType<typeof resolveWlurOverlayRuntimeConfig>>,
+  ): string {
+    const { params, quality } = resolvedConfig;
+    return [
+      width,
+      height,
+      quality.kernelSize,
+      quality.resolutionScale,
+      params.radius,
+      params.offset,
+      params.interpolation,
+      params.direction,
+      params.noise,
+      params.curve?.join(",") ?? "",
+      params.mixCurve?.join(",") ?? "",
+      params.tint?.color.join(",") ?? "",
+      params.tint?.amount ?? "",
+      params.tint?.curve?.join(",") ?? "",
+    ].join("|");
+  }
+
+  #createGpuTimestampResources(): void {
+    if (!this.#device || !this.#gpuTimingSupported) return;
+
+    const byteSize = GPU_TIMESTAMP_QUERY_CAPACITY * BigUint64Array.BYTES_PER_ELEMENT;
+    this.#gpuTimestampSlots = Array.from({ length: GPU_TIMESTAMP_SLOT_COUNT }, (_, index) => ({
+      querySet: this.#device!.createQuerySet({
+        label: `Canvas GPU timestamps ${index}`,
+        type: "timestamp",
+        count: GPU_TIMESTAMP_QUERY_CAPACITY,
+      }),
+      resolveBuffer: this.#device!.createBuffer({
+        label: `Canvas GPU timestamp resolve ${index}`,
+        size: byteSize,
+        usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
+      }),
+      readBuffer: this.#device!.createBuffer({
+        label: `Canvas GPU timestamp read ${index}`,
+        size: byteSize,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+      }),
+      pending: false,
+    }));
+  }
+
+  #beginGpuTimestampCapture(debugMode: boolean): GpuTimestampFrameCapture | null {
+    if (!debugMode || this.#gpuTimestampSlots.length === 0) {
+      return null;
+    }
+
+    const slotIndex = this.#gpuTimestampSlotCursor;
+    const slot = this.#gpuTimestampSlots[slotIndex];
+    if (!slot || slot.pending) {
+      return null;
+    }
+
+    this.#gpuTimestampSlotCursor = (slotIndex + 1) % this.#gpuTimestampSlots.length;
+    return {
+      slotIndex,
+    };
+  }
+
+  #writeGpuTimestampMarker(
+    encoder: GPUCommandEncoder,
+    capture: GpuTimestampFrameCapture | null,
+    phase: GpuTimingPhase,
+    edge: "start" | "end",
+  ): void {
+    if (!capture) return;
+    const slot = this.#gpuTimestampSlots[capture.slotIndex];
+    if (!slot) return;
+
+    const [startIndex, endIndex] = GPU_TIMESTAMP_PHASE_RANGES[phase];
+    const timestampWrites =
+      edge === "start"
+        ? { querySet: slot.querySet, beginningOfPassWriteIndex: startIndex }
+        : { querySet: slot.querySet, endOfPassWriteIndex: endIndex };
+
+    const marker = encoder.beginComputePass({
+      label: `GPU timestamp ${phase} ${edge}`,
+      timestampWrites,
+    });
+    marker.end();
+  }
+
+  #finalizeGpuTimestampCapture(
+    encoder: GPUCommandEncoder,
+    capture: GpuTimestampFrameCapture | null,
+  ): GpuTimestampFrameCapture | null {
+    if (!capture) {
+      return null;
+    }
+
+    const slot = this.#gpuTimestampSlots[capture.slotIndex];
+    if (!slot || slot.pending) {
+      return null;
+    }
+
+    const byteSize = GPU_TIMESTAMP_QUERY_CAPACITY * BigUint64Array.BYTES_PER_ELEMENT;
+    encoder.resolveQuerySet(slot.querySet, 0, GPU_TIMESTAMP_QUERY_CAPACITY, slot.resolveBuffer, 0);
+    encoder.copyBufferToBuffer(slot.resolveBuffer, 0, slot.readBuffer, 0, byteSize);
+
+    slot.pending = true;
+
+    return capture;
+  }
+
+  #readGpuTimestampCapture(capture: GpuTimestampFrameCapture | null): void {
+    if (!capture) return;
+    const slot = this.#gpuTimestampSlots[capture.slotIndex];
+    if (!slot || !slot.pending) return;
+
+    const byteSize = GPU_TIMESTAMP_QUERY_CAPACITY * BigUint64Array.BYTES_PER_ELEMENT;
+    slot.readBuffer
+      .mapAsync(GPUMapMode.READ, 0, byteSize)
+      .then(() => {
+        const mapped = slot.readBuffer.getMappedRange(0, byteSize);
+        const timestamps = new BigUint64Array(mapped.slice(0));
+        slot.readBuffer.unmap();
+        this.#applyGpuTimestampReadback(timestamps);
+      })
+      .catch(() => {
+        if (!slot.readBuffer.mapState || slot.readBuffer.mapState === "unmapped") {
+          return;
+        }
+        slot.readBuffer.unmap();
+      })
+      .finally(() => {
+        slot.pending = false;
+      });
+  }
+
+  #applyGpuTimestampReadback(timestamps: BigUint64Array): void {
+    const getDeltaMs = (phase: GpuTimingPhase): number => {
+      const range = GPU_TIMESTAMP_PHASE_RANGES[phase];
+      const [start, end] = range;
+      const startValue = timestamps[start];
+      const endValue = timestamps[end];
+      if (startValue === undefined || endValue === undefined) return 0;
+      return Number(endValue - startValue) / 1_000_000;
+    };
+
+    this.#lastGpuFrameTime = getDeltaMs("frame");
+    this.#lastGpuGridTime = getDeltaMs("grid-pass");
+    this.#lastGpuEntityTime = getDeltaMs("entity-pass");
+    this.#lastGpuWlurTime = getDeltaMs("wlur-overlay");
+    this.#lastGpuActionLayerBlurTime = getDeltaMs("action-layer-blur");
+    this.#lastGpuActionLayerSharpTime = getDeltaMs("action-layer-sharp");
+    this.#lastGpuSelectionTime = getDeltaMs("selection-rects");
+  }
+
+  #destroyGpuTimestampResources(): void {
+    for (const slot of this.#gpuTimestampSlots) {
+      if (slot.readBuffer.mapState === "mapped") {
+        slot.readBuffer.unmap();
+      }
+      slot.querySet.destroy();
+      slot.resolveBuffer.destroy();
+      slot.readBuffer.destroy();
+    }
+    this.#gpuTimestampSlots = [];
+    this.#gpuTimingSupported = false;
+    this.#lastGpuFrameTime = 0;
+    this.#lastGpuGridTime = 0;
+    this.#lastGpuEntityTime = 0;
+    this.#lastGpuWlurTime = 0;
+    this.#lastGpuActionLayerBlurTime = 0;
+    this.#lastGpuActionLayerSharpTime = 0;
+    this.#lastGpuSelectionTime = 0;
   }
 
   #createActionLayerBlitPipeline(): void {
@@ -1267,6 +1571,20 @@ export class InfiniteCanvasRenderer {
     const frameDt = this.#lastFrameTime > 0 ? (renderStart - this.#lastFrameTime) / 1000 : 1 / 60;
     this.#lastFrameTime = renderStart;
     const { entities, viewport, hoveredEntityId, selectedEntityIds, debugMode } = state;
+    const traceId = Math.round(renderStart * 1000).toString(36);
+    const markPhaseStart = (phase: string) => {
+      if (!debugMode) return;
+      performance.mark(`canvas:${phase}:start:${traceId}`);
+    };
+    const markPhaseEnd = (phase: string) => {
+      if (!debugMode) return;
+      performance.mark(`canvas:${phase}:end:${traceId}`);
+      performance.measure(
+        `canvas:${phase}`,
+        `canvas:${phase}:start:${traceId}`,
+        `canvas:${phase}:end:${traceId}`,
+      );
+    };
 
     // Compute action layer rubber-band offset in world coordinates
     // Use controller state (not store) — offset continues during dismiss animation
@@ -1311,6 +1629,7 @@ export class InfiniteCanvasRenderer {
     const entityBindGroups: GPUBindGroup[] = [];
     const actionLayerBindGroups: GPUBindGroup[] = [];
     let hasAnimatingContent = false;
+    markPhaseStart("entity-prep");
 
     // Compute viewport world bounds once for culling (with buffer to prevent pop-in)
     const viewportBounds = getViewportWorldBounds(
@@ -1437,11 +1756,13 @@ export class InfiniteCanvasRenderer {
         entityBindGroups.push(bindGroup);
       }
     }
+    markPhaseEnd("entity-prep");
 
     // Create single command encoder for grid + all entities
     const encoder = this.#device.createCommandEncoder({
       label: "Canvas render encoder",
     });
+    const gpuCapture = this.#beginGpuTimestampCapture(debugMode);
 
     const texture = this.#context.getCurrentTexture();
     // Skip render if swapchain texture is invalid
@@ -1451,6 +1772,9 @@ export class InfiniteCanvasRenderer {
     const targetView = texture.createView();
 
     // Pass 1: Render dot grid background
+    markPhaseStart("grid-pass");
+    this.#writeGpuTimestampMarker(encoder, gpuCapture, "frame", "start");
+    this.#writeGpuTimestampMarker(encoder, gpuCapture, "grid-pass", "start");
     const gridPass = encoder.beginRenderPass({
       label: "Grid render pass",
       colorAttachments: [
@@ -1467,8 +1791,12 @@ export class InfiniteCanvasRenderer {
     gridPass.setBindGroup(0, this.#gridBindGroup!);
     gridPass.draw(3);
     gridPass.end();
+    this.#writeGpuTimestampMarker(encoder, gpuCapture, "grid-pass", "end");
+    markPhaseEnd("grid-pass");
 
     // Pass 2: Render all entities (batched into same encoder)
+    markPhaseStart("entity-pass");
+    this.#writeGpuTimestampMarker(encoder, gpuCapture, "entity-pass", "start");
     for (const bindGroup of entityBindGroups) {
       const entityPass = encoder.beginRenderPass({
         label: "Entity composition pass",
@@ -1486,6 +1814,8 @@ export class InfiniteCanvasRenderer {
       entityPass.draw(6); // 2 triangles = 6 vertices
       entityPass.end();
     }
+    this.#writeGpuTimestampMarker(encoder, gpuCapture, "entity-pass", "end");
+    markPhaseEnd("entity-pass");
 
     // Pass 2a: Action layer blur overlay
     // Blur+dim everything, then re-render selected entities sharp on top
@@ -1499,6 +1829,8 @@ export class InfiniteCanvasRenderer {
       this.#actionLayerBlitUniformBuffer &&
       this.#actionLayerBlitSampler
     ) {
+      markPhaseStart("action-layer-blur");
+      this.#writeGpuTimestampMarker(encoder, gpuCapture, "action-layer-blur", "start");
       // Get or create intermediate textures for full-screen blur
       const blurTextures = this.#getOrCreateActionLayerBlurTextures(width, height);
       if (blurTextures) {
@@ -1564,6 +1896,8 @@ export class InfiniteCanvasRenderer {
         blitPass.draw(3);
         blitPass.end();
       }
+      this.#writeGpuTimestampMarker(encoder, gpuCapture, "action-layer-blur", "end");
+      markPhaseEnd("action-layer-blur");
     }
 
     // Reset blur cache when action layer blur is no longer rendering
@@ -1573,6 +1907,8 @@ export class InfiniteCanvasRenderer {
     }
 
     // Always render action layer entities on top (sharp, after blur or normally)
+    markPhaseStart("action-layer-sharp");
+    this.#writeGpuTimestampMarker(encoder, gpuCapture, "action-layer-sharp", "start");
     for (const bindGroup of actionLayerBindGroups) {
       const sharpPass = encoder.beginRenderPass({
         label: "Action layer sharp entity pass",
@@ -1589,6 +1925,8 @@ export class InfiniteCanvasRenderer {
       sharpPass.draw(6);
       sharpPass.end();
     }
+    this.#writeGpuTimestampMarker(encoder, gpuCapture, "action-layer-sharp", "end");
+    markPhaseEnd("action-layer-sharp");
 
     // Pass 2b: Render disintegration overlays (on top of entities)
     this.#renderDisintegrationOverlays(encoder, targetView, frameDt);
@@ -1620,6 +1958,8 @@ export class InfiniteCanvasRenderer {
       this.#selectionRectUniformBuffer &&
       this.#selectionRectBindGroup
     ) {
+      markPhaseStart("selection-rects");
+      this.#writeGpuTimestampMarker(encoder, gpuCapture, "selection-rects", "start");
       this.#updateSelectionRectUniformsMulti(selectionRects, viewport);
       this.#device.queue.writeBuffer(
         this.#selectionRectUniformBuffer,
@@ -1642,10 +1982,95 @@ export class InfiniteCanvasRenderer {
       selectionRectPass.setBindGroup(0, this.#selectionRectBindGroup);
       selectionRectPass.draw(3); // Fullscreen triangle
       selectionRectPass.end();
+      this.#writeGpuTimestampMarker(encoder, gpuCapture, "selection-rects", "end");
+      markPhaseEnd("selection-rects");
+    }
+
+    // Final pass: WLUR progressive blur overlay (renders on top of everything)
+    const resolvedWlurOverlay = resolveWlurOverlayRuntimeConfig(
+      this.#wlurOverlayConfig,
+      height,
+      dpr,
+    );
+    if (
+      resolvedWlurOverlay &&
+      this.#wlurPass &&
+      this.#passthroughCopyPass &&
+      this.#presentCopyPass
+    ) {
+      const wlurTextures = this.#getOrCreateWlurOverlayTextures(width, height);
+      const wlurCacheKey = this.#buildWlurOverlayCacheKey(width, height, resolvedWlurOverlay);
+      const wlurNeedsUpdate =
+        !resolvedWlurOverlay.cache ||
+        !this.#wlurOverlayCacheValid ||
+        this.#wlurOverlayCacheKey !== wlurCacheKey ||
+        state.dirty ||
+        hasAnimatingContent ||
+        this.#disintegrationOverlays.size > 0 ||
+        blurIntensity > 0.01 ||
+        state.dragSelectBounds !== null;
+
+      const qualityKey = [
+        resolvedWlurOverlay.quality.kernelSize,
+        resolvedWlurOverlay.quality.resolutionScale,
+      ].join("|");
+      if (qualityKey !== this.#wlurLastQualityKey) {
+        this.#wlurPass.updateConfig({ quality: resolvedWlurOverlay.quality });
+        this.#wlurLastQualityKey = qualityKey;
+      }
+
+      markPhaseStart("wlur-overlay");
+      this.#writeGpuTimestampMarker(encoder, gpuCapture, "wlur-overlay", "start");
+      if (wlurNeedsUpdate) {
+        if (this.#canvasFormat === this.#colorConfig.intermediateFormat) {
+          encoder.copyTextureToTexture(
+            { texture },
+            { texture: wlurTextures.input },
+            { width, height },
+          );
+        } else {
+          this.#passthroughCopyPass.encode(encoder, texture, wlurTextures.input);
+        }
+
+        this.#wlurPass.encode(
+          encoder,
+          wlurTextures.input,
+          wlurTextures.output,
+          width,
+          height,
+          resolvedWlurOverlay.params,
+        );
+
+        if (resolvedWlurOverlay.cache) {
+          this.#wlurOverlayCacheValid = true;
+          this.#wlurOverlayCacheKey = wlurCacheKey;
+        } else {
+          this.#invalidateWlurOverlayCache();
+        }
+      }
+
+      if (this.#canvasFormat === this.#colorConfig.intermediateFormat) {
+        encoder.copyTextureToTexture(
+          { texture: wlurTextures.output },
+          { texture },
+          { width, height },
+        );
+      } else {
+        this.#presentCopyPass!.encode(encoder, wlurTextures.output, targetView);
+      }
+      this.#writeGpuTimestampMarker(encoder, gpuCapture, "wlur-overlay", "end");
+      markPhaseEnd("wlur-overlay");
+    } else {
+      this.#invalidateWlurOverlayCache();
     }
 
     // Single submission for all passes
+    this.#writeGpuTimestampMarker(encoder, gpuCapture, "frame", "end");
+    const finalizedGpuCapture = this.#finalizeGpuTimestampCapture(encoder, gpuCapture);
+    markPhaseStart("queue-submit");
     this.#device.queue.submit([encoder.finish()]);
+    this.#readGpuTimestampCapture(finalizedGpuCapture);
+    markPhaseEnd("queue-submit");
 
     // Record frame stats for performance overlay
     this.#lastRenderTime = performance.now() - renderStart;
@@ -1661,6 +2086,7 @@ export class InfiniteCanvasRenderer {
    */
   setGridConfig(config: Partial<GridConfig>): void {
     this.#gridConfig = { ...this.#gridConfig, ...config };
+    this.#invalidateWlurOverlayCache();
   }
 
   setActionLayerTint(color: [number, number, number]): void {
@@ -1673,6 +2099,17 @@ export class InfiniteCanvasRenderer {
   ): void {
     this.#selectionRectConfig = selectionRect;
     this.#multiSelectBoundingBoxConfig = multiSelectBox;
+  }
+
+  setWlurOverlay(config: WlurOverlayConfig | null): void {
+    this.#wlurOverlayConfig = config;
+    this.#wlurLastQualityKey = "";
+    if (config?.quality) {
+      this.#wlurPass?.updateConfig({ quality: config.quality });
+    } else if (!config) {
+      this.#destroyWlurOverlayTextures();
+    }
+    this.#invalidateWlurOverlayCache();
   }
 
   /**
@@ -1921,6 +2358,13 @@ export class InfiniteCanvasRenderer {
     this.#processingPipeline?.destroy();
     this.#processingPipeline = null;
     this.#passthroughCopyPass = null;
+    this.#presentCopyPass = null;
+    this.#wlurPass?.destroy();
+    this.#wlurPass = null;
+    this.#wlurOverlayConfig = null;
+    this.#wlurLastQualityKey = "";
+    this.#destroyWlurOverlayTextures();
+    this.#invalidateWlurOverlayCache();
 
     // Destroy shader registry
     this.#shaderRegistry?.destroy();
@@ -1960,6 +2404,8 @@ export class InfiniteCanvasRenderer {
     // Disconnect resize observer
     this.#resizeObserver?.disconnect();
     this.#resizeObserver = null;
+
+    this.#destroyGpuTimestampResources();
 
     // Destroy device
     this.#device?.destroy();

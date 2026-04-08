@@ -7,6 +7,8 @@
     "#components/*": "./components/*",
     "#engine": "./engine/index.ts",
     "#renderer/*": "./renderer/*",
+    "#wlur": "./packages/wlur/index.ts",
+    "#wlur/*": "./packages/wlur/*",
     "#types/*": "./types/*",
     "#lib/*": "./lib/*",
     "#hooks/*": "./hooks/*",

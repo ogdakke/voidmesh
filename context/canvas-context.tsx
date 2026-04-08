@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   CanvasCommandsContext,
   CanvasRendererContext,
@@ -60,6 +60,10 @@ import { applyShaderDefaults } from "#lib/shader-defaults.ts";
 import { extractPaletteFromImage } from "#lib/palette-extraction/index.ts";
 import { ColorSpace } from "#types/enums.ts";
 import type { PartialDeep } from "type-fest";
+import {
+  createDefaultWlurOverlayDebugConfig,
+  type WlurOverlayDebugConfig,
+} from "#renderer/wlur-debug.ts";
 
 // --- Resource ownership for undo/redo cleanup ---
 // Tracks which undo command "owns" cleanup rights for each entity's media resources.
@@ -210,6 +214,9 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     parseAsStringEnum(Object.values(DebugType)),
   );
   const debug = debugType !== null;
+  const [wlurDebugConfig, setWlurDebugConfigState] = useState<WlurOverlayDebugConfig>(() =>
+    createDefaultWlurOverlayDebugConfig(),
+  );
   // URL params for selected entity shader settings (for shareable configurations)
   const [renderState, setRenderState] = useQueryStates(shaderUrlParams);
   const renderStateRef = useRef(renderState);
@@ -1704,6 +1711,14 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     gameLoop.setRenderer(renderer);
   };
 
+  const setWlurDebugConfig = useCallback((updates: Partial<WlurOverlayDebugConfig>) => {
+    setWlurDebugConfigState((prev) => ({ ...prev, ...updates }));
+  }, []);
+
+  const resetWlurDebugConfig = useCallback(() => {
+    setWlurDebugConfigState(createDefaultWlurOverlayDebugConfig());
+  }, []);
+
   // Export functions
   // Copy to clipboard: single-selection only (clipboard API limitation)
   const copySelectedEntityToClipboard = async (): Promise<boolean> => {
@@ -1846,8 +1861,12 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       registerRenderer,
       renderer: rendererState,
       colorSpace,
+      debugMode: debug,
+      wlurDebugConfig,
+      setWlurDebugConfig,
+      resetWlurDebugConfig,
     }),
-    [rendererState, colorSpace],
+    [rendererState, colorSpace, debug, wlurDebugConfig, setWlurDebugConfig, resetWlurDebugConfig],
   );
 
   // Expose canvas context to window for dev console debugging

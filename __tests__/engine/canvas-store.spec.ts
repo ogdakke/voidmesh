@@ -200,3 +200,32 @@ describe("canvasStore.updateGifPlaybackTime", () => {
     expect(canvasStore.getPlaybackSnapshot().version).toBe(initialVersion + 1);
   });
 });
+
+describe("canvasStore.moveEntity", () => {
+  test("marks render state dirty for position-only updates", () => {
+    const entity = createTestEntity();
+    canvasStore.addEntity(entity);
+    canvasStore.clearDirtyFlags();
+
+    canvasStore.moveEntity(entity.id, { x: 24, y: -12 });
+
+    const renderState = canvasStore.getRenderState();
+    const moved = renderState.entities.find(({ id }) => id === entity.id);
+
+    expect(moved?.position).toEqual({ x: 24, y: -12 });
+    expect(renderState.dirty).toBe(true);
+  });
+
+  test("dirty flag clears after render bookkeeping", () => {
+    const entity = createTestEntity();
+    canvasStore.addEntity(entity);
+    canvasStore.clearDirtyFlags();
+
+    canvasStore.moveEntity(entity.id, { x: 1, y: 1 });
+    expect(canvasStore.getRenderState().dirty).toBe(true);
+
+    canvasStore.clearDirtyFlags();
+
+    expect(canvasStore.getRenderState().dirty).toBe(false);
+  });
+});

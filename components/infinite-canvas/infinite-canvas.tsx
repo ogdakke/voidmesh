@@ -28,6 +28,8 @@ import {
   zoomToPoint,
 } from "#lib/canvas-math.ts";
 import { undo } from "#lib/undo.ts";
+import { createDefaultWlurOverlayConfig } from "#renderer/wlur-overlay.ts";
+import { applyWlurOverlayDebugConfig } from "#renderer/wlur-debug.ts";
 import { Check, Drag, Enlarge, Reduce, Square3dFromCenter } from "iconoir-react";
 import {
   lazy,
@@ -132,7 +134,7 @@ export function InfiniteCanvas() {
     resetSelectionToDefaults,
     setSnapToGrid,
   } = useCanvasCommands();
-  const { registerRenderer } = useCanvasRendererService();
+  const { registerRenderer, debugMode, wlurDebugConfig } = useCanvasRendererService();
   const { snapToGrid } = useCanvasPreferences();
   const selectedEntity = useSelectedEntity();
   const selectedEntityIds = useSelectedEntityIds();
@@ -193,11 +195,35 @@ export function InfiniteCanvas() {
         darkTheme ? config.selectionRectangle.dark : config.selectionRectangle.light,
         darkTheme ? config.multiSelectBoundingBox.dark : config.multiSelectBoundingBox.light,
       );
+      const shouldEnableMobileBackdrop = isMobile && !isFullscreen;
+      const tintColor = darkTheme ? ([0, 0, 0] as const) : ([1, 1, 1] as const);
+      const wlurOverlay = shouldEnableMobileBackdrop
+        ? createDefaultWlurOverlayConfig({
+            tintColor,
+            tintAmount: darkTheme ? 1 : 0.77,
+          })
+        : null;
+      renderer.setWlurOverlay(
+        wlurOverlay
+          ? debugMode
+            ? applyWlurOverlayDebugConfig(wlurOverlay, wlurDebugConfig, tintColor)
+            : wlurOverlay
+          : null,
+      );
       registerRenderer(renderer);
       gameLoop.start();
     }
     return () => gameLoop.stop();
-  }, [renderer, isReady, registerRenderer, darkTheme]);
+  }, [
+    renderer,
+    isReady,
+    registerRenderer,
+    darkTheme,
+    isMobile,
+    isFullscreen,
+    debugMode,
+    wlurDebugConfig,
+  ]);
 
   // Image input handlers (paste, drop, file upload)
   const { handleDrop } = useImageInput({ containerRef, multipleFiles: true });

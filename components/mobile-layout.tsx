@@ -8,12 +8,13 @@ import {
   MediaVideo,
   Palette,
   ScaleFrameEnlarge,
+  Settings,
 } from "iconoir-react";
 import { Canvas } from "./canvas";
 import { MediaControls } from "./infinite-canvas/media-controls.tsx";
 import { MobileControls } from "./mobile-controls.tsx";
 import { BottomBarItem, MobileBottomBar } from "./mobile-bottom/mobile-bottom-bar.tsx";
-import { items, type BarItem } from "./mobile-bottom/bar-items.ts";
+import { debugBarItem, items, type BarItem, type DebugBarItem } from "./mobile-bottom/bar-items.ts";
 import { DeleteDropZone } from "./delete-drop-zone/delete-drop-zone.tsx";
 import { ActionLayer } from "./action-layer/action-layer.tsx";
 import { CopyPasteDrawer } from "./action-layer/copy-paste-drawer.tsx";
@@ -22,6 +23,7 @@ import { IonDuplicateOutline } from "./icons/duplicate.tsx";
 import { Drawer } from "#ui/drawer/index.tsx";
 import {
   useCanvasCommands,
+  useDebugMode,
   useCanvasRendererService,
   useMultiSelectMode,
   useSelectedEntityIds,
@@ -88,12 +90,13 @@ function MobileActionLayer() {
 }
 
 function MobileFloat() {
-  const [activeItem, setActiveItem] = useState<BarItem | null>(items.at(0)!);
+  const [activeItem, setActiveItem] = useState<BarItem | DebugBarItem | null>(items.at(0)!);
   const multiSelectMode = useMultiSelectMode();
   const selectedEntityIds = useSelectedEntityIds();
   const { entityDragActive } = useEntityDrag();
   const { isFullscreen } = useLayout();
   const { active: actionLayerActive } = useActionLayer();
+  const debugMode = useDebugMode();
   const palette = useParamValue("palette", null);
   const bottomBarDisabled = multiSelectMode || selectedEntityIds.size === 0 || isFullscreen;
 
@@ -129,7 +132,11 @@ function MobileFloat() {
         </div>
       )}
 
-      <MobileBottomBar items={items} onChange={setActiveItem} value={activeItem}>
+      <MobileBottomBar
+        items={items}
+        onChange={(item) => setActiveItem(item as BarItem | DebugBarItem | null)}
+        value={activeItem}
+      >
         <BottomBarItem label="style" {...propsMapByItem["style"]}>
           <Component />
         </BottomBarItem>
@@ -148,6 +155,11 @@ function MobileFloat() {
         <BottomBarItem label="export" {...propsMapByItem["export"]}>
           <Download />
         </BottomBarItem>
+        {debugMode && (
+          <BottomBarItem label={debugBarItem} disabled={isFullscreen}>
+            <Settings />
+          </BottomBarItem>
+        )}
       </MobileBottomBar>
     </div>
   );

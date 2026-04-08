@@ -15,9 +15,9 @@ import { canvasStore } from "#engine";
 
 interface BottomBarContextValue<T extends string> {
   items: T[];
-  activeItem: T | null;
-  setActiveItem: (item: T | null) => void;
-  onChange: (item: T | null) => void;
+  activeItem: string | null;
+  setActiveItem: (item: string | null) => void;
+  onChange: (item: string | null) => void;
 }
 
 const BottomBarContext = createContext<BottomBarContextValue<string> | null>(null);
@@ -37,10 +37,10 @@ function BottomBarProvider<T extends string>({
   children,
 }: PropsWithChildren<{
   items: readonly T[];
-  onChange?: (item: T | null) => void;
-  value?: T | null;
+  onChange?: (item: string | null) => void;
+  value?: string | null;
 }>) {
-  const [activeItem, setActiveItem] = useState<T | null>(value ?? null);
+  const [activeItem, setActiveItem] = useState<string | null>(value ?? null);
 
   const contextValue = {
     items,
@@ -62,8 +62,8 @@ function BottomBarRoot<T extends string>({
 }: {
   items: readonly T[];
   children: ReactNode | ((items: readonly T[]) => ReactNode);
-  onChange?: (item: T | null) => void;
-  value?: T | null;
+  onChange?: (item: string | null) => void;
+  value?: string | null;
 }) {
   return (
     <BottomBarProvider items={items} onChange={onChange} value={value}>
@@ -82,8 +82,8 @@ export function MobileBottomBar<T extends string>({
 }: {
   items: readonly T[];
   children: ReactNode | ((items: readonly T[]) => ReactNode);
-  onChange?: (item: T | null) => void;
-  value: T | null;
+  onChange?: (item: string | null) => void;
+  value: string | null;
   hideItems?: boolean;
 }) {
   const { isFullscreen, toggleFullscreen } = useLayout();
