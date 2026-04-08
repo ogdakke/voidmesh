@@ -194,16 +194,19 @@ export function InfiniteCanvas() {
         darkTheme ? config.selectionRectangle.dark : config.selectionRectangle.light,
         darkTheme ? config.multiSelectBoundingBox.dark : config.multiSelectBoundingBox.light,
       );
+      const shouldEnableMobileBackdrop = isMobile && !isFullscreen;
       renderer.setWlurOverlay(
-        createDefaultWlurOverlayConfig({
-          isMobile,
-        }),
+        shouldEnableMobileBackdrop
+          ? createDefaultWlurOverlayConfig({
+              isMobile: true,
+            })
+          : null,
       );
       registerRenderer(renderer);
       gameLoop.start();
     }
     return () => gameLoop.stop();
-  }, [renderer, isReady, registerRenderer, darkTheme, isMobile]);
+  }, [renderer, isReady, registerRenderer, darkTheme, isMobile, isFullscreen]);
 
   // Image input handlers (paste, drop, file upload)
   const { handleDrop } = useImageInput({ containerRef, multipleFiles: true });
