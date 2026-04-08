@@ -199,7 +199,8 @@ export function InfiniteCanvas() {
       const tintColor = darkTheme ? ([0, 0, 0] as const) : ([1, 1, 1] as const);
       const wlurOverlay = shouldEnableMobileBackdrop
         ? createDefaultWlurOverlayConfig({
-            isMobile: true,
+            tintColor,
+            tintAmount: darkTheme ? 1 : 0.77,
           })
         : null;
       renderer.setWlurOverlay(

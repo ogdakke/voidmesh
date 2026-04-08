@@ -1,5 +1,9 @@
 import { WLUR_CURVES, type WlurCurve, type WlurTintColor } from "#wlur";
-import type { WlurOverlayConfig } from "./wlur-overlay.ts";
+import {
+  DEFAULT_WLUR_OVERLAY_PARAMS,
+  DEFAULT_WLUR_OVERLAY_QUALITY,
+  type WlurOverlayConfig,
+} from "./wlur-overlay.ts";
 
 export const WLUR_DEBUG_CURVE_OPTIONS = [
   { value: "linear", label: "Linear", shortLabel: "Lin" },
@@ -29,20 +33,26 @@ export interface WlurOverlayDebugConfig {
   tintCurve: WlurDebugCurvePreset;
 }
 
-export const DEFAULT_WLUR_OVERLAY_DEBUG_CONFIG = Object.freeze({
-  enabled: true,
-  cache: true,
-  radius: 62,
-  offset: 0.64,
-  interpolation: 0.4,
-  noise: 0.2,
-  tintAmount: 0,
-  kernelSize: 45,
-  resolutionScale: 0.8,
-  blurCurve: "overlayQuickFade",
-  mixCurve: "overlaySoftMix",
-  tintCurve: "ease",
-} satisfies WlurOverlayDebugConfig);
+export function createDefaultWlurOverlayDebugConfig(): WlurOverlayDebugConfig {
+  return {
+    enabled: true,
+    cache: true,
+    radius: DEFAULT_WLUR_OVERLAY_PARAMS.radius,
+    offset: DEFAULT_WLUR_OVERLAY_PARAMS.offset,
+    interpolation: DEFAULT_WLUR_OVERLAY_PARAMS.interpolation,
+    noise: DEFAULT_WLUR_OVERLAY_PARAMS.noise,
+    tintAmount: 0.77,
+    kernelSize: DEFAULT_WLUR_OVERLAY_QUALITY.kernelSize,
+    resolutionScale: DEFAULT_WLUR_OVERLAY_QUALITY.resolutionScale,
+    blurCurve: "overlayQuickFade",
+    mixCurve: "overlaySoftMix",
+    tintCurve: "easeIn",
+  };
+}
+
+export const DEFAULT_WLUR_OVERLAY_DEBUG_CONFIG = Object.freeze(
+  createDefaultWlurOverlayDebugConfig(),
+);
 
 export function getWlurDebugCurvePreset(
   preset: WlurDebugCurvePreset | string | undefined,

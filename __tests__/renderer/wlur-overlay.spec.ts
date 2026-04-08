@@ -6,36 +6,7 @@ import { sampleWlurCurve } from "#wlur";
 import { describe, expect, test } from "vitest";
 
 describe("wlur overlay config", () => {
-  test("scales the mobile preset against the visible viewport height", () => {
-    const fullHeight = resolveWlurOverlayRuntimeConfig(
-      createDefaultWlurOverlayConfig({
-        isMobile: true,
-        tintColor: [1, 1, 1],
-      }),
-      1000,
-      1,
-    );
-    const occluded = resolveWlurOverlayRuntimeConfig(
-      createDefaultWlurOverlayConfig({
-        isMobile: true,
-        bottomInsetCssPx: 200,
-        tintColor: [1, 1, 1],
-      }),
-      1000,
-      1,
-    );
-
-    expect(fullHeight).not.toBeNull();
-    expect(occluded).not.toBeNull();
-    expect(occluded!.params.offset).toBeLessThan(fullHeight!.params.offset);
-    expect(occluded!.params.interpolation).toBeLessThan(fullHeight!.params.interpolation);
-    expect(occluded?.params.direction).toBe(fullHeight?.params.direction);
-    expect(occluded?.params.tint?.color).toEqual([1, 1, 1]);
-    expect(occluded!.params.tint!.amount).toBeGreaterThanOrEqual(0);
-    expect(occluded!.params.tint!.amount).toBeLessThanOrEqual(1);
-  });
-
-  test("creates a valid desktop default config without pinning tuneable constants", () => {
+  test("creates a valid default config without pinning tuneable constants", () => {
     const resolved = resolveWlurOverlayRuntimeConfig(createDefaultWlurOverlayConfig(), 1000, 1);
 
     expect(resolved).not.toBeNull();
@@ -51,10 +22,9 @@ describe("wlur overlay config", () => {
     expect(resolved!.quality.resolutionScale).toBeLessThanOrEqual(1);
   });
 
-  test("preserves tint color on mobile presets", () => {
+  test("preserves tint color on the default preset", () => {
     const resolved = resolveWlurOverlayRuntimeConfig(
       createDefaultWlurOverlayConfig({
-        isMobile: true,
         tintColor: [1, 1, 1],
       }),
       1000,
@@ -68,7 +38,7 @@ describe("wlur overlay config", () => {
   test("preserves explicit overrides after the preset is resolved", () => {
     const resolved = resolveWlurOverlayRuntimeConfig(
       {
-        ...createDefaultWlurOverlayConfig({ isMobile: true, bottomInsetCssPx: 100 }),
+        ...createDefaultWlurOverlayConfig(),
         params: {
           radius: 16,
           offset: 0.2,

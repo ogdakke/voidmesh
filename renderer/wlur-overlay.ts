@@ -9,15 +9,6 @@ import {
 } from "#wlur";
 
 export interface WlurOverlayLayout {
-  /** Whether the overlay should use the mobile preset instead of the desktop preset. */
-  isMobile?: boolean;
-  /**
-   * Occluded bottom UI height in CSS pixels.
-   *
-   * Expected range: `>= 0`.
-   * Used to resolve wlur defaults against the visible viewport height.
-   */
-  bottomInsetCssPx?: number;
   /**
    * Optional app-level tint color for the overlay.
    *
@@ -51,22 +42,26 @@ export interface ResolvedWlurOverlayConfig {
   quality: WlurQuality;
 }
 
-const MOBILE_OVERLAY_PARAMS = Object.freeze({
+export const DEFAULT_WLUR_OVERLAY_PARAMS = Object.freeze({
   ...DEFAULT_WLUR_PARAMS,
-  offset: 0.64,
-  interpolation: 0.4,
+  offset: 0.58,
+  interpolation: 0.65,
   direction: "down",
-  radius: 80,
+  radius: 130,
   noise: 0,
+  curve: WLUR_CURVES.overlayQuickFade,
+  mixCurve: WLUR_CURVES.overlaySoftMix,
+  tint: {
+    curve: WLUR_CURVES.easeIn,
+    amount: 0.77,
+    color: [0, 0, 0],
+  },
 } satisfies WlurParams);
 
-const DESKTOP_OVERLAY_PARAMS = Object.freeze({
-  ...DEFAULT_WLUR_PARAMS,
-  offset: 0.95,
-  interpolation: 0.4,
-  direction: "down",
-  radius: 80,
-} satisfies WlurParams);
+export const DEFAULT_WLUR_OVERLAY_QUALITY = Object.freeze({
+  kernelSize: 45,
+  resolutionScale: 0.5,
+} satisfies WlurQuality);
 
 export function createDefaultWlurOverlayConfig(layout: WlurOverlayLayout = {}): WlurOverlayConfig {
   const tint =
@@ -74,7 +69,7 @@ export function createDefaultWlurOverlayConfig(layout: WlurOverlayLayout = {}): 
       ? {
           color: layout.tintColor,
           amount: layout.tintAmount ?? 1,
-          curve: WLUR_CURVES.ease,
+          curve: WLUR_CURVES.easeIn,
         }
       : undefined;
 
@@ -83,14 +78,10 @@ export function createDefaultWlurOverlayConfig(layout: WlurOverlayLayout = {}): 
     cache: true,
     layout,
     params: {
+      ...DEFAULT_WLUR_OVERLAY_PARAMS,
       tint,
-      curve: WLUR_CURVES.overlayQuickFade,
-      mixCurve: WLUR_CURVES.overlaySoftMix,
     },
-    quality: {
-      kernelSize: 25,
-      resolutionScale: 0.5,
-    },
+    quality: DEFAULT_WLUR_OVERLAY_QUALITY,
   };
 }
 
@@ -103,31 +94,19 @@ export function resolveWlurOverlayRuntimeConfig(
     return null;
   }
 
-  const layout = config.layout ?? {};
-  const isMobile = layout.isMobile ?? false;
-  const heightPx = Math.max(1, canvasHeightPx);
-  const dpr = Math.max(devicePixelRatio, 1);
-  const bottomInsetPx = Math.max((layout.bottomInsetCssPx ?? 0) * dpr, 0);
-  const visibleHeightPx = heightPx - bottomInsetPx;
-
-  if (visibleHeightPx <= 1) {
+  if (Math.max(1, canvasHeightPx) <= 1 || Math.max(devicePixelRatio, 1) <= 0) {
     return null;
   }
-
-  const visibleFraction = Math.min(Math.max(visibleHeightPx / heightPx, 0), 1);
-  const baseParams = isMobile ? MOBILE_OVERLAY_PARAMS : DESKTOP_OVERLAY_PARAMS;
-  const scaledDefaults = clampWlurParams({
-    ...baseParams,
-    offset: baseParams.offset * visibleFraction,
-    interpolation: baseParams.interpolation * visibleFraction,
-  });
 
   return {
     cache: config.cache !== false,
     params: clampWlurParams({
-      ...scaledDefaults,
+      ...DEFAULT_WLUR_OVERLAY_PARAMS,
       ...config.params,
     }),
-    quality: clampWlurQuality(config.quality),
+    quality: clampWlurQuality({
+      ...DEFAULT_WLUR_OVERLAY_QUALITY,
+      ...config.quality,
+    }),
   };
 }

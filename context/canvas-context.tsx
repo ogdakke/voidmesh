@@ -61,7 +61,7 @@ import { extractPaletteFromImage } from "#lib/palette-extraction/index.ts";
 import { ColorSpace } from "#types/enums.ts";
 import type { PartialDeep } from "type-fest";
 import {
-  DEFAULT_WLUR_OVERLAY_DEBUG_CONFIG,
+  createDefaultWlurOverlayDebugConfig,
   type WlurOverlayDebugConfig,
 } from "#renderer/wlur-debug.ts";
 
@@ -214,8 +214,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     parseAsStringEnum(Object.values(DebugType)),
   );
   const debug = debugType !== null;
-  const [wlurDebugConfig, setWlurDebugConfigState] = useState<WlurOverlayDebugConfig>(
-    DEFAULT_WLUR_OVERLAY_DEBUG_CONFIG,
+  const [wlurDebugConfig, setWlurDebugConfigState] = useState<WlurOverlayDebugConfig>(() =>
+    createDefaultWlurOverlayDebugConfig(),
   );
   // URL params for selected entity shader settings (for shareable configurations)
   const [renderState, setRenderState] = useQueryStates(shaderUrlParams);
@@ -1716,7 +1716,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const resetWlurDebugConfig = useCallback(() => {
-    setWlurDebugConfigState(DEFAULT_WLUR_OVERLAY_DEBUG_CONFIG);
+    setWlurDebugConfigState(createDefaultWlurOverlayDebugConfig());
   }, []);
 
   // Export functions
