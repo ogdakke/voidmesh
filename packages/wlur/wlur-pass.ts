@@ -509,6 +509,10 @@ export class WlurPass {
     const cached = this.#scratchTextures.get(key);
     if (cached) return cached;
 
+    // Keep scratch caching bounded to the active working size so fullscreen resizes
+    // do not accumulate stale GPU textures over a long session.
+    this.#destroyScratchTextures();
+
     const working = getWlurWorkingDimensions(width, height, this.#quality.resolutionScale);
     const workingUsage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT;
     const compositeUsage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT;

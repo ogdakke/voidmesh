@@ -57,6 +57,29 @@ describe("wlur overlay config", () => {
     expect(resolved?.quality.kernelSize).toBe(49);
   });
 
+  test("preserves preset tint fields when applying partial tint overrides", () => {
+    const resolved = resolveWlurOverlayRuntimeConfig(
+      {
+        ...createDefaultWlurOverlayConfig({
+          tintColor: [1, 1, 1],
+          tintAmount: 0.77,
+        }),
+        params: {
+          tint: {
+            amount: 0.25,
+          } as never,
+        },
+      },
+      1000,
+      1,
+    );
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.params.tint?.color).toEqual([1, 1, 1]);
+    expect(resolved?.params.tint?.amount).toBe(0.25);
+    expect(resolved?.params.tint?.curve).toBeDefined();
+  });
+
   test("returns null when the overlay is disabled", () => {
     expect(
       resolveWlurOverlayRuntimeConfig(

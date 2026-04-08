@@ -98,14 +98,27 @@ export function resolveWlurOverlayRuntimeConfig(
     return null;
   }
 
+  const preset = createDefaultWlurOverlayConfig(config.layout);
+  const presetParams = preset.params ?? DEFAULT_WLUR_OVERLAY_PARAMS;
+  const presetQuality = preset.quality ?? DEFAULT_WLUR_OVERLAY_QUALITY;
+
+  const mergedTint =
+    config.params?.tint === undefined
+      ? presetParams.tint
+      : {
+          ...presetParams.tint,
+          ...config.params.tint,
+        };
+
   return {
     cache: config.cache !== false,
     params: clampWlurParams({
-      ...DEFAULT_WLUR_OVERLAY_PARAMS,
+      ...presetParams,
       ...config.params,
+      tint: mergedTint,
     }),
     quality: clampWlurQuality({
-      ...DEFAULT_WLUR_OVERLAY_QUALITY,
+      ...presetQuality,
       ...config.quality,
     }),
   };
