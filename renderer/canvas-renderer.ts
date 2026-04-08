@@ -46,10 +46,10 @@ type GpuTimingPhase =
   | "frame"
   | "grid-pass"
   | "entity-pass"
-  | "wlur-overlay"
   | "action-layer-blur"
   | "action-layer-sharp"
-  | "selection-rects";
+  | "selection-rects"
+  | "wlur-overlay";
 
 interface GpuTimestampFrameCapture {
   slotIndex: number;
@@ -1817,80 +1817,6 @@ export class InfiniteCanvasRenderer {
     this.#writeGpuTimestampMarker(encoder, gpuCapture, "entity-pass", "end");
     markPhaseEnd("entity-pass");
 
-    const resolvedWlurOverlay = resolveWlurOverlayRuntimeConfig(
-      this.#wlurOverlayConfig,
-      height,
-      dpr,
-    );
-    if (
-      resolvedWlurOverlay &&
-      this.#wlurPass &&
-      this.#passthroughCopyPass &&
-      this.#presentCopyPass
-    ) {
-      const wlurTextures = this.#getOrCreateWlurOverlayTextures(width, height);
-      const wlurCacheKey = this.#buildWlurOverlayCacheKey(width, height, resolvedWlurOverlay);
-      const wlurNeedsUpdate =
-        !resolvedWlurOverlay.cache ||
-        !this.#wlurOverlayCacheValid ||
-        this.#wlurOverlayCacheKey !== wlurCacheKey ||
-        state.dirty ||
-        hasAnimatingContent;
-
-      const qualityKey = [
-        resolvedWlurOverlay.quality.kernelSize,
-        resolvedWlurOverlay.quality.resolutionScale,
-      ].join("|");
-      if (qualityKey !== this.#wlurLastQualityKey) {
-        this.#wlurPass.updateConfig({ quality: resolvedWlurOverlay.quality });
-        this.#wlurLastQualityKey = qualityKey;
-      }
-
-      markPhaseStart("wlur-overlay");
-      this.#writeGpuTimestampMarker(encoder, gpuCapture, "wlur-overlay", "start");
-      if (wlurNeedsUpdate) {
-        if (this.#canvasFormat === this.#colorConfig.intermediateFormat) {
-          encoder.copyTextureToTexture(
-            { texture },
-            { texture: wlurTextures.input },
-            { width, height },
-          );
-        } else {
-          this.#passthroughCopyPass.encode(encoder, texture, wlurTextures.input);
-        }
-
-        this.#wlurPass.encode(
-          encoder,
-          wlurTextures.input,
-          wlurTextures.output,
-          width,
-          height,
-          resolvedWlurOverlay.params,
-        );
-
-        if (resolvedWlurOverlay.cache) {
-          this.#wlurOverlayCacheValid = true;
-          this.#wlurOverlayCacheKey = wlurCacheKey;
-        } else {
-          this.#invalidateWlurOverlayCache();
-        }
-      }
-
-      if (this.#canvasFormat === this.#colorConfig.intermediateFormat) {
-        encoder.copyTextureToTexture(
-          { texture: wlurTextures.output },
-          { texture },
-          { width, height },
-        );
-      } else {
-        this.#presentCopyPass!.encode(encoder, wlurTextures.output, targetView);
-      }
-      this.#writeGpuTimestampMarker(encoder, gpuCapture, "wlur-overlay", "end");
-      markPhaseEnd("wlur-overlay");
-    } else {
-      this.#invalidateWlurOverlayCache();
-    }
-
     // Pass 2a: Action layer blur overlay
     // Blur+dim everything, then re-render selected entities sharp on top
     const blurIntensity = actionLayerController.getBlurIntensity();
@@ -2058,6 +1984,84 @@ export class InfiniteCanvasRenderer {
       selectionRectPass.end();
       this.#writeGpuTimestampMarker(encoder, gpuCapture, "selection-rects", "end");
       markPhaseEnd("selection-rects");
+    }
+
+    // Final pass: WLUR progressive blur overlay (renders on top of everything)
+    const resolvedWlurOverlay = resolveWlurOverlayRuntimeConfig(
+      this.#wlurOverlayConfig,
+      height,
+      dpr,
+    );
+    if (
+      resolvedWlurOverlay &&
+      this.#wlurPass &&
+      this.#passthroughCopyPass &&
+      this.#presentCopyPass
+    ) {
+      const wlurTextures = this.#getOrCreateWlurOverlayTextures(width, height);
+      const wlurCacheKey = this.#buildWlurOverlayCacheKey(width, height, resolvedWlurOverlay);
+      const wlurNeedsUpdate =
+        !resolvedWlurOverlay.cache ||
+        !this.#wlurOverlayCacheValid ||
+        this.#wlurOverlayCacheKey !== wlurCacheKey ||
+        state.dirty ||
+        hasAnimatingContent ||
+        this.#disintegrationOverlays.size > 0 ||
+        blurIntensity > 0.01 ||
+        state.dragSelectBounds !== null;
+
+      const qualityKey = [
+        resolvedWlurOverlay.quality.kernelSize,
+        resolvedWlurOverlay.quality.resolutionScale,
+      ].join("|");
+      if (qualityKey !== this.#wlurLastQualityKey) {
+        this.#wlurPass.updateConfig({ quality: resolvedWlurOverlay.quality });
+        this.#wlurLastQualityKey = qualityKey;
+      }
+
+      markPhaseStart("wlur-overlay");
+      this.#writeGpuTimestampMarker(encoder, gpuCapture, "wlur-overlay", "start");
+      if (wlurNeedsUpdate) {
+        if (this.#canvasFormat === this.#colorConfig.intermediateFormat) {
+          encoder.copyTextureToTexture(
+            { texture },
+            { texture: wlurTextures.input },
+            { width, height },
+          );
+        } else {
+          this.#passthroughCopyPass.encode(encoder, texture, wlurTextures.input);
+        }
+
+        this.#wlurPass.encode(
+          encoder,
+          wlurTextures.input,
+          wlurTextures.output,
+          width,
+          height,
+          resolvedWlurOverlay.params,
+        );
+
+        if (resolvedWlurOverlay.cache) {
+          this.#wlurOverlayCacheValid = true;
+          this.#wlurOverlayCacheKey = wlurCacheKey;
+        } else {
+          this.#invalidateWlurOverlayCache();
+        }
+      }
+
+      if (this.#canvasFormat === this.#colorConfig.intermediateFormat) {
+        encoder.copyTextureToTexture(
+          { texture: wlurTextures.output },
+          { texture },
+          { width, height },
+        );
+      } else {
+        this.#presentCopyPass!.encode(encoder, wlurTextures.output, targetView);
+      }
+      this.#writeGpuTimestampMarker(encoder, gpuCapture, "wlur-overlay", "end");
+      markPhaseEnd("wlur-overlay");
+    } else {
+      this.#invalidateWlurOverlayCache();
     }
 
     // Single submission for all passes
