@@ -179,6 +179,8 @@ export function MobileColorKnobs() {
       showFloatingLabel("Preserve Colors");
     } else if (id === REVERSE_PALETTE_ID) {
       showFloatingLabel("Reverse Palette");
+    } else if (id === "") {
+      showFloatingLabel("Mixed Palettes");
     }
   };
 
@@ -224,7 +226,7 @@ export function MobileColorKnobs() {
             aria-label="Color palette selection"
           >
             {paletteParam.isMixed && (
-              <SliderPickerMixedItem className="mobile-style-knobs__item mobile-color-knobs__item">
+              <SliderPickerMixedItem className="mobile-style-knobs__item">
                 <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
                   <QuestionMark />
                 </button>
