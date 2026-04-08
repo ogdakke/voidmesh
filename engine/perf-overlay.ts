@@ -10,6 +10,14 @@ export interface FrameStats {
   renderTime: number;
   entityCount: number;
   renderedCount: number;
+  gpuSupported?: boolean;
+  gpuTime?: number;
+  gpuGridTime?: number;
+  gpuEntityTime?: number;
+  gpuWlurTime?: number;
+  gpuActionLayerBlurTime?: number;
+  gpuActionLayerSharpTime?: number;
+  gpuSelectionTime?: number;
 }
 
 const RING_SIZE = 300; // 5 seconds at 60fps
@@ -34,6 +42,29 @@ class PerfOverlayController {
   #framesSinceUpdate = 0;
   #lastEntityCount = 0;
   #lastRenderedCount = 0;
+  #gpuSamples = new Float64Array(RING_SIZE);
+  #gpuIndex = 0;
+  #gpuCount = 0;
+  #lastGpuStats: Pick<
+    FrameStats,
+    | "gpuSupported"
+    | "gpuTime"
+    | "gpuGridTime"
+    | "gpuEntityTime"
+    | "gpuWlurTime"
+    | "gpuActionLayerBlurTime"
+    | "gpuActionLayerSharpTime"
+    | "gpuSelectionTime"
+  > = {
+    gpuSupported: false,
+    gpuTime: 0,
+    gpuGridTime: 0,
+    gpuEntityTime: 0,
+    gpuWlurTime: 0,
+    gpuActionLayerBlurTime: 0,
+    gpuActionLayerSharpTime: 0,
+    gpuSelectionTime: 0,
+  };
 
   setElement(element: HTMLElement): void {
     this.#element = element;
@@ -75,6 +106,21 @@ class PerfOverlayController {
 
     this.#lastEntityCount = stats.entityCount;
     this.#lastRenderedCount = stats.renderedCount;
+    this.#lastGpuStats = {
+      gpuSupported: stats.gpuSupported ?? false,
+      gpuTime: stats.gpuTime ?? 0,
+      gpuGridTime: stats.gpuGridTime ?? 0,
+      gpuEntityTime: stats.gpuEntityTime ?? 0,
+      gpuWlurTime: stats.gpuWlurTime ?? 0,
+      gpuActionLayerBlurTime: stats.gpuActionLayerBlurTime ?? 0,
+      gpuActionLayerSharpTime: stats.gpuActionLayerSharpTime ?? 0,
+      gpuSelectionTime: stats.gpuSelectionTime ?? 0,
+    };
+    if (stats.gpuSupported && (stats.gpuTime ?? 0) > 0) {
+      this.#gpuSamples[this.#gpuIndex] = stats.gpuTime!;
+      this.#gpuIndex = (this.#gpuIndex + 1) % RING_SIZE;
+      if (this.#gpuCount < RING_SIZE) this.#gpuCount++;
+    }
 
     // Update text at ~2Hz
     this.#framesSinceUpdate++;
@@ -83,9 +129,13 @@ class PerfOverlayController {
 
     const render = this.#computePercentiles(this.#renderSamples, this.#renderCount);
     const frame = this.#computePercentiles(this.#fpsSamples, this.#fpsCount);
+    const gpu = this.#computePercentiles(this.#gpuSamples, this.#gpuCount);
     const fps = frame.median > 0 ? Math.round(1000 / frame.median) : 0;
+    const gpuText = this.#lastGpuStats.gpuSupported
+      ? ` | gpu ${gpu.median.toFixed(1)}ms med | ent ${this.#lastGpuStats.gpuEntityTime?.toFixed(1) ?? "0.0"} | wlur ${this.#lastGpuStats.gpuWlurTime?.toFixed(1) ?? "0.0"} | act ${this.#lastGpuStats.gpuActionLayerBlurTime?.toFixed(1) ?? "0.0"}`
+      : "";
 
-    const text = `${fps} fps | ${render.median.toFixed(1)}ms med | ${render.p95.toFixed(1)}ms p95 | ${this.#lastRenderedCount}/${this.#lastEntityCount} entities`;
+    const text = `${fps} fps | cpu ${render.median.toFixed(1)}ms med | ${render.p95.toFixed(1)}ms p95${gpuText} | ${this.#lastRenderedCount}/${this.#lastEntityCount} entities`;
 
     if (text !== this.#cachedText) {
       this.#element.textContent = text;

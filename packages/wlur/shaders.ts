@@ -18,13 +18,13 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 
 const curveSampling = (samplerName: string) => `
 const CURVE_LUT_SIZE: f32 = ${WLUR_CURVE_LUT_SIZE}.0;
-const CURVE_TEXTURE_ROWS: f32 = 2.0;
+const CURVE_TEXTURE_ROWS: f32 = 3.0;
 
 fn sample_curve(curve_texture: texture_2d<f32>, factor: f32, row: f32) -> f32 {
   let clamped_factor = clamp(factor, 0.0, 1.0);
   let u = ((clamped_factor * (CURVE_LUT_SIZE - 1.0)) + 0.5) / CURVE_LUT_SIZE;
   let v = (row + 0.5) / CURVE_TEXTURE_ROWS;
-  return textureSample(curve_texture, ${samplerName}, vec2f(u, v)).r;
+  return textureSampleLevel(curve_texture, ${samplerName}, vec2f(u, v), 0.0).r;
 }
 `;
 
@@ -102,9 +102,18 @@ const HALF_KERNEL: f32 = ${halfKernel}.0;
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   let raw_factor = map_factor(in.uv, params.effect.y, params.effect.z, params.effect.w);
+  let original = textureSampleLevel(input_texture, input_sampler, in.uv, 0.0);
+
+  if (raw_factor <= 0.000001 || params.effect.x <= 0.001 || params.config.x <= 0.001) {
+    return original;
+  }
+
   let factor = sample_curve(curve_texture, raw_factor, 0.0);
   let radius = factor * params.effect.x * params.config.x;
-  let original = textureSample(input_texture, input_sampler, in.uv);
+  if (radius <= 0.001) {
+    return original;
+  }
+
   let sigma = max(radius, 0.001);
   var accum = vec4f(0.0);
   var weight_sum = 0.0;
@@ -113,13 +122,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     let sample_offset = f32(i) - HALF_KERNEL;
     let weight = exp(-(sample_offset * sample_offset) / (2.0 * sigma * sigma));
     let sample_uv = clamp(in.uv + ${texelOffset}, vec2f(0.0), vec2f(1.0));
-    accum = accum + textureSample(input_texture, input_sampler, sample_uv) * weight;
+    accum = accum + textureSampleLevel(input_texture, input_sampler, sample_uv, 0.0) * weight;
     weight_sum = weight_sum + weight;
   }
 
-  let blurred = accum / max(weight_sum, 0.00001);
-  let use_original = select(0.0, 1.0, radius <= 0.001);
-  return mix(blurred, original, use_original);
+  return accum / max(weight_sum, 0.00001);
 }
 `;
 }
@@ -144,10 +151,18 @@ ${curveSampling("tex_sampler")}
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-  let original = textureSample(original_texture, tex_sampler, in.uv);
+  let original = textureSampleLevel(original_texture, tex_sampler, in.uv, 0.0);
   let raw_factor = map_factor(in.uv, params.effect.x, params.effect.y, params.effect.z);
-  let factor = sample_curve(curve_texture, raw_factor, 0.0);
-  let blurred = textureSample(blurred_texture, tex_sampler, in.uv);
+  if (raw_factor <= 0.000001) {
+    return original;
+  }
+
+  let mix_factor = sample_curve(curve_texture, raw_factor, 2.0);
+  if (mix_factor <= 0.000001) {
+    return original;
+  }
+
+  let blurred = textureSampleLevel(blurred_texture, tex_sampler, in.uv, 0.0);
   let tint_factor = sample_curve(curve_texture, raw_factor, 1.0);
   let tint_strength = clamp(tint_factor * params.tint.a, 0.0, 1.0);
   let tinted_blur = vec4f(
@@ -156,10 +171,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   );
   let threshold_blend = select(
     1.0,
-    smoothstep(0.0, params.resolution.z, factor),
+    smoothstep(0.0, params.resolution.z, mix_factor),
     params.resolution.z > 0.001,
   );
-  let blend = select(0.0, threshold_blend, factor > 0.0);
+  let blend = select(0.0, threshold_blend, mix_factor > 0.0);
   return mix(original, tinted_blur, blend);
 }
 `;
@@ -191,8 +206,11 @@ fn rand(st: vec2f) -> f32 {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-  let color = textureSample(input_texture, input_sampler, in.uv);
+  let color = textureSampleLevel(input_texture, input_sampler, in.uv, 0.0);
   let raw_factor = map_factor(in.uv, params.effect.x, params.effect.y, params.effect.z);
+  if (raw_factor <= 0.000001) {
+    return color;
+  }
   let factor = sample_curve(curve_texture, raw_factor, 0.0);
   let strength = min(factor * params.resolution.z, params.resolution.z);
 

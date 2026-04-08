@@ -13,6 +13,7 @@ import { createEnum } from "#types/index.ts";
 import type { ColorSpace } from "#types/enums.ts";
 import type { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
 import type { ImageExportOptions } from "#renderer/export-formats.ts";
+import type { WlurOverlayDebugConfig } from "#renderer/wlur-debug.ts";
 import type { DeserializeResult } from "#lib/serialization/types.ts";
 import type { Options } from "nuqs";
 import type { PartialDeep } from "type-fest";
@@ -92,6 +93,10 @@ export interface CanvasRendererService {
   registerRenderer: (renderer: InfiniteCanvasRenderer) => void;
   renderer: InfiniteCanvasRenderer | null;
   colorSpace: ColorSpace;
+  debugMode: boolean;
+  wlurDebugConfig: WlurOverlayDebugConfig;
+  setWlurDebugConfig: (updates: Partial<WlurOverlayDebugConfig>) => void;
+  resetWlurDebugConfig: () => void;
 }
 
 const CanvasCommandsContext = createContext<CanvasCommands | null>(null);
@@ -151,6 +156,10 @@ export function useSelectedShaderType(): ShaderType {
 
 export function useMultiSelectMode(): boolean {
   return useCanvasSelector((state) => state.multiSelectMode);
+}
+
+export function useDebugMode(): boolean {
+  return useCanvasSelector((state) => state.debugMode);
 }
 
 export function useContextOpenEntityId(): string | null {

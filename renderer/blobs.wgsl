@@ -113,50 +113,25 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   let pixelPos = fragCoord.xy;
   let currentCell = getCellIndex(pixelPos);
 
-  // Pre-sample all 25 cells in uniform control flow (5x5 kernel)
-  // Expanded from 3x3 to allow dots to extend beyond cell boundaries
-  // Each cell stores: rgb = color, w = radius
-  var cellData: array<vec4f, 25>;
-  var cellCenters: array<vec2f, 25>;
-  var cellValid: array<bool, 25>;
-
   // Max radius with scale applied
   let maxRadius = uniforms.cellSize * 0.75 * uniforms.scale;
-
-  for (var i: u32 = 0u; i < 25u; i++) {
-    let dy = i32(i / 5u) - 2;
-    let dx = i32(i % 5u) - 2;
-    let neighborCell = currentCell + vec2f(f32(dx), f32(dy));
-
-    // Get cell center with stagger offset
-    let cellCenter = getCellCenter(neighborCell);
-    cellCenters[i] = cellCenter;
-
-    // Check if cell center is within canvas bounds (not just cell index)
-    let valid = cellCenter.x >= 0.0 && cellCenter.y >= 0.0 &&
-                cellCenter.x <= uniforms.resolution.x && cellCenter.y <= uniforms.resolution.y;
-    cellValid[i] = valid;
-
-    // Sample texture (always, to maintain uniform control flow)
-    let sampleUV = clamp(cellCenter / uniforms.resolution, vec2f(0.0), vec2f(1.0));
-    let sourceColor = textureSample(sourceTexture, sourceSampler, sampleUV);
-    // Apply intensity to brightness curve (higher intensity = more contrast)
-    let rawBrightness = luminance(sourceColor.rgb);
-    let brightness = pow(rawBrightness, max(uniforms.intensity, 0.01));
-    // When preserveColors is true: bright = large dots (to show white/bright colors)
-    // When preserveColors is false: dark = large dots (traditional halftone)
-    let brightnessFactor = select(1.0 - brightness, brightness, uniforms.preserveColors == 1u);
-    let shapeRadius = sqrt(brightnessFactor) * maxRadius;
-
-    cellData[i] = vec4f(sourceColor.rgb, shapeRadius);
-  }
-
-  // Current cell is at index 12 (center of 5x5 grid)
-  let currentColor = cellData[12].rgb;
-  let currentRadius = cellData[12].w;
-  let currentCenter = cellCenters[12];
-  // Compute k for smin based on eagerness (map 0-1 to useful range)
   let k = uniforms.eagerness * uniforms.cellSize * 1.5;
+  // Conservative influence bound used to skip neighbor cells that cannot affect this pixel.
+  let maxInfluence = maxRadius + k + 2.0;
+  let neighborReachX = select(1, 2, maxInfluence > uniforms.cellSize * 1.05);
+  let neighborReachY = select(1, 2, maxInfluence > (uniforms.cellSize * 0.866) * 1.05);
+
+  let currentCenter = getCellCenter(currentCell);
+  let currentSampleUV = clamp(currentCenter / uniforms.resolution, vec2f(0.0), vec2f(1.0));
+  let currentColor = textureSampleLevel(sourceTexture, sourceSampler, currentSampleUV, 0.0).rgb;
+  let currentRawBrightness = luminance(currentColor);
+  let currentBrightness = pow(currentRawBrightness, max(uniforms.intensity, 0.01));
+  let currentBrightnessFactor = select(
+    1.0 - currentBrightness,
+    currentBrightness,
+    uniforms.preserveColors == 1u,
+  );
+  let currentRadius = sqrt(currentBrightnessFactor) * maxRadius;
 
   // Initialize with current cell's distance
   var minDist = sdDot(pixelPos, currentCenter, currentRadius);
@@ -165,16 +140,38 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   var closestDist = minDist;
   var closestColor = currentColor;
 
-  // Process all neighbors — smin merges ALL dots, eagerness controls amount
+  // Process neighboring cells. We skip cells whose maximum possible influence
+  // cannot reach the current pixel, which cuts a lot of unnecessary samples.
   for (var i: u32 = 0u; i < 25u; i++) {
-    if (i == 12u) { continue; }  // Skip center cell
+    let dy = i32(i / 5u) - 2;
+    let dx = i32(i % 5u) - 2;
+    if (dx == 0 && dy == 0) { continue; }
+    if (abs(dx) > neighborReachX || abs(dy) > neighborReachY) { continue; }
 
-    let neighborColor = cellData[i].rgb;
-    let neighborRadius = cellData[i].w;
-    let neighborCenter = cellCenters[i];
+    let neighborCell = currentCell + vec2f(f32(dx), f32(dy));
+    let neighborCenter = getCellCenter(neighborCell);
+    if (
+      neighborCenter.x < 0.0 || neighborCenter.y < 0.0 ||
+      neighborCenter.x > uniforms.resolution.x || neighborCenter.y > uniforms.resolution.y
+    ) {
+      continue;
+    }
 
-    // Skip invalid or zero-radius neighbors
-    if (!cellValid[i] || neighborRadius <= 0.5) { continue; }
+    let delta = abs(pixelPos - neighborCenter);
+    if (delta.x > maxInfluence || delta.y > maxInfluence) { continue; }
+
+    let sampleUV = clamp(neighborCenter / uniforms.resolution, vec2f(0.0), vec2f(1.0));
+    let sourceColor = textureSampleLevel(sourceTexture, sourceSampler, sampleUV, 0.0);
+    let rawBrightness = luminance(sourceColor.rgb);
+    let brightness = pow(rawBrightness, max(uniforms.intensity, 0.01));
+    let brightnessFactor = select(
+      1.0 - brightness,
+      brightness,
+      uniforms.preserveColors == 1u,
+    );
+    let neighborRadius = sqrt(brightnessFactor) * maxRadius;
+    if (neighborRadius <= 0.5) { continue; }
+    let neighborColor = sourceColor.rgb;
 
     let dist = sdDot(pixelPos, neighborCenter, neighborRadius);
 

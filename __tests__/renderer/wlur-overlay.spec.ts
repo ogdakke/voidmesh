@@ -2,6 +2,7 @@ import {
   createDefaultWlurOverlayConfig,
   resolveWlurOverlayRuntimeConfig,
 } from "#renderer/wlur-overlay.ts";
+import { sampleWlurCurve } from "#wlur";
 import { describe, expect, test } from "vitest";
 
 describe("wlur overlay config", () => {
@@ -44,6 +45,7 @@ describe("wlur overlay config", () => {
     expect(resolved!.params.offset).toBeLessThanOrEqual(1);
     expect(resolved!.params.interpolation).toBeGreaterThanOrEqual(0);
     expect(resolved!.params.interpolation).toBeLessThanOrEqual(1);
+    expect(sampleWlurCurve(resolved!.params.mixCurve, 0.5)).toBeLessThan(0.5);
     expect(resolved!.quality.kernelSize % 2).toBe(1);
     expect(resolved!.quality.resolutionScale).toBeGreaterThan(0);
     expect(resolved!.quality.resolutionScale).toBeLessThanOrEqual(1);

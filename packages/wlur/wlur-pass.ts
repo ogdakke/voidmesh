@@ -84,7 +84,7 @@ export class WlurPass {
     });
     this.#curveTexture = this.#device.createTexture({
       label: `${this.#label} curve LUT`,
-      size: [WLUR_CURVE_LUT_SIZE, 2],
+      size: [WLUR_CURVE_LUT_SIZE, 3],
       format: "rgba8unorm",
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
     });
@@ -149,7 +149,8 @@ export class WlurPass {
     const resolvedParams = clampWlurParams(params);
     const baseCurve = resolveWlurCurve(resolvedParams.curve);
     const tintCurve = resolveWlurCurve(resolvedParams.tint?.curve ?? resolvedParams.curve);
-    this.#updateCurveTexture(baseCurve, tintCurve);
+    const mixCurve = resolveWlurCurve(resolvedParams.mixCurve ?? resolvedParams.curve);
+    this.#updateCurveTexture(baseCurve, tintCurve, mixCurve);
 
     if (resolvedParams.radius <= 0.001 && resolvedParams.noise <= 0.001) {
       this.#encodeCopyPass(encoder, inputTexture, outputTexture);
@@ -174,6 +175,8 @@ export class WlurPass {
     const directionIndex = wlurDirectionToIndex(resolvedParams.direction);
     const radiusScale = needsScaledInput ? working.scale : 1;
 
+    const compositeTarget = resolvedParams.noise > 0.001 ? scratch.composite : outputTexture;
+    const restoreThreshold = needsScaledInput ? 0.05 : 0.001;
     this.#writeBlurUniforms(
       this.#blurXUniformBuffer,
       working.width,
@@ -217,9 +220,6 @@ export class WlurPass {
       scratch.blurOutput,
       `${this.#label} blur Y pass`,
     );
-
-    const compositeTarget = resolvedParams.noise > 0.001 ? scratch.composite : outputTexture;
-    const restoreThreshold = needsScaledInput ? 0.05 : 0.001;
 
     this.#writeCompositeUniforms(
       width,
@@ -557,25 +557,30 @@ export class WlurPass {
   #updateCurveTexture(
     baseCurve: WlurCurveInput | undefined,
     tintCurve: WlurCurveInput | undefined,
+    mixCurve: WlurCurveInput | undefined,
   ): void {
     if (!this.#curveTexture) return;
 
-    const key = `${getWlurCurveKey(baseCurve)}|${getWlurCurveKey(tintCurve)}`;
+    const key = [
+      getWlurCurveKey(baseCurve),
+      getWlurCurveKey(tintCurve),
+      getWlurCurveKey(mixCurve),
+    ].join("|");
     if (key === this.#curveTextureKey) {
       return;
     }
 
-    const data = createPackedWlurCurveRows([baseCurve, tintCurve] as const);
+    const data = createPackedWlurCurveRows([baseCurve, tintCurve, mixCurve] as const);
     this.#device.queue.writeTexture(
       { texture: this.#curveTexture },
       data,
       {
         bytesPerRow: WLUR_CURVE_LUT_SIZE * 4,
-        rowsPerImage: 2,
+        rowsPerImage: 3,
       },
       {
         width: WLUR_CURVE_LUT_SIZE,
-        height: 2,
+        height: 3,
         depthOrArrayLayers: 1,
       },
     );

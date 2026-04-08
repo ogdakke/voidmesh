@@ -305,14 +305,18 @@ export function InfiniteSlider({
 
     const handleTouchStart = (e: TouchEvent) => {
       if (e.touches.length !== 1) return;
-      e.preventDefault();
+      if (e.cancelable) {
+        e.preventDefault();
+      }
       touchActiveRef.current = true;
       engineRef.current?.handlePointerDown(e.touches[0]!.clientX);
     };
 
     const handleTouchMove = (e: TouchEvent) => {
       if (!touchActiveRef.current || e.touches.length !== 1) return;
-      e.preventDefault();
+      if (e.cancelable) {
+        e.preventDefault();
+      }
       engineRef.current?.handlePointerMove(e.touches[0]!.clientX);
     };
 

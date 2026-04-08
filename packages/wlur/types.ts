@@ -62,6 +62,13 @@ export interface WlurParams {
    */
   curve?: WlurCurveInput;
   /**
+   * Optional CSS-compatible cubic-bezier curve for the final composite mix.
+   *
+   * This controls how quickly the blurred result replaces the original image.
+   * When omitted, wlur reuses `curve`.
+   */
+  mixCurve?: WlurCurveInput;
+  /**
    * Normalized point where the directional blur starts.
    *
    * Range: `[0, 1]`.
@@ -140,7 +147,9 @@ export const DEFAULT_WLUR_CURVE = Object.freeze([0, 0, 1, 1] as const) satisfies
  * The first five mirror the familiar CSS timing functions.
  * The overlay presets are tuned for bottom-edge blur/tint overlays:
  * `overlayQuickFade` concentrates strength nearer the edge,
- * while `overlayEdgeHold` lets the strong region linger longer before fading.
+ * `overlayEdgeHold` lets the strong region linger longer before fading,
+ * and `overlaySoftMix` keeps the top edge gentler when compositing back over
+ * the original image.
  */
 export const WLUR_CURVES = Object.freeze({
   linear: DEFAULT_WLUR_CURVE,
@@ -150,6 +159,7 @@ export const WLUR_CURVES = Object.freeze({
   easeInOut: [0.42, 0, 0.58, 1] as const,
   overlayQuickFade: [0.55, 0, 1, 0.45] as const,
   overlayEdgeHold: [0.28, 0.78, 0.5, 1] as const,
+  overlaySoftMix: [0.55, 0, 0.7, 0.32] as const,
 }) satisfies Record<string, WlurCurve>;
 
 export const DEFAULT_WLUR_PARAMS = Object.freeze({

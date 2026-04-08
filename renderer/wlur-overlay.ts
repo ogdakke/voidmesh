@@ -53,10 +53,11 @@ export interface ResolvedWlurOverlayConfig {
 
 const MOBILE_OVERLAY_PARAMS = Object.freeze({
   ...DEFAULT_WLUR_PARAMS,
-  offset: 0.7,
+  offset: 0.64,
   interpolation: 0.4,
   direction: "down",
   radius: 80,
+  noise: 0,
 } satisfies WlurParams);
 
 const DESKTOP_OVERLAY_PARAMS = Object.freeze({
@@ -64,11 +65,10 @@ const DESKTOP_OVERLAY_PARAMS = Object.freeze({
   offset: 0.95,
   interpolation: 0.4,
   direction: "down",
-  radius: 30,
+  radius: 80,
 } satisfies WlurParams);
 
 export function createDefaultWlurOverlayConfig(layout: WlurOverlayLayout = {}): WlurOverlayConfig {
-  const isMobile = layout.isMobile ?? false;
   const tint =
     layout.tintColor != null
       ? {
@@ -82,10 +82,14 @@ export function createDefaultWlurOverlayConfig(layout: WlurOverlayLayout = {}): 
     enabled: true,
     cache: true,
     layout,
-    params: { tint, curve: WLUR_CURVES.linear },
+    params: {
+      tint,
+      curve: WLUR_CURVES.overlayQuickFade,
+      mixCurve: WLUR_CURVES.overlaySoftMix,
+    },
     quality: {
-      kernelSize: 63,
-      resolutionScale: isMobile ? 0.5 : 0.75,
+      kernelSize: 25,
+      resolutionScale: 0.5,
     },
   };
 }

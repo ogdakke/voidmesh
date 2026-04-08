@@ -143,6 +143,7 @@ vite.config.ts.timestamp-*
 
 # data
 data/
+traces/
 
 # msdf-atlas-gen build tool (cloned and built locally)
 msdf-atlas-gen/

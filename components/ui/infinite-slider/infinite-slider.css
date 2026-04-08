@@ -25,6 +25,7 @@
     width: 100%;
     height: calc(var(--tick-h));
     cursor: grab;
+    touch-action: none;
     mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent);
     -webkit-mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent);
   }

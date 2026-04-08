@@ -58,6 +58,7 @@ export function clampWlurParams(params?: Partial<WlurParams>): WlurParams {
   return {
     radius: Math.max(0, params?.radius ?? DEFAULT_WLUR_PARAMS.radius),
     ...(params?.curve !== undefined ? { curve: resolveWlurCurve(params.curve) } : {}),
+    ...(params?.mixCurve !== undefined ? { mixCurve: resolveWlurCurve(params.mixCurve) } : {}),
     offset: clamp(params?.offset ?? DEFAULT_WLUR_PARAMS.offset, 0, 1),
     interpolation: clamp(params?.interpolation ?? DEFAULT_WLUR_PARAMS.interpolation, 0, 1),
     direction: resolvedDirection,

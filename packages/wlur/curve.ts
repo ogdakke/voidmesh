@@ -159,11 +159,12 @@ export function createWlurCurveLut(
 }
 
 export function createPackedWlurCurveRows(
-  rows: readonly [WlurCurveInput | undefined, WlurCurveInput | undefined],
+  rows: readonly (WlurCurveInput | undefined)[],
   sampleCount = WLUR_CURVE_LUT_SIZE,
 ): Uint8Array {
   const count = Math.max(2, Math.round(sampleCount));
-  const data = new Uint8Array(count * 2 * 4);
+  const rowCount = Math.max(rows.length, 1);
+  const data = new Uint8Array(count * rowCount * 4);
   const luts = rows.map((curve) => createWlurCurveLut(curve, count));
 
   for (let row = 0; row < luts.length; row++) {

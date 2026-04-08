@@ -41,6 +41,7 @@ type WlurDirection = "down" | "up" | "right" | "left";
 interface WlurParams {
   radius: number;
   curve?: readonly [number, number, number, number];
+  mixCurve?: readonly [number, number, number, number];
   offset: number;
   interpolation: number;
   direction: WlurDirection;
@@ -90,7 +91,8 @@ Exports live in [index.ts](/Users/danielwargh/.codex/worktrees/5e09/voidmesh/pac
 `WlurParams` follows the same mental model as Glur:
 
 - `radius`: maximum blur radius when the effect is fully active
-- `curve`: CSS-compatible cubic-bezier shaping applied to the wlur ramp
+- `curve`: CSS-compatible cubic-bezier shaping applied to blur strength
+- `mixCurve`: optional CSS-compatible cubic-bezier shaping applied to the final composite mix
 - `offset`: normalized point where the effect starts
 - `interpolation`: normalized distance over which blur ramps from 0 to full strength
 - `direction`: which edge or side the blur grows from
@@ -103,6 +105,7 @@ Examples:
 - right-edge blur: `{ direction: "right", offset: 0.8, interpolation: 0.2 }`
 - frosted white bottom blur: `{ direction: "down", offset: 0.75, interpolation: 0.25, tint: { color: [1, 1, 1], amount: 0.18 } }`
 - quicker bottom-edge fade: `{ curve: [0.55, 0, 1, 0.45] }`
+- subtler top-edge composite fade: `{ mixCurve: [0.55, 0, 0.9, 0.32] }`
 - stronger tint edge with a different falloff: `{ tint: { color: [1, 1, 1], amount: 1, curve: [0.28, 0.78, 0.5, 1] } }`
 
 Notes:
@@ -111,6 +114,7 @@ Notes:
 - `radius` and `noise` are clamped to `>= 0`
 - tint colors are clamped into `[0, 1]` and tint amount is clamped to `>= 0`
 - curves use CSS-compatible control points `[x1, y1, x2, y2]`, so values from common online easing generators can be pasted directly as numbers
+- `mixCurve` defaults to `curve` when omitted, so a single curve still controls the whole effect unless you want to split them apart
 - when both `radius` and `noise` are effectively zero, `wlur` becomes a copy pass
 
 ## Curve Presets
@@ -124,11 +128,13 @@ Notes:
 - `easeInOut`
 - `overlayQuickFade`
 - `overlayEdgeHold`
+- `overlaySoftMix`
 
 The overlay presets are tuned for fullscreen bottom overlays:
 
 - `overlayQuickFade` concentrates more strength near the edge and fades faster through the ramp
 - `overlayEdgeHold` keeps the strong edge around longer before fading
+- `overlaySoftMix` keeps the very top edge gentler by ramping the composite in more slowly
 
 Example:
 
@@ -138,6 +144,7 @@ import { WLUR_CURVES } from "#wlur";
 const params = {
   radius: 20,
   curve: WLUR_CURVES.overlayQuickFade,
+  mixCurve: WLUR_CURVES.overlaySoftMix,
   offset: 0.75,
   interpolation: 0.25,
   direction: "down",
@@ -152,14 +159,14 @@ const params = {
 
 ## Quality Controls
 
-`WlurQuality` exposes implementation-oriented tuning:
+`WlurQuality` exposes the main Gaussian blur tuning:
 
 - `kernelSize`: odd Gaussian kernel size, clamped to `3..127`
 - `resolutionScale`: internal working resolution, clamped to `0.1..1`
 
 Guidelines:
 
-- use `kernelSize: 63` for a strong default
+- use `kernelSize: 45` for a strong but still-performant fullscreen default
 - reduce `resolutionScale` for large fullscreen passes
 - keep `resolutionScale: 1` for smaller or detail-sensitive entity passes
 
@@ -187,6 +194,7 @@ wlur.encode(encoder, inputTexture, outputTexture, width, height, {
   ...DEFAULT_WLUR_PARAMS,
   radius: 14,
   curve: [0.55, 0, 1, 0.45],
+  mixCurve: [0.55, 0, 0.9, 0.32],
   offset: 0.75,
   interpolation: 0.25,
   direction: "down",

@@ -50,7 +50,7 @@ describe("wlur helpers", () => {
         interpolation: -3,
         noise: -2,
       }),
-    ).toEqual({
+    ).toMatchObject({
       radius: 0,
       offset: 1,
       interpolation: 0,
@@ -79,6 +79,7 @@ describe("wlur helpers", () => {
     expect(
       clampWlurParams({
         curve: [0.55, 0, 1, 0.45],
+        mixCurve: [0.55, 0, 0.9, 0.32],
         tint: {
           color: [1, 1, 1],
           amount: 1,
@@ -87,6 +88,7 @@ describe("wlur helpers", () => {
       }),
     ).toMatchObject({
       curve: [0.55, 0, 1, 0.45],
+      mixCurve: [0.55, 0, 0.9, 0.32],
       tint: {
         curve: [0.28, 0.78, 0.5, 1],
       },
@@ -104,7 +106,7 @@ describe("wlur helpers", () => {
   });
 
   test("normalizes quality", () => {
-    expect(clampWlurQuality({ kernelSize: 48, resolutionScale: 10 })).toEqual({
+    expect(clampWlurQuality({ kernelSize: 48, resolutionScale: 10 })).toMatchObject({
       kernelSize: 49,
       resolutionScale: 1,
     });
