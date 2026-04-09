@@ -87,21 +87,13 @@ Static media images live in `media/` (not `public/media/`). Import via `#media/*
 
 ## Source Code Reference
 
-Source code for dependencies is available in `opensrc/` for deeper understanding of implementation details.
+Source code for dependencies is cached at `~/.opensrc/`.
 
-See `opensrc/sources.json` for the list of available packages and their versions.
-
-Use this source code when you need to understand how a package works internally, not just its types/interface.
-
-### Fetching Additional Source Code
-
-To fetch source code for a package or repository you need to understand, run:
+Use `opensrc path` inside other commands to read source:
 
 ```bash
-npx opensrc <package>           # npm package (e.g., npx opensrc zod)
-npx opensrc pypi:<package>      # Python package (e.g., npx opensrc pypi:requests)
-npx opensrc crates:<package>    # Rust crate (e.g., npx opensrc crates:serde)
-npx opensrc <owner>/<repo>      # GitHub repo (e.g., npx opensrc vercel/ai)
+rg "pattern" $(opensrc path <package>)
+cat $(opensrc path <package>)/path/to/file
 ```
 
 <!-- opensrc:end -->
