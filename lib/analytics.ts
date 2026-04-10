@@ -5,6 +5,8 @@ export interface AnalyticsProvider {
 export interface AnalyticsEventMap {
   "action_layer.opened": { entity_count: number };
   "action_layer.button_selected": { button: string };
+  "app.crash_recovered": Record<string, unknown>;
+  "app.error": Record<string, unknown>;
   "entity.deleted": {
     method: "drop_zone" | "keyboard" | "context_menu";
     entity_count: number;
@@ -12,6 +14,8 @@ export interface AnalyticsEventMap {
   "shader.changed": { from: string; to: string; entity_count: number };
   "entity.added": { media_type: string };
   "entity.duplicated": { entity_count: number };
+  "gpu.device_lost": Record<string, unknown>;
+  "gpu.uncaptured_error": Record<string, unknown>;
 }
 
 class Analytics {

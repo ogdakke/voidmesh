@@ -54,6 +54,7 @@ import { preferences } from "#lib/storage.ts";
 import { paletteStore } from "#lib/palette-store.ts";
 import { analytics } from "#lib/analytics.ts";
 import { logger } from "#lib/client.logger.ts";
+import { crashReporter, summarizeEntities } from "#lib/crash-reporting.ts";
 import { downloadBlob } from "#lib/download.ts";
 import { deepMerge } from "#lib/deep-merge.ts";
 import { applyShaderDefaults } from "#lib/shader-defaults.ts";
@@ -447,6 +448,43 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   const rendererRef = useRef<InfiniteCanvasRenderer | null>(null);
   const [rendererState, setRendererState] = useState<InfiniteCanvasRenderer | null>(null);
   const [colorSpace, setColorSpace] = useState<ColorSpace>(ColorSpace.srgb);
+
+  useEffect(() => {
+    crashReporter.setCanvasSnapshotProvider(() => {
+      const state = canvasStore.getState();
+      const entities = Array.from(state.entities.values());
+      const summary = summarizeEntities(entities, state.selectedEntityIds);
+
+      return {
+        entityCount: summary.entityCount,
+        selectedCount: summary.selectedCount,
+        mediaTypeCounts: summary.mediaTypeCounts,
+        shaderTypeCounts: summary.shaderTypeCounts,
+        totalPixels: summary.totalPixels,
+        selectedPixels: summary.selectedPixels,
+        maxWidth: summary.maxWidth,
+        maxHeight: summary.maxHeight,
+        memoryEstimate: summary.memoryEstimate,
+        viewport: {
+          zoom: state.viewport.zoom,
+          offsetX: state.viewport.offset.x,
+          offsetY: state.viewport.offset.y,
+        },
+        preferences: {
+          snapToGrid: state.snapToGrid,
+          fancyDelete: state.fancyDelete,
+          haptics: state.haptics,
+        },
+      };
+    });
+
+    crashReporter.setRendererSnapshotProvider(() => rendererRef.current?.getFrameStats() ?? null);
+
+    return () => {
+      crashReporter.setCanvasSnapshotProvider(null);
+      crashReporter.setRendererSnapshotProvider(null);
+    };
+  }, []);
   const colorSpaceRef = useRef<ColorSpace>(ColorSpace.srgb);
   colorSpaceRef.current = colorSpace;
 
@@ -672,7 +710,9 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
     const previousPosition = { ...entity.position };
     canvasStore.moveEntity(id, delta);
-    const newPosition = { ...canvasStore.getState().entities.get(id)!.position };
+    const newPosition = {
+      ...canvasStore.getState().entities.get(id)!.position,
+    };
 
     undo.add(
       Command.create({
@@ -723,18 +763,42 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     const selected = canvasStore.getSelectedEntities();
     if (selected.length === 0) return [];
 
+    const state = canvasStore.getState();
+    const selectedIds = new Set(selected.map((entity) => entity.id));
+    crashReporter.recordAction("entity.duplicate.requested", {
+      entity_count: selected.length,
+      selection: summarizeEntities(selected, selectedIds),
+      workspace: summarizeEntities(Array.from(state.entities.values()), state.selectedEntityIds),
+    });
     analytics.track("entity.duplicated", { entity_count: selected.length });
 
-    // Clone all media sources in parallel (async: creates independent video elements, bitmaps, etc.)
-    const clones = await Promise.all(
-      selected.map(async (entity) => {
-        const { mediaSource, imageBitmap } = await cloneMediaSource(
-          entity.mediaSource,
-          entity.imageBitmap,
-        );
-        return { entity, mediaSource, imageBitmap };
-      }),
-    );
+    let clones: Array<{
+      entity: ShaderCanvasEntity;
+      mediaSource: ShaderCanvasEntity["mediaSource"];
+      imageBitmap: ImageBitmap;
+    }>;
+
+    try {
+      // Clone all media sources in parallel (async: creates independent video elements, bitmaps, etc.)
+      clones = await Promise.all(
+        selected.map(async (entity) => {
+          const { mediaSource, imageBitmap } = await cloneMediaSource(
+            entity.mediaSource,
+            entity.imageBitmap,
+          );
+          return {
+            entity,
+            mediaSource: mediaSource as ShaderCanvasEntity["mediaSource"],
+            imageBitmap,
+          };
+        }),
+      );
+    } catch (error) {
+      crashReporter.captureException("entity.duplicate.clone_failed", error, {
+        entity_count: selected.length,
+      });
+      throw error;
+    }
 
     const newIds: string[] = [];
     const useTransaction = clones.length > 1;
@@ -797,6 +861,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     if (useTransaction) undo.commitTransaction(`Duplicate ${selected.length} entities`);
 
     canvasStore.replaceSelection(newIds);
+    crashReporter.addBreadcrumb("action", "entity.duplicate.completed", {
+      entity_count: selected.length,
+      new_entity_ids: newIds.length,
+      total_entity_count: canvasStore.getState().entities.size,
+    });
     return newIds;
   };
 
@@ -1534,7 +1603,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     const entities = canvasStore.getSelectedEntities();
     if (entities.length === 0) return;
 
-    analytics.track("entity.deleted", { method: source, entity_count: entities.length });
+    analytics.track("entity.deleted", {
+      method: source,
+      entity_count: entities.length,
+    });
     e?.preventDefault();
     disintegrationController.resetStagger();
 
@@ -1616,7 +1688,9 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         applyEffectsToSelection(parsed);
         const entityCount = canvasStore.getSelectedEntities().length;
         if (entityCount > 1) {
-          toastManager.add({ title: `Applied effects to ${entityCount} entities` });
+          toastManager.add({
+            title: `Applied effects to ${entityCount} entities`,
+          });
         }
         return;
       }
@@ -1629,7 +1703,9 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       setRenderStateFromURL(url.searchParams);
       const entityCount = canvasStore.getSelectedEntities().length;
       if (entityCount > 1) {
-        toastManager.add({ title: `Applied params to ${entityCount} entities` });
+        toastManager.add({
+          title: `Applied params to ${entityCount} entities`,
+        });
       }
       return;
     }

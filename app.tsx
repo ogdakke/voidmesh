@@ -17,6 +17,7 @@ import { PostHogProvider, usePostHog } from "@posthog/react";
 import type { PostHogConfig } from "posthog-js";
 import { analytics } from "#lib/analytics.ts";
 import { PostHogAnalyticsProvider } from "#lib/analytics-posthog.ts";
+import { crashReporter } from "#lib/crash-reporting.ts";
 import { Agentation } from "agentation";
 
 import "./styles/app.css";
@@ -64,7 +65,12 @@ export default function App() {
 
   return (
     <IconoirProvider
-      iconProps={{ color: "currentColor", strokeWidth: 1.5, width: "1em", height: "1em" }}
+      iconProps={{
+        color: "currentColor",
+        strokeWidth: 1.5,
+        width: "1em",
+        height: "1em",
+      }}
     >
       <ToastProvider>
         <PwaUpdateManager />
@@ -73,7 +79,12 @@ export default function App() {
             <ExportQueueProvider>
               <UpscaleQueueProvider>
                 <LayoutProvider
-                  value={{ isFullscreen, toggleFullscreen, setFullscreen, registerPanelToggle }}
+                  value={{
+                    isFullscreen,
+                    toggleFullscreen,
+                    setFullscreen,
+                    registerPanelToggle,
+                  }}
                 >
                   <Suspense fallback={null}>
                     {showMobileLayout ? <MobileLayout /> : <DesktopLayout />}
@@ -91,9 +102,15 @@ export default function App() {
 ReactDOM.createRoot(document.getElementById("root")!, {
   onCaughtError(error, errorInfo) {
     logger.error("[ErrorBoundary]", error, errorInfo.componentStack);
+    crashReporter.captureException("react.caught", error, {
+      componentStack: errorInfo.componentStack,
+    });
   },
   onUncaughtError(error, errorInfo) {
     logger.error("[Uncaught]", error, errorInfo.componentStack);
+    crashReporter.captureException("react.uncaught", error, {
+      componentStack: errorInfo.componentStack,
+    });
   },
 }).render(
   <React.StrictMode>
@@ -118,6 +135,13 @@ function PostHogBridge() {
   return null;
 }
 
+function CrashReporterBridge() {
+  useEffect(() => {
+    crashReporter.initialize();
+  }, []);
+  return null;
+}
+
 if (import.meta.env.DEV) {
   analytics.addProvider({
     track(event, properties) {
@@ -128,11 +152,17 @@ if (import.meta.env.DEV) {
 
 function AnalyticsProvider({ children }: PropsWithChildren) {
   if (typeof window !== "undefined" && window.location.hostname === "localhost") {
-    return children;
+    return (
+      <>
+        <CrashReporterBridge />
+        {children}
+      </>
+    );
   }
   return (
     <PostHogProvider apiKey={import.meta.env.VITE_PUBLIC_POSTHOG_KEY!} options={options}>
       <PostHogBridge />
+      <CrashReporterBridge />
       {children}
     </PostHogProvider>
   );

@@ -1,5 +1,6 @@
 import { analytics } from "#lib/analytics.ts";
 import { logger } from "#lib/client.logger.ts";
+import { crashReporter } from "#lib/crash-reporting.ts";
 import {
   boundsIntersect,
   calculateFitToView,
@@ -353,14 +354,24 @@ export class GameLoop {
 
     // 9. Render only when needed (skip idle frames)
     if (this.#renderer?.isReady && needsRender) {
-      if (renderState.debugMode) performance.mark("studio-render-start");
-      this.#renderer.render(renderState);
-      this.#firstFrameRendered = true;
-      if (renderState.debugMode) {
-        performance.mark("studio-render-end");
-        performance.measure("studio-render", "studio-render-start", "studio-render-end");
+      try {
+        if (renderState.debugMode) performance.mark("studio-render-start");
+        this.#renderer.render(renderState);
+        this.#firstFrameRendered = true;
+        if (renderState.debugMode) {
+          performance.mark("studio-render-end");
+          performance.measure("studio-render", "studio-render-start", "studio-render-end");
+        }
+        this.#deps.perf.tick(this.#renderer.getFrameStats(), renderState.debugMode);
+      } catch (error) {
+        crashReporter.captureException("game_loop.render_failed", error, {
+          entity_count: renderState.entities.length,
+          debug_mode: renderState.debugMode,
+          selected_count: renderState.selectedEntityIds.size,
+          action_layer_active: renderState.actionLayerActive,
+        });
+        throw error;
       }
-      this.#deps.perf.tick(this.#renderer.getFrameStats(), renderState.debugMode);
     }
 
     // 10. Clear dirty flags

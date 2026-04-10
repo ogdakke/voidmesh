@@ -116,7 +116,9 @@ export class InfiniteCanvasRenderer {
   // Callback for error notifications (e.g., to show toast)
   onEntityError?: (entityId: string, error: string) => void;
   // Callback for GPU device lost events
-  onDeviceLost?: (reason: string) => void;
+  onDeviceLost?: (info: GPUDeviceLostInfo) => void;
+  // Callback for uncaptured GPU errors
+  onUncapturedError?: (error: GPUError) => void;
 
   // Entity texture cache
   #entityTextures: Map<string, GPUTexture> = new Map();
@@ -156,8 +158,11 @@ export class InfiniteCanvasRenderer {
 
   // Palette sorting cache - avoid re-sorting every frame
   // Stores { original: RGBA[], sorted: RGBA[] } to detect when palette changes
-  #sortedPaletteCache: { original: readonly RGBA[]; reversed: boolean; sorted: RGBA[] } | null =
-    null;
+  #sortedPaletteCache: {
+    original: readonly RGBA[];
+    reversed: boolean;
+    sorted: RGBA[];
+  } | null = null;
 
   // Reusable canvas for Firefox-compatible video frame upload
   #videoUploadCanvas: OffscreenCanvas | null = null;
@@ -317,11 +322,13 @@ export class InfiniteCanvasRenderer {
 
     this.#device.lost.then((info) => {
       logger.error(`[WebGPU] Device lost: ${info.reason}`, info.message);
-      this.onDeviceLost?.(info.reason);
+      this.onDeviceLost?.(info);
     });
 
     this.#device.addEventListener("uncapturederror", (event) => {
-      logger.warn("[WebGPU] Uncaptured error:", (event as GPUUncapturedErrorEvent).error);
+      const error = (event as GPUUncapturedErrorEvent).error;
+      logger.warn("[WebGPU] Uncaptured error:", error);
+      this.onUncapturedError?.(error);
     });
 
     this.#context = this.canvas.getContext("webgpu");
@@ -982,8 +989,16 @@ export class InfiniteCanvasRenderer {
     this.#actionLayerBlitBindGroupLayout = this.#device.createBindGroupLayout({
       label: "Action layer blit bind group layout",
       entries: [
-        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
-        { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+        {
+          binding: 0,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: "float" },
+        },
+        {
+          binding: 1,
+          visibility: GPUShaderStage.FRAGMENT,
+          sampler: { type: "filtering" },
+        },
         {
           binding: 2,
           visibility: GPUShaderStage.FRAGMENT,
@@ -1505,7 +1520,10 @@ export class InfiniteCanvasRenderer {
 
       this.#device.queue.copyExternalImageToTexture(
         { source: externalSource },
-        { texture: sourceTexture, colorSpace: this.#colorConfig.textureColorSpace },
+        {
+          texture: sourceTexture,
+          colorSpace: this.#colorConfig.textureColorSpace,
+        },
         [width, height],
       );
 
@@ -1876,7 +1894,10 @@ export class InfiniteCanvasRenderer {
             entries: [
               { binding: 0, resource: blurTextures.output.createView() },
               { binding: 1, resource: this.#actionLayerBlitSampler },
-              { binding: 2, resource: { buffer: this.#actionLayerBlitUniformBuffer } },
+              {
+                binding: 2,
+                resource: { buffer: this.#actionLayerBlitUniformBuffer },
+              },
             ],
           });
         }

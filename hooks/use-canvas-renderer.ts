@@ -1,4 +1,5 @@
 import { logger } from "#lib/client.logger.ts";
+import { crashReporter } from "#lib/crash-reporting.ts";
 import { useEffect, useRef, useState } from "react";
 import { InfiniteCanvasRenderer } from "../renderer/canvas-renderer.ts";
 
@@ -64,13 +65,28 @@ export function useCanvasRenderer(
     const renderer = new InfiniteCanvasRenderer(canvasElement);
     rendererRef.current = renderer;
 
-    renderer.onDeviceLost = (reason) => {
+    renderer.onDeviceLost = (info) => {
       if (cancelled) return;
+      crashReporter.captureGpuDeviceLost(
+        {
+          reason: String(info.reason),
+          message: info.message,
+        },
+        {
+          renderer_ready: renderer.isReady,
+        },
+      );
       setState((prev) => ({
         ...prev,
         isSupported: false,
-        error: new Error(`GPU device lost: ${reason}`),
+        error: new Error(`GPU device lost: ${info.reason}`),
       }));
+    };
+    renderer.onUncapturedError = (error) => {
+      if (cancelled) return;
+      crashReporter.captureGpuUncapturedError(error, {
+        renderer_ready: renderer.isReady,
+      });
     };
 
     renderer
@@ -82,6 +98,7 @@ export function useCanvasRenderer(
       .catch((err: Error) => {
         if (cancelled) return;
         setState((prev) => ({ ...prev, isSupported: false, error: err }));
+        crashReporter.captureException("renderer.initialize_failed", err);
         logger.error("Failed to initialize canvas renderer:", err);
       })
       .finally(() => {
