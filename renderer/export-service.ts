@@ -1,5 +1,6 @@
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
 import { getFrameAtTime } from "../lib/gif-decoder.ts";
+import { mediaAssetRegistry } from "../lib/media-asset-registry.ts";
 import { CopyPass } from "./copy-pass.ts";
 import { type ImageExportOptions, getImageMimeType } from "./export-formats.ts";
 import type { GpuColorConfig } from "./gpu-color-space.ts";
@@ -146,7 +147,8 @@ export class ExportService {
       return null;
     }
 
-    const frame = getFrameAtTime(entity.mediaSource.frames, timestampSeconds, true);
+    const frames = mediaAssetRegistry.getGifFrames(entity.assetId);
+    const frame = getFrameAtTime(frames, timestampSeconds, true);
 
     return this.#renderSourceToImageBitmap(
       entity,
@@ -232,6 +234,10 @@ export class ExportService {
   ): Promise<Blob | null> {
     const width = entity.originalSize.width;
     const height = entity.originalSize.height;
+    const source =
+      entity.mediaSource.type === "image" || entity.mediaSource.type === "svg"
+        ? mediaAssetRegistry.getStaticAssetBitmap(entity.assetId)
+        : entity.imageBitmap;
 
     // Source texture: rgba8unorm (uploaded images are 8-bit)
     const sourceTexture = this.#device.createTexture({
@@ -245,7 +251,7 @@ export class ExportService {
     });
 
     this.#device.queue.copyExternalImageToTexture(
-      { source: entity.imageBitmap },
+      { source },
       { texture: sourceTexture, colorSpace: this.#colorConfig.textureColorSpace },
       [width, height],
     );

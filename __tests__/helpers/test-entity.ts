@@ -2,9 +2,6 @@
  * Test entity factory for creating ShaderCanvasEntity objects
  */
 import {
-  type MediaSourceGif,
-  type MediaSourceImage,
-  type MediaSourceVideo,
   MediaType,
   type PlaybackState,
   type Point,
@@ -15,6 +12,7 @@ import {
 } from "#types/canvas.ts";
 import { config } from "#config";
 import { deepMerge } from "#lib/deep-merge.ts";
+import { mediaAssetRegistry } from "#lib/media-asset-registry.ts";
 import { createMockImageBitmap } from "../mocks/media.mock.ts";
 
 let entityCounter = 0;
@@ -106,6 +104,7 @@ export function createTestEntity(options: CreateEntityOptions = {}): ShaderCanva
   // Common base properties
   const baseProps = {
     id,
+    assetId: "",
     name,
     position: { x: 0, y: 0, ...options.position },
     size: { width, height },
@@ -123,26 +122,43 @@ export function createTestEntity(options: CreateEntityOptions = {}): ShaderCanva
 
   // Build entity with proper discriminated union type
   if (options.mediaType === "video") {
+    const blob = new Blob(["mock-video"], { type: "video/mp4" });
+    const asset = mediaAssetRegistry.createVideoAsset(
+      blob,
+      mockBitmap,
+      width,
+      height,
+      options.videoDuration ?? 10,
+      options.videoFps ?? 30,
+      false,
+    );
+    const mediaSource = {
+      type: "video" as const,
+      blob,
+      assetId: asset.assetId,
+      duration: asset.duration,
+      fps: asset.fps,
+      hasAudio: asset.hasAudio,
+    };
     const videoElement = createMockVideoElement({
-      duration: options.videoDuration ?? 10,
+      duration: asset.duration,
       videoWidth: width,
       videoHeight: height,
     });
-    const mediaSource: MediaSourceVideo = {
-      type: "video",
-      videoElement,
-      blob: new Blob(["mock-video"], { type: "video/mp4" }),
-      duration: options.videoDuration ?? 10,
-      fps: options.videoFps ?? 30,
-      hasAudio: false,
-    };
+    mediaAssetRegistry.registerVideoSession(id, asset.assetId, videoElement);
     const playback: PlaybackState = {
       isPlaying: false,
       currentTime: 0,
       loop: false,
       playbackRate: 1,
     };
-    return { ...baseProps, mediaSource, playback };
+    return {
+      ...baseProps,
+      assetId: asset.assetId,
+      imageBitmap: asset.posterFrame,
+      mediaSource,
+      playback,
+    };
   }
 
   if (options.mediaType === MediaType.gif) {
@@ -154,12 +170,21 @@ export function createTestEntity(options: CreateEntityOptions = {}): ShaderCanva
       delay: frameDelayMs,
       timestamp: i * frameDelayMs,
     }));
-    const mediaSource: MediaSourceGif = {
-      type: "gif",
+    const blob = new Blob(["GIF89a"], { type: "image/gif" });
+    const asset = mediaAssetRegistry.createGifAsset(
+      blob,
       frames,
+      width,
+      height,
       duration,
-      fps: frameCount / duration,
-      blob: new Blob(["GIF89a"], { type: "image/gif" }),
+      frameCount / duration,
+    );
+    const mediaSource = {
+      type: "gif" as const,
+      assetId: asset.assetId,
+      duration: asset.duration,
+      fps: asset.fps,
+      blob,
     };
     const playback: PlaybackState = {
       isPlaying: false,
@@ -167,35 +192,33 @@ export function createTestEntity(options: CreateEntityOptions = {}): ShaderCanva
       loop: true,
       playbackRate: 1,
     };
-    return { ...baseProps, mediaSource, playback };
+    return {
+      ...baseProps,
+      assetId: asset.assetId,
+      imageBitmap: asset.frames[0]!.bitmap,
+      mediaSource,
+      playback,
+    };
   }
 
   // Default: image entity
-  const mediaSource: MediaSourceImage = {
-    type: "image",
-    imageBitmap: mockBitmap,
-    blob: new Blob(["mock-image"], { type: "image/png" }),
+  const blob = new Blob(["mock-image"], { type: "image/png" });
+  const asset = mediaAssetRegistry.createImageAsset(blob, mockBitmap);
+  const mediaSource = {
+    type: "image" as const,
+    blob,
+    assetId: asset.assetId,
   };
-  return { ...baseProps, mediaSource };
+  return { ...baseProps, assetId: asset.assetId, imageBitmap: asset.imageBitmap, mediaSource };
 }
 
-/**
- * Mock HTMLVideoElement with proper event listener support for testing
- */
-export interface MockVideoElement extends HTMLVideoElement {
-  /** Simulate seeking to a time (fires seeked event) */
+interface MockVideoElement extends HTMLVideoElement {
   simulateSeek: (time: number) => void;
-  /** Simulate timeupdate event */
   simulateTimeUpdate: () => void;
-  /** Simulate play event */
   simulatePlay: () => void;
-  /** Simulate ended event */
   simulateEnded: () => void;
 }
 
-/**
- * Create a mock HTMLVideoElement for video entities with proper event support
- */
 function createMockVideoElement(options: {
   duration: number;
   videoWidth: number;
@@ -215,12 +238,10 @@ function createMockVideoElement(options: {
     playbackRate: 1,
     muted: true,
     volume: 1,
-    readyState: 4, // HAVE_ENOUGH_DATA
+    readyState: 4,
     seeking: false,
-
     play: async function () {
       const self = this as typeof video;
-      // Simulate browser behavior: restart from beginning when playing at/past the end
       if (self.ended || self.currentTime >= self.duration) {
         self.currentTime = 0;
       }
@@ -228,15 +249,12 @@ function createMockVideoElement(options: {
       self.ended = false;
       self.dispatchEvent(new Event("play"));
     },
-
     pause: function () {
       const self = this as typeof video;
       self.paused = true;
       self.dispatchEvent(new Event("pause"));
     },
-
     load: function () {},
-
     addEventListener: function (
       type: string,
       listener: EventListener,
@@ -247,7 +265,6 @@ function createMockVideoElement(options: {
       }
       listeners.get(type)!.add(listener);
 
-      // Handle { once: true } option
       if (typeof options === "object" && options.once) {
         const originalListener = listener;
         const wrappedListener = (event: Event) => {
@@ -258,11 +275,9 @@ function createMockVideoElement(options: {
         listeners.get(type)!.add(wrappedListener);
       }
     },
-
     removeEventListener: function (type: string, listener: EventListener) {
       listeners.get(type)?.delete(listener);
     },
-
     dispatchEvent: function (event: Event) {
       const typeListeners = listeners.get(event.type);
       if (typeListeners) {
@@ -272,33 +287,24 @@ function createMockVideoElement(options: {
       }
       return true;
     },
-
-    // Test helpers
     simulateSeek: function (time: number) {
       const self = this as typeof video;
       self.seeking = true;
       self.currentTime = Math.max(0, Math.min(time, self.duration));
       self.seeking = false;
-      if (self.currentTime >= self.duration) {
-        self.ended = true;
-      } else {
-        self.ended = false;
-      }
+      self.ended = self.currentTime >= self.duration;
       self.dispatchEvent(new Event("seeked"));
     },
-
     simulateTimeUpdate: function () {
       const self = this as typeof video;
       self.dispatchEvent(new Event("timeupdate"));
     },
-
     simulatePlay: function () {
       const self = this as typeof video;
       self.paused = false;
       self.ended = false;
       self.dispatchEvent(new Event("play"));
     },
-
     simulateEnded: function () {
       const self = this as typeof video;
       self.ended = true;

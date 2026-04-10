@@ -11,6 +11,7 @@ function createEntity(
 
   return {
     id,
+    assetId: overrides.assetId ?? `asset-${id}`,
     name: overrides.name ?? id,
     position: { x: 0, y: 0 },
     size: overrides.size ?? { width: 100, height: 100 },
@@ -105,8 +106,8 @@ describe("crash-reporting", () => {
         shaderType: ShaderType.halftone,
         mediaSource: {
           type: MediaType.image,
-          imageBitmap: {} as ImageBitmap,
           blob: new Blob(),
+          assetId: "asset-image-1",
         },
       }),
       createEntity({
@@ -118,8 +119,8 @@ describe("crash-reporting", () => {
         } as ShaderCanvasEntity["shaderParams"],
         mediaSource: {
           type: MediaType.image,
-          imageBitmap: {} as ImageBitmap,
           blob: new Blob(),
+          assetId: "asset-image-2",
         },
       }),
     ];

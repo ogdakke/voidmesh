@@ -1,6 +1,7 @@
 import { analytics } from "#lib/analytics.ts";
 import { logger } from "#lib/client.logger.ts";
 import { crashReporter } from "#lib/crash-reporting.ts";
+import { mediaAssetRegistry } from "#lib/media-asset-registry.ts";
 import {
   boundsIntersect,
   calculateFitToView,
@@ -313,8 +314,9 @@ export class GameLoop {
       }
       // Update video playback time continuously
       if (entity.mediaSource.type === MediaType.video && entity.playback?.isPlaying) {
-        const video = entity.mediaSource.videoElement;
-        canvasStore.updatePlaybackTime(entity.id, video.currentTime);
+        const currentTime =
+          mediaAssetRegistry.getVideoCurrentTime(entity.id) ?? entity.playback.currentTime;
+        canvasStore.updatePlaybackTime(entity.id, currentTime);
         hasPlayingMedia = true;
       }
       // Check if any shader needs continuous re-rendering (e.g., time-based animation)

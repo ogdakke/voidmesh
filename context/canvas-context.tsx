@@ -55,6 +55,7 @@ import { paletteStore } from "#lib/palette-store.ts";
 import { analytics } from "#lib/analytics.ts";
 import { logger } from "#lib/client.logger.ts";
 import { crashReporter, summarizeEntities } from "#lib/crash-reporting.ts";
+import { mediaAssetRegistry } from "#lib/media-asset-registry.ts";
 import { downloadBlob } from "#lib/download.ts";
 import { deepMerge } from "#lib/deep-merge.ts";
 import { applyShaderDefaults } from "#lib/shader-defaults.ts";
@@ -87,22 +88,8 @@ function tryCleanupEntityResources(entity: ShaderCanvasEntity, ownerToken: numbe
     return;
   }
 
-  if (entity.mediaSource.type === MediaType.video) {
-    const video = entity.mediaSource.videoElement;
-    const videoSrc = video.src;
-    video.src = "";
-    video.load();
-    URL.revokeObjectURL(videoSrc);
-  } else if (isGifEntity(entity)) {
-    for (const frame of entity.mediaSource.frames) {
-      frame.bitmap.close();
-    }
-  } else if (entity.mediaSource.type === "svg") {
-    entity.imageBitmap.close();
-  } else if (entity.mediaSource.type === "image") {
-    entity.imageBitmap.close();
-  }
-
+  mediaAssetRegistry.destroyVideoSession(entity.id);
+  mediaAssetRegistry.releaseAsset(entity.assetId);
   resourceOwners.delete(entity.id);
 }
 
@@ -535,7 +522,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       edited: false,
     };
 
+    mediaAssetRegistry.retainAsset(newEntity.assetId);
     canvasStore.addEntity(newEntity);
+    if (newEntity.mediaSource.type === MediaType.video && newEntity.playback?.isPlaying) {
+      void canvasStore.playVideo(newEntity.id).catch((e) => logger.error(e));
+    }
     analytics.track("entity.added", {
       media_type: newEntity.mediaSource.type as string,
     });
@@ -547,15 +538,20 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         undo: () => {
           // Pause playback if playing
           if (newEntity.mediaSource.type === MediaType.video) {
-            newEntity.mediaSource.videoElement.pause();
+            mediaAssetRegistry.destroyVideoSession(newEntity.id);
           } else if (isGifEntity(newEntity) && newEntity.playback) {
             newEntity.playback.isPlaying = false;
           }
           rendererRef.current?.removeEntityTexture(newEntity.id);
           canvasStore.removeEntity(newEntity.id);
+          mediaAssetRegistry.releaseAsset(newEntity.assetId);
         },
         execute: () => {
+          mediaAssetRegistry.retainAsset(newEntity.assetId);
           canvasStore.addEntity(newEntity);
+          if (newEntity.mediaSource.type === MediaType.video && newEntity.playback?.isPlaying) {
+            void canvasStore.playVideo(newEntity.id).catch((e) => logger.error(e));
+          }
         },
         onEvict: () => tryCleanupEntityResources(newEntity, ownerToken),
         description: `Add entity ${newEntity.name}`,
@@ -642,16 +638,15 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       size: { ...entity.size },
       shaderParams: structuredClone(entity.shaderParams),
       originalPalette: entity.originalPalette ? structuredClone(entity.originalPalette) : undefined,
-      // Keep mediaSource as-is (references to videoElement/imageBitmap are needed for restore)
+      // Keep mediaSource as-is (blob + asset reference are needed for restore)
       mediaSource: entity.mediaSource as any,
     };
 
     // Capture playback state before pausing (entityCopy.playback is a shared reference)
     const wasPlaying = entity.playback?.isPlaying ?? false;
 
-    // For animated entities, pause but DON'T destroy resources yet
     if (entity.mediaSource.type === MediaType.video) {
-      entity.mediaSource.videoElement.pause();
+      mediaAssetRegistry.destroyVideoSession(entity.id);
     } else if (isGifEntity(entity) && entity.playback) {
       entity.playback.isPlaying = false;
     }
@@ -665,6 +660,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     // Clean up renderer texture cache and remove from store immediately
     rendererRef.current?.removeEntityTexture(id);
     canvasStore.removeEntity(id);
+    mediaAssetRegistry.releaseAsset(entity.assetId);
 
     const ownerToken = claimResourceOwnership(entityCopy.id);
     undo.add(
@@ -673,11 +669,12 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           // Cancel any still-playing disintegration overlay
           rendererRef.current?.cancelDisintegration(entityCopy.id);
           // Restore the entity with all its resources
+          mediaAssetRegistry.retainAsset(entityCopy.assetId);
           canvasStore.addEntity(entityCopy);
           // Resume playback if entity was playing when deleted
           if (wasPlaying) {
             if (entityCopy.mediaSource.type === MediaType.video) {
-              entityCopy.mediaSource.videoElement.play().catch((e) => logger.error(e));
+              void canvasStore.playVideo(entityCopy.id).catch((e) => logger.error(e));
             }
             if (entityCopy.playback) {
               entityCopy.playback.isPlaying = true;
@@ -687,12 +684,13 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         execute: () => {
           // Re-delete the entity (no animation on redo)
           if (entityCopy.mediaSource.type === MediaType.video) {
-            entityCopy.mediaSource.videoElement.pause();
+            mediaAssetRegistry.destroyVideoSession(entityCopy.id);
           } else if (isGifEntity(entityCopy) && entityCopy.playback) {
             entityCopy.playback.isPlaying = false;
           }
           rendererRef.current?.removeEntityTexture(entityCopy.id);
           canvasStore.removeEntity(entityCopy.id);
+          mediaAssetRegistry.releaseAsset(entityCopy.assetId);
         },
         onEvict: () => tryCleanupEntityResources(entityCopy, ownerToken),
         description: `Delete entity ${entity.name}`,
@@ -834,6 +832,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         edited: false,
       };
 
+      mediaAssetRegistry.retainAsset(clone.assetId);
       canvasStore.addEntity(clone);
       newIds.push(id);
 
@@ -842,14 +841,16 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         Command.create({
           undo: () => {
             if (clone.mediaSource.type === MediaType.video) {
-              clone.mediaSource.videoElement.pause();
+              mediaAssetRegistry.destroyVideoSession(clone.id);
             } else if (isGifEntity(clone) && clone.playback) {
               clone.playback.isPlaying = false;
             }
             rendererRef.current?.removeEntityTexture(clone.id);
             canvasStore.removeEntity(clone.id);
+            mediaAssetRegistry.releaseAsset(clone.assetId);
           },
           execute: () => {
+            mediaAssetRegistry.retainAsset(clone.assetId);
             canvasStore.addEntity(clone);
           },
           onEvict: () => tryCleanupEntityResources(clone, ownerToken),

@@ -1,18 +1,37 @@
-import { ShaderType, type ShaderCanvasEntity, type ShaderParams } from "#types/canvas.ts";
+import {
+  MediaType,
+  ShaderType,
+  type MediaAsset,
+  type ShaderCanvasEntity,
+  type ShaderParams,
+} from "#types/canvas.ts";
 import { unzipSync } from "fflate";
 import { canvasStore } from "#engine";
 import { config } from "#config";
 import { deepMerge } from "../deep-merge.ts";
 import { decodeGif } from "../gif-decoder.ts";
-import { rasterizeSvg } from "../media-loader.ts";
+import { mediaAssetRegistry } from "../media-asset-registry.ts";
+import { loadVideo, rasterizeSvg } from "../media-loader.ts";
 import { paletteStore } from "../palette-store.ts";
-import { bytesToImageBitmap, bytesToVideoElement } from "./media.ts";
+import { bytesToImageBitmap } from "./media.ts";
 import { runMigrations } from "./migrations.ts";
-import type { DeserializeResult, SerializedEntity, StudioManifest } from "./types.ts";
+import type {
+  DeserializeResult,
+  SerializedAsset,
+  SerializedEntity,
+  StudioManifest,
+} from "./types.ts";
 import { isStudioManifest, toPlaybackState } from "./types.ts";
 import { CURRENT_VERSION } from "./version.ts";
 
 const MIME_BY_EXT: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  avif: "image/avif",
+  svg: "image/svg+xml",
+  gif: "image/gif",
   mp4: "video/mp4",
   webm: "video/webm",
   mov: "video/quicktime",
@@ -20,28 +39,23 @@ const MIME_BY_EXT: Record<string, string> = {
   mkv: "video/x-matroska",
 };
 
-/**
- * Deserialize a .vdmsh archive (Blob or ArrayBuffer) and restore the canvas.
- *
- * Clears the existing canvas state, restores viewport, and adds all entities.
- * Returns a result object with success status, warnings, and per-entity errors.
- */
+interface DecodedAsset {
+  serialized: SerializedAsset;
+  asset: MediaAsset;
+}
+
 export async function deserialize(source: Blob | ArrayBuffer): Promise<DeserializeResult> {
   const warnings: string[] = [];
   const errors: { entityId: string; entityName: string; error: string }[] = [];
 
-  // 0. Validate input type
   if (!(source instanceof Blob) && !(source instanceof ArrayBuffer)) {
     throw new Error(
       "deserialize() expects a Blob or ArrayBuffer. Did you forget to await serialize()?",
     );
   }
 
-  // 1. Unzip the archive
   const buffer = source instanceof Blob ? await source.arrayBuffer() : source;
   const zipEntries = unzipSync(new Uint8Array(buffer));
-
-  // 2. Read and parse manifest
   const manifestBytes = zipEntries["manifest.json"];
   if (!manifestBytes) {
     throw new Error("Invalid .vdmsh file: missing manifest.json");
@@ -61,11 +75,12 @@ export async function deserialize(source: Blob | ArrayBuffer): Promise<Deseriali
     );
   }
 
-  // 3. Run migrations if needed
   let doc = manifest as StudioManifest;
   if (doc.version < CURRENT_VERSION) {
     doc = runMigrations(doc);
-    warnings.push(`Migrated from v${manifest.version} to v${CURRENT_VERSION}`);
+    warnings.push(
+      `Migrated from v${(manifest as { version: number }).version} to v${CURRENT_VERSION}`,
+    );
   }
   if (doc.version > CURRENT_VERSION) {
     warnings.push(
@@ -73,9 +88,8 @@ export async function deserialize(source: Blob | ArrayBuffer): Promise<Deseriali
     );
   }
 
-  // 4. Import custom/extracted palettes that don't already exist locally
   if (doc.palettes?.length) {
-    const existingIds = new Set(paletteStore.getPalettes().map((p) => p.id));
+    const existingIds = new Set(paletteStore.getPalettes().map((palette) => palette.id));
     for (const palette of doc.palettes) {
       if (palette.id && !existingIds.has(palette.id)) {
         paletteStore.addPalette(palette);
@@ -83,26 +97,49 @@ export async function deserialize(source: Blob | ArrayBuffer): Promise<Deseriali
     }
   }
 
-  // 5. Decode all entities BEFORE clearing canvas (so we don't destroy existing
-  //    state if decoding fails entirely)
-  const entityPromises = doc.entities.map(async (serialized) => {
+  canvasStore.reset();
+  canvasStore.setViewport({
+    offset: { x: doc.viewport.offset.x, y: doc.viewport.offset.y },
+    zoom: doc.viewport.zoom,
+  });
+
+  const decodedAssets = await Promise.all(
+    doc.assets.map(async (serialized) => {
+      try {
+        return await decodeAsset(serialized, zipEntries);
+      } catch (error) {
+        warnings.push(
+          `Asset ${serialized.assetId} failed to restore: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return null;
+      }
+    }),
+  );
+
+  const assetMap = new Map<string, MediaAsset>();
+  for (const decoded of decodedAssets) {
+    if (!decoded) continue;
+    assetMap.set(decoded.serialized.assetId, decoded.asset);
+  }
+
+  const validEntities: ShaderCanvasEntity[] = [];
+  for (const serialized of doc.entities) {
     try {
-      return await deserializeEntity(serialized, zipEntries, warnings);
-    } catch (err) {
+      const entity = deserializeEntity(serialized, assetMap, warnings);
+      validEntities.push(entity);
+    } catch (error) {
       errors.push({
         entityId: serialized.id,
         entityName: serialized.name,
-        error: err instanceof Error ? err.message : String(err),
+        error: error instanceof Error ? error.message : String(error),
       });
-      return null;
     }
-  });
+  }
 
-  const decodedEntities = await Promise.all(entityPromises);
-  const validEntities = decodedEntities.filter((e): e is ShaderCanvasEntity => e !== null);
-
-  // If nothing decoded at all, bail without touching the canvas
   if (validEntities.length === 0 && doc.entities.length > 0) {
+    for (const asset of assetMap.values()) {
+      mediaAssetRegistry.destroyAssetResources(asset.assetId);
+    }
     return {
       success: false,
       entityCount: 0,
@@ -111,31 +148,16 @@ export async function deserialize(source: Blob | ArrayBuffer): Promise<Deseriali
     };
   }
 
-  // 6. Pause all existing animated entities before clearing
-  for (const entity of canvasStore.getState().entities.values()) {
-    if (entity.mediaSource.type === "video") {
-      entity.mediaSource.videoElement.pause();
-    }
-  }
-
-  // 7. Clear canvas and restore viewport
-  canvasStore.reset();
-  canvasStore.setViewport({
-    offset: { x: doc.viewport.offset.x, y: doc.viewport.offset.y },
-    zoom: doc.viewport.zoom,
-  });
-
-  // 8. Add decoded entities sequentially (maintains zIndex ordering from manifest)
   for (const entity of validEntities) {
+    mediaAssetRegistry.retainAsset(entity.assetId);
     canvasStore.addEntity(entity);
   }
 
-  // 9. Resume playback for entities that were playing when saved
   for (const entity of validEntities) {
     if (!entity.playback?.isPlaying) continue;
-    if (entity.mediaSource.type === "video") {
-      canvasStore.playVideo(entity.id);
-    } else if (entity.mediaSource.type === "gif") {
+    if (entity.mediaSource.type === MediaType.video) {
+      void canvasStore.playVideo(entity.id);
+    } else if (entity.mediaSource.type === MediaType.gif) {
       canvasStore.playGif(entity.id);
     }
   }
@@ -148,10 +170,6 @@ export async function deserialize(source: Blob | ArrayBuffer): Promise<Deseriali
   };
 }
 
-/**
- * Returns the maximum entity ID number and zIndex from the restored entities.
- * Used by canvas-context to update its counters after deserialization.
- */
 export function getMaxCounters(_result: DeserializeResult): {
   maxId: number;
   maxZIndex: number;
@@ -161,7 +179,6 @@ export function getMaxCounters(_result: DeserializeResult): {
   let maxZIndex = 0;
 
   for (const entity of state.entities.values()) {
-    // Extract numeric part from "entity-N" IDs
     const match = entity.id.match(/^entity-(\d+)$/);
     if (match) {
       maxId = Math.max(maxId, Number(match[1]));
@@ -172,27 +189,101 @@ export function getMaxCounters(_result: DeserializeResult): {
   return { maxId, maxZIndex };
 }
 
-// ============================================================================
-// Per-entity deserialization
-// ============================================================================
-
-/** Validate shaderType against known values, falling back to the default */
 function validateShaderType(raw: string): ShaderType {
   const valid = Object.values(ShaderType) as string[];
   return valid.includes(raw) ? (raw as ShaderType) : config.defaults.shader;
 }
 
-async function deserializeEntity(
-  serialized: SerializedEntity,
+async function decodeAsset(
+  serialized: SerializedAsset,
   zipEntries: Record<string, Uint8Array>,
+): Promise<DecodedAsset> {
+  const bytes = zipEntries[serialized.mediaFile];
+  if (!bytes) {
+    throw new Error(`Missing media file: ${serialized.mediaFile}`);
+  }
+
+  const ext = serialized.mediaFile.split(".").pop()?.toLowerCase() ?? "";
+  const mimeType = MIME_BY_EXT[ext] ?? "application/octet-stream";
+
+  switch (serialized.mediaType) {
+    case MediaType.image: {
+      const blob = new Blob([bytes.slice()], { type: mimeType });
+      const bitmap = await bytesToImageBitmap(bytes, mimeType);
+      return {
+        serialized,
+        asset: mediaAssetRegistry.createImageAsset(blob, bitmap, serialized.assetId),
+      };
+    }
+    case MediaType.svg: {
+      const text = new TextDecoder().decode(bytes);
+      const blob = new Blob([bytes.slice()], { type: "image/svg+xml" });
+      const { bitmap } = await rasterizeSvg(text);
+      return {
+        serialized,
+        asset: mediaAssetRegistry.createSvgAsset(
+          blob,
+          bitmap,
+          serialized.width,
+          serialized.height,
+          serialized.assetId,
+        ),
+      };
+    }
+    case MediaType.gif: {
+      const blob = new Blob([bytes.slice()], { type: "image/gif" });
+      const { frames, duration, fps, width, height } = await decodeGif(blob);
+      return {
+        serialized,
+        asset: mediaAssetRegistry.createGifAsset(
+          blob,
+          frames,
+          width,
+          height,
+          duration,
+          fps,
+          serialized.assetId,
+        ),
+      };
+    }
+    case MediaType.video: {
+      const blob = new Blob([bytes.slice()], { type: mimeType });
+      const loaded = await loadVideo(blob);
+      loaded.videoElement.pause();
+      loaded.videoElement.src = "";
+      loaded.videoElement.load();
+      return {
+        serialized,
+        asset: mediaAssetRegistry.createVideoAsset(
+          blob,
+          loaded.initialFrame,
+          loaded.width,
+          loaded.height,
+          serialized.duration,
+          serialized.fps,
+          serialized.hasAudio,
+          serialized.assetId,
+        ),
+      };
+    }
+  }
+}
+
+function deserializeEntity(
+  serialized: SerializedEntity,
+  assetMap: Map<string, MediaAsset>,
   warnings: string[],
-): Promise<ShaderCanvasEntity> {
-  // Validate shaderType (1b) and merge shaderParams with defaults (1c/3d)
+): ShaderCanvasEntity {
   const shaderType = validateShaderType(serialized.shaderType);
   if (shaderType !== serialized.shaderType) {
     warnings.push(
       `Entity "${serialized.name}": unknown shader "${serialized.shaderType}", using "${shaderType}"`,
     );
+  }
+
+  const asset = assetMap.get(serialized.assetId);
+  if (!asset) {
+    throw new Error(`Missing asset: ${serialized.assetId}`);
   }
 
   const shaderParams = deepMerge(
@@ -202,6 +293,7 @@ async function deserializeEntity(
 
   const base = {
     id: serialized.id,
+    assetId: serialized.assetId,
     name: serialized.name,
     position: { ...serialized.position },
     size: { ...serialized.size },
@@ -219,93 +311,45 @@ async function deserializeEntity(
     }),
   };
 
-  switch (serialized.mediaType) {
-    case "image": {
-      const bytes = zipEntries[serialized.mediaFile];
-      if (!bytes) throw new Error(`Missing media file: ${serialized.mediaFile}`);
-      const imageBlob = new Blob([bytes.slice()]);
-      const bitmap = await bytesToImageBitmap(bytes);
+  switch (asset.type) {
+    case MediaType.image:
       return {
         ...base,
-        imageBitmap: bitmap,
-        mediaSource: { type: "image" as const, imageBitmap: bitmap, blob: imageBlob },
+        imageBitmap: asset.imageBitmap,
+        mediaSource: { type: MediaType.image, blob: asset.blob, assetId: asset.assetId },
       };
-    }
-
-    case "video": {
-      const bytes = zipEntries[serialized.mediaFile];
-      if (!bytes) throw new Error(`Missing media file: ${serialized.mediaFile}`);
-
-      const ext = serialized.mediaFile.split(".").pop() ?? "mp4";
-      const mimeType = MIME_BY_EXT[ext] ?? "video/mp4";
-
-      const videoBlob = new Blob([bytes.slice()], { type: mimeType });
-      const savedTime = serialized.playback?.currentTime ?? 0;
-      const { videoElement, initialFrame, duration } = await bytesToVideoElement(
-        bytes,
-        mimeType,
-        savedTime,
-      );
-
-      // v3+ files have hasAudio in the manifest; legacy files need a probe
-      const hasAudio =
-        serialized.hasAudio ??
-        (await import("#lib/audio-demux.ts").then(({ hasAudioTrack }) => hasAudioTrack(videoBlob)));
-
+    case MediaType.svg:
       return {
         ...base,
-        imageBitmap: initialFrame,
+        imageBitmap: asset.imageBitmap,
+        mediaSource: { type: MediaType.svg, blob: asset.blob, assetId: asset.assetId },
+      };
+    case MediaType.gif:
+      return {
+        ...base,
+        imageBitmap: asset.frames[0]!.bitmap,
         mediaSource: {
-          type: "video" as const,
-          videoElement,
-          blob: videoBlob,
-          duration,
-          fps: serialized.fps,
-          hasAudio,
+          type: MediaType.gif,
+          assetId: asset.assetId,
+          duration: asset.duration,
+          fps: asset.fps,
+          blob: asset.blob,
         },
         playback: toPlaybackState(serialized.playback),
       };
-    }
-
-    case "gif": {
-      const bytes = zipEntries[serialized.mediaFile];
-      if (!bytes) throw new Error(`Missing media file: ${serialized.mediaFile}`);
-
-      const blob = new Blob([bytes.slice()], { type: "image/gif" });
-      const { frames, duration, fps } = await decodeGif(blob);
-
-      if (frames.length === 0) throw new Error("GIF has no frames");
-
+    case MediaType.video:
       return {
         ...base,
-        imageBitmap: frames[0]!.bitmap,
+        imageBitmap: asset.posterFrame,
         mediaSource: {
-          type: "gif" as const,
-          frames,
-          duration,
-          fps,
-          blob,
+          type: MediaType.video,
+          assetId: asset.assetId,
+          blob: asset.blob,
+          duration: asset.duration,
+          fps: asset.fps,
+          hasAudio: asset.hasAudio,
         },
         playback: toPlaybackState(serialized.playback),
       };
-    }
-
-    case "svg": {
-      const bytes = zipEntries[serialized.mediaFile];
-      if (!bytes) throw new Error(`Missing media file: ${serialized.mediaFile}`);
-
-      const text = new TextDecoder().decode(bytes);
-      const blob = new Blob([bytes.slice()], { type: "image/svg+xml" });
-      const { bitmap } = await rasterizeSvg(text);
-
-      return {
-        ...base,
-        imageBitmap: bitmap,
-        mediaSource: { type: "svg" as const, blob },
-      };
-    }
-
-    default:
-      throw new Error(`Unknown media type: ${(serialized as Record<string, unknown>).mediaType}`);
   }
 }

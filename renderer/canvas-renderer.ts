@@ -13,8 +13,10 @@ import {
   getViewportMatrix,
   getViewportWorldBounds,
 } from "../lib/canvas-math.ts";
+import { mediaAssetRegistry } from "../lib/media-asset-registry.ts";
 import {
   isAnimatedEntity,
+  MediaType,
   ShaderType,
   type Bounds,
   type RGBA,
@@ -121,18 +123,27 @@ export class InfiniteCanvasRenderer {
   onUncapturedError?: (error: GPUError) => void;
 
   // Entity texture cache
-  #entityTextures: Map<string, GPUTexture> = new Map();
+  #renderTextures: Map<
+    string,
+    {
+      texture: GPUTexture;
+      refCount: number;
+    }
+  > = new Map();
+  #entityRenderKeys: Map<string, string> = new Map();
 
-  // Cached source textures per entity (avoids re-uploading unchanged images to GPU)
-  #entitySourceTextures: Map<
+  // Cached source textures shared by asset/runtime source identity.
+  #sourceTextures: Map<
     string,
     {
       texture: GPUTexture;
       sourceRef: ImageBitmap | OffscreenCanvas;
       width: number;
       height: number;
+      refCount: number;
     }
   > = new Map();
+  #entitySourceKeys: Map<string, string> = new Map();
 
   // Entity composition cache (uniform buffers, bind groups, texture views)
   // These are invalidated when entity texture changes
@@ -1436,6 +1447,115 @@ export class InfiniteCanvasRenderer {
     return this.#videoUploadCanvas;
   }
 
+  #getExternalSource(
+    entity: ShaderCanvasEntity,
+    width: number,
+    height: number,
+  ): ImageBitmap | OffscreenCanvas {
+    switch (entity.mediaSource.type) {
+      case MediaType.video: {
+        const activeVideo = mediaAssetRegistry.getVideoElement(entity.id);
+        return activeVideo
+          ? this.#getVideoFrameSource(activeVideo, width, height)
+          : entity.imageBitmap;
+      }
+      case MediaType.image:
+      case MediaType.svg:
+        return mediaAssetRegistry.getStaticAssetBitmap(entity.assetId);
+      case MediaType.gif:
+        return entity.imageBitmap;
+    }
+  }
+
+  #getSourceCacheKey(entity: ShaderCanvasEntity): string {
+    switch (entity.mediaSource.type) {
+      case MediaType.image:
+      case MediaType.svg:
+        return `asset:${entity.assetId}`;
+      case MediaType.gif:
+        return `gif:${entity.id}`;
+      case MediaType.video:
+        return `video:${entity.id}`;
+    }
+  }
+
+  #getRenderCacheKey(entity: ShaderCanvasEntity): string {
+    const sourceIdentity =
+      entity.mediaSource.type === MediaType.video
+        ? {
+            type: MediaType.video,
+            assetId: entity.assetId,
+            currentTime: entity.playback?.currentTime ?? 0,
+            isPlaying: entity.playback?.isPlaying ?? false,
+          }
+        : entity.mediaSource.type === MediaType.gif
+          ? {
+              type: MediaType.gif,
+              assetId: entity.assetId,
+              currentTime: entity.playback?.currentTime ?? 0,
+              isPlaying: entity.playback?.isPlaying ?? false,
+            }
+          : {
+              type: entity.mediaSource.type,
+              assetId: entity.assetId,
+            };
+
+    return JSON.stringify({
+      sourceIdentity,
+      width: entity.originalSize.width,
+      height: entity.originalSize.height,
+      shaderType: entity.shaderType,
+      shaderParams: entity.shaderParams,
+      originalPalette: entity.originalPalette ?? null,
+    });
+  }
+
+  #acquireSourceKey(entityId: string, sourceKey: string): void {
+    const previousKey = this.#entitySourceKeys.get(entityId);
+    if (previousKey === sourceKey) return;
+    if (previousKey) {
+      this.#releaseSourceKey(previousKey);
+    }
+    this.#entitySourceKeys.set(entityId, sourceKey);
+    const cached = this.#sourceTextures.get(sourceKey);
+    if (cached) {
+      cached.refCount++;
+    }
+  }
+
+  #releaseSourceKey(sourceKey: string): void {
+    const cached = this.#sourceTextures.get(sourceKey);
+    if (!cached) return;
+    cached.refCount = Math.max(0, cached.refCount - 1);
+    if (cached.refCount === 0) {
+      cached.texture.destroy();
+      this.#sourceTextures.delete(sourceKey);
+    }
+  }
+
+  #acquireRenderKey(entityId: string, renderKey: string): void {
+    const previousKey = this.#entityRenderKeys.get(entityId);
+    if (previousKey === renderKey) return;
+    if (previousKey) {
+      this.#releaseRenderKey(previousKey);
+    }
+    this.#entityRenderKeys.set(entityId, renderKey);
+    const cached = this.#renderTextures.get(renderKey);
+    if (cached) {
+      cached.refCount++;
+    }
+  }
+
+  #releaseRenderKey(renderKey: string): void {
+    const cached = this.#renderTextures.get(renderKey);
+    if (!cached) return;
+    cached.refCount = Math.max(0, cached.refCount - 1);
+    if (cached.refCount === 0) {
+      cached.texture.destroy();
+      this.#renderTextures.delete(renderKey);
+    }
+  }
+
   /**
    * Render an entity's image through its shader to a texture.
    * Returns the texture, caching it for future frames.
@@ -1456,8 +1576,12 @@ export class InfiniteCanvasRenderer {
       (isAnimatedEntity(entity) && entity.playback?.isPlaying) ||
       (shader?.needsContinuousRender(entity) ?? false);
 
-    // Check if we have a valid cached texture (skip cache for playing videos)
-    const cachedTexture = this.#entityTextures.get(entity.id);
+    const renderKey = this.#getRenderCacheKey(entity);
+    const cachedRenderKey = this.#entityRenderKeys.get(entity.id);
+    const cachedTexture =
+      cachedRenderKey && cachedRenderKey === renderKey
+        ? this.#renderTextures.get(renderKey)?.texture
+        : null;
     if (!isAnimating && cachedTexture && !entity.textureDirty) {
       return cachedTexture;
     }
@@ -1473,15 +1597,11 @@ export class InfiniteCanvasRenderer {
       GPUTextureUsage.RENDER_ATTACHMENT;
 
     // Get the appropriate source for GPU upload
-    const externalSource =
-      entity.mediaSource.type === "video"
-        ? this.#getVideoFrameSource(entity.mediaSource.videoElement, width, height)
-        : entity.mediaSource.type === "image"
-          ? entity.mediaSource.imageBitmap
-          : entity.imageBitmap;
+    const externalSource = this.#getExternalSource(entity, width, height);
 
     // Check source texture cache: reuse if source image is unchanged
-    const cachedSource = this.#entitySourceTextures.get(entity.id);
+    const sourceKey = this.#getSourceCacheKey(entity);
+    const cachedSource = this.#sourceTextures.get(sourceKey);
     let sourceTexture: GPUTexture;
 
     if (
@@ -1500,7 +1620,7 @@ export class InfiniteCanvasRenderer {
         // Dimensions changed — destroy old, create new
         cachedSource.texture.destroy();
         sourceTexture = this.#device.createTexture({
-          label: `Entity ${entity.id} cached source`,
+          label: `Source ${sourceKey}`,
           size: [width, height],
           format: "rgba8unorm",
           usage: sourceUsage,
@@ -1511,7 +1631,7 @@ export class InfiniteCanvasRenderer {
       } else {
         // First render — create new long-lived source texture
         sourceTexture = this.#device.createTexture({
-          label: `Entity ${entity.id} cached source`,
+          label: `Source ${sourceKey}`,
           size: [width, height],
           format: "rgba8unorm",
           usage: sourceUsage,
@@ -1527,13 +1647,17 @@ export class InfiniteCanvasRenderer {
         [width, height],
       );
 
-      this.#entitySourceTextures.set(entity.id, {
+      this.#acquireSourceKey(entity.id, sourceKey);
+      this.#sourceTextures.set(sourceKey, {
         texture: sourceTexture,
         sourceRef: externalSource,
         width,
         height,
+        refCount: cachedSource?.refCount ?? 1,
       });
     }
+
+    this.#acquireSourceKey(entity.id, sourceKey);
 
     // Reuse output texture if dimensions match, otherwise create new
     const outputUsage =
@@ -1547,10 +1671,9 @@ export class InfiniteCanvasRenderer {
       // Reuse existing output texture — content will be overwritten by shader
       outputTexture = cachedTexture;
     } else {
-      // Dimensions changed or first render — destroy old, create new
-      cachedTexture?.destroy();
+      // Dimensions changed or first render — create new shared output texture entry
       outputTexture = this.#device.createTexture({
-        label: `Entity ${entity.id} processed texture`,
+        label: `Render ${renderKey}`,
         size: [width, height],
         format: this.#colorConfig.intermediateFormat,
         usage: outputUsage,
@@ -1563,16 +1686,22 @@ export class InfiniteCanvasRenderer {
     if (entity.shaderParams.showOriginal) {
       this.#passthroughCopyPass!.execute(sourceTexture, outputTexture);
 
-      // Cache and return (source texture stays in #entitySourceTextures)
-      this.#entityTextures.set(entity.id, outputTexture);
+      this.#acquireRenderKey(entity.id, renderKey);
+      this.#renderTextures.set(renderKey, {
+        texture: outputTexture,
+        refCount: this.#renderTextures.get(renderKey)?.refCount ?? 1,
+      });
       return outputTexture;
     }
 
     // Apply shader using unified method (handles both compute and fragment shader paths)
     this.#applyShaderToTexture(entity, sourceTexture, outputTexture);
 
-    // Cache and return (source texture stays in #entitySourceTextures)
-    this.#entityTextures.set(entity.id, outputTexture);
+    this.#acquireRenderKey(entity.id, renderKey);
+    this.#renderTextures.set(renderKey, {
+      texture: outputTexture,
+      refCount: this.#renderTextures.get(renderKey)?.refCount ?? 1,
+    });
     return outputTexture;
   }
 
@@ -2137,16 +2266,16 @@ export class InfiniteCanvasRenderer {
    * Remove cached resources for an entity
    */
   removeEntityTexture(entityId: string): void {
-    // Remove texture
-    const texture = this.#entityTextures.get(entityId);
-    texture?.destroy();
-    this.#entityTextures.delete(entityId);
+    const renderKey = this.#entityRenderKeys.get(entityId);
+    if (renderKey) {
+      this.#entityRenderKeys.delete(entityId);
+      this.#releaseRenderKey(renderKey);
+    }
 
-    // Remove cached source texture
-    const cachedSource = this.#entitySourceTextures.get(entityId);
-    if (cachedSource) {
-      cachedSource.texture.destroy();
-      this.#entitySourceTextures.delete(entityId);
+    const sourceKey = this.#entitySourceKeys.get(entityId);
+    if (sourceKey) {
+      this.#entitySourceKeys.delete(entityId);
+      this.#releaseSourceKey(sourceKey);
     }
 
     // Remove composition cache (uniform buffer, bind group, texture view)
@@ -2180,7 +2309,8 @@ export class InfiniteCanvasRenderer {
     size: { width: number; height: number };
     rotation: number;
   }): void {
-    const sourceTexture = this.#entityTextures.get(entity.id);
+    const renderKey = this.#entityRenderKeys.get(entity.id);
+    const sourceTexture = renderKey ? this.#renderTextures.get(renderKey)?.texture : null;
     if (!sourceTexture || !this.#device || !this.#compositionBindGroupLayout) return;
 
     // Copy the entity's rendered texture (so original can be destroyed freely)
@@ -2348,17 +2478,17 @@ export class InfiniteCanvasRenderer {
   }
 
   destroy(): void {
-    // Destroy entity textures
-    for (const texture of this.#entityTextures.values()) {
-      texture.destroy();
-    }
-    this.#entityTextures.clear();
-
-    // Destroy cached source textures
-    for (const cached of this.#entitySourceTextures.values()) {
+    for (const cached of this.#renderTextures.values()) {
       cached.texture.destroy();
     }
-    this.#entitySourceTextures.clear();
+    this.#renderTextures.clear();
+    this.#entityRenderKeys.clear();
+
+    for (const cached of this.#sourceTextures.values()) {
+      cached.texture.destroy();
+    }
+    this.#sourceTextures.clear();
+    this.#entitySourceKeys.clear();
 
     // Destroy entity composition cache
     for (const cached of this.#entityCompositionCache.values()) {

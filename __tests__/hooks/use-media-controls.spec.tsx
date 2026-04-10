@@ -141,9 +141,6 @@ describe("playback state via store", () => {
       canvasStore.addEntity(entity);
       canvasStore.replaceSelection([entity.id]);
 
-      if (entity.mediaSource.type === "video") {
-        entity.mediaSource.videoElement.currentTime = 25;
-      }
       if (entity.playback) {
         entity.playback.currentTime = 25;
       }

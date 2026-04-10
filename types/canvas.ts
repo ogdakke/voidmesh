@@ -373,17 +373,52 @@ export const MediaType = createEnum({
 
 export type MediaType = typeof MediaType.infer;
 
-export type MediaSourceImage = {
+export interface MediaAssetBase {
+  assetId: string;
+  type: MediaType;
+  blob: Blob;
+  width: number;
+  height: number;
+}
+
+export type MediaAssetImage = MediaAssetBase & {
   type: typeof MediaType.image;
   imageBitmap: ImageBitmap;
+};
+
+export type MediaAssetVideo = MediaAssetBase & {
+  type: typeof MediaType.video;
+  duration: number;
+  fps: number | null;
+  hasAudio: boolean;
+  posterFrame: ImageBitmap;
+};
+
+export type MediaAssetGif = MediaAssetBase & {
+  type: typeof MediaType.gif;
+  frames: GifFrame[];
+  duration: number;
+  fps: number;
+};
+
+export type MediaAssetSvg = MediaAssetBase & {
+  type: typeof MediaType.svg;
+  imageBitmap: ImageBitmap;
+};
+
+export type MediaAsset = MediaAssetImage | MediaAssetVideo | MediaAssetGif | MediaAssetSvg;
+
+export type MediaSourceImage = {
+  type: typeof MediaType.image;
   /** Original source data for lossless duplication */
   blob: Blob;
+  assetId: string;
 };
 export type MediaSourceVideo = {
   type: typeof MediaType.video;
-  videoElement: HTMLVideoElement;
   /** Original source data for lossless duplication */
   blob: Blob;
+  assetId: string;
   duration: number;
   fps: number | null;
   /** Whether the source video contains an audio track */
@@ -391,7 +426,7 @@ export type MediaSourceVideo = {
 };
 export type MediaSourceGif = {
   type: typeof MediaType.gif;
-  frames: GifFrame[];
+  assetId: string;
   duration: number;
   fps: number;
   /** Original GIF binary data for serialization */
@@ -399,6 +434,7 @@ export type MediaSourceGif = {
 };
 export type MediaSourceSvg = {
   type: typeof MediaType.svg;
+  assetId: string;
   /** Original SVG data for lossless serialization */
   blob: Blob;
 };
@@ -416,6 +452,8 @@ export interface PlaybackState {
 
 type ShaderCanvasEntityBase = {
   id: string;
+  /** Shared immutable media asset backing this entity */
+  assetId: string;
   /** Display name (filename or "Image N") */
   name: string;
   /** Position in world coordinates */
@@ -427,7 +465,7 @@ type ShaderCanvasEntityBase = {
   /** Rotation in degrees */
   rotation: number;
 
-  /** Source image bitmap (for images: the bitmap, for videos: current frame snapshot) */
+  /** Current frame/source bitmap reference. Lifecycle owned by the media asset registry. */
   imageBitmap: ImageBitmap;
   /** Original media dimensions (for aspect ratio preservation) */
   originalSize: Size;

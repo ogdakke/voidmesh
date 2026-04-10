@@ -22,6 +22,7 @@ import {
   createVideoEntityData,
   loadVideo,
 } from "#lib/media-loader.ts";
+import { mediaAssetRegistry } from "#lib/media-asset-registry.ts";
 import { encodeGifFromFrames } from "#lib/gif-encoder.ts";
 import { logger } from "#lib/client.logger.ts";
 import { toastManager } from "#ui/toast/toast-manager.ts";
@@ -364,7 +365,7 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
   ): Promise<string> {
     if (entity.mediaSource.type !== MediaType.gif) throw new Error("Entity is not a GIF");
 
-    const sourceFrames = entity.mediaSource.frames;
+    const sourceFrames = mediaAssetRegistry.getGifFrames(entity.assetId);
     const totalFrames = sourceFrames.length;
 
     // Clone frames so we don't close the source entity's bitmaps

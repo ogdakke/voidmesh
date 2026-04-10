@@ -10,6 +10,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { canvasStore } from "../engine/index.ts";
 import { logger } from "../lib/client.logger.ts";
+import { mediaAssetRegistry } from "../lib/media-asset-registry.ts";
 import { formatMediaTimeParts, type MediaTimeParts } from "../lib/time-format.ts";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
 import { isVideoEntity, isGifEntity, isAnimatedEntity, MediaType } from "#types/canvas.ts";
@@ -187,7 +188,7 @@ export function useMediaControlsActions(
     const currentTime = entity.playback?.currentTime ?? 0;
     const duration =
       entity.mediaSource.type === MediaType.video
-        ? entity.mediaSource.videoElement.duration || 0
+        ? entity.mediaSource.duration
         : entity.mediaSource.duration;
 
     let newTime = currentTime + delta;
@@ -280,7 +281,8 @@ export function useMediaControlsActions(
     if (!isAnimatedSelected || !entity) return;
 
     if (isVideoEntity(entity)) {
-      const video = entity.mediaSource.videoElement;
+      const video = mediaAssetRegistry.getVideoElement(entity.id);
+      if (!video) return;
 
       // Firefox sometimes doesn't fire timeupdate after seek completes
       // Force an immediate update (bypasses throttle) to ensure UI syncs

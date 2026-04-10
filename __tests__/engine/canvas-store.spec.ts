@@ -25,9 +25,7 @@ describe("canvasStore.seekVideo", () => {
 
     canvasStore.seekVideo(entity.id, 50);
 
-    if (entity.mediaSource.type === "video") {
-      expect(entity.mediaSource.videoElement.currentTime).toBe(50);
-    }
+    expect(entity.playback?.currentTime).toBe(50);
   });
 
   test("updates playback.currentTime", () => {
@@ -44,16 +42,10 @@ describe("canvasStore.seekVideo", () => {
     canvasStore.addEntity(entity);
 
     canvasStore.seekVideo(entity.id, 150);
-
-    if (entity.mediaSource.type === "video") {
-      expect(entity.mediaSource.videoElement.currentTime).toBe(100);
-    }
+    expect(entity.playback?.currentTime).toBe(100);
 
     canvasStore.seekVideo(entity.id, -10);
-
-    if (entity.mediaSource.type === "video") {
-      expect(entity.mediaSource.videoElement.currentTime).toBe(0);
-    }
+    expect(entity.playback?.currentTime).toBe(0);
   });
 
   test("marks texture as dirty", () => {

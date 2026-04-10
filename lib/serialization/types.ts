@@ -1,45 +1,84 @@
-import type { ColorPalette, PlaybackState, ShaderParams } from "#types/canvas.ts";
+import type { ColorPalette, MediaType, PlaybackState, ShaderParams } from "#types/canvas.ts";
 
-// ============================================================================
-// Document Envelope
-// ============================================================================
-
-/** Top-level manifest stored as manifest.json inside a .studio zip archive */
 export interface StudioManifest {
-  /** Format identifier */
   type: "studio-canvas";
-  /** Schema version (integer, monotonically increasing) */
   version: number;
-  /** ISO 8601 timestamp of when this document was created */
   createdAt: string;
-  /** Viewport state at time of save */
   viewport: SerializedViewport;
-  /** All entities on the canvas, sorted by zIndex */
+  assets: SerializedAsset[];
   entities: SerializedEntity[];
-  /** Custom/extracted palettes referenced by entities (v4+) */
   palettes?: ColorPalette[];
 }
 
-// ============================================================================
-// Viewport
-// ============================================================================
+export interface LegacyStudioManifest {
+  type: "studio-canvas";
+  version: number;
+  createdAt: string;
+  viewport: SerializedViewport;
+  entities: LegacySerializedEntity[];
+  palettes?: ColorPalette[];
+}
 
 export interface SerializedViewport {
   offset: { x: number; y: number };
   zoom: number;
 }
 
-// ============================================================================
-// Entity (discriminated union on mediaType)
-// ============================================================================
-
-export type SerializedEntity =
-  | SerializedImageEntity
-  | SerializedVideoEntity
-  | SerializedGifEntity
-  | SerializedSvgEntity;
-
 interface SerializedEntityBase {
+  id: string;
+  assetId: string;
+  name: string;
+  position: { x: number; y: number };
+  size: { width: number; height: number };
+  originalSize: { width: number; height: number };
+  zIndex: number;
+  rotation: number;
+  locked: boolean;
+  edited: boolean;
+  shaderType: string;
+  shaderParams: ShaderParams;
+  originalPalette?: ColorPalette;
+  playback?: SerializedPlaybackState;
+}
+
+export interface SerializedEntity extends SerializedEntityBase {}
+
+interface SerializedAssetBase {
+  assetId: string;
+  mediaType: MediaType;
+  mediaFile: string;
+  width: number;
+  height: number;
+}
+
+export interface SerializedImageAsset extends SerializedAssetBase {
+  mediaType: "image";
+}
+
+export interface SerializedSvgAsset extends SerializedAssetBase {
+  mediaType: "svg";
+}
+
+export interface SerializedVideoAsset extends SerializedAssetBase {
+  mediaType: "video";
+  duration: number;
+  fps: number | null;
+  hasAudio: boolean;
+}
+
+export interface SerializedGifAsset extends SerializedAssetBase {
+  mediaType: "gif";
+  duration: number;
+  fps: number;
+}
+
+export type SerializedAsset =
+  | SerializedImageAsset
+  | SerializedSvgAsset
+  | SerializedVideoAsset
+  | SerializedGifAsset;
+
+interface LegacySerializedEntityBase {
   id: string;
   name: string;
   position: { x: number; y: number };
@@ -51,59 +90,48 @@ interface SerializedEntityBase {
   edited: boolean;
   shaderType: string;
   shaderParams: ShaderParams;
-  /** Palette extracted from source image (v4+) */
   originalPalette?: ColorPalette;
 }
 
-export interface SerializedImageEntity extends SerializedEntityBase {
+export interface LegacySerializedImageEntity extends LegacySerializedEntityBase {
   mediaType: "image";
-  /** Path to the image file inside the zip archive */
   mediaFile: string;
 }
 
-export interface SerializedVideoEntity extends SerializedEntityBase {
+export interface LegacySerializedVideoEntity extends LegacySerializedEntityBase {
   mediaType: "video";
-  /** Path to the video file inside the zip archive */
   mediaFile: string;
-  /** Original video duration in seconds */
   duration: number;
-  /** Detected frame rate (null if unknown) */
   fps: number | null;
-  /** Whether the source video contains an audio track (added in v3) */
-  hasAudio: boolean;
-  /** Playback state at time of save */
+  hasAudio?: boolean;
   playback: SerializedPlaybackState;
 }
 
-export interface SerializedGifEntity extends SerializedEntityBase {
+export interface LegacySerializedGifEntity extends LegacySerializedEntityBase {
   mediaType: "gif";
-  /** Path to the GIF file inside the zip archive */
   mediaFile: string;
-  /** Total duration in seconds */
   duration: number;
-  /** Average frames per second */
   fps: number;
-  /** Playback state at time of save */
   playback: SerializedPlaybackState;
 }
 
-export interface SerializedSvgEntity extends SerializedEntityBase {
+export interface LegacySerializedSvgEntity extends LegacySerializedEntityBase {
   mediaType: "svg";
-  /** Path to the SVG file inside the zip archive */
   mediaFile: string;
 }
 
-/** Playback state for serialization */
+export type LegacySerializedEntity =
+  | LegacySerializedImageEntity
+  | LegacySerializedVideoEntity
+  | LegacySerializedGifEntity
+  | LegacySerializedSvgEntity;
+
 export interface SerializedPlaybackState {
   currentTime: number;
   loop: boolean;
   playbackRate: number;
   isPlaying?: boolean;
 }
-
-// ============================================================================
-// Deserialization Result
-// ============================================================================
 
 export interface DeserializeResult {
   success: boolean;
@@ -112,11 +140,6 @@ export interface DeserializeResult {
   errors: { entityId: string; entityName: string; error: string }[];
 }
 
-// ============================================================================
-// Serialize Worker
-// ============================================================================
-
-/** Media data passed between main thread and serialization worker. */
 export interface SerializeMediaEntry {
   path: string;
   type: "imageBitmap" | "bytes";
@@ -124,12 +147,7 @@ export interface SerializeMediaEntry {
   bytes?: Uint8Array;
 }
 
-// ============================================================================
-// Type Guards
-// ============================================================================
-
-/** Validate the top-level manifest envelope */
-export function isStudioManifest(data: unknown): data is StudioManifest {
+export function isStudioManifest(data: unknown): data is StudioManifest | LegacyStudioManifest {
   if (typeof data !== "object" || data === null) return false;
   const obj = data as Record<string, unknown>;
   return (
@@ -141,21 +159,19 @@ export function isStudioManifest(data: unknown): data is StudioManifest {
   );
 }
 
-/** Minimal validation that a serialized entity has required fields */
 export function isSerializedEntity(data: unknown): data is SerializedEntity {
   if (typeof data !== "object" || data === null) return false;
   const e = data as Record<string, unknown>;
   return (
     typeof e.id === "string" &&
+    typeof e.assetId === "string" &&
     typeof e.name === "string" &&
-    typeof e.mediaType === "string" &&
     typeof e.shaderType === "string" &&
     typeof e.position === "object" &&
     typeof e.size === "object"
   );
 }
 
-/** Playback state with safe defaults */
 export function toPlaybackState(s: SerializedPlaybackState | undefined): PlaybackState {
   return {
     isPlaying: s?.isPlaying ?? false,

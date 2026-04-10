@@ -1,30 +1,29 @@
 import { canvasStore } from "#engine";
 import { config } from "#config";
-import type { ColorPalette, ShaderCanvasEntity } from "#types/canvas.ts";
+import {
+  MediaType,
+  type ColorPalette,
+  type MediaAsset,
+  type ShaderCanvasEntity,
+} from "#types/canvas.ts";
+import { mediaAssetRegistry } from "../media-asset-registry.ts";
 import { paletteStore } from "../palette-store.ts";
-import { detectVideoExtension, videoElementToBytes } from "./media.ts";
+import { detectVideoExtension } from "./media.ts";
 import type {
   SerializeMediaEntry,
+  SerializedAsset,
   SerializedEntity,
   SerializedPlaybackState,
   StudioManifest,
 } from "./types.ts";
 import { CURRENT_VERSION } from "./version.ts";
 
-/** Synchronous flag — prevents overlapping saves even when React state hasn't flushed yet. */
 let isSaving = false;
 
 export function getIsSaving(): boolean {
   return isSaving;
 }
 
-/**
- * Serialize the current canvas state into a .vdmsh zip archive (Blob).
- *
- * Heavy work (PNG encoding + zip compression) runs in a Web Worker.
- * The main thread only prepares entity metadata and collects transferable media data.
- * Concurrent calls are rejected (returns null) to prevent queuing redundant saves.
- */
 export async function serialize(): Promise<Blob | null> {
   if (isSaving) return null;
   isSaving = true;
@@ -32,26 +31,18 @@ export async function serialize(): Promise<Blob | null> {
   try {
     const state = canvasStore.getState();
     const entities = Array.from(state.entities.values());
-
-    // Sort by zIndex for deterministic output
     entities.sort((a, b) => a.zIndex - b.zIndex);
 
-    // Prepare entity metadata and media data in parallel (main thread)
-    const serializedEntities: SerializedEntity[] = [];
-    const mediaEntries: SerializeMediaEntry[] = [];
+    const referencedAssetIds = new Set(entities.map((entity) => entity.assetId));
+    const assets = mediaAssetRegistry
+      .getAllAssets()
+      .filter((asset) => referencedAssetIds.has(asset.assetId))
+      .sort((a, b) => a.assetId.localeCompare(b.assetId));
 
-    await Promise.all(
-      entities.map(async (entity) => {
-        const { serialized, media } = await prepareEntity(entity);
-        serializedEntities.push(serialized);
-        mediaEntries.push(media);
-      }),
-    );
-
-    // Re-sort after parallel processing (order may have been scrambled)
-    serializedEntities.sort((a, b) => a.zIndex - b.zIndex);
-
-    // Collect custom/extracted palettes referenced by entities
+    const serializedEntities = entities.map(prepareEntity);
+    const assetResults = await Promise.all(assets.map((asset) => prepareAsset(asset)));
+    const serializedAssets = assetResults.map((result) => result.serialized);
+    const mediaEntries = assetResults.map((result) => result.media);
     const referencedPalettes = collectReferencedPalettes(entities);
 
     const manifest: StudioManifest = {
@@ -62,14 +53,12 @@ export async function serialize(): Promise<Blob | null> {
         offset: { x: state.viewport.offset.x, y: state.viewport.offset.y },
         zoom: state.viewport.zoom,
       },
+      assets: serializedAssets,
       entities: serializedEntities,
       ...(referencedPalettes.length > 0 && { palettes: referencedPalettes }),
     };
 
-    const manifestJson = JSON.stringify(manifest, null, 2);
-
-    // Delegate PNG encoding + zip compression to worker
-    return await compressInWorker(manifestJson, mediaEntries);
+    return await compressInWorker(JSON.stringify(manifest, null, 2), mediaEntries);
   } finally {
     isSaving = false;
   }
@@ -100,12 +89,10 @@ function compressInWorker(manifest: string, mediaEntries: SerializeMediaEntry[])
 
     worker.onerror = (err) => {
       reject(new Error(`Serialization worker failed: ${err.message}`));
-      // Worker is broken — discard so next save creates a fresh one
       serializeWorker?.terminate();
       serializeWorker = null;
     };
 
-    // Build transfer list for zero-copy posting
     const transferList: Transferable[] = [];
     for (const entry of mediaEntries) {
       if (entry.type === "imageBitmap") {
@@ -119,14 +106,15 @@ function compressInWorker(manifest: string, mediaEntries: SerializeMediaEntry[])
   });
 }
 
-interface PreparedEntity {
-  serialized: SerializedEntity;
+interface PreparedAsset {
+  serialized: SerializedAsset;
   media: SerializeMediaEntry;
 }
 
-async function prepareEntity(entity: ShaderCanvasEntity): Promise<PreparedEntity> {
-  const base = {
+function prepareEntity(entity: ShaderCanvasEntity): SerializedEntity {
+  return {
     id: entity.id,
+    assetId: entity.assetId,
     name: entity.name,
     position: { x: entity.position.x, y: entity.position.y },
     size: { width: entity.size.width, height: entity.size.height },
@@ -143,59 +131,70 @@ async function prepareEntity(entity: ShaderCanvasEntity): Promise<PreparedEntity
     ...(entity.originalPalette && {
       originalPalette: structuredClone(entity.originalPalette),
     }),
+    ...(entity.playback && { playback: serializePlayback(entity.playback) }),
   };
+}
 
-  switch (entity.mediaSource.type) {
-    case "image": {
-      const path = `media/${entity.id}.png`;
-      // Clone bitmap — transfer destroys the source, entity still needs it for rendering
-      const cloned = await createImageBitmap(entity.imageBitmap);
+async function prepareAsset(asset: MediaAsset): Promise<PreparedAsset> {
+  const bytes = new Uint8Array(await asset.blob.arrayBuffer());
+
+  switch (asset.type) {
+    case MediaType.image: {
+      const extension = getImageExtension(asset.blob.type);
+      const path = `assets/${asset.assetId}.${extension}`;
       return {
-        serialized: { ...base, mediaType: "image", mediaFile: path },
-        media: { path, type: "imageBitmap", bitmap: cloned },
+        serialized: {
+          assetId: asset.assetId,
+          mediaType: MediaType.image,
+          mediaFile: path,
+          width: asset.width,
+          height: asset.height,
+        },
+        media: { path, type: "bytes", bytes },
       };
     }
-
-    case "video": {
-      // Fetch blob URL bytes on main thread (blob URLs don't work in workers)
-      const bytes = await videoElementToBytes(entity.mediaSource.videoElement);
+    case MediaType.svg: {
+      const path = `assets/${asset.assetId}.svg`;
+      return {
+        serialized: {
+          assetId: asset.assetId,
+          mediaType: MediaType.svg,
+          mediaFile: path,
+          width: asset.width,
+          height: asset.height,
+        },
+        media: { path, type: "bytes", bytes },
+      };
+    }
+    case MediaType.gif: {
+      const path = `assets/${asset.assetId}.gif`;
+      return {
+        serialized: {
+          assetId: asset.assetId,
+          mediaType: MediaType.gif,
+          mediaFile: path,
+          width: asset.width,
+          height: asset.height,
+          duration: asset.duration,
+          fps: asset.fps,
+        },
+        media: { path, type: "bytes", bytes },
+      };
+    }
+    case MediaType.video: {
       const ext = detectVideoExtension(bytes);
-      const path = `media/${entity.id}.${ext}`;
+      const path = `assets/${asset.assetId}.${ext}`;
       return {
         serialized: {
-          ...base,
-          mediaType: "video",
+          assetId: asset.assetId,
+          mediaType: MediaType.video,
           mediaFile: path,
-          duration: entity.mediaSource.duration,
-          fps: entity.mediaSource.fps,
-          hasAudio: entity.mediaSource.hasAudio,
-          playback: serializePlayback(entity.playback),
+          width: asset.width,
+          height: asset.height,
+          duration: asset.duration,
+          fps: asset.fps,
+          hasAudio: asset.hasAudio,
         },
-        media: { path, type: "bytes", bytes },
-      };
-    }
-
-    case "gif": {
-      const bytes = new Uint8Array(await entity.mediaSource.blob.arrayBuffer());
-      const path = `media/${entity.id}.gif`;
-      return {
-        serialized: {
-          ...base,
-          mediaType: "gif",
-          mediaFile: path,
-          duration: entity.mediaSource.duration,
-          fps: entity.mediaSource.fps,
-          playback: serializePlayback(entity.playback),
-        },
-        media: { path, type: "bytes", bytes },
-      };
-    }
-
-    case "svg": {
-      const bytes = new Uint8Array(await entity.mediaSource.blob.arrayBuffer());
-      const path = `media/${entity.id}.svg`;
-      return {
-        serialized: { ...base, mediaType: "svg", mediaFile: path },
         media: { path, type: "bytes", bytes },
       };
     }
@@ -211,13 +210,26 @@ function serializePlayback(playback: ShaderCanvasEntity["playback"]): Serialized
   };
 }
 
+function getImageExtension(mimeType: string): string {
+  switch (mimeType) {
+    case "image/jpeg":
+      return "jpg";
+    case "image/webp":
+      return "webp";
+    case "image/avif":
+      return "avif";
+    case "image/png":
+    default:
+      return "png";
+  }
+}
+
 function isUserPaletteId(id: string | undefined): id is string {
   if (!id) return false;
   const { custom, extracted } = config.paletteIdPrefix;
   return id.startsWith(custom) || id.startsWith(extracted);
 }
 
-/** Collect custom/extracted palettes referenced by entities from the palette store */
 function collectReferencedPalettes(entities: ShaderCanvasEntity[]): ColorPalette[] {
   const referencedIds = new Set<string>();
   for (const entity of entities) {
@@ -231,6 +243,6 @@ function collectReferencedPalettes(entities: ShaderCanvasEntity[]): ColorPalette
 
   const storePalettes = paletteStore.getPalettes();
   return storePalettes
-    .filter((p) => p.id != null && referencedIds.has(p.id))
-    .map((p) => structuredClone(p));
+    .filter((palette) => palette.id != null && referencedIds.has(palette.id))
+    .map((palette) => structuredClone(palette));
 }

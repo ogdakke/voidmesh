@@ -1,47 +1,104 @@
-import type { StudioManifest } from "./types.ts";
+import type { LegacySerializedEntity, LegacyStudioManifest, StudioManifest } from "./types.ts";
 import { CURRENT_VERSION } from "./version.ts";
 
 type Migration = (doc: Record<string, unknown>) => Record<string, unknown>;
 
-/**
- * Migration registry. Each entry migrates from version N to N+1.
- * Key is the SOURCE version.
- */
+function migrateLegacyEntity(entity: LegacySerializedEntity) {
+  const assetId = `asset-${entity.id}`;
+
+  const baseEntity = {
+    id: entity.id,
+    assetId,
+    name: entity.name,
+    position: entity.position,
+    size: entity.size,
+    originalSize: entity.originalSize,
+    zIndex: entity.zIndex,
+    rotation: entity.rotation,
+    locked: entity.locked,
+    edited: entity.edited,
+    shaderType: entity.shaderType,
+    shaderParams: entity.shaderParams,
+    ...(entity.originalPalette && { originalPalette: entity.originalPalette }),
+    ...("playback" in entity && entity.playback ? { playback: entity.playback } : {}),
+  };
+
+  const baseAsset = {
+    assetId,
+    mediaType: entity.mediaType,
+    mediaFile: entity.mediaFile,
+    width: entity.originalSize.width,
+    height: entity.originalSize.height,
+  };
+
+  switch (entity.mediaType) {
+    case "image":
+    case "svg":
+      return { asset: baseAsset, entity: baseEntity };
+    case "video":
+      return {
+        asset: {
+          ...baseAsset,
+          duration: entity.duration,
+          fps: entity.fps,
+          hasAudio: entity.hasAudio ?? false,
+        },
+        entity: baseEntity,
+      };
+    case "gif":
+      return {
+        asset: {
+          ...baseAsset,
+          duration: entity.duration,
+          fps: entity.fps,
+        },
+        entity: baseEntity,
+      };
+  }
+}
+
 const migrations: Record<number, Migration> = {
-  // Version 1 -> 2: Add reversePalette field to ShaderParams
   1: (doc) => {
-    for (const entity of doc.entities as any[]) {
-      if (entity.shaderParams) {
-        entity.shaderParams.reversePalette = entity.shaderParams.reversePalette ?? false;
+    for (const entity of doc.entities as Array<Record<string, unknown>>) {
+      if (entity.shaderParams && typeof entity.shaderParams === "object") {
+        entity.shaderParams = {
+          ...(entity.shaderParams as Record<string, unknown>),
+          reversePalette: (entity.shaderParams as Record<string, unknown>).reversePalette ?? false,
+        };
       }
     }
     doc.version = 2;
     return doc;
   },
-
-  // Version 2 -> 3: Add hasAudio field to video entities
-  // Since migrations only operate on manifest JSON (no media blobs),
-  // we leave hasAudio undefined here. Deserialization probes the actual
-  // blob for legacy files where hasAudio is missing.
   2: (doc) => {
     doc.version = 3;
     return doc;
   },
-
-  // Version 3 -> 4: Add originalPalette to entities and palettes to manifest.
-  // Both fields are optional so no data transform needed — old files simply
-  // won't have them. originalPalette will be re-extracted in the context layer.
   3: (doc) => {
     doc.version = 4;
     return doc;
   },
+  4: (doc) => {
+    const legacy = doc as unknown as LegacyStudioManifest;
+    const assets = [];
+    const entities = [];
+
+    for (const entity of legacy.entities) {
+      const migrated = migrateLegacyEntity(entity);
+      assets.push(migrated.asset);
+      entities.push(migrated.entity);
+    }
+
+    return {
+      ...legacy,
+      version: 5,
+      assets,
+      entities,
+    };
+  },
 };
 
-/**
- * Run all necessary migrations to bring a document to CURRENT_VERSION.
- * Returns a new object (does not mutate the input).
- */
-export function runMigrations(doc: StudioManifest): StudioManifest {
+export function runMigrations(doc: StudioManifest | LegacyStudioManifest): StudioManifest {
   let current = structuredClone(doc) as unknown as Record<string, unknown>;
 
   while ((current.version as number) < CURRENT_VERSION) {

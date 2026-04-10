@@ -1,4 +1,5 @@
 import { logger, LogLevel, type Logger } from "#lib/client.logger.ts";
+import { mediaAssetRegistry } from "#lib/media-asset-registry.ts";
 import { Store } from "#lib/store.ts";
 import { getCommonFeatures, paramVisibilityRules, shaderFeatures } from "#config";
 import {
@@ -270,11 +271,10 @@ export class CanvasStore extends Store<CanvasState> {
 
       // Handle video entities
       if (selectedEntity?.mediaSource.type === MediaType.video) {
-        const video = selectedEntity.mediaSource.videoElement;
         return {
           entityId: selectedEntity.id,
           currentTime: selectedEntity.playback?.currentTime ?? 0,
-          duration: video.duration || 0,
+          duration: selectedEntity.mediaSource.duration,
           isPlaying: selectedEntity.playback?.isPlaying ?? false,
           version: s.playbackVersion,
         };
@@ -532,6 +532,7 @@ export class CanvasStore extends Store<CanvasState> {
    * Properly increments versions and notifies subscribers.
    */
   reset(): void {
+    mediaAssetRegistry.reset();
     this.state.entities.clear();
     this.state.selectedEntityIds = new Set();
     this.state.hoveredEntityId = null;
@@ -648,7 +649,11 @@ export class CanvasStore extends Store<CanvasState> {
     const entity = this.state.entities.get(entityId);
     if (!entity || entity.mediaSource.type !== MediaType.video) return;
 
-    const video = entity.mediaSource.videoElement;
+    const video = await mediaAssetRegistry.ensureVideoSession(
+      entityId,
+      entity.assetId,
+      entity.playback?.currentTime ?? 0,
+    );
     await video.play();
 
     if (entity.playback) {
@@ -663,28 +668,24 @@ export class CanvasStore extends Store<CanvasState> {
     const entity = this.state.entities.get(entityId);
     if (!entity || entity.mediaSource.type !== MediaType.video) return;
 
-    const video = entity.mediaSource.videoElement;
-    video.pause();
+    const video = mediaAssetRegistry.getVideoElement(entityId);
+    video?.pause();
 
     if (entity.playback) {
       entity.playback.isPlaying = false;
-      entity.playback.currentTime = video.currentTime;
+      entity.playback.currentTime = video?.currentTime ?? entity.playback.currentTime;
     }
 
-    // Snapshot current frame for static display
-    const canvas = new OffscreenCanvas(video.videoWidth, video.videoHeight);
-    const ctx = canvas.getContext("2d");
-    if (ctx) {
-      ctx.drawImage(video, 0, 0);
-      createImageBitmap(canvas)
-        .then((bitmap) => {
-          entity.imageBitmap = bitmap;
-          entity.textureDirty = true;
-          this.state.entitiesDirty.add(entityId);
-          this.notifySelectionChange();
-        })
-        .catch((e) => logger.error(e));
-    }
+    void mediaAssetRegistry
+      .captureSessionFrame(entityId)
+      .then((bitmap) => {
+        if (!bitmap) return;
+        entity.imageBitmap = bitmap;
+        entity.textureDirty = true;
+        this.state.entitiesDirty.add(entityId);
+        this.notifySelectionChange();
+      })
+      .catch((e) => logger.error(e));
 
     this.state.entitiesDirty.add(entityId);
     this.notifySelectionChange();
@@ -698,10 +699,8 @@ export class CanvasStore extends Store<CanvasState> {
     const entity = this.state.entities.get(entityId);
     if (!entity || entity.mediaSource.type !== MediaType.video) return;
 
-    const video = entity.mediaSource.videoElement;
     // Clamp to valid range
-    const clampedTime = Math.max(0, Math.min(time, video.duration || 0));
-    video.currentTime = clampedTime;
+    const clampedTime = Math.max(0, Math.min(time, entity.mediaSource.duration || 0));
 
     if (entity.playback) {
       entity.playback.currentTime = clampedTime;
@@ -711,6 +710,19 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.entitiesDirty.add(entityId);
     this.state.playbackVersion++;
     this.notify();
+
+    void mediaAssetRegistry
+      .seekVideoSession(entityId, entity.assetId, clampedTime)
+      .then(async () => {
+        if (entity.playback?.isPlaying) return;
+        const bitmap = await mediaAssetRegistry.captureSessionFrame(entityId);
+        if (!bitmap) return;
+        entity.imageBitmap = bitmap;
+        entity.textureDirty = true;
+        this.state.entitiesDirty.add(entityId);
+        this.notifySelectionChange();
+      })
+      .catch((e) => logger.error(e));
   }
 
   /**
@@ -767,7 +779,8 @@ export class CanvasStore extends Store<CanvasState> {
     const entity = this.state.entities.get(entityId);
     if (!entity || entity.mediaSource.type !== MediaType.gif) return;
 
-    const { frames, duration } = entity.mediaSource;
+    const frames = mediaAssetRegistry.getGifFrames(entity.assetId);
+    const { duration } = entity.mediaSource;
     const clampedTime = Math.max(0, Math.min(time, duration));
 
     if (entity.playback) {
@@ -825,7 +838,8 @@ export class CanvasStore extends Store<CanvasState> {
     const entity = this.state.entities.get(entityId);
     if (!entity || entity.mediaSource.type !== MediaType.gif || !entity.playback?.isPlaying) return;
 
-    const { frames, duration } = entity.mediaSource;
+    const frames = mediaAssetRegistry.getGifFrames(entity.assetId);
+    const { duration } = entity.mediaSource;
     const loop = entity.playback.loop;
 
     // Advance current time

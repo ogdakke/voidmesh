@@ -2,6 +2,7 @@ import type { ShaderCanvasEntity, Point, ColorPalette, MediaSource } from "#type
 import type { ColorSpace } from "#types/enums.ts";
 import { logger } from "./client.logger.ts";
 import { config } from "./config/index.ts";
+import { mediaAssetRegistry } from "./media-asset-registry.ts";
 import { extractPaletteFromImage } from "./palette-extraction/index.ts";
 import { decodeGif, isAnimatedGif, type GifDecodeResult } from "./gif-decoder.ts";
 
@@ -220,13 +221,15 @@ export function createImageEntityData(
   position: Point = { x: 0, y: 0 },
   filename?: string,
 ): Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string } {
+  const asset = mediaAssetRegistry.createImageAsset(blob, bitmap);
   return {
+    assetId: asset.assetId,
     name: filename,
-    mediaSource: { type: "image", imageBitmap: bitmap, blob },
-    imageBitmap: bitmap,
+    mediaSource: { type: "image", blob, assetId: asset.assetId },
+    imageBitmap: asset.imageBitmap,
     position,
-    size: { width: bitmap.width, height: bitmap.height },
-    originalSize: { width: bitmap.width, height: bitmap.height },
+    size: { width: asset.width, height: asset.height },
+    originalSize: { width: asset.width, height: asset.height },
     rotation: 0,
     shaderType: config.defaults.shader,
     shaderParams: config.defaults.shaderParams,
@@ -254,17 +257,19 @@ export function createGifEntityData(
   filename?: string,
 ): Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string } {
   const { frames, width, height, duration, fps } = gifResult;
+  const asset = mediaAssetRegistry.createGifAsset(blob, frames, width, height, duration, fps);
 
   return {
+    assetId: asset.assetId,
     name: filename,
     mediaSource: {
       type: "gif",
-      frames,
+      assetId: asset.assetId,
       duration,
       fps,
       blob,
     },
-    imageBitmap: frames[0]!.bitmap,
+    imageBitmap: asset.frames[0]!.bitmap,
     position,
     size: { width, height },
     originalSize: { width, height },
@@ -363,10 +368,12 @@ export function createSvgEntityData(
   filename?: string,
 ): Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string } {
   const { bitmap, width, height } = rasterResult;
+  const asset = mediaAssetRegistry.createSvgAsset(blob, bitmap, width, height);
   return {
+    assetId: asset.assetId,
     name: filename,
-    mediaSource: { type: "svg", blob },
-    imageBitmap: bitmap,
+    mediaSource: { type: "svg", blob, assetId: asset.assetId },
+    imageBitmap: asset.imageBitmap,
     position,
     size: { width, height },
     originalSize: { width, height },
@@ -390,18 +397,31 @@ export function createVideoEntityData(
   filename?: string,
 ): Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string } {
   const { videoElement, initialFrame, width, height, duration, fps, hasAudio } = videoResult;
+  const asset = mediaAssetRegistry.createVideoAsset(
+    blob,
+    initialFrame,
+    width,
+    height,
+    duration,
+    fps,
+    hasAudio,
+  );
+  videoElement.pause();
+  videoElement.src = "";
+  videoElement.load();
 
   return {
+    assetId: asset.assetId,
     name: filename,
     mediaSource: {
       type: "video",
-      videoElement,
       blob,
+      assetId: asset.assetId,
       duration,
       fps,
       hasAudio,
     },
-    imageBitmap: initialFrame,
+    imageBitmap: asset.posterFrame,
     position,
     size: { width, height },
     originalSize: { width, height },
@@ -567,48 +587,30 @@ export async function cloneMediaSource(
 ): Promise<{ mediaSource: MediaSource; imageBitmap: ImageBitmap }> {
   switch (source.type) {
     case "image": {
-      const bitmap = await createImageBitmap(source.blob);
       return {
-        mediaSource: { type: "image", imageBitmap: bitmap, blob: source.blob },
-        imageBitmap: bitmap,
+        mediaSource: source,
+        imageBitmap: mediaAssetRegistry.getStaticAssetBitmap(source.assetId),
       };
     }
 
     case "video": {
-      const videoResult = await loadVideo(source.blob);
       return {
-        mediaSource: {
-          type: "video",
-          videoElement: videoResult.videoElement,
-          blob: source.blob,
-          duration: source.duration,
-          fps: source.fps,
-          hasAudio: videoResult.hasAudio,
-        },
-        imageBitmap: videoResult.initialFrame,
+        mediaSource: source,
+        imageBitmap: currentBitmap,
       };
     }
 
     case "gif": {
-      const gifResult = await decodeGif(source.blob);
       return {
-        mediaSource: {
-          type: "gif",
-          frames: gifResult.frames,
-          duration: source.duration,
-          fps: source.fps,
-          blob: source.blob,
-        },
-        imageBitmap: gifResult.frames[0]?.bitmap ?? currentBitmap,
+        mediaSource: source,
+        imageBitmap: currentBitmap,
       };
     }
 
     case "svg": {
-      const text = await source.blob.text();
-      const rasterResult = await rasterizeSvg(text);
       return {
-        mediaSource: { type: "svg", blob: source.blob },
-        imageBitmap: rasterResult.bitmap,
+        mediaSource: source,
+        imageBitmap: mediaAssetRegistry.getStaticAssetBitmap(source.assetId),
       };
     }
   }
