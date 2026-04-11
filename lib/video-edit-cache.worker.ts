@@ -1,19 +1,48 @@
-import { ALL_FORMATS, BlobSource, EncodedPacketSink, Input } from "mediabunny";
+import {
+  ALL_FORMATS,
+  BlobSource,
+  BufferTarget,
+  Conversion,
+  EncodedPacketSink,
+  Input,
+  Mp4OutputFormat,
+  Output,
+} from "mediabunny";
 import {
   getVideoEditCacheDirectory,
   getVideoEditCacheRootDirectory,
   readArrayBufferFile,
+  readBlobFile,
   readJsonFile,
   removeDirectoryEntry,
+  removeFileEntry,
   requestPersistentStorage,
+  writeBlobFile,
   writeArrayBufferFile,
   writeJsonFile,
 } from "./opfs.ts";
 
-const CACHE_VERSION = 3;
+const CACHE_VERSION = 4;
 const FRAME_INDEX_FILE_NAME = "frame-index.bin";
 const KEYFRAME_INDEX_FILE_NAME = "keyframe-index.bin";
 const MANIFEST_FILE_NAME = "manifest.json";
+const PROXY_FILE_NAME = "scrub-proxy.mp4";
+const MAX_PROXY_EDGE = 1280;
+const MAX_PROXY_FRAME_RATE = 30;
+const PROXY_KEYFRAME_INTERVAL_SECONDS = 0.5;
+
+export interface VideoEditCacheProxyManifest {
+  status: "not-needed" | "pending" | "ready" | "failed";
+  fileName?: string;
+  mimeType?: string;
+  width?: number;
+  height?: number;
+  frameRate?: number;
+  bitrate?: number;
+  codec?: string;
+  byteLength?: number;
+  error?: string;
+}
 
 export interface VideoEditCacheManifest {
   version: number;
@@ -30,6 +59,7 @@ export interface VideoEditCacheManifest {
   createdAt: number;
   updatedAt: number;
   lastAccessedAt: number;
+  proxy: VideoEditCacheProxyManifest;
   error?: string;
 }
 
@@ -93,7 +123,10 @@ function isManifest(value: unknown): value is VideoEditCacheManifest {
     typeof manifest.keyframeCount === "number" &&
     typeof manifest.frameIndexReady === "boolean" &&
     typeof manifest.keyframeIndexReady === "boolean" &&
-    typeof manifest.status === "string"
+    typeof manifest.status === "string" &&
+    !!manifest.proxy &&
+    typeof manifest.proxy === "object" &&
+    typeof manifest.proxy.status === "string"
   );
 }
 
@@ -120,6 +153,9 @@ function createManifest(
     createdAt: now,
     updatedAt: now,
     lastAccessedAt: now,
+    proxy: {
+      status: "pending",
+    },
   };
 }
 
@@ -159,6 +195,50 @@ async function loadOrCreateManifest(
   const manifest = createManifest(cacheKey, durationHint, fpsHint, width, height);
   await writeJsonFile(freshDir, MANIFEST_FILE_NAME, manifest);
   return manifest;
+}
+
+function shouldBuildAdaptiveProxy(
+  blob: Blob,
+  manifest: VideoEditCacheManifest,
+  sourceCodec: string | null | undefined,
+): boolean {
+  const pixelCount = manifest.width * manifest.height;
+  const averageBytesPerSecond = manifest.duration > 0 ? blob.size / manifest.duration : blob.size;
+  const sourceFps = manifest.fps ?? 0;
+  return (
+    sourceCodec !== "avc" ||
+    pixelCount > 1920 * 1080 ||
+    averageBytesPerSecond > 2_500_000 ||
+    sourceFps > MAX_PROXY_FRAME_RATE
+  );
+}
+
+function roundToEven(value: number): number {
+  const rounded = Math.max(2, Math.round(value));
+  return rounded % 2 === 0 ? rounded : rounded + 1;
+}
+
+function getProxyDimensions(width: number, height: number): { width: number; height: number } {
+  const longestEdge = Math.max(width, height);
+  const scale = longestEdge > MAX_PROXY_EDGE ? MAX_PROXY_EDGE / longestEdge : 1;
+  return {
+    width: roundToEven(width * scale),
+    height: roundToEven(height * scale),
+  };
+}
+
+function getProxyFrameRate(fps: number | null): number {
+  if (!fps || !Number.isFinite(fps) || fps <= 0) {
+    return MAX_PROXY_FRAME_RATE;
+  }
+  return Math.max(12, Math.min(MAX_PROXY_FRAME_RATE, Math.round(fps)));
+}
+
+function getProxyBitrate(width: number, height: number, frameRate: number): number {
+  const pixels = width * height;
+  const megapixels = pixels / 1_000_000;
+  const bitrate = Math.round(megapixels * frameRate * 100_000);
+  return Math.max(1_500_000, Math.min(5_000_000, bitrate));
 }
 
 function encodeFrameIndex(frameIndex: VideoEditCacheFrameIndex): ArrayBuffer {
@@ -282,6 +362,124 @@ async function buildIndices(job: CacheBuildJob): Promise<void> {
   postMessageToMain({ type: "manifest", cacheKey: job.cacheKey, manifest: job.manifest });
 }
 
+async function buildAdaptiveProxy(job: CacheBuildJob, blob: Blob): Promise<void> {
+  const cacheDir = await getVideoEditCacheDirectory(job.cacheKey, true);
+  const shouldBuild = shouldBuildAdaptiveProxy(blob, job.manifest, job.videoTrack.codec);
+
+  if (!shouldBuild) {
+    job.manifest.proxy = {
+      status: "not-needed",
+    };
+    await removeFileEntry(cacheDir, PROXY_FILE_NAME).catch(() => {});
+    await persistManifest(job);
+    postMessageToMain({ type: "manifest", cacheKey: job.cacheKey, manifest: job.manifest });
+    return;
+  }
+
+  const existingProxy =
+    job.manifest.proxy.status === "ready"
+      ? await readBlobFile(cacheDir, job.manifest.proxy.fileName ?? PROXY_FILE_NAME)
+      : null;
+  if (existingProxy) {
+    job.manifest.proxy = {
+      ...job.manifest.proxy,
+      status: "ready",
+      fileName: job.manifest.proxy.fileName ?? PROXY_FILE_NAME,
+      mimeType: existingProxy.type || "video/mp4",
+      byteLength: existingProxy.size,
+      error: undefined,
+    };
+    await persistManifest(job);
+    postMessageToMain({ type: "manifest", cacheKey: job.cacheKey, manifest: job.manifest });
+    return;
+  }
+
+  const { width, height } = getProxyDimensions(job.manifest.width, job.manifest.height);
+  const frameRate = getProxyFrameRate(job.manifest.fps);
+  const bitrate = getProxyBitrate(width, height, frameRate);
+
+  job.manifest.proxy = {
+    status: "pending",
+    fileName: PROXY_FILE_NAME,
+    mimeType: "video/mp4",
+    width,
+    height,
+    frameRate,
+    bitrate,
+    codec: "avc",
+  };
+  await persistManifest(job);
+  postMessageToMain({ type: "manifest", cacheKey: job.cacheKey, manifest: job.manifest });
+
+  const target = new BufferTarget();
+  const output = new Output({
+    format: new Mp4OutputFormat(),
+    target,
+  });
+
+  try {
+    const conversion = await Conversion.init({
+      input: job.input,
+      output,
+      showWarnings: false,
+      video: {
+        width,
+        height,
+        fit: "contain",
+        codec: "avc",
+        bitrate,
+        frameRate,
+        keyFrameInterval: PROXY_KEYFRAME_INTERVAL_SECONDS,
+      },
+      audio: {
+        discard: true,
+      },
+    });
+
+    if (!conversion.isValid) {
+      throw new Error("Failed to create adaptive scrub proxy: output configuration is invalid");
+    }
+
+    await conversion.execute();
+
+    if (!target.buffer) {
+      throw new Error("Adaptive scrub proxy conversion completed without an output buffer");
+    }
+
+    const proxyBlob = new Blob([target.buffer], { type: "video/mp4" });
+    await writeBlobFile(cacheDir, PROXY_FILE_NAME, proxyBlob);
+    job.manifest.proxy = {
+      status: "ready",
+      fileName: PROXY_FILE_NAME,
+      mimeType: proxyBlob.type || "video/mp4",
+      width,
+      height,
+      frameRate,
+      bitrate,
+      codec: "avc",
+      byteLength: proxyBlob.size,
+    };
+    await persistManifest(job);
+    postMessageToMain({ type: "manifest", cacheKey: job.cacheKey, manifest: job.manifest });
+  } catch (error) {
+    await output.cancel().catch(() => {});
+    job.manifest.proxy = {
+      status: "failed",
+      fileName: PROXY_FILE_NAME,
+      mimeType: "video/mp4",
+      width,
+      height,
+      frameRate,
+      bitrate,
+      codec: "avc",
+      error: error instanceof Error ? error.message : "Failed to build adaptive scrub proxy",
+    };
+    await removeFileEntry(cacheDir, PROXY_FILE_NAME).catch(() => {});
+    await persistManifest(job);
+    postMessageToMain({ type: "manifest", cacheKey: job.cacheKey, manifest: job.manifest });
+  }
+}
+
 async function ensureJob(
   cacheKey: string,
   blob: Blob,
@@ -332,21 +530,31 @@ function postMessageToMain(message: FromVideoEditCacheWorkerMessage): void {
   self.postMessage(message);
 }
 
-async function startBuild(job: CacheBuildJob): Promise<void> {
+async function startBuild(job: CacheBuildJob, blob: Blob): Promise<void> {
   if (job.buildPromise || job.disposed) {
     return await (job.buildPromise ?? Promise.resolve());
   }
 
-  job.buildPromise = buildIndices(job).catch(async (error) => {
-    job.manifest.status = "failed";
-    job.manifest.error = error instanceof Error ? error.message : "Failed to build video index";
-    await persistManifest(job).catch(() => {});
-    postMessageToMain({
-      type: "error",
-      cacheKey: job.cacheKey,
-      message: job.manifest.error,
-    });
-  });
+  job.buildPromise = (async () => {
+    try {
+      await buildIndices(job);
+      if (job.disposed) {
+        return;
+      }
+      await buildAdaptiveProxy(job, blob);
+    } catch (error) {
+      job.manifest.status = "failed";
+      job.manifest.error = error instanceof Error ? error.message : "Failed to build video index";
+      await persistManifest(job).catch(() => {});
+      postMessageToMain({
+        type: "error",
+        cacheKey: job.cacheKey,
+        message: job.manifest.error,
+      });
+    } finally {
+      job.buildPromise = null;
+    }
+  })();
 
   await job.buildPromise;
 }
@@ -358,7 +566,7 @@ self.onmessage = async (event: MessageEvent<ToVideoEditCacheWorkerMessage>) => {
     case "ensure-cache": {
       try {
         const job = await ensureJob(message.cacheKey, message.blob, message.duration, message.fps);
-        await startBuild(job);
+        await startBuild(job, message.blob);
       } catch (error) {
         postMessageToMain({
           type: "error",

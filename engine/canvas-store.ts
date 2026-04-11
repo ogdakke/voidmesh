@@ -16,6 +16,7 @@ import {
 import { getFrameAtTime } from "#lib/gif-decoder.ts";
 import {
   createExactVideoFrameSession,
+  type ExactVideoFrameMode,
   type ExactVideoFrameSession,
 } from "#lib/video-frame-engine.ts";
 import { captureVideoFrame } from "#lib/serialization/media.ts";
@@ -684,10 +685,12 @@ export class CanvasStore extends Store<CanvasState> {
     });
     const session = this.#getOrCreateVideoFrameSession(entityId);
     if (!session) return;
+    const mode: ExactVideoFrameMode =
+      reason === "scrub-move" || reason === "scrub-start" ? "interactive" : "exact";
 
     try {
       const startedAt = performance.now();
-      const frame = await session.getFrame(clampedTime);
+      const frame = await session.getFrame(clampedTime, mode);
       const totalMs = performance.now() - startedAt;
       const current = this.state.entities.get(entityId);
       const latestRequestId = this.#videoLatestFrameRequestId.get(entityId);
@@ -704,6 +707,7 @@ export class CanvasStore extends Store<CanvasState> {
           time: frame.time,
           latestRequestId,
           cacheStatus: frame.cacheStatus,
+          source: frame.source,
           totalMs: Number(totalMs.toFixed(2)),
         });
         return;
@@ -729,6 +733,7 @@ export class CanvasStore extends Store<CanvasState> {
         requestedTime: clampedTime,
         resolvedTime: frame.time,
         cacheStatus: frame.cacheStatus,
+        source: frame.source,
         decodeMs: Number(frame.decodeMs.toFixed(2)),
         totalMs: Number(totalMs.toFixed(2)),
       });

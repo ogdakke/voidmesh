@@ -24,7 +24,7 @@ describe("canvasStore.seekVideo", () => {
     canvasStore.addEntity(entity);
 
     canvasStore.seekVideo(entity.id, 50);
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    await new Promise((resolve) => setTimeout(resolve, 220));
 
     if (entity.mediaSource.type === "video") {
       expect(entity.mediaSource.videoElement.currentTime).toBe(50);
@@ -45,14 +45,14 @@ describe("canvasStore.seekVideo", () => {
     canvasStore.addEntity(entity);
 
     canvasStore.seekVideo(entity.id, 150);
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    await new Promise((resolve) => setTimeout(resolve, 220));
 
     if (entity.mediaSource.type === "video") {
       expect(entity.mediaSource.videoElement.currentTime).toBe(100);
     }
 
     canvasStore.seekVideo(entity.id, -10);
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    await new Promise((resolve) => setTimeout(resolve, 220));
 
     if (entity.mediaSource.type === "video") {
       expect(entity.mediaSource.videoElement.currentTime).toBe(0);
@@ -117,7 +117,7 @@ describe("canvasStore.seekVideo", () => {
     canvasStore.beginVideoScrub(entity.id);
     canvasStore.seekVideo(entity.id, 25);
     canvasStore.endVideoScrub(entity.id);
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    await new Promise((resolve) => setTimeout(resolve, 220));
 
     expect(entity.playback?.isPlaying).toBe(true);
     if (entity.mediaSource.type === "video") {

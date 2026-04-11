@@ -5,17 +5,19 @@ import { demuxVideo, type VideoDemuxHandle } from "./video-demux.ts";
 const DEFAULT_CACHE_FRAME_LIMIT = 12;
 const DEFAULT_CACHE_BYTE_LIMIT = 192 * 1024 * 1024;
 
+export type ExactVideoFrameMode = "interactive" | "exact";
+
 export interface ExactVideoFrameResult {
   bitmap: ImageBitmap;
   cacheKey: string;
   time: number;
   cacheStatus: "hit" | "miss";
   decodeMs: number;
-  source: "original" | "cache";
+  source: "original" | "proxy";
 }
 
 export interface ExactVideoFrameSession {
-  getFrame(time: number): Promise<ExactVideoFrameResult>;
+  getFrame(time: number, mode?: ExactVideoFrameMode): Promise<ExactVideoFrameResult>;
   setDisplayedFrame(cacheKey: string | null): void;
   isManagedBitmap(bitmap: ImageBitmap): boolean;
   dispose(): void;
@@ -41,7 +43,7 @@ class BlobVideoFrameSession {
   constructor(
     private readonly blob: Blob,
     private readonly debugLabel: string,
-    private readonly source: "original" | "cache",
+    private readonly source: "original" | "proxy",
     private readonly minTime: number,
     private readonly maxTime: number,
   ) {}
@@ -243,6 +245,8 @@ function getFrameTimeForOrdinal(frameIndex: VideoEditCacheFrameIndex, ordinal: n
 class ExactVideoFrameSessionImpl implements ExactVideoFrameSession {
   #fallbackSession: BlobVideoFrameSession;
   #cacheHandle: ReturnType<typeof createVideoEditCacheHandle>;
+  #proxySession: BlobVideoFrameSession | null = null;
+  #proxySessionPromise: Promise<BlobVideoFrameSession | null> | null = null;
 
   constructor(
     private readonly blob: Blob,
@@ -260,9 +264,19 @@ class ExactVideoFrameSessionImpl implements ExactVideoFrameSession {
     );
   }
 
-  async getFrame(time: number): Promise<ExactVideoFrameResult> {
+  async getFrame(
+    time: number,
+    mode: ExactVideoFrameMode = "exact",
+  ): Promise<ExactVideoFrameResult> {
     const clampedTime = Math.max(0, Math.min(time, this.duration));
     const cacheHandle = this.#cacheHandle;
+    if (mode === "interactive") {
+      const proxySession = await this.#getProxySession();
+      if (proxySession) {
+        return await proxySession.getFrame(clampedTime);
+      }
+    }
+
     if (cacheHandle) {
       cacheHandle.prioritizeTime(clampedTime);
 
@@ -281,15 +295,62 @@ class ExactVideoFrameSessionImpl implements ExactVideoFrameSession {
     this.#fallbackSession.setDisplayedFrame(
       cacheKey?.startsWith(`${this.debugLabel}:original:`) ? cacheKey : null,
     );
+    this.#proxySession?.setDisplayedFrame(
+      cacheKey?.startsWith(`${this.debugLabel}:proxy:`) ? cacheKey : null,
+    );
   }
 
   isManagedBitmap(bitmap: ImageBitmap): boolean {
-    return this.#fallbackSession.isManagedBitmap(bitmap);
+    return (
+      this.#fallbackSession.isManagedBitmap(bitmap) ||
+      this.#proxySession?.isManagedBitmap(bitmap) === true
+    );
   }
 
   dispose(): void {
+    this.#proxySession?.dispose();
+    this.#proxySession = null;
+    this.#proxySessionPromise = null;
     this.#fallbackSession.dispose();
     this.#cacheHandle?.dispose();
+  }
+
+  async #getProxySession(): Promise<BlobVideoFrameSession | null> {
+    if (this.#proxySession) {
+      return this.#proxySession;
+    }
+    if (this.#proxySessionPromise) {
+      return await this.#proxySessionPromise;
+    }
+    if (!this.#cacheHandle) {
+      return null;
+    }
+
+    this.#proxySessionPromise = (async () => {
+      const manifest = await this.#cacheHandle?.getManifest();
+      if (!manifest || manifest.proxy.status !== "ready") {
+        return null;
+      }
+
+      const proxyFile = await this.#cacheHandle?.getProxyFile();
+      if (!proxyFile) {
+        return null;
+      }
+
+      const proxyDuration = manifest.duration > 0 ? manifest.duration : this.duration;
+      this.#proxySession = new BlobVideoFrameSession(
+        proxyFile,
+        `${this.debugLabel}:proxy`,
+        "proxy",
+        0,
+        proxyDuration,
+      );
+      return this.#proxySession;
+    })().finally(() => {
+      this.#proxySessionPromise = null;
+    });
+
+    return await this.#proxySessionPromise;
   }
 }
 

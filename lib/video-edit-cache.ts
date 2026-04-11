@@ -3,6 +3,7 @@ import {
   getVideoEditCacheDirectory,
   isOpfsSupported,
   readArrayBufferFile,
+  readBlobFile,
   requestPersistentStorage,
 } from "./opfs.ts";
 import type {
@@ -22,6 +23,7 @@ export interface VideoEditCacheHandle {
   getManifest(): Promise<VideoEditCacheManifest | null>;
   getFrameIndex(): Promise<VideoEditCacheFrameIndex | null>;
   getKeyframeIndex(): Promise<VideoEditCacheKeyframeIndex | null>;
+  getProxyFile(): Promise<File | null>;
   prioritizeTime(time: number): void;
   dispose(): void;
 }
@@ -135,6 +137,7 @@ class VideoEditCacheHandleImpl implements VideoEditCacheHandle {
   #manifest: VideoEditCacheManifest | null = null;
   #frameIndex: VideoEditCacheFrameIndex | null = null;
   #keyframeIndex: VideoEditCacheKeyframeIndex | null = null;
+  #proxyFile: File | null = null;
   readonly readyPromise: Promise<void>;
   cacheKey: string | null = null;
 
@@ -160,6 +163,9 @@ class VideoEditCacheHandleImpl implements VideoEditCacheHandle {
 
   applyManifest(manifest: VideoEditCacheManifest): void {
     this.#manifest = manifest;
+    if (manifest.proxy.status !== "ready") {
+      this.#proxyFile = null;
+    }
   }
 
   async getManifest(): Promise<VideoEditCacheManifest | null> {
@@ -225,6 +231,34 @@ class VideoEditCacheHandleImpl implements VideoEditCacheHandle {
     }
     this.#keyframeIndex = { ordinals, timestamps };
     return this.#keyframeIndex;
+  }
+
+  async getProxyFile(): Promise<File | null> {
+    await this.readyPromise;
+    if (this.#proxyFile) {
+      return this.#proxyFile;
+    }
+    if (!this.cacheKey) {
+      return null;
+    }
+
+    const manifest = await this.getManifest();
+    if (!manifest || manifest.proxy.status !== "ready") {
+      return null;
+    }
+
+    const cacheDir = await getVideoEditCacheDirectory(this.cacheKey, false).catch(() => null);
+    if (!cacheDir) {
+      return null;
+    }
+
+    const file = await readBlobFile(cacheDir, manifest.proxy.fileName ?? "scrub-proxy.mp4");
+    if (!file) {
+      return null;
+    }
+
+    this.#proxyFile = file;
+    return this.#proxyFile;
   }
 
   prioritizeTime(time: number): void {
