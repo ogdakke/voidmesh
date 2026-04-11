@@ -72,6 +72,14 @@ export const SidebarLeft = () => {
       <div className="sidebar-row">
         <Hint />
       </div>
+      <div className="sidebar-row sidebar-text">
+        <p>
+          Made by{" "}
+          <a href="https://danielwargh.com" target="_blank" rel="noopener noreferrer">
+            Daniel Wargh
+          </a>
+        </p>
+      </div>
     </div>
   );
 };
