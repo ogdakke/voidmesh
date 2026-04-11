@@ -29,11 +29,22 @@ import type { RGBA } from "#types/canvas.ts";
 const hexDigit = () => fc.integer({ min: 0, max: 15 }).map((n) => n.toString(16));
 
 const hex6 = () =>
-  fc.tuple(hexDigit(), hexDigit(), hexDigit(), hexDigit(), hexDigit(), hexDigit())
+  fc
+    .tuple(hexDigit(), hexDigit(), hexDigit(), hexDigit(), hexDigit(), hexDigit())
     .map((digits) => digits.join(""));
 
 const hex8 = () =>
-  fc.tuple(hexDigit(), hexDigit(), hexDigit(), hexDigit(), hexDigit(), hexDigit(), hexDigit(), hexDigit())
+  fc
+    .tuple(
+      hexDigit(),
+      hexDigit(),
+      hexDigit(),
+      hexDigit(),
+      hexDigit(),
+      hexDigit(),
+      hexDigit(),
+      hexDigit(),
+    )
     .map((digits) => digits.join(""));
 
 /** Normalized channel [0, 1] */
@@ -132,7 +143,14 @@ describe("isValidColorCss", () => {
   test("random non-hex strings are not valid", () => {
     fc.assert(
       fc.property(
-        fc.string().filter((s) => !/^#?[0-9a-fA-F]{3}([0-9a-fA-F]([0-9a-fA-F]{2}([0-9a-fA-F]{2})?)?)?$/.test(s.trim()) && !/^color\(display-p3/.test(s.trim())),
+        fc
+          .string()
+          .filter(
+            (s) =>
+              !/^#?[0-9a-fA-F]{3}([0-9a-fA-F]([0-9a-fA-F]{2}([0-9a-fA-F]{2})?)?)?$/.test(
+                s.trim(),
+              ) && !/^color\(display-p3/.test(s.trim()),
+          ),
         (s) => {
           expect(isValidColorCss(s)).toBe(false);
         },
@@ -301,9 +319,12 @@ describe("luminance", () => {
         (r, g, b, delta, cs) => {
           const base = luminance(r, g, b, cs);
           // Increasing any channel should increase luminance (or keep it equal)
-          if (r + delta <= 1) expect(luminance(r + delta, g, b, cs)).toBeGreaterThanOrEqual(base - 1e-10);
-          if (g + delta <= 1) expect(luminance(r, g + delta, b, cs)).toBeGreaterThanOrEqual(base - 1e-10);
-          if (b + delta <= 1) expect(luminance(r, g, b + delta, cs)).toBeGreaterThanOrEqual(base - 1e-10);
+          if (r + delta <= 1)
+            expect(luminance(r + delta, g, b, cs)).toBeGreaterThanOrEqual(base - 1e-10);
+          if (g + delta <= 1)
+            expect(luminance(r, g + delta, b, cs)).toBeGreaterThanOrEqual(base - 1e-10);
+          if (b + delta <= 1)
+            expect(luminance(r, g, b + delta, cs)).toBeGreaterThanOrEqual(base - 1e-10);
         },
       ),
     );
@@ -313,8 +334,7 @@ describe("luminance", () => {
 // ── sortPaletteByLuminance Properties ───────────────────────────────
 
 describe("sortPaletteByLuminance", () => {
-  const paletteArb = () =>
-    fc.array(rgba(), { minLength: 1, maxLength: 16 });
+  const paletteArb = () => fc.array(rgba(), { minLength: 1, maxLength: 16 });
 
   test("result has same length as input", () => {
     fc.assert(

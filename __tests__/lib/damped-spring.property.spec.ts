@@ -119,42 +119,38 @@ describe("DampedSpring2D (property-based)", () => {
 
   test("higher damping settles faster", () => {
     fc.assert(
-      fc.property(
-        fc.double({ min: 10, max: 500, noNaN: true }),
-        response(),
-        (offsetMag, resp) => {
-          const offset = { x: offsetMag, y: 0 };
-          const velocity = { x: 0, y: 0 };
+      fc.property(fc.double({ min: 10, max: 500, noNaN: true }), response(), (offsetMag, resp) => {
+        const offset = { x: offsetMag, y: 0 };
+        const velocity = { x: 0, y: 0 };
 
-          // Low damping
-          const springLow = new DampedSpring2D();
-          springLow.start(offset, velocity, resp, 0.3);
+        // Low damping
+        const springLow = new DampedSpring2D();
+        springLow.start(offset, velocity, resp, 0.3);
 
-          // High damping
-          const springHigh = new DampedSpring2D();
-          springHigh.start(offset, velocity, resp, 0.9);
+        // High damping
+        const springHigh = new DampedSpring2D();
+        springHigh.start(offset, velocity, resp, 0.9);
 
-          // Step both for same time
-          let lowSteps = 0;
-          let highSteps = 0;
-          const maxSteps = 2000;
+        // Step both for same time
+        let lowSteps = 0;
+        let highSteps = 0;
+        const maxSteps = 2000;
 
-          for (let i = 0; i < maxSteps; i++) {
-            if (springLow.active) {
-              springLow.step(0.016);
-              lowSteps = i + 1;
-            }
-            if (springHigh.active) {
-              springHigh.step(0.016);
-              highSteps = i + 1;
-            }
-            if (!springLow.active && !springHigh.active) break;
+        for (let i = 0; i < maxSteps; i++) {
+          if (springLow.active) {
+            springLow.step(0.016);
+            lowSteps = i + 1;
           }
+          if (springHigh.active) {
+            springHigh.step(0.016);
+            highSteps = i + 1;
+          }
+          if (!springLow.active && !springHigh.active) break;
+        }
 
-          // Higher damping should settle in fewer or equal steps
-          expect(highSteps).toBeLessThanOrEqual(lowSteps);
-        },
-      ),
+        // Higher damping should settle in fewer or equal steps
+        expect(highSteps).toBeLessThanOrEqual(lowSteps);
+      }),
     );
   });
 

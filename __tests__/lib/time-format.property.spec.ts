@@ -87,27 +87,21 @@ describe("formatMediaTime (property-based)", () => {
 
   test("seconds >= 60 use M:SS format in main part", () => {
     fc.assert(
-      fc.property(
-        fc.double({ min: 60, max: 100_000, noNaN: true }),
-        (seconds) => {
-          const parts = formatMediaTimeParts(seconds);
-          // Main part should contain a colon (M:SS format)
-          expect(parts.main).toMatch(/^\d+:\d{2}$/);
-        },
-      ),
+      fc.property(fc.double({ min: 60, max: 100_000, noNaN: true }), (seconds) => {
+        const parts = formatMediaTimeParts(seconds);
+        // Main part should contain a colon (M:SS format)
+        expect(parts.main).toMatch(/^\d+:\d{2}$/);
+      }),
     );
   });
 
   test("seconds < 60 use plain seconds in main part", () => {
     fc.assert(
-      fc.property(
-        fc.double({ min: 0, max: 59.994, noNaN: true }),
-        (seconds) => {
-          const parts = formatMediaTimeParts(seconds);
-          // Main part should be just digits (no colon)
-          expect(parts.main).toMatch(/^\d+$/);
-        },
-      ),
+      fc.property(fc.double({ min: 0, max: 59.994, noNaN: true }), (seconds) => {
+        const parts = formatMediaTimeParts(seconds);
+        // Main part should be just digits (no colon)
+        expect(parts.main).toMatch(/^\d+$/);
+      }),
     );
   });
 });

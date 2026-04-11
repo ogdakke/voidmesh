@@ -21,11 +21,7 @@ const primitive = () =>
   );
 
 const flatRecord = () =>
-  fc.dictionary(
-    fc.string({ minLength: 1, maxLength: 5 }),
-    primitive(),
-    { minKeys: 0, maxKeys: 5 },
-  );
+  fc.dictionary(fc.string({ minLength: 1, maxLength: 5 }), primitive(), { minKeys: 0, maxKeys: 5 });
 
 // ── Equivalence Relation Properties ─────────────────────────────────
 

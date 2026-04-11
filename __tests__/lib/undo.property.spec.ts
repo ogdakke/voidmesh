@@ -12,8 +12,12 @@ import { Undo, Command } from "#lib/undo.ts";
 
 function createTrackingCommand(state: { value: number }, delta: number) {
   return Command.create({
-    execute: () => { state.value += delta; },
-    undo: () => { state.value -= delta; },
+    execute: () => {
+      state.value += delta;
+    },
+    undo: () => {
+      state.value -= delta;
+    },
     description: `change by ${delta}`,
   });
 }
@@ -199,7 +203,9 @@ describe("Undo (property-based)", () => {
           }
 
           // State should equal sum of remaining deltas
-          const expectedSum = deltas.slice(0, deltas.length - actualUndos).reduce((a, b) => a + b, 0);
+          const expectedSum = deltas
+            .slice(0, deltas.length - actualUndos)
+            .reduce((a, b) => a + b, 0);
           expect(state.value).toBe(expectedSum);
         },
       ),

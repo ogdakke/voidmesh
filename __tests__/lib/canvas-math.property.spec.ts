@@ -33,8 +33,7 @@ import type { Point, Viewport, Bounds } from "#types/canvas.ts";
 /** Reasonable float range to avoid precision issues at extremes */
 const coordinate = () => fc.double({ min: -10_000, max: 10_000, noNaN: true });
 
-const point = (): fc.Arbitrary<Point> =>
-  fc.record({ x: coordinate(), y: coordinate() });
+const point = (): fc.Arbitrary<Point> => fc.record({ x: coordinate(), y: coordinate() });
 
 const positiveFloat = () => fc.double({ min: 0.001, max: 10_000, noNaN: true });
 
@@ -47,22 +46,24 @@ const viewport = (): fc.Arbitrary<Viewport> =>
   });
 
 const containerRect = (): fc.Arbitrary<DOMRect> =>
-  fc.record({
-    left: coordinate(),
-    top: coordinate(),
-    width: positiveFloat(),
-    height: positiveFloat(),
-  }).map(({ left, top, width, height }) => ({
-    left,
-    top,
-    width,
-    height,
-    right: left + width,
-    bottom: top + height,
-    x: left,
-    y: top,
-    toJSON: () => ({}),
-  }));
+  fc
+    .record({
+      left: coordinate(),
+      top: coordinate(),
+      width: positiveFloat(),
+      height: positiveFloat(),
+    })
+    .map(({ left, top, width, height }) => ({
+      left,
+      top,
+      width,
+      height,
+      right: left + width,
+      bottom: top + height,
+      x: left,
+      y: top,
+      toJSON: () => ({}),
+    }));
 
 const dpr = () => fc.double({ min: 0.5, max: 4, noNaN: true });
 
@@ -81,35 +82,23 @@ const unitInterval = () => fc.double({ min: 0, max: 1, noNaN: true });
 describe("coordinate transforms", () => {
   test("screenToWorld → worldToScreen is identity (round-trip)", () => {
     fc.assert(
-      fc.property(
-        point(),
-        viewport(),
-        containerRect(),
-        dpr(),
-        (screenPt, vp, rect, d) => {
-          const world = screenToWorld(screenPt, vp, rect, d);
-          const backToScreen = worldToScreen(world, vp, rect, d);
-          expect(backToScreen.x).toBeCloseTo(screenPt.x, 6);
-          expect(backToScreen.y).toBeCloseTo(screenPt.y, 6);
-        },
-      ),
+      fc.property(point(), viewport(), containerRect(), dpr(), (screenPt, vp, rect, d) => {
+        const world = screenToWorld(screenPt, vp, rect, d);
+        const backToScreen = worldToScreen(world, vp, rect, d);
+        expect(backToScreen.x).toBeCloseTo(screenPt.x, 6);
+        expect(backToScreen.y).toBeCloseTo(screenPt.y, 6);
+      }),
     );
   });
 
   test("worldToScreen → screenToWorld is identity (round-trip)", () => {
     fc.assert(
-      fc.property(
-        point(),
-        viewport(),
-        containerRect(),
-        dpr(),
-        (worldPt, vp, rect, d) => {
-          const screen = worldToScreen(worldPt, vp, rect, d);
-          const backToWorld = screenToWorld(screen, vp, rect, d);
-          expect(backToWorld.x).toBeCloseTo(worldPt.x, 6);
-          expect(backToWorld.y).toBeCloseTo(worldPt.y, 6);
-        },
-      ),
+      fc.property(point(), viewport(), containerRect(), dpr(), (worldPt, vp, rect, d) => {
+        const screen = worldToScreen(worldPt, vp, rect, d);
+        const backToWorld = screenToWorld(screen, vp, rect, d);
+        expect(backToWorld.x).toBeCloseTo(worldPt.x, 6);
+        expect(backToWorld.y).toBeCloseTo(worldPt.y, 6);
+      }),
     );
   });
 });
@@ -119,29 +108,24 @@ describe("coordinate transforms", () => {
 describe("zoomToPoint", () => {
   test("world point under cursor is preserved after zoom", () => {
     fc.assert(
-      fc.property(
-        viewport(),
-        point(),
-        zoom(),
-        (vp, cursorPos, newZoom) => {
-          // World point under cursor before zoom
-          const worldBefore = {
-            x: cursorPos.x / vp.zoom + vp.offset.x,
-            y: cursorPos.y / vp.zoom + vp.offset.y,
-          };
+      fc.property(viewport(), point(), zoom(), (vp, cursorPos, newZoom) => {
+        // World point under cursor before zoom
+        const worldBefore = {
+          x: cursorPos.x / vp.zoom + vp.offset.x,
+          y: cursorPos.y / vp.zoom + vp.offset.y,
+        };
 
-          const newVp = zoomToPoint(vp, cursorPos, newZoom);
+        const newVp = zoomToPoint(vp, cursorPos, newZoom);
 
-          // World point under cursor after zoom
-          const worldAfter = {
-            x: cursorPos.x / newVp.zoom + newVp.offset.x,
-            y: cursorPos.y / newVp.zoom + newVp.offset.y,
-          };
+        // World point under cursor after zoom
+        const worldAfter = {
+          x: cursorPos.x / newVp.zoom + newVp.offset.x,
+          y: cursorPos.y / newVp.zoom + newVp.offset.y,
+        };
 
-          expect(worldAfter.x).toBeCloseTo(worldBefore.x, 6);
-          expect(worldAfter.y).toBeCloseTo(worldBefore.y, 6);
-        },
-      ),
+        expect(worldAfter.x).toBeCloseTo(worldBefore.x, 6);
+        expect(worldAfter.y).toBeCloseTo(worldBefore.y, 6);
+      }),
     );
   });
 
@@ -176,16 +160,12 @@ describe("clampZoom", () => {
 
   test("values within range are unchanged", () => {
     fc.assert(
-      fc.property(
-        positiveFloat(),
-        positiveFloat(),
-        (a, b) => {
-          const min = Math.min(a, b);
-          const max = Math.max(a, b) || min + 0.01;
-          const mid = (min + max) / 2;
-          expect(clampZoom(mid, min, max)).toBe(mid);
-        },
-      ),
+      fc.property(positiveFloat(), positiveFloat(), (a, b) => {
+        const min = Math.min(a, b);
+        const max = Math.max(a, b) || min + 0.01;
+        const mid = (min + max) / 2;
+        expect(clampZoom(mid, min, max)).toBe(mid);
+      }),
     );
   });
 });
@@ -195,51 +175,39 @@ describe("clampZoom", () => {
 describe("rubberBandZoom", () => {
   test("within-bounds zoom is unchanged", () => {
     fc.assert(
-      fc.property(
-        fc.double({ min: 0.01, max: 10, noNaN: true }),
-        (z) => {
-          // Default bounds: 0.01 to 10
-          const result = rubberBandZoom(z, 0.01, 10);
-          expect(result).toBeCloseTo(z, 10);
-        },
-      ),
+      fc.property(fc.double({ min: 0.01, max: 10, noNaN: true }), (z) => {
+        // Default bounds: 0.01 to 10
+        const result = rubberBandZoom(z, 0.01, 10);
+        expect(result).toBeCloseTo(z, 10);
+      }),
     );
   });
 
   test("result is always positive", () => {
     fc.assert(
-      fc.property(
-        fc.double({ min: 0.0001, max: 1000, noNaN: true }),
-        (z) => {
-          expect(rubberBandZoom(z, 0.01, 10)).toBeGreaterThan(0);
-        },
-      ),
+      fc.property(fc.double({ min: 0.0001, max: 1000, noNaN: true }), (z) => {
+        expect(rubberBandZoom(z, 0.01, 10)).toBeGreaterThan(0);
+      }),
     );
   });
 
   test("overshoot beyond max is damped below raw value", () => {
     fc.assert(
-      fc.property(
-        fc.double({ min: 10.01, max: 200, noNaN: true }),
-        (z) => {
-          const result = rubberBandZoom(z, 0.01, 10);
-          expect(result).toBeLessThan(z);
-          expect(result).toBeGreaterThanOrEqual(10);
-        },
-      ),
+      fc.property(fc.double({ min: 10.01, max: 200, noNaN: true }), (z) => {
+        const result = rubberBandZoom(z, 0.01, 10);
+        expect(result).toBeLessThan(z);
+        expect(result).toBeGreaterThanOrEqual(10);
+      }),
     );
   });
 
   test("undershoot below min is damped above raw value", () => {
     fc.assert(
-      fc.property(
-        fc.double({ min: 0.0001, max: 0.0099, noNaN: true }),
-        (z) => {
-          const result = rubberBandZoom(z, 0.01, 10);
-          expect(result).toBeGreaterThan(z);
-          expect(result).toBeLessThanOrEqual(0.01);
-        },
-      ),
+      fc.property(fc.double({ min: 0.0001, max: 0.0099, noNaN: true }), (z) => {
+        const result = rubberBandZoom(z, 0.01, 10);
+        expect(result).toBeGreaterThan(z);
+        expect(result).toBeLessThanOrEqual(0.01);
+      }),
     );
   });
 });
@@ -409,18 +377,12 @@ describe("lerp", () => {
 
   test("lerp is monotone in t (when a < b)", () => {
     fc.assert(
-      fc.property(
-        coordinate(),
-        coordinate(),
-        unitInterval(),
-        unitInterval(),
-        (a, b, t1, t2) => {
-          if (a >= b) return; // skip when a >= b
-          const lo = Math.min(t1, t2);
-          const hi = Math.max(t1, t2);
-          expect(lerp(a, b, hi)).toBeGreaterThanOrEqual(lerp(a, b, lo) - 1e-10);
-        },
-      ),
+      fc.property(coordinate(), coordinate(), unitInterval(), unitInterval(), (a, b, t1, t2) => {
+        if (a >= b) return; // skip when a >= b
+        const lo = Math.min(t1, t2);
+        const hi = Math.max(t1, t2);
+        expect(lerp(a, b, hi)).toBeGreaterThanOrEqual(lerp(a, b, lo) - 1e-10);
+      }),
     );
   });
 });
@@ -594,32 +556,26 @@ describe("easing functions", () => {
 describe("calculateCenteredOffset", () => {
   test("offset centers the origin: screenToWorld of screen center = (0,0)", () => {
     fc.assert(
-      fc.property(
-        positiveFloat(),
-        positiveFloat(),
-        zoom(),
-        dpr(),
-        (cw, ch, z, d) => {
-          const offset = calculateCenteredOffset(cw, ch, z, d);
-          const vp: Viewport = { offset, zoom: z };
-          const rect = {
-            left: 0,
-            top: 0,
-            width: cw,
-            height: ch,
-            right: cw,
-            bottom: ch,
-            x: 0,
-            y: 0,
-            toJSON: () => ({}),
-          } as DOMRect;
+      fc.property(positiveFloat(), positiveFloat(), zoom(), dpr(), (cw, ch, z, d) => {
+        const offset = calculateCenteredOffset(cw, ch, z, d);
+        const vp: Viewport = { offset, zoom: z };
+        const rect = {
+          left: 0,
+          top: 0,
+          width: cw,
+          height: ch,
+          right: cw,
+          bottom: ch,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        } as DOMRect;
 
-          const screenCenter: Point = { x: cw / 2, y: ch / 2 };
-          const world = screenToWorld(screenCenter, vp, rect, d);
-          expect(world.x).toBeCloseTo(0, 4);
-          expect(world.y).toBeCloseTo(0, 4);
-        },
-      ),
+        const screenCenter: Point = { x: cw / 2, y: ch / 2 };
+        const world = screenToWorld(screenCenter, vp, rect, d);
+        expect(world.x).toBeCloseTo(0, 4);
+        expect(world.y).toBeCloseTo(0, 4);
+      }),
     );
   });
 });
