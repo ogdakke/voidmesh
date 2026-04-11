@@ -1,29 +1,28 @@
 import { logger } from "./client.logger.ts";
 import {
-  getNestedDirectoryHandle,
   getVideoEditCacheDirectory,
   isOpfsSupported,
   readArrayBufferFile,
-  readBlobFile,
   requestPersistentStorage,
 } from "./opfs.ts";
 import type {
   FromVideoEditCacheWorkerMessage,
   ToVideoEditCacheWorkerMessage,
   VideoEditCacheFrameIndex,
+  VideoEditCacheKeyframeIndex,
   VideoEditCacheManifest,
-  VideoEditCacheSegment,
 } from "./video-edit-cache.worker.ts";
 
-export type { VideoEditCacheFrameIndex, VideoEditCacheManifest, VideoEditCacheSegment };
+export type { VideoEditCacheFrameIndex, VideoEditCacheKeyframeIndex, VideoEditCacheManifest };
 
 const FRAME_INDEX_FILE_NAME = "frame-index.bin";
+const KEYFRAME_INDEX_FILE_NAME = "keyframe-index.bin";
 
 export interface VideoEditCacheHandle {
   getManifest(): Promise<VideoEditCacheManifest | null>;
   getFrameIndex(): Promise<VideoEditCacheFrameIndex | null>;
+  getKeyframeIndex(): Promise<VideoEditCacheKeyframeIndex | null>;
   prioritizeTime(time: number): void;
-  getSegmentFile(segment: VideoEditCacheSegment): Promise<File | null>;
   dispose(): void;
 }
 
@@ -34,7 +33,16 @@ function isEditCacheSupported(): boolean {
 }
 
 async function hashBlob(blob: Blob): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
+  const head = await blob.slice(0, Math.min(blob.size, 64 * 1024)).arrayBuffer();
+  const tailStart = Math.max(0, blob.size - 64 * 1024);
+  const tail = tailStart === 0 ? new ArrayBuffer(0) : await blob.slice(tailStart).arrayBuffer();
+  const encoder = new TextEncoder();
+  const metadata = encoder.encode(`${blob.type}:${blob.size}`);
+  const combined = new Uint8Array(metadata.byteLength + head.byteLength + tail.byteLength);
+  combined.set(metadata, 0);
+  combined.set(new Uint8Array(head), metadata.byteLength);
+  combined.set(new Uint8Array(tail), metadata.byteLength + head.byteLength);
+  const digest = await crypto.subtle.digest("SHA-256", combined);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
@@ -53,7 +61,6 @@ class VideoEditCacheWorkerClient {
 
       switch (event.data.type) {
         case "manifest":
-        case "segment-ready":
           for (const handle of handles) {
             handle.applyManifest(event.data.manifest);
           }
@@ -120,17 +127,6 @@ class VideoEditCacheWorkerClient {
       time,
     } satisfies ToVideoEditCacheWorkerMessage);
   }
-
-  touchSegment(cacheKey: string, segment: VideoEditCacheSegment): void {
-    const worker = this.#ensureWorker();
-    if (!worker) return;
-    worker.postMessage({
-      type: "touch-segment",
-      cacheKey,
-      tier: segment.tier,
-      segmentIndex: segment.index,
-    } satisfies ToVideoEditCacheWorkerMessage);
-  }
 }
 
 const workerClient = new VideoEditCacheWorkerClient();
@@ -138,6 +134,7 @@ const workerClient = new VideoEditCacheWorkerClient();
 class VideoEditCacheHandleImpl implements VideoEditCacheHandle {
   #manifest: VideoEditCacheManifest | null = null;
   #frameIndex: VideoEditCacheFrameIndex | null = null;
+  #keyframeIndex: VideoEditCacheKeyframeIndex | null = null;
   readonly readyPromise: Promise<void>;
   cacheKey: string | null = null;
 
@@ -200,29 +197,39 @@ class VideoEditCacheHandleImpl implements VideoEditCacheHandle {
     return this.#frameIndex;
   }
 
-  prioritizeTime(time: number): void {
-    if (!this.cacheKey) return;
-    workerClient.prioritizeTime(this.cacheKey, time);
-  }
-
-  async getSegmentFile(segment: VideoEditCacheSegment): Promise<File | null> {
+  async getKeyframeIndex(): Promise<VideoEditCacheKeyframeIndex | null> {
     await this.readyPromise;
-    if (!this.cacheKey) return null;
+    if (this.#keyframeIndex) {
+      return this.#keyframeIndex;
+    }
+    if (!this.cacheKey) {
+      return null;
+    }
+
     const cacheDir = await getVideoEditCacheDirectory(this.cacheKey, false).catch(() => null);
     if (!cacheDir) {
       return null;
     }
-    const videoDir = await getNestedDirectoryHandle(cacheDir, segment.tier, false).catch(
-      () => null,
-    );
-    if (!videoDir) {
+
+    const buffer = await readArrayBufferFile(cacheDir, KEYFRAME_INDEX_FILE_NAME);
+    if (!buffer) {
       return null;
     }
-    const file = await readBlobFile(videoDir, segment.fileName);
-    if (file) {
-      workerClient.touchSegment(this.cacheKey, segment);
+
+    const view = new Float64Array(buffer);
+    const ordinals: number[] = [];
+    const timestamps: number[] = [];
+    for (let index = 0; index < view.length; index += 2) {
+      ordinals.push(view[index]!);
+      timestamps.push(view[index + 1]!);
     }
-    return file;
+    this.#keyframeIndex = { ordinals, timestamps };
+    return this.#keyframeIndex;
+  }
+
+  prioritizeTime(time: number): void {
+    if (!this.cacheKey) return;
+    workerClient.prioritizeTime(this.cacheKey, time);
   }
 
   dispose(): void {

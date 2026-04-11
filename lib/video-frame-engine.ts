@@ -1,10 +1,5 @@
 import { logger } from "./client.logger.ts";
-import {
-  createVideoEditCacheHandle,
-  type VideoEditCacheFrameIndex,
-  type VideoEditCacheManifest,
-  type VideoEditCacheSegment,
-} from "./video-edit-cache.ts";
+import { createVideoEditCacheHandle, type VideoEditCacheFrameIndex } from "./video-edit-cache.ts";
 import { demuxVideo, type VideoDemuxHandle } from "./video-demux.ts";
 
 const DEFAULT_CACHE_FRAME_LIMIT = 12;
@@ -45,7 +40,6 @@ class BlobVideoFrameSession {
 
   constructor(
     private readonly blob: Blob,
-    private readonly fps: number | null,
     private readonly debugLabel: string,
     private readonly source: "original" | "cache",
     private readonly minTime: number,
@@ -54,10 +48,7 @@ class BlobVideoFrameSession {
 
   async getFrame(time: number, cacheIdentity?: string): Promise<ExactVideoFrameResult> {
     const clampedTime = Math.max(this.minTime, Math.min(time, this.maxTime));
-    const normalizedTime =
-      cacheIdentity || !(this.fps && this.fps > 0)
-        ? clampedTime
-        : Math.round(clampedTime * this.fps) / this.fps;
+    const normalizedTime = clampedTime;
     const localKey = cacheIdentity ?? String(Math.round(normalizedTime * 1_000_000));
     const cacheKey = `${this.debugLabel}:${localKey}`;
     const cached = this.#cache.get(cacheKey);
@@ -214,7 +205,10 @@ class BlobVideoFrameSession {
   }
 }
 
-function findNearestFrameOrdinal(frameIndex: VideoEditCacheFrameIndex, time: number): number {
+function findFrameOrdinalAtOrBeforeTime(
+  frameIndex: VideoEditCacheFrameIndex,
+  time: number,
+): number {
   const timestamps = frameIndex.timestamps;
   if (timestamps.length === 0) {
     return 0;
@@ -237,10 +231,7 @@ function findNearestFrameOrdinal(frameIndex: VideoEditCacheFrameIndex, time: num
   if (low >= timestamps.length) {
     return timestamps.length - 1;
   }
-
-  const previous = timestamps[low - 1]!;
-  const current = timestamps[low]!;
-  return Math.abs(previous - time) <= Math.abs(current - time) ? low - 1 : low;
+  return timestamps[low]! <= time ? low : low - 1;
 }
 
 function getFrameTimeForOrdinal(frameIndex: VideoEditCacheFrameIndex, ordinal: number): number {
@@ -249,24 +240,9 @@ function getFrameTimeForOrdinal(frameIndex: VideoEditCacheFrameIndex, ordinal: n
   );
 }
 
-function findReadySegmentForOrdinal(
-  segments: VideoEditCacheSegment[],
-  ordinal: number,
-): VideoEditCacheSegment | null {
-  for (const segment of segments) {
-    if (!segment.ready || segment.startOrdinal === null || segment.endOrdinal === null) continue;
-    if (ordinal >= segment.startOrdinal && ordinal <= segment.endOrdinal) {
-      return segment;
-    }
-  }
-  return null;
-}
-
 class ExactVideoFrameSessionImpl implements ExactVideoFrameSession {
   #fallbackSession: BlobVideoFrameSession;
   #cacheHandle: ReturnType<typeof createVideoEditCacheHandle>;
-  #segmentSessions = new Map<string, Promise<BlobVideoFrameSession | null>>();
-  #resolvedSegmentSessions = new Map<string, BlobVideoFrameSession>();
 
   constructor(
     private readonly blob: Blob,
@@ -277,7 +253,6 @@ class ExactVideoFrameSessionImpl implements ExactVideoFrameSession {
     this.#cacheHandle = createVideoEditCacheHandle(blob, duration, fps);
     this.#fallbackSession = new BlobVideoFrameSession(
       blob,
-      fps,
       `${debugLabel}:original`,
       "original",
       0,
@@ -291,34 +266,10 @@ class ExactVideoFrameSessionImpl implements ExactVideoFrameSession {
     if (cacheHandle) {
       cacheHandle.prioritizeTime(clampedTime);
 
-      const [manifest, frameIndex] = await Promise.all([
-        cacheHandle.getManifest(),
-        cacheHandle.getFrameIndex(),
-      ]);
-      if (manifest && frameIndex && frameIndex.timestamps.length > 0) {
-        const ordinal = findNearestFrameOrdinal(frameIndex, clampedTime);
+      const frameIndex = await cacheHandle.getFrameIndex();
+      if (frameIndex && frameIndex.timestamps.length > 0) {
+        const ordinal = findFrameOrdinalAtOrBeforeTime(frameIndex, clampedTime);
         const frameTime = getFrameTimeForOrdinal(frameIndex, ordinal);
-        const segment = this.#findBestReadySegment(manifest, ordinal);
-        if (segment) {
-          const sessionKey = this.#getSegmentSessionKey(segment);
-          const session = await this.#getOrCreateSegmentSession(segment);
-          if (session) {
-            try {
-              return await session.getFrame(frameTime, `ordinal:${ordinal}`);
-            } catch (error) {
-              logger.warn("[video-frame-engine] Cached segment decode failed, falling back", {
-                label: this.debugLabel,
-                tier: segment.tier,
-                segmentIndex: segment.index,
-                time: frameTime,
-                ordinal,
-                error,
-              });
-              this.#invalidateSegmentSession(sessionKey, session);
-            }
-          }
-        }
-
         return await this.#fallbackSession.getFrame(frameTime, `ordinal:${ordinal}`);
       }
     }
@@ -330,104 +281,15 @@ class ExactVideoFrameSessionImpl implements ExactVideoFrameSession {
     this.#fallbackSession.setDisplayedFrame(
       cacheKey?.startsWith(`${this.debugLabel}:original:`) ? cacheKey : null,
     );
-
-    for (const [sessionKey, sessionPromise] of this.#segmentSessions) {
-      void sessionPromise.then((session) => {
-        session?.setDisplayedFrame(
-          cacheKey?.startsWith(`${this.debugLabel}:${sessionKey}:`) ? cacheKey : null,
-        );
-      });
-    }
   }
 
   isManagedBitmap(bitmap: ImageBitmap): boolean {
-    if (this.#fallbackSession.isManagedBitmap(bitmap)) {
-      return true;
-    }
-    for (const session of this.#resolvedSegmentSessions.values()) {
-      if (session.isManagedBitmap(bitmap)) {
-        return true;
-      }
-    }
-    return false;
+    return this.#fallbackSession.isManagedBitmap(bitmap);
   }
 
   dispose(): void {
     this.#fallbackSession.dispose();
     this.#cacheHandle?.dispose();
-    for (const session of this.#resolvedSegmentSessions.values()) {
-      session.dispose();
-    }
-    this.#segmentSessions.clear();
-    this.#resolvedSegmentSessions.clear();
-  }
-
-  #findBestReadySegment(
-    manifest: VideoEditCacheManifest,
-    ordinal: number,
-  ): VideoEditCacheSegment | null {
-    return (
-      findReadySegmentForOrdinal(manifest.tiers.detail.segments, ordinal) ??
-      findReadySegmentForOrdinal(manifest.tiers.sweep.segments, ordinal)
-    );
-  }
-
-  #getSegmentSessionKey(segment: VideoEditCacheSegment): string {
-    return `${segment.tier}:${segment.index}`;
-  }
-
-  async #getOrCreateSegmentSession(
-    segment: VideoEditCacheSegment,
-  ): Promise<BlobVideoFrameSession | null> {
-    const sessionKey = this.#getSegmentSessionKey(segment);
-    let sessionPromise = this.#segmentSessions.get(sessionKey);
-    if (!sessionPromise) {
-      sessionPromise = this.#loadSegmentSession(segment);
-      this.#segmentSessions.set(sessionKey, sessionPromise);
-    }
-    const session = await sessionPromise;
-    if (!session) {
-      this.#segmentSessions.delete(sessionKey);
-      return null;
-    }
-    this.#resolvedSegmentSessions.set(sessionKey, session);
-    return session;
-  }
-
-  #invalidateSegmentSession(sessionKey: string, session: BlobVideoFrameSession | null): void {
-    session?.dispose();
-    this.#segmentSessions.delete(sessionKey);
-    this.#resolvedSegmentSessions.delete(sessionKey);
-  }
-
-  async #loadSegmentSession(segment: VideoEditCacheSegment): Promise<BlobVideoFrameSession | null> {
-    const cacheHandle = this.#cacheHandle;
-    if (!cacheHandle) return null;
-
-    try {
-      const file = await cacheHandle.getSegmentFile(segment);
-      if (!file) {
-        return null;
-      }
-
-      const sessionKey = this.#getSegmentSessionKey(segment);
-      return new BlobVideoFrameSession(
-        file,
-        this.fps,
-        `${this.debugLabel}:${sessionKey}`,
-        "cache",
-        segment.startTime,
-        Math.max(segment.endTime, segment.startTime),
-      );
-    } catch (error) {
-      logger.warn("[video-frame-engine] Failed to load cached segment", {
-        label: this.debugLabel,
-        tier: segment.tier,
-        segmentIndex: segment.index,
-        error,
-      });
-      return null;
-    }
   }
 }
 

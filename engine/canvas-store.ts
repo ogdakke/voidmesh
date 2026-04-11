@@ -189,8 +189,10 @@ export class CanvasStore extends Store<CanvasState> {
   #videoFrameSessions = new Map<string, ExactVideoFrameSession>();
   #videoFrameRequestQueue = new Map<string, PendingExactVideoFrameRequest>();
   #videoFrameRequestInFlight = new Set<string>();
+  #videoLatestFrameRequestId = new Map<string, number>();
   #videoScrubResume = new Map<string, boolean>();
   #videoSnapshotTokens = new Map<string, number>();
+  #videoFrameCallbackIds = new Map<string, number>();
   #nextVideoSnapshotToken = 0;
   #nextVideoFrameRequestId = 0;
 
@@ -302,9 +304,14 @@ export class CanvasStore extends Store<CanvasState> {
       // Handle video entities
       if (selectedEntity?.mediaSource.type === MediaType.video) {
         const video = selectedEntity.mediaSource.videoElement;
+        const currentTime =
+          !(selectedEntity.playback?.isPlaying ?? false) &&
+          selectedEntity.mediaSource.displayTimeOverride !== undefined
+            ? selectedEntity.mediaSource.displayTimeOverride
+            : (selectedEntity.playback?.currentTime ?? 0);
         return {
           entityId: selectedEntity.id,
-          currentTime: selectedEntity.playback?.currentTime ?? 0,
+          currentTime,
           duration: video.duration || 0,
           isPlaying: selectedEntity.playback?.isPlaying ?? false,
           version: s.playbackVersion,
@@ -376,6 +383,45 @@ export class CanvasStore extends Store<CanvasState> {
     this.#videoSettleTimers.delete(entityId);
   }
 
+  #startVideoFrameTracking(entityId: string): void {
+    const entity = this.state.entities.get(entityId);
+    if (!entity || entity.mediaSource.type !== MediaType.video) return;
+
+    const video = entity.mediaSource.videoElement as HTMLVideoElement & {
+      requestVideoFrameCallback?: (callback: VideoFrameRequestCallback) => number;
+    };
+    if (typeof video.requestVideoFrameCallback !== "function") {
+      return;
+    }
+
+    const callbackId = video.requestVideoFrameCallback((_now, metadata) => {
+      const current = this.state.entities.get(entityId);
+      if (!current || current.mediaSource.type !== MediaType.video) {
+        this.#videoFrameCallbackIds.delete(entityId);
+        return;
+      }
+
+      current.mediaSource.lastPresentedFrameTime = metadata.mediaTime;
+      this.#videoFrameCallbackIds.delete(entityId);
+      this.#startVideoFrameTracking(entityId);
+    });
+
+    this.#videoFrameCallbackIds.set(entityId, callbackId);
+  }
+
+  #stopVideoFrameTracking(entityId: string, video: HTMLVideoElement): void {
+    const callbackId = this.#videoFrameCallbackIds.get(entityId);
+    this.#videoFrameCallbackIds.delete(entityId);
+    const cancelVideoFrameCallback = (
+      video as HTMLVideoElement & {
+        cancelVideoFrameCallback?: (handle: number) => void;
+      }
+    ).cancelVideoFrameCallback;
+    if (callbackId !== undefined && typeof cancelVideoFrameCallback === "function") {
+      cancelVideoFrameCallback.call(video, callbackId);
+    }
+  }
+
   #getOrCreateVideoFrameSession(entityId: string): ExactVideoFrameSession | null {
     const entity = this.state.entities.get(entityId);
     if (!entity || entity.mediaSource.type !== MediaType.video) {
@@ -408,6 +454,9 @@ export class CanvasStore extends Store<CanvasState> {
 
     const previousBitmap = entity.imageBitmap;
     entity.imageBitmap = bitmap;
+    entity.mediaSource.preferVideoElementFrame = false;
+    entity.mediaSource.displayTimeOverride =
+      entity.playback?.currentTime ?? entity.mediaSource.displayTimeOverride;
     if (previousBitmap !== bitmap && !(session?.isManagedBitmap(previousBitmap) ?? false)) {
       previousBitmap.close();
     }
@@ -423,14 +472,19 @@ export class CanvasStore extends Store<CanvasState> {
       entity.imageBitmap.close();
     }
     this.#clearVideoSettleTimer(entityId);
+    this.#stopVideoFrameTracking(entityId, source.videoElement);
     session?.dispose();
     this.#videoFrameSessions.delete(entityId);
     this.#videoFrameRequestQueue.delete(entityId);
     this.#videoFrameRequestInFlight.delete(entityId);
+    this.#videoLatestFrameRequestId.delete(entityId);
     this.#videoScrubResume.delete(entityId);
     this.#videoSnapshotTokens.delete(entityId);
 
     source.isScrubbing = false;
+    source.preferVideoElementFrame = false;
+    source.displayTimeOverride = undefined;
+    source.lastPresentedFrameTime = undefined;
   }
 
   async #seekVideoElement(video: HTMLVideoElement, time: number): Promise<void> {
@@ -517,6 +571,7 @@ export class CanvasStore extends Store<CanvasState> {
   #cancelExactVideoFrameRequests(entityId: string, reason: string): void {
     const pending = this.#videoFrameRequestQueue.get(entityId);
     this.#videoFrameRequestQueue.delete(entityId);
+    this.#videoLatestFrameRequestId.delete(entityId);
     this.#videoSnapshotTokens.set(entityId, ++this.#nextVideoSnapshotToken);
 
     if (pending) {
@@ -555,6 +610,7 @@ export class CanvasStore extends Store<CanvasState> {
       enqueuedAt: performance.now(),
     };
     this.#videoFrameRequestQueue.set(entityId, request);
+    this.#videoLatestFrameRequestId.set(entityId, request.requestId);
 
     if (existing) {
       this.#logger.info("[video-scrub] Coalesced exact frame request", {
@@ -634,16 +690,19 @@ export class CanvasStore extends Store<CanvasState> {
       const frame = await session.getFrame(clampedTime);
       const totalMs = performance.now() - startedAt;
       const current = this.state.entities.get(entityId);
+      const latestRequestId = this.#videoLatestFrameRequestId.get(entityId);
       if (
         !current ||
         current.mediaSource.type !== MediaType.video ||
-        this.#videoSnapshotTokens.get(entityId) !== token
+        this.#videoSnapshotTokens.get(entityId) !== token ||
+        (latestRequestId !== undefined && latestRequestId !== requestId)
       ) {
         this.#logger.info("[video-scrub] Dropped stale exact frame", {
           entityId,
           requestId,
           reason,
           time: frame.time,
+          latestRequestId,
           cacheStatus: frame.cacheStatus,
           totalMs: Number(totalMs.toFixed(2)),
         });
@@ -651,11 +710,12 @@ export class CanvasStore extends Store<CanvasState> {
       }
 
       if (syncVideoElement) {
-        current.mediaSource.videoElement.currentTime = frame.time;
+        current.mediaSource.videoElement.currentTime = clampedTime;
       }
       if (current.playback) {
-        current.playback.currentTime = frame.time;
+        current.playback.currentTime = clampedTime;
       }
+      current.mediaSource.displayTimeOverride = clampedTime;
 
       this.#replaceVideoSnapshot(entityId, frame.bitmap, frame.cacheKey);
       current.textureDirty = true;
@@ -680,10 +740,21 @@ export class CanvasStore extends Store<CanvasState> {
         time: clampedTime,
       });
       const current = this.state.entities.get(entityId);
+      const latestRequestId = this.#videoLatestFrameRequestId.get(entityId);
       if (this.#videoSnapshotTokens.get(entityId) !== token) {
         this.#logger.info("[video-scrub] Ignoring stale decode failure", {
           entityId,
           requestId,
+          reason,
+          time: clampedTime,
+        });
+        return;
+      }
+      if (latestRequestId !== undefined && latestRequestId !== requestId) {
+        this.#logger.info("[video-scrub] Ignoring stale decode failure after newer request", {
+          entityId,
+          requestId,
+          latestRequestId,
           reason,
           time: clampedTime,
         });
@@ -702,17 +773,29 @@ export class CanvasStore extends Store<CanvasState> {
     }
   }
 
-  #pauseVideoInternal(entityId: string, captureSnapshot: boolean): void {
+  #pauseVideoInternal(
+    entityId: string,
+    captureSnapshot: boolean,
+    syncPlaybackTimeToElement = true,
+  ): void {
     const entity = this.state.entities.get(entityId);
     if (!entity || entity.mediaSource.type !== MediaType.video) return;
 
     this.#clearVideoSettleTimer(entityId);
     const video = entity.mediaSource.videoElement;
     video.pause();
+    const targetTime = entity.mediaSource.lastPresentedFrameTime ?? video.currentTime;
 
-    if (entity.playback) {
+    if (entity.playback && syncPlaybackTimeToElement) {
       entity.playback.isPlaying = false;
-      entity.playback.currentTime = video.currentTime;
+      entity.playback.currentTime = targetTime;
+    } else if (entity.playback) {
+      entity.playback.isPlaying = false;
+    }
+    entity.mediaSource.displayTimeOverride = entity.playback?.currentTime ?? targetTime;
+
+    if (captureSnapshot) {
+      entity.mediaSource.preferVideoElementFrame = true;
     }
 
     entity.textureDirty = true;
@@ -720,7 +803,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.notifySelectionChange();
 
     if (captureSnapshot) {
-      this.#queueExactVideoFrameRequest(entityId, video.currentTime, true, "pause-snapshot");
+      this.#queueExactVideoFrameRequest(entityId, targetTime, true, "pause-snapshot");
     }
   }
 
@@ -730,6 +813,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.entitiesDirty.add(entity.id);
     if (entity.mediaSource.type === MediaType.video) {
       this.#getOrCreateVideoFrameSession(entity.id);
+      this.#startVideoFrameTracking(entity.id);
     }
     this.notifySelectionChange();
   }
@@ -949,6 +1033,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.#resetSelectorCaches();
     this.#videoFrameRequestQueue.clear();
     this.#videoFrameRequestInFlight.clear();
+    this.#videoLatestFrameRequestId.clear();
     // Notify all subscribers
     this.notify();
   }
@@ -1055,6 +1140,8 @@ export class CanvasStore extends Store<CanvasState> {
     const video = entity.mediaSource.videoElement;
     const targetTime = entity.playback?.currentTime ?? video.currentTime;
     entity.mediaSource.isScrubbing = false;
+    entity.mediaSource.preferVideoElementFrame = false;
+    entity.mediaSource.displayTimeOverride = undefined;
     await this.#seekVideoElement(video, targetTime);
     await video.play();
 
@@ -1080,11 +1167,8 @@ export class CanvasStore extends Store<CanvasState> {
     this.#videoSnapshotTokens.set(entityId, ++this.#nextVideoSnapshotToken);
     const wasPlaying = entity.playback?.isPlaying ?? !entity.mediaSource.videoElement.paused;
     this.#videoScrubResume.set(entityId, wasPlaying);
-    this.#pauseVideoInternal(entityId, false);
+    this.#pauseVideoInternal(entityId, false, wasPlaying);
     entity.mediaSource.isScrubbing = true;
-
-    const targetTime = entity.playback?.currentTime ?? entity.mediaSource.videoElement.currentTime;
-    this.#queueExactVideoFrameRequest(entityId, targetTime, false, "scrub-start");
 
     entity.textureDirty = true;
     this.state.entitiesDirty.add(entityId);
@@ -1097,6 +1181,7 @@ export class CanvasStore extends Store<CanvasState> {
 
     const targetTime = entity.playback?.currentTime ?? entity.mediaSource.videoElement.currentTime;
     entity.mediaSource.isScrubbing = false;
+    entity.mediaSource.displayTimeOverride = targetTime;
     const shouldResume = this.#videoScrubResume.get(entityId) ?? false;
     this.#videoScrubResume.delete(entityId);
     if (shouldResume) {
@@ -1117,11 +1202,13 @@ export class CanvasStore extends Store<CanvasState> {
     if (entity.playback) {
       entity.playback.currentTime = clampedTime;
     }
+    entity.mediaSource.displayTimeOverride = clampedTime;
 
     if (entity.mediaSource.isScrubbing) {
       this.#queueExactVideoFrameRequest(entityId, clampedTime, false, "scrub-move");
     } else {
       if (!entity.playback?.isPlaying) {
+        entity.mediaSource.preferVideoElementFrame = true;
         this.#queueExactVideoFrameRequest(entityId, clampedTime, true, "paused-seek");
       } else {
         entity.mediaSource.videoElement.currentTime = clampedTime;
@@ -1144,6 +1231,7 @@ export class CanvasStore extends Store<CanvasState> {
     if (!entity || entity.mediaSource.type !== MediaType.video || !entity.playback) return;
 
     entity.playback.currentTime = currentTime;
+    entity.mediaSource.displayTimeOverride = undefined;
 
     const now = performance.now();
     if (now - this.#lastPlaybackNotifyTime < CanvasStore.#PLAYBACK_NOTIFY_INTERVAL_MS) {
@@ -1233,6 +1321,9 @@ export class CanvasStore extends Store<CanvasState> {
     if (!entity || !entity.playback) return;
 
     entity.playback.currentTime = currentTime;
+    if (entity.mediaSource.type === MediaType.video && entity.playback.isPlaying) {
+      entity.mediaSource.displayTimeOverride = undefined;
+    }
     this.#lastPlaybackNotifyTime = performance.now();
     this.state.playbackVersion++;
     this.notify();

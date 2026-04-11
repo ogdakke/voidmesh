@@ -124,6 +124,62 @@ describe("canvasStore.seekVideo", () => {
       expect(entity.mediaSource.videoElement.currentTime).toBe(25);
     }
   });
+
+  test("keeps rendering from the live video frame while pause snapshot settles", () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
+    canvasStore.addEntity(entity);
+
+    canvasStore.pauseVideo(entity.id);
+
+    if (entity.mediaSource.type === "video") {
+      expect(entity.mediaSource.preferVideoElementFrame).toBe(true);
+    }
+  });
+
+  test("keeps rendering from the live video frame while paused seek settles", () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
+    canvasStore.addEntity(entity);
+
+    canvasStore.seekVideo(entity.id, 25);
+
+    if (entity.mediaSource.type === "video") {
+      expect(entity.mediaSource.preferVideoElementFrame).toBe(true);
+    }
+  });
+
+  test("preserves the current scrub target when beginning a new scrub from paused state", () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
+    canvasStore.addEntity(entity);
+
+    if (entity.mediaSource.type !== "video") {
+      throw new Error("Expected video entity");
+    }
+
+    entity.playback!.currentTime = 42;
+    entity.mediaSource.videoElement.currentTime = 17;
+
+    canvasStore.beginVideoScrub(entity.id);
+
+    expect(entity.playback?.currentTime).toBe(42);
+  });
+
+  test("playback snapshot prefers the paused display override over stale element time", () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
+    canvasStore.addEntity(entity);
+    canvasStore.replaceSelection([entity.id]);
+
+    if (entity.mediaSource.type !== "video") {
+      throw new Error("Expected video entity");
+    }
+
+    entity.playback!.isPlaying = false;
+    entity.playback!.currentTime = 12;
+    entity.mediaSource.displayTimeOverride = 34.56;
+    entity.mediaSource.videoElement.currentTime = 12;
+
+    const snapshot = canvasStore.getPlaybackSnapshot();
+    expect(snapshot.currentTime).toBe(34.56);
+  });
 });
 
 describe("canvasStore.updatePlaybackTime", () => {

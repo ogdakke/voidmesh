@@ -1468,11 +1468,12 @@ export class InfiniteCanvasRenderer {
       GPUTextureUsage.RENDER_ATTACHMENT;
 
     // Get the appropriate source for GPU upload.
-    // Paused videos render from the exact captured bitmap; playing videos still
-    // render from the live media element.
+    // Paused videos normally render from the exact captured bitmap. During pause/seek
+    // settle we keep rendering from the video element until the fresh still snapshot lands
+    // so we never flash an old paused frame.
     const externalSource =
       entity.mediaSource.type === "video"
-        ? entity.playback?.isPlaying
+        ? entity.playback?.isPlaying || entity.mediaSource.preferVideoElementFrame
           ? this.#getVideoFrameSource(entity.mediaSource.videoElement, width, height)
           : entity.imageBitmap
         : entity.mediaSource.type === "image"

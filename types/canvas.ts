@@ -395,6 +395,12 @@ export type MediaSourceVideo = {
   cacheCoverage?: number;
   /** Whether the user is actively dragging the scrubber for this entity */
   isScrubbing?: boolean;
+  /** Keep rendering from the paused video element until a fresh still snapshot is ready */
+  preferVideoElementFrame?: boolean;
+  /** Stable UI time to show while paused/scrubbing exact-frame work settles */
+  displayTimeOverride?: number;
+  /** Presentation timestamp of the last frame actually shown by the video element */
+  lastPresentedFrameTime?: number;
 };
 export type MediaSourceGif = {
   type: typeof MediaType.gif;
