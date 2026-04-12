@@ -6,9 +6,11 @@ import {
   useCanvasCommands,
   useCanvasPreferences,
   useCanvasRendererService,
+  useHasEntities,
   useMultiSelectMode,
   useSelectedEntity,
   useSelectedEntityIds,
+  useSelectionState,
   useViewport,
 } from "#context/use-canvas.ts";
 import { useLayout } from "#context/use-layout.ts";
@@ -20,6 +22,7 @@ import { useImageInput } from "#hooks/use-image-input.ts";
 import { useIsMobile } from "#hooks/use-is-mobile.ts";
 import { useMediaControlsActions } from "#hooks/use-media-controls.ts";
 import useMediaQuery from "#hooks/use-media-query.ts";
+import { useParamValue } from "#hooks/use-param-value.ts";
 import { useStudioFile } from "#hooks/use-studio-file.ts";
 import { useExportQueue } from "#context/use-export-queue.ts";
 import { useUpscaleQueue } from "#context/use-upscale-queue.ts";
@@ -124,14 +127,31 @@ export function InfiniteCanvas() {
     duplicateEntities,
     copySelectionImage,
     copySelectionEffects,
+    pasteEffects,
     resetSelectionToDefaults,
     setSnapToGrid,
+    updateSelectedEntityParams,
+    changeShaderType,
+    changeDitheringKind,
+    changeAsciiKind,
+    setAsciiInvert,
+    changeGlassKind,
+    changeGlitchKind,
+    changePalette,
+    uploadPalette,
+    setShowOriginal,
+    setPreserveColors,
+    setReversePalette,
+    copySelectedEntityToClipboard,
+    saveSelectedEntityToFile,
   } = useCanvasCommands();
-  const { registerRenderer, debugMode, wlurDebugConfig } = useCanvasRendererService();
+  const { registerRenderer, renderer, debugMode, wlurDebugConfig } = useCanvasRendererService();
   const { snapToGrid } = useCanvasPreferences();
   const selectedEntity = useSelectedEntity();
   const selectedEntityIds = useSelectedEntityIds();
   const multiSelectMode = useMultiSelectMode();
+  const selectionState = useSelectionState();
+  const hasEntities = useHasEntities();
   const mediaActions = useMediaControlsActions(selectedEntity);
   const keybindStore = useKeybinds();
   const { addToQueue } = useExportQueue();
@@ -195,19 +215,19 @@ export function InfiniteCanvas() {
             tintAmount: darkTheme ? 1 : 0.77,
           })
         : null;
-      renderer.setWlurOverlay(
+      webgpuRenderer.setWlurOverlay(
         wlurOverlay
           ? debugMode
             ? applyWlurOverlayDebugConfig(wlurOverlay, wlurDebugConfig, tintColor)
             : wlurOverlay
           : null,
       );
-      registerRenderer(renderer);
+      registerRenderer(webgpuRenderer);
       gameLoop.start();
     }
     return () => gameLoop.stop();
   }, [
-    renderer,
+    webgpuRenderer,
     isReady,
     registerRenderer,
     darkTheme,
@@ -239,7 +259,7 @@ export function InfiniteCanvas() {
   const { exportStudioFile, saveAsStudioFile, importStudioFile } = useStudioFile();
 
   const handlePaletteInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    await handlePaletteUpload(e.target.files);
+    await uploadPalette(e.target.files);
     e.target.value = "";
   };
 
@@ -294,20 +314,20 @@ export function InfiniteCanvas() {
       saveWorkspace: () => exportStudioFile(),
       saveAsWorkspace: () => saveAsStudioFile(),
       openWorkspace: () => importStudioFile(),
-      toggleSnapToGrid: (checked) => handleSnapToGridChange(checked),
-      changeShaderType: (type) => handleShaderTypeChange(type),
+      toggleSnapToGrid: (checked) => setSnapToGrid(checked),
+      changeShaderType: (type) => changeShaderType(type),
       changeShape: (shape) => updateSelectedEntityParams({ shape: shape as Shape }),
-      changeDitheringKind: (kind) => handleDitheringKindChange(kind),
-      changeAsciiKind: (kind) => handleAsciiKindChange(kind),
-      toggleAsciiInvert: (checked) => handleAsciiInvertChange(checked),
-      changeGlassKind: (kind) => handleGlassKindChange(kind),
-      changeGlitchKind: (kind) => handleGlitchKindChange(kind),
-      changePalette: (palette) => handlePaletteChange(palette),
+      changeDitheringKind: (kind) => changeDitheringKind(kind),
+      changeAsciiKind: (kind) => changeAsciiKind(kind),
+      toggleAsciiInvert: (checked) => setAsciiInvert(checked),
+      changeGlassKind: (kind) => changeGlassKind(kind),
+      changeGlitchKind: (kind) => changeGlitchKind(kind),
+      changePalette: (palette) => changePalette(palette),
       triggerPaletteUpload: () => paletteInputRef.current?.click(),
-      toggleShowOriginal: (checked) => handleShowOriginalChange(checked),
-      togglePreserveColors: (checked) => handlePreserveColorsChange(checked),
-      toggleReversePalette: (checked) => handleReversePaletteChange(checked),
-      copyImage: () => copyEntity(),
+      toggleShowOriginal: (checked) => setShowOriginal(checked),
+      togglePreserveColors: (checked) => setPreserveColors(checked),
+      toggleReversePalette: (checked) => setReversePalette(checked),
+      copyImage: () => copySelectedEntityToClipboard(),
       saveAsFormat: (format) => {
         saveSelectedEntityToFile(imageExportOptionsForFormat(format));
       },
@@ -320,10 +340,10 @@ export function InfiniteCanvas() {
           }
         })();
       },
-      copyEffects: () => copyEntityParams(),
-      pasteEffects: () => pasteEntityParams(),
-      bringToFront: () => handleBringToFront(),
-      sendToBack: () => handleSendToBack(),
+      copyEffects: () => copySelectionEffects(),
+      pasteEffects: () => pasteEffects(),
+      bringToFront: () => bringSelectionToFront(),
+      sendToBack: () => sendSelectionToBack(),
       duplicate: () => duplicateEntities(),
       upscale: (entityIds) => addToUpscaleQueue(entityIds),
       exportAnimated: (entitiesToExport) => {
@@ -332,8 +352,8 @@ export function InfiniteCanvas() {
           addToQueue(entity, renderer);
         }
       },
-      reset: () => resetEntityToDefaults(),
-      deleteEntity: () => deleteEntity(undefined, "context_menu"),
+      reset: () => resetSelectionToDefaults(),
+      deleteEntity: () => deleteSelection(undefined, "context_menu"),
       close: () => {
         contextMenuController.close();
         canvasStore.setContextMenuClosed();
@@ -349,15 +369,12 @@ export function InfiniteCanvas() {
       snapToGrid,
       showOriginal: {
         supported: true,
-        value:
-          (selectionState.paramValues.showOriginal?.value as boolean | undefined) ?? showOriginal,
+        value: (selectionState.paramValues.showOriginal?.value as boolean | undefined) ?? false,
         mixed: showOriginalMixed,
       },
       preserveColors: {
         supported: preserveColorsParam.isSupported,
-        value:
-          (selectionState.paramValues.preserveColors?.value as boolean | undefined) ??
-          preserveColors,
+        value: (selectionState.paramValues.preserveColors?.value as boolean | undefined) ?? false,
         mixed: preserveColorsMixed,
       },
       reversePalette: {
@@ -409,7 +426,7 @@ export function InfiniteCanvas() {
       currentPaletteId: paletteParam.value?.id,
       paletteMixed: paletteParam.isMixed,
       paletteValues: [...paletteParam.values],
-      hasEntities: entities.length > 0,
+      hasEntities,
       submenuGutter: 4,
     });
   }, [
@@ -423,16 +440,16 @@ export function InfiniteCanvas() {
     asciiKindParam.value,
     asciiKindParam.values,
     customPalettes,
-    deleteEntity,
+    deleteSelection,
     ditheringKindParam.isMixed,
     ditheringKindParam.isSupported,
     ditheringKindParam.value,
     ditheringKindParam.values,
     duplicateEntities,
     exportStudioFile,
-    copyEntityParams,
-    copyEntity,
-    entities.length,
+    copySelectionEffects,
+    copySelectedEntityToClipboard,
+    hasEntities,
     glassKindParam.isMixed,
     glassKindParam.isSupported,
     glassKindParam.value,
@@ -441,34 +458,33 @@ export function InfiniteCanvas() {
     glitchKindParam.isSupported,
     glitchKindParam.value,
     glitchKindParam.values,
-    handleAsciiInvertChange,
-    handleAsciiKindChange,
-    handleBringToFront,
+    setAsciiInvert,
+    changeAsciiKind,
+    bringSelectionToFront,
     handleCanvasPaste,
-    handleDitheringKindChange,
-    handleGlassKindChange,
-    handleGlitchKindChange,
-    handlePaletteChange,
-    handlePaletteUpload,
-    handlePreserveColorsChange,
-    handleReversePaletteChange,
-    handleSendToBack,
-    handleShaderTypeChange,
-    handleShowOriginalChange,
-    handleSnapToGridChange,
+    changeDitheringKind,
+    changeGlassKind,
+    changeGlitchKind,
+    changePalette,
+    uploadPalette,
+    setPreserveColors,
+    setReversePalette,
+    sendSelectionToBack,
+    changeShaderType,
+    setShowOriginal,
+    setSnapToGrid,
     importStudioFile,
     paletteParam.isMixed,
     paletteParam.value,
     paletteParam.values,
-    pasteEntityParams,
+    pasteEffects,
     paletteInputRef,
-    preserveColors,
     preserveColorsMixed,
     preserveColorsParam.isSupported,
     renderer,
     reversePaletteMixed,
     reversePaletteParam.isSupported,
-    resetEntityToDefaults,
+    resetSelectionToDefaults,
     saveSelectedEntityToFile,
     saveAsStudioFile,
     selectionState,
@@ -476,7 +492,6 @@ export function InfiniteCanvas() {
     shapeParam.isSupported,
     shapeParam.value,
     shapeParam.values,
-    showOriginal,
     showOriginalMixed,
     snapToGrid,
     updateSelectedEntityParams,
