@@ -1,11 +1,5 @@
 import type { Point, Size, ShaderCanvasEntity } from "#types/canvas.ts";
-import {
-  calculateFitToView,
-  getViewportCenter,
-  easings,
-  snapToGrid,
-  SNAP_GRID_SIZE,
-} from "./canvas-math.ts";
+import { calculateFitToView, easings, snapToGrid, SNAP_GRID_SIZE } from "./canvas-math.ts";
 import { canvasStore } from "../engine/canvas-store.ts";
 import { viewportAnimation } from "../engine/viewport-animation.ts";
 import { gameLoop } from "../engine/game-loop.ts";
@@ -15,6 +9,7 @@ import { logger } from "./client.logger.ts";
 
 type EntityData = Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string };
 type AddEntityFn = (entity: EntityData, filename?: string) => string;
+type LoadedEntity = { data: EntityData; filename?: string };
 
 interface LayoutOptions {
   gap: number;
@@ -22,6 +17,13 @@ interface LayoutOptions {
 }
 
 export type LayoutAlgorithm = (sizes: Size[], options: LayoutOptions) => Point[];
+
+export interface ImportPlacementOptions {
+  anchor: Point;
+  select: boolean;
+  fitToView: boolean;
+  bottomInset: number;
+}
 
 /**
  * Shelf-packing layout: pack items left-to-right into rows.
@@ -169,22 +171,43 @@ export function fitEntitiesToView(
   });
 }
 
-/**
- * Load files, lay them out in a grid, add to canvas, select all, and fit-to-view.
- */
-export async function addFilesToCanvas(
-  files: File[],
+function placeLoadedEntities(
+  loaded: LoadedEntity[],
   addEntity: AddEntityFn,
   container: HTMLElement,
-  bottomInset: number = 0,
-): Promise<string[]> {
-  if (files.length === 0) return [];
+  options: ImportPlacementOptions,
+): string[] {
+  if (loaded.length === 0) return [];
 
-  // 1. Load all files in parallel (position at origin, will be repositioned)
+  const positions = calculateLayout(
+    loaded.map((entity) => entity.data.size),
+    options.anchor,
+  );
+
+  const snapEnabled = canvasStore.getState().snapToGrid;
+  const entityIds: string[] = [];
+
+  for (let i = 0; i < loaded.length; i++) {
+    const position = snapEnabled ? snapToGrid(positions[i]!, SNAP_GRID_SIZE) : positions[i]!;
+    const entity = loaded[i]!;
+    const id = addEntity({ ...entity.data, position }, entity.filename);
+    entityIds.push(id);
+  }
+
+  if (options.select) {
+    canvasStore.replaceSelection(entityIds);
+  }
+  if (options.fitToView) {
+    fitEntitiesToView(entityIds, container, options.bottomInset);
+  }
+
+  return entityIds;
+}
+
+async function loadFilesForCanvas(files: File[]): Promise<LoadedEntity[]> {
   const results = await Promise.allSettled(files.map((file) => loadMediaFile(file)));
 
-  // 2. Collect successful loads (preserve original order)
-  const loaded: { data: EntityData; filename: string }[] = [];
+  const loaded: LoadedEntity[] = [];
   for (let i = 0; i < results.length; i++) {
     const result = results[i]!;
     if (result.status === "fulfilled" && result.value) {
@@ -192,89 +215,86 @@ export async function addFilesToCanvas(
     }
   }
 
-  if (loaded.length === 0) return [];
+  return loaded;
+}
 
-  // 3. Calculate grid positions centered at viewport center
-  const viewport = canvasStore.getViewport();
-  const rect = container.getBoundingClientRect();
-  const centerWorld = getViewportCenter(viewport, rect, window.devicePixelRatio);
+async function loadUrlForCanvas(url: string): Promise<LoadedEntity | null> {
+  const response = await fetch(url);
+  const blob = await response.blob();
 
-  const positions = calculateLayout(
-    loaded.map((l) => l.data.size),
-    centerWorld,
-  );
+  const rawContentType = response.headers.get("content-type") ?? "";
+  const mimeType = (rawContentType.split(";")[0]?.trim() || blob.type).toLowerCase();
 
-  // 4. Add entities with calculated positions (snap if enabled)
-  const snapEnabled = canvasStore.getState().snapToGrid;
-  const entityIds: string[] = [];
-  for (let i = 0; i < loaded.length; i++) {
-    loaded[i]!.data.position = snapEnabled
-      ? snapToGrid(positions[i]!, SNAP_GRID_SIZE)
-      : positions[i]!;
-    const id = addEntity(loaded[i]!.data, loaded[i]!.filename);
-    entityIds.push(id);
+  let filename: string | undefined;
+  try {
+    const urlObj = new URL(url);
+    const pathParts = urlObj.pathname.split("/");
+    const lastPart = pathParts[pathParts.length - 1];
+    if (lastPart && lastPart.includes(".")) {
+      filename = decodeURIComponent(lastPart);
+    }
+  } catch {
+    // Ignore URL parsing errors
   }
 
-  // 5. Select all new entities and fit-to-view
-  canvasStore.replaceSelection(entityIds);
-  fitEntitiesToView(entityIds, container, bottomInset);
+  const entityData = await loadMediaFromBlob(blob, mimeType, { x: 0, y: 0 }, filename);
+  if (!entityData) return null;
 
-  return entityIds;
+  return { data: entityData, filename };
 }
 
 /**
- * Load an image from a URL, add to canvas, select, and fit-to-view.
+ * Load files, lay them out around the provided anchor, then optionally select and fit.
+ */
+export async function addFilesToCanvas(
+  files: File[],
+  addEntity: AddEntityFn,
+  container: HTMLElement,
+  options: ImportPlacementOptions,
+): Promise<string[]> {
+  if (files.length === 0) return [];
+
+  const loaded = await loadFilesForCanvas(files);
+  return placeLoadedEntities(loaded, addEntity, container, options);
+}
+
+/**
+ * Load media from URLs, lay them out around the provided anchor, then optionally select and fit.
+ */
+export async function addUrlsToCanvas(
+  urls: string[],
+  addEntity: AddEntityFn,
+  container: HTMLElement,
+  options: ImportPlacementOptions,
+): Promise<string[]> {
+  if (urls.length === 0) return [];
+
+  const results = await Promise.allSettled(urls.map((url) => loadUrlForCanvas(url)));
+  const loaded: LoadedEntity[] = [];
+
+  for (const result of results) {
+    if (result.status === "fulfilled" && result.value) {
+      loaded.push(result.value);
+    } else if (result.status === "rejected") {
+      logger.error("Failed to load media from URL:", result.reason);
+    }
+  }
+
+  return placeLoadedEntities(loaded, addEntity, container, options);
+}
+
+/**
+ * Load media from a URL, add to canvas, and return the new entity ID.
  */
 export async function addUrlToCanvas(
   url: string,
   addEntity: AddEntityFn,
   container: HTMLElement,
-  bottomInset: number = 0,
+  options: ImportPlacementOptions,
 ): Promise<string | null> {
   try {
-    const response = await fetch(url);
-    const blob = await response.blob();
-
-    // Resolve MIME type: prefer Content-Type header, fall back to blob.type
-    const rawContentType = response.headers.get("content-type") ?? "";
-    const mimeType = (rawContentType.split(";")[0]?.trim() || blob.type).toLowerCase();
-
-    // Extract filename from URL
-    let filename: string | undefined;
-    try {
-      const urlObj = new URL(url);
-      const pathParts = urlObj.pathname.split("/");
-      const lastPart = pathParts[pathParts.length - 1];
-      if (lastPart && lastPart.includes(".")) {
-        filename = decodeURIComponent(lastPart);
-      }
-    } catch {
-      // Ignore URL parsing errors
-    }
-
-    const entityData = await loadMediaFromBlob(blob, mimeType, { x: 0, y: 0 }, filename);
-    if (!entityData) return null;
-
-    // Calculate centered position
-    const viewport = canvasStore.getViewport();
-    const rect = container.getBoundingClientRect();
-    const centerWorld = getViewportCenter(viewport, rect, window.devicePixelRatio);
-
-    let position: Point = {
-      x: centerWorld.x - entityData.size.width / 2,
-      y: centerWorld.y - entityData.size.height / 2,
-    };
-    if (canvasStore.getState().snapToGrid) {
-      position = snapToGrid(position, SNAP_GRID_SIZE);
-    }
-    entityData.position = position;
-
-    const entityId = addEntity(entityData, filename);
-
-    canvasStore.replaceSelection([entityId]);
-    fitEntitiesToView([entityId], container, bottomInset);
-
-    return entityId;
+    const entityIds = await addUrlsToCanvas([url], addEntity, container, options);
+    return entityIds[0] ?? null;
   } catch (err) {
     logger.error("Failed to load media from URL:", err);
     return null;

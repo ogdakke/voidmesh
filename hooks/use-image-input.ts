@@ -1,7 +1,13 @@
 import { toastManager } from "#components/ui/toast/toast-manager.ts";
 import { config } from "#config";
-import { addFilesToCanvas, addUrlToCanvas, fitEntitiesToView } from "#lib/entity-placement.ts";
+import {
+  addFilesToCanvas,
+  addUrlsToCanvas,
+  addUrlToCanvas,
+  fitEntitiesToView,
+} from "#lib/entity-placement.ts";
 import { fileHandleStore } from "#lib/files/file-handle.ts";
+import { getViewportCenter, screenToWorld } from "#lib/canvas-math.ts";
 import { wait } from "#lib/util.ts";
 import { useRef } from "react";
 import { useCanvasCommands } from "../context/use-canvas.ts";
@@ -15,6 +21,11 @@ interface UseImageInputOptions {
   multipleFiles?: boolean;
 }
 
+interface PastePlacementOptions {
+  anchor?: { x: number; y: number };
+  fitToView?: boolean;
+}
+
 function isStudioFile(file: File): boolean {
   return file.name.endsWith(".studio") || file.name.endsWith(".vdmsh");
 }
@@ -26,10 +37,25 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
   const isMobile = useIsMobile();
   const bottomInset = isMobile ? config.canvas.mobile.bottomInset : 0;
 
+  const getAnchor = (screenPoint?: { x: number; y: number }) => {
+    const container = containerRef.current;
+    if (!container) return null;
+
+    const viewport = canvasStore.getViewport();
+    const rect = container.getBoundingClientRect();
+    const dpr = window.devicePixelRatio;
+    return screenPoint
+      ? screenToWorld(screenPoint, viewport, rect, dpr)
+      : getViewportCenter(viewport, rect, dpr);
+  };
+
   /**
    * Handle pasted items from clipboard (files or URLs)
    */
-  const handlePastedItems = async (items: (File | string)[]) => {
+  const handlePastedItems = async (
+    items: (File | string)[],
+    placementOptions: PastePlacementOptions = {},
+  ) => {
     if (isLoadingRef.current || items.length === 0) return;
     isLoadingRef.current = true;
 
@@ -38,6 +64,13 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
       isLoadingRef.current = false;
       return;
     }
+
+    const anchor = placementOptions.anchor ?? getAnchor();
+    if (!anchor) {
+      isLoadingRef.current = false;
+      return;
+    }
+    const shouldFitToView = placementOptions.fitToView ?? true;
 
     const files: File[] = [];
     const urls: string[] = [];
@@ -53,7 +86,12 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
     // Handle pasted files (images and videos)
     if (files.length > 0) {
       const maxFiles = multipleFiles ? files.length : 1;
-      await addFilesToCanvas(files.slice(0, maxFiles), addEntity, container, bottomInset);
+      await addFilesToCanvas(files.slice(0, maxFiles), addEntity, container, {
+        anchor,
+        select: true,
+        fitToView: shouldFitToView,
+        bottomInset,
+      });
     }
 
     // Handle pasted URLs or voidmesh effects JSON
@@ -84,7 +122,12 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
           continue;
         }
 
-        const entityId = await addUrlToCanvas(urlString, addEntity, container, bottomInset);
+        const entityId = await addUrlToCanvas(urlString, addEntity, container, {
+          anchor,
+          select: true,
+          fitToView: shouldFitToView,
+          bottomInset,
+        });
         if (entityId) {
           entityIds.push(entityId);
           toastManager.add({ title: "Pasted Link" });
@@ -98,7 +141,7 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
       }
 
       // If multiple URLs were pasted, re-select all and fit-to-view together
-      if (entityIds.length > 1) {
+      if (entityIds.length > 1 && shouldFitToView) {
         canvasStore.replaceSelection(entityIds);
         fitEntitiesToView(entityIds, container, bottomInset);
       }
@@ -123,11 +166,22 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
       return;
     }
 
+    const anchor = getAnchor();
+    if (!anchor) {
+      isLoadingRef.current = false;
+      return;
+    }
+
     const fileArray = Array.from(files);
     const maxFiles = multipleFiles ? fileArray.length : 1;
     const filesToProcess = fileArray.slice(0, maxFiles);
 
-    await addFilesToCanvas(filesToProcess, addEntity, container, bottomInset);
+    await addFilesToCanvas(filesToProcess, addEntity, container, {
+      anchor,
+      select: true,
+      fitToView: true,
+      bottomInset,
+    });
 
     isLoadingRef.current = false;
   };
@@ -141,6 +195,12 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
 
     const container = containerRef.current;
     if (!container) {
+      isLoadingRef.current = false;
+      return;
+    }
+
+    const dropAnchor = getAnchor({ x: e.clientX, y: e.clientY });
+    if (!dropAnchor) {
       isLoadingRef.current = false;
       return;
     }
@@ -174,7 +234,12 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
     if (dataTransfer.files.length > 0) {
       const fileArray = Array.from(dataTransfer.files);
       const maxFiles = multipleFiles ? fileArray.length : 1;
-      await addFilesToCanvas(fileArray.slice(0, maxFiles), addEntity, container, bottomInset);
+      await addFilesToCanvas(fileArray.slice(0, maxFiles), addEntity, container, {
+        anchor: dropAnchor,
+        select: true,
+        fitToView: false,
+        bottomInset,
+      });
     }
     // Handle dropped URLs
     else {
@@ -185,38 +250,38 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
 
         const maxUrls = multipleFiles ? urls.length : 1;
         const urlsToProcess = urls.slice(0, maxUrls);
-        const entityIds: string[] = [];
+        const validUrls: string[] = [];
+        const toastIds: string[] = [];
 
         for (const uriString of urlsToProcess) {
           if (URL.canParse(uriString)) {
-            const url = new URL(uriString);
-            const toastId = toastManager.add({
-              title: "Dropped Link",
-              timeout: 0,
-            });
-
-            const loadPromise = async () => {
-              const entityId = await addUrlToCanvas(
-                url.toString(),
-                addEntity,
-                container,
-                bottomInset,
-              );
-              if (entityId) {
-                entityIds.push(entityId);
-              }
-            };
-            // show the toast for at least N ms
-            await Promise.all([loadPromise(), wait(2000)]);
-
-            toastManager.close(toastId);
+            validUrls.push(uriString);
+            toastIds.push(
+              toastManager.add({
+                title: "Dropped Link",
+                timeout: 0,
+              }),
+            );
           }
         }
 
-        // If multiple URLs were dropped, re-select all and fit-to-view together
-        if (entityIds.length > 1) {
-          canvasStore.replaceSelection(entityIds);
-          fitEntitiesToView(entityIds, container, bottomInset);
+        if (validUrls.length > 0) {
+          try {
+            // Keep the loading toast visible long enough to be noticeable.
+            await Promise.all([
+              addUrlsToCanvas(validUrls, addEntity, container, {
+                anchor: dropAnchor,
+                select: true,
+                fitToView: false,
+                bottomInset,
+              }),
+              wait(2000),
+            ]);
+          } finally {
+            for (const toastId of toastIds) {
+              toastManager.close(toastId);
+            }
+          }
         }
       }
     }

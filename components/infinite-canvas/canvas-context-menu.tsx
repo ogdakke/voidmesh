@@ -37,6 +37,7 @@ import { MaterialSymbolsFlipToBackRounded } from "../icons/flip-to-back.tsx";
 import { IonDuplicateOutline } from "../icons/duplicate.tsx";
 import { config } from "#config";
 import { logger } from "#lib/client.logger.ts";
+import { screenToWorld } from "#lib/canvas-math.ts";
 import { AsciiMenuKnobs } from "../ascii-knobs.tsx";
 import { DitheringMenuKnobs } from "../dithering-knobs.tsx";
 import { GlassMenuKnobs } from "../glass-knobs.tsx";
@@ -51,6 +52,7 @@ import {
   IMAGE_FORMAT_OPTIONS,
   imageExportOptionsForFormat,
 } from "#renderer/export-formats.ts";
+import type { Point } from "#types/canvas.ts";
 
 const IMAGE_FORMAT_ICONS: Record<ImageExportFormat, typeof PngFormat> = {
   png: PngFormat,
@@ -80,6 +82,7 @@ export default function CanvasContextMenu({
   const paletteInputRef = useRef<HTMLInputElement>(null);
   const [frozenEntity, setFrozenEntity] = useState<ShaderCanvasEntity | undefined>(undefined);
   const [frozenSelection, setFrozenSelection] = useState<FrozenSelectionState | null>(null);
+  const frozenContextMenuScreenPointRef = useRef<Point | null>(null);
 
   const handleOpenChange = (open: boolean) => {
     onOpenChange(open);
@@ -112,6 +115,7 @@ export default function CanvasContextMenu({
     if (!open) {
       setFrozenEntity(undefined);
       setFrozenSelection(null);
+      frozenContextMenuScreenPointRef.current = null;
     }
   };
 
@@ -135,13 +139,21 @@ export default function CanvasContextMenu({
         onOpenChange={handleOpenChange}
         onOpenChangeComplete={handleOpenChangeComplete}
       >
-        <ContextMenu.Trigger className="canvas-menu-trigger">{children}</ContextMenu.Trigger>
+        <ContextMenu.Trigger
+          className="canvas-menu-trigger"
+          onContextMenuCapture={(e) => {
+            frozenContextMenuScreenPointRef.current = { x: e.clientX, y: e.clientY };
+          }}
+        >
+          {children}
+        </ContextMenu.Trigger>
         <ContextMenu.Portal>
           <ContextMenu.Positioner className="menu-positioner">
             <ContextMenu.Popup className="menu-popup">
               <CanvasContextMenuItems
                 contextOpenEntity={frozenEntity}
                 frozenSelection={frozenSelection}
+                frozenContextMenuScreenPointRef={frozenContextMenuScreenPointRef}
                 containerRef={containerRef}
                 paletteInputRef={paletteInputRef}
               />
@@ -169,6 +181,7 @@ function FilePickerButton({ onClick, children }: FilePickerButtonProps) {
 interface CanvasContextMenuItemsProps {
   contextOpenEntity: ShaderCanvasEntity | undefined;
   frozenSelection: FrozenSelectionState | null;
+  frozenContextMenuScreenPointRef: RefObject<Point | null>;
   containerRef: RefObject<HTMLDivElement | null>;
   paletteInputRef: RefObject<HTMLInputElement | null>;
 }
@@ -176,6 +189,7 @@ interface CanvasContextMenuItemsProps {
 function CanvasContextMenuItems({
   contextOpenEntity,
   frozenSelection,
+  frozenContextMenuScreenPointRef,
   containerRef,
   paletteInputRef,
 }: CanvasContextMenuItemsProps) {
@@ -288,7 +302,20 @@ function CanvasContextMenuItems({
       }
     }
     if (collected.length > 0) {
-      await handlePastedItems(collected);
+      const anchor =
+        frozenContextMenuScreenPointRef.current && containerRef.current
+          ? screenToWorld(
+              frozenContextMenuScreenPointRef.current,
+              canvasStore.getViewport(),
+              containerRef.current.getBoundingClientRect(),
+              window.devicePixelRatio,
+            )
+          : undefined;
+
+      await handlePastedItems(collected, {
+        anchor,
+        fitToView: false,
+      });
     }
   };
 
