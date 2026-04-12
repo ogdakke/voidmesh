@@ -54,8 +54,9 @@ bun run lint:all    # oxlint with type-checking. Always run after changes.
 ## Anti-Patterns
 
 - Do not use TypeScript `enum` keyword. Use `createEnum()`.
+- Do not use `typeof import("...").Type` anywhere. Ever. Use a regular type import, a namespace type import, or an explicit local type alias instead.
 - Do not add `"use client"` / `"use server"` — this is a SPA, not Next.js.
-- Do not import from `node_modules` internals. Use `opensrc/` for source reading.
+- Do not import from `node_modules` internals. Use opensrc cli for source reading.
 - Do not create new context providers without discussion.
 
 ## Export Pipeline

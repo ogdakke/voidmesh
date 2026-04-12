@@ -36,9 +36,9 @@ vi.mock("#hooks/use-studio-file.ts", () => ({
 }));
 
 vi.mock("#lib/util.ts", async () => {
-  const actual = await vi.importActual<typeof import("#lib/util.ts")>("#lib/util.ts");
+  const actual = await vi.importActual("#lib/util.ts");
   return {
-    ...actual,
+    ...(actual as object),
     wait: mocks.wait,
   };
 });
