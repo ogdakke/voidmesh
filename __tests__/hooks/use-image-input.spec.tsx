@@ -8,12 +8,12 @@ import { getViewportCenter, screenToWorld } from "#lib/canvas-math.ts";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
 
 const mocks = vi.hoisted(() => ({
-  addFilesToCanvas: vi.fn(),
-  addUrlToCanvas: vi.fn(),
-  addUrlsToCanvas: vi.fn(),
-  fitEntitiesToView: vi.fn(),
-  wait: vi.fn(async () => {}),
-  importStudioWithToasts: vi.fn(),
+  addFilesToCanvas: vi.fn<() => void>(),
+  addUrlToCanvas: vi.fn<() => void>(),
+  addUrlsToCanvas: vi.fn<() => void>(),
+  fitEntitiesToView: vi.fn<() => void>(),
+  wait: vi.fn<() => Promise<void>>(async () => {}),
+  importStudioWithToasts: vi.fn<() => void>(),
 }));
 
 vi.mock("#lib/entity-placement.ts", () => ({

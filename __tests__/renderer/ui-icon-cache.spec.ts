@@ -21,13 +21,15 @@ class MockImage {
 }
 
 function createMockDevice() {
-  const copyExternalImageToTexture = vi.fn();
-  const createTexture = vi.fn(({ size }: { size: [number, number] }) => ({
-    width: size[0],
-    height: size[1],
-    destroy: vi.fn(),
-    createView: vi.fn(),
-  }));
+  const copyExternalImageToTexture = vi.fn<() => void>();
+  const createTexture = vi.fn<(args: { size: [number, number] }) => object>(
+    ({ size }: { size: [number, number] }) => ({
+      width: size[0],
+      height: size[1],
+      destroy: vi.fn<() => void>(),
+      createView: vi.fn<() => void>(),
+    }),
+  );
 
   return {
     device: {
@@ -69,10 +71,12 @@ describe("UIIconCache", () => {
 
   beforeEach(() => {
     originalImage = globalThis.Image;
-    createImageBitmapMock = vi.fn(async (_source, options?: ImageBitmapOptions) => ({
+    createImageBitmapMock = vi.fn<
+      (source: unknown, options?: ImageBitmapOptions) => Promise<object>
+    >(async (_source, options?: ImageBitmapOptions) => ({
       width: options?.resizeWidth ?? FIXED_ICON_RASTER_EDGE,
       height: options?.resizeHeight ?? FIXED_ICON_RASTER_EDGE,
-      close: vi.fn(),
+      close: vi.fn<() => void>(),
     }));
 
     vi.stubGlobal("Image", MockImage);

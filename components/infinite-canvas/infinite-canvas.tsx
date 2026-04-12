@@ -36,7 +36,7 @@ import {
 import { undo } from "#lib/undo.ts";
 import { createDefaultWlurOverlayConfig } from "#renderer/wlur-overlay.ts";
 import { applyWlurOverlayDebugConfig } from "#renderer/wlur-debug.ts";
-import { Check, Drag, Enlarge, Reduce, Square3dFromCenter } from "iconoir-react";
+import { Check, Enlarge, Reduce, Square3dFromCenter } from "iconoir-react";
 import {
   lazy,
   memo,
