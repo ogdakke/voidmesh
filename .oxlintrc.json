@@ -9,10 +9,6 @@
     }
   ],
   "rules": {
-    "react-hooks/unsupported-syntax": "error",
-    "react-hooks/use-memo": "error",
-    "react-hooks/void-use-memo": "error",
-    "react-hooks/incompatible-library": "error",
     "react/rules-of-hooks": "error",
     "react/no-direct-mutation-state": "error",
     "react/jsx-no-duplicate-props": "error",
@@ -40,7 +36,8 @@
     "react-hooks-js/use-memo": "error",
     "react-hooks-js/void-use-memo": "error",
     "react-hooks-js/incompatible-library": "error",
-    "react/only-export-components": "warn"
+    "react/only-export-components": "warn",
+    "jsx-a11y/no-noninteractive-tabindex": ["warn", { "roles": ["application"] }]
   },
   "overrides": [
     {

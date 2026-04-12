@@ -1,7 +1,7 @@
+import babel from "@rolldown/plugin-babel";
+import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { resolve } from "path";
 import { defineConfig } from "vitest/config";
-import react, { reactCompilerPreset } from "@vitejs/plugin-react";
-import babel from "@rolldown/plugin-babel";
 
 export default defineConfig({
   resolve: {
@@ -22,6 +22,6 @@ export default defineConfig({
     environment: "happy-dom",
     setupFiles: ["./__tests__/setup/happydom.ts", "./__tests__/setup/testing-library.ts"],
     include: ["**/*.spec.{ts,tsx}"],
-    exclude: ["**/node_modules/**", "**/.git/**", "opensrc/**"],
+    exclude: ["**/node_modules/**", "**/.git/**", ".claude/**"],
   },
 });

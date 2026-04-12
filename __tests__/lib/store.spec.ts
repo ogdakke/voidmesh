@@ -46,7 +46,7 @@ describe("Store", () => {
   describe("subscribe", () => {
     test("adds listener that gets called on notify", () => {
       const store = new TestStore();
-      const listener = vi.fn();
+      const listener = vi.fn<() => void>();
 
       store.subscribe(listener);
       store.increment();
@@ -56,7 +56,7 @@ describe("Store", () => {
 
     test("unsubscribe removes listener", () => {
       const store = new TestStore();
-      const listener = vi.fn();
+      const listener = vi.fn<() => void>();
 
       const unsubscribe = store.subscribe(listener);
       unsubscribe();
@@ -67,8 +67,8 @@ describe("Store", () => {
 
     test("multiple listeners all get called", () => {
       const store = new TestStore();
-      const listener1 = vi.fn();
-      const listener2 = vi.fn();
+      const listener1 = vi.fn<() => void>();
+      const listener2 = vi.fn<() => void>();
 
       store.subscribe(listener1);
       store.subscribe(listener2);

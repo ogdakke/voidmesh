@@ -27,7 +27,7 @@ describe("KeybindProvider", () => {
 
 describe("useKeybind", () => {
   test("registers a keybind that fires on keypress", async () => {
-    const actionMock = vi.fn(() => {});
+    const actionMock = vi.fn<() => void>(() => {});
 
     function TestComponent() {
       useKeybind("global", {
@@ -49,7 +49,7 @@ describe("useKeybind", () => {
   });
 
   test("supports modifier keys (meta+s)", async () => {
-    const actionMock = vi.fn((e: KeyboardEvent) => {
+    const actionMock = vi.fn<(e: KeyboardEvent) => void>((e: KeyboardEvent) => {
       e.preventDefault();
     });
 
@@ -71,7 +71,7 @@ describe("useKeybind", () => {
   });
 
   test("does not fire when modifier requirements are not met", async () => {
-    const actionMock = vi.fn(() => {});
+    const actionMock = vi.fn<() => void>(() => {});
 
     function TestComponent() {
       useKeybind("global", {
@@ -91,7 +91,7 @@ describe("useKeybind", () => {
   });
 
   test("cleans up keybind on unmount", async () => {
-    const actionMock = vi.fn(() => {});
+    const actionMock = vi.fn<() => void>(() => {});
 
     function TestComponent({ show }: { show: boolean }) {
       return show ? <KeybindComponent /> : null;
@@ -157,7 +157,7 @@ describe("withMod()", () => {
     vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
     );
-    const actionMock = vi.fn();
+    const actionMock = vi.fn<() => void>();
 
     function TestComponent() {
       useKeybind("global", {
@@ -186,7 +186,7 @@ describe("withMod()", () => {
     vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
     );
-    const actionMock = vi.fn();
+    const actionMock = vi.fn<() => void>();
 
     function TestComponent() {
       useKeybind("global", {
@@ -215,7 +215,7 @@ describe("withMod()", () => {
     vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
     );
-    const actionMock = vi.fn();
+    const actionMock = vi.fn<() => void>();
 
     function TestComponent() {
       useKeybind("global", {
@@ -244,7 +244,7 @@ describe("withMod()", () => {
     vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
     );
-    const actionMock = vi.fn();
+    const actionMock = vi.fn<() => void>();
 
     function TestComponent() {
       useKeybind("global", {

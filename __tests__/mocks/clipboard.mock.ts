@@ -54,21 +54,23 @@ export function mockClipboard(): ClipboardMock {
   let lastWrittenText: string | null = null;
   let lastWrittenItems: ClipboardItem[] | null = null;
 
-  const writeMock = vi.fn(async (items: ClipboardItem[]) => {
-    lastWrittenItems = items;
-    storedItems = items;
-  });
+  const writeMock = vi.fn<(items: ClipboardItem[]) => Promise<void>>(
+    async (items: ClipboardItem[]) => {
+      lastWrittenItems = items;
+      storedItems = items;
+    },
+  );
 
-  const readMock = vi.fn(async () => {
+  const readMock = vi.fn<() => Promise<ClipboardItem[]>>(async () => {
     return storedItems ?? [];
   });
 
-  const writeTextMock = vi.fn(async (text: string) => {
+  const writeTextMock = vi.fn<(text: string) => Promise<void>>(async (text: string) => {
     lastWrittenText = text;
     storedText = text;
   });
 
-  const readTextMock = vi.fn(async () => {
+  const readTextMock = vi.fn<() => Promise<string>>(async () => {
     return storedText ?? "";
   });
 

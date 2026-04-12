@@ -17,7 +17,7 @@ vi.mock("#hooks/use-is-mobile.ts", () => ({
 function renderValueInput({
   value,
   colorSpace = ColorSpace.displayP3,
-  onChange = vi.fn(),
+  onChange = vi.fn<(color: string) => void>(),
 }: {
   value: string;
   colorSpace?: ColorSpace;
@@ -107,7 +107,7 @@ describe("ColorPicker ValueInput", () => {
   test("changing the mobile selector converts the current color and emits the new format", async () => {
     mockUseIsMobile.mockReturnValue(true);
     const user = userEvent.setup();
-    const onChange = vi.fn();
+    const onChange = vi.fn<(color: string) => void>();
     renderValueInput({
       value: "color(display-p3 1 0 0)",
       onChange,
@@ -124,7 +124,7 @@ describe("ColorPicker ValueInput", () => {
   test("changing the selector while the input is focused does not revert to the old format", async () => {
     mockUseIsMobile.mockReturnValue(true);
     const user = userEvent.setup();
-    const onChange = vi.fn();
+    const onChange = vi.fn<(color: string) => void>();
     renderValueInput({
       value: "color(display-p3 0.8314 0.5011 0.4028)",
       onChange,
@@ -144,7 +144,7 @@ describe("ColorPicker ValueInput", () => {
 
   test("changing the desktop selector while the input is focused does not revert to P3", async () => {
     const user = userEvent.setup();
-    const onChange = vi.fn();
+    const onChange = vi.fn<(color: string) => void>();
     const { container } = renderValueInput({
       value: "color(display-p3 0.8314 0.5011 0.4028)",
       onChange,
@@ -172,7 +172,7 @@ describe("ColorPicker ValueInput", () => {
   test("typing a valid hex color switches the selector to Hex", async () => {
     mockUseIsMobile.mockReturnValue(true);
     const user = userEvent.setup();
-    const onChange = vi.fn();
+    const onChange = vi.fn<(color: string) => void>();
     renderValueInput({
       value: "color(display-p3 1 0 0)",
       onChange,
@@ -194,7 +194,7 @@ describe("ColorPicker ValueInput", () => {
   test("pasting a valid P3 color switches the selector to P3", async () => {
     mockUseIsMobile.mockReturnValue(true);
     const user = userEvent.setup();
-    const onChange = vi.fn();
+    const onChange = vi.fn<(color: string) => void>();
     renderValueInput({
       value: "#ff0000",
       onChange,
@@ -220,7 +220,7 @@ describe("ColorPicker ValueInput", () => {
   test("format toggles do not keep drifting for the same in-memory color", async () => {
     mockUseIsMobile.mockReturnValue(true);
     const user = userEvent.setup();
-    const onChange = vi.fn();
+    const onChange = vi.fn<(color: string) => void>();
     renderValueInput({
       value: "color(display-p3 0.8314 0.5011 0.4028)",
       onChange,

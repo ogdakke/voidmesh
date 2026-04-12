@@ -7,7 +7,7 @@ import { mockPwaState, resetMockPwaState } from "../mocks/virtual-pwa-register-r
 
 vi.mock("#lib/client.logger.ts", () => ({
   logger: {
-    error: vi.fn(),
+    error: vi.fn<(...args: unknown[]) => void>(),
   },
 }));
 
@@ -17,7 +17,9 @@ describe("PwaUpdateManager", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-05T12:00:00.000Z"));
     resetMockPwaState();
-    mockPwaState.updateServiceWorker = vi.fn(async () => {});
+    mockPwaState.updateServiceWorker = vi.fn<(reloadPage?: boolean) => Promise<void>>(
+      async () => {},
+    );
     setVisibilityState("visible");
   });
 
@@ -143,7 +145,7 @@ function renderWithToastProvider() {
 
 function createRegistration() {
   return {
-    update: vi.fn(async () => {}),
+    update: vi.fn<() => Promise<void>>(async () => {}),
   } as unknown as ServiceWorkerRegistration;
 }
 

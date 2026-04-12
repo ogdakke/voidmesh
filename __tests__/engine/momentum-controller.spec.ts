@@ -14,16 +14,19 @@ describe("MomentumController", () => {
     viewport = { offset: { x: 0, y: 0 }, zoom: 1 };
 
     deps = {
-      panBy: vi.fn((delta) => {
+      panBy: vi.fn<(delta: { x: number; y: number }) => void>((delta) => {
         viewport.offset.x += delta.x;
         viewport.offset.y += delta.y;
       }),
-      getViewport: vi.fn(() => ({ ...viewport, offset: { ...viewport.offset } })),
-      setViewport: vi.fn((v) => {
+      getViewport: vi.fn<() => { offset: { x: number; y: number }; zoom: number }>(() => ({
+        ...viewport,
+        offset: { ...viewport.offset },
+      })),
+      setViewport: vi.fn<(v: { offset: { x: number; y: number }; zoom: number }) => void>((v) => {
         viewport = { offset: { ...v.offset }, zoom: v.zoom };
       }),
-      getContainerRect: vi.fn(() => new DOMRect(0, 0, 800, 600)),
-      getDpr: vi.fn(() => 1),
+      getContainerRect: vi.fn<() => DOMRect>(() => new DOMRect(0, 0, 800, 600)),
+      getDpr: vi.fn<() => number>(() => 1),
     };
 
     controller = new MomentumController(clock.scheduler, deps);

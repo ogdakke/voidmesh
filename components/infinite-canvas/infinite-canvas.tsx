@@ -880,6 +880,7 @@ export function InfiniteCanvas() {
       <div
         ref={containerRef}
         className={`infinite-canvas${isSpaceHeld ? " infinite-canvas--space" : ""}`}
+        role="application"
         data-ready={isReady || undefined}
         tabIndex={0}
         onFocus={handleContainerFocus}
