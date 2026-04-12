@@ -1,9 +1,11 @@
 import { useCanvasCommands, useHasEntities } from "#context/use-canvas.ts";
 import { useIsMobile } from "#hooks/use-is-mobile.ts";
+import { getViewportCenter } from "#lib/canvas-math.ts";
 import { addFilesToCanvas } from "#lib/entity-placement.ts";
 import { MediaImagePlus } from "iconoir-react";
 import { useRef } from "react";
 import { config } from "../lib/config";
+import { canvasStore } from "../engine/canvas-store.ts";
 import { Button } from "./ui/button";
 
 export function UploadControls() {
@@ -34,7 +36,18 @@ export function FileUploadComponent() {
     const container = document.querySelector(".infinite-canvas");
     if (!(container instanceof HTMLElement)) return;
 
-    await addFilesToCanvas(Array.from(files), addEntity, container, bottomInset);
+    const anchor = getViewportCenter(
+      canvasStore.getViewport(),
+      container.getBoundingClientRect(),
+      window.devicePixelRatio,
+    );
+
+    await addFilesToCanvas(Array.from(files), addEntity, container, {
+      anchor,
+      select: true,
+      fitToView: true,
+      bottomInset,
+    });
   };
 
   return (
