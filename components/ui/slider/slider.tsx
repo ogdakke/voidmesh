@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Field } from "@base-ui/react";
 import {
   Slider as BaseSlider,
@@ -187,12 +187,14 @@ export function Slider({
             ) : (
               <BaseSlider.Thumb
                 className={"slider-thumb"}
-                style={(state) => ({
-                  "--slider-position":
-                    min != null && max != null
-                      ? ((state.values[0] ?? min) - min) / (max - min)
-                      : 0.5,
-                })}
+                style={(state) =>
+                  ({
+                    "--slider-position":
+                      min != null && max != null
+                        ? ((state.values[0] ?? min) - min) / (max - min)
+                        : 0.5,
+                  }) as CSSProperties
+                }
               />
             )}
           </BaseSlider.Track>
