@@ -1,6 +1,87 @@
 import type { Point } from "#types/canvas.ts";
 
 /**
+ * 1D underdamped harmonic oscillator.
+ *
+ * Decays toward zero with configurable response time and damping ratio.
+ * Used for scalar value animations where callers care about the current value,
+ * not just per-frame deltas.
+ */
+export class DampedSpring {
+  #offset = 0;
+  #velocity = 0;
+  #zetaOmega = 0;
+  #omegaD = 0;
+  #threshold = 0.01;
+
+  /** Whether the spring has meaningful motion (below sleep threshold = settled) */
+  get active(): boolean {
+    const t = this.#threshold;
+    return Math.abs(this.#offset) > t || Math.abs(this.#velocity) > t;
+  }
+
+  /** Current offset from the target value */
+  get offset(): number {
+    return this.#offset;
+  }
+
+  /**
+   * Configure spring parameters and set initial state.
+   * @param offset Initial displacement from target
+   * @param velocity Initial velocity (units per second)
+   * @param response Spring response time in seconds (lower = faster)
+   * @param damping Damping ratio (0-1, where 1 = critical damping). Must be < 1.
+   */
+  start(
+    offset: number,
+    velocity: number,
+    response: number,
+    damping: number,
+    threshold = 0.01,
+  ): void {
+    this.#threshold = threshold;
+    const omega = (2 * Math.PI) / response;
+    this.#zetaOmega = damping * omega;
+    this.#omegaD = omega * Math.sqrt(1 - damping * damping);
+    this.#offset = offset;
+    this.#velocity = velocity;
+  }
+
+  /** Advance the spring by dt seconds. */
+  step(dt: number): void {
+    if (dt <= 0) {
+      return;
+    }
+
+    const zetaOmega = this.#zetaOmega;
+    const omegaD = this.#omegaD;
+    const decay = Math.exp(-zetaOmega * dt);
+    const cosD = Math.cos(omegaD * dt);
+    const sinD = Math.sin(omegaD * dt);
+
+    const a = this.#offset;
+    const b = (this.#velocity + zetaOmega * a) / omegaD;
+    this.#offset = decay * (a * cosD + b * sinD);
+    this.#velocity =
+      decay * ((b * omegaD - a * zetaOmega) * cosD - (a * omegaD + b * zetaOmega) * sinD);
+  }
+
+  /** Snap to the target value. */
+  flush(): void {
+    this.#offset = 0;
+    this.#velocity = 0;
+  }
+
+  /** Reset all state */
+  reset(): void {
+    this.#offset = 0;
+    this.#velocity = 0;
+    this.#zetaOmega = 0;
+    this.#omegaD = 0;
+  }
+}
+
+/**
  * 2D underdamped harmonic oscillator.
  *
  * Decays toward zero with configurable response time and damping ratio.

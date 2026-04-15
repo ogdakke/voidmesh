@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ComponentProps } from "react";
-import { resolveCssVarColor } from "#lib/css-color.ts";
+import { resolveCssVarColor } from "#lib/css.ts";
 import { SliderEngine } from "./slider-engine.ts";
 import {
   renderSliderTicks,

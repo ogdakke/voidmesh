@@ -1,6 +1,6 @@
 import { entityDragVisual } from "../engine/entity-drag-visual.ts";
 import { scheduler, type AnimationHandle } from "../lib/animation-scheduler.ts";
-import { resolveCssColor, resolveCssVarColor } from "#lib/css-color.ts";
+import { getCssVarValue, resolveCssColor, resolveCssVarColor } from "#lib/css.ts";
 import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
 import shaderSource from "./entity-label.wgsl?raw";
 
@@ -17,8 +17,11 @@ const MAX_TEXT_WIDTH_MOBILE = 192; // 12rem
 const VERTICAL_MARGIN = 8; // CSS pixels above entity
 const ICON_SIZE_RATIO = 1.2;
 const MOBILE_BREAKPOINT = 768;
-const DRAG_ANIM_DURATION = 0.15; // seconds
+const DRAG_ANIM_RESPONSE = 0.15; // seconds
+const DRAG_ANIM_DAMPING = 0.78;
 const UNIFORM_SIZE = 32; // bytes (2x vec2f + f32 + 3x f32 padding)
+const LABEL_FONT_FAMILY_FALLBACK =
+  'ui-rounded, "Hiragino Maru Gothic ProN", Quicksand, Comfortaa, Manjari, "Arial Rounded MT", "Arial Rounded MT Bold", Calibri, source-sans-pro, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji"';
 
 interface LabelColors {
   normalGradientTop: string;
@@ -44,27 +47,8 @@ function resolveColors(isDark: boolean): LabelColors {
   };
 }
 
-// ── Cubic bezier easing ──────────────────────────────────────────────────────
-
-function cubicBezier(x1: number, y1: number, x2: number, y2: number, t: number): number {
-  if (t <= 0) return 0;
-  if (t >= 1) return 1;
-  let low = 0;
-  let high = 1;
-  for (let i = 0; i < 12; i++) {
-    const mid = (low + high) * 0.5;
-    const inv = 1 - mid;
-    const x = 3 * x1 * mid * inv * inv + 3 * x2 * mid * mid * inv + mid * mid * mid;
-    if (x < t) low = mid;
-    else high = mid;
-  }
-  const u = (low + high) * 0.5;
-  const inv = 1 - u;
-  return 3 * y1 * u * inv * inv + 3 * y2 * u * u * inv + u * u * u;
-}
-
-function springEase(t: number): number {
-  return cubicBezier(0.34, 1.56, 0.64, 1, t);
+function resolveLabelFontFamily(): string {
+  return getCssVarValue("--sans-serif-rounded") ?? LABEL_FONT_FAMILY_FALLBACK;
 }
 
 // ── Per-entity label cache entry ─────────────────────────────────────────────
@@ -124,6 +108,7 @@ export class EntityLabelPass {
 
   // Color state
   #colors: LabelColors;
+  #fontFamily: string;
   #isDark: boolean;
   #colorSchemeQuery: MediaQueryList;
   #styleVersion = 0;
@@ -143,6 +128,7 @@ export class EntityLabelPass {
     this.#ctx = this.#canvas.getContext("2d")!;
 
     this.#colorSchemeQuery = matchMedia("(prefers-color-scheme: dark)");
+    this.#fontFamily = resolveLabelFontFamily();
     this.#isDark = this.#colorSchemeQuery.matches;
     this.#colors = resolveColors(this.#isDark);
 
@@ -286,11 +272,11 @@ export class EntityLabelPass {
 
     if (this.#dragIconProgress === nextTarget) return;
 
-    this.#dragAnimHandle = scheduler.tween({
+    this.#dragAnimHandle = scheduler.spring({
       from: this.#dragIconProgress,
       to: nextTarget,
-      duration: DRAG_ANIM_DURATION * 1000,
-      easing: springEase,
+      response: DRAG_ANIM_RESPONSE,
+      damping: DRAG_ANIM_DAMPING,
       onUpdate: (value) => {
         this.#dragIconProgress = Math.max(0, Math.min(1, value));
       },
@@ -400,7 +386,7 @@ export class EntityLabelPass {
     const maxTextWidth = (isMobile ? MAX_TEXT_WIDTH_MOBILE : MAX_TEXT_WIDTH_DESKTOP) * dpr;
     const borderRadius = fontSize;
 
-    const fontStr = `${fontSize}px system-ui, -apple-system, sans-serif`;
+    const fontStr = `${fontSize}px ${this.#fontFamily}`;
     ctx.font = fontStr;
 
     const displayText = isWarning ? `\u26A0 Original: ${name}` : name;
