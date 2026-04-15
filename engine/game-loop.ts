@@ -27,7 +27,6 @@ import { createEnum } from "#types/index.ts";
 import { canvasStore, type CanvasState } from "./canvas-store.ts";
 import { entityDragVisual } from "./entity-drag-visual.ts";
 import { actionLayerController } from "./action-layer-controller.ts";
-import { entityLabel } from "./entity-label.ts";
 import { perfOverlay } from "./perf-overlay.ts";
 import { viewportAnimation } from "./viewport-animation.ts";
 import { MomentumController, type MomentumDeps } from "./momentum-controller.ts";
@@ -40,7 +39,6 @@ function createDefaultDeps() {
     viewportAnimation,
     actionLayer: actionLayerController,
     dragVisual: entityDragVisual,
-    label: entityLabel,
     perf: perfOverlay,
     haptic,
     analytics,
@@ -231,15 +229,6 @@ export class GameLoop {
     this.#resizeObserver.observe(container, { box: "border-box" });
 
     this.#deps.viewportAnimation.setContainer(container);
-    this.#deps.label.setContainer(container);
-  }
-
-  setLabelElement(element: HTMLDivElement): void {
-    this.#deps.label.setLabelElement(element);
-  }
-
-  setTextElement(element: HTMLSpanElement): void {
-    this.#deps.label.setTextElement(element);
   }
 
   setPerfElement(element: HTMLElement): void {
@@ -346,12 +335,7 @@ export class GameLoop {
       (this.#inputState.pointerDown && !!this.#dragTarget) ||
       this.#dragSelect?.isActive;
 
-    // 8. Update entity label position (only when rendering)
-    if (needsRender) {
-      this.#deps.label.tick(renderState);
-    }
-
-    // 9. Render only when needed (skip idle frames)
+    // 8. Render only when needed (skip idle frames)
     if (this.#renderer?.isReady && needsRender) {
       if (renderState.debugMode) performance.mark("studio-render-start");
       this.#renderer.render(renderState);

@@ -38,12 +38,6 @@ export function createMockGameLoopDeps(scheduler: AnimationScheduler): GameLoopD
       isActive: vi.fn<() => boolean>(() => false),
       getScale: vi.fn<() => number>(() => 1),
     },
-    label: {
-      setContainer: vi.fn<() => void>(),
-      setLabelElement: vi.fn<() => void>(),
-      setTextElement: vi.fn<() => void>(),
-      tick: vi.fn<() => void>(),
-    },
     perf: {
       setElement: vi.fn<() => void>(),
       tick: vi.fn<() => void>(),

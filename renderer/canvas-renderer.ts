@@ -38,6 +38,7 @@ import { HalftoneShader } from "./shaders/halftone-shader.ts";
 import { MeltShader } from "./shaders/melt-shader.ts";
 import type { ShaderContext } from "./shaders/shader-pass.ts";
 import { ShaderRegistry } from "./shaders/shader-registry.ts";
+import { EntityLabelPass } from "./entity-label-pass.ts";
 import { TexturePool } from "./texture-pool.ts";
 import { resolveWlurOverlayRuntimeConfig, type WlurOverlayConfig } from "./wlur-overlay.ts";
 import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
@@ -165,6 +166,9 @@ export class InfiniteCanvasRenderer {
 
   // Disintegration particle system (GPU compute + instanced rendering)
   #particleSystem: DisintegrationParticleSystem | null = null;
+
+  // Entity label pass (Canvas 2D rasterized → GPU textured quad)
+  #entityLabelPass: EntityLabelPass | null = null;
 
   // Disintegration overlays — GPU resources for fire-and-forget dust animations
   #disintegrationOverlays: Map<
@@ -420,6 +424,14 @@ export class InfiniteCanvasRenderer {
     // Initialize disintegration particle system
     this.#particleSystem = new DisintegrationParticleSystem(this.#device);
     await this.#particleSystem.initialize(this.#canvasFormat, this.#viewportUniformBuffer!);
+
+    // Initialize entity label pass
+    this.#entityLabelPass = new EntityLabelPass(
+      this.#device,
+      this.#canvasFormat,
+      this.#viewportUniformBuffer!,
+    );
+    this.#entityLabelPass.initialize();
 
     // Set up ResizeObserver to cache canvas dimensions (avoids getBoundingClientRect in render loop)
     this.#resizeObserver = new ResizeObserver((entries) => {
@@ -1986,6 +1998,20 @@ export class InfiniteCanvasRenderer {
       markPhaseEnd("selection-rects");
     }
 
+    // Entity label pass (Canvas 2D → GPU textured quad)
+    if (this.#entityLabelPass) {
+      const labelAnimating = this.#entityLabelPass.render(
+        encoder,
+        targetView,
+        state,
+        viewport,
+        width,
+        height,
+        frameDt,
+      );
+      if (labelAnimating) hasAnimatingContent = true;
+    }
+
     // Final pass: WLUR progressive blur overlay (renders on top of everything)
     const resolvedWlurOverlay = resolveWlurOverlayRuntimeConfig(
       this.#wlurOverlayConfig,
@@ -2353,6 +2379,10 @@ export class InfiniteCanvasRenderer {
     this.#disintegrationOverlays.clear();
     this.#particleSystem?.destroy();
     this.#particleSystem = null;
+
+    // Destroy entity label pass
+    this.#entityLabelPass?.destroy();
+    this.#entityLabelPass = null;
 
     // Destroy processing pipeline
     this.#processingPipeline?.destroy();
