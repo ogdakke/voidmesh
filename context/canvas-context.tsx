@@ -41,7 +41,7 @@ import {
   generatePaletteShortName,
 } from "#components/palette-preset/palette-presets.ts";
 import type { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
-import type { DeserializeResult } from "#lib/serialization/types.ts";
+import type { DeserializeOptions, DeserializeResult } from "#lib/serialization/types.ts";
 import { type ImageExportOptions, getImageExtension } from "#renderer/export-formats.ts";
 import { canvasStore, disintegrationController, gameLoop } from "#engine";
 
@@ -1777,9 +1777,12 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     return serialize();
   };
 
-  const deserializeCanvas = async (source: Blob | ArrayBuffer): Promise<DeserializeResult> => {
+  const deserializeCanvas = async (
+    source: Blob | ArrayBuffer,
+    options?: DeserializeOptions,
+  ): Promise<DeserializeResult> => {
     const { deserialize, getMaxCounters } = await import("#lib/serialization/index.ts");
-    const result = await deserialize(source);
+    const result = await deserialize(source, options);
 
     // Update ID counters to avoid collisions with future entities
     const { maxId, maxZIndex } = getMaxCounters(result);

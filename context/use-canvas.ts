@@ -14,7 +14,7 @@ import type { ColorSpace } from "#types/enums.ts";
 import type { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
 import type { ImageExportOptions } from "#renderer/export-formats.ts";
 import type { WlurOverlayDebugConfig } from "#renderer/wlur-debug.ts";
-import type { DeserializeResult } from "#lib/serialization/types.ts";
+import type { DeserializeOptions, DeserializeResult } from "#lib/serialization/types.ts";
 import type { Options } from "nuqs";
 import type { PartialDeep } from "type-fest";
 
@@ -76,7 +76,10 @@ export interface CanvasCommands {
   copySelectedEntityToClipboard: () => Promise<boolean>;
   saveSelectedEntityToFile: (options?: ImageExportOptions) => Promise<void>;
   serializeCanvas: () => Promise<Blob | null>;
-  deserializeCanvas: (source: Blob | ArrayBuffer) => Promise<DeserializeResult>;
+  deserializeCanvas: (
+    source: Blob | ArrayBuffer,
+    options?: DeserializeOptions,
+  ) => Promise<DeserializeResult>;
   applyUrlState: (params: URLSearchParams) => void;
   applyEffectsToSelection: (data: {
     shaderType: ShaderType;

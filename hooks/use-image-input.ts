@@ -193,100 +193,101 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
     if (isLoadingRef.current) return;
     isLoadingRef.current = true;
 
-    const container = containerRef.current;
-    if (!container) {
-      isLoadingRef.current = false;
-      return;
-    }
-
-    const dropAnchor = getAnchor({ x: e.clientX, y: e.clientY });
-    if (!dropAnchor) {
-      isLoadingRef.current = false;
-      return;
-    }
-
-    const { dataTransfer } = e;
-
-    // Handle dropped .studio files — deserialize instead of adding as media
-    if (dataTransfer.files.length > 0) {
-      const studioFile = Array.from(dataTransfer.files).find(isStudioFile);
-      if (studioFile) {
-        // Capture file handle from drop for "save to same file" on Chromium
-        if (fileHandleStore.supportsFileSystemAccess) {
-          const items = Array.from(dataTransfer.items);
-          const studioItem = items.find(
-            (item) => item.kind === "file" && item.getAsFile()?.name === studioFile.name,
-          );
-          if (studioItem) {
-            const handle = await studioItem.getAsFileSystemHandle();
-            if (handle?.kind === "file") {
-              fileHandleStore.handle = handle as FileSystemFileHandle;
-            }
-          }
-        }
-        await importStudioWithToasts(studioFile, deserializeCanvas);
-        isLoadingRef.current = false;
+    try {
+      const container = containerRef.current;
+      if (!container) {
         return;
       }
-    }
 
-    // Handle dropped files (images and videos)
-    if (dataTransfer.files.length > 0) {
-      const fileArray = Array.from(dataTransfer.files);
-      const maxFiles = multipleFiles ? fileArray.length : 1;
-      await addFilesToCanvas(fileArray.slice(0, maxFiles), addEntity, container, {
-        anchor: dropAnchor,
-        select: true,
-        fitToView: false,
-        bottomInset,
-      });
-    }
-    // Handle dropped URLs
-    else {
-      const uriList = dataTransfer.getData("text/uri-list") || dataTransfer.getData("text/plain");
-      if (uriList) {
-        // text/uri-list: newline-separated URIs, lines starting with # are comments (RFC 2483)
-        const urls = uriList.split(/\r?\n/).filter((line) => line.trim() && !line.startsWith("#"));
+      const dropAnchor = getAnchor({ x: e.clientX, y: e.clientY });
+      if (!dropAnchor) {
+        return;
+      }
 
-        const maxUrls = multipleFiles ? urls.length : 1;
-        const urlsToProcess = urls.slice(0, maxUrls);
-        const validUrls: string[] = [];
-        const toastIds: string[] = [];
+      const { dataTransfer } = e;
 
-        for (const uriString of urlsToProcess) {
-          if (URL.canParse(uriString)) {
-            validUrls.push(uriString);
-            toastIds.push(
-              toastManager.add({
-                title: "Dropped Link",
-                timeout: 0,
-              }),
+      // Handle dropped .studio files — deserialize instead of adding as media
+      if (dataTransfer.files.length > 0) {
+        const studioFile = Array.from(dataTransfer.files).find(isStudioFile);
+        if (studioFile) {
+          // Capture file handle from drop for "save to same file" on Chromium
+          if (fileHandleStore.supportsFileSystemAccess) {
+            const items = Array.from(dataTransfer.items);
+            const studioItem = items.find(
+              (item) => item.kind === "file" && item.getAsFile()?.name === studioFile.name,
             );
+            if (studioItem) {
+              const handle = await studioItem.getAsFileSystemHandle();
+              if (handle?.kind === "file") {
+                fileHandleStore.handle = handle as FileSystemFileHandle;
+              }
+            }
           }
+          await importStudioWithToasts(studioFile, deserializeCanvas);
+          return;
         }
+      }
 
-        if (validUrls.length > 0) {
-          try {
-            // Keep the loading toast visible long enough to be noticeable.
-            await Promise.all([
-              addUrlsToCanvas(validUrls, addEntity, container, {
-                anchor: dropAnchor,
-                select: true,
-                fitToView: false,
-                bottomInset,
-              }),
-              wait(2000),
-            ]);
-          } finally {
-            for (const toastId of toastIds) {
-              toastManager.close(toastId);
+      // Handle dropped files (images and videos)
+      if (dataTransfer.files.length > 0) {
+        const fileArray = Array.from(dataTransfer.files);
+        const maxFiles = multipleFiles ? fileArray.length : 1;
+        await addFilesToCanvas(fileArray.slice(0, maxFiles), addEntity, container, {
+          anchor: dropAnchor,
+          select: true,
+          fitToView: false,
+          bottomInset,
+        });
+      }
+      // Handle dropped URLs
+      else {
+        const uriList = dataTransfer.getData("text/uri-list") || dataTransfer.getData("text/plain");
+        if (uriList) {
+          // text/uri-list: newline-separated URIs, lines starting with # are comments (RFC 2483)
+          const urls = uriList
+            .split(/\r?\n/)
+            .filter((line) => line.trim() && !line.startsWith("#"));
+
+          const maxUrls = multipleFiles ? urls.length : 1;
+          const urlsToProcess = urls.slice(0, maxUrls);
+          const validUrls: string[] = [];
+          const toastIds: string[] = [];
+
+          for (const uriString of urlsToProcess) {
+            if (URL.canParse(uriString)) {
+              validUrls.push(uriString);
+              toastIds.push(
+                toastManager.add({
+                  title: "Dropped Link",
+                  timeout: 0,
+                }),
+              );
+            }
+          }
+
+          if (validUrls.length > 0) {
+            try {
+              // Keep the loading toast visible long enough to be noticeable.
+              await Promise.all([
+                addUrlsToCanvas(validUrls, addEntity, container, {
+                  anchor: dropAnchor,
+                  select: true,
+                  fitToView: false,
+                  bottomInset,
+                }),
+                wait(2000),
+              ]);
+            } finally {
+              for (const toastId of toastIds) {
+                toastManager.close(toastId);
+              }
             }
           }
         }
       }
+    } finally {
+      isLoadingRef.current = false;
     }
-
-    isLoadingRef.current = false;
   };
 
   return {

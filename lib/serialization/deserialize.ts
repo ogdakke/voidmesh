@@ -1,14 +1,21 @@
 import { ShaderType, type ShaderCanvasEntity, type ShaderParams } from "#types/canvas.ts";
-import { unzipSync } from "fflate";
+import { unzip, type AsyncTerminable } from "fflate";
 import { canvasStore } from "#engine";
 import { config } from "#config";
 import { deepMerge } from "../deep-merge.ts";
 import { decodeGif } from "../gif-decoder.ts";
 import { rasterizeSvg } from "../media-loader.ts";
 import { paletteStore } from "../palette-store.ts";
+import { logger } from "../client.logger.ts";
 import { bytesToImageBitmap, bytesToVideoElement } from "./media.ts";
 import { runMigrations } from "./migrations.ts";
-import type { DeserializeResult, SerializedEntity, StudioManifest } from "./types.ts";
+import type {
+  DeserializeOptions,
+  DeserializeProgress,
+  DeserializeResult,
+  SerializedEntity,
+  StudioManifest,
+} from "./types.ts";
 import { isStudioManifest, toPlaybackState } from "./types.ts";
 import { CURRENT_VERSION } from "./version.ts";
 
@@ -26,9 +33,26 @@ const MIME_BY_EXT: Record<string, string> = {
  * Clears the existing canvas state, restores viewport, and adds all entities.
  * Returns a result object with success status, warnings, and per-entity errors.
  */
-export async function deserialize(source: Blob | ArrayBuffer): Promise<DeserializeResult> {
+export async function deserialize(
+  source: Blob | ArrayBuffer,
+  options: DeserializeOptions = {},
+): Promise<DeserializeResult> {
+  const { signal, onProgress } = options;
   const warnings: string[] = [];
   const errors: { entityId: string; entityName: string; error: string }[] = [];
+  const startedAt = performance.now();
+  let lastStage: DeserializeProgress["stage"] | null = null;
+
+  const reportProgress = (progress: DeserializeProgress) => {
+    throwIfAborted(signal);
+    if (progress.stage !== lastStage) {
+      lastStage = progress.stage;
+      logger.debug("[workspace-import] stage", progress);
+    } else if (progress.stage === "decoding") {
+      logger.debug("[workspace-import] decoding entity", progress);
+    }
+    onProgress?.(progress);
+  };
 
   // 0. Validate input type
   if (!(source instanceof Blob) && !(source instanceof ArrayBuffer)) {
@@ -37,11 +61,23 @@ export async function deserialize(source: Blob | ArrayBuffer): Promise<Deseriali
     );
   }
 
+  const fileSizeBytes = source instanceof Blob ? source.size : source.byteLength;
+  logger.debug("[workspace-import] deserialize start", {
+    fileSizeBytes,
+    sourceType: source instanceof Blob ? "blob" : "array-buffer",
+  });
+
+  reportProgress({ stage: "reading", fileSizeBytes });
+
   // 1. Unzip the archive
   const buffer = source instanceof Blob ? await source.arrayBuffer() : source;
-  const zipEntries = unzipSync(new Uint8Array(buffer));
+  throwIfAborted(signal);
+  reportProgress({ stage: "unzipping", fileSizeBytes: buffer.byteLength });
+  const zipEntries = await unzipArchive(buffer, signal);
+  throwIfAborted(signal);
 
   // 2. Read and parse manifest
+  reportProgress({ stage: "parsing", fileSizeBytes: buffer.byteLength });
   const manifestBytes = zipEntries["manifest.json"];
   if (!manifestBytes) {
     throw new Error("Invalid .vdmsh file: missing manifest.json");
@@ -60,6 +96,12 @@ export async function deserialize(source: Blob | ArrayBuffer): Promise<Deseriali
       "Invalid .vdmsh file: manifest missing 'type: \"studio-canvas\"' or 'version' field",
     );
   }
+  throwIfAborted(signal);
+  logger.debug("[workspace-import] manifest parsed", {
+    version: (manifest as StudioManifest).version,
+    entityCount: (manifest as StudioManifest).entities.length,
+    paletteCount: (manifest as StudioManifest).palettes?.length ?? 0,
+  });
 
   // 3. Run migrations if needed
   let doc = manifest as StudioManifest;
@@ -72,6 +114,9 @@ export async function deserialize(source: Blob | ArrayBuffer): Promise<Deseriali
       `Document is from a newer version (v${doc.version}). Some features may not restore correctly.`,
     );
   }
+  if (warnings.length > 0) {
+    logger.debug("[workspace-import] manifest warnings", warnings);
+  }
 
   // 4. Import custom/extracted palettes that don't already exist locally
   if (doc.palettes?.length) {
@@ -83,23 +128,45 @@ export async function deserialize(source: Blob | ArrayBuffer): Promise<Deseriali
     }
   }
 
-  // 5. Decode all entities BEFORE clearing canvas (so we don't destroy existing
-  //    state if decoding fails entirely)
-  const entityPromises = doc.entities.map(async (serialized) => {
+  // 5. Decode entities BEFORE clearing canvas so a failed import does not
+  //    destroy the current workspace. Keep this sequential to reduce memory
+  //    pressure on iOS Safari and give cancellation/progress updates time to run.
+  const validEntities: ShaderCanvasEntity[] = [];
+  for (let index = 0; index < doc.entities.length; index++) {
+    const serialized = doc.entities[index]!;
+    reportProgress({
+      stage: "decoding",
+      entityIndex: index + 1,
+      entityCount: doc.entities.length,
+      entityName: serialized.name,
+      fileSizeBytes: buffer.byteLength,
+    });
+    throwIfAborted(signal);
+
+    if (index > 0) {
+      await yieldToMainThread();
+      throwIfAborted(signal);
+    }
+
     try {
-      return await deserializeEntity(serialized, zipEntries, warnings);
+      const entity = await deserializeEntity(serialized, zipEntries, warnings);
+      validEntities.push(entity);
+      logger.debug("[workspace-import] restored entity", {
+        entityId: serialized.id,
+        entityName: serialized.name,
+        mediaType: serialized.mediaType,
+        restoredCount: validEntities.length,
+      });
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       errors.push({
         entityId: serialized.id,
         entityName: serialized.name,
-        error: err instanceof Error ? err.message : String(err),
+        error: message,
       });
-      return null;
+      logger.warn(`[deserialize] Failed to restore "${serialized.name}": ${message}`);
     }
-  });
-
-  const decodedEntities = await Promise.all(entityPromises);
-  const validEntities = decodedEntities.filter((e): e is ShaderCanvasEntity => e !== null);
+  }
 
   // If nothing decoded at all, bail without touching the canvas
   if (validEntities.length === 0 && doc.entities.length > 0) {
@@ -112,6 +179,11 @@ export async function deserialize(source: Blob | ArrayBuffer): Promise<Deseriali
   }
 
   // 6. Pause all existing animated entities before clearing
+  reportProgress({
+    stage: "restoring",
+    entityCount: doc.entities.length,
+    fileSizeBytes: buffer.byteLength,
+  });
   for (const entity of canvasStore.getState().entities.values()) {
     if (entity.mediaSource.type === "video") {
       entity.mediaSource.videoElement.pause();
@@ -140,12 +212,92 @@ export async function deserialize(source: Blob | ArrayBuffer): Promise<Deseriali
     }
   }
 
+  reportProgress({
+    stage: "done",
+    entityCount: validEntities.length,
+    fileSizeBytes: buffer.byteLength,
+  });
+  logger.debug("[workspace-import] deserialize complete", {
+    durationMs: Math.round(performance.now() - startedAt),
+    entityCount: validEntities.length,
+    errorCount: errors.length,
+    warningCount: warnings.length,
+  });
+
   return {
     success: errors.length === 0,
     entityCount: validEntities.length,
     warnings,
     errors,
   };
+}
+
+function createAbortError(): Error {
+  if (typeof DOMException !== "undefined") {
+    return new DOMException("Workspace import cancelled", "AbortError");
+  }
+
+  const error = new Error("Workspace import cancelled");
+  error.name = "AbortError";
+  return error;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    logger.debug("[workspace-import] abort requested");
+    throw createAbortError();
+  }
+}
+
+async function yieldToMainThread(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
+function unzipArchive(
+  buffer: ArrayBuffer,
+  signal?: AbortSignal,
+): Promise<Record<string, Uint8Array>> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let terminate: AsyncTerminable | null = null;
+    const startedAt = performance.now();
+
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      callback();
+    };
+
+    const onAbort = () => {
+      terminate?.();
+      logger.debug("[workspace-import] unzip aborted");
+      finish(() => reject(createAbortError()));
+    };
+
+    if (signal?.aborted) {
+      reject(createAbortError());
+      return;
+    }
+
+    signal?.addEventListener("abort", onAbort, { once: true });
+    terminate = unzip(new Uint8Array(buffer), (err, entries) => {
+      finish(() => {
+        if (err) {
+          logger.debug("[workspace-import] unzip failed", err);
+          reject(err);
+          return;
+        }
+        logger.debug("[workspace-import] unzip complete", {
+          entryCount: Object.keys(entries).length,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        resolve(entries);
+      });
+    });
+  });
 }
 
 /**
@@ -187,6 +339,13 @@ async function deserializeEntity(
   zipEntries: Record<string, Uint8Array>,
   warnings: string[],
 ): Promise<ShaderCanvasEntity> {
+  logger.debug("[workspace-import] deserialize entity start", {
+    entityId: serialized.id,
+    entityName: serialized.name,
+    mediaType: serialized.mediaType,
+    mediaFile: serialized.mediaFile,
+  });
+
   // Validate shaderType (1b) and merge shaderParams with defaults (1c/3d)
   const shaderType = validateShaderType(serialized.shaderType);
   if (shaderType !== serialized.shaderType) {

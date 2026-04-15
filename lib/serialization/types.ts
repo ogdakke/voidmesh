@@ -112,6 +112,27 @@ export interface DeserializeResult {
   errors: { entityId: string; entityName: string; error: string }[];
 }
 
+export type DeserializeStage =
+  | "reading"
+  | "unzipping"
+  | "parsing"
+  | "decoding"
+  | "restoring"
+  | "done";
+
+export interface DeserializeProgress {
+  stage: DeserializeStage;
+  entityIndex?: number;
+  entityCount?: number;
+  entityName?: string;
+  fileSizeBytes?: number;
+}
+
+export interface DeserializeOptions {
+  signal?: AbortSignal;
+  onProgress?: (progress: DeserializeProgress) => void;
+}
+
 // ============================================================================
 // Serialize Worker
 // ============================================================================

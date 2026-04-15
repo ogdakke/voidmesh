@@ -1,7 +1,11 @@
 import { useState } from "react";
 import { useCanvasCommands } from "../context/use-canvas.ts";
 import { toastManager, ToastType } from "#components/ui/toast/toast-manager.ts";
-import type { DeserializeResult } from "#lib/serialization/types.ts";
+import type {
+  DeserializeOptions,
+  DeserializeProgress,
+  DeserializeResult,
+} from "#lib/serialization/types.ts";
 import {
   acquireSaveHandle,
   downloadBlob,
@@ -24,26 +28,124 @@ export type StudioFileStatus = typeof StudioFileStatus.infer;
 
 export async function importStudioWithToasts(
   source: Blob | ArrayBuffer,
-  deserializeCanvas: (source: Blob | ArrayBuffer) => Promise<DeserializeResult>,
+  deserializeCanvas: (
+    source: Blob | ArrayBuffer,
+    options?: DeserializeOptions,
+  ) => Promise<DeserializeResult>,
 ): Promise<DeserializeResult> {
-  return toastManager.promise(deserializeCanvas(source), {
-    loading: { title: "Importing voidmesh workspace..." },
-    success: (r) => {
-      if (r.errors.length > 0) {
-        const total = r.entityCount + r.errors.length;
-        return {
-          title: `Failed to import ${r.errors.length} of ${total} files`,
-          type: ToastType.destructive,
-        };
-      }
-      return { title: "Imported successfully", timeout: 2500 };
-    },
-    error: (err) => ({
-      title: "Import failed",
-      description: err instanceof Error ? err.message : "Unknown error",
-      type: ToastType.destructive,
-    }),
+  const controller = new AbortController();
+  let lastProgress: DeserializeProgress | null = null;
+  const startedAt = performance.now();
+  logger.debug("[workspace-import] ui import requested", {
+    fileSizeBytes: source instanceof Blob ? source.size : source.byteLength,
+    sourceType: source instanceof Blob ? "blob" : "array-buffer",
   });
+
+  const toastId = toastManager.add({
+    title: "Importing voidmesh workspace",
+    description: "Preparing",
+    timeout: 0,
+    actionProps: {
+      children: "Cancel",
+      onClick: () => controller.abort(),
+    },
+  });
+
+  const updateToast = (updates: {
+    title?: string;
+    description?: string;
+    timeout?: number;
+    type?: (typeof ToastType)[keyof typeof ToastType];
+    showAction?: boolean;
+  }) => {
+    toastManager.update(toastId, {
+      ...updates,
+      actionProps: updates.showAction
+        ? {
+            children: "Cancel",
+            onClick: () => controller.abort(),
+          }
+        : {
+            children: null,
+          },
+    });
+  };
+
+  try {
+    const result = await deserializeCanvas(source, {
+      signal: controller.signal,
+      onProgress: (progress) => {
+        lastProgress = progress;
+        logger.debug("[workspace-import] ui progress", progress);
+        updateToast({
+          description: formatImportProgress(progress),
+          showAction: progress.stage !== "done",
+        });
+      },
+    });
+
+    if (result.errors.length > 0) {
+      const total = result.entityCount + result.errors.length;
+      updateToast({
+        title:
+          result.entityCount > 0
+            ? `Failed to import ${result.errors.length} of ${total} files`
+            : "Import failed",
+        description: result.errors[0]?.error ?? "Some items could not be restored",
+        timeout: 5000,
+        type: ToastType.destructive,
+        showAction: false,
+      });
+      logger.debug("[workspace-import] ui import completed with entity errors", {
+        durationMs: Math.round(performance.now() - startedAt),
+        entityCount: result.entityCount,
+        errorCount: result.errors.length,
+        firstError: result.errors[0]?.error,
+      });
+      return result;
+    }
+
+    updateToast({
+      title: "Imported successfully",
+      description: result.warnings[0] ?? undefined,
+      timeout: 2500,
+      showAction: false,
+    });
+    logger.debug("[workspace-import] ui import succeeded", {
+      durationMs: Math.round(performance.now() - startedAt),
+      entityCount: result.entityCount,
+      warningCount: result.warnings.length,
+    });
+    return result;
+  } catch (err) {
+    if (isAbortError(err)) {
+      updateToast({
+        title: "Import cancelled",
+        description: lastProgress ? formatImportProgress(lastProgress) : undefined,
+        timeout: 2500,
+        showAction: false,
+      });
+      logger.debug("[workspace-import] ui import cancelled", {
+        durationMs: Math.round(performance.now() - startedAt),
+        lastProgress,
+      });
+      throw err;
+    }
+
+    updateToast({
+      title: "Import failed",
+      description: formatImportError(err, lastProgress),
+      timeout: 5000,
+      type: ToastType.destructive,
+      showAction: false,
+    });
+    logger.debug("[workspace-import] ui import failed", {
+      durationMs: Math.round(performance.now() - startedAt),
+      lastProgress,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
 }
 
 async function serializeAndSave(
@@ -220,8 +322,11 @@ export function useStudioFile() {
           const result = await importStudioWithToasts(file, deserializeCanvas);
           if (result.success) onSuccess?.();
         } catch (err) {
-          logger.error("[importStudioFile] Import failed:", err);
+          if (!isAbortError(err)) {
+            logger.error("[importStudioFile] Import failed:", err);
+          }
         } finally {
+          logger.debug("[workspace-import] picker import finished");
           setStatus(StudioFileStatus.idle);
         }
       })
@@ -239,4 +344,34 @@ export function useStudioFile() {
     isExporting: status === StudioFileStatus.saving,
     isImporting: status === StudioFileStatus.opening,
   };
+}
+
+function formatImportProgress(progress: DeserializeProgress): string {
+  switch (progress.stage) {
+    case "reading":
+      return "Reading workspace file";
+    case "unzipping":
+      return "Unpacking workspace archive";
+    case "parsing":
+      return "Reading workspace manifest";
+    case "decoding":
+      if (progress.entityCount && progress.entityIndex) {
+        return `Importing item ${progress.entityIndex} of ${progress.entityCount}`;
+      }
+      return "Importing workspace media";
+    case "restoring":
+      return "Importing workspace into canvas";
+    case "done":
+      return "Imported successfully";
+  }
+}
+
+function formatImportError(err: unknown, progress: DeserializeProgress | null): string {
+  const message = err instanceof Error ? err.message : "Unknown error";
+  if (!progress) return message;
+  return `${formatImportProgress(progress)} ${message}`;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
