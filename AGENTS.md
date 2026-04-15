@@ -42,6 +42,17 @@ React 19 + Compiler, rolldown-vite 7, WebGPU, TypeScript (strict), Bun, oxlint +
 bun run lint:all    # oxlint with type-checking. Always run after changes.
 ```
 
+## Testing
+
+```bash
+# Never use `bun test` in this repo. Use Vitest via the project scripts.
+# Prefer running whole test suite
+bun run test
+# if working on specific area, run a set of tests as follows
+bun run test -- __tests__/engine/action-layer-controller.spec.ts
+# Add `-t "test name"` to target a single test, or use `bun run test:watch -- <path>` while iterating.
+```
+
 ## Key Patterns
 
 1. **Enum pattern**: Use `createEnum()` from `types/index.ts`, not TypeScript `enum`. Produces both value object and type via `.infer`. Example: `ShaderType.dithering` (value), `ShaderType` (type).

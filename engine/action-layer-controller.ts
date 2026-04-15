@@ -96,6 +96,7 @@ export class ActionLayerController {
     this.#blurTarget = 1;
     this.#blurStartTime = performance.now();
 
+    canvasStore.setContainerDirty();
     this.#registerAnimation();
   }
 
@@ -113,6 +114,13 @@ export class ActionLayerController {
     if (rawDist <= deadzone) {
       this.#targetOffsetX = 0;
       this.#targetOffsetY = 0;
+      if (
+        !this.#handle?.isActive &&
+        (Math.abs(this.#currentOffsetX) > 0.05 || Math.abs(this.#currentOffsetY) > 0.05)
+      ) {
+        this.#registerAnimation();
+      }
+      canvasStore.setContainerDirty();
       return;
     }
 
@@ -129,6 +137,7 @@ export class ActionLayerController {
 
     this.#targetOffsetX = rubberBand(dx, entityRubberBandMax);
     this.#targetOffsetY = rubberBand(dy, entityRubberBandMax);
+    canvasStore.setContainerDirty();
   }
 
   /**
@@ -145,6 +154,10 @@ export class ActionLayerController {
     this.#blurTarget = newTarget;
     this.#blurStartValue = this.#blurIntensity;
     this.#blurStartTime = performance.now();
+    if (!this.#handle?.isActive && Math.abs(this.#blurIntensity - newTarget) > 0.001) {
+      this.#registerAnimation();
+    }
+    canvasStore.setContainerDirty();
   }
 
   /** Get entity offset from rubber-banding (screen-space CSS pixels). */
@@ -206,6 +219,7 @@ export class ActionLayerController {
     if (!this.#handle?.isActive) {
       this.#registerAnimation();
     }
+    canvasStore.setContainerDirty();
   }
 
   /** Dismiss the action layer. Spring entity back to origin, fade blur. */
@@ -234,6 +248,7 @@ export class ActionLayerController {
     if (!this.#handle?.isActive) {
       this.#registerAnimation();
     }
+    canvasStore.setContainerDirty();
   }
 
   /** Immediately reset to idle. */
@@ -253,6 +268,7 @@ export class ActionLayerController {
     this.#entityIds = new Set();
     this.#dismissSpringX.reset();
     this.#dismissSpringY.reset();
+    canvasStore.setContainerDirty();
   }
 
   #registerAnimation(): void {
@@ -261,6 +277,7 @@ export class ActionLayerController {
       tag: "action-layer",
       tick: (now) => {
         if (this.#phase === ActionLayerPhase.idle) return false;
+        let visualChanged = false;
 
         // Animate blur intensity toward target
         if (this.#blurIntensity !== this.#blurTarget) {
@@ -275,6 +292,7 @@ export class ActionLayerController {
           if (t >= 1) {
             this.#blurIntensity = this.#blurTarget;
           }
+          visualChanged = true;
         }
 
         // Active phase: exact analytical damped harmonic oscillator
@@ -307,6 +325,7 @@ export class ActionLayerController {
               decay *
               ((bY * this.#omegaD - aY * this.#zetaOmega) * cosD -
                 (aY * this.#omegaD + bY * this.#zetaOmega) * sinD);
+            visualChanged = true;
           }
 
           // Spring settled: no meaningful motion — let scheduler remove us.
@@ -345,6 +364,7 @@ export class ActionLayerController {
           } else {
             this.#currentOffsetY = 0;
           }
+          visualChanged = true;
 
           // If all animations settled, return to idle
           if (valX === null && valY === null && this.#blurIntensity === this.#blurTarget) {
@@ -356,6 +376,9 @@ export class ActionLayerController {
           }
         }
 
+        if (visualChanged) {
+          canvasStore.setContainerDirty();
+        }
         return true;
       },
     });

@@ -88,6 +88,7 @@ class EntityDragVisualController {
     }, timeout);
     // Phase stays idle until timer fires — no visual change during delay
     this.#phase = DragVisualPhase.idle;
+    canvasStore.setContainerDirty();
   }
 
   /**
@@ -106,6 +107,7 @@ class EntityDragVisualController {
     // Pop-back: animate from current scale to 1.0
     this.#targetScale = 1;
     this.#phase = DragVisualPhase.dragging;
+    canvasStore.setContainerDirty();
     this.#registerAnimation(config.touch.dragVisual.popBackSpring);
   }
 
@@ -175,6 +177,7 @@ class EntityDragVisualController {
       settleThreshold: EntityDragVisualController.#SETTLE_THRESHOLD,
       onUpdate: (value) => {
         this.#currentScale = Math.max(0.8, Math.min(value, 1.05));
+        canvasStore.setContainerDirty();
       },
       onComplete: () => {
         this.#currentScale = targetScale;
