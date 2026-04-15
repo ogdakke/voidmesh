@@ -36,7 +36,7 @@ class EntityDragVisualController {
   #entityIds = new Set<string>();
 
   static readonly #SPRING_DAMPING = 0.9;
-  static readonly #SETTLE_THRESHOLD = 0.001;
+  static readonly #SETTLE_THRESHOLD = 0.0001;
 
   constructor(scheduler: AnimationScheduler) {
     this.#scheduler = scheduler;

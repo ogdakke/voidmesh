@@ -8,11 +8,13 @@ import type { Point } from "#types/canvas.ts";
  * not just per-frame deltas.
  */
 export class DampedSpring {
+  static readonly DEFAULT_THRESHOLD = 0.0001;
+
   #offset = 0;
   #velocity = 0;
   #zetaOmega = 0;
   #omegaD = 0;
-  #threshold = 0.01;
+  #threshold = DampedSpring.DEFAULT_THRESHOLD;
 
   /** Whether the spring has meaningful motion (below sleep threshold = settled) */
   get active(): boolean {
@@ -37,7 +39,7 @@ export class DampedSpring {
     velocity: number,
     response: number,
     damping: number,
-    threshold = 0.01,
+    threshold = DampedSpring.DEFAULT_THRESHOLD,
   ): void {
     this.#threshold = threshold;
     const omega = (2 * Math.PI) / response;

@@ -35,7 +35,7 @@ export interface SpringConfig {
   response: number;
   /** Damping ratio (0–1, where 1 = critical damping). Must be < 1. */
   damping: number;
-  /** Sleep threshold: spring settles when offset+velocity drop below this (default 0.01) */
+  /** Sleep threshold in value units. Scalar springs default tighter than 2D motion springs. */
   settleThreshold?: number;
   tag?: string;
   onUpdate: (value: number) => void;
