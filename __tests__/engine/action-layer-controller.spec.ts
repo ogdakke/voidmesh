@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import { ActionLayerController } from "../../engine/action-layer-controller.ts";
+import { canvasStore } from "../../engine/canvas-store.ts";
 import { config } from "#config";
 import { TestClock } from "../helpers/test-clock.ts";
 
@@ -8,6 +9,7 @@ describe("ActionLayerController", () => {
   let controller: ActionLayerController;
 
   beforeEach(() => {
+    canvasStore.reset();
     clock = new TestClock();
     controller = new ActionLayerController(clock.scheduler);
   });
@@ -76,6 +78,30 @@ describe("ActionLayerController", () => {
 
     // BUG: without fix, offset stays at 0 because no animation is running
     expect(Math.abs(controller.getEntityOffset().x)).toBeGreaterThan(1);
+  });
+
+  test("returning inside deadzone after settling springs back to origin", () => {
+    controller.activate({ x: 200, y: 200 });
+
+    controller.updateFingerPosition({ x: 400, y: 200 });
+    clock.advanceUntilSettled();
+    expect(Math.abs(controller.getEntityOffset().x)).toBeGreaterThan(1);
+
+    controller.updateFingerPosition({ x: 200 + config.actionLayer.deadzone - 1, y: 200 });
+    clock.advanceUntilSettled();
+
+    expect(Math.abs(controller.getEntityOffset().x)).toBeLessThan(0.5);
+  });
+
+  test("active animation marks render state dirty while values are changing", () => {
+    controller.activate({ x: 200, y: 200 });
+    canvasStore.clearDirtyFlags();
+
+    clock.advanceBy(16);
+    canvasStore.clearDirtyFlags();
+    clock.advanceBy(16);
+
+    expect(canvasStore.getRenderState().dirty).toBe(true);
   });
 
   // ── Core behavior tests ─────────────────────────────────────────────────
