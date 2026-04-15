@@ -224,7 +224,6 @@ export class InfiniteCanvasRenderer {
   } | null = null;
   // Blur result caching: skip re-running Kawase when content hasn't changed
   #actionLayerBlurCacheValid = false;
-  #actionLayerLastBlurIntensity = -1;
   #actionLayerBlitBindGroupCached: GPUBindGroup | null = null;
 
   // Copy pass for showOriginal (rgba8unorm source → rgba16float output)
@@ -1890,10 +1889,7 @@ export class InfiniteCanvasRenderer {
       if (blurTextures) {
         // Only re-run the expensive Kawase blur pipeline when content has actually changed
         const blurNeedsUpdate =
-          !this.#actionLayerBlurCacheValid ||
-          Math.abs(blurIntensity - this.#actionLayerLastBlurIntensity) > 0.001 ||
-          state.dirty ||
-          hasAnimatingContent;
+          !this.#actionLayerBlurCacheValid || state.dirty || hasAnimatingContent;
 
         if (blurNeedsUpdate) {
           // Copy swapchain → input texture
@@ -1913,7 +1909,6 @@ export class InfiniteCanvasRenderer {
           );
 
           this.#actionLayerBlurCacheValid = true;
-          this.#actionLayerLastBlurIntensity = blurIntensity;
         }
 
         // Always update uniforms (intensity may change during fade animation)
@@ -1957,7 +1952,6 @@ export class InfiniteCanvasRenderer {
     // Reset blur cache when action layer blur is no longer rendering
     if (blurIntensity <= 0.01) {
       this.#actionLayerBlurCacheValid = false;
-      this.#actionLayerLastBlurIntensity = -1;
     }
 
     // Always render action layer entities on top (sharp, after blur or normally)
