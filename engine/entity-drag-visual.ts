@@ -1,4 +1,3 @@
-import { SpringBack } from "../lib/touch-scroll/spring-back.ts";
 import { config } from "../lib/config/index.ts";
 import { canvasStore } from "./canvas-store.ts";
 import {
@@ -29,14 +28,15 @@ const enum DragVisualPhase {
 class EntityDragVisualController {
   #scheduler: AnimationScheduler;
   #phase = DragVisualPhase.idle as DragVisualPhase;
-  #spring = new SpringBack();
-  #springStartTime = 0;
   #currentScale = 1;
   #targetScale = 1;
   #possibleDragTimerId: ReturnType<typeof setTimeout> | null = null;
   #handle: AnimationHandle | null = null;
   /** Entity IDs with active visual (single entity during possibleDrag, full selection during drag) */
   #entityIds = new Set<string>();
+
+  static readonly #SPRING_DAMPING = 0.9;
+  static readonly #SETTLE_THRESHOLD = 0.0001;
 
   constructor(scheduler: AnimationScheduler) {
     this.#scheduler = scheduler;
@@ -68,7 +68,6 @@ class EntityDragVisualController {
     // Reset any in-progress animation
     this.#clearTimer();
     this.#cancelAnimation();
-    this.#spring.reset();
     this.#currentScale = 1;
     this.#targetScale = 1;
     this.#entityIds.clear();
@@ -104,16 +103,10 @@ class EntityDragVisualController {
       this.#entityIds.add(id);
     }
 
-    // Get current spring velocity if mid-animation
-    const currentVelocity = this.#getSpringVelocity();
-
     // Pop-back: animate from current scale to 1.0
     this.#targetScale = 1;
-    const distance = this.#currentScale - 1;
-    this.#spring.absorb(currentVelocity, distance, config.touch.dragVisual.popBackSpring);
-    this.#springStartTime = performance.now();
     this.#phase = DragVisualPhase.dragging;
-    this.#registerAnimation();
+    this.#registerAnimation(config.touch.dragVisual.popBackSpring);
   }
 
   /**
@@ -125,16 +118,14 @@ class EntityDragVisualController {
 
     if (this.#phase === DragVisualPhase.idle) return;
 
-    const currentVelocity = this.#getSpringVelocity();
     const distance = this.#currentScale - 1;
 
     // Already at 1.0 and no velocity — skip animation
-    if (Math.abs(distance) < 0.001 && Math.abs(currentVelocity) < 0.001) {
+    if (Math.abs(distance) < EntityDragVisualController.#SETTLE_THRESHOLD) {
       this.#phase = DragVisualPhase.idle;
       this.#currentScale = 1;
       this.#targetScale = 1;
       this.#entityIds.clear();
-      this.#spring.reset();
       this.#cancelAnimation();
       // Force a render frame so the label can clean up its drag mode class
       canvasStore.setContainerDirty();
@@ -142,10 +133,8 @@ class EntityDragVisualController {
     }
 
     this.#targetScale = 1;
-    this.#spring.absorb(currentVelocity, distance, config.touch.dragVisual.releaseSpring);
-    this.#springStartTime = performance.now();
     this.#phase = DragVisualPhase.releasing;
-    this.#registerAnimation();
+    this.#registerAnimation(config.touch.dragVisual.releaseSpring);
   }
 
   /** Immediately reset to idle. Called when gesture is cancelled (pan, multi-touch, etc.). */
@@ -156,7 +145,6 @@ class EntityDragVisualController {
     this.#currentScale = 1;
     this.#targetScale = 1;
     this.#entityIds.clear();
-    this.#spring.reset();
     this.#cancelAnimation();
     // Force a render frame so entities return to normal scale and label cleans up
     if (wasActive) {
@@ -171,40 +159,31 @@ class EntityDragVisualController {
 
     // Animate from 1.0 down to scaleDown target
     this.#targetScale = scaleDown;
-    const distance = 1 - scaleDown; // positive distance from target
-    this.#spring.absorb(0, distance, scaleDownSpring);
-    this.#springStartTime = performance.now();
     this.#phase = DragVisualPhase.possibleDrag;
-    this.#registerAnimation();
+    this.#registerAnimation(scaleDownSpring);
   }
 
-  #registerAnimation(): void {
+  #registerAnimation(response: number): void {
     this.#cancelAnimation();
-    this.#handle = this.#scheduler.custom({
+    const targetScale = this.#targetScale;
+    this.#handle = this.#scheduler.spring({
       tag: "drag-visual",
-      tick: (now) => {
-        if (this.#phase === DragVisualPhase.idle) return false;
-
-        const elapsed = now - this.#springStartTime;
-        const springValue = this.#spring.value(elapsed);
-
-        if (springValue === null) {
-          // Spring settled
-          this.#currentScale = this.#targetScale;
-          if (this.#phase === DragVisualPhase.releasing) {
-            this.#phase = DragVisualPhase.idle;
-            this.#entityIds.clear();
-            canvasStore.setContainerDirty();
-            return false;
-          }
-          // possibleDrag or dragging phase — spring settled but phase continues
-          return false;
+      from: this.#currentScale,
+      to: targetScale,
+      response,
+      damping: EntityDragVisualController.#SPRING_DAMPING,
+      settleThreshold: EntityDragVisualController.#SETTLE_THRESHOLD,
+      onUpdate: (value) => {
+        this.#currentScale = Math.max(0.8, Math.min(value, 1.05));
+      },
+      onComplete: () => {
+        this.#currentScale = targetScale;
+        this.#handle = null;
+        if (this.#phase === DragVisualPhase.releasing) {
+          this.#phase = DragVisualPhase.idle;
+          this.#entityIds.clear();
+          canvasStore.setContainerDirty();
         }
-
-        // Clamp scale to prevent extreme overshoot from spring dynamics
-        const rawScale = this.#targetScale + springValue.offset;
-        this.#currentScale = Math.max(0.8, Math.min(rawScale, 1.05));
-        return true;
       },
     });
   }
@@ -212,15 +191,6 @@ class EntityDragVisualController {
   #cancelAnimation(): void {
     this.#handle?.cancel();
     this.#handle = null;
-  }
-
-  /** Get current spring velocity in units/ms (matching SpringBack.absorb's expected input). */
-  #getSpringVelocity(): number {
-    if (this.#phase === DragVisualPhase.idle) return 0;
-    const elapsed = performance.now() - this.#springStartTime;
-    const value = this.#spring.value(elapsed);
-    // spring.value() returns velocity in units/second, absorb() expects units/ms
-    return value ? value.velocity / 1000 : 0;
   }
 
   #clearTimer(): void {

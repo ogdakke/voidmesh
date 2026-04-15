@@ -11,7 +11,6 @@ Canvas state management and input processing. This is the "model + controller" l
 - `disintegration-controller.ts` — Timing + spatial data for entity delete animations. GPU resources live in renderer. Singleton.
 - `viewport-animation.ts` — Eased viewport transitions (zoom-to-fit, pan-to-entity).
 - `entity-drag-visual.ts` — Canvas2D overlays for entity drag feedback.
-- `entity-label.ts` — Canvas2D text labels for entities.
 - `perf-overlay.ts` — FPS/frame-time metrics overlay.
 - `index.ts` — Barrel export. This is the ONLY barrel file consumers should use (`#engine`).
 

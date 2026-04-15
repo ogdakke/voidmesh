@@ -38,6 +38,7 @@ import { HalftoneShader } from "./shaders/halftone-shader.ts";
 import { MeltShader } from "./shaders/melt-shader.ts";
 import type { ShaderContext } from "./shaders/shader-pass.ts";
 import { ShaderRegistry } from "./shaders/shader-registry.ts";
+import { EntityLabelPass } from "./entity-label-pass.ts";
 import { TexturePool } from "./texture-pool.ts";
 import { resolveWlurOverlayRuntimeConfig, type WlurOverlayConfig } from "./wlur-overlay.ts";
 import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
@@ -60,6 +61,14 @@ interface GpuTimestampSlot {
   resolveBuffer: GPUBuffer;
   readBuffer: GPUBuffer;
   pending: boolean;
+}
+
+interface CompositionDrawItem {
+  bindGroup: GPUBindGroup;
+  entity: ShaderCanvasEntity;
+  isSelected: boolean;
+  offsetX: number;
+  offsetY: number;
 }
 
 const GPU_TIMESTAMP_QUERY_CAPACITY = 14;
@@ -166,6 +175,9 @@ export class InfiniteCanvasRenderer {
   // Disintegration particle system (GPU compute + instanced rendering)
   #particleSystem: DisintegrationParticleSystem | null = null;
 
+  // Entity label pass (Canvas 2D rasterized → GPU textured quad)
+  #entityLabelPass: EntityLabelPass | null = null;
+
   // Disintegration overlays — GPU resources for fire-and-forget dust animations
   #disintegrationOverlays: Map<
     string,
@@ -212,7 +224,6 @@ export class InfiniteCanvasRenderer {
   } | null = null;
   // Blur result caching: skip re-running Kawase when content hasn't changed
   #actionLayerBlurCacheValid = false;
-  #actionLayerLastBlurIntensity = -1;
   #actionLayerBlitBindGroupCached: GPUBindGroup | null = null;
 
   // Copy pass for showOriginal (rgba8unorm source → rgba16float output)
@@ -420,6 +431,14 @@ export class InfiniteCanvasRenderer {
     // Initialize disintegration particle system
     this.#particleSystem = new DisintegrationParticleSystem(this.#device);
     await this.#particleSystem.initialize(this.#canvasFormat, this.#viewportUniformBuffer!);
+
+    // Initialize entity label pass
+    this.#entityLabelPass = new EntityLabelPass(
+      this.#device,
+      this.#canvasFormat,
+      this.#viewportUniformBuffer!,
+    );
+    this.#entityLabelPass.initialize();
 
     // Set up ResizeObserver to cache canvas dimensions (avoids getBoundingClientRect in render loop)
     this.#resizeObserver = new ResizeObserver((entries) => {
@@ -1332,6 +1351,22 @@ export class InfiniteCanvasRenderer {
     this.#entityFloatView[11] = 0;
   }
 
+  #drawCompositionItems(
+    pass: GPURenderPassEncoder,
+    items: readonly CompositionDrawItem[],
+    selectedEntityCount: number,
+  ): void {
+    for (const item of items) {
+      pass.setPipeline(this.#compositionPipeline!);
+      pass.setBindGroup(0, item.bindGroup);
+      pass.draw(6);
+
+      if (item.isSelected && selectedEntityCount === 1 && this.#entityLabelPass) {
+        this.#entityLabelPass.drawLabel(pass, item.entity, item.offsetX, item.offsetY);
+      }
+    }
+  }
+
   #renderDisintegrationOverlays(
     encoder: GPUCommandEncoder,
     targetView: GPUTextureView,
@@ -1626,8 +1661,8 @@ export class InfiniteCanvasRenderer {
 
     // Pre-process entities: render to textures and prepare bind groups
     // Uses caching to avoid per-frame allocations
-    const entityBindGroups: GPUBindGroup[] = [];
-    const actionLayerBindGroups: GPUBindGroup[] = [];
+    const entityDrawItems: CompositionDrawItem[] = [];
+    const actionLayerDrawItems: CompositionDrawItem[] = [];
     let hasAnimatingContent = false;
     markPhaseStart("entity-prep");
 
@@ -1750,10 +1785,24 @@ export class InfiniteCanvasRenderer {
       }
 
       // Action layer entities are drawn AFTER blur (not in main pass) to avoid halo
-      if (actionLayerControllerActive && actionLayerController.hasEntity(entity.id)) {
-        actionLayerBindGroups.push(bindGroup);
+      const isActionLayerEntity =
+        actionLayerControllerActive && actionLayerController.hasEntity(entity.id);
+      if (isActionLayerEntity) {
+        actionLayerDrawItems.push({
+          bindGroup,
+          entity,
+          isSelected,
+          offsetX: actionLayerOffsetX,
+          offsetY: actionLayerOffsetY,
+        });
       } else {
-        entityBindGroups.push(bindGroup);
+        entityDrawItems.push({
+          bindGroup,
+          entity,
+          isSelected,
+          offsetX: 0,
+          offsetY: 0,
+        });
       }
     }
     markPhaseEnd("entity-prep");
@@ -1794,26 +1843,30 @@ export class InfiniteCanvasRenderer {
     this.#writeGpuTimestampMarker(encoder, gpuCapture, "grid-pass", "end");
     markPhaseEnd("grid-pass");
 
-    // Pass 2: Render all entities (batched into same encoder)
+    // Pass 2: Render all entities with interleaved labels (z-ordered)
     markPhaseStart("entity-pass");
     this.#writeGpuTimestampMarker(encoder, gpuCapture, "entity-pass", "start");
-    for (const bindGroup of entityBindGroups) {
-      const entityPass = encoder.beginRenderPass({
-        label: "Entity composition pass",
-        colorAttachments: [
-          {
-            view: targetView,
-            loadOp: "load", // Preserve previous content
-            storeOp: "store",
-          },
-        ],
-      });
 
-      entityPass.setPipeline(this.#compositionPipeline);
-      entityPass.setBindGroup(0, bindGroup);
-      entityPass.draw(6); // 2 triangles = 6 vertices
-      entityPass.end();
-    }
+    // Update label animation state once per frame
+    this.#entityLabelPass?.beginFrame(viewport, width, height);
+    const selectedEntityCount = selectedEntityIds.size;
+    const entityPass = encoder.beginRenderPass({
+      label: "Entity composition pass",
+      colorAttachments: [
+        {
+          view: targetView,
+          loadOp: "load",
+          storeOp: "store",
+        },
+      ],
+    });
+    this.#drawCompositionItems(entityPass, entityDrawItems, selectedEntityCount);
+    entityPass.end();
+
+    // Evict label caches for deselected entities
+    this.#entityLabelPass?.endFrame(selectedEntityIds);
+    if (this.#entityLabelPass?.isAnimating) hasAnimatingContent = true;
+
     this.#writeGpuTimestampMarker(encoder, gpuCapture, "entity-pass", "end");
     markPhaseEnd("entity-pass");
 
@@ -1836,10 +1889,7 @@ export class InfiniteCanvasRenderer {
       if (blurTextures) {
         // Only re-run the expensive Kawase blur pipeline when content has actually changed
         const blurNeedsUpdate =
-          !this.#actionLayerBlurCacheValid ||
-          Math.abs(blurIntensity - this.#actionLayerLastBlurIntensity) > 0.001 ||
-          state.dirty ||
-          hasAnimatingContent;
+          !this.#actionLayerBlurCacheValid || state.dirty || hasAnimatingContent;
 
         if (blurNeedsUpdate) {
           // Copy swapchain → input texture
@@ -1859,7 +1909,6 @@ export class InfiniteCanvasRenderer {
           );
 
           this.#actionLayerBlurCacheValid = true;
-          this.#actionLayerLastBlurIntensity = blurIntensity;
         }
 
         // Always update uniforms (intensity may change during fade animation)
@@ -1903,13 +1952,12 @@ export class InfiniteCanvasRenderer {
     // Reset blur cache when action layer blur is no longer rendering
     if (blurIntensity <= 0.01) {
       this.#actionLayerBlurCacheValid = false;
-      this.#actionLayerLastBlurIntensity = -1;
     }
 
     // Always render action layer entities on top (sharp, after blur or normally)
     markPhaseStart("action-layer-sharp");
     this.#writeGpuTimestampMarker(encoder, gpuCapture, "action-layer-sharp", "start");
-    for (const bindGroup of actionLayerBindGroups) {
+    if (actionLayerDrawItems.length > 0) {
       const sharpPass = encoder.beginRenderPass({
         label: "Action layer sharp entity pass",
         colorAttachments: [
@@ -1920,9 +1968,7 @@ export class InfiniteCanvasRenderer {
           },
         ],
       });
-      sharpPass.setPipeline(this.#compositionPipeline);
-      sharpPass.setBindGroup(0, bindGroup);
-      sharpPass.draw(6);
+      this.#drawCompositionItems(sharpPass, actionLayerDrawItems, selectedEntityCount);
       sharpPass.end();
     }
     this.#writeGpuTimestampMarker(encoder, gpuCapture, "action-layer-sharp", "end");
@@ -2075,7 +2121,7 @@ export class InfiniteCanvasRenderer {
     // Record frame stats for performance overlay
     this.#lastRenderTime = performance.now() - renderStart;
     this.#lastEntityCount = entities.length;
-    this.#lastRenderedCount = entityBindGroups.length;
+    this.#lastRenderedCount = entityDrawItems.length;
 
     // Advance texture pool frame counter and cleanup stale textures
     this.#texturePool?.nextFrame();
@@ -2353,6 +2399,10 @@ export class InfiniteCanvasRenderer {
     this.#disintegrationOverlays.clear();
     this.#particleSystem?.destroy();
     this.#particleSystem = null;
+
+    // Destroy entity label pass
+    this.#entityLabelPass?.destroy();
+    this.#entityLabelPass = null;
 
     // Destroy processing pipeline
     this.#processingPipeline?.destroy();

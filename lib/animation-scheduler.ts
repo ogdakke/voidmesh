@@ -1,5 +1,5 @@
 import type { Point } from "#types/canvas.ts";
-import { DampedSpring2D } from "./touch-scroll/damped-spring.ts";
+import { DampedSpring, DampedSpring2D } from "./touch-scroll/damped-spring.ts";
 
 export type EasingFunction = (t: number) => number;
 
@@ -22,6 +22,30 @@ export interface TweenConfig {
 
 // ── Spring2D ───────────────────────────────────────────────────────────────
 
+/**
+ * Use `spring()` for animating a single scalar value toward a target.
+ * The scheduler owns the spring state and calls `onUpdate(value)` with the absolute value.
+ */
+export interface SpringConfig {
+  from: number;
+  to: number;
+  /** Initial velocity in units per second. */
+  velocity?: number;
+  /** Spring response time in seconds (lower = faster) */
+  response: number;
+  /** Damping ratio (0–1, where 1 = critical damping). Must be < 1. */
+  damping: number;
+  /** Sleep threshold in value units. Scalar springs default tighter than 2D motion springs. */
+  settleThreshold?: number;
+  tag?: string;
+  onUpdate: (value: number) => void;
+  onComplete?: () => void;
+}
+
+/**
+ * Use `spring2D()` for motion that applies per-frame x/y deltas.
+ * The scheduler owns the spring state and calls `onUpdate(dx, dy)` with the delta to apply this frame.
+ */
 export interface Spring2DConfig {
   offset: Point;
   velocity: Point;
@@ -74,6 +98,18 @@ interface Spring2DAnimation {
   cancelled: boolean;
 }
 
+interface SpringAnimation {
+  type: "spring";
+  id: number;
+  tag: string | undefined;
+  spring: DampedSpring;
+  target: number;
+  lastTime: number | null;
+  onUpdate: (value: number) => void;
+  onComplete: (() => void) | undefined;
+  cancelled: boolean;
+}
+
 interface CustomAnimation {
   type: "custom";
   id: number;
@@ -83,7 +119,7 @@ interface CustomAnimation {
   cancelled: boolean;
 }
 
-type Animation = TweenAnimation | Spring2DAnimation | CustomAnimation;
+type Animation = TweenAnimation | Spring2DAnimation | SpringAnimation | CustomAnimation;
 
 // ── Scheduler ──────────────────────────────────────────────────────────────
 
@@ -109,6 +145,31 @@ export class AnimationScheduler {
       from: config.from,
       to: config.to,
       easing: config.easing ?? linear,
+      onUpdate: config.onUpdate,
+      onComplete: config.onComplete,
+      cancelled: false,
+    };
+    this.#animations.set(id, anim);
+    return this.#makeHandle(id, anim);
+  }
+
+  spring(config: SpringConfig): AnimationHandle {
+    const id = this.#nextId++;
+    const spring = new DampedSpring();
+    spring.start(
+      config.from - config.to,
+      config.velocity ?? 0,
+      config.response,
+      config.damping,
+      config.settleThreshold,
+    );
+    const anim: SpringAnimation = {
+      type: "spring",
+      id,
+      tag: config.tag,
+      spring,
+      target: config.to,
+      lastTime: null,
       onUpdate: config.onUpdate,
       onComplete: config.onComplete,
       cancelled: false,
@@ -184,8 +245,10 @@ export class AnimationScheduler {
 
       if (anim.type === "tween") {
         done = this.#tickTween(anim, now);
-      } else if (anim.type === "spring2d") {
+      } else if (anim.type === "spring") {
         done = this.#tickSpring(anim, now);
+      } else if (anim.type === "spring2d") {
+        done = this.#tickSpring2D(anim, now);
       } else {
         done = !anim.tick(now);
       }
@@ -219,7 +282,28 @@ export class AnimationScheduler {
     return false;
   }
 
-  #tickSpring(anim: Spring2DAnimation, now: number): boolean {
+  #tickSpring(anim: SpringAnimation, now: number): boolean {
+    if (anim.lastTime === null) {
+      anim.lastTime = now;
+      anim.onUpdate(anim.target + anim.spring.offset);
+      return false;
+    }
+
+    const dt = (now - anim.lastTime) / 1000;
+    anim.lastTime = now;
+
+    const spring = anim.spring;
+    spring.step(dt);
+    anim.onUpdate(anim.target + spring.offset);
+
+    if (spring.active) return false;
+
+    spring.flush();
+    anim.onUpdate(anim.target);
+    return true;
+  }
+
+  #tickSpring2D(anim: Spring2DAnimation, now: number): boolean {
     if (anim.lastTime === null) {
       anim.lastTime = now;
       return false;

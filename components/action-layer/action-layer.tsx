@@ -11,6 +11,7 @@ import {
 import { createPortal } from "react-dom";
 import { config } from "#config";
 import { analytics } from "#lib/analytics.ts";
+import { getCssVarPx } from "#lib/css.ts";
 import { actionLayerController } from "#engine";
 import { useActionLayer } from "#hooks/use-action-layer.ts";
 import "./action-layer.css";
@@ -82,13 +83,6 @@ function computeRingPositions(
   return positions;
 }
 
-/** Read a CSS env() value as a number (px). Returns 0 if unsupported. */
-function getEnvPx(envVar: string): number {
-  const el = document.documentElement;
-  const value = getComputedStyle(el).getPropertyValue(envVar);
-  return parseFloat(value) || 0;
-}
-
 /**
  * Compute the optimal arc base angle so all buttons stay within the safe area.
  * Returns -π/2 (upward) when buttons fit. Otherwise, binary-searches for the
@@ -99,10 +93,10 @@ function computeArcAngle(cx: number, cy: number, count: number, radius: number):
   const { edgeInset, buttonSize } = config.actionLayer;
   const pad = buttonSize / 2 + edgeInset;
 
-  const safeTop = getEnvPx("--safe-area-top");
-  const safeBottom = getEnvPx("--safe-area-bottom");
-  const safeLeft = getEnvPx("--safe-area-left");
-  const safeRight = getEnvPx("--safe-area-right");
+  const safeTop = getCssVarPx("--safe-area-top");
+  const safeBottom = getCssVarPx("--safe-area-bottom");
+  const safeLeft = getCssVarPx("--safe-area-left");
+  const safeRight = getCssVarPx("--safe-area-right");
 
   const minX = pad + safeLeft;
   const maxX = window.innerWidth - pad - safeRight;
