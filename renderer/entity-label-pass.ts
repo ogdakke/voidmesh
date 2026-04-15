@@ -99,6 +99,7 @@ interface LabelCacheEntry {
   warning: boolean;
   dragProgress: number;
   dpr: number;
+  isMobile: boolean;
 }
 
 // ── EntityLabelPass ──────────────────────────────────────────────────────────
@@ -131,10 +132,6 @@ export class EntityLabelPass {
   #colors: LabelColors;
   #isDark: boolean;
   #colorSchemeQuery: MediaQueryList;
-
-  // PWA safe-area handling
-  #safeAreaInsetTop: number | undefined;
-  #isStandalone = !!(navigator as any)?.standalone;
 
   // Frame state (set in beginFrame, read in drawLabel)
   #isMobile = false;
@@ -283,7 +280,8 @@ export class EntityLabelPass {
       cached.name !== entity.name ||
       cached.warning !== isWarning ||
       cached.dragProgress !== dragProgress ||
-      cached.dpr !== dpr;
+      cached.dpr !== dpr ||
+      cached.isMobile !== this.#isMobile;
 
     if (needsRaster) {
       const { width, height } = this.#rasterize(
@@ -336,6 +334,7 @@ export class EntityLabelPass {
           warning: isWarning,
           dragProgress,
           dpr,
+          isMobile: this.#isMobile,
         };
         this.#cache.set(entity.id, cached);
       } else {
@@ -344,6 +343,7 @@ export class EntityLabelPass {
         cached.warning = isWarning;
         cached.dragProgress = dragProgress;
         cached.dpr = dpr;
+        cached.isMobile = this.#isMobile;
       }
 
       // Upload rasterized canvas to texture
@@ -365,14 +365,6 @@ export class EntityLabelPass {
     let worldX = entityCenterX - worldWidth / 2 + offsetX;
     let worldY =
       entity.position.y - (VERTICAL_MARGIN * dpr) / viewport.zoom - worldHeight + offsetY;
-
-    // Apply safe area inset for PWA standalone mode
-    if (this.#isStandalone) {
-      const safeArea = this.#getSafeAreaInsetTop();
-      if (safeArea > 0) {
-        worldY += (safeArea * dpr) / viewport.zoom;
-      }
-    }
 
     // ── Write uniforms and draw ────────────────────────────────────────────
 
@@ -587,19 +579,6 @@ export class EntityLabelPass {
 
     ctx.restore();
   }
-
-  // ── Private: PWA safe area ───────────────────────────────────────────────
-
-  #getSafeAreaInsetTop(): number {
-    if (this.#safeAreaInsetTop && this.#safeAreaInsetTop > 0) return this.#safeAreaInsetTop;
-    const top = +getComputedStyle(document.documentElement)
-      .getPropertyValue("--safe-area-top")
-      .slice(0, -2);
-    if (this.#isStandalone && top <= 0) return 0;
-    this.#safeAreaInsetTop = top;
-    return top;
-  }
-
   // ── Lifecycle ────────────────────────────────────────────────────────────
 
   destroy(): void {
