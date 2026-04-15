@@ -76,16 +76,16 @@ export const actionLayerDefaults: ActionLayerConfig = {
   entitySpringDamping: 0.95,
   ringFollowFactor: 0.08,
 
-  blurIntensity: 0.9,
+  blurIntensity: 0.8,
   blurOffset: 1,
   blurLevels: 4,
   dimOpacity: 0.05,
   dimColor: { dark: [0, 0, 0], light: [1, 1, 1] },
-  blurFadeInMs: 200,
+  blurFadeInMs: 100,
   blurFadeOutMs: 100,
 
   buttonShrinkStart: 0.9,
-  blurFadeStart: 0.6,
+  blurFadeStart: 0.4,
 
   edgeInset: 8,
   debug: undefined, //"default",
