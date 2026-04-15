@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { strToU8, zipSync } from "fflate";
 import { canvasStore } from "#engine";
 import { config } from "#config";
+import { provideMockAnalytics } from "#lib/analytics.ts";
 import { deserialize } from "#lib/serialization/deserialize.ts";
 import { CURRENT_VERSION } from "#lib/serialization/version.ts";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
@@ -45,13 +46,23 @@ function createImageWorkspace(entityCount = 1): ArrayBuffer {
 
 describe("deserialize workspace", () => {
   let cleanup: () => void;
+  let cleanupAnalytics: (() => void) | undefined;
 
   beforeEach(() => {
     cleanup?.();
     cleanup = setupCanvasTest();
+    cleanupAnalytics?.();
+    cleanupAnalytics = undefined;
+  });
+
+  afterEach(() => {
+    cleanupAnalytics?.();
+    cleanupAnalytics = undefined;
   });
 
   test("reports import progress stages in order", async () => {
+    const { mock, cleanup: nextCleanupAnalytics } = provideMockAnalytics();
+    cleanupAnalytics = nextCleanupAnalytics;
     const stages: string[] = [];
     const progressEvents: Array<{ stage: string; entityIndex?: number; entityName?: string }> = [];
 
@@ -75,6 +86,16 @@ describe("deserialize workspace", () => {
       entityName: "Image 1",
     });
     expect(canvasStore.getState().entities.size).toBe(1);
+    expect(mock.calls).toContainEqual({
+      event: "deserialization.import_summary",
+      properties: expect.objectContaining({
+        workspaceEntityCount: 1,
+        videoEntityCount: 0,
+        videoSeekTimeoutCount: 0,
+        errorCount: 0,
+        success: true,
+      }),
+    });
   });
 
   test("aborting during decode keeps the current canvas intact", async () => {

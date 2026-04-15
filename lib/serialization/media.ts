@@ -1,3 +1,8 @@
+import { logger } from "../client.logger.ts";
+import { wait } from "../util.ts";
+
+const VIDEO_SEEK_TIMEOUT_MS = 1500;
+
 /**
  * Convert an ImageBitmap to PNG bytes via OffscreenCanvas.
  */
@@ -53,10 +58,7 @@ export async function captureVideoFrame(
     // by the caller, but the decoder may not have finished (iOS Safari).
     // Re-trigger seek and wait for the decoder to settle.
     const seekTarget = video.currentTime;
-    video.currentTime = seekTarget;
-    await new Promise<void>((resolve) => {
-      video.onseeked = () => resolve();
-    });
+    await seekVideoWithTimeout(video, seekTarget, "capture fallback");
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 
@@ -123,33 +125,32 @@ export async function bytesToVideoElement(
   width: number;
   height: number;
   duration: number;
+  currentTime: number;
+  seekApplied: boolean;
 }> {
   const blob = new Blob([bytes.slice()], { type: mimeType });
-  const video = document.createElement("video");
-  video.src = URL.createObjectURL(blob);
-  video.muted = true;
-  video.loop = true;
-  video.playsInline = true;
-  video.preload = "auto";
-
-  // Wait for metadata
-  await new Promise<void>((resolve, reject) => {
-    video.onloadedmetadata = () => resolve();
-    video.onerror = () => reject(new Error("Failed to load video from archive"));
-  });
-
-  const width = video.videoWidth;
-  const height = video.videoHeight;
+  let video = createArchiveVideoElement(blob);
+  await waitForVideoMetadata(video);
+  let seekApplied = true;
 
   // Seek to the requested time before capturing
   if (seekTime > 0) {
-    video.currentTime = seekTime;
-    await new Promise<void>((resolve) => {
-      video.onseeked = () => resolve();
-    });
+    const seekResult = await seekVideoWithTimeout(video, seekTime, "initial frame");
+    if (seekResult === "timeout") {
+      seekApplied = false;
+      logger.debug("[workspace-import] rebuilding video element after timed out seek", {
+        seekTime,
+        currentTime: video.currentTime,
+      });
+      cleanupVideoElement(video);
+      video = createArchiveVideoElement(blob);
+      await waitForVideoMetadata(video);
+    }
   }
 
   // Capture frame using play-then-capture for reliable decode (fixes iOS blank frames)
+  const width = video.videoWidth;
+  const height = video.videoHeight;
   const initialFrame = await captureVideoFrame(video, width, height);
 
   return {
@@ -158,5 +159,71 @@ export async function bytesToVideoElement(
     width,
     height,
     duration: video.duration,
+    currentTime: video.currentTime,
+    seekApplied,
   };
+}
+
+async function seekVideoWithTimeout(
+  video: HTMLVideoElement,
+  seekTime: number,
+  context: string,
+): Promise<"seeked" | "timeout"> {
+  video.currentTime = seekTime;
+
+  const result = await new Promise<"seeked" | "timeout">((resolve) => {
+    let settled = false;
+
+    const finish = (value: "seeked" | "timeout") => {
+      if (settled) return;
+      settled = true;
+      video.removeEventListener("seeked", onSeeked);
+      resolve(value);
+    };
+
+    const onSeeked = () => finish("seeked");
+
+    video.addEventListener("seeked", onSeeked, { once: true });
+    void wait(VIDEO_SEEK_TIMEOUT_MS).then(() => finish("timeout"));
+  });
+
+  if (result === "timeout") {
+    logger.debug("[workspace-import] video seek timed out", {
+      context,
+      seekTime,
+      timeoutMs: VIDEO_SEEK_TIMEOUT_MS,
+      currentTime: video.currentTime,
+      readyState: video.readyState,
+      networkState: video.networkState,
+    });
+  }
+
+  return result;
+}
+
+function createArchiveVideoElement(blob: Blob): HTMLVideoElement {
+  const video = document.createElement("video");
+  video.src = URL.createObjectURL(blob);
+  video.muted = true;
+  video.loop = true;
+  video.playsInline = true;
+  video.preload = "auto";
+  return video;
+}
+
+async function waitForVideoMetadata(video: HTMLVideoElement): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    video.onloadedmetadata = () => resolve();
+    video.onerror = () => reject(new Error("Failed to load video from archive"));
+  });
+}
+
+function cleanupVideoElement(video: HTMLVideoElement): void {
+  const src = video.src;
+  video.pause();
+  video.src = "";
+  video.load();
+  if (src.startsWith("blob:")) {
+    URL.revokeObjectURL(src);
+  }
 }

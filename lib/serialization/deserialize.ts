@@ -18,6 +18,7 @@ import type {
 } from "./types.ts";
 import { isStudioManifest, toPlaybackState } from "./types.ts";
 import { CURRENT_VERSION } from "./version.ts";
+import { analytics } from "#lib/analytics.ts";
 
 const MIME_BY_EXT: Record<string, string> = {
   mp4: "video/mp4",
@@ -105,6 +106,9 @@ export async function deserialize(
 
   // 3. Run migrations if needed
   let doc = manifest as StudioManifest;
+  const workspaceEntityCount = doc.entities.length;
+  const videoEntityCount = doc.entities.filter((entity) => entity.mediaType === "video").length;
+  let videoSeekTimeoutCount = 0;
   if (doc.version < CURRENT_VERSION) {
     doc = runMigrations(doc);
     warnings.push(`Migrated from v${manifest.version} to v${CURRENT_VERSION}`);
@@ -149,7 +153,13 @@ export async function deserialize(
     }
 
     try {
-      const entity = await deserializeEntity(serialized, zipEntries, warnings);
+      const entity = await deserializeEntity(serialized, zipEntries, warnings, {
+        workspaceEntityCount,
+        videoEntityCount,
+        onVideoSeekTimeout: () => {
+          videoSeekTimeoutCount++;
+        },
+      });
       validEntities.push(entity);
       logger.debug("[workspace-import] restored entity", {
         entityId: serialized.id,
@@ -170,6 +180,14 @@ export async function deserialize(
 
   // If nothing decoded at all, bail without touching the canvas
   if (validEntities.length === 0 && doc.entities.length > 0) {
+    analytics.track("deserialization.import_summary", {
+      workspaceEntityCount,
+      videoEntityCount,
+      videoSeekTimeoutCount,
+      errorCount: errors.length,
+      success: false,
+      durationMs: Math.round(performance.now() - startedAt),
+    });
     return {
       success: false,
       entityCount: 0,
@@ -222,6 +240,14 @@ export async function deserialize(
     entityCount: validEntities.length,
     errorCount: errors.length,
     warningCount: warnings.length,
+  });
+  analytics.track("deserialization.import_summary", {
+    workspaceEntityCount,
+    videoEntityCount,
+    videoSeekTimeoutCount,
+    errorCount: errors.length,
+    success: errors.length === 0,
+    durationMs: Math.round(performance.now() - startedAt),
   });
 
   return {
@@ -338,6 +364,11 @@ async function deserializeEntity(
   serialized: SerializedEntity,
   zipEntries: Record<string, Uint8Array>,
   warnings: string[],
+  analyticsContext: {
+    workspaceEntityCount: number;
+    videoEntityCount: number;
+    onVideoSeekTimeout: () => void;
+  },
 ): Promise<ShaderCanvasEntity> {
   logger.debug("[workspace-import] deserialize entity start", {
     entityId: serialized.id,
@@ -397,18 +428,46 @@ async function deserializeEntity(
 
       const ext = serialized.mediaFile.split(".").pop() ?? "mp4";
       const mimeType = MIME_BY_EXT[ext] ?? "video/mp4";
+      const container = ext.toLowerCase();
 
       const videoBlob = new Blob([bytes.slice()], { type: mimeType });
       const savedTime = serialized.playback?.currentTime ?? 0;
-      const { videoElement, initialFrame, duration } = await bytesToVideoElement(
-        bytes,
-        mimeType,
-        savedTime,
-      );
+      const { videoElement, initialFrame, duration, currentTime, seekApplied } =
+        await bytesToVideoElement(bytes, mimeType, savedTime);
+      const playback = toPlaybackState(serialized.playback);
+      playback.currentTime = currentTime;
+
+      let timedOutSeekMetadata: Awaited<ReturnType<typeof probeTimedOutVideoSeekMetadata>> | null =
+        null;
+      if (!seekApplied && savedTime > 0) {
+        analyticsContext.onVideoSeekTimeout();
+        timedOutSeekMetadata = await probeTimedOutVideoSeekMetadata(videoBlob);
+        const hasAudio = serialized.hasAudio ?? timedOutSeekMetadata.hasAudio;
+        analytics.track("deserialization.video_seek_timed_out", {
+          mediaType: "video",
+          container,
+          mimeType,
+          videoCodec: timedOutSeekMetadata.videoCodec,
+          audioCodec: timedOutSeekMetadata.audioCodec,
+          sizeBytes: bytes.length,
+          duration,
+          width: videoElement.videoWidth,
+          height: videoElement.videoHeight,
+          fps: serialized.fps,
+          hasAudio,
+          savedSeekTime: savedTime,
+          savedSeekRatio: duration > 0 ? savedTime / duration : null,
+          currentTimeAfterRecovery: currentTime,
+          bitrateEstimate: duration > 0 ? (bytes.length * 8) / duration : null,
+          workspaceEntityCount: analyticsContext.workspaceEntityCount,
+          videoEntityCount: analyticsContext.videoEntityCount,
+        });
+      }
 
       // v3+ files have hasAudio in the manifest; legacy files need a probe
       const hasAudio =
         serialized.hasAudio ??
+        timedOutSeekMetadata?.hasAudio ??
         (await import("#lib/audio-demux.ts").then(({ hasAudioTrack }) => hasAudioTrack(videoBlob)));
 
       return {
@@ -422,7 +481,7 @@ async function deserializeEntity(
           fps: serialized.fps,
           hasAudio,
         },
-        playback: toPlaybackState(serialized.playback),
+        playback,
       };
     }
 
@@ -466,5 +525,45 @@ async function deserializeEntity(
 
     default:
       throw new Error(`Unknown media type: ${(serialized as Record<string, unknown>).mediaType}`);
+  }
+}
+
+async function probeTimedOutVideoSeekMetadata(videoBlob: Blob): Promise<{
+  hasAudio: boolean;
+  videoCodec: string | null;
+  audioCodec: string | null;
+}> {
+  try {
+    const { ALL_FORMATS, BlobSource, Input } = await import("mediabunny");
+    const input = new Input({
+      source: new BlobSource(videoBlob),
+      formats: ALL_FORMATS,
+    });
+
+    try {
+      const [videoTrack, audioTrack] = await Promise.all([
+        input.getPrimaryVideoTrack(),
+        input.getPrimaryAudioTrack(),
+      ]);
+      const [videoDecoderConfig, audioDecoderConfig] = await Promise.all([
+        videoTrack?.getDecoderConfig() ?? Promise.resolve(null),
+        audioTrack?.getDecoderConfig() ?? Promise.resolve(null),
+      ]);
+
+      return {
+        hasAudio: audioTrack !== null,
+        videoCodec: videoDecoderConfig?.codec ?? null,
+        audioCodec: audioDecoderConfig?.codec ?? null,
+      };
+    } finally {
+      input.dispose();
+    }
+  } catch (error) {
+    logger.debug("[workspace-import] failed to probe timed out video metadata", error);
+    return {
+      hasAudio: false,
+      videoCodec: null,
+      audioCodec: null,
+    };
   }
 }

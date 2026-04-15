@@ -12,6 +12,33 @@ export interface AnalyticsEventMap {
   "shader.changed": { from: string; to: string; entity_count: number };
   "entity.added": { media_type: string };
   "entity.duplicated": { entity_count: number };
+  "deserialization.video_seek_timed_out": {
+    mediaType: "video";
+    container: string;
+    mimeType: string;
+    videoCodec: string | null;
+    audioCodec: string | null;
+    sizeBytes: number;
+    duration: number;
+    width: number;
+    height: number;
+    fps: number | null;
+    hasAudio: boolean;
+    savedSeekTime: number;
+    savedSeekRatio: number | null;
+    currentTimeAfterRecovery: number;
+    bitrateEstimate: number | null;
+    workspaceEntityCount: number;
+    videoEntityCount: number;
+  };
+  "deserialization.import_summary": {
+    workspaceEntityCount: number;
+    videoEntityCount: number;
+    videoSeekTimeoutCount: number;
+    errorCount: number;
+    success: boolean;
+    durationMs: number;
+  };
 }
 
 class Analytics {
