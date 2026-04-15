@@ -350,17 +350,25 @@ export interface GridConfig {
 }
 
 /** Configuration for drag visual feedback (spring scale animation) */
+export interface DragVisualSpringConfig {
+  /** Spring response time in seconds */
+  response: number;
+  /** Damping ratio (0-1, where higher = less bounce) */
+  damping: number;
+}
+
+/** Configuration for drag visual feedback (spring scale animation) */
 export interface DragVisualConfig {
   /** Delay in ms before scale-down animation starts */
   possibleDragDelay: number;
   /** Target scale during possible-drag phase (e.g., 0.95 = 5% shrink) */
   scaleDown: number;
-  /** Spring response time in seconds for the scale-down animation */
-  scaleDownSpring: number;
-  /** Spring response time in seconds for the pop-back to normal size */
-  popBackSpring: number;
-  /** Spring response time in seconds for the release animation */
-  releaseSpring: number;
+  /** Spring preset for the scale-down animation */
+  scaleDownSpring: DragVisualSpringConfig;
+  /** Spring preset for the pop-back to normal size */
+  popBackSpring: DragVisualSpringConfig;
+  /** Spring preset for the release animation */
+  releaseSpring: DragVisualSpringConfig;
 }
 
 /** Configuration for touch gesture sensitivity and momentum */
@@ -650,9 +658,18 @@ export const config = {
     dragVisual: {
       possibleDragDelay: 100,
       scaleDown: 0.95,
-      scaleDownSpring: 0.2,
-      popBackSpring: 0.25,
-      releaseSpring: 0.3,
+      scaleDownSpring: {
+        response: 0.2,
+        damping: 0.94,
+      },
+      popBackSpring: {
+        response: 0.22,
+        damping: 0.4,
+      },
+      releaseSpring: {
+        response: 0.3,
+        damping: 0.7,
+      },
     },
     zoomMomentum: {
       velocityThreshold: 0.0001,

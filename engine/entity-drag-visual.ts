@@ -1,4 +1,4 @@
-import { config } from "../lib/config/index.ts";
+import { config, type DragVisualSpringConfig } from "../lib/config/index.ts";
 import { canvasStore } from "./canvas-store.ts";
 import {
   scheduler as defaultScheduler,
@@ -35,7 +35,6 @@ class EntityDragVisualController {
   /** Entity IDs with active visual (single entity during possibleDrag, full selection during drag) */
   #entityIds = new Set<string>();
 
-  static readonly #SPRING_DAMPING = 0.9;
   static readonly #SETTLE_THRESHOLD = 0.0001;
 
   constructor(scheduler: AnimationScheduler) {
@@ -165,15 +164,15 @@ class EntityDragVisualController {
     this.#registerAnimation(scaleDownSpring);
   }
 
-  #registerAnimation(response: number): void {
+  #registerAnimation(springConfig: DragVisualSpringConfig): void {
     this.#cancelAnimation();
     const targetScale = this.#targetScale;
     this.#handle = this.#scheduler.spring({
       tag: "drag-visual",
       from: this.#currentScale,
       to: targetScale,
-      response,
-      damping: EntityDragVisualController.#SPRING_DAMPING,
+      response: springConfig.response,
+      damping: springConfig.damping,
       settleThreshold: EntityDragVisualController.#SETTLE_THRESHOLD,
       onUpdate: (value) => {
         this.#currentScale = Math.max(0.8, Math.min(value, 1.05));
