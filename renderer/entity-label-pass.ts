@@ -1,5 +1,6 @@
 import { entityDragVisual } from "../engine/entity-drag-visual.ts";
 import { scheduler, type AnimationHandle } from "../lib/animation-scheduler.ts";
+import { resolveCssColor, resolveCssVarColor } from "#lib/css-color.ts";
 import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
 import shaderSource from "./entity-label.wgsl?raw";
 
@@ -19,8 +20,6 @@ const MOBILE_BREAKPOINT = 768;
 const DRAG_ANIM_DURATION = 0.15; // seconds
 const UNIFORM_SIZE = 32; // bytes (2x vec2f + f32 + 3x f32 padding)
 
-// ── Color resolution ─────────────────────────────────────────────────────────
-
 interface LabelColors {
   normalGradientTop: string;
   normalGradientBottom: string;
@@ -31,35 +30,17 @@ interface LabelColors {
   warningText: string;
 }
 
-function resolveCSSColor(value: string): string {
-  const el = document.createElement("div");
-  el.style.color = value;
-  document.documentElement.appendChild(el);
-  const resolved = getComputedStyle(el).color;
-  el.remove();
-  return resolved;
-}
-
-function resolveCSSVar(varName: string): string {
-  const el = document.createElement("div");
-  el.style.color = `var(${varName})`;
-  document.documentElement.appendChild(el);
-  const resolved = getComputedStyle(el).color;
-  el.remove();
-  return resolved;
-}
-
 function resolveColors(isDark: boolean): LabelColors {
   return {
-    normalGradientTop: resolveCSSColor("oklch(0.7 0.18 250.78)"),
-    normalGradientBottom: resolveCSSColor(
+    normalGradientTop: resolveCssColor("oklch(0.7 0.18 250.78)")!,
+    normalGradientBottom: resolveCssColor(
       isDark ? "oklch(62% 0.23 252.87)" : "oklch(61% 0.23 253.3)",
-    ),
-    normalBorder: resolveCSSColor("oklch(0.66 0.19 251.62)"),
-    warningGradientTop: resolveCSSVar(isDark ? "--amber-600" : "--amber-500"),
-    warningGradientBottom: resolveCSSVar(isDark ? "--amber-900" : "--amber-600"),
-    warningBorder: resolveCSSVar("--amber-1000"),
-    warningText: resolveCSSVar("--amber-1600"),
+    )!,
+    normalBorder: resolveCssColor("oklch(0.66 0.19 251.62)")!,
+    warningGradientTop: resolveCssVarColor(isDark ? "--amber-600" : "--amber-500")!,
+    warningGradientBottom: resolveCssVarColor(isDark ? "--amber-900" : "--amber-600")!,
+    warningBorder: resolveCssVarColor("--amber-1000")!,
+    warningText: resolveCssVarColor("--amber-1600")!,
   };
 }
 
@@ -94,12 +75,27 @@ interface LabelCacheEntry {
   uniformBuffer: GPUBuffer;
   textureWidth: number;
   textureHeight: number;
-  // Dirty-checking
+  rasterState: LabelRasterState;
+}
+
+interface LabelRasterState {
   name: string;
   warning: boolean;
   dragProgress: number;
   dpr: number;
   isMobile: boolean;
+  styleVersion: number;
+}
+
+function rasterStatesEqual(a: LabelRasterState, b: LabelRasterState): boolean {
+  return (
+    a.name === b.name &&
+    a.warning === b.warning &&
+    a.dragProgress === b.dragProgress &&
+    a.dpr === b.dpr &&
+    a.isMobile === b.isMobile &&
+    a.styleVersion === b.styleVersion
+  );
 }
 
 // ── EntityLabelPass ──────────────────────────────────────────────────────────
@@ -123,8 +119,6 @@ export class EntityLabelPass {
 
   // Shared animation state (drag icon affects all labels identically)
   #dragIconProgress = 0;
-  #dragAnimStartTime = 0;
-  #dragAnimFrom = 0;
   #dragAnimTarget = 0;
   #dragAnimHandle: AnimationHandle | null = null;
 
@@ -132,6 +126,7 @@ export class EntityLabelPass {
   #colors: LabelColors;
   #isDark: boolean;
   #colorSchemeQuery: MediaQueryList;
+  #styleVersion = 0;
 
   // Frame state (set in beginFrame, read in drawLabel)
   #isMobile = false;
@@ -154,10 +149,7 @@ export class EntityLabelPass {
     this.#colorSchemeQuery.addEventListener("change", (e) => {
       this.#isDark = e.matches;
       this.#colors = resolveColors(this.#isDark);
-      // Invalidate all cached labels on color scheme change
-      for (const entry of this.#cache.values()) {
-        entry.name = "";
-      }
+      this.#styleVersion++;
     });
   }
 
@@ -220,38 +212,8 @@ export class EntityLabelPass {
     this.#dpr = devicePixelRatio || 1;
     this.#isMobile = canvasWidth / this.#dpr < MOBILE_BREAKPOINT;
     this.#viewport = viewport;
-    this.#isAnimating = false;
-
-    // ── Drag icon animation (shared across all labels) ───────────────────
-
-    const isDragPhase = entityDragVisual.isDragPhase();
-    const newDragTarget = isDragPhase ? 1 : 0;
-
-    if (newDragTarget !== this.#dragAnimTarget) {
-      this.#dragAnimFrom = this.#dragIconProgress;
-      this.#dragAnimTarget = newDragTarget;
-      this.#dragAnimStartTime = performance.now();
-      this.#dragAnimHandle?.cancel();
-      this.#dragAnimHandle = scheduler.tween({
-        from: 0,
-        to: 1,
-        duration: DRAG_ANIM_DURATION * 1000,
-        onUpdate: () => {},
-        onComplete: () => {
-          this.#dragAnimHandle = null;
-        },
-      });
-    }
-
-    if (this.#dragIconProgress !== this.#dragAnimTarget) {
-      const elapsed = (performance.now() - this.#dragAnimStartTime) / 1000;
-      const t = Math.min(elapsed / DRAG_ANIM_DURATION, 1);
-      this.#dragIconProgress =
-        this.#dragAnimFrom + (this.#dragAnimTarget - this.#dragAnimFrom) * springEase(t);
-      this.#dragIconProgress = Math.max(0, Math.min(1, this.#dragIconProgress));
-      if (t >= 1) this.#dragIconProgress = this.#dragAnimTarget;
-      this.#isAnimating = true;
-    }
+    this.#syncDragAnimation();
+    this.#isAnimating = this.#dragAnimHandle?.isActive ?? false;
   }
 
   /**
@@ -259,8 +221,7 @@ export class EntityLabelPass {
    * (after the entity's own draw call) so labels respect z-ordering.
    */
   drawLabel(
-    encoder: GPUCommandEncoder,
-    targetView: GPUTextureView,
+    pass: GPURenderPassEncoder,
     entity: ShaderCanvasEntity,
     offsetX: number,
     offsetY: number,
@@ -269,92 +230,7 @@ export class EntityLabelPass {
 
     const dpr = this.#dpr;
     const viewport = this.#viewport;
-    const isWarning = entity.shaderParams.showOriginal;
-    const dragProgress = this.#dragIconProgress;
-
-    // ── Rasterize if dirty ─────────────────────────────────────────────────
-
-    let cached = this.#cache.get(entity.id);
-    const needsRaster =
-      !cached ||
-      cached.name !== entity.name ||
-      cached.warning !== isWarning ||
-      cached.dragProgress !== dragProgress ||
-      cached.dpr !== dpr ||
-      cached.isMobile !== this.#isMobile;
-
-    if (needsRaster) {
-      const { width, height } = this.#rasterize(
-        entity.name,
-        isWarning,
-        dragProgress,
-        this.#isMobile,
-        dpr,
-      );
-
-      if (!cached || cached.textureWidth !== width || cached.textureHeight !== height) {
-        // Destroy old resources if dimensions changed
-        cached?.texture.destroy();
-        cached?.uniformBuffer.destroy();
-
-        const texture = this.#device.createTexture({
-          label: `Label ${entity.id}`,
-          size: [width, height],
-          format: "rgba8unorm",
-          usage:
-            GPUTextureUsage.TEXTURE_BINDING |
-            GPUTextureUsage.COPY_DST |
-            GPUTextureUsage.RENDER_ATTACHMENT,
-        });
-
-        const uniformBuffer = this.#device.createBuffer({
-          label: `Label ${entity.id} uniforms`,
-          size: UNIFORM_SIZE,
-          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
-
-        const bindGroup = this.#device.createBindGroup({
-          label: `Label ${entity.id} bind group`,
-          layout: this.#bindGroupLayout,
-          entries: [
-            { binding: 0, resource: { buffer: this.#viewportUniformBuffer } },
-            { binding: 1, resource: { buffer: uniformBuffer } },
-            { binding: 2, resource: texture.createView() },
-            { binding: 3, resource: this.#sampler },
-          ],
-        });
-
-        cached = {
-          texture,
-          bindGroup,
-          uniformBuffer,
-          textureWidth: width,
-          textureHeight: height,
-          name: entity.name,
-          warning: isWarning,
-          dragProgress,
-          dpr,
-          isMobile: this.#isMobile,
-        };
-        this.#cache.set(entity.id, cached);
-      } else {
-        // Same dimensions — update metadata only
-        cached.name = entity.name;
-        cached.warning = isWarning;
-        cached.dragProgress = dragProgress;
-        cached.dpr = dpr;
-        cached.isMobile = this.#isMobile;
-      }
-
-      // Upload rasterized canvas to texture
-      this.#device.queue.copyExternalImageToTexture(
-        { source: this.#canvas },
-        { texture: cached.texture },
-        [width, height],
-      );
-    }
-
-    if (!cached) return;
+    const cached = this.#getLabelEntry(entity);
 
     // ── Compute world-space position ───────────────────────────────────────
 
@@ -376,15 +252,9 @@ export class EntityLabelPass {
     data[4] = 1; // opacity
     this.#device.queue.writeBuffer(cached.uniformBuffer, 0, data);
 
-    const pass = encoder.beginRenderPass({
-      label: `Label ${entity.id} pass`,
-      colorAttachments: [{ view: targetView, loadOp: "load", storeOp: "store" }],
-    });
-
-    pass.setPipeline(this.#pipeline!);
+    pass.setPipeline(this.#pipeline);
     pass.setBindGroup(0, cached.bindGroup);
     pass.draw(6);
-    pass.end();
   }
 
   /** Whether the drag icon animation is still in progress. */
@@ -406,15 +276,122 @@ export class EntityLabelPass {
     }
   }
 
+  #syncDragAnimation(): void {
+    const nextTarget = entityDragVisual.isDragPhase() ? 1 : 0;
+    if (nextTarget === this.#dragAnimTarget) return;
+
+    this.#dragAnimTarget = nextTarget;
+    this.#dragAnimHandle?.cancel();
+    this.#dragAnimHandle = null;
+
+    if (this.#dragIconProgress === nextTarget) return;
+
+    this.#dragAnimHandle = scheduler.tween({
+      from: this.#dragIconProgress,
+      to: nextTarget,
+      duration: DRAG_ANIM_DURATION * 1000,
+      easing: springEase,
+      onUpdate: (value) => {
+        this.#dragIconProgress = Math.max(0, Math.min(1, value));
+      },
+      onComplete: () => {
+        this.#dragIconProgress = nextTarget;
+        this.#dragAnimHandle = null;
+      },
+    });
+  }
+
+  #getLabelEntry(entity: ShaderCanvasEntity): LabelCacheEntry {
+    const rasterState = this.#getRasterState(entity);
+    const cached = this.#cache.get(entity.id);
+    if (cached && rasterStatesEqual(cached.rasterState, rasterState)) {
+      return cached;
+    }
+
+    return this.#rasterizeLabel(entity.id, rasterState);
+  }
+
+  #getRasterState(entity: ShaderCanvasEntity): LabelRasterState {
+    return {
+      name: entity.name,
+      warning: entity.shaderParams.showOriginal,
+      dragProgress: this.#dragIconProgress,
+      dpr: this.#dpr,
+      isMobile: this.#isMobile,
+      styleVersion: this.#styleVersion,
+    };
+  }
+
+  #rasterizeLabel(entityId: string, rasterState: LabelRasterState): LabelCacheEntry {
+    const { width, height } = this.#rasterize(rasterState);
+    let cached = this.#cache.get(entityId);
+
+    if (!cached || cached.textureWidth !== width || cached.textureHeight !== height) {
+      cached?.texture.destroy();
+      cached?.uniformBuffer.destroy();
+
+      cached = this.#createLabelEntry(entityId, width, height, rasterState);
+      this.#cache.set(entityId, cached);
+    } else {
+      cached.rasterState = rasterState;
+    }
+
+    this.#device.queue.copyExternalImageToTexture(
+      { source: this.#canvas },
+      { texture: cached.texture },
+      [width, height],
+    );
+
+    return cached;
+  }
+
+  #createLabelEntry(
+    entityId: string,
+    width: number,
+    height: number,
+    rasterState: LabelRasterState,
+  ): LabelCacheEntry {
+    const texture = this.#device.createTexture({
+      label: `Label ${entityId}`,
+      size: [width, height],
+      format: "rgba8unorm",
+      usage:
+        GPUTextureUsage.TEXTURE_BINDING |
+        GPUTextureUsage.COPY_DST |
+        GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+
+    const uniformBuffer = this.#device.createBuffer({
+      label: `Label ${entityId} uniforms`,
+      size: UNIFORM_SIZE,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+
+    const bindGroup = this.#device.createBindGroup({
+      label: `Label ${entityId} bind group`,
+      layout: this.#bindGroupLayout!,
+      entries: [
+        { binding: 0, resource: { buffer: this.#viewportUniformBuffer } },
+        { binding: 1, resource: { buffer: uniformBuffer } },
+        { binding: 2, resource: texture.createView() },
+        { binding: 3, resource: this.#sampler! },
+      ],
+    });
+
+    return {
+      texture,
+      bindGroup,
+      uniformBuffer,
+      textureWidth: width,
+      textureHeight: height,
+      rasterState,
+    };
+  }
+
   // ── Private: Canvas 2D rasterization ─────────────────────────────────────
 
-  #rasterize(
-    name: string,
-    isWarning: boolean,
-    dragProgress: number,
-    isMobile: boolean,
-    dpr: number,
-  ): { width: number; height: number } {
+  #rasterize(rasterState: LabelRasterState): { width: number; height: number } {
+    const { name, warning: isWarning, dragProgress, isMobile, dpr } = rasterState;
     const ctx = this.#ctx;
     const fontSize = (isMobile ? FONT_SIZE_MOBILE : FONT_SIZE_DESKTOP) * dpr;
     const paddingX = PADDING_X * dpr;

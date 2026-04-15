@@ -63,6 +63,14 @@ interface GpuTimestampSlot {
   pending: boolean;
 }
 
+interface CompositionDrawItem {
+  bindGroup: GPUBindGroup;
+  entity: ShaderCanvasEntity;
+  isSelected: boolean;
+  offsetX: number;
+  offsetY: number;
+}
+
 const GPU_TIMESTAMP_QUERY_CAPACITY = 14;
 const GPU_TIMESTAMP_SLOT_COUNT = 3;
 const GPU_TIMESTAMP_PHASE_RANGES: Record<GpuTimingPhase, [number, number]> = {
@@ -1344,6 +1352,22 @@ export class InfiniteCanvasRenderer {
     this.#entityFloatView[11] = 0;
   }
 
+  #drawCompositionItems(
+    pass: GPURenderPassEncoder,
+    items: readonly CompositionDrawItem[],
+    selectedEntityCount: number,
+  ): void {
+    for (const item of items) {
+      pass.setPipeline(this.#compositionPipeline!);
+      pass.setBindGroup(0, item.bindGroup);
+      pass.draw(6);
+
+      if (item.isSelected && selectedEntityCount === 1 && this.#entityLabelPass) {
+        this.#entityLabelPass.drawLabel(pass, item.entity, item.offsetX, item.offsetY);
+      }
+    }
+  }
+
   #renderDisintegrationOverlays(
     encoder: GPUCommandEncoder,
     targetView: GPUTextureView,
@@ -1638,19 +1662,8 @@ export class InfiniteCanvasRenderer {
 
     // Pre-process entities: render to textures and prepare bind groups
     // Uses caching to avoid per-frame allocations
-    const entityDrawItems: Array<{
-      bindGroup: GPUBindGroup;
-      entity: ShaderCanvasEntity;
-      isSelected: boolean;
-      offsetX: number;
-      offsetY: number;
-    }> = [];
-    const actionLayerDrawItems: Array<{
-      bindGroup: GPUBindGroup;
-      entity: ShaderCanvasEntity;
-      offsetX: number;
-      offsetY: number;
-    }> = [];
+    const entityDrawItems: CompositionDrawItem[] = [];
+    const actionLayerDrawItems: CompositionDrawItem[] = [];
     let hasAnimatingContent = false;
     markPhaseStart("entity-prep");
 
@@ -1779,6 +1792,7 @@ export class InfiniteCanvasRenderer {
         actionLayerDrawItems.push({
           bindGroup,
           entity,
+          isSelected,
           offsetX: actionLayerOffsetX,
           offsetY: actionLayerOffsetY,
         });
@@ -1836,36 +1850,19 @@ export class InfiniteCanvasRenderer {
 
     // Update label animation state once per frame
     this.#entityLabelPass?.beginFrame(viewport, width, height);
-
-    for (const item of entityDrawItems) {
-      const entityPass = encoder.beginRenderPass({
-        label: "Entity composition pass",
-        colorAttachments: [
-          {
-            view: targetView,
-            loadOp: "load",
-            storeOp: "store",
-          },
-        ],
-      });
-
-      entityPass.setPipeline(this.#compositionPipeline);
-      entityPass.setBindGroup(0, item.bindGroup);
-      entityPass.draw(6);
-      entityPass.end();
-
-      // Draw label immediately after its entity so it sits at the same z-level
-      // Only show label for single selection — multi-select gets too noisy
-      if (item.isSelected && selectedEntityIds.size === 1 && this.#entityLabelPass) {
-        this.#entityLabelPass.drawLabel(
-          encoder,
-          targetView,
-          item.entity,
-          item.offsetX,
-          item.offsetY,
-        );
-      }
-    }
+    const selectedEntityCount = selectedEntityIds.size;
+    const entityPass = encoder.beginRenderPass({
+      label: "Entity composition pass",
+      colorAttachments: [
+        {
+          view: targetView,
+          loadOp: "load",
+          storeOp: "store",
+        },
+      ],
+    });
+    this.#drawCompositionItems(entityPass, entityDrawItems, selectedEntityCount);
+    entityPass.end();
 
     // Evict label caches for deselected entities
     this.#entityLabelPass?.endFrame(selectedEntityIds);
@@ -1966,7 +1963,7 @@ export class InfiniteCanvasRenderer {
     // Always render action layer entities on top (sharp, after blur or normally)
     markPhaseStart("action-layer-sharp");
     this.#writeGpuTimestampMarker(encoder, gpuCapture, "action-layer-sharp", "start");
-    for (const item of actionLayerDrawItems) {
+    if (actionLayerDrawItems.length > 0) {
       const sharpPass = encoder.beginRenderPass({
         label: "Action layer sharp entity pass",
         colorAttachments: [
@@ -1977,21 +1974,8 @@ export class InfiniteCanvasRenderer {
           },
         ],
       });
-      sharpPass.setPipeline(this.#compositionPipeline);
-      sharpPass.setBindGroup(0, item.bindGroup);
-      sharpPass.draw(6);
+      this.#drawCompositionItems(sharpPass, actionLayerDrawItems, selectedEntityCount);
       sharpPass.end();
-
-      // Draw label for action layer entities (single selection only)
-      if (selectedEntityIds.size === 1 && this.#entityLabelPass) {
-        this.#entityLabelPass.drawLabel(
-          encoder,
-          targetView,
-          item.entity,
-          item.offsetX,
-          item.offsetY,
-        );
-      }
     }
     this.#writeGpuTimestampMarker(encoder, gpuCapture, "action-layer-sharp", "end");
     markPhaseEnd("action-layer-sharp");

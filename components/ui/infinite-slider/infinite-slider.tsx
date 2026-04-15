@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ComponentProps } from "react";
+import { resolveCssVarColor } from "#lib/css-color.ts";
 import { SliderEngine } from "./slider-engine.ts";
 import {
   renderSliderTicks,
@@ -122,39 +123,26 @@ export function InfiniteSlider({
     const el = containerRef.current;
     if (!el) return;
 
-    // Resolve a CSS custom property through a real CSS property context.
-    // Custom properties preserve light-dark()/oklch(from ...) as-is,
-    // but Canvas 2D fillStyle can't parse those. Forcing resolution
-    // through `color` gives us a concrete rgb/oklch value.
-    const resolveCssColor = (varName: string): string | null => {
-      const probe = document.createElement("span");
-      probe.style.color = `var(${varName})`;
-      el.appendChild(probe);
-      const resolved = getComputedStyle(probe).color;
-      probe.remove();
-      return resolved || null;
-    };
-
     const resolveColors = () => {
       // Prop overrides take priority
       if (tickColorProp) {
         renderConfigRef.current.tickColor = tickColorProp;
       } else {
-        const resolved = resolveCssColor("--slider-tick-color");
+        const resolved = resolveCssVarColor("--slider-tick-color", el);
         if (resolved) renderConfigRef.current.tickColor = resolved;
       }
 
       if (highlightColorProp) {
         renderConfigRef.current.highlightColor = highlightColorProp;
       } else {
-        const resolved = resolveCssColor("--slider-highlight-color");
+        const resolved = resolveCssVarColor("--slider-highlight-color", el);
         if (resolved) renderConfigRef.current.highlightColor = resolved;
       }
 
       if (majorTickColorProp) {
         renderConfigRef.current.majorTickColor = majorTickColorProp;
       } else {
-        const resolved = resolveCssColor("--slider-major-tick-color");
+        const resolved = resolveCssVarColor("--slider-major-tick-color", el);
         if (resolved) renderConfigRef.current.majorTickColor = resolved;
       }
 
