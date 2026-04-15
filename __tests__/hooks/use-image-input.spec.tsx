@@ -257,4 +257,40 @@ describe("useImageInput", () => {
     expect(mocks.importStudioWithToasts).toHaveBeenCalledTimes(1);
     expect(mocks.addFilesToCanvas).not.toHaveBeenCalled();
   });
+
+  test("failed workspace drops do not leave drag-and-drop stuck loading", async () => {
+    expect(handlers).not.toBeNull();
+
+    const abortError = new Error("Workspace import cancelled");
+    abortError.name = "AbortError";
+    mocks.importStudioWithToasts.mockRejectedValueOnce(abortError);
+
+    await act(async () => {
+      await expect(
+        handlers!.handleDrop({
+          clientX: 100,
+          clientY: 100,
+          dataTransfer: {
+            files: [makeFile("workspace.vdmsh", "application/vdmsh")],
+            items: [],
+            getData: () => "",
+          },
+        } as unknown as React.DragEvent<HTMLDivElement>),
+      ).rejects.toThrow("Workspace import cancelled");
+    });
+
+    await act(async () => {
+      await handlers!.handleDrop({
+        clientX: 100,
+        clientY: 100,
+        dataTransfer: {
+          files: [makeFile("drop.png")],
+          items: [],
+          getData: () => "",
+        },
+      } as unknown as React.DragEvent<HTMLDivElement>);
+    });
+
+    expect(mocks.addFilesToCanvas).toHaveBeenCalledTimes(1);
+  });
 });
