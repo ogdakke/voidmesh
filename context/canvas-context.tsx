@@ -220,7 +220,9 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   // URL params for selected entity shader settings (for shareable configurations)
   const [renderState, setRenderState] = useQueryStates(shaderUrlParams);
   const renderStateRef = useRef(renderState);
-  renderStateRef.current = renderState;
+  useEffect(() => {
+    renderStateRef.current = renderState;
+  }, [renderState]);
   // NOTE: URL param keys were previously used for URL→entity sync
   // Now we update entities directly, so these are no longer needed
 
@@ -448,7 +450,9 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   const [rendererState, setRendererState] = useState<InfiniteCanvasRenderer | null>(null);
   const [colorSpace, setColorSpace] = useState<ColorSpace>(ColorSpace.srgb);
   const colorSpaceRef = useRef<ColorSpace>(ColorSpace.srgb);
-  colorSpaceRef.current = colorSpace;
+  useEffect(() => {
+    colorSpaceRef.current = colorSpace;
+  }, [colorSpace]);
 
   // Viewport operations - delegate to store
   const setViewport = (newViewport: Viewport) => {
@@ -1805,9 +1809,57 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     return result;
   };
 
-  const commandsRef = useRef<CanvasCommands | null>(null);
-  if (!commandsRef.current) {
-    commandsRef.current = {
+  const commandsImplRef = useRef<CanvasCommands>({
+    setViewport,
+    panBy,
+    resetViewport,
+    addEntity,
+    updateEntity,
+    removeEntity,
+    selectEntity,
+    moveEntity,
+    bringToFront,
+    sendToBack,
+    duplicateEntities,
+    updateSelectedEntityParams,
+    setSelectedEntityTimeAutoPlay,
+    syncSelectedEntityTimes,
+    changeShaderType,
+    changeDitheringKind,
+    changeAsciiKind,
+    setAsciiInvert,
+    changeGlassKind,
+    changeGlitchKind,
+    changePalette,
+    uploadPalette,
+    deletePalette,
+    setShowOriginal,
+    toggleShowOriginal,
+    setPreserveColors,
+    togglePreserveColors,
+    setReversePalette,
+    toggleReversePalette,
+    deleteSelection,
+    copySelectionImage,
+    copySelectionEffects,
+    pasteEffects,
+    bringSelectionToFront,
+    sendSelectionToBack,
+    resetSelectionToDefaults,
+    setSnapToGrid: setSnapToGridPreference,
+    setFancyDelete: setFancyDeletePreference,
+    setHaptics: setHapticsPreference,
+    changeSize,
+    copySelectedEntityToClipboard,
+    saveSelectedEntityToFile,
+    serializeCanvas,
+    deserializeCanvas,
+    applyUrlState: setRenderStateFromURL,
+    applyEffectsToSelection,
+    setDebugType,
+  });
+  useEffect(() => {
+    commandsImplRef.current = {
       setViewport,
       panBy,
       resetViewport,
@@ -1856,8 +1908,63 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       applyEffectsToSelection,
       setDebugType,
     };
-  }
-  const commands = commandsRef.current;
+  });
+  const commands = useMemo<CanvasCommands>(
+    () => ({
+      setViewport: (...args) => commandsImplRef.current.setViewport(...args),
+      panBy: (...args) => commandsImplRef.current.panBy(...args),
+      resetViewport: () => commandsImplRef.current.resetViewport(),
+      addEntity: (...args) => commandsImplRef.current.addEntity(...args),
+      updateEntity: (...args) => commandsImplRef.current.updateEntity(...args),
+      removeEntity: (...args) => commandsImplRef.current.removeEntity(...args),
+      selectEntity: (...args) => commandsImplRef.current.selectEntity(...args),
+      moveEntity: (...args) => commandsImplRef.current.moveEntity(...args),
+      bringToFront: (...args) => commandsImplRef.current.bringToFront(...args),
+      sendToBack: (...args) => commandsImplRef.current.sendToBack(...args),
+      duplicateEntities: () => commandsImplRef.current.duplicateEntities(),
+      updateSelectedEntityParams: (...args) =>
+        commandsImplRef.current.updateSelectedEntityParams(...args),
+      setSelectedEntityTimeAutoPlay: (...args) =>
+        commandsImplRef.current.setSelectedEntityTimeAutoPlay(...args),
+      syncSelectedEntityTimes: () => commandsImplRef.current.syncSelectedEntityTimes(),
+      changeShaderType: (...args) => commandsImplRef.current.changeShaderType(...args),
+      changeDitheringKind: (...args) => commandsImplRef.current.changeDitheringKind(...args),
+      changeAsciiKind: (...args) => commandsImplRef.current.changeAsciiKind(...args),
+      setAsciiInvert: (...args) => commandsImplRef.current.setAsciiInvert(...args),
+      changeGlassKind: (...args) => commandsImplRef.current.changeGlassKind(...args),
+      changeGlitchKind: (...args) => commandsImplRef.current.changeGlitchKind(...args),
+      changePalette: (...args) => commandsImplRef.current.changePalette(...args),
+      uploadPalette: (...args) => commandsImplRef.current.uploadPalette(...args),
+      deletePalette: (...args) => commandsImplRef.current.deletePalette(...args),
+      setShowOriginal: (...args) => commandsImplRef.current.setShowOriginal(...args),
+      toggleShowOriginal: () => commandsImplRef.current.toggleShowOriginal(),
+      setPreserveColors: (...args) => commandsImplRef.current.setPreserveColors(...args),
+      togglePreserveColors: () => commandsImplRef.current.togglePreserveColors(),
+      setReversePalette: (...args) => commandsImplRef.current.setReversePalette(...args),
+      toggleReversePalette: () => commandsImplRef.current.toggleReversePalette(),
+      deleteSelection: (...args) => commandsImplRef.current.deleteSelection(...args),
+      copySelectionImage: (...args) => commandsImplRef.current.copySelectionImage(...args),
+      copySelectionEffects: () => commandsImplRef.current.copySelectionEffects(),
+      pasteEffects: () => commandsImplRef.current.pasteEffects(),
+      bringSelectionToFront: () => commandsImplRef.current.bringSelectionToFront(),
+      sendSelectionToBack: () => commandsImplRef.current.sendSelectionToBack(),
+      resetSelectionToDefaults: () => commandsImplRef.current.resetSelectionToDefaults(),
+      setSnapToGrid: (...args) => commandsImplRef.current.setSnapToGrid(...args),
+      setFancyDelete: (...args) => commandsImplRef.current.setFancyDelete(...args),
+      setHaptics: (...args) => commandsImplRef.current.setHaptics(...args),
+      changeSize: (...args) => commandsImplRef.current.changeSize(...args),
+      copySelectedEntityToClipboard: () => commandsImplRef.current.copySelectedEntityToClipboard(),
+      saveSelectedEntityToFile: (...args) =>
+        commandsImplRef.current.saveSelectedEntityToFile(...args),
+      serializeCanvas: () => commandsImplRef.current.serializeCanvas(),
+      deserializeCanvas: (...args) => commandsImplRef.current.deserializeCanvas(...args),
+      applyUrlState: (...args) => commandsImplRef.current.applyUrlState(...args),
+      applyEffectsToSelection: (...args) =>
+        commandsImplRef.current.applyEffectsToSelection(...args),
+      setDebugType: (...args) => commandsImplRef.current.setDebugType(...args),
+    }),
+    [],
+  );
 
   const rendererService = useMemo<CanvasRendererService>(
     () => ({
@@ -1873,23 +1980,20 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   );
 
   // Expose canvas context to window for dev console debugging
-  const valueRef = useRef(commands);
-  valueRef.current = commands;
   useEffect(() => {
     if (import.meta.env.PROD) return;
     if (typeof window !== "undefined") {
-      const ctx = valueRef;
       (window as any).__CANVAS__ = {};
       (window as any).__CANVAS__.store = canvasStore;
       (window as any).__CANVAS__.config = config;
       Object.defineProperty((window as any).__CANVAS__, "commands", {
-        get: () => ctx.current,
+        get: () => commands,
         configurable: true,
       });
 
-      // Serialization API — delegates to context methods via ref for fresh access
+      // Serialization API — delegates through stable command wrappers for fresh access
       (window as any).__CANVAS__.serialize = async () => {
-        const blob = await ctx.current.serializeCanvas();
+        const blob = await commands.serializeCanvas();
         if (!blob) {
           console.log("[Canvas] Save already in progress, skipped");
           return null;
@@ -1901,7 +2005,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       };
 
       (window as any).__CANVAS__.deserialize = async (source: Blob | ArrayBuffer) => {
-        const result = await ctx.current.deserializeCanvas(source);
+        const result = await commands.deserializeCanvas(source);
 
         if (result.warnings.length > 0) {
           console.warn("[Canvas] Deserialize warnings:", result.warnings);
@@ -1916,7 +2020,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       };
 
       (window as any).__CANVAS__.save = async (filename = "canvas.vdmsh") => {
-        const blob = await ctx.current.serializeCanvas();
+        const blob = await commands.serializeCanvas();
         if (!blob) {
           console.log("[Canvas] Save already in progress, skipped");
           return;
@@ -1936,7 +2040,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
               resolve();
               return;
             }
-            await ctx.current.deserializeCanvas(file);
+            await commands.deserializeCanvas(file);
             resolve();
           };
           input.click();
@@ -1948,7 +2052,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         delete (window as any)?.__CANVAS__;
       }
     };
-  }, []);
+  }, [commands]);
 
   return (
     <CanvasCommandsContext.Provider value={commands}>

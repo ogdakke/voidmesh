@@ -123,7 +123,7 @@ const WorkspaceActions = memo(function WorkspaceActions({
 }: {
   hasEntities: boolean;
   exportStudioFile: () => void;
-  importStudioFile: () => void;
+  importStudioFile: (onSuccess?: () => void) => void;
   isExporting: boolean;
   isImporting: boolean;
 }) {
@@ -135,7 +135,11 @@ const WorkspaceActions = memo(function WorkspaceActions({
           <span>Save workspace</span>
         </Button>
       )}
-      <Button variant="secondary" onClick={importStudioFile} disabled={isExporting || isImporting}>
+      <Button
+        variant="secondary"
+        onClick={() => importStudioFile()}
+        disabled={isExporting || isImporting}
+      >
         <Import />
         <span>Open workspace</span>
       </Button>

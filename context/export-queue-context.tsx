@@ -9,7 +9,7 @@
  * - Audio demuxed from source and sent to worker for muxing (no FFmpeg needed)
  */
 
-import { useState, useRef, useEffect, type PropsWithChildren } from "react";
+import { useState, useRef, useEffect, useEffectEvent, type PropsWithChildren } from "react";
 import { flushSync } from "react-dom";
 import { ExportQueueContext } from "./use-export-queue.ts";
 import {
@@ -138,7 +138,7 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
   };
 
   /** Process the next job in the queue */
-  const processNextJob = async () => {
+  const processNextJob = useEffectEvent(async () => {
     // Prevent concurrent processing
     if (isProcessingRef.current) return;
 
@@ -307,7 +307,7 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
 
       setState((prev) => ({ ...prev, currentJobId: null }));
     }
-  };
+  });
 
   // Store entity/renderer references for jobs
   const jobEntityRefs = useRef<
@@ -374,16 +374,13 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
     return jobId;
   };
 
-  const processNextJobRef = useRef(processNextJob);
-  processNextJobRef.current = processNextJob;
-
   // Auto-start processing when jobs are added and nothing is processing
   useEffect(() => {
     const hasQueuedJobs = state.jobs.some((job) => job.status === "queued");
     const isProcessing = state.currentJobId !== null;
 
     if (hasQueuedJobs && !isProcessing && !isProcessingRef.current) {
-      void processNextJobRef.current();
+      void processNextJob();
     }
   }, [state.jobs, state.currentJobId]);
 

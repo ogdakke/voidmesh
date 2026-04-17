@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ComponentProps } from "react";
+import { useEffect, useEffectEvent, useRef, type ComponentProps } from "react";
 import { resolveCssVarColor } from "#lib/css.ts";
 import { SliderEngine } from "./slider-engine.ts";
 import {
@@ -95,17 +95,17 @@ export function InfiniteSlider({
     ...defaultRenderConfig,
   });
 
-  // Keep callbacks in a ref to avoid engine re-creation
-  const callbacksRef = useRef({
-    onValueChange,
-    onValueCommit,
-    onInteractionStart,
+  const handleValueChange = useEffectEvent((nextValue: number) => {
+    onValueChange?.(nextValue);
   });
-  callbacksRef.current = {
-    onValueChange,
-    onValueCommit,
-    onInteractionStart,
-  };
+
+  const handleValueCommit = useEffectEvent((nextValue: number) => {
+    onValueCommit?.(nextValue);
+  });
+
+  const handleInteractionStart = useEffectEvent(() => {
+    onInteractionStart?.();
+  });
 
   // Update visual config when props change
   useEffect(() => {
@@ -199,9 +199,9 @@ export function InfiniteSlider({
           cfg,
         );
       },
-      onValueChange: (v) => callbacksRef.current.onValueChange?.(v),
-      onValueCommit: (v) => callbacksRef.current.onValueCommit?.(v),
-      onInteractionStart: () => callbacksRef.current.onInteractionStart?.(),
+      onValueChange: handleValueChange,
+      onValueCommit: handleValueCommit,
+      onInteractionStart: handleInteractionStart,
     });
 
     engineRef.current = engine;

@@ -1,7 +1,7 @@
 import { logger } from "#lib/client.logger.ts";
 import { Store } from "#lib/store.ts";
 import { isMacOS, isWindows } from "#lib/util.ts";
-import { createContext, use, useEffect, useRef, useSyncExternalStore } from "react";
+import { createContext, use, useEffect, useEffectEvent, useSyncExternalStore } from "react";
 
 type BaseBindProperties = {
   /** @default "all" */
@@ -559,10 +559,9 @@ export function useKeybind<T extends string, kb extends KeybindUnion<T>>(
   keybind: kb,
 ) {
   const store = useKeybinds();
-  const actionRef = useRef(keybind.action);
-
-  // Keep the ref updated with the latest action
-  actionRef.current = keybind.action;
+  const handleAction = useEffectEvent((event: KeyboardEvent) => {
+    void keybind.action(event);
+  });
 
   const bindString = keybind.bind.toString();
 
@@ -574,7 +573,7 @@ export function useKeybind<T extends string, kb extends KeybindUnion<T>>(
     return store.register(contextName, {
       platform: "all",
       ...keybind,
-      action: (e: KeyboardEvent) => actionRef.current(e),
+      action: handleAction,
     } as any);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keybind object changes every render; bind key is the meaningful dep, action handled via ref
   }, [store, contextName, bindString]);
@@ -582,10 +581,9 @@ export function useKeybind<T extends string, kb extends KeybindUnion<T>>(
 
 export function useRegisterKeybinds(contextName: ContextName, keybinds: KeybindUnion<string>[]) {
   const store = useKeybinds();
-  const actionsRef = useRef(keybinds.map((kb) => kb.action));
-
-  // Keep the refs updated with the latest actions
-  actionsRef.current = keybinds.map((kb) => kb.action);
+  const handleAction = useEffectEvent((index: number, event: KeyboardEvent) => {
+    void keybinds[index]?.action(event);
+  });
 
   // Stable dependency key for the binds
   const bindsKey = keybinds.map((kb) => kb.bind.toString()).join(",");
@@ -599,14 +597,14 @@ export function useRegisterKeybinds(contextName: ContextName, keybinds: KeybindU
       return store.register(contextName, {
         platform: "all",
         ...keybind,
-        action: (e: KeyboardEvent) => actionsRef.current[index]?.(e),
+        action: (e: KeyboardEvent) => handleAction(index, e),
       } as any);
     });
 
     return () => {
       disposables.forEach((dispose) => dispose?.());
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keybinds array changes every render; bindsKey is the stable proxy, actions handled via ref
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keybinds array changes every render; bindsKey is the stable proxy, actions handled via effect event
   }, [store, contextName, bindsKey]);
 }
 

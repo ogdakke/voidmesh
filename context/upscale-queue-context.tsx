@@ -8,7 +8,7 @@
  * dimensions before processing to maximize GPU network cache hits.
  */
 
-import { useState, useRef, useEffect, type PropsWithChildren } from "react";
+import { useState, useRef, useEffect, useEffectEvent, type PropsWithChildren } from "react";
 import { flushSync } from "react-dom";
 import { UpscaleQueueContext } from "./use-upscale-queue.ts";
 import { useCanvasCommands, useCanvasRendererService } from "./use-canvas.ts";
@@ -193,122 +193,6 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
   // --------------------------------------------------------------------------
   // Processing pipeline
   // --------------------------------------------------------------------------
-
-  const processNextJob = async () => {
-    if (isProcessingRef.current) return;
-
-    // Read latest jobs via setState callback to avoid stale closure
-    const nextJob = await new Promise<UpscaleJob | null>((resolve) => {
-      setState((prev) => {
-        const found = prev.jobs.find((job) => job.status === "queued");
-        if (!found) {
-          resolve(null);
-          return { ...prev, currentJobId: null };
-        }
-        resolve(found);
-        return { ...prev, currentJobId: found.id };
-      });
-    });
-    if (!nextJob) return;
-
-    isProcessingRef.current = true;
-    updateJob(nextJob.id, { status: "processing" });
-
-    // Show progress toast (persistent until done, with cancel action)
-    let toastId!: string;
-    const cancelFromToast = () => {
-      cancelledJobIdRef.current = nextJob.id;
-      if (currentVideoHandleRef.current) {
-        currentVideoHandleRef.current.cancel();
-      }
-      updateJob(nextJob.id, { status: "cancelled" });
-      toastManager.close(toastId);
-    };
-    toastId = toastManager.add({
-      title: `Upscaling ${nextJob.entityName}`,
-      description: getMediaLabel(nextJob.type) === "image" ? "Processing..." : "Starting...",
-      timeout: 0,
-      actionProps: {
-        children: "Cancel",
-        onClick: cancelFromToast,
-      },
-    });
-    jobToastIdsRef.current.set(nextJob.id, toastId);
-
-    try {
-      const entity = jobEntitySnapshotsRef.current.get(nextJob.id);
-      if (!entity) throw new Error("Entity snapshot not found for job");
-
-      const service = getUpscaleService();
-      if (!service) throw new Error("GPU device not available for upscaling");
-
-      if (cancelledJobIdRef.current === nextJob.id) throw new Error("Upscale cancelled");
-
-      let resultEntityId: string;
-
-      switch (nextJob.type) {
-        case "image":
-          resultEntityId = await processImageUpscale(nextJob, entity, service);
-          break;
-        case "gif":
-          resultEntityId = await processGifUpscale(nextJob, entity, service);
-          break;
-        case "video":
-          resultEntityId = await processVideoUpscale(nextJob, entity, service);
-          break;
-      }
-
-      updateJob(nextJob.id, {
-        status: "completed",
-        resultEntityId,
-        progress: { frame: 1, totalFrames: 1, percent: 1, stage: "done" },
-      });
-
-      logger.info(`Upscale completed: ${entity.name} → ${resultEntityId}`);
-
-      // Update toast to show completion
-      const doneToastId = jobToastIdsRef.current.get(nextJob.id);
-      if (doneToastId) {
-        toastManager.update(doneToastId, {
-          title: `Upscaled ${nextJob.entityName}`,
-          description: "Added to canvas",
-          timeout: 4000,
-          actionProps: { children: null },
-        });
-      }
-
-      // Auto-remove completed job after a short delay
-      const completedJobId = nextJob.id;
-      const timer = setTimeout(() => {
-        removalTimersRef.current.delete(completedJobId);
-        removeJob(completedJobId);
-      }, 3000);
-      removalTimersRef.current.set(completedJobId, timer);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Upscale failed";
-      const errToastId = jobToastIdsRef.current.get(nextJob.id);
-      if (message !== "Upscale cancelled") {
-        logger.error(`Upscale failed: ${nextJob.entityName}`, err);
-        updateJob(nextJob.id, { status: "failed", error: message });
-        if (errToastId) {
-          toastManager.update(errToastId, {
-            title: `Upscale failed`,
-            description: message,
-            timeout: 5000,
-          });
-        }
-      } else if (errToastId) {
-        toastManager.close(errToastId);
-      }
-    } finally {
-      jobToastIdsRef.current.delete(nextJob.id);
-      currentVideoHandleRef.current = null;
-      isProcessingRef.current = false;
-      cancelledJobIdRef.current = null;
-      jobEntitySnapshotsRef.current.delete(nextJob.id);
-      setState((prev) => ({ ...prev, currentJobId: null }));
-    }
-  };
 
   /** Update toast description for a job (throttled naturally by frame callbacks) */
   const updateToastProgress = (jobId: string, description: string) => {
@@ -512,12 +396,125 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
     );
   }
 
+  const processNextJob = useEffectEvent(async () => {
+    if (isProcessingRef.current) return;
+
+    // Read latest jobs via setState callback to avoid stale closure
+    const nextJob = await new Promise<UpscaleJob | null>((resolve) => {
+      setState((prev) => {
+        const found = prev.jobs.find((job) => job.status === "queued");
+        if (!found) {
+          resolve(null);
+          return { ...prev, currentJobId: null };
+        }
+        resolve(found);
+        return { ...prev, currentJobId: found.id };
+      });
+    });
+    if (!nextJob) return;
+
+    isProcessingRef.current = true;
+    updateJob(nextJob.id, { status: "processing" });
+
+    // Show progress toast (persistent until done, with cancel action)
+    let toastId!: string;
+    const cancelFromToast = () => {
+      cancelledJobIdRef.current = nextJob.id;
+      if (currentVideoHandleRef.current) {
+        currentVideoHandleRef.current.cancel();
+      }
+      updateJob(nextJob.id, { status: "cancelled" });
+      toastManager.close(toastId);
+    };
+    toastId = toastManager.add({
+      title: `Upscaling ${nextJob.entityName}`,
+      description: getMediaLabel(nextJob.type) === "image" ? "Processing..." : "Starting...",
+      timeout: 0,
+      actionProps: {
+        children: "Cancel",
+        onClick: cancelFromToast,
+      },
+    });
+    jobToastIdsRef.current.set(nextJob.id, toastId);
+
+    try {
+      const entity = jobEntitySnapshotsRef.current.get(nextJob.id);
+      if (!entity) throw new Error("Entity snapshot not found for job");
+
+      const service = getUpscaleService();
+      if (!service) throw new Error("GPU device not available for upscaling");
+
+      if (cancelledJobIdRef.current === nextJob.id) throw new Error("Upscale cancelled");
+
+      let resultEntityId: string;
+
+      switch (nextJob.type) {
+        case "image":
+          resultEntityId = await processImageUpscale(nextJob, entity, service);
+          break;
+        case "gif":
+          resultEntityId = await processGifUpscale(nextJob, entity, service);
+          break;
+        case "video":
+          resultEntityId = await processVideoUpscale(nextJob, entity, service);
+          break;
+      }
+
+      updateJob(nextJob.id, {
+        status: "completed",
+        resultEntityId,
+        progress: { frame: 1, totalFrames: 1, percent: 1, stage: "done" },
+      });
+
+      logger.info(`Upscale completed: ${entity.name} → ${resultEntityId}`);
+
+      // Update toast to show completion
+      const doneToastId = jobToastIdsRef.current.get(nextJob.id);
+      if (doneToastId) {
+        toastManager.update(doneToastId, {
+          title: `Upscaled ${nextJob.entityName}`,
+          description: "Added to canvas",
+          timeout: 4000,
+          actionProps: { children: null },
+        });
+      }
+
+      // Auto-remove completed job after a short delay
+      const completedJobId = nextJob.id;
+      const timer = setTimeout(() => {
+        removalTimersRef.current.delete(completedJobId);
+        removeJob(completedJobId);
+      }, 3000);
+      removalTimersRef.current.set(completedJobId, timer);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Upscale failed";
+      const errToastId = jobToastIdsRef.current.get(nextJob.id);
+      if (message !== "Upscale cancelled") {
+        logger.error(`Upscale failed: ${nextJob.entityName}`, err);
+        updateJob(nextJob.id, { status: "failed", error: message });
+        if (errToastId) {
+          toastManager.update(errToastId, {
+            title: `Upscale failed`,
+            description: message,
+            timeout: 5000,
+          });
+        }
+      } else if (errToastId) {
+        toastManager.close(errToastId);
+      }
+    } finally {
+      jobToastIdsRef.current.delete(nextJob.id);
+      currentVideoHandleRef.current = null;
+      isProcessingRef.current = false;
+      cancelledJobIdRef.current = null;
+      jobEntitySnapshotsRef.current.delete(nextJob.id);
+      setState((prev) => ({ ...prev, currentJobId: null }));
+    }
+  });
+
   // --------------------------------------------------------------------------
   // Queue management
   // --------------------------------------------------------------------------
-
-  const processNextJobRef = useRef(processNextJob);
-  processNextJobRef.current = processNextJob;
 
   // Auto-start processing when jobs are added
   useEffect(() => {
@@ -525,7 +522,7 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
     const isProcessing = state.currentJobId !== null;
 
     if (hasQueuedJobs && !isProcessing && !isProcessingRef.current) {
-      void processNextJobRef.current();
+      void processNextJob();
     }
   }, [state.jobs, state.currentJobId]);
 

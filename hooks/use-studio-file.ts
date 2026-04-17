@@ -320,7 +320,7 @@ export function useStudioFile() {
         );
         try {
           const result = await importStudioWithToasts(file, deserializeCanvas);
-          if (result.success) onSuccess?.();
+          if (result.success && onSuccess) onSuccess();
         } catch (err) {
           if (!isAbortError(err)) {
             logger.error("[importStudioFile] Import failed:", err);
