@@ -90,13 +90,19 @@ describe("blurParamToKawaseParams", () => {
 
   test("continuity at breakpoint transitions", () => {
     const breakpoints = [0.3, 2, 6, 14, 24, 36, 48];
-    for (const bp of breakpoints) {
-      const before = blurParamToKawaseParams(bp - 0.001);
-      const after = blurParamToKawaseParams(bp + 0.001);
+    const blendedTransitions = breakpoints
+      .map((bp) => {
+        const before = blurParamToKawaseParams(bp - 0.001);
+        const after = blurParamToKawaseParams(bp + 0.001);
 
-      if (before.blendFactor > 0.5) {
-        expect(before.levelsHigh).toBe(after.levelsLow);
-      }
+        return { before, after };
+      })
+      .filter(({ before }) => before.blendFactor > 0.5);
+
+    expect(blendedTransitions.length).toBeGreaterThan(0);
+
+    for (const { before, after } of blendedTransitions) {
+      expect(before.levelsHigh).toBe(after.levelsLow);
     }
   });
 });

@@ -1,9 +1,18 @@
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import { canvasStore } from "#engine";
+import { isVideoEntity, type ShaderCanvasEntity } from "#types/canvas.ts";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
 import { createTestEntity, resetEntityCounter } from "../helpers/test-entity.ts";
 
 let cleanup: () => void;
+
+function getVideoCurrentTime(entity: ShaderCanvasEntity): number {
+  if (!isVideoEntity(entity)) {
+    throw new Error(`Expected video entity, received ${entity.mediaSource.type}`);
+  }
+
+  return entity.mediaSource.videoElement.currentTime;
+}
 
 beforeEach(() => {
   cleanup = setupCanvasTest();
@@ -25,9 +34,7 @@ describe("canvasStore.seekVideo", () => {
 
     canvasStore.seekVideo(entity.id, 50);
 
-    if (entity.mediaSource.type === "video") {
-      expect(entity.mediaSource.videoElement.currentTime).toBe(50);
-    }
+    expect(getVideoCurrentTime(entity)).toBe(50);
   });
 
   test("updates playback.currentTime", () => {
@@ -45,15 +52,11 @@ describe("canvasStore.seekVideo", () => {
 
     canvasStore.seekVideo(entity.id, 150);
 
-    if (entity.mediaSource.type === "video") {
-      expect(entity.mediaSource.videoElement.currentTime).toBe(100);
-    }
+    expect(getVideoCurrentTime(entity)).toBe(100);
 
     canvasStore.seekVideo(entity.id, -10);
 
-    if (entity.mediaSource.type === "video") {
-      expect(entity.mediaSource.videoElement.currentTime).toBe(0);
-    }
+    expect(getVideoCurrentTime(entity)).toBe(0);
   });
 
   test("marks texture as dirty", () => {
