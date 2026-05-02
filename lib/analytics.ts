@@ -12,6 +12,7 @@ export interface AnalyticsEventMap {
   "shader.changed": { from: string; to: string; entity_count: number };
   "entity.added": { media_type: string };
   "entity.duplicated": { entity_count: number };
+  "workspace.cleared": { entity_count: number };
   "deserialization.video_seek_timed_out": {
     mediaType: "video";
     container: string;

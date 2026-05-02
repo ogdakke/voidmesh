@@ -36,6 +36,7 @@ export interface CanvasCommands {
   ) => string;
   updateEntity: (id: string, updates: Partial<ShaderCanvasEntity>) => void;
   removeEntity: (id: string) => void;
+  clearWorkspace: () => void;
   selectEntity: (id: string | null) => void;
   moveEntity: (id: string, delta: Point) => void;
   bringToFront: (id: string) => void;

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useCanvasCommands } from "../context/use-canvas.ts";
 import { toastManager, ToastType } from "#components/ui/toast/toast-manager.ts";
 import type {
@@ -169,10 +169,27 @@ async function serializeAndDownload(serializeCanvas: () => Promise<Blob | null>)
 }
 
 export function useStudioFile() {
-  const { serializeCanvas, deserializeCanvas } = useCanvasCommands();
+  const {
+    serializeCanvas,
+    deserializeCanvas,
+    clearWorkspace: clearCanvasWorkspace,
+  } = useCanvasCommands();
   const [status, setStatus] = useState<StudioFileStatus>(StudioFileStatus.idle);
+  const activeFileHandle = useSyncExternalStore(
+    fileHandleStore.subscribe,
+    fileHandleStore.getSnapshot,
+  );
 
   const isBusy = status !== StudioFileStatus.idle;
+
+  const clearWorkspace = () => {
+    clearCanvasWorkspace();
+    fileHandleStore.handle = null;
+    toastManager.add({
+      title: "Workspace cleared",
+      description: "All resources were removed",
+    });
+  };
 
   const exportStudioFile = async () => {
     if (isBusy || getIsSaving()) return;
@@ -340,6 +357,9 @@ export function useStudioFile() {
     exportStudioFile,
     saveAsStudioFile,
     importStudioFile,
+    clearWorkspace,
+    activeWorkspaceFileName: activeFileHandle?.name ?? null,
+    hasActiveWorkspaceFile: activeFileHandle !== null,
     status,
     isExporting: status === StudioFileStatus.saving,
     isImporting: status === StudioFileStatus.opening,

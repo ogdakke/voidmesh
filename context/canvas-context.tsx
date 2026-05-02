@@ -86,19 +86,25 @@ function tryCleanupEntityResources(entity: ShaderCanvasEntity, ownerToken: numbe
     return;
   }
 
+  destroyEntityMediaResources(entity);
+}
+
+function destroyEntityMediaResources(entity: ShaderCanvasEntity): void {
   if (entity.mediaSource.type === MediaType.video) {
     const video = entity.mediaSource.videoElement;
     const videoSrc = video.src;
+    video.pause();
     video.src = "";
     video.load();
     URL.revokeObjectURL(videoSrc);
+    entity.imageBitmap.close();
   } else if (isGifEntity(entity)) {
     for (const frame of entity.mediaSource.frames) {
       frame.bitmap.close();
     }
-  } else if (entity.mediaSource.type === "svg") {
+  } else if (entity.mediaSource.type === MediaType.svg) {
     entity.imageBitmap.close();
-  } else if (entity.mediaSource.type === "image") {
+  } else if (entity.mediaSource.type === MediaType.image) {
     entity.imageBitmap.close();
   }
 
@@ -664,6 +670,31 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         description: `Delete entity ${entity.name}`,
       }),
     );
+  };
+
+  const clearWorkspace = () => {
+    const entities = Array.from(canvasStore.getState().entities.values());
+
+    // Clear undo first while live entities are still present, so undo eviction
+    // does not own-destroy resources that are about to be destroyed here.
+    undo.clear();
+    disintegrationController.clear();
+
+    for (const entity of entities) {
+      rendererRef.current?.cancelDisintegration(entity.id);
+      rendererRef.current?.removeEntityTexture(entity.id);
+      destroyEntityMediaResources(entity);
+    }
+
+    canvasStore.reset();
+    canvasStore.setViewport(config.defaults.viewport);
+    nextIdRef.current = 1;
+    nextZIndexRef.current = 1;
+    nextImageNumberRef.current = 1;
+
+    analytics.track("workspace.cleared", {
+      entity_count: entities.length,
+    });
   };
 
   const selectEntity = (id: string | null) => {
@@ -1816,6 +1847,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     addEntity,
     updateEntity,
     removeEntity,
+    clearWorkspace,
     selectEntity,
     moveEntity,
     bringToFront,
@@ -1866,6 +1898,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       addEntity,
       updateEntity,
       removeEntity,
+      clearWorkspace,
       selectEntity,
       moveEntity,
       bringToFront,
@@ -1917,6 +1950,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       addEntity: (...args) => commandsImplRef.current.addEntity(...args),
       updateEntity: (...args) => commandsImplRef.current.updateEntity(...args),
       removeEntity: (...args) => commandsImplRef.current.removeEntity(...args),
+      clearWorkspace: () => commandsImplRef.current.clearWorkspace(),
       selectEntity: (...args) => commandsImplRef.current.selectEntity(...args),
       moveEntity: (...args) => commandsImplRef.current.moveEntity(...args),
       bringToFront: (...args) => commandsImplRef.current.bringToFront(...args),
