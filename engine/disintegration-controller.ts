@@ -120,6 +120,13 @@ class DisintegrationController {
   cancelOverlay(id: string): void {
     this.#overlays.delete(id);
   }
+
+  /** Cancel all active overlays. */
+  clear(): void {
+    this.#overlays.clear();
+    this.#staggerIndex = 0;
+    canvasStore.setContainerDirty();
+  }
 }
 
 /** Singleton instance */

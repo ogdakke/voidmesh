@@ -1,5 +1,13 @@
-import { memo, type ChangeEvent } from "react";
-import { DropletHalf, Eye, FloppyDiskArrowIn, Import, NavArrowRight } from "iconoir-react";
+import { memo, useSyncExternalStore, type ChangeEvent } from "react";
+import {
+  DropletHalf,
+  Eye,
+  FloppyDiskArrowIn,
+  Import,
+  NavArrowDown,
+  NavArrowRight,
+  Trash,
+} from "iconoir-react";
 import {
   useCanvasRendererService,
   useHasEntities,
@@ -48,6 +56,9 @@ import {
 } from "#components/ui/collapsible/index.tsx";
 import { FileUploadComponent } from "./upload-button-controls.tsx";
 import { useStudioFile } from "#hooks/use-studio-file.ts";
+import { ButtonGroup, ButtonGroupSeparator } from "#components/ui/button-group/button-group.tsx";
+import { Menu } from "#components/ui/menu/menu.tsx";
+import { Keybind } from "#components/keyboard-shortcuts/keybind.tsx";
 
 interface SidebarRightControlsProps {
   className?: string;
@@ -58,7 +69,15 @@ interface SidebarRightControlsProps {
 export const SidebarRightControls = ({ className, compact }: SidebarRightControlsProps) => {
   const hasEntities = useHasEntities();
   const hasSelection = useHasSelection();
-  const { exportStudioFile, importStudioFile, isExporting, isImporting } = useStudioFile();
+  const {
+    exportStudioFile,
+    importStudioFile,
+    clearWorkspace,
+    hasActiveWorkspaceFile,
+    activeWorkspaceFileName,
+    isExporting,
+    isImporting,
+  } = useStudioFile();
 
   return (
     <form onSubmit={(e) => e.preventDefault()} className={className}>
@@ -85,6 +104,9 @@ export const SidebarRightControls = ({ className, compact }: SidebarRightControl
           hasEntities={hasEntities}
           exportStudioFile={exportStudioFile}
           importStudioFile={importStudioFile}
+          clearWorkspace={clearWorkspace}
+          hasActiveWorkspaceFile={hasActiveWorkspaceFile}
+          activeWorkspaceFileName={activeWorkspaceFileName}
           isExporting={isExporting}
           isImporting={isImporting}
         />
@@ -114,35 +136,100 @@ const EmptySelectionMessage = memo(function EmptySelectionMessage({
   );
 });
 
+const getHasUndoHistory = () => undo.canUndo() || undo.canRedo();
+
 const WorkspaceActions = memo(function WorkspaceActions({
   hasEntities,
   exportStudioFile,
   importStudioFile,
+  clearWorkspace,
+  hasActiveWorkspaceFile,
+  activeWorkspaceFileName,
   isExporting,
   isImporting,
 }: {
   hasEntities: boolean;
   exportStudioFile: () => void;
   importStudioFile: (onSuccess?: () => void) => void;
+  clearWorkspace: () => void;
+  hasActiveWorkspaceFile: boolean;
+  activeWorkspaceFileName: string | null;
   isExporting: boolean;
   isImporting: boolean;
 }) {
+  const isBusy = isExporting || isImporting;
+  const hasUndoHistory = useSyncExternalStore(undo.subscribe, getHasUndoHistory);
+  const canSaveWorkspace = hasEntities && !isBusy;
+  const canClearWorkspace = (hasEntities || hasActiveWorkspaceFile || hasUndoHistory) && !isBusy;
+
   return (
     <div className="sidebar-row studio-file-row">
-      {hasEntities && (
-        <Button variant="primary" onClick={exportStudioFile} disabled={isExporting || isImporting}>
-          <FloppyDiskArrowIn />
-          <span>Save workspace</span>
-        </Button>
-      )}
-      <Button
-        variant="secondary"
-        onClick={() => importStudioFile()}
-        disabled={isExporting || isImporting}
-      >
-        <Import />
-        <span>Open workspace</span>
-      </Button>
+      <Menu.Root>
+        <ButtonGroup aria-label="Workspace actions" className="workspace-button-group">
+          <Button
+            type="button"
+            variant="primary"
+            className="workspace-button-group__primary"
+            data-button-group-position="first"
+            onClick={() => importStudioFile()}
+            disabled={isBusy}
+          >
+            <Import />
+            <span>Open workspace</span>
+          </Button>
+          <ButtonGroupSeparator />
+          <Menu.Trigger
+            disabled={isBusy}
+            render={(props) => (
+              <Button
+                {...props}
+                type="button"
+                variant="primary"
+                icon
+                className={`workspace-button-group__menu-trigger ${props.className ?? ""}`}
+                data-button-group-position="last"
+                aria-label="More workspace actions"
+              >
+                <NavArrowDown />
+              </Button>
+            )}
+          />
+        </ButtonGroup>
+        <Menu.Popup align="end" sideOffset={6} className="workspace-actions-menu">
+          {activeWorkspaceFileName && (
+            <>
+              <Menu.Group>
+                <Menu.GroupLabel title={activeWorkspaceFileName}>
+                  {activeWorkspaceFileName}
+                </Menu.GroupLabel>
+              </Menu.Group>
+              <Menu.Separator />
+            </>
+          )}
+          <Menu.Item
+            className="menu-item--icon-left menu-item--icon-right"
+            onClick={exportStudioFile}
+            disabled={!canSaveWorkspace}
+          >
+            <Menu.IconLeft>
+              <FloppyDiskArrowIn />
+            </Menu.IconLeft>
+            Save workspace
+            <Keybind keybindId="save_studio" />
+          </Menu.Item>
+          <Menu.Item
+            className="menu-item--icon-left"
+            onClick={clearWorkspace}
+            disabled={!canClearWorkspace}
+            variant="destructive"
+          >
+            <Menu.IconLeft>
+              <Trash />
+            </Menu.IconLeft>
+            Clear workspace
+          </Menu.Item>
+        </Menu.Popup>
+      </Menu.Root>
     </div>
   );
 });

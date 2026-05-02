@@ -536,6 +536,11 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.selectedEntityIds = new Set();
     this.state.hoveredEntityId = null;
     this.state.contextOpenEntityId = null;
+    this.state.multiSelectMode = false;
+    this.state.entityDragActive = false;
+    this.state.actionLayerActive = false;
+    this.state.actionLayerEntityIds = new Set();
+    this.state.actionLayerTouchOrigin = { x: 0, y: 0 };
     this.state.entitiesDirty.clear();
     this.state.selectionDirty = false;
     this.state.viewportDirty = false;
@@ -546,6 +551,8 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.viewportVersion++;
     this.state.preferencesVersion++;
     this.state.playbackVersion++;
+    this.state.dragVersion++;
+    this.state.actionLayerVersion++;
     // Clear computed cache
     this.clearComputedCache();
     this.#resetSelectorCaches();

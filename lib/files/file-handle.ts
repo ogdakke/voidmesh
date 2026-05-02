@@ -14,13 +14,16 @@ class FileHandleStore {
     })();
 
   #handle: FileSystemFileHandle | null = null;
+  #listeners = new Set<() => void>();
 
   get handle(): FileSystemFileHandle | null {
     return this.#handle;
   }
 
   set handle(h: FileSystemFileHandle | null) {
+    if (this.#handle === h) return;
     this.#handle = h;
+    this.#emit();
   }
 
   get name(): string | null {
@@ -29,6 +32,19 @@ class FileHandleStore {
 
   get hasHandle(): boolean {
     return this.#handle !== null;
+  }
+
+  subscribe = (listener: () => void): (() => void) => {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  };
+
+  getSnapshot = (): FileSystemFileHandle | null => {
+    return this.#handle;
+  };
+
+  #emit() {
+    for (const listener of this.#listeners) listener();
   }
 }
 
