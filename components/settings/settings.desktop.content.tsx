@@ -1,8 +1,4 @@
-import { useHasEntities } from "#context/use-canvas.ts";
-import { useStudioFile } from "#hooks/use-studio-file.ts";
-import { Button } from "#ui/button/button.tsx";
 import { Modal } from "#ui/modal/modal.tsx";
-import { FloppyDiskArrowIn, Import } from "iconoir-react";
 import {
   FancyDeleteToggle,
   FeedbackLink,
@@ -18,11 +14,6 @@ export default function DesktopSettingsContent({
   isOpen: boolean;
   onClose: () => void;
 }) {
-  const hasEntities = useHasEntities();
-  const { exportStudioFile, importStudioFile, isExporting, isImporting } = useStudioFile();
-
-  const isLoading = isExporting || isImporting;
-
   return (
     <Modal.Root open={isOpen} onClose={onClose}>
       <Modal.Content className="desktop-settings-modal">
@@ -44,19 +35,6 @@ export default function DesktopSettingsContent({
           <LinkItem>
             <FeedbackLink className="desktop-settings-link" />
           </LinkItem>
-        </div>
-        <hr className="divider" />
-        <div className="desktop-settings-studio-buttons">
-          <Button variant="quiet" onClick={() => importStudioFile(onClose)} disabled={isLoading}>
-            <Import />
-            <span>Open workspace</span>
-          </Button>
-          {hasEntities && (
-            <Button variant="primary" onClick={exportStudioFile} disabled={isLoading}>
-              <FloppyDiskArrowIn />
-              <span>Save workspace</span>
-            </Button>
-          )}
         </div>
       </Modal.Content>
     </Modal.Root>

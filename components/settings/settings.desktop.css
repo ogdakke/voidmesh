@@ -34,20 +34,6 @@
     color: var(--gray-900);
   }
 
-  .desktop-settings-button {
-    flex: 1;
-    cursor: pointer;
-  }
-
-  .desktop-settings-studio-buttons {
-    margin-top: auto;
-    display: grid;
-    grid-auto-flow: row;
-    justify-content: stretch;
-    gap: var(--spacing-2);
-    padding: var(--spacing-2);
-  }
-
   .flex {
     display: flex;
   }
