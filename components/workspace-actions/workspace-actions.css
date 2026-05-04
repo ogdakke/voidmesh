@@ -1,0 +1,28 @@
+.workspace-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin-top: auto;
+  padding: 4px 12px 8px;
+}
+
+.workspace-button-group {
+  width: 100%;
+}
+
+.workspace-button-group__primary {
+  flex: 1;
+}
+
+.workspace-actions-menu {
+  min-width: 220px;
+
+  .menu-group-label {
+    max-width: 220px;
+    display: block;
+    overflow: clip;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--gray-900);
+  }
+}

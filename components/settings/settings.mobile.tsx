@@ -1,8 +1,9 @@
 import { useHasEntities } from "#context/use-canvas.ts";
 import { useStudioFile } from "#hooks/use-studio-file.ts";
+import { WorkspaceActions } from "#components/workspace-actions/workspace-actions.tsx";
 import { Button } from "#ui/button/index.tsx";
 import { Drawer } from "#ui/drawer/index.tsx";
-import { FloppyDiskArrowIn, Import, MoreVert } from "iconoir-react";
+import { MoreVert } from "iconoir-react";
 import { useState } from "react";
 import "./settings.mobile.css";
 import {
@@ -15,10 +16,23 @@ import {
 } from "./settings.shared.tsx";
 export default function SettingsDrawer() {
   const hasEntities = useHasEntities();
-  const { exportStudioFile, importStudioFile, isExporting, isImporting } = useStudioFile();
+  const {
+    exportStudioFile,
+    importStudioFile,
+    clearWorkspace,
+    hasActiveWorkspaceFile,
+    activeWorkspaceFileName,
+    isExporting,
+    isImporting,
+  } = useStudioFile();
   const [open, setOpen] = useState(false);
 
-  const isLoading = isExporting || isImporting;
+  const importAndClose = (onSuccess?: () => void) => {
+    importStudioFile(() => {
+      onSuccess?.();
+      setOpen(false);
+    });
+  };
 
   return (
     <Drawer.Root open={open} onOpenChange={setOpen}>
@@ -59,22 +73,17 @@ export default function SettingsDrawer() {
               <FeedbackLink className="settings-drawer-link" />
             </LinkItem>
           </div>
-          <div className="settings-drawer-studio-buttons">
-            {hasEntities && (
-              <Button variant="primary" onClick={exportStudioFile} disabled={isLoading}>
-                <FloppyDiskArrowIn />
-                <span>Save workspace</span>
-              </Button>
-            )}
-            <Button
-              variant="secondary"
-              onClick={() => importStudioFile(() => setOpen(false))}
-              disabled={isLoading}
-            >
-              <Import />
-              <span>Open workspace</span>
-            </Button>
-          </div>
+          <WorkspaceActions
+            className="settings-drawer-workspace-actions"
+            hasEntities={hasEntities}
+            exportStudioFile={exportStudioFile}
+            importStudioFile={importAndClose}
+            clearWorkspace={clearWorkspace}
+            hasActiveWorkspaceFile={hasActiveWorkspaceFile}
+            activeWorkspaceFileName={activeWorkspaceFileName}
+            isExporting={isExporting}
+            isImporting={isImporting}
+          />
         </div>
       </Drawer.Popup>
     </Drawer.Root>

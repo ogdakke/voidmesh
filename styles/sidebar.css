@@ -39,35 +39,6 @@
   margin-top: auto;
 }
 
-.studio-file-row {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  margin-top: auto;
-  padding-block-end: 8px;
-}
-
-.workspace-button-group {
-  width: 100%;
-}
-
-.workspace-button-group__primary {
-  flex: 1;
-}
-
-.workspace-actions-menu {
-  min-width: 220px;
-
-  .menu-group-label {
-    max-width: 220px;
-    display: block;
-    overflow: clip;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--gray-900);
-  }
-}
-
 .export-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
