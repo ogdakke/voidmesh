@@ -48,7 +48,6 @@
     width: 100%;
     height: 1.5rem;
     padding: 0 0 var(--spacing);
-    margin: 0 0 var(--spacing) -0.25rem;
     border: 1px solid transparent;
     border-radius: var(--radius);
     background: transparent;
@@ -57,16 +56,13 @@
     font-size: var(--text-sm);
     font-weight: 500;
     text-align: left;
-    outline: none;
     overflow: hidden;
     text-overflow: ellipsis;
     cursor: text;
 
     &:focus {
-      border-color: var(--primary);
-      background: var(--background);
+      outline: 2px solid var(--primary);
       color: var(--color);
-      box-shadow: 0 0 0 2px color-mix(in oklch, var(--primary) 20%, transparent);
     }
   }
 
