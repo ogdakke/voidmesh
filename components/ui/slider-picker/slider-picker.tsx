@@ -319,6 +319,7 @@ export function SliderPickerOptions({ className, children, ...props }: SliderPic
       ref={optionsRef}
       data-slot="slider-picker-options"
       className={clsx("slider-picker-options", className)}
+      // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
       role="listbox"
       {...props}
     >

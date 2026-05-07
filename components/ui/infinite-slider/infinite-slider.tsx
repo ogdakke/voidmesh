@@ -399,6 +399,7 @@ export function InfiniteSlider({
       {...props}
       ref={containerRef}
       className="infinite-slider"
+      // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
       role="slider"
       tabIndex={0}
       aria-valuenow={value}

@@ -112,6 +112,7 @@ function SliderBase({
             ref={trackRef}
             className="color-slider"
             data-channel={channel === "h" ? "hue" : "alpha"}
+            // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
             role="slider"
             aria-label={label}
             aria-valuemin={min}
