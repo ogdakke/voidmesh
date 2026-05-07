@@ -1531,6 +1531,54 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const renamePalette = (paletteId: string, name: string) => {
+    if (!isUserPalette(paletteId)) return;
+
+    const trimmedName = name.trim();
+    if (!trimmedName) return;
+
+    const oldPalette = paletteStore.getPalettes().find((palette) => palette.id === paletteId);
+    if (!oldPalette) return;
+    if (oldPalette.name === trimmedName && oldPalette.shortName === trimmedName) return;
+
+    const renamedPalette: ColorPalette = {
+      ...oldPalette,
+      name: trimmedName,
+      shortName: trimmedName,
+    };
+    const entities = [...canvasStore.getState().entities.values()].filter(
+      (entity) => entity.shaderParams.palette?.id === paletteId,
+    );
+
+    const ownTransaction = !undo.isInTransaction();
+    if (ownTransaction) undo.beginTransaction();
+    paletteStore.updatePalette(paletteId, renamedPalette);
+    undo.add(
+      Command.create({
+        execute: () => paletteStore.updatePalette(paletteId, renamedPalette),
+        undo: () => paletteStore.updatePalette(paletteId, oldPalette),
+        description: "Rename palette",
+      }),
+    );
+
+    for (const entity of entities) {
+      const entityPalette = entity.shaderParams.palette;
+      if (!entityPalette) continue;
+      updateEntity(entity.id, {
+        shaderParams: {
+          ...entity.shaderParams,
+          palette: {
+            ...entityPalette,
+            name: trimmedName,
+            shortName: trimmedName,
+          },
+        },
+      });
+    }
+
+    if (ownTransaction) undo.commitTransaction("Rename palette");
+  };
+
   const deletePalette = (paletteId: string) => {
     const entities = canvasStore.getSelectedEntities();
     if (entities.length === 0) return;
@@ -1863,6 +1911,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     changeGlassKind,
     changeGlitchKind,
     changePalette,
+    renamePalette,
     uploadPalette,
     deletePalette,
     setShowOriginal,
@@ -1914,6 +1963,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       changeGlassKind,
       changeGlitchKind,
       changePalette,
+      renamePalette,
       uploadPalette,
       deletePalette,
       setShowOriginal,
@@ -1968,6 +2018,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       changeGlassKind: (...args) => commandsImplRef.current.changeGlassKind(...args),
       changeGlitchKind: (...args) => commandsImplRef.current.changeGlitchKind(...args),
       changePalette: (...args) => commandsImplRef.current.changePalette(...args),
+      renamePalette: (...args) => commandsImplRef.current.renamePalette(...args),
       uploadPalette: (...args) => commandsImplRef.current.uploadPalette(...args),
       deletePalette: (...args) => commandsImplRef.current.deletePalette(...args),
       setShowOriginal: (...args) => commandsImplRef.current.setShowOriginal(...args),

@@ -55,6 +55,7 @@ export interface CanvasCommands {
   changeGlassKind: (value: string | null) => void;
   changeGlitchKind: (value: string | null) => void;
   changePalette: (palette: ColorPalette) => void;
+  renamePalette: (paletteId: string, name: string) => void;
   uploadPalette: (files: FileList | File | null) => Promise<void>;
   deletePalette: (paletteId: string) => void;
   setShowOriginal: (value: boolean) => void;

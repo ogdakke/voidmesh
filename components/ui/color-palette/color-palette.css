@@ -9,6 +9,15 @@
 
   .color-palette__label {
     grid-column: 1 / 1;
+    min-width: 0;
+    max-width: 100%;
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    line-clamp: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .color-palette__count {
@@ -33,5 +42,98 @@
     justify-self: end;
     display: flex;
     gap: var(--spacing-2);
+  }
+
+  .color-palette__name-input {
+    width: 100%;
+    height: 1.5rem;
+    padding: 0 0 var(--spacing);
+    margin: 0 0 var(--spacing) -0.25rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--gray-900);
+    font: inherit;
+    font-size: var(--text-sm);
+    font-weight: 500;
+    text-align: left;
+    outline: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: text;
+
+    &:focus {
+      border-color: var(--primary);
+      background: var(--background);
+      color: var(--color);
+      box-shadow: 0 0 0 2px color-mix(in oklch, var(--primary) 20%, transparent);
+    }
+  }
+
+  .color-palette-drawer {
+    max-height: calc(400px + env(safe-area-inset-bottom, 0px));
+
+    & .drawer-title {
+      place-self: center;
+      max-width: 80%;
+      display: -webkit-box;
+      -webkit-line-clamp: 1;
+      -webkit-box-orient: vertical;
+      line-clamp: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  .color-palette-drawer__content {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-3);
+    padding: var(--spacing-3) var(--spacing-3)
+      max(env(safe-area-inset-bottom, var(--spacing-3)), var(--spacing-3));
+  }
+
+  .color-palette-drawer__field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-1);
+  }
+
+  .color-palette-drawer__input {
+    box-sizing: border-box;
+    padding: 0 var(--spacing-2);
+    border: 1px solid #0000;
+    line-height: 1.125rem;
+    font-size: 1.125rem;
+    font-weight: 600;
+    font-family: var(--sans-serif-rounded);
+    font-variant: tabular-nums;
+    background: var(--gray-75);
+    height: calc(9 * var(--spacing));
+    color: var(--gray-1400);
+    border-radius: var(--radius-xl);
+    box-shadow: 0px 0px 7px 1px #0000000d inset;
+    min-width: 0;
+
+    @media (prefers-color-scheme: dark) {
+      box-shadow: 0px 0px 7px 1px #00000047 inset;
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+    }
+  }
+
+  .color-palette-drawer__actions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-2);
+    margin-top: auto;
+
+    .ui-button {
+      width: 100%;
+    }
   }
 }

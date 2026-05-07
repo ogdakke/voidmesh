@@ -642,7 +642,7 @@ export const EntityParams = memo(function EntityParams() {
 });
 
 const PaletteEditorSection = memo(function PaletteEditorSection() {
-  const { changePalette, uploadPalette, deletePalette } = useCanvasCommands();
+  const { changePalette, renamePalette, uploadPalette, deletePalette } = useCanvasCommands();
   const { colorSpace } = useCanvasRendererService();
   const reversePalette = useParamValue(
     "reversePalette",
@@ -661,11 +661,17 @@ const PaletteEditorSection = memo(function PaletteEditorSection() {
           palette={palette.value ?? undefined}
           colorSpace={colorSpace}
           reversed={!!reversePalette.value}
+          onRename={
+            palette.value?.id && isUserPalette(palette.value.id)
+              ? (name) => renamePalette(palette.value!.id!, name)
+              : undefined
+          }
           onDelete={
             palette.value?.id && isUserPalette(palette.value.id)
               ? () => deletePalette(palette.value.id!)
               : undefined
           }
+          canRename={!!palette.value?.id && isUserPalette(palette.value.id)}
           canDelete={!!palette.value?.id && isUserPalette(palette.value.id)}
         />
       )}

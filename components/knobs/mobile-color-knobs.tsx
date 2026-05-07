@@ -49,7 +49,7 @@ interface MobilePaletteItem {
 }
 
 export function MobileColorKnobs() {
-  const { changePalette, uploadPalette, deletePalette, updateSelectedEntityParams } =
+  const { changePalette, renamePalette, uploadPalette, deletePalette, updateSelectedEntityParams } =
     useCanvasCommands();
   const selectedEntity = useSelectedEntity();
   const customPalettes = usePaletteStore();
@@ -301,12 +301,20 @@ export function MobileColorKnobs() {
           onValueChange={changePalette}
           colorSpace={colorSpace}
           reversed={!!reversePalette.value}
+          onRename={
+            paletteParam.value?.id && isUserPalette(paletteParam.value.id)
+              ? (name) => renamePalette(paletteParam.value!.id!, name)
+              : undefined
+          }
           onDelete={
             paletteParam.value?.id && isUserPalette(paletteParam.value.id)
               ? () => deletePalette(paletteParam.value!.id!)
               : undefined
           }
+          canRename={!!paletteParam.value?.id && isUserPalette(paletteParam.value.id)}
           canDelete={!!paletteParam.value?.id && isUserPalette(paletteParam.value.id)}
+          actionMode="manage"
+          editableLabel={false}
           className="mobile-color__palette"
         />
       )}
