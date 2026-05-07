@@ -303,12 +303,12 @@ export function MobileColorKnobs() {
           reversed={!!reversePalette.value}
           onRename={
             paletteParam.value?.id && isUserPalette(paletteParam.value.id)
-              ? (name) => renamePalette(paletteParam.value!.id!, name)
+              ? (name) => renamePalette(paletteParam.value.id!, name)
               : undefined
           }
           onDelete={
             paletteParam.value?.id && isUserPalette(paletteParam.value.id)
-              ? () => deletePalette(paletteParam.value!.id!)
+              ? () => deletePalette(paletteParam.value.id!)
               : undefined
           }
           canRename={!!paletteParam.value?.id && isUserPalette(paletteParam.value.id)}
