@@ -273,7 +273,7 @@
 /* ── Mobile Drawer ──────────────────────────────────────────────────── */
 
 .color-picker__drawer {
-  max-height: calc(520px + env(safe-area-inset-bottom, 0px));
+  max-height: calc(600px + env(safe-area-inset-bottom, 0px));
 }
 
 .color-picker__drawer-body {
@@ -286,7 +286,7 @@
 }
 
 .color-picker-remove-button {
-  grid-column: 1 / -1;
+  margin-top: var(--spacing-3);
 }
 
 .color-picker-footer-top-row {

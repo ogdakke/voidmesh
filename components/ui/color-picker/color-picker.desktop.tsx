@@ -1,4 +1,3 @@
-import { Trash } from "iconoir-react";
 import { Button } from "../button";
 import { ColorPicker } from "./color-picker";
 import { usePickerClose } from "./use-color-picker";
@@ -40,7 +39,6 @@ export default function DesktopPreset({ onRemove }: DesktopPresetProps) {
                 aria-label="Remove color"
                 size="md"
               >
-                <Trash />
                 <span>Remove</span>
               </Button>
             )}

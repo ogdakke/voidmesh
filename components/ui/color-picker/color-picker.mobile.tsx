@@ -1,4 +1,3 @@
-import { Trash } from "iconoir-react";
 import { Button } from "../button";
 import { ColorPicker } from "./color-picker";
 import { usePickerClose } from "./use-color-picker";
@@ -32,17 +31,16 @@ export default function MobilePreset({ onRemove }: MobilePresetProps) {
         <ColorPicker.Footer>
           <div className="color-picker-footer-top-row">
             <ColorPicker.ValueInput />
-            {onRemove && (
-              <Button
-                onClick={handleRemove}
-                icon
-                variant="destructive"
-                className="color-picker-remove-button"
-              >
-                <Trash />
-              </Button>
-            )}
           </div>
+          {onRemove && (
+            <Button
+              onClick={handleRemove}
+              variant="destructive"
+              className="color-picker-remove-button"
+            >
+              Remove
+            </Button>
+          )}
         </ColorPicker.Footer>
       </ColorPicker.DrawerPopup>
     </>

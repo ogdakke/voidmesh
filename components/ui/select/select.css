@@ -4,6 +4,7 @@
     flex-direction: column;
     align-items: start;
     gap: 0.25rem;
+    min-width: 0;
   }
 
   .select-label {
@@ -69,6 +70,12 @@
   .select-value_primary {
     font-size: 1rem;
     line-height: 1.5rem;
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
+    overflow: hidden;
+    white-space: nowrap;
+    flex: 1;
+    text-overflow: ellipsis;
   }
 
   .select-value_secondary {
