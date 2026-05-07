@@ -227,6 +227,8 @@ function PaletteNameLabel({
       title="Rename palette"
       autoComplete="off"
       spellCheck={false}
+      autoCorrect="off"
+      placeholder="Name your palette"
       onChange={(event) => setDraftName(event.currentTarget.value)}
       onFocus={(event) => event.currentTarget.select()}
       onKeyDown={handleKeyDown}
@@ -292,6 +294,10 @@ function PaletteManagementDrawer({
               type="text"
               value={draftName}
               maxLength={64}
+              autoComplete="off"
+              spellCheck={false}
+              autoCorrect="off"
+              placeholder="Name your palette"
               className="color-palette-drawer__input"
               onChange={(event) => setDraftName(event.currentTarget.value)}
               onKeyDown={(event) => {
