@@ -432,7 +432,7 @@ const GLASS_ITEMS: MobileStyleItem<GlassKind>[] = [
   },
   {
     value: GlassKind.flowing,
-    label: "Flowing Glass (experimental)",
+    label: "Flowing Glass",
     shortLabel: "Flowing",
     icon: () => <span>F</span>,
   },

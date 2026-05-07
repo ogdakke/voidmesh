@@ -54,7 +54,7 @@ export type GlassKind = typeof GlassKind.infer;
 export const GLASS_KIND_OPTIONS = [
   { value: GlassKind.fluted, label: "Fluted" },
   { value: GlassKind.frostedVoronoi, label: "Frosted Voronoi" },
-  { value: GlassKind.flowing, label: "Flowing (experimental)" },
+  { value: GlassKind.flowing, label: "Flowing" },
 ];
 
 /** Dithering algorithm types */
