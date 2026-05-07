@@ -174,7 +174,7 @@ export function MobileColorKnobs() {
       changePalette(item.palette);
       showFloatingLabel(item.label);
     } else if (id === UPLOAD_MODE_ID) {
-      showFloatingLabel("Upload");
+      showFloatingLabel("Extract palette");
     } else if (id === PRESERVE_COLORS_ID) {
       showFloatingLabel("Preserve Colors");
     } else if (id === REVERSE_PALETTE_ID) {
@@ -186,7 +186,7 @@ export function MobileColorKnobs() {
 
   // Show floating label on interaction start + begin undo transaction
   const handleInteractionStart = () => {
-    showFloatingLabel(selectedItem?.label ?? "Upload");
+    showFloatingLabel(selectedItem?.label ?? "Extract");
     undo.beginTransaction();
   };
 
