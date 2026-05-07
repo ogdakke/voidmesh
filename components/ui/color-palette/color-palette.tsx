@@ -221,6 +221,7 @@ function PaletteNameLabel({
     <input
       type="text"
       className="field-label color-palette__label color-palette__name-input"
+      name="palette-name"
       value={draftName}
       maxLength={64}
       aria-label="Palette name"
@@ -295,6 +296,7 @@ function PaletteManagementDrawer({
               value={draftName}
               maxLength={64}
               autoComplete="off"
+              name="palette-name"
               spellCheck={false}
               autoCorrect="off"
               placeholder="Name your palette"
