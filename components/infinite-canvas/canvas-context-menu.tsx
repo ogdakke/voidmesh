@@ -32,8 +32,6 @@ import { type RefObject, type PropsWithChildren, useRef, useState } from "react"
 import { ContextMenu } from "@base-ui/react/context-menu";
 import "../ui/menu/menu.css";
 import { Keybind } from "../keyboard-shortcuts/keybind.tsx";
-import { MaterialSymbolsFlipToFrontRounded } from "../icons/flip-to-front.tsx";
-import { MaterialSymbolsFlipToBackRounded } from "../icons/flip-to-back.tsx";
 import { IonDuplicateOutline } from "../icons/duplicate.tsx";
 import { config } from "#config";
 import { logger } from "#lib/client.logger.ts";
@@ -204,8 +202,6 @@ function CanvasContextMenuItems({
     copySelectionImage,
     copySelectionEffects,
     pasteEffects,
-    bringSelectionToFront,
-    sendSelectionToBack,
     duplicateEntities,
     resetSelectionToDefaults,
     saveSelectedEntityToFile,
@@ -724,22 +720,6 @@ function CanvasContextMenuItems({
         </ContextMenu.Portal>
       </ContextMenu.SubmenuRoot>
       <ContextMenu.Separator className="menu-separator" />
-      <ContextMenu.Item
-        className="menu-item menu-item--icon-left menu-item--icon-right"
-        onClick={bringSelectionToFront}
-      >
-        <MaterialSymbolsFlipToFrontRounded className="menu-icon-left" />
-        Bring to Front{isMultiple && ` (${selectionCount})`}
-        <Keybind keybindId="bring_to_front" />
-      </ContextMenu.Item>
-      <ContextMenu.Item
-        className="menu-item menu-item--icon-left menu-item--icon-right"
-        onClick={sendSelectionToBack}
-      >
-        <MaterialSymbolsFlipToBackRounded className="menu-icon-left" />
-        Send to Back{isMultiple && ` (${selectionCount})`}
-        <Keybind keybindId="send_to_back" />
-      </ContextMenu.Item>
       <ContextMenu.Item
         className="menu-item menu-item--icon-left menu-item--icon-right"
         onClick={() => duplicateEntities()}

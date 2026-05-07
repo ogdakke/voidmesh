@@ -39,8 +39,6 @@ export interface CanvasCommands {
   clearWorkspace: () => void;
   selectEntity: (id: string | null) => void;
   moveEntity: (id: string, delta: Point) => void;
-  bringToFront: (id: string) => void;
-  sendToBack: (id: string) => void;
   duplicateEntities: () => Promise<string[]>;
   updateSelectedEntityParams: (
     updates: PartialDeep<ShaderParams>,
@@ -68,8 +66,6 @@ export interface CanvasCommands {
   copySelectionImage: (e?: KeyboardEvent) => Promise<void>;
   copySelectionEffects: () => void;
   pasteEffects: () => Promise<void>;
-  bringSelectionToFront: () => void;
-  sendSelectionToBack: () => void;
   resetSelectionToDefaults: () => void;
   setSnapToGrid: (enabled: boolean) => void;
   setFancyDelete: (enabled: boolean) => void;

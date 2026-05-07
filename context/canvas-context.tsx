@@ -718,42 +718,6 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     );
   };
 
-  const bringToFront = (id: string) => {
-    const entity = canvasStore.getState().entities.get(id);
-    if (!entity) return;
-
-    const previousZIndex = entity.zIndex;
-    const newZIndex = nextZIndexRef.current++;
-    canvasStore.updateEntity(id, { zIndex: newZIndex });
-
-    undo.add(
-      Command.create({
-        undo: () => canvasStore.updateEntity(id, { zIndex: previousZIndex }),
-        execute: () => canvasStore.updateEntity(id, { zIndex: newZIndex }),
-        description: `Bring to front ${id}`,
-      }),
-    );
-  };
-
-  const sendToBack = (id: string) => {
-    const entity = canvasStore.getState().entities.get(id);
-    if (!entity) return;
-
-    const previousZIndex = entity.zIndex;
-    const entities = Array.from(canvasStore.getState().entities.values());
-    const minZIndex = Math.min(...entities.map((e) => e.zIndex), 0);
-    const newZIndex = minZIndex - 1;
-    canvasStore.updateEntity(id, { zIndex: newZIndex });
-
-    undo.add(
-      Command.create({
-        undo: () => canvasStore.updateEntity(id, { zIndex: previousZIndex }),
-        execute: () => canvasStore.updateEntity(id, { zIndex: newZIndex }),
-        description: `Send to back ${id}`,
-      }),
-    );
-  };
-
   const duplicateEntities = async (): Promise<string[]> => {
     const selected = canvasStore.getSelectedEntities();
     if (selected.length === 0) return [];
@@ -1751,26 +1715,6 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     undo.commitTransaction(`Reset ${entities.length} entities to defaults`);
   };
 
-  const bringSelectionToFront = () => {
-    const entities = canvasStore.getSelectedEntities();
-    if (entities.length === 0) return;
-
-    const sorted = [...entities].sort((a, b) => a.zIndex - b.zIndex);
-    for (const entity of sorted) {
-      bringToFront(entity.id);
-    }
-  };
-
-  const sendSelectionToBack = () => {
-    const entities = canvasStore.getSelectedEntities();
-    if (entities.length === 0) return;
-
-    const sorted = [...entities].sort((a, b) => b.zIndex - a.zIndex);
-    for (const entity of sorted) {
-      sendToBack(entity.id);
-    }
-  };
-
   const setSnapToGridPreference = (enabled: boolean) => {
     canvasStore.setSnapToGrid(enabled);
     preferences.setSnapToGrid(enabled);
@@ -1898,8 +1842,6 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     clearWorkspace,
     selectEntity,
     moveEntity,
-    bringToFront,
-    sendToBack,
     duplicateEntities,
     updateSelectedEntityParams,
     setSelectedEntityTimeAutoPlay,
@@ -1924,8 +1866,6 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     copySelectionImage,
     copySelectionEffects,
     pasteEffects,
-    bringSelectionToFront,
-    sendSelectionToBack,
     resetSelectionToDefaults,
     setSnapToGrid: setSnapToGridPreference,
     setFancyDelete: setFancyDeletePreference,
@@ -1950,8 +1890,6 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       clearWorkspace,
       selectEntity,
       moveEntity,
-      bringToFront,
-      sendToBack,
       duplicateEntities,
       updateSelectedEntityParams,
       setSelectedEntityTimeAutoPlay,
@@ -1976,8 +1914,6 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       copySelectionImage,
       copySelectionEffects,
       pasteEffects,
-      bringSelectionToFront,
-      sendSelectionToBack,
       resetSelectionToDefaults,
       setSnapToGrid: setSnapToGridPreference,
       setFancyDelete: setFancyDeletePreference,
@@ -2003,8 +1939,6 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       clearWorkspace: () => commandsImplRef.current.clearWorkspace(),
       selectEntity: (...args) => commandsImplRef.current.selectEntity(...args),
       moveEntity: (...args) => commandsImplRef.current.moveEntity(...args),
-      bringToFront: (...args) => commandsImplRef.current.bringToFront(...args),
-      sendToBack: (...args) => commandsImplRef.current.sendToBack(...args),
       duplicateEntities: () => commandsImplRef.current.duplicateEntities(),
       updateSelectedEntityParams: (...args) =>
         commandsImplRef.current.updateSelectedEntityParams(...args),
@@ -2031,8 +1965,6 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       copySelectionImage: (...args) => commandsImplRef.current.copySelectionImage(...args),
       copySelectionEffects: () => commandsImplRef.current.copySelectionEffects(),
       pasteEffects: () => commandsImplRef.current.pasteEffects(),
-      bringSelectionToFront: () => commandsImplRef.current.bringSelectionToFront(),
-      sendSelectionToBack: () => commandsImplRef.current.sendSelectionToBack(),
       resetSelectionToDefaults: () => commandsImplRef.current.resetSelectionToDefaults(),
       setSnapToGrid: (...args) => commandsImplRef.current.setSnapToGrid(...args),
       setFancyDelete: (...args) => commandsImplRef.current.setFancyDelete(...args),

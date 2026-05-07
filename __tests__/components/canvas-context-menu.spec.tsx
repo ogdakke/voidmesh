@@ -336,50 +336,6 @@ describe("CanvasContextMenu", () => {
     });
   });
 
-  describe("layer ordering", () => {
-    test("shows bring to front with count for multi-select", async () => {
-      const user = userEvent.setup();
-      const { canvas } = renderWithCanvas(<ContextMenuTestWrapper />, { skip: skipProviders });
-
-      act(() => {
-        const ids = [canvas.addEntity(createEntityInput()), canvas.addEntity(createEntityInput())];
-        canvasStore.replaceSelection(ids);
-      });
-
-      await waitFor(() => canvasStore.getState().selectedEntityIds.size === 2);
-
-      const trigger = screen.getByTestId("trigger-area");
-      await user.pointer({ keys: "[MouseRight]", target: trigger });
-
-      await waitFor(() => {
-        return screen.queryByText(/bring to front.*\(2\)/i) !== null;
-      });
-
-      expect(screen.getByText(/bring to front.*\(2\)/i)).toBeInTheDocument();
-    });
-
-    test("shows send to back with count for multi-select", async () => {
-      const user = userEvent.setup();
-      const { canvas } = renderWithCanvas(<ContextMenuTestWrapper />, { skip: skipProviders });
-
-      act(() => {
-        const ids = [canvas.addEntity(createEntityInput()), canvas.addEntity(createEntityInput())];
-        canvasStore.replaceSelection(ids);
-      });
-
-      await waitFor(() => canvasStore.getState().selectedEntityIds.size === 2);
-
-      const trigger = screen.getByTestId("trigger-area");
-      await user.pointer({ keys: "[MouseRight]", target: trigger });
-
-      await waitFor(() => {
-        return screen.queryByText(/send to back.*\(2\)/i) !== null;
-      });
-
-      expect(screen.getByText(/send to back.*\(2\)/i)).toBeInTheDocument();
-    });
-  });
-
   describe("reset option", () => {
     test("shows reset with count for multi-select", async () => {
       const user = userEvent.setup();

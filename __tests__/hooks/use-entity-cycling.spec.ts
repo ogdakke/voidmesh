@@ -121,27 +121,6 @@ describe("cycleToNextEntity (ArrowDown)", () => {
       cycleToNextEntity();
       assertSelectionEquals(["first"]); // Wrapped to first
     });
-
-    test("insertion order is independent of zIndex changes", () => {
-      const e1 = createTestEntity({ id: "first", zIndex: 100 });
-      const e2 = createTestEntity({ id: "second", zIndex: 1 });
-      const e3 = createTestEntity({ id: "third", zIndex: 50 });
-      canvasStore.addEntity(e1);
-      canvasStore.addEntity(e2);
-      canvasStore.addEntity(e3);
-
-      // Should follow insertion order, not zIndex order
-      canvasStore.replaceSelection(["first"]);
-      cycleToNextEntity();
-      assertSelectionEquals(["second"]); // Next in insertion order
-
-      // Simulate bring-to-front (change zIndex)
-      canvasStore.updateEntity("first", { zIndex: 999 });
-
-      canvasStore.replaceSelection(["second"]);
-      cycleToNextEntity();
-      assertSelectionEquals(["third"]); // Still follows insertion order
-    });
   });
 
   describe("multi-selection", () => {

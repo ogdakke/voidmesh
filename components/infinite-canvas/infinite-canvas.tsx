@@ -105,8 +105,6 @@ export function InfiniteCanvas() {
     toggleShowOriginal,
     togglePreserveColors,
     toggleReversePalette,
-    bringSelectionToFront,
-    sendSelectionToBack,
     duplicateEntities,
     copySelectionImage,
     copySelectionEffects,
@@ -523,14 +521,6 @@ export function InfiniteCanvas() {
     undo.redo();
   };
 
-  const bringToFrontShortcutHandler = (_e: KeyboardEvent) => {
-    bringSelectionToFront();
-  };
-
-  const sendToBackShortcutHandler = (_e: KeyboardEvent) => {
-    sendSelectionToBack();
-  };
-
   const duplicateShortcutHandler = (e: KeyboardEvent) => {
     e.preventDefault();
     duplicateEntities();
@@ -791,20 +781,6 @@ export function InfiniteCanvas() {
         e.preventDefault();
         copySelectionEffects();
       },
-    },
-    {
-      id: "bring_to_front",
-      bind: "]",
-      group: "selection",
-      label: "Bring to front",
-      action: bringToFrontShortcutHandler,
-    },
-    {
-      id: "send_to_back",
-      bind: "[",
-      group: "selection",
-      label: "Send to back",
-      action: sendToBackShortcutHandler,
     },
     {
       id: "duplicate_entity",
