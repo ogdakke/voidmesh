@@ -83,6 +83,7 @@ export default function SettingsDrawer() {
             activeWorkspaceFileName={activeWorkspaceFileName}
             isExporting={isExporting}
             isImporting={isImporting}
+            moreActionsPresentation="sheet"
           />
         </div>
       </Drawer.Popup>
