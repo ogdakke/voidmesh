@@ -11,12 +11,13 @@ import "./drawer.css";
 
 interface DrawerProps extends DrawerPopupProps {
   handle?: boolean;
+  backdrop?: boolean;
 }
 
-const Popup = ({ children, handle = true, ...props }: DrawerProps) => {
+const Popup = ({ children, handle = true, backdrop = true, ...props }: DrawerProps) => {
   return (
     <BaseDrawer.Portal>
-      <BaseDrawer.Backdrop className="drawer-overlay" />
+      {backdrop ? <BaseDrawer.Backdrop className="drawer-overlay" /> : null}
       <BaseDrawer.Viewport className="drawer-viewport">
         <BaseDrawer.Popup {...props} className={clsx("drawer-popup", props.className)}>
           {handle ? <div className="drawer-handle" /> : null}
