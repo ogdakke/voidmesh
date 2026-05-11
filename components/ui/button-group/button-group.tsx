@@ -17,7 +17,7 @@ export function ButtonGroup({ orientation = "horizontal", className, ...props }:
   );
 }
 
-interface ButtonGroupSeparatorProps extends ComponentProps<"div"> {
+interface ButtonGroupSeparatorProps extends ComponentProps<"hr"> {
   orientation?: "horizontal" | "vertical";
 }
 
@@ -27,9 +27,8 @@ export function ButtonGroupSeparator({
   ...props
 }: ButtonGroupSeparatorProps) {
   return (
-    <div
+    <hr
       {...props}
-      role="separator"
       aria-orientation={orientation}
       className={clsx("button-group-separator", className)}
       data-orientation={orientation}

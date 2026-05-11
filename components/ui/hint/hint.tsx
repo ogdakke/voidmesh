@@ -8,7 +8,7 @@ import clsx from "clsx";
 export type { HintContent, HintOptions } from "./hint-manager.ts";
 
 // Hint component
-export interface HintProps extends ComponentProps<"div"> {}
+export interface HintProps extends ComponentProps<"output"> {}
 
 export function Hint(props: HintProps) {
   const { content, key } = useHint();
@@ -20,10 +20,9 @@ export function Hint(props: HintProps) {
   if (!content) return null;
 
   return (
-    <div
+    <output
       {...props}
       className={clsx("hint", props.className)}
-      role="status"
       aria-live="polite"
       style={{ viewTransitionName: key }}
       data-hint-key={key}
@@ -43,6 +42,6 @@ export function Hint(props: HintProps) {
       >
         <Xmark width={16} height={16} />
       </Button>
-    </div>
+    </output>
   );
 }

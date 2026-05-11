@@ -131,6 +131,7 @@
   .button-group-separator {
     align-self: stretch;
     background: color-mix(in srgb, currentColor 22%, transparent);
+    border: 0;
     pointer-events: none;
   }
 

@@ -294,10 +294,29 @@
 }
 
 .export-progress__bar {
+  display: block;
+  width: 100%;
   height: 4px;
+  appearance: none;
   background: var(--primary-25);
+  border: 0;
   border-radius: var(--radius-sm);
   overflow: hidden;
+}
+
+progress.export-progress__bar::-webkit-progress-bar {
+  background: var(--primary-25);
+  border-radius: var(--radius-sm);
+}
+
+progress.export-progress__bar::-webkit-progress-value {
+  background: var(--primary);
+  border-radius: var(--radius-sm);
+}
+
+progress.export-progress__bar::-moz-progress-bar {
+  background: var(--primary);
+  border-radius: var(--radius-sm);
 }
 
 .export-progress__fill {

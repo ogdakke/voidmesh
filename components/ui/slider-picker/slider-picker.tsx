@@ -399,6 +399,7 @@ export function SliderPickerItem({
       data-toggleable={hasToggle || undefined}
       data-checked={checked || undefined}
       className={clsx("slider-picker-item", className)}
+      // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- custom scrollable listbox option; native option cannot contain this item content
       role="option"
       aria-selected={isSelected}
       tabIndex={isSelected ? 0 : -1}
@@ -467,6 +468,7 @@ export function SliderPickerMixedItem({
       data-toggleable={hasToggle || undefined}
       data-checked={checked || undefined}
       className={clsx("slider-picker-item", className)}
+      // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- custom scrollable listbox option; native option cannot contain this item content
       role="option"
       aria-selected={isSelected}
       tabIndex={-1}

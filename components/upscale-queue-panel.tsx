@@ -94,16 +94,12 @@ function UpscaleJobItem({ job }: { job: UpscaleJob }) {
       </div>
 
       {isActive && (
-        <div
+        <progress
           className="export-progress__bar"
-          role="progressbar"
-          aria-valuenow={Math.round(percent * 100)}
-          aria-valuemin={0}
-          aria-valuemax={100}
+          value={percent}
+          max={1}
           aria-label={`Upscaling ${job.entityName}`}
-        >
-          <div className="export-progress__fill" style={{ width: `${percent * 100}%` }} />
-        </div>
+        />
       )}
 
       <span className="export-progress__status">{getStatusLabel(job)}</span>
