@@ -5,7 +5,7 @@ import { Button } from "#ui/button/button.tsx";
 import { Drawer } from "#ui/drawer/index.tsx";
 import { Menu } from "#ui/menu/menu.tsx";
 import clsx from "clsx";
-import { FloppyDiskArrowIn, Import, NavArrowDown, Trash } from "iconoir-react";
+import { FloppyDiskArrowIn, NavArrowDown, Trash } from "iconoir-react";
 import { useState, useSyncExternalStore } from "react";
 import "./workspace-actions.css";
 
