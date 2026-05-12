@@ -14,6 +14,7 @@ export default defineConfig(({ mode }) => {
     publicDir: resolve(__dirname, "public"),
     appType: "spa",
     server: {
+      allowedHosts: true,
       watch: {
         ignored: ["**/opensrc/**", ".vendor/**", ".claude/**"],
       },
