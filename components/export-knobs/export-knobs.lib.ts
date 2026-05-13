@@ -5,9 +5,9 @@ import type {
   GifDitherMode,
 } from "#renderer/export-formats.ts";
 
-const FORMAT_OPTIONS: { value: ExportFormat; label: string }[] = [
-  { value: "mp4", label: "MP4 (H.264)" },
-  { value: "mov", label: "MOV (H.264)" },
+const FORMAT_OPTIONS: { value: ExportFormat; label: string; subLabel?: string }[] = [
+  { value: "mp4", label: "MP4", subLabel: "h.264" },
+  { value: "mov", label: "MOV", subLabel: "h.264" },
   { value: "gif", label: "GIF" },
 ];
 

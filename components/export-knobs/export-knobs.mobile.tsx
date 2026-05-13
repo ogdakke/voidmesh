@@ -1,6 +1,10 @@
 import { ExportQueuePanel } from "#components/export-queue-panel.tsx";
-import { UploadControls } from "#components/upload-button-controls.tsx";
-import { useSelectedEntities } from "#context/use-canvas.ts";
+import {
+  useCanvasCommands,
+  useCanvasRendererService,
+  useSelectedEntities,
+  useSelectionState,
+} from "#context/use-canvas.ts";
 import { useExportQueue } from "#context/use-export-queue.ts";
 import {
   formatSupportsAudio,
@@ -10,24 +14,23 @@ import {
   type GifDitherMode,
   type ImageExportFormat,
   IMAGE_FORMAT_OPTIONS,
+  imageExportOptionsForFormat,
 } from "#renderer/export-formats.ts";
 import { isAnimatedEntity, isVideoEntity } from "#types/canvas.ts";
 import { Button } from "#ui/button/button.tsx";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "#ui/collapsible/collapsible.tsx";
 import { Drawer } from "#ui/drawer/drawer.tsx";
 import { NativeSelect, NativeSelectOption } from "#ui/native-select/native-select.tsx";
-import { NavArrowRight, Download } from "iconoir-react";
+import { Copy, Download } from "iconoir-react";
 import { useRef, useEffect, type ChangeEvent, useState } from "react";
-import { ExportSaveButtons } from "./export-knobs.shared";
 import { Checkbox } from "#ui/checkbox/checkbox.tsx";
 import { config } from "#config";
 import { exportUiConstants } from "./export-knobs.lib";
 import { Slider } from "#ui/slider/slider.tsx";
 import "./export-knobs.css";
+import "../ui/toggle/toggle.css";
+import { Radio, RadioGroup } from "@base-ui/react";
+import { getCssVarPx } from "#lib/css.ts";
+import { toastManager } from "#ui/toast/toast-manager.ts";
 
 const { ui: exportUiConfig } = config.videoExporting;
 const { FORMAT_OPTIONS, QUALITY_OPTIONS, RESOLUTION_OPTIONS, GIF_DITHER_OPTIONS } =
@@ -38,6 +41,7 @@ function MobileExportSettingsKnobs() {
   const { exportOptions, updateExportOptions, syncFpsWithEntity } = useExportQueue();
   const selectedEntities = useSelectedEntities();
 
+  const [imageFormat, setImageFormat] = useState<ImageExportFormat>("png");
   const animatedEntities = selectedEntities.filter(isAnimatedEntity);
   const firstAnimatedEntity = animatedEntities[0] ?? null;
   const hasAnimated = animatedEntities.length > 0;
@@ -63,12 +67,15 @@ function MobileExportSettingsKnobs() {
     firstAnimatedEntity.mediaSource.hasAudio;
   const supportsAudio = formatSupportsAudio(exportOptions.format) && entityHasAudio;
 
-  const handleFormatChange = (e: ChangeEvent<HTMLSelectElement>) => {
-    const format = e.target.value as ExportFormat;
+  const handleFormatChange = (format: ExportFormat) => {
     updateExportOptions({
       format,
       includeAudio: formatSupportsAudio(format) ? exportOptions.includeAudio : false,
     });
+  };
+
+  const handleImageFormatChange = (value: ImageExportFormat) => {
+    setImageFormat(value);
   };
 
   const handleQualityChange = (e: ChangeEvent<HTMLSelectElement>) => {
@@ -108,32 +115,81 @@ function MobileExportSettingsKnobs() {
   };
 
   if (!hasAnimated) {
-    return null;
+    return (
+      <>
+        <div className="main-settings" data-image-only>
+          <div className="mobile-row image-format">
+            <div className="format">
+              <RadioGroup
+                name="image-format"
+                className="format-toggle-group"
+                value={imageFormat}
+                onValueChange={handleImageFormatChange}
+              >
+                {IMAGE_FORMAT_OPTIONS.map(({ value, label, subLabel }) => (
+                  <Radio.Root
+                    key={value}
+                    value={value}
+                    nativeButton
+                    render={(props) => (
+                      <button
+                        {...props}
+                        data-pressed={value === imageFormat || undefined}
+                        className="ui-toggle format-toggle"
+                      >
+                        <span className="format-label">{label}</span>
+                        {subLabel && <span className="format-sub-label">{subLabel}</span>}
+                      </button>
+                    )}
+                  />
+                ))}
+              </RadioGroup>
+            </div>
+          </div>
+          <MobileExportButtons imageFormat={imageFormat} />
+        </div>
+      </>
+    );
   }
 
   return (
     <>
-      <div className="mobile-row">
-        <div className="native-select-field native-select-field--mobile">
-          <label className="select-label" htmlFor="mobile-export-format">
-            Format
-          </label>
-          <NativeSelect
-            id="mobile-export-format"
-            value={exportOptions.format}
-            onChange={handleFormatChange}
-            variant="quiet"
-            name="export-format"
-          >
-            {formatOptions.map(({ value, label }) => (
-              <NativeSelectOption key={value} value={value}>
-                {label}
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
+      <div className="main-settings">
+        <div className="mobile-row">
+          <div className="format">
+            <RadioGroup
+              id="mobile-export-format"
+              className="format-toggle-group"
+              onValueChange={(val) => handleFormatChange(val)}
+              value={exportOptions.format}
+              name="export-format"
+            >
+              {formatOptions.map(({ value, label, subLabel }) => (
+                <Radio.Root
+                  key={value}
+                  value={value}
+                  nativeButton
+                  render={(props) => (
+                    <button
+                      {...props}
+                      data-pressed={value === exportOptions.format || undefined}
+                      className="ui-toggle format-toggle"
+                    >
+                      <span className="format-label">{label}</span>
+                      {subLabel && <span className="format-sub-label">{subLabel}</span>}
+                    </button>
+                  )}
+                />
+              ))}
+            </RadioGroup>
+          </div>
+        </div>
+        <div className="main-settings-buttons">
+          <MobileExportButtons imageFormat={imageFormat} />
         </div>
       </div>
 
+      <p className="mobile-row advanced-settings">Advanced settings</p>
       {!isGif && (
         <div className="mobile-row">
           <div className="native-select-field native-select-field--mobile">
@@ -170,113 +226,199 @@ function MobileExportSettingsKnobs() {
         </div>
       )}
 
-      <Collapsible>
-        <CollapsibleTrigger>
-          <NavArrowRight />
-          Advanced
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <div className="mobile-row">
+      <div className="mobile-row">
+        <Slider
+          name="export-fps"
+          label="Frame Rate (FPS)"
+          min={isGif ? exportUiConfig.gifFps.min : exportUiConfig.fps.min}
+          max={isGif ? exportUiConfig.gifFps.max : exportUiConfig.fps.max}
+          step={isGif ? exportUiConfig.gifFps.step : exportUiConfig.fps.step}
+          value={Math.min(
+            exportOptions.fps,
+            isGif ? exportUiConfig.gifFps.max : exportUiConfig.fps.max,
+          )}
+          onValueChange={handleFpsChange}
+          showValue
+        />
+      </div>
+
+      {!isGif && (
+        <div className="mobile-row">
+          <div className="native-select-field native-select-field--mobile">
+            <label className="select-label" htmlFor="mobile-export-resolution">
+              Resolution
+            </label>
+            <NativeSelect
+              id="mobile-export-resolution"
+              value={exportOptions.advanced.resolution}
+              onChange={handleResolutionChange}
+              name="export-resolution"
+              variant="quiet"
+            >
+              {RESOLUTION_OPTIONS.map(({ value, label }) => (
+                <NativeSelectOption key={value} value={value}>
+                  {label}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </div>
+        </div>
+      )}
+
+      {isGif && (
+        <>
+          <div className="mobile-row gif-export-slider">
             <Slider
-              name="export-fps"
-              label="Frame Rate (FPS)"
-              min={isGif ? exportUiConfig.gifFps.min : exportUiConfig.fps.min}
-              max={isGif ? exportUiConfig.gifFps.max : exportUiConfig.fps.max}
-              step={isGif ? exportUiConfig.gifFps.step : exportUiConfig.fps.step}
-              value={Math.min(
-                exportOptions.fps,
-                isGif ? exportUiConfig.gifFps.max : exportUiConfig.fps.max,
-              )}
-              onValueChange={handleFpsChange}
+              label="Max Width"
+              name="gif-max-width"
+              value={exportOptions.advanced.gifMaxWidth}
+              onValueChange={handleGifMaxWidthChange}
+              min={exportUiConfig.gifMaxWidth.min}
+              max={exportUiConfig.gifMaxWidth.max}
+              step={exportUiConfig.gifMaxWidth.step}
               showValue
             />
           </div>
-
-          {!isGif && (
-            <div className="mobile-row">
-              <div className="native-select-field native-select-field--mobile">
-                <label className="select-label" htmlFor="mobile-export-resolution">
-                  Resolution
-                </label>
-                <NativeSelect
-                  id="mobile-export-resolution"
-                  value={exportOptions.advanced.resolution}
-                  onChange={handleResolutionChange}
-                  name="export-resolution"
-                  variant="quiet"
-                >
-                  {RESOLUTION_OPTIONS.map(({ value, label }) => (
-                    <NativeSelectOption key={value} value={value}>
-                      {label}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
-              </div>
+          <div className="mobile-row">
+            <div className="native-select-field native-select-field--mobile">
+              <label className="select-label" htmlFor="mobile-gif-dither">
+                Dither
+              </label>
+              <NativeSelect
+                id="mobile-gif-dither"
+                value={exportOptions.advanced.gifDither}
+                onChange={handleGifDitherChange}
+                name="gif-dither"
+                variant="quiet"
+              >
+                {GIF_DITHER_OPTIONS.map(({ value, label }) => (
+                  <NativeSelectOption key={value} value={value}>
+                    {label}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
             </div>
-          )}
+          </div>
+        </>
+      )}
 
-          {isGif && (
-            <>
-              <div className="mobile-row gif-export-slider">
-                <Slider
-                  label="Max Width"
-                  name="gif-max-width"
-                  value={exportOptions.advanced.gifMaxWidth}
-                  onValueChange={handleGifMaxWidthChange}
-                  min={exportUiConfig.gifMaxWidth.min}
-                  max={exportUiConfig.gifMaxWidth.max}
-                  step={exportUiConfig.gifMaxWidth.step}
-                  showValue
-                />
-              </div>
-              <div className="mobile-row">
-                <div className="native-select-field native-select-field--mobile">
-                  <label className="select-label" htmlFor="mobile-gif-dither">
-                    Dither
-                  </label>
-                  <NativeSelect
-                    id="mobile-gif-dither"
-                    value={exportOptions.advanced.gifDither}
-                    onChange={handleGifDitherChange}
-                    name="gif-dither"
-                    variant="quiet"
+      {hasAnimated && <hr className="divider" />}
+      <p className="advanced-settings mobile-row">Single frame settings</p>
+      <div className="mobile-row">
+        <div className="format">
+          <RadioGroup
+            name="image-format"
+            className="format-toggle-group"
+            value={imageFormat}
+            aria-label="Image format"
+            onValueChange={handleImageFormatChange}
+          >
+            {IMAGE_FORMAT_OPTIONS.map(({ value, label, subLabel }) => (
+              <Radio.Root
+                key={value}
+                value={value}
+                nativeButton
+                render={(props) => (
+                  <button
+                    {...props}
+                    data-pressed={value === imageFormat || undefined}
+                    className="ui-toggle format-toggle"
                   >
-                    {GIF_DITHER_OPTIONS.map(({ value, label }) => (
-                      <NativeSelectOption key={value} value={value}>
-                        {label}
-                      </NativeSelectOption>
-                    ))}
-                  </NativeSelect>
-                </div>
-              </div>
-            </>
-          )}
-        </CollapsibleContent>
-      </Collapsible>
+                    <span className="format-label">{label}</span>
+                    <span className="format-sub-label">{subLabel}</span>
+                  </button>
+                )}
+              />
+            ))}
+          </RadioGroup>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function MobileExportButtons({ imageFormat }: { imageFormat: ImageExportFormat }) {
+  const { exportOptions, addToQueue, isExporting } = useExportQueue();
+  const selectionState = useSelectionState();
+  const selectedEntities = useSelectedEntities();
+  const { saveSelectedEntityToFile: saveToFile, copySelectedEntityToClipboard } =
+    useCanvasCommands();
+  const { renderer } = useCanvasRendererService();
+
+  const saveSelectedEntityToFile = () => saveToFile(imageExportOptionsForFormat(imageFormat));
+
+  const animatedEntities = selectedEntities.filter(isAnimatedEntity);
+  const hasAnimated = animatedEntities.length > 0;
+  const animatedCount = animatedEntities.length;
+  const isMultiAnimated = animatedCount > 1;
+  const isMany = selectionState.isMultiple;
+  const isGif = exportOptions.format === "gif";
+
+  const handleStartExport = () => {
+    if (!renderer || animatedEntities.length === 0) return;
+    for (const entity of animatedEntities) {
+      addToQueue(entity, renderer);
+    }
+    toastManager.add({
+      title: "Export started",
+      description: "See progress in the bottom of the export panel",
+    });
+  };
+
+  return (
+    <>
+      {/* Video export button - adds to queue */}
+      {hasAnimated && (
+        <div className="export-video-row sidebar-row">
+          <Button onClick={handleStartExport} className="export-video-btn" isPending={isExporting}>
+            <span>
+              {isMultiAnimated
+                ? `Export ${animatedCount} ${isGif ? "GIFs" : "Videos"}`
+                : isGif
+                  ? "Export GIF"
+                  : "Export Video"}
+            </span>
+          </Button>
+        </div>
+      )}
+
+      {/* Frame export buttons (always shown, labeled differently for video) */}
+      <div className="export-row sidebar-row">
+        <Button onClick={saveSelectedEntityToFile} variant={hasAnimated ? "secondary" : "primary"}>
+          <span className="text-xs no-wrap">
+            {hasAnimated ? `Save Frame${isMany ? "s" : ""}` : `Save Image${isMany ? "s" : ""}`}
+          </span>
+        </Button>
+        {selectionState.isSingle && (
+          <Button onClick={copySelectedEntityToClipboard} variant="secondary">
+            <Copy />
+            <span className="text-xs no-wrap">{hasAnimated ? "Copy Frame" : "Copy Image"}</span>
+          </Button>
+        )}
+      </div>
     </>
   );
 }
 
 export function MobileExportKnobs() {
   const selectedEntities = useSelectedEntities();
-  const [imageFormat, setImageFormat] = useState<ImageExportFormat>("png");
-
   const hasAnimated = selectedEntities.some(isAnimatedEntity);
-
-  const handleImageFormatChange = (e: ChangeEvent<HTMLSelectElement>) => {
-    setImageFormat(e.target.value as ImageExportFormat);
-  };
+  const safeAreaInsetBottom = getCssVarPx("--safe-area-bottom");
+  const firstSnapPoint =
+    safeAreaInsetBottom > 0 && hasAnimated ? 360 + safeAreaInsetBottom : hasAnimated ? 360 : null;
+  const [snapPoint, setSnapPoint] = useState<number | string | null>(firstSnapPoint);
 
   return (
     <div className="mobile-exports">
-      <div className="mobile-exports-common">
-        <UploadControls />
-      </div>
       <div className="mobile-row">
-        <Drawer.Root>
+        <Drawer.Root
+          snapPoint={snapPoint}
+          onSnapPointChange={(val) => setSnapPoint(val)}
+          snapPoints={firstSnapPoint !== null ? [firstSnapPoint, 1] : undefined}
+        >
           <Drawer.Trigger
             render={(props) => (
-              <Button {...props} className="mobile-export-btn" variant="secondary">
+              <Button {...props} className="mobile-export-btn">
                 <Download />
                 <span>Export</span>
               </Button>
@@ -288,35 +430,13 @@ export function MobileExportKnobs() {
           >
             <Drawer.Content>
               <div className="mobile-exports-drawer-inner">
-                <div className="mobile-exports-settings">
+                <div
+                  className="mobile-exports-settings"
+                  data-fully-snapped={snapPoint === 1 || undefined}
+                >
                   <MobileExportSettingsKnobs />
-                  {/* divider if there's animated entity knobs above */}
-                  {hasAnimated && <hr className="divider" />}
-                  <div className="mobile-row">
-                    <div className="native-select-field native-select-field--mobile">
-                      <label className="select-label" htmlFor="mobile-image-format">
-                        {hasAnimated ? "Format (frame export)" : "Format"}
-                      </label>
-                      <NativeSelect
-                        id="mobile-image-format"
-                        value={imageFormat}
-                        onChange={handleImageFormatChange}
-                        variant="quiet"
-                        name="image-format"
-                      >
-                        {IMAGE_FORMAT_OPTIONS.map(({ value, label }) => (
-                          <NativeSelectOption key={value} value={value}>
-                            {label}
-                          </NativeSelectOption>
-                        ))}
-                      </NativeSelect>
-                    </div>
-                  </div>
                 </div>
                 <ExportQueuePanel />
-                <div className="mobile-exports-actions">
-                  <ExportSaveButtons imageFormat={imageFormat} />
-                </div>
               </div>
             </Drawer.Content>
           </Drawer.Popup>
