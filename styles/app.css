@@ -136,31 +136,6 @@
     }
   }
 
-  .mobile-exports-drawer-content {
-    &[data-image-only] {
-      max-height: 40%;
-      overflow-y: hidden;
-    }
-  }
-
-  .mobile-exports-drawer-inner {
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    gap: var(--spacing-2);
-    height: 100%;
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-  }
-
-  .mobile-exports-settings {
-    overflow-y: auto;
-    flex: 1;
-    min-height: 0;
-    display: grid;
-    align-content: start;
-    gap: var(--spacing);
-  }
-
   .mobile-row {
     display: grid;
     padding: var(--spacing) var(--spacing-2);

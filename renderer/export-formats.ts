@@ -21,9 +21,10 @@ export interface ImageExportOptions {
 export const IMAGE_FORMAT_OPTIONS: {
   value: ImageExportFormat;
   label: string;
+  subLabel?: string;
 }[] = [
-  { value: "png", label: "PNG (larger)" },
-  { value: "jpeg", label: "JPEG (smaller)" },
+  { value: "png", label: "PNG", subLabel: "Larger, lossless" },
+  { value: "jpeg", label: "JPEG", subLabel: "Smaller, lossy" },
 ];
 
 export function imageExportOptionsForFormat(format: ImageExportFormat): ImageExportOptions {

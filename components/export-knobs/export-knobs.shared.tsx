@@ -9,7 +9,7 @@ import { useIsMobile } from "#hooks/use-is-mobile.ts";
 import { type ImageExportFormat, imageExportOptionsForFormat } from "#renderer/export-formats.ts";
 import { isAnimatedEntity } from "#types/canvas.ts";
 import { Button } from "#ui/button/button.tsx";
-import { Copy, Download, MediaVideo } from "iconoir-react";
+import { Copy, Download } from "iconoir-react";
 
 /** Export save buttons - frame copy/save and video export */
 export function ExportSaveButtons({ imageFormat }: { imageFormat: ImageExportFormat }) {
@@ -42,7 +42,6 @@ export function ExportSaveButtons({ imageFormat }: { imageFormat: ImageExportFor
       {hasAnimated && (
         <div className="export-video-row sidebar-row">
           <Button onClick={handleStartExport} className="export-video-btn">
-            <MediaVideo />
             <span>
               {isMultiAnimated
                 ? `Export ${animatedCount} ${isGif ? "GIFs" : "Videos"}`
