@@ -73,6 +73,36 @@ describe("VelocityTracker", () => {
       expect(typeof velocity).toBe("number");
       expect(Number.isFinite(velocity)).toBe(true);
     });
+
+    test("linear regression avoids tiny-interval release spikes", () => {
+      // Captured from a fast iOS flick: two 1-2ms intervals produce an
+      // unrealistic pairwise release velocity, but the whole gesture is sane.
+      tracker.addDataPoint(0, 142.67);
+      tracker.addDataPoint(9, 147);
+      tracker.addDataPoint(11, 179.33);
+      tracker.addDataPoint(24, 189.67);
+      tracker.addDataPoint(25, 228);
+      tracker.addDataPoint(41, 243.67);
+
+      expect(tracker.calculate()).toBeGreaterThan(10);
+      expect(tracker.calculateLinearRegression()).toBeLessThan(4);
+    });
+
+    test("terminal velocity skips tiny release intervals", () => {
+      tracker.addDataPoint(0, 0);
+      tracker.addDataPoint(16, 16);
+      tracker.addDataPoint(17, 48);
+
+      expect(tracker.calculateTerminalVelocity()).toBeCloseTo(1);
+    });
+
+    test("terminal velocity returns null without a frame-sized interval", () => {
+      tracker.addDataPoint(0, 0);
+      tracker.addDataPoint(1, 8);
+      tracker.addDataPoint(3, 16);
+
+      expect(tracker.calculateTerminalVelocity()).toBeNull();
+    });
   });
 
   describe("reset", () => {
@@ -300,6 +330,16 @@ describe("Scroller", () => {
       const v500Normal = scrollerNormal.value(500)?.velocity ?? 0;
 
       expect(Math.abs(v500)).toBeLessThan(Math.abs(v500Normal));
+    });
+  });
+
+  describe("setVelocityThreshold", () => {
+    test("uses updated threshold to settle tiny tail movement", () => {
+      const scroller = new Scroller(DecelerationRate.FAST);
+      scroller.setVelocityThreshold(0.05);
+      scroller.fling(0.04);
+
+      expect(scroller.value(0)).toBe(null);
     });
   });
 

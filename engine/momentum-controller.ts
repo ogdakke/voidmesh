@@ -3,6 +3,7 @@ import { clampZoom, screenToWorld } from "../lib/canvas-math.ts";
 import { config, type TouchConfig } from "../lib/config/index.ts";
 import type { Point, Viewport } from "#types/canvas.ts";
 import type { AnimationScheduler, AnimationHandle } from "../lib/animation-scheduler.ts";
+import { panTrace } from "#lib/pan-trace.ts";
 
 export interface MomentumDeps {
   panBy(delta: Point): void;
@@ -25,8 +26,8 @@ export class MomentumController {
   #scheduler: AnimationScheduler;
   #deps: MomentumDeps;
 
-  #scrollerX = new Scroller(config.touch.decelerationRate);
-  #scrollerY = new Scroller(config.touch.decelerationRate);
+  #scrollerX = new Scroller(config.touch.decelerationRate, config.touch.velocityThreshold);
+  #scrollerY = new Scroller(config.touch.decelerationRate, config.touch.velocityThreshold);
   #scrollerZoom = new Scroller(config.touch.zoomMomentum.decelerationRate, 0.0001);
   #springBackZoom = new SpringBack();
 
@@ -51,17 +52,32 @@ export class MomentumController {
   triggerScroll(velocity: Point): void {
     const { velocityThreshold, maxVelocity, velocityScale } = this.#touchConfig;
 
-    if (Math.abs(velocity.x) <= velocityThreshold && Math.abs(velocity.y) <= velocityThreshold) {
+    const speed = Math.hypot(velocity.x, velocity.y);
+    if (speed <= velocityThreshold) {
       return;
     }
 
-    const clampedVelX = Math.max(-maxVelocity, Math.min(maxVelocity, velocity.x));
-    const clampedVelY = Math.max(-maxVelocity, Math.min(maxVelocity, velocity.y));
+    const velocityRatio = Math.min(speed, maxVelocity) / speed;
+    const clampedVelX = velocity.x * velocityRatio;
+    const clampedVelY = velocity.y * velocityRatio;
+
+    if (panTrace.enabled) {
+      panTrace.record("momentumStart", {
+        inputVelocity: velocity,
+        clampedVelocity: { x: clampedVelX, y: clampedVelY },
+        config: { velocityThreshold, maxVelocity, velocityScale },
+        viewport: this.#deps.getViewport(),
+      });
+    }
 
     // Cancel previous handle before setting up new fling
     // (stopScroll resets scrollers, so it must come before fling)
     this.stopScroll();
 
+    this.#scrollerX.setDecelerationRate(this.#touchConfig.decelerationRate);
+    this.#scrollerY.setDecelerationRate(this.#touchConfig.decelerationRate);
+    this.#scrollerX.setVelocityThreshold(velocityThreshold);
+    this.#scrollerY.setVelocityThreshold(velocityThreshold);
     this.#scrollerX.fling(clampedVelX * velocityScale);
     this.#scrollerY.fling(clampedVelY * velocityScale);
 
@@ -82,14 +98,36 @@ export class MomentumController {
 
           const viewport = this.#deps.getViewport();
           const dpr = this.#deps.getDpr();
-          this.#deps.panBy({
+          const worldDelta = {
             x: (deltaX * dpr) / viewport.zoom,
             y: (deltaY * dpr) / viewport.zoom,
-          });
+          };
+          this.#deps.panBy(worldDelta);
+
+          if (panTrace.enabled) {
+            panTrace.record("momentumTick", {
+              elapsed,
+              deltaCss: { x: deltaX, y: deltaY },
+              worldDelta,
+              scroller: {
+                x: valX ? { offset: valX.offset, velocity: valX.velocity } : null,
+                y: valY ? { offset: valY.offset, velocity: valY.velocity } : null,
+              },
+              viewportBefore: viewport,
+              viewportAfter: this.#deps.getViewport(),
+            });
+          }
 
           if (valX) lastOffsetX = valX.offset;
           if (valY) lastOffsetY = valY.offset;
           return true;
+        }
+
+        if (panTrace.enabled) {
+          panTrace.record("momentumStop", {
+            reason: "settled",
+            viewport: this.#deps.getViewport(),
+          });
         }
 
         this.stopScroll();
@@ -244,6 +282,10 @@ export class MomentumController {
   stopAll(): void {
     this.stopScroll();
     this.stopZoom();
+  }
+
+  get isActive(): boolean {
+    return !!this.#scrollHandle?.isActive || !!this.#zoomHandle?.isActive;
   }
 
   /** Update touch config (e.g. changed deceleration rates). */

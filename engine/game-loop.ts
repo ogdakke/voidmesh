@@ -32,6 +32,9 @@ import { viewportAnimation } from "./viewport-animation.ts";
 import { MomentumController, type MomentumDeps } from "./momentum-controller.ts";
 import { scheduler, type AnimationHandle } from "../lib/animation-scheduler.ts";
 import { haptic } from "#lib/haptic.ts";
+import { panTrace } from "#lib/pan-trace.ts";
+
+const RELEASE_TERMINAL_SPEED_MULTIPLIER = 1.15;
 
 function createDefaultDeps() {
   return {
@@ -42,6 +45,24 @@ function createDefaultDeps() {
     perf: perfOverlay,
     haptic,
     analytics,
+  };
+}
+
+function constrainReleaseVelocityToTerminalMotion(velocity: Point, terminalVelocity: Point): Point {
+  const speed = Math.hypot(velocity.x, velocity.y);
+  if (speed === 0) return velocity;
+
+  const terminalSpeed = Math.hypot(terminalVelocity.x, terminalVelocity.y);
+  const maxSpeed = terminalSpeed * RELEASE_TERMINAL_SPEED_MULTIPLIER;
+
+  if (maxSpeed >= speed) {
+    return velocity;
+  }
+
+  const ratio = maxSpeed / speed;
+  return {
+    x: velocity.x * ratio,
+    y: velocity.y * ratio,
   };
 }
 
@@ -122,6 +143,7 @@ export class GameLoop {
   #resizeObserver: ResizeObserver | null = null;
   #running = false;
   #animationFrameId: number | null = null;
+  #pendingScrollMomentumVelocity: Point | null = null;
   #firstFrameRendered = false;
   #lastFrameTime: number | null = null;
 
@@ -270,6 +292,7 @@ export class GameLoop {
   stop(): void {
     this.#running = false;
     this.#lastFrameTime = null;
+    this.#cancelPendingScrollMomentum();
     this.#cancelLongPressTimer();
     this.#cancelDoubleTapTimer();
     if (this.#animationFrameId !== null) {
@@ -335,6 +358,16 @@ export class GameLoop {
       (this.#inputState.pointerDown && !!this.#dragTarget) ||
       this.#dragSelect?.isActive;
 
+    if (panTrace.enabled && (renderState.dirty || this.#deps.scheduler.hasActive)) {
+      panTrace.record("gameLoopFrame", {
+        needsRender,
+        dirty: renderState.dirty,
+        schedulerActive: this.#deps.scheduler.hasActive,
+        pendingScrollMomentum: this.#pendingScrollMomentumVelocity !== null,
+        viewport: renderState.viewport,
+      });
+    }
+
     // 8. Render only when needed (skip idle frames)
     if (this.#renderer?.isReady && needsRender) {
       if (renderState.debugMode) performance.mark("studio-render-start");
@@ -350,12 +383,18 @@ export class GameLoop {
     // 10. Clear dirty flags
     canvasStore.clearDirtyFlags();
 
-    // 11. Schedule next frame
+    // 11. Start queued pan momentum only after the final touch-driven viewport
+    // has passed through this render tick. This prevents the release frame from
+    // combining late touch movement and the first fling delta.
+    this.#startPendingScrollMomentum();
+
+    // 12. Schedule next frame
     this.#animationFrameId = requestAnimationFrame(this.tick);
   };
 
   /** Stop any active momentum scrolling and zoom momentum (public API for external callers) */
   stopMomentum(): void {
+    this.#cancelPendingScrollMomentum();
     this.#momentum.stopAll();
   }
 
@@ -1321,14 +1360,23 @@ export class GameLoop {
   }
 
   /** Handle touch start - determines gesture type */
-  handleTouchStart(touches: Point[]): void {
+  handleTouchStart(touches: Point[], eventTime?: number): void {
     // Cancel any viewport animation when user starts interacting
     this.#deps.viewportAnimation.cancel();
     // Cancel any momentum scrolling
+    this.#cancelPendingScrollMomentum();
     this.#momentum.stopScroll();
     this.#momentum.stopZoom();
 
     if (!this.#container) return;
+
+    if (panTrace.enabled) {
+      panTrace.record("touchStart", {
+        touches,
+        eventDelayMs: eventTime === undefined ? null : performance.now() - eventTime,
+        viewport: canvasStore.getViewport(),
+      });
+    }
 
     this.#touchState.touchCount = touches.length;
 
@@ -1341,7 +1389,7 @@ export class GameLoop {
       // Reset velocity trackers for momentum scrolling
       this.#velocityTrackerX.reset();
       this.#velocityTrackerY.reset();
-      const now = performance.now();
+      const now = eventTime ?? performance.now();
       this.#velocityTrackerX.addDataPoint(now, touch.x);
       this.#velocityTrackerY.addDataPoint(now, touch.y);
 
@@ -1429,7 +1477,7 @@ export class GameLoop {
 
       // Seed zoom velocity tracker for momentum on pinch end
       this.#velocityTrackerZoom.reset();
-      const now = performance.now();
+      const now = eventTime ?? performance.now();
       this.#velocityTrackerZoom.addDataPoint(now, Math.log(this.#touchState.initialZoom));
 
       // Only move entities if already in long-press drag mode
@@ -1440,8 +1488,23 @@ export class GameLoop {
   }
 
   /** Handle touch move - performs pan, zoom, or entity movement */
-  handleTouchMove(touches: Point[]): void {
+  handleTouchMove(touches: Point[], eventTime?: number): void {
     if (!this.#container) return;
+
+    if (panTrace.enabled) {
+      panTrace.record("touchMove", {
+        touches,
+        eventDelayMs: eventTime === undefined ? null : performance.now() - eventTime,
+        viewport: canvasStore.getViewport(),
+        state: {
+          isPanning: this.#touchState.isPanning,
+          isPinching: this.#touchState.isPinching,
+          isDraggingEntity: this.#touchState.isDraggingEntity,
+          isActionLayerActive: this.#touchState.isActionLayerActive,
+          hadMultiTouch: this.#touchState.hadMultiTouch,
+        },
+      });
+    }
 
     const viewport = canvasStore.getViewport();
     const rect = this.#containerRect;
@@ -1474,7 +1537,7 @@ export class GameLoop {
 
         // Seed zoom velocity tracker for momentum on release
         this.#velocityTrackerZoom.reset();
-        const now = performance.now();
+        const now = eventTime ?? performance.now();
         this.#velocityTrackerZoom.addDataPoint(now, Math.log(canvasStore.getViewport().zoom));
         // Manual zoom invalidates saved viewport for double-tap toggle
         this.#savedViewport = null;
@@ -1507,7 +1570,7 @@ export class GameLoop {
       });
 
       // Track zoom velocity for momentum on release
-      const now = performance.now();
+      const now = eventTime ?? performance.now();
       this.#velocityTrackerZoom.addDataPoint(now, Math.log(canvasStore.getViewport().zoom));
     } else if (touches.length === 1 && this.#touchState.isActionLayerActive) {
       // Action layer active: update finger position for rubber-banding
@@ -1615,6 +1678,7 @@ export class GameLoop {
       if (lastPos) {
         const deltaX = touch.x - lastPos.x;
         const deltaY = touch.y - lastPos.y;
+        const before = panTrace.enabled ? canvasStore.getViewport() : null;
 
         // Pan the viewport (content follows finger)
         const dpr = window.devicePixelRatio || 1;
@@ -1622,10 +1686,21 @@ export class GameLoop {
           x: (-deltaX * dpr) / viewport.zoom,
           y: (-deltaY * dpr) / viewport.zoom,
         });
+
+        if (panTrace.enabled) {
+          panTrace.record("singleFingerPan", {
+            touch,
+            lastPos,
+            delta: { x: deltaX, y: deltaY },
+            dpr,
+            viewportBefore: before,
+            viewportAfter: canvasStore.getViewport(),
+          });
+        }
       }
 
       // Track velocity for momentum scrolling
-      const now = performance.now();
+      const now = eventTime ?? performance.now();
       this.#velocityTrackerX.addDataPoint(now, touch.x);
       this.#velocityTrackerY.addDataPoint(now, touch.y);
 
@@ -1658,7 +1733,7 @@ export class GameLoop {
 
         // Track zoom velocity in log-space for momentum on pinch end
         const currentZoom = canvasStore.getViewport().zoom;
-        const now = performance.now();
+        const now = eventTime ?? performance.now();
         this.#velocityTrackerZoom.addDataPoint(now, Math.log(currentZoom));
       }
 
@@ -1691,7 +1766,28 @@ export class GameLoop {
   }
 
   /** Handle touch end - reset gesture state */
-  handleTouchEnd(remainingTouches: { x: number; y: number }[], isCancelled: boolean = false): void {
+  handleTouchEnd(
+    remainingTouches: { x: number; y: number }[],
+    isCancelled: boolean = false,
+    eventTime?: number,
+  ): void {
+    if (panTrace.enabled) {
+      panTrace.record("touchEnd", {
+        remainingTouches,
+        isCancelled,
+        eventDelayMs: eventTime === undefined ? null : performance.now() - eventTime,
+        lastTouchPosition: this.#touchState.lastTouchPosition,
+        viewport: canvasStore.getViewport(),
+        state: {
+          isPanning: this.#touchState.isPanning,
+          isPinching: this.#touchState.isPinching,
+          isDraggingEntity: this.#touchState.isDraggingEntity,
+          isActionLayerActive: this.#touchState.isActionLayerActive,
+          hadMultiTouch: this.#touchState.hadMultiTouch,
+        },
+      });
+    }
+
     if (remainingTouches.length === 0) {
       if (this.#doubleTapHoldZoom.isZooming) {
         // Double-tap-hold zoom ended — trigger zoom momentum
@@ -1727,10 +1823,29 @@ export class GameLoop {
         if (this.#detectTouchTap()) {
           this.#handleTouchTap();
         } else {
-          this.#momentum.triggerScroll({
-            x: this.#velocityTrackerX.calculate(),
-            y: this.#velocityTrackerY.calculate(),
-          });
+          const estimatedVelocity = {
+            x: this.#velocityTrackerX.calculateLinearRegression(),
+            y: this.#velocityTrackerY.calculateLinearRegression(),
+          };
+          const terminalVelocityX = this.#velocityTrackerX.calculateTerminalVelocity();
+          const terminalVelocityY = this.#velocityTrackerY.calculateTerminalVelocity();
+          const terminalVelocity =
+            terminalVelocityX === null || terminalVelocityY === null
+              ? estimatedVelocity
+              : { x: terminalVelocityX, y: terminalVelocityY };
+          const velocity = constrainReleaseVelocityToTerminalMotion(
+            estimatedVelocity,
+            terminalVelocity,
+          );
+          if (panTrace.enabled) {
+            panTrace.record("touchPanReleaseVelocity", {
+              estimatedVelocity,
+              terminalVelocity,
+              velocity,
+              terminalSpeedMultiplier: RELEASE_TERMINAL_SPEED_MULTIPLIER,
+            });
+          }
+          this.#triggerScrollMomentumAfterNextRender(velocity);
         }
       }
       // Cancel any pending long-press timer
@@ -1767,7 +1882,7 @@ export class GameLoop {
         // Reset velocity trackers for the new single-finger pan
         this.#velocityTrackerX.reset();
         this.#velocityTrackerY.reset();
-        const now = performance.now();
+        const now = eventTime ?? performance.now();
         this.#velocityTrackerX.addDataPoint(now, touch.x);
         this.#velocityTrackerY.addDataPoint(now, touch.y);
       }
@@ -1777,6 +1892,39 @@ export class GameLoop {
       this.#inputState.pointerDownEntityId = null;
       this.#inputState.pointerDownWasSelected = false;
     }
+  }
+
+  #triggerScrollMomentumAfterNextRender(velocity: Point): void {
+    this.#cancelPendingScrollMomentum();
+
+    if (panTrace.enabled) {
+      panTrace.record("touchPanMomentumQueued", {
+        velocity,
+        viewport: canvasStore.getViewport(),
+      });
+    }
+
+    this.#pendingScrollMomentumVelocity = { ...velocity };
+  }
+
+  #startPendingScrollMomentum(): void {
+    const velocity = this.#pendingScrollMomentumVelocity;
+    if (!velocity) return;
+
+    this.#pendingScrollMomentumVelocity = null;
+
+    if (panTrace.enabled) {
+      panTrace.record("touchPanMomentumStartAfterFrame", {
+        velocity,
+        viewport: canvasStore.getViewport(),
+      });
+    }
+
+    this.#momentum.triggerScroll(velocity);
+  }
+
+  #cancelPendingScrollMomentum(): void {
+    this.#pendingScrollMomentumVelocity = null;
   }
 
   /** Detect if the current touch gesture was a tap (not a swipe) */
@@ -1939,6 +2087,20 @@ export class GameLoop {
   /** Check if a touch interaction is active */
   isTouchActive(): boolean {
     return this.#touchState.touchCount > 0;
+  }
+
+  /** True while user-driven viewport movement is active or coasting. */
+  isViewportInteractionActive(): boolean {
+    return (
+      this.#touchState.touchCount > 0 ||
+      this.#touchState.isPanning ||
+      this.#touchState.isPinching ||
+      this.#doubleTapHoldZoom.isCandidate ||
+      this.#doubleTapHoldZoom.isZooming ||
+      this.#spacePanMode === SpacePanMode.panning ||
+      this.#pendingScrollMomentumVelocity !== null ||
+      this.#momentum.isActive
+    );
   }
 
   #constructMomentumDeps(): MomentumDeps {

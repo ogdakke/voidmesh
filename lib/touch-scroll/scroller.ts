@@ -70,6 +70,13 @@ export class Scroller {
   }
 
   /**
+   * Set the velocity below which the fling is considered settled.
+   */
+  setVelocityThreshold(threshold: number): void {
+    this.#velocityThreshold = threshold;
+  }
+
+  /**
    * Start a fling animation with the given initial velocity.
    * @param velocity Initial velocity in pixels per millisecond
    */

@@ -152,6 +152,7 @@ export interface ParamResult<T> {
  */
 export class CanvasStore extends Store<CanvasState> {
   #logger: Logger;
+  #viewportListeners = new Set<() => void>();
   #selectedEntitiesCache: ShaderCanvasEntity[] = [];
   #selectionStateCache: { entities: ShaderCanvasEntity[]; value: SelectionState } | null = null;
   #paramResultCache = new Map<
@@ -900,15 +901,22 @@ export class CanvasStore extends Store<CanvasState> {
     return this.state.viewport;
   }
 
+  subscribeViewport = (listener: () => void): (() => void) => {
+    this.#viewportListeners.add(listener);
+    return () => this.#viewportListeners.delete(listener);
+  };
+
   // ============================================================================
   // Notification Helpers (use base class notify())
   // ============================================================================
 
   private notifyViewportChange(): void {
     // Only increment viewportVersion, NOT version
-    // This ensures useViewport() re-renders but useCanvas()/provider does NOT
+    // This keeps high-frequency pan/zoom off the general store subscription path.
     this.state.viewportVersion++;
-    this.notify();
+    for (const listener of this.#viewportListeners) {
+      listener();
+    }
   }
 
   private notifySelectionChange(): void {

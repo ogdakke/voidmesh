@@ -130,7 +130,10 @@ export function useCanvasRendererService(): CanvasRendererService {
 }
 
 export function useViewport(): Viewport {
-  return useCanvasSelector((state) => state.viewport);
+  return useSyncExternalStore(
+    canvasStore.subscribeViewport,
+    () => canvasStore.getViewportSnapshot().viewport,
+  );
 }
 
 export function useSelectedEntityIds(): ReadonlySet<string> {
