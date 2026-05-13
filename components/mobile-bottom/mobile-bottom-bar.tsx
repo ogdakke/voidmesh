@@ -93,7 +93,7 @@ export function MobileBottomBar<T extends string>({
         {typeof children === "function" ? children(items) : children}
       </BottomBarRoot>
       <button
-        className={"mobile-fullscreen-btn"}
+        className={"mobile-fullscreen-btn icon-crossfade"}
         data-active={isFullscreen ? true : undefined}
         onClick={() => {
           haptic({ wantsHaptic: canvasStore.getState().haptics });
@@ -101,7 +101,8 @@ export function MobileBottomBar<T extends string>({
         }}
         aria-label={`Toggle fullscreen ${isFullscreen ? "off" : "on"}`}
       >
-        {isFullscreen ? <Reduce /> : <Enlarge />}
+        <Reduce className={isFullscreen ? "icon-visible" : "icon-hidden"} />
+        <Enlarge className={isFullscreen ? "icon-hidden" : "icon-visible"} />
       </button>
     </div>
   );

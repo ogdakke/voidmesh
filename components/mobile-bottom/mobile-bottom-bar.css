@@ -169,7 +169,7 @@
   background: linear-gradient(to top, var(--background), var(--gray-100) 50%, var(--background));
   color: var(--gray-1000);
   width: 100%;
-  display: flex;
+  display: grid;
   justify-content: center;
   align-items: center;
   border-radius: var(--radius-button);
@@ -212,8 +212,10 @@
   }
 
   :where(svg) {
+    --icon-crossfade-dur: 250ms;
     height: 1.5rem;
     width: 1.5rem;
+    grid-area: 1 / 1;
   }
 
   &:active {
