@@ -91,18 +91,18 @@ export function MobileBottomBar<T extends string>({
     <div className="mobile-bottom-bar-container">
       <BottomBarRoot items={items} onChange={onChange} value={value}>
         {typeof children === "function" ? children(items) : children}
-        <button
-          className={"bottom-bar-item"}
-          data-active={isFullscreen ? true : undefined}
-          onClick={() => {
-            haptic({ wantsHaptic: canvasStore.getState().haptics });
-            toggleFullscreen();
-          }}
-          aria-label={`Toggle fullscreen ${isFullscreen ? "off" : "on"}`}
-        >
-          {isFullscreen ? <Reduce /> : <Enlarge />}
-        </button>
       </BottomBarRoot>
+      <button
+        className={"mobile-fullscreen-btn"}
+        data-active={isFullscreen ? true : undefined}
+        onClick={() => {
+          haptic({ wantsHaptic: canvasStore.getState().haptics });
+          toggleFullscreen();
+        }}
+        aria-label={`Toggle fullscreen ${isFullscreen ? "off" : "on"}`}
+      >
+        {isFullscreen ? <Reduce /> : <Enlarge />}
+      </button>
     </div>
   );
 }

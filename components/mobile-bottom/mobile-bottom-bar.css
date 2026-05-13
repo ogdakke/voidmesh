@@ -157,63 +157,73 @@
   align-items: center;
   grid-template-columns: 1fr auto;
   margin: 0 var(--spacing-2) 5px;
-  gap: 0;
+  gap: var(--spacing-2);
   height: var(--bottom-bar-height, 56px);
 }
 
-/* TODO: delete this */
-.mobile-action-btn-slot {
-  justify-self: end;
-  display: grid;
-  height: inherit;
-  aspect-ratio: 1;
-  margin-inline-start: var(--spacing-2);
-
-  > * {
-    grid-area: 1 / 1;
-  }
-}
-
-/* TODO: delete these */
-.mobile-delete-btn,
 .mobile-fullscreen-btn {
   --in-dur: 150ms;
   --out-dur: 120ms;
   --start-scale: 0.92;
-
+  position: relative;
+  background: linear-gradient(to top, var(--background), var(--gray-100) 50%, var(--background));
+  color: var(--gray-1000);
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  border-radius: var(--radius-button);
   opacity: 1;
   scale: 1;
-  /*width: 100%;*/
   height: inherit;
+  aspect-ratio: 1;
   filter: drop-shadow(0px 1px 2px #00000010);
-  border-color: var(--border-75);
+  border: 1px solid var(--border-75);
 
   transition:
-    --destructive-btn-gradient-to 0.15s ease-out,
     opacity var(--in-dur) ease-out,
-    scale var(--in-dur) ease-out,
-    display var(--in-dur) ease-out allow-discrete;
+    scale var(--in-dur) ease-out;
 
-  @starting-style {
-    opacity: 0;
-    scale: var(--start-scale);
+  @media (prefers-color-scheme: dark) {
+    background: color-mix(in oklch, var(--gray-50) 88%, transparent);
+    backdrop-filter: blur(5px);
+    border: none;
+    filter: none;
+    box-shadow: 0px 0px 3px 1px #000000 inset;
+
+    &::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      padding: 2px;
+      background: linear-gradient(to top, #4040402b 10%, transparent);
+      -webkit-mask:
+        linear-gradient(#fff 0 0) content-box,
+        linear-gradient(#fff 0 0);
+      -webkit-mask-composite: xor;
+      mask:
+        linear-gradient(#fff 0 0) content-box,
+        linear-gradient(#fff 0 0);
+      mask-composite: exclude;
+      pointer-events: none;
+      box-shadow: 0px 0px 0px 0.5px #3e3e3e24 inset;
+    }
   }
 
-  &[hidden] {
-    display: none;
-    opacity: 0;
-    scale: var(--start-scale);
+  :where(svg) {
+    height: 1.5rem;
+    width: 1.5rem;
+  }
 
-    transition:
-      --destructive-btn-gradient-to 0.15s ease-out,
-      opacity var(--out-dur) ease-out,
-      scale var(--out-dur) ease-out,
-      display var(--out-dur) ease-out allow-discrete;
+  &:active {
+    scale: var(--start-scale);
   }
 
   @media (prefers-reduced-motion: reduce) {
     --in-dur: 0ms;
     --out-dur: 0ms;
+    transition: none;
   }
 
   @media (prefers-color-scheme: dark) {
