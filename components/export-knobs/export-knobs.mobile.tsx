@@ -29,8 +29,8 @@ import { Slider } from "#ui/slider/slider.tsx";
 import "./export-knobs.css";
 import "../ui/toggle/toggle.css";
 import { Radio, RadioGroup } from "@base-ui/react";
-import { getCssVarPx } from "#lib/css.ts";
 import { toastManager } from "#ui/toast/toast-manager.ts";
+import { SnapPoints } from "#ui/drawer/snappoints.ts";
 
 const { ui: exportUiConfig } = config.videoExporting;
 const { FORMAT_OPTIONS, QUALITY_OPTIONS, RESOLUTION_OPTIONS, GIF_DITHER_OPTIONS } =
@@ -369,7 +369,7 @@ function MobileExportButtons({ imageFormat }: { imageFormat: ImageExportFormat }
     <>
       {/* Video export button - adds to queue */}
       {hasAnimated && (
-        <div className="export-video-row sidebar-row">
+        <div className="export-video-row mobile-row">
           <Button onClick={handleStartExport} className="export-video-btn" isPending={isExporting}>
             <span>
               {isMultiAnimated
@@ -383,7 +383,7 @@ function MobileExportButtons({ imageFormat }: { imageFormat: ImageExportFormat }
       )}
 
       {/* Frame export buttons (always shown, labeled differently for video) */}
-      <div className="export-row sidebar-row">
+      <div className="export-row mobile-row">
         <Button onClick={saveSelectedEntityToFile} variant={hasAnimated ? "secondary" : "primary"}>
           <span className="text-xs no-wrap">
             {hasAnimated ? `Save Frame${isMany ? "s" : ""}` : `Save Image${isMany ? "s" : ""}`}
@@ -403,9 +403,7 @@ function MobileExportButtons({ imageFormat }: { imageFormat: ImageExportFormat }
 export function MobileExportKnobs() {
   const selectedEntities = useSelectedEntities();
   const hasAnimated = selectedEntities.some(isAnimatedEntity);
-  const safeAreaInsetBottom = getCssVarPx("--safe-area-bottom");
-  const firstSnapPoint =
-    safeAreaInsetBottom > 0 && hasAnimated ? 360 + safeAreaInsetBottom : hasAnimated ? 360 : null;
+  const firstSnapPoint = SnapPoints.compute().at(0)!;
   const [snapPoint, setSnapPoint] = useState<number | string | null>(firstSnapPoint);
 
   return (

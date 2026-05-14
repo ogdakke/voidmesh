@@ -6,7 +6,7 @@ export class SnapPoints {
   static snapPoints: DrawerSnapPoint[];
 
   static compute() {
-    SnapPoints.drawerSnapPointMedium ??= getCssVarPx("--drawer-snap-point-medium");
+    SnapPoints.drawerSnapPointMedium ??= getCssVarPx("--drawer-snap-medium");
 
     return (SnapPoints.snapPoints ??= [SnapPoints.drawerSnapPointMedium, DrawerSnapPoint.full]);
   }
