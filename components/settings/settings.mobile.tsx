@@ -11,6 +11,7 @@ import {
   FeedbackLink,
   HapticsToggle,
   LinkItem,
+  RedoOnboardingLink,
   ShareLink,
   SnapToGridToggle,
 } from "./settings.shared.tsx";
@@ -71,6 +72,12 @@ export default function SettingsDrawer() {
           <div className="settings-drawer-ext-item field-label">
             <LinkItem>
               <FeedbackLink className="settings-drawer-link" />
+            </LinkItem>
+          </div>
+          <hr className="divider" />
+          <div className="settings-drawer-ext-item field-label">
+            <LinkItem>
+              <RedoOnboardingLink onDone={() => setOpen(false)} />
             </LinkItem>
           </div>
           <WorkspaceActions

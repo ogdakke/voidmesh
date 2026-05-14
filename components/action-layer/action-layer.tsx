@@ -12,6 +12,8 @@ import { createPortal } from "react-dom";
 import { config } from "#config";
 import { analytics } from "#lib/analytics.ts";
 import { getCssVarPx } from "#lib/css.ts";
+import { completeOnboardingStepFromEvent } from "#lib/onboarding-runtime.ts";
+import { OnboardingStepId } from "#lib/onboarding.ts";
 import { actionLayerController } from "#engine";
 import { useActionLayer } from "#hooks/use-action-layer.ts";
 import "./action-layer.css";
@@ -220,7 +222,11 @@ function Root({ children }: PropsWithChildren) {
       if (newHovered !== hoveredIndexRef.current) {
         hoveredIndexRef.current = newHovered;
         setHoveredIndex(newHovered);
-        setTooltipLabel(newHovered !== null ? (items[newHovered]?.label ?? null) : null);
+        const label = newHovered !== null ? (items[newHovered]?.label ?? null) : null;
+        setTooltipLabel(label);
+        if (label) {
+          completeOnboardingStepFromEvent(OnboardingStepId.hoverAction);
+        }
       }
 
       // Safe zone progress (deadzone-aware)
@@ -244,6 +250,7 @@ function Root({ children }: PropsWithChildren) {
         const item = items[hovered];
         if (item) {
           analytics.track("action_layer.button_selected", { button: item.label });
+          completeOnboardingStepFromEvent(OnboardingStepId.hoverAction);
           item.onAction();
         }
         // Cancel immediately so entities return to normal render order on the next frame.

@@ -3,6 +3,7 @@ import {
   FancyDeleteToggle,
   FeedbackLink,
   LinkItem,
+  RedoOnboardingLink,
   ShareLink,
   SnapToGridToggle,
 } from "./settings.shared.tsx";
@@ -34,6 +35,12 @@ export default function DesktopSettingsContent({
         <div className="desktop-settings-ext-item field-label">
           <LinkItem>
             <FeedbackLink className="desktop-settings-link" />
+          </LinkItem>
+        </div>
+        <hr className="divider" />
+        <div className="desktop-settings-ext-item field-label">
+          <LinkItem>
+            <RedoOnboardingLink onDone={onClose} />
           </LinkItem>
         </div>
       </Modal.Content>

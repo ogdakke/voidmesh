@@ -4,6 +4,8 @@ import { useCanvasCommands } from "#context/use-canvas.ts";
 import { useEntityDrag } from "#hooks/use-entity-drag.ts";
 import { useActionLayer } from "#hooks/use-action-layer.ts";
 import { haptic } from "#lib/haptic.ts";
+import { completeOnboardingStepFromEvent } from "#lib/onboarding-runtime.ts";
+import { OnboardingStepId } from "#lib/onboarding.ts";
 import { canvasStore } from "#engine";
 import "./delete-drop-zone.css";
 
@@ -50,6 +52,7 @@ export function DeleteDropZone() {
     const handleTouchEnd = () => {
       if (isOverRef.current) {
         haptic({ wantsHaptic: canvasStore.getState().haptics });
+        completeOnboardingStepFromEvent(OnboardingStepId.deleteFromActionLayer);
         deleteSelection(undefined, "drop_zone");
         isOverRef.current = false;
         zone.removeAttribute("data-over");

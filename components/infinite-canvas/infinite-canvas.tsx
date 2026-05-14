@@ -20,6 +20,7 @@ import { useImageInput } from "#hooks/use-image-input.ts";
 import { useIsMobile } from "#hooks/use-is-mobile.ts";
 import { useMediaControlsActions } from "#hooks/use-media-controls.ts";
 import useMediaQuery from "#hooks/use-media-query.ts";
+import { useOnboarding } from "#hooks/use-onboarding.ts";
 import { useStudioFile } from "#hooks/use-studio-file.ts";
 import {
   calculateCenteredOffset,
@@ -202,6 +203,7 @@ export function InfiniteCanvas() {
 
   // Image input handlers (paste, drop, file upload)
   const { handleDrop } = useImageInput({ containerRef, multipleFiles: true });
+  const onboarding = useOnboarding({ containerRef, ready: isReady });
 
   // Studio file save/load
   const { exportStudioFile, saveAsStudioFile, importStudioFile } = useStudioFile();
@@ -890,8 +892,22 @@ export function InfiniteCanvas() {
           {!(isMobile && isFullscreen) && (
             <InfiniteCanvasToolRow>
               <div className="left-controls">
-                <About className="infinite-canvas__keyboard-shortcuts" />
-                <UndoRedoButtons />
+                <div className="left-controls__top">
+                  <About className="infinite-canvas__keyboard-shortcuts" />
+                  <UndoRedoButtons />
+                </div>
+                {onboarding.active && (
+                  <div className="onboarding-container">
+                    <Button
+                      className="infinite-canvas__skip-onboarding"
+                      onClick={onboarding.skip}
+                      type="button"
+                      size="sm"
+                    >
+                      Skip onboarding
+                    </Button>
+                  </div>
+                )}
               </div>
               <div className="infinite-canvas__controls">
                 {isMobile ? (
