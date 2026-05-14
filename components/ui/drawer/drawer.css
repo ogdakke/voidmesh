@@ -203,4 +203,10 @@
       overflow: hidden;
     }
   }
+
+  .drawer-snap-area-default {
+    /* the height of content for the drawers' default snappoint. If safe area is present, the area should be 260px, otherwise 270px */
+    --drawer-snap-default: max(260px, calc(270px - env(safe-area-inset-bottom, 0px)));
+    min-height: var(--drawer-snap-default);
+  }
 }

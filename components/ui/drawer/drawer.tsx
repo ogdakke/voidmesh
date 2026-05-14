@@ -8,6 +8,7 @@ import type {
 import { Drawer as BaseDrawer } from "@base-ui/react/drawer";
 import clsx from "clsx";
 import "./drawer.css";
+import type { ComponentProps, PropsWithChildren } from "react";
 
 interface DrawerProps extends DrawerPopupProps {
   handle?: boolean;
@@ -52,6 +53,17 @@ const Close = ({ children, ...props }: DrawerCloseProps) => {
   );
 };
 
+const DefaultSnapContentArea = ({
+  children,
+  ...props
+}: PropsWithChildren<ComponentProps<"div">>) => {
+  return (
+    <div {...props} className={clsx("drawer-snap-area-default", props.className)}>
+      {children}
+    </div>
+  );
+};
+
 export const Drawer = {
   Root: BaseDrawer.Root,
   Trigger: BaseDrawer.Trigger,
@@ -62,4 +74,5 @@ export const Drawer = {
   Provider: BaseDrawer.Provider,
   Indent: BaseDrawer.Indent,
   IndentBackground: BaseDrawer.IndentBackground,
+  DefaultSnapContentArea,
 };

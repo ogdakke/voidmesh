@@ -2,6 +2,7 @@ import { Button } from "../button";
 import { ColorPicker } from "./color-picker";
 import { usePickerClose } from "./use-color-picker";
 import { Field } from "#ui/field/field.tsx";
+import { Drawer } from "../drawer";
 
 interface MobilePresetProps {
   onRemove?: () => void;
@@ -21,10 +22,12 @@ export default function MobilePreset({ onRemove }: MobilePresetProps) {
         <ColorPicker.Swatch />
       </ColorPicker.DrawerTrigger>
       <ColorPicker.DrawerPopup>
-        <ColorPicker.Area />
-        <ColorPicker.HueSlider>
-          <Field.Label>Hue</Field.Label>
-        </ColorPicker.HueSlider>
+        <Drawer.DefaultSnapContentArea className="color-picker-drawer-medium">
+          <ColorPicker.Area />
+          <ColorPicker.HueSlider>
+            <Field.Label>Hue</Field.Label>
+          </ColorPicker.HueSlider>
+        </Drawer.DefaultSnapContentArea>
         <ColorPicker.AlphaSlider>
           <Field.Label>Alpha</Field.Label>
         </ColorPicker.AlphaSlider>

@@ -7,3 +7,9 @@ export const enum ColorSpace {
   srgb = "srgb",
   displayP3 = "display-p3",
 }
+
+export const enum DrawerSnapPoint {
+  /** @deprecated computed from css variable */
+  medium = 380,
+  full = 1,
+}
