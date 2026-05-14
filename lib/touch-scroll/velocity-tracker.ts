@@ -20,14 +20,19 @@ interface DataPoint {
 }
 
 const HISTORY_SIZE = 20;
+const DEFAULT_REGRESSION_HORIZON_MS = 100;
+const DEFAULT_MIN_REGRESSION_SPAN_MS = 32;
+const DEFAULT_TERMINAL_MIN_DELTA_MS = 8;
+const DEFAULT_TERMINAL_MAX_DELTA_MS = 40;
 
 /**
  * Tracks touch position samples and calculates velocity using
  * a weighted recurrence relation algorithm.
  */
 export class VelocityTracker {
-  #samples: (DataPoint | null)[] = Array(HISTORY_SIZE).fill(null);
+  #samples: DataPoint[] = Array.from({ length: HISTORY_SIZE }, () => ({ time: 0, value: 0 }));
   #index = 0;
+  #count = 0;
 
   /**
    * Add a new data point for velocity calculation.
@@ -36,7 +41,10 @@ export class VelocityTracker {
    */
   addDataPoint(time: number, position: number): void {
     this.#index = (this.#index + 1) % HISTORY_SIZE;
-    this.#samples[this.#index] = { time, value: position };
+    const sample = this.#samples[this.#index]!;
+    sample.time = time;
+    sample.value = position;
+    if (this.#count < HISTORY_SIZE) this.#count++;
   }
 
   /**
@@ -49,9 +57,8 @@ export class VelocityTracker {
     const samples: DataPoint[] = [];
     let index = this.#index;
 
-    for (let i = 0; i < HISTORY_SIZE; i++) {
-      const sample = this.#samples[index];
-      if (!sample) break;
+    for (let i = 0; i < this.#count; i++) {
+      const sample = this.#samples[index]!;
       samples.push(sample);
       index = index === 0 ? HISTORY_SIZE - 1 : index - 1;
     }
@@ -117,12 +124,102 @@ export class VelocityTracker {
   }
 
   /**
+   * Estimate release velocity from a recent sample window using linear least squares.
+   *
+   * This is intended for fling handoff, where very small touch event intervals can
+   * create unrealistic pairwise velocities. The fit uses recent position history
+   * instead of the last one or two deltas.
+   */
+  calculateLinearRegression(
+    horizonMs: number = DEFAULT_REGRESSION_HORIZON_MS,
+    minSpanMs: number = DEFAULT_MIN_REGRESSION_SPAN_MS,
+  ): number {
+    const samples = this.#getSamplesOldestFirst();
+    if (samples.length < 2) return 0;
+
+    const newest = samples.at(-1)!;
+    let windowStart = samples.length - 1;
+
+    for (let i = samples.length - 2; i >= 0; i--) {
+      const age = newest.time - samples[i]!.time;
+      if (age > horizonMs) break;
+      windowStart = i;
+      if (age >= minSpanMs) {
+        break;
+      }
+    }
+
+    const window = samples.slice(windowStart);
+    if (window.length < 2) return this.calculate();
+
+    const first = window[0]!;
+    const last = window.at(-1)!;
+    const span = last.time - first.time;
+    if (span <= 0) return 0;
+
+    const meanTime = window.reduce((sum, sample) => sum + sample.time, 0) / window.length;
+    const meanValue = window.reduce((sum, sample) => sum + sample.value, 0) / window.length;
+
+    let numerator = 0;
+    let denominator = 0;
+
+    for (const sample of window) {
+      const dt = sample.time - meanTime;
+      numerator += dt * (sample.value - meanValue);
+      denominator += dt * dt;
+    }
+
+    return denominator > 0 ? numerator / denominator : 0;
+  }
+
+  /**
+   * Return the last pairwise velocity backed by a plausible frame interval.
+   *
+   * This is not the primary fling estimator; it is a handoff guard. iOS can
+   * emit tiny 1-3ms touch intervals near release, so this skips intervals that
+   * are too short to represent a visible finger-to-frame movement.
+   */
+  calculateTerminalVelocity(
+    minDeltaMs: number = DEFAULT_TERMINAL_MIN_DELTA_MS,
+    maxDeltaMs: number = DEFAULT_TERMINAL_MAX_DELTA_MS,
+  ): number | null {
+    const samples = this.#getSamplesOldestFirst();
+    if (samples.length < 2) return null;
+
+    for (let i = samples.length - 1; i > 0; i--) {
+      const current = samples[i]!;
+      const previous = samples[i - 1]!;
+      const deltaTime = current.time - previous.time;
+
+      if (deltaTime >= minDeltaMs && deltaTime <= maxDeltaMs) {
+        return (current.value - previous.value) / deltaTime;
+      }
+    }
+
+    return null;
+  }
+
+  #getSamplesOldestFirst(): DataPoint[] {
+    const samples: DataPoint[] = [];
+    let index = this.#index;
+
+    for (let i = 0; i < this.#count; i++) {
+      const sample = this.#samples[index]!;
+      samples.push(sample);
+      index = index === 0 ? HISTORY_SIZE - 1 : index - 1;
+    }
+
+    samples.reverse();
+    return samples;
+  }
+
+  /**
    * Reset the tracker, clearing all samples.
    * Call this at the start of each new gesture.
    */
   reset(): void {
-    this.#samples.fill(null);
     this.#index = 0;
+    this.#count = 0;
   }
 
   /**

@@ -55,6 +55,14 @@ function click(gl: GameLoop, point: Point, shiftKey = false): void {
   gl.handlePointerUp(point);
 }
 
+function getViewportValues() {
+  const viewport = canvasStore.getViewport();
+  return {
+    offset: { x: viewport.offset.x, y: viewport.offset.y },
+    zoom: viewport.zoom,
+  };
+}
+
 // ── Setup ───────────────────────────────────────────────────────────────────
 
 let gl: GameLoop;
@@ -231,7 +239,7 @@ describe("Desktop pointer interactions", () => {
 
 describe("Wheel zoom/pan", () => {
   test("wheel without ctrlKey pans viewport", () => {
-    const before = canvasStore.getViewport();
+    const before = getViewportValues();
     gl.handleWheel(50, 30, { x: 400, y: 300 }, false);
     const after = canvasStore.getViewport();
 
@@ -241,7 +249,7 @@ describe("Wheel zoom/pan", () => {
   });
 
   test("wheel with ctrlKey zooms viewport", () => {
-    const before = canvasStore.getViewport();
+    const before = getViewportValues();
     gl.handleWheel(0, -10, { x: 400, y: 300 }, true);
     const after = canvasStore.getViewport();
 
@@ -286,7 +294,7 @@ describe("Space+drag pan", () => {
 
   test("pointer down in ready mode transitions to panning and pans viewport", () => {
     gl.setSpaceHeld(true);
-    const before = canvasStore.getViewport();
+    const before = getViewportValues();
     gl.handlePointerDown({ x: 400, y: 300 });
     expect(gl.spacePanMode).toBe(SpacePanMode.panning);
 
@@ -357,7 +365,7 @@ describe("Touch tap detection", () => {
 
 describe("Single-finger pan", () => {
   test("touch pan moves viewport", () => {
-    const before = canvasStore.getViewport();
+    const before = getViewportValues();
 
     gl.handleTouchStart([{ x: 400, y: 300 }]);
     gl.handleTouchMove([{ x: 350, y: 250 }]);
@@ -368,7 +376,7 @@ describe("Single-finger pan", () => {
   });
 
   test("swipe triggers momentum on touchEnd", () => {
-    const before = canvasStore.getViewport();
+    const before = getViewportValues();
 
     gl.handleTouchStart([{ x: 400, y: 300 }]);
     gl.handleTouchMove([{ x: 350, y: 300 }]);
@@ -547,7 +555,7 @@ describe("Long-press and action layer", () => {
 
 describe("Multi-touch gesture transitions", () => {
   test("pan → pinch zoom → pan: remaining finger continues panning after zoom", () => {
-    const before = canvasStore.getViewport();
+    const before = getViewportValues();
 
     // Phase 1: single finger pan
     gl.handleTouchStart([{ x: 400, y: 300 }]);
@@ -571,7 +579,7 @@ describe("Multi-touch gesture transitions", () => {
 
     // Phase 3: lift second finger → back to single-finger pan
     gl.handleTouchEnd([{ x: 300, y: 250 }]);
-    const afterLift = canvasStore.getViewport();
+    const afterLift = getViewportValues();
 
     // Move the remaining finger further
     gl.handleTouchMove([{ x: 250, y: 200 }]);

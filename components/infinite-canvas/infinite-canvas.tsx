@@ -128,6 +128,7 @@ export function InfiniteCanvas() {
 
   const [isSpaceHeld, setIsSpaceHeld] = useState(false);
   const isMetaHeldRef = useRef(false);
+  const touchPointsRef = useRef<{ x: number; y: number }[]>([]);
 
   const isMobile = useIsMobile();
   const bottomInset = isMobile ? config.canvas.mobile.bottomInset : 0;
@@ -235,26 +236,41 @@ export function InfiniteCanvas() {
     gameLoop.handlePointerUp({ x: e.clientX, y: e.clientY });
   };
 
+  const getTouchPoints = (touches: React.TouchList) => {
+    const points = touchPointsRef.current;
+    points.length = touches.length;
+
+    for (let i = 0; i < touches.length; i++) {
+      const touch = touches[i]!;
+      const point = points[i];
+
+      if (point) {
+        point.x = touch.clientX;
+        point.y = touch.clientY;
+      } else {
+        points[i] = { x: touch.clientX, y: touch.clientY };
+      }
+    }
+
+    return points;
+  };
+
   // Touch event handlers for mobile
   const handleTouchStart = (e: React.TouchEvent) => {
     containerRef.current?.focus();
-    const touches = Array.from(e.touches).map((t) => ({ x: t.clientX, y: t.clientY }));
-    gameLoop.handleTouchStart(touches);
+    gameLoop.handleTouchStart(getTouchPoints(e.touches), e.timeStamp);
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
-    const touches = Array.from(e.touches).map((t) => ({ x: t.clientX, y: t.clientY }));
-    gameLoop.handleTouchMove(touches);
+    gameLoop.handleTouchMove(getTouchPoints(e.touches), e.timeStamp);
   };
 
   const handleTouchEnd = (e: React.TouchEvent) => {
-    const remainingTouches = Array.from(e.touches).map((t) => ({ x: t.clientX, y: t.clientY }));
-    gameLoop.handleTouchEnd(remainingTouches);
+    gameLoop.handleTouchEnd(getTouchPoints(e.touches), false, e.timeStamp);
   };
 
   const handleTouchCancel = (e: React.TouchEvent) => {
-    const remainingTouches = Array.from(e.touches).map((t) => ({ x: t.clientX, y: t.clientY }));
-    gameLoop.handleTouchEnd(remainingTouches, true);
+    gameLoop.handleTouchEnd(getTouchPoints(e.touches), true, e.timeStamp);
   };
 
   // handle context menu
@@ -953,7 +969,7 @@ export function InfiniteCanvas() {
                   />
                 )}
                 {isMobile && <SettingsDrawer />}
-                <ViewportZoom onZoomReset={handleZoomReset} />
+                {!isMobile && <ViewportZoom onZoomReset={handleZoomReset} />}
               </div>
             </InfiniteCanvasToolRow>
           )}

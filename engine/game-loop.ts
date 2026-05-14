@@ -35,6 +35,8 @@ import { haptic } from "#lib/haptic.ts";
 import { OnboardingStepId } from "#lib/onboarding.ts";
 import { completeOnboardingStepFromEvent } from "#lib/onboarding-runtime.ts";
 
+const RELEASE_TERMINAL_SPEED_MULTIPLIER = 1.15;
+
 function createDefaultDeps() {
   return {
     scheduler,
@@ -44,6 +46,24 @@ function createDefaultDeps() {
     perf: perfOverlay,
     haptic,
     analytics,
+  };
+}
+
+function constrainReleaseVelocityToTerminalMotion(velocity: Point, terminalVelocity: Point): Point {
+  const speed = Math.hypot(velocity.x, velocity.y);
+  if (speed === 0) return velocity;
+
+  const terminalSpeed = Math.hypot(terminalVelocity.x, terminalVelocity.y);
+  const maxSpeed = terminalSpeed * RELEASE_TERMINAL_SPEED_MULTIPLIER;
+
+  if (maxSpeed >= speed) {
+    return velocity;
+  }
+
+  const ratio = maxSpeed / speed;
+  return {
+    x: velocity.x * ratio,
+    y: velocity.y * ratio,
   };
 }
 
@@ -124,6 +144,7 @@ export class GameLoop {
   #resizeObserver: ResizeObserver | null = null;
   #running = false;
   #animationFrameId: number | null = null;
+  #pendingScrollMomentumVelocity: Point | null = null;
   #firstFrameRendered = false;
   #lastFrameTime: number | null = null;
 
@@ -272,6 +293,7 @@ export class GameLoop {
   stop(): void {
     this.#running = false;
     this.#lastFrameTime = null;
+    this.#cancelPendingScrollMomentum();
     this.#cancelLongPressTimer();
     this.#cancelDoubleTapTimer();
     if (this.#animationFrameId !== null) {
@@ -352,12 +374,18 @@ export class GameLoop {
     // 10. Clear dirty flags
     canvasStore.clearDirtyFlags();
 
-    // 11. Schedule next frame
+    // 11. Start queued pan momentum only after the final touch-driven viewport
+    // has passed through this render tick. This prevents the release frame from
+    // combining late touch movement and the first fling delta.
+    this.#startPendingScrollMomentum();
+
+    // 12. Schedule next frame
     this.#animationFrameId = requestAnimationFrame(this.tick);
   };
 
   /** Stop any active momentum scrolling and zoom momentum (public API for external callers) */
   stopMomentum(): void {
+    this.#cancelPendingScrollMomentum();
     this.#momentum.stopAll();
   }
 
@@ -398,6 +426,8 @@ export class GameLoop {
 
   /** Reusable point for #moveEntitiesRaw → canvasStore.moveEntity (avoids per-frame allocation) */
   readonly #moveDelta: Point = { x: 0, y: 0 };
+  /** Reusable point for viewport panning deltas. */
+  readonly #panDelta: Point = { x: 0, y: 0 };
 
   /** Move current drag target entities without snap-to-grid (raw world-space delta).
    *  Falls back to #springEntityIds when dragTarget is null (finger lifted, spring still running). */
@@ -725,10 +755,9 @@ export class GameLoop {
       if (lastPos) {
         const viewport = canvasStore.getViewport();
         const dpr = window.devicePixelRatio || 1;
-        canvasStore.panBy({
-          x: (-(screenPoint.x - lastPos.x) * dpr) / viewport.zoom,
-          y: (-(screenPoint.y - lastPos.y) * dpr) / viewport.zoom,
-        });
+        this.#panDelta.x = (-(screenPoint.x - lastPos.x) * dpr) / viewport.zoom;
+        this.#panDelta.y = (-(screenPoint.y - lastPos.y) * dpr) / viewport.zoom;
+        canvasStore.panBy(this.#panDelta);
       }
       return;
     }
@@ -969,10 +998,9 @@ export class GameLoop {
       });
     } else {
       // Pan
-      canvasStore.panBy({
-        x: (deltaX * dpr) / viewport.zoom,
-        y: (deltaY * dpr) / viewport.zoom,
-      });
+      this.#panDelta.x = (deltaX * dpr) / viewport.zoom;
+      this.#panDelta.y = (deltaY * dpr) / viewport.zoom;
+      canvasStore.panBy(this.#panDelta);
     }
   }
 
@@ -1323,11 +1351,23 @@ export class GameLoop {
     };
   }
 
+  #setLastTouchPosition(x: number, y: number): void {
+    const lastTouchPosition = this.#touchState.lastTouchPosition;
+    if (lastTouchPosition) {
+      lastTouchPosition.x = x;
+      lastTouchPosition.y = y;
+      return;
+    }
+
+    this.#touchState.lastTouchPosition = { x, y };
+  }
+
   /** Handle touch start - determines gesture type */
-  handleTouchStart(touches: Point[]): void {
+  handleTouchStart(touches: Point[], eventTime?: number): void {
     // Cancel any viewport animation when user starts interacting
     this.#deps.viewportAnimation.cancel();
     // Cancel any momentum scrolling
+    this.#cancelPendingScrollMomentum();
     this.#momentum.stopScroll();
     this.#momentum.stopZoom();
 
@@ -1339,12 +1379,12 @@ export class GameLoop {
       // Single finger - pan the viewport
       const touch = touches[0]!;
       this.#touchState.isPanning = true;
-      this.#touchState.lastTouchPosition = { x: touch.x, y: touch.y };
+      this.#setLastTouchPosition(touch.x, touch.y);
 
       // Reset velocity trackers for momentum scrolling
       this.#velocityTrackerX.reset();
       this.#velocityTrackerY.reset();
-      const now = performance.now();
+      const now = eventTime ?? performance.now();
       this.#velocityTrackerX.addDataPoint(now, touch.x);
       this.#velocityTrackerY.addDataPoint(now, touch.y);
 
@@ -1432,7 +1472,7 @@ export class GameLoop {
 
       // Seed zoom velocity tracker for momentum on pinch end
       this.#velocityTrackerZoom.reset();
-      const now = performance.now();
+      const now = eventTime ?? performance.now();
       this.#velocityTrackerZoom.addDataPoint(now, Math.log(this.#touchState.initialZoom));
 
       // Only move entities if already in long-press drag mode
@@ -1443,7 +1483,7 @@ export class GameLoop {
   }
 
   /** Handle touch move - performs pan, zoom, or entity movement */
-  handleTouchMove(touches: Point[]): void {
+  handleTouchMove(touches: Point[], eventTime?: number): void {
     if (!this.#container) return;
 
     const viewport = canvasStore.getViewport();
@@ -1477,7 +1517,7 @@ export class GameLoop {
 
         // Seed zoom velocity tracker for momentum on release
         this.#velocityTrackerZoom.reset();
-        const now = performance.now();
+        const now = eventTime ?? performance.now();
         this.#velocityTrackerZoom.addDataPoint(now, Math.log(canvasStore.getViewport().zoom));
         // Manual zoom invalidates saved viewport for double-tap toggle
         this.#savedViewport = null;
@@ -1510,13 +1550,13 @@ export class GameLoop {
       });
 
       // Track zoom velocity for momentum on release
-      const now = performance.now();
+      const now = eventTime ?? performance.now();
       this.#velocityTrackerZoom.addDataPoint(now, Math.log(canvasStore.getViewport().zoom));
     } else if (touches.length === 1 && this.#touchState.isActionLayerActive) {
       // Action layer active: update finger position for rubber-banding
       const touch = touches[0]!;
       this.#deps.actionLayer.updateFingerPosition(touch);
-      this.#touchState.lastTouchPosition = { x: touch.x, y: touch.y };
+      this.#setLastTouchPosition(touch.x, touch.y);
 
       // Check safe zone exit → transition to entity drag
       const touchOrigin = this.#deps.actionLayer.getTouchOrigin();
@@ -1571,10 +1611,8 @@ export class GameLoop {
 
       if (lastPos) {
         const dpr = window.devicePixelRatio || 1;
-        const worldDelta = {
-          x: ((touch.x - lastPos.x) * dpr) / viewport.zoom,
-          y: ((touch.y - lastPos.y) * dpr) / viewport.zoom,
-        };
+        this.#moveDelta.x = ((touch.x - lastPos.x) * dpr) / viewport.zoom;
+        this.#moveDelta.y = ((touch.y - lastPos.y) * dpr) / viewport.zoom;
 
         if (this.#dragCatchUpHandle?.isActive || this.#snapSettleHandle?.isActive) {
           // During catch-up or snap-settle: bypass snap for smooth animation
@@ -1583,20 +1621,20 @@ export class GameLoop {
             this.#snapSettleHandle.cancel();
             this.#snapAccumulator = null;
           }
-          this.#moveEntitiesRaw(worldDelta.x, worldDelta.y);
+          this.#moveEntitiesRaw(this.#moveDelta.x, this.#moveDelta.y);
         } else if (this.#dragTarget?.type === DragTargetType.multiSelection) {
-          this.moveSelectedEntities(worldDelta);
+          this.moveSelectedEntities(this.#moveDelta);
         } else if (this.#dragTarget?.type === DragTargetType.entity && this.#dragTarget.entityId) {
           if (canvasStore.getState().snapToGrid) {
-            this.moveEntitySnapped(this.#dragTarget.entityId, worldDelta);
+            this.moveEntitySnapped(this.#dragTarget.entityId, this.#moveDelta);
           } else {
-            canvasStore.moveEntity(this.#dragTarget.entityId, worldDelta);
+            canvasStore.moveEntity(this.#dragTarget.entityId, this.#moveDelta);
           }
         }
       }
 
       // Update position but skip velocity tracking (no momentum on entity drop)
-      this.#touchState.lastTouchPosition = { x: touch.x, y: touch.y };
+      this.#setLastTouchPosition(touch.x, touch.y);
     } else if (touches.length === 1 && this.#touchState.isPanning) {
       // Single finger pan — manual viewport change invalidates double-tap zoom-back
       this.#savedViewport = null;
@@ -1621,18 +1659,17 @@ export class GameLoop {
 
         // Pan the viewport (content follows finger)
         const dpr = window.devicePixelRatio || 1;
-        canvasStore.panBy({
-          x: (-deltaX * dpr) / viewport.zoom,
-          y: (-deltaY * dpr) / viewport.zoom,
-        });
+        this.#panDelta.x = (-deltaX * dpr) / viewport.zoom;
+        this.#panDelta.y = (-deltaY * dpr) / viewport.zoom;
+        canvasStore.panBy(this.#panDelta);
       }
 
       // Track velocity for momentum scrolling
-      const now = performance.now();
+      const now = eventTime ?? performance.now();
       this.#velocityTrackerX.addDataPoint(now, touch.x);
       this.#velocityTrackerY.addDataPoint(now, touch.y);
 
-      this.#touchState.lastTouchPosition = { x: touch.x, y: touch.y };
+      this.#setLastTouchPosition(touch.x, touch.y);
     } else if (touches.length === 2 && this.#touchState.isPinching) {
       // Pinch zoom — manual viewport change invalidates double-tap zoom-back
       this.#savedViewport = null;
@@ -1661,7 +1698,7 @@ export class GameLoop {
 
         // Track zoom velocity in log-space for momentum on pinch end
         const currentZoom = canvasStore.getViewport().zoom;
-        const now = performance.now();
+        const now = eventTime ?? performance.now();
         this.#velocityTrackerZoom.addDataPoint(now, Math.log(currentZoom));
       }
 
@@ -1694,7 +1731,11 @@ export class GameLoop {
   }
 
   /** Handle touch end - reset gesture state */
-  handleTouchEnd(remainingTouches: { x: number; y: number }[], isCancelled: boolean = false): void {
+  handleTouchEnd(
+    remainingTouches: { x: number; y: number }[],
+    isCancelled: boolean = false,
+    eventTime?: number,
+  ): void {
     if (remainingTouches.length === 0) {
       if (this.#doubleTapHoldZoom.isZooming) {
         // Double-tap-hold zoom ended — trigger zoom momentum
@@ -1730,10 +1771,21 @@ export class GameLoop {
         if (this.#detectTouchTap()) {
           this.#handleTouchTap();
         } else {
-          this.#momentum.triggerScroll({
-            x: this.#velocityTrackerX.calculate(),
-            y: this.#velocityTrackerY.calculate(),
-          });
+          const estimatedVelocity = {
+            x: this.#velocityTrackerX.calculateLinearRegression(),
+            y: this.#velocityTrackerY.calculateLinearRegression(),
+          };
+          const terminalVelocityX = this.#velocityTrackerX.calculateTerminalVelocity();
+          const terminalVelocityY = this.#velocityTrackerY.calculateTerminalVelocity();
+          const terminalVelocity =
+            terminalVelocityX === null || terminalVelocityY === null
+              ? estimatedVelocity
+              : { x: terminalVelocityX, y: terminalVelocityY };
+          const velocity = constrainReleaseVelocityToTerminalMotion(
+            estimatedVelocity,
+            terminalVelocity,
+          );
+          this.#triggerScrollMomentumAfterNextRender(velocity);
         }
       }
       // Cancel any pending long-press timer
@@ -1761,16 +1813,16 @@ export class GameLoop {
       if (this.#touchState.isDraggingEntity) {
         // Resume entity drag with the remaining finger
         this.#touchState.isPanning = false;
-        this.#touchState.lastTouchPosition = { x: touch.x, y: touch.y };
+        this.#setLastTouchPosition(touch.x, touch.y);
       } else {
         // Switch to panning
         this.#touchState.isPanning = true;
-        this.#touchState.lastTouchPosition = { x: touch.x, y: touch.y };
+        this.#setLastTouchPosition(touch.x, touch.y);
 
         // Reset velocity trackers for the new single-finger pan
         this.#velocityTrackerX.reset();
         this.#velocityTrackerY.reset();
-        const now = performance.now();
+        const now = eventTime ?? performance.now();
         this.#velocityTrackerX.addDataPoint(now, touch.x);
         this.#velocityTrackerY.addDataPoint(now, touch.y);
       }
@@ -1780,6 +1832,25 @@ export class GameLoop {
       this.#inputState.pointerDownEntityId = null;
       this.#inputState.pointerDownWasSelected = false;
     }
+  }
+
+  #triggerScrollMomentumAfterNextRender(velocity: Point): void {
+    this.#cancelPendingScrollMomentum();
+
+    this.#pendingScrollMomentumVelocity = { ...velocity };
+  }
+
+  #startPendingScrollMomentum(): void {
+    const velocity = this.#pendingScrollMomentumVelocity;
+    if (!velocity) return;
+
+    this.#pendingScrollMomentumVelocity = null;
+
+    this.#momentum.triggerScroll(velocity);
+  }
+
+  #cancelPendingScrollMomentum(): void {
+    this.#pendingScrollMomentumVelocity = null;
   }
 
   /** Detect if the current touch gesture was a tap (not a swipe) */

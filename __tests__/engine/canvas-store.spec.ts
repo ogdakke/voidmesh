@@ -23,6 +23,28 @@ afterEach(() => {
   cleanup();
 });
 
+describe("canvasStore viewport subscriptions", () => {
+  test("viewport changes do not notify general store subscribers", () => {
+    let generalNotifications = 0;
+    let viewportNotifications = 0;
+
+    const unsubscribeGeneral = canvasStore.subscribe(() => {
+      generalNotifications++;
+    });
+    const unsubscribeViewport = canvasStore.subscribeViewport(() => {
+      viewportNotifications++;
+    });
+
+    canvasStore.panBy({ x: 12, y: -8 });
+
+    expect(viewportNotifications).toBe(1);
+    expect(generalNotifications).toBe(0);
+
+    unsubscribeGeneral();
+    unsubscribeViewport();
+  });
+});
+
 // ============================================================================
 // Video Playback Store Methods
 // ============================================================================
