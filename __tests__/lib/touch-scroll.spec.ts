@@ -333,16 +333,6 @@ describe("Scroller", () => {
     });
   });
 
-  describe("setVelocityThreshold", () => {
-    test("uses updated threshold to settle tiny tail movement", () => {
-      const scroller = new Scroller(DecelerationRate.FAST);
-      scroller.setVelocityThreshold(0.05);
-      scroller.fling(0.04);
-
-      expect(scroller.value(0)).toBe(null);
-    });
-  });
-
   describe("getInitialVelocity", () => {
     test("returns the flung velocity", () => {
       const scroller = new Scroller();

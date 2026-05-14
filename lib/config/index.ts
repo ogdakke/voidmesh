@@ -647,8 +647,8 @@ export const config = {
     velocityThreshold: 0.05,
     /** Maximum velocity for momentum fling in px/ms */
     maxVelocity: 2.2,
-    /** Deceleration rate for momentum, 0-1 where higher = longer glide (default: 0.998) */
-    decelerationRate: DecelerationRate.FAST,
+    /** Deceleration rate for momentum, 0-1 where higher = longer glide */
+    decelerationRate: DecelerationRate.REASONABLE,
     /** Duration in ms to hold before entering entity drag mode (default: 400) */
     longPressDelay: 400,
     /** Max screen-pixel movement allowed during the hold period (default: 10) */

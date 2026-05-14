@@ -3,7 +3,6 @@ import { clampZoom, screenToWorld } from "../lib/canvas-math.ts";
 import { config, type TouchConfig } from "../lib/config/index.ts";
 import type { Point, Viewport } from "#types/canvas.ts";
 import type { AnimationScheduler, AnimationHandle } from "../lib/animation-scheduler.ts";
-import { panTrace } from "#lib/pan-trace.ts";
 
 export interface MomentumDeps {
   panBy(delta: Point): void;
@@ -26,8 +25,8 @@ export class MomentumController {
   #scheduler: AnimationScheduler;
   #deps: MomentumDeps;
 
-  #scrollerX = new Scroller(config.touch.decelerationRate, config.touch.velocityThreshold);
-  #scrollerY = new Scroller(config.touch.decelerationRate, config.touch.velocityThreshold);
+  #scrollerX = new Scroller(config.touch.decelerationRate);
+  #scrollerY = new Scroller(config.touch.decelerationRate);
   #scrollerZoom = new Scroller(config.touch.zoomMomentum.decelerationRate, 0.0001);
   #springBackZoom = new SpringBack();
 
@@ -61,23 +60,10 @@ export class MomentumController {
     const clampedVelX = velocity.x * velocityRatio;
     const clampedVelY = velocity.y * velocityRatio;
 
-    if (panTrace.enabled) {
-      panTrace.record("momentumStart", {
-        inputVelocity: velocity,
-        clampedVelocity: { x: clampedVelX, y: clampedVelY },
-        config: { velocityThreshold, maxVelocity, velocityScale },
-        viewport: this.#deps.getViewport(),
-      });
-    }
-
     // Cancel previous handle before setting up new fling
     // (stopScroll resets scrollers, so it must come before fling)
     this.stopScroll();
 
-    this.#scrollerX.setDecelerationRate(this.#touchConfig.decelerationRate);
-    this.#scrollerY.setDecelerationRate(this.#touchConfig.decelerationRate);
-    this.#scrollerX.setVelocityThreshold(velocityThreshold);
-    this.#scrollerY.setVelocityThreshold(velocityThreshold);
     this.#scrollerX.fling(clampedVelX * velocityScale);
     this.#scrollerY.fling(clampedVelY * velocityScale);
 
@@ -104,30 +90,9 @@ export class MomentumController {
           };
           this.#deps.panBy(worldDelta);
 
-          if (panTrace.enabled) {
-            panTrace.record("momentumTick", {
-              elapsed,
-              deltaCss: { x: deltaX, y: deltaY },
-              worldDelta,
-              scroller: {
-                x: valX ? { offset: valX.offset, velocity: valX.velocity } : null,
-                y: valY ? { offset: valY.offset, velocity: valY.velocity } : null,
-              },
-              viewportBefore: viewport,
-              viewportAfter: this.#deps.getViewport(),
-            });
-          }
-
           if (valX) lastOffsetX = valX.offset;
           if (valY) lastOffsetY = valY.offset;
           return true;
-        }
-
-        if (panTrace.enabled) {
-          panTrace.record("momentumStop", {
-            reason: "settled",
-            viewport: this.#deps.getViewport(),
-          });
         }
 
         this.stopScroll();
