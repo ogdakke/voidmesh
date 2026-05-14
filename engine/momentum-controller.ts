@@ -33,6 +33,7 @@ export class MomentumController {
   #scrollHandle: AnimationHandle | null = null;
   #zoomHandle: AnimationHandle | null = null;
   #zoomFocalPoint: Point | null = null;
+  readonly #scrollWorldDelta: Point = { x: 0, y: 0 };
 
   #touchConfig: TouchConfig;
 
@@ -84,11 +85,9 @@ export class MomentumController {
 
           const viewport = this.#deps.getViewport();
           const dpr = this.#deps.getDpr();
-          const worldDelta = {
-            x: (deltaX * dpr) / viewport.zoom,
-            y: (deltaY * dpr) / viewport.zoom,
-          };
-          this.#deps.panBy(worldDelta);
+          this.#scrollWorldDelta.x = (deltaX * dpr) / viewport.zoom;
+          this.#scrollWorldDelta.y = (deltaY * dpr) / viewport.zoom;
+          this.#deps.panBy(this.#scrollWorldDelta);
 
           if (valX) lastOffsetX = valX.offset;
           if (valY) lastOffsetY = valY.offset;

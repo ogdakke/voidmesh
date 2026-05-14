@@ -424,6 +424,8 @@ export class GameLoop {
 
   /** Reusable point for #moveEntitiesRaw → canvasStore.moveEntity (avoids per-frame allocation) */
   readonly #moveDelta: Point = { x: 0, y: 0 };
+  /** Reusable point for viewport panning deltas. */
+  readonly #panDelta: Point = { x: 0, y: 0 };
 
   /** Move current drag target entities without snap-to-grid (raw world-space delta).
    *  Falls back to #springEntityIds when dragTarget is null (finger lifted, spring still running). */
@@ -751,10 +753,9 @@ export class GameLoop {
       if (lastPos) {
         const viewport = canvasStore.getViewport();
         const dpr = window.devicePixelRatio || 1;
-        canvasStore.panBy({
-          x: (-(screenPoint.x - lastPos.x) * dpr) / viewport.zoom,
-          y: (-(screenPoint.y - lastPos.y) * dpr) / viewport.zoom,
-        });
+        this.#panDelta.x = (-(screenPoint.x - lastPos.x) * dpr) / viewport.zoom;
+        this.#panDelta.y = (-(screenPoint.y - lastPos.y) * dpr) / viewport.zoom;
+        canvasStore.panBy(this.#panDelta);
       }
       return;
     }
@@ -995,10 +996,9 @@ export class GameLoop {
       });
     } else {
       // Pan
-      canvasStore.panBy({
-        x: (deltaX * dpr) / viewport.zoom,
-        y: (deltaY * dpr) / viewport.zoom,
-      });
+      this.#panDelta.x = (deltaX * dpr) / viewport.zoom;
+      this.#panDelta.y = (deltaY * dpr) / viewport.zoom;
+      canvasStore.panBy(this.#panDelta);
     }
   }
 
@@ -1348,6 +1348,17 @@ export class GameLoop {
     };
   }
 
+  #setLastTouchPosition(x: number, y: number): void {
+    const lastTouchPosition = this.#touchState.lastTouchPosition;
+    if (lastTouchPosition) {
+      lastTouchPosition.x = x;
+      lastTouchPosition.y = y;
+      return;
+    }
+
+    this.#touchState.lastTouchPosition = { x, y };
+  }
+
   /** Handle touch start - determines gesture type */
   handleTouchStart(touches: Point[], eventTime?: number): void {
     // Cancel any viewport animation when user starts interacting
@@ -1365,7 +1376,7 @@ export class GameLoop {
       // Single finger - pan the viewport
       const touch = touches[0]!;
       this.#touchState.isPanning = true;
-      this.#touchState.lastTouchPosition = { x: touch.x, y: touch.y };
+      this.#setLastTouchPosition(touch.x, touch.y);
 
       // Reset velocity trackers for momentum scrolling
       this.#velocityTrackerX.reset();
@@ -1542,7 +1553,7 @@ export class GameLoop {
       // Action layer active: update finger position for rubber-banding
       const touch = touches[0]!;
       this.#deps.actionLayer.updateFingerPosition(touch);
-      this.#touchState.lastTouchPosition = { x: touch.x, y: touch.y };
+      this.#setLastTouchPosition(touch.x, touch.y);
 
       // Check safe zone exit → transition to entity drag
       const touchOrigin = this.#deps.actionLayer.getTouchOrigin();
@@ -1597,10 +1608,8 @@ export class GameLoop {
 
       if (lastPos) {
         const dpr = window.devicePixelRatio || 1;
-        const worldDelta = {
-          x: ((touch.x - lastPos.x) * dpr) / viewport.zoom,
-          y: ((touch.y - lastPos.y) * dpr) / viewport.zoom,
-        };
+        this.#moveDelta.x = ((touch.x - lastPos.x) * dpr) / viewport.zoom;
+        this.#moveDelta.y = ((touch.y - lastPos.y) * dpr) / viewport.zoom;
 
         if (this.#dragCatchUpHandle?.isActive || this.#snapSettleHandle?.isActive) {
           // During catch-up or snap-settle: bypass snap for smooth animation
@@ -1609,20 +1618,20 @@ export class GameLoop {
             this.#snapSettleHandle.cancel();
             this.#snapAccumulator = null;
           }
-          this.#moveEntitiesRaw(worldDelta.x, worldDelta.y);
+          this.#moveEntitiesRaw(this.#moveDelta.x, this.#moveDelta.y);
         } else if (this.#dragTarget?.type === DragTargetType.multiSelection) {
-          this.moveSelectedEntities(worldDelta);
+          this.moveSelectedEntities(this.#moveDelta);
         } else if (this.#dragTarget?.type === DragTargetType.entity && this.#dragTarget.entityId) {
           if (canvasStore.getState().snapToGrid) {
-            this.moveEntitySnapped(this.#dragTarget.entityId, worldDelta);
+            this.moveEntitySnapped(this.#dragTarget.entityId, this.#moveDelta);
           } else {
-            canvasStore.moveEntity(this.#dragTarget.entityId, worldDelta);
+            canvasStore.moveEntity(this.#dragTarget.entityId, this.#moveDelta);
           }
         }
       }
 
       // Update position but skip velocity tracking (no momentum on entity drop)
-      this.#touchState.lastTouchPosition = { x: touch.x, y: touch.y };
+      this.#setLastTouchPosition(touch.x, touch.y);
     } else if (touches.length === 1 && this.#touchState.isPanning) {
       // Single finger pan — manual viewport change invalidates double-tap zoom-back
       this.#savedViewport = null;
@@ -1647,10 +1656,9 @@ export class GameLoop {
 
         // Pan the viewport (content follows finger)
         const dpr = window.devicePixelRatio || 1;
-        canvasStore.panBy({
-          x: (-deltaX * dpr) / viewport.zoom,
-          y: (-deltaY * dpr) / viewport.zoom,
-        });
+        this.#panDelta.x = (-deltaX * dpr) / viewport.zoom;
+        this.#panDelta.y = (-deltaY * dpr) / viewport.zoom;
+        canvasStore.panBy(this.#panDelta);
       }
 
       // Track velocity for momentum scrolling
@@ -1658,7 +1666,7 @@ export class GameLoop {
       this.#velocityTrackerX.addDataPoint(now, touch.x);
       this.#velocityTrackerY.addDataPoint(now, touch.y);
 
-      this.#touchState.lastTouchPosition = { x: touch.x, y: touch.y };
+      this.#setLastTouchPosition(touch.x, touch.y);
     } else if (touches.length === 2 && this.#touchState.isPinching) {
       // Pinch zoom — manual viewport change invalidates double-tap zoom-back
       this.#savedViewport = null;
@@ -1802,11 +1810,11 @@ export class GameLoop {
       if (this.#touchState.isDraggingEntity) {
         // Resume entity drag with the remaining finger
         this.#touchState.isPanning = false;
-        this.#touchState.lastTouchPosition = { x: touch.x, y: touch.y };
+        this.#setLastTouchPosition(touch.x, touch.y);
       } else {
         // Switch to panning
         this.#touchState.isPanning = true;
-        this.#touchState.lastTouchPosition = { x: touch.x, y: touch.y };
+        this.#setLastTouchPosition(touch.x, touch.y);
 
         // Reset velocity trackers for the new single-finger pan
         this.#velocityTrackerX.reset();

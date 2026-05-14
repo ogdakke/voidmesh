@@ -127,6 +127,7 @@ export function InfiniteCanvas() {
 
   const [isSpaceHeld, setIsSpaceHeld] = useState(false);
   const isMetaHeldRef = useRef(false);
+  const touchPointsRef = useRef<{ x: number; y: number }[]>([]);
 
   const isMobile = useIsMobile();
   const bottomInset = isMobile ? config.canvas.mobile.bottomInset : 0;
@@ -233,52 +234,42 @@ export function InfiniteCanvas() {
     gameLoop.handlePointerUp({ x: e.clientX, y: e.clientY });
   };
 
-  // Native touch listeners must be non-passive so iOS cannot hand quick flicks
-  // to page rubber-band scrolling before the canvas consumes them.
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+  const getTouchPoints = (touches: React.TouchList) => {
+    const points = touchPointsRef.current;
+    points.length = touches.length;
 
-    const touchOptions = { passive: false } as const;
-    const getTouchPoints = (touches: TouchList) =>
-      Array.from(touches).map((t) => ({ x: t.clientX, y: t.clientY }));
-    const preventDefault = (e: TouchEvent) => {
-      if (e.cancelable) e.preventDefault();
-    };
+    for (let i = 0; i < touches.length; i++) {
+      const touch = touches[i]!;
+      const point = points[i];
 
-    const handleTouchStart = (e: TouchEvent) => {
-      preventDefault(e);
-      containerRef.current?.focus({ preventScroll: true });
-      gameLoop.handleTouchStart(getTouchPoints(e.touches), e.timeStamp);
-    };
+      if (point) {
+        point.x = touch.clientX;
+        point.y = touch.clientY;
+      } else {
+        points[i] = { x: touch.clientX, y: touch.clientY };
+      }
+    }
 
-    const handleTouchMove = (e: TouchEvent) => {
-      preventDefault(e);
-      gameLoop.handleTouchMove(getTouchPoints(e.touches), e.timeStamp);
-    };
+    return points;
+  };
 
-    const handleTouchEnd = (e: TouchEvent) => {
-      preventDefault(e);
-      gameLoop.handleTouchEnd(getTouchPoints(e.touches), false, e.timeStamp);
-    };
+  // Touch event handlers for mobile
+  const handleTouchStart = (e: React.TouchEvent) => {
+    containerRef.current?.focus();
+    gameLoop.handleTouchStart(getTouchPoints(e.touches), e.timeStamp);
+  };
 
-    const handleTouchCancel = (e: TouchEvent) => {
-      preventDefault(e);
-      gameLoop.handleTouchEnd(getTouchPoints(e.touches), true, e.timeStamp);
-    };
+  const handleTouchMove = (e: React.TouchEvent) => {
+    gameLoop.handleTouchMove(getTouchPoints(e.touches), e.timeStamp);
+  };
 
-    canvas.addEventListener("touchstart", handleTouchStart, touchOptions);
-    canvas.addEventListener("touchmove", handleTouchMove, touchOptions);
-    canvas.addEventListener("touchend", handleTouchEnd, touchOptions);
-    canvas.addEventListener("touchcancel", handleTouchCancel, touchOptions);
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    gameLoop.handleTouchEnd(getTouchPoints(e.touches), false, e.timeStamp);
+  };
 
-    return () => {
-      canvas.removeEventListener("touchstart", handleTouchStart);
-      canvas.removeEventListener("touchmove", handleTouchMove);
-      canvas.removeEventListener("touchend", handleTouchEnd);
-      canvas.removeEventListener("touchcancel", handleTouchCancel);
-    };
-  }, []);
+  const handleTouchCancel = (e: React.TouchEvent) => {
+    gameLoop.handleTouchEnd(getTouchPoints(e.touches), true, e.timeStamp);
+  };
 
   // handle context menu
   const handleContextMenu = (e: React.MouseEvent) => {
@@ -872,6 +863,10 @@ export function InfiniteCanvas() {
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               onPointerCancel={handlePointerUp}
+              onTouchStart={handleTouchStart}
+              onTouchMove={handleTouchMove}
+              onTouchEnd={handleTouchEnd}
+              onTouchCancel={handleTouchCancel}
               onContextMenu={handleContextMenu}
               className="infinite-canvas__canvas"
             />

@@ -328,13 +328,8 @@ export class CanvasStore extends Store<CanvasState> {
   }
 
   panBy(delta: Point): void {
-    this.state.viewport = {
-      ...this.state.viewport,
-      offset: {
-        x: this.state.viewport.offset.x + delta.x,
-        y: this.state.viewport.offset.y + delta.y,
-      },
-    };
+    this.state.viewport.offset.x += delta.x;
+    this.state.viewport.offset.y += delta.y;
     this.state.viewportDirty = true;
     this.notifyViewportChange();
   }

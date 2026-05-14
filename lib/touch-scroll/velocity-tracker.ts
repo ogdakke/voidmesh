@@ -30,8 +30,9 @@ const DEFAULT_TERMINAL_MAX_DELTA_MS = 40;
  * a weighted recurrence relation algorithm.
  */
 export class VelocityTracker {
-  #samples: (DataPoint | null)[] = Array(HISTORY_SIZE).fill(null);
+  #samples: DataPoint[] = Array.from({ length: HISTORY_SIZE }, () => ({ time: 0, value: 0 }));
   #index = 0;
+  #count = 0;
 
   /**
    * Add a new data point for velocity calculation.
@@ -40,7 +41,10 @@ export class VelocityTracker {
    */
   addDataPoint(time: number, position: number): void {
     this.#index = (this.#index + 1) % HISTORY_SIZE;
-    this.#samples[this.#index] = { time, value: position };
+    const sample = this.#samples[this.#index]!;
+    sample.time = time;
+    sample.value = position;
+    if (this.#count < HISTORY_SIZE) this.#count++;
   }
 
   /**
@@ -53,9 +57,8 @@ export class VelocityTracker {
     const samples: DataPoint[] = [];
     let index = this.#index;
 
-    for (let i = 0; i < HISTORY_SIZE; i++) {
-      const sample = this.#samples[index];
-      if (!sample) break;
+    for (let i = 0; i < this.#count; i++) {
+      const sample = this.#samples[index]!;
       samples.push(sample);
       index = index === 0 ? HISTORY_SIZE - 1 : index - 1;
     }
@@ -200,9 +203,8 @@ export class VelocityTracker {
     const samples: DataPoint[] = [];
     let index = this.#index;
 
-    for (let i = 0; i < HISTORY_SIZE; i++) {
-      const sample = this.#samples[index];
-      if (!sample) break;
+    for (let i = 0; i < this.#count; i++) {
+      const sample = this.#samples[index]!;
       samples.push(sample);
       index = index === 0 ? HISTORY_SIZE - 1 : index - 1;
     }
@@ -216,8 +218,8 @@ export class VelocityTracker {
    * Call this at the start of each new gesture.
    */
   reset(): void {
-    this.#samples.fill(null);
     this.#index = 0;
+    this.#count = 0;
   }
 
   /**
