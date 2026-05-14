@@ -64,6 +64,29 @@ describe("MomentumController", () => {
       expect(Math.abs(delta!.y / delta!.x)).toBeCloseTo(4 / 3, 2);
     });
 
+    test("keeps diagonal pan direction stable until momentum ends", () => {
+      controller.setTouchConfig({ velocityThreshold: 0.01, velocityScale: 1 });
+      controller.triggerScroll({ x: 0.17, y: 1 });
+
+      const tailDeltas: { x: number; y: number }[] = [];
+      for (let i = 0; i < 60; i++) {
+        (deps.panBy as Mock).mockClear();
+        clock.advanceBy(16);
+        const delta = (deps.panBy as Mock).mock.calls.at(-1)?.[0];
+        if (!delta) break;
+
+        if (i > 35) {
+          tailDeltas.push({ x: delta.x, y: delta.y });
+        }
+      }
+
+      expect(tailDeltas.length).toBeGreaterThan(0);
+      for (const delta of tailDeltas) {
+        expect(Math.abs(delta.x)).toBeGreaterThan(0);
+        expect(Math.abs(delta.y / delta.x)).toBeCloseTo(1 / 0.17, 2);
+      }
+    });
+
     test("does nothing when velocity is below threshold", () => {
       const threshold = config.touch.velocityThreshold;
       controller.triggerScroll({ x: threshold * 0.5, y: threshold * 0.5 });

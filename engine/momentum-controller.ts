@@ -15,7 +15,7 @@ export interface MomentumDeps {
 /**
  * Momentum physics for pan and zoom flings.
  *
- * Pan fling: exponential deceleration via Scroller (one per axis).
+ * Pan fling: exponential deceleration via Scroller along a fixed release vector.
  * Zoom fling: exponential deceleration in log(zoom) space, with elastic
  * spring-back (via SpringBack) when overshooting zoom boundaries.
  *
@@ -25,8 +25,7 @@ export class MomentumController {
   #scheduler: AnimationScheduler;
   #deps: MomentumDeps;
 
-  #scrollerX = new Scroller(config.touch.decelerationRate);
-  #scrollerY = new Scroller(config.touch.decelerationRate);
+  #scrollerPan = new Scroller(config.touch.decelerationRate);
   #scrollerZoom = new Scroller(config.touch.zoomMomentum.decelerationRate, 0.0001);
   #springBackZoom = new SpringBack();
 
@@ -57,40 +56,35 @@ export class MomentumController {
       return;
     }
 
-    const velocityRatio = Math.min(speed, maxVelocity) / speed;
-    const clampedVelX = velocity.x * velocityRatio;
-    const clampedVelY = velocity.y * velocityRatio;
+    const clampedSpeed = Math.min(speed, maxVelocity);
+    const directionX = velocity.x / speed;
+    const directionY = velocity.y / speed;
 
     // Cancel previous handle before setting up new fling
     // (stopScroll resets scrollers, so it must come before fling)
     this.stopScroll();
 
-    this.#scrollerX.fling(clampedVelX * velocityScale);
-    this.#scrollerY.fling(clampedVelY * velocityScale);
+    this.#scrollerPan.fling(clampedSpeed * velocityScale);
 
     const startTime = performance.now();
-    let lastOffsetX = 0;
-    let lastOffsetY = 0;
+    let lastOffset = 0;
 
     this.#scrollHandle = this.#scheduler.custom({
       tag: "momentum",
       tick: (now) => {
         const elapsed = now - startTime;
-        const valX = this.#scrollerX.value(elapsed);
-        const valY = this.#scrollerY.value(elapsed);
+        const value = this.#scrollerPan.value(elapsed);
 
-        if (valX || valY) {
-          const deltaX = valX ? -(valX.offset - lastOffsetX) : 0;
-          const deltaY = valY ? -(valY.offset - lastOffsetY) : 0;
+        if (value) {
+          const delta = -(value.offset - lastOffset);
 
           const viewport = this.#deps.getViewport();
           const dpr = this.#deps.getDpr();
-          this.#scrollWorldDelta.x = (deltaX * dpr) / viewport.zoom;
-          this.#scrollWorldDelta.y = (deltaY * dpr) / viewport.zoom;
+          this.#scrollWorldDelta.x = (delta * directionX * dpr) / viewport.zoom;
+          this.#scrollWorldDelta.y = (delta * directionY * dpr) / viewport.zoom;
           this.#deps.panBy(this.#scrollWorldDelta);
 
-          if (valX) lastOffsetX = valX.offset;
-          if (valY) lastOffsetY = valY.offset;
+          lastOffset = value.offset;
           return true;
         }
 
@@ -104,8 +98,7 @@ export class MomentumController {
   stopScroll(): void {
     this.#scrollHandle?.cancel();
     this.#scrollHandle = null;
-    this.#scrollerX.reset();
-    this.#scrollerY.reset();
+    this.#scrollerPan.reset();
   }
 
   // ── Zoom Fling ─────────────────────────────────────────────────────────
@@ -255,8 +248,7 @@ export class MomentumController {
   /** Update touch config (e.g. changed deceleration rates). */
   setTouchConfig(touchConfig: Partial<TouchConfig>): void {
     this.#touchConfig = { ...this.#touchConfig, ...touchConfig };
-    this.#scrollerX.setDecelerationRate(this.#touchConfig.decelerationRate);
-    this.#scrollerY.setDecelerationRate(this.#touchConfig.decelerationRate);
+    this.#scrollerPan.setDecelerationRate(this.#touchConfig.decelerationRate);
     if (touchConfig.zoomMomentum) {
       this.#scrollerZoom.setDecelerationRate(this.#touchConfig.zoomMomentum.decelerationRate);
     }
