@@ -5,7 +5,6 @@ import {
   ControlSlider,
   Copy,
   Download,
-  MediaVideo,
   Palette,
   ScaleFrameEnlarge,
   Settings,
@@ -20,52 +19,24 @@ import { ActionLayer } from "./action-layer/action-layer.tsx";
 import { CopyPasteDrawer } from "./action-layer/copy-paste-drawer.tsx";
 import { UpscaleDrawer } from "./action-layer/upscale-drawer.tsx";
 import { IonDuplicateOutline } from "./icons/duplicate.tsx";
+import { MobileExportDrawer } from "./export-knobs/export-knobs.mobile.tsx";
 import { Drawer } from "#ui/drawer/index.tsx";
 import {
   useCanvasCommands,
   useDebugMode,
-  useCanvasRendererService,
   useMultiSelectMode,
   useSelectedEntityIds,
 } from "#context/use-canvas.ts";
-import { useExportQueue } from "#context/use-export-queue.ts";
 import { useActionLayer } from "#hooks/use-action-layer.ts";
 import { useLayout } from "#context/use-layout.ts";
 import { useParamValue } from "#hooks/use-param-value.ts";
-import { isAnimatedEntity } from "#types/canvas.ts";
-import { canvasStore } from "#engine";
 import { useEntityDrag } from "#hooks/use-entity-drag.ts";
-import { toastManager } from "#ui/toast/toast-manager.ts";
 
 function MobileActionLayer() {
-  const { saveSelectedEntityToFile, duplicateEntities } = useCanvasCommands();
-  const { renderer } = useCanvasRendererService();
-  const { addToQueue } = useExportQueue();
+  const { duplicateEntities } = useCanvasCommands();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [upscaleDrawerOpen, setUpscaleDrawerOpen] = useState(false);
-
-  const handleSave = () => {
-    // Check if the selected entity is animated — export instead of save
-    const selectedEntities = canvasStore.getSelectedEntities();
-    const animated = selectedEntities.filter(isAnimatedEntity);
-    if (animated.length > 0 && renderer) {
-      for (const entity of animated) {
-        addToQueue(entity, renderer);
-      }
-      const n = animated.length;
-      const count = `${n} ${n === 1 ? "file" : "files"}`;
-      toastManager.add({
-        title: `Exporting ${count}`,
-        description: "See progress in exports tab",
-      });
-    } else {
-      saveSelectedEntityToFile();
-    }
-  };
-
-  // Determine label based on selection type
-  const selectedEntities = canvasStore.getSelectedEntities();
-  const hasAnimated = selectedEntities.some(isAnimatedEntity);
+  const [exportDrawerOpen, setExportDrawerOpen] = useState(false);
 
   return (
     <>
@@ -79,12 +50,17 @@ function MobileActionLayer() {
         <ActionLayer.Item order={2} onAction={() => setUpscaleDrawerOpen(true)} label="Upscale 2×">
           <ScaleFrameEnlarge />
         </ActionLayer.Item>
-        <ActionLayer.Item order={3} onAction={handleSave} label={hasAnimated ? "Export" : "Save"}>
-          {hasAnimated ? <MediaVideo /> : <Download />}
+        <ActionLayer.Item order={3} onAction={() => setExportDrawerOpen(true)} label="Export">
+          <Download />
         </ActionLayer.Item>
       </ActionLayer.Root>
       <CopyPasteDrawer open={drawerOpen} onOpenChange={setDrawerOpen} />
       <UpscaleDrawer open={upscaleDrawerOpen} onOpenChange={setUpscaleDrawerOpen} />
+      <MobileExportDrawer
+        open={exportDrawerOpen}
+        onOpenChange={setExportDrawerOpen}
+        trigger={false}
+      />
     </>
   );
 }
@@ -111,10 +87,6 @@ function MobileFloat() {
       disabled: bottomBarDisabled,
     },
     style: {
-      disabled: bottomBarDisabled,
-    },
-    export: {
-      // TODO: maybe show exports button and commit multi-selection if user clicks on it?
       disabled: bottomBarDisabled,
     },
   };
@@ -151,9 +123,6 @@ function MobileFloat() {
           {...propsMapByItem["adjustments and post-processing"]}
         >
           <ColorFilter />
-        </BottomBarItem>
-        <BottomBarItem label="export" {...propsMapByItem["export"]}>
-          <Download />
         </BottomBarItem>
         {debugMode && (
           <BottomBarItem label={debugBarItem} disabled={isFullscreen}>

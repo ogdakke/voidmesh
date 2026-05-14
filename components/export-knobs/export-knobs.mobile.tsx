@@ -400,46 +400,68 @@ function MobileExportButtons({ imageFormat }: { imageFormat: ImageExportFormat }
   );
 }
 
-export function MobileExportKnobs() {
+interface MobileExportDrawerProps {
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  trigger?: boolean;
+}
+
+export function MobileExportDrawer({
+  open,
+  onOpenChange,
+  trigger = true,
+}: MobileExportDrawerProps) {
   const selectedEntities = useSelectedEntities();
   const hasAnimated = selectedEntities.some(isAnimatedEntity);
   const firstSnapPoint = SnapPoints.compute().at(0)!;
   const [snapPoint, setSnapPoint] = useState<number | string | null>(firstSnapPoint);
 
+  const drawer = (
+    <Drawer.Root
+      open={open}
+      onOpenChange={onOpenChange}
+      snapPoint={snapPoint}
+      onSnapPointChange={(val) => setSnapPoint(val)}
+      snapPoints={firstSnapPoint !== null ? [firstSnapPoint, 1] : undefined}
+    >
+      {trigger && (
+        <Drawer.Trigger
+          render={(props) => (
+            <Button {...props} className="mobile-export-btn">
+              <Download />
+              <span>Export</span>
+            </Button>
+          )}
+        ></Drawer.Trigger>
+      )}
+      <Drawer.Popup
+        className="mobile-exports-drawer-content"
+        data-image-only={!hasAnimated || undefined}
+      >
+        <Drawer.Content>
+          <div className="mobile-exports-drawer-inner">
+            <div
+              className="mobile-exports-settings"
+              data-fully-snapped={snapPoint === 1 || undefined}
+            >
+              <MobileExportSettingsKnobs />
+            </div>
+            <ExportQueuePanel />
+          </div>
+        </Drawer.Content>
+      </Drawer.Popup>
+    </Drawer.Root>
+  );
+
+  if (!trigger) return drawer;
+
   return (
     <div className="mobile-exports">
-      <div className="mobile-row">
-        <Drawer.Root
-          snapPoint={snapPoint}
-          onSnapPointChange={(val) => setSnapPoint(val)}
-          snapPoints={firstSnapPoint !== null ? [firstSnapPoint, 1] : undefined}
-        >
-          <Drawer.Trigger
-            render={(props) => (
-              <Button {...props} className="mobile-export-btn">
-                <Download />
-                <span>Export</span>
-              </Button>
-            )}
-          ></Drawer.Trigger>
-          <Drawer.Popup
-            className="mobile-exports-drawer-content"
-            data-image-only={!hasAnimated || undefined}
-          >
-            <Drawer.Content>
-              <div className="mobile-exports-drawer-inner">
-                <div
-                  className="mobile-exports-settings"
-                  data-fully-snapped={snapPoint === 1 || undefined}
-                >
-                  <MobileExportSettingsKnobs />
-                </div>
-                <ExportQueuePanel />
-              </div>
-            </Drawer.Content>
-          </Drawer.Popup>
-        </Drawer.Root>
-      </div>
+      <div className="mobile-row">{drawer}</div>
     </div>
   );
+}
+
+export function MobileExportKnobs() {
+  return <MobileExportDrawer />;
 }
