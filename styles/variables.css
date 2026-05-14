@@ -41,6 +41,9 @@
   --sidebar-width: 200px;
   --prose-width: calc(512rem / 16);
   --wide-width: calc(736rem / 16);
+  /* should stay synced with DrawerSnapPoint.medium */
+  --drawer-snap-medium: calc(380px + env(safe-area-inset-bottom, 0px));
+  --drawer-snap-medium-content: max(260px, calc(270px - env(safe-area-inset-bottom, 0px)));
 
   /* Typography */
   --sans-serif:

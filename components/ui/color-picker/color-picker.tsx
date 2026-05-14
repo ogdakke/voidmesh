@@ -14,6 +14,7 @@ import { ValueInput } from "./color-value-input";
 import { EyeDropperButton } from "./eyedropper";
 import { Footer } from "./color-picker-footer";
 import "./color-picker.css";
+import { SnapPoints } from "#ui/drawer/snappoints.ts";
 
 const DesktopPreset = lazy(() => import("./color-picker.desktop"));
 const MobilePreset = lazy(() => import("./color-picker.mobile"));
@@ -76,7 +77,7 @@ function DrawerRootInner({ children }: React.PropsWithChildren) {
   const close = () => handleOpenChange(false);
 
   return (
-    <Drawer.Root open={open} onOpenChange={handleOpenChange}>
+    <Drawer.Root open={open} onOpenChange={handleOpenChange} snapPoints={SnapPoints.compute()}>
       <PickerCloseContext value={close}>{children}</PickerCloseContext>
     </Drawer.Root>
   );

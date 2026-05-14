@@ -1,7 +1,6 @@
 .mobile-exports-drawer-content {
   &[data-image-only] {
-    /* guesstimation */
-    max-height: calc(45% - (env(safe-area-inset-bottom, 0px) / 2));
+    max-height: var(--drawer-snap-medium);
     min-height: fit-content;
     overflow-y: hidden;
   }
@@ -11,25 +10,16 @@
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  gap: var(--spacing-2);
   height: 100%;
   padding-bottom: env(safe-area-inset-bottom, 0px);
   padding-top: var(--spacing);
 }
 
 .main-settings {
-  height: 260px;
+  height: var(--drawer-snap-medium-content);
   display: flex;
   flex-direction: column;
-
-  &[data-image-only] {
-    height: auto;
-  }
-
-  & .main-settings-buttons {
-    margin-top: auto;
-    margin-bottom: var(--spacing-2);
-  }
+  justify-content: space-between;
 }
 
 .mobile-exports-settings {

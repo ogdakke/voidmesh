@@ -29,6 +29,18 @@ export function getCssVarValue(varName: string, scope?: CssScope): string | null
 
 /** Read a CSS custom property that resolves to px as a number. Returns 0 if unset/unsupported. */
 export function getCssVarPx(varName: string, scope?: CssScope): number {
-  const value = getCssVarValue(varName, scope);
-  return value ? parseFloat(value) || 0 : 0;
+  if (typeof document === "undefined") return 0;
+
+  const parent = scope ?? document.documentElement;
+  const probe = document.createElement("div");
+  probe.style.position = "absolute";
+  probe.style.visibility = "hidden";
+  probe.style.pointerEvents = "none";
+  probe.style.width = `var(${varName})`;
+
+  parent.appendChild(probe);
+  const value = getComputedStyle(probe).width;
+  probe.remove();
+
+  return parseFloat(value) || 0;
 }

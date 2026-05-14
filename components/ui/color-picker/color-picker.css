@@ -279,10 +279,15 @@
 .color-picker__drawer-body {
   display: flex;
   flex-direction: column;
-  justify-content: end;
   gap: var(--spacing-3);
   padding: var(--spacing-3) var(--spacing-3)
     max(env(safe-area-inset-bottom, var(--spacing-3)), var(--spacing-3));
+}
+
+.color-picker-drawer-medium {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: var(--spacing-2);
 }
 
 .color-picker-remove-button {
