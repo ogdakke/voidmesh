@@ -32,6 +32,8 @@ import { viewportAnimation } from "./viewport-animation.ts";
 import { MomentumController, type MomentumDeps } from "./momentum-controller.ts";
 import { scheduler, type AnimationHandle } from "../lib/animation-scheduler.ts";
 import { haptic } from "#lib/haptic.ts";
+import { OnboardingStepId } from "#lib/onboarding.ts";
+import { completeOnboardingStepFromEvent } from "#lib/onboarding-runtime.ts";
 
 function createDefaultDeps() {
   return {
@@ -1297,6 +1299,7 @@ export class GameLoop {
       this.#deps.analytics.track("action_layer.opened", {
         entity_count: finalState.selectedEntityIds.size,
       });
+      completeOnboardingStepFromEvent(OnboardingStepId.openActionLayer);
     }
 
     // Haptic feedback

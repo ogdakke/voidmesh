@@ -85,6 +85,19 @@
 .left-controls {
   display: grid;
   grid-auto-flow: column;
+  justify-items: start;
+  align-content: start;
+  gap: var(--spacing-2);
+  pointer-events: auto;
+
+  @media screen and (max-width: 768px) {
+    grid-auto-flow: row;
+  }
+}
+
+.left-controls__top {
+  display: grid;
+  grid-auto-flow: column;
   gap: var(--spacing-2);
   pointer-events: auto;
 }
@@ -94,6 +107,16 @@
     bottom: initial;
     top: calc(var(--spacing) * 1.5);
   }
+}
+
+.onboarding-container {
+  width: 100%;
+  display: flex;
+}
+
+.infinite-canvas__skip-onboarding {
+  height: calc(7 * var(--spacing));
+  filter: drop-shadow(var(--floaty-shadow));
 }
 
 /* Controls container - covers canvas height for proper layout */

@@ -17,6 +17,9 @@
   grid-auto-flow: row;
   align-items: center;
 }
+.settings-drawer-ext-item {
+  padding: var(--spacing-2);
+}
 
 .settings-drawer-link {
   color: var(--gray-900);

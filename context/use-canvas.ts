@@ -26,6 +26,11 @@ export const DebugType = createEnum({
 });
 export type DebugType = typeof DebugType.infer;
 
+export interface AddEntityOptions {
+  skipUndo?: boolean;
+  source?: "user" | "onboarding";
+}
+
 export interface CanvasCommands {
   setViewport: (viewport: Viewport) => void;
   panBy: (delta: Point) => void;
@@ -33,6 +38,7 @@ export interface CanvasCommands {
   addEntity: (
     entity: Omit<ShaderCanvasEntity, "id" | "zIndex" | "name">,
     filename?: string,
+    options?: AddEntityOptions,
   ) => string;
   updateEntity: (id: string, updates: Partial<ShaderCanvasEntity>) => void;
   removeEntity: (id: string) => void;

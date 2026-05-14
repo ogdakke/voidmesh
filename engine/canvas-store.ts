@@ -3,6 +3,7 @@ import { Store } from "#lib/store.ts";
 import { getCommonFeatures, paramVisibilityRules, shaderFeatures } from "#config";
 import {
   type Viewport,
+  type CanvasCallout,
   type ShaderCanvasEntity,
   type Point,
   type Bounds,
@@ -13,6 +14,7 @@ import {
   MediaType,
 } from "#types/canvas.ts";
 import { getFrameAtTime } from "#lib/gif-decoder.ts";
+import { completeOnboardingStarterSelectionFromEvent } from "#lib/onboarding-runtime.ts";
 
 export interface CanvasState {
   // Core state
@@ -41,6 +43,7 @@ export interface CanvasState {
   entitiesDirty: Set<string>;
   selectionDirty: boolean;
   containerSizeDirty: boolean;
+  canvasCalloutsDirty: boolean;
 
   // Frame counter for debugging
   frameCount: number;
@@ -66,6 +69,9 @@ export interface CanvasState {
   actionLayerTouchOrigin: { x: number; y: number };
   /** Version counter for action layer state changes */
   actionLayerVersion: number;
+
+  // Canvas-rendered instructional callouts (transient, not persisted)
+  canvasCallouts: readonly CanvasCallout[];
 }
 
 // Snapshot types for selective subscriptions
@@ -120,6 +126,7 @@ export interface RenderState {
   hoveredEntityId: string | null;
   debugMode: boolean;
   dirty: boolean;
+  canvasCallouts: readonly CanvasCallout[];
   /** Drag-select rectangle bounds in world coordinates (null if not active) */
   dragSelectBounds: Bounds | null;
   /** Multi-select bounding box in world coordinates (null if < 2 entities selected) */
@@ -194,6 +201,7 @@ export class CanvasStore extends Store<CanvasState> {
       entitiesDirty: new Set(),
       selectionDirty: false,
       containerSizeDirty: false,
+      canvasCalloutsDirty: false,
       frameCount: 0,
       version: 0,
       viewportVersion: 0,
@@ -206,6 +214,7 @@ export class CanvasStore extends Store<CanvasState> {
       actionLayerEntityIds: new Set(),
       actionLayerTouchOrigin: { x: 0, y: 0 },
       actionLayerVersion: 0,
+      canvasCallouts: [],
     });
 
     this.#logger = logger;
@@ -395,6 +404,7 @@ export class CanvasStore extends Store<CanvasState> {
     if (!this.state.entities.has(id)) return;
     this.state.selectedEntityIds = new Set(this.state.selectedEntityIds).add(id);
     this.state.selectionDirty = true;
+    completeOnboardingStarterSelectionFromEvent(this.state.selectedEntityIds);
     this.#logger.debug(`Added to selection: ${id}`, this.state.entities.get(id));
     this.notifySelectionChange();
   }
@@ -428,6 +438,7 @@ export class CanvasStore extends Store<CanvasState> {
     }
     this.state.selectedEntityIds = newSelection;
     this.state.selectionDirty = true;
+    completeOnboardingStarterSelectionFromEvent(this.state.selectedEntityIds);
     this.#logger.debug(`Selection replaced with: ${ids.join(", ")}`);
     this.notifySelectionChange();
   }
@@ -541,10 +552,12 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.actionLayerActive = false;
     this.state.actionLayerEntityIds = new Set();
     this.state.actionLayerTouchOrigin = { x: 0, y: 0 };
+    this.state.canvasCallouts = [];
     this.state.entitiesDirty.clear();
     this.state.selectionDirty = false;
     this.state.viewportDirty = false;
     this.state.containerSizeDirty = false;
+    this.state.canvasCalloutsDirty = false;
     // Increment versions to invalidate cached snapshots
     this.state.version++;
     this.state.selectionVersion++;
@@ -624,6 +637,12 @@ export class CanvasStore extends Store<CanvasState> {
     if (touchOrigin) this.state.actionLayerTouchOrigin = touchOrigin;
     this.state.actionLayerVersion++;
     this.notify();
+  }
+
+  setCanvasCallouts(callouts: readonly CanvasCallout[]): void {
+    if (sameCanvasCallouts(this.state.canvasCallouts, callouts)) return;
+    this.state.canvasCallouts = callouts;
+    this.state.canvasCalloutsDirty = true;
   }
 
   setMultiSelectMode(enabled: boolean): void {
@@ -877,7 +896,9 @@ export class CanvasStore extends Store<CanvasState> {
         this.state.viewportDirty ||
         this.state.entitiesDirty.size > 0 ||
         this.state.selectionDirty ||
-        this.state.containerSizeDirty,
+        this.state.containerSizeDirty ||
+        this.state.canvasCalloutsDirty,
+      canvasCallouts: this.state.canvasCallouts,
       // dragSelectBounds and multiSelectBounds are set by game-loop after calling this method
       dragSelectBounds: null,
       multiSelectBounds: null,
@@ -892,6 +913,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.entitiesDirty.clear();
     this.state.selectionDirty = false;
     this.state.containerSizeDirty = false;
+    this.state.canvasCalloutsDirty = false;
     this.state.frameCount++;
   }
 
@@ -1101,6 +1123,39 @@ function sameReferenceArray<T>(a: readonly T[], b: readonly T[]): boolean {
   for (let index = 0; index < a.length; index += 1) {
     if (a[index] !== b[index]) return false;
   }
+  return true;
+}
+
+function sameCanvasCallouts(a: readonly CanvasCallout[], b: readonly CanvasCallout[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+
+  for (let index = 0; index < a.length; index += 1) {
+    const left = a[index]!;
+    const right = b[index]!;
+    if (left.id !== right.id || left.text !== right.text) return false;
+    if ((left.offset?.x ?? 0) !== (right.offset?.x ?? 0)) return false;
+    if ((left.offset?.y ?? 0) !== (right.offset?.y ?? 0)) return false;
+    if (left.anchor.type !== right.anchor.type) return false;
+
+    if (left.anchor.type === "entity" && right.anchor.type === "entity") {
+      if (
+        left.anchor.entityId !== right.anchor.entityId ||
+        left.anchor.placement !== right.anchor.placement
+      ) {
+        return false;
+      }
+    } else if (left.anchor.type === "screen" && right.anchor.type === "screen") {
+      if (
+        left.anchor.position.x !== right.anchor.position.x ||
+        left.anchor.position.y !== right.anchor.position.y ||
+        left.anchor.align !== right.anchor.align
+      ) {
+        return false;
+      }
+    }
+  }
+
   return true;
 }
 

@@ -1,6 +1,7 @@
 import { NavArrowRight } from "iconoir-react";
 import { Checkbox } from "#ui/checkbox/index.tsx";
 import { useCanvasCommands, useCanvasPreferences } from "#context/use-canvas.ts";
+import { resetOnboardingProgress } from "#lib/onboarding-storage.ts";
 import { shareOrCopyUrl } from "./share.ts";
 
 export function SnapToGridToggle() {
@@ -64,6 +65,22 @@ export function FeedbackLink({ className }: { className?: string }) {
     >
       <span>Send feedback</span>
     </a>
+  );
+}
+
+export function RedoOnboardingLink({ onDone }: { onDone?: () => void }) {
+  const { clearWorkspace } = useCanvasCommands();
+
+  const redoOnboarding = () => {
+    clearWorkspace();
+    void resetOnboardingProgress();
+    onDone?.();
+  };
+
+  return (
+    <button type="button" onClick={redoOnboarding}>
+      <span>Redo onboarding</span>
+    </button>
   );
 }
 

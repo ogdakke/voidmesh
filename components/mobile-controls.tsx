@@ -7,7 +7,6 @@ import { PostProcessMobileKnobs } from "./knobs/post-process-knobs";
 import { MobileColorKnobs } from "./knobs/mobile-color-knobs";
 import { MultiSelectionControls } from "./multi-selection-controls";
 import { UploadControls } from "./upload-button-controls";
-import { MobileExportKnobs } from "./export-knobs/export-knobs.mobile.tsx";
 
 interface MobileControlsProps {
   activeItem: BarItem | DebugBarItem | null;
@@ -35,10 +34,6 @@ export function MobileControls({ activeItem }: MobileControlsProps) {
 
   if (!hasSelection) {
     return <UploadControls />;
-  }
-
-  if (activeItem === "export") {
-    return <MobileExportKnobs />;
   }
 
   if (activeItem === "style") {

@@ -38,6 +38,7 @@ import { HalftoneShader } from "./shaders/halftone-shader.ts";
 import { MeltShader } from "./shaders/melt-shader.ts";
 import type { ShaderContext } from "./shaders/shader-pass.ts";
 import { ShaderRegistry } from "./shaders/shader-registry.ts";
+import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
 import { EntityLabelPass } from "./entity-label-pass.ts";
 import { TexturePool } from "./texture-pool.ts";
 import { resolveWlurOverlayRuntimeConfig, type WlurOverlayConfig } from "./wlur-overlay.ts";
@@ -177,6 +178,7 @@ export class InfiniteCanvasRenderer {
 
   // Entity label pass (Canvas 2D rasterized → GPU textured quad)
   #entityLabelPass: EntityLabelPass | null = null;
+  #canvasCalloutPass: CanvasCalloutPass | null = null;
 
   // Disintegration overlays — GPU resources for fire-and-forget dust animations
   #disintegrationOverlays: Map<
@@ -439,6 +441,13 @@ export class InfiniteCanvasRenderer {
       this.#viewportUniformBuffer!,
     );
     this.#entityLabelPass.initialize();
+
+    this.#canvasCalloutPass = new CanvasCalloutPass(
+      this.#device,
+      this.#canvasFormat,
+      this.#viewportUniformBuffer!,
+    );
+    this.#canvasCalloutPass.initialize();
 
     // Set up ResizeObserver to cache canvas dimensions (avoids getBoundingClientRect in render loop)
     this.#resizeObserver = new ResizeObserver((entries) => {
@@ -1974,6 +1983,26 @@ export class InfiniteCanvasRenderer {
     this.#writeGpuTimestampMarker(encoder, gpuCapture, "action-layer-sharp", "end");
     markPhaseEnd("action-layer-sharp");
 
+    if (state.canvasCallouts.length > 0 && this.#canvasCalloutPass) {
+      this.#canvasCalloutPass.beginFrame(viewport, width);
+      const calloutPass = encoder.beginRenderPass({
+        label: "Canvas callout pass",
+        colorAttachments: [
+          {
+            view: targetView,
+            loadOp: "load",
+            storeOp: "store",
+          },
+        ],
+      });
+      this.#canvasCalloutPass.drawCallouts(
+        calloutPass,
+        state.canvasCallouts,
+        new Map(entities.map((entity) => [entity.id, entity])),
+      );
+      calloutPass.end();
+    }
+
     // Pass 2b: Render disintegration overlays (on top of entities)
     this.#renderDisintegrationOverlays(encoder, targetView, frameDt);
 
@@ -2403,6 +2432,8 @@ export class InfiniteCanvasRenderer {
     // Destroy entity label pass
     this.#entityLabelPass?.destroy();
     this.#entityLabelPass = null;
+    this.#canvasCalloutPass?.destroy();
+    this.#canvasCalloutPass = null;
 
     // Destroy processing pipeline
     this.#processingPipeline?.destroy();

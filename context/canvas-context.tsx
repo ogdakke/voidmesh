@@ -5,6 +5,7 @@ import {
   DebugType,
   type CanvasCommands,
   type CanvasRendererService,
+  type AddEntityOptions,
 } from "./use-canvas.ts";
 import {
   useQueryState,
@@ -477,6 +478,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   const addEntity = (
     entity: Omit<ShaderCanvasEntity, "id" | "zIndex" | "name">,
     filename?: string,
+    options?: AddEntityOptions,
   ): string => {
     const id = `entity-${nextIdRef.current++}`;
     const zIndex = nextZIndexRef.current++;
@@ -513,26 +515,28 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     });
 
     // Add undo support for entity creation
-    const ownerToken = claimResourceOwnership(newEntity.id);
-    undo.add(
-      Command.create({
-        undo: () => {
-          // Pause playback if playing
-          if (newEntity.mediaSource.type === MediaType.video) {
-            newEntity.mediaSource.videoElement.pause();
-          } else if (isGifEntity(newEntity) && newEntity.playback) {
-            newEntity.playback.isPlaying = false;
-          }
-          rendererRef.current?.removeEntityTexture(newEntity.id);
-          canvasStore.removeEntity(newEntity.id);
-        },
-        execute: () => {
-          canvasStore.addEntity(newEntity);
-        },
-        onEvict: () => tryCleanupEntityResources(newEntity, ownerToken),
-        description: `Add entity ${newEntity.name}`,
-      }),
-    );
+    if (!options?.skipUndo) {
+      const ownerToken = claimResourceOwnership(newEntity.id);
+      undo.add(
+        Command.create({
+          undo: () => {
+            // Pause playback if playing
+            if (newEntity.mediaSource.type === MediaType.video) {
+              newEntity.mediaSource.videoElement.pause();
+            } else if (isGifEntity(newEntity) && newEntity.playback) {
+              newEntity.playback.isPlaying = false;
+            }
+            rendererRef.current?.removeEntityTexture(newEntity.id);
+            canvasStore.removeEntity(newEntity.id);
+          },
+          execute: () => {
+            canvasStore.addEntity(newEntity);
+          },
+          onEvict: () => tryCleanupEntityResources(newEntity, ownerToken),
+          description: `Add entity ${newEntity.name}`,
+        }),
+      );
+    }
 
     // Async palette extraction for images, GIFs, and SVGs (use first frame for GIFs)
     if (

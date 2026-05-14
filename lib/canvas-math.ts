@@ -259,6 +259,23 @@ export function getViewportCenter(
 }
 
 /**
+ * Get the center point of an untransformed layout box in world coordinates.
+ * Use this for programmatic placement inside the rendered canvas. Unlike
+ * getBoundingClientRect(), clientWidth/clientHeight are not affected by CSS
+ * transforms such as the mobile drawer indent animation.
+ */
+export function getViewportLayoutCenter(
+  viewport: Viewport,
+  container: Pick<HTMLElement, "clientWidth" | "clientHeight">,
+  dpr: number = 1,
+): Point {
+  return {
+    x: viewport.offset.x + (container.clientWidth * dpr) / (2 * viewport.zoom),
+    y: viewport.offset.y + (container.clientHeight * dpr) / (2 * viewport.zoom),
+  };
+}
+
+/**
  * Calculate viewport offset to center world origin (0,0) at viewport center.
  * Use this for initial viewport setup and "center canvas" functionality.
  *

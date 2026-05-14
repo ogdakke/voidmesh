@@ -30,6 +30,27 @@ export interface Viewport {
   zoom: number;
 }
 
+export type CanvasCalloutPlacement = "top" | "bottom" | "screen";
+
+export type CanvasCalloutAnchor =
+  | {
+      type: "entity";
+      entityId: string;
+      placement: Exclude<CanvasCalloutPlacement, "screen">;
+    }
+  | {
+      type: "screen";
+      position: Point;
+      align?: "start" | "center";
+    };
+
+export interface CanvasCallout {
+  id: string;
+  text: string;
+  anchor: CanvasCalloutAnchor;
+  offset?: Point;
+}
+
 export const ShaderType = createEnum({
   halftone: "halftone",
   blobs: "blobs",

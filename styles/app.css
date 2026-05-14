@@ -167,7 +167,7 @@
     min-width: clamp(200px, 500px, 90vw);
     max-height: 90dvh;
     overflow-y: auto;
-    background-color: var(--gray-50);
+    background-color: var(--background);
     border-radius: calc(var(--radius) * 2);
     border: 1px solid var(--border);
     padding: 0.5rem 1rem;
