@@ -24,7 +24,7 @@ const enum ActionLayerPhase {
  */
 export class ActionLayerController {
   #scheduler: AnimationScheduler;
-  #phase = ActionLayerPhase.idle as ActionLayerPhase;
+  #phase = ActionLayerPhase.idle;
   #handle: AnimationHandle | null = null;
 
   // Dismiss springs (screen-space offsets, one-shot spring-back to 0)

@@ -287,7 +287,7 @@ function PaletteManagementDrawer({
         <EditPencil />
       </Drawer.Trigger>
       <Drawer.Popup className="color-palette-drawer">
-        <Drawer.Title>{palette.name}</Drawer.Title>
+        <Drawer.Title>Edit palette</Drawer.Title>
         <Drawer.Content className="color-palette-drawer__content">
           <label className="color-palette-drawer__field">
             <span className="field-label">Palette name</span>

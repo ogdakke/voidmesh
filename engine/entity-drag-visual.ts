@@ -27,7 +27,7 @@ const enum DragVisualPhase {
  */
 class EntityDragVisualController {
   #scheduler: AnimationScheduler;
-  #phase = DragVisualPhase.idle as DragVisualPhase;
+  #phase = DragVisualPhase.idle;
   #currentScale = 1;
   #targetScale = 1;
   #possibleDragTimerId: ReturnType<typeof setTimeout> | null = null;
