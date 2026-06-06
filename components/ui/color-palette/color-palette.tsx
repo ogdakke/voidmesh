@@ -289,9 +289,10 @@ function PaletteManagementDrawer({
       <Drawer.Popup className="color-palette-drawer">
         <Drawer.Title>Edit palette</Drawer.Title>
         <Drawer.Content className="color-palette-drawer__content">
-          <label className="color-palette-drawer__field">
+          <label className="color-palette-drawer__field" id="palette-name">
             <span className="field-label">Palette name</span>
             <input
+              aria-labelledby="palette-name"
               type="text"
               value={draftName}
               maxLength={64}

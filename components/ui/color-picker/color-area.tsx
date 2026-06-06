@@ -137,6 +137,7 @@ export function ColorArea() {
   const thumbY = 1 - oklch.l;
 
   return (
+    // oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
     <div
       ref={containerRef}
       className="color-area"
@@ -151,6 +152,7 @@ export function ColorArea() {
       data-active={isDragging || undefined}
       style={{ "--x": String(thumbX), "--y": String(thumbY) } as React.CSSProperties}
     >
+      {/* oxlint-disable-next-line jsx-a11y/control-has-associated-label */}
       <canvas ref={canvasRef} className="color-area__canvas" />
       <div className="color-area__thumb" />
     </div>

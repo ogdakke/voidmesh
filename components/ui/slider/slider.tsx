@@ -49,6 +49,7 @@ function SliderValueInput({
   };
 
   return (
+    // oxlint-disable-next-line jsx-a11y/control-has-associated-label
     <input
       ref={inputRef}
       className="slider-value"

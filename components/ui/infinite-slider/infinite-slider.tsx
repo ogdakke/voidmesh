@@ -410,6 +410,7 @@ export function InfiniteSlider({
       aria-labelledby={ariaLabelledBy}
       onKeyDown={handleKeyDown}
     >
+      {/* oxlint-disable-next-line jsx-a11y/control-has-associated-label */}
       <canvas
         ref={canvasRef}
         className="infinite-slider__canvas"

@@ -17,6 +17,7 @@ export function PaletteUpload({ onUpload, variant = "desktop" }: PaletteUploadPr
   if (variant === "mobile") {
     return (
       <div className="mobile-palette-upload">
+        {/* oxlint-disable-next-line jsx-a11y/control-has-associated-label */}
         <input
           ref={inputRef}
           type="file"
@@ -38,6 +39,7 @@ export function PaletteUpload({ onUpload, variant = "desktop" }: PaletteUploadPr
 
   return (
     <>
+      {/* oxlint-disable-next-line jsx-a11y/control-has-associated-label */}
       <input
         ref={inputRef}
         type="file"

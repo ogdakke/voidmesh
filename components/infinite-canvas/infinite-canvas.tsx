@@ -859,6 +859,7 @@ export function InfiniteCanvas() {
       >
         {isSupported ? (
           <CanvasWrapper onOpenChange={handleContextMenuOpenChange} containerRef={containerRef}>
+            {/* oxlint-disable-next-line jsx-a11y/control-has-associated-label*/}
             <canvas
               ref={canvasRef}
               onPointerDown={handlePointerDown}
