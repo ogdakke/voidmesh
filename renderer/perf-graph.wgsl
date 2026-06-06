@@ -47,7 +47,6 @@ fn sampleAt(column: u32, sampleCount: u32, latestIndex: u32) -> f32 {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   let pixel = in.position.xy;
-  let resolution = uniforms.resolutionAndOrigin.xy;
   let graphOrigin = uniforms.resolutionAndOrigin.zw;
   let graphSize = uniforms.graphAndRing.xy;
   let sampleCount = u32(uniforms.graphAndRing.z);
@@ -97,6 +96,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     color = composite(uniforms.foreground, color);
   }
 
-  _ = resolution;
   return color;
 }

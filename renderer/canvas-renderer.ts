@@ -1279,9 +1279,12 @@ export class InfiniteCanvasRenderer {
           return video;
         } catch (error) {
           this.#directVideoUploadSupported = false;
-          logger.debug("[renderer] Direct video texture upload unavailable; using canvas fallback", {
-            error,
-          });
+          logger.debug(
+            "[renderer] Direct video texture upload unavailable; using canvas fallback",
+            {
+              error,
+            },
+          );
         }
       }
 

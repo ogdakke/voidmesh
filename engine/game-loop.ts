@@ -406,11 +406,7 @@ export class GameLoop {
     this.#animationFrameId = requestAnimationFrame(this.tick);
   };
 
-  #consumeVideoFrameUpdate(
-    entityId: string,
-    video: HTMLVideoElement,
-    fps: number | null,
-  ): boolean {
+  #consumeVideoFrameUpdate(entityId: string, video: HTMLVideoElement, fps: number | null): boolean {
     let tracker = this.#videoFrameTrackers.get(entityId);
     if (!tracker || tracker.video !== video) {
       if (tracker) this.#cancelVideoFrameCallback(tracker);

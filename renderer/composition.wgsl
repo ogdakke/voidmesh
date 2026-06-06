@@ -103,9 +103,9 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
   let scaledSize = entity.size * entity.scale;
   let scaleOffset = (entity.size - scaledSize) * 0.5;
 
-  // Expand quad outward for outside selection/debug borders
+  // Expand quad outward for outside selection borders
   let border_px = BORDER_PX;
-  let needsBorder = (entity.isSelected == 1u) || (entity.debugMode == 1u);
+  let needsBorder = entity.isSelected == 1u;
   let borderExpand = select(
     vec2f(0.0),
     vec2f(border_px / (scaledSize.x * viewport.zoom), border_px / (scaledSize.y * viewport.zoom)),
@@ -149,14 +149,14 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
   return output;
 }
 
-// Fragment shader - samples entity texture and renders hover/selection borders
+// Fragment shader - samples entity texture and renders selection borders
 // Also handles disintegration dissolve-to-dust effect when disintProgress > 0
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
     // Sample texture (clamp UV for expanded border region)
     let textureColor = textureSample(entityTexture, entitySampler, clamp(input.uv, vec2f(0.0), vec2f(1.0)));
 
-    // Outside border: UV is outside [0,1] when quad is expanded for selection/debug
+    // Outside border: UV is outside [0,1] when quad is expanded for selection
     let inBorder = input.uv.x < 0.0 || input.uv.x > 1.0 || input.uv.y < 0.0 || input.uv.y > 1.0;
 
     // --- Disintegration effect ---
@@ -165,13 +165,11 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
         return disintegrate(input, textureColor);
     }
 
-    // Debug mode border (red) - highest priority
-    if (entity.debugMode == 1u && inBorder) {
-        return vec4f(1.0, 0.0, 0.0, 1.0); // Red
-    }
-
-    // Selection border (blue)
+    // Selection border. Debug mode uses red for selected entities only.
     if (entity.isSelected == 1u && inBorder) {
+        if (entity.debugMode == 1u) {
+            return vec4f(1.0, 0.0, 0.0, 1.0); // Red
+        }
         return vec4f(59.0/255.0, 130.0/255.0, 246.0/255.0, 1.0); // #3B82F6
     }
 
