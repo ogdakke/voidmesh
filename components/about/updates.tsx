@@ -104,15 +104,15 @@ export function Updates({ id }: { id?: string }) {
           <Video
             className="video"
             src={[
-              { src: "/m/feature_context_menu_av1_qp50.mp4", codec: "av1" },
-              { src: "/m/feature_context_menu_compressed.mp4", codec: "h264" },
+              { src: "/m/context_menu_new_av1_qp50.mp4", codec: "av1" },
+              { src: "/m/context_menu_new_compressed.mp4", codec: "h264" },
             ]}
-            placeholder="y/cJDQIHiZV5B7inZoWYl/qXiW+4"
+            placeholder="KoYJHwb599eDiHlflkaXeImFHF4F82UE"
             muted
             autoPlay
             loop
             playsInline
-            style={{ aspectRatio: "3/4" }}
+            style={{ aspectRatio: "1" }}
           />
           <figcaption>
             Duplicate, copy/paste effects, and save are now available on long press
