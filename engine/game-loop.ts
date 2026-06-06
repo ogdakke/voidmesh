@@ -245,6 +245,11 @@ export class GameLoop {
 
   setRenderer(renderer: InfiniteCanvasRenderer): void {
     this.#renderer = renderer;
+    this.#deps.perf.setRenderer(
+      renderer.device,
+      renderer.colorConfig.canvasFormat,
+      renderer.colorConfig.canvasColorSpace,
+    );
     // Reset first frame flag when renderer changes
     this.#firstFrameRendered = false;
   }
@@ -361,6 +366,7 @@ export class GameLoop {
     // 5. Snapshot render state AFTER all ticks so the viewport reflects
     // this frame's animation/momentum/input updates, not the previous frame's.
     const renderState = canvasStore.getRenderState();
+    this.#deps.perf.onFrame(renderState.debugMode, now);
 
     // 6. Add selection bounds to render state (managed by game-loop, not store)
     renderState.dragSelectBounds = this.getDragSelectBounds();
@@ -385,7 +391,7 @@ export class GameLoop {
         performance.mark("studio-render-end");
         performance.measure("studio-render", "studio-render-start", "studio-render-end");
       }
-      this.#deps.perf.tick(this.#renderer.getFrameStats(), renderState.debugMode);
+      this.#deps.perf.onRender(this.#renderer.getFrameStats(), renderState.debugMode);
     }
 
     // 10. Clear dirty flags

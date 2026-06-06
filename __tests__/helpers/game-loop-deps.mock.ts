@@ -40,7 +40,9 @@ export function createMockGameLoopDeps(scheduler: AnimationScheduler): GameLoopD
     },
     perf: {
       setElement: vi.fn<() => void>(),
-      tick: vi.fn<() => void>(),
+      setRenderer: vi.fn<() => void>(),
+      onFrame: vi.fn<() => void>(),
+      onRender: vi.fn<() => void>(),
     },
     haptic: vi.fn<() => void>(),
     analytics: { track: vi.fn<() => void>() },
