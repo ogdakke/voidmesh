@@ -43,26 +43,6 @@ import { TexturePool } from "./texture-pool.ts";
 import { resolveWlurOverlayRuntimeConfig, type WlurOverlayConfig } from "./wlur-overlay.ts";
 import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
 
-type GpuTimingPhase =
-  | "frame"
-  | "grid-pass"
-  | "entity-pass"
-  | "action-layer-blur"
-  | "action-layer-sharp"
-  | "selection-rects"
-  | "wlur-overlay";
-
-interface GpuTimestampFrameCapture {
-  slotIndex: number;
-}
-
-interface GpuTimestampSlot {
-  querySet: GPUQuerySet;
-  resolveBuffer: GPUBuffer;
-  readBuffer: GPUBuffer;
-  pending: boolean;
-}
-
 interface CompositionDrawItem {
   bindGroup: GPUBindGroup;
   entity: ShaderCanvasEntity;
@@ -70,18 +50,6 @@ interface CompositionDrawItem {
   offsetX: number;
   offsetY: number;
 }
-
-const GPU_TIMESTAMP_QUERY_CAPACITY = 14;
-const GPU_TIMESTAMP_SLOT_COUNT = 3;
-const GPU_TIMESTAMP_PHASE_RANGES: Record<GpuTimingPhase, [number, number]> = {
-  frame: [0, 1],
-  "grid-pass": [2, 3],
-  "entity-pass": [4, 5],
-  "wlur-overlay": [6, 7],
-  "action-layer-blur": [8, 9],
-  "action-layer-sharp": [10, 11],
-  "selection-rects": [12, 13],
-};
 
 export class InfiniteCanvasRenderer {
   readonly canvas: HTMLCanvasElement;
@@ -256,16 +224,6 @@ export class InfiniteCanvasRenderer {
   #lastRenderTime = 0;
   #lastEntityCount = 0;
   #lastRenderedCount = 0;
-  #gpuTimingSupported = false;
-  #gpuTimestampSlots: GpuTimestampSlot[] = [];
-  #gpuTimestampSlotCursor = 0;
-  #lastGpuFrameTime = 0;
-  #lastGpuGridTime = 0;
-  #lastGpuEntityTime = 0;
-  #lastGpuWlurTime = 0;
-  #lastGpuActionLayerBlurTime = 0;
-  #lastGpuActionLayerSharpTime = 0;
-  #lastGpuSelectionTime = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -288,14 +246,6 @@ export class InfiniteCanvasRenderer {
       renderTime: this.#lastRenderTime,
       entityCount: this.#lastEntityCount,
       renderedCount: this.#lastRenderedCount,
-      gpuSupported: this.#gpuTimingSupported,
-      gpuTime: this.#lastGpuFrameTime,
-      gpuGridTime: this.#lastGpuGridTime,
-      gpuEntityTime: this.#lastGpuEntityTime,
-      gpuWlurTime: this.#lastGpuWlurTime,
-      gpuActionLayerBlurTime: this.#lastGpuActionLayerBlurTime,
-      gpuActionLayerSharpTime: this.#lastGpuActionLayerSharpTime,
-      gpuSelectionTime: this.#lastGpuSelectionTime,
     };
   }
 
@@ -304,7 +254,6 @@ export class InfiniteCanvasRenderer {
     if (!adapter) {
       throw new Error("WebGPU adapter not available");
     }
-    const supportsTimestampQuery = adapter.features.has("timestamp-query");
 
     // Request higher storage buffer limit for large images (error diffusion dithering)
     // The error buffer needs width × height × 4 floats × 4 bytes per pixel
@@ -322,11 +271,7 @@ export class InfiniteCanvasRenderer {
       requiredLimits.maxBufferSize = adapterLimits.maxBufferSize;
     }
 
-    this.#device = await adapter.requestDevice({
-      requiredFeatures: supportsTimestampQuery ? ["timestamp-query"] : [],
-      requiredLimits,
-    });
-    this.#gpuTimingSupported = supportsTimestampQuery;
+    this.#device = await adapter.requestDevice({ requiredLimits });
 
     this.#device.lost.then((info) => {
       logger.error(`[WebGPU] Device lost: ${info.reason}`, info.message);
@@ -420,7 +365,6 @@ export class InfiniteCanvasRenderer {
       label: "Wlur",
     });
     this.#wlurPass.initialize();
-    this.#createGpuTimestampResources();
 
     // Initialize export service with callbacks into renderer
     this.#exportService = new ExportService(
@@ -847,156 +791,6 @@ export class InfiniteCanvasRenderer {
       params.tint?.amount ?? "",
       params.tint?.curve?.join(",") ?? "",
     ].join("|");
-  }
-
-  #createGpuTimestampResources(): void {
-    if (!this.#device || !this.#gpuTimingSupported) return;
-
-    const byteSize = GPU_TIMESTAMP_QUERY_CAPACITY * BigUint64Array.BYTES_PER_ELEMENT;
-    this.#gpuTimestampSlots = Array.from({ length: GPU_TIMESTAMP_SLOT_COUNT }, (_, index) => ({
-      querySet: this.#device!.createQuerySet({
-        label: `Canvas GPU timestamps ${index}`,
-        type: "timestamp",
-        count: GPU_TIMESTAMP_QUERY_CAPACITY,
-      }),
-      resolveBuffer: this.#device!.createBuffer({
-        label: `Canvas GPU timestamp resolve ${index}`,
-        size: byteSize,
-        usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
-      }),
-      readBuffer: this.#device!.createBuffer({
-        label: `Canvas GPU timestamp read ${index}`,
-        size: byteSize,
-        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-      }),
-      pending: false,
-    }));
-  }
-
-  #beginGpuTimestampCapture(debugMode: boolean): GpuTimestampFrameCapture | null {
-    if (!debugMode || this.#gpuTimestampSlots.length === 0) {
-      return null;
-    }
-
-    const slotIndex = this.#gpuTimestampSlotCursor;
-    const slot = this.#gpuTimestampSlots[slotIndex];
-    if (!slot || slot.pending) {
-      return null;
-    }
-
-    this.#gpuTimestampSlotCursor = (slotIndex + 1) % this.#gpuTimestampSlots.length;
-    return {
-      slotIndex,
-    };
-  }
-
-  #writeGpuTimestampMarker(
-    encoder: GPUCommandEncoder,
-    capture: GpuTimestampFrameCapture | null,
-    phase: GpuTimingPhase,
-    edge: "start" | "end",
-  ): void {
-    if (!capture) return;
-    const slot = this.#gpuTimestampSlots[capture.slotIndex];
-    if (!slot) return;
-
-    const [startIndex, endIndex] = GPU_TIMESTAMP_PHASE_RANGES[phase];
-    const timestampWrites =
-      edge === "start"
-        ? { querySet: slot.querySet, beginningOfPassWriteIndex: startIndex }
-        : { querySet: slot.querySet, endOfPassWriteIndex: endIndex };
-
-    const marker = encoder.beginComputePass({
-      label: `GPU timestamp ${phase} ${edge}`,
-      timestampWrites,
-    });
-    marker.end();
-  }
-
-  #finalizeGpuTimestampCapture(
-    encoder: GPUCommandEncoder,
-    capture: GpuTimestampFrameCapture | null,
-  ): GpuTimestampFrameCapture | null {
-    if (!capture) {
-      return null;
-    }
-
-    const slot = this.#gpuTimestampSlots[capture.slotIndex];
-    if (!slot || slot.pending) {
-      return null;
-    }
-
-    const byteSize = GPU_TIMESTAMP_QUERY_CAPACITY * BigUint64Array.BYTES_PER_ELEMENT;
-    encoder.resolveQuerySet(slot.querySet, 0, GPU_TIMESTAMP_QUERY_CAPACITY, slot.resolveBuffer, 0);
-    encoder.copyBufferToBuffer(slot.resolveBuffer, 0, slot.readBuffer, 0, byteSize);
-
-    slot.pending = true;
-
-    return capture;
-  }
-
-  #readGpuTimestampCapture(capture: GpuTimestampFrameCapture | null): void {
-    if (!capture) return;
-    const slot = this.#gpuTimestampSlots[capture.slotIndex];
-    if (!slot || !slot.pending) return;
-
-    const byteSize = GPU_TIMESTAMP_QUERY_CAPACITY * BigUint64Array.BYTES_PER_ELEMENT;
-    slot.readBuffer
-      .mapAsync(GPUMapMode.READ, 0, byteSize)
-      .then(() => {
-        const mapped = slot.readBuffer.getMappedRange(0, byteSize);
-        const timestamps = new BigUint64Array(mapped.slice(0));
-        slot.readBuffer.unmap();
-        this.#applyGpuTimestampReadback(timestamps);
-      })
-      .catch(() => {
-        if (!slot.readBuffer.mapState || slot.readBuffer.mapState === "unmapped") {
-          return;
-        }
-        slot.readBuffer.unmap();
-      })
-      .finally(() => {
-        slot.pending = false;
-      });
-  }
-
-  #applyGpuTimestampReadback(timestamps: BigUint64Array): void {
-    const getDeltaMs = (phase: GpuTimingPhase): number => {
-      const range = GPU_TIMESTAMP_PHASE_RANGES[phase];
-      const [start, end] = range;
-      const startValue = timestamps[start];
-      const endValue = timestamps[end];
-      if (startValue === undefined || endValue === undefined) return 0;
-      return Number(endValue - startValue) / 1_000_000;
-    };
-
-    this.#lastGpuFrameTime = getDeltaMs("frame");
-    this.#lastGpuGridTime = getDeltaMs("grid-pass");
-    this.#lastGpuEntityTime = getDeltaMs("entity-pass");
-    this.#lastGpuWlurTime = getDeltaMs("wlur-overlay");
-    this.#lastGpuActionLayerBlurTime = getDeltaMs("action-layer-blur");
-    this.#lastGpuActionLayerSharpTime = getDeltaMs("action-layer-sharp");
-    this.#lastGpuSelectionTime = getDeltaMs("selection-rects");
-  }
-
-  #destroyGpuTimestampResources(): void {
-    for (const slot of this.#gpuTimestampSlots) {
-      if (slot.readBuffer.mapState === "mapped") {
-        slot.readBuffer.unmap();
-      }
-      slot.querySet.destroy();
-      slot.resolveBuffer.destroy();
-      slot.readBuffer.destroy();
-    }
-    this.#gpuTimestampSlots = [];
-    this.#gpuTimingSupported = false;
-    this.#lastGpuFrameTime = 0;
-    this.#lastGpuGridTime = 0;
-    this.#lastGpuEntityTime = 0;
-    this.#lastGpuWlurTime = 0;
-    this.#lastGpuActionLayerBlurTime = 0;
-    this.#lastGpuActionLayerSharpTime = 0;
-    this.#lastGpuSelectionTime = 0;
   }
 
   #createActionLayerBlitPipeline(): void {
@@ -1854,7 +1648,6 @@ export class InfiniteCanvasRenderer {
     const encoder = this.#device.createCommandEncoder({
       label: "Canvas render encoder",
     });
-    const gpuCapture = this.#beginGpuTimestampCapture(debugMode);
 
     const texture = this.#context.getCurrentTexture();
     // Skip render if swapchain texture is invalid
@@ -1865,8 +1658,6 @@ export class InfiniteCanvasRenderer {
 
     // Pass 1: Render dot grid background
     markPhaseStart("grid-pass");
-    this.#writeGpuTimestampMarker(encoder, gpuCapture, "frame", "start");
-    this.#writeGpuTimestampMarker(encoder, gpuCapture, "grid-pass", "start");
     const gridPass = encoder.beginRenderPass({
       label: "Grid render pass",
       colorAttachments: [
@@ -1883,12 +1674,10 @@ export class InfiniteCanvasRenderer {
     gridPass.setBindGroup(0, this.#gridBindGroup!);
     gridPass.draw(3);
     gridPass.end();
-    this.#writeGpuTimestampMarker(encoder, gpuCapture, "grid-pass", "end");
     markPhaseEnd("grid-pass");
 
     // Pass 2: Render all entities with interleaved labels (z-ordered)
     markPhaseStart("entity-pass");
-    this.#writeGpuTimestampMarker(encoder, gpuCapture, "entity-pass", "start");
 
     // Update label animation state once per frame
     this.#entityLabelPass?.beginFrame(viewport, width, height);
@@ -1910,7 +1699,6 @@ export class InfiniteCanvasRenderer {
     this.#entityLabelPass?.endFrame(selectedEntityIds);
     if (this.#entityLabelPass?.isAnimating) hasAnimatingContent = true;
 
-    this.#writeGpuTimestampMarker(encoder, gpuCapture, "entity-pass", "end");
     markPhaseEnd("entity-pass");
 
     // Pass 2a: Action layer blur overlay
@@ -1926,7 +1714,6 @@ export class InfiniteCanvasRenderer {
       this.#actionLayerBlitSampler
     ) {
       markPhaseStart("action-layer-blur");
-      this.#writeGpuTimestampMarker(encoder, gpuCapture, "action-layer-blur", "start");
       // Get or create intermediate textures for full-screen blur
       const blurTextures = this.#getOrCreateActionLayerBlurTextures(width, height);
       if (blurTextures) {
@@ -1988,7 +1775,6 @@ export class InfiniteCanvasRenderer {
         blitPass.draw(3);
         blitPass.end();
       }
-      this.#writeGpuTimestampMarker(encoder, gpuCapture, "action-layer-blur", "end");
       markPhaseEnd("action-layer-blur");
     }
 
@@ -1999,7 +1785,6 @@ export class InfiniteCanvasRenderer {
 
     // Always render action layer entities on top (sharp, after blur or normally)
     markPhaseStart("action-layer-sharp");
-    this.#writeGpuTimestampMarker(encoder, gpuCapture, "action-layer-sharp", "start");
     if (actionLayerDrawItems.length > 0) {
       const sharpPass = encoder.beginRenderPass({
         label: "Action layer sharp entity pass",
@@ -2014,7 +1799,6 @@ export class InfiniteCanvasRenderer {
       this.#drawCompositionItems(sharpPass, actionLayerDrawItems, selectedEntityCount);
       sharpPass.end();
     }
-    this.#writeGpuTimestampMarker(encoder, gpuCapture, "action-layer-sharp", "end");
     markPhaseEnd("action-layer-sharp");
 
     if (state.canvasCallouts.length > 0 && this.#canvasCalloutPass) {
@@ -2068,7 +1852,6 @@ export class InfiniteCanvasRenderer {
       this.#selectionRectBindGroup
     ) {
       markPhaseStart("selection-rects");
-      this.#writeGpuTimestampMarker(encoder, gpuCapture, "selection-rects", "start");
       this.#updateSelectionRectUniformsMulti(selectionRects, viewport);
       this.#device.queue.writeBuffer(
         this.#selectionRectUniformBuffer,
@@ -2091,7 +1874,6 @@ export class InfiniteCanvasRenderer {
       selectionRectPass.setBindGroup(0, this.#selectionRectBindGroup);
       selectionRectPass.draw(3); // Fullscreen triangle
       selectionRectPass.end();
-      this.#writeGpuTimestampMarker(encoder, gpuCapture, "selection-rects", "end");
       markPhaseEnd("selection-rects");
     }
 
@@ -2129,7 +1911,6 @@ export class InfiniteCanvasRenderer {
       }
 
       markPhaseStart("wlur-overlay");
-      this.#writeGpuTimestampMarker(encoder, gpuCapture, "wlur-overlay", "start");
       if (wlurNeedsUpdate) {
         if (this.#canvasFormat === this.#colorConfig.intermediateFormat) {
           encoder.copyTextureToTexture(
@@ -2167,18 +1948,14 @@ export class InfiniteCanvasRenderer {
       } else {
         this.#presentCopyPass!.encode(encoder, wlurTextures.output, targetView);
       }
-      this.#writeGpuTimestampMarker(encoder, gpuCapture, "wlur-overlay", "end");
       markPhaseEnd("wlur-overlay");
     } else {
       this.#invalidateWlurOverlayCache();
     }
 
     // Single submission for all passes
-    this.#writeGpuTimestampMarker(encoder, gpuCapture, "frame", "end");
-    const finalizedGpuCapture = this.#finalizeGpuTimestampCapture(encoder, gpuCapture);
     markPhaseStart("queue-submit");
     this.#device.queue.submit([encoder.finish()]);
-    this.#readGpuTimestampCapture(finalizedGpuCapture);
     markPhaseEnd("queue-submit");
 
     // Record frame stats for performance overlay
@@ -2519,8 +2296,6 @@ export class InfiniteCanvasRenderer {
     // Disconnect resize observer
     this.#resizeObserver?.disconnect();
     this.#resizeObserver = null;
-
-    this.#destroyGpuTimestampResources();
 
     // Destroy device
     this.#device?.destroy();
