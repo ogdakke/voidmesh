@@ -190,18 +190,16 @@
     contain-intrinsic-size: auto 500px;
     padding-block: var(--spacing-4);
     border-block-start: 1px solid var(--border);
+
+    :where(.video) {
+      border-radius: var(--radius-lg);
+      margin-top: var(--spacing-4);
+    }
   }
 
   .update:first-of-type {
     padding-block-start: 0;
     border-block-start: none;
-  }
-
-  .update {
-    :where(video) {
-      border-radius: var(--radius-lg);
-      margin-top: var(--spacing-4);
-    }
   }
 
   .updates-title {
@@ -301,14 +299,109 @@
     }
   }
 
-  .carousel-dots {
+  .nav-carousel-container {
     --dot-size: 9px;
     --dots-in-dur: 250ms;
     --dots-in-delay: 300ms;
+    display: grid;
+    grid-auto-flow: column;
+    gap: var(--spacing-2);
     position: absolute;
     bottom: var(--spacing-4);
     left: 50%;
     transform: translateX(-50%);
+    transition: transform var(--dots-in-dur) cubic-bezier(0.34, 1.56, 0.64, 1) var(--dots-in-delay);
+
+    & .carousel-arrow {
+      height: 24px;
+      width: 24px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      border-radius: 999px;
+      background: light-dark(
+        color-mix(in srgb, var(--gray-200) 80%, transparent),
+        color-mix(in srgb, var(--gray-100) 60%, transparent)
+      );
+      opacity: 0;
+      filter: blur(3px);
+      will-change: transform, filter, opacity, scale;
+      backdrop-filter: blur(8px);
+
+      transition:
+        opacity 150ms ease-out 20ms,
+        transform 175ms cubic-bezier(0.34, 1.56, 0.64, 1),
+        scale 200ms cubic-bezier(0.34, 1.56, 0.64, 1),
+        filter 350ms ease-out;
+
+      &:focus-visible {
+        outline: 1px solid var(--primary);
+        outline-offset: 2px;
+      }
+
+      & svg {
+        width: 12px;
+        height: 12px;
+      }
+
+      &:first-of-type,
+      &:last-of-type {
+        scale: 0.56;
+      }
+
+      &:first-of-type {
+        transform: translateX(50px);
+      }
+      &:last-of-type {
+        transform: translateX(-50px);
+      }
+
+      &[data-show] {
+        opacity: 1;
+        filter: blur(0);
+        scale: 1;
+
+        @media (pointer: fine) and (hover: hover) {
+          &:hover {
+            scale: 1.1;
+          }
+        }
+
+        &:active {
+          scale: 0.96;
+        }
+      }
+
+      &:first-of-type[data-show] {
+        transform: translateX(0);
+      }
+
+      &:last-of-type[data-show] {
+        transform: translateX(0);
+      }
+    }
+
+    @starting-style {
+      opacity: 0;
+      transform: translateX(-50%) translateY(38px) scale(0.76);
+      filter: blur(10px);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      --dots-in-dur: 0ms;
+      --dots-in-delay: 0ms;
+    }
+
+    @media screen and (width <= 768px) {
+      bottom: calc(68px + var(--safe-area-bottom));
+
+      & .carousel-arrow {
+        display: none;
+      }
+    }
+  }
+
+  .carousel-dots {
     z-index: 1;
     display: flex;
     justify-content: center;
@@ -327,19 +420,7 @@
     filter: blur(0px);
     transition:
       opacity var(--dots-in-dur) ease-out var(--dots-in-delay),
-      transform var(--dots-in-dur) cubic-bezier(0.34, 1.56, 0.64, 1) var(--dots-in-delay),
       filter var(--dots-in-dur) ease-out var(--dots-in-delay);
-
-    @starting-style {
-      opacity: 0;
-      transform: translateX(-50%) translateY(16px) scale(0.76);
-      filter: blur(4px);
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      --dots-in-dur: 0ms;
-      --dots-in-delay: 0ms;
-    }
   }
 
   .carousel-dot {
@@ -364,8 +445,10 @@
     }
 
     &:focus-visible {
-      outline: 1px solid var(--gray-1400);
-      outline-offset: 2px;
+      &::after {
+        outline: 1px solid var(--primary);
+        outline-offset: 2px;
+      }
     }
   }
 }

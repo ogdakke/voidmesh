@@ -70,10 +70,10 @@
     <link rel="stylesheet" href="./styles/globals.css" />
     <style>
       :root {
-        --safe-area-top: env(safe-area-inset-top);
-        --safe-area-bottom: env(safe-area-inset-bottom);
-        --safe-area-left: env(safe-area-inset-left);
-        --safe-area-right: env(safe-area-inset-right);
+        --safe-area-top: env(safe-area-inset-top, 0);
+        --safe-area-bottom: env(safe-area-inset-bottom, 0);
+        --safe-area-left: env(safe-area-inset-left, 0);
+        --safe-area-right: env(safe-area-inset-right, 0);
       }
     </style>
     <script type="module" src="./app.tsx"></script>
