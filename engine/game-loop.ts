@@ -135,6 +135,15 @@ export interface DragSelectState {
   previousSelection: Set<string>;
 }
 
+interface VideoFrameTracker {
+  video: HTMLVideoElement;
+  requestId: number | null;
+  dirty: boolean;
+  initialized: boolean;
+  fallbackFrameIndex: number;
+  generation: number;
+}
+
 export class GameLoop {
   readonly #deps: GameLoopDeps;
   #logger = logger;
@@ -144,6 +153,8 @@ export class GameLoop {
   #resizeObserver: ResizeObserver | null = null;
   #running = false;
   #animationFrameId: number | null = null;
+  #videoFrameTrackers = new Map<string, VideoFrameTracker>();
+  #videoFrameTrackerGeneration = 0;
   #pendingScrollMomentumVelocity: Point | null = null;
   #firstFrameRendered = false;
   #lastFrameTime: number | null = null;
@@ -296,6 +307,7 @@ export class GameLoop {
     this.#cancelPendingScrollMomentum();
     this.#cancelLongPressTimer();
     this.#cancelDoubleTapTimer();
+    this.#clearVideoFrameTrackers();
     if (this.#animationFrameId !== null) {
       cancelAnimationFrame(this.#animationFrameId);
       this.#animationFrameId = null;
@@ -310,8 +322,9 @@ export class GameLoop {
     const deltaSeconds = this.#lastFrameTime !== null ? (now - this.#lastFrameTime) / 1000 : 0;
     this.#lastFrameTime = now;
 
-    let hasPlayingMedia = false;
+    let hasAnimatedFrameUpdate = false;
     let hasContinuousShaderRender = false;
+    this.#videoFrameTrackerGeneration++;
 
     // 2. Advance GIF playback and update video time for all playing animated entities.
     // Uses entity refs directly — getRenderState() is deferred until after all ticks
@@ -321,19 +334,23 @@ export class GameLoop {
         canvasStore.advanceGifPlayback(entity.id, deltaSeconds);
         // Notify playback subscribers for real-time time display updates
         canvasStore.updateGifPlaybackTime(entity.id, entity.playback.currentTime);
-        hasPlayingMedia = true;
+        if (entity.textureDirty) hasAnimatedFrameUpdate = true;
       }
       // Update video playback time continuously
       if (entity.mediaSource.type === MediaType.video && entity.playback?.isPlaying) {
         const video = entity.mediaSource.videoElement;
         canvasStore.updatePlaybackTime(entity.id, video.currentTime);
-        hasPlayingMedia = true;
+        if (this.#consumeVideoFrameUpdate(entity.id, video, entity.mediaSource.fps)) {
+          canvasStore.markEntityTextureDirty(entity.id);
+          hasAnimatedFrameUpdate = true;
+        }
       }
       // Check if any shader needs continuous re-rendering (e.g., time-based animation)
       if (!hasContinuousShaderRender && this.#renderer?.needsContinuousRenderForEntity(entity)) {
         hasContinuousShaderRender = true;
       }
     }
+    this.#cleanupInactiveVideoFrameTrackers();
 
     // 3. Advance all scheduler-managed animations (viewport, etc.)
     this.#deps.scheduler.tick(now);
@@ -353,7 +370,7 @@ export class GameLoop {
     const needsRender =
       !this.#firstFrameRendered ||
       renderState.dirty ||
-      hasPlayingMedia ||
+      hasAnimatedFrameUpdate ||
       hasContinuousShaderRender ||
       this.#deps.scheduler.hasActive ||
       (this.#inputState.pointerDown && !!this.#dragTarget) ||
@@ -382,6 +399,95 @@ export class GameLoop {
     // 12. Schedule next frame
     this.#animationFrameId = requestAnimationFrame(this.tick);
   };
+
+  #consumeVideoFrameUpdate(
+    entityId: string,
+    video: HTMLVideoElement,
+    fps: number | null,
+  ): boolean {
+    let tracker = this.#videoFrameTrackers.get(entityId);
+    if (!tracker || tracker.video !== video) {
+      if (tracker) this.#cancelVideoFrameCallback(tracker);
+      tracker = {
+        video,
+        requestId: null,
+        dirty: true,
+        initialized: false,
+        fallbackFrameIndex: this.#getVideoFallbackFrameIndex(video, fps),
+        generation: this.#videoFrameTrackerGeneration,
+      };
+      this.#videoFrameTrackers.set(entityId, tracker);
+    }
+
+    tracker.generation = this.#videoFrameTrackerGeneration;
+
+    if ("requestVideoFrameCallback" in video) {
+      this.#scheduleVideoFrameCallback(entityId, tracker);
+      if (!tracker.initialized) {
+        tracker.initialized = true;
+        tracker.dirty = true;
+      }
+      if (!tracker.dirty) return false;
+      tracker.dirty = false;
+      return true;
+    }
+
+    const frameIndex = this.#getVideoFallbackFrameIndex(video, fps);
+    if (!tracker.initialized) {
+      tracker.initialized = true;
+      tracker.fallbackFrameIndex = frameIndex;
+      return true;
+    }
+    if (frameIndex === tracker.fallbackFrameIndex) return false;
+
+    tracker.fallbackFrameIndex = frameIndex;
+    return true;
+  }
+
+  #scheduleVideoFrameCallback(entityId: string, tracker: VideoFrameTracker): void {
+    if (tracker.requestId !== null) return;
+    if (!("requestVideoFrameCallback" in tracker.video)) return;
+
+    tracker.requestId = tracker.video.requestVideoFrameCallback(() => {
+      tracker.requestId = null;
+      if (this.#videoFrameTrackers.get(entityId) !== tracker) return;
+
+      tracker.dirty = true;
+      if (!tracker.video.paused && !tracker.video.ended) {
+        this.#scheduleVideoFrameCallback(entityId, tracker);
+      }
+    });
+  }
+
+  #getVideoFallbackFrameIndex(video: HTMLVideoElement, fps: number | null): number {
+    const effectiveFps = fps && Number.isFinite(fps) && fps > 0 ? fps : 30;
+    return Math.floor(video.currentTime * effectiveFps + 0.0001);
+  }
+
+  #cleanupInactiveVideoFrameTrackers(): void {
+    for (const [entityId, tracker] of this.#videoFrameTrackers) {
+      if (tracker.generation === this.#videoFrameTrackerGeneration) continue;
+
+      this.#cancelVideoFrameCallback(tracker);
+      this.#videoFrameTrackers.delete(entityId);
+    }
+  }
+
+  #clearVideoFrameTrackers(): void {
+    for (const tracker of this.#videoFrameTrackers.values()) {
+      this.#cancelVideoFrameCallback(tracker);
+    }
+    this.#videoFrameTrackers.clear();
+  }
+
+  #cancelVideoFrameCallback(tracker: VideoFrameTracker): void {
+    if (tracker.requestId === null) return;
+
+    if ("cancelVideoFrameCallback" in tracker.video) {
+      tracker.video.cancelVideoFrameCallback(tracker.requestId);
+    }
+    tracker.requestId = null;
+  }
 
   /** Stop any active momentum scrolling and zoom momentum (public API for external callers) */
   stopMomentum(): void {

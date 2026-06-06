@@ -14,7 +14,6 @@ import {
   getViewportWorldBounds,
 } from "../lib/canvas-math.ts";
 import {
-  isAnimatedEntity,
   ShaderType,
   type Bounds,
   type RGBA,
@@ -136,7 +135,7 @@ export class InfiniteCanvasRenderer {
     string,
     {
       texture: GPUTexture;
-      sourceRef: ImageBitmap | OffscreenCanvas;
+      sourceRef: HTMLVideoElement | ImageBitmap | OffscreenCanvas;
       width: number;
       height: number;
     }
@@ -172,6 +171,7 @@ export class InfiniteCanvasRenderer {
   // Reusable canvas for Firefox-compatible video frame upload
   #videoUploadCanvas: OffscreenCanvas | null = null;
   #videoUploadCtx: OffscreenCanvasRenderingContext2D | null = null;
+  #directVideoUploadSupported: boolean | null = null;
 
   // Disintegration particle system (GPU compute + instanced rendering)
   #particleSystem: DisintegrationParticleSystem | null = null;
@@ -1465,6 +1465,51 @@ export class InfiniteCanvasRenderer {
     return this.#videoUploadCanvas;
   }
 
+  #uploadEntitySourceToTexture(
+    entity: ShaderCanvasEntity,
+    texture: GPUTexture,
+    width: number,
+    height: number,
+  ): HTMLVideoElement | ImageBitmap | OffscreenCanvas {
+    if (entity.mediaSource.type === "video") {
+      const video = entity.mediaSource.videoElement;
+
+      if (this.#directVideoUploadSupported !== false) {
+        try {
+          this.#device!.queue.copyExternalImageToTexture(
+            { source: video },
+            { texture, colorSpace: this.#colorConfig.textureColorSpace },
+            [width, height],
+          );
+          this.#directVideoUploadSupported = true;
+          return video;
+        } catch (error) {
+          this.#directVideoUploadSupported = false;
+          logger.debug("[renderer] Direct video texture upload unavailable; using canvas fallback", {
+            error,
+          });
+        }
+      }
+
+      const source = this.#getVideoFrameSource(video, width, height);
+      this.#device!.queue.copyExternalImageToTexture(
+        { source },
+        { texture, colorSpace: this.#colorConfig.textureColorSpace },
+        [width, height],
+      );
+      return source;
+    }
+
+    const source =
+      entity.mediaSource.type === "image" ? entity.mediaSource.imageBitmap : entity.imageBitmap;
+    this.#device!.queue.copyExternalImageToTexture(
+      { source },
+      { texture, colorSpace: this.#colorConfig.textureColorSpace },
+      [width, height],
+    );
+    return source;
+  }
+
   /**
    * Render an entity's image through its shader to a texture.
    * Returns the texture, caching it for future frames.
@@ -1479,15 +1524,19 @@ export class InfiniteCanvasRenderer {
       return null;
     }
 
-    // For animated media or shaders with continuous rendering (e.g., time-based): always re-render
+    // Time-based shaders need the shader pass every frame, but animated media only
+    // re-uploads/re-shades when the game loop marks a new decoded frame dirty.
     const shader = this.#shaderRegistry?.get(entity.shaderType);
-    const isAnimating =
-      (isAnimatedEntity(entity) && entity.playback?.isPlaying) ||
-      (shader?.needsContinuousRender(entity) ?? false);
+    const needsContinuousShaderRender = shader?.needsContinuousRender(entity) ?? false;
 
-    // Check if we have a valid cached texture (skip cache for playing videos)
+    // Check if we have a valid processed texture.
     const cachedTexture = this.#entityTextures.get(entity.id);
-    if (!isAnimating && cachedTexture && !entity.textureDirty) {
+    if (
+      !entity.shaderParams.showOriginal &&
+      !needsContinuousShaderRender &&
+      cachedTexture &&
+      !entity.textureDirty
+    ) {
       return cachedTexture;
     }
 
@@ -1501,30 +1550,20 @@ export class InfiniteCanvasRenderer {
       GPUTextureUsage.COPY_SRC |
       GPUTextureUsage.RENDER_ATTACHMENT;
 
-    // Get the appropriate source for GPU upload
-    const externalSource =
-      entity.mediaSource.type === "video"
-        ? this.#getVideoFrameSource(entity.mediaSource.videoElement, width, height)
-        : entity.mediaSource.type === "image"
-          ? entity.mediaSource.imageBitmap
-          : entity.imageBitmap;
-
-    // Check source texture cache: reuse if source image is unchanged
+    // Check source texture cache: reuse when source dimensions match and no new media frame
+    // was marked dirty. This lets viewport/UI redraws sample the previous video frame.
     const cachedSource = this.#entitySourceTextures.get(entity.id);
     let sourceTexture: GPUTexture;
 
     if (
-      !isAnimating &&
       !entity.textureDirty &&
       cachedSource &&
-      cachedSource.sourceRef === externalSource &&
       cachedSource.width === width &&
       cachedSource.height === height
     ) {
-      // Source image is identical — reuse cached GPU texture, skip upload
       sourceTexture = cachedSource.texture;
     } else {
-      // Source changed, dimensions changed, or animated media: need to (re-)upload
+      // Source changed, dimensions changed, or a new animated frame arrived: upload.
       if (cachedSource && (cachedSource.width !== width || cachedSource.height !== height)) {
         // Dimensions changed — destroy old, create new
         cachedSource.texture.destroy();
@@ -1547,18 +1586,25 @@ export class InfiniteCanvasRenderer {
         });
       }
 
-      this.#device.queue.copyExternalImageToTexture(
-        { source: externalSource },
-        { texture: sourceTexture, colorSpace: this.#colorConfig.textureColorSpace },
-        [width, height],
-      );
+      const sourceRef = this.#uploadEntitySourceToTexture(entity, sourceTexture, width, height);
 
       this.#entitySourceTextures.set(entity.id, {
         texture: sourceTexture,
-        sourceRef: externalSource,
+        sourceRef,
         width,
         height,
       });
+    }
+
+    // If showOriginal is enabled, compose the source texture directly. The source texture
+    // is owned by #entitySourceTextures, so keep it out of #entityTextures to avoid
+    // double-destroying the same GPU resource during cleanup.
+    if (entity.shaderParams.showOriginal) {
+      if (cachedTexture) {
+        cachedTexture.destroy();
+        this.#entityTextures.delete(entity.id);
+      }
+      return sourceTexture;
     }
 
     // Reuse output texture if dimensions match, otherwise create new
@@ -1581,17 +1627,6 @@ export class InfiniteCanvasRenderer {
         format: this.#colorConfig.intermediateFormat,
         usage: outputUsage,
       });
-    }
-
-    // If showOriginal is enabled, bypass shader processing and blit source directly.
-    // Uses CopyPass render pass instead of copyTextureToTexture because
-    // source (rgba8unorm) and output (rgba16float) formats are not copy-compatible.
-    if (entity.shaderParams.showOriginal) {
-      this.#passthroughCopyPass!.execute(sourceTexture, outputTexture);
-
-      // Cache and return (source texture stays in #entitySourceTextures)
-      this.#entityTextures.set(entity.id, outputTexture);
-      return outputTexture;
     }
 
     // Apply shader using unified method (handles both compute and fragment shader paths)
@@ -1692,11 +1727,10 @@ export class InfiniteCanvasRenderer {
         continue;
       }
 
-      // Check if texture needs regeneration
-      // For playing animated media, always consider texture dirty (frame changes every render)
-      const isPlayingMedia = isAnimatedEntity(entity) && entity.playback?.isPlaying;
-      const textureWasDirty = entity.textureDirty || isPlayingMedia;
-      if (isPlayingMedia || this.needsContinuousRenderForEntity(entity)) {
+      // Check if texture needs regeneration. Animated media is marked dirty by the
+      // game loop only when the decoded frame changes.
+      const textureWasDirty = !!entity.textureDirty;
+      if (textureWasDirty || this.needsContinuousRenderForEntity(entity)) {
         hasAnimatingContent = true;
       }
 

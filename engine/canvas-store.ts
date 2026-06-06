@@ -755,6 +755,14 @@ export class CanvasStore extends Store<CanvasState> {
     this.notify();
   }
 
+  markEntityTextureDirty(entityId: string): void {
+    const entity = this.state.entities.get(entityId);
+    if (!entity) return;
+
+    entity.textureDirty = true;
+    this.state.entitiesDirty.add(entityId);
+  }
+
   // GIF playback controls
   playGif(entityId: string): void {
     const entity = this.state.entities.get(entityId);
@@ -863,6 +871,10 @@ export class CanvasStore extends Store<CanvasState> {
 
     // Resolve the frame to display
     const frame = getFrameAtTime(frames, entity.playback.currentTime, loop);
+    if (entity.imageBitmap === frame.bitmap) {
+      return;
+    }
+
     entity.imageBitmap = frame.bitmap;
     // Mark as dirty so renderer picks up the new frame
     entity.textureDirty = true;
