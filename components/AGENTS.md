@@ -43,7 +43,7 @@ const param = useParamValue("path.to.param", defaultValue);
 
 ## React Compiler Constraints
 
-This project uses `babel-plugin-react-compiler` with strict oxlint rules (`react-hooks-js/*`). Three rules cause the most mistakes:
+This project uses `@rolldown/plugin-react` and react compiler with strict oxlint rules (`react-hooks-js/*`). Three rules cause the most mistakes:
 
 ### 1. No ref access during render (`react-hooks-js/refs`)
 

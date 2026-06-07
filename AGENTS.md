@@ -30,7 +30,7 @@ Infinite canvas app with real-time WebGPU shader effects. Users drop images/vide
 
 ## Stack
 
-React 19 + Compiler, rolldown-vite 7, WebGPU, TypeScript (strict), Bun, oxlint + tsgo.
+React 19 + Compiler, rolldown-vite 8, WebGPU, TypeScript (strict), Bun, oxlint + tsgo.
 
 ## Path Aliases (package.json `imports`)
 

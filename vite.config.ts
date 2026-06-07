@@ -3,9 +3,9 @@ import { defineConfig, loadEnv } from "vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import basicSsl from "@vitejs/plugin-basic-ssl";
 import { VitePWA } from "vite-plugin-pwa";
-import imagePlugin from "./plugins/vite-plugin-image.ts";
-import wgslMinifyPlugin from "./plugins/vite-plugin-wgsl-minify.ts";
 import babel from "@rolldown/plugin-babel";
+import wgslMinifyPlugin from "./plugins/vite-plugin-wgsl-minify.ts";
+import imagePlugin from "./plugins/vite-plugin-image.ts";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
