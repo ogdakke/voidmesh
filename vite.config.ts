@@ -156,8 +156,9 @@ export default defineConfig(({ mode }) => {
     build: {
       emptyOutDir: true,
       sourcemap: true,
+      target: ["ios26"],
       rolldownOptions: {
-        external: ["opensrc/", ".vendor/"],
+        external: [".vendor/"],
       },
     },
     optimizeDeps: {
