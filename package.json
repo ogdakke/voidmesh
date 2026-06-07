@@ -20,7 +20,7 @@
   },
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build",
+    "build": "vite build && vite build --ssr entry-prerender.tsx --outDir .tmp/prerender && bun run scripts/prerender.ts",
     "sourcemap": "posthog-cli sourcemap inject -d ./dist/assets && posthog-cli sourcemap upload -d ./dist/assets --release-name voidmesh --delete-after",
     "preview": "vite preview",
     "test": "bun run --bun vitest run",

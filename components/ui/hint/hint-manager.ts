@@ -136,6 +136,7 @@ export function useHint() {
   const state = useSyncExternalStore(
     (callback) => hints.subscribe(callback),
     () => hints.getState(),
+    () => hints.getState(),
   );
 
   return state;

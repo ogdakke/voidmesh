@@ -1,0 +1,56 @@
+@import "#ui/button/button.css";
+
+@layer components {
+  .static-studio-shell {
+    display: grid;
+    grid-template-columns: 260px 1px minmax(0, 1fr) 1px 300px;
+    height: 100%;
+    width: 100%;
+  }
+
+  .static-studio-shell__left,
+  .static-studio-shell__right {
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .static-studio-shell__center {
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .static-studio-shell__handle {
+    pointer-events: none;
+  }
+
+  .static-studio-shell__upload {
+    width: 100%;
+  }
+
+  .static-canvas-placeholder {
+    position: relative;
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+    background: var(--studio-background);
+  }
+
+  @media screen and (max-width: 768px) {
+    .static-studio-shell {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .static-studio-shell__left,
+    .static-studio-shell__right,
+    .static-studio-shell__handle {
+      display: none;
+    }
+
+    .static-studio-shell .content {
+      height: 100%;
+      margin: 0;
+      border: 0;
+      border-radius: 0;
+    }
+  }
+}

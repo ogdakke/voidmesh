@@ -87,6 +87,10 @@ html {
   user-select: none;
 }
 
+html[data-prerendered="true"] .app-loading-container {
+  display: none;
+}
+
 .app-loading {
   --transition-dur-in: 200ms;
   --transition-dur-out: 180ms;

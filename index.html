@@ -76,7 +76,7 @@
         --safe-area-right: env(safe-area-inset-right, 0);
       }
     </style>
-    <script type="module" src="./app.tsx"></script>
+    <script type="module" src="./entry-client.tsx"></script>
     <script type="module" src="./components/web-components/gallery.ts"></script>
     <script type="module" src="./components/web-components/lightbox.ts"></script>
     <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -290,15 +290,14 @@
         <p>Loading...</p>
       </div>
     </div>
-    <div id="root">
-      <noscript>
-        <p>
-          Sorry, guy 🥺 this thing definitely needs JavaScript, the amazingest programming language,
-          to work.
-        </p>
-        <br />
-        <p>It's worth it 🤞 (I think)</p>
-      </noscript>
-    </div>
+    <div id="root"><!--ssg-outlet--></div>
+    <noscript>
+      <p>
+        Sorry, guy 🥺 this thing definitely needs JavaScript, the amazingest programming language,
+        to work.
+      </p>
+      <br />
+      <p>It's worth it 🤞 (I think)</p>
+    </noscript>
   </body>
 </html>
