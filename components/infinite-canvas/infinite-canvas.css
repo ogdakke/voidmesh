@@ -67,7 +67,7 @@
 .infinite-canvas__perf-overlay {
   --perf-graph-bg: #0000;
   --perf-graph-fg: var(--primary-lighter);
-  --perf-graph-fill: var(--primary-50);
+  --perf-graph-fill: var(--primary);
   --perf-graph-grid: var(--border-75);
 
   position: absolute;

@@ -39,7 +39,7 @@ export interface PerfOverlaySnapshot {
   sampleCount: number;
 }
 
-const SAMPLE_COUNT = 300;
+const SAMPLE_COUNT = 200;
 const GRAPH_RENDER_INTERVAL_MS = 1000;
 const TEXT_UPDATE_INTERVAL_MS = 250;
 const SCALE_DECAY = 0.08;
