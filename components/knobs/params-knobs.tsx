@@ -1,7 +1,7 @@
 import { useParamValue, type ParamResult } from "#hooks/use-param-value.ts";
 import { useCanvasCommands, useSelectedShaderType } from "#context/use-canvas.ts";
 import { type ParamPaths, type ShaderParams, type ShaderType } from "#types/canvas.ts";
-import { memo, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   SliderPicker,
@@ -150,7 +150,7 @@ const AllSlideyParamsInOrder = [
 type SlideyParam = (typeof AllSlideyParamsInOrder)[number];
 
 // ---------------------------------------------------------------------------
-// ActiveParamSlider — single memoized instance for all non-time params
+// ActiveParamSlider — single slider instance for all non-time params
 // ---------------------------------------------------------------------------
 
 interface ActiveParamSliderProps {
@@ -160,7 +160,7 @@ interface ActiveParamSliderProps {
   onParamChange: (param: SlideyParam, uiValue: number) => void;
 }
 
-const ActiveParamSlider = memo(function ActiveParamSlider({
+function ActiveParamSlider({
   param,
   paramResult,
   shaderType,
@@ -181,7 +181,7 @@ const ActiveParamSlider = memo(function ActiveParamSlider({
       onValueCommit={() => undo.commitTransaction()}
     />
   );
-});
+}
 
 // ---------------------------------------------------------------------------
 // ParamsKnobs (main component)

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ComponentProps } from "react";
+import { useEffect, useRef, useState, type ComponentProps, type MouseEventHandler } from "react";
 import { decodeThumbhash } from "#lib/thumbhash.ts";
 
 const codecType = {
@@ -59,17 +59,14 @@ export function Video({ src, placeholder, eager, autoPlay, muted, onClick, ...re
     return () => observer.disconnect();
   }, [src, eager, autoPlay, hasSources]);
 
-  const handleClick = useCallback<React.MouseEventHandler<HTMLVideoElement>>(
-    (e) => {
-      const video = videoRef.current;
-      if (video) {
-        if (video.paused) video.play();
-        else video.pause();
-      }
-      onClick?.(e);
-    },
-    [onClick],
-  );
+  const handleClick: MouseEventHandler<HTMLVideoElement> = (e) => {
+    const video = videoRef.current;
+    if (video) {
+      if (video.paused) video.play();
+      else video.pause();
+    }
+    onClick?.(e);
+  };
 
   return (
     // eslint-disable-next-line jsx-a11y/media-has-caption -- decorative video, no speech content

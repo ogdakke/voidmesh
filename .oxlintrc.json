@@ -6,6 +6,10 @@
     {
       "name": "react-hooks-js",
       "specifier": "eslint-plugin-react-hooks"
+    },
+    {
+      "name": "voidmesh-react-compiler",
+      "specifier": "./plugins/oxlint-react-compiler.js"
     }
   ],
   "rules": {
@@ -36,6 +40,7 @@
     "react-hooks-js/use-memo": "error",
     "react-hooks-js/void-use-memo": "error",
     "react-hooks-js/incompatible-library": "error",
+    "voidmesh-react-compiler/no-manual-memoization": "error",
     "react/only-export-components": "warn",
     "jsx-a11y/no-noninteractive-tabindex": ["warn", { "roles": ["application"] }]
   },

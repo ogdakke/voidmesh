@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   CanvasCommandsContext,
   CanvasRendererContext,
@@ -1742,13 +1742,13 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     gameLoop.setRenderer(renderer);
   };
 
-  const setWlurDebugConfig = useCallback((updates: Partial<WlurOverlayDebugConfig>) => {
+  const setWlurDebugConfig = (updates: Partial<WlurOverlayDebugConfig>) => {
     setWlurDebugConfigState((prev) => ({ ...prev, ...updates }));
-  }, []);
+  };
 
-  const resetWlurDebugConfig = useCallback(() => {
+  const resetWlurDebugConfig = () => {
     setWlurDebugConfigState(createDefaultWlurOverlayDebugConfig());
-  }, []);
+  };
 
   // Export functions
   // Copy to clipboard: single-selection only (clipboard API limitation)
@@ -1932,73 +1932,66 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       setDebugType,
     };
   });
-  const commands = useMemo<CanvasCommands>(
-    () => ({
-      setViewport: (...args) => commandsImplRef.current.setViewport(...args),
-      panBy: (...args) => commandsImplRef.current.panBy(...args),
-      resetViewport: () => commandsImplRef.current.resetViewport(),
-      addEntity: (...args) => commandsImplRef.current.addEntity(...args),
-      updateEntity: (...args) => commandsImplRef.current.updateEntity(...args),
-      removeEntity: (...args) => commandsImplRef.current.removeEntity(...args),
-      clearWorkspace: () => commandsImplRef.current.clearWorkspace(),
-      selectEntity: (...args) => commandsImplRef.current.selectEntity(...args),
-      moveEntity: (...args) => commandsImplRef.current.moveEntity(...args),
-      duplicateEntities: () => commandsImplRef.current.duplicateEntities(),
-      updateSelectedEntityParams: (...args) =>
-        commandsImplRef.current.updateSelectedEntityParams(...args),
-      setSelectedEntityTimeAutoPlay: (...args) =>
-        commandsImplRef.current.setSelectedEntityTimeAutoPlay(...args),
-      syncSelectedEntityTimes: () => commandsImplRef.current.syncSelectedEntityTimes(),
-      changeShaderType: (...args) => commandsImplRef.current.changeShaderType(...args),
-      changeDitheringKind: (...args) => commandsImplRef.current.changeDitheringKind(...args),
-      changeAsciiKind: (...args) => commandsImplRef.current.changeAsciiKind(...args),
-      setAsciiInvert: (...args) => commandsImplRef.current.setAsciiInvert(...args),
-      changeGlassKind: (...args) => commandsImplRef.current.changeGlassKind(...args),
-      changeGlitchKind: (...args) => commandsImplRef.current.changeGlitchKind(...args),
-      changePalette: (...args) => commandsImplRef.current.changePalette(...args),
-      renamePalette: (...args) => commandsImplRef.current.renamePalette(...args),
-      uploadPalette: (...args) => commandsImplRef.current.uploadPalette(...args),
-      deletePalette: (...args) => commandsImplRef.current.deletePalette(...args),
-      setShowOriginal: (...args) => commandsImplRef.current.setShowOriginal(...args),
-      toggleShowOriginal: () => commandsImplRef.current.toggleShowOriginal(),
-      setPreserveColors: (...args) => commandsImplRef.current.setPreserveColors(...args),
-      togglePreserveColors: () => commandsImplRef.current.togglePreserveColors(),
-      setReversePalette: (...args) => commandsImplRef.current.setReversePalette(...args),
-      toggleReversePalette: () => commandsImplRef.current.toggleReversePalette(),
-      deleteSelection: (...args) => commandsImplRef.current.deleteSelection(...args),
-      copySelectionImage: (...args) => commandsImplRef.current.copySelectionImage(...args),
-      copySelectionEffects: () => commandsImplRef.current.copySelectionEffects(),
-      pasteEffects: () => commandsImplRef.current.pasteEffects(),
-      resetSelectionToDefaults: () => commandsImplRef.current.resetSelectionToDefaults(),
-      setSnapToGrid: (...args) => commandsImplRef.current.setSnapToGrid(...args),
-      setFancyDelete: (...args) => commandsImplRef.current.setFancyDelete(...args),
-      setHaptics: (...args) => commandsImplRef.current.setHaptics(...args),
-      changeSize: (...args) => commandsImplRef.current.changeSize(...args),
-      copySelectedEntityToClipboard: () => commandsImplRef.current.copySelectedEntityToClipboard(),
-      saveSelectedEntityToFile: (...args) =>
-        commandsImplRef.current.saveSelectedEntityToFile(...args),
-      serializeCanvas: () => commandsImplRef.current.serializeCanvas(),
-      deserializeCanvas: (...args) => commandsImplRef.current.deserializeCanvas(...args),
-      applyUrlState: (...args) => commandsImplRef.current.applyUrlState(...args),
-      applyEffectsToSelection: (...args) =>
-        commandsImplRef.current.applyEffectsToSelection(...args),
-      setDebugType: (...args) => commandsImplRef.current.setDebugType(...args),
-    }),
-    [],
-  );
+  const [commands] = useState<CanvasCommands>(() => ({
+    setViewport: (...args) => commandsImplRef.current.setViewport(...args),
+    panBy: (...args) => commandsImplRef.current.panBy(...args),
+    resetViewport: () => commandsImplRef.current.resetViewport(),
+    addEntity: (...args) => commandsImplRef.current.addEntity(...args),
+    updateEntity: (...args) => commandsImplRef.current.updateEntity(...args),
+    removeEntity: (...args) => commandsImplRef.current.removeEntity(...args),
+    clearWorkspace: () => commandsImplRef.current.clearWorkspace(),
+    selectEntity: (...args) => commandsImplRef.current.selectEntity(...args),
+    moveEntity: (...args) => commandsImplRef.current.moveEntity(...args),
+    duplicateEntities: () => commandsImplRef.current.duplicateEntities(),
+    updateSelectedEntityParams: (...args) =>
+      commandsImplRef.current.updateSelectedEntityParams(...args),
+    setSelectedEntityTimeAutoPlay: (...args) =>
+      commandsImplRef.current.setSelectedEntityTimeAutoPlay(...args),
+    syncSelectedEntityTimes: () => commandsImplRef.current.syncSelectedEntityTimes(),
+    changeShaderType: (...args) => commandsImplRef.current.changeShaderType(...args),
+    changeDitheringKind: (...args) => commandsImplRef.current.changeDitheringKind(...args),
+    changeAsciiKind: (...args) => commandsImplRef.current.changeAsciiKind(...args),
+    setAsciiInvert: (...args) => commandsImplRef.current.setAsciiInvert(...args),
+    changeGlassKind: (...args) => commandsImplRef.current.changeGlassKind(...args),
+    changeGlitchKind: (...args) => commandsImplRef.current.changeGlitchKind(...args),
+    changePalette: (...args) => commandsImplRef.current.changePalette(...args),
+    renamePalette: (...args) => commandsImplRef.current.renamePalette(...args),
+    uploadPalette: (...args) => commandsImplRef.current.uploadPalette(...args),
+    deletePalette: (...args) => commandsImplRef.current.deletePalette(...args),
+    setShowOriginal: (...args) => commandsImplRef.current.setShowOriginal(...args),
+    toggleShowOriginal: () => commandsImplRef.current.toggleShowOriginal(),
+    setPreserveColors: (...args) => commandsImplRef.current.setPreserveColors(...args),
+    togglePreserveColors: () => commandsImplRef.current.togglePreserveColors(),
+    setReversePalette: (...args) => commandsImplRef.current.setReversePalette(...args),
+    toggleReversePalette: () => commandsImplRef.current.toggleReversePalette(),
+    deleteSelection: (...args) => commandsImplRef.current.deleteSelection(...args),
+    copySelectionImage: (...args) => commandsImplRef.current.copySelectionImage(...args),
+    copySelectionEffects: () => commandsImplRef.current.copySelectionEffects(),
+    pasteEffects: () => commandsImplRef.current.pasteEffects(),
+    resetSelectionToDefaults: () => commandsImplRef.current.resetSelectionToDefaults(),
+    setSnapToGrid: (...args) => commandsImplRef.current.setSnapToGrid(...args),
+    setFancyDelete: (...args) => commandsImplRef.current.setFancyDelete(...args),
+    setHaptics: (...args) => commandsImplRef.current.setHaptics(...args),
+    changeSize: (...args) => commandsImplRef.current.changeSize(...args),
+    copySelectedEntityToClipboard: () => commandsImplRef.current.copySelectedEntityToClipboard(),
+    saveSelectedEntityToFile: (...args) =>
+      commandsImplRef.current.saveSelectedEntityToFile(...args),
+    serializeCanvas: () => commandsImplRef.current.serializeCanvas(),
+    deserializeCanvas: (...args) => commandsImplRef.current.deserializeCanvas(...args),
+    applyUrlState: (...args) => commandsImplRef.current.applyUrlState(...args),
+    applyEffectsToSelection: (...args) => commandsImplRef.current.applyEffectsToSelection(...args),
+    setDebugType: (...args) => commandsImplRef.current.setDebugType(...args),
+  }));
 
-  const rendererService = useMemo<CanvasRendererService>(
-    () => ({
-      registerRenderer,
-      renderer: rendererState,
-      colorSpace,
-      debugMode: debug,
-      wlurDebugConfig,
-      setWlurDebugConfig,
-      resetWlurDebugConfig,
-    }),
-    [rendererState, colorSpace, debug, wlurDebugConfig, setWlurDebugConfig, resetWlurDebugConfig],
-  );
+  const rendererService: CanvasRendererService = {
+    registerRenderer,
+    renderer: rendererState,
+    colorSpace,
+    debugMode: debug,
+    wlurDebugConfig,
+    setWlurDebugConfig,
+    resetWlurDebugConfig,
+  };
 
   // Expose canvas context to window for dev console debugging
   useEffect(() => {

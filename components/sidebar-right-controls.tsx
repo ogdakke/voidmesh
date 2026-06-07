@@ -1,4 +1,4 @@
-import { memo, type ChangeEvent } from "react";
+import { type ChangeEvent } from "react";
 import { DropletHalf, Eye, NavArrowRight } from "iconoir-react";
 import {
   useCanvasRendererService,
@@ -110,11 +110,7 @@ export const SidebarRightControls = ({ className, compact }: SidebarRightControl
   );
 };
 
-const EmptySelectionMessage = memo(function EmptySelectionMessage({
-  hasEntities,
-}: {
-  hasEntities: boolean;
-}) {
+function EmptySelectionMessage({ hasEntities }: { hasEntities: boolean }) {
   return (
     <div className="sidebar-row no-selection-message">
       <p>
@@ -124,9 +120,9 @@ const EmptySelectionMessage = memo(function EmptySelectionMessage({
       </p>
     </div>
   );
-});
+}
 
-const SelectedSidebarSections = memo(function SelectedSidebarSections() {
+function SelectedSidebarSections() {
   return (
     <>
       <SelectionHeaderSection />
@@ -160,9 +156,9 @@ const SelectedSidebarSections = memo(function SelectedSidebarSections() {
       <PostProcessingSection />
     </>
   );
-});
+}
 
-const SelectionHeaderSection = memo(function SelectionHeaderSection() {
+function SelectionHeaderSection() {
   const { changeShaderType, setShowOriginal, resetSelectionToDefaults } = useCanvasCommands();
   const selectedShaderType = useSelectedShaderType();
   const hasUniformShader = useHasUniformSelectedShader();
@@ -197,9 +193,9 @@ const SelectionHeaderSection = memo(function SelectionHeaderSection() {
       </div>
     </>
   );
-});
+}
 
-const PostProcessingSection = memo(function PostProcessingSection() {
+function PostProcessingSection() {
   const { updateSelectedEntityParams } = useCanvasCommands();
   const postProcessEnabled = useParamValue(
     "postProcess.enabled",
@@ -231,9 +227,9 @@ const PostProcessingSection = memo(function PostProcessingSection() {
       </CollapsibleContent>
     </Collapsible>
   );
-});
+}
 
-const SelectionFooterSections = memo(function SelectionFooterSections() {
+function SelectionFooterSections() {
   return (
     <>
       <UpscaleQueuePanel />
@@ -248,7 +244,7 @@ const SelectionFooterSections = memo(function SelectionFooterSections() {
       </Collapsible>
     </>
   );
-});
+}
 
 interface ShaderSelectProps {
   shaderType: string;
@@ -626,7 +622,7 @@ export function EffectParams({ show }: { show?: "scale" | "intensity" }) {
   );
 }
 
-export const EntityParams = memo(function EntityParams() {
+export function EntityParams() {
   const hasSelection = useHasSelection();
   if (!hasSelection) return null;
 
@@ -639,9 +635,9 @@ export const EntityParams = memo(function EntityParams() {
       <ShapeSection />
     </>
   );
-});
+}
 
-const PaletteEditorSection = memo(function PaletteEditorSection() {
+function PaletteEditorSection() {
   const { changePalette, renamePalette, uploadPalette, deletePalette } = useCanvasCommands();
   const { colorSpace } = useCanvasRendererService();
   const reversePalette = useParamValue(
@@ -678,9 +674,9 @@ const PaletteEditorSection = memo(function PaletteEditorSection() {
       <PaletteUpload onUpload={uploadPalette} />
     </div>
   );
-});
+}
 
-const PalettePresetsSection = memo(function PalettePresetsSection() {
+function PalettePresetsSection() {
   const { changePalette } = useCanvasCommands();
   const selectedEntity = useSelectedEntity();
   const customPalettes = usePaletteStore();
@@ -699,9 +695,9 @@ const PalettePresetsSection = memo(function PalettePresetsSection() {
       />
     </div>
   );
-});
+}
 
-const PaletteToggleSection = memo(function PaletteToggleSection() {
+function PaletteToggleSection() {
   const { setPreserveColors, setReversePalette } = useCanvasCommands();
   const preserveColors = useParamValue(
     "preserveColors",
@@ -743,9 +739,9 @@ const PaletteToggleSection = memo(function PaletteToggleSection() {
       )}
     </div>
   );
-});
+}
 
-const SizeSection = memo(function SizeSection() {
+function SizeSection() {
   const { changeSize } = useCanvasCommands();
   const size = useParamValue("size", config.defaults.shaderParams.size);
 
@@ -769,8 +765,8 @@ const SizeSection = memo(function SizeSection() {
       />
     </div>
   );
-});
+}
 
-const ShapeSection = memo(function ShapeSection() {
+function ShapeSection() {
   return <ShapeKnobs />;
-});
+}

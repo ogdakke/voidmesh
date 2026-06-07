@@ -1,4 +1,3 @@
-import { memo } from "react";
 import { ErrorBoundary } from "#ui/error-boundary.tsx";
 import { InfiniteCanvas } from "./infinite-canvas";
 import { Button } from "#ui/button/button.tsx";
@@ -19,7 +18,7 @@ function CanvasErrorFallback({ error }: { error: Error }) {
   );
 }
 
-export const Canvas = memo(function Canvas() {
+export function Canvas() {
   return (
     <div className="canvas">
       <ErrorBoundary fallback={({ error }) => <CanvasErrorFallback error={error} />}>
@@ -27,4 +26,4 @@ export const Canvas = memo(function Canvas() {
       </ErrorBoundary>
     </div>
   );
-});
+}

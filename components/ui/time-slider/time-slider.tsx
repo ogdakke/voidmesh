@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
 import {
   InfiniteSlider,
@@ -16,10 +16,10 @@ export interface TimeSliderProps extends InfiniteSliderProps {
 }
 
 /**
- * Memoized slider for shader time that drives the InfiniteSlider imperatively
+ * Slider for shader time that drives the InfiniteSlider imperatively
  * at 60fps during autoplay — zero React re-renders while playing.
  */
-export const TimeSlider = memo(function TimeSlider({
+export function TimeSlider({
   entity,
   isAutoPlaying,
   entityTime,
@@ -57,4 +57,4 @@ export const TimeSlider = memo(function TimeSlider({
       pixelsPerStep={0.5}
     />
   );
-});
+}

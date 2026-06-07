@@ -34,7 +34,6 @@ import { applyWlurOverlayDebugConfig } from "#renderer/wlur-debug.ts";
 import { Check, Enlarge, Reduce, Square3dFromCenter } from "iconoir-react";
 import {
   lazy,
-  memo,
   Suspense,
   useEffect,
   useLayoutEffect,
@@ -1001,6 +1000,6 @@ const CanvasWrapper = ({
   );
 };
 
-const InfiniteCanvasToolRow = memo(function InfiniteCanvasToolRow({ children }: PropsWithChildren) {
+function InfiniteCanvasToolRow({ children }: PropsWithChildren) {
   return <div className="infinite-canvas-toolrow">{children}</div>;
-});
+}
