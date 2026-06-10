@@ -2042,28 +2042,51 @@ export class InfiniteCanvasRenderer {
    * Called before removeEntityTexture — copies the GPU texture so the entity
    * can be removed immediately while the dust animation plays independently.
    */
+  #createDisintegrationSnapshot(entityId: string): GPUTexture | null {
+    if (!this.#device) return null;
+
+    const renderedTexture = this.#entityTextures.get(entityId);
+    if (renderedTexture) {
+      const snapshotTexture = this.#device.createTexture({
+        label: `Disintegration snapshot ${entityId}`,
+        size: [renderedTexture.width, renderedTexture.height],
+        format: renderedTexture.format,
+        usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+      });
+      const encoder = this.#device.createCommandEncoder();
+      encoder.copyTextureToTexture({ texture: renderedTexture }, { texture: snapshotTexture }, [
+        renderedTexture.width,
+        renderedTexture.height,
+      ]);
+      this.#device.queue.submit([encoder.finish()]);
+      return snapshotTexture;
+    }
+
+    const sourceTexture = this.#entitySourceTextures.get(entityId)?.texture;
+    if (!sourceTexture || !this.#passthroughCopyPass) return null;
+
+    const snapshotTexture = this.#device.createTexture({
+      label: `Disintegration snapshot ${entityId}`,
+      size: [sourceTexture.width, sourceTexture.height],
+      format: this.#colorConfig.intermediateFormat,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    const encoder = this.#device.createCommandEncoder();
+    this.#passthroughCopyPass.encode(encoder, sourceTexture, snapshotTexture);
+    this.#device.queue.submit([encoder.finish()]);
+    return snapshotTexture;
+  }
+
   startDisintegration(entity: {
     id: string;
     position: { x: number; y: number };
     size: { width: number; height: number };
     rotation: number;
   }): void {
-    const sourceTexture = this.#entityTextures.get(entity.id);
-    if (!sourceTexture || !this.#device || !this.#compositionBindGroupLayout) return;
+    if (!this.#device || !this.#compositionBindGroupLayout) return;
 
-    // Copy the entity's rendered texture (so original can be destroyed freely)
-    const snapshotTexture = this.#device.createTexture({
-      label: `Disintegration snapshot ${entity.id}`,
-      size: [sourceTexture.width, sourceTexture.height],
-      format: sourceTexture.format,
-      usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
-    });
-    const encoder = this.#device.createCommandEncoder();
-    encoder.copyTextureToTexture({ texture: sourceTexture }, { texture: snapshotTexture }, [
-      sourceTexture.width,
-      sourceTexture.height,
-    ]);
-    this.#device.queue.submit([encoder.finish()]);
+    const snapshotTexture = this.#createDisintegrationSnapshot(entity.id);
+    if (!snapshotTexture) return;
 
     const textureView = snapshotTexture.createView();
     const uniformBuffer = this.#device.createBuffer({
