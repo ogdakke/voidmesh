@@ -1824,7 +1824,7 @@ export class InfiniteCanvasRenderer {
     }
 
     const sourceTexture = this.#entitySourceTextures.get(entityId)?.texture;
-    if (!sourceTexture || !this.#passthroughCopyPass) return null;
+    if (!sourceTexture || !this.#entityShaderRuntime) return null;
 
     const snapshotTexture = this.#device.createTexture({
       label: `Disintegration snapshot ${entityId}`,
@@ -1833,7 +1833,7 @@ export class InfiniteCanvasRenderer {
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
     });
     const encoder = this.#device.createCommandEncoder();
-    this.#passthroughCopyPass.encode(encoder, sourceTexture, snapshotTexture);
+    this.#entityShaderRuntime.passthroughCopyPass.encode(encoder, sourceTexture, snapshotTexture);
     this.#device.queue.submit([encoder.finish()]);
     return snapshotTexture;
   }
