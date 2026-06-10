@@ -179,9 +179,15 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
         currentDemuxRef.current = demux;
 
         // Use demux duration for consistent frame counts between decoder and encoder
+        const frameWidth = demux.width;
+        const frameHeight = demux.height;
+        entitySnapshot.originalSize = {
+          width: frameWidth,
+          height: frameHeight,
+        };
         animatedSource = {
-          width: entity.originalSize.width,
-          height: entity.originalSize.height,
+          width: frameWidth,
+          height: frameHeight,
           duration: demux.duration,
         };
 
@@ -197,8 +203,8 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
           const bitmap = await renderer.renderFrameWithShader(
             entitySnapshot,
             frameBitmap,
-            entity.originalSize.width,
-            entity.originalSize.height,
+            frameWidth,
+            frameHeight,
           );
           frameBitmap.close();
           if (!bitmap) throw new Error("Failed to render frame");

@@ -72,7 +72,8 @@ export async function demuxVideo(videoBlob: Blob): Promise<VideoDemuxHandle> {
   const sink = new VideoSampleSink(videoTrack);
 
   async function* frames(timestamps: Iterable<number>): AsyncGenerator<ImageBitmap> {
-    // Hold a canvas with the last decoded frame for repeat on null samples
+    // Hold a display-oriented copy of the last decoded frame for repeats and
+    // for videos whose encoded frame dimensions differ from display dimensions.
     const repeatCanvas = new OffscreenCanvas(width, height);
     const repeatCtx = repeatCanvas.getContext("2d")!;
     let hasFrame = false;
@@ -96,12 +97,12 @@ export async function demuxVideo(videoBlob: Blob): Promise<VideoDemuxHandle> {
         yieldCount++;
         continue;
       }
-      const source = sample.toCanvasImageSource();
-      const bitmap = await createImageBitmap(source);
-      sample.close();
-
-      // Stash a copy for potential repeat
-      repeatCtx.drawImage(bitmap, 0, 0);
+      repeatCtx.clearRect(0, 0, width, height);
+      try {
+        sample.draw(repeatCtx, 0, 0, width, height);
+      } finally {
+        sample.close();
+      }
 
       if (!hasFrame) {
         hasFrame = true;
@@ -112,7 +113,7 @@ export async function demuxVideo(videoBlob: Blob): Promise<VideoDemuxHandle> {
         }
       }
 
-      yield bitmap;
+      yield await createImageBitmap(repeatCanvas);
       yieldCount++;
     }
 
