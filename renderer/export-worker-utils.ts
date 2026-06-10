@@ -1,9 +1,5 @@
 import { calculateVideoBitrate } from "#config";
-import {
-  calculateTargetResolution,
-  defaultGifConfig,
-  qualityConfigs,
-} from "./export-formats.ts";
+import { calculateTargetResolution, defaultGifConfig, qualityConfigs } from "./export-formats.ts";
 import type { VideoExportOptions } from "./video-exporter.ts";
 
 export function getGifExportDimensions(
@@ -55,5 +51,7 @@ export function getVideoExportBitrate(
   options: VideoExportOptions,
 ): number {
   const qualityFactor = qualityConfigs[options.quality ?? "high"].bitrateFactor;
-  return options.advanced?.bitrate ?? Math.round(calculateVideoBitrate(width, height) * qualityFactor);
+  return (
+    options.advanced?.bitrate ?? Math.round(calculateVideoBitrate(width, height) * qualityFactor)
+  );
 }

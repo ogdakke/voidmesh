@@ -16,6 +16,11 @@ import type { GifFrame } from "#types/canvas.ts";
 import { logger } from "#lib/client.logger.ts";
 import type { VideoDemuxHandle } from "#lib/video-demux.ts";
 import type { DemuxedAudio } from "#lib/audio-demux.ts";
+import {
+  createRgba8Texture,
+  readRgba8TextureToPixels,
+  uploadExternalImageToTexture,
+} from "#renderer/gpu-texture-io.ts";
 
 /**
  * WebGPU image upscaling service using Anime4K CNN-2x models.
@@ -68,24 +73,25 @@ export class UpscaleService {
 
       const weights = await loadWeights(size, variant);
 
-      const inputTexture = this.#device.createTexture({
-        label: "upscale-input",
-        size: [paddedWidth, paddedHeight],
-        format: "rgba8unorm",
-        usage:
-          GPUTextureUsage.TEXTURE_BINDING |
+      const inputTexture = createRgba8Texture(
+        this.#device,
+        paddedWidth,
+        paddedHeight,
+        GPUTextureUsage.TEXTURE_BINDING |
           GPUTextureUsage.COPY_DST |
           GPUTextureUsage.RENDER_ATTACHMENT,
-      });
+        "upscale-input",
+      );
 
       const outputWidth = paddedWidth * 2;
       const outputHeight = paddedHeight * 2;
-      const outputTexture = this.#device.createTexture({
-        label: "upscale-output",
-        size: [outputWidth, outputHeight],
-        format: "rgba8unorm",
-        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
-      });
+      const outputTexture = createRgba8Texture(
+        this.#device,
+        outputWidth,
+        outputHeight,
+        GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+        "upscale-output",
+      );
 
       const network = buildNetwork(
         this.#device,
@@ -103,10 +109,7 @@ export class UpscaleService {
     }
 
     // Upload source pixels to cached input texture
-    this.#device.queue.copyExternalImageToTexture({ source }, { texture: cached.inputTexture }, [
-      origWidth,
-      origHeight,
-    ]);
+    uploadExternalImageToTexture(this.#device, source, cached.inputTexture, origWidth, origHeight);
 
     // Execute all passes in a single command encoder
     const encoder = this.#device.createCommandEncoder({ label: "upscale-encoder" });
@@ -305,39 +308,13 @@ export class UpscaleService {
     cropWidth: number,
     cropHeight: number,
   ): Promise<ImageBitmap> {
-    const bytesPerRow = Math.ceil((textureWidth * 4) / 256) * 256;
-    const bufferSize = bytesPerRow * textureHeight;
-
-    const stagingBuffer = this.#device.createBuffer({
-      label: "upscale-staging",
-      size: bufferSize,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    const data = await readRgba8TextureToPixels(this.#device, texture, {
+      width: textureWidth,
+      height: textureHeight,
+      cropWidth,
+      cropHeight,
+      label: "upscale-readback",
     });
-
-    const encoder = this.#device.createCommandEncoder({ label: "upscale-readback" });
-    encoder.copyTextureToBuffer({ texture }, { buffer: stagingBuffer, bytesPerRow }, [
-      textureWidth,
-      textureHeight,
-    ]);
-    this.#device.queue.submit([encoder.finish()]);
-
-    await this.#device.queue.onSubmittedWorkDone();
-    await stagingBuffer.mapAsync(GPUMapMode.READ);
-
-    const mappedRange = stagingBuffer.getMappedRange();
-    const srcData = new Uint8ClampedArray(mappedRange);
-
-    // Copy cropped region row-by-row (due to bytesPerRow padding and potential crop)
-    const data = new Uint8ClampedArray(cropWidth * cropHeight * 4);
-    for (let y = 0; y < cropHeight; y++) {
-      const srcOffset = y * bytesPerRow;
-      const dstOffset = y * cropWidth * 4;
-      data.set(srcData.subarray(srcOffset, srcOffset + cropWidth * 4), dstOffset);
-    }
-
-    stagingBuffer.unmap();
-    stagingBuffer.destroy();
-
     return createImageBitmap(new ImageData(data, cropWidth, cropHeight));
   }
 

@@ -7,8 +7,8 @@
  * 3. Return final GIF blob
  */
 
-import { GIFEncoder, quantize, applyPalette } from "gifenc";
-import { floydSteinbergDither } from "#lib/floyd-steinberg.ts";
+import { GIFEncoder } from "gifenc";
+import { buildGifPaletteFromPixels, mapGifFrameToPalette } from "#lib/gif-encode-core.ts";
 import { defaultGifConfig } from "./export-formats.ts";
 import type { ExportProgress, AnimatedSource, VideoExportOptions } from "./video-exporter.ts";
 import { logger } from "#lib/client.logger.ts";
@@ -84,15 +84,7 @@ export async function exportGif(
     sampledPixels.push(framePixels[i]!.data);
   }
 
-  const totalSamplePixels = sampledPixels.reduce((sum, p) => sum + p.length, 0);
-  const allPixels = new Uint8Array(totalSamplePixels);
-  let offset = 0;
-  for (const pixels of sampledPixels) {
-    allPixels.set(pixels, offset);
-    offset += pixels.length;
-  }
-
-  const palette = quantize(allPixels, maxColors);
+  const palette = buildGifPaletteFromPixels(sampledPixels, maxColors);
 
   logger.debug(`[gif-export] Generated palette with ${palette.length} colors`);
 
@@ -109,13 +101,13 @@ export async function exportGif(
 
     const imageData = framePixels[i]!;
 
-    // Apply Floyd-Steinberg dithering
-    if (useDither) {
-      floydSteinbergDither(imageData.data, outWidth, outHeight, palette);
-    }
-
-    // Map pixels to palette indices
-    const indexed = applyPalette(imageData.data, palette);
+    const indexed = mapGifFrameToPalette({
+      pixels: imageData.data,
+      width: outWidth,
+      height: outHeight,
+      palette,
+      dither: useDither,
+    });
 
     // Calculate variable delay to avoid cumulative drift
     const idealDelay = nominalDelayCentiseconds + accumulatedError;

@@ -15,7 +15,8 @@ interface EncodeRequest {
 
 self.onmessage = async (e: MessageEvent<EncodeRequest>) => {
   const { bitmaps, delays, width, height } = e.data;
-  const { GIFEncoder, quantize, applyPalette } = await import("gifenc");
+  const { GIFEncoder } = await import("gifenc");
+  const { buildGifPaletteFromPixels, mapGifFrameToPalette } = await import("./gif-encode-core.ts");
 
   // Sample frames at reduced resolution for palette generation
   const sampleSize = 128;
@@ -29,13 +30,7 @@ self.onmessage = async (e: MessageEvent<EncodeRequest>) => {
     sampledPixels.push(sampleCtx.getImageData(0, 0, sampleSize, sampleSize).data);
   }
 
-  const combined = new Uint8Array(sampledPixels.reduce((s, p) => s + p.length, 0));
-  let offset = 0;
-  for (const p of sampledPixels) {
-    combined.set(p, offset);
-    offset += p.length;
-  }
-  const palette = quantize(combined, 128);
+  const palette = buildGifPaletteFromPixels(sampledPixels, 128);
 
   // Encode frames at full resolution
   const canvas = new OffscreenCanvas(width, height);
@@ -45,7 +40,7 @@ self.onmessage = async (e: MessageEvent<EncodeRequest>) => {
   for (let i = 0; i < bitmaps.length; i++) {
     ctx.drawImage(bitmaps[i]!, 0, 0);
     const pixels = ctx.getImageData(0, 0, width, height).data;
-    const indexed = applyPalette(pixels, palette);
+    const indexed = mapGifFrameToPalette({ pixels, width, height, palette, dither: false });
     gif.writeFrame(indexed, width, height, {
       palette,
       delay: Math.round(delays[i]!),

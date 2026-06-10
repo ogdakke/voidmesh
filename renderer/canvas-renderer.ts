@@ -13,31 +13,15 @@ import {
   getViewportMatrix,
   getViewportWorldBounds,
 } from "../lib/canvas-math.ts";
-import {
-  ShaderType,
-  type Bounds,
-  type RGBA,
-  type ShaderCanvasEntity,
-  type Viewport,
-} from "#types/canvas.ts";
+import { type Bounds, type RGBA, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import compositionShaderSource from "./composition.wgsl?raw";
 import { CopyPass } from "./copy-pass.ts";
 import { DisintegrationParticleSystem } from "./disintegration-particles.ts";
 import dotGridShaderSource from "./dot-grid.wgsl?raw";
-import { encodeEntityTexturePipeline } from "./entity-texture-pipeline.ts";
+import { EntityShaderRuntime } from "./entity-shader-runtime.ts";
 import { ExportService } from "./export-service.ts";
 import { detectGpuColorConfig, type GpuColorConfig } from "./gpu-color-space.ts";
-import { ProcessingPipeline } from "./processing-pipeline.ts";
 import selectionRectShaderSource from "./selection-rect.wgsl?raw";
-import { AsciiShader } from "./shaders/ascii-shader.ts";
-import { BlobsShader } from "./shaders/blobs-shader.ts";
-import { DitheringShader } from "./shaders/dithering-shader.ts";
-import { GlassShader } from "./shaders/glass-shader.ts";
-import { GlitchShader } from "./shaders/glitch-shader.ts";
-import { HalftoneShader } from "./shaders/halftone-shader.ts";
-import { MeltShader } from "./shaders/melt-shader.ts";
-import type { ShaderContext } from "./shaders/shader-pass.ts";
-import { ShaderRegistry } from "./shaders/shader-registry.ts";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
 import { EntityLabelPass } from "./entity-label-pass.ts";
 import { TexturePool } from "./texture-pool.ts";
@@ -78,16 +62,6 @@ export class InfiniteCanvasRenderer {
   #entityUniformData = new ArrayBuffer(config.rendering.entityUniformSize);
   #entityFloatView = new Float32Array(this.#entityUniformData);
   #entityUintView = new Uint32Array(this.#entityUniformData);
-
-  #entityShaderBindGroupLayout: GPUBindGroupLayout | null = null;
-  #entityShaderUniformBuffer: GPUBuffer | null = null;
-  #entityShaderSampler: GPUSampler | null = null;
-
-  // Unified uniform data for all shaders (includes palette support)
-  // All shaders now use the same larger buffer size for palette data
-  #shaderUniformData = new ArrayBuffer(config.rendering.ditheringUniformSize);
-  #shaderFloatView = new Float32Array(this.#shaderUniformData);
-  #shaderUintView = new Uint32Array(this.#shaderUniformData);
 
   // Entity error tracking (entityId -> error message)
   #entityErrors: Map<string, string> = new Map();
@@ -132,11 +106,6 @@ export class InfiniteCanvasRenderer {
   // Texture pool for eliminating per-frame allocation churn
   #texturePool: TexturePool | null = null;
 
-  // Palette sorting cache - avoid re-sorting every frame
-  // Stores { original: RGBA[], sorted: RGBA[] } to detect when palette changes
-  #sortedPaletteCache: { original: readonly RGBA[]; reversed: boolean; sorted: RGBA[] } | null =
-    null;
-
   // Reusable canvas for Firefox-compatible video frame upload
   #videoUploadCanvas: OffscreenCanvas | null = null;
   #videoUploadCtx: OffscreenCanvasRenderingContext2D | null = null;
@@ -178,9 +147,6 @@ export class InfiniteCanvasRenderer {
   #selectionRectUniformData = new ArrayBuffer(288);
   #selectionRectFloatView = new Float32Array(this.#selectionRectUniformData);
 
-  // Processing pipeline (adjustments, post-processing, bloom)
-  #processingPipeline: ProcessingPipeline | null = null;
-
   // Action layer blit pipeline (fullscreen dimmed blit for blur overlay)
   #actionLayerBlitPipeline: GPURenderPipeline | null = null;
   #actionLayerBlitBindGroupLayout: GPUBindGroupLayout | null = null;
@@ -197,8 +163,6 @@ export class InfiniteCanvasRenderer {
   #actionLayerBlurCacheValid = false;
   #actionLayerBlitBindGroupCached: GPUBindGroup | null = null;
 
-  // Copy pass for showOriginal (rgba8unorm source → rgba16float output)
-  #passthroughCopyPass: CopyPass | null = null;
   #presentCopyPass: CopyPass | null = null;
 
   // Wlur progressive full-canvas overlay
@@ -214,9 +178,7 @@ export class InfiniteCanvasRenderer {
   #wlurOverlayCacheKey = "";
   #wlurLastQualityKey = "";
 
-  // Shader registry and context for delegated shader passes
-  #shaderRegistry: ShaderRegistry | null = null;
-  #shaderContext: ShaderContext | null = null;
+  #entityShaderRuntime: EntityShaderRuntime | null = null;
 
   // Export service for rendering entities to blobs/bitmaps
   #exportService: ExportService | null = null;
@@ -310,55 +272,21 @@ export class InfiniteCanvasRenderer {
 
     this.#createGridPipeline();
     this.#createCompositionPipeline();
-    this.#createEntityShaderResources();
-
-    // Create ShaderContext from existing resources and initialize shader registry
-    this.#shaderContext = {
+    this.#entityShaderRuntime = new EntityShaderRuntime({
       device: this.#device,
-      uniformBuffer: this.#entityShaderUniformBuffer!,
-      uniformData: this.#shaderUniformData,
-      floatView: this.#shaderFloatView,
-      uintView: this.#shaderUintView,
-      sampler: this.#entityShaderSampler!,
-      sortedPaletteCache: this.#sortedPaletteCache,
+      colorConfig: this.#colorConfig,
       texturePool: this.#texturePool,
-      intermediateFormat: this.#colorConfig.intermediateFormat,
-      supportsP3: this.#colorConfig.supportsP3,
-    };
-
-    this.#shaderRegistry = new ShaderRegistry();
-    const asciiShader = new AsciiShader(this.#shaderContext);
-    asciiShader.onEntityError = (entityId, error) => {
-      if (!this.#entityErrors.has(entityId)) {
-        this.#entityErrors.set(entityId, error);
-        this.onEntityError?.(entityId, error);
-      }
-    };
-    const shaders = [
-      [ShaderType.halftone, new HalftoneShader(this.#shaderContext)] as const,
-      [ShaderType.blobs, new BlobsShader(this.#shaderContext)] as const,
-      [ShaderType.melt, new MeltShader(this.#shaderContext)] as const,
-      [ShaderType.glass, new GlassShader(this.#shaderContext)] as const,
-      [ShaderType.glitch, new GlitchShader(this.#shaderContext)] as const,
-      [ShaderType.ascii, asciiShader] as const,
-      [ShaderType.dithering, new DitheringShader(this.#shaderContext)] as const,
-    ];
-    await Promise.all(
-      shaders.map(async ([type, pass]) => {
-        await pass.initialize();
-        this.#shaderRegistry!.register(type, pass);
-      }),
-    );
+      onEntityError: (entityId, error) => {
+        if (!this.#entityErrors.has(entityId)) {
+          this.#entityErrors.set(entityId, error);
+          this.onEntityError?.(entityId, error);
+        }
+      },
+    });
+    await this.#entityShaderRuntime.initialize();
 
     this.#createSelectionRectPipeline();
     this.#createActionLayerBlitPipeline();
-    this.#processingPipeline = new ProcessingPipeline(
-      this.#device,
-      this.#colorConfig.intermediateFormat,
-      this.#colorConfig.supportsP3,
-    );
-    this.#processingPipeline.initialize();
-    this.#passthroughCopyPass = new CopyPass(this.#device, this.#colorConfig.intermediateFormat);
     this.#presentCopyPass = new CopyPass(this.#device, this.#canvasFormat);
     this.#wlurPass = new WlurPass({
       device: this.#device,
@@ -565,46 +493,6 @@ export class InfiniteCanvasRenderer {
       primitive: {
         topology: "triangle-list",
       },
-    });
-  }
-
-  #createEntityShaderResources(): void {
-    if (!this.#device) return;
-
-    this.#entityShaderBindGroupLayout = this.#device.createBindGroupLayout({
-      label: "Entity shader bind group layout",
-      entries: [
-        {
-          binding: 0,
-          visibility: GPUShaderStage.FRAGMENT,
-          buffer: { type: "uniform" },
-        },
-        {
-          binding: 1,
-          visibility: GPUShaderStage.FRAGMENT,
-          texture: { sampleType: "float" },
-        },
-        {
-          binding: 2,
-          visibility: GPUShaderStage.FRAGMENT,
-          sampler: { type: "filtering" },
-        },
-      ],
-    });
-
-    // Single unified buffer for all shaders (includes palette data)
-    this.#entityShaderUniformBuffer = this.#device.createBuffer({
-      label: "Entity shader uniforms",
-      size: config.rendering.ditheringUniformSize,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-
-    this.#entityShaderSampler = this.#device.createSampler({
-      label: "Entity shader sampler",
-      magFilter: "linear",
-      minFilter: "linear",
-      addressModeU: "clamp-to-edge",
-      addressModeV: "clamp-to-edge",
     });
   }
 
@@ -944,15 +832,7 @@ export class InfiniteCanvasRenderer {
     outputTexture: GPUTexture,
     _outputTextureHasStorageBinding: boolean = false,
   ): void {
-    if (
-      !this.#device ||
-      !this.#entityShaderBindGroupLayout ||
-      !this.#entityShaderUniformBuffer ||
-      !this.#entityShaderSampler ||
-      !this.#processingPipeline ||
-      !this.#shaderRegistry ||
-      !this.#passthroughCopyPass
-    ) {
+    if (!this.#device || !this.#entityShaderRuntime) {
       return;
     }
 
@@ -960,19 +840,13 @@ export class InfiniteCanvasRenderer {
     const encoder = this.#device.createCommandEncoder({
       label: `Entity ${entity.id} pipeline`,
     });
-    encodeEntityTexturePipeline({
-      device: this.#device,
+    this.#entityShaderRuntime.encode({
       entity,
       sourceTexture,
       outputTexture,
       encoder,
       width: entity.originalSize.width,
       height: entity.originalSize.height,
-      processingPipeline: this.#processingPipeline!,
-      shaderRegistry: this.#shaderRegistry!,
-      texturePool: this.#texturePool,
-      passthroughCopyPass: this.#passthroughCopyPass!,
-      intermediateFormat: this.#colorConfig.intermediateFormat,
       respectShowOriginal: true,
     });
 
@@ -1208,19 +1082,13 @@ export class InfiniteCanvasRenderer {
    * Returns the texture, caching it for future frames.
    */
   renderEntityToTexture(entity: ShaderCanvasEntity): GPUTexture | null {
-    if (
-      !this.#device ||
-      !this.#entityShaderBindGroupLayout ||
-      !this.#entityShaderUniformBuffer ||
-      !this.#entityShaderSampler
-    ) {
+    if (!this.#device || !this.#entityShaderRuntime) {
       return null;
     }
 
     // Time-based shaders need the shader pass every frame, but animated media only
     // re-uploads/re-shades when the game loop marks a new decoded frame dirty.
-    const shader = this.#shaderRegistry?.get(entity.shaderType);
-    const needsContinuousShaderRender = shader?.needsContinuousRender(entity) ?? false;
+    const needsContinuousShaderRender = this.#entityShaderRuntime.needsContinuousRender(entity);
 
     // Check if we have a valid processed texture.
     const cachedTexture = this.#entityTextures.get(entity.id);
@@ -1606,7 +1474,7 @@ export class InfiniteCanvasRenderer {
     if (
       blurIntensity > 0.01 &&
       this.#canvasFormat === this.#colorConfig.intermediateFormat &&
-      this.#processingPipeline &&
+      this.#entityShaderRuntime &&
       this.#actionLayerBlitPipeline &&
       this.#actionLayerBlitBindGroupLayout &&
       this.#actionLayerBlitUniformBuffer &&
@@ -1629,7 +1497,7 @@ export class InfiniteCanvasRenderer {
           );
 
           // Kawase blur: input → output
-          this.#processingPipeline.encodeFullScreenBlur(
+          this.#entityShaderRuntime.processingPipeline.encodeFullScreenBlur(
             encoder,
             blurTextures.input,
             blurTextures.output,
@@ -1785,7 +1653,7 @@ export class InfiniteCanvasRenderer {
     if (
       resolvedWlurOverlay &&
       this.#wlurPass &&
-      this.#passthroughCopyPass &&
+      this.#entityShaderRuntime &&
       this.#presentCopyPass
     ) {
       const wlurTextures = this.#getOrCreateWlurOverlayTextures(width, height);
@@ -1818,7 +1686,11 @@ export class InfiniteCanvasRenderer {
             { width, height },
           );
         } else {
-          this.#passthroughCopyPass.encode(encoder, texture, wlurTextures.input);
+          this.#entityShaderRuntime.passthroughCopyPass.encode(
+            encoder,
+            texture,
+            wlurTextures.input,
+          );
         }
 
         this.#wlurPass.encode(
@@ -1920,14 +1792,7 @@ export class InfiniteCanvasRenderer {
       this.#entityCompositionCache.delete(entityId);
     }
 
-    // Remove error buffers for this entity (delegated to dithering shader)
-    const ditheringShader = this.#shaderRegistry?.get("dithering") as
-      | import("./shaders/dithering-shader.ts").DitheringShader
-      | undefined;
-    ditheringShader?.removeEntity(entityId);
-
-    // Remove time tracking for this entity (glass shader)
-    this.#getGlassShader()?.removeEntity(entityId);
+    this.#entityShaderRuntime?.removeEntity(entityId);
 
     // Clear any errors for this entity
     this.#entityErrors.delete(entityId);
@@ -2101,14 +1966,10 @@ export class InfiniteCanvasRenderer {
 
   /** Whether a shader needs continuous re-rendering for the given entity (e.g., time-based animation). */
   needsContinuousRenderForEntity(entity: ShaderCanvasEntity): boolean {
-    return this.#shaderRegistry?.get(entity.shaderType)?.needsContinuousRender(entity) ?? false;
+    return this.#entityShaderRuntime?.needsContinuousRender(entity) ?? false;
   }
 
   // ── Per-entity time control ─────────────────────────────────────────
-
-  #getGlassShader(): GlassShader | undefined {
-    return this.#shaderRegistry?.get(ShaderType.glass) as GlassShader | undefined;
-  }
 
   /** Set the shader time for an entity (used by the time slider). Mutates in-place. */
   setEntityTime(entity: ShaderCanvasEntity, time: number): void {
@@ -2125,7 +1986,7 @@ export class InfiniteCanvasRenderer {
     entity.shaderParams.timeAutoPlay = playing;
     // Reset delta tracking when pausing so we don't get a jump on resume
     if (!playing) {
-      this.#getGlassShader()?.removeEntity(entity.id);
+      this.#entityShaderRuntime?.removeGlassEntity(entity.id);
     }
   }
 
@@ -2168,10 +2029,8 @@ export class InfiniteCanvasRenderer {
     this.#canvasCalloutPass?.destroy();
     this.#canvasCalloutPass = null;
 
-    // Destroy processing pipeline
-    this.#processingPipeline?.destroy();
-    this.#processingPipeline = null;
-    this.#passthroughCopyPass = null;
+    this.#entityShaderRuntime?.destroy();
+    this.#entityShaderRuntime = null;
     this.#presentCopyPass = null;
     this.#wlurPass?.destroy();
     this.#wlurPass = null;
@@ -2179,11 +2038,6 @@ export class InfiniteCanvasRenderer {
     this.#wlurLastQualityKey = "";
     this.#destroyWlurOverlayTextures();
     this.#invalidateWlurOverlayCache();
-
-    // Destroy shader registry
-    this.#shaderRegistry?.destroy();
-    this.#shaderRegistry = null;
-    this.#shaderContext = null;
 
     // Destroy export service
     this.#exportService = null;
@@ -2209,7 +2063,6 @@ export class InfiniteCanvasRenderer {
     this.#gridUniformBuffer?.destroy();
     this.#viewportUniformBuffer?.destroy();
     this.#entityUniformBuffer?.destroy();
-    this.#entityShaderUniformBuffer?.destroy();
     this.#selectionRectUniformBuffer?.destroy();
 
     // Clear entity errors
@@ -2229,7 +2082,6 @@ export class InfiniteCanvasRenderer {
     this.#gridBindGroup = null;
     this.#selectionRectBindGroup = null;
     this.#compositionBindGroupLayout = null;
-    this.#entityShaderBindGroupLayout = null;
     this.#context = null;
     this.#device = null;
   }

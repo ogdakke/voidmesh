@@ -1,4 +1,5 @@
-import { AsciiKind, type ShaderCanvasEntity } from "#types/canvas.ts";
+import { AsciiKind } from "#types/canvas.ts";
+import type { EffectRenderEntity } from "../effect-render-entity.ts";
 import asciiShaderSource from "../ascii.wgsl?raw";
 import { ShaderPass } from "./shader-pass.ts";
 
@@ -71,7 +72,7 @@ export class AsciiShader extends ShaderPass {
     }
   }
 
-  override writeVariantUniforms(entity: ShaderCanvasEntity): void {
+  override writeVariantUniforms(entity: EffectRenderEntity): void {
     const asciiKind = entity.shaderParams.ascii?.kind ?? AsciiKind.standard;
     this.ctx.uintView[7] = ASCII_KIND_INDEX[asciiKind];
   }
@@ -126,7 +127,7 @@ export class AsciiShader extends ShaderPass {
   }
 
   override execute(
-    entity: ShaderCanvasEntity,
+    entity: EffectRenderEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,

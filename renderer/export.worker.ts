@@ -1,23 +1,18 @@
-import { config, getH264Codec } from "#config";
+import { config } from "#config";
 import { demuxAudio, type DemuxedAudio } from "#lib/audio-demux.ts";
-import { decodeGif, getFrameAtTime, type GifDecodeResult } from "#lib/gif-decoder.ts";
-import { floydSteinbergDither } from "#lib/floyd-steinberg.ts";
-import { createFrameIterator, demuxVideo, type VideoDemuxHandle } from "#lib/video-demux.ts";
 import {
-  BufferTarget,
-  EncodedAudioPacketSource,
-  EncodedPacket,
-  EncodedVideoPacketSource,
-  MovOutputFormat,
-  Mp4OutputFormat,
-  Output,
-  type IsobmffOutputFormatOptions,
-} from "mediabunny";
-import { GIFEncoder, applyPalette, quantize } from "gifenc";
+  buildGifPaletteFromPixels,
+  mapGifFrameToPalette,
+  type GifPalette,
+} from "#lib/gif-encode-core.ts";
+import { decodeGif, getFrameAtTime, type GifDecodeResult } from "#lib/gif-decoder.ts";
+import { createFrameIterator, demuxVideo, type VideoDemuxHandle } from "#lib/video-demux.ts";
+import { GIFEncoder } from "gifenc";
 import { HeadlessExportRenderer } from "./headless-export-renderer.ts";
 import type { ExportJobSnapshot } from "./export-snapshot.ts";
 import { defaultGifConfig } from "./export-formats.ts";
 import type { ExportProgress } from "./video-exporter.ts";
+import { VideoEncoderSession, muxEncodedVideo, selectH264Codec } from "./video-encode-core.ts";
 import {
   getGifExportDimensions,
   getGifFrameDelayCentiseconds,
@@ -25,9 +20,7 @@ import {
   getVideoExportDimensions,
 } from "./export-worker-utils.ts";
 
-export type ToExportWorkerMessage =
-  | { type: "start"; job: ExportJobSnapshot }
-  | { type: "cancel" };
+export type ToExportWorkerMessage = { type: "start"; job: ExportJobSnapshot } | { type: "cancel" };
 
 export type FromExportWorkerMessage =
   | { type: "progress"; progress: ExportProgress }
@@ -62,24 +55,6 @@ function createUnsupportedWorkerExportError(message: string): Error {
   return new Error(`UNSUPPORTED_WORKER_EXPORT: ${message}`);
 }
 
-async function selectCodec(
-  width: number,
-  height: number,
-  fps: number,
-  bitrate: number,
-): Promise<string> {
-  const codec = getH264Codec(width, height, fps);
-  const support = await VideoEncoder.isConfigSupported({
-    codec,
-    width,
-    height,
-    bitrate,
-    framerate: fps,
-  });
-  if (!support.supported) throw createUnsupportedWorkerExportError("H.264 codec not supported");
-  return codec;
-}
-
 async function exportMp4Mov(job: ExportJobSnapshot): Promise<Blob> {
   if (typeof VideoDecoder === "undefined") {
     throw new Error("UNSUPPORTED_WORKER_EXPORT: VideoDecoder is unavailable");
@@ -98,13 +73,18 @@ async function exportMp4Mov(job: ExportJobSnapshot): Promise<Blob> {
     const totalFrames = Math.round(demux.duration * fps);
     const dimensions = getVideoExportDimensions(demux.width, demux.height, job.options);
     const bitrate = getVideoExportBitrate(dimensions.width, dimensions.height, job.options);
-    const codec = await selectCodec(dimensions.width, dimensions.height, fps, bitrate);
+    let codec: string;
+    try {
+      codec = await selectH264Codec(dimensions.width, dimensions.height, fps, bitrate);
+    } catch (error) {
+      throw createUnsupportedWorkerExportError(
+        error instanceof Error ? error.message : "H.264 codec not supported",
+      );
+    }
     const renderer = await HeadlessExportRenderer.create(dimensions.width, dimensions.height);
     try {
       if (job.colorConfig?.supportsP3 && !renderer.colorConfig.supportsP3) {
-        throw createUnsupportedWorkerExportError(
-          "Worker WebGPU display-p3 canvas is unavailable",
-        );
+        throw createUnsupportedWorkerExportError("Worker WebGPU display-p3 canvas is unavailable");
       }
       const audioData =
         job.options.includeAudio && source.hasAudio ? await demuxAudio(source.blob) : null;
@@ -143,50 +123,17 @@ async function encodeRenderedVideo(params: {
   const { job, demux, renderer, width, height, fps, totalFrames, bitrate, codec, audioData } =
     params;
   const format = (job.options.format ?? "mp4") as "mp4" | "mov";
-  const keyFrameInterval = Math.floor(fps * config.videoExporting.keyFrameIntervalSeconds);
-  const frameDurationUs = Math.round(1_000_000 / fps);
-  let encodeError: Error | null = null;
-  const chunks: Array<{
-    data: Uint8Array;
-    type: "key" | "delta";
-    timestamp: number;
-    duration: number;
-    meta?: EncodedVideoChunkMetadata;
-  }> = [];
-  let resolveEncoderError: (error: Error) => void = () => {};
-  const encoderErrorSignal = new Promise<Error>((resolve) => {
-    resolveEncoderError = resolve;
-  });
-
-  const encoder = new VideoEncoder({
-    output: (chunk, metadata) => {
-      const data = new Uint8Array(chunk.byteLength);
-      chunk.copyTo(data);
-      chunks.push({
-        data,
-        type: chunk.type === "key" ? "key" : "delta",
-        timestamp: chunk.timestamp / 1_000_000,
-        duration: (chunk.duration ?? frameDurationUs) / 1_000_000,
-        meta: metadata,
-      });
-    },
-    error: (error) => {
-      encodeError = error;
-      resolveEncoderError(error);
-    },
-  });
-
-  encoder.configure({
+  const encoder = new VideoEncoderSession({
     codec,
     width,
     height,
     bitrate,
-    bitrateMode: config.videoExporting.bitrateMode,
-    framerate: fps,
+    fps,
+    keyFrameIntervalSeconds: config.videoExporting.keyFrameIntervalSeconds,
     hardwareAcceleration: config.videoExporting.hardwareAcceleration,
     latencyMode: config.videoExporting.latencyMode,
-    avc: codec.startsWith("avc") ? { format: "avc" } : undefined,
-  } satisfies VideoEncoderConfig);
+    bitrateMode: config.videoExporting.bitrateMode,
+  });
 
   const { iterator } = createFrameIterator(demux, fps);
   const initialShaderTime = job.entity.shaderParams.time ?? 0;
@@ -196,78 +143,62 @@ async function encodeRenderedVideo(params: {
       `Worker VideoEncoder cannot encode the WebGPU export canvas: ${error.message}`,
     );
   };
-  const throwIfEncoderUnusable = (): void => {
-    if (encodeError) throwEncodeUnsupported(encodeError);
-    if (encoder.state !== "configured") {
-      throwEncodeUnsupported(new Error(`VideoEncoder is ${encoder.state}`));
-    }
-  };
-  const waitForEncoderBackpressure = async (): Promise<void> => {
-    if (encoder.encodeQueueSize <= 4) return;
-    const result = await Promise.race([
-      new Promise<null>((resolve) =>
-        encoder.addEventListener("dequeue", () => resolve(null), { once: true }),
-      ),
-      encoderErrorSignal,
-    ]);
-    if (result) throwEncodeUnsupported(result);
-    if (encodeError) throwEncodeUnsupported(encodeError);
-  };
-
-  for (let i = 0; i < totalFrames; i++) {
-    if (isCancelled()) throw new Error("Export cancelled");
-    throwIfEncoderUnusable();
-
-    const timestampSeconds = i / fps;
-    const timestampUs = Math.floor(timestampSeconds * 1_000_000);
-    const { value: bitmap, done } = await iterator.next();
-    if (done || !bitmap) throw new Error("No more video frames");
-
-    if (animateShaderTime) {
-      job.entity.shaderParams.time = initialShaderTime + timestampSeconds;
-    }
-
-    await renderer.renderToCanvas(job.entity, bitmap, width, height);
-    bitmap.close();
-
-    const frame = new VideoFrame(renderer.canvas, {
-      timestamp: timestampUs,
-      duration: frameDurationUs,
-      alpha: "discard",
-    });
-    try {
-      encoder.encode(frame, { keyFrame: i % keyFrameInterval === 0 });
-    } catch (error) {
-      if (encodeError) throwEncodeUnsupported(encodeError);
-      throwEncodeUnsupported(error instanceof Error ? error : new Error("VideoEncoder failed"));
-    } finally {
-      frame.close();
-    }
-    if (encodeError) throwEncodeUnsupported(encodeError);
-    await waitForEncoderBackpressure();
-
-    emitProgress({
-      frame: i + 1,
-      totalFrames,
-      percent: ((i + 1) / totalFrames) * 0.8,
-      stage: "extracting",
-      message: `Rendering frame ${i + 1}/${totalFrames}`,
-    });
-  }
 
   try {
-    await Promise.race([
-      encoder.flush(),
-      encoderErrorSignal.then((error) => {
-        throw error;
-      }),
-    ]);
-  } catch (error) {
-    if (encodeError) throwEncodeUnsupported(encodeError);
-    throwEncodeUnsupported(error instanceof Error ? error : new Error("VideoEncoder flush failed"));
+    for (let i = 0; i < totalFrames; i++) {
+      if (isCancelled()) throw new Error("Export cancelled");
+
+      const timestampSeconds = i / fps;
+      const timestampUs = Math.floor(timestampSeconds * 1_000_000);
+      const { value: bitmap, done } = await iterator.next();
+      if (done || !bitmap) throw new Error("No more video frames");
+
+      if (animateShaderTime) {
+        job.entity.shaderParams.time = initialShaderTime + timestampSeconds;
+      }
+
+      await renderer.renderToCanvas(job.entity, bitmap, width, height);
+      bitmap.close();
+
+      const frame = new VideoFrame(renderer.canvas, {
+        timestamp: timestampUs,
+        duration: encoder.frameDurationUs,
+        alpha: "discard",
+      });
+      try {
+        encoder.encodeFrame(frame, i);
+      } catch (error) {
+        throwEncodeUnsupported(error instanceof Error ? error : new Error("VideoEncoder failed"));
+      } finally {
+        frame.close();
+      }
+      try {
+        await encoder.waitForBackpressure();
+      } catch (error) {
+        throwEncodeUnsupported(
+          error instanceof Error ? error : new Error("VideoEncoder backpressure failed"),
+        );
+      }
+
+      emitProgress({
+        frame: i + 1,
+        totalFrames,
+        percent: ((i + 1) / totalFrames) * 0.8,
+        stage: "extracting",
+        message: `Rendering frame ${i + 1}/${totalFrames}`,
+      });
+    }
+
+    try {
+      await encoder.flush();
+    } catch (error) {
+      throwEncodeUnsupported(
+        error instanceof Error ? error : new Error("VideoEncoder flush failed"),
+      );
+    }
+  } finally {
+    if (encoder.state !== "closed") encoder.close();
   }
-  if (encodeError) throwEncodeUnsupported(encodeError);
-  encoder.close();
 
   emitProgress({
     frame: totalFrames,
@@ -277,86 +208,14 @@ async function encodeRenderedVideo(params: {
     message: "Muxing video...",
   });
 
-  return muxVideo({ format, fps, chunks, audioData, totalFrames });
-}
-
-async function muxVideo(params: {
-  format: "mp4" | "mov";
-  fps: number;
-  chunks: Array<{
-    data: Uint8Array;
-    type: "key" | "delta";
-    timestamp: number;
-    duration: number;
-    meta?: EncodedVideoChunkMetadata;
-  }>;
-  audioData: DemuxedAudio | null;
-  totalFrames: number;
-}): Promise<Blob> {
-  const { format, fps, chunks, audioData, totalFrames } = params;
-  const options: IsobmffOutputFormatOptions = { fastStart: "in-memory" };
-  const outputFormat = format === "mov" ? new MovOutputFormat(options) : new Mp4OutputFormat(options);
-  const target = new BufferTarget();
-  const output = new Output({ format: outputFormat, target });
-  const videoSource = new EncodedVideoPacketSource("avc");
-  output.addVideoTrack(videoSource, { frameRate: fps });
-
-  let audioSource: EncodedAudioPacketSource | null = null;
-  if (audioData) {
-    audioSource = new EncodedAudioPacketSource("aac");
-    output.addAudioTrack(audioSource);
-  }
-
-  await output.start();
-
-  let firstVideoPacket = true;
-  for (const chunk of chunks) {
-    if (isCancelled()) throw new Error("Export cancelled");
-    const packet = new EncodedPacket(chunk.data, chunk.type, chunk.timestamp, chunk.duration);
-    if (firstVideoPacket && chunk.meta) {
-      await videoSource.add(packet, chunk.meta);
-      firstVideoPacket = false;
-    } else {
-      await videoSource.add(packet);
-    }
-  }
-  videoSource.close();
-
-  if (audioData && audioSource) {
-    const videoDuration = totalFrames / fps;
-    let firstAudioPacket = true;
-    for (const packetData of audioData.packets) {
-      if (isCancelled()) throw new Error("Export cancelled");
-      if (packetData.timestamp < 0) continue;
-      if (packetData.timestamp > videoDuration) break;
-
-      const packet = new EncodedPacket(
-        packetData.data,
-        packetData.type,
-        packetData.timestamp,
-        packetData.duration,
-      );
-      if (firstAudioPacket) {
-        await audioSource.add(packet, {
-          decoderConfig: {
-            codec: audioData.codec,
-            sampleRate: audioData.sampleRate,
-            numberOfChannels: audioData.numberOfChannels,
-            description: audioData.description,
-          },
-        });
-        firstAudioPacket = false;
-      } else {
-        await audioSource.add(packet);
-      }
-    }
-    audioSource.close();
-  }
-
-  await output.finalize();
-  const buffer = target.buffer;
-  if (!buffer) throw new Error("Output buffer is null after finalize");
-  return new Blob([buffer], { type: output.format.mimeType });
+  return muxEncodedVideo({
+    format,
+    fps,
+    chunks: encoder.chunks,
+    audioData,
+    totalFrames,
+    isCancelled,
+  });
 }
 
 async function exportGif(job: ExportJobSnapshot): Promise<Blob> {
@@ -399,8 +258,13 @@ async function exportGif(job: ExportJobSnapshot): Promise<Blob> {
       });
       closeFrameSource(sourceInfo, source);
 
-      if (useDither) floydSteinbergDither(pixels, dimensions.width, dimensions.height, palette);
-      const indexed = applyPalette(pixels, palette);
+      const indexed = mapGifFrameToPalette({
+        pixels,
+        width: dimensions.width,
+        height: dimensions.height,
+        palette,
+        dither: useDither,
+      });
       const delay = getGifFrameDelayCentiseconds(fps, accumulatedError);
       accumulatedError = delay.nextAccumulatedError;
 
@@ -487,7 +351,7 @@ async function buildGifPalette(params: {
   totalFrames: number;
   width: number;
   height: number;
-}): Promise<[number, number, number][]> {
+}): Promise<GifPalette> {
   const { job, renderer, sourceInfo, fps, totalFrames, width, height } = params;
   const sampleInterval = Math.max(1, Math.floor(totalFrames / 20));
   const initialShaderTime = job.entity.shaderParams.time ?? 0;
@@ -527,14 +391,7 @@ async function buildGifPalette(params: {
     sampleIndex++;
   }
 
-  const byteLength = sampledPixels.reduce((sum, pixels) => sum + pixels.byteLength, 0);
-  const combined = new Uint8Array(byteLength);
-  let offset = 0;
-  for (const pixels of sampledPixels) {
-    combined.set(pixels, offset);
-    offset += pixels.byteLength;
-  }
-  return quantize(combined, defaultGifConfig.maxColors);
+  return buildGifPaletteFromPixels(sampledPixels, defaultGifConfig.maxColors);
 }
 
 async function* iterateFrameSources(

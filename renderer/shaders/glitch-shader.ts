@@ -1,4 +1,5 @@
-import { GlitchKind, type ShaderCanvasEntity } from "#types/canvas.ts";
+import { GlitchKind } from "#types/canvas.ts";
+import type { EffectRenderEntity } from "../effect-render-entity.ts";
 import glitchShaderSource from "../glitch.wgsl?raw";
 import { ShaderPass } from "./shader-pass.ts";
 
@@ -15,7 +16,7 @@ export class GlitchShader extends ShaderPass {
     return glitchShaderSource;
   }
 
-  writeVariantUniforms(entity: ShaderCanvasEntity): void {
+  writeVariantUniforms(entity: EffectRenderEntity): void {
     const params = entity.shaderParams;
     const glitchKind = params.glitch?.kind ?? GlitchKind.channelShift;
     const kindIndex = GLITCH_KIND_INDEX[glitchKind] ?? 0;

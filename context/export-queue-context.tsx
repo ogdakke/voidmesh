@@ -170,7 +170,11 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
       }
 
       try {
-        const snapshot = createExportJobSnapshot(entitySnapshot, nextJob.options, renderer.colorConfig);
+        const snapshot = createExportJobSnapshot(
+          entitySnapshot,
+          nextJob.options,
+          renderer.colorConfig,
+        );
         const handle = exportSnapshotInWorker(snapshot);
         currentHandleRef.current = handle;
         handle.result.catch(() => {});
@@ -199,7 +203,9 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
         if (!(err instanceof WorkerExportUnsupportedError)) {
           throw err;
         }
-        logger.warn(`[export] Worker export unsupported, falling back to main renderer: ${err.message}`);
+        logger.warn(
+          `[export] Worker export unsupported, falling back to main renderer: ${err.message}`,
+        );
       }
 
       // Drive shader time externally during export

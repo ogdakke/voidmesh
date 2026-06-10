@@ -1,7 +1,8 @@
-import type { RGBA, ShaderCanvasEntity } from "#types/canvas.ts";
+import type { RGBA } from "#types/canvas.ts";
 import { ColorSpace } from "#types/enums.ts";
 import { sortPaletteByLuminance } from "#lib/color-utils.ts";
 import type { TexturePool } from "../texture-pool.ts";
+import type { EffectRenderEntity } from "../effect-render-entity.ts";
 
 export interface ShaderContext {
   device: GPUDevice;
@@ -30,7 +31,7 @@ export abstract class ShaderPass {
   constructor(protected readonly ctx: ShaderContext) {}
 
   /** Whether this shader needs re-rendering every frame for the given entity (e.g., time-based animation). */
-  needsContinuousRender(_entity: ShaderCanvasEntity): boolean {
+  needsContinuousRender(_entity: EffectRenderEntity): boolean {
     return false;
   }
 
@@ -41,7 +42,7 @@ export abstract class ShaderPass {
    * Write shader-variant uniform at offset 7 (byte 28) and any other per-shader overrides.
    * Called after common uniforms are written.
    */
-  abstract writeVariantUniforms(entity: ShaderCanvasEntity): void;
+  abstract writeVariantUniforms(entity: EffectRenderEntity): void;
 
   /** Async initialization. Default creates pipeline. Override for async resources like ASCII atlas. */
   async initialize(): Promise<void> {
@@ -54,7 +55,7 @@ export abstract class ShaderPass {
    *
    * Replicates the exact logic from canvas-renderer.ts #updateShaderUniforms (lines 2159-2247).
    */
-  writeUniforms(entity: ShaderCanvasEntity): void {
+  writeUniforms(entity: EffectRenderEntity): void {
     const params = entity.shaderParams;
     const width = entity.originalSize.width;
     const height = entity.originalSize.height;
@@ -208,7 +209,7 @@ export abstract class ShaderPass {
    * Override for compute shaders (DitheringShader) or error handling (AsciiShader).
    */
   execute(
-    entity: ShaderCanvasEntity,
+    entity: EffectRenderEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,

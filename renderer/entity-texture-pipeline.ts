@@ -1,4 +1,4 @@
-import type { ShaderCanvasEntity } from "#types/canvas.ts";
+import type { EffectRenderEntity } from "./effect-render-entity.ts";
 import type { ProcessingPipeline } from "./processing-pipeline.ts";
 import type { ShaderRegistry } from "./shaders/shader-registry.ts";
 import type { TexturePool } from "./texture-pool.ts";
@@ -6,7 +6,7 @@ import type { CopyPass } from "./copy-pass.ts";
 
 interface EncodeEntityTexturePipelineParams {
   device: GPUDevice;
-  entity: ShaderCanvasEntity;
+  entity: EffectRenderEntity;
   sourceTexture: GPUTexture;
   outputTexture: GPUTexture;
   encoder: GPUCommandEncoder;
@@ -79,9 +79,7 @@ export function encodeEntityTexturePipeline(params: EncodeEntityTexturePipelineP
   const needsAdjustments = processingPipeline.needsAdjustments(entity);
   const postProcessEnabled = entity.shaderParams.postProcess?.enabled ?? false;
   const preProcessUsage =
-    GPUTextureUsage.TEXTURE_BINDING |
-    GPUTextureUsage.RENDER_ATTACHMENT |
-    GPUTextureUsage.COPY_SRC;
+    GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC;
 
   let shaderSourceTexture = sourceTexture;
   let blurOutputTexture: GPUTexture | null = null;
@@ -121,9 +119,7 @@ export function encodeEntityTexturePipeline(params: EncodeEntityTexturePipelineP
   }
 
   const postProcessUsage =
-    GPUTextureUsage.TEXTURE_BINDING |
-    GPUTextureUsage.RENDER_ATTACHMENT |
-    GPUTextureUsage.COPY_DST;
+    GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_DST;
   let mainShaderOutputTexture = outputTexture;
   let postProcessIntermediateTexture: GPUTexture | null = null;
 
