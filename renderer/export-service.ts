@@ -16,7 +16,6 @@ export class ExportService {
   #texturePool: TexturePool | null;
   #applyShader: ApplyShaderFn;
   #copyPass: CopyPass;
-  #passthroughCopyPass: CopyPass;
   #colorConfig: GpuColorConfig;
 
   constructor(
@@ -29,7 +28,6 @@ export class ExportService {
     this.#texturePool = texturePool;
     this.#applyShader = applyShader;
     this.#copyPass = new CopyPass(device);
-    this.#passthroughCopyPass = new CopyPass(device, colorConfig.intermediateFormat);
     this.#colorConfig = colorConfig;
   }
 
@@ -201,11 +199,7 @@ export class ExportService {
           usage: outputUsage,
         });
 
-    if (entity.shaderParams.showOriginal) {
-      this.#passthroughCopyPass.execute(sourceTexture, outputTexture);
-    } else {
-      this.#applyShader(entity, sourceTexture, outputTexture);
-    }
+    this.#applyShader(entity, sourceTexture, outputTexture);
 
     const bitmap = await this.#convertToImageBitmap(outputTexture, width, height);
 
@@ -262,12 +256,7 @@ export class ExportService {
         GPUTextureUsage.COPY_DST,
     });
 
-    // Apply shader or passthrough original based on showOriginal toggle
-    if (entity.shaderParams.showOriginal) {
-      this.#passthroughCopyPass.execute(sourceTexture, outputTexture);
-    } else {
-      this.#applyShader(entity, sourceTexture, outputTexture);
-    }
+    this.#applyShader(entity, sourceTexture, outputTexture);
 
     // Convert rgba16float → rgba8unorm via CopyPass, then read back as P3 ImageData
     const stagingTexture = this.#device.createTexture({

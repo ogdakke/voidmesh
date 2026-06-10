@@ -24,6 +24,7 @@ import compositionShaderSource from "./composition.wgsl?raw";
 import { CopyPass } from "./copy-pass.ts";
 import { DisintegrationParticleSystem } from "./disintegration-particles.ts";
 import dotGridShaderSource from "./dot-grid.wgsl?raw";
+import { encodeEntityTexturePipeline } from "./entity-texture-pipeline.ts";
 import { ExportService } from "./export-service.ts";
 import { detectGpuColorConfig, type GpuColorConfig } from "./gpu-color-space.ts";
 import { ProcessingPipeline } from "./processing-pipeline.ts";
@@ -947,138 +948,33 @@ export class InfiniteCanvasRenderer {
       !this.#device ||
       !this.#entityShaderBindGroupLayout ||
       !this.#entityShaderUniformBuffer ||
-      !this.#entityShaderSampler
+      !this.#entityShaderSampler ||
+      !this.#processingPipeline ||
+      !this.#shaderRegistry ||
+      !this.#passthroughCopyPass
     ) {
       return;
     }
 
-    const width = entity.originalSize.width;
-    const height = entity.originalSize.height;
-
-    // Check if blur needs to be applied (pre-processing, before color adjustments)
-    const needsBlur = this.#processingPipeline!.needsBlur(entity);
-
-    // Check if color adjustments need to be applied (pre-processing)
-    const needsAdjustments = this.#processingPipeline!.needsAdjustments(entity);
-
-    // Check if post-processing is enabled
-    const postProcessEnabled = entity.shaderParams.postProcess?.enabled ?? false;
-
-    const preProcessUsage =
-      GPUTextureUsage.TEXTURE_BINDING |
-      GPUTextureUsage.RENDER_ATTACHMENT |
-      GPUTextureUsage.COPY_SRC;
-
-    // Single encoder for the entire entity pipeline: blur → adjustments → shader → post-process
+    // Single encoder for the entire entity pipeline: blur -> adjustments -> shader -> post-process
     const encoder = this.#device.createCommandEncoder({
       label: `Entity ${entity.id} pipeline`,
     });
-
-    let shaderSourceTexture = sourceTexture;
-    let blurOutputTexture: GPUTexture | null = null;
-    let adjustmentsOutputTexture: GPUTexture | null = null;
-
-    if (needsBlur) {
-      blurOutputTexture = this.#texturePool
-        ? this.#texturePool.acquire(width, height, preProcessUsage, `Blur output texture`)
-        : this.#device.createTexture({
-            label: `Blur output texture`,
-            size: [width, height],
-            format: this.#colorConfig.intermediateFormat,
-            usage: preProcessUsage,
-          });
-
-      this.#processingPipeline!.applyBlur(entity, sourceTexture, blurOutputTexture, encoder);
-      shaderSourceTexture = blurOutputTexture;
-    }
-
-    if (needsAdjustments) {
-      adjustmentsOutputTexture = this.#texturePool
-        ? this.#texturePool.acquire(width, height, preProcessUsage, `Adjustments output texture`)
-        : this.#device.createTexture({
-            label: `Adjustments output texture`,
-            size: [width, height],
-            format: this.#colorConfig.intermediateFormat,
-            usage: preProcessUsage,
-          });
-
-      this.#processingPipeline!.applyAdjustments(
-        entity,
-        shaderSourceTexture,
-        adjustmentsOutputTexture,
-        encoder,
-      );
-      shaderSourceTexture = adjustmentsOutputTexture;
-    }
-
-    let mainShaderOutputTexture = outputTexture;
-    let postProcessIntermediateTexture: GPUTexture | null = null;
-
-    if (postProcessEnabled) {
-      const intermediateUsage =
-        GPUTextureUsage.TEXTURE_BINDING |
-        GPUTextureUsage.RENDER_ATTACHMENT |
-        GPUTextureUsage.COPY_DST;
-
-      postProcessIntermediateTexture = this.#texturePool
-        ? this.#texturePool.acquire(
-            width,
-            height,
-            intermediateUsage,
-            `Post-process intermediate texture`,
-          )
-        : this.#device.createTexture({
-            label: `Post-process intermediate texture`,
-            size: [width, height],
-            format: this.#colorConfig.intermediateFormat,
-            usage: intermediateUsage,
-          });
-
-      mainShaderOutputTexture = postProcessIntermediateTexture;
-    }
-
-    this.#shaderRegistry!.applyShader(
+    encodeEntityTexturePipeline({
+      device: this.#device,
       entity,
-      shaderSourceTexture,
-      mainShaderOutputTexture,
+      sourceTexture,
+      outputTexture,
       encoder,
-    );
-
-    // Release pre-processing output textures back to pool (if used)
-    if (blurOutputTexture) {
-      if (this.#texturePool) {
-        this.#texturePool.release(blurOutputTexture, width, height, preProcessUsage);
-      } else {
-        blurOutputTexture.destroy();
-      }
-    }
-    if (adjustmentsOutputTexture) {
-      if (this.#texturePool) {
-        this.#texturePool.release(adjustmentsOutputTexture, width, height, preProcessUsage);
-      } else {
-        adjustmentsOutputTexture.destroy();
-      }
-    }
-
-    if (postProcessEnabled && postProcessIntermediateTexture) {
-      this.#processingPipeline!.applyPostProcessing(
-        entity,
-        postProcessIntermediateTexture,
-        outputTexture,
-        encoder,
-      );
-
-      const intermediateUsage =
-        GPUTextureUsage.TEXTURE_BINDING |
-        GPUTextureUsage.RENDER_ATTACHMENT |
-        GPUTextureUsage.COPY_DST;
-
-      if (this.#texturePool) {
-        this.#texturePool.release(postProcessIntermediateTexture, width, height, intermediateUsage);
-      } else {
-        postProcessIntermediateTexture.destroy();
-      }
-    }
+      width: entity.originalSize.width,
+      height: entity.originalSize.height,
+      processingPipeline: this.#processingPipeline!,
+      shaderRegistry: this.#shaderRegistry!,
+      texturePool: this.#texturePool,
+      passthroughCopyPass: this.#passthroughCopyPass!,
+      intermediateFormat: this.#colorConfig.intermediateFormat,
+      respectShowOriginal: true,
+    });
 
     this.#device.queue.submit([encoder.finish()]);
   }

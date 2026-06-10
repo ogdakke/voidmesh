@@ -28,6 +28,11 @@ import { logger } from "#lib/client.logger.ts";
 import { useVideoExportContext } from "./use-video-export.ts";
 import type { ExportOptionsState, ExportOptionsUpdate } from "./video-export-context.tsx";
 import type { VideoDemuxHandle } from "#lib/video-demux.ts";
+import { createExportJobSnapshot } from "#renderer/export-snapshot.ts";
+import {
+  exportSnapshotInWorker,
+  WorkerExportUnsupportedError,
+} from "#renderer/export-worker-client.ts";
 
 /** Export job status */
 export type ExportJobStatus = "queued" | "processing" | "completed" | "failed" | "cancelled";
@@ -162,6 +167,39 @@ export function ExportQueueProvider({ children }: PropsWithChildren) {
 
       if (!isAnimatedEntity(entity)) {
         throw new Error("Entity is not a video or animated GIF");
+      }
+
+      try {
+        const snapshot = createExportJobSnapshot(entitySnapshot, nextJob.options, renderer.colorConfig);
+        const handle = exportSnapshotInWorker(snapshot);
+        currentHandleRef.current = handle;
+        handle.result.catch(() => {});
+
+        for await (const progress of handle.progress) {
+          updateJob(nextJob.id, { progress });
+        }
+
+        const exportedBlob = await handle.result;
+        if (cancelledJobIdRef.current === nextJob.id) throw new Error("Export cancelled");
+
+        const url = URL.createObjectURL(exportedBlob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = nextJob.outputFileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        logger.info(`Export completed in worker: ${nextJob.outputFileName}`);
+        removeJob(nextJob.id);
+        return;
+      } catch (err) {
+        currentHandleRef.current = null;
+        if (!(err instanceof WorkerExportUnsupportedError)) {
+          throw err;
+        }
+        logger.warn(`[export] Worker export unsupported, falling back to main renderer: ${err.message}`);
       }
 
       // Drive shader time externally during export
