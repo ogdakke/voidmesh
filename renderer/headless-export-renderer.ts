@@ -98,7 +98,7 @@ export class HeadlessExportRenderer {
       width,
       height,
     );
-    await renderer.#initialize();
+    await renderer.#entityShaderRuntime.initialize();
     return renderer;
   }
 
@@ -108,10 +108,6 @@ export class HeadlessExportRenderer {
 
   get colorConfig(): GpuColorConfig {
     return this.#colorConfig;
-  }
-
-  async #initialize(): Promise<void> {
-    await this.#entityShaderRuntime.initialize();
   }
 
   resize(width: number, height: number): void {
@@ -127,22 +123,11 @@ export class HeadlessExportRenderer {
     width: number,
     height: number,
   ): Promise<void> {
-    this.resize(width, height);
-    const entity = this.#createEntity(snapshot, width, height);
-    const { encoder, sourceTexture, outputTexture, outputUsage } = this.#encodeSourceToOutput(
-      entity,
-      source,
-      width,
-      height,
-    );
-
-    this.#presentCopyPass.encode(encoder, outputTexture, this.#context.getCurrentTexture());
-    this.#device.queue.submit([encoder.finish()]);
-    await this.#device.queue.onSubmittedWorkDone();
-
-    sourceTexture.destroy();
-    this.#texturePool.release(outputTexture, width, height, outputUsage);
-    this.#texturePool.nextFrame();
+    await this.#withRenderedOutput(snapshot, source, width, height, async (encoder, output) => {
+      this.#presentCopyPass.encode(encoder, output, this.#context.getCurrentTexture());
+      this.#device.queue.submit([encoder.finish()]);
+      await this.#device.queue.onSubmittedWorkDone();
+    });
   }
 
   async renderToPixels(
@@ -151,6 +136,35 @@ export class HeadlessExportRenderer {
     width: number,
     height: number,
   ): Promise<Uint8ClampedArray<ArrayBuffer>> {
+    return this.#withRenderedOutput(snapshot, source, width, height, async (encoder, output) => {
+      const stagingTexture = createRgba8Texture(
+        this.#device,
+        width,
+        height,
+        GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
+        "Headless export rgba8 staging texture",
+      );
+      try {
+        this.#rgba8CopyPass.encode(encoder, output, stagingTexture);
+        return await readRgba8TextureToPixels(this.#device, stagingTexture, {
+          width,
+          height,
+          encoder,
+          label: "Headless export texture readback",
+        });
+      } finally {
+        stagingTexture.destroy();
+      }
+    });
+  }
+
+  async #withRenderedOutput<T>(
+    snapshot: ExportEntitySnapshot,
+    source: ExportFrameSource,
+    width: number,
+    height: number,
+    consume: (encoder: GPUCommandEncoder, outputTexture: GPUTexture) => Promise<T>,
+  ): Promise<T> {
     this.resize(width, height);
     const entity = this.#createEntity(snapshot, width, height);
     const { encoder, sourceTexture, outputTexture, outputUsage } = this.#encodeSourceToOutput(
@@ -160,27 +174,13 @@ export class HeadlessExportRenderer {
       height,
     );
 
-    const stagingTexture = createRgba8Texture(
-      this.#device,
-      width,
-      height,
-      GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
-      "Headless export rgba8 staging texture",
-    );
-    this.#rgba8CopyPass.encode(encoder, outputTexture, stagingTexture);
-
-    const pixels = await readRgba8TextureToPixels(this.#device, stagingTexture, {
-      width,
-      height,
-      encoder,
-      label: "Headless export texture readback",
-    });
-
-    sourceTexture.destroy();
-    stagingTexture.destroy();
-    this.#texturePool.release(outputTexture, width, height, outputUsage);
-    this.#texturePool.nextFrame();
-    return pixels;
+    try {
+      return await consume(encoder, outputTexture);
+    } finally {
+      sourceTexture.destroy();
+      this.#texturePool.release(outputTexture, width, height, outputUsage);
+      this.#texturePool.nextFrame();
+    }
   }
 
   #encodeSourceToOutput(
@@ -228,19 +228,6 @@ export class HeadlessExportRenderer {
     );
     const encoder = this.#device.createCommandEncoder({ label: "Headless export frame encoder" });
 
-    this.#encodeShaderPipeline(entity, sourceTexture, outputTexture, encoder, width, height);
-
-    return { encoder, sourceTexture, outputTexture, outputUsage };
-  }
-
-  #encodeShaderPipeline(
-    entity: EffectRenderEntity,
-    sourceTexture: GPUTexture,
-    outputTexture: GPUTexture,
-    encoder: GPUCommandEncoder,
-    width: number,
-    height: number,
-  ): void {
     this.#entityShaderRuntime.encode({
       entity,
       sourceTexture,
@@ -250,6 +237,8 @@ export class HeadlessExportRenderer {
       height,
       respectShowOriginal: true,
     });
+
+    return { encoder, sourceTexture, outputTexture, outputUsage };
   }
 
   #createEntity(snapshot: ExportEntitySnapshot, width: number, height: number): EffectRenderEntity {

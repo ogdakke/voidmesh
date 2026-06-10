@@ -3,7 +3,6 @@ import type { RGBA } from "#types/canvas.ts";
 import { ShaderType } from "#types/canvas.ts";
 import { CopyPass } from "./copy-pass.ts";
 import type { EffectRenderEntity } from "./effect-render-entity.ts";
-import { encodeEntityTexturePipeline } from "./entity-texture-pipeline.ts";
 import type { GpuColorConfig } from "./gpu-color-space.ts";
 import { ProcessingPipeline } from "./processing-pipeline.ts";
 import { AsciiShader } from "./shaders/ascii-shader.ts";
@@ -121,21 +120,115 @@ export class EntityShaderRuntime {
     height: number;
     respectShowOriginal: boolean;
   }): void {
-    encodeEntityTexturePipeline({
-      device: this.#device,
-      entity: params.entity,
-      sourceTexture: params.sourceTexture,
-      outputTexture: params.outputTexture,
-      encoder: params.encoder,
-      width: params.width,
-      height: params.height,
-      processingPipeline: this.#processingPipeline,
-      shaderRegistry: this.#shaderRegistry,
-      texturePool: this.#texturePool,
-      passthroughCopyPass: this.#passthroughCopyPass,
-      intermediateFormat: this.#colorConfig.intermediateFormat,
-      respectShowOriginal: params.respectShowOriginal,
+    const { entity, sourceTexture, outputTexture, encoder, width, height } = params;
+
+    if (params.respectShowOriginal && entity.shaderParams.showOriginal) {
+      this.#passthroughCopyPass.encode(encoder, sourceTexture, outputTexture);
+      return;
+    }
+
+    const needsBlur = this.#processingPipeline.needsBlur(entity);
+    const needsAdjustments = this.#processingPipeline.needsAdjustments(entity);
+    const postProcessEnabled = entity.shaderParams.postProcess?.enabled ?? false;
+    const preProcessUsage =
+      GPUTextureUsage.TEXTURE_BINDING |
+      GPUTextureUsage.RENDER_ATTACHMENT |
+      GPUTextureUsage.COPY_SRC;
+
+    let shaderSourceTexture = sourceTexture;
+    let blurOutputTexture: GPUTexture | null = null;
+    let adjustmentsOutputTexture: GPUTexture | null = null;
+
+    if (needsBlur) {
+      blurOutputTexture = this.#acquireTexture(
+        width,
+        height,
+        preProcessUsage,
+        "Blur output texture",
+      );
+      this.#processingPipeline.applyBlur(entity, sourceTexture, blurOutputTexture, encoder);
+      shaderSourceTexture = blurOutputTexture;
+    }
+
+    if (needsAdjustments) {
+      adjustmentsOutputTexture = this.#acquireTexture(
+        width,
+        height,
+        preProcessUsage,
+        "Adjustments output texture",
+      );
+      this.#processingPipeline.applyAdjustments(
+        entity,
+        shaderSourceTexture,
+        adjustmentsOutputTexture,
+        encoder,
+      );
+      shaderSourceTexture = adjustmentsOutputTexture;
+    }
+
+    const postProcessUsage =
+      GPUTextureUsage.TEXTURE_BINDING |
+      GPUTextureUsage.RENDER_ATTACHMENT |
+      GPUTextureUsage.COPY_DST;
+    let mainShaderOutputTexture = outputTexture;
+    let postProcessIntermediateTexture: GPUTexture | null = null;
+
+    if (postProcessEnabled) {
+      postProcessIntermediateTexture = this.#acquireTexture(
+        width,
+        height,
+        postProcessUsage,
+        "Post-process intermediate texture",
+      );
+      mainShaderOutputTexture = postProcessIntermediateTexture;
+    }
+
+    this.#shaderRegistry.applyShader(entity, shaderSourceTexture, mainShaderOutputTexture, encoder);
+
+    if (blurOutputTexture) {
+      this.#releaseTexture(blurOutputTexture, width, height, preProcessUsage);
+    }
+    if (adjustmentsOutputTexture) {
+      this.#releaseTexture(adjustmentsOutputTexture, width, height, preProcessUsage);
+    }
+
+    if (postProcessIntermediateTexture) {
+      this.#processingPipeline.applyPostProcessing(
+        entity,
+        postProcessIntermediateTexture,
+        outputTexture,
+        encoder,
+      );
+      this.#releaseTexture(postProcessIntermediateTexture, width, height, postProcessUsage);
+    }
+  }
+
+  #acquireTexture(
+    width: number,
+    height: number,
+    usage: GPUTextureUsageFlags,
+    label: string,
+  ): GPUTexture {
+    if (this.#texturePool) return this.#texturePool.acquire(width, height, usage, label);
+    return this.#device.createTexture({
+      label,
+      size: [width, height],
+      format: this.#colorConfig.intermediateFormat,
+      usage,
     });
+  }
+
+  #releaseTexture(
+    texture: GPUTexture,
+    width: number,
+    height: number,
+    usage: GPUTextureUsageFlags,
+  ): void {
+    if (this.#texturePool) {
+      this.#texturePool.release(texture, width, height, usage);
+    } else {
+      texture.destroy();
+    }
   }
 
   needsContinuousRender(entity: EffectRenderEntity): boolean {

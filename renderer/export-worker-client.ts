@@ -24,26 +24,7 @@ export function exportSnapshotInWorker(snapshot: ExportJobSnapshot): VideoExport
     (p) => p.stage === "done",
     () => cancelled,
   );
-
-  if (typeof Worker === "undefined") {
-    rejectResult!(new WorkerExportUnsupportedError("Web Workers are unavailable"));
-    return {
-      progress: progress.generator(),
-      result,
-      cancel: () => {
-        cancelled = true;
-        progress.wake();
-      },
-    };
-  }
-
-  let worker: Worker;
-  try {
-    worker = new Worker(new URL("./export.worker.ts", import.meta.url), {
-      type: "module",
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Export worker startup failed";
+  const unsupported = (message: string): VideoExportHandle => {
     rejectResult!(new WorkerExportUnsupportedError(message));
     return {
       progress: progress.generator(),
@@ -53,6 +34,20 @@ export function exportSnapshotInWorker(snapshot: ExportJobSnapshot): VideoExport
         progress.wake();
       },
     };
+  };
+
+  if (typeof Worker === "undefined") {
+    return unsupported("Web Workers are unavailable");
+  }
+
+  let worker: Worker;
+  try {
+    worker = new Worker(new URL("./export.worker.ts", import.meta.url), {
+      type: "module",
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Export worker startup failed";
+    return unsupported(message);
   }
 
   worker.onmessage = (event: MessageEvent<FromExportWorkerMessage>) => {
@@ -94,8 +89,6 @@ export function exportSnapshotInWorker(snapshot: ExportJobSnapshot): VideoExport
     result,
     cancel: () => {
       cancelled = true;
-      const cancel: ToExportWorkerMessage = { type: "cancel" };
-      worker.postMessage(cancel);
       worker.terminate();
       progress.wake();
       rejectResult(new Error("Export cancelled"));

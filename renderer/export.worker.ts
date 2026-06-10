@@ -1,4 +1,4 @@
-import { config } from "#config";
+import { calculateVideoBitrate, config } from "#config";
 import { demuxAudio, type DemuxedAudio } from "#lib/audio-demux.ts";
 import {
   buildGifPaletteFromPixels,
@@ -10,24 +10,21 @@ import { createFrameIterator, demuxVideo, type VideoDemuxHandle } from "#lib/vid
 import { GIFEncoder } from "gifenc";
 import { HeadlessExportRenderer } from "./headless-export-renderer.ts";
 import type { ExportJobSnapshot } from "./export-snapshot.ts";
-import { defaultGifConfig } from "./export-formats.ts";
+import { calculateTargetResolution, defaultGifConfig, qualityConfigs } from "./export-formats.ts";
 import type { ExportProgress } from "./video-exporter.ts";
-import { VideoEncoderSession, muxEncodedVideo, selectH264Codec } from "./video-encode-core.ts";
 import {
-  getGifExportDimensions,
-  getGifFrameDelayCentiseconds,
-  getVideoExportBitrate,
-  getVideoExportDimensions,
-} from "./export-worker-utils.ts";
+  type EncodedVideoChunkData,
+  VideoEncoderSession,
+  muxEncodedVideo,
+  selectH264Codec,
+} from "./video-encode-core.ts";
 
-export type ToExportWorkerMessage = { type: "start"; job: ExportJobSnapshot } | { type: "cancel" };
+export type ToExportWorkerMessage = { type: "start"; job: ExportJobSnapshot };
 
 export type FromExportWorkerMessage =
   | { type: "progress"; progress: ExportProgress }
   | { type: "done"; blob: Blob }
   | { type: "error"; message: string; unsupported?: boolean };
-
-let cancelled = false;
 
 function post(msg: FromExportWorkerMessage): void {
   self.postMessage(msg);
@@ -47,12 +44,20 @@ function emitProgress(progress: ExportProgress): void {
   post({ type: "progress", progress });
 }
 
-function isCancelled(): boolean {
-  return cancelled;
-}
-
 function createUnsupportedWorkerExportError(message: string): Error {
   return new Error(`UNSUPPORTED_WORKER_EXPORT: ${message}`);
+}
+
+function getEvenGifDimensions(
+  sourceWidth: number,
+  sourceHeight: number,
+  maxWidth: number,
+): { width: number; height: number } {
+  const scale = sourceWidth > maxWidth ? maxWidth / sourceWidth : 1;
+  return {
+    width: Math.floor((sourceWidth * scale) / 2) * 2 || 2,
+    height: Math.floor((sourceHeight * scale) / 2) * 2 || 2,
+  };
 }
 
 async function exportMp4Mov(job: ExportJobSnapshot): Promise<Blob> {
@@ -71,8 +76,17 @@ async function exportMp4Mov(job: ExportJobSnapshot): Promise<Blob> {
   try {
     const fps = job.options.fps ?? config.videoExporting.defaults.fps;
     const totalFrames = Math.round(demux.duration * fps);
-    const dimensions = getVideoExportDimensions(demux.width, demux.height, job.options);
-    const bitrate = getVideoExportBitrate(dimensions.width, dimensions.height, job.options);
+    const dimensions = calculateTargetResolution(
+      demux.width,
+      demux.height,
+      job.options.advanced?.resolution ?? "original",
+    );
+    const bitrate =
+      job.options.advanced?.bitrate ??
+      Math.round(
+        calculateVideoBitrate(dimensions.width, dimensions.height) *
+          qualityConfigs[job.options.quality ?? "high"].bitrateFactor,
+      );
     let codec: string;
     try {
       codec = await selectH264Codec(dimensions.width, dimensions.height, fps, bitrate);
@@ -83,7 +97,7 @@ async function exportMp4Mov(job: ExportJobSnapshot): Promise<Blob> {
     }
     const renderer = await HeadlessExportRenderer.create(dimensions.width, dimensions.height);
     try {
-      if (job.colorConfig?.supportsP3 && !renderer.colorConfig.supportsP3) {
+      if (job.requiresP3 && !renderer.colorConfig.supportsP3) {
         throw createUnsupportedWorkerExportError("Worker WebGPU display-p3 canvas is unavailable");
       }
       const audioData =
@@ -144,10 +158,9 @@ async function encodeRenderedVideo(params: {
     );
   };
 
+  let chunks: readonly EncodedVideoChunkData[] = [];
   try {
     for (let i = 0; i < totalFrames; i++) {
-      if (isCancelled()) throw new Error("Export cancelled");
-
       const timestampSeconds = i / fps;
       const timestampUs = Math.floor(timestampSeconds * 1_000_000);
       const { value: bitmap, done } = await iterator.next();
@@ -190,14 +203,14 @@ async function encodeRenderedVideo(params: {
     }
 
     try {
-      await encoder.flush();
+      chunks = await encoder.flush();
     } catch (error) {
       throwEncodeUnsupported(
         error instanceof Error ? error : new Error("VideoEncoder flush failed"),
       );
     }
   } finally {
-    if (encoder.state !== "closed") encoder.close();
+    encoder.close();
   }
 
   emitProgress({
@@ -211,10 +224,9 @@ async function encodeRenderedVideo(params: {
   return muxEncodedVideo({
     format,
     fps,
-    chunks: encoder.chunks,
+    chunks,
     audioData,
     totalFrames,
-    isCancelled,
   });
 }
 
@@ -224,7 +236,7 @@ async function exportGif(job: ExportJobSnapshot): Promise<Blob> {
   const useDither = (job.options.advanced?.gifDither ?? "floyd_steinberg") !== "none";
   const sourceInfo = await getAnimatedSourceInfo(job);
   const totalFrames = Math.ceil(sourceInfo.duration * fps);
-  const dimensions = getGifExportDimensions(sourceInfo.width, sourceInfo.height, maxWidth);
+  const dimensions = getEvenGifDimensions(sourceInfo.width, sourceInfo.height, maxWidth);
   const renderer = await HeadlessExportRenderer.create(dimensions.width, dimensions.height);
 
   try {
@@ -244,8 +256,6 @@ async function exportGif(job: ExportJobSnapshot): Promise<Blob> {
     let i = 0;
 
     for await (const source of iterateFrameSources(job, sourceInfo, timestamps)) {
-      if (isCancelled()) throw new Error("Export cancelled");
-
       const timestampSeconds = i / fps;
       const pixels = await renderFramePixels({
         job,
@@ -265,13 +275,14 @@ async function exportGif(job: ExportJobSnapshot): Promise<Blob> {
         palette,
         dither: useDither,
       });
-      const delay = getGifFrameDelayCentiseconds(fps, accumulatedError);
-      accumulatedError = delay.nextAccumulatedError;
+      const idealDelay = 100 / fps + accumulatedError;
+      const delayCentiseconds = Math.max(1, Math.round(idealDelay));
+      accumulatedError = idealDelay - delayCentiseconds;
 
       gif.writeFrame(indexed, dimensions.width, dimensions.height, {
         palette,
         repeat: 0,
-        delay: delay.delayCentiseconds * 10,
+        delay: delayCentiseconds * 10,
       });
 
       emitProgress({
@@ -364,8 +375,6 @@ async function buildGifPalette(params: {
   let sampleIndex = 0;
 
   for await (const source of iterateFrameSources(job, sourceInfo, sampleTimestamps)) {
-    if (isCancelled()) throw new Error("Export cancelled");
-
     const frameIndex = sampleFrameIndexes[sampleIndex]!;
     const timestampSeconds = sampleTimestamps[sampleIndex]!;
     sampledPixels.push(
@@ -438,27 +447,15 @@ function closeFrameSource(sourceInfo: AnimatedSourceInfo, source: ImageBitmap): 
 
 async function handleStart(job: ExportJobSnapshot): Promise<void> {
   assertWorkerSupport();
-  cancelled = false;
 
   const format = job.options.format ?? "mp4";
   const blob = format === "gif" ? await exportGif(job) : await exportMp4Mov(job);
 
-  emitProgress({
-    frame: 1,
-    totalFrames: 1,
-    percent: 1,
-    stage: "done",
-    message: "Export complete",
-  });
   post({ type: "done", blob });
 }
 
 self.onmessage = async (event: MessageEvent<ToExportWorkerMessage>) => {
   try {
-    if (event.data.type === "cancel") {
-      cancelled = true;
-      return;
-    }
     await handleStart(event.data.job);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Export failed";

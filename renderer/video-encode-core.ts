@@ -107,20 +107,12 @@ export class VideoEncoderSession {
     } satisfies VideoEncoderConfig);
   }
 
-  get chunks(): readonly EncodedVideoChunkData[] {
-    return this.#chunks;
-  }
-
   get frameDurationUs(): number {
     return this.#frameDurationUs;
   }
 
   get encodeQueueSize(): number {
     return this.#encoder?.encodeQueueSize ?? 0;
-  }
-
-  get state(): CodecState {
-    return this.#encoder?.state ?? "closed";
   }
 
   encodeFrame(frame: VideoFrame, frameIndex: number): void {
@@ -155,18 +147,21 @@ export class VideoEncoderSession {
         throw error;
       }),
     ]);
-    this.#throwIfUnusable();
-    encoder.close();
-    this.#encoder = null;
+    if (this.#encodeError) throw this.#encodeError;
+    this.close();
     return this.#chunks;
   }
 
   close(): void {
-    if (!this.#encoder) return;
+    const encoder = this.#encoder;
+    if (!encoder) return;
+    this.#encoder = null;
+    if (encoder.state === "closed") return;
     try {
-      this.#encoder.close();
-    } finally {
-      this.#encoder = null;
+      encoder.close();
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "InvalidStateError") return;
+      throw error;
     }
   }
 

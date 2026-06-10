@@ -79,21 +79,3 @@ export async function readRgba8TextureToPixels(
   stagingBuffer.destroy();
   return data;
 }
-
-export async function rgba8TextureToImageBitmap(
-  device: GPUDevice,
-  texture: GPUTexture,
-  options: ReadRgba8TextureOptions & { colorSpace?: PredefinedColorSpace },
-): Promise<ImageBitmap> {
-  const pixels = await readRgba8TextureToPixels(device, texture, options);
-  return createImageBitmap(
-    new ImageData(
-      pixels,
-      options.cropWidth ?? options.width,
-      options.cropHeight ?? options.height,
-      {
-        colorSpace: options.colorSpace,
-      },
-    ),
-  );
-}
