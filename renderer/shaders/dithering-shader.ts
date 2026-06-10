@@ -1,5 +1,6 @@
 import { config } from "#config";
-import { DitheringKind, isErrorDiffusion, type ShaderCanvasEntity } from "#types/canvas.ts";
+import { DitheringKind, isErrorDiffusion } from "#types/canvas.ts";
+import type { EffectRenderEntity } from "../effect-render-entity.ts";
 import ditheringComputeShaderSource from "../dithering-compute.wgsl?raw";
 import ditheringShaderSource from "../dithering.wgsl?raw";
 import { ShaderPass } from "./shader-pass.ts";
@@ -33,7 +34,7 @@ export class DitheringShader extends ShaderPass {
     return ditheringShaderSource;
   }
 
-  override writeVariantUniforms(entity: ShaderCanvasEntity): void {
+  override writeVariantUniforms(entity: EffectRenderEntity): void {
     const ditheringKind = entity.shaderParams.dithering?.kind ?? DitheringKind.bayer4x4;
     this.ctx.uintView[7] = DITHERING_KIND_INDEX[ditheringKind];
   }
@@ -133,7 +134,7 @@ export class DitheringShader extends ShaderPass {
   }
 
   override execute(
-    entity: ShaderCanvasEntity,
+    entity: EffectRenderEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,
@@ -148,7 +149,7 @@ export class DitheringShader extends ShaderPass {
   }
 
   #executeCompute(
-    entity: ShaderCanvasEntity,
+    entity: EffectRenderEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,

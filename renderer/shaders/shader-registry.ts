@@ -1,5 +1,6 @@
-import type { ShaderCanvasEntity, ShaderType } from "#types/canvas.ts";
+import type { ShaderType } from "#types/canvas.ts";
 import type { TexturePool } from "../texture-pool.ts";
+import type { EffectRenderEntity } from "../effect-render-entity.ts";
 import type { ShaderPass } from "./shader-pass.ts";
 
 export class ShaderRegistry {
@@ -22,7 +23,7 @@ export class ShaderRegistry {
 
   /** Execute a single shader pass: source -> output */
   applyShader(
-    entity: ShaderCanvasEntity,
+    entity: EffectRenderEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,
@@ -38,7 +39,7 @@ export class ShaderRegistry {
    * The final result ends up in `outputTexture`.
    */
   applyShaderChain(
-    entity: ShaderCanvasEntity,
+    entity: EffectRenderEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
     chain: ShaderType[],

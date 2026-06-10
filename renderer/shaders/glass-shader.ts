@@ -1,4 +1,5 @@
-import { GlassKind, type ShaderCanvasEntity } from "#types/canvas.ts";
+import { GlassKind } from "#types/canvas.ts";
+import type { EffectRenderEntity } from "../effect-render-entity.ts";
 import glassFlowingSource from "../glass-flowing.wgsl?raw";
 import glassFlutedSource from "../glass-fluted.wgsl?raw";
 import glassFrostedSource from "../glass-frosted.wgsl?raw";
@@ -11,7 +12,7 @@ export class GlassShader extends ShaderPass {
   /** Per-entity last frame timestamps for delta-time calculation */
   #lastFrameTimes = new Map<string, number>();
 
-  override needsContinuousRender(entity: ShaderCanvasEntity): boolean {
+  override needsContinuousRender(entity: EffectRenderEntity): boolean {
     return (
       entity.shaderParams.glass?.kind === GlassKind.flowing &&
       entity.shaderParams.timeAutoPlay !== false
@@ -71,7 +72,7 @@ export class GlassShader extends ShaderPass {
     });
   }
 
-  writeVariantUniforms(entity: ShaderCanvasEntity): void {
+  writeVariantUniforms(entity: EffectRenderEntity): void {
     const glassKind = entity.shaderParams.glass?.kind ?? GlassKind.frostedVoronoi;
 
     if (glassKind === GlassKind.fluted) {
@@ -93,7 +94,7 @@ export class GlassShader extends ShaderPass {
   }
 
   override execute(
-    entity: ShaderCanvasEntity,
+    entity: EffectRenderEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,
@@ -110,7 +111,7 @@ export class GlassShader extends ShaderPass {
   }
 
   #executeFluted(
-    entity: ShaderCanvasEntity,
+    entity: EffectRenderEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,
@@ -141,7 +142,7 @@ export class GlassShader extends ShaderPass {
   }
 
   #executeFlowing(
-    entity: ShaderCanvasEntity,
+    entity: EffectRenderEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,

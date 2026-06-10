@@ -15,17 +15,9 @@
  * mediabunny requires all tracks added before start(), and start() before add().
  */
 
-import {
-  Output,
-  Mp4OutputFormat,
-  MovOutputFormat,
-  BufferTarget,
-  EncodedVideoPacketSource,
-  EncodedAudioPacketSource,
-  EncodedPacket,
-  type IsobmffOutputFormatOptions,
-} from "mediabunny";
 import type { ExportFormat } from "./export-formats.ts";
+import type { DemuxedAudio } from "#lib/audio-demux.ts";
+import { VideoEncoderSession, muxEncodedVideo } from "./video-encode-core.ts";
 
 // Message types from main thread
 export type ToWorkerMessage =
@@ -75,29 +67,17 @@ export type FromWorkerMessage =
   | { type: "error"; message: string };
 
 // Worker state
-let encoder: VideoEncoder | null = null;
-let output: Output | null = null;
-let videoSource: EncodedVideoPacketSource | null = null;
+let encodeSession: VideoEncoderSession | null = null;
 let cancelled = false;
 
 // Config state
 let fps = 30;
-let keyFrameInterval = 60;
-let frameDurationUs = 33333;
 let totalFrames = 0;
 let debugLogging = false;
-
-// Buffered encoded video chunks (fed to mediabunny during finish)
-let bufferedVideoChunks: Array<{
-  data: Uint8Array;
-  type: "key" | "delta";
-  timestamp: number;
-  duration: number;
-  meta?: EncodedVideoChunkMetadata;
-}> = [];
+let format: "mp4" | "mov" = "mp4";
 
 // Audio data received from main thread
-let pendingAudioData: (ToWorkerMessage & { type: "audio-track" }) | null = null;
+let pendingAudioData: DemuxedAudio | null = null;
 
 function sendMessage(msg: FromWorkerMessage): void {
   self.postMessage(msg);
@@ -117,62 +97,26 @@ function handleInit(msg: Extract<ToWorkerMessage, { type: "init" }>): void {
   fps = msg.fps;
   totalFrames = msg.totalFrames;
   cancelled = false;
-  bufferedVideoChunks = [];
   debugLogging = msg.debug ?? false;
+  format = msg.format === "mov" ? "mov" : "mp4";
 
-  keyFrameInterval = Math.floor(fps * keyFrameIntervalSeconds);
-  frameDurationUs = Math.round(1_000_000 / fps);
-
-  // MP4 and MOV both use ISOBMFF but with different codec support
-  const isobmffOptions: IsobmffOutputFormatOptions = { fastStart: "in-memory" };
-  const outputFormat =
-    msg.format === "mov"
-      ? new MovOutputFormat(isobmffOptions)
-      : new Mp4OutputFormat(isobmffOptions);
-
-  // Create mediabunny output and video source
-  const target = new BufferTarget();
-  output = new Output({ format: outputFormat, target });
-  videoSource = new EncodedVideoPacketSource("avc");
-  output.addVideoTrack(videoSource, { frameRate: fps });
-
-  // Audio track is added during finish when we know if audio data was sent
-  // output.start() is also deferred to finish
-
-  // Create encoder
-  encoder = new VideoEncoder({
-    output: (chunk, metadata) => {
-      const data = new Uint8Array(chunk.byteLength);
-      chunk.copyTo(data);
-
-      bufferedVideoChunks.push({
-        data,
-        type: chunk.type === "key" ? "key" : "delta",
-        timestamp: chunk.timestamp / 1_000_000,
-        duration: (chunk.duration ?? frameDurationUs) / 1_000_000,
-        meta: metadata,
-      });
-    },
-    error: (e) => {
-      sendMessage({ type: "error", message: e.message });
-    },
-  });
-
-  encoder.configure({
+  encodeSession?.close();
+  encodeSession = new VideoEncoderSession({
     codec,
     width,
     height,
+    fps,
     bitrate,
-    bitrateMode,
-    framerate: fps,
+    keyFrameIntervalSeconds,
     hardwareAcceleration,
     latencyMode,
-    avc: codec.startsWith("avc") ? { format: "avc" } : undefined,
-  } satisfies VideoEncoderConfig);
+    bitrateMode,
+    onError: (error) => sendMessage({ type: "error", message: error.message }),
+  });
 }
 
 function handleFrame(msg: Extract<ToWorkerMessage, { type: "frame" }>): void {
-  if (cancelled || !encoder) return;
+  if (cancelled || !encodeSession) return;
 
   const { bitmap, frameIndex, timestampUs } = msg;
 
@@ -186,39 +130,43 @@ function handleFrame(msg: Extract<ToWorkerMessage, { type: "frame" }>): void {
 
   const frame = new VideoFrame(bitmap, {
     timestamp: timestampUs,
-    duration: frameDurationUs,
+    duration: encodeSession.frameDurationUs,
   });
 
-  const isKeyFrame = frameIndex % keyFrameInterval === 0;
-  encoder.encode(frame, { keyFrame: isKeyFrame });
-  frame.close();
-  bitmap.close();
-
-  if (debugLogging && frameIndex % 10 === 0) {
-    console.debug(
-      `[export-worker] encoded frame ${frameIndex}/${totalFrames}${isKeyFrame ? " (keyframe)" : ""}, encoder queue: ${encoder.encodeQueueSize}`,
-    );
+  try {
+    encodeSession.encodeFrame(frame, frameIndex);
+    if (debugLogging && frameIndex % 10 === 0) {
+      console.debug(
+        `[export-worker] encoded frame ${frameIndex}/${totalFrames}, encoder queue: ${encodeSession.encodeQueueSize}`,
+      );
+    }
+  } finally {
+    frame.close();
+    bitmap.close();
   }
 }
 
 function handleAudioTrack(msg: Extract<ToWorkerMessage, { type: "audio-track" }>): void {
   // MP4/MOV use AAC natively — no transcoding needed, just store for muxing
-  pendingAudioData = msg;
+  pendingAudioData = {
+    packets: msg.packets,
+    codec: msg.codec,
+    sampleRate: msg.sampleRate,
+    numberOfChannels: msg.numberOfChannels,
+    description: msg.description,
+  };
 }
 
 async function handleFinish(): Promise<void> {
-  if (cancelled || !encoder || !output || !videoSource) return;
+  if (cancelled || !encodeSession) return;
 
   try {
     // 1. Flush the WebCodecs encoder
     if (debugLogging) console.debug(`[export-worker] flushing encoder...`);
-    await encoder.flush();
-    encoder.close();
-    encoder = null;
+    const chunks = await encodeSession.flush();
+    encodeSession = null;
     if (debugLogging)
-      console.debug(
-        `[export-worker] encoder flushed, ${bufferedVideoChunks.length} chunks buffered`,
-      );
+      console.debug(`[export-worker] encoder flushed, ${chunks.length} chunks buffered`);
 
     sendMessage({
       type: "progress",
@@ -228,72 +176,15 @@ async function handleFinish(): Promise<void> {
       stage: "muxing",
     });
 
-    // 2. Add audio track if audio data was sent
-    let audioSource: EncodedAudioPacketSource | null = null;
-    if (pendingAudioData) {
-      audioSource = new EncodedAudioPacketSource("aac");
-      output.addAudioTrack(audioSource);
-    }
-
-    // 3. Start the output (all tracks must be added before this)
-    await output.start();
-
-    // 4. Feed all buffered video chunks
-    let firstVideoPacket = true;
-    for (const chunk of bufferedVideoChunks) {
-      if (cancelled) break;
-      const packet = new EncodedPacket(chunk.data, chunk.type, chunk.timestamp, chunk.duration);
-
-      if (firstVideoPacket && chunk.meta) {
-        await videoSource.add(packet, chunk.meta);
-        firstVideoPacket = false;
-      } else {
-        await videoSource.add(packet);
-      }
-    }
-    videoSource.close();
-
-    // 5. Feed audio data if present
-    if (pendingAudioData && audioSource) {
-      const audio = pendingAudioData;
-      const videoDuration = totalFrames / fps;
-      let isFirstAudioPacket = true;
-
-      for (const pkt of audio.packets) {
-        if (cancelled) break;
-        // Skip negative-timestamp pre-roll packets (AAC decoder priming frames)
-        if (pkt.timestamp < 0) continue;
-        // Trim audio to video duration
-        if (pkt.timestamp > videoDuration) break;
-
-        const packet = new EncodedPacket(pkt.data, pkt.type, pkt.timestamp, pkt.duration);
-
-        if (isFirstAudioPacket) {
-          await audioSource.add(packet, {
-            decoderConfig: {
-              codec: audio.codec,
-              sampleRate: audio.sampleRate,
-              numberOfChannels: audio.numberOfChannels,
-              description: audio.description,
-            },
-          });
-          isFirstAudioPacket = false;
-        } else {
-          await audioSource.add(packet);
-        }
-      }
-      audioSource.close();
-    }
-
-    // 6. Finalize the output
-    await output.finalize();
+    const blob = await muxEncodedVideo({
+      format,
+      fps,
+      chunks,
+      audioData: pendingAudioData,
+      totalFrames,
+      isCancelled: () => cancelled,
+    });
     if (debugLogging) console.debug(`[export-worker] output finalized`);
-
-    const buffer = (output.target as BufferTarget).buffer;
-    if (!buffer) throw new Error("Output buffer is null after finalize");
-
-    const mimeType = output.format.mimeType;
-    const blob = new Blob([buffer], { type: mimeType });
     if (debugLogging)
       console.debug(`[export-worker] built: ${(blob.size / 1024 / 1024).toFixed(2)} MB`);
 
@@ -302,29 +193,15 @@ async function handleFinish(): Promise<void> {
   } catch (e) {
     sendMessage({ type: "error", message: e instanceof Error ? e.message : "Muxing failed" });
   } finally {
-    output = null;
-    videoSource = null;
-    bufferedVideoChunks = [];
+    encodeSession = null;
     pendingAudioData = null;
   }
 }
 
 function handleCancel(): void {
   cancelled = true;
-  if (encoder) {
-    try {
-      encoder.close();
-    } catch {
-      // Ignore
-    }
-    encoder = null;
-  }
-  if (output) {
-    output.cancel().catch(() => {});
-    output = null;
-  }
-  videoSource = null;
-  bufferedVideoChunks = [];
+  encodeSession?.close();
+  encodeSession = null;
   pendingAudioData = null;
 }
 

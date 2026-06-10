@@ -3,6 +3,11 @@ import { getFrameAtTime } from "../lib/gif-decoder.ts";
 import { CopyPass } from "./copy-pass.ts";
 import { type ImageExportOptions, getImageMimeType } from "./export-formats.ts";
 import type { GpuColorConfig } from "./gpu-color-space.ts";
+import {
+  createRgba8Texture,
+  readRgba8TextureToPixels,
+  uploadExternalImageToTexture,
+} from "./gpu-texture-io.ts";
 import type { TexturePool } from "./texture-pool.ts";
 
 export type ApplyShaderFn = (
@@ -16,7 +21,6 @@ export class ExportService {
   #texturePool: TexturePool | null;
   #applyShader: ApplyShaderFn;
   #copyPass: CopyPass;
-  #passthroughCopyPass: CopyPass;
   #colorConfig: GpuColorConfig;
 
   constructor(
@@ -29,60 +33,7 @@ export class ExportService {
     this.#texturePool = texturePool;
     this.#applyShader = applyShader;
     this.#copyPass = new CopyPass(device);
-    this.#passthroughCopyPass = new CopyPass(device, colorConfig.intermediateFormat);
     this.#colorConfig = colorConfig;
-  }
-
-  /**
-   * Read texture pixels to CPU memory via staging buffer.
-   * Expects an rgba8unorm texture (use CopyPass to convert from rgba16float first).
-   */
-  async #readTextureToPixelData(
-    texture: GPUTexture,
-    width: number,
-    height: number,
-  ): Promise<Uint8ClampedArray<ArrayBuffer>> {
-    const bytesPerRow = Math.ceil((width * 4) / 256) * 256; // Must be 256-byte aligned
-    const bufferSize = bytesPerRow * height;
-
-    const stagingBuffer = this.#device.createBuffer({
-      label: `Staging buffer for texture readback`,
-      size: bufferSize,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-    });
-
-    // Copy texture to staging buffer
-    const encoder = this.#device.createCommandEncoder({
-      label: `Texture readback encoder`,
-    });
-
-    encoder.copyTextureToBuffer({ texture }, { buffer: stagingBuffer, bytesPerRow }, [
-      width,
-      height,
-    ]);
-
-    this.#device.queue.submit([encoder.finish()]);
-
-    // Wait for GPU work and map buffer
-    await this.#device.queue.onSubmittedWorkDone();
-    await stagingBuffer.mapAsync(GPUMapMode.READ);
-
-    // Read pixel data
-    const copyArrayBuffer = stagingBuffer.getMappedRange();
-    const data: Uint8ClampedArray<ArrayBuffer> = new Uint8ClampedArray(width * height * 4);
-
-    // Copy row by row (due to bytesPerRow padding)
-    const srcData = new Uint8ClampedArray(copyArrayBuffer);
-    for (let y = 0; y < height; y++) {
-      const srcOffset = y * bytesPerRow;
-      const dstOffset = y * width * 4;
-      data.set(srcData.subarray(srcOffset, srcOffset + width * 4), dstOffset);
-    }
-
-    stagingBuffer.unmap();
-    stagingBuffer.destroy();
-
-    return data;
   }
 
   /**
@@ -95,17 +46,22 @@ export class ExportService {
     height: number,
   ): Promise<ImageBitmap | null> {
     // Create rgba8unorm staging texture for readback
-    const stagingTexture = this.#device.createTexture({
-      label: "Export staging texture (rgba8unorm)",
-      size: [width, height],
-      format: "rgba8unorm",
-      usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
+    const stagingTexture = createRgba8Texture(
+      this.#device,
+      width,
+      height,
+      GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
+      "Export staging texture (rgba8unorm)",
+    );
 
     // GPU-side format conversion: rgba16float → rgba8unorm (values clamped to [0,1])
     this.#copyPass.execute(shaderOutput, stagingTexture);
 
-    const data = await this.#readTextureToPixelData(stagingTexture, width, height);
+    const data = await readRgba8TextureToPixels(this.#device, stagingTexture, {
+      width,
+      height,
+      label: "Export texture readback",
+    });
     stagingTexture.destroy();
 
     const imageData = new ImageData(data, width, height, {
@@ -185,10 +141,13 @@ export class ExportService {
       usage: sourceUsage,
     });
 
-    this.#device.queue.copyExternalImageToTexture(
-      { source },
-      { texture: sourceTexture, colorSpace: this.#colorConfig.textureColorSpace },
-      [width, height],
+    uploadExternalImageToTexture(
+      this.#device,
+      source,
+      sourceTexture,
+      width,
+      height,
+      this.#colorConfig,
     );
 
     // Output texture uses intermediate format (shader processing precision)
@@ -201,11 +160,7 @@ export class ExportService {
           usage: outputUsage,
         });
 
-    if (entity.shaderParams.showOriginal) {
-      this.#passthroughCopyPass.execute(sourceTexture, outputTexture);
-    } else {
-      this.#applyShader(entity, sourceTexture, outputTexture);
-    }
+    this.#applyShader(entity, sourceTexture, outputTexture);
 
     const bitmap = await this.#convertToImageBitmap(outputTexture, width, height);
 
@@ -244,10 +199,13 @@ export class ExportService {
         GPUTextureUsage.RENDER_ATTACHMENT,
     });
 
-    this.#device.queue.copyExternalImageToTexture(
-      { source: entity.imageBitmap },
-      { texture: sourceTexture, colorSpace: this.#colorConfig.textureColorSpace },
-      [width, height],
+    uploadExternalImageToTexture(
+      this.#device,
+      entity.imageBitmap,
+      sourceTexture,
+      width,
+      height,
+      this.#colorConfig,
     );
 
     // Output texture uses intermediate format (shader processing precision)
@@ -262,24 +220,24 @@ export class ExportService {
         GPUTextureUsage.COPY_DST,
     });
 
-    // Apply shader or passthrough original based on showOriginal toggle
-    if (entity.shaderParams.showOriginal) {
-      this.#passthroughCopyPass.execute(sourceTexture, outputTexture);
-    } else {
-      this.#applyShader(entity, sourceTexture, outputTexture);
-    }
+    this.#applyShader(entity, sourceTexture, outputTexture);
 
     // Convert rgba16float → rgba8unorm via CopyPass, then read back as P3 ImageData
-    const stagingTexture = this.#device.createTexture({
-      label: "Export staging texture (rgba8unorm)",
-      size: [width, height],
-      format: "rgba8unorm",
-      usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
+    const stagingTexture = createRgba8Texture(
+      this.#device,
+      width,
+      height,
+      GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
+      "Export staging texture (rgba8unorm)",
+    );
 
     this.#copyPass.execute(outputTexture, stagingTexture);
 
-    const data = await this.#readTextureToPixelData(stagingTexture, width, height);
+    const data = await readRgba8TextureToPixels(this.#device, stagingTexture, {
+      width,
+      height,
+      label: "Export texture readback",
+    });
 
     const imageData = new ImageData(data, width, height, {
       colorSpace: this.#colorConfig.textureColorSpace,

@@ -4,7 +4,7 @@ import {
   config,
   MAX_BLUR_MIP_LEVELS,
 } from "#config";
-import type { ShaderCanvasEntity } from "#types/canvas.ts";
+import type { EffectRenderEntity } from "./effect-render-entity.ts";
 import adjustmentsShaderSource from "./adjustments.wgsl?raw";
 import bloomDownsampleShaderSource from "./bloom-downsample.wgsl?raw";
 import bloomUpsampleShaderSource from "./bloom-upsample.wgsl?raw";
@@ -776,7 +776,7 @@ export class ProcessingPipeline {
   /**
    * Update adjustments uniforms from entity params
    */
-  #updateAdjustmentsUniforms(entity: ShaderCanvasEntity): void {
+  #updateAdjustmentsUniforms(entity: EffectRenderEntity): void {
     const width = entity.originalSize.width;
     const height = entity.originalSize.height;
     const adjustments = entity.shaderParams.adjustments;
@@ -800,7 +800,7 @@ export class ProcessingPipeline {
   /**
    * Check if adjustments need to be applied (any value is not default 0.5)
    */
-  needsAdjustments(entity: ShaderCanvasEntity): boolean {
+  needsAdjustments(entity: EffectRenderEntity): boolean {
     const adjustments = entity.shaderParams.adjustments;
     if (!adjustments) return false;
 
@@ -817,7 +817,7 @@ export class ProcessingPipeline {
   /**
    * Check if blur needs to be applied
    */
-  needsBlur(entity: ShaderCanvasEntity): boolean {
+  needsBlur(entity: EffectRenderEntity): boolean {
     const blur = entity.shaderParams.adjustments?.blur;
     return blur != null && blur > 0.001;
   }
@@ -1147,7 +1147,7 @@ export class ProcessingPipeline {
    * All passes are batched into a single command encoder submission.
    */
   applyBlur(
-    entity: ShaderCanvasEntity,
+    entity: EffectRenderEntity,
     inputTexture: GPUTexture,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,
@@ -1268,7 +1268,7 @@ export class ProcessingPipeline {
    * When encoder is provided, encodes into it without submitting.
    */
   applyAdjustments(
-    entity: ShaderCanvasEntity,
+    entity: EffectRenderEntity,
     inputTexture: GPUTexture,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,
@@ -1316,7 +1316,7 @@ export class ProcessingPipeline {
   /**
    * Update post-process uniforms from entity params
    */
-  #updatePostProcessUniforms(entity: ShaderCanvasEntity): void {
+  #updatePostProcessUniforms(entity: EffectRenderEntity): void {
     const width = entity.originalSize.width;
     const height = entity.originalSize.height;
     const postProcess = entity.shaderParams.postProcess;
@@ -1357,7 +1357,7 @@ export class ProcessingPipeline {
    * Runs bloom pipeline first (if enabled), then composites with other effects.
    */
   applyPostProcessing(
-    entity: ShaderCanvasEntity,
+    entity: EffectRenderEntity,
     inputTexture: GPUTexture,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,
