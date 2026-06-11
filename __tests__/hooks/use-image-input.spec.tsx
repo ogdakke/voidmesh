@@ -136,6 +136,7 @@ describe("useImageInput", () => {
         select: true,
         fitToView: true,
         bottomInset: 0,
+        onLoadFailure: expect.any(Function),
       },
     );
   });
@@ -172,6 +173,7 @@ describe("useImageInput", () => {
         select: true,
         fitToView: false,
         bottomInset: 0,
+        onLoadFailure: expect.any(Function),
       },
     );
   });
@@ -235,6 +237,7 @@ describe("useImageInput", () => {
         select: true,
         fitToView: false,
         bottomInset: 0,
+        onLoadFailure: expect.any(Function),
       },
     );
   });
