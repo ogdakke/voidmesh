@@ -2,9 +2,10 @@ import { useSelectedEntity } from "#context/use-canvas.ts";
 import {
   useMediaControlsActions,
   useFrozenPlaybackTime,
+  useSelectedVideoAudioState,
   type MediaControlsActionsOnly,
 } from "#hooks/use-media-controls.ts";
-import { PauseSolid, PlaySolid } from "iconoir-react";
+import { PauseSolid, PlaySolid, SoundHigh, SoundOff } from "iconoir-react";
 import { Slider as BaseSlider } from "@base-ui/react/slider";
 import "./media-controls.css";
 
@@ -46,6 +47,24 @@ function PlayPauseButton({ actions }: { actions: MediaControlsActionsOnly }) {
     >
       <PauseSolid className={isPlaying ? "icon-visible" : "icon-hidden"} />
       <PlaySolid className={isPlaying ? "icon-hidden" : "icon-visible"} />
+    </button>
+  );
+}
+
+function MuteButton({ actions }: { actions: MediaControlsActionsOnly }) {
+  const audio = useSelectedVideoAudioState();
+
+  if (!audio.canToggleMuted) return null;
+
+  return (
+    <button
+      type="button"
+      className="mute-button controls-state icon-crossfade"
+      onClick={actions.toggleMuted}
+      aria-label={audio.isMuted ? "Unmute" : "Mute"}
+    >
+      <SoundOff className={audio.isMuted ? "icon-visible" : "icon-hidden"} />
+      <SoundHigh className={audio.isMuted ? "icon-hidden" : "icon-visible"} />
     </button>
   );
 }
@@ -115,6 +134,7 @@ export function MediaControls() {
       <div className="media-controls__container">
         <PlayPauseButton actions={actions} />
         <MediaSlider actions={actions} />
+        <MuteButton actions={actions} />
       </div>
     </div>
   );

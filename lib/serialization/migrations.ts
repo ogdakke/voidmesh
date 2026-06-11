@@ -35,6 +35,13 @@ const migrations: Record<number, Migration> = {
     doc.version = 4;
     return doc;
   },
+
+  // Version 4 -> 5: Add muted and volume to playback state.
+  // toPlaybackState() supplies defaults for old manifests, so no rewrite needed.
+  4: (doc) => {
+    doc.version = 5;
+    return doc;
+  },
 };
 
 /**

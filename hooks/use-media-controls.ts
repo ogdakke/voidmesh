@@ -24,12 +24,15 @@ export interface MediaControlsActionsOnly {
   play: () => Promise<void>;
   pause: () => void;
   togglePlayback: () => Promise<void>;
+  toggleMuted: () => void;
   seek: (time: number) => void;
   /** Seek relative to current position. Reads current time directly from entity to avoid stale state. */
   seekRelative: (delta: number) => void;
   seekStart: () => void;
   seekEnd: () => void;
   isIdle: () => boolean;
+  canToggleMuted: () => boolean;
+  isMuted: () => boolean;
 }
 
 export interface PlaybackTimeState {
@@ -41,6 +44,12 @@ export interface PlaybackTimeState {
   timeParts: MediaTimeParts;
   /** Duration parts for custom styling (main + ms) */
   durationParts: MediaTimeParts;
+}
+
+export interface SelectedVideoAudioState {
+  entityId: string | null;
+  canToggleMuted: boolean;
+  isMuted: boolean;
 }
 
 // ============================================================================
@@ -92,6 +101,19 @@ export function useFrozenPlaybackTime(): PlaybackTimeState {
 
   // Return frozen state during idle (for exit animation), live state otherwise
   return liveState.entityId !== null ? liveState : frozen;
+}
+
+export function useSelectedVideoAudioState(): SelectedVideoAudioState {
+  const audioSnapshot = useSyncExternalStore(
+    canvasStore.subscribe.bind(canvasStore),
+    canvasStore.getSelectedVideoAudioSnapshot.bind(canvasStore),
+  );
+
+  return {
+    entityId: audioSnapshot.entityId,
+    canToggleMuted: audioSnapshot.canToggleMuted,
+    isMuted: audioSnapshot.muted,
+  };
 }
 
 // ============================================================================
@@ -157,6 +179,15 @@ export function useMediaControlsActions(
     if (entity?.id) {
       await canvasStore.togglePlayback(entity.id);
     }
+  };
+
+  const toggleMuted = () => {
+    if (!entity?.id || !isVideoEntity(entity) || !entity.mediaSource.hasAudio) return;
+    logger.debug("[MediaControls] toggleMuted() called", {
+      entityId: entity.id,
+      muted: entity.playback?.muted,
+    });
+    canvasStore.toggleVideoMuted(entity.id);
   };
 
   const seek = (time: number) => {
@@ -274,6 +305,15 @@ export function useMediaControlsActions(
     return !entity || !isAnimatedEntity(entity);
   };
 
+  const canToggleMuted = () => {
+    return !!entity && isVideoEntity(entity) && entity.mediaSource.hasAudio;
+  };
+
+  const isMuted = () => {
+    if (!entity || !isVideoEntity(entity)) return true;
+    return entity.playback?.muted ?? entity.mediaSource.videoElement.muted;
+  };
+
   // Handle video edge case events (seeked, ended, play)
   // Note: Regular time updates are handled by the game loop
   useEffect(() => {
@@ -332,10 +372,13 @@ export function useMediaControlsActions(
     play,
     pause,
     togglePlayback,
+    toggleMuted,
     seek,
     seekRelative,
     seekStart,
     seekEnd,
     isIdle,
+    canToggleMuted,
+    isMuted,
   };
 }

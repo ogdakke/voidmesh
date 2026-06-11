@@ -14,6 +14,7 @@ import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import { act } from "@testing-library/react";
 import React, { type ReactNode } from "react";
 import { canvasStore } from "#engine";
+import { useKeybinds, useRegisterKeybinds } from "#context/keybind-context.ts";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
 import { createTestEntity, createEntityInput, resetEntityCounter } from "../helpers/test-entity.ts";
 import {
@@ -451,6 +452,53 @@ describe("useMediaControlsActions hook callbacks", () => {
 
       updatedEntity = canvasStore.getState().entities.get(gifId!);
       expect(updatedEntity?.playback?.isPlaying).toBe(false);
+    });
+  });
+
+  describe("audio", () => {
+    test("reports and toggles selected video mute state", async () => {
+      const { canvas, getActions } = renderWithMediaHooks();
+
+      let videoId: string;
+      await act(async () => {
+        videoId = canvas.addEntity(
+          createEntityInput({ mediaType: "video", videoDuration: 60, videoHasAudio: true }),
+        );
+        canvas.selectEntity(videoId);
+      });
+
+      expect(getActions().canToggleMuted()).toBe(true);
+      expect(getActions().isMuted()).toBe(true);
+
+      await act(async () => {
+        getActions().toggleMuted();
+      });
+
+      const entity = canvasStore.getState().entities.get(videoId!);
+      expect(entity?.playback?.muted).toBe(false);
+      expect(getActions().isMuted()).toBe(false);
+    });
+
+    test("does not expose mute controls for GIFs or silent videos", async () => {
+      const { canvas, getActions } = renderWithMediaHooks();
+
+      let videoId: string;
+      let gifId: string;
+      await act(async () => {
+        videoId = canvas.addEntity(
+          createEntityInput({ mediaType: "video", videoDuration: 60, videoHasAudio: false }),
+        );
+        gifId = canvas.addEntity(createEntityInput({ mediaType: "gif", gifDuration: 2 }));
+        canvas.selectEntity(videoId);
+      });
+
+      expect(getActions().canToggleMuted()).toBe(false);
+
+      await act(async () => {
+        canvas.selectEntity(gifId!);
+      });
+
+      expect(getActions().canToggleMuted()).toBe(false);
     });
   });
 
@@ -1004,6 +1052,80 @@ describe("useMediaControlsActions hook callbacks", () => {
       const entity = canvasStore.getState().entities.get(gifId!);
       expect(entity?.playback?.isPlaying).toBe(true);
     });
+  });
+});
+
+describe("media mute keybind", () => {
+  function MuteKeybindHarness() {
+    const keybindStore = useKeybinds();
+    const storeSnapshot = React.useSyncExternalStore(
+      canvasStore.subscribe.bind(canvasStore),
+      canvasStore.getSelectionSnapshot.bind(canvasStore),
+    );
+    const selectedEntity =
+      storeSnapshot.selectedEntityIds.size === 1
+        ? storeSnapshot.entities.get([...storeSnapshot.selectedEntityIds][0]!)
+        : undefined;
+    const actions = useMediaControlsActions(selectedEntity);
+
+    React.useEffect(() => {
+      keybindStore.setActiveContext("selection");
+      return () => keybindStore.setActiveContext("global");
+    }, [keybindStore]);
+
+    useRegisterKeybinds("selection", [
+      {
+        id: "test_toggle_media_mute",
+        bind: (bb) => bb.withBind("m").withSensitive(false),
+        group: "video",
+        label: "Mute/Unmute media",
+        action: (e: KeyboardEvent) => {
+          if (!actions.canToggleMuted()) return;
+          e.preventDefault();
+          actions.toggleMuted();
+        },
+      },
+    ]);
+
+    return null;
+  }
+
+  test("pressing m toggles muted state for selected videos with audio", async () => {
+    const { canvas } = renderWithCanvas(<MuteKeybindHarness />);
+
+    let videoId: string;
+    await act(async () => {
+      videoId = canvas.addEntity(
+        createEntityInput({ mediaType: "video", videoDuration: 60, videoHasAudio: true }),
+      );
+      canvas.selectEntity(videoId);
+    });
+
+    expect(canvasStore.getState().entities.get(videoId!)?.playback?.muted).toBe(true);
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "m" }));
+    });
+
+    expect(canvasStore.getState().entities.get(videoId!)?.playback?.muted).toBe(false);
+  });
+
+  test("pressing m is ignored for selected videos without audio", async () => {
+    const { canvas } = renderWithCanvas(<MuteKeybindHarness />);
+
+    let videoId: string;
+    await act(async () => {
+      videoId = canvas.addEntity(
+        createEntityInput({ mediaType: "video", videoDuration: 60, videoHasAudio: false }),
+      );
+      canvas.selectEntity(videoId);
+    });
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "m" }));
+    });
+
+    expect(canvasStore.getState().entities.get(videoId!)?.playback?.muted).toBe(true);
   });
 });
 

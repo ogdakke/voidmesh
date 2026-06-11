@@ -2,6 +2,7 @@ import { useCanvasCommands, useHasEntities } from "#context/use-canvas.ts";
 import { useIsMobile } from "#hooks/use-is-mobile.ts";
 import { getViewportCenter } from "#lib/canvas-math.ts";
 import { addFilesToCanvas } from "#lib/entity-placement.ts";
+import { showMediaLoadFailureToasts } from "#components/media-load-errors.ts";
 import { MediaImagePlus } from "iconoir-react";
 import { useRef } from "react";
 import { config } from "../lib/config";
@@ -47,6 +48,7 @@ export function FileUploadComponent() {
       select: true,
       fitToView: true,
       bottomInset,
+      onLoadFailure: showMediaLoadFailureToasts,
     });
   };
 

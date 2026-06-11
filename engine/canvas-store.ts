@@ -119,6 +119,13 @@ export interface PlaybackSnapshot {
   version: number;
 }
 
+export interface SelectedVideoAudioSnapshot {
+  entityId: string | null;
+  canToggleMuted: boolean;
+  muted: boolean;
+  version: number;
+}
+
 export interface RenderState {
   viewport: Viewport;
   entities: ShaderCanvasEntity[];
@@ -183,6 +190,7 @@ export class CanvasStore extends Store<CanvasState> {
   readonly getContextOpenEntityIdSnapshot: () => string | null;
   readonly getPreferencesSnapshot: () => PreferencesSnapshot;
   readonly getPlaybackSnapshot: () => PlaybackSnapshot;
+  readonly getSelectedVideoAudioSnapshot: () => SelectedVideoAudioSnapshot;
   readonly getDragSnapshot: () => DragSnapshot;
   readonly getActionLayerSnapshot: () => ActionLayerSnapshot;
 
@@ -311,6 +319,25 @@ export class CanvasStore extends Store<CanvasState> {
       };
     });
 
+    this.getSelectedVideoAudioSnapshot = this.createSnapshot("selectionVersion", (s) => {
+      const selectedEntity = this.getSelectedEntity();
+      if (selectedEntity?.mediaSource.type === MediaType.video) {
+        return {
+          entityId: selectedEntity.id,
+          canToggleMuted: selectedEntity.mediaSource.hasAudio,
+          muted: selectedEntity.playback?.muted ?? selectedEntity.mediaSource.videoElement.muted,
+          version: s.selectionVersion,
+        };
+      }
+
+      return {
+        entityId: null,
+        canToggleMuted: false,
+        muted: true,
+        version: s.selectionVersion,
+      };
+    });
+
     this.getDragSnapshot = this.createSnapshot("dragVersion", (s) => ({
       entityDragActive: s.entityDragActive,
       version: s.dragVersion,
@@ -345,6 +372,9 @@ export class CanvasStore extends Store<CanvasState> {
 
   // Entity mutations (only notify selection subscribers)
   addEntity(entity: ShaderCanvasEntity): void {
+    if (entity.mediaSource.type === MediaType.video) {
+      this.#syncVideoElementPlayback(entity);
+    }
     this.state.entities.set(entity.id, entity);
     this.state.entitiesDirty.add(entity.id);
     this.notifySelectionChange();
@@ -671,6 +701,7 @@ export class CanvasStore extends Store<CanvasState> {
     if (!entity || entity.mediaSource.type !== MediaType.video) return;
 
     const video = entity.mediaSource.videoElement;
+    this.#syncVideoElementPlayback(entity);
     await video.play();
 
     if (entity.playback) {
@@ -679,6 +710,30 @@ export class CanvasStore extends Store<CanvasState> {
     }
     this.state.entitiesDirty.add(entityId);
     this.notifySelectionChange();
+  }
+
+  setVideoMuted(entityId: string, muted: boolean): void {
+    const entity = this.state.entities.get(entityId);
+    if (!entity || entity.mediaSource.type !== MediaType.video || !entity.playback) return;
+
+    if (entity.playback.muted === muted && entity.mediaSource.videoElement.muted === muted) {
+      return;
+    }
+
+    entity.playback.muted = muted;
+    entity.mediaSource.videoElement.muted = muted;
+    this.state.entitiesDirty.add(entityId);
+    this.notifySelectionChange();
+  }
+
+  toggleVideoMuted(entityId: string): void {
+    const entity = this.state.entities.get(entityId);
+    if (!entity || entity.mediaSource.type !== MediaType.video) return;
+
+    this.setVideoMuted(
+      entityId,
+      !(entity.playback?.muted ?? entity.mediaSource.videoElement.muted),
+    );
   }
 
   pauseVideo(entityId: string): void {
@@ -845,6 +900,17 @@ export class CanvasStore extends Store<CanvasState> {
     this.#lastPlaybackNotifyTime = performance.now();
     this.state.playbackVersion++;
     this.notify();
+  }
+
+  #syncVideoElementPlayback(entity: ShaderCanvasEntity): void {
+    if (entity.mediaSource.type !== MediaType.video) return;
+
+    const { videoElement } = entity.mediaSource;
+    const playback = entity.playback;
+    videoElement.muted = playback?.muted ?? true;
+    videoElement.volume = Math.max(0, Math.min(playback?.volume ?? 1, 1));
+    videoElement.loop = playback?.loop ?? true;
+    videoElement.playbackRate = playback?.playbackRate ?? 1;
   }
 
   /**

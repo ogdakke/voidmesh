@@ -23,6 +23,13 @@ export interface ImportPlacementOptions {
   select: boolean;
   fitToView: boolean;
   bottomInset: number;
+  onLoadFailure?: (failures: MediaLoadFailure[]) => void;
+}
+
+export interface MediaLoadFailure {
+  file: File;
+  reason: unknown;
+  mediaKind: "video" | "image" | "unknown";
 }
 
 /**
@@ -204,18 +211,33 @@ function placeLoadedEntities(
   return entityIds;
 }
 
-async function loadFilesForCanvas(files: File[]): Promise<LoadedEntity[]> {
+function getMediaKind(file: File): MediaLoadFailure["mediaKind"] {
+  if (file.type.startsWith("video/")) return "video";
+  if (file.type.startsWith("image/")) return "image";
+  return "unknown";
+}
+
+async function loadFilesForCanvas(
+  files: File[],
+): Promise<{ loaded: LoadedEntity[]; failures: MediaLoadFailure[] }> {
   const results = await Promise.allSettled(files.map((file) => loadMediaFile(file)));
 
   const loaded: LoadedEntity[] = [];
+  const failures: MediaLoadFailure[] = [];
   for (let i = 0; i < results.length; i++) {
     const result = results[i]!;
     if (result.status === "fulfilled" && result.value) {
       loaded.push({ data: result.value, filename: files[i]!.name });
+    } else if (result.status === "rejected") {
+      failures.push({
+        file: files[i]!,
+        reason: result.reason,
+        mediaKind: getMediaKind(files[i]!),
+      });
     }
   }
 
-  return loaded;
+  return { loaded, failures };
 }
 
 async function loadUrlForCanvas(url: string): Promise<LoadedEntity | null> {
@@ -254,7 +276,10 @@ export async function addFilesToCanvas(
 ): Promise<string[]> {
   if (files.length === 0) return [];
 
-  const loaded = await loadFilesForCanvas(files);
+  const { loaded, failures } = await loadFilesForCanvas(files);
+  if (failures.length > 0) {
+    options.onLoadFailure?.(failures);
+  }
   return placeLoadedEntities(loaded, addEntity, container, options);
 }
 

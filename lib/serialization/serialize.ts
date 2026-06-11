@@ -1,5 +1,6 @@
 import { canvasStore } from "#engine";
 import { config } from "#config";
+import { createPlaybackState } from "#lib/media-playback.ts";
 import type { ColorPalette, ShaderCanvasEntity } from "#types/canvas.ts";
 import { paletteStore } from "../palette-store.ts";
 import { detectVideoExtension, videoElementToBytes } from "./media.ts";
@@ -202,12 +203,17 @@ async function prepareEntity(entity: ShaderCanvasEntity): Promise<PreparedEntity
   }
 }
 
-function serializePlayback(playback: ShaderCanvasEntity["playback"]): SerializedPlaybackState {
+export function serializePlayback(
+  playback: ShaderCanvasEntity["playback"],
+): SerializedPlaybackState {
+  const safePlayback = createPlaybackState(playback);
   return {
-    currentTime: playback?.currentTime ?? 0,
-    loop: playback?.loop ?? true,
-    playbackRate: playback?.playbackRate ?? 1,
-    isPlaying: playback?.isPlaying ?? false,
+    currentTime: safePlayback.currentTime,
+    loop: safePlayback.loop,
+    playbackRate: safePlayback.playbackRate,
+    muted: safePlayback.muted,
+    volume: safePlayback.volume,
+    isPlaying: safePlayback.isPlaying,
   };
 }
 
