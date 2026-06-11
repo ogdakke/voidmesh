@@ -415,6 +415,12 @@ export function InfiniteCanvas() {
     playPauseRef.current = playPauseShortcutHandler;
   });
 
+  const muteMediaShortcutHandler = (e: KeyboardEvent) => {
+    if (!mediaActions.canToggleMuted()) return;
+    e.preventDefault();
+    mediaActions.toggleMuted();
+  };
+
   // Space+drag canvas panning: intercept space before the keybind system (capture phase,
   // registered first due to React's child-before-parent effect ordering).
   useEffect(() => {
@@ -762,6 +768,13 @@ export function InfiniteCanvas() {
       group: "video",
       label: "Play/Pause media",
       action: () => {}, // Handled by space+drag keyup handler to distinguish tap vs hold
+    },
+    {
+      id: "toggle_media_mute",
+      bind: (bb) => bb.withBind("m").withSensitive(false),
+      group: "video",
+      label: "Mute/Unmute media",
+      action: muteMediaShortcutHandler,
     },
     {
       id: "copy_selection",

@@ -1,4 +1,5 @@
 import { toastManager } from "#components/ui/toast/toast-manager.ts";
+import { showMediaLoadFailureToasts } from "#components/media-load-errors.ts";
 import { config } from "#config";
 import {
   addFilesToCanvas,
@@ -91,6 +92,7 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
         select: true,
         fitToView: shouldFitToView,
         bottomInset,
+        onLoadFailure: showMediaLoadFailureToasts,
       });
     }
 
@@ -181,6 +183,7 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
       select: true,
       fitToView: true,
       bottomInset,
+      onLoadFailure: showMediaLoadFailureToasts,
     });
 
     isLoadingRef.current = false;
@@ -237,6 +240,7 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
           select: true,
           fitToView: false,
           bottomInset,
+          onLoadFailure: showMediaLoadFailureToasts,
         });
       }
       // Handle dropped URLs

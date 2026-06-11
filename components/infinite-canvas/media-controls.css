@@ -62,7 +62,7 @@
   position: relative;
   height: var(--player-height, 60px);
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto 1fr auto;
   background: var(--floating-background);
   backdrop-filter: var(--floating-backdrop);
   padding: var(--spacing-2) var(--spacing-2);
@@ -220,4 +220,23 @@
   height: 100%;
   background-color: var(--primary);
   opacity: 1;
+}
+
+.mute-button {
+  color: var(--gray-800);
+  width: 24px;
+  height: 24px;
+  padding: 10px;
+  margin: -8px;
+  margin-left: -4px;
+  padding-top: 8px;
+
+  @media screen and (max-width: 768px) {
+    padding-top: 12px;
+  }
+
+  svg {
+    width: 20px;
+    height: 20px;
+  }
 }

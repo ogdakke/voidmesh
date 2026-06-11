@@ -50,6 +50,10 @@ import { toastManager } from "#components/ui/toast/toast-manager.ts";
 import { hints } from "#components/ui/hint/hint-manager.ts";
 import { extractOriginalPalette, cloneMediaSource } from "#lib/media-loader.ts";
 import { Command, undo } from "#lib/undo.ts";
+import {
+  createDuplicatePlaybackState,
+  resetDuplicatedMediaPlayback,
+} from "#lib/media-duplication.ts";
 import { config, glassKindResets, glitchKindResets } from "#config";
 import { preferences } from "#lib/storage.ts";
 import { paletteStore } from "#lib/palette-store.ts";
@@ -751,6 +755,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       let n = 1;
       while (entities.values().some((e) => e.name === `${baseName} (${n})`)) n++;
       const name = `${baseName} (${n})`;
+      const playback = createDuplicatePlaybackState(entity);
+      resetDuplicatedMediaPlayback(mediaSource, playback);
 
       const clone: ShaderCanvasEntity = {
         ...entity,
@@ -766,7 +772,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         originalPalette: entity.originalPalette
           ? structuredClone(entity.originalPalette)
           : undefined,
-        playback: entity.playback ? { ...entity.playback, isPlaying: false } : undefined,
+        playback,
         texture: undefined,
         textureDirty: true,
         selected: false,

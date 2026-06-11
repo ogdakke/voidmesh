@@ -1,4 +1,5 @@
 import type { ColorPalette, PlaybackState, ShaderParams } from "#types/canvas.ts";
+import { createPlaybackState } from "#lib/media-playback.ts";
 
 // ============================================================================
 // Document Envelope
@@ -98,6 +99,8 @@ export interface SerializedPlaybackState {
   currentTime: number;
   loop: boolean;
   playbackRate: number;
+  muted?: boolean;
+  volume?: number;
   isPlaying?: boolean;
 }
 
@@ -178,10 +181,5 @@ export function isSerializedEntity(data: unknown): data is SerializedEntity {
 
 /** Playback state with safe defaults */
 export function toPlaybackState(s: SerializedPlaybackState | undefined): PlaybackState {
-  return {
-    isPlaying: s?.isPlaying ?? false,
-    currentTime: s?.currentTime ?? 0,
-    loop: s?.loop ?? true,
-    playbackRate: s?.playbackRate ?? 1,
-  };
+  return createPlaybackState(s);
 }

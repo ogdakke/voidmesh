@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
+import type { MediaLoadFailure } from "#lib/entity-placement.ts";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
 import { createEntityInput } from "../helpers/test-entity.ts";
 
@@ -139,6 +140,39 @@ describe("entity placement", () => {
 
     expect(stopMomentum).toHaveBeenCalled();
     expect(animateTo).toHaveBeenCalledTimes(1);
+  });
+
+  test("reports failed file loads without blocking successful files", async () => {
+    const loadError = new Error("Unsupported codec");
+    vi.spyOn(mediaLoader, "loadMediaFile")
+      .mockRejectedValueOnce(loadError)
+      .mockResolvedValueOnce(makeEntityInput({ width: 100, height: 80 }));
+
+    const { addEntity, added } = createAddEntityRecorder();
+    const onLoadFailure = vi.fn<(failures: MediaLoadFailure[]) => void>();
+
+    const ids = await addFilesToCanvas(
+      [makeFile("bad.mp4", "video/mp4"), makeFile("good.png")],
+      addEntity,
+      makeContainer(),
+      {
+        anchor: { x: 100, y: 100 },
+        select: true,
+        fitToView: false,
+        bottomInset: 0,
+        onLoadFailure,
+      },
+    );
+
+    expect(ids).toEqual(["good.png"]);
+    expect(added).toHaveLength(1);
+    expect(onLoadFailure).toHaveBeenCalledWith([
+      {
+        file: expect.objectContaining({ name: "bad.mp4", type: "video/mp4" }),
+        reason: loadError,
+        mediaKind: "video",
+      },
+    ]);
   });
 
   test("multiple dropped URLs are laid out as a group around the drop point", async () => {

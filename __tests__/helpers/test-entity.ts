@@ -56,6 +56,12 @@ export interface CreateEntityOptions {
   videoDuration?: number;
   /** Video FPS (for video entities) */
   videoFps?: number;
+  /** Whether the video entity has an audio track */
+  videoHasAudio?: boolean;
+  /** Initial muted state for animated playback */
+  muted?: boolean;
+  /** Initial volume for animated playback */
+  volume?: number;
   /** GIF duration in seconds (for gif entities) */
   gifDuration?: number;
   /** Number of GIF frames (for gif entities) */
@@ -134,14 +140,18 @@ export function createTestEntity(options: CreateEntityOptions = {}): ShaderCanva
       blob: new Blob(["mock-video"], { type: "video/mp4" }),
       duration: options.videoDuration ?? 10,
       fps: options.videoFps ?? 30,
-      hasAudio: false,
+      hasAudio: options.videoHasAudio ?? false,
     };
     const playback: PlaybackState = {
       isPlaying: false,
       currentTime: 0,
       loop: false,
       playbackRate: 1,
+      muted: options.muted ?? true,
+      volume: options.volume ?? 1,
     };
+    videoElement.muted = playback.muted;
+    videoElement.volume = playback.volume;
     return { ...baseProps, mediaSource, playback };
   }
 
@@ -166,6 +176,8 @@ export function createTestEntity(options: CreateEntityOptions = {}): ShaderCanva
       currentTime: 0,
       loop: true,
       playbackRate: 1,
+      muted: options.muted ?? true,
+      volume: options.volume ?? 1,
     };
     return { ...baseProps, mediaSource, playback };
   }

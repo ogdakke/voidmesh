@@ -13,6 +13,21 @@ export interface AnalyticsEventMap {
   "entity.added": { media_type: string };
   "entity.duplicated": { entity_count: number };
   "workspace.cleared": { entity_count: number };
+  "media.video_unsupported": {
+    mimeType: string;
+    sizeBytes: number;
+    errorType: string;
+    errorCode: number | null;
+    canPlayMimeType: string;
+    canPlayVideoCodec: string;
+    videoCodec: string | null;
+    audioCodec: string | null;
+    audioSampleRate: number | null;
+    audioChannels: number | null;
+    demuxError: string | null;
+    webCodecsVideoDecoderSupported: boolean | null;
+    webCodecsVideoDecoderSupportError: string | null;
+  };
   "deserialization.video_seek_timed_out": {
     mediaType: "video";
     container: string;

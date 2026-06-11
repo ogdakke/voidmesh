@@ -433,6 +433,10 @@ export interface PlaybackState {
   currentTime: number;
   loop: boolean;
   playbackRate: number;
+  /** Whether video audio is muted during canvas preview playback */
+  muted: boolean;
+  /** Video audio volume for future volume controls */
+  volume: number;
 }
 
 type ShaderCanvasEntityBase = {

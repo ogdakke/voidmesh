@@ -5,7 +5,7 @@
  * and immediate updates when switching between media entities.
  */
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
-import { screen, act } from "@testing-library/react";
+import { screen, act, fireEvent, waitFor } from "@testing-library/react";
 import { MediaControls } from "../../components/infinite-canvas/media-controls.tsx";
 import { renderWithCanvas } from "../helpers/render-with-providers.tsx";
 import { createEntityInput, resetEntityCounter } from "../helpers/test-entity.ts";
@@ -174,6 +174,93 @@ describe("MediaControls", () => {
       expect(button).toBeInTheDocument();
     });
   });
+
+  describe("mute button", () => {
+    test("shows mute button for video with audio, defaulting to muted", () => {
+      const { canvas } = renderWithCanvas(<MediaControls />);
+
+      act(() => {
+        const id = canvas.addEntity(
+          createEntityInput({ mediaType: "video", videoDuration: 60, videoHasAudio: true }),
+        );
+        canvas.selectEntity(id);
+      });
+
+      expect(screen.getByRole("button", { name: /unmute/i, hidden: true })).toBeInTheDocument();
+    });
+
+    test("clicking mute button toggles selected video audio state", async () => {
+      const { canvas } = renderWithCanvas(<MediaControls />);
+
+      let videoId: string;
+      act(() => {
+        videoId = canvas.addEntity(
+          createEntityInput({ mediaType: "video", videoDuration: 60, videoHasAudio: true }),
+        );
+        canvas.selectEntity(videoId);
+      });
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: /unmute/i, hidden: true }));
+      });
+
+      const entity = canvasStore.getState().entities.get(videoId!);
+      expect(entity?.playback?.muted).toBe(false);
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /^mute$/i, hidden: true })).toBeInTheDocument();
+      });
+    });
+
+    test("does not show mute button for video without audio", () => {
+      const { canvas } = renderWithCanvas(<MediaControls />);
+
+      act(() => {
+        const id = canvas.addEntity(
+          createEntityInput({ mediaType: "video", videoDuration: 60, videoHasAudio: false }),
+        );
+        canvas.selectEntity(id);
+      });
+
+      expect(screen.queryByRole("button", { name: /mute/i, hidden: true })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: /unmute/i, hidden: true }),
+      ).not.toBeInTheDocument();
+    });
+
+    test("switching selected videos shows each independent muted state", () => {
+      const { canvas } = renderWithCanvas(<MediaControls />);
+
+      let idA: string;
+      let idB: string;
+      act(() => {
+        idA = canvas.addEntity(
+          createEntityInput({
+            mediaType: "video",
+            videoDuration: 60,
+            videoHasAudio: true,
+            muted: false,
+          }),
+        );
+        idB = canvas.addEntity(
+          createEntityInput({
+            mediaType: "video",
+            videoDuration: 60,
+            videoHasAudio: true,
+            muted: true,
+          }),
+        );
+        canvas.selectEntity(idA);
+      });
+
+      expect(screen.getByRole("button", { name: /^mute$/i, hidden: true })).toBeInTheDocument();
+
+      act(() => {
+        canvas.selectEntity(idB!);
+      });
+
+      expect(screen.getByRole("button", { name: /unmute/i, hidden: true })).toBeInTheDocument();
+    });
+  });
 });
 
 // ============================================================================
@@ -192,6 +279,20 @@ describe("MediaControls - GIF support", () => {
 
       const controls = document.querySelector(".media-controls");
       expect(controls).not.toHaveAttribute("hidden");
+    });
+
+    test("does not show mute button for GIF", () => {
+      const { canvas } = renderWithCanvas(<MediaControls />);
+
+      act(() => {
+        const id = canvas.addEntity(createEntityInput({ mediaType: "gif", gifDuration: 2 }));
+        canvas.selectEntity(id);
+      });
+
+      expect(screen.queryByRole("button", { name: /mute/i, hidden: true })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: /unmute/i, hidden: true }),
+      ).not.toBeInTheDocument();
     });
   });
 

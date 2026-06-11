@@ -1,9 +1,11 @@
 import type { ShaderCanvasEntity, Point, ColorPalette, MediaSource } from "#types/canvas.ts";
 import type { ColorSpace } from "#types/enums.ts";
+import { analytics } from "./analytics.ts";
 import { logger } from "./client.logger.ts";
 import { config } from "./config/index.ts";
 import { extractPaletteFromImage } from "./palette-extraction/index.ts";
 import { decodeGif, isAnimatedGif, type GifDecodeResult } from "./gif-decoder.ts";
+import { createPlaybackState } from "./media-playback.ts";
 
 /** Check if a file is a video */
 export function isVideoFile(file: File): boolean {
@@ -39,6 +41,23 @@ export interface VideoLoadResult {
   duration: number;
   hasAudio: boolean;
   fps: number | null;
+}
+
+interface VideoLoadFailureDetails {
+  errorCode: number | null;
+  errorType: string;
+  errorMessage: string;
+  mimeType: string;
+  canPlayMimeType: string;
+  canPlayVideoCodec: string;
+  sizeBytes: number;
+  videoCodec: string | null;
+  webCodecsVideoDecoderSupported: boolean | null;
+  webCodecsVideoDecoderSupportError: string | null;
+  audioCodec: string | null;
+  audioSampleRate: number | null;
+  audioChannels: number | null;
+  demuxError: string | null;
 }
 
 /** Common frame rates to round to */
@@ -162,17 +181,26 @@ async function detectVideoFps(
  */
 export async function loadVideo(blob: Blob): Promise<VideoLoadResult> {
   const video = document.createElement("video");
-  video.src = URL.createObjectURL(blob);
   video.muted = true;
+  video.defaultMuted = true;
   video.loop = true;
   video.playsInline = true;
   video.preload = "auto";
+  video.src = URL.createObjectURL(blob);
 
   // Wait for metadata to load
-  await new Promise<void>((resolve, reject) => {
-    video.onloadedmetadata = () => resolve();
-    video.onerror = () => reject(new Error("Failed to load video"));
-  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      video.onloadedmetadata = () => resolve();
+      video.onerror = () => {
+        void createVideoLoadError(video, blob).then(reject);
+      };
+    });
+  } catch (error) {
+    cleanupVideoElement(video);
+    trackUnsupportedVideoLoad(blob, error);
+    throw error;
+  }
 
   const width = video.videoWidth;
   const height = video.videoHeight;
@@ -209,6 +237,165 @@ export async function loadVideo(blob: Blob): Promise<VideoLoadResult> {
     fps,
     hasAudio,
   };
+}
+
+async function createVideoLoadError(video: HTMLVideoElement, blob: Blob): Promise<Error> {
+  const details = await getVideoLoadFailureDetails(video, blob);
+  logger.error("[media-loader] Failed to load video", details);
+
+  const error = new Error(
+    `Failed to load video (${details.errorType}; type=${details.mimeType}; canPlay=${details.canPlayMimeType}; size=${details.sizeBytes}; videoCodec=${details.videoCodec ?? "unknown"}; audioCodec=${details.audioCodec ?? "unknown"})`,
+  );
+  return Object.assign(error, { details });
+}
+
+function getVideoLoadErrorDetails(error: unknown): VideoLoadFailureDetails | null {
+  if (!(error instanceof Error) || !("details" in error)) return null;
+  const details = (error as Error & { details?: unknown }).details;
+  if (!details || typeof details !== "object") return null;
+  return details as VideoLoadFailureDetails;
+}
+
+function trackUnsupportedVideoLoad(blob: Blob, error: unknown): void {
+  const details = getVideoLoadErrorDetails(error);
+  if (!details) return;
+
+  analytics.track("media.video_unsupported", {
+    mimeType: details.mimeType,
+    sizeBytes: blob.size,
+    errorType: details.errorType,
+    errorCode: details.errorCode,
+    canPlayMimeType: details.canPlayMimeType,
+    canPlayVideoCodec: details.canPlayVideoCodec,
+    videoCodec: details.videoCodec,
+    audioCodec: details.audioCodec,
+    audioSampleRate: details.audioSampleRate,
+    audioChannels: details.audioChannels,
+    demuxError: details.demuxError,
+    webCodecsVideoDecoderSupported: details.webCodecsVideoDecoderSupported,
+    webCodecsVideoDecoderSupportError: details.webCodecsVideoDecoderSupportError,
+  });
+}
+
+async function getVideoLoadFailureDetails(
+  video: HTMLVideoElement,
+  blob: Blob,
+): Promise<VideoLoadFailureDetails> {
+  const mediaError = video.error;
+  const code = mediaError?.code;
+  const codeLabel =
+    code === 1
+      ? "aborted"
+      : code === 2
+        ? "network"
+        : code === 3
+          ? "decode"
+          : code === 4
+            ? "source-not-supported"
+            : "unknown";
+  const demux = await probeVideoLoadFailureCodecs(blob);
+  const support = blob.type ? video.canPlayType(blob.type) || "no" : "unknown";
+  const videoCodecSupport =
+    blob.type && demux.videoCodec
+      ? video.canPlayType(`${blob.type}; codecs="${demux.videoCodec}"`) || "no"
+      : "unknown";
+  const videoDecoderSupport = await checkVideoDecoderSupport(demux.videoDecoderConfig);
+
+  return {
+    errorCode: code ?? null,
+    errorType: codeLabel,
+    errorMessage: mediaError?.message ?? "",
+    mimeType: blob.type || "unknown",
+    canPlayMimeType: support,
+    canPlayVideoCodec: videoCodecSupport,
+    sizeBytes: blob.size,
+    videoCodec: demux.videoCodec,
+    webCodecsVideoDecoderSupported: videoDecoderSupport.supported,
+    webCodecsVideoDecoderSupportError: videoDecoderSupport.error,
+    audioCodec: demux.audioCodec,
+    audioSampleRate: demux.audioSampleRate,
+    audioChannels: demux.audioChannels,
+    demuxError: demux.error,
+  };
+}
+
+async function probeVideoLoadFailureCodecs(blob: Blob): Promise<{
+  videoCodec: string | null;
+  videoDecoderConfig: VideoDecoderConfig | null;
+  audioCodec: string | null;
+  audioSampleRate: number | null;
+  audioChannels: number | null;
+  error: string | null;
+}> {
+  try {
+    const { ALL_FORMATS, BlobSource, Input } = await import("mediabunny");
+    const input = new Input({
+      source: new BlobSource(blob),
+      formats: ALL_FORMATS,
+    });
+
+    try {
+      const [videoTrack, audioTrack] = await Promise.all([
+        input.getPrimaryVideoTrack(),
+        input.getPrimaryAudioTrack(),
+      ]);
+      const [videoConfig, audioConfig, audioSampleRate, audioChannels] = await Promise.all([
+        videoTrack?.getDecoderConfig() ?? Promise.resolve(null),
+        audioTrack?.getDecoderConfig() ?? Promise.resolve(null),
+        audioTrack?.getSampleRate() ?? Promise.resolve(null),
+        audioTrack?.getNumberOfChannels() ?? Promise.resolve(null),
+      ]);
+
+      return {
+        videoCodec: videoConfig?.codec ?? null,
+        videoDecoderConfig: videoConfig,
+        audioCodec: audioConfig?.codec ?? null,
+        audioSampleRate,
+        audioChannels,
+        error: null,
+      };
+    } finally {
+      input.dispose();
+    }
+  } catch (error) {
+    return {
+      videoCodec: null,
+      videoDecoderConfig: null,
+      audioCodec: null,
+      audioSampleRate: null,
+      audioChannels: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function checkVideoDecoderSupport(
+  decoderConfig: VideoDecoderConfig | null,
+): Promise<{ supported: boolean | null; error: string | null }> {
+  if (!decoderConfig) return { supported: null, error: null };
+  if (typeof VideoDecoder === "undefined") {
+    return { supported: false, error: "VideoDecoder is unavailable" };
+  }
+
+  try {
+    const support = await VideoDecoder.isConfigSupported(decoderConfig);
+    return { supported: support.supported === true, error: null };
+  } catch (error) {
+    return {
+      supported: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function cleanupVideoElement(video: HTMLVideoElement): void {
+  const { src } = video;
+  video.pause();
+  video.removeAttribute("src");
+  video.load();
+  if (src.startsWith("blob:")) {
+    URL.revokeObjectURL(src);
+  }
 }
 
 /**
@@ -275,12 +462,7 @@ export function createGifEntityData(
     selected: false,
     locked: false,
     edited: false,
-    playback: {
-      isPlaying: true, // Autoplay when added
-      currentTime: 0,
-      loop: true,
-      playbackRate: 1,
-    },
+    playback: createPlaybackState({ isPlaying: true }), // Autoplay when added
   };
 }
 
@@ -412,12 +594,7 @@ export function createVideoEntityData(
     selected: false,
     locked: false,
     edited: false,
-    playback: {
-      isPlaying: true, // Autoplay when added
-      currentTime: 0,
-      loop: true,
-      playbackRate: 1,
-    },
+    playback: createPlaybackState({ isPlaying: true }), // Autoplay when added
   };
 }
 
@@ -429,13 +606,8 @@ export async function loadMediaFile(
   position: Point = { x: 0, y: 0 },
 ): Promise<(Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string }) | null> {
   if (isVideoFile(file)) {
-    try {
-      const videoResult = await loadVideo(file);
-      return createVideoEntityData(videoResult, file, position, file.name);
-    } catch (err) {
-      console.error("Failed to load video:", err);
-      return null;
-    }
+    const videoResult = await loadVideo(file);
+    return createVideoEntityData(videoResult, file, position, file.name);
   }
 
   if (isImageFile(file)) {
@@ -490,13 +662,8 @@ export async function loadMediaFromBlob(
   filename?: string,
 ): Promise<(Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string }) | null> {
   if (isVideoMimeType(mimeType)) {
-    try {
-      const videoResult = await loadVideo(blob);
-      return createVideoEntityData(videoResult, blob, position, filename);
-    } catch (err) {
-      console.error("Failed to load video from URL:", err);
-      return null;
-    }
+    const videoResult = await loadVideo(blob);
+    return createVideoEntityData(videoResult, blob, position, filename);
   }
 
   if (isImageMimeType(mimeType)) {

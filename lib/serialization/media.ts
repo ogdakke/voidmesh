@@ -203,11 +203,12 @@ async function seekVideoWithTimeout(
 
 function createArchiveVideoElement(blob: Blob): HTMLVideoElement {
   const video = document.createElement("video");
-  video.src = URL.createObjectURL(blob);
   video.muted = true;
+  video.defaultMuted = true;
   video.loop = true;
   video.playsInline = true;
   video.preload = "auto";
+  video.src = URL.createObjectURL(blob);
   return video;
 }
 

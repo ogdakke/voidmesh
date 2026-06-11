@@ -92,6 +92,59 @@ describe("canvasStore.seekVideo", () => {
   });
 });
 
+describe("canvasStore video audio controls", () => {
+  test("setVideoMuted updates playback and video element muted state", () => {
+    const entity = createTestEntity({ mediaType: "video", videoHasAudio: true });
+    canvasStore.addEntity(entity);
+
+    canvasStore.setVideoMuted(entity.id, false);
+
+    expect(entity.playback?.muted).toBe(false);
+    expect(entity.mediaSource.type === "video" && entity.mediaSource.videoElement.muted).toBe(
+      false,
+    );
+  });
+
+  test("toggleVideoMuted flips playback and video element muted state", () => {
+    const entity = createTestEntity({
+      mediaType: "video",
+      videoDuration: 100,
+      videoHasAudio: true,
+      muted: true,
+    });
+    canvasStore.addEntity(entity);
+
+    canvasStore.toggleVideoMuted(entity.id);
+
+    expect(entity.playback?.muted).toBe(false);
+    expect(entity.mediaSource.type === "video" && entity.mediaSource.videoElement.muted).toBe(
+      false,
+    );
+  });
+
+  test("does not change timing, playing state, or selected entity when muting", () => {
+    const entity = createTestEntity({
+      mediaType: "video",
+      videoDuration: 100,
+      videoHasAudio: true,
+      muted: true,
+    });
+    canvasStore.addEntity(entity);
+    canvasStore.replaceSelection([entity.id]);
+    canvasStore.seekVideo(entity.id, 12);
+    if (entity.playback) entity.playback.isPlaying = true;
+
+    const selectedBefore = canvasStore.getSelectedEntity()?.id;
+
+    canvasStore.toggleVideoMuted(entity.id);
+
+    expect(entity.playback?.currentTime).toBe(12);
+    expect(getVideoCurrentTime(entity)).toBe(12);
+    expect(entity.playback?.isPlaying).toBe(true);
+    expect(canvasStore.getSelectedEntity()?.id).toBe(selectedBefore);
+  });
+});
+
 describe("canvasStore.updatePlaybackTime", () => {
   test("updates playback.currentTime", () => {
     const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
