@@ -54,7 +54,7 @@
         "**/*.test.ts"
       ],
       "rules": {
-        "vitest/expect-expect": "warn",
+        "vitest/expect-expect": "off",
         "react-hooks-js/globals": "off",
         "react-hooks-js/set-state-in-effect": "off",
         "react-hooks-js/refs": "off",
