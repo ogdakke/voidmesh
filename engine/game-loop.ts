@@ -325,6 +325,7 @@ export class GameLoop {
     // 1. Compute delta time for GIF playback advancement
     const now = performance.now();
     const deltaSeconds = this.#lastFrameTime !== null ? (now - this.#lastFrameTime) / 1000 : 0;
+    const rafDeltaMs = deltaSeconds * 1000;
     this.#lastFrameTime = now;
 
     let hasAnimatedFrameUpdate = false;
@@ -371,6 +372,7 @@ export class GameLoop {
     // 6. Add selection bounds to render state (managed by game-loop, not store)
     renderState.dragSelectBounds = this.getDragSelectBounds();
     renderState.multiSelectBounds = this.getMultiSelectBounds();
+    renderState.rafDeltaMs = rafDeltaMs;
 
     // 7. Determine if we need to render this frame
     const needsRender =

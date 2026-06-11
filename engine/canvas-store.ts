@@ -133,6 +133,8 @@ export interface RenderState {
   hoveredEntityId: string | null;
   debugMode: boolean;
   dirty: boolean;
+  /** Latest requestAnimationFrame interval in milliseconds. Used by renderer quality adaptation. */
+  rafDeltaMs: number;
   canvasCallouts: readonly CanvasCallout[];
   /** Drag-select rectangle bounds in world coordinates (null if not active) */
   dragSelectBounds: Bounds | null;
@@ -972,6 +974,7 @@ export class CanvasStore extends Store<CanvasState> {
         this.state.selectionDirty ||
         this.state.containerSizeDirty ||
         this.state.canvasCalloutsDirty,
+      rafDeltaMs: 0,
       canvasCallouts: this.state.canvasCallouts,
       // dragSelectBounds and multiSelectBounds are set by game-loop after calling this method
       dragSelectBounds: null,

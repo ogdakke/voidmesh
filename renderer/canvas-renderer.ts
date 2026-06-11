@@ -13,11 +13,18 @@ import {
   getViewportMatrix,
   getViewportWorldBounds,
 } from "../lib/canvas-math.ts";
-import { type Bounds, type RGBA, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
+import {
+  type Bounds,
+  type RGBA,
+  type ShaderCanvasEntity,
+  type ShaderParams,
+  type Viewport,
+} from "#types/canvas.ts";
 import compositionShaderSource from "./composition.wgsl?raw";
 import { CopyPass } from "./copy-pass.ts";
 import { DisintegrationParticleSystem } from "./disintegration-particles.ts";
 import dotGridShaderSource from "./dot-grid.wgsl?raw";
+import type { EffectRenderEntity } from "./effect-render-entity.ts";
 import { EntityShaderRuntime } from "./entity-shader-runtime.ts";
 import { ExportService } from "./export-service.ts";
 import { detectGpuColorConfig, type GpuColorConfig } from "./gpu-color-space.ts";
@@ -25,6 +32,19 @@ import selectionRectShaderSource from "./selection-rect.wgsl?raw";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
 import { EntityLabelPass } from "./entity-label-pass.ts";
 import { TexturePool } from "./texture-pool.ts";
+import {
+  blockVideoPreviewFrameGovernorUpgrades,
+  createVideoPreviewFrameGovernorState,
+  createVideoPreviewAdaptiveState,
+  recordVideoPreviewFrameGovernorSample,
+  recordVideoPreviewRenderSample,
+  resolveVideoPreviewResolution,
+  type PreviewResolution,
+  type VideoPreviewAdaptiveState,
+  type VideoPreviewFrameGovernorState,
+  type VideoPreviewGovernorEntity,
+  type VideoPreviewQualityTransition,
+} from "./video-preview-resolution.ts";
 import { resolveWlurOverlayRuntimeConfig, type WlurOverlayConfig } from "./wlur-overlay.ts";
 import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
 
@@ -34,6 +54,11 @@ interface CompositionDrawItem {
   isSelected: boolean;
   offsetX: number;
   offsetY: number;
+}
+
+interface EntityTextureRenderResult {
+  texture: GPUTexture;
+  changed: boolean;
 }
 
 export class InfiniteCanvasRenderer {
@@ -83,6 +108,9 @@ export class InfiniteCanvasRenderer {
       height: number;
     }
   > = new Map();
+  #videoPreviewAdaptiveStates: Map<string, VideoPreviewAdaptiveState> = new Map();
+  #videoPreviewFrameGovernor: VideoPreviewFrameGovernorState =
+    createVideoPreviewFrameGovernorState();
 
   // Entity composition cache (uniform buffers, bind groups, texture views)
   // These are invalidated when entity texture changes
@@ -827,7 +855,7 @@ export class InfiniteCanvasRenderer {
    * @param outputTextureHasStorageBinding - Whether outputTexture has STORAGE_BINDING (for compute shader direct write)
    */
   #applyShaderToTexture(
-    entity: ShaderCanvasEntity,
+    entity: EffectRenderEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
     _outputTextureHasStorageBinding: boolean = false,
@@ -851,6 +879,145 @@ export class InfiniteCanvasRenderer {
     });
 
     this.#device.queue.submit([encoder.finish()]);
+  }
+
+  #resolveEntityPreviewResolution(
+    entity: ShaderCanvasEntity,
+    viewport: Viewport,
+    nowMs: number,
+  ): PreviewResolution {
+    const state =
+      entity.mediaSource.type === "video"
+        ? this.#getVideoPreviewAdaptiveState(entity.id)
+        : undefined;
+
+    return resolveVideoPreviewResolution(
+      {
+        isVideo: entity.mediaSource.type === "video",
+        originalSize: entity.originalSize,
+        entitySize: entity.size,
+        viewportZoom: viewport.zoom,
+        nowMs,
+        state,
+      },
+      config.rendering.videoPreviewAdaptive,
+    );
+  }
+
+  #recordVideoPreviewFrameTime(
+    visibleEntities: readonly ShaderCanvasEntity[],
+    rafDeltaMs: number,
+  ): void {
+    const videoEntities = visibleEntities.filter(
+      (entity) => entity.mediaSource.type === "video" && entity.playback?.isPlaying,
+    );
+    if (videoEntities.length === 0) return;
+
+    const entityById = new Map(videoEntities.map((entity) => [entity.id, entity]));
+    const governorEntities: VideoPreviewGovernorEntity[] = videoEntities.map((entity) => ({
+      id: entity.id,
+      quality: this.#getVideoPreviewAdaptiveState(entity.id).quality,
+      originalSize: entity.originalSize,
+    }));
+    const transitions = recordVideoPreviewFrameGovernorSample(
+      this.#videoPreviewFrameGovernor,
+      governorEntities,
+      rafDeltaMs,
+      config.rendering.videoPreviewAdaptive,
+    );
+
+    for (const transition of transitions) {
+      if (!transition.entityId) continue;
+      const entity = entityById.get(transition.entityId);
+      if (!entity) continue;
+      const adaptiveState = this.#getVideoPreviewAdaptiveState(entity.id);
+      adaptiveState.quality = transition.to;
+      adaptiveState.forceResolutionUpdate = true;
+      adaptiveState.samples = [];
+
+      this.#logVideoPreviewTransition(entity, transition, {
+        rafDeltaMs: Number(rafDeltaMs.toFixed(2)),
+        visibleVideoCount: videoEntities.length,
+        thisFrameWillResolveNewQuality: true,
+      });
+    }
+  }
+
+  #logVideoPreviewTransition(
+    entity: ShaderCanvasEntity,
+    transition: VideoPreviewQualityTransition,
+    extra: Record<string, unknown>,
+  ): void {
+    const direction =
+      transition.from === "full" ||
+      (transition.from === "threeQuarter" && transition.to === "floor")
+        ? "downgraded"
+        : "upgraded";
+
+    logger.info(`[renderer] Video preview ${direction}`, {
+      entityId: entity.id,
+      entityName: entity.name,
+      source: transition.source,
+      from: transition.from,
+      to: transition.to,
+      ...(transition.action ? { action: transition.action } : {}),
+      medianMs: Number(transition.medianMs.toFixed(2)),
+      p95Ms: Number(transition.p95Ms.toFixed(2)),
+      ...(transition.targetMs ? { targetMs: Number(transition.targetMs.toFixed(2)) } : {}),
+      ...extra,
+    });
+  }
+
+  #getVideoPreviewAdaptiveState(entityId: string): VideoPreviewAdaptiveState {
+    let state = this.#videoPreviewAdaptiveStates.get(entityId);
+    if (!state) {
+      state = createVideoPreviewAdaptiveState();
+      this.#videoPreviewAdaptiveStates.set(entityId, state);
+    }
+    return state;
+  }
+
+  #createRenderEntity(
+    entity: ShaderCanvasEntity,
+    renderResolution: PreviewResolution,
+  ): EffectRenderEntity {
+    if (renderResolution.renderScale === 1) return entity;
+    return {
+      id: entity.id,
+      originalSize: {
+        width: renderResolution.width,
+        height: renderResolution.height,
+      },
+      shaderType: entity.shaderType,
+      shaderParams: this.#scaleRenderParams(entity.shaderParams, renderResolution.renderScale),
+    };
+  }
+
+  #scaleRenderParams(params: ShaderParams, renderScale: number): ShaderParams {
+    const postProcess = params.postProcess;
+    const scaledPostProcess = postProcess
+      ? {
+          ...postProcess,
+          grain: postProcess.grain
+            ? {
+                ...postProcess.grain,
+                size: postProcess.grain.size * renderScale,
+              }
+            : postProcess.grain,
+          chromaticAberration: postProcess.chromaticAberration
+            ? {
+                ...postProcess.chromaticAberration,
+                offset: postProcess.chromaticAberration.offset * renderScale,
+              }
+            : postProcess.chromaticAberration,
+        }
+      : postProcess;
+
+    return {
+      ...params,
+      size: params.size * renderScale,
+      ...(scaledPostProcess ? { postProcess: scaledPostProcess } : {}),
+    };
   }
 
   #updateGridUniforms(viewport: Viewport): void {
@@ -1037,8 +1204,10 @@ export class InfiniteCanvasRenderer {
   ): HTMLVideoElement | ImageBitmap | OffscreenCanvas {
     if (entity.mediaSource.type === "video") {
       const video = entity.mediaSource.videoElement;
+      const needsScaledUpload =
+        width !== entity.originalSize.width || height !== entity.originalSize.height;
 
-      if (this.#directVideoUploadSupported !== false) {
+      if (!needsScaledUpload && this.#directVideoUploadSupported !== false) {
         try {
           this.#device!.queue.copyExternalImageToTexture(
             { source: video },
@@ -1077,14 +1246,56 @@ export class InfiniteCanvasRenderer {
     return source;
   }
 
+  #recordVideoPreviewRenderTime(
+    entity: ShaderCanvasEntity,
+    didReprocess: boolean,
+    renderStart: number,
+    resolution: PreviewResolution,
+  ): void {
+    if (!didReprocess || entity.mediaSource.type !== "video") return;
+    const state = this.#videoPreviewAdaptiveStates.get(entity.id);
+    if (!state) return;
+    const renderTimeMs = performance.now() - renderStart;
+    const transition = recordVideoPreviewRenderSample(
+      state,
+      renderTimeMs,
+      config.rendering.videoPreviewAdaptive,
+    );
+    if (!transition) return;
+    blockVideoPreviewFrameGovernorUpgrades(
+      this.#videoPreviewFrameGovernor,
+      config.rendering.videoPreviewAdaptive,
+    );
+
+    this.#logVideoPreviewTransition(entity, transition, {
+      renderTimeMs: Number(renderTimeMs.toFixed(2)),
+      renderedTextureSize: `${resolution.width}x${resolution.height}`,
+      nextFrameWillResolveNewQuality: true,
+    });
+  }
+
   /**
    * Render an entity's image through its shader to a texture.
    * Returns the texture, caching it for future frames.
    */
-  renderEntityToTexture(entity: ShaderCanvasEntity): GPUTexture | null {
+  renderEntityToTexture(
+    entity: ShaderCanvasEntity,
+    renderResolution?: PreviewResolution,
+  ): EntityTextureRenderResult | null {
     if (!this.#device || !this.#entityShaderRuntime) {
       return null;
     }
+
+    const resolution = renderResolution ?? {
+      width: entity.originalSize.width,
+      height: entity.originalSize.height,
+      renderScale: 1,
+      quality: "full" as const,
+    };
+    const width = resolution.width;
+    const height = resolution.height;
+    const renderStart = performance.now();
+    let didReprocess = false;
 
     // Time-based shaders need the shader pass every frame, but animated media only
     // re-uploads/re-shades when the game loop marks a new decoded frame dirty.
@@ -1096,13 +1307,12 @@ export class InfiniteCanvasRenderer {
       !entity.shaderParams.showOriginal &&
       !needsContinuousShaderRender &&
       cachedTexture &&
+      cachedTexture.width === width &&
+      cachedTexture.height === height &&
       !entity.textureDirty
     ) {
-      return cachedTexture;
+      return { texture: cachedTexture, changed: false };
     }
-
-    const width = entity.originalSize.width;
-    const height = entity.originalSize.height;
 
     // Source texture usage flags
     const sourceUsage =
@@ -1115,6 +1325,7 @@ export class InfiniteCanvasRenderer {
     // was marked dirty. This lets viewport/UI redraws sample the previous video frame.
     const cachedSource = this.#entitySourceTextures.get(entity.id);
     let sourceTexture: GPUTexture;
+    let sourceTextureChanged = false;
 
     if (
       !entity.textureDirty &&
@@ -1124,10 +1335,12 @@ export class InfiniteCanvasRenderer {
     ) {
       sourceTexture = cachedSource.texture;
     } else {
+      didReprocess = true;
       // Source changed, dimensions changed, or a new animated frame arrived: upload.
       if (cachedSource && (cachedSource.width !== width || cachedSource.height !== height)) {
         // Dimensions changed — destroy old, create new
         cachedSource.texture.destroy();
+        sourceTextureChanged = true;
         sourceTexture = this.#device.createTexture({
           label: `Entity ${entity.id} cached source`,
           size: [width, height],
@@ -1139,6 +1352,7 @@ export class InfiniteCanvasRenderer {
         sourceTexture = cachedSource.texture;
       } else {
         // First render — create new long-lived source texture
+        sourceTextureChanged = true;
         sourceTexture = this.#device.createTexture({
           label: `Entity ${entity.id} cached source`,
           size: [width, height],
@@ -1164,8 +1378,10 @@ export class InfiniteCanvasRenderer {
       if (cachedTexture) {
         cachedTexture.destroy();
         this.#entityTextures.delete(entity.id);
+        sourceTextureChanged = true;
       }
-      return sourceTexture;
+      this.#recordVideoPreviewRenderTime(entity, didReprocess, renderStart, resolution);
+      return { texture: sourceTexture, changed: sourceTextureChanged };
     }
 
     // Reuse output texture if dimensions match, otherwise create new
@@ -1176,12 +1392,14 @@ export class InfiniteCanvasRenderer {
       GPUTextureUsage.COPY_SRC;
 
     let outputTexture: GPUTexture;
+    let outputTextureChanged = false;
     if (cachedTexture && cachedTexture.width === width && cachedTexture.height === height) {
       // Reuse existing output texture — content will be overwritten by shader
       outputTexture = cachedTexture;
     } else {
       // Dimensions changed or first render — destroy old, create new
       cachedTexture?.destroy();
+      outputTextureChanged = true;
       outputTexture = this.#device.createTexture({
         label: `Entity ${entity.id} processed texture`,
         size: [width, height],
@@ -1191,11 +1409,17 @@ export class InfiniteCanvasRenderer {
     }
 
     // Apply shader using unified method (handles both compute and fragment shader paths)
-    this.#applyShaderToTexture(entity, sourceTexture, outputTexture);
+    didReprocess = true;
+    const renderEntity = this.#createRenderEntity(entity, resolution);
+    this.#applyShaderToTexture(renderEntity, sourceTexture, outputTexture);
+    if (renderEntity !== entity && renderEntity.shaderParams.time !== entity.shaderParams.time) {
+      entity.shaderParams.time = renderEntity.shaderParams.time;
+    }
+    this.#recordVideoPreviewRenderTime(entity, didReprocess, renderStart, resolution);
 
     // Cache and return (source texture stays in #entitySourceTextures)
     this.#entityTextures.set(entity.id, outputTexture);
-    return outputTexture;
+    return { texture: outputTexture, changed: outputTextureChanged };
   }
 
   /**
@@ -1278,7 +1502,7 @@ export class InfiniteCanvasRenderer {
       height,
       config.canvas.cullingBufferFraction,
     );
-
+    const visibleEntities: ShaderCanvasEntity[] = [];
     for (const entity of entities) {
       // Viewport culling: skip all GPU work for entities entirely outside the viewport.
       // textureDirty is intentionally NOT cleared here — it stays true so the entity
@@ -1287,7 +1511,12 @@ export class InfiniteCanvasRenderer {
       if (!boundsIntersect(entityAABB, viewportBounds)) {
         continue;
       }
+      visibleEntities.push(entity);
+    }
 
+    this.#recordVideoPreviewFrameTime(visibleEntities, state.rafDeltaMs);
+
+    for (const entity of visibleEntities) {
       // Check if texture needs regeneration. Animated media is marked dirty by the
       // game loop only when the decoded frame changes.
       const textureWasDirty = !!entity.textureDirty;
@@ -1295,9 +1524,15 @@ export class InfiniteCanvasRenderer {
         hasAnimatingContent = true;
       }
 
+      const previewResolution = this.#resolveEntityPreviewResolution(entity, viewport, renderStart);
+
       // Render entity to texture if needed (this has its own submission for dirty textures)
-      const entityTexture = this.renderEntityToTexture(entity);
-      if (!entityTexture) continue;
+      const entityTextureResult = this.renderEntityToTexture(entity, previewResolution);
+      if (!entityTextureResult) continue;
+      const { texture: entityTexture, changed: entityTextureChanged } = entityTextureResult;
+      if (entityTextureChanged) {
+        hasAnimatingContent = true;
+      }
 
       // Clear dirty flag
       entity.textureDirty = false;
@@ -1311,6 +1546,7 @@ export class InfiniteCanvasRenderer {
       const needsNewBindGroup =
         !cached ||
         textureWasDirty ||
+        entityTextureChanged ||
         cached.lastHovered !== isHovered ||
         cached.lastSelected !== isSelected ||
         cached.lastDebugMode !== debugMode;
@@ -1319,13 +1555,13 @@ export class InfiniteCanvasRenderer {
 
       if (needsNewBindGroup) {
         // Destroy old uniform buffer if exists (texture view is tied to texture lifecycle)
-        if (cached && textureWasDirty) {
+        if (cached && (textureWasDirty || entityTextureChanged)) {
           cached.uniformBuffer.destroy();
         }
 
         // Create or reuse uniform buffer
         const uniformBuffer =
-          cached && !textureWasDirty
+          cached && !textureWasDirty && !entityTextureChanged
             ? cached.uniformBuffer
             : this.#device.createBuffer({
                 label: `Entity ${entity.id} composition uniform`,
@@ -1348,7 +1584,9 @@ export class InfiniteCanvasRenderer {
 
         // Create texture view (reuse if texture didn't change)
         const textureView =
-          cached && !textureWasDirty ? cached.textureView : entityTexture.createView();
+          cached && !textureWasDirty && !entityTextureChanged
+            ? cached.textureView
+            : entityTexture.createView();
 
         // Create bind group with dedicated uniform buffer
         bindGroup = this.#device.createBindGroup({
@@ -1793,6 +2031,7 @@ export class InfiniteCanvasRenderer {
     }
 
     this.#entityShaderRuntime?.removeEntity(entityId);
+    this.#videoPreviewAdaptiveStates.delete(entityId);
 
     // Clear any errors for this entity
     this.#entityErrors.delete(entityId);
@@ -2007,6 +2246,8 @@ export class InfiniteCanvasRenderer {
       cached.texture.destroy();
     }
     this.#entitySourceTextures.clear();
+    this.#videoPreviewAdaptiveStates.clear();
+    this.#videoPreviewFrameGovernor = createVideoPreviewFrameGovernorState();
 
     // Destroy entity composition cache
     for (const cached of this.#entityCompositionCache.values()) {
