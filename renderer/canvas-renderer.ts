@@ -19,6 +19,7 @@ import {
   type ShaderCanvasEntity,
   type ShaderParams,
   type Viewport,
+  isAnimatedEntity,
 } from "#types/canvas.ts";
 import compositionShaderSource from "./composition.wgsl?raw";
 import { CopyPass } from "./copy-pass.ts";
@@ -33,18 +34,15 @@ import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
 import { EntityLabelPass } from "./entity-label-pass.ts";
 import { TexturePool } from "./texture-pool.ts";
 import {
-  blockVideoPreviewFrameGovernorUpgrades,
-  createVideoPreviewFrameGovernorState,
-  createVideoPreviewAdaptiveState,
-  recordVideoPreviewFrameGovernorSample,
-  recordVideoPreviewRenderSample,
-  resolveVideoPreviewResolution,
+  createPreviewResolutionGovernorState,
+  recordPreviewResolutionFrameSample,
+  recordPreviewResolutionRenderSample,
+  resolvePreviewResolution,
   type PreviewResolution,
-  type VideoPreviewAdaptiveState,
-  type VideoPreviewFrameGovernorState,
-  type VideoPreviewGovernorEntity,
-  type VideoPreviewQualityTransition,
-} from "./video-preview-resolution.ts";
+  type PreviewResolutionGovernorEntity,
+  type PreviewResolutionGovernorState,
+  type PreviewResolutionTransition,
+} from "./preview-resolution-governor.ts";
 import { resolveWlurOverlayRuntimeConfig, type WlurOverlayConfig } from "./wlur-overlay.ts";
 import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
 
@@ -108,9 +106,9 @@ export class InfiniteCanvasRenderer {
       height: number;
     }
   > = new Map();
-  #videoPreviewAdaptiveStates: Map<string, VideoPreviewAdaptiveState> = new Map();
-  #videoPreviewFrameGovernor: VideoPreviewFrameGovernorState =
-    createVideoPreviewFrameGovernorState();
+  #previewResolutionGovernor: PreviewResolutionGovernorState =
+    createPreviewResolutionGovernorState();
+  #managedPreviewEntityIds = new Set<string>();
 
   // Entity composition cache (uniform buffers, bind groups, texture views)
   // These are invalidated when entity texture changes
@@ -134,9 +132,9 @@ export class InfiniteCanvasRenderer {
   // Texture pool for eliminating per-frame allocation churn
   #texturePool: TexturePool | null = null;
 
-  // Reusable canvas for Firefox-compatible video frame upload
-  #videoUploadCanvas: OffscreenCanvas | null = null;
-  #videoUploadCtx: OffscreenCanvasRenderingContext2D | null = null;
+  // Reusable canvas for scaled or Firefox-compatible external image uploads.
+  #scaledUploadCanvas: OffscreenCanvas | null = null;
+  #scaledUploadCtx: OffscreenCanvasRenderingContext2D | null = null;
   #directVideoUploadSupported: boolean | null = null;
 
   // Disintegration particle system (GPU compute + instanced rendering)
@@ -881,100 +879,69 @@ export class InfiniteCanvasRenderer {
     this.#device.queue.submit([encoder.finish()]);
   }
 
-  #resolveEntityPreviewResolution(
-    entity: ShaderCanvasEntity,
-    viewport: Viewport,
-    nowMs: number,
-  ): PreviewResolution {
-    const state =
-      entity.mediaSource.type === "video"
-        ? this.#getVideoPreviewAdaptiveState(entity.id)
-        : undefined;
-
-    return resolveVideoPreviewResolution(
+  #resolveEntityPreviewResolution(entity: ShaderCanvasEntity): PreviewResolution {
+    return resolvePreviewResolution(
       {
-        isVideo: entity.mediaSource.type === "video",
+        entityId: entity.id,
+        isManaged: this.#managedPreviewEntityIds.has(entity.id),
         originalSize: entity.originalSize,
-        entitySize: entity.size,
-        viewportZoom: viewport.zoom,
-        nowMs,
-        state,
+        state: this.#previewResolutionGovernor,
       },
-      config.rendering.videoPreviewAdaptive,
+      config.rendering.previewResolutionAdaptive,
     );
   }
 
-  #recordVideoPreviewFrameTime(
+  #recordPreviewResolutionFrame(
     visibleEntities: readonly ShaderCanvasEntity[],
+    viewport: Viewport,
     rafDeltaMs: number,
+    displayFrameMs: number,
+    nowMs: number,
   ): void {
-    const videoEntities = visibleEntities.filter(
-      (entity) => entity.mediaSource.type === "video" && entity.playback?.isPlaying,
+    const managedEntities = visibleEntities.filter((entity) =>
+      this.#isPreviewManagedEntity(entity),
     );
-    if (videoEntities.length === 0) return;
+    this.#managedPreviewEntityIds = new Set(managedEntities.map((entity) => entity.id));
 
-    const entityById = new Map(videoEntities.map((entity) => [entity.id, entity]));
-    const governorEntities: VideoPreviewGovernorEntity[] = videoEntities.map((entity) => ({
+    const governorEntities: PreviewResolutionGovernorEntity[] = managedEntities.map((entity) => ({
       id: entity.id,
-      quality: this.#getVideoPreviewAdaptiveState(entity.id).quality,
       originalSize: entity.originalSize,
+      entitySize: entity.size,
+      viewportZoom: viewport.zoom,
     }));
-    const transitions = recordVideoPreviewFrameGovernorSample(
-      this.#videoPreviewFrameGovernor,
+    const transition = recordPreviewResolutionFrameSample(
+      this.#previewResolutionGovernor,
       governorEntities,
       rafDeltaMs,
-      config.rendering.videoPreviewAdaptive,
+      nowMs,
+      displayFrameMs,
+      config.rendering.previewResolutionAdaptive,
     );
 
-    for (const transition of transitions) {
-      if (!transition.entityId) continue;
-      const entity = entityById.get(transition.entityId);
-      if (!entity) continue;
-      const adaptiveState = this.#getVideoPreviewAdaptiveState(entity.id);
-      adaptiveState.quality = transition.to;
-      adaptiveState.forceResolutionUpdate = true;
-      adaptiveState.samples = [];
-
-      this.#logVideoPreviewTransition(entity, transition, {
-        rafDeltaMs: Number(rafDeltaMs.toFixed(2)),
-        visibleVideoCount: videoEntities.length,
-        thisFrameWillResolveNewQuality: true,
-      });
-    }
+    if (transition) this.#logPreviewResolutionTransition(transition, rafDeltaMs);
   }
 
-  #logVideoPreviewTransition(
-    entity: ShaderCanvasEntity,
-    transition: VideoPreviewQualityTransition,
-    extra: Record<string, unknown>,
-  ): void {
-    const direction =
-      transition.from === "full" ||
-      (transition.from === "threeQuarter" && transition.to === "floor")
-        ? "downgraded"
-        : "upgraded";
+  #isPreviewManagedEntity(entity: ShaderCanvasEntity): boolean {
+    if (isAnimatedEntity(entity) && entity.playback?.isPlaying) return true;
+    return this.needsContinuousRenderForEntity(entity);
+  }
 
-    logger.info(`[renderer] Video preview ${direction}`, {
-      entityId: entity.id,
-      entityName: entity.name,
-      source: transition.source,
-      from: transition.from,
-      to: transition.to,
+  #logPreviewResolutionTransition(
+    transition: PreviewResolutionTransition,
+    rafDeltaMs: number,
+  ): void {
+    const direction = transition.action === "cohort-downgrade" ? "downgraded" : "upgraded";
+
+    logger.info(`[renderer] Preview resolution ${direction}`, {
       ...(transition.action ? { action: transition.action } : {}),
+      fromPressureLevel: transition.fromPressureLevel,
+      toPressureLevel: transition.toPressureLevel,
       medianMs: Number(transition.medianMs.toFixed(2)),
       p95Ms: Number(transition.p95Ms.toFixed(2)),
-      ...(transition.targetMs ? { targetMs: Number(transition.targetMs.toFixed(2)) } : {}),
-      ...extra,
+      targetMs: Number(transition.targetMs.toFixed(2)),
+      rafDeltaMs: Number(rafDeltaMs.toFixed(2)),
+      managedEntityCount: transition.managedEntityCount,
     });
-  }
-
-  #getVideoPreviewAdaptiveState(entityId: string): VideoPreviewAdaptiveState {
-    let state = this.#videoPreviewAdaptiveStates.get(entityId);
-    if (!state) {
-      state = createVideoPreviewAdaptiveState();
-      this.#videoPreviewAdaptiveStates.set(entityId, state);
-    }
-    return state;
   }
 
   #createRenderEntity(
@@ -1176,24 +1143,24 @@ export class InfiniteCanvasRenderer {
     }
   }
 
-  /**
-   * Get a video frame as an OffscreenCanvas source compatible with all browsers.
-   * Firefox doesn't support HTMLVideoElement in copyExternalImageToTexture,
-   * so we draw to an OffscreenCanvas first.
-   */
-  #getVideoFrameSource(video: HTMLVideoElement, width: number, height: number): OffscreenCanvas {
+  #getScaledExternalImageSource(
+    source: CanvasImageSource,
+    width: number,
+    height: number,
+  ): OffscreenCanvas {
     if (
-      !this.#videoUploadCanvas ||
-      this.#videoUploadCanvas.width !== width ||
-      this.#videoUploadCanvas.height !== height
+      !this.#scaledUploadCanvas ||
+      this.#scaledUploadCanvas.width !== width ||
+      this.#scaledUploadCanvas.height !== height
     ) {
-      this.#videoUploadCanvas = new OffscreenCanvas(width, height);
-      this.#videoUploadCtx = this.#videoUploadCanvas.getContext("2d", {
+      this.#scaledUploadCanvas = new OffscreenCanvas(width, height);
+      this.#scaledUploadCtx = this.#scaledUploadCanvas.getContext("2d", {
         colorSpace: this.#colorConfig.textureColorSpace,
       });
     }
-    this.#videoUploadCtx!.drawImage(video, 0, 0, width, height);
-    return this.#videoUploadCanvas;
+    this.#scaledUploadCtx!.clearRect(0, 0, width, height);
+    this.#scaledUploadCtx!.drawImage(source, 0, 0, width, height);
+    return this.#scaledUploadCanvas;
   }
 
   #uploadEntitySourceToTexture(
@@ -1227,7 +1194,7 @@ export class InfiniteCanvasRenderer {
         }
       }
 
-      const source = this.#getVideoFrameSource(video, width, height);
+      const source = this.#getScaledExternalImageSource(video, width, height);
       this.#device!.queue.copyExternalImageToTexture(
         { source },
         { texture, colorSpace: this.#colorConfig.textureColorSpace },
@@ -1238,6 +1205,18 @@ export class InfiniteCanvasRenderer {
 
     const source =
       entity.mediaSource.type === "image" ? entity.mediaSource.imageBitmap : entity.imageBitmap;
+    const needsScaledUpload =
+      width !== entity.originalSize.width || height !== entity.originalSize.height;
+    if (needsScaledUpload) {
+      const scaledSource = this.#getScaledExternalImageSource(source, width, height);
+      this.#device!.queue.copyExternalImageToTexture(
+        { source: scaledSource },
+        { texture, colorSpace: this.#colorConfig.textureColorSpace },
+        [width, height],
+      );
+      return scaledSource;
+    }
+
     this.#device!.queue.copyExternalImageToTexture(
       { source },
       { texture, colorSpace: this.#colorConfig.textureColorSpace },
@@ -1246,32 +1225,21 @@ export class InfiniteCanvasRenderer {
     return source;
   }
 
-  #recordVideoPreviewRenderTime(
+  #recordPreviewResolutionRenderTime(
     entity: ShaderCanvasEntity,
     didReprocess: boolean,
     renderStart: number,
     resolution: PreviewResolution,
   ): void {
-    if (!didReprocess || entity.mediaSource.type !== "video") return;
-    const state = this.#videoPreviewAdaptiveStates.get(entity.id);
-    if (!state) return;
+    if (!didReprocess || !resolution.managed) return;
     const renderTimeMs = performance.now() - renderStart;
-    const transition = recordVideoPreviewRenderSample(
-      state,
+    recordPreviewResolutionRenderSample(
+      this.#previewResolutionGovernor,
+      entity.id,
       renderTimeMs,
-      config.rendering.videoPreviewAdaptive,
+      resolution,
+      config.rendering.previewResolutionAdaptive,
     );
-    if (!transition) return;
-    blockVideoPreviewFrameGovernorUpgrades(
-      this.#videoPreviewFrameGovernor,
-      config.rendering.videoPreviewAdaptive,
-    );
-
-    this.#logVideoPreviewTransition(entity, transition, {
-      renderTimeMs: Number(renderTimeMs.toFixed(2)),
-      renderedTextureSize: `${resolution.width}x${resolution.height}`,
-      nextFrameWillResolveNewQuality: true,
-    });
   }
 
   /**
@@ -1290,7 +1258,8 @@ export class InfiniteCanvasRenderer {
       width: entity.originalSize.width,
       height: entity.originalSize.height,
       renderScale: 1,
-      quality: "full" as const,
+      longEdge: Math.max(entity.originalSize.width, entity.originalSize.height),
+      managed: false,
     };
     const width = resolution.width;
     const height = resolution.height;
@@ -1380,7 +1349,7 @@ export class InfiniteCanvasRenderer {
         this.#entityTextures.delete(entity.id);
         sourceTextureChanged = true;
       }
-      this.#recordVideoPreviewRenderTime(entity, didReprocess, renderStart, resolution);
+      this.#recordPreviewResolutionRenderTime(entity, didReprocess, renderStart, resolution);
       return { texture: sourceTexture, changed: sourceTextureChanged };
     }
 
@@ -1415,7 +1384,7 @@ export class InfiniteCanvasRenderer {
     if (renderEntity !== entity && renderEntity.shaderParams.time !== entity.shaderParams.time) {
       entity.shaderParams.time = renderEntity.shaderParams.time;
     }
-    this.#recordVideoPreviewRenderTime(entity, didReprocess, renderStart, resolution);
+    this.#recordPreviewResolutionRenderTime(entity, didReprocess, renderStart, resolution);
 
     // Cache and return (source texture stays in #entitySourceTextures)
     this.#entityTextures.set(entity.id, outputTexture);
@@ -1514,7 +1483,13 @@ export class InfiniteCanvasRenderer {
       visibleEntities.push(entity);
     }
 
-    this.#recordVideoPreviewFrameTime(visibleEntities, state.rafDeltaMs);
+    this.#recordPreviewResolutionFrame(
+      visibleEntities,
+      viewport,
+      state.rafDeltaMs,
+      state.displayFrameMs,
+      renderStart,
+    );
 
     for (const entity of visibleEntities) {
       // Check if texture needs regeneration. Animated media is marked dirty by the
@@ -1524,7 +1499,7 @@ export class InfiniteCanvasRenderer {
         hasAnimatingContent = true;
       }
 
-      const previewResolution = this.#resolveEntityPreviewResolution(entity, viewport, renderStart);
+      const previewResolution = this.#resolveEntityPreviewResolution(entity);
 
       // Render entity to texture if needed (this has its own submission for dirty textures)
       const entityTextureResult = this.renderEntityToTexture(entity, previewResolution);
@@ -2031,7 +2006,10 @@ export class InfiniteCanvasRenderer {
     }
 
     this.#entityShaderRuntime?.removeEntity(entityId);
-    this.#videoPreviewAdaptiveStates.delete(entityId);
+    this.#managedPreviewEntityIds.delete(entityId);
+    this.#previewResolutionGovernor.allocations.delete(entityId);
+    this.#previewResolutionGovernor.entityStates.delete(entityId);
+    this.#previewResolutionGovernor.entityCosts.delete(entityId);
 
     // Clear any errors for this entity
     this.#entityErrors.delete(entityId);
@@ -2246,8 +2224,8 @@ export class InfiniteCanvasRenderer {
       cached.texture.destroy();
     }
     this.#entitySourceTextures.clear();
-    this.#videoPreviewAdaptiveStates.clear();
-    this.#videoPreviewFrameGovernor = createVideoPreviewFrameGovernorState();
+    this.#managedPreviewEntityIds.clear();
+    this.#previewResolutionGovernor = createPreviewResolutionGovernorState();
 
     // Destroy entity composition cache
     for (const cached of this.#entityCompositionCache.values()) {

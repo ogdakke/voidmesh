@@ -31,11 +31,15 @@ import { perfOverlay } from "./perf-overlay.ts";
 import { viewportAnimation } from "./viewport-animation.ts";
 import { MomentumController, type MomentumDeps } from "./momentum-controller.ts";
 import { scheduler, type AnimationHandle } from "../lib/animation-scheduler.ts";
+import { isPlausibleDisplayFrameRate, percentile } from "../lib/display-refresh.ts";
 import { haptic } from "#lib/haptic.ts";
 import { OnboardingStepId } from "#lib/onboarding.ts";
 import { completeOnboardingStepFromEvent } from "#lib/onboarding-runtime.ts";
 
 const RELEASE_TERMINAL_SPEED_MULTIPLIER = 1.15;
+const DISPLAY_FRAME_SAMPLE_MIN = 30;
+const DISPLAY_FRAME_SAMPLE_MAX = 90;
+const DISPLAY_FRAME_STABILITY_MULTIPLIER = 1.1;
 
 function createDefaultDeps() {
   return {
@@ -158,6 +162,8 @@ export class GameLoop {
   #pendingScrollMomentumVelocity: Point | null = null;
   #firstFrameRendered = false;
   #lastFrameTime: number | null = null;
+  #displayFrameSamples: number[] = [];
+  #displayFrameMs = 0;
 
   #inputState: InputState = {
     pointerPosition: null,
@@ -327,6 +333,7 @@ export class GameLoop {
     const deltaSeconds = this.#lastFrameTime !== null ? (now - this.#lastFrameTime) / 1000 : 0;
     const rafDeltaMs = deltaSeconds * 1000;
     this.#lastFrameTime = now;
+    this.#recordStartupDisplayFrameSample(rafDeltaMs);
 
     let hasAnimatedFrameUpdate = false;
     let hasContinuousShaderRender = false;
@@ -373,6 +380,7 @@ export class GameLoop {
     renderState.dragSelectBounds = this.getDragSelectBounds();
     renderState.multiSelectBounds = this.getMultiSelectBounds();
     renderState.rafDeltaMs = rafDeltaMs;
+    renderState.displayFrameMs = this.#displayFrameMs;
 
     // 7. Determine if we need to render this frame
     const needsRender =
@@ -407,6 +415,32 @@ export class GameLoop {
     // 12. Schedule next frame
     this.#animationFrameId = requestAnimationFrame(this.tick);
   };
+
+  #recordStartupDisplayFrameSample(rafDeltaMs: number): void {
+    if (this.#displayFrameMs > 0) return;
+    if (!Number.isFinite(rafDeltaMs) || rafDeltaMs <= 0 || rafDeltaMs > 100) return;
+
+    this.#displayFrameSamples.push(rafDeltaMs);
+    if (this.#displayFrameSamples.length > DISPLAY_FRAME_SAMPLE_MAX) {
+      this.#displayFrameSamples.shift();
+    }
+    if (this.#displayFrameSamples.length < DISPLAY_FRAME_SAMPLE_MIN) return;
+
+    const median = percentile(this.#displayFrameSamples, 0.5);
+    const p95 = percentile(this.#displayFrameSamples, 0.95);
+    const frameRate = 1000 / median;
+    if (
+      p95 <= median * DISPLAY_FRAME_STABILITY_MULTIPLIER &&
+      isPlausibleDisplayFrameRate(frameRate)
+    ) {
+      this.#displayFrameMs = median;
+      this.#displayFrameSamples = [];
+      this.#logger.info("[GameLoop] display refresh learned", {
+        hz: Number(frameRate.toFixed(2)),
+        frameMs: Number(median.toFixed(2)),
+      });
+    }
+  }
 
   #consumeVideoFrameUpdate(entityId: string, video: HTMLVideoElement, fps: number | null): boolean {
     let tracker = this.#videoFrameTrackers.get(entityId);

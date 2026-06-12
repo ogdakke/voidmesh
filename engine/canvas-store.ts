@@ -135,6 +135,8 @@ export interface RenderState {
   dirty: boolean;
   /** Latest requestAnimationFrame interval in milliseconds. Used by renderer quality adaptation. */
   rafDeltaMs: number;
+  /** Stable display frame interval learned from startup rAF samples. */
+  displayFrameMs: number;
   canvasCallouts: readonly CanvasCallout[];
   /** Drag-select rectangle bounds in world coordinates (null if not active) */
   dragSelectBounds: Bounds | null;
@@ -975,6 +977,7 @@ export class CanvasStore extends Store<CanvasState> {
         this.state.containerSizeDirty ||
         this.state.canvasCalloutsDirty,
       rafDeltaMs: 0,
+      displayFrameMs: 0,
       canvasCallouts: this.state.canvasCallouts,
       // dragSelectBounds and multiSelectBounds are set by game-loop after calling this method
       dragSelectBounds: null,
