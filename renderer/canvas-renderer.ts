@@ -36,6 +36,25 @@ interface CompositionDrawItem {
   offsetY: number;
 }
 
+export interface FrameCapturePixels {
+  width: number;
+  height: number;
+  data: Uint8ClampedArray<ArrayBuffer>;
+}
+
+interface PendingFrameCapture {
+  resolve: (capture: FrameCapturePixels) => void;
+  reject: (error: unknown) => void;
+}
+
+interface EncodedFrameCapture extends PendingFrameCapture {
+  width: number;
+  height: number;
+  bytesPerRow: number;
+  buffer: GPUBuffer;
+  texture: GPUTexture;
+}
+
 export class InfiniteCanvasRenderer {
   readonly canvas: HTMLCanvasElement;
 
@@ -165,6 +184,8 @@ export class InfiniteCanvasRenderer {
   #actionLayerBlitBindGroupCached: GPUBindGroup | null = null;
 
   #presentCopyPass: CopyPass | null = null;
+  #frameCaptureCopyPass: CopyPass | null = null;
+  #pendingFrameCaptures: PendingFrameCapture[] = [];
 
   // Wlur progressive full-canvas overlay
   #wlurPass: WlurPass | null = null;
@@ -211,6 +232,35 @@ export class InfiniteCanvasRenderer {
       entityCount: this.#lastEntityCount,
       renderedCount: this.#lastRenderedCount,
     };
+  }
+
+  /**
+   * Explicitly set the canvas display size used for render target sizing.
+   * App code normally gets this from ResizeObserver; browser tests can use this
+   * to avoid depending on observer timing after creating a standalone canvas.
+   */
+  setDisplaySize(cssWidth: number, cssHeight: number): void {
+    if (cssWidth <= 0 || cssHeight <= 0) {
+      throw new Error(`Invalid canvas display size: ${cssWidth}x${cssHeight}`);
+    }
+
+    this.#cachedCanvasWidth = cssWidth;
+    this.#cachedCanvasHeight = cssHeight;
+  }
+
+  /**
+   * Capture the next fully-composited frame rendered by render(). This reads
+   * pixels from the WebGPU canvas path itself, not from an individual entity
+   * export texture, making it suitable for browser renderer snapshot tests.
+   */
+  captureNextFramePixels(): Promise<FrameCapturePixels> {
+    if (!this.#device) {
+      return Promise.reject(new Error("Renderer is not initialized"));
+    }
+
+    return new Promise((resolve, reject) => {
+      this.#pendingFrameCaptures.push({ resolve, reject });
+    });
   }
 
   async initialize(): Promise<void> {
@@ -289,6 +339,7 @@ export class InfiniteCanvasRenderer {
     this.#createSelectionRectPipeline();
     this.#createActionLayerBlitPipeline();
     this.#presentCopyPass = new CopyPass(this.#device, this.#canvasFormat);
+    this.#frameCaptureCopyPass = new CopyPass(this.#device);
     this.#wlurPass = new WlurPass({
       device: this.#device,
       format: this.#colorConfig.intermediateFormat,
@@ -1721,10 +1772,16 @@ export class InfiniteCanvasRenderer {
       this.#invalidateWlurOverlayCache();
     }
 
+    const frameCaptures = this.#encodePendingFrameCaptures(encoder, texture, width, height);
+
     // Single submission for all passes
     markPhaseStart("queue-submit");
     this.#device.queue.submit([encoder.finish()]);
     markPhaseEnd("queue-submit");
+
+    for (const capture of frameCaptures) {
+      void this.#resolveFrameCapture(capture);
+    }
 
     // Record frame stats for performance overlay
     this.#lastRenderTime = performance.now() - renderStart;
@@ -1733,6 +1790,69 @@ export class InfiniteCanvasRenderer {
 
     // Advance texture pool frame counter and cleanup stale textures
     this.#texturePool?.nextFrame();
+  }
+
+  #encodePendingFrameCaptures(
+    encoder: GPUCommandEncoder,
+    source: GPUTexture,
+    width: number,
+    height: number,
+  ): EncodedFrameCapture[] {
+    if (!this.#device || !this.#frameCaptureCopyPass || this.#pendingFrameCaptures.length === 0) {
+      return [];
+    }
+
+    const pending = this.#pendingFrameCaptures.splice(0);
+    const bytesPerRow = Math.ceil((width * 4) / 256) * 256;
+    const bufferSize = bytesPerRow * height;
+
+    return pending.map((capture) => {
+      const texture = this.#device!.createTexture({
+        label: "Frame capture texture",
+        size: [width, height],
+        format: "rgba8unorm",
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+      });
+      const buffer = this.#device!.createBuffer({
+        label: "Frame capture buffer",
+        size: bufferSize,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+      });
+
+      this.#frameCaptureCopyPass!.encode(encoder, source, texture);
+      encoder.copyTextureToBuffer({ texture }, { buffer, bytesPerRow }, [width, height]);
+
+      return { ...capture, width, height, bytesPerRow, buffer, texture };
+    });
+  }
+
+  async #resolveFrameCapture(capture: EncodedFrameCapture): Promise<void> {
+    try {
+      await this.#device?.queue.onSubmittedWorkDone();
+      await capture.buffer.mapAsync(GPUMapMode.READ);
+
+      const mapped = capture.buffer.getMappedRange();
+      const source = new Uint8ClampedArray(mapped);
+      const data: Uint8ClampedArray<ArrayBuffer> = new Uint8ClampedArray(
+        capture.width * capture.height * 4,
+      );
+      for (let y = 0; y < capture.height; y++) {
+        const sourceOffset = y * capture.bytesPerRow;
+        const destinationOffset = y * capture.width * 4;
+        data.set(
+          source.subarray(sourceOffset, sourceOffset + capture.width * 4),
+          destinationOffset,
+        );
+      }
+
+      capture.buffer.unmap();
+      capture.resolve({ width: capture.width, height: capture.height, data });
+    } catch (error) {
+      capture.reject(error);
+    } finally {
+      capture.texture.destroy();
+      capture.buffer.destroy();
+    }
   }
 
   /**
@@ -2047,6 +2167,7 @@ export class InfiniteCanvasRenderer {
     this.#entityShaderRuntime?.destroy();
     this.#entityShaderRuntime = null;
     this.#presentCopyPass = null;
+    this.#frameCaptureCopyPass = null;
     this.#wlurPass?.destroy();
     this.#wlurPass = null;
     this.#wlurOverlayConfig = null;
@@ -2082,6 +2203,9 @@ export class InfiniteCanvasRenderer {
 
     // Clear entity errors
     this.#entityErrors.clear();
+    for (const capture of this.#pendingFrameCaptures.splice(0)) {
+      capture.reject(new Error("Renderer destroyed before frame capture completed"));
+    }
 
     // Disconnect resize observer
     this.#resizeObserver?.disconnect();

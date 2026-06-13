@@ -151,7 +151,6 @@ msdf-atlas-gen/
 # Vendor repos for investigation
 .vendor/
 
-
 .venv
 .claude/worktrees
 
@@ -162,3 +161,5 @@ opensrc/repos/
 
 # opensrc - source code for packages
 opensrc/
+
+test-results/

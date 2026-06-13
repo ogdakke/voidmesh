@@ -24,6 +24,9 @@
     "sourcemap": "posthog-cli sourcemap inject -d ./dist/assets && posthog-cli sourcemap upload -d ./dist/assets --release-name voidmesh --delete-after",
     "preview": "vite preview",
     "test": "bun run --bun vitest run",
+    "test:webgpu": "playwright test -c playwright.webgpu.config.ts",
+    "test:webgpu:ui": "playwright test -c playwright.webgpu.config.ts --ui",
+    "test:webgpu:update": "playwright test -c playwright.webgpu.config.ts --update-snapshots",
     "test:watch": "bun run --bun vitest",
     "lint:all": "oxlint . --type-aware --type-check",
     "lint": "oxlint . --type-aware --",
@@ -55,6 +58,7 @@
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "^20.10.3",
+    "@playwright/test": "^1.60.0",
     "@posthog/cli": "^0.7.22",
     "@rolldown/plugin-babel": "^0.2.3",
     "@testing-library/dom": "^10.4.1",
