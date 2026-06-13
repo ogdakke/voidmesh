@@ -90,6 +90,7 @@ export class InfiniteCanvasRenderer {
     string,
     {
       uniformBuffer: GPUBuffer;
+      texture: GPUTexture;
       textureView: GPUTextureView;
       bindGroup: GPUBindGroup;
       lastHovered: boolean;
@@ -1308,9 +1309,10 @@ export class InfiniteCanvasRenderer {
 
       // Check cache for existing composition resources
       const cached = this.#entityCompositionCache.get(entity.id);
+      const textureChanged = cached?.texture !== entityTexture;
       const needsNewBindGroup =
         !cached ||
-        textureWasDirty ||
+        textureChanged ||
         cached.lastHovered !== isHovered ||
         cached.lastSelected !== isSelected ||
         cached.lastDebugMode !== debugMode;
@@ -1318,20 +1320,14 @@ export class InfiniteCanvasRenderer {
       let bindGroup: GPUBindGroup;
 
       if (needsNewBindGroup) {
-        // Destroy old uniform buffer if exists (texture view is tied to texture lifecycle)
-        if (cached && textureWasDirty) {
-          cached.uniformBuffer.destroy();
-        }
-
         // Create or reuse uniform buffer
         const uniformBuffer =
-          cached && !textureWasDirty
-            ? cached.uniformBuffer
-            : this.#device.createBuffer({
-                label: `Entity ${entity.id} composition uniform`,
-                size: config.rendering.entityUniformSize,
-                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-              });
+          cached?.uniformBuffer ??
+          this.#device.createBuffer({
+            label: `Entity ${entity.id} composition uniform`,
+            size: config.rendering.entityUniformSize,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+          });
 
         // Update and write entity uniforms (apply rubber-band offset for action layer entities)
         const applyOffset =
@@ -1348,7 +1344,7 @@ export class InfiniteCanvasRenderer {
 
         // Create texture view (reuse if texture didn't change)
         const textureView =
-          cached && !textureWasDirty ? cached.textureView : entityTexture.createView();
+          cached && !textureChanged ? cached.textureView : entityTexture.createView();
 
         // Create bind group with dedicated uniform buffer
         bindGroup = this.#device.createBindGroup({
@@ -1365,6 +1361,7 @@ export class InfiniteCanvasRenderer {
         // Update cache
         this.#entityCompositionCache.set(entity.id, {
           uniformBuffer,
+          texture: entityTexture,
           textureView,
           bindGroup,
           lastHovered: isHovered,
