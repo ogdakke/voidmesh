@@ -64,6 +64,7 @@ bun run test -- __tests__/engine/action-layer-controller.spec.ts
 
 ## Anti-Patterns
 
+- IMPORTANT: Do not add fallback behavior unless it is absolutely necessary and you explain the exact reason why fallback behavior is mandatory!
 - Do not use TypeScript `enum` keyword. Use `createEnum()`.
 - Do not use `typeof import("...").Type` anywhere. Ever. Use a regular type import, a namespace type import, or an explicit local type alias instead.
 - Do not add `"use client"` / `"use server"` — this is a SPA, not Next.js.

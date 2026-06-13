@@ -1955,13 +1955,31 @@ export class InfiniteCanvasRenderer {
 
   /**
    * Render an entity to a Blob for export/clipboard.
-   * Delegates to ExportService. Supports PNG (default) and JPEG.
+   * Uses only the exact GPU texture currently used for canvas composition, so
+   * static entities, animated media, and time-animated shaders all export the
+   * visible frame.
    */
   async renderEntityToBlob(
     entity: ShaderCanvasEntity,
     options?: import("./export-formats.ts").ImageExportOptions,
   ): Promise<Blob | null> {
-    return this.#exportService!.renderEntityToBlob(entity, options);
+    const displayedTexture = this.#getDisplayedEntityTexture(entity);
+    if (!displayedTexture) return null;
+
+    return this.#exportService!.renderTextureToBlob(
+      displayedTexture,
+      entity.originalSize.width,
+      entity.originalSize.height,
+      options,
+    );
+  }
+
+  #getDisplayedEntityTexture(entity: ShaderCanvasEntity): GPUTexture | null {
+    if (entity.shaderParams.showOriginal) {
+      return this.#entitySourceTextures.get(entity.id)?.texture ?? null;
+    }
+
+    return this.#entityTextures.get(entity.id) ?? null;
   }
 
   /** Whether a shader needs continuous re-rendering for the given entity (e.g., time-based animation). */
