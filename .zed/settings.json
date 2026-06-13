@@ -1,18 +1,11 @@
 {
-  "formatter": [
-    "language_server",
-    {
-      "language_server": {
-        "name": "oxfmt"
-      }
-    }
-  ],
+  "formatter": ["language_server", { "language_server": { "name": "oxfmt" } }],
   "language_servers": [
     "!tailwindcss-language-server",
     "!typescript-language-server",
-    "!tsgo",
+    "!vtsls",
     "!eslint",
-    "vtsls",
+    "tsgo",
     "..."
   ],
   "lsp": {
@@ -21,7 +14,7 @@
         "settings": {
           "fixKind": "safe_fix",
           "run": "onType",
-          "typeAware": false
+          "typeAware": true
         }
       }
     }
@@ -29,96 +22,41 @@
   "languages": {
     "JavaScript": {
       "format_on_save": "on",
-      "formatter": [
-        {
-          "language_server": {
-            "name": "oxfmt"
-          }
-        }
-      ]
+      "formatter": [{ "language_server": { "name": "oxfmt" } }]
     },
     "TSX": {
       "format_on_save": "on",
-      "formatter": [
-        {
-          "language_server": {
-            "name": "oxfmt"
-          }
-        }
-      ]
+      "formatter": [{ "language_server": { "name": "oxfmt" } }]
     },
     "TypeScript": {
-      "formatter": [
-        "language_server",
-        {
-          "language_server": {
-            "name": "oxfmt"
-          }
-        }
-      ]
+      "formatter": ["language_server", { "language_server": { "name": "oxfmt" } }]
     },
     "HTML": {
       "format_on_save": "on",
-      "formatter": [
-        {
-          "language_server": {
-            "name": "oxfmt"
-          }
-        }
-      ]
+      "formatter": [{ "language_server": { "name": "oxfmt" } }]
     },
     "CSS": {
       "format_on_save": "on",
-      "formatter": [
-        {
-          "language_server": {
-            "name": "oxfmt"
-          }
-        }
-      ]
+      "formatter": [{ "language_server": { "name": "oxfmt" } }]
     },
     "JSON": {
       "language_servers": ["json-language-server", "..."],
       "format_on_save": "on",
-      "formatter": [
-        {
-          "language_server": {
-            "name": "oxfmt"
-          }
-        }
-      ]
+      "formatter": [{ "language_server": { "name": "oxfmt" } }]
     },
     "JSONC": {
       "language_servers": ["json-language-server", "..."],
       "format_on_save": "on",
-      "formatter": [
-        {
-          "language_server": {
-            "name": "oxfmt"
-          }
-        }
-      ]
+      "formatter": [{ "language_server": { "name": "oxfmt" } }]
     },
     "WGSL/WESL": {
       "language_servers": ["wgsl_analyzer"],
       "format_on_save": "on",
-      "formatter": [
-        {
-          "language_server": {
-            "name": "wgsl_analyzer"
-          }
-        }
-      ]
+      "formatter": [{ "language_server": { "name": "wgsl_analyzer" } }]
     },
     "Markdown": {
       "format_on_save": "on",
-      "formatter": [
-        {
-          "language_server": {
-            "name": "oxfmt"
-          }
-        }
-      ]
+      "formatter": [{ "language_server": { "name": "oxfmt" } }]
     }
   }
 }
