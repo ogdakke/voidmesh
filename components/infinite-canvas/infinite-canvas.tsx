@@ -860,6 +860,7 @@ export function InfiniteCanvas() {
 
   return (
     <DropZone onDrop={handleDrop} className="infinite-canvas-dropzone">
+      {/* oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
       <div
         ref={containerRef}
         className={`infinite-canvas${isSpaceHeld ? " infinite-canvas--space" : ""}`}
@@ -871,7 +872,6 @@ export function InfiniteCanvas() {
       >
         {isSupported ? (
           <CanvasWrapper onOpenChange={handleContextMenuOpenChange} containerRef={containerRef}>
-            {/* oxlint-disable-next-line jsx-a11y/control-has-associated-label*/}
             <canvas
               ref={canvasRef}
               onPointerDown={handlePointerDown}
