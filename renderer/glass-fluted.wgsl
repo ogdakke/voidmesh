@@ -90,9 +90,10 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   let uvBlue = clamp(uv + displacement - chromOffset, vec2f(0.0), vec2f(1.0));
 
   let colorR = textureSample(sourceTexture, sourceSampler, uvRed).r;
-  let colorG = textureSample(sourceTexture, sourceSampler, uvBase).g;
+  let colorBase = textureSample(sourceTexture, sourceSampler, uvBase);
   let colorB = textureSample(sourceTexture, sourceSampler, uvBlue).b;
-  let colorA = textureSample(sourceTexture, sourceSampler, uvBase).a;
+  let colorG = colorBase.g;
+  let colorA = colorBase.a;
 
   // --- Caustic brightness (physically-based) ---
   // The cylindrical lens concentrates light where rays converge and spreads it where they diverge.

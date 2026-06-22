@@ -34,6 +34,13 @@ const TURB_SPEED: f32 = 0.3;
 const TURB_FREQ: f32 = 2.0;
 const TURB_EXP: f32 = 1.4;
 
+struct WaveField {
+  height: f32,
+  grad: vec2f,
+  dGradXdx: f32,
+  dGradYdy: f32,
+}
+
 // Pseudo-random hash: 2D -> 1D, non-periodic noise source
 fn hash21(p: vec2f) -> f32 {
   return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453);
@@ -92,9 +99,8 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> @builtin(position) vec4f 
   return vec4f(positions[vertexIndex], 0.0, 1.0);
 }
 
-// Compute the combined wave height and its gradient at a pixel position.
-// Returns vec3(height, dHeight/dx, dHeight/dy).
-fn waveField(pos: vec2f, freq: f32, wavelength: f32, amplitude: f32, flow: f32, time: f32) -> vec3f {
+// Compute the combined wave height, gradient, and axis-aligned curvature at a pixel position.
+fn waveField(pos: vec2f, freq: f32, wavelength: f32, amplitude: f32, flow: f32, time: f32) -> WaveField {
   // --- Primary wave: vertical ridges with sinusoidal undulation ---
   // The y-modulation creates the flowing look: ridges that meander sideways.
   // When flow=0, yMod=0 and ridges are perfectly straight (like fluted glass).
@@ -104,14 +110,23 @@ fn waveField(pos: vec2f, freq: f32, wavelength: f32, amplitude: f32, flow: f32, 
   let timeDrift = sin(time * 0.13) * wavelength * 0.1;
   let primaryPhase = (pos.x + yMod + timeDrift) * freq;
   // Subtle amplitude breathing: glass thickness varies organically
-  let ampMod = 1.0 + 0.1 * sin(time * 0.11 + pos.x * 0.001);
+  let ampPhase = time * 0.11 + pos.x * 0.001;
+  let ampMod = 1.0 + 0.1 * sin(ampPhase);
+  let ampDx = amplitude * 0.0001 * cos(ampPhase);
   let primaryHeight = cos(primaryPhase) * amplitude * ampMod;
 
   // Analytical gradient of primary wave (ampMod applied to amplitude)
   let dPrimaryPhase_dx = freq;
-  let dPrimaryPhase_dy = cos(pos.y * yFreq) * yFreq * wavelength * 0.15 * flow * freq;
-  let dPrimary_dx = -sin(primaryPhase) * amplitude * ampMod * dPrimaryPhase_dx;
-  let dPrimary_dy = -sin(primaryPhase) * amplitude * ampMod * dPrimaryPhase_dy;
+  let dPrimaryPhase_dyBase = pos.y * yFreq;
+  let dPrimaryPhase_dy = cos(dPrimaryPhase_dyBase) * yFreq * wavelength * 0.15 * flow * freq;
+  let d2PrimaryPhase_dy2 = -sin(dPrimaryPhase_dyBase) * yFreq * yFreq * wavelength * 0.15 * flow * freq;
+  let primaryAmp = amplitude * ampMod;
+  let primarySin = sin(primaryPhase);
+  let primaryCos = cos(primaryPhase);
+  let dPrimary_dx = -primarySin * primaryAmp * dPrimaryPhase_dx;
+  let dPrimary_dy = -primarySin * primaryAmp * dPrimaryPhase_dy;
+  let dPrimary_dx_dx = -(primaryCos * dPrimaryPhase_dx * primaryAmp + primarySin * ampDx) * dPrimaryPhase_dx;
+  let dPrimary_dy_dy = -primaryAmp * (primaryCos * dPrimaryPhase_dy * dPrimaryPhase_dy + primarySin * d2PrimaryPhase_dy2);
 
   // --- Secondary wave: golden-ratio frequency for interference complexity ---
   let secondaryFreq = freq * PHI;
@@ -122,9 +137,15 @@ fn waveField(pos: vec2f, freq: f32, wavelength: f32, amplitude: f32, flow: f32, 
   let secondaryHeight = cos(secondaryPhase) * secondaryAmplitude;
 
   let dSecondaryPhase_dx = secondaryFreq;
-  let dSecondaryPhase_dy = cos(pos.y * yFreq * PHI) * yFreq * PHI * wavelength * 0.08 * flow * secondaryFreq;
-  let dSecondary_dx = -sin(secondaryPhase) * secondaryAmplitude * dSecondaryPhase_dx;
-  let dSecondary_dy = -sin(secondaryPhase) * secondaryAmplitude * dSecondaryPhase_dy;
+  let dSecondaryPhase_dyBase = pos.y * yFreq * PHI;
+  let dSecondaryPhase_dy = cos(dSecondaryPhase_dyBase) * yFreq * PHI * wavelength * 0.08 * flow * secondaryFreq;
+  let d2SecondaryPhase_dy2 = -sin(dSecondaryPhase_dyBase) * yFreq * PHI * yFreq * PHI * wavelength * 0.08 * flow * secondaryFreq;
+  let secondarySin = sin(secondaryPhase);
+  let secondaryCos = cos(secondaryPhase);
+  let dSecondary_dx = -secondarySin * secondaryAmplitude * dSecondaryPhase_dx;
+  let dSecondary_dy = -secondarySin * secondaryAmplitude * dSecondaryPhase_dy;
+  let dSecondary_dx_dx = -secondaryCos * secondaryAmplitude * dSecondaryPhase_dx * dSecondaryPhase_dx;
+  let dSecondary_dy_dy = -secondaryAmplitude * (secondaryCos * dSecondaryPhase_dy * dSecondaryPhase_dy + secondarySin * d2SecondaryPhase_dy2);
 
   // --- Cross-wave: perpendicular component for flowing lattice effect ---
   // Only appears when flow > 0, adding horizontal ridges
@@ -134,13 +155,16 @@ fn waveField(pos: vec2f, freq: f32, wavelength: f32, amplitude: f32, flow: f32, 
 
   let dCross_dx = 0.0;
   let dCross_dy = -sin(crossPhase) * crossAmplitude * freq * 0.7;
+  let dCross_dy_dy = -cos(crossPhase) * crossAmplitude * freq * 0.7 * freq * 0.7;
 
   // --- Combine ---
   let totalHeight = primaryHeight + secondaryHeight + crossHeight;
   let totalGrad_x = dPrimary_dx + dSecondary_dx + dCross_dx;
   let totalGrad_y = dPrimary_dy + dSecondary_dy + dCross_dy;
+  let totalDGradXdx = dPrimary_dx_dx + dSecondary_dx_dx;
+  let totalDGradYdy = dPrimary_dy_dy + dSecondary_dy_dy + dCross_dy_dy;
 
-  return vec3f(totalHeight, totalGrad_x, totalGrad_y);
+  return WaveField(totalHeight, vec2f(totalGrad_x, totalGrad_y), totalDGradXdx, totalDGradYdy);
 }
 
 // Fragment shader - computes flowing glass refraction per-pixel
@@ -160,9 +184,9 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
 
   // --- Step 1: Evaluate wave field (using warped position) ---
   let field = waveField(warpedPos, freq, wavelength, amplitude, flow, uniforms.time);
-  let waveHeight = field.x;
-  let grad_x = field.y;
-  let grad_y = field.z;
+  let waveHeight = field.height;
+  let grad_x = field.grad.x;
+  let grad_y = field.grad.y;
 
   // --- Step 2: Edge-sharpened refraction displacement ---
   // Apply tanh to the gradient magnitude: compresses gentle slopes, sharpens
@@ -187,21 +211,16 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   let uvBlue = clamp(uv + displacement - chromOffset, vec2f(0.0), vec2f(1.0));
 
   let colorR = textureSample(sourceTexture, sourceSampler, uvRed).r;
-  let colorG = textureSample(sourceTexture, sourceSampler, uvBase).g;
+  let colorBase = textureSample(sourceTexture, sourceSampler, uvBase);
   let colorB = textureSample(sourceTexture, sourceSampler, uvBlue).b;
-  let colorA = textureSample(sourceTexture, sourceSampler, uvBase).a;
+  let colorG = colorBase.g;
+  let colorA = colorBase.a;
 
   // --- Step 4: Caustic brightness (physically-based from Jacobian) ---
-  // Finite-difference 2D Jacobian: evaluate wave gradient at neighboring pixels
-  let eps = 0.5;
-  let fieldPx = waveField(warpedPos + vec2f(eps, 0.0), freq, wavelength, amplitude, flow, uniforms.time);
-  let fieldMx = waveField(warpedPos - vec2f(eps, 0.0), freq, wavelength, amplitude, flow, uniforms.time);
-  let fieldPy = waveField(warpedPos + vec2f(0.0, eps), freq, wavelength, amplitude, flow, uniforms.time);
-  let fieldMy = waveField(warpedPos - vec2f(0.0, eps), freq, wavelength, amplitude, flow, uniforms.time);
-
-  // d(displacement_x)/dx and d(displacement_y)/dy via central differences
-  let dDx_dx = -(fieldPx.y - fieldMx.y) / (2.0 * eps) * refractionScale;
-  let dDy_dy = -(fieldPy.z - fieldMy.z) / (2.0 * eps) * refractionScale;
+  // Use analytical axis-aligned curvature instead of four extra finite-difference
+  // wave evaluations per fragment.
+  let dDx_dx = -field.dGradXdx * refractionScale;
+  let dDy_dy = -field.dGradYdy * refractionScale;
 
   // Simplified 2D Jacobian determinant (ignoring off-diagonal terms)
   let jacobian = (1.0 + dDx_dx) * (1.0 + dDy_dy);

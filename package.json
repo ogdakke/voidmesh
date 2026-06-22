@@ -20,6 +20,7 @@
   },
   "scripts": {
     "dev": "vite dev",
+    "bench:render": "vite dev --host 127.0.0.1 --port 5175",
     "build": "vite build",
     "sourcemap": "posthog-cli sourcemap inject -d ./dist/assets && posthog-cli sourcemap upload -d ./dist/assets --release-name voidmesh --delete-after",
     "preview": "vite preview",
