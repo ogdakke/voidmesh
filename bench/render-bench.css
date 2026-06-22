@@ -1,0 +1,136 @@
+:root {
+  color-scheme: dark;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  background: #111;
+  color: #f2f2f2;
+}
+
+body {
+  margin: 0;
+  background: #111;
+}
+
+button {
+  font: inherit;
+}
+
+.bench-shell {
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.bench-header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 18px;
+}
+
+.bench-header h1,
+.bench-header p,
+.results-section h2,
+.bench-grid h2 {
+  margin: 0;
+}
+
+.bench-header h1 {
+  font-size: 24px;
+  font-weight: 650;
+}
+
+.bench-header p {
+  margin-top: 6px;
+  color: #b8b8b8;
+  font-size: 14px;
+}
+
+#run-all,
+.scenario-button {
+  border: 1px solid #3c3c3c;
+  background: #1f1f1f;
+  color: #f2f2f2;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+#run-all {
+  min-width: 112px;
+  height: 40px;
+  padding: 0 16px;
+}
+
+#run-all:disabled,
+.scenario-button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.bench-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1280px) minmax(280px, 360px);
+  gap: 18px;
+  align-items: start;
+}
+
+#bench-canvas {
+  width: 1280px;
+  height: 720px;
+  max-width: 100%;
+  background: #050505;
+  border: 1px solid #333;
+}
+
+.scenario-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.scenario-button {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.scenario-button strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.scenario-button span {
+  color: #b8b8b8;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.results-section {
+  margin-top: 18px;
+}
+
+#results {
+  overflow: auto;
+  max-height: 52vh;
+  margin: 12px 0 0;
+  padding: 14px;
+  border: 1px solid #333;
+  background: #080808;
+  color: #d8d8d8;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+@media (max-width: 1100px) {
+  .bench-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Voidmesh Render Bench</title>
+    <script type="module" src="./render-bench.ts"></script>
+  </head>
+  <body>
+    <main class="bench-shell">
+      <header class="bench-header">
+        <div>
+          <h1>Render Bench</h1>
+          <p>Real renderer queue-drain benchmarks for high-resolution media scenarios.</p>
+        </div>
+        <button id="run-all" type="button">Run All</button>
+      </header>
+
+      <section class="bench-grid">
+        <canvas id="bench-canvas" width="1280" height="720"></canvas>
+        <aside>
+          <h2>Scenarios</h2>
+          <div id="scenario-list" class="scenario-list"></div>
+        </aside>
+      </section>
+
+      <section class="results-section">
+        <h2>Results</h2>
+        <pre id="results">Idle.</pre>
+      </section>
+    </main>
+  </body>
+</html>
