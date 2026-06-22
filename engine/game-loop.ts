@@ -732,19 +732,17 @@ export class GameLoop {
   }
 
   private findEntityAtPoint(worldPoint: Point, state: CanvasState): string | null {
-    const sortedEntities = state.entities
-      .values()
-      .toArray()
-      .sort((a, b) => b.zIndex - a.zIndex);
+    let topEntity: { id: string; zIndex: number } | null = null;
 
-    for (const entity of sortedEntities) {
+    for (const entity of state.entities.values()) {
       if (entity.locked) continue;
       const bounds = createBounds(entity.position, entity.size);
-      if (pointInBounds(worldPoint, bounds)) {
-        return entity.id;
+      if (pointInBounds(worldPoint, bounds) && (!topEntity || entity.zIndex > topEntity.zIndex)) {
+        topEntity = entity;
       }
     }
-    return null;
+
+    return topEntity?.id ?? null;
   }
 
   // Input event handlers (called from React component)
