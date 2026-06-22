@@ -37,13 +37,14 @@ function addEntity(
   y: number,
   width = 200,
   height = 150,
-  opts: { id?: string; locked?: boolean } = {},
+  opts: { id?: string; locked?: boolean; zIndex?: number } = {},
 ): string {
   const entity = createTestEntity({
     id: opts.id,
     position: { x, y },
     size: { width, height },
     locked: opts.locked,
+    zIndex: opts.zIndex,
   });
   canvasStore.addEntity(entity);
   return entity.id;
@@ -122,6 +123,36 @@ describe("Desktop pointer interactions", () => {
       expect(canvasStore.getSelectedEntityIds().size).toBe(1);
       expect(canvasStore.getSelectedEntityIds().has(id1)).toBe(true);
       expect(canvasStore.getSelectedEntityIds().has(id2)).toBe(false);
+    });
+
+    test("click on overlapping entities selects highest z-index entity", () => {
+      const backId = addEntity(100, 100, 200, 150, { zIndex: 1 });
+      const frontId = addEntity(100, 100, 200, 150, { zIndex: 10 });
+
+      click(gl, { x: 150, y: 150 });
+
+      expect(canvasStore.getSelectedEntityIds().has(frontId)).toBe(true);
+      expect(canvasStore.getSelectedEntityIds().has(backId)).toBe(false);
+    });
+
+    test("click on overlapping entities ignores locked topmost entity", () => {
+      const unlockedId = addEntity(100, 100, 200, 150, { zIndex: 10 });
+      const lockedId = addEntity(100, 100, 200, 150, { locked: true, zIndex: 20 });
+
+      click(gl, { x: 150, y: 150 });
+
+      expect(canvasStore.getSelectedEntityIds().has(unlockedId)).toBe(true);
+      expect(canvasStore.getSelectedEntityIds().has(lockedId)).toBe(false);
+    });
+
+    test("click on overlapping entities with equal z-index keeps insertion order", () => {
+      const firstId = addEntity(100, 100, 200, 150, { zIndex: 5 });
+      const secondId = addEntity(100, 100, 200, 150, { zIndex: 5 });
+
+      click(gl, { x: 150, y: 150 });
+
+      expect(canvasStore.getSelectedEntityIds().has(firstId)).toBe(true);
+      expect(canvasStore.getSelectedEntityIds().has(secondId)).toBe(false);
     });
   });
 
