@@ -547,7 +547,6 @@ export class ProcessingPipeline {
         topology: "triangle-list",
       },
     });
-
   }
 
   /**

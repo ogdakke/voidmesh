@@ -13,7 +13,15 @@ import {
   getViewportMatrix,
   getViewportWorldBounds,
 } from "../lib/canvas-math.ts";
-import { type Bounds, type RGBA, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
+import {
+  DitheringKind,
+  isErrorDiffusion,
+  ShaderType,
+  type Bounds,
+  type RGBA,
+  type ShaderCanvasEntity,
+  type Viewport,
+} from "#types/canvas.ts";
 import compositionShaderSource from "./composition.wgsl?raw";
 import { CopyPass } from "./copy-pass.ts";
 import { DisintegrationParticleSystem } from "./disintegration-particles.ts";
@@ -1218,13 +1226,17 @@ export class InfiniteCanvasRenderer {
       return sourceTexture;
     }
 
+    const needsStorageOutput =
+      entity.shaderType === ShaderType.dithering &&
+      isErrorDiffusion(entity.shaderParams.dithering?.kind ?? DitheringKind.bayer4x4);
+
     // Reuse output texture if dimensions match, otherwise create new
     const outputUsage =
       GPUTextureUsage.TEXTURE_BINDING |
       GPUTextureUsage.RENDER_ATTACHMENT |
       GPUTextureUsage.COPY_DST |
       GPUTextureUsage.COPY_SRC |
-      GPUTextureUsage.STORAGE_BINDING;
+      (needsStorageOutput ? GPUTextureUsage.STORAGE_BINDING : 0);
 
     let outputTexture: GPUTexture;
     if (cachedTexture && cachedTexture.width === width && cachedTexture.height === height) {
@@ -1242,7 +1254,7 @@ export class InfiniteCanvasRenderer {
     }
 
     // Apply shader using unified method (handles both compute and fragment shader paths)
-    this.#applyShaderToTexture(entity, sourceTexture, outputTexture, true);
+    this.#applyShaderToTexture(entity, sourceTexture, outputTexture, needsStorageOutput);
 
     // Cache and return (source texture stays in #entitySourceTextures)
     this.#entityTextures.set(entity.id, outputTexture);
