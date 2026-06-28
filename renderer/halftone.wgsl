@@ -27,6 +27,13 @@ fn luminance(c: vec3f) -> f32 {
   return dot(c, coeffs);
 }
 
+fn applyIntensity(value: f32) -> f32 {
+  if (uniforms.intensity == 1.0) {
+    return value;
+  }
+  return pow(value, max(uniforms.intensity, 0.01));
+}
+
 // Find the palette color whose luminance best matches the target luminance
 // Skips palette[0] (background), searches palette[1..paletteCount]
 fn findPaletteColorByLuminance(targetLum: f32) -> vec3f {
@@ -80,7 +87,7 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
 
   // Apply intensity to brightness curve (higher intensity = more contrast)
   // Using power curve: intensity > 1 increases contrast, < 1 decreases it
-  let brightness = pow(rawBrightness, max(uniforms.intensity, 0.01));
+  let brightness = applyIntensity(rawBrightness);
 
   // Map brightness to shape radius
   // When preserveColors is true: bright = large dots (to show white/bright colors)

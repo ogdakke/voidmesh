@@ -114,6 +114,13 @@ fn luminance(c: vec3f) -> f32 {
   return dot(c, coeffs);
 }
 
+fn applyIntensity(value: f32) -> f32 {
+  if (uniforms.intensity == 1.0) {
+    return value;
+  }
+  return pow(value, max(uniforms.intensity, 0.01));
+}
+
 // Find the nearest color in the palette using squared Euclidean distance
 fn findNearestPaletteColor(rgb: vec3f) -> vec3f {
   var minDist = 1e10;
@@ -231,9 +238,9 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   if (uniforms.preserveColors == 1u) {
     // Per-channel RGB dithering: dither each channel independently
     // Apply intensity curve to each channel before dithering
-    let adjustedR = pow(sourceColor.r, max(uniforms.intensity, 0.01));
-    let adjustedG = pow(sourceColor.g, max(uniforms.intensity, 0.01));
-    let adjustedB = pow(sourceColor.b, max(uniforms.intensity, 0.01));
+    let adjustedR = applyIntensity(sourceColor.r);
+    let adjustedG = applyIntensity(sourceColor.g);
+    let adjustedB = applyIntensity(sourceColor.b);
 
     let ditheredR = quantize(adjustedR, threshold);
     let ditheredG = quantize(adjustedG, threshold);
@@ -244,9 +251,9 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
     // Multi-color palette dithering
     // Apply intensity curve to input color
     let adjustedColor = vec3f(
-      pow(sourceColor.r, max(uniforms.intensity, 0.01)),
-      pow(sourceColor.g, max(uniforms.intensity, 0.01)),
-      pow(sourceColor.b, max(uniforms.intensity, 0.01))
+      applyIntensity(sourceColor.r),
+      applyIntensity(sourceColor.g),
+      applyIntensity(sourceColor.b)
     );
 
     // Calculate luminance for the adjusted color
@@ -294,7 +301,7 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
     // Classic 2-color dithering (backward compatible)
     let gray = luminance(sourceColor.rgb);
     // Apply intensity curve (higher = more contrast)
-    let adjustedGray = pow(gray, max(uniforms.intensity, 0.01));
+    let adjustedGray = applyIntensity(gray);
 
     let dithered = quantize(adjustedGray, threshold);
 

@@ -121,13 +121,13 @@ export class GlassShader extends ShaderPass {
     this.writeUniforms(entity);
     this.ctx.device.queue.writeBuffer(this.ctx.uniformBuffer, 0, this.ctx.uniformData);
 
-    const bindGroup = this.createBindGroup(sourceTexture.createView());
+    const bindGroup = this.getBindGroup(sourceTexture);
 
     const pass = encoder.beginRenderPass({
       label: "GlassShader fluted render pass",
       colorAttachments: [
         {
-          view: outputTexture.createView(),
+          view: this.getTextureView(outputTexture),
           loadOp: "clear",
           storeOp: "store",
           clearValue: { r: 0, g: 0, b: 0, a: 0 },
@@ -152,13 +152,13 @@ export class GlassShader extends ShaderPass {
     this.writeUniforms(entity);
     this.ctx.device.queue.writeBuffer(this.ctx.uniformBuffer, 0, this.ctx.uniformData);
 
-    const bindGroup = this.createBindGroup(sourceTexture.createView());
+    const bindGroup = this.getBindGroup(sourceTexture);
 
     const pass = encoder.beginRenderPass({
       label: "GlassShader flowing render pass",
       colorAttachments: [
         {
-          view: outputTexture.createView(),
+          view: this.getTextureView(outputTexture),
           loadOp: "clear",
           storeOp: "store",
           clearValue: { r: 0, g: 0, b: 0, a: 0 },

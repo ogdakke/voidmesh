@@ -47,6 +47,16 @@ interface BenchResult {
   msPerFrame: number;
   cpuEncodeMedianMs: number;
   queueDrainMedianMs: number;
+  cpuEncodeMsPerFrame: number;
+  queueDrainMsPerFrame: number;
+}
+
+interface VisualMetrics {
+  width: number;
+  height: number;
+  fnv1a32: string;
+  meanChannel: number;
+  nonTransparentRatio: number;
 }
 
 interface VisualCaptureResult {
@@ -56,6 +66,7 @@ interface VisualCaptureResult {
   time: number;
   shaderType: ShaderType;
   shaderKind: GlassKind;
+  metrics: VisualMetrics;
 }
 
 interface BenchEntitySet {
@@ -69,6 +80,7 @@ declare global {
     __voidmeshBenchResults?: BenchResult[];
     __voidmeshBenchVisual?: VisualCaptureResult;
     __captureVoidmeshRenderBenchVisual?: () => Promise<VisualCaptureResult>;
+    __runVoidmeshRenderBenchScenario?: (scenarioId: string) => Promise<BenchResult>;
     __runVoidmeshRenderBench?: () => Promise<BenchResult[]>;
   }
 }
@@ -667,6 +679,8 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
       msPerFrame: median(samples) / scenario.frames,
       cpuEncodeMedianMs: median(cpuSamples),
       queueDrainMedianMs: median(queueDrainSamples),
+      cpuEncodeMsPerFrame: median(cpuSamples) / scenario.frames,
+      queueDrainMsPerFrame: median(queueDrainSamples) / scenario.frames,
     };
   } finally {
     entitySet.cleanup?.();
@@ -714,6 +728,62 @@ async function runAll(): Promise<BenchResult[]> {
   }
 }
 
+async function runScenarioById(scenarioId: string): Promise<BenchResult> {
+  const scenario = scenarios.find((item) => item.id === scenarioId);
+  if (!scenario) throw new Error(`Unknown render benchmark scenario: ${scenarioId}`);
+  const result = await runScenario(scenario);
+  window.__voidmeshBenchResults = [result];
+  writeResults(formatResults([result]));
+  markComplete([result]);
+  console.log("[voidmesh-render-bench-scenario]", JSON.stringify(result, null, 2));
+  return result;
+}
+
+async function captureBlobMetrics(blob: Blob): Promise<VisualMetrics> {
+  const bitmap = await createImageBitmap(blob);
+  const offscreen = new OffscreenCanvas(bitmap.width, bitmap.height);
+  const ctx = offscreen.getContext("2d", { alpha: true });
+  if (!ctx) {
+    bitmap.close();
+    throw new Error("Could not create visual metric context");
+  }
+
+  ctx.drawImage(bitmap, 0, 0);
+  bitmap.close();
+
+  const pixels = ctx.getImageData(0, 0, offscreen.width, offscreen.height).data;
+  let hash = 2166136261 >>> 0;
+  let channelSum = 0;
+  let nonTransparentPixels = 0;
+
+  for (let index = 0; index < pixels.length; index += 4) {
+    const red = pixels[index]!;
+    const green = pixels[index + 1]!;
+    const blue = pixels[index + 2]!;
+    const alpha = pixels[index + 3]!;
+
+    hash ^= red;
+    hash = Math.imul(hash, 16777619) >>> 0;
+    hash ^= green;
+    hash = Math.imul(hash, 16777619) >>> 0;
+    hash ^= blue;
+    hash = Math.imul(hash, 16777619) >>> 0;
+    hash ^= alpha;
+    hash = Math.imul(hash, 16777619) >>> 0;
+
+    channelSum += red + green + blue + alpha;
+    if (alpha > 0) nonTransparentPixels += 1;
+  }
+
+  return {
+    width: offscreen.width,
+    height: offscreen.height,
+    fnv1a32: hash.toString(16).padStart(8, "0"),
+    meanChannel: channelSum / pixels.length,
+    nonTransparentRatio: nonTransparentPixels / (pixels.length / 4),
+  };
+}
+
 async function captureFlowingGlassVisual(): Promise<VisualCaptureResult> {
   const benchRenderer = await getRenderer();
   const entitySet = await createEntities(flowingGlassVisualScenario);
@@ -723,6 +793,11 @@ async function captureFlowingGlassVisual(): Promise<VisualCaptureResult> {
   try {
     benchRenderer.render(createRenderState(entitySet.entities, true));
     await device.queue.onSubmittedWorkDone();
+    const blob = await benchRenderer.renderEntityToBlob(entitySet.entities[0]!, {
+      format: "png",
+      quality: 1,
+    });
+    if (!blob) throw new Error("Could not export visual reference texture");
 
     const result: VisualCaptureResult = {
       id: flowingGlassVisualScenario.id,
@@ -731,6 +806,7 @@ async function captureFlowingGlassVisual(): Promise<VisualCaptureResult> {
       time: FLOWING_GLASS_VISUAL_TIME,
       shaderType: ShaderType.glass,
       shaderKind: GlassKind.flowing,
+      metrics: await captureBlobMetrics(blob),
     };
     window.__voidmeshBenchVisual = result;
     writeResults(JSON.stringify(result, null, 2));
@@ -773,11 +849,15 @@ runAllButton.addEventListener("click", () => {
   void runAll();
 });
 window.__runVoidmeshRenderBench = runAll;
+window.__runVoidmeshRenderBenchScenario = runScenarioById;
 window.__captureVoidmeshRenderBenchVisual = captureFlowingGlassVisual;
 
 const searchParams = new URLSearchParams(window.location.search);
+const scenarioId = searchParams.get("scenario");
 if (searchParams.get("visual") === "flowing-glass") {
   void captureFlowingGlassVisual();
+} else if (scenarioId) {
+  void runScenarioById(scenarioId);
 } else if (searchParams.get("autorun") === "1") {
   void runAll();
 }

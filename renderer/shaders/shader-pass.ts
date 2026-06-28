@@ -27,6 +27,8 @@ export interface ShaderContext {
 export abstract class ShaderPass {
   protected pipeline: GPURenderPipeline | null = null;
   protected bindGroupLayout: GPUBindGroupLayout | null = null;
+  #textureViewCache = new WeakMap<GPUTexture, GPUTextureView>();
+  #bindGroupCache = new WeakMap<GPUTexture, GPUBindGroup>();
 
   constructor(protected readonly ctx: ShaderContext) {}
 
@@ -202,6 +204,24 @@ export abstract class ShaderPass {
     });
   }
 
+  protected getTextureView(texture: GPUTexture): GPUTextureView {
+    const cached = this.#textureViewCache.get(texture);
+    if (cached) return cached;
+
+    const view = texture.createView();
+    this.#textureViewCache.set(texture, view);
+    return view;
+  }
+
+  protected getBindGroup(sourceTexture: GPUTexture): GPUBindGroup {
+    const cached = this.#bindGroupCache.get(sourceTexture);
+    if (cached) return cached;
+
+    const bindGroup = this.createBindGroup(this.getTextureView(sourceTexture));
+    this.#bindGroupCache.set(sourceTexture, bindGroup);
+    return bindGroup;
+  }
+
   /**
    * Execute this shader pass: write uniforms, create bind group, encode render pass.
    * When an encoder is provided, encodes into it without submitting.
@@ -219,13 +239,13 @@ export abstract class ShaderPass {
     this.writeUniforms(entity);
     this.ctx.device.queue.writeBuffer(this.ctx.uniformBuffer, 0, this.ctx.uniformData);
 
-    const bindGroup = this.createBindGroup(sourceTexture.createView());
+    const bindGroup = this.getBindGroup(sourceTexture);
 
     const pass = encoder.beginRenderPass({
       label: `${this.constructor.name} render pass`,
       colorAttachments: [
         {
-          view: outputTexture.createView(),
+          view: this.getTextureView(outputTexture),
           loadOp: "clear",
           storeOp: "store",
           clearValue: { r: 0, g: 0, b: 0, a: 0 },
