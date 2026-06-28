@@ -28,7 +28,7 @@ fn bayer2x2(pos: vec2u) -> f32 {
     0.0, 2.0,
     3.0, 1.0
   );
-  let idx = (pos.y % 2u) * 2u + (pos.x % 2u);
+  let idx = (pos.y & 1u) * 2u + (pos.x & 1u);
   return (matrix[idx] + 0.5) / 4.0;
 }
 
@@ -40,7 +40,7 @@ fn bayer4x4(pos: vec2u) -> f32 {
      3.0, 11.0,  1.0,  9.0,
     15.0,  7.0, 13.0,  5.0
   );
-  let idx = (pos.y % 4u) * 4u + (pos.x % 4u);
+  let idx = (pos.y & 3u) * 4u + (pos.x & 3u);
   return (matrix[idx] + 0.5) / 16.0;
 }
 
@@ -56,7 +56,7 @@ fn bayer8x8(pos: vec2u) -> f32 {
     15.0, 47.0,  7.0, 39.0, 13.0, 45.0,  5.0, 37.0,
     63.0, 31.0, 55.0, 23.0, 61.0, 29.0, 53.0, 21.0
   );
-  let idx = (pos.y % 8u) * 8u + (pos.x % 8u);
+  let idx = (pos.y & 7u) * 8u + (pos.x & 7u);
   return (matrix[idx] + 0.5) / 64.0;
 }
 

@@ -60,6 +60,11 @@ interface LabelCacheEntry {
   textureWidth: number;
   textureHeight: number;
   rasterState: LabelRasterState;
+  lastUniformX: number;
+  lastUniformY: number;
+  lastUniformWidth: number;
+  lastUniformHeight: number;
+  lastUniformOpacity: number;
 }
 
 interface LabelRasterState {
@@ -100,6 +105,7 @@ export class EntityLabelPass {
 
   // Per-entity label cache
   #cache = new Map<string, LabelCacheEntry>();
+  #uniformData = new Float32Array(UNIFORM_SIZE / 4);
 
   // Shared animation state (drag icon affects all labels identically)
   #dragIconProgress = 0;
@@ -230,13 +236,27 @@ export class EntityLabelPass {
 
     // ── Write uniforms and draw ────────────────────────────────────────────
 
-    const data = new Float32Array(UNIFORM_SIZE / 4);
-    data[0] = worldX;
-    data[1] = worldY;
-    data[2] = worldWidth;
-    data[3] = worldHeight;
-    data[4] = 1; // opacity
-    this.#device.queue.writeBuffer(cached.uniformBuffer, 0, data);
+    const opacity = 1;
+    if (
+      cached.lastUniformX !== worldX ||
+      cached.lastUniformY !== worldY ||
+      cached.lastUniformWidth !== worldWidth ||
+      cached.lastUniformHeight !== worldHeight ||
+      cached.lastUniformOpacity !== opacity
+    ) {
+      const data = this.#uniformData;
+      data[0] = worldX;
+      data[1] = worldY;
+      data[2] = worldWidth;
+      data[3] = worldHeight;
+      data[4] = opacity;
+      this.#device.queue.writeBuffer(cached.uniformBuffer, 0, data);
+      cached.lastUniformX = worldX;
+      cached.lastUniformY = worldY;
+      cached.lastUniformWidth = worldWidth;
+      cached.lastUniformHeight = worldHeight;
+      cached.lastUniformOpacity = opacity;
+    }
 
     pass.setPipeline(this.#pipeline);
     pass.setBindGroup(0, cached.bindGroup);
@@ -371,6 +391,11 @@ export class EntityLabelPass {
       textureWidth: width,
       textureHeight: height,
       rasterState,
+      lastUniformX: Number.NaN,
+      lastUniformY: Number.NaN,
+      lastUniformWidth: Number.NaN,
+      lastUniformHeight: Number.NaN,
+      lastUniformOpacity: Number.NaN,
     };
   }
 

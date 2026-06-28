@@ -35,9 +35,14 @@ fn hash(p: vec2f) -> f32 {
 }
 
 // Generate film grain noise
-fn grain(uv: vec2f, time: f32, size: f32, intensity: f32) -> f32 {
+fn grain(pixelPos: vec2f, time: f32, size: f32, intensity: f32) -> f32 {
   // Scale UV by grain size (larger size = larger grain blocks)
-  let scaledUV = floor(uv * uniforms.resolution / max(size, 1.0));
+  var scaledUV: vec2f;
+  if (size <= 1.0) {
+    scaledUV = floor(pixelPos);
+  } else {
+    scaledUV = floor(pixelPos / size);
+  }
 
   // Add time variation for animated grain
   let noise = hash(scaledUV + vec2f(time * 100.0, time * 73.0));
@@ -109,7 +114,7 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
 
   // Apply grain (last, adds noise on top)
   if ((flags & FLAG_GRAIN) != 0u && uniforms.grain_intensity > 0.0) {
-    let grainValue = grain(uv, uniforms.time, uniforms.grain_size, uniforms.grain_intensity);
+    let grainValue = grain(fragCoord.xy, uniforms.time, uniforms.grain_size, uniforms.grain_intensity);
     color += vec3f(grainValue);
   }
 

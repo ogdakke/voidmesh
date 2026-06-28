@@ -119,6 +119,7 @@ export class EntityShaderRuntime {
     width: number;
     height: number;
     respectShowOriginal: boolean;
+    outputTextureHasStorageBinding?: boolean;
   }): void {
     const { entity, sourceTexture, outputTexture, encoder, width, height } = params;
 
@@ -169,9 +170,11 @@ export class EntityShaderRuntime {
     const postProcessUsage =
       GPUTextureUsage.TEXTURE_BINDING |
       GPUTextureUsage.RENDER_ATTACHMENT |
-      GPUTextureUsage.COPY_DST;
+      GPUTextureUsage.COPY_DST |
+      GPUTextureUsage.STORAGE_BINDING;
     let mainShaderOutputTexture = outputTexture;
     let postProcessIntermediateTexture: GPUTexture | null = null;
+    let mainShaderOutputHasStorageBinding = params.outputTextureHasStorageBinding ?? false;
 
     if (postProcessEnabled) {
       postProcessIntermediateTexture = this.#acquireTexture(
@@ -181,9 +184,16 @@ export class EntityShaderRuntime {
         "Post-process intermediate texture",
       );
       mainShaderOutputTexture = postProcessIntermediateTexture;
+      mainShaderOutputHasStorageBinding = true;
     }
 
-    this.#shaderRegistry.applyShader(entity, shaderSourceTexture, mainShaderOutputTexture, encoder);
+    this.#shaderRegistry.applyShader(
+      entity,
+      shaderSourceTexture,
+      mainShaderOutputTexture,
+      encoder,
+      mainShaderOutputHasStorageBinding,
+    );
 
     if (blurOutputTexture) {
       this.#releaseTexture(blurOutputTexture, width, height, preProcessUsage);

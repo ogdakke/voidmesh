@@ -19,6 +19,7 @@ export class ProcessingPipeline {
   #device: GPUDevice;
   #intermediateFormat: GPUTextureFormat;
   #supportsP3: boolean;
+  #textureViewCache = new WeakMap<GPUTexture, GPUTextureView>();
 
   // Adjustments (pre-processing) pipeline
   #adjustmentsPipeline: GPURenderPipeline | null = null;
@@ -27,6 +28,7 @@ export class ProcessingPipeline {
   #adjustmentsSampler: GPUSampler | null = null;
   #adjustmentsUniformData = new ArrayBuffer(config.rendering.adjustmentsUniformSize);
   #adjustmentsFloatView = new Float32Array(this.#adjustmentsUniformData);
+  #adjustmentsBindGroupCache = new WeakMap<GPUTexture, GPUBindGroup>();
 
   // Dual Kawase blur (pre-processing) pipeline
   #blurDownsamplePipeline: GPURenderPipeline | null = null;
@@ -50,6 +52,11 @@ export class ProcessingPipeline {
   #blurMixPipeline: GPURenderPipeline | null = null;
   #blurMixBindGroupLayout: GPUBindGroupLayout | null = null;
   #blurMixUniformBuffer: GPUBuffer | null = null;
+  #blurUniformData = new ArrayBuffer(config.rendering.blurUniformSize);
+  #blurFloatView = new Float32Array(this.#blurUniformData);
+  #blurDownsampleBindGroupCaches: WeakMap<GPUTexture, GPUBindGroup>[] = [];
+  #blurUpsampleBindGroupCaches: WeakMap<GPUTexture, GPUBindGroup>[] = [];
+  #blurMixBindGroupCache = new WeakMap<GPUTexture, WeakMap<GPUTexture, GPUBindGroup>>();
   // Blend textures cached per entity dimensions (keyed by "WxH")
   #blurBlendTextureCache: Map<
     string,
@@ -70,6 +77,8 @@ export class ProcessingPipeline {
   #postProcessFloatView = new Float32Array(this.#postProcessUniformData);
   #postProcessUintView = new Uint32Array(this.#postProcessUniformData);
   #postProcessTime = 0; // Animated time for grain effect
+  #postProcessBindGroupCache = new WeakMap<GPUTexture, WeakMap<GPUTexture, GPUBindGroup>>();
+  #dummyBloomTexture: GPUTexture | null = null;
 
   // Bloom pipeline (multi-pass downsample/upsample)
   #bloomDownsamplePipeline: GPURenderPipeline | null = null;
@@ -80,6 +89,13 @@ export class ProcessingPipeline {
   #bloomDownsampleUniformBuffers: GPUBuffer[] = [];
   #bloomUpsampleUniformBuffers: GPUBuffer[] = [];
   #bloomSampler: GPUSampler | null = null;
+  #bloomDownsampleUniformData = new ArrayBuffer(32);
+  #bloomDownsampleFloatView = new Float32Array(this.#bloomDownsampleUniformData);
+  #bloomDownsampleUintView = new Uint32Array(this.#bloomDownsampleUniformData);
+  #bloomUpsampleUniformData = new ArrayBuffer(16);
+  #bloomUpsampleFloatView = new Float32Array(this.#bloomUpsampleUniformData);
+  #bloomDownsampleBindGroupCaches: WeakMap<GPUTexture, GPUBindGroup>[] = [];
+  #bloomUpsampleBindGroupCaches: WeakMap<GPUTexture, GPUBindGroup>[] = [];
   // Bloom mip chain textures (cached per entity dimensions)
   #bloomMipChainCache: Map<
     string,
@@ -102,6 +118,115 @@ export class ProcessingPipeline {
     this.#createBlurMixPipeline();
     this.#createPostProcessPipeline();
     this.#createBloomPipelines();
+  }
+
+  #getTextureView(texture: GPUTexture): GPUTextureView {
+    const cached = this.#textureViewCache.get(texture);
+    if (cached) return cached;
+
+    const view = texture.createView();
+    this.#textureViewCache.set(texture, view);
+    return view;
+  }
+
+  #getTextureBindGroup(
+    cache: WeakMap<GPUTexture, GPUBindGroup>,
+    texture: GPUTexture,
+    layout: GPUBindGroupLayout,
+    uniformBuffer: GPUBuffer,
+    sampler: GPUSampler,
+    label: string,
+  ): GPUBindGroup {
+    const cached = cache.get(texture);
+    if (cached) return cached;
+
+    const bindGroup = this.#device.createBindGroup({
+      label,
+      layout,
+      entries: [
+        { binding: 0, resource: { buffer: uniformBuffer } },
+        { binding: 1, resource: this.#getTextureView(texture) },
+        { binding: 2, resource: sampler },
+      ],
+    });
+    cache.set(texture, bindGroup);
+    return bindGroup;
+  }
+
+  #getIndexedTextureBindGroup(
+    caches: WeakMap<GPUTexture, GPUBindGroup>[],
+    index: number,
+    texture: GPUTexture,
+    layout: GPUBindGroupLayout,
+    uniformBuffer: GPUBuffer,
+    sampler: GPUSampler,
+    label: string,
+  ): GPUBindGroup {
+    let cache = caches[index];
+    if (!cache) {
+      cache = new WeakMap();
+      caches[index] = cache;
+    }
+    return this.#getTextureBindGroup(cache, texture, layout, uniformBuffer, sampler, label);
+  }
+
+  #getBlurMixBindGroup(textureA: GPUTexture, textureB: GPUTexture): GPUBindGroup {
+    let cache = this.#blurMixBindGroupCache.get(textureA);
+    if (!cache) {
+      cache = new WeakMap();
+      this.#blurMixBindGroupCache.set(textureA, cache);
+    }
+
+    const cached = cache.get(textureB);
+    if (cached) return cached;
+
+    const bindGroup = this.#device.createBindGroup({
+      label: "Blur mix bind group",
+      layout: this.#blurMixBindGroupLayout!,
+      entries: [
+        { binding: 0, resource: { buffer: this.#blurMixUniformBuffer! } },
+        { binding: 1, resource: this.#getTextureView(textureA) },
+        { binding: 2, resource: this.#getTextureView(textureB) },
+        { binding: 3, resource: this.#blurSampler! },
+      ],
+    });
+    cache.set(textureB, bindGroup);
+    return bindGroup;
+  }
+
+  #getPostProcessBindGroup(inputTexture: GPUTexture, bloomTexture: GPUTexture): GPUBindGroup {
+    let cache = this.#postProcessBindGroupCache.get(inputTexture);
+    if (!cache) {
+      cache = new WeakMap();
+      this.#postProcessBindGroupCache.set(inputTexture, cache);
+    }
+
+    const cached = cache.get(bloomTexture);
+    if (cached) return cached;
+
+    const bindGroup = this.#device.createBindGroup({
+      label: "Post-process bind group",
+      layout: this.#postProcessBindGroupLayout!,
+      entries: [
+        { binding: 0, resource: { buffer: this.#postProcessUniformBuffer! } },
+        { binding: 1, resource: this.#getTextureView(inputTexture) },
+        { binding: 2, resource: this.#postProcessSampler! },
+        { binding: 3, resource: this.#getTextureView(bloomTexture) },
+      ],
+    });
+    cache.set(bloomTexture, bindGroup);
+    return bindGroup;
+  }
+
+  #getDummyBloomTexture(): GPUTexture {
+    if (this.#dummyBloomTexture) return this.#dummyBloomTexture;
+    this.#dummyBloomTexture = this.#device.createTexture({
+      label: "Dummy bloom texture",
+      size: [1, 1],
+      format: this.#intermediateFormat,
+      usage: GPUTextureUsage.TEXTURE_BINDING,
+    });
+    return this.#dummyBloomTexture;
   }
 
   #createAdjustmentsPipeline(): void {
@@ -422,6 +547,7 @@ export class ProcessingPipeline {
         topology: "triangle-list",
       },
     });
+
   }
 
   /**
@@ -654,19 +780,22 @@ export class ProcessingPipeline {
     const softKnee = softness;
 
     for (let i = 0; i < mipChain.length; i++) {
-      const uniformData = new ArrayBuffer(32);
-      const floatView = new Float32Array(uniformData);
-      const uintView = new Uint32Array(uniformData);
-      floatView[0] = srcWidth;
-      floatView[1] = srcHeight;
-      uintView[2] = i;
-      uintView[3] = i === 0 && threshold > 0 ? 1 : 0;
-      floatView[4] = threshold;
-      floatView[5] = softKnee;
-      uintView[6] = this.#supportsP3 ? 1 : 0;
-      floatView[7] = 0;
+      const f = this.#bloomDownsampleFloatView;
+      const u = this.#bloomDownsampleUintView;
+      f[0] = srcWidth;
+      f[1] = srcHeight;
+      u[2] = i;
+      u[3] = i === 0 && threshold > 0 ? 1 : 0;
+      f[4] = threshold;
+      f[5] = softKnee;
+      u[6] = this.#supportsP3 ? 1 : 0;
+      f[7] = 0;
 
-      this.#device.queue.writeBuffer(this.#bloomDownsampleUniformBuffers[i]!, 0, uniformData);
+      this.#device.queue.writeBuffer(
+        this.#bloomDownsampleUniformBuffers[i]!,
+        0,
+        this.#bloomDownsampleUniformData,
+      );
 
       srcWidth = Math.max(1, Math.floor(srcWidth / 2));
       srcHeight = Math.max(1, Math.floor(srcHeight / 2));
@@ -674,19 +803,18 @@ export class ProcessingPipeline {
 
     for (let i = mipChain.length - 1; i > 0; i--) {
       const dstMip = mipChain[i - 1]!;
-      const upsampleUniformData = new ArrayBuffer(16);
-      const upsampleFloatView = new Float32Array(upsampleUniformData);
-      upsampleFloatView[0] = filterRadius;
-      upsampleFloatView[1] = 0;
-      upsampleFloatView[2] = dstMip.width;
-      upsampleFloatView[3] = dstMip.height;
+      const f = this.#bloomUpsampleFloatView;
+      f[0] = filterRadius;
+      f[1] = 0;
+      f[2] = dstMip.width;
+      f[3] = dstMip.height;
 
       // Map pass index: i goes from mipChain.length-1 down to 1, buffer index = mipChain.length-1-i
       const bufIdx = mipChain.length - 1 - i;
       this.#device.queue.writeBuffer(
         this.#bloomUpsampleUniformBuffers[bufIdx]!,
         0,
-        upsampleUniformData,
+        this.#bloomUpsampleUniformData,
       );
     }
 
@@ -697,24 +825,21 @@ export class ProcessingPipeline {
       const dstWidth = dstTexture.width;
       const dstHeight = dstTexture.height;
 
-      const bindGroup = this.#device.createBindGroup({
-        label: `Bloom downsample bind group mip ${i}`,
-        layout: this.#bloomDownsampleBindGroupLayout,
-        entries: [
-          {
-            binding: 0,
-            resource: { buffer: this.#bloomDownsampleUniformBuffers[i]! },
-          },
-          { binding: 1, resource: srcTexture.createView() },
-          { binding: 2, resource: this.#bloomSampler },
-        ],
-      });
+      const bindGroup = this.#getIndexedTextureBindGroup(
+        this.#bloomDownsampleBindGroupCaches,
+        i,
+        srcTexture,
+        this.#bloomDownsampleBindGroupLayout,
+        this.#bloomDownsampleUniformBuffers[i]!,
+        this.#bloomSampler,
+        `Bloom downsample bind group mip ${i}`,
+      );
 
       const pass = encoder.beginRenderPass({
         label: `Bloom downsample pass mip ${i}`,
         colorAttachments: [
           {
-            view: dstTexture.createView(),
+            view: this.#getTextureView(dstTexture),
             loadOp: "clear",
             storeOp: "store",
             clearValue: { r: 0, g: 0, b: 0, a: 1 },
@@ -739,24 +864,21 @@ export class ProcessingPipeline {
       const dstHeight = dstMip.height;
       const bufIdx = mipChain.length - 1 - i;
 
-      const bindGroup = this.#device.createBindGroup({
-        label: `Bloom upsample bind group mip ${i}`,
-        layout: this.#bloomUpsampleBindGroupLayout,
-        entries: [
-          {
-            binding: 0,
-            resource: { buffer: this.#bloomUpsampleUniformBuffers[bufIdx]! },
-          },
-          { binding: 1, resource: srcMip.createView() },
-          { binding: 2, resource: this.#bloomSampler },
-        ],
-      });
+      const bindGroup = this.#getIndexedTextureBindGroup(
+        this.#bloomUpsampleBindGroupCaches,
+        bufIdx,
+        srcMip,
+        this.#bloomUpsampleBindGroupLayout,
+        this.#bloomUpsampleUniformBuffers[bufIdx]!,
+        this.#bloomSampler,
+        `Bloom upsample bind group mip ${i}`,
+      );
 
       const pass = encoder.beginRenderPass({
         label: `Bloom upsample pass mip ${i}`,
         colorAttachments: [
           {
-            view: dstMip.createView(),
+            view: this.#getTextureView(dstMip),
             loadOp: "load",
             storeOp: "store",
           },
@@ -916,17 +1038,16 @@ export class ProcessingPipeline {
     let srcWidth = width;
     let srcHeight = height;
     for (let i = 0; i < activeLevels; i++) {
-      const uniformData = new ArrayBuffer(config.rendering.blurUniformSize);
-      const floatView = new Float32Array(uniformData);
-      floatView[0] = srcWidth; // src_resolution.x
-      floatView[1] = srcHeight; // src_resolution.y
-      floatView[2] = offset; // per-pass offset
-      floatView[3] = 0; // padding
+      const f = this.#blurFloatView;
+      f[0] = srcWidth; // src_resolution.x
+      f[1] = srcHeight; // src_resolution.y
+      f[2] = offset; // per-pass offset
+      f[3] = 0; // padding
 
       this.#device.queue.writeBuffer(
         this.#blurDownsampleUniformBuffers[bufferOffset + i]!,
         0,
-        uniformData,
+        this.#blurUniformData,
       );
 
       srcWidth = Math.max(1, Math.floor(srcWidth / 2));
@@ -937,34 +1058,32 @@ export class ProcessingPipeline {
     let bufIdx = 0;
     for (let i = activeLevels - 1; i > 0; i--) {
       const dstMip = mipChain[i - 1]!;
-      const uniformData = new ArrayBuffer(config.rendering.blurUniformSize);
-      const floatView = new Float32Array(uniformData);
-      floatView[0] = dstMip.width; // dst_resolution.x
-      floatView[1] = dstMip.height; // dst_resolution.y
-      floatView[2] = offset; // per-pass offset
-      floatView[3] = 0; // padding
+      const f = this.#blurFloatView;
+      f[0] = dstMip.width; // dst_resolution.x
+      f[1] = dstMip.height; // dst_resolution.y
+      f[2] = offset; // per-pass offset
+      f[3] = 0; // padding
 
       this.#device.queue.writeBuffer(
         this.#blurUpsampleUniformBuffers[bufferOffset + bufIdx]!,
         0,
-        uniformData,
+        this.#blurUniformData,
       );
       bufIdx++;
     }
 
     // Final upsample uniform: mip[0] -> full resolution
     {
-      const uniformData = new ArrayBuffer(config.rendering.blurUniformSize);
-      const floatView = new Float32Array(uniformData);
-      floatView[0] = width; // dst_resolution.x (full res)
-      floatView[1] = height; // dst_resolution.y (full res)
-      floatView[2] = offset; // per-pass offset
-      floatView[3] = 0; // padding
+      const f = this.#blurFloatView;
+      f[0] = width; // dst_resolution.x (full res)
+      f[1] = height; // dst_resolution.y (full res)
+      f[2] = offset; // per-pass offset
+      f[3] = 0; // padding
 
       this.#device.queue.writeBuffer(
         this.#blurUpsampleUniformBuffers[bufferOffset + bufIdx]!,
         0,
-        uniformData,
+        this.#blurUniformData,
       );
     }
 
@@ -973,26 +1092,21 @@ export class ProcessingPipeline {
     for (let i = 0; i < activeLevels; i++) {
       const dstTexture = mipChain[i]!;
 
-      const bindGroup = this.#device.createBindGroup({
-        label: `Blur downsample bind group level ${i}`,
-        layout: this.#blurDownsampleBindGroupLayout!,
-        entries: [
-          {
-            binding: 0,
-            resource: {
-              buffer: this.#blurDownsampleUniformBuffers[bufferOffset + i]!,
-            },
-          },
-          { binding: 1, resource: srcTexture.createView() },
-          { binding: 2, resource: this.#blurSampler! },
-        ],
-      });
+      const bindGroup = this.#getIndexedTextureBindGroup(
+        this.#blurDownsampleBindGroupCaches,
+        bufferOffset + i,
+        srcTexture,
+        this.#blurDownsampleBindGroupLayout!,
+        this.#blurDownsampleUniformBuffers[bufferOffset + i]!,
+        this.#blurSampler!,
+        `Blur downsample bind group level ${i}`,
+      );
 
       const pass = encoder.beginRenderPass({
         label: `Blur downsample pass level ${i}`,
         colorAttachments: [
           {
-            view: dstTexture.createView(),
+            view: this.#getTextureView(dstTexture),
             loadOp: "clear",
             storeOp: "store",
             clearValue: { r: 0, g: 0, b: 0, a: 1 },
@@ -1015,26 +1129,21 @@ export class ProcessingPipeline {
       const srcMip = mipChain[i]!;
       const dstMip = mipChain[i - 1]!;
 
-      const bindGroup = this.#device.createBindGroup({
-        label: `Blur upsample bind group level ${i}`,
-        layout: this.#blurUpsampleBindGroupLayout!,
-        entries: [
-          {
-            binding: 0,
-            resource: {
-              buffer: this.#blurUpsampleUniformBuffers[bufferOffset + bufIdx]!,
-            },
-          },
-          { binding: 1, resource: srcMip.createView() },
-          { binding: 2, resource: this.#blurSampler! },
-        ],
-      });
+      const bindGroup = this.#getIndexedTextureBindGroup(
+        this.#blurUpsampleBindGroupCaches,
+        bufferOffset + bufIdx,
+        srcMip,
+        this.#blurUpsampleBindGroupLayout!,
+        this.#blurUpsampleUniformBuffers[bufferOffset + bufIdx]!,
+        this.#blurSampler!,
+        `Blur upsample bind group level ${i}`,
+      );
 
       const pass = encoder.beginRenderPass({
         label: `Blur upsample pass level ${i}`,
         colorAttachments: [
           {
-            view: dstMip.createView(),
+            view: this.#getTextureView(dstMip),
             loadOp: "clear",
             storeOp: "store",
             clearValue: { r: 0, g: 0, b: 0, a: 1 },
@@ -1055,26 +1164,21 @@ export class ProcessingPipeline {
     {
       const srcMip = mipChain[0]!;
 
-      const bindGroup = this.#device.createBindGroup({
-        label: "Blur final upsample bind group",
-        layout: this.#blurUpsampleBindGroupLayout!,
-        entries: [
-          {
-            binding: 0,
-            resource: {
-              buffer: this.#blurUpsampleUniformBuffers[bufferOffset + bufIdx]!,
-            },
-          },
-          { binding: 1, resource: srcMip.createView() },
-          { binding: 2, resource: this.#blurSampler! },
-        ],
-      });
+      const bindGroup = this.#getIndexedTextureBindGroup(
+        this.#blurUpsampleBindGroupCaches,
+        bufferOffset + bufIdx,
+        srcMip,
+        this.#blurUpsampleBindGroupLayout!,
+        this.#blurUpsampleUniformBuffers[bufferOffset + bufIdx]!,
+        this.#blurSampler!,
+        "Blur final upsample bind group",
+      );
 
       const pass = encoder.beginRenderPass({
         label: "Blur final upsample pass",
         colorAttachments: [
           {
-            view: finalTarget.createView(),
+            view: this.#getTextureView(finalTarget),
             loadOp: "clear",
             storeOp: "store",
             clearValue: { r: 0, g: 0, b: 0, a: 1 },
@@ -1102,31 +1206,21 @@ export class ProcessingPipeline {
     width: number,
     height: number,
   ): void {
-    const uniformData = new ArrayBuffer(config.rendering.blurUniformSize);
-    const floatView = new Float32Array(uniformData);
-    floatView[0] = width;
-    floatView[1] = height;
-    floatView[2] = mixFactor;
-    floatView[3] = 0; // padding
+    const f = this.#blurFloatView;
+    f[0] = width;
+    f[1] = height;
+    f[2] = mixFactor;
+    f[3] = 0; // padding
 
-    this.#device.queue.writeBuffer(this.#blurMixUniformBuffer!, 0, uniformData);
+    this.#device.queue.writeBuffer(this.#blurMixUniformBuffer!, 0, this.#blurUniformData);
 
-    const bindGroup = this.#device.createBindGroup({
-      label: "Blur mix bind group",
-      layout: this.#blurMixBindGroupLayout!,
-      entries: [
-        { binding: 0, resource: { buffer: this.#blurMixUniformBuffer! } },
-        { binding: 1, resource: textureA.createView() },
-        { binding: 2, resource: textureB.createView() },
-        { binding: 3, resource: this.#blurSampler! },
-      ],
-    });
+    const bindGroup = this.#getBlurMixBindGroup(textureA, textureB);
 
     const pass = encoder.beginRenderPass({
       label: "Blur mix pass",
       colorAttachments: [
         {
-          view: outputTexture.createView(),
+          view: this.#getTextureView(outputTexture),
           loadOp: "clear",
           storeOp: "store",
           clearValue: { r: 0, g: 0, b: 0, a: 1 },
@@ -1285,21 +1379,20 @@ export class ProcessingPipeline {
     this.#updateAdjustmentsUniforms(entity);
     this.#device.queue.writeBuffer(this.#adjustmentsUniformBuffer, 0, this.#adjustmentsUniformData);
 
-    const bindGroup = this.#device.createBindGroup({
-      label: "Adjustments bind group",
-      layout: this.#adjustmentsBindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.#adjustmentsUniformBuffer } },
-        { binding: 1, resource: inputTexture.createView() },
-        { binding: 2, resource: this.#adjustmentsSampler },
-      ],
-    });
+    const bindGroup = this.#getTextureBindGroup(
+      this.#adjustmentsBindGroupCache,
+      inputTexture,
+      this.#adjustmentsBindGroupLayout,
+      this.#adjustmentsUniformBuffer,
+      this.#adjustmentsSampler,
+      "Adjustments bind group",
+    );
 
     const pass = encoder.beginRenderPass({
       label: "Adjustments render pass",
       colorAttachments: [
         {
-          view: outputTexture.createView(),
+          view: this.#getTextureView(outputTexture),
           loadOp: "clear",
           storeOp: "store",
           clearValue: { r: 0, g: 0, b: 0, a: 0 },
@@ -1392,40 +1485,17 @@ export class ProcessingPipeline {
       );
     }
 
-    // If no bloom texture was generated, create a 1x1 black texture as placeholder
-    // (the shader expects a texture at binding 3)
-    let bloomTextureView: GPUTextureView;
-    if (bloomTexture) {
-      bloomTextureView = bloomTexture.createView();
-    } else {
-      const dummyTexture = this.#device.createTexture({
-        label: "Dummy bloom texture",
-        size: [1, 1],
-        format: this.#intermediateFormat,
-        usage: GPUTextureUsage.TEXTURE_BINDING,
-      });
-      bloomTextureView = dummyTexture.createView();
-    }
-
     this.#updatePostProcessUniforms(entity);
     this.#device.queue.writeBuffer(this.#postProcessUniformBuffer, 0, this.#postProcessUniformData);
 
-    const bindGroup = this.#device.createBindGroup({
-      label: "Post-process bind group",
-      layout: this.#postProcessBindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.#postProcessUniformBuffer } },
-        { binding: 1, resource: inputTexture.createView() },
-        { binding: 2, resource: this.#postProcessSampler },
-        { binding: 3, resource: bloomTextureView },
-      ],
-    });
+    const bloomBindingTexture = bloomTexture ?? this.#getDummyBloomTexture();
+    const bindGroup = this.#getPostProcessBindGroup(inputTexture, bloomBindingTexture);
 
     const pass = encoder.beginRenderPass({
       label: "Post-process render pass",
       colorAttachments: [
         {
-          view: outputTexture.createView(),
+          view: this.#getTextureView(outputTexture),
           loadOp: "clear",
           storeOp: "store",
           clearValue: { r: 0, g: 0, b: 0, a: 0 },
@@ -1451,7 +1521,7 @@ export class ProcessingPipeline {
     this.#blurMixUniformBuffer?.destroy();
     for (const buf of this.#bloomDownsampleUniformBuffers) buf.destroy();
     for (const buf of this.#bloomUpsampleUniformBuffers) buf.destroy();
-
+    this.#dummyBloomTexture?.destroy();
     // Destroy blur mip chain textures
     for (const cached of this.#blurMipChainCache.values()) {
       for (const texture of cached.textures) {
@@ -1475,6 +1545,15 @@ export class ProcessingPipeline {
     }
     this.#bloomMipChainCache.clear();
 
+    this.#textureViewCache = new WeakMap();
+    this.#adjustmentsBindGroupCache = new WeakMap();
+    this.#blurDownsampleBindGroupCaches = [];
+    this.#blurUpsampleBindGroupCaches = [];
+    this.#blurMixBindGroupCache = new WeakMap();
+    this.#postProcessBindGroupCache = new WeakMap();
+    this.#bloomDownsampleBindGroupCaches = [];
+    this.#bloomUpsampleBindGroupCaches = [];
+
     // Clear pipeline references
     this.#adjustmentsPipeline = null;
     this.#adjustmentsBindGroupLayout = null;
@@ -1494,6 +1573,7 @@ export class ProcessingPipeline {
     this.#postProcessBindGroupLayout = null;
     this.#postProcessUniformBuffer = null;
     this.#postProcessSampler = null;
+    this.#dummyBloomTexture = null;
     this.#bloomDownsamplePipeline = null;
     this.#bloomUpsamplePipeline = null;
     this.#bloomDownsampleBindGroupLayout = null;

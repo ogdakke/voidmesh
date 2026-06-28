@@ -33,6 +33,7 @@ interface BenchScenario {
   frames: number;
   warmupFrames: number;
   samples: number;
+  selectedEntityIndex?: number;
 }
 
 interface BenchResult {
@@ -69,6 +70,15 @@ interface VisualCaptureResult {
   metrics: VisualMetrics;
 }
 
+interface ScenarioVisualCaptureResult {
+  id: string;
+  label: string;
+  sourceSize: Size;
+  shaderType: ShaderType;
+  target: "entity" | "canvas";
+  metrics: VisualMetrics;
+}
+
 interface BenchEntitySet {
   entities: ShaderCanvasEntity[];
   beforeFrame?: (frameIndex: number) => void;
@@ -80,6 +90,12 @@ declare global {
     __voidmeshBenchResults?: BenchResult[];
     __voidmeshBenchVisual?: VisualCaptureResult;
     __captureVoidmeshRenderBenchVisual?: () => Promise<VisualCaptureResult>;
+    __captureVoidmeshRenderBenchScenarioVisual?: (
+      scenarioId: string,
+    ) => Promise<ScenarioVisualCaptureResult>;
+    __captureVoidmeshRenderBenchCanvasVisual?: (
+      scenarioId: string,
+    ) => Promise<ScenarioVisualCaptureResult>;
     __runVoidmeshRenderBenchScenario?: (scenarioId: string) => Promise<BenchResult>;
     __runVoidmeshRenderBench?: () => Promise<BenchResult[]>;
   }
@@ -107,6 +123,24 @@ const scenarios: BenchScenario[] = [
     samples: 5,
   },
   {
+    id: "image-original-4k-selected-label",
+    label: "4K image, cached original + selected label",
+    description: "Static 4K image with selected-entity label rendering each frame.",
+    kind: "image",
+    sourceSize: { width: 3840, height: 2160 },
+    shaderType: ShaderType.dithering,
+    params: {
+      showOriginal: true,
+      postProcess: { enabled: false },
+      adjustments: { brightness: 0.5, contrast: 0.5, saturation: 0.5, blur: 0 },
+    },
+    dirtyMode: "none",
+    frames: 180,
+    warmupFrames: 20,
+    samples: 5,
+    selectedEntityIndex: 0,
+  },
+  {
     id: "image-dither-4k-upload-shader",
     label: "4K image, upload + ordered dithering",
     description: "Forces source upload and shader processing each frame.",
@@ -124,6 +158,26 @@ const scenarios: BenchScenario[] = [
     dirtyMode: "texture",
     frames: 60,
     warmupFrames: 8,
+    samples: 5,
+  },
+  {
+    id: "image-dither-1080p-error-diffusion",
+    label: "1080p image, upload + Floyd-Steinberg dithering",
+    description: "Forces source upload and compute-based error-diffusion dithering each frame.",
+    kind: "image",
+    sourceSize: { width: 1920, height: 1080 },
+    shaderType: ShaderType.dithering,
+    params: {
+      size: 1,
+      scale: 1,
+      preserveColors: false,
+      dithering: { kind: DitheringKind.floydSteinberg },
+      postProcess: { enabled: false },
+      adjustments: { brightness: 0.5, contrast: 0.5, saturation: 0.5, blur: 0 },
+    },
+    dirtyMode: "texture",
+    frames: 30,
+    warmupFrames: 4,
     samples: 5,
   },
   {
@@ -203,6 +257,32 @@ const scenarios: BenchScenario[] = [
     samples: 5,
   },
   {
+    id: "image-postprocess-1440p-no-bloom",
+    label: "1440p image, shader + grain/chromatic",
+    description: "Forces post-processing without bloom to cover the no-bloom binding path.",
+    kind: "image",
+    sourceSize: { width: 2560, height: 1440 },
+    shaderType: ShaderType.halftone,
+    params: {
+      size: 10,
+      intensity: 1,
+      scale: 1,
+      shape: Shape.circle,
+      preserveColors: true,
+      postProcess: {
+        enabled: true,
+        grain: { enabled: true, size: 1, intensity: 0.12 },
+        bloom: { enabled: false, threshold: 0.35, intensity: 0, filterRadius: 21, softness: 0.1 },
+        chromaticAberration: { enabled: true, offset: 3 },
+      },
+      adjustments: { brightness: 0.5, contrast: 0.5, saturation: 0.5, blur: 0 },
+    },
+    dirtyMode: "texture",
+    frames: 60,
+    warmupFrames: 8,
+    samples: 5,
+  },
+  {
     id: "multi-25-cached-composition",
     label: "25 cached 1024px entities, composition",
     description: "Realistic many-entity composition after textures are already cached.",
@@ -258,6 +338,7 @@ const canvas = queryRequired<HTMLCanvasElement>("#bench-canvas");
 const runAllButton = queryRequired<HTMLButtonElement>("#run-all");
 const scenarioList = queryRequired<HTMLDivElement>("#scenario-list");
 const resultsEl = queryRequired<HTMLPreElement>("#results");
+const EMPTY_ENTITY_IDS: ReadonlySet<string> = new Set();
 
 canvas.style.width = `${CANVAS_WIDTH}px`;
 canvas.style.height = `${CANVAS_HEIGHT}px`;
@@ -585,11 +666,15 @@ function getEntityPosition(index: number, count: number): { x: number; y: number
   };
 }
 
-function createRenderState(entities: ShaderCanvasEntity[], dirty: boolean): RenderState {
+function createRenderState(
+  entities: ShaderCanvasEntity[],
+  dirty: boolean,
+  selectedEntityIds: ReadonlySet<string> = EMPTY_ENTITY_IDS,
+): RenderState {
   return {
     viewport: { offset: { x: 0, y: 0 }, zoom: 1 },
     entities,
-    selectedEntityIds: new Set(),
+    selectedEntityIds,
     hoveredEntityId: null,
     debugMode: false,
     dirty,
@@ -597,8 +682,16 @@ function createRenderState(entities: ShaderCanvasEntity[], dirty: boolean): Rend
     dragSelectBounds: null,
     multiSelectBounds: null,
     actionLayerActive: false,
-    actionLayerEntityIds: new Set(),
+    actionLayerEntityIds: EMPTY_ENTITY_IDS,
   };
+}
+
+function getSelectedEntityIds(
+  scenario: BenchScenario,
+  entities: readonly ShaderCanvasEntity[],
+): Set<string> {
+  const selectedEntity = scenario.selectedEntityIndex;
+  return selectedEntity === undefined ? new Set() : new Set([entities[selectedEntity]!.id]);
 }
 
 async function runFrames(params: {
@@ -607,17 +700,20 @@ async function runFrames(params: {
   frameCount: number;
   beforeFrame?: (frameIndex: number) => void;
   startFrameIndex: number;
+  selectedEntityIds?: ReadonlySet<string>;
 }): Promise<{ totalMs: number; cpuEncodeMs: number; queueDrainMs: number }> {
   const device = params.renderer.device;
   if (!device) throw new Error("Renderer device is unavailable");
 
   const start = performance.now();
   let cpuEncodeMs = 0;
+  const renderEntities = [...params.entities];
+  const selectedEntityIds = params.selectedEntityIds ?? EMPTY_ENTITY_IDS;
 
   for (let index = 0; index < params.frameCount; index += 1) {
     params.beforeFrame?.(params.startFrameIndex + index);
     const cpuStart = performance.now();
-    params.renderer.render(createRenderState([...params.entities], true));
+    params.renderer.render(createRenderState(renderEntities, true, selectedEntityIds));
     cpuEncodeMs += performance.now() - cpuStart;
   }
 
@@ -633,34 +729,40 @@ async function runFrames(params: {
 }
 
 async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
+  const activeScenario = applyRuntimeOverrides(scenario);
   const benchRenderer = await getRenderer();
-  const entitySet = await createEntities(scenario);
+  const entitySet = await createEntities(activeScenario);
+  const selectedEntityIds = getSelectedEntityIds(activeScenario, entitySet.entities);
   let frameIndex = 0;
 
   try {
-    writeResults(`Running ${scenario.label}\n\nWarming up...`);
+    writeResults(`Running ${activeScenario.label}\n\nWarming up...`);
     await runFrames({
       renderer: benchRenderer,
       entities: entitySet.entities,
-      frameCount: scenario.warmupFrames,
+      frameCount: activeScenario.warmupFrames,
       beforeFrame: entitySet.beforeFrame,
       startFrameIndex: frameIndex,
+      selectedEntityIds,
     });
-    frameIndex += scenario.warmupFrames;
+    frameIndex += activeScenario.warmupFrames;
 
     const samples: number[] = [];
     const cpuSamples: number[] = [];
     const queueDrainSamples: number[] = [];
-    for (let sample = 0; sample < scenario.samples; sample += 1) {
-      writeResults(`Running ${scenario.label}\n\nSample ${sample + 1} of ${scenario.samples}...`);
+    for (let sample = 0; sample < activeScenario.samples; sample += 1) {
+      writeResults(
+        `Running ${activeScenario.label}\n\nSample ${sample + 1} of ${activeScenario.samples}...`,
+      );
       const result = await runFrames({
         renderer: benchRenderer,
         entities: entitySet.entities,
-        frameCount: scenario.frames,
+        frameCount: activeScenario.frames,
         beforeFrame: entitySet.beforeFrame,
         startFrameIndex: frameIndex,
+        selectedEntityIds,
       });
-      frameIndex += scenario.frames;
+      frameIndex += activeScenario.frames;
       samples.push(result.totalMs);
       cpuSamples.push(result.cpuEncodeMs);
       queueDrainSamples.push(result.queueDrainMs);
@@ -668,23 +770,48 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
     }
 
     return {
-      id: scenario.id,
-      label: scenario.label,
-      sourceSize: scenario.sourceSize,
+      id: activeScenario.id,
+      label: activeScenario.label,
+      sourceSize: activeScenario.sourceSize,
       entityCount: entitySet.entities.length,
-      frames: scenario.frames,
+      frames: activeScenario.frames,
       samples,
       medianMs: median(samples),
       p95Ms: percentile(samples, 0.95),
-      msPerFrame: median(samples) / scenario.frames,
+      msPerFrame: median(samples) / activeScenario.frames,
       cpuEncodeMedianMs: median(cpuSamples),
       queueDrainMedianMs: median(queueDrainSamples),
-      cpuEncodeMsPerFrame: median(cpuSamples) / scenario.frames,
-      queueDrainMsPerFrame: median(queueDrainSamples) / scenario.frames,
+      cpuEncodeMsPerFrame: median(cpuSamples) / activeScenario.frames,
+      queueDrainMsPerFrame: median(queueDrainSamples) / activeScenario.frames,
     };
   } finally {
     entitySet.cleanup?.();
   }
+}
+
+function parsePositiveIntegerParam(name: string): number | null {
+  const rawValue = new URLSearchParams(window.location.search).get(name);
+  if (!rawValue) return null;
+  const value = Number(rawValue);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`Expected ${name} to be a positive integer, received ${rawValue}`);
+  }
+  return value;
+}
+
+function applyRuntimeOverrides(scenario: BenchScenario): BenchScenario {
+  const frames = parsePositiveIntegerParam("frames");
+  const samples = parsePositiveIntegerParam("samples");
+  const warmupFrames = parsePositiveIntegerParam("warmupFrames");
+
+  if (!frames && !samples && !warmupFrames) return scenario;
+
+  return {
+    ...scenario,
+    frames: frames ?? scenario.frames,
+    samples: samples ?? scenario.samples,
+    warmupFrames: warmupFrames ?? scenario.warmupFrames,
+  };
 }
 
 function median(values: readonly number[]): number {
@@ -784,6 +911,14 @@ async function captureBlobMetrics(blob: Blob): Promise<VisualMetrics> {
   };
 }
 
+async function canvasToPngBlob(): Promise<Blob> {
+  const blob = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob(resolve, "image/png");
+  });
+  if (!blob) throw new Error("Could not capture benchmark canvas");
+  return blob;
+}
+
 async function captureFlowingGlassVisual(): Promise<VisualCaptureResult> {
   const benchRenderer = await getRenderer();
   const entitySet = await createEntities(flowingGlassVisualScenario);
@@ -812,6 +947,89 @@ async function captureFlowingGlassVisual(): Promise<VisualCaptureResult> {
     writeResults(JSON.stringify(result, null, 2));
     markVisualComplete(result);
     console.log("[voidmesh-render-visual]", JSON.stringify(result, null, 2));
+    return result;
+  } finally {
+    entitySet.cleanup?.();
+  }
+}
+
+async function captureScenarioVisual(scenarioId: string): Promise<ScenarioVisualCaptureResult> {
+  const scenario = scenarios.find((item) => item.id === scenarioId);
+  if (!scenario) throw new Error(`Unknown render benchmark scenario: ${scenarioId}`);
+  const benchRenderer = await getRenderer();
+  const entitySet = await createEntities(scenario);
+  const device = benchRenderer.device;
+  if (!device) throw new Error("Renderer device is unavailable");
+
+  try {
+    entitySet.beforeFrame?.(0);
+    benchRenderer.render(createRenderState(entitySet.entities, true));
+    await device.queue.onSubmittedWorkDone();
+    const blob = await benchRenderer.renderEntityToBlob(entitySet.entities[0]!, {
+      format: "png",
+      quality: 1,
+    });
+    if (!blob) throw new Error(`Could not export visual reference for ${scenarioId}`);
+
+    const result: ScenarioVisualCaptureResult = {
+      id: scenario.id,
+      label: scenario.label,
+      sourceSize: scenario.sourceSize,
+      shaderType: scenario.shaderType,
+      target: "entity",
+      metrics: await captureBlobMetrics(blob),
+    };
+    writeResults(JSON.stringify(result, null, 2));
+    markVisualComplete({
+      id: result.id,
+      label: result.label,
+      sourceSize: result.sourceSize,
+      time: 0,
+      shaderType: result.shaderType,
+      shaderKind: GlassKind.frostedVoronoi,
+      metrics: result.metrics,
+    });
+    console.log("[voidmesh-render-scenario-visual]", JSON.stringify(result, null, 2));
+    return result;
+  } finally {
+    entitySet.cleanup?.();
+  }
+}
+
+async function captureCanvasVisual(scenarioId: string): Promise<ScenarioVisualCaptureResult> {
+  const scenario = scenarios.find((item) => item.id === scenarioId);
+  if (!scenario) throw new Error(`Unknown render benchmark scenario: ${scenarioId}`);
+  const benchRenderer = await getRenderer();
+  const entitySet = await createEntities(scenario);
+  const device = benchRenderer.device;
+  const selectedEntityIds = getSelectedEntityIds(scenario, entitySet.entities);
+  if (!device) throw new Error("Renderer device is unavailable");
+
+  try {
+    entitySet.beforeFrame?.(0);
+    benchRenderer.render(createRenderState(entitySet.entities, true, selectedEntityIds));
+    await device.queue.onSubmittedWorkDone();
+    const blob = await canvasToPngBlob();
+
+    const result: ScenarioVisualCaptureResult = {
+      id: scenario.id,
+      label: scenario.label,
+      sourceSize: scenario.sourceSize,
+      shaderType: scenario.shaderType,
+      target: "canvas",
+      metrics: await captureBlobMetrics(blob),
+    };
+    writeResults(JSON.stringify(result, null, 2));
+    markVisualComplete({
+      id: result.id,
+      label: result.label,
+      sourceSize: result.sourceSize,
+      time: 0,
+      shaderType: result.shaderType,
+      shaderKind: GlassKind.frostedVoronoi,
+      metrics: result.metrics,
+    });
+    console.log("[voidmesh-render-canvas-visual]", JSON.stringify(result, null, 2));
     return result;
   } finally {
     entitySet.cleanup?.();
@@ -851,11 +1069,19 @@ runAllButton.addEventListener("click", () => {
 window.__runVoidmeshRenderBench = runAll;
 window.__runVoidmeshRenderBenchScenario = runScenarioById;
 window.__captureVoidmeshRenderBenchVisual = captureFlowingGlassVisual;
+window.__captureVoidmeshRenderBenchScenarioVisual = captureScenarioVisual;
+window.__captureVoidmeshRenderBenchCanvasVisual = captureCanvasVisual;
 
 const searchParams = new URLSearchParams(window.location.search);
 const scenarioId = searchParams.get("scenario");
+const visualScenarioId = searchParams.get("visualScenario");
+const canvasVisualScenarioId = searchParams.get("canvasVisualScenario");
 if (searchParams.get("visual") === "flowing-glass") {
   void captureFlowingGlassVisual();
+} else if (canvasVisualScenarioId) {
+  void captureCanvasVisual(canvasVisualScenarioId);
+} else if (visualScenarioId) {
+  void captureScenarioVisual(visualScenarioId);
 } else if (scenarioId) {
   void runScenarioById(scenarioId);
 } else if (searchParams.get("autorun") === "1") {

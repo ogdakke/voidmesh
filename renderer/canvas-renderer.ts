@@ -36,6 +36,22 @@ interface CompositionDrawItem {
   offsetY: number;
 }
 
+interface EntityCompositionCacheEntry {
+  uniformBuffer: GPUBuffer;
+  texture: GPUTexture;
+  textureView: GPUTextureView;
+  bindGroup: GPUBindGroup;
+  lastHovered: boolean;
+  lastSelected: boolean;
+  lastDebugMode: boolean;
+  lastUniformX: number;
+  lastUniformY: number;
+  lastUniformWidth: number;
+  lastUniformHeight: number;
+  lastUniformRotation: number;
+  lastUniformScale: number;
+}
+
 export class InfiniteCanvasRenderer {
   readonly canvas: HTMLCanvasElement;
 
@@ -86,18 +102,7 @@ export class InfiniteCanvasRenderer {
 
   // Entity composition cache (uniform buffers, bind groups, texture views)
   // These are invalidated when entity texture changes
-  #entityCompositionCache: Map<
-    string,
-    {
-      uniformBuffer: GPUBuffer;
-      texture: GPUTexture;
-      textureView: GPUTextureView;
-      bindGroup: GPUBindGroup;
-      lastHovered: boolean;
-      lastSelected: boolean;
-      lastDebugMode: boolean;
-    }
-  > = new Map();
+  #entityCompositionCache: Map<string, EntityCompositionCacheEntry> = new Map();
 
   #gridConfig: GridConfig = config.rendering.grid.default;
   #actionLayerTintColor: [number, number, number] = config.actionLayer.dimColor.dark;
@@ -300,7 +305,8 @@ export class InfiniteCanvasRenderer {
     this.#exportService = new ExportService(
       this.#device,
       this.#texturePool,
-      (entity, source, output) => this.#applyShaderToTexture(entity, source, output),
+      (entity, source, output, outputTextureHasStorageBinding) =>
+        this.#applyShaderToTexture(entity, source, output, outputTextureHasStorageBinding),
       this.#colorConfig,
     );
 
@@ -849,6 +855,7 @@ export class InfiniteCanvasRenderer {
       width: entity.originalSize.width,
       height: entity.originalSize.height,
       respectShowOriginal: true,
+      outputTextureHasStorageBinding: _outputTextureHasStorageBinding,
     });
 
     this.#device.queue.submit([encoder.finish()]);
@@ -910,6 +917,7 @@ export class InfiniteCanvasRenderer {
     debugMode: boolean,
     positionOffsetX = 0,
     positionOffsetY = 0,
+    dragScale = entityDragVisual.getScale(entity.id),
   ): void {
     this.#entityFloatView[0] = entity.position.x + positionOffsetX;
     this.#entityFloatView[1] = entity.position.y + positionOffsetY;
@@ -919,10 +927,46 @@ export class InfiniteCanvasRenderer {
     this.#entityUintView[5] = isHovered ? 1 : 0; // isHovered flag
     this.#entityUintView[6] = isSelected ? 1 : 0; // isSelected flag
     this.#entityUintView[7] = debugMode ? 1 : 0; // debugMode flag
-    this.#entityFloatView[8] = entityDragVisual.getScale(entity.id); // visual drag scale
+    this.#entityFloatView[8] = dragScale; // visual drag scale
     this.#entityFloatView[9] = 0; // disintProgress (unused for live entities)
     this.#entityFloatView[10] = 0; // disintSeed (unused for live entities)
     this.#entityFloatView[11] = 0;
+  }
+
+  #entityCompositionUniformsChanged(
+    cached: EntityCompositionCacheEntry,
+    uniformX: number,
+    uniformY: number,
+    width: number,
+    height: number,
+    rotation: number,
+    dragScale: number,
+  ): boolean {
+    return (
+      cached.lastUniformX !== uniformX ||
+      cached.lastUniformY !== uniformY ||
+      cached.lastUniformWidth !== width ||
+      cached.lastUniformHeight !== height ||
+      cached.lastUniformRotation !== rotation ||
+      cached.lastUniformScale !== dragScale
+    );
+  }
+
+  #updateEntityCompositionUniformCache(
+    cached: EntityCompositionCacheEntry,
+    uniformX: number,
+    uniformY: number,
+    width: number,
+    height: number,
+    rotation: number,
+    dragScale: number,
+  ): void {
+    cached.lastUniformX = uniformX;
+    cached.lastUniformY = uniformY;
+    cached.lastUniformWidth = width;
+    cached.lastUniformHeight = height;
+    cached.lastUniformRotation = rotation;
+    cached.lastUniformScale = dragScale;
   }
 
   #drawCompositionItems(
@@ -930,13 +974,18 @@ export class InfiniteCanvasRenderer {
     items: readonly CompositionDrawItem[],
     selectedEntityCount: number,
   ): void {
+    if (items.length === 0) return;
+
+    const compositionPipeline = this.#compositionPipeline!;
+    pass.setPipeline(compositionPipeline);
+
     for (const item of items) {
-      pass.setPipeline(this.#compositionPipeline!);
       pass.setBindGroup(0, item.bindGroup);
       pass.draw(6);
 
       if (item.isSelected && selectedEntityCount === 1 && this.#entityLabelPass) {
         this.#entityLabelPass.drawLabel(pass, item.entity, item.offsetX, item.offsetY);
+        pass.setPipeline(compositionPipeline);
       }
     }
   }
@@ -1174,7 +1223,8 @@ export class InfiniteCanvasRenderer {
       GPUTextureUsage.TEXTURE_BINDING |
       GPUTextureUsage.RENDER_ATTACHMENT |
       GPUTextureUsage.COPY_DST |
-      GPUTextureUsage.COPY_SRC;
+      GPUTextureUsage.COPY_SRC |
+      GPUTextureUsage.STORAGE_BINDING;
 
     let outputTexture: GPUTexture;
     if (cachedTexture && cachedTexture.width === width && cachedTexture.height === height) {
@@ -1192,7 +1242,7 @@ export class InfiniteCanvasRenderer {
     }
 
     // Apply shader using unified method (handles both compute and fragment shader paths)
-    this.#applyShaderToTexture(entity, sourceTexture, outputTexture);
+    this.#applyShaderToTexture(entity, sourceTexture, outputTexture, true);
 
     // Cache and return (source texture stays in #entitySourceTextures)
     this.#entityTextures.set(entity.id, outputTexture);
@@ -1306,6 +1356,15 @@ export class InfiniteCanvasRenderer {
       // Determine if this entity is hovered or selected
       const isHovered = entity.id === hoveredEntityId;
       const isSelected = selectedEntityIds.has(entity.id);
+      const applyOffset = actionLayerControllerActive && actionLayerController.hasEntity(entity.id);
+      const positionOffsetX = applyOffset ? actionLayerOffsetX : 0;
+      const positionOffsetY = applyOffset ? actionLayerOffsetY : 0;
+      const uniformX = entity.position.x + positionOffsetX;
+      const uniformY = entity.position.y + positionOffsetY;
+      const uniformWidth = entity.size.width;
+      const uniformHeight = entity.size.height;
+      const uniformRotation = entity.rotation;
+      const dragScale = entityDragVisual.getScale(entity.id);
 
       // Check cache for existing composition resources
       const cached = this.#entityCompositionCache.get(entity.id);
@@ -1330,15 +1389,14 @@ export class InfiniteCanvasRenderer {
           });
 
         // Update and write entity uniforms (apply rubber-band offset for action layer entities)
-        const applyOffset =
-          actionLayerControllerActive && actionLayerController.hasEntity(entity.id);
         this.#updateEntityUniforms(
           entity,
           isHovered,
           isSelected,
           debugMode,
-          applyOffset ? actionLayerOffsetX : 0,
-          applyOffset ? actionLayerOffsetY : 0,
+          positionOffsetX,
+          positionOffsetY,
+          dragScale,
         );
         this.#device.queue.writeBuffer(uniformBuffer, 0, this.#entityUniformData);
 
@@ -1367,21 +1425,45 @@ export class InfiniteCanvasRenderer {
           lastHovered: isHovered,
           lastSelected: isSelected,
           lastDebugMode: debugMode,
+          lastUniformX: uniformX,
+          lastUniformY: uniformY,
+          lastUniformWidth: uniformWidth,
+          lastUniformHeight: uniformHeight,
+          lastUniformRotation: uniformRotation,
+          lastUniformScale: dragScale,
         });
       } else {
-        // Reuse cached bind group, but ALWAYS update uniform buffer with current position
-        // This is critical for drag operations where position changes every frame
-        const applyOffset2 =
-          actionLayerControllerActive && actionLayerController.hasEntity(entity.id);
-        this.#updateEntityUniforms(
-          entity,
-          isHovered,
-          isSelected,
-          debugMode,
-          applyOffset2 ? actionLayerOffsetX : 0,
-          applyOffset2 ? actionLayerOffsetY : 0,
-        );
-        this.#device.queue.writeBuffer(cached.uniformBuffer, 0, this.#entityUniformData);
+        if (
+          this.#entityCompositionUniformsChanged(
+            cached,
+            uniformX,
+            uniformY,
+            uniformWidth,
+            uniformHeight,
+            uniformRotation,
+            dragScale,
+          )
+        ) {
+          this.#updateEntityUniforms(
+            entity,
+            isHovered,
+            isSelected,
+            debugMode,
+            positionOffsetX,
+            positionOffsetY,
+            dragScale,
+          );
+          this.#device.queue.writeBuffer(cached.uniformBuffer, 0, this.#entityUniformData);
+          this.#updateEntityCompositionUniformCache(
+            cached,
+            uniformX,
+            uniformY,
+            uniformWidth,
+            uniformHeight,
+            uniformRotation,
+            dragScale,
+          );
+        }
         bindGroup = cached.bindGroup;
       }
 
@@ -1393,8 +1475,8 @@ export class InfiniteCanvasRenderer {
           bindGroup,
           entity,
           isSelected,
-          offsetX: actionLayerOffsetX,
-          offsetY: actionLayerOffsetY,
+          offsetX: positionOffsetX,
+          offsetY: positionOffsetY,
         });
       } else {
         entityDrawItems.push({

@@ -29,6 +29,10 @@ export class DitheringShader extends ShaderPass {
   #computeUniformBuffer: GPUBuffer | null = null;
   // Error buffer cache per entity (keyed by entityId-width-height)
   #errorBufferCache: Map<string, GPUBuffer> = new Map();
+  #computeBindGroupCache = new WeakMap<
+    GPUTexture,
+    WeakMap<GPUTexture, WeakMap<GPUBuffer, GPUBindGroup>>
+  >();
 
   override getShaderSource(): string {
     return ditheringShaderSource;
@@ -138,13 +142,20 @@ export class DitheringShader extends ShaderPass {
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,
+    outputTextureHasStorageBinding = false,
   ): void {
     const ditheringKind = entity.shaderParams.dithering?.kind ?? DitheringKind.bayer4x4;
 
     if (isErrorDiffusion(ditheringKind)) {
-      this.#executeCompute(entity, sourceTexture, outputTexture, encoder);
+      this.#executeCompute(
+        entity,
+        sourceTexture,
+        outputTexture,
+        encoder,
+        outputTextureHasStorageBinding,
+      );
     } else {
-      super.execute(entity, sourceTexture, outputTexture, encoder);
+      super.execute(entity, sourceTexture, outputTexture, encoder, outputTextureHasStorageBinding);
     }
   }
 
@@ -153,6 +164,7 @@ export class DitheringShader extends ShaderPass {
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,
+    outputTextureHasStorageBinding: boolean,
   ): void {
     if (!this.#computePipeline || !this.#computeBindGroupLayout || !this.#computeUniformBuffer) {
       return;
@@ -171,25 +183,18 @@ export class DitheringShader extends ShaderPass {
       GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC;
 
     const pool = this.ctx.texturePool;
-    const computeOutputTexture = pool
-      ? pool.acquire(width, height, computeUsage, `Compute output intermediate`)
-      : device.createTexture({
-          label: `Compute output intermediate texture`,
-          size: [width, height],
-          format: this.ctx.intermediateFormat,
-          usage: computeUsage,
-        });
+    const computeOutputTexture = outputTextureHasStorageBinding
+      ? outputTexture
+      : pool
+        ? pool.acquire(width, height, computeUsage, `Compute output intermediate`)
+        : device.createTexture({
+            label: `Compute output intermediate texture`,
+            size: [width, height],
+            format: this.ctx.intermediateFormat,
+            usage: computeUsage,
+          });
 
-    const bindGroup = device.createBindGroup({
-      label: `Entity ${entity.id} compute bind group`,
-      layout: this.#computeBindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.#computeUniformBuffer } },
-        { binding: 1, resource: sourceTexture.createView() },
-        { binding: 2, resource: computeOutputTexture.createView() },
-        { binding: 3, resource: { buffer: errorBuffer } },
-      ],
-    });
+    const bindGroup = this.#getComputeBindGroup(sourceTexture, computeOutputTexture, errorBuffer);
 
     encoder.clearBuffer(errorBuffer);
 
@@ -202,17 +207,53 @@ export class DitheringShader extends ShaderPass {
     computePass.dispatchWorkgroups(Math.ceil(height / 32));
     computePass.end();
 
-    encoder.copyTextureToTexture({ texture: computeOutputTexture }, { texture: outputTexture }, [
-      width,
-      height,
-    ]);
+    if (!outputTextureHasStorageBinding) {
+      encoder.copyTextureToTexture({ texture: computeOutputTexture }, { texture: outputTexture }, [
+        width,
+        height,
+      ]);
 
-    // Release compute output texture back to pool
-    if (pool) {
-      pool.release(computeOutputTexture, width, height, computeUsage);
-    } else {
-      computeOutputTexture.destroy();
+      // Release compute output texture back to pool
+      if (pool) {
+        pool.release(computeOutputTexture, width, height, computeUsage);
+      } else {
+        computeOutputTexture.destroy();
+      }
     }
+  }
+
+  #getComputeBindGroup(
+    sourceTexture: GPUTexture,
+    outputTexture: GPUTexture,
+    errorBuffer: GPUBuffer,
+  ): GPUBindGroup {
+    let outputCache = this.#computeBindGroupCache.get(sourceTexture);
+    if (!outputCache) {
+      outputCache = new WeakMap();
+      this.#computeBindGroupCache.set(sourceTexture, outputCache);
+    }
+
+    let errorCache = outputCache.get(outputTexture);
+    if (!errorCache) {
+      errorCache = new WeakMap();
+      outputCache.set(outputTexture, errorCache);
+    }
+
+    const cached = errorCache.get(errorBuffer);
+    if (cached) return cached;
+
+    const bindGroup = this.ctx.device.createBindGroup({
+      label: `Dithering compute bind group`,
+      layout: this.#computeBindGroupLayout!,
+      entries: [
+        { binding: 0, resource: { buffer: this.#computeUniformBuffer! } },
+        { binding: 1, resource: this.getTextureView(sourceTexture) },
+        { binding: 2, resource: this.getTextureView(outputTexture) },
+        { binding: 3, resource: { buffer: errorBuffer } },
+      ],
+    });
+    errorCache.set(errorBuffer, bindGroup);
+    return bindGroup;
   }
 
   /** Remove cached error buffers for an entity (call when entity is removed) */
@@ -234,6 +275,7 @@ export class DitheringShader extends ShaderPass {
     this.#computeUniformBuffer = null;
     this.#computePipeline = null;
     this.#computeBindGroupLayout = null;
+    this.#computeBindGroupCache = new WeakMap();
     super.destroy();
   }
 }

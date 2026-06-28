@@ -14,6 +14,7 @@ export type ApplyShaderFn = (
   entity: ShaderCanvasEntity,
   sourceTexture: GPUTexture,
   outputTexture: GPUTexture,
+  outputTextureHasStorageBinding?: boolean,
 ) => void;
 
 export class ExportService {
@@ -177,7 +178,8 @@ export class ExportService {
       GPUTextureUsage.TEXTURE_BINDING |
       GPUTextureUsage.RENDER_ATTACHMENT |
       GPUTextureUsage.COPY_SRC |
-      GPUTextureUsage.COPY_DST;
+      GPUTextureUsage.COPY_DST |
+      GPUTextureUsage.STORAGE_BINDING;
 
     const sourceTexture = this.#device.createTexture({
       label: "Export source texture",
@@ -205,7 +207,7 @@ export class ExportService {
           usage: outputUsage,
         });
 
-    this.#applyShader(entity, sourceTexture, outputTexture);
+    this.#applyShader(entity, sourceTexture, outputTexture, true);
 
     const bitmap = await this.#convertToImageBitmap(outputTexture, width, height);
 

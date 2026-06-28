@@ -233,6 +233,7 @@ export abstract class ShaderPass {
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,
+    _outputTextureHasStorageBinding = false,
   ): void {
     if (!this.pipeline) return;
 

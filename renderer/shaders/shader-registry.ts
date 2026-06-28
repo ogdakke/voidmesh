@@ -27,10 +27,11 @@ export class ShaderRegistry {
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,
+    outputTextureHasStorageBinding = false,
   ): void {
     const pass = this.#passes.get(entity.shaderType);
     if (!pass) throw new Error(`Shader pass not registered: ${entity.shaderType}`);
-    pass.execute(entity, sourceTexture, outputTexture, encoder);
+    pass.execute(entity, sourceTexture, outputTexture, encoder, outputTextureHasStorageBinding);
   }
 
   /**

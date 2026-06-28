@@ -13,6 +13,8 @@ export class CopyPass {
   #pipeline: GPURenderPipeline;
   #bindGroupLayout: GPUBindGroupLayout;
   #sampler: GPUSampler;
+  #textureViewCache = new WeakMap<GPUTexture, GPUTextureView>();
+  #bindGroupCache = new WeakMap<GPUTexture, GPUBindGroup>();
 
   constructor(device: GPUDevice, targetFormat: GPUTextureFormat = "rgba8unorm") {
     this.#device = device;
@@ -67,16 +69,10 @@ export class CopyPass {
     source: GPUTexture,
     destination: GPUTexture | GPUTextureView,
   ): void {
-    const destinationView = "createView" in destination ? destination.createView() : destination;
+    const destinationView =
+      "createView" in destination ? this.#getTextureView(destination) : destination;
 
-    const bindGroup = this.#device.createBindGroup({
-      label: "CopyPass bind group",
-      layout: this.#bindGroupLayout,
-      entries: [
-        { binding: 0, resource: source.createView() },
-        { binding: 1, resource: this.#sampler },
-      ],
-    });
+    const bindGroup = this.#getBindGroup(source);
 
     const pass = encoder.beginRenderPass({
       label: "CopyPass render pass",
@@ -94,6 +90,31 @@ export class CopyPass {
     pass.setBindGroup(0, bindGroup);
     pass.draw(3);
     pass.end();
+  }
+
+  #getTextureView(texture: GPUTexture): GPUTextureView {
+    const cached = this.#textureViewCache.get(texture);
+    if (cached) return cached;
+
+    const view = texture.createView();
+    this.#textureViewCache.set(texture, view);
+    return view;
+  }
+
+  #getBindGroup(source: GPUTexture): GPUBindGroup {
+    const cached = this.#bindGroupCache.get(source);
+    if (cached) return cached;
+
+    const bindGroup = this.#device.createBindGroup({
+      label: "CopyPass bind group",
+      layout: this.#bindGroupLayout,
+      entries: [
+        { binding: 0, resource: this.#getTextureView(source) },
+        { binding: 1, resource: this.#sampler },
+      ],
+    });
+    this.#bindGroupCache.set(source, bindGroup);
+    return bindGroup;
   }
 
   /**
