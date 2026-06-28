@@ -1,6 +1,6 @@
 import { appLoader } from "#lib/app-loader.ts";
 import { config } from "#config";
-import { useKeybinds, useRegisterKeybinds } from "#context/keybind-context.ts";
+import { isUserTypingInInput, useKeybinds, useRegisterKeybinds } from "#context/keybind-context.ts";
 import {
   DebugType,
   useCanvasCommands,
@@ -400,6 +400,7 @@ export function InfiniteCanvas() {
 
   // Play/pause media - works for both video and GIF
   const playPauseShortcutHandler = async (_e: KeyboardEvent) => {
+    if (isUserTypingInInput()) return;
     if (mediaActions.isIdle()) return;
     // Blur DropZone button to prevent it capturing spacebar, but not the canvas container
     if (
@@ -427,6 +428,7 @@ export function InfiniteCanvas() {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Meta") isMetaHeldRef.current = true;
       if (e.key !== " " || e.repeat) return;
+      if (isUserTypingInInput()) return;
       gameLoop.setSpaceHeld(true);
       setIsSpaceHeld(true);
     };
@@ -434,6 +436,11 @@ export function InfiniteCanvas() {
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.key === "Meta") isMetaHeldRef.current = false;
       if (e.key !== " ") return;
+      if (isUserTypingInInput()) {
+        gameLoop.setSpaceHeld(false);
+        setIsSpaceHeld(false);
+        return;
+      }
       const wasReady = gameLoop.spacePanMode === SpacePanMode.ready;
       gameLoop.setSpaceHeld(false);
       setIsSpaceHeld(false);
