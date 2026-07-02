@@ -85,101 +85,63 @@ function roundToCommonFrameRate(fps: number): number {
   return Math.round(fps * 100) / 100;
 }
 
-/**
- * Detect video frame rate using requestVideoFrameCallback
- * Observes frames from an already-playing video without controlling playback.
- * @param video - The video element to detect fps from (should already be playing)
- * @param sampleCount - Number of frames to sample (default: 5)
- * @param timeoutMs - Timeout in milliseconds (default: 2000)
- * @returns Detected fps or null if detection fails
- */
-async function detectVideoFps(
-  video: HTMLVideoElement,
-  sampleCount = 5,
-  timeoutMs = 2000,
-): Promise<number | null> {
-  // Check if requestVideoFrameCallback is supported
-  if (!("requestVideoFrameCallback" in video)) {
-    console.warn("[detectVideoFps] requestVideoFrameCallback not supported");
-    return null;
-  }
-
-  return new Promise((resolve) => {
-    const timestamps: number[] = [];
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    let resolved = false;
-
-    const cleanup = () => {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-        timeoutId = null;
-      }
-      // Don't pause video - let it continue playing for the user
-    };
-
-    const onFrame = (_now: number, metadata: VideoFrameCallbackMetadata) => {
-      if (resolved) return;
-
-      timestamps.push(metadata.mediaTime);
-
-      if (timestamps.length >= sampleCount + 1) {
-        cleanup();
-        resolved = true;
-
-        // Calculate average frame duration from deltas
-        const deltas: number[] = [];
-        for (let i = 1; i < timestamps.length; i++) {
-          const current = timestamps[i];
-          const previous = timestamps[i - 1];
-          if (current !== undefined && previous !== undefined) {
-            const delta = current - previous;
-            if (delta > 0) {
-              deltas.push(delta);
-            }
-          }
-        }
-
-        if (deltas.length === 0) {
-          resolve(null);
-          return;
-        }
-
-        const avgDelta = deltas.reduce((a, b) => a + b, 0) / deltas.length;
-        const rawFps = 1 / avgDelta;
-
-        // Validate reasonable fps range (1-240)
-        if (rawFps < 1 || rawFps > 240) {
-          resolve(null);
-          return;
-        }
-
-        const fps = roundToCommonFrameRate(rawFps);
-        resolve(fps);
-        return;
-      }
-
-      // Request next frame (only if not resolved)
-      video.requestVideoFrameCallback(onFrame);
-    };
-
-    // Set timeout
-    timeoutId = setTimeout(() => {
-      if (!resolved) {
-        cleanup();
-        resolved = true;
-        resolve(null);
-      }
-    }, timeoutMs);
-
-    // Register callback - video should already be playing
-    video.requestVideoFrameCallback(onFrame);
+async function probeVideoMetadata(blob: Blob): Promise<{ fps: number | null; hasAudio: boolean }> {
+  const startedAt = performance.now();
+  const { ALL_FORMATS, BlobSource, Input } = await import("mediabunny");
+  const input = new Input({
+    source: new BlobSource(blob),
+    formats: ALL_FORMATS,
   });
+
+  try {
+    const tracksStartedAt = performance.now();
+    const [videoTrack, audioTrack] = await Promise.all([
+      input.getPrimaryVideoTrack(),
+      input.getPrimaryAudioTrack(),
+    ]);
+    logger.info("[media-loader] Mediabunny track probe complete", {
+      durationMs: Math.round(performance.now() - tracksStartedAt),
+      hasVideo: videoTrack !== null,
+      hasAudio: audioTrack !== null,
+    });
+    if (!videoTrack) return { fps: null, hasAudio: audioTrack !== null };
+
+    let fps: number | null = null;
+    try {
+      const statsStartedAt = performance.now();
+      const stats = await videoTrack.computePacketStats(100);
+      const statsDurationMs = Math.round(performance.now() - statsStartedAt);
+      const rawFps = stats.averagePacketRate;
+      if (rawFps >= 1 && rawFps <= 240) {
+        fps = roundToCommonFrameRate(rawFps);
+      }
+      logger.info("[media-loader] Mediabunny video packet stats complete", {
+        durationMs: statsDurationMs,
+        packetCount: stats.packetCount,
+        rawFps,
+        fps,
+        averageBitrate: Math.round(stats.averageBitrate),
+      });
+    } catch (error) {
+      logger.debug("[media-loader] Failed to compute video packet stats", error);
+    }
+
+    return { fps, hasAudio: audioTrack !== null };
+  } finally {
+    logger.info("[media-loader] Mediabunny video metadata probe complete", {
+      durationMs: Math.round(performance.now() - startedAt),
+      sizeBytes: blob.size,
+      mimeType: blob.type || "unknown",
+    });
+    input.dispose();
+  }
 }
 
 /**
  * Load a video blob and extract metadata + initial frame
  */
 export async function loadVideo(blob: Blob): Promise<VideoLoadResult> {
+  const loadStartedAt = performance.now();
   const video = document.createElement("video");
   video.muted = true;
   video.defaultMuted = true;
@@ -190,11 +152,20 @@ export async function loadVideo(blob: Blob): Promise<VideoLoadResult> {
 
   // Wait for metadata to load
   try {
+    const metadataStartedAt = performance.now();
     await new Promise<void>((resolve, reject) => {
       video.onloadedmetadata = () => resolve();
       video.onerror = () => {
         void createVideoLoadError(video, blob).then(reject);
       };
+    });
+    logger.info("[media-loader] HTML video metadata loaded", {
+      durationMs: Math.round(performance.now() - metadataStartedAt),
+      mediaDurationSeconds: video.duration,
+      width: video.videoWidth,
+      height: video.videoHeight,
+      sizeBytes: blob.size,
+      mimeType: blob.type || "unknown",
     });
   } catch (error) {
     cleanupVideoElement(video);
@@ -206,27 +177,46 @@ export async function loadVideo(blob: Blob): Promise<VideoLoadResult> {
   const height = video.videoHeight;
 
   // Seek to first frame and wait for it
+  const seekStartedAt = performance.now();
   video.currentTime = 0;
   await new Promise<void>((resolve) => {
     video.onseeked = () => resolve();
   });
+  logger.info("[media-loader] HTML video initial seek complete", {
+    durationMs: Math.round(performance.now() - seekStartedAt),
+  });
 
   // Create initial frame snapshot
+  const captureStartedAt = performance.now();
   const canvas = new OffscreenCanvas(width, height);
   const ctx = canvas.getContext("2d")!;
   ctx.drawImage(video, 0, 0);
   const initialFrame = await createImageBitmap(canvas);
+  logger.info("[media-loader] Initial video frame captured", {
+    durationMs: Math.round(performance.now() - captureStartedAt),
+    width,
+    height,
+  });
 
   // Start playing for autoplay
+  const playStartedAt = performance.now();
   await video.play().catch((e) => {
     logger.error("Failed to autoplay video", e);
   });
+  logger.info("[media-loader] HTML video autoplay request complete", {
+    durationMs: Math.round(performance.now() - playStartedAt),
+    paused: video.paused,
+  });
 
-  // Detect fps and probe for audio track in parallel
-  const [fps, hasAudio] = await Promise.all([
-    detectVideoFps(video),
-    import("#lib/audio-demux.ts").then(({ hasAudioTrack }) => hasAudioTrack(blob)),
-  ]);
+  const { fps, hasAudio } = await probeVideoMetadata(blob);
+  logger.info("[media-loader] Video load complete", {
+    durationMs: Math.round(performance.now() - loadStartedAt),
+    fps,
+    hasAudio,
+    width,
+    height,
+    mediaDurationSeconds: video.duration,
+  });
 
   return {
     videoElement: video,

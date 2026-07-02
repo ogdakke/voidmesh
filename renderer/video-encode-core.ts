@@ -1,5 +1,6 @@
 import { getH264Codec } from "#config";
 import type { DemuxedAudio } from "#lib/audio-demux.ts";
+import { logger } from "#lib/client.logger.ts";
 import {
   BufferTarget,
   EncodedAudioPacketSource,
@@ -174,6 +175,7 @@ export class VideoEncoderSession {
 }
 
 export async function muxEncodedVideo(options: MuxEncodedVideoOptions): Promise<Blob> {
+  const muxStartedAt = performance.now();
   const { format, fps, chunks, audioData, totalFrames, isCancelled = () => false } = options;
   const isobmffOptions: IsobmffOutputFormatOptions = { fastStart: "in-memory" };
   const outputFormat =
@@ -184,15 +186,33 @@ export async function muxEncodedVideo(options: MuxEncodedVideoOptions): Promise<
   output.addVideoTrack(videoSource, { frameRate: fps });
 
   let audioSource: EncodedAudioPacketSource | null = null;
-  if (audioData) {
-    audioSource = new EncodedAudioPacketSource("aac");
+  const muxedAudioData =
+    audioData && outputFormat.getSupportedCodecs().includes(audioData.packetCodec)
+      ? audioData
+      : null;
+  if (audioData && !muxedAudioData) {
+    logger.warn(
+      `[video-mux] Skipping audio passthrough: ${format} does not support ${audioData.packetCodec}`,
+    );
+  }
+  if (muxedAudioData) {
+    audioSource = new EncodedAudioPacketSource(muxedAudioData.packetCodec);
     output.addAudioTrack(audioSource);
   }
 
   try {
+    const startStartedAt = performance.now();
     await output.start();
+    logger.info("[video-mux] Output start complete", {
+      durationMs: Math.round(performance.now() - startStartedAt),
+      format,
+      videoChunks: chunks.length,
+      audioPackets: muxedAudioData?.packets.length ?? 0,
+    });
 
+    const videoStartedAt = performance.now();
     let firstVideoPacket = true;
+    let videoPacketCount = 0;
     for (const chunk of chunks) {
       if (isCancelled()) throw new Error("Export cancelled");
       const packet = new EncodedPacket(chunk.data, chunk.type, chunk.timestamp, chunk.duration);
@@ -202,15 +222,26 @@ export async function muxEncodedVideo(options: MuxEncodedVideoOptions): Promise<
       } else {
         await videoSource.add(packet);
       }
+      videoPacketCount++;
     }
     videoSource.close();
+    logger.info("[video-mux] Video packet mux complete", {
+      durationMs: Math.round(performance.now() - videoStartedAt),
+      packetCount: videoPacketCount,
+    });
 
-    if (audioData && audioSource) {
+    if (muxedAudioData && audioSource) {
+      const audioStartedAt = performance.now();
       const videoDuration = totalFrames / fps;
       let firstAudioPacket = true;
-      for (const packetData of audioData.packets) {
+      let audioPacketCount = 0;
+      let skippedNegativeAudioPackets = 0;
+      for (const packetData of muxedAudioData.packets) {
         if (isCancelled()) throw new Error("Export cancelled");
-        if (packetData.timestamp < 0) continue;
+        if (packetData.timestamp < 0) {
+          skippedNegativeAudioPackets++;
+          continue;
+        }
         if (packetData.timestamp > videoDuration) break;
 
         const packet = new EncodedPacket(
@@ -222,23 +253,38 @@ export async function muxEncodedVideo(options: MuxEncodedVideoOptions): Promise<
         if (firstAudioPacket) {
           await audioSource.add(packet, {
             decoderConfig: {
-              codec: audioData.codec,
-              sampleRate: audioData.sampleRate,
-              numberOfChannels: audioData.numberOfChannels,
-              description: audioData.description,
+              codec: muxedAudioData.codec,
+              sampleRate: muxedAudioData.sampleRate,
+              numberOfChannels: muxedAudioData.numberOfChannels,
+              description: muxedAudioData.description,
             },
           });
           firstAudioPacket = false;
         } else {
           await audioSource.add(packet);
         }
+        audioPacketCount++;
       }
       audioSource.close();
+      logger.info("[video-mux] Audio packet mux complete", {
+        durationMs: Math.round(performance.now() - audioStartedAt),
+        packetCount: audioPacketCount,
+        skippedNegativePackets: skippedNegativeAudioPackets,
+        packetCodec: muxedAudioData.packetCodec,
+      });
     }
 
+    const finalizeStartedAt = performance.now();
     await output.finalize();
+    const finalizeDurationMs = Math.round(performance.now() - finalizeStartedAt);
     const buffer = target.buffer;
     if (!buffer) throw new Error("Output buffer is null after finalize");
+    logger.info("[video-mux] Output finalize complete", {
+      durationMs: finalizeDurationMs,
+      totalDurationMs: Math.round(performance.now() - muxStartedAt),
+      format,
+      sizeBytes: buffer.byteLength,
+    });
     return new Blob([buffer], { type: output.format.mimeType });
   } catch (error) {
     await output.cancel().catch(() => {});

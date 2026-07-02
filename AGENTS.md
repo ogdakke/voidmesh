@@ -55,17 +55,15 @@ bun run test -- __tests__/engine/action-layer-controller.spec.ts
 
 ## Key Patterns
 
-1. **Enum pattern**: Use `createEnum()` from `types/index.ts`, not TypeScript `enum`. Produces both value object and type via `.infer`. Example: `ShaderType.dithering` (value), `ShaderType` (type).
-2. **Store pattern**: Extend `Store<T>` from `lib/store.ts` for reactive state. Use `createSnapshot(versionKey, create)` for `useSyncExternalStore`, `getComputed(key, versionKey, compute)` for derived values with structural sharing.
-3. **Private fields**: Use `#` private class fields, not `private` keyword.
-4. **No barrel exports**: Only `engine/index.ts` and `types/index.ts` have barrels. Import directly from files elsewhere.
-5. **GPU resources**: Always clean up buffers/textures. Use `TexturePool` for intermediates. Track entity textures in Maps keyed by entity ID.
-6. **Undo pattern**: Wrap state mutations in `Command.create({ execute, undo, onEvict })`, push to `undo` singleton from `lib/undo.ts`.
+1. **Store pattern**: Extend `Store<T>` from `lib/store.ts` for reactive state. Use `createSnapshot(versionKey, create)` for `useSyncExternalStore`, `getComputed(key, versionKey, compute)` for derived values with structural sharing.
+2. **Private fields**: Use `#` private class fields, not `private` keyword.
+3. **No barrel exports**: Only `engine/index.ts` and `types/index.ts` have barrels. Import directly from files elsewhere.
+4. **GPU resources**: Always clean up buffers/textures. Use `TexturePool` for intermediates. Track entity textures in Maps keyed by entity ID.
+5. **Undo pattern**: Wrap state mutations in `Command.create({ execute, undo, onEvict })`, push to `undo` singleton from `lib/undo.ts`.
 
 ## Anti-Patterns
 
 - IMPORTANT: Do not add fallback behavior unless it is absolutely necessary and you explain the exact reason why fallback behavior is mandatory!
-- Do not use TypeScript `enum` keyword. Use `createEnum()`.
 - Do not use `typeof import("...").Type` anywhere. Ever. Use a regular type import, a namespace type import, or an explicit local type alias instead.
 - Do not add `"use client"` / `"use server"` — this is a SPA, not Next.js.
 - Do not import from `node_modules` internals. Use opensrc cli for source reading.
@@ -73,7 +71,7 @@ bun run test -- __tests__/engine/action-layer-controller.spec.ts
 
 ## Export Pipeline
 
-Video: WebCodecs H.264 + mediabunny muxer in Web Worker (MP4/MOV only). GIF: gifenc in Web Worker (`lib/gif-encoder-worker.ts`). No WebM. Audio: demuxed via mediabunny, passed as raw AAC packets.
+Video: WebCodecs H.264 + mediabunny muxer in Web Worker (MP4/MOV only). GIF: gifenc in Web Worker (`lib/gif-encoder-worker.ts`). No WebM. Audio: demuxed via mediabunny and passed through as encoded packets when the output container supports the source audio codec.
 
 ## Upscale Pipeline
 

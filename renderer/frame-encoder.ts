@@ -225,6 +225,7 @@ async function runEncode(params: RunEncodeParams): Promise<void> {
       type: "audio-track",
       packets: audioData.packets,
       codec: audioData.codec,
+      packetCodec: audioData.packetCodec,
       sampleRate: audioData.sampleRate,
       numberOfChannels: audioData.numberOfChannels,
       description: audioData.description,

@@ -604,7 +604,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.version++;
     this.state.viewportDirty = true;
     this.state.debugMode = !this.state.debugMode;
-    this.#logger.setLevel(this.state.debugMode ? LogLevel.DEBUG : LogLevel.ERROR);
+    this.#logger.setLevel(this.state.debugMode ? LogLevel.DEBUG : LogLevel.INFO);
     this.notifySelectionChange();
     this.#logger.debug(`Debug mode toggled: ${this.state.debugMode}`);
   }
@@ -613,7 +613,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.version++;
     this.state.viewportDirty = true;
     this.state.debugMode = enabled;
-    this.#logger.setLevel(enabled ? LogLevel.DEBUG : LogLevel.ERROR);
+    this.#logger.setLevel(enabled ? LogLevel.DEBUG : LogLevel.INFO);
     this.notifySelectionChange();
     this.#logger.debug(`Debug mode set to: ${this.state.debugMode}`);
   }

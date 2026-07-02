@@ -47,6 +47,7 @@ export type ToWorkerMessage =
         duration: number;
       }>;
       codec: string;
+      packetCodec: DemuxedAudio["packetCodec"];
       sampleRate: number;
       numberOfChannels: number;
       description?: Uint8Array;
@@ -147,10 +148,11 @@ function handleFrame(msg: Extract<ToWorkerMessage, { type: "frame" }>): void {
 }
 
 function handleAudioTrack(msg: Extract<ToWorkerMessage, { type: "audio-track" }>): void {
-  // MP4/MOV use AAC natively — no transcoding needed, just store for muxing
+  // No transcoding here; muxing decides whether the output container supports this packet codec.
   pendingAudioData = {
     packets: msg.packets,
     codec: msg.codec,
+    packetCodec: msg.packetCodec,
     sampleRate: msg.sampleRate,
     numberOfChannels: msg.numberOfChannels,
     description: msg.description,
