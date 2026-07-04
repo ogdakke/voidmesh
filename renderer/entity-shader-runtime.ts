@@ -149,19 +149,17 @@ export class EntityShaderRuntime {
     let adjustmentsOutputTexture: GPUTexture | null = null;
 
     if (needsBlur) {
-      if (source.kind === "external") {
-        // TODO(video-external): Add an external-texture variant for the first
-        // Kawase blur/downsample pass so videos with pre-blur do not need a
-        // materialized source texture.
-        return;
-      }
       blurOutputTexture = this.#acquireTexture(
         width,
         height,
         preProcessUsage,
         "Blur output texture",
       );
-      this.#processingPipeline.applyBlur(entity, source.texture, blurOutputTexture, encoder);
+      if (source.kind === "external") {
+        this.#processingPipeline.applyBlurExternal(entity, source, blurOutputTexture, encoder);
+      } else {
+        this.#processingPipeline.applyBlur(entity, source.texture, blurOutputTexture, encoder);
+      }
       shaderSource = { kind: "texture", texture: blurOutputTexture };
     }
 

@@ -21,10 +21,24 @@ const DITHERING_KIND_INDEX: Record<DitheringKind, number> = {
   [DitheringKind.sierraLite]: 11,
 };
 
+function createExternalComputeShaderSource(source: string): string {
+  return source
+    .replace(
+      /@group\(0\)\s+@binding\(1\)\s+var\s+inputTexture:\s+texture_2d<f32>;/,
+      "@group(0) @binding(1) var inputTexture: texture_external;",
+    )
+    .replace(
+      /textureLoad\(inputTexture,\s*samplePos,\s*0\)/g,
+      "textureLoad(inputTexture, samplePos)",
+    );
+}
+
 export class DitheringShader extends ShaderPass {
   // Compute pipeline for error diffusion
   #computePipeline: GPUComputePipeline | null = null;
+  #externalComputePipeline: GPUComputePipeline | null = null;
   #computeBindGroupLayout: GPUBindGroupLayout | null = null;
+  #externalComputeBindGroupLayout: GPUBindGroupLayout | null = null;
   // Error buffer cache per entity (keyed by entityId-width-height)
   #errorBufferCache: Map<string, GPUBuffer> = new Map();
 
@@ -77,9 +91,39 @@ export class DitheringShader extends ShaderPass {
       ],
     });
 
+    this.#externalComputeBindGroupLayout = device.createBindGroupLayout({
+      label: "Dithering external compute bind group layout",
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: "uniform" },
+        },
+        {
+          binding: 1,
+          visibility: GPUShaderStage.COMPUTE,
+          externalTexture: {},
+        },
+        {
+          binding: 2,
+          visibility: GPUShaderStage.COMPUTE,
+          storageTexture: { access: "write-only", format: this.ctx.intermediateFormat },
+        },
+        {
+          binding: 3,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: "storage" },
+        },
+      ],
+    });
+
     const shaderModule = device.createShaderModule({
       label: "Dithering compute shader",
       code: ditheringComputeShaderSource,
+    });
+    const externalShaderModule = device.createShaderModule({
+      label: "Dithering external compute shader",
+      code: createExternalComputeShaderSource(ditheringComputeShaderSource),
     });
 
     const compilationInfo = await shaderModule.getCompilationInfo();
@@ -88,10 +132,22 @@ export class DitheringShader extends ShaderPass {
       const errorMessages = errors.map((e) => `Line ${e.lineNum}: ${e.message}`).join("\n");
       throw new Error(`Dithering compute shader compilation failed:\n${errorMessages}`);
     }
+    const externalCompilationInfo = await externalShaderModule.getCompilationInfo();
+    const externalErrors = externalCompilationInfo.messages.filter((m) => m.type === "error");
+    if (externalErrors.length > 0) {
+      const errorMessages = externalErrors
+        .map((e) => `Line ${e.lineNum}: ${e.message}`)
+        .join("\n");
+      throw new Error(`Dithering external compute shader compilation failed:\n${errorMessages}`);
+    }
 
     const pipelineLayout = device.createPipelineLayout({
       label: "Dithering compute pipeline layout",
       bindGroupLayouts: [this.#computeBindGroupLayout],
+    });
+    const externalPipelineLayout = device.createPipelineLayout({
+      label: "Dithering external compute pipeline layout",
+      bindGroupLayouts: [this.#externalComputeBindGroupLayout],
     });
 
     try {
@@ -100,6 +156,14 @@ export class DitheringShader extends ShaderPass {
         layout: pipelineLayout,
         compute: {
           module: shaderModule,
+          entryPoint: "main",
+        },
+      });
+      this.#externalComputePipeline = await device.createComputePipelineAsync({
+        label: "Dithering external compute pipeline",
+        layout: externalPipelineLayout,
+        compute: {
+          module: externalShaderModule,
           entryPoint: "main",
         },
       });
@@ -151,9 +215,7 @@ export class DitheringShader extends ShaderPass {
     const ditheringKind = entity.shaderParams.dithering?.kind ?? DitheringKind.bayer4x4;
 
     if (isErrorDiffusion(ditheringKind)) {
-      // TODO(video-external): Add a texture_external compute variant or a fragment-path
-      // implementation for error-diffusion dithering. For now callers must materialize
-      // video frames to a GPUTexture before reaching this method.
+      this.#executeComputeExternal(entity, source, outputTexture, encoder);
       return;
     }
 
@@ -221,6 +283,66 @@ export class DitheringShader extends ShaderPass {
     this.ctx.releaseTexture(computeOutputTexture, width, height, computeUsage);
   }
 
+  #executeComputeExternal(
+    entity: EffectRenderEntity,
+    source: ExternalTextureSource,
+    outputTexture: GPUTexture,
+    encoder: GPUCommandEncoder,
+  ): void {
+    if (!this.#externalComputePipeline || !this.#externalComputeBindGroupLayout) {
+      return;
+    }
+
+    const device = this.ctx.device;
+    const width = entity.originalSize.width;
+    const height = entity.originalSize.height;
+
+    const errorBuffer = this.#getOrCreateErrorBuffer(entity.id, width, height);
+    const uniformBuffer = this.writeEntityUniformBuffer(entity);
+
+    const computeUsage =
+      GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC;
+
+    const pool = this.ctx.texturePool;
+    const computeOutputTexture = pool
+      ? pool.acquire(width, height, computeUsage, `Compute external output intermediate`)
+      : device.createTexture({
+          label: `Compute external output intermediate texture`,
+          size: [width, height],
+          format: this.ctx.intermediateFormat,
+          usage: computeUsage,
+        });
+
+    const bindGroup = device.createBindGroup({
+      label: `Entity ${entity.id} external compute bind group`,
+      layout: this.#externalComputeBindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer: uniformBuffer } },
+        { binding: 1, resource: source.texture },
+        { binding: 2, resource: computeOutputTexture.createView() },
+        { binding: 3, resource: { buffer: errorBuffer } },
+      ],
+    });
+
+    encoder.clearBuffer(errorBuffer);
+
+    const computePass = encoder.beginComputePass({
+      label: `Entity ${entity.id} external compute pass`,
+    });
+
+    computePass.setPipeline(this.#externalComputePipeline);
+    computePass.setBindGroup(0, bindGroup);
+    computePass.dispatchWorkgroups(Math.ceil(height / 32));
+    computePass.end();
+
+    encoder.copyTextureToTexture({ texture: computeOutputTexture }, { texture: outputTexture }, [
+      width,
+      height,
+    ]);
+
+    this.ctx.releaseTexture(computeOutputTexture, width, height, computeUsage);
+  }
+
   /** Remove cached error buffers for an entity (call when entity is removed) */
   removeEntity(entityId: string): void {
     for (const [key, buffer] of this.#errorBufferCache.entries()) {
@@ -237,7 +359,9 @@ export class DitheringShader extends ShaderPass {
     }
     this.#errorBufferCache.clear();
     this.#computePipeline = null;
+    this.#externalComputePipeline = null;
     this.#computeBindGroupLayout = null;
+    this.#externalComputeBindGroupLayout = null;
     super.destroy();
   }
 }

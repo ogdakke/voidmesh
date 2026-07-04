@@ -30,16 +30,26 @@ interface BloomUniformSet {
   upsample: GPUBuffer[];
 }
 
-function createExternalTextureShaderSource(source: string): string {
+type BlurInputSource =
+  | { kind: "texture"; texture: GPUTexture }
+  | { kind: "external"; texture: GPUExternalTexture };
+
+function createExternalTextureShaderSource(
+  source: string,
+  textureName = "sourceTexture",
+  samplerName = "sourceSampler",
+): string {
+  const textureDeclaration = new RegExp(
+    `@group\\(0\\)\\s+@binding\\(1\\)\\s+var\\s+${textureName}:\\s+texture_2d<f32>;`,
+  );
+  const textureSample = new RegExp(`textureSample\\(${textureName},\\s*${samplerName},`, "g");
+
   return source
     .replace(
-      /@group\(0\)\s+@binding\(1\)\s+var\s+sourceTexture:\s+texture_2d<f32>;/,
-      "@group(0) @binding(1) var sourceTexture: texture_external;",
+      textureDeclaration,
+      `@group(0) @binding(1) var ${textureName}: texture_external;`,
     )
-    .replace(
-      /textureSample\(sourceTexture,\s*sourceSampler,/g,
-      "textureSampleBaseClampToEdge(sourceTexture, sourceSampler,",
-    );
+    .replace(textureSample, `textureSampleBaseClampToEdge(${textureName}, ${samplerName},`);
 }
 
 export class ProcessingPipeline {
@@ -59,8 +69,10 @@ export class ProcessingPipeline {
 
   // Dual Kawase blur (pre-processing) pipeline
   #blurDownsamplePipeline: GPURenderPipeline | null = null;
+  #blurExternalDownsamplePipeline: GPURenderPipeline | null = null;
   #blurUpsamplePipeline: GPURenderPipeline | null = null;
   #blurDownsampleBindGroupLayout: GPUBindGroupLayout | null = null;
+  #blurExternalDownsampleBindGroupLayout: GPUBindGroupLayout | null = null;
   #blurUpsampleBindGroupLayout: GPUBindGroupLayout | null = null;
   // Per-level uniform buffers (enables single command encoder submission)
   #blurDownsampleUniformBuffers: GPUBuffer[] = [];
@@ -396,6 +408,48 @@ export class ProcessingPipeline {
       },
       fragment: {
         module: downsampleModule,
+        entryPoint: "fs_main",
+        targets: [{ format: this.#intermediateFormat }],
+      },
+      primitive: {
+        topology: "triangle-list",
+      },
+    });
+
+    this.#blurExternalDownsampleBindGroupLayout = this.#device.createBindGroupLayout({
+      label: "Blur external downsample bind group layout",
+      entries: [
+        bindGroupLayoutEntries[0]!,
+        {
+          binding: 1,
+          visibility: GPUShaderStage.FRAGMENT,
+          externalTexture: {},
+        },
+        bindGroupLayoutEntries[2]!,
+      ],
+    });
+
+    const externalDownsampleModule = this.#device.createShaderModule({
+      label: "Kawase external downsample shader",
+      code: createExternalTextureShaderSource(
+        kawaseDownsampleShaderSource,
+        "src_texture",
+        "src_sampler",
+      ),
+    });
+    const externalDownsamplePipelineLayout = this.#device.createPipelineLayout({
+      label: "Blur external downsample pipeline layout",
+      bindGroupLayouts: [this.#blurExternalDownsampleBindGroupLayout],
+    });
+    this.#blurExternalDownsamplePipeline = this.#device.createRenderPipeline({
+      label: "Blur external downsample pipeline",
+      layout: externalDownsamplePipelineLayout,
+      vertex: {
+        module: externalDownsampleModule,
+        entryPoint: "vs_main",
+      },
+      fragment: {
+        module: externalDownsampleModule,
         entryPoint: "fs_main",
         targets: [{ format: this.#intermediateFormat }],
       },
@@ -1049,7 +1103,7 @@ export class ProcessingPipeline {
    */
   #encodeBlurPasses(
     encoder: GPUCommandEncoder,
-    inputTexture: GPUTexture,
+    inputSource: BlurInputSource,
     finalTarget: GPUTexture,
     mipChain: GPUTexture[],
     uniformSet: BlurUniformSet,
@@ -1107,27 +1161,55 @@ export class ProcessingPipeline {
     }
 
     // === Downsample passes ===
-    let srcTexture = inputTexture;
+    let srcTexture: GPUTexture | null = inputSource.kind === "texture" ? inputSource.texture : null;
     for (let i = 0; i < activeLevels; i++) {
       const dstTexture = mipChain[i]!;
 
-      const bindGroup = this.#device.createBindGroup({
-        label: `Blur downsample bind group level ${i}`,
-        layout: this.#blurDownsampleBindGroupLayout!,
-        entries: [
-          {
-            binding: 0,
-            resource: {
-              buffer: uniformSet.downsample[bufferOffset + i]!,
+      const readsExternalSource = i === 0 && inputSource.kind === "external";
+      if (
+        readsExternalSource &&
+        (!this.#blurExternalDownsampleBindGroupLayout || !this.#blurExternalDownsamplePipeline)
+      ) {
+        return;
+      }
+      if (!readsExternalSource && !srcTexture) return;
+
+      const bindGroup = this.#device.createBindGroup(
+        readsExternalSource
+          ? {
+              label: `Blur external downsample bind group level ${i}`,
+              layout: this.#blurExternalDownsampleBindGroupLayout!,
+              entries: [
+                {
+                  binding: 0,
+                  resource: {
+                    buffer: uniformSet.downsample[bufferOffset + i]!,
+                  },
+                },
+                { binding: 1, resource: inputSource.texture },
+                { binding: 2, resource: this.#blurSampler! },
+              ],
+            }
+          : {
+              label: `Blur downsample bind group level ${i}`,
+              layout: this.#blurDownsampleBindGroupLayout!,
+              entries: [
+                {
+                  binding: 0,
+                  resource: {
+                    buffer: uniformSet.downsample[bufferOffset + i]!,
+                  },
+                },
+                { binding: 1, resource: srcTexture!.createView() },
+                { binding: 2, resource: this.#blurSampler! },
+              ],
             },
-          },
-          { binding: 1, resource: srcTexture.createView() },
-          { binding: 2, resource: this.#blurSampler! },
-        ],
-      });
+      );
 
       const pass = encoder.beginRenderPass({
-        label: `Blur downsample pass level ${i}`,
+        label: readsExternalSource
+          ? `Blur external downsample pass level ${i}`
+          : `Blur downsample pass level ${i}`,
         colorAttachments: [
           {
             view: dstTexture.createView(),
@@ -1138,7 +1220,9 @@ export class ProcessingPipeline {
         ],
       });
 
-      pass.setPipeline(this.#blurDownsamplePipeline!);
+      pass.setPipeline(
+        readsExternalSource ? this.#blurExternalDownsamplePipeline! : this.#blurDownsamplePipeline!,
+      );
       pass.setBindGroup(0, bindGroup);
       pass.setViewport(0, 0, dstTexture.width, dstTexture.height, 0, 1);
       pass.draw(3);
@@ -1323,7 +1407,7 @@ export class ProcessingPipeline {
     if (!needsBlend) {
       this.#encodeBlurPasses(
         encoder,
-        inputTexture,
+        { kind: "texture", texture: inputTexture },
         outputTexture,
         mipChain,
         uniformSet,
@@ -1341,7 +1425,7 @@ export class ProcessingPipeline {
 
     this.#encodeBlurPasses(
       encoder,
-      inputTexture,
+      { kind: "texture", texture: inputTexture },
       textureA,
       mipChain,
       uniformSet,
@@ -1353,7 +1437,99 @@ export class ProcessingPipeline {
     );
     this.#encodeBlurPasses(
       encoder,
-      inputTexture,
+      { kind: "texture", texture: inputTexture },
+      textureB,
+      mipChain,
+      uniformSet,
+      levelsHigh,
+      offsetHigh,
+      width,
+      height,
+      MAX_BLUR_MIP_LEVELS,
+    );
+    this.#encodeMixPass(
+      encoder,
+      textureA,
+      textureB,
+      outputTexture,
+      uniformSet.mix,
+      blendFactor,
+      width,
+      height,
+    );
+  }
+
+  applyBlurExternal(
+    entity: EffectRenderEntity,
+    inputSource: ExternalTextureSource,
+    outputTexture: GPUTexture,
+    encoder: GPUCommandEncoder,
+  ): void {
+    if (
+      !this.#blurDownsamplePipeline ||
+      !this.#blurExternalDownsamplePipeline ||
+      !this.#blurUpsamplePipeline ||
+      !this.#blurDownsampleBindGroupLayout ||
+      !this.#blurExternalDownsampleBindGroupLayout ||
+      !this.#blurUpsampleBindGroupLayout ||
+      !this.#blurMixPipeline ||
+      !this.#blurMixBindGroupLayout ||
+      !this.#blurMixUniformBuffer ||
+      !this.#blurSampler
+    ) {
+      return;
+    }
+
+    const width = entity.originalSize.width;
+    const height = entity.originalSize.height;
+    const blur = entity.shaderParams.adjustments?.blur ?? 0;
+    const { levelsLow, levelsHigh, offsetLow, offsetHigh, blendFactor } =
+      blurParamToKawaseParams(blur);
+
+    const needsBlend = blendFactor > 0.001 && blendFactor < 0.999;
+    const levels = needsBlend ? levelsLow : blendFactor >= 0.999 ? levelsHigh : levelsLow;
+    const offset = needsBlend ? offsetLow : blendFactor >= 0.999 ? offsetHigh : offsetLow;
+
+    if (levels <= 0 && (!needsBlend || levelsHigh <= 0)) return;
+
+    const mipChain = this.#getOrCreateBlurMipChain(width, height);
+    if (mipChain.length === 0) return;
+    const uniformSet = this.#getOrCreateBlurUniformSet(entity.id);
+    const blurSource: BlurInputSource = { kind: "external", texture: inputSource.texture };
+
+    if (!needsBlend) {
+      this.#encodeBlurPasses(
+        encoder,
+        blurSource,
+        outputTexture,
+        mipChain,
+        uniformSet,
+        levels,
+        offset,
+        width,
+        height,
+        0,
+      );
+      return;
+    }
+
+    const { textureA, textureB } = this.#getOrCreateBlurBlendTextures(width, height);
+
+    this.#encodeBlurPasses(
+      encoder,
+      blurSource,
+      textureA,
+      mipChain,
+      uniformSet,
+      levelsLow,
+      offsetLow,
+      width,
+      height,
+      0,
+    );
+    this.#encodeBlurPasses(
+      encoder,
+      blurSource,
       textureB,
       mipChain,
       uniformSet,
@@ -1412,7 +1588,7 @@ export class ProcessingPipeline {
 
     this.#encodeBlurPasses(
       encoder,
-      inputTexture,
+      { kind: "texture", texture: inputTexture },
       outputTexture,
       mipChain,
       uniformSet,
@@ -1742,8 +1918,10 @@ export class ProcessingPipeline {
     this.#adjustmentsExternalBindGroupLayout = null;
     this.#adjustmentsSampler = null;
     this.#blurDownsamplePipeline = null;
+    this.#blurExternalDownsamplePipeline = null;
     this.#blurUpsamplePipeline = null;
     this.#blurDownsampleBindGroupLayout = null;
+    this.#blurExternalDownsampleBindGroupLayout = null;
     this.#blurUpsampleBindGroupLayout = null;
     this.#blurDownsampleUniformBuffers = [];
     this.#blurUpsampleUniformBuffers = [];

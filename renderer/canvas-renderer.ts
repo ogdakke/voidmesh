@@ -14,9 +14,6 @@ import {
   getViewportWorldBounds,
 } from "../lib/canvas-math.ts";
 import {
-  DitheringKind,
-  isErrorDiffusion,
-  ShaderType,
   type Bounds,
   type RGBA,
   type ShaderCanvasEntity,
@@ -28,6 +25,7 @@ import { DisintegrationParticleSystem } from "./disintegration-particles.ts";
 import dotGridShaderSource from "./dot-grid.wgsl?raw";
 import { EntityShaderRuntime, type EntityShaderSource } from "./entity-shader-runtime.ts";
 import { ExportService } from "./export-service.ts";
+import { ExternalTextureCopyPass } from "./external-texture-copy-pass.ts";
 import { detectGpuColorConfig, type GpuColorConfig } from "./gpu-color-space.ts";
 import selectionRectShaderSource from "./selection-rect.wgsl?raw";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
@@ -48,31 +46,6 @@ interface CompositionDrawItem {
 type CompositionSource =
   | { kind: "texture"; texture: GPUTexture }
   | { kind: "external"; texture: GPUExternalTexture };
-
-const externalVideoBlitShaderSource = `
-@group(0) @binding(0) var sourceTexture: texture_external;
-@group(0) @binding(1) var sourceSampler: sampler;
-
-struct VertexOutput {
-  @builtin(position) position: vec4f,
-  @location(0) uv: vec2f,
-}
-
-@vertex
-fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
-  let uv = vec2f(f32((vertexIndex << 1u) & 2u), f32(vertexIndex & 2u));
-  var out: VertexOutput;
-  out.position = vec4f(uv * 2.0 - 1.0, 0.0, 1.0);
-  out.uv = vec2f(uv.x, 1.0 - uv.y);
-  return out;
-}
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-  let color = textureSampleBaseClampToEdge(sourceTexture, sourceSampler, in.uv);
-  return vec4f(color.rgb, 1.0);
-}
-`;
 
 function createExternalCompositionShaderSource(source: string): string {
   return source
@@ -104,9 +77,7 @@ export class InfiniteCanvasRenderer {
   // Composition pipeline
   #compositionPipeline: GPURenderPipeline | null = null;
   #externalCompositionPipeline: GPURenderPipeline | null = null;
-  #externalVideoBlitPipeline: GPURenderPipeline | null = null;
-  #externalVideoBlitBindGroupLayout: GPUBindGroupLayout | null = null;
-  #externalVideoBlitSampler: GPUSampler | null = null;
+  #externalTextureCopyPass: ExternalTextureCopyPass | null = null;
   #viewportUniformBuffer: GPUBuffer | null = null;
   #entityUniformBuffer: GPUBuffer | null = null;
   #compositionSampler: GPUSampler | null = null;
@@ -133,7 +104,6 @@ export class InfiniteCanvasRenderer {
     string,
     {
       texture: GPUTexture;
-      sourceRef: HTMLVideoElement | ImageBitmap | OffscreenCanvas;
       width: number;
       height: number;
     }
@@ -168,11 +138,6 @@ export class InfiniteCanvasRenderer {
 
   // Texture pool for eliminating per-frame allocation churn
   #texturePool: TexturePool | null = null;
-
-  // Reusable canvas for Firefox-compatible video frame upload
-  #videoUploadCanvas: OffscreenCanvas | null = null;
-  #videoUploadCtx: OffscreenCanvasRenderingContext2D | null = null;
-  #directVideoUploadSupported: boolean | null = null;
 
   // Disintegration particle system (GPU compute + instanced rendering)
   #particleSystem: DisintegrationParticleSystem | null = null;
@@ -335,7 +300,10 @@ export class InfiniteCanvasRenderer {
 
     this.#createGridPipeline();
     this.#createCompositionPipeline();
-    this.#createExternalVideoBlitPipeline();
+    this.#externalTextureCopyPass = new ExternalTextureCopyPass(
+      this.#device,
+      this.#colorConfig.intermediateFormat,
+    );
     this.#entityShaderRuntime = new EntityShaderRuntime({
       device: this.#device,
       colorConfig: this.#colorConfig,
@@ -627,95 +595,6 @@ export class InfiniteCanvasRenderer {
         topology: "triangle-list",
       },
     });
-  }
-
-  #createExternalVideoBlitPipeline(): void {
-    if (!this.#device) return;
-
-    this.#externalVideoBlitBindGroupLayout = this.#device.createBindGroupLayout({
-      label: "External video blit bind group layout",
-      entries: [
-        {
-          binding: 0,
-          visibility: GPUShaderStage.FRAGMENT,
-          externalTexture: {},
-        },
-        {
-          binding: 1,
-          visibility: GPUShaderStage.FRAGMENT,
-          sampler: { type: "filtering" },
-        },
-      ],
-    });
-
-    this.#externalVideoBlitSampler = this.#device.createSampler({
-      label: "External video blit sampler",
-      magFilter: "linear",
-      minFilter: "linear",
-      addressModeU: "clamp-to-edge",
-      addressModeV: "clamp-to-edge",
-    });
-
-    const shaderModule = this.#device.createShaderModule({
-      label: "External video blit shader",
-      code: externalVideoBlitShaderSource,
-    });
-    const pipelineLayout = this.#device.createPipelineLayout({
-      label: "External video blit pipeline layout",
-      bindGroupLayouts: [this.#externalVideoBlitBindGroupLayout],
-    });
-
-    this.#externalVideoBlitPipeline = this.#device.createRenderPipeline({
-      label: "External video blit pipeline",
-      layout: pipelineLayout,
-      vertex: { module: shaderModule, entryPoint: "vs_main" },
-      fragment: {
-        module: shaderModule,
-        entryPoint: "fs_main",
-        targets: [{ format: this.#colorConfig.intermediateFormat }],
-      },
-      primitive: { topology: "triangle-list" },
-    });
-  }
-
-  #blitExternalVideoToTexture(
-    source: GPUExternalTexture,
-    destination: GPUTexture,
-    encoder: GPUCommandEncoder,
-  ): void {
-    if (
-      !this.#device ||
-      !this.#externalVideoBlitPipeline ||
-      !this.#externalVideoBlitBindGroupLayout ||
-      !this.#externalVideoBlitSampler
-    ) {
-      return;
-    }
-
-    const bindGroup = this.#device.createBindGroup({
-      label: "External video blit bind group",
-      layout: this.#externalVideoBlitBindGroupLayout,
-      entries: [
-        { binding: 0, resource: source },
-        { binding: 1, resource: this.#externalVideoBlitSampler },
-      ],
-    });
-
-    const pass = encoder.beginRenderPass({
-      label: "External video blit render pass",
-      colorAttachments: [
-        {
-          view: destination.createView(),
-          loadOp: "clear",
-          storeOp: "store",
-          clearValue: { r: 0, g: 0, b: 0, a: 0 },
-        },
-      ],
-    });
-    pass.setPipeline(this.#externalVideoBlitPipeline);
-    pass.setBindGroup(0, bindGroup);
-    pass.draw(3);
-    pass.end();
   }
 
   #createSelectionRectPipeline(): void {
@@ -1076,26 +955,6 @@ export class InfiniteCanvasRenderer {
     this.#entityShaderRuntime.flushTextureReleases();
   }
 
-  #shouldMaterializeVideoSource(entity: ShaderCanvasEntity): boolean {
-    if (entity.mediaSource.type !== "video" || entity.shaderParams.showOriginal) return false;
-
-    if ((entity.shaderParams.adjustments?.blur ?? 0) > 0) {
-      // TODO(video-external): Add a texture_external variant for the first
-      // blur/downsample pass. Until then, pre-blurred video needs a normal
-      // source texture.
-      return true;
-    }
-
-    const ditheringKind = entity.shaderParams.dithering?.kind ?? DitheringKind.bayer4x4;
-    if (entity.shaderType === ShaderType.dithering && isErrorDiffusion(ditheringKind)) {
-      // TODO(video-external): Add an external-texture compute variant for
-      // error-diffusion dithering, or port that path to fragment passes.
-      return true;
-    }
-
-    return false;
-  }
-
   #destroyEntitySourceTexture(entityId: string): void {
     const cachedSource = this.#entitySourceTextures.get(entityId);
     if (!cachedSource) return;
@@ -1264,64 +1123,12 @@ export class InfiniteCanvasRenderer {
     }
   }
 
-  /**
-   * Get a video frame as an OffscreenCanvas source compatible with all browsers.
-   * Firefox doesn't support HTMLVideoElement in copyExternalImageToTexture,
-   * so we draw to an OffscreenCanvas first.
-   */
-  #getVideoFrameSource(video: HTMLVideoElement, width: number, height: number): OffscreenCanvas {
-    if (
-      !this.#videoUploadCanvas ||
-      this.#videoUploadCanvas.width !== width ||
-      this.#videoUploadCanvas.height !== height
-    ) {
-      this.#videoUploadCanvas = new OffscreenCanvas(width, height);
-      this.#videoUploadCtx = this.#videoUploadCanvas.getContext("2d", {
-        colorSpace: this.#colorConfig.textureColorSpace,
-      });
-    }
-    this.#videoUploadCtx!.drawImage(video, 0, 0, width, height);
-    return this.#videoUploadCanvas;
-  }
-
-  #uploadEntitySourceToTexture(
+  #uploadStaticEntitySourceToTexture(
     entity: ShaderCanvasEntity,
     texture: GPUTexture,
     width: number,
     height: number,
-  ): HTMLVideoElement | ImageBitmap | OffscreenCanvas {
-    if (entity.mediaSource.type === "video") {
-      const video = entity.mediaSource.videoElement;
-
-      if (this.#directVideoUploadSupported !== false) {
-        try {
-          this.#device!.queue.copyExternalImageToTexture(
-            { source: video },
-            { texture, colorSpace: this.#colorConfig.textureColorSpace },
-            [width, height],
-          );
-          this.#directVideoUploadSupported = true;
-          return video;
-        } catch (error) {
-          this.#directVideoUploadSupported = false;
-          logger.debug(
-            "[renderer] Direct video texture upload unavailable; using canvas fallback",
-            {
-              error,
-            },
-          );
-        }
-      }
-
-      const source = this.#getVideoFrameSource(video, width, height);
-      this.#device!.queue.copyExternalImageToTexture(
-        { source },
-        { texture, colorSpace: this.#colorConfig.textureColorSpace },
-        [width, height],
-      );
-      return source;
-    }
-
+  ): void {
     const source =
       entity.mediaSource.type === "image" ? entity.mediaSource.imageBitmap : entity.imageBitmap;
     this.#device!.queue.copyExternalImageToTexture(
@@ -1329,7 +1136,6 @@ export class InfiniteCanvasRenderer {
       { texture, colorSpace: this.#colorConfig.textureColorSpace },
       [width, height],
     );
-    return source;
   }
 
   /**
@@ -1346,8 +1152,7 @@ export class InfiniteCanvasRenderer {
 
     const width = entity.originalSize.width;
     const height = entity.originalSize.height;
-    const useExternalVideoSource =
-      entity.mediaSource.type === "video" && !this.#shouldMaterializeVideoSource(entity);
+    const useExternalVideoSource = entity.mediaSource.type === "video";
 
     // Time-based shaders and zero-copy video sources need the shader pass every frame that the
     // canvas renders. The source frame lives behind the HTMLVideoElement, so reusing an old
@@ -1378,29 +1183,9 @@ export class InfiniteCanvasRenderer {
       });
 
       if (entity.shaderParams.showOriginal) {
-        const outputUsage =
-          GPUTextureUsage.TEXTURE_BINDING |
-          GPUTextureUsage.RENDER_ATTACHMENT |
-          GPUTextureUsage.COPY_DST |
-          GPUTextureUsage.COPY_SRC;
-        let outputTexture: GPUTexture;
-        if (cachedTexture && cachedTexture.width === width && cachedTexture.height === height) {
-          outputTexture = cachedTexture;
-        } else {
-          cachedTexture?.destroy();
-          outputTexture = this.#device.createTexture({
-            label: `Entity ${entity.id} original video texture`,
-            size: [width, height],
-            format: this.#colorConfig.intermediateFormat,
-            usage: outputUsage,
-          });
-        }
-        // Safari corrupts direct external-video composition for showOriginal.
-        // Keep the zero-CPU-copy path, but normalize through a GPU blit into the
-        // same texture format used by processed entities.
-        this.#blitExternalVideoToTexture(externalTexture, outputTexture, encoder);
-        this.#entityTextures.set(entity.id, outputTexture);
-        return { kind: "texture", texture: outputTexture };
+        cachedTexture?.destroy();
+        this.#entityTextures.delete(entity.id);
+        return { kind: "external", texture: externalTexture };
       }
 
       shaderSource = { kind: "external", texture: externalTexture };
@@ -1413,8 +1198,8 @@ export class InfiniteCanvasRenderer {
       GPUTextureUsage.COPY_SRC |
       GPUTextureUsage.RENDER_ATTACHMENT;
 
-    // Check source texture cache: reuse when source dimensions match and no new media frame
-    // was marked dirty. This lets viewport/UI redraws sample the previous video frame.
+    // Check source texture cache for static media: reuse when source dimensions match and
+    // the entity was not marked dirty.
     const cachedSource = this.#entitySourceTextures.get(entity.id);
 
     if (!shaderSource) {
@@ -1449,11 +1234,10 @@ export class InfiniteCanvasRenderer {
           });
         }
 
-        const sourceRef = this.#uploadEntitySourceToTexture(entity, sourceTexture, width, height);
+        this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
 
         this.#entitySourceTextures.set(entity.id, {
           texture: sourceTexture,
-          sourceRef,
           width,
           height,
         });
@@ -1495,7 +1279,7 @@ export class InfiniteCanvasRenderer {
       });
     }
 
-    // Apply shader using unified method (handles fragment/external paths and compute fallback paths).
+    // Apply shader using unified method (handles fragment, external, and compute paths).
     this.#entityShaderRuntime.encode({
       entity,
       source: shaderSource,
@@ -1521,8 +1305,7 @@ export class InfiniteCanvasRenderer {
       !this.#context ||
       !this.#gridPipeline ||
       !this.#compositionPipeline ||
-      !this.#externalCompositionPipeline ||
-      !this.#externalVideoBlitPipeline
+      !this.#externalCompositionPipeline
     ) {
       return;
     }
@@ -2169,6 +1952,36 @@ export class InfiniteCanvasRenderer {
    * Called before removeEntityTexture — copies the GPU texture so the entity
    * can be removed immediately while the dust animation plays independently.
    */
+  #copyCurrentVideoFrameToTexture(entity: ShaderCanvasEntity, label: string): GPUTexture | null {
+    if (
+      !this.#device ||
+      !this.#externalTextureCopyPass ||
+      entity.mediaSource.type !== "video"
+    ) {
+      return null;
+    }
+
+    const width = entity.originalSize.width;
+    const height = entity.originalSize.height;
+    const texture = this.#device.createTexture({
+      label,
+      size: [width, height],
+      format: this.#colorConfig.intermediateFormat,
+      usage:
+        GPUTextureUsage.TEXTURE_BINDING |
+        GPUTextureUsage.RENDER_ATTACHMENT |
+        GPUTextureUsage.COPY_SRC,
+    });
+    const externalTexture = this.#device.importExternalTexture({
+      source: entity.mediaSource.videoElement,
+      colorSpace: this.#colorConfig.textureColorSpace,
+    });
+    const encoder = this.#device.createCommandEncoder({ label: `${label} encoder` });
+    this.#externalTextureCopyPass.encode(encoder, externalTexture, texture);
+    this.#device.queue.submit([encoder.finish()]);
+    return texture;
+  }
+
   #createDisintegrationSnapshot(entity: ShaderCanvasEntity): GPUTexture | null {
     if (!this.#device) return null;
     const entityId = entity.id;
@@ -2191,22 +2004,11 @@ export class InfiniteCanvasRenderer {
     }
 
     let sourceTexture = this.#entitySourceTextures.get(entityId)?.texture ?? null;
-    let temporarySourceTexture: GPUTexture | null = null;
     if (!sourceTexture && entity.mediaSource.type === "video") {
-      const width = entity.originalSize.width;
-      const height = entity.originalSize.height;
-      sourceTexture = this.#device.createTexture({
-        label: `Disintegration video snapshot source ${entityId}`,
-        size: [width, height],
-        format: "rgba8unorm",
-        usage:
-          GPUTextureUsage.TEXTURE_BINDING |
-          GPUTextureUsage.COPY_DST |
-          GPUTextureUsage.COPY_SRC |
-          GPUTextureUsage.RENDER_ATTACHMENT,
-      });
-      this.#uploadEntitySourceToTexture(entity, sourceTexture, width, height);
-      temporarySourceTexture = sourceTexture;
+      return this.#copyCurrentVideoFrameToTexture(
+        entity,
+        `Disintegration video snapshot ${entityId}`,
+      );
     }
     if (!sourceTexture || !this.#entityShaderRuntime) return null;
 
@@ -2219,7 +2021,6 @@ export class InfiniteCanvasRenderer {
     const encoder = this.#device.createCommandEncoder();
     this.#entityShaderRuntime.passthroughCopyPass.encode(encoder, sourceTexture, snapshotTexture);
     this.#device.queue.submit([encoder.finish()]);
-    temporarySourceTexture?.destroy();
     return snapshotTexture;
   }
 
@@ -2344,7 +2145,26 @@ export class InfiniteCanvasRenderer {
     options?: import("./export-formats.ts").ImageExportOptions,
   ): Promise<Blob | null> {
     const displayedTexture = this.#getDisplayedEntityTexture(entity);
-    if (!displayedTexture) return null;
+    if (!displayedTexture) {
+      if (entity.mediaSource.type !== "video" || !entity.shaderParams.showOriginal) return null;
+
+      const capturedTexture = this.#copyCurrentVideoFrameToTexture(
+        entity,
+        `Entity ${entity.id} original video export texture`,
+      );
+      if (!capturedTexture) return null;
+
+      try {
+        return await this.#exportService!.renderTextureToBlob(
+          capturedTexture,
+          entity.originalSize.width,
+          entity.originalSize.height,
+          options,
+        );
+      } finally {
+        capturedTexture.destroy();
+      }
+    }
 
     return this.#exportService!.renderTextureToBlob(
       displayedTexture,
@@ -2486,9 +2306,7 @@ export class InfiniteCanvasRenderer {
     this.#gridPipeline = null;
     this.#compositionPipeline = null;
     this.#externalCompositionPipeline = null;
-    this.#externalVideoBlitPipeline = null;
-    this.#externalVideoBlitBindGroupLayout = null;
-    this.#externalVideoBlitSampler = null;
+    this.#externalTextureCopyPass = null;
     this.#selectionRectPipeline = null;
     this.#gridBindGroup = null;
     this.#selectionRectBindGroup = null;
