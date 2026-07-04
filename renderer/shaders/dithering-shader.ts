@@ -1,9 +1,8 @@
-import { config } from "#config";
 import { DitheringKind, isErrorDiffusion } from "#types/canvas.ts";
 import type { EffectRenderEntity } from "../effect-render-entity.ts";
 import ditheringComputeShaderSource from "../dithering-compute.wgsl?raw";
 import ditheringShaderSource from "../dithering.wgsl?raw";
-import { ShaderPass } from "./shader-pass.ts";
+import { type ExternalTextureSource, ShaderPass } from "./shader-pass.ts";
 
 // Map DitheringKind to uniform index
 const DITHERING_KIND_INDEX: Record<DitheringKind, number> = {
@@ -26,7 +25,6 @@ export class DitheringShader extends ShaderPass {
   // Compute pipeline for error diffusion
   #computePipeline: GPUComputePipeline | null = null;
   #computeBindGroupLayout: GPUBindGroupLayout | null = null;
-  #computeUniformBuffer: GPUBuffer | null = null;
   // Error buffer cache per entity (keyed by entityId-width-height)
   #errorBufferCache: Map<string, GPUBuffer> = new Map();
 
@@ -43,6 +41,8 @@ export class DitheringShader extends ShaderPass {
     // Fragment pipeline (ordered dithering) - from base class
     this.bindGroupLayout = this.createBindGroupLayout();
     this.pipeline = this.createPipeline();
+    this.externalBindGroupLayout = this.createExternalBindGroupLayout();
+    this.externalPipeline = this.createExternalPipeline();
 
     // Compute pipeline (error diffusion dithering)
     await this.#createComputePipeline();
@@ -75,12 +75,6 @@ export class DitheringShader extends ShaderPass {
           buffer: { type: "storage" },
         },
       ],
-    });
-
-    this.#computeUniformBuffer = device.createBuffer({
-      label: "Dithering compute uniforms",
-      size: config.rendering.ditheringUniformSize,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
     const shaderModule = device.createShaderModule({
@@ -148,13 +142,31 @@ export class DitheringShader extends ShaderPass {
     }
   }
 
+  override executeExternal(
+    entity: EffectRenderEntity,
+    source: ExternalTextureSource,
+    outputTexture: GPUTexture,
+    encoder: GPUCommandEncoder,
+  ): void {
+    const ditheringKind = entity.shaderParams.dithering?.kind ?? DitheringKind.bayer4x4;
+
+    if (isErrorDiffusion(ditheringKind)) {
+      // TODO(video-external): Add a texture_external compute variant or a fragment-path
+      // implementation for error-diffusion dithering. For now callers must materialize
+      // video frames to a GPUTexture before reaching this method.
+      return;
+    }
+
+    super.executeExternal(entity, source, outputTexture, encoder);
+  }
+
   #executeCompute(
     entity: EffectRenderEntity,
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,
   ): void {
-    if (!this.#computePipeline || !this.#computeBindGroupLayout || !this.#computeUniformBuffer) {
+    if (!this.#computePipeline || !this.#computeBindGroupLayout) {
       return;
     }
 
@@ -164,8 +176,7 @@ export class DitheringShader extends ShaderPass {
 
     const errorBuffer = this.#getOrCreateErrorBuffer(entity.id, width, height);
 
-    this.writeUniforms(entity);
-    device.queue.writeBuffer(this.#computeUniformBuffer, 0, this.ctx.uniformData);
+    const uniformBuffer = this.writeEntityUniformBuffer(entity);
 
     const computeUsage =
       GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC;
@@ -184,7 +195,7 @@ export class DitheringShader extends ShaderPass {
       label: `Entity ${entity.id} compute bind group`,
       layout: this.#computeBindGroupLayout,
       entries: [
-        { binding: 0, resource: { buffer: this.#computeUniformBuffer } },
+        { binding: 0, resource: { buffer: uniformBuffer } },
         { binding: 1, resource: sourceTexture.createView() },
         { binding: 2, resource: computeOutputTexture.createView() },
         { binding: 3, resource: { buffer: errorBuffer } },
@@ -207,12 +218,7 @@ export class DitheringShader extends ShaderPass {
       height,
     ]);
 
-    // Release compute output texture back to pool
-    if (pool) {
-      pool.release(computeOutputTexture, width, height, computeUsage);
-    } else {
-      computeOutputTexture.destroy();
-    }
+    this.ctx.releaseTexture(computeOutputTexture, width, height, computeUsage);
   }
 
   /** Remove cached error buffers for an entity (call when entity is removed) */
@@ -230,8 +236,6 @@ export class DitheringShader extends ShaderPass {
       buffer.destroy();
     }
     this.#errorBufferCache.clear();
-    this.#computeUniformBuffer?.destroy();
-    this.#computeUniformBuffer = null;
     this.#computePipeline = null;
     this.#computeBindGroupLayout = null;
     super.destroy();

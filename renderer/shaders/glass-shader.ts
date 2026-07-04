@@ -3,11 +3,17 @@ import type { EffectRenderEntity } from "../effect-render-entity.ts";
 import glassFlowingSource from "../glass-flowing.wgsl?raw";
 import glassFlutedSource from "../glass-fluted.wgsl?raw";
 import glassFrostedSource from "../glass-frosted.wgsl?raw";
-import { ShaderPass } from "./shader-pass.ts";
+import {
+  createExternalTextureShaderSource,
+  type ExternalTextureSource,
+  ShaderPass,
+} from "./shader-pass.ts";
 
 export class GlassShader extends ShaderPass {
   #flutedPipeline: GPURenderPipeline | null = null;
   #flowingPipeline: GPURenderPipeline | null = null;
+  #externalFlutedPipeline: GPURenderPipeline | null = null;
+  #externalFlowingPipeline: GPURenderPipeline | null = null;
 
   /** Per-entity last frame timestamps for delta-time calculation */
   #lastFrameTimes = new Map<string, number>();
@@ -28,6 +34,8 @@ export class GlassShader extends ShaderPass {
     // Frosted pipeline (default, stored in this.pipeline via base class)
     this.bindGroupLayout = this.createBindGroupLayout();
     this.pipeline = this.createPipeline();
+    this.externalBindGroupLayout = this.createExternalBindGroupLayout();
+    this.externalPipeline = this.createExternalPipeline();
 
     // Fluted pipeline (separate render pipeline, same bind group layout)
     const flutedModule = this.ctx.device.createShaderModule({
@@ -49,6 +57,25 @@ export class GlassShader extends ShaderPass {
       },
       primitive: { topology: "triangle-list" },
     });
+    const externalFlutedModule = this.ctx.device.createShaderModule({
+      label: "GlassShader external fluted shader",
+      code: createExternalTextureShaderSource(glassFlutedSource),
+    });
+    const externalFlutedPipelineLayout = this.ctx.device.createPipelineLayout({
+      label: "GlassShader external fluted pipeline layout",
+      bindGroupLayouts: [this.externalBindGroupLayout!],
+    });
+    this.#externalFlutedPipeline = this.ctx.device.createRenderPipeline({
+      label: "GlassShader external fluted pipeline",
+      layout: externalFlutedPipelineLayout,
+      vertex: { module: externalFlutedModule, entryPoint: "vs_main" },
+      fragment: {
+        module: externalFlutedModule,
+        entryPoint: "fs_main",
+        targets: [{ format: this.ctx.intermediateFormat }],
+      },
+      primitive: { topology: "triangle-list" },
+    });
 
     // Flowing pipeline (separate render pipeline, same bind group layout)
     const flowingModule = this.ctx.device.createShaderModule({
@@ -65,6 +92,25 @@ export class GlassShader extends ShaderPass {
       vertex: { module: flowingModule, entryPoint: "vs_main" },
       fragment: {
         module: flowingModule,
+        entryPoint: "fs_main",
+        targets: [{ format: this.ctx.intermediateFormat }],
+      },
+      primitive: { topology: "triangle-list" },
+    });
+    const externalFlowingModule = this.ctx.device.createShaderModule({
+      label: "GlassShader external flowing shader",
+      code: createExternalTextureShaderSource(glassFlowingSource),
+    });
+    const externalFlowingPipelineLayout = this.ctx.device.createPipelineLayout({
+      label: "GlassShader external flowing pipeline layout",
+      bindGroupLayouts: [this.externalBindGroupLayout!],
+    });
+    this.#externalFlowingPipeline = this.ctx.device.createRenderPipeline({
+      label: "GlassShader external flowing pipeline",
+      layout: externalFlowingPipelineLayout,
+      vertex: { module: externalFlowingModule, entryPoint: "vs_main" },
+      fragment: {
+        module: externalFlowingModule,
         entryPoint: "fs_main",
         targets: [{ format: this.ctx.intermediateFormat }],
       },
@@ -110,6 +156,69 @@ export class GlassShader extends ShaderPass {
     }
   }
 
+  override executeExternal(
+    entity: EffectRenderEntity,
+    source: ExternalTextureSource,
+    outputTexture: GPUTexture,
+    encoder: GPUCommandEncoder,
+  ): void {
+    const glassKind = entity.shaderParams.glass?.kind ?? GlassKind.frostedVoronoi;
+
+    if (glassKind === GlassKind.fluted) {
+      this.#executeExternalVariant(
+        entity,
+        source,
+        outputTexture,
+        encoder,
+        this.#externalFlutedPipeline,
+        "GlassShader external fluted render pass",
+      );
+    } else if (glassKind === GlassKind.flowing) {
+      this.#executeExternalVariant(
+        entity,
+        source,
+        outputTexture,
+        encoder,
+        this.#externalFlowingPipeline,
+        "GlassShader external flowing render pass",
+      );
+      this.#advanceFlowingTime(entity);
+    } else {
+      super.executeExternal(entity, source, outputTexture, encoder);
+    }
+  }
+
+  #executeExternalVariant(
+    entity: EffectRenderEntity,
+    source: ExternalTextureSource,
+    outputTexture: GPUTexture,
+    encoder: GPUCommandEncoder,
+    pipeline: GPURenderPipeline | null,
+    label: string,
+  ): void {
+    if (!pipeline) return;
+
+    const uniformBuffer = this.writeEntityUniformBuffer(entity);
+    const bindGroup = this.createExternalBindGroup(source, uniformBuffer);
+
+    const pass = encoder.beginRenderPass({
+      label,
+      colorAttachments: [
+        {
+          view: this.getTextureView(outputTexture),
+          loadOp: "clear",
+          storeOp: "store",
+          clearValue: { r: 0, g: 0, b: 0, a: 0 },
+        },
+      ],
+    });
+
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, bindGroup);
+    pass.draw(3);
+    pass.end();
+  }
+
   #executeFluted(
     entity: EffectRenderEntity,
     sourceTexture: GPUTexture,
@@ -118,10 +227,8 @@ export class GlassShader extends ShaderPass {
   ): void {
     if (!this.#flutedPipeline) return;
 
-    this.writeUniforms(entity);
-    this.ctx.device.queue.writeBuffer(this.ctx.uniformBuffer, 0, this.ctx.uniformData);
-
-    const bindGroup = this.getBindGroup(sourceTexture);
+    const uniformBuffer = this.writeEntityUniformBuffer(entity);
+    const bindGroup = this.getBindGroup(sourceTexture, uniformBuffer);
 
     const pass = encoder.beginRenderPass({
       label: "GlassShader fluted render pass",
@@ -149,10 +256,8 @@ export class GlassShader extends ShaderPass {
   ): void {
     if (!this.#flowingPipeline) return;
 
-    this.writeUniforms(entity);
-    this.ctx.device.queue.writeBuffer(this.ctx.uniformBuffer, 0, this.ctx.uniformData);
-
-    const bindGroup = this.getBindGroup(sourceTexture);
+    const uniformBuffer = this.writeEntityUniformBuffer(entity);
+    const bindGroup = this.getBindGroup(sourceTexture, uniformBuffer);
 
     const pass = encoder.beginRenderPass({
       label: "GlassShader flowing render pass",
@@ -171,6 +276,10 @@ export class GlassShader extends ShaderPass {
     pass.draw(3);
     pass.end();
 
+    this.#advanceFlowingTime(entity);
+  }
+
+  #advanceFlowingTime(entity: EffectRenderEntity): void {
     // Auto-increment time per-entity (mutate in-place, no React/undo involvement)
     if (entity.shaderParams.timeAutoPlay !== false) {
       const now = performance.now();
@@ -193,6 +302,8 @@ export class GlassShader extends ShaderPass {
   override destroy(): void {
     this.#flutedPipeline = null;
     this.#flowingPipeline = null;
+    this.#externalFlutedPipeline = null;
+    this.#externalFlowingPipeline = null;
     this.#lastFrameTimes.clear();
     super.destroy();
   }

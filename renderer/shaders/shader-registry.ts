@@ -1,7 +1,7 @@
 import type { ShaderType } from "#types/canvas.ts";
 import type { TexturePool } from "../texture-pool.ts";
 import type { EffectRenderEntity } from "../effect-render-entity.ts";
-import type { ShaderPass } from "./shader-pass.ts";
+import type { ExternalTextureSource, ShaderPass } from "./shader-pass.ts";
 
 export class ShaderRegistry {
   #passes: Map<string, ShaderPass> = new Map();
@@ -31,6 +31,17 @@ export class ShaderRegistry {
     const pass = this.#passes.get(entity.shaderType);
     if (!pass) throw new Error(`Shader pass not registered: ${entity.shaderType}`);
     pass.execute(entity, sourceTexture, outputTexture, encoder);
+  }
+
+  applyShaderExternal(
+    entity: EffectRenderEntity,
+    source: ExternalTextureSource,
+    outputTexture: GPUTexture,
+    encoder: GPUCommandEncoder,
+  ): void {
+    const pass = this.#passes.get(entity.shaderType);
+    if (!pass) throw new Error(`Shader pass not registered: ${entity.shaderType}`);
+    pass.executeExternal(entity, source, outputTexture, encoder);
   }
 
   /**

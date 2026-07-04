@@ -6,8 +6,6 @@ import type { EffectRenderEntity } from "../effect-render-entity.ts";
 
 export interface ShaderContext {
   device: GPUDevice;
-  /** Shared 336-byte uniform buffer for entity shaders */
-  uniformBuffer: GPUBuffer;
   /** Pre-allocated ArrayBuffer for the 336-byte uniform layout */
   uniformData: ArrayBuffer;
   floatView: Float32Array;
@@ -18,17 +16,50 @@ export interface ShaderContext {
   sortedPaletteCache: { original: readonly RGBA[]; reversed: boolean; sorted: RGBA[] } | null;
   /** Texture pool for intermediate textures (used by compute shaders) */
   texturePool: TexturePool | null;
+  /** Defer release until the command buffer using the texture has been submitted. */
+  releaseTexture: (
+    texture: GPUTexture,
+    width: number,
+    height: number,
+    usage: GPUTextureUsageFlags,
+  ) => void;
   /** Intermediate texture format for the rendering pipeline */
   intermediateFormat: GPUTextureFormat;
   /** Whether the GPU is rendering in Display P3 color space */
   supportsP3: boolean;
 }
 
+export interface ExternalTextureSource {
+  texture: GPUExternalTexture;
+}
+
+export function createExternalTextureShaderSource(source: string): string {
+  return source
+    .replace(
+      /@group\(0\)\s+@binding\(1\)\s+var\s+sourceTexture:\s+texture_2d<f32>;/,
+      "@group(0) @binding(1) var sourceTexture: texture_external;",
+    )
+    .replace(
+      /fn loadAtUV\(uv: vec2f\) -> vec4f \{\s*let dims = vec2f\(textureDimensions\(sourceTexture\)\);\s*let coord = vec2i\(clamp\(uv \* dims, vec2f\(0\.0\), dims - 1\.0\)\);\s*return textureLoad\(sourceTexture, coord, 0\);\s*\}/,
+      "fn loadAtUV(uv: vec2f) -> vec4f {\n  return textureSampleBaseClampToEdge(sourceTexture, sourceSampler, clamp(uv, vec2f(0.0), vec2f(1.0)));\n}",
+    )
+    .replace(
+      /textureSampleLevel\(sourceTexture,\s*sourceSampler,\s*([^,]+),\s*0\.0\)/g,
+      "textureSampleBaseClampToEdge(sourceTexture, sourceSampler, $1)",
+    )
+    .replace(
+      /textureSample\(sourceTexture,\s*sourceSampler,/g,
+      "textureSampleBaseClampToEdge(sourceTexture, sourceSampler,",
+    );
+}
+
 export abstract class ShaderPass {
   protected pipeline: GPURenderPipeline | null = null;
   protected bindGroupLayout: GPUBindGroupLayout | null = null;
+  protected externalPipeline: GPURenderPipeline | null = null;
+  protected externalBindGroupLayout: GPUBindGroupLayout | null = null;
   #textureViewCache = new WeakMap<GPUTexture, GPUTextureView>();
-  #bindGroupCache = new WeakMap<GPUTexture, GPUBindGroup>();
+  #uniformBufferCache = new Map<string, GPUBuffer>();
 
   constructor(protected readonly ctx: ShaderContext) {}
 
@@ -50,6 +81,8 @@ export abstract class ShaderPass {
   async initialize(): Promise<void> {
     this.bindGroupLayout = this.createBindGroupLayout();
     this.pipeline = this.createPipeline();
+    this.externalBindGroupLayout = this.createExternalBindGroupLayout();
+    this.externalPipeline = this.createExternalPipeline();
   }
 
   /**
@@ -166,6 +199,29 @@ export abstract class ShaderPass {
     });
   }
 
+  protected createExternalBindGroupLayout(): GPUBindGroupLayout {
+    return this.ctx.device.createBindGroupLayout({
+      label: `${this.constructor.name} external bind group layout`,
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.FRAGMENT,
+          buffer: { type: "uniform" },
+        },
+        {
+          binding: 1,
+          visibility: GPUShaderStage.FRAGMENT,
+          externalTexture: {},
+        },
+        {
+          binding: 2,
+          visibility: GPUShaderStage.FRAGMENT,
+          sampler: { type: "filtering" },
+        },
+      ],
+    });
+  }
+
   /** Create render pipeline from shader source and layout */
   protected createPipeline(): GPURenderPipeline {
     const shaderModule = this.ctx.device.createShaderModule({
@@ -191,14 +247,70 @@ export abstract class ShaderPass {
     });
   }
 
+  protected createExternalPipeline(): GPURenderPipeline {
+    const shaderModule = this.ctx.device.createShaderModule({
+      label: `${this.constructor.name} external shader`,
+      code: createExternalTextureShaderSource(this.getShaderSource()),
+    });
+
+    const pipelineLayout = this.ctx.device.createPipelineLayout({
+      label: `${this.constructor.name} external pipeline layout`,
+      bindGroupLayouts: [this.externalBindGroupLayout!],
+    });
+
+    return this.ctx.device.createRenderPipeline({
+      label: `${this.constructor.name} external pipeline`,
+      layout: pipelineLayout,
+      vertex: { module: shaderModule, entryPoint: "vs_main" },
+      fragment: {
+        module: shaderModule,
+        entryPoint: "fs_main",
+        targets: [{ format: this.ctx.intermediateFormat }],
+      },
+      primitive: { topology: "triangle-list" },
+    });
+  }
+
+  #getUniformBuffer(entityId: string): GPUBuffer {
+    const cached = this.#uniformBufferCache.get(entityId);
+    if (cached) return cached;
+
+    const buffer = this.ctx.device.createBuffer({
+      label: `${this.constructor.name} uniforms ${entityId}`,
+      size: this.ctx.uniformData.byteLength,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    this.#uniformBufferCache.set(entityId, buffer);
+    return buffer;
+  }
+
+  protected writeEntityUniformBuffer(entity: EffectRenderEntity): GPUBuffer {
+    this.writeUniforms(entity);
+    const uniformBuffer = this.#getUniformBuffer(entity.id);
+    this.ctx.device.queue.writeBuffer(uniformBuffer, 0, this.ctx.uniformData);
+    return uniformBuffer;
+  }
+
   /** Create bind group for a source texture. Override for extra bindings (ASCII). */
-  createBindGroup(sourceTextureView: GPUTextureView): GPUBindGroup {
+  createBindGroup(sourceTextureView: GPUTextureView, uniformBuffer: GPUBuffer): GPUBindGroup {
     return this.ctx.device.createBindGroup({
       label: `${this.constructor.name} bind group`,
       layout: this.bindGroupLayout!,
       entries: [
-        { binding: 0, resource: { buffer: this.ctx.uniformBuffer } },
+        { binding: 0, resource: { buffer: uniformBuffer } },
         { binding: 1, resource: sourceTextureView },
+        { binding: 2, resource: this.ctx.sampler },
+      ],
+    });
+  }
+
+  createExternalBindGroup(source: ExternalTextureSource, uniformBuffer: GPUBuffer): GPUBindGroup {
+    return this.ctx.device.createBindGroup({
+      label: `${this.constructor.name} external bind group`,
+      layout: this.externalBindGroupLayout!,
+      entries: [
+        { binding: 0, resource: { buffer: uniformBuffer } },
+        { binding: 1, resource: source.texture },
         { binding: 2, resource: this.ctx.sampler },
       ],
     });
@@ -213,13 +325,8 @@ export abstract class ShaderPass {
     return view;
   }
 
-  protected getBindGroup(sourceTexture: GPUTexture): GPUBindGroup {
-    const cached = this.#bindGroupCache.get(sourceTexture);
-    if (cached) return cached;
-
-    const bindGroup = this.createBindGroup(this.getTextureView(sourceTexture));
-    this.#bindGroupCache.set(sourceTexture, bindGroup);
-    return bindGroup;
+  protected getBindGroup(sourceTexture: GPUTexture, uniformBuffer: GPUBuffer): GPUBindGroup {
+    return this.createBindGroup(this.getTextureView(sourceTexture), uniformBuffer);
   }
 
   /**
@@ -236,10 +343,8 @@ export abstract class ShaderPass {
   ): void {
     if (!this.pipeline) return;
 
-    this.writeUniforms(entity);
-    this.ctx.device.queue.writeBuffer(this.ctx.uniformBuffer, 0, this.ctx.uniformData);
-
-    const bindGroup = this.getBindGroup(sourceTexture);
+    const uniformBuffer = this.writeEntityUniformBuffer(entity);
+    const bindGroup = this.getBindGroup(sourceTexture, uniformBuffer);
 
     const pass = encoder.beginRenderPass({
       label: `${this.constructor.name} render pass`,
@@ -259,10 +364,45 @@ export abstract class ShaderPass {
     pass.end();
   }
 
+  executeExternal(
+    entity: EffectRenderEntity,
+    source: ExternalTextureSource,
+    outputTexture: GPUTexture,
+    encoder: GPUCommandEncoder,
+  ): void {
+    if (!this.externalPipeline) return;
+
+    const uniformBuffer = this.writeEntityUniformBuffer(entity);
+    const bindGroup = this.createExternalBindGroup(source, uniformBuffer);
+
+    const pass = encoder.beginRenderPass({
+      label: `${this.constructor.name} external render pass`,
+      colorAttachments: [
+        {
+          view: this.getTextureView(outputTexture),
+          loadOp: "clear",
+          storeOp: "store",
+          clearValue: { r: 0, g: 0, b: 0, a: 0 },
+        },
+      ],
+    });
+
+    pass.setPipeline(this.externalPipeline);
+    pass.setBindGroup(0, bindGroup);
+    pass.draw(3);
+    pass.end();
+  }
+
   /** Cleanup GPU resources. Override to clean up additional resources. */
   destroy(): void {
+    for (const buffer of this.#uniformBufferCache.values()) {
+      buffer.destroy();
+    }
+    this.#uniformBufferCache.clear();
     // Pipeline and bind group layout don't need explicit destruction
     this.pipeline = null;
     this.bindGroupLayout = null;
+    this.externalPipeline = null;
+    this.externalBindGroupLayout = null;
   }
 }

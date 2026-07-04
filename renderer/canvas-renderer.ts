@@ -13,12 +13,20 @@ import {
   getViewportMatrix,
   getViewportWorldBounds,
 } from "../lib/canvas-math.ts";
-import { type Bounds, type RGBA, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
+import {
+  DitheringKind,
+  isErrorDiffusion,
+  ShaderType,
+  type Bounds,
+  type RGBA,
+  type ShaderCanvasEntity,
+  type Viewport,
+} from "#types/canvas.ts";
 import compositionShaderSource from "./composition.wgsl?raw";
 import { CopyPass } from "./copy-pass.ts";
 import { DisintegrationParticleSystem } from "./disintegration-particles.ts";
 import dotGridShaderSource from "./dot-grid.wgsl?raw";
-import { EntityShaderRuntime } from "./entity-shader-runtime.ts";
+import { EntityShaderRuntime, type EntityShaderSource } from "./entity-shader-runtime.ts";
 import { ExportService } from "./export-service.ts";
 import { detectGpuColorConfig, type GpuColorConfig } from "./gpu-color-space.ts";
 import selectionRectShaderSource from "./selection-rect.wgsl?raw";
@@ -30,10 +38,52 @@ import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
 
 interface CompositionDrawItem {
   bindGroup: GPUBindGroup;
+  pipeline: "texture" | "external";
   entity: ShaderCanvasEntity;
   isSelected: boolean;
   offsetX: number;
   offsetY: number;
+}
+
+type CompositionSource =
+  | { kind: "texture"; texture: GPUTexture }
+  | { kind: "external"; texture: GPUExternalTexture };
+
+const externalVideoBlitShaderSource = `
+@group(0) @binding(0) var sourceTexture: texture_external;
+@group(0) @binding(1) var sourceSampler: sampler;
+
+struct VertexOutput {
+  @builtin(position) position: vec4f,
+  @location(0) uv: vec2f,
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
+  let uv = vec2f(f32((vertexIndex << 1u) & 2u), f32(vertexIndex & 2u));
+  var out: VertexOutput;
+  out.position = vec4f(uv * 2.0 - 1.0, 0.0, 1.0);
+  out.uv = vec2f(uv.x, 1.0 - uv.y);
+  return out;
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+  let color = textureSampleBaseClampToEdge(sourceTexture, sourceSampler, in.uv);
+  return vec4f(color.rgb, 1.0);
+}
+`;
+
+function createExternalCompositionShaderSource(source: string): string {
+  return source
+    .replace(
+      /@group\(0\)\s+@binding\(2\)\s+var\s+entityTexture:\s+texture_2d<f32>;/,
+      "@group(0) @binding(2) var entityTexture: texture_external;",
+    )
+    .replace(
+      /textureSample\(entityTexture,\s*entitySampler,/g,
+      "textureSampleBaseClampToEdge(entityTexture, entitySampler,",
+    );
 }
 
 export class InfiniteCanvasRenderer {
@@ -53,10 +103,15 @@ export class InfiniteCanvasRenderer {
 
   // Composition pipeline
   #compositionPipeline: GPURenderPipeline | null = null;
+  #externalCompositionPipeline: GPURenderPipeline | null = null;
+  #externalVideoBlitPipeline: GPURenderPipeline | null = null;
+  #externalVideoBlitBindGroupLayout: GPUBindGroupLayout | null = null;
+  #externalVideoBlitSampler: GPUSampler | null = null;
   #viewportUniformBuffer: GPUBuffer | null = null;
   #entityUniformBuffer: GPUBuffer | null = null;
   #compositionSampler: GPUSampler | null = null;
   #compositionBindGroupLayout: GPUBindGroupLayout | null = null;
+  #externalCompositionBindGroupLayout: GPUBindGroupLayout | null = null;
   #viewportUniformData = new ArrayBuffer(config.rendering.viewportUniformSize);
   #viewportFloatView = new Float32Array(this.#viewportUniformData);
   #entityUniformData = new ArrayBuffer(config.rendering.entityUniformSize);
@@ -96,6 +151,13 @@ export class InfiniteCanvasRenderer {
       lastHovered: boolean;
       lastSelected: boolean;
       lastDebugMode: boolean;
+    }
+  > = new Map();
+
+  #entityExternalCompositionCache: Map<
+    string,
+    {
+      uniformBuffer: GPUBuffer;
     }
   > = new Map();
 
@@ -273,6 +335,7 @@ export class InfiniteCanvasRenderer {
 
     this.#createGridPipeline();
     this.#createCompositionPipeline();
+    this.#createExternalVideoBlitPipeline();
     this.#entityShaderRuntime = new EntityShaderRuntime({
       device: this.#device,
       colorConfig: this.#colorConfig,
@@ -438,6 +501,32 @@ export class InfiniteCanvasRenderer {
       ],
     });
 
+    this.#externalCompositionBindGroupLayout = this.#device.createBindGroupLayout({
+      label: "External composition bind group layout",
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+          buffer: { type: "uniform" },
+        },
+        {
+          binding: 1,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+          buffer: { type: "uniform" },
+        },
+        {
+          binding: 2,
+          visibility: GPUShaderStage.FRAGMENT,
+          externalTexture: {},
+        },
+        {
+          binding: 3,
+          visibility: GPUShaderStage.FRAGMENT,
+          sampler: { type: "filtering" },
+        },
+      ],
+    });
+
     this.#viewportUniformBuffer = this.#device.createBuffer({
       label: "Viewport uniforms",
       size: config.rendering.viewportUniformSize,
@@ -495,6 +584,138 @@ export class InfiniteCanvasRenderer {
         topology: "triangle-list",
       },
     });
+
+    const externalShaderModule = this.#device.createShaderModule({
+      label: "External composition shader",
+      code: createExternalCompositionShaderSource(compositionShaderSource),
+    });
+
+    const externalPipelineLayout = this.#device.createPipelineLayout({
+      label: "External composition pipeline layout",
+      bindGroupLayouts: [this.#externalCompositionBindGroupLayout],
+    });
+
+    this.#externalCompositionPipeline = this.#device.createRenderPipeline({
+      label: "External composition pipeline",
+      layout: externalPipelineLayout,
+      vertex: {
+        module: externalShaderModule,
+        entryPoint: "vs_main",
+      },
+      fragment: {
+        module: externalShaderModule,
+        entryPoint: "fs_main",
+        targets: [
+          {
+            format: this.#canvasFormat,
+            blend: {
+              color: {
+                srcFactor: "src-alpha",
+                dstFactor: "one-minus-src-alpha",
+                operation: "add",
+              },
+              alpha: {
+                srcFactor: "one",
+                dstFactor: "one-minus-src-alpha",
+                operation: "add",
+              },
+            },
+          },
+        ],
+      },
+      primitive: {
+        topology: "triangle-list",
+      },
+    });
+  }
+
+  #createExternalVideoBlitPipeline(): void {
+    if (!this.#device) return;
+
+    this.#externalVideoBlitBindGroupLayout = this.#device.createBindGroupLayout({
+      label: "External video blit bind group layout",
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.FRAGMENT,
+          externalTexture: {},
+        },
+        {
+          binding: 1,
+          visibility: GPUShaderStage.FRAGMENT,
+          sampler: { type: "filtering" },
+        },
+      ],
+    });
+
+    this.#externalVideoBlitSampler = this.#device.createSampler({
+      label: "External video blit sampler",
+      magFilter: "linear",
+      minFilter: "linear",
+      addressModeU: "clamp-to-edge",
+      addressModeV: "clamp-to-edge",
+    });
+
+    const shaderModule = this.#device.createShaderModule({
+      label: "External video blit shader",
+      code: externalVideoBlitShaderSource,
+    });
+    const pipelineLayout = this.#device.createPipelineLayout({
+      label: "External video blit pipeline layout",
+      bindGroupLayouts: [this.#externalVideoBlitBindGroupLayout],
+    });
+
+    this.#externalVideoBlitPipeline = this.#device.createRenderPipeline({
+      label: "External video blit pipeline",
+      layout: pipelineLayout,
+      vertex: { module: shaderModule, entryPoint: "vs_main" },
+      fragment: {
+        module: shaderModule,
+        entryPoint: "fs_main",
+        targets: [{ format: this.#colorConfig.intermediateFormat }],
+      },
+      primitive: { topology: "triangle-list" },
+    });
+  }
+
+  #blitExternalVideoToTexture(
+    source: GPUExternalTexture,
+    destination: GPUTexture,
+    encoder: GPUCommandEncoder,
+  ): void {
+    if (
+      !this.#device ||
+      !this.#externalVideoBlitPipeline ||
+      !this.#externalVideoBlitBindGroupLayout ||
+      !this.#externalVideoBlitSampler
+    ) {
+      return;
+    }
+
+    const bindGroup = this.#device.createBindGroup({
+      label: "External video blit bind group",
+      layout: this.#externalVideoBlitBindGroupLayout,
+      entries: [
+        { binding: 0, resource: source },
+        { binding: 1, resource: this.#externalVideoBlitSampler },
+      ],
+    });
+
+    const pass = encoder.beginRenderPass({
+      label: "External video blit render pass",
+      colorAttachments: [
+        {
+          view: destination.createView(),
+          loadOp: "clear",
+          storeOp: "store",
+          clearValue: { r: 0, g: 0, b: 0, a: 0 },
+        },
+      ],
+    });
+    pass.setPipeline(this.#externalVideoBlitPipeline);
+    pass.setBindGroup(0, bindGroup);
+    pass.draw(3);
+    pass.end();
   }
 
   #createSelectionRectPipeline(): void {
@@ -843,7 +1064,7 @@ export class InfiniteCanvasRenderer {
     });
     this.#entityShaderRuntime.encode({
       entity,
-      sourceTexture,
+      source: { kind: "texture", texture: sourceTexture },
       outputTexture,
       encoder,
       width: entity.originalSize.width,
@@ -852,6 +1073,35 @@ export class InfiniteCanvasRenderer {
     });
 
     this.#device.queue.submit([encoder.finish()]);
+    this.#entityShaderRuntime.flushTextureReleases();
+  }
+
+  #shouldMaterializeVideoSource(entity: ShaderCanvasEntity): boolean {
+    if (entity.mediaSource.type !== "video" || entity.shaderParams.showOriginal) return false;
+
+    if ((entity.shaderParams.adjustments?.blur ?? 0) > 0) {
+      // TODO(video-external): Add a texture_external variant for the first
+      // blur/downsample pass. Until then, pre-blurred video needs a normal
+      // source texture.
+      return true;
+    }
+
+    const ditheringKind = entity.shaderParams.dithering?.kind ?? DitheringKind.bayer4x4;
+    if (entity.shaderType === ShaderType.dithering && isErrorDiffusion(ditheringKind)) {
+      // TODO(video-external): Add an external-texture compute variant for
+      // error-diffusion dithering, or port that path to fragment passes.
+      return true;
+    }
+
+    return false;
+  }
+
+  #destroyEntitySourceTexture(entityId: string): void {
+    const cachedSource = this.#entitySourceTextures.get(entityId);
+    if (!cachedSource) return;
+
+    cachedSource.texture.destroy();
+    this.#entitySourceTextures.delete(entityId);
   }
 
   #updateGridUniforms(viewport: Viewport): void {
@@ -931,7 +1181,11 @@ export class InfiniteCanvasRenderer {
     selectedEntityCount: number,
   ): void {
     for (const item of items) {
-      pass.setPipeline(this.#compositionPipeline!);
+      pass.setPipeline(
+        item.pipeline === "external"
+          ? this.#externalCompositionPipeline!
+          : this.#compositionPipeline!,
+      );
       pass.setBindGroup(0, item.bindGroup);
       pass.draw(6);
 
@@ -1082,14 +1336,25 @@ export class InfiniteCanvasRenderer {
    * Render an entity's image through its shader to a texture.
    * Returns the texture, caching it for future frames.
    */
-  renderEntityToTexture(entity: ShaderCanvasEntity): GPUTexture | null {
+  renderEntityToTexture(
+    entity: ShaderCanvasEntity,
+    encoder: GPUCommandEncoder,
+  ): CompositionSource | null {
     if (!this.#device || !this.#entityShaderRuntime) {
       return null;
     }
 
-    // Time-based shaders need the shader pass every frame, but animated media only
-    // re-uploads/re-shades when the game loop marks a new decoded frame dirty.
-    const needsContinuousShaderRender = this.#entityShaderRuntime.needsContinuousRender(entity);
+    const width = entity.originalSize.width;
+    const height = entity.originalSize.height;
+    const useExternalVideoSource =
+      entity.mediaSource.type === "video" && !this.#shouldMaterializeVideoSource(entity);
+
+    // Time-based shaders and zero-copy video sources need the shader pass every frame that the
+    // canvas renders. The source frame lives behind the HTMLVideoElement, so reusing an old
+    // processed output can show stale/cross-ticked frames when multiple videos are playing.
+    const needsContinuousShaderRender =
+      this.#entityShaderRuntime.needsContinuousRender(entity) ||
+      (useExternalVideoSource && !entity.shaderParams.showOriginal);
 
     // Check if we have a valid processed texture.
     const cachedTexture = this.#entityTextures.get(entity.id);
@@ -1099,11 +1364,47 @@ export class InfiniteCanvasRenderer {
       cachedTexture &&
       !entity.textureDirty
     ) {
-      return cachedTexture;
+      return { kind: "texture", texture: cachedTexture };
     }
+    let shaderSource: EntityShaderSource | null = null;
+    let sourceTexture: GPUTexture | null = null;
 
-    const width = entity.originalSize.width;
-    const height = entity.originalSize.height;
+    if (useExternalVideoSource && entity.mediaSource.type === "video") {
+      this.#destroyEntitySourceTexture(entity.id);
+      const video = entity.mediaSource.videoElement;
+      const externalTexture = this.#device.importExternalTexture({
+        source: video,
+        colorSpace: this.#colorConfig.textureColorSpace,
+      });
+
+      if (entity.shaderParams.showOriginal) {
+        const outputUsage =
+          GPUTextureUsage.TEXTURE_BINDING |
+          GPUTextureUsage.RENDER_ATTACHMENT |
+          GPUTextureUsage.COPY_DST |
+          GPUTextureUsage.COPY_SRC;
+        let outputTexture: GPUTexture;
+        if (cachedTexture && cachedTexture.width === width && cachedTexture.height === height) {
+          outputTexture = cachedTexture;
+        } else {
+          cachedTexture?.destroy();
+          outputTexture = this.#device.createTexture({
+            label: `Entity ${entity.id} original video texture`,
+            size: [width, height],
+            format: this.#colorConfig.intermediateFormat,
+            usage: outputUsage,
+          });
+        }
+        // Safari corrupts direct external-video composition for showOriginal.
+        // Keep the zero-CPU-copy path, but normalize through a GPU blit into the
+        // same texture format used by processed entities.
+        this.#blitExternalVideoToTexture(externalTexture, outputTexture, encoder);
+        this.#entityTextures.set(entity.id, outputTexture);
+        return { kind: "texture", texture: outputTexture };
+      }
+
+      shaderSource = { kind: "external", texture: externalTexture };
+    }
 
     // Source texture usage flags
     const sourceUsage =
@@ -1115,47 +1416,50 @@ export class InfiniteCanvasRenderer {
     // Check source texture cache: reuse when source dimensions match and no new media frame
     // was marked dirty. This lets viewport/UI redraws sample the previous video frame.
     const cachedSource = this.#entitySourceTextures.get(entity.id);
-    let sourceTexture: GPUTexture;
 
-    if (
-      !entity.textureDirty &&
-      cachedSource &&
-      cachedSource.width === width &&
-      cachedSource.height === height
-    ) {
-      sourceTexture = cachedSource.texture;
-    } else {
-      // Source changed, dimensions changed, or a new animated frame arrived: upload.
-      if (cachedSource && (cachedSource.width !== width || cachedSource.height !== height)) {
-        // Dimensions changed — destroy old, create new
-        cachedSource.texture.destroy();
-        sourceTexture = this.#device.createTexture({
-          label: `Entity ${entity.id} cached source`,
-          size: [width, height],
-          format: "rgba8unorm",
-          usage: sourceUsage,
-        });
-      } else if (cachedSource) {
-        // Same dimensions — reuse existing texture object, just re-upload data
+    if (!shaderSource) {
+      if (
+        !entity.textureDirty &&
+        cachedSource &&
+        cachedSource.width === width &&
+        cachedSource.height === height
+      ) {
         sourceTexture = cachedSource.texture;
       } else {
-        // First render — create new long-lived source texture
-        sourceTexture = this.#device.createTexture({
-          label: `Entity ${entity.id} cached source`,
-          size: [width, height],
-          format: "rgba8unorm",
-          usage: sourceUsage,
+        // Source changed, dimensions changed, or a new animated frame arrived: upload.
+        if (cachedSource && (cachedSource.width !== width || cachedSource.height !== height)) {
+          // Dimensions changed — destroy old, create new
+          cachedSource.texture.destroy();
+          sourceTexture = this.#device.createTexture({
+            label: `Entity ${entity.id} cached source`,
+            size: [width, height],
+            format: "rgba8unorm",
+            usage: sourceUsage,
+          });
+        } else if (cachedSource) {
+          // Same dimensions — reuse existing texture object, just re-upload data
+          sourceTexture = cachedSource.texture;
+        } else {
+          // First render — create new long-lived source texture
+          sourceTexture = this.#device.createTexture({
+            label: `Entity ${entity.id} cached source`,
+            size: [width, height],
+            format: "rgba8unorm",
+            usage: sourceUsage,
+          });
+        }
+
+        const sourceRef = this.#uploadEntitySourceToTexture(entity, sourceTexture, width, height);
+
+        this.#entitySourceTextures.set(entity.id, {
+          texture: sourceTexture,
+          sourceRef,
+          width,
+          height,
         });
       }
 
-      const sourceRef = this.#uploadEntitySourceToTexture(entity, sourceTexture, width, height);
-
-      this.#entitySourceTextures.set(entity.id, {
-        texture: sourceTexture,
-        sourceRef,
-        width,
-        height,
-      });
+      shaderSource = { kind: "texture", texture: sourceTexture! };
     }
 
     // If showOriginal is enabled, compose the source texture directly. The source texture
@@ -1166,7 +1470,7 @@ export class InfiniteCanvasRenderer {
         cachedTexture.destroy();
         this.#entityTextures.delete(entity.id);
       }
-      return sourceTexture;
+      return { kind: "texture", texture: sourceTexture! };
     }
 
     // Reuse output texture if dimensions match, otherwise create new
@@ -1191,12 +1495,20 @@ export class InfiniteCanvasRenderer {
       });
     }
 
-    // Apply shader using unified method (handles both compute and fragment shader paths)
-    this.#applyShaderToTexture(entity, sourceTexture, outputTexture);
+    // Apply shader using unified method (handles fragment/external paths and compute fallback paths).
+    this.#entityShaderRuntime.encode({
+      entity,
+      source: shaderSource,
+      outputTexture,
+      encoder,
+      width,
+      height,
+      respectShowOriginal: true,
+    });
 
     // Cache and return (source texture stays in #entitySourceTextures)
     this.#entityTextures.set(entity.id, outputTexture);
-    return outputTexture;
+    return { kind: "texture", texture: outputTexture };
   }
 
   /**
@@ -1204,7 +1516,14 @@ export class InfiniteCanvasRenderer {
    * Optimized to batch all render passes into a single GPU submission.
    */
   render(state: RenderState): void {
-    if (!this.#device || !this.#context || !this.#gridPipeline || !this.#compositionPipeline) {
+    if (
+      !this.#device ||
+      !this.#context ||
+      !this.#gridPipeline ||
+      !this.#compositionPipeline ||
+      !this.#externalCompositionPipeline ||
+      !this.#externalVideoBlitPipeline
+    ) {
       return;
     }
 
@@ -1265,6 +1584,13 @@ export class InfiniteCanvasRenderer {
     // Sort entities in-place by z-index (avoid array copying)
     entities.sort((a, b) => a.zIndex - b.zIndex);
 
+    // Entity preprocessing can encode shader passes into this same command buffer.
+    // External video textures must be imported, bound, encoded, finished, and submitted
+    // inside the current render task.
+    const encoder = this.#device.createCommandEncoder({
+      label: "Canvas render encoder",
+    });
+
     // Pre-process entities: render to textures and prepare bind groups
     // Uses caching to avoid per-frame allocations
     const entityDrawItems: CompositionDrawItem[] = [];
@@ -1296,9 +1622,8 @@ export class InfiniteCanvasRenderer {
         hasAnimatingContent = true;
       }
 
-      // Render entity to texture if needed (this has its own submission for dirty textures)
-      const entityTexture = this.renderEntityToTexture(entity);
-      if (!entityTexture) continue;
+      const compositionSource = this.renderEntityToTexture(entity, encoder);
+      if (!compositionSource) continue;
 
       // Clear dirty flag
       entity.textureDirty = false;
@@ -1307,29 +1632,97 @@ export class InfiniteCanvasRenderer {
       const isHovered = entity.id === hoveredEntityId;
       const isSelected = selectedEntityIds.has(entity.id);
 
-      // Check cache for existing composition resources
-      const cached = this.#entityCompositionCache.get(entity.id);
-      const textureChanged = cached?.texture !== entityTexture;
-      const needsNewBindGroup =
-        !cached ||
-        textureChanged ||
-        cached.lastHovered !== isHovered ||
-        cached.lastSelected !== isSelected ||
-        cached.lastDebugMode !== debugMode;
-
       let bindGroup: GPUBindGroup;
+      let pipeline: "texture" | "external";
 
-      if (needsNewBindGroup) {
-        // Create or reuse uniform buffer
+      if (compositionSource.kind === "texture") {
+        pipeline = "texture";
+
+        // Check cache for existing composition resources
+        const cached = this.#entityCompositionCache.get(entity.id);
+        const textureChanged = cached?.texture !== compositionSource.texture;
+        const needsNewBindGroup =
+          !cached ||
+          textureChanged ||
+          cached.lastHovered !== isHovered ||
+          cached.lastSelected !== isSelected ||
+          cached.lastDebugMode !== debugMode;
+
+        if (needsNewBindGroup) {
+          // Create or reuse uniform buffer
+          const uniformBuffer =
+            cached?.uniformBuffer ??
+            this.#device.createBuffer({
+              label: `Entity ${entity.id} composition uniform`,
+              size: config.rendering.entityUniformSize,
+              usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
+
+          // Update and write entity uniforms (apply rubber-band offset for action layer entities)
+          const applyOffset =
+            actionLayerControllerActive && actionLayerController.hasEntity(entity.id);
+          this.#updateEntityUniforms(
+            entity,
+            isHovered,
+            isSelected,
+            debugMode,
+            applyOffset ? actionLayerOffsetX : 0,
+            applyOffset ? actionLayerOffsetY : 0,
+          );
+          this.#device.queue.writeBuffer(uniformBuffer, 0, this.#entityUniformData);
+
+          // Create texture view (reuse if texture didn't change)
+          const textureView =
+            cached && !textureChanged ? cached.textureView : compositionSource.texture.createView();
+
+          // Create bind group with dedicated uniform buffer
+          bindGroup = this.#device.createBindGroup({
+            label: `Entity ${entity.id} composition bind group`,
+            layout: this.#compositionBindGroupLayout!,
+            entries: [
+              { binding: 0, resource: { buffer: this.#viewportUniformBuffer! } },
+              { binding: 1, resource: { buffer: uniformBuffer } },
+              { binding: 2, resource: textureView },
+              { binding: 3, resource: this.#compositionSampler! },
+            ],
+          });
+
+          // Update cache
+          this.#entityCompositionCache.set(entity.id, {
+            uniformBuffer,
+            texture: compositionSource.texture,
+            textureView,
+            bindGroup,
+            lastHovered: isHovered,
+            lastSelected: isSelected,
+            lastDebugMode: debugMode,
+          });
+        } else {
+          // Reuse cached bind group, but ALWAYS update uniform buffer with current position
+          // This is critical for drag operations where position changes every frame
+          const applyOffset2 =
+            actionLayerControllerActive && actionLayerController.hasEntity(entity.id);
+          this.#updateEntityUniforms(
+            entity,
+            isHovered,
+            isSelected,
+            debugMode,
+            applyOffset2 ? actionLayerOffsetX : 0,
+            applyOffset2 ? actionLayerOffsetY : 0,
+          );
+          this.#device.queue.writeBuffer(cached.uniformBuffer, 0, this.#entityUniformData);
+          bindGroup = cached.bindGroup;
+        }
+      } else {
+        pipeline = "external";
+        const cached = this.#entityExternalCompositionCache.get(entity.id);
         const uniformBuffer =
           cached?.uniformBuffer ??
           this.#device.createBuffer({
-            label: `Entity ${entity.id} composition uniform`,
+            label: `Entity ${entity.id} external composition uniform`,
             size: config.rendering.entityUniformSize,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
           });
-
-        // Update and write entity uniforms (apply rubber-band offset for action layer entities)
         const applyOffset =
           actionLayerControllerActive && actionLayerController.hasEntity(entity.id);
         this.#updateEntityUniforms(
@@ -1341,48 +1734,19 @@ export class InfiniteCanvasRenderer {
           applyOffset ? actionLayerOffsetY : 0,
         );
         this.#device.queue.writeBuffer(uniformBuffer, 0, this.#entityUniformData);
-
-        // Create texture view (reuse if texture didn't change)
-        const textureView =
-          cached && !textureChanged ? cached.textureView : entityTexture.createView();
-
-        // Create bind group with dedicated uniform buffer
         bindGroup = this.#device.createBindGroup({
-          label: `Entity ${entity.id} composition bind group`,
-          layout: this.#compositionBindGroupLayout!,
+          label: `Entity ${entity.id} external composition bind group`,
+          layout: this.#externalCompositionBindGroupLayout!,
           entries: [
             { binding: 0, resource: { buffer: this.#viewportUniformBuffer! } },
             { binding: 1, resource: { buffer: uniformBuffer } },
-            { binding: 2, resource: textureView },
+            { binding: 2, resource: compositionSource.texture },
             { binding: 3, resource: this.#compositionSampler! },
           ],
         });
-
-        // Update cache
-        this.#entityCompositionCache.set(entity.id, {
-          uniformBuffer,
-          texture: entityTexture,
-          textureView,
-          bindGroup,
-          lastHovered: isHovered,
-          lastSelected: isSelected,
-          lastDebugMode: debugMode,
-        });
-      } else {
-        // Reuse cached bind group, but ALWAYS update uniform buffer with current position
-        // This is critical for drag operations where position changes every frame
-        const applyOffset2 =
-          actionLayerControllerActive && actionLayerController.hasEntity(entity.id);
-        this.#updateEntityUniforms(
-          entity,
-          isHovered,
-          isSelected,
-          debugMode,
-          applyOffset2 ? actionLayerOffsetX : 0,
-          applyOffset2 ? actionLayerOffsetY : 0,
-        );
-        this.#device.queue.writeBuffer(cached.uniformBuffer, 0, this.#entityUniformData);
-        bindGroup = cached.bindGroup;
+        if (!cached) {
+          this.#entityExternalCompositionCache.set(entity.id, { uniformBuffer });
+        }
       }
 
       // Action layer entities are drawn AFTER blur (not in main pass) to avoid halo
@@ -1391,6 +1755,7 @@ export class InfiniteCanvasRenderer {
       if (isActionLayerEntity) {
         actionLayerDrawItems.push({
           bindGroup,
+          pipeline,
           entity,
           isSelected,
           offsetX: actionLayerOffsetX,
@@ -1399,6 +1764,7 @@ export class InfiniteCanvasRenderer {
       } else {
         entityDrawItems.push({
           bindGroup,
+          pipeline,
           entity,
           isSelected,
           offsetX: 0,
@@ -1408,14 +1774,10 @@ export class InfiniteCanvasRenderer {
     }
     markPhaseEnd("entity-prep");
 
-    // Create single command encoder for grid + all entities
-    const encoder = this.#device.createCommandEncoder({
-      label: "Canvas render encoder",
-    });
-
     const texture = this.#context.getCurrentTexture();
     // Skip render if swapchain texture is invalid
     if (texture.width === 0 || texture.height === 0) {
+      this.#entityShaderRuntime?.flushTextureReleases();
       return;
     }
     const targetView = texture.createView();
@@ -1724,6 +2086,7 @@ export class InfiniteCanvasRenderer {
     // Single submission for all passes
     markPhaseStart("queue-submit");
     this.#device.queue.submit([encoder.finish()]);
+    this.#entityShaderRuntime?.flushTextureReleases();
     markPhaseEnd("queue-submit");
 
     // Record frame stats for performance overlay
@@ -1789,6 +2152,12 @@ export class InfiniteCanvasRenderer {
       this.#entityCompositionCache.delete(entityId);
     }
 
+    const externalCached = this.#entityExternalCompositionCache.get(entityId);
+    if (externalCached) {
+      externalCached.uniformBuffer.destroy();
+      this.#entityExternalCompositionCache.delete(entityId);
+    }
+
     this.#entityShaderRuntime?.removeEntity(entityId);
 
     // Clear any errors for this entity
@@ -1800,8 +2169,9 @@ export class InfiniteCanvasRenderer {
    * Called before removeEntityTexture — copies the GPU texture so the entity
    * can be removed immediately while the dust animation plays independently.
    */
-  #createDisintegrationSnapshot(entityId: string): GPUTexture | null {
+  #createDisintegrationSnapshot(entity: ShaderCanvasEntity): GPUTexture | null {
     if (!this.#device) return null;
+    const entityId = entity.id;
 
     const renderedTexture = this.#entityTextures.get(entityId);
     if (renderedTexture) {
@@ -1820,7 +2190,24 @@ export class InfiniteCanvasRenderer {
       return snapshotTexture;
     }
 
-    const sourceTexture = this.#entitySourceTextures.get(entityId)?.texture;
+    let sourceTexture = this.#entitySourceTextures.get(entityId)?.texture ?? null;
+    let temporarySourceTexture: GPUTexture | null = null;
+    if (!sourceTexture && entity.mediaSource.type === "video") {
+      const width = entity.originalSize.width;
+      const height = entity.originalSize.height;
+      sourceTexture = this.#device.createTexture({
+        label: `Disintegration video snapshot source ${entityId}`,
+        size: [width, height],
+        format: "rgba8unorm",
+        usage:
+          GPUTextureUsage.TEXTURE_BINDING |
+          GPUTextureUsage.COPY_DST |
+          GPUTextureUsage.COPY_SRC |
+          GPUTextureUsage.RENDER_ATTACHMENT,
+      });
+      this.#uploadEntitySourceToTexture(entity, sourceTexture, width, height);
+      temporarySourceTexture = sourceTexture;
+    }
     if (!sourceTexture || !this.#entityShaderRuntime) return null;
 
     const snapshotTexture = this.#device.createTexture({
@@ -1832,18 +2219,14 @@ export class InfiniteCanvasRenderer {
     const encoder = this.#device.createCommandEncoder();
     this.#entityShaderRuntime.passthroughCopyPass.encode(encoder, sourceTexture, snapshotTexture);
     this.#device.queue.submit([encoder.finish()]);
+    temporarySourceTexture?.destroy();
     return snapshotTexture;
   }
 
-  startDisintegration(entity: {
-    id: string;
-    position: { x: number; y: number };
-    size: { width: number; height: number };
-    rotation: number;
-  }): void {
+  startDisintegration(entity: ShaderCanvasEntity): void {
     if (!this.#device || !this.#compositionBindGroupLayout) return;
 
-    const snapshotTexture = this.#createDisintegrationSnapshot(entity.id);
+    const snapshotTexture = this.#createDisintegrationSnapshot(entity);
     if (!snapshotTexture) return;
 
     const textureView = snapshotTexture.createView();
@@ -1973,7 +2356,11 @@ export class InfiniteCanvasRenderer {
 
   #getDisplayedEntityTexture(entity: ShaderCanvasEntity): GPUTexture | null {
     if (entity.shaderParams.showOriginal) {
-      return this.#entitySourceTextures.get(entity.id)?.texture ?? null;
+      return (
+        this.#entitySourceTextures.get(entity.id)?.texture ??
+        this.#entityTextures.get(entity.id) ??
+        null
+      );
     }
 
     return this.#entityTextures.get(entity.id) ?? null;
@@ -2028,6 +2415,11 @@ export class InfiniteCanvasRenderer {
       cached.uniformBuffer.destroy();
     }
     this.#entityCompositionCache.clear();
+
+    for (const cached of this.#entityExternalCompositionCache.values()) {
+      cached.uniformBuffer.destroy();
+    }
+    this.#entityExternalCompositionCache.clear();
 
     // Destroy disintegration overlays + particle system
     for (const overlay of this.#disintegrationOverlays.values()) {
@@ -2093,10 +2485,15 @@ export class InfiniteCanvasRenderer {
     // Clear references
     this.#gridPipeline = null;
     this.#compositionPipeline = null;
+    this.#externalCompositionPipeline = null;
+    this.#externalVideoBlitPipeline = null;
+    this.#externalVideoBlitBindGroupLayout = null;
+    this.#externalVideoBlitSampler = null;
     this.#selectionRectPipeline = null;
     this.#gridBindGroup = null;
     this.#selectionRectBindGroup = null;
     this.#compositionBindGroupLayout = null;
+    this.#externalCompositionBindGroupLayout = null;
     this.#context = null;
     this.#device = null;
   }
