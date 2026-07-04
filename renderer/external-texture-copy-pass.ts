@@ -76,11 +76,7 @@ export class ExternalTextureCopyPass {
     });
   }
 
-  encode(
-    encoder: GPUCommandEncoder,
-    source: GPUExternalTexture,
-    destination: GPUTexture,
-  ): void {
+  encode(encoder: GPUCommandEncoder, source: GPUExternalTexture, destination: GPUTexture): void {
     const bindGroup = this.#device.createBindGroup({
       label: "External texture copy bind group",
       layout: this.#bindGroupLayout,

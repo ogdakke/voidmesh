@@ -13,12 +13,7 @@ import {
   getViewportMatrix,
   getViewportWorldBounds,
 } from "../lib/canvas-math.ts";
-import {
-  type Bounds,
-  type RGBA,
-  type ShaderCanvasEntity,
-  type Viewport,
-} from "#types/canvas.ts";
+import { type Bounds, type RGBA, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import compositionShaderSource from "./composition.wgsl?raw";
 import { CopyPass } from "./copy-pass.ts";
 import { DisintegrationParticleSystem } from "./disintegration-particles.ts";
@@ -1953,11 +1948,7 @@ export class InfiniteCanvasRenderer {
    * can be removed immediately while the dust animation plays independently.
    */
   #copyCurrentVideoFrameToTexture(entity: ShaderCanvasEntity, label: string): GPUTexture | null {
-    if (
-      !this.#device ||
-      !this.#externalTextureCopyPass ||
-      entity.mediaSource.type !== "video"
-    ) {
+    if (!this.#device || !this.#externalTextureCopyPass || entity.mediaSource.type !== "video") {
       return null;
     }
 

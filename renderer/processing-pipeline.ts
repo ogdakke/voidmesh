@@ -45,10 +45,7 @@ function createExternalTextureShaderSource(
   const textureSample = new RegExp(`textureSample\\(${textureName},\\s*${samplerName},`, "g");
 
   return source
-    .replace(
-      textureDeclaration,
-      `@group(0) @binding(1) var ${textureName}: texture_external;`,
-    )
+    .replace(textureDeclaration, `@group(0) @binding(1) var ${textureName}: texture_external;`)
     .replace(textureSample, `textureSampleBaseClampToEdge(${textureName}, ${samplerName},`);
 }
 

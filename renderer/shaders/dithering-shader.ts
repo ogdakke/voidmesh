@@ -135,9 +135,7 @@ export class DitheringShader extends ShaderPass {
     const externalCompilationInfo = await externalShaderModule.getCompilationInfo();
     const externalErrors = externalCompilationInfo.messages.filter((m) => m.type === "error");
     if (externalErrors.length > 0) {
-      const errorMessages = externalErrors
-        .map((e) => `Line ${e.lineNum}: ${e.message}`)
-        .join("\n");
+      const errorMessages = externalErrors.map((e) => `Line ${e.lineNum}: ${e.message}`).join("\n");
       throw new Error(`Dithering external compute shader compilation failed:\n${errorMessages}`);
     }
 
