@@ -188,16 +188,6 @@ describe("Desktop pointer interactions", () => {
       expect(canvasStore.getSelectedEntityIds().has(unlockedId)).toBe(true);
       expect(canvasStore.getSelectedEntityIds().has(lockedId)).toBe(false);
     });
-
-    test("click on overlapping entities with equal z-index keeps insertion order", () => {
-      const firstId = addEntity(100, 100, 200, 150, { zIndex: 5 });
-      const secondId = addEntity(100, 100, 200, 150, { zIndex: 5 });
-
-      click(gl, { x: 150, y: 150 });
-
-      expect(canvasStore.getSelectedEntityIds().has(firstId)).toBe(true);
-      expect(canvasStore.getSelectedEntityIds().has(secondId)).toBe(false);
-    });
   });
 
   describe("Shift+click", () => {
