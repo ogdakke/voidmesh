@@ -40,13 +40,18 @@ function createExternalTextureShaderSource(
   samplerName = "sourceSampler",
 ): string {
   const textureDeclaration = new RegExp(
-    `@group\\(0\\)\\s+@binding\\(1\\)\\s+var\\s+${textureName}:\\s+texture_2d<f32>;`,
+    `@group\\(0\\)\\s+@binding\\(1\\)\\s+var\\s+${textureName}\\s*:\\s*texture_2d<f32>;`,
   );
   const textureSample = new RegExp(`textureSample\\(${textureName},\\s*${samplerName},`, "g");
 
-  return source
+  const rewritten = source
     .replace(textureDeclaration, `@group(0) @binding(1) var ${textureName}: texture_external;`)
     .replace(textureSample, `textureSampleBaseClampToEdge(${textureName}, ${samplerName},`);
+
+  if (rewritten === source || !rewritten.includes("texture_external")) {
+    throw new Error(`Failed to rewrite ${textureName} shader source for external texture input.`);
+  }
+  return rewritten;
 }
 
 export class ProcessingPipeline {

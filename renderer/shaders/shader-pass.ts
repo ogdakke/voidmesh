@@ -33,15 +33,22 @@ export interface ExternalTextureSource {
   texture: GPUExternalTexture;
 }
 
+function assertExternalTextureRewrite(source: string, rewritten: string, label: string): string {
+  if (rewritten === source || !rewritten.includes("texture_external")) {
+    throw new Error(`Failed to rewrite ${label} shader source for external texture input.`);
+  }
+  return rewritten;
+}
+
 export function createExternalTextureShaderSource(source: string): string {
-  return source
+  const rewritten = source
     .replace(
-      /@group\(0\)\s+@binding\(1\)\s+var\s+sourceTexture:\s+texture_2d<f32>;/,
+      /@group\(0\)\s+@binding\(1\)\s+var\s+sourceTexture\s*:\s*texture_2d<f32>;/,
       "@group(0) @binding(1) var sourceTexture: texture_external;",
     )
     .replace(
-      /fn loadAtUV\(uv: vec2f\) -> vec4f \{\s*let dims = vec2f\(textureDimensions\(sourceTexture\)\);\s*let coord = vec2i\(clamp\(uv \* dims, vec2f\(0\.0\), dims - 1\.0\)\);\s*return textureLoad\(sourceTexture, coord, 0\);\s*\}/,
-      "fn loadAtUV(uv: vec2f) -> vec4f {\n  return textureSampleBaseClampToEdge(sourceTexture, sourceSampler, clamp(uv, vec2f(0.0), vec2f(1.0)));\n}",
+      /fn\s+loadAtUV\s*\(\s*([A-Za-z_]\w*)\s*:\s*vec2f\s*\)\s*->\s*vec4f\s*\{[^{}]*textureLoad\s*\(\s*sourceTexture\s*,[^)]*,\s*0\s*\)\s*;?\s*\}/,
+      "fn loadAtUV($1: vec2f) -> vec4f {\n  return textureSampleBaseClampToEdge(sourceTexture, sourceSampler, clamp($1, vec2f(0.0), vec2f(1.0)));\n}",
     )
     .replace(
       /textureSampleLevel\(sourceTexture,\s*sourceSampler,\s*([^,]+),\s*0\.0\)/g,
@@ -51,6 +58,8 @@ export function createExternalTextureShaderSource(source: string): string {
       /textureSample\(sourceTexture,\s*sourceSampler,/g,
       "textureSampleBaseClampToEdge(sourceTexture, sourceSampler,",
     );
+
+  return assertExternalTextureRewrite(source, rewritten, "entity effect");
 }
 
 export abstract class ShaderPass {

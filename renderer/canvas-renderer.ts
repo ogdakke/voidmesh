@@ -43,15 +43,20 @@ type CompositionSource =
   | { kind: "external"; texture: GPUExternalTexture };
 
 function createExternalCompositionShaderSource(source: string): string {
-  return source
+  const rewritten = source
     .replace(
-      /@group\(0\)\s+@binding\(2\)\s+var\s+entityTexture:\s+texture_2d<f32>;/,
+      /@group\(0\)\s+@binding\(2\)\s+var\s+entityTexture\s*:\s*texture_2d<f32>;/,
       "@group(0) @binding(2) var entityTexture: texture_external;",
     )
     .replace(
       /textureSample\(entityTexture,\s*entitySampler,/g,
       "textureSampleBaseClampToEdge(entityTexture, entitySampler,",
     );
+
+  if (rewritten === source || !rewritten.includes("texture_external")) {
+    throw new Error("Failed to rewrite composition shader source for external texture input.");
+  }
+  return rewritten;
 }
 
 export class InfiniteCanvasRenderer {

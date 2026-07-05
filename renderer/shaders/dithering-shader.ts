@@ -22,15 +22,19 @@ const DITHERING_KIND_INDEX: Record<DitheringKind, number> = {
 };
 
 function createExternalComputeShaderSource(source: string): string {
-  return source
+  const rewritten = source
     .replace(
-      /@group\(0\)\s+@binding\(1\)\s+var\s+inputTexture:\s+texture_2d<f32>;/,
+      /@group\(0\)\s+@binding\(1\)\s+var\s+inputTexture\s*:\s*texture_2d<f32>;/,
       "@group(0) @binding(1) var inputTexture: texture_external;",
     )
-    .replace(
-      /textureLoad\(inputTexture,\s*samplePos,\s*0\)/g,
-      "textureLoad(inputTexture, samplePos)",
+    .replace(/textureLoad\(inputTexture,\s*([^,]+),\s*0\)/g, "textureLoad(inputTexture, $1)");
+
+  if (rewritten === source || !rewritten.includes("texture_external")) {
+    throw new Error(
+      "Failed to rewrite dithering compute shader source for external texture input.",
     );
+  }
+  return rewritten;
 }
 
 export class DitheringShader extends ShaderPass {

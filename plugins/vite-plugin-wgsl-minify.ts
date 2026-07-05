@@ -5,6 +5,17 @@ import { initialize, minify, type InitializeOptions, type MinifyOptions } from "
 const WGSL_RAW_RE = /\.wgsl\?raw$/;
 let initPromise: Promise<void> | null = null;
 
+const RUNTIME_REWRITE_KEEP_NAMES = [
+  "sourceTexture",
+  "sourceSampler",
+  "inputTexture",
+  "entityTexture",
+  "entitySampler",
+  "src_texture",
+  "src_sampler",
+  "loadAtUV",
+];
+
 type WgslMinifyOptions = {
   initialize?: InitializeOptions;
   minify?: MinifyOptions;
@@ -35,7 +46,12 @@ export default function wgslMinifyPlugin(
       initPromise ??= initialize(options.initialize ?? {});
       await initPromise;
 
-      const result = minify(source, options.minify);
+      const result = minify(source, {
+        ...options.minify,
+        keepNames: [
+          ...new Set([...RUNTIME_REWRITE_KEEP_NAMES, ...(options.minify?.keepNames ?? [])]),
+        ],
+      });
 
       if (result.errors.length > 0) {
         for (const err of result.errors) {
