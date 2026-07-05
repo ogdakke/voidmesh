@@ -1,22 +1,6 @@
+import alphaMaskExternalShaderSource from "./alpha-mask-external.wgsl?raw";
 import alphaMaskShaderSource from "./alpha-mask.wgsl?raw";
 import type { ExternalTextureSource } from "./shaders/shader-pass.ts";
-
-function createExternalAlphaMaskShaderSource(source: string): string {
-  const rewritten = source
-    .replace(
-      /@group\(0\)\s+@binding\(1\)\s+var\s+maskTexture\s*:\s*texture_2d<f32>;/,
-      "@group(0) @binding(1) var maskTexture: texture_external;",
-    )
-    .replace(
-      /textureSample\(maskTexture,\s*texSampler,\s*uv\)/g,
-      "textureSampleBaseClampToEdge(maskTexture, texSampler, uv)",
-    );
-
-  if (rewritten === source || !rewritten.includes("texture_external")) {
-    throw new Error("Failed to rewrite alpha mask shader source for external texture input.");
-  }
-  return rewritten;
-}
 
 export type AlphaMaskSource =
   | { kind: "texture"; texture: GPUTexture }
@@ -89,7 +73,7 @@ export class AlphaMaskPass {
     });
     const externalShaderModule = device.createShaderModule({
       label: "AlphaMaskPass external shader",
-      code: createExternalAlphaMaskShaderSource(alphaMaskShaderSource),
+      code: alphaMaskExternalShaderSource,
     });
 
     this.#pipeline = this.#createPipeline(
