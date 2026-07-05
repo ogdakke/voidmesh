@@ -39,6 +39,9 @@ export interface ViewportLensDistortionConfig {
   scale: number;
   reflectionIntensity: number;
   reflectionFocus: number;
+  occlusion: number;
+  vignetteLight: number;
+  vignetteDark: number;
 }
 
 interface CompositionDrawItem {
@@ -207,16 +210,8 @@ export class InfiniteCanvasRenderer {
 
   // Full-canvas viewport lens distortion pass. Runs before mobile wlur overlay so
   // the progressive bottom blur itself stays screen-space rather than warped.
-  #viewportLensConfig: ViewportLensDistortionConfig = {
-    enabled: true,
-    strength: 0.4,
-    radius: 0.07,
-    falloff: 1.8,
-    dispersion: 0.25,
-    scale: 1,
-    reflectionIntensity: 0.23,
-    reflectionFocus: 0.87,
-  };
+  #viewportLensConfig: ViewportLensDistortionConfig = config.canvas.lens;
+  #viewportLensDarkTheme = false;
   #viewportLensPipeline: GPURenderPipeline | null = null;
   #viewportLensBindGroupLayout: GPUBindGroupLayout | null = null;
   #viewportLensUniformBuffer: GPUBuffer | null = null;
@@ -927,8 +922,8 @@ export class InfiniteCanvasRenderer {
     v[6] = lens.scale;
     v[7] = lens.reflectionIntensity;
     v[8] = lens.reflectionFocus;
-    v[9] = 0;
-    v[10] = 0;
+    v[9] = lens.occlusion;
+    v[10] = this.#viewportLensDarkTheme ? lens.vignetteDark : lens.vignetteLight;
     v[11] = 0;
     this.#device!.queue.writeBuffer(
       this.#viewportLensUniformBuffer,
@@ -2106,6 +2101,12 @@ export class InfiniteCanvasRenderer {
 
   setViewportLensDistortion(config: ViewportLensDistortionConfig): void {
     this.#viewportLensConfig = { ...config };
+    this.#invalidateWlurOverlayCache();
+  }
+
+  setViewportLensColorScheme(isDark: boolean): void {
+    if (this.#viewportLensDarkTheme === isDark) return;
+    this.#viewportLensDarkTheme = isDark;
     this.#invalidateWlurOverlayCache();
   }
 

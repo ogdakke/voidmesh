@@ -8,7 +8,13 @@ import { Checkbox } from "#ui/checkbox/checkbox.tsx";
 import { Slider } from "#ui/slider/index.tsx";
 import "./viewport-lens-controls.css";
 
-export function ViewportLensControls({ renderer }: { renderer: InfiniteCanvasRenderer }) {
+export function ViewportLensControls({
+  renderer,
+  darkTheme,
+}: {
+  renderer: InfiniteCanvasRenderer;
+  darkTheme: boolean;
+}) {
   const [lensConfig, setLensConfig] = useState<ViewportLensDistortionConfig>(
     renderer.viewPortLensConfig,
   );
@@ -155,6 +161,36 @@ export function ViewportLensControls({ renderer }: { renderer: InfiniteCanvasRen
         value={lensConfig.reflectionFocus}
         showValue
         onValueChange={(value) => updateLensConfig({ reflectionFocus: value })}
+      />
+      <Slider
+        name="viewport-lens-occlusion"
+        label="Occlusion"
+        min={0}
+        max={1}
+        step={0.01}
+        value={lensConfig.occlusion}
+        showValue
+        onValueChange={(value) => updateLensConfig({ occlusion: value })}
+      />
+      <Slider
+        name="viewport-lens-vignette-light"
+        label={darkTheme ? "Vignette · light" : "Vignette · light active"}
+        min={0}
+        max={1}
+        step={0.01}
+        value={lensConfig.vignetteLight}
+        showValue
+        onValueChange={(value) => updateLensConfig({ vignetteLight: value })}
+      />
+      <Slider
+        name="viewport-lens-vignette-dark"
+        label={darkTheme ? "Vignette · dark active" : "Vignette · dark"}
+        min={0}
+        max={1}
+        step={0.01}
+        value={lensConfig.vignetteDark}
+        showValue
+        onValueChange={(value) => updateLensConfig({ vignetteDark: value })}
       />
     </section>
   );

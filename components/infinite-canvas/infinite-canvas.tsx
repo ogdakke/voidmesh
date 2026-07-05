@@ -135,6 +135,11 @@ export function InfiniteCanvas() {
   const darkTheme = useMediaQuery("(prefers-color-scheme: dark)");
   const { isFullscreen, toggleFullscreen } = useLayout();
 
+  useEffect(() => {
+    renderer?.setViewportLensColorScheme(darkTheme);
+    canvasStore.setContainerDirty();
+  }, [renderer, darkTheme]);
+
   // Update app loader text while canvas initializes
   useEffect(() => {
     appLoader.setText("Initializing canvas...");
@@ -909,7 +914,9 @@ export function InfiniteCanvas() {
 
           {!isMobile && (
             <>
-              {renderer ? <ViewportLensControls renderer={renderer} /> : undefined}
+              {renderer ? (
+                <ViewportLensControls renderer={renderer} darkTheme={darkTheme} />
+              ) : undefined}
               <div className="infinite-canvas__top-left">
                 <DesktopSettings />
               </div>

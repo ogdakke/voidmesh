@@ -17,6 +17,7 @@ import type { easings } from "../canvas-math";
 import { palettes } from "./palettes.config";
 import { DecelerationRate } from "../touch-scroll";
 import { type ActionLayerConfig, actionLayerDefaults } from "./action-layer.config";
+import type { ViewportLensDistortionConfig } from "#renderer/canvas-renderer.ts";
 
 // ============================================================================
 // Shader Feature Definitions (for multi-select param intersection)
@@ -517,6 +518,19 @@ export const config = {
       /** Duration for fit-to-view (ms) */
       fitToViewDuration: 300,
     },
+    lens: {
+      enabled: true,
+      strength: 0.4,
+      radius: 0.07,
+      falloff: 1.8,
+      dispersion: 0.25,
+      scale: 1,
+      reflectionIntensity: 0.23,
+      reflectionFocus: 0.87,
+      occlusion: 0.04,
+      vignetteLight: 0.16,
+      vignetteDark: 0.32,
+    } satisfies ViewportLensDistortionConfig,
   },
   hitTesting: {
     alphaGrid: {

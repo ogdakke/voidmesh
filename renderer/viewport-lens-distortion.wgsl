@@ -7,7 +7,8 @@ struct LensUniforms {
     scale: f32,
     reflectionIntensity: f32,
     reflectionFocus: f32,
-    _pad: f32,
+    occlusion: f32,
+    vignette: f32,
 }
 
 @group(0) @binding(0) var inputTexture: texture_2d<f32>;
@@ -103,12 +104,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     let gSample = textureSample(inputTexture, inputSampler, uvG);
     let b = textureSample(inputTexture, inputSampler, uvB).b;
 
-    let vignette = 1.0 - edge * lens.strength * 0.04;
+    let vignette = 1.0 - edge * lens.strength * lens.vignette;
     var color = vec3f(r, gSample.g, b) * vignette;
 
     let normal2 = superellipseNormal(fromCenter, halfSize, power);
     let surfaceNormal = normalize(vec3f(-normal2 * edge * lens.strength * 0.75, 1.0));
     let lightDirection = normalize(vec3f(-0.38, -0.62, 0.9));
+    let measure = superellipseMeasure(fromCenter, halfSize, power);
+    let inward = clamp((1.0 - measure) / max(lens.radius, 0.0001), 0.0, 1.0);
+    let edgeDepth = pow(1.0 - inward, 8.0);
+    let shadowSide = 1.0 - max(dot(surfaceNormal, lightDirection), 0.0);
+    let occlusion = clamp(lens.occlusion, 0.0, 1.0) * edgeDepth * (0.55 + shadowSide * 0.45);
+    color *= 1.0 - occlusion * 0.96;
+
     let reflectionPower = mix(8.0, 96.0, clamp(lens.reflectionFocus, 0.0, 1.0));
     let specular = pow(max(dot(surfaceNormal, lightDirection), 0.0), reflectionPower) * edge * edge;
     let reflectionMask = clamp(lens.reflectionIntensity, 0.0, 1.0) * pow(edge, 2.35) * (0.18 + specular * 0.85);
