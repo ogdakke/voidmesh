@@ -624,6 +624,7 @@ async function createEntities(scenario: BenchScenario): Promise<BenchEntitySet> 
         duration: 60,
         fps: 30,
         hasAudio: false,
+        alphaMode: "none",
       },
       playback: {
         isPlaying: true,

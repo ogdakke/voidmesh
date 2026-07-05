@@ -21,6 +21,7 @@ import {
   MediaType,
   type Bounds,
   type Point,
+  type ShaderCanvasEntity,
   type Viewport,
 } from "#types/canvas.ts";
 import { createEnum } from "#types/index.ts";
@@ -34,6 +35,12 @@ import { scheduler, type AnimationHandle } from "../lib/animation-scheduler.ts";
 import { haptic } from "#lib/haptic.ts";
 import { OnboardingStepId } from "#lib/onboarding.ts";
 import { completeOnboardingStepFromEvent } from "#lib/onboarding-runtime.ts";
+import {
+  getEntityAlphaGrid,
+  isAlphaGridCellOpaque,
+  sampleCanvasSourceCellOpacity,
+  worldPointToEntityLocal,
+} from "#lib/alpha-hit-testing.ts";
 
 const RELEASE_TERMINAL_SPEED_MULTIPLIER = 1.15;
 
@@ -616,15 +623,15 @@ export class GameLoop {
     if (!pointerPosition || !this.#container) return;
 
     const rect = this.#containerRect;
-    const state = canvasStore.getState();
     const viewport = canvasStore.getViewport(); // Always get fresh viewport
     const dpr = window.devicePixelRatio || 1;
     const worldPoint = screenToWorld(pointerPosition, viewport, rect, dpr);
 
     // Update hover state
     if (!pointerDown) {
-      const hoveredId = this.findEntityAtPoint(worldPoint, state);
-      canvasStore.setHoveredEntity(hoveredId);
+      // TODO: this was too costly
+      // const hoveredId = this.findEntityAtPoint(worldPoint, state);
+      canvasStore.setHoveredEntity(null);
     }
 
     // Handle dragging (skip if context menu is open or touch is handling drag directly)
@@ -732,17 +739,46 @@ export class GameLoop {
   }
 
   private findEntityAtPoint(worldPoint: Point, state: CanvasState): string | null {
-    let topEntity: { id: string; zIndex: number } | null = null;
+    for (let i = state.entityIds.length - 1; i >= 0; i--) {
+      const entity = state.entities.get(state.entityIds[i]!);
+      if (!entity || entity.locked) continue;
 
-    for (const entity of state.entities.values()) {
-      if (entity.locked) continue;
-      const bounds = createBounds(entity.position, entity.size);
-      if (pointInBounds(worldPoint, bounds) && (!topEntity || entity.zIndex > topEntity.zIndex)) {
-        topEntity = entity;
+      const localPoint = worldPointToEntityLocal(worldPoint, entity);
+      if (!localPoint) continue;
+
+      if (this.#isEntityHitCellOpaque(entity, localPoint)) {
+        return entity.id;
       }
     }
 
-    return topEntity?.id ?? null;
+    return null;
+  }
+
+  #isEntityHitCellOpaque(entity: ShaderCanvasEntity, localPoint: Point): boolean {
+    if (!config.hitTesting.alphaGrid.enabled) return true;
+
+    if (entity.mediaSource.type === MediaType.video) {
+      if (entity.mediaSource.alphaMode === "none") return true;
+      const video = entity.mediaSource.videoElement;
+      if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+        // No current frame is synchronously inspectable, so preserve legacy rectangular selection.
+        return true;
+      }
+
+      return sampleCanvasSourceCellOpacity(
+        video,
+        video.videoWidth || entity.originalSize.width,
+        video.videoHeight || entity.originalSize.height,
+        localPoint,
+        entity.size,
+        config.hitTesting.alphaGrid,
+      );
+    }
+
+    const grid = getEntityAlphaGrid(entity);
+    if (!grid) return true;
+
+    return isAlphaGridCellOpaque(grid, localPoint, entity.size);
   }
 
   // Input event handlers (called from React component)

@@ -141,6 +141,7 @@ export function createTestEntity(options: CreateEntityOptions = {}): ShaderCanva
       duration: options.videoDuration ?? 10,
       fps: options.videoFps ?? 30,
       hasAudio: options.videoHasAudio ?? false,
+      alphaMode: "none",
     };
     const playback: PlaybackState = {
       isPlaying: false,

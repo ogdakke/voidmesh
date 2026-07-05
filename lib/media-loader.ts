@@ -1,4 +1,11 @@
-import type { ShaderCanvasEntity, Point, ColorPalette, MediaSource } from "#types/canvas.ts";
+import type {
+  ShaderCanvasEntity,
+  Point,
+  ColorPalette,
+  MediaSource,
+  MediaAlphaMode,
+  GifFrame,
+} from "#types/canvas.ts";
 import type { ColorSpace } from "#types/enums.ts";
 import { analytics } from "./analytics.ts";
 import { logger } from "./client.logger.ts";
@@ -6,6 +13,7 @@ import { config } from "./config/index.ts";
 import { extractPaletteFromImage } from "./palette-extraction/index.ts";
 import { decodeGif, isAnimatedGif, type GifDecodeResult } from "./gif-decoder.ts";
 import { createPlaybackState } from "./media-playback.ts";
+import { createAlphaHitGrid } from "./alpha-hit-testing.ts";
 
 /** Check if a file is a video */
 export function isVideoFile(file: File): boolean {
@@ -41,6 +49,7 @@ export interface VideoLoadResult {
   duration: number;
   hasAudio: boolean;
   fps: number | null;
+  alphaMode: MediaAlphaMode;
 }
 
 interface VideoLoadFailureDetails {
@@ -222,10 +231,11 @@ export async function loadVideo(blob: Blob): Promise<VideoLoadResult> {
     logger.error("Failed to autoplay video", e);
   });
 
-  // Detect fps and probe for audio track in parallel
-  const [fps, hasAudio] = await Promise.all([
+  // Detect fps and probe tracks in parallel
+  const [fps, hasAudio, alphaMode] = await Promise.all([
     detectVideoFps(video),
     import("#lib/audio-demux.ts").then(({ hasAudioTrack }) => hasAudioTrack(blob)),
+    probeVideoAlphaMode(blob),
   ]);
 
   return {
@@ -236,7 +246,41 @@ export async function loadVideo(blob: Blob): Promise<VideoLoadResult> {
     duration: video.duration,
     fps,
     hasAudio,
+    alphaMode,
   };
+}
+
+export async function probeVideoAlphaMode(blob: Blob): Promise<MediaAlphaMode> {
+  try {
+    const { ALL_FORMATS, BlobSource, Input, VideoSampleSink } = await import("mediabunny");
+    const input = new Input({
+      source: new BlobSource(blob),
+      formats: ALL_FORMATS,
+    });
+
+    try {
+      const videoTrack = await input.getPrimaryVideoTrack();
+      if (!videoTrack || !(await videoTrack.canDecode())) return "unknown";
+
+      const sink = new VideoSampleSink(videoTrack);
+      for await (const sample of sink.samples()) {
+        try {
+          if (sample.hasAlpha === true) return "supported";
+          if (sample.hasAlpha === false) return "none";
+          return "unknown";
+        } finally {
+          sample.close();
+        }
+      }
+
+      return "unknown";
+    } finally {
+      input.dispose();
+    }
+  } catch (error) {
+    logger.debug("[media-loader] failed to probe video alpha mode", error);
+    return "unknown";
+  }
 }
 
 async function createVideoLoadError(video: HTMLVideoElement, blob: Blob): Promise<Error> {
@@ -407,9 +451,10 @@ export function createImageEntityData(
   position: Point = { x: 0, y: 0 },
   filename?: string,
 ): Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string } {
+  const alphaHitGrid = createMediaAlphaHitGrid(bitmap);
   return {
     name: filename,
-    mediaSource: { type: "image", imageBitmap: bitmap, blob },
+    mediaSource: { type: "image", imageBitmap: bitmap, blob, alphaHitGrid },
     imageBitmap: bitmap,
     position,
     size: { width: bitmap.width, height: bitmap.height },
@@ -422,6 +467,17 @@ export function createImageEntityData(
     locked: false,
     edited: false,
   };
+}
+
+function createMediaAlphaHitGrid(bitmap: ImageBitmap) {
+  return createAlphaHitGrid(bitmap, config.hitTesting.alphaGrid);
+}
+
+function withGifAlphaHitGrids(frames: GifFrame[]): GifFrame[] {
+  return frames.map((frame) => ({
+    ...frame,
+    alphaHitGrid: createMediaAlphaHitGrid(frame.bitmap),
+  }));
 }
 
 /**
@@ -441,17 +497,18 @@ export function createGifEntityData(
   filename?: string,
 ): Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string } {
   const { frames, width, height, duration, fps } = gifResult;
+  const framesWithAlpha = withGifAlphaHitGrids(frames);
 
   return {
     name: filename,
     mediaSource: {
       type: "gif",
-      frames,
+      frames: framesWithAlpha,
       duration,
       fps,
       blob,
     },
-    imageBitmap: frames[0]!.bitmap,
+    imageBitmap: framesWithAlpha[0]!.bitmap,
     position,
     size: { width, height },
     originalSize: { width, height },
@@ -545,9 +602,10 @@ export function createSvgEntityData(
   filename?: string,
 ): Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string } {
   const { bitmap, width, height } = rasterResult;
+  const alphaHitGrid = createMediaAlphaHitGrid(bitmap);
   return {
     name: filename,
-    mediaSource: { type: "svg", blob },
+    mediaSource: { type: "svg", blob, alphaHitGrid },
     imageBitmap: bitmap,
     position,
     size: { width, height },
@@ -571,7 +629,8 @@ export function createVideoEntityData(
   position: Point = { x: 0, y: 0 },
   filename?: string,
 ): Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string } {
-  const { videoElement, initialFrame, width, height, duration, fps, hasAudio } = videoResult;
+  const { videoElement, initialFrame, width, height, duration, fps, hasAudio, alphaMode } =
+    videoResult;
 
   return {
     name: filename,
@@ -582,6 +641,7 @@ export function createVideoEntityData(
       duration,
       fps,
       hasAudio,
+      alphaMode,
     },
     imageBitmap: initialFrame,
     position,
@@ -736,7 +796,12 @@ export async function cloneMediaSource(
     case "image": {
       const bitmap = await createImageBitmap(source.blob);
       return {
-        mediaSource: { type: "image", imageBitmap: bitmap, blob: source.blob },
+        mediaSource: {
+          type: "image",
+          imageBitmap: bitmap,
+          blob: source.blob,
+          alphaHitGrid: createMediaAlphaHitGrid(bitmap),
+        },
         imageBitmap: bitmap,
       };
     }
@@ -751,6 +816,7 @@ export async function cloneMediaSource(
           duration: source.duration,
           fps: source.fps,
           hasAudio: videoResult.hasAudio,
+          alphaMode: videoResult.alphaMode,
         },
         imageBitmap: videoResult.initialFrame,
       };
@@ -758,15 +824,16 @@ export async function cloneMediaSource(
 
     case "gif": {
       const gifResult = await decodeGif(source.blob);
+      const frames = withGifAlphaHitGrids(gifResult.frames);
       return {
         mediaSource: {
           type: "gif",
-          frames: gifResult.frames,
+          frames,
           duration: source.duration,
           fps: source.fps,
           blob: source.blob,
         },
-        imageBitmap: gifResult.frames[0]?.bitmap ?? currentBitmap,
+        imageBitmap: frames[0]?.bitmap ?? currentBitmap,
       };
     }
 
@@ -774,7 +841,11 @@ export async function cloneMediaSource(
       const text = await source.blob.text();
       const rasterResult = await rasterizeSvg(text);
       return {
-        mediaSource: { type: "svg", blob: source.blob },
+        mediaSource: {
+          type: "svg",
+          blob: source.blob,
+          alphaHitGrid: createMediaAlphaHitGrid(rasterResult.bitmap),
+        },
         imageBitmap: rasterResult.bitmap,
       };
     }
