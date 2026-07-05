@@ -34,6 +34,14 @@ fn luminance(c: vec3f) -> f32 {
   return dot(c, coeffs);
 }
 
+fn blobAmount(sourceColor: vec4f) -> f32 {
+  let rawBrightness = luminance(sourceColor.rgb);
+  let brightness = pow(rawBrightness, max(uniforms.intensity, 0.01));
+  let traditionalInk = sourceColor.a * (1.0 - brightness);
+  let colorInk = sourceColor.a * brightness;
+  return select(traditionalInk, colorInk, uniforms.preserveColors == 1u);
+}
+
 // Find the palette color whose luminance best matches the target luminance
 // Skips palette[0] (background), searches palette[1..paletteCount]
 fn findPaletteColorByLuminance(targetLum: f32) -> vec3f {
@@ -123,15 +131,10 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
 
   let currentCenter = getCellCenter(currentCell);
   let currentSampleUV = clamp(currentCenter / uniforms.resolution, vec2f(0.0), vec2f(1.0));
-  let currentColor = textureSampleLevel(sourceTexture, sourceSampler, currentSampleUV, 0.0).rgb;
-  let currentRawBrightness = luminance(currentColor);
-  let currentBrightness = pow(currentRawBrightness, max(uniforms.intensity, 0.01));
-  let currentBrightnessFactor = select(
-    1.0 - currentBrightness,
-    currentBrightness,
-    uniforms.preserveColors == 1u,
-  );
-  let currentRadius = sqrt(currentBrightnessFactor) * maxRadius;
+  let currentSourceColor = textureSampleLevel(sourceTexture, sourceSampler, currentSampleUV, 0.0);
+  let currentColor = currentSourceColor.rgb;
+  let currentAlpha = currentSourceColor.a;
+  let currentRadius = sqrt(blobAmount(currentSourceColor)) * maxRadius;
 
   // Initialize with current cell's distance
   var minDist = sdDot(pixelPos, currentCenter, currentRadius);
@@ -139,6 +142,7 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   // Track closest individual dot for hard color selection (Voronoi-style)
   var closestDist = minDist;
   var closestColor = currentColor;
+  var closestAlpha = currentAlpha;
 
   // Process neighboring cells. We skip cells whose maximum possible influence
   // cannot reach the current pixel, which cuts a lot of unnecessary samples.
@@ -162,14 +166,7 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
 
     let sampleUV = clamp(neighborCenter / uniforms.resolution, vec2f(0.0), vec2f(1.0));
     let sourceColor = textureSampleLevel(sourceTexture, sourceSampler, sampleUV, 0.0);
-    let rawBrightness = luminance(sourceColor.rgb);
-    let brightness = pow(rawBrightness, max(uniforms.intensity, 0.01));
-    let brightnessFactor = select(
-      1.0 - brightness,
-      brightness,
-      uniforms.preserveColors == 1u,
-    );
-    let neighborRadius = sqrt(brightnessFactor) * maxRadius;
+    let neighborRadius = sqrt(blobAmount(sourceColor)) * maxRadius;
     if (neighborRadius <= 0.5) { continue; }
     let neighborColor = sourceColor.rgb;
 
@@ -179,6 +176,7 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
     if (dist < closestDist) {
       closestDist = dist;
       closestColor = neighborColor;
+      closestAlpha = sourceColor.a;
     }
 
     // Merge all dots: smin for gooey bridges, min as fallback when eagerness=0
@@ -195,6 +193,7 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
 
   // Use palette[0] as background
   let bgColor = uniforms.palette[0];
+  let bgAlpha = bgColor.a * smoothstep(0.95, 1.0, closestAlpha);
 
   // Determine shape color — hard selection from closest dot, no blending
   var shapeColor: vec4f;
@@ -210,10 +209,10 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   }
 
   // Premultiplied alpha blending
-  let bgPremult = bgColor.rgb * bgColor.a;
+  let bgPremult = bgColor.rgb * bgAlpha;
   let shapePremult = shapeColor.rgb * shapeColor.a;
   let outRgb = mix(bgPremult, shapePremult, alpha);
-  let outAlpha = mix(bgColor.a, shapeColor.a, alpha);
+  let outAlpha = mix(bgAlpha, shapeColor.a, alpha);
 
   return vec4f(outRgb, outAlpha);
 }

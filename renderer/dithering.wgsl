@@ -245,8 +245,9 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
     let ditheredR = quantize(adjustedR, threshold);
     let ditheredG = quantize(adjustedG, threshold);
     let ditheredB = quantize(adjustedB, threshold);
+    let ditheredA = quantize(sourceColor.a, threshold);
 
-    outColor = vec4f(ditheredR, ditheredG, ditheredB, sourceColor.a);
+    outColor = vec4f(ditheredR, ditheredG, ditheredB, ditheredA);
   } else if (uniforms.paletteCount > 2u) {
     // Multi-color palette dithering
     // Apply intensity curve to input color
@@ -295,8 +296,9 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
     let dithered = select(0.0, 1.0, blendFactor >= threshold);
     let finalColor = mix(lowerColor, upperColor, dithered);
     let finalAlpha = mix(lowerAlpha, upperAlpha, dithered);
+    let sourceCoverage = quantize(sourceColor.a, threshold);
 
-    outColor = vec4f(finalColor, finalAlpha);
+    outColor = vec4f(finalColor, finalAlpha * sourceCoverage);
   } else {
     // Classic 2-color dithering (backward compatible)
     let gray = luminance(sourceColor.rgb);
@@ -314,8 +316,9 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
     let bgAlpha = uniforms.palette[0].a;
     let fgAlpha = uniforms.palette[1].a;
     let finalAlpha = mix(bgAlpha, fgAlpha, dithered);
+    let sourceCoverage = quantize(sourceColor.a, threshold);
 
-    outColor = vec4f(finalColor, finalAlpha);
+    outColor = vec4f(finalColor, finalAlpha * sourceCoverage);
   }
 
   // Premultiply alpha for canvas blending

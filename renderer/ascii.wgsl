@@ -244,6 +244,13 @@ fn findPaletteColorByLuminance(targetLum: f32) -> vec3f {
   return bestColor;
 }
 
+fn asciiDensity(sourceColor: vec4f) -> f32 {
+  let sourceLum = luminance(sourceColor.rgb);
+  let alphaOnlyWeight = 1.0 - smoothstep(0.95, 1.0, sourceColor.a);
+  let alphaDensity = sourceColor.a * (1.0 - sourceLum) * alphaOnlyWeight;
+  return max(sourceLum, alphaDensity);
+}
+
 // ============================================================================
 // Vertex Shader
 // ============================================================================
@@ -281,8 +288,9 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   let clampedUV = clamp(sampleUV, vec2f(0.0), vec2f(1.0));
   let sourceColor = textureSample(sourceTexture, sourceSampler, clampedUV);
   
-  // Calculate brightness
-  let rawBrightness = luminance(sourceColor.rgb);
+  // Calculate visible density. RGB luminance handles ordinary image detail; alpha
+  // adds coverage for media like shadows encoded as black RGB with varying alpha.
+  let rawBrightness = asciiDensity(sourceColor);
   
   // Apply intensity curve (higher intensity = more contrast)
   let brightness = pow(rawBrightness, max(uniforms.intensity, 0.01));
@@ -317,10 +325,13 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   }
   
   // Blend foreground and background based on character alpha
-  let bgPremult = bgColor.rgb * bgColor.a;
-  let fgPremult = fgColor.rgb * fgColor.a;
+  let opaqueSource = smoothstep(0.95, 1.0, sourceColor.a);
+  let bgAlpha = bgColor.a * opaqueSource;
+  let bgPremult = bgColor.rgb * bgAlpha;
+  let fgAlpha = select(fgColor.a * sourceColor.a, sourceColor.a, uniforms.preserveColors == 1u);
+  let fgPremult = fgColor.rgb * fgAlpha;
   let outRgb = mix(bgPremult, fgPremult, charAlpha);
-  let outAlpha = mix(bgColor.a, fgColor.a, charAlpha);
+  let outAlpha = mix(bgAlpha, fgAlpha, charAlpha);
   
   return vec4f(outRgb, outAlpha);
 }

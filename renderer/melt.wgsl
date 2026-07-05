@@ -28,6 +28,13 @@ fn luminance(c: vec3f) -> f32 {
   return dot(c, coeffs);
 }
 
+fn meltAmount(sourceColor: vec4f) -> f32 {
+  let sourceLum = luminance(sourceColor.rgb);
+  let alphaOnlyWeight = 1.0 - smoothstep(0.95, 1.0, sourceColor.a);
+  let alphaDensity = sourceColor.a * (1.0 - sourceLum) * alphaOnlyWeight;
+  return max(sourceLum, alphaDensity);
+}
+
 // Find the palette color whose luminance best matches the target luminance
 // Skips palette[0] (background), searches palette[1..paletteCount]
 fn findPaletteColorByLuminance(targetLum: f32) -> vec3f {
@@ -109,7 +116,7 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
     let isValidCell = sampleUV.y >= 0.0 && sampleUV.y <= 1.0;
 
     // Calculate brightness
-    let luma = luminance(sourceColor.rgb);
+    let luma = meltAmount(sourceColor);
 
     // Calculate how far this cell's shape drips down
     let offY = luma * uniforms.cellSize * 2.0 * uniforms.intensity;
@@ -137,6 +144,9 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
 
   // Use palette[0] as background
   let bgColor = uniforms.palette[0];
+  let baseUV = clamp(pixelPos / uniforms.resolution, vec2f(0.0), vec2f(1.0));
+  let baseAlpha = textureSample(sourceTexture, sourceSampler, baseUV).a;
+  let bgAlpha = bgColor.a * smoothstep(0.95, 1.0, baseAlpha);
 
   // Determine shape color based on mode
   var shapeColor: vec4f;
@@ -154,12 +164,12 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   }
 
   // Premultiply RGB by alpha for each color
-  let bgPremult = bgColor.rgb * bgColor.a;
+  let bgPremult = bgColor.rgb * bgAlpha;
   let shapePremult = shapeColor.rgb * shapeColor.a;
 
   // Blend premultiplied colors and alphas based on coverage
   let outRgb = mix(bgPremult, shapePremult, bestAlpha);
-  let outAlpha = mix(bgColor.a, shapeColor.a, bestAlpha);
+  let outAlpha = mix(bgAlpha, shapeColor.a, bestAlpha);
 
   return vec4f(outRgb, outAlpha);
 }

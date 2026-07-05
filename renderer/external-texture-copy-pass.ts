@@ -19,7 +19,7 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   let color = textureSampleBaseClampToEdge(sourceTexture, sourceSampler, in.uv);
-  return vec4f(color.rgb, 1.0);
+  return color;
 }
 `;
 

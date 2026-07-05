@@ -1,6 +1,7 @@
 import { config } from "#config";
+import { isErrorDiffusion, ShaderType } from "#types/canvas.ts";
 import type { RGBA } from "#types/canvas.ts";
-import { ShaderType } from "#types/canvas.ts";
+import { AlphaMaskPass } from "./alpha-mask-pass.ts";
 import { CopyPass } from "./copy-pass.ts";
 import type { EffectRenderEntity } from "./effect-render-entity.ts";
 import type { GpuColorConfig } from "./gpu-color-space.ts";
@@ -35,6 +36,7 @@ export class EntityShaderRuntime {
   #shaderRegistry = new ShaderRegistry();
   #processingPipeline: ProcessingPipeline;
   #passthroughCopyPass: CopyPass;
+  #alphaMaskPass: AlphaMaskPass;
   #sampler: GPUSampler;
   #uniformData = new ArrayBuffer(config.rendering.ditheringUniformSize);
   #floatView = new Float32Array(this.#uniformData);
@@ -84,6 +86,7 @@ export class EntityShaderRuntime {
       this.#colorConfig.supportsP3,
     );
     this.#passthroughCopyPass = new CopyPass(this.#device, this.#colorConfig.intermediateFormat);
+    this.#alphaMaskPass = new AlphaMaskPass(this.#device, this.#colorConfig.intermediateFormat);
   }
 
   get passthroughCopyPass(): CopyPass {
@@ -137,6 +140,7 @@ export class EntityShaderRuntime {
       return;
     }
 
+    const applySourceAlphaMask = shouldApplySourceAlphaMask(entity);
     const needsBlur = this.#processingPipeline.needsBlur(entity);
     const needsAdjustments = this.#processingPipeline.needsAdjustments(entity);
     const postProcessEnabled = entity.shaderParams.postProcess?.enabled ?? false;
@@ -193,9 +197,25 @@ export class EntityShaderRuntime {
       GPUTextureUsage.TEXTURE_BINDING |
       GPUTextureUsage.RENDER_ATTACHMENT |
       GPUTextureUsage.COPY_DST;
-    let mainShaderOutputTexture = outputTexture;
+    const alphaMaskUsage =
+      GPUTextureUsage.TEXTURE_BINDING |
+      GPUTextureUsage.RENDER_ATTACHMENT |
+      GPUTextureUsage.COPY_DST;
+    let pipelineOutputTexture = outputTexture;
+    let alphaMaskIntermediateTexture: GPUTexture | null = null;
     let postProcessIntermediateTexture: GPUTexture | null = null;
 
+    if (applySourceAlphaMask) {
+      alphaMaskIntermediateTexture = this.#acquireTexture(
+        width,
+        height,
+        alphaMaskUsage,
+        "Alpha mask intermediate texture",
+      );
+      pipelineOutputTexture = alphaMaskIntermediateTexture;
+    }
+
+    let mainShaderOutputTexture = pipelineOutputTexture;
     if (postProcessEnabled) {
       postProcessIntermediateTexture = this.#acquireTexture(
         width,
@@ -233,10 +253,15 @@ export class EntityShaderRuntime {
       this.#processingPipeline.applyPostProcessing(
         entity,
         postProcessIntermediateTexture,
-        outputTexture,
+        pipelineOutputTexture,
         encoder,
       );
       this.#releaseTexture(postProcessIntermediateTexture, width, height, postProcessUsage);
+    }
+
+    if (alphaMaskIntermediateTexture) {
+      this.#alphaMaskPass.encode(encoder, alphaMaskIntermediateTexture, source, outputTexture);
+      this.#releaseTexture(alphaMaskIntermediateTexture, width, height, alphaMaskUsage);
     }
   }
 
@@ -309,4 +334,11 @@ function shaderImmediatesDisabledByLocation(): boolean {
   const search = globalThis.location?.search;
   if (!search) return false;
   return new URLSearchParams(search).get("shaderImmediates") === "0";
+}
+
+function shouldApplySourceAlphaMask(entity: EffectRenderEntity): boolean {
+  if (entity.shaderType !== ShaderType.dithering) return true;
+
+  const ditheringKind = entity.shaderParams.dithering?.kind;
+  return ditheringKind ? !isErrorDiffusion(ditheringKind) : true;
 }

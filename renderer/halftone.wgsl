@@ -34,6 +34,14 @@ fn applyIntensity(value: f32) -> f32 {
   return pow(value, max(uniforms.intensity, 0.01));
 }
 
+fn halftoneAmount(sourceColor: vec4f) -> f32 {
+  let rawBrightness = luminance(sourceColor.rgb);
+  let brightness = applyIntensity(rawBrightness);
+  let traditionalInk = sourceColor.a * (1.0 - brightness);
+  let colorInk = sourceColor.a * brightness;
+  return select(traditionalInk, colorInk, uniforms.preserveColors == 1u);
+}
+
 // Find the palette color whose luminance best matches the target luminance
 // Skips palette[0] (background), searches palette[1..paletteCount]
 fn findPaletteColorByLuminance(targetLum: f32) -> vec3f {
@@ -83,18 +91,11 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   let clampedUV = clamp(sampleUV, vec2f(0.0), vec2f(1.0));
   let sourceColor = textureSample(sourceTexture, sourceSampler, clampedUV);
 
-  let rawBrightness = luminance(sourceColor.rgb);
-
-  // Apply intensity to brightness curve (higher intensity = more contrast)
-  // Using power curve: intensity > 1 increases contrast, < 1 decreases it
-  let brightness = applyIntensity(rawBrightness);
-
   // Map brightness to shape radius
   // When preserveColors is true: bright = large dots (to show white/bright colors)
   // When preserveColors is false: dark = large dots (traditional halftone)
   let maxRadius = uniforms.cellSize * 0.5 * uniforms.scale;
-  let brightnessFactor = select(1.0 - brightness, brightness, uniforms.preserveColors == 1u);
-  let shapeRadius = brightnessFactor * maxRadius;
+  let shapeRadius = halftoneAmount(sourceColor) * maxRadius;
 
   // Distance from pixel to cell center
   let toCenter = pixelPos - cellCenter;
@@ -122,6 +123,7 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   // For premultiplied alpha canvas, output RGB must be multiplied by alpha
   // Use palette[0] as background
   let bgColor = uniforms.palette[0];
+  let bgAlpha = bgColor.a * smoothstep(0.95, 1.0, sourceColor.a);
 
   // Determine shape color based on mode
   var shapeColor: vec4f;
@@ -139,12 +141,12 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   }
 
   // Premultiply RGB by alpha for each color
-  let bgPremult = bgColor.rgb * bgColor.a;
+  let bgPremult = bgColor.rgb * bgAlpha;
   let shapePremult = shapeColor.rgb * shapeColor.a;
 
   // Blend premultiplied colors and alphas based on coverage
   let outRgb = mix(bgPremult, shapePremult, alpha);
-  let outAlpha = mix(bgColor.a, shapeColor.a, alpha);
+  let outAlpha = mix(bgAlpha, shapeColor.a, alpha);
 
   return vec4f(outRgb, outAlpha);
 }
