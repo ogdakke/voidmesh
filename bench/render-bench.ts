@@ -417,11 +417,7 @@ async function getRenderer(): Promise<InfiniteCanvasRenderer> {
 }
 
 async function collectBenchMetadata(): Promise<BenchMetadata> {
-  const gpu = navigator.gpu as
-    | (GPU & {
-        wgslLanguageFeatures?: Set<string>;
-      })
-    | undefined;
+  const gpu = navigator.gpu;
   const adapter = gpu ? await navigator.gpu.requestAdapter() : null;
   const wgslLanguageFeatures = gpu?.wgslLanguageFeatures
     ? [...gpu.wgslLanguageFeatures.values()].sort()
