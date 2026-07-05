@@ -44,6 +44,7 @@ import {
 import { Button } from "../ui/button/index.tsx";
 import { DropZone } from "../ui/dropzone/index.tsx";
 import { UndoRedoButtons } from "./undo-redo.tsx";
+import { ViewportLensControls } from "./viewport-lens-controls.tsx";
 import "./infinite-canvas.css";
 
 import DesktopSettings from "#components/settings/settings.desktop.tsx";
@@ -908,6 +909,7 @@ export function InfiniteCanvas() {
 
           {!isMobile && (
             <>
+              <ViewportLensControls renderer={renderer} />
               <div className="infinite-canvas__top-left">
                 <DesktopSettings />
               </div>
