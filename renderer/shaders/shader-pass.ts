@@ -27,6 +27,8 @@ export interface ShaderContext {
   intermediateFormat: GPUTextureFormat;
   /** Whether the GPU is rendering in Display P3 color space */
   supportsP3: boolean;
+  /** Whether WGSL `var<immediate>` and pass.setImmediates are available. */
+  supportsImmediates: boolean;
 }
 
 export interface ExternalTextureSource {
