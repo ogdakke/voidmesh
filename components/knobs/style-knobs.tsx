@@ -90,48 +90,6 @@ const DITHERING_ITEMS: MobileStyleItem<DitheringKind>[] = [
     shortLabel: "Blue",
     icon: () => <span>B</span>,
   },
-  {
-    value: DitheringKind.floydSteinberg,
-    label: "Floyd-Steinberg",
-    shortLabel: "F-S",
-    icon: () => <span>F</span>,
-  },
-  {
-    value: DitheringKind.atkinson,
-    label: "Atkinson",
-    shortLabel: "Atkin",
-    icon: () => <span>A</span>,
-  },
-  {
-    value: DitheringKind.jarvisJudiceNinke,
-    label: "Jarvis-Judice-Ninke",
-    shortLabel: "J-J-N",
-    icon: () => <span>J</span>,
-  },
-  {
-    value: DitheringKind.stucki,
-    label: "Stucki",
-    shortLabel: "Stucki",
-    icon: () => <span>S</span>,
-  },
-  {
-    value: DitheringKind.burkes,
-    label: "Burkes",
-    shortLabel: "Burkes",
-    icon: () => <span>B</span>,
-  },
-  {
-    value: DitheringKind.sierra,
-    label: "Sierra",
-    shortLabel: "Sierra",
-    icon: () => <span>S</span>,
-  },
-  {
-    value: DitheringKind.sierraLite,
-    label: "Sierra Lite",
-    shortLabel: "Lite",
-    icon: () => <span>S</span>,
-  },
 ];
 
 // ============================================================================
