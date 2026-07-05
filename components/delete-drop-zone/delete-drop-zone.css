@@ -1,9 +1,16 @@
 .mobile-delete-drop-zone {
   --_size: calc(10 * var(--spacing));
+  --_spring-duration: 420ms;
+  --_spring-ease: cubic-bezier(0.18, 1.32, 0.36, 1);
+  position: absolute;
+  left: 50%;
+  bottom: calc(
+    env(safe-area-inset-bottom, 0) + var(--bottom-bar-height, 56px) + var(--spacing-2) + 5px
+  );
+  z-index: 0;
   width: var(--_size);
   height: var(--_size);
   border-radius: 50%;
-  margin-inline: auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -12,14 +19,21 @@
   color: var(--color);
   backdrop-filter: var(--floating-backdrop);
   opacity: 0;
-  scale: 0.86;
+  scale: 0.36;
+  translate: -50% 100%;
   pointer-events: none;
   transition:
     opacity 200ms ease-out,
-    scale 200ms ease-out,
+    scale var(--_spring-duration) var(--_spring-ease),
+    translate var(--_spring-duration) var(--_spring-ease),
     background-color 150ms ease-out,
     filter 200ms ease-out;
-  margin-block-end: var(--spacing-2);
+
+  @supports (transition-timing-function: linear(0, 1)) {
+    /* stiffness: high, damping: medium-high — quick weighted lift with slight overshoot */
+    /* prettier-ignore */
+    --_spring-ease: linear(0, 0.007, 0.03 2.1%, 0.119 4.6%, 0.468 10.6%, 0.699 15.2%, 0.865 20%, 0.972 25.2%, 1.033 30.6%, 1.059 36.4%, 1.061 42.4%, 1.044 49.1%, 1.022 56.2%, 1.006 64.1%, 0.998 72.3%, 0.997 81.4%, 1.001);
+  }
 
   svg {
     width: 2rem;
@@ -29,6 +43,7 @@
   &[data-drag-active] {
     opacity: 1;
     scale: 1;
+    translate: -50% 0;
     filter: drop-shadow(var(--popover-shadow)) blur(0px);
   }
 

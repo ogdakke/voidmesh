@@ -75,6 +75,8 @@ function MobileFloat() {
   const debugMode = useDebugMode();
   const palette = useParamValue("palette", null);
   const bottomBarDisabled = multiSelectMode || selectedEntityIds.size === 0 || isFullscreen;
+  const hideMobileControls = isFullscreen || actionLayerActive || entityDragActive;
+  const hideMediaControls = hideMobileControls || multiSelectMode;
 
   const propsMapByItem: Record<BarItem, { disabled: boolean }> = {
     "adjustments and post-processing": {
@@ -95,14 +97,10 @@ function MobileFloat() {
     <div className="mobile-float" data-fullscreen={isFullscreen || undefined}>
       <MobileActionLayer />
       <DeleteDropZone />
-      {!isFullscreen && !multiSelectMode && !actionLayerActive && !entityDragActive && (
-        <MediaControls />
-      )}
-      {!isFullscreen && (
-        <div className="mobile-controls-container">
-          <MobileControls activeItem={activeItem} />
-        </div>
-      )}
+      <MediaControls hidden={hideMediaControls} />
+      <div className="mobile-controls-container" hidden={hideMobileControls}>
+        <MobileControls activeItem={activeItem} />
+      </div>
 
       <MobileBottomBar
         items={items}

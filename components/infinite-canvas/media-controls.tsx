@@ -122,7 +122,7 @@ function MediaSlider({ actions }: { actions: MediaControlsActionsOnly }) {
  * Child components (PlayPauseButton, MediaSlider, PlaybackTimeDisplay) handle
  * their own subscriptions to playback time and use frozen state for exit animation.
  */
-export function MediaControls() {
+export function MediaControls({ hidden = false }: { hidden?: boolean }) {
   const selectedEntity = useSelectedEntity();
   const actions = useMediaControlsActions(selectedEntity);
 
@@ -130,7 +130,7 @@ export function MediaControls() {
   const isVisible = !actions.isIdle();
 
   return (
-    <div className="media-controls" hidden={!isVisible}>
+    <div className="media-controls" hidden={hidden || !isVisible}>
       <div className="media-controls__container">
         <PlayPauseButton actions={actions} />
         <MediaSlider actions={actions} />

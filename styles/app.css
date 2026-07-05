@@ -104,6 +104,8 @@
   }
 
   .mobile-controls-container {
+    --mobile-controls-transition-in: 180ms;
+    --mobile-controls-transition-out: 140ms;
     overflow-y: auto;
     height: var(--mobile-controls-h, 160px);
     position: relative;
@@ -111,6 +113,32 @@
     flex-direction: column;
     justify-content: space-between;
     pointer-events: none;
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    transition:
+      opacity var(--mobile-controls-transition-in) ease-out,
+      transform var(--mobile-controls-transition-in) ease-out,
+      display var(--mobile-controls-transition-in) ease-out allow-discrete;
+
+    @starting-style {
+      opacity: 0;
+      transform: translateY(var(--spacing-3)) scale(0.96);
+    }
+
+    &[hidden] {
+      display: none;
+      opacity: 0;
+      transform: translateY(var(--spacing-3)) scale(0.96);
+      transition:
+        opacity var(--mobile-controls-transition-out) ease-in,
+        transform var(--mobile-controls-transition-out) ease-in,
+        display var(--mobile-controls-transition-out) ease-in allow-discrete;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      --mobile-controls-transition-in: 0ms;
+      --mobile-controls-transition-out: 0ms;
+    }
   }
 
   .mobile-controls-container > *,
