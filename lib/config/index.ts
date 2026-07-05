@@ -413,6 +413,21 @@ export interface TouchConfig {
   };
 }
 
+export interface AlphaHitTestingConfig {
+  /** Enables alpha-aware entity picking for pointer/touch hit tests. */
+  enabled: boolean;
+  /** Source-media pixel size of each alpha occupancy cell. */
+  cellSizePx: number;
+  /** Pixel alpha byte threshold. Values above this are counted as opaque. */
+  alphaThreshold: number;
+  /** Minimum opaque-pixel coverage for a cell to receive hits. */
+  coverageThreshold: number;
+  /** Renders the derived cell grid over entities. */
+  debug: boolean;
+  /** Avoids accidental debug rendering explosions on very large media. */
+  debugMaxCellsPerEntity: number;
+}
+
 export const DEFAULT_GRID_CONFIG: GridConfig = {
   gridSize: 25,
   dotSize: 1.5,
@@ -502,6 +517,16 @@ export const config = {
       /** Duration for fit-to-view (ms) */
       fitToViewDuration: 300,
     },
+  },
+  hitTesting: {
+    alphaGrid: {
+      enabled: true,
+      cellSizePx: 16,
+      alphaThreshold: 8,
+      coverageThreshold: 0.01,
+      debug: false,
+      debugMaxCellsPerEntity: 20_000,
+    } satisfies AlphaHitTestingConfig,
   },
   supports: {
     /** Supported video MIME types */

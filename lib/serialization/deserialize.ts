@@ -4,7 +4,8 @@ import { canvasStore } from "#engine";
 import { config } from "#config";
 import { deepMerge } from "../deep-merge.ts";
 import { decodeGif } from "../gif-decoder.ts";
-import { rasterizeSvg } from "../media-loader.ts";
+import { probeVideoAlphaMode, rasterizeSvg } from "../media-loader.ts";
+import { createAlphaHitGrid } from "../alpha-hit-testing.ts";
 import { paletteStore } from "../palette-store.ts";
 import { logger } from "../client.logger.ts";
 import { bytesToImageBitmap, bytesToVideoElement } from "./media.ts";
@@ -418,7 +419,12 @@ async function deserializeEntity(
       return {
         ...base,
         imageBitmap: bitmap,
-        mediaSource: { type: "image" as const, imageBitmap: bitmap, blob: imageBlob },
+        mediaSource: {
+          type: "image" as const,
+          imageBitmap: bitmap,
+          blob: imageBlob,
+          alphaHitGrid: createAlphaHitGrid(bitmap, config.hitTesting.alphaGrid),
+        },
       };
     }
 
@@ -469,6 +475,7 @@ async function deserializeEntity(
         serialized.hasAudio ??
         timedOutSeekMetadata?.hasAudio ??
         (await import("#lib/audio-demux.ts").then(({ hasAudioTrack }) => hasAudioTrack(videoBlob)));
+      const alphaMode = await probeVideoAlphaMode(videoBlob);
 
       return {
         ...base,
@@ -480,6 +487,7 @@ async function deserializeEntity(
           duration,
           fps: serialized.fps,
           hasAudio,
+          alphaMode,
         },
         playback,
       };
@@ -491,15 +499,19 @@ async function deserializeEntity(
 
       const blob = new Blob([bytes.slice()], { type: "image/gif" });
       const { frames, duration, fps } = await decodeGif(blob);
+      const framesWithAlpha = frames.map((frame) => ({
+        ...frame,
+        alphaHitGrid: createAlphaHitGrid(frame.bitmap, config.hitTesting.alphaGrid),
+      }));
 
-      if (frames.length === 0) throw new Error("GIF has no frames");
+      if (framesWithAlpha.length === 0) throw new Error("GIF has no frames");
 
       return {
         ...base,
-        imageBitmap: frames[0]!.bitmap,
+        imageBitmap: framesWithAlpha[0]!.bitmap,
         mediaSource: {
           type: "gif" as const,
-          frames,
+          frames: framesWithAlpha,
           duration,
           fps,
           blob,
@@ -519,7 +531,11 @@ async function deserializeEntity(
       return {
         ...base,
         imageBitmap: bitmap,
-        mediaSource: { type: "svg" as const, blob },
+        mediaSource: {
+          type: "svg" as const,
+          blob,
+          alphaHitGrid: createAlphaHitGrid(bitmap, config.hitTesting.alphaGrid),
+        },
       };
     }
 

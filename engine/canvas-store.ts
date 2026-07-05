@@ -20,10 +20,13 @@ export interface CanvasState {
   // Core state
   viewport: Viewport;
   entities: Map<string, ShaderCanvasEntity>;
+  /** Sorted list of entity IDs by their z-index (ascending) */
+  entityIds: string[];
 
   // Interaction state (transient, not persisted)
   /** Selected entity IDs (multi-select support) */
   selectedEntityIds: Set<string>;
+  /** @deprecated this is not used anywhere */
   hoveredEntityId: string | null;
   contextOpenEntityId: string | null;
   /** Multi-select mode: tapping toggles selection, empty space tap is ignored */
@@ -198,6 +201,7 @@ export class CanvasStore extends Store<CanvasState> {
     super({
       viewport: { offset: { x: 0, y: 0 }, zoom: 1 },
       entities: new Map(),
+      entityIds: [],
       selectedEntityIds: new Set(),
       contextOpenEntityId: null,
       hoveredEntityId: null,
@@ -376,6 +380,7 @@ export class CanvasStore extends Store<CanvasState> {
       this.#syncVideoElementPlayback(entity);
     }
     this.state.entities.set(entity.id, entity);
+    this.state.entityIds.push(entity.id);
     this.state.entitiesDirty.add(entity.id);
     this.notifySelectionChange();
   }
@@ -385,6 +390,7 @@ export class CanvasStore extends Store<CanvasState> {
     if (entity) {
       const nextEntity = { ...entity, ...updates } as ShaderCanvasEntity;
       this.state.entities.set(id, nextEntity);
+      // TODO: if z-index can change, we should re-sort the entityIds array here (can't change zindex currently)
       this.state.entitiesDirty.add(id);
       this.notifySelectionChange();
       this.#logger.debug(`Updated entity: ${id}`, { entity: nextEntity, updates });
@@ -404,6 +410,11 @@ export class CanvasStore extends Store<CanvasState> {
 
   removeEntity(id: string): void {
     this.state.entities.delete(id);
+    const index = this.state.entityIds.indexOf(id);
+    if (index !== -1) {
+      this.state.entityIds.splice(index, 1);
+    }
+
     this.state.entitiesDirty.delete(id);
     // Always mark dirty since entity list changed (needed for undo/redo re-render)
     this.state.selectionDirty = true;

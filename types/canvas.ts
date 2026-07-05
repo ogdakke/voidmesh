@@ -376,6 +376,8 @@ export interface GifFrame {
   delay: number;
   /** Cumulative timestamp in milliseconds (for binary search lookup) */
   timestamp: number;
+  /** Derived alpha occupancy grid for pointer hit testing */
+  alphaHitGrid?: AlphaHitGrid;
 }
 
 export const MediaType = createEnum({
@@ -392,7 +394,23 @@ export type MediaSourceImage = {
   imageBitmap: ImageBitmap;
   /** Original source data for lossless duplication */
   blob: Blob;
+  /** Derived alpha occupancy grid for pointer hit testing */
+  alphaHitGrid?: AlphaHitGrid;
 };
+export type MediaAlphaMode = "none" | "supported" | "unknown";
+
+export interface AlphaHitGrid {
+  width: number;
+  height: number;
+  cellSize: number;
+  cols: number;
+  rows: number;
+  /** One byte per cell: 1 = opaque enough to receive hits, 0 = transparent. */
+  cells: Uint8Array;
+  hasTransparentCells: boolean;
+  hasOpaqueCells: boolean;
+}
+
 export type MediaSourceVideo = {
   type: typeof MediaType.video;
   videoElement: HTMLVideoElement;
@@ -402,6 +420,8 @@ export type MediaSourceVideo = {
   fps: number | null;
   /** Whether the source video contains an audio track */
   hasAudio: boolean;
+  /** Whether decoded video samples can carry alpha. */
+  alphaMode: MediaAlphaMode;
 };
 export type MediaSourceGif = {
   type: typeof MediaType.gif;
@@ -415,6 +435,8 @@ export type MediaSourceSvg = {
   type: typeof MediaType.svg;
   /** Original SVG data for lossless serialization */
   blob: Blob;
+  /** Derived alpha occupancy grid for pointer hit testing */
+  alphaHitGrid?: AlphaHitGrid;
 };
 
 /** Media source for an entity - an image, video, animated GIF, or SVG */
