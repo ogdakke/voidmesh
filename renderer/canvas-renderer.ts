@@ -37,6 +37,8 @@ export interface ViewportLensDistortionConfig {
   falloff: number;
   dispersion: number;
   scale: number;
+  highlight: number;
+  gloss: number;
 }
 
 interface CompositionDrawItem {
@@ -212,12 +214,14 @@ export class InfiniteCanvasRenderer {
     falloff: 1.8,
     dispersion: 0.25,
     scale: 1,
+    highlight: 0.15,
+    gloss: 0.5,
   };
   #viewportLensPipeline: GPURenderPipeline | null = null;
   #viewportLensBindGroupLayout: GPUBindGroupLayout | null = null;
   #viewportLensUniformBuffer: GPUBuffer | null = null;
   #viewportLensSampler: GPUSampler | null = null;
-  #viewportLensUniformData = new ArrayBuffer(32);
+  #viewportLensUniformData = new ArrayBuffer(48);
   #viewportLensFloatView = new Float32Array(this.#viewportLensUniformData);
   #viewportLensTexture: { width: number; height: number; texture: GPUTexture } | null = null;
 
@@ -921,7 +925,11 @@ export class InfiniteCanvasRenderer {
     v[4] = lens.falloff;
     v[5] = lens.dispersion;
     v[6] = lens.scale;
-    v[7] = 0;
+    v[7] = lens.highlight;
+    v[8] = lens.gloss;
+    v[9] = 0;
+    v[10] = 0;
+    v[11] = 0;
     this.#device!.queue.writeBuffer(
       this.#viewportLensUniformBuffer,
       0,

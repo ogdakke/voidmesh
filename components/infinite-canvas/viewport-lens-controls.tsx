@@ -1,4 +1,4 @@
-import { useEffect, useState, type PointerEvent } from "react";
+import { useState, type PointerEvent } from "react";
 import { canvasStore } from "#engine";
 import type {
   InfiniteCanvasRenderer,
@@ -135,6 +135,26 @@ export function ViewportLensControls({ renderer }: { renderer: InfiniteCanvasRen
         value={lensConfig.scale}
         showValue
         onValueChange={(value) => updateLensConfig({ scale: value })}
+      />
+      <Slider
+        name="viewport-lens-highlight"
+        label="Highlight"
+        min={0}
+        max={1}
+        step={0.01}
+        value={lensConfig.highlight}
+        showValue
+        onValueChange={(value) => updateLensConfig({ highlight: value })}
+      />
+      <Slider
+        name="viewport-lens-gloss"
+        label="Gloss"
+        min={0}
+        max={1}
+        step={0.01}
+        value={lensConfig.gloss}
+        showValue
+        onValueChange={(value) => updateLensConfig({ gloss: value })}
       />
     </section>
   );

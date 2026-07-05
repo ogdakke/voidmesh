@@ -5,6 +5,8 @@ struct LensUniforms {
     falloff: f32,
     dispersion: f32,
     scale: f32,
+    highlight: f32,
+    gloss: f32,
     _pad: f32,
 }
 
@@ -86,7 +88,11 @@ fn warpedUv(uv: vec2f, channelOffset: f32) -> vec2f {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-    let edge = edgeMask(in.uv, lens.resolution.x / max(lens.resolution.y, 1.0));
+    let aspect = lens.resolution.x / max(lens.resolution.y, 1.0);
+    let fromCenter = (in.uv - vec2f(0.5)) * vec2f(aspect, 1.0);
+    let halfSize = vec2f(0.5 * aspect, 0.5);
+    let power = lensSuperellipsePower();
+    let edge = edgeMaskFromCenter(fromCenter, halfSize, power);
     let dispersion = lens.dispersion * edge;
 
     let uvR = warpedUv(in.uv, dispersion);
@@ -98,5 +104,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     let b = textureSample(inputTexture, inputSampler, uvB).b;
 
     let vignette = 1.0 - edge * lens.strength * 0.04;
-    return vec4f(vec3f(r, gSample.g, b) * vignette, gSample.a);
+    var color = vec3f(r, gSample.g, b) * vignette;
+
+    let normal2 = superellipseNormal(fromCenter, halfSize, power);
+    let surfaceNormal = normalize(vec3f(-normal2 * edge * lens.strength * 0.75, 1.0));
+    let lightDirection = normalize(vec3f(-0.38, -0.62, 0.9));
+    let glossPower = mix(8.0, 96.0, clamp(lens.gloss, 0.0, 1.0));
+    let specular = pow(max(dot(surfaceNormal, lightDirection), 0.0), glossPower) * edge * edge;
+    let rim = pow(edge, 2.7) * 0.18;
+    let highlight = clamp(lens.highlight, 0.0, 1.0) * (rim + specular * 0.75);
+
+    let uvNormal = normal2 / vec2f(aspect, 1.0);
+    let nearUv1 = clamp(uvG - uvNormal * edge * 0.018, vec2f(0.0), vec2f(1.0));
+    let nearUv2 = clamp(uvG - uvNormal * edge * 0.042, vec2f(0.0), vec2f(1.0));
+    let localRadiance = (gSample.rgb + textureSample(inputTexture, inputSampler, nearUv1).rgb + textureSample(inputTexture, inputSampler, nearUv2).rgb) / 3.0;
+    let radianceLuma = dot(localRadiance, vec3f(0.2126, 0.7152, 0.0722));
+    let radianceColor = mix(localRadiance, sqrt(clamp(localRadiance, vec3f(0.0), vec3f(1.0))), 0.45);
+    color += radianceColor * highlight * (0.35 + radianceLuma * 0.9);
+
+    return vec4f(color, gSample.a);
 }
