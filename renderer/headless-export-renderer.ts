@@ -177,6 +177,7 @@ export class HeadlessExportRenderer {
     try {
       return await consume(encoder, outputTexture);
     } finally {
+      this.#entityShaderRuntime.flushTextureReleases();
       sourceTexture.destroy();
       this.#texturePool.release(outputTexture, width, height, outputUsage);
       this.#texturePool.nextFrame();
@@ -230,7 +231,7 @@ export class HeadlessExportRenderer {
 
     this.#entityShaderRuntime.encode({
       entity,
-      sourceTexture,
+      source: { kind: "texture", texture: sourceTexture },
       outputTexture,
       encoder,
       width,

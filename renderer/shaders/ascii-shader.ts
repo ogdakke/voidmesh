@@ -1,7 +1,7 @@
 import { AsciiKind } from "#types/canvas.ts";
 import type { EffectRenderEntity } from "../effect-render-entity.ts";
 import asciiShaderSource from "../ascii.wgsl?raw";
-import { ShaderPass } from "./shader-pass.ts";
+import { type ExternalTextureSource, ShaderPass } from "./shader-pass.ts";
 
 // Map AsciiKind to uniform index
 // Matches asciiKind values in ascii.wgsl: 0=standard, 1=extended, 2=binary, 3=minimal
@@ -30,6 +30,8 @@ export class AsciiShader extends ShaderPass {
     await this.#loadAtlas();
     this.bindGroupLayout = this.createBindGroupLayout();
     this.pipeline = this.createPipeline();
+    this.externalBindGroupLayout = this.createExternalBindGroupLayout();
+    this.externalPipeline = this.createExternalPipeline();
   }
 
   async #loadAtlas(): Promise<void> {
@@ -111,14 +113,67 @@ export class AsciiShader extends ShaderPass {
     });
   }
 
+  protected override createExternalBindGroupLayout(): GPUBindGroupLayout {
+    return this.ctx.device.createBindGroupLayout({
+      label: "ASCII shader external bind group layout",
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.FRAGMENT,
+          buffer: { type: "uniform" },
+        },
+        {
+          binding: 1,
+          visibility: GPUShaderStage.FRAGMENT,
+          externalTexture: {},
+        },
+        {
+          binding: 2,
+          visibility: GPUShaderStage.FRAGMENT,
+          sampler: { type: "filtering" },
+        },
+        {
+          binding: 3,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: "float" },
+        },
+        {
+          binding: 4,
+          visibility: GPUShaderStage.FRAGMENT,
+          sampler: { type: "filtering" },
+        },
+      ],
+    });
+  }
+
   /** Override: includes atlas texture and sampler at bindings 3, 4 */
-  override createBindGroup(sourceTextureView: GPUTextureView): GPUBindGroup {
+  override createBindGroup(
+    sourceTextureView: GPUTextureView,
+    uniformBuffer: GPUBuffer,
+  ): GPUBindGroup {
     return this.ctx.device.createBindGroup({
       label: "ASCII shader bind group",
       layout: this.bindGroupLayout!,
       entries: [
-        { binding: 0, resource: { buffer: this.ctx.uniformBuffer } },
+        { binding: 0, resource: { buffer: uniformBuffer } },
         { binding: 1, resource: sourceTextureView },
+        { binding: 2, resource: this.ctx.sampler },
+        { binding: 3, resource: this.#atlasTexture!.createView() },
+        { binding: 4, resource: this.#atlasSampler! },
+      ],
+    });
+  }
+
+  override createExternalBindGroup(
+    source: ExternalTextureSource,
+    uniformBuffer: GPUBuffer,
+  ): GPUBindGroup {
+    return this.ctx.device.createBindGroup({
+      label: "ASCII shader external bind group",
+      layout: this.externalBindGroupLayout!,
+      entries: [
+        { binding: 0, resource: { buffer: uniformBuffer } },
+        { binding: 1, resource: source.texture },
         { binding: 2, resource: this.ctx.sampler },
         { binding: 3, resource: this.#atlasTexture!.createView() },
         { binding: 4, resource: this.#atlasSampler! },
@@ -141,6 +196,23 @@ export class AsciiShader extends ShaderPass {
       return;
     }
     super.execute(entity, sourceTexture, outputTexture, encoder);
+  }
+
+  override executeExternal(
+    entity: EffectRenderEntity,
+    source: ExternalTextureSource,
+    outputTexture: GPUTexture,
+    encoder: GPUCommandEncoder,
+  ): void {
+    if (!this.#atlasTexture || !this.#atlasSampler) {
+      const errorMsg = "ASCII atlas not loaded";
+      if (!this.#reportedErrors.has(entity.id)) {
+        this.#reportedErrors.add(entity.id);
+        this.onEntityError?.(entity.id, errorMsg);
+      }
+      return;
+    }
+    super.executeExternal(entity, source, outputTexture, encoder);
   }
 
   /** Clear error state for an entity (e.g., when entity is removed) */

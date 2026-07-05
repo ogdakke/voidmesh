@@ -147,13 +147,6 @@ export const DITHERING_KIND_OPTIONS = [
   { value: DitheringKind.bayer8x8, label: "Bayer 8x8" },
   { value: DitheringKind.whiteNoise, label: "White Noise" },
   { value: DitheringKind.blueNoise, label: "Blue Noise" },
-  { value: DitheringKind.floydSteinberg, label: "Floyd-Steinberg" },
-  { value: DitheringKind.atkinson, label: "Atkinson" },
-  { value: DitheringKind.jarvisJudiceNinke, label: "Jarvis-Judice-Ninke" },
-  { value: DitheringKind.stucki, label: "Stucki" },
-  { value: DitheringKind.burkes, label: "Burkes" },
-  { value: DitheringKind.sierra, label: "Sierra" },
-  { value: DitheringKind.sierraLite, label: "Sierra Lite" },
 ];
 
 /** Check if a dithering kind requires compute shader (error diffusion) */

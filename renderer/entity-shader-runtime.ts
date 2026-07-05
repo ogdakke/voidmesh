@@ -13,6 +13,7 @@ import { GlitchShader } from "./shaders/glitch-shader.ts";
 import { HalftoneShader } from "./shaders/halftone-shader.ts";
 import { MeltShader } from "./shaders/melt-shader.ts";
 import type { ShaderContext } from "./shaders/shader-pass.ts";
+import type { ExternalTextureSource } from "./shaders/shader-pass.ts";
 import { ShaderRegistry } from "./shaders/shader-registry.ts";
 import type { TexturePool } from "./texture-pool.ts";
 
@@ -23,6 +24,10 @@ export interface EntityShaderRuntimeOptions {
   onEntityError?: (entityId: string, error: string) => void;
 }
 
+export type EntityShaderSource =
+  | { kind: "texture"; texture: GPUTexture }
+  | ({ kind: "external" } & ExternalTextureSource);
+
 export class EntityShaderRuntime {
   #device: GPUDevice;
   #colorConfig: GpuColorConfig;
@@ -30,13 +35,18 @@ export class EntityShaderRuntime {
   #shaderRegistry = new ShaderRegistry();
   #processingPipeline: ProcessingPipeline;
   #passthroughCopyPass: CopyPass;
-  #uniformBuffer: GPUBuffer;
   #sampler: GPUSampler;
   #uniformData = new ArrayBuffer(config.rendering.ditheringUniformSize);
   #floatView = new Float32Array(this.#uniformData);
   #uintView = new Uint32Array(this.#uniformData);
   #sortedPaletteCache: { original: readonly RGBA[]; reversed: boolean; sorted: RGBA[] } | null =
     null;
+  #pendingTextureReleases: Array<{
+    texture: GPUTexture;
+    width: number;
+    height: number;
+    usage: GPUTextureUsageFlags;
+  }> = [];
   #shaderContext: ShaderContext;
   #initialized = false;
   #onEntityError?: (entityId: string, error: string) => void;
@@ -46,11 +56,6 @@ export class EntityShaderRuntime {
     this.#colorConfig = options.colorConfig;
     this.#texturePool = options.texturePool;
     this.#onEntityError = options.onEntityError;
-    this.#uniformBuffer = this.#device.createBuffer({
-      label: "Entity shader uniforms",
-      size: config.rendering.ditheringUniformSize,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
     this.#sampler = this.#device.createSampler({
       label: "Entity shader sampler",
       magFilter: "linear",
@@ -60,13 +65,15 @@ export class EntityShaderRuntime {
     });
     this.#shaderContext = {
       device: this.#device,
-      uniformBuffer: this.#uniformBuffer,
       uniformData: this.#uniformData,
       floatView: this.#floatView,
       uintView: this.#uintView,
       sampler: this.#sampler,
       sortedPaletteCache: this.#sortedPaletteCache,
       texturePool: this.#texturePool,
+      releaseTexture: (texture, width, height, usage) => {
+        this.#releaseTexture(texture, width, height, usage);
+      },
       intermediateFormat: this.#colorConfig.intermediateFormat,
       supportsP3: this.#colorConfig.supportsP3,
     };
@@ -113,16 +120,18 @@ export class EntityShaderRuntime {
 
   encode(params: {
     entity: EffectRenderEntity;
-    sourceTexture: GPUTexture;
+    source: EntityShaderSource;
     outputTexture: GPUTexture;
     encoder: GPUCommandEncoder;
     width: number;
     height: number;
     respectShowOriginal: boolean;
   }): void {
-    const { entity, sourceTexture, outputTexture, encoder, width, height } = params;
+    const { entity, source, outputTexture, encoder, width, height } = params;
 
     if (params.respectShowOriginal && entity.shaderParams.showOriginal) {
+      if (source.kind === "external") return;
+      const sourceTexture = source.texture;
       this.#passthroughCopyPass.encode(encoder, sourceTexture, outputTexture);
       return;
     }
@@ -135,7 +144,7 @@ export class EntityShaderRuntime {
       GPUTextureUsage.RENDER_ATTACHMENT |
       GPUTextureUsage.COPY_SRC;
 
-    let shaderSourceTexture = sourceTexture;
+    let shaderSource = source;
     let blurOutputTexture: GPUTexture | null = null;
     let adjustmentsOutputTexture: GPUTexture | null = null;
 
@@ -146,8 +155,12 @@ export class EntityShaderRuntime {
         preProcessUsage,
         "Blur output texture",
       );
-      this.#processingPipeline.applyBlur(entity, sourceTexture, blurOutputTexture, encoder);
-      shaderSourceTexture = blurOutputTexture;
+      if (source.kind === "external") {
+        this.#processingPipeline.applyBlurExternal(entity, source, blurOutputTexture, encoder);
+      } else {
+        this.#processingPipeline.applyBlur(entity, source.texture, blurOutputTexture, encoder);
+      }
+      shaderSource = { kind: "texture", texture: blurOutputTexture };
     }
 
     if (needsAdjustments) {
@@ -157,13 +170,22 @@ export class EntityShaderRuntime {
         preProcessUsage,
         "Adjustments output texture",
       );
-      this.#processingPipeline.applyAdjustments(
-        entity,
-        shaderSourceTexture,
-        adjustmentsOutputTexture,
-        encoder,
-      );
-      shaderSourceTexture = adjustmentsOutputTexture;
+      if (shaderSource.kind === "external") {
+        this.#processingPipeline.applyAdjustmentsExternal(
+          entity,
+          shaderSource,
+          adjustmentsOutputTexture,
+          encoder,
+        );
+      } else {
+        this.#processingPipeline.applyAdjustments(
+          entity,
+          shaderSource.texture,
+          adjustmentsOutputTexture,
+          encoder,
+        );
+      }
+      shaderSource = { kind: "texture", texture: adjustmentsOutputTexture };
     }
 
     const postProcessUsage =
@@ -183,7 +205,21 @@ export class EntityShaderRuntime {
       mainShaderOutputTexture = postProcessIntermediateTexture;
     }
 
-    this.#shaderRegistry.applyShader(entity, shaderSourceTexture, mainShaderOutputTexture, encoder);
+    if (shaderSource.kind === "external") {
+      this.#shaderRegistry.applyShaderExternal(
+        entity,
+        shaderSource,
+        mainShaderOutputTexture,
+        encoder,
+      );
+    } else {
+      this.#shaderRegistry.applyShader(
+        entity,
+        shaderSource.texture,
+        mainShaderOutputTexture,
+        encoder,
+      );
+    }
 
     if (blurOutputTexture) {
       this.#releaseTexture(blurOutputTexture, width, height, preProcessUsage);
@@ -224,11 +260,18 @@ export class EntityShaderRuntime {
     height: number,
     usage: GPUTextureUsageFlags,
   ): void {
-    if (this.#texturePool) {
-      this.#texturePool.release(texture, width, height, usage);
-    } else {
-      texture.destroy();
+    this.#pendingTextureReleases.push({ texture, width, height, usage });
+  }
+
+  flushTextureReleases(): void {
+    for (const release of this.#pendingTextureReleases) {
+      if (this.#texturePool) {
+        this.#texturePool.release(release.texture, release.width, release.height, release.usage);
+      } else {
+        release.texture.destroy();
+      }
     }
+    this.#pendingTextureReleases = [];
   }
 
   needsContinuousRender(entity: EffectRenderEntity): boolean {
@@ -240,6 +283,7 @@ export class EntityShaderRuntime {
       | DitheringShader
       | undefined;
     ditheringShader?.removeEntity(entityId);
+    this.#processingPipeline.removeEntity(entityId);
     this.removeGlassEntity(entityId);
   }
 
@@ -249,8 +293,8 @@ export class EntityShaderRuntime {
   }
 
   destroy(): void {
+    this.flushTextureReleases();
     this.#shaderRegistry.destroy();
     this.#processingPipeline.destroy();
-    this.#uniformBuffer.destroy();
   }
 }
