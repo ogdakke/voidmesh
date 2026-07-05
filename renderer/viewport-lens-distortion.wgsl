@@ -5,8 +5,8 @@ struct LensUniforms {
     falloff: f32,
     dispersion: f32,
     scale: f32,
-    highlight: f32,
-    gloss: f32,
+    reflectionIntensity: f32,
+    reflectionFocus: f32,
     _pad: f32,
 }
 
@@ -109,18 +109,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     let normal2 = superellipseNormal(fromCenter, halfSize, power);
     let surfaceNormal = normalize(vec3f(-normal2 * edge * lens.strength * 0.75, 1.0));
     let lightDirection = normalize(vec3f(-0.38, -0.62, 0.9));
-    let glossPower = mix(8.0, 96.0, clamp(lens.gloss, 0.0, 1.0));
-    let specular = pow(max(dot(surfaceNormal, lightDirection), 0.0), glossPower) * edge * edge;
-    let rim = pow(edge, 2.7) * 0.18;
-    let highlight = clamp(lens.highlight, 0.0, 1.0) * (rim + specular * 0.75);
+    let reflectionPower = mix(8.0, 96.0, clamp(lens.reflectionFocus, 0.0, 1.0));
+    let specular = pow(max(dot(surfaceNormal, lightDirection), 0.0), reflectionPower) * edge * edge;
+    let reflectionMask = clamp(lens.reflectionIntensity, 0.0, 1.0) * pow(edge, 2.35) * (0.18 + specular * 0.85);
 
     let uvNormal = normal2 / vec2f(aspect, 1.0);
-    let nearUv1 = clamp(uvG - uvNormal * edge * 0.018, vec2f(0.0), vec2f(1.0));
-    let nearUv2 = clamp(uvG - uvNormal * edge * 0.042, vec2f(0.0), vec2f(1.0));
-    let localRadiance = (gSample.rgb + textureSample(inputTexture, inputSampler, nearUv1).rgb + textureSample(inputTexture, inputSampler, nearUv2).rgb) / 3.0;
+    let nearUv1 = clamp(uvG - uvNormal * edge * 0.075, vec2f(0.0), vec2f(1.0));
+    let nearUv2 = clamp(uvG - uvNormal * edge * 0.15, vec2f(0.0), vec2f(1.0));
+    let nearUv3 = clamp(uvG - uvNormal * edge * 0.3, vec2f(0.0), vec2f(1.0));
+    let localRadiance = (gSample.rgb * 0.55 +
+        textureSample(inputTexture, inputSampler, nearUv1).rgb * 0.85 +
+        textureSample(inputTexture, inputSampler, nearUv2).rgb * 1.1 +
+        textureSample(inputTexture, inputSampler, nearUv3).rgb * 0.75) / 3.25;
     let radianceLuma = dot(localRadiance, vec3f(0.2126, 0.7152, 0.0722));
-    let radianceColor = mix(localRadiance, sqrt(clamp(localRadiance, vec3f(0.0), vec3f(1.0))), 0.45);
-    color += radianceColor * highlight * (0.35 + radianceLuma * 0.9);
+    let brightRolloff = 1.0 - smoothstep(0.62, 1.0, radianceLuma) * 0.42;
+    color += localRadiance * reflectionMask * (radianceLuma * 1.45 * brightRolloff);
 
     return vec4f(color, gSample.a);
 }

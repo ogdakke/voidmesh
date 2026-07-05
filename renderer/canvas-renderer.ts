@@ -37,8 +37,8 @@ export interface ViewportLensDistortionConfig {
   falloff: number;
   dispersion: number;
   scale: number;
-  highlight: number;
-  gloss: number;
+  reflectionIntensity: number;
+  reflectionFocus: number;
 }
 
 interface CompositionDrawItem {
@@ -214,8 +214,8 @@ export class InfiniteCanvasRenderer {
     falloff: 1.8,
     dispersion: 0.25,
     scale: 1,
-    highlight: 0.15,
-    gloss: 0.5,
+    reflectionIntensity: 0.23,
+    reflectionFocus: 0.87,
   };
   #viewportLensPipeline: GPURenderPipeline | null = null;
   #viewportLensBindGroupLayout: GPUBindGroupLayout | null = null;
@@ -925,8 +925,8 @@ export class InfiniteCanvasRenderer {
     v[4] = lens.falloff;
     v[5] = lens.dispersion;
     v[6] = lens.scale;
-    v[7] = lens.highlight;
-    v[8] = lens.gloss;
+    v[7] = lens.reflectionIntensity;
+    v[8] = lens.reflectionFocus;
     v[9] = 0;
     v[10] = 0;
     v[11] = 0;

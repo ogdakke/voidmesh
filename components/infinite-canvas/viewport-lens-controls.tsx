@@ -137,24 +137,24 @@ export function ViewportLensControls({ renderer }: { renderer: InfiniteCanvasRen
         onValueChange={(value) => updateLensConfig({ scale: value })}
       />
       <Slider
-        name="viewport-lens-highlight"
-        label="Highlight"
+        name="viewport-lens-reflection"
+        label="Reflection"
         min={0}
         max={1}
         step={0.01}
-        value={lensConfig.highlight}
+        value={lensConfig.reflectionIntensity}
         showValue
-        onValueChange={(value) => updateLensConfig({ highlight: value })}
+        onValueChange={(value) => updateLensConfig({ reflectionIntensity: value })}
       />
       <Slider
-        name="viewport-lens-gloss"
-        label="Gloss"
+        name="viewport-lens-reflection-focus"
+        label="Focus"
         min={0}
         max={1}
         step={0.01}
-        value={lensConfig.gloss}
+        value={lensConfig.reflectionFocus}
         showValue
-        onValueChange={(value) => updateLensConfig({ gloss: value })}
+        onValueChange={(value) => updateLensConfig({ reflectionFocus: value })}
       />
     </section>
   );
