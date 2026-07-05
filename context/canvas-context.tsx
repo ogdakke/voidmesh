@@ -55,7 +55,7 @@ import {
   resetDuplicatedMediaPlayback,
 } from "#lib/media-duplication.ts";
 import { config, glassKindResets, glitchKindResets } from "#config";
-import { preferences } from "#lib/storage.ts";
+import { preferences } from "#lib/preferences.ts";
 import { paletteStore } from "#lib/palette-store.ts";
 import { analytics } from "#lib/analytics.ts";
 import { logger } from "#lib/client.logger.ts";
