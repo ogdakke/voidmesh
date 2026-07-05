@@ -18,6 +18,7 @@ import { palettes } from "./palettes.config";
 import { DecelerationRate } from "../touch-scroll";
 import { type ActionLayerConfig, actionLayerDefaults } from "./action-layer.config";
 import type { ViewportLensDistortionConfig } from "#renderer/canvas-renderer.ts";
+import { CanvasLensing } from "#types/enums.ts";
 
 // ============================================================================
 // Shader Feature Definitions (for multi-select param intersection)
@@ -519,18 +520,33 @@ export const config = {
       fitToViewDuration: 300,
     },
     lens: {
-      enabled: true,
-      strength: 0.4,
-      radius: 0.07,
-      falloff: 1.8,
-      dispersion: 0.25,
-      scale: 1,
-      reflectionIntensity: 0.23,
-      reflectionFocus: 0.87,
-      occlusion: 0.04,
-      vignetteLight: 0.16,
-      vignetteDark: 0.32,
-    } satisfies ViewportLensDistortionConfig,
+      subtle: {
+        enabled: true,
+        strength: 0.4,
+        radius: 0.07,
+        falloff: 1.8,
+        dispersion: 0.25,
+        scale: 1,
+        reflectionIntensity: 0.23,
+        reflectionFocus: 0.87,
+        occlusion: 0.04,
+        vignetteLight: 0.16,
+        vignetteDark: 0.32,
+      } satisfies ViewportLensDistortionConfig,
+      extreme: {
+        enabled: true,
+        strength: 0.35,
+        radius: 0.33,
+        falloff: 3.55,
+        dispersion: 0.65,
+        scale: 4,
+        reflectionIntensity: 0.16,
+        reflectionFocus: 0,
+        occlusion: 0.03,
+        vignetteLight: 0.22,
+        vignetteDark: 0,
+      } satisfies ViewportLensDistortionConfig,
+    },
   },
   hitTesting: {
     alphaGrid: {
@@ -879,4 +895,14 @@ export function blurParamToKawaseParams(value: number): KawaseBlurParams {
     offsetHigh: 0.5,
     blendFactor: 0,
   };
+}
+
+export function getViewportLensDistortionConfig(
+  canvasLensing: CanvasLensing,
+): ViewportLensDistortionConfig {
+  if (canvasLensing === CanvasLensing.subtle)
+    return { ...config.canvas.lens.subtle, enabled: true };
+  if (canvasLensing === CanvasLensing.extreme)
+    return { ...config.canvas.lens.extreme, enabled: true };
+  return { ...config.canvas.lens.subtle, enabled: false };
 }

@@ -13,3 +13,9 @@ export const enum DrawerSnapPoint {
   medium = 380,
   full = 1,
 }
+
+export const enum CanvasLensing {
+  off = "off",
+  subtle = "subtle",
+  extreme = "extreme",
+}

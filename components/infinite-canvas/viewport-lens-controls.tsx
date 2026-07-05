@@ -8,7 +8,7 @@ import { Checkbox } from "#ui/checkbox/checkbox.tsx";
 import { Slider } from "#ui/slider/index.tsx";
 import "./viewport-lens-controls.css";
 
-export function ViewportLensControls({
+export default function ViewportLensControls({
   renderer,
   darkTheme,
 }: {

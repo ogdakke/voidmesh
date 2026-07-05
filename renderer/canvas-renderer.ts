@@ -1,4 +1,4 @@
-import { config, type GridConfig } from "#config";
+import { config, getViewportLensDistortionConfig, type GridConfig } from "#config";
 import { logger } from "#lib/client.logger.ts";
 import { WlurPass } from "#wlur";
 import { setGpuContext } from "./gpu-color-space.ts";
@@ -29,6 +29,7 @@ import { TexturePool } from "./texture-pool.ts";
 import { resolveWlurOverlayRuntimeConfig, type WlurOverlayConfig } from "./wlur-overlay.ts";
 import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
 import viewportLensDistortionShaderSource from "./viewport-lens-distortion.wgsl?raw";
+import { CanvasLensing } from "#types/enums.ts";
 
 export interface ViewportLensDistortionConfig {
   enabled: boolean;
@@ -210,7 +211,9 @@ export class InfiniteCanvasRenderer {
 
   // Full-canvas viewport lens distortion pass. Runs before mobile wlur overlay so
   // the progressive bottom blur itself stays screen-space rather than warped.
-  #viewportLensConfig: ViewportLensDistortionConfig = config.canvas.lens;
+  #viewportLensConfig: ViewportLensDistortionConfig = getViewportLensDistortionConfig(
+    CanvasLensing.off,
+  );
   #viewportLensDarkTheme = false;
   #viewportLensPipeline: GPURenderPipeline | null = null;
   #viewportLensBindGroupLayout: GPUBindGroupLayout | null = null;

@@ -15,6 +15,7 @@ import {
 } from "#types/canvas.ts";
 import { getFrameAtTime } from "#lib/gif-decoder.ts";
 import { completeOnboardingStarterSelectionFromEvent } from "#lib/onboarding-runtime.ts";
+import { CanvasLensing } from "#types/enums.ts";
 
 export interface CanvasState {
   // Core state
@@ -40,6 +41,8 @@ export interface CanvasState {
   fancyDelete: boolean;
   // Haptic feedback on touch interactions
   haptics: boolean;
+  // Full-canvas edge lensing effect intensity
+  canvasLensing: CanvasLensing;
 
   // Dirty flags for optimization
   viewportDirty: boolean;
@@ -104,6 +107,7 @@ export interface PreferencesSnapshot {
   snapToGrid: boolean;
   fancyDelete: boolean;
   haptics: boolean;
+  canvasLensing: CanvasLensing;
   version: number;
 }
 
@@ -210,6 +214,7 @@ export class CanvasStore extends Store<CanvasState> {
       snapToGrid: false,
       fancyDelete: true,
       haptics: true,
+      canvasLensing: CanvasLensing.off,
       viewportDirty: false,
       entitiesDirty: new Set(),
       selectionDirty: false,
@@ -284,6 +289,7 @@ export class CanvasStore extends Store<CanvasState> {
       snapToGrid: s.snapToGrid,
       fancyDelete: s.fancyDelete,
       haptics: s.haptics,
+      canvasLensing: s.canvasLensing,
       version: s.preferencesVersion,
     }));
 
@@ -653,6 +659,13 @@ export class CanvasStore extends Store<CanvasState> {
   setHaptics(enabled: boolean): void {
     if (this.state.haptics === enabled) return;
     this.state.haptics = enabled;
+    this.state.version++;
+    this.notifyPreferencesChange();
+  }
+
+  setCanvasLensing(value: CanvasLensing): void {
+    if (this.state.canvasLensing === value) return;
+    this.state.canvasLensing = value;
     this.state.version++;
     this.notifyPreferencesChange();
   }
