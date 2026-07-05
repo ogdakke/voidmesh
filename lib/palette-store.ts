@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import type { ColorPalette } from "#types/canvas.ts";
 import { Store } from "./store.ts";
-import { preferences } from "./storage.ts";
+import { preferences } from "./preferences.ts";
 
 interface PaletteStoreState {
   customPalettes: ColorPalette[];

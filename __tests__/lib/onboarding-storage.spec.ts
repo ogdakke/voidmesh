@@ -7,7 +7,7 @@ const setItem = vi.fn<(key: string, value: unknown) => Promise<void>>(async (_ke
   storedValue = value;
 });
 
-vi.mock("#lib/storage.ts", () => ({
+vi.mock("#lib/preferences.ts", () => ({
   storage: {
     getItem,
     setItem,

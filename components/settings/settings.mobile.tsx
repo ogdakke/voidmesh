@@ -7,6 +7,7 @@ import { MoreVert } from "iconoir-react";
 import { useState } from "react";
 import "./settings.mobile.css";
 import {
+  CanvasLensingSelect,
   FancyDeleteToggle,
   FeedbackLink,
   HapticsToggle,
@@ -62,6 +63,9 @@ export default function SettingsDrawer() {
           </div>
           <div className="settings-drawer-switch">
             <HapticsToggle />
+          </div>
+          <div className="settings-drawer-switch">
+            <CanvasLensingSelect />
           </div>
           <hr className="divider" />
           <div className="settings-drawer-ext-item field-label">

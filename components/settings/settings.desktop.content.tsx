@@ -1,5 +1,6 @@
 import { Modal } from "#ui/modal/modal.tsx";
 import {
+  CanvasLensingSelect,
   FancyDeleteToggle,
   FeedbackLink,
   LinkItem,
@@ -25,6 +26,9 @@ export default function DesktopSettingsContent({
         </div>
         <div className="desktop-settings-switch">
           <FancyDeleteToggle />
+        </div>
+        <div className="desktop-settings-switch">
+          <CanvasLensingSelect />
         </div>
         <hr className="divider" />
         <div className="desktop-settings-ext-item field-label">

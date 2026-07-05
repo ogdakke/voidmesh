@@ -10,7 +10,7 @@ import type {
   Viewport,
 } from "#types/canvas.ts";
 import { createEnum } from "#types/index.ts";
-import type { ColorSpace } from "#types/enums.ts";
+import type { CanvasLensing, ColorSpace } from "#types/enums.ts";
 import type { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
 import type { ImageExportOptions } from "#renderer/export-formats.ts";
 import type { WlurOverlayDebugConfig } from "#renderer/wlur-debug.ts";
@@ -76,6 +76,7 @@ export interface CanvasCommands {
   setSnapToGrid: (enabled: boolean) => void;
   setFancyDelete: (enabled: boolean) => void;
   setHaptics: (enabled: boolean) => void;
+  setCanvasLensing: (value: CanvasLensing) => void;
   changeSize: (value: number | number[]) => void;
   copySelectedEntityToClipboard: () => Promise<boolean>;
   saveSelectedEntityToFile: (options?: ImageExportOptions) => Promise<void>;
@@ -188,8 +189,9 @@ export function useCanvasPreferences(): PreferencesSnapshot {
   const snapToGrid = useCanvasSelector((state) => state.snapToGrid);
   const fancyDelete = useCanvasSelector((state) => state.fancyDelete);
   const haptics = useCanvasSelector((state) => state.haptics);
+  const canvasLensing = useCanvasSelector((state) => state.canvasLensing);
   const version = useCanvasSelector((state) => state.preferencesVersion);
-  return { snapToGrid, fancyDelete, haptics, version };
+  return { snapToGrid, fancyDelete, haptics, canvasLensing, version };
 }
 
 export function useHasSelection(): boolean {

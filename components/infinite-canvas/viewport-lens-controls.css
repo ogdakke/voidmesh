@@ -1,0 +1,58 @@
+.viewport-lens-controls {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: var(--canvas-overlay-z-3);
+  display: grid;
+  gap: var(--spacing-2);
+  width: min(320px, calc(100vw - 32px));
+  padding: var(--spacing-2);
+  color: var(--text-color);
+  background: var(--floating-background);
+  backdrop-filter: var(--floating-backdrop);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) * 1.4);
+  box-shadow: var(--floaty-shadow);
+  pointer-events: auto;
+  user-select: none;
+}
+
+.viewport-lens-controls__handle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  margin: calc(-1 * var(--spacing-2)) calc(-1 * var(--spacing-2)) 0;
+  padding: var(--spacing-2);
+  color: var(--gray-1100);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  cursor: grab;
+  touch-action: none;
+}
+
+.viewport-lens-controls__handle:active {
+  cursor: grabbing;
+}
+
+.viewport-lens-controls__hint {
+  color: var(--gray-800);
+  font-size: var(--text-xxs);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.viewport-lens-controls .slider-field {
+  gap: calc(var(--spacing) * 0.5);
+}
+
+.viewport-lens-controls .slider-root {
+  --slider-h: 1.65rem;
+}
+
+@media screen and (max-width: 768px) {
+  .viewport-lens-controls {
+    display: none;
+  }
+}

@@ -1,5 +1,5 @@
 import { appLoader } from "#lib/app-loader.ts";
-import { config } from "#config";
+import { config, getViewportLensDistortionConfig } from "#config";
 import { isUserTypingInInput, useKeybinds, useRegisterKeybinds } from "#context/keybind-context.ts";
 import {
   DebugType,
@@ -29,8 +29,8 @@ import {
   zoomToPoint,
 } from "#lib/canvas-math.ts";
 import { undo } from "#lib/undo.ts";
-import { createDefaultWlurOverlayConfig } from "#renderer/wlur-overlay.ts";
 import { applyWlurOverlayDebugConfig } from "#renderer/wlur-debug.ts";
+import { createDefaultWlurOverlayConfig } from "#renderer/wlur-overlay.ts";
 import { Check, Enlarge, Reduce, Square3dFromCenter } from "iconoir-react";
 import {
   lazy,
@@ -51,6 +51,7 @@ import SettingsDrawer from "../settings/settings.mobile.tsx";
 import About from "../about/index.tsx";
 
 const CanvasContextMenu = lazy(() => import("./canvas-context-menu.tsx"));
+// const ViewportLensControls = lazy(() => import("./viewport-lens-controls.tsx"));
 
 function CenterCanvasControl({
   onCenterCanvas,
@@ -112,7 +113,7 @@ export function InfiniteCanvas() {
     setSnapToGrid,
   } = useCanvasCommands();
   const { registerRenderer, debugMode, wlurDebugConfig } = useCanvasRendererService();
-  const { snapToGrid } = useCanvasPreferences();
+  const { snapToGrid, canvasLensing } = useCanvasPreferences();
   const selectedEntity = useSelectedEntity();
   const selectedEntityIds = useSelectedEntityIds();
   const multiSelectMode = useMultiSelectMode();
@@ -133,6 +134,16 @@ export function InfiniteCanvas() {
   const bottomInset = isMobile ? config.canvas.mobile.bottomInset : 0;
   const darkTheme = useMediaQuery("(prefers-color-scheme: dark)");
   const { isFullscreen, toggleFullscreen } = useLayout();
+
+  useEffect(() => {
+    renderer?.setViewportLensColorScheme(darkTheme);
+    canvasStore.setContainerDirty();
+  }, [renderer, darkTheme]);
+
+  useEffect(() => {
+    renderer?.setViewportLensDistortion(getViewportLensDistortionConfig(canvasLensing));
+    canvasStore.setContainerDirty();
+  }, [renderer, canvasLensing]);
 
   // Update app loader text while canvas initializes
   useEffect(() => {
@@ -908,6 +919,15 @@ export function InfiniteCanvas() {
 
           {!isMobile && (
             <>
+              {/*<Suspense>
+                {renderer && import.meta.env.DEV ? (
+                  <ViewportLensControls
+                    key={canvasLensing}
+                    renderer={renderer}
+                    darkTheme={darkTheme}
+                  />
+                ) : undefined}
+              </Suspense>*/}
               <div className="infinite-canvas__top-left">
                 <DesktopSettings />
               </div>

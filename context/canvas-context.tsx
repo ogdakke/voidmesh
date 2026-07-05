@@ -55,7 +55,7 @@ import {
   resetDuplicatedMediaPlayback,
 } from "#lib/media-duplication.ts";
 import { config, glassKindResets, glitchKindResets } from "#config";
-import { preferences } from "#lib/storage.ts";
+import { preferences } from "#lib/preferences.ts";
 import { paletteStore } from "#lib/palette-store.ts";
 import { analytics } from "#lib/analytics.ts";
 import { logger } from "#lib/client.logger.ts";
@@ -63,7 +63,7 @@ import { downloadBlob } from "#lib/download.ts";
 import { deepMerge } from "#lib/deep-merge.ts";
 import { applyShaderDefaults } from "#lib/shader-defaults.ts";
 import { extractPaletteFromImage } from "#lib/palette-extraction/index.ts";
-import { ColorSpace } from "#types/enums.ts";
+import { CanvasLensing, ColorSpace } from "#types/enums.ts";
 import type { PartialDeep } from "type-fest";
 import {
   createDefaultWlurOverlayDebugConfig,
@@ -255,6 +255,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       canvasStore.setFancyDelete(v ?? !reduced);
     });
     preferences.getHaptics().then((v) => canvasStore.setHaptics(v));
+    preferences.getCanvasLensing().then((v) => canvasStore.setCanvasLensing(v));
     preferences.getCustomPalettes().then((palettes) => paletteStore.setPalettes(palettes));
   }, []);
 
@@ -1740,6 +1741,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     preferences.setHaptics(enabled);
   };
 
+  const setCanvasLensingPreference = (value: CanvasLensing) => {
+    canvasStore.setCanvasLensing(value);
+    preferences.setCanvasLensing(value);
+  };
+
   // Renderer registration
   const registerRenderer = (renderer: InfiniteCanvasRenderer) => {
     rendererRef.current = renderer;
@@ -1880,6 +1886,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setSnapToGrid: setSnapToGridPreference,
     setFancyDelete: setFancyDeletePreference,
     setHaptics: setHapticsPreference,
+    setCanvasLensing: setCanvasLensingPreference,
     changeSize,
     copySelectedEntityToClipboard,
     saveSelectedEntityToFile,
@@ -1928,6 +1935,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       setSnapToGrid: setSnapToGridPreference,
       setFancyDelete: setFancyDeletePreference,
       setHaptics: setHapticsPreference,
+      setCanvasLensing: setCanvasLensingPreference,
       changeSize,
       copySelectedEntityToClipboard,
       saveSelectedEntityToFile,
@@ -1978,6 +1986,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setSnapToGrid: (...args) => commandsImplRef.current.setSnapToGrid(...args),
     setFancyDelete: (...args) => commandsImplRef.current.setFancyDelete(...args),
     setHaptics: (...args) => commandsImplRef.current.setHaptics(...args),
+    setCanvasLensing: (...args) => commandsImplRef.current.setCanvasLensing(...args),
     changeSize: (...args) => commandsImplRef.current.changeSize(...args),
     copySelectedEntityToClipboard: () => commandsImplRef.current.copySelectedEntityToClipboard(),
     saveSelectedEntityToFile: (...args) =>
