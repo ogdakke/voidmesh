@@ -207,11 +207,11 @@ export class InfiniteCanvasRenderer {
   // the progressive bottom blur itself stays screen-space rather than warped.
   #viewportLensConfig: ViewportLensDistortionConfig = {
     enabled: true,
-    strength: 0.1,
-    radius: 0.3,
-    falloff: 2.2,
+    strength: 0.4,
+    radius: 0.07,
+    falloff: 1.8,
     dispersion: 0.25,
-    scale: 0.4,
+    scale: 1,
   };
   #viewportLensPipeline: GPURenderPipeline | null = null;
   #viewportLensBindGroupLayout: GPUBindGroupLayout | null = null;
@@ -2099,6 +2099,10 @@ export class InfiniteCanvasRenderer {
   setViewportLensDistortion(config: ViewportLensDistortionConfig): void {
     this.#viewportLensConfig = { ...config };
     this.#invalidateWlurOverlayCache();
+  }
+
+  get viewPortLensConfig(): ViewportLensDistortionConfig {
+    return this.#viewportLensConfig;
   }
 
   /**

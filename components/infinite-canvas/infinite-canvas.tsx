@@ -909,7 +909,7 @@ export function InfiniteCanvas() {
 
           {!isMobile && (
             <>
-              <ViewportLensControls renderer={renderer} />
+              {renderer ? <ViewportLensControls renderer={renderer} /> : undefined}
               <div className="infinite-canvas__top-left">
                 <DesktopSettings />
               </div>

@@ -8,25 +8,10 @@ import { Checkbox } from "#ui/checkbox/checkbox.tsx";
 import { Slider } from "#ui/slider/index.tsx";
 import "./viewport-lens-controls.css";
 
-const defaultLensConfig: ViewportLensDistortionConfig = {
-  enabled: true,
-  strength: 0.1,
-  radius: 0.3,
-  falloff: 2.2,
-  dispersion: 0.25,
-  scale: 0.4,
-};
-
-function commitLensConfig(
-  renderer: InfiniteCanvasRenderer | null,
-  config: ViewportLensDistortionConfig,
-): void {
-  renderer?.setViewportLensDistortion(config);
-  canvasStore.setContainerDirty();
-}
-
-export function ViewportLensControls({ renderer }: { renderer: InfiniteCanvasRenderer | null }) {
-  const [lensConfig, setLensConfig] = useState<ViewportLensDistortionConfig>(defaultLensConfig);
+export function ViewportLensControls({ renderer }: { renderer: InfiniteCanvasRenderer }) {
+  const [lensConfig, setLensConfig] = useState<ViewportLensDistortionConfig>(
+    renderer.viewPortLensConfig,
+  );
   const [position, setPosition] = useState({ x: 18, y: 76 });
   const [drag, setDrag] = useState<{
     pointerId: number;
@@ -36,13 +21,11 @@ export function ViewportLensControls({ renderer }: { renderer: InfiniteCanvasRen
     startY: number;
   } | null>(null);
 
-  useEffect(() => {
-    commitLensConfig(renderer, lensConfig);
-  }, [renderer, lensConfig]);
-
   const updateLensConfig = (updates: Partial<ViewportLensDistortionConfig>) => {
-    const next = { ...lensConfig, ...updates };
+    const next: ViewportLensDistortionConfig = { ...lensConfig, ...updates };
     setLensConfig(next);
+    renderer?.setViewportLensDistortion(next);
+    canvasStore.setContainerDirty();
   };
 
   const handlePanelPointerDown = (event: PointerEvent) => {
@@ -108,7 +91,7 @@ export function ViewportLensControls({ renderer }: { renderer: InfiniteCanvasRen
         label="Roll"
         min={0}
         max={4}
-        step={0.05}
+        step={0.01}
         value={lensConfig.strength}
         showValue
         onValueChange={(value) => updateLensConfig({ strength: value })}
@@ -117,7 +100,7 @@ export function ViewportLensControls({ renderer }: { renderer: InfiniteCanvasRen
         name="viewport-lens-radius"
         label="Edge width"
         min={0}
-        max={0.7}
+        max={0.9}
         step={0.01}
         value={lensConfig.radius}
         showValue
@@ -126,9 +109,9 @@ export function ViewportLensControls({ renderer }: { renderer: InfiniteCanvasRen
       <Slider
         name="viewport-lens-falloff"
         label="Falloff"
-        min={0.4}
-        max={4}
-        step={0.05}
+        min={0.01}
+        max={10}
+        step={0.01}
         value={lensConfig.falloff}
         showValue
         onValueChange={(value) => updateLensConfig({ falloff: value })}
@@ -138,7 +121,7 @@ export function ViewportLensControls({ renderer }: { renderer: InfiniteCanvasRen
         label="Dispersion"
         min={0}
         max={2}
-        step={0.05}
+        step={0.01}
         value={lensConfig.dispersion}
         showValue
         onValueChange={(value) => updateLensConfig({ dispersion: value })}
@@ -147,7 +130,7 @@ export function ViewportLensControls({ renderer }: { renderer: InfiniteCanvasRen
         name="viewport-lens-scale"
         label="Stretch"
         min={0}
-        max={2}
+        max={4}
         step={0.01}
         value={lensConfig.scale}
         showValue

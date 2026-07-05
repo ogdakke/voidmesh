@@ -77,12 +77,10 @@ fn warpedUv(uv: vec2f, channelOffset: f32) -> vec2f {
     }
 
     let dir = superellipseNormal(aspectCentered, halfSize, power);
-    let edgeWave = sin(edge * 3.14159265);
     let roll = edge * edge * lens.strength * 0.18;
     let stretch = edge * lens.strength * 0.08;
     let sampleAspect = aspectCentered - dir * (roll + channelOffset * edge * 0.0035);
-    let sag = vec2f(0.0, edgeWave * edge * lens.strength * 0.055);
-    let sampleCentered = sampleAspect / vec2f(aspect, 1.0) + sag;
+    let sampleCentered = sampleAspect / vec2f(aspect, 1.0);
     return clamp(vec2f(0.5) + sampleCentered * (1.0 - stretch * lens.scale), vec2f(0.0), vec2f(1.0));
 }
 
