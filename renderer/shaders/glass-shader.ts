@@ -9,11 +9,46 @@ import {
   ShaderPass,
 } from "./shader-pass.ts";
 
+const FLOWING_IMMEDIATE_DECLARATION = `
+struct FlowingGlassImmediates {
+  time: f32,
+}
+
+var<immediate> immediates: FlowingGlassImmediates;
+`;
+
+function createFlowingImmediateShaderSource(source: string): string {
+  const rewritten = source
+    .replace(
+      /@group\(0\)\s+@binding\(2\)\s+var\s+sourceSampler\s*:\s*sampler;/,
+      `$&\n${FLOWING_IMMEDIATE_DECLARATION}`,
+    )
+    .replace(/\buniforms\.time\b/g, "immediates.time");
+
+  if (rewritten === source || !rewritten.includes("var<immediate>")) {
+    throw new Error("Failed to create flowing glass immediate shader source.");
+  }
+  return rewritten;
+}
+
+function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.byteLength !== b.byteLength) return false;
+  for (let index = 0; index < a.byteLength; index += 1) {
+    if (a[index] !== b[index]) return false;
+  }
+  return true;
+}
+
 export class GlassShader extends ShaderPass {
   #flutedPipeline: GPURenderPipeline | null = null;
   #flowingPipeline: GPURenderPipeline | null = null;
+  #flowingImmediatePipeline: GPURenderPipeline | null = null;
   #externalFlutedPipeline: GPURenderPipeline | null = null;
   #externalFlowingPipeline: GPURenderPipeline | null = null;
+  #externalFlowingImmediatePipeline: GPURenderPipeline | null = null;
+  #flowingImmediateData = new Float32Array(1);
+  #flowingImmediateUniformBuffers = new Map<string, GPUBuffer>();
+  #flowingImmediateUniformDataCache = new Map<string, Uint8Array>();
 
   /** Per-entity last frame timestamps for delta-time calculation */
   #lastFrameTimes = new Map<string, number>();
@@ -116,6 +151,51 @@ export class GlassShader extends ShaderPass {
       },
       primitive: { topology: "triangle-list" },
     });
+
+    if (this.ctx.supportsImmediates) {
+      const flowingImmediateSource = createFlowingImmediateShaderSource(glassFlowingSource);
+      const flowingImmediateModule = this.ctx.device.createShaderModule({
+        label: "GlassShader flowing immediate shader",
+        code: flowingImmediateSource,
+      });
+      const flowingImmediatePipelineLayout = this.ctx.device.createPipelineLayout({
+        label: "GlassShader flowing immediate pipeline layout",
+        bindGroupLayouts: [this.bindGroupLayout!],
+        immediateSize: 4,
+      });
+      this.#flowingImmediatePipeline = this.ctx.device.createRenderPipeline({
+        label: "GlassShader flowing immediate pipeline",
+        layout: flowingImmediatePipelineLayout,
+        vertex: { module: flowingImmediateModule, entryPoint: "vs_main" },
+        fragment: {
+          module: flowingImmediateModule,
+          entryPoint: "fs_main",
+          targets: [{ format: this.ctx.intermediateFormat }],
+        },
+        primitive: { topology: "triangle-list" },
+      });
+
+      const externalFlowingImmediateModule = this.ctx.device.createShaderModule({
+        label: "GlassShader external flowing immediate shader",
+        code: createExternalTextureShaderSource(flowingImmediateSource),
+      });
+      const externalFlowingImmediatePipelineLayout = this.ctx.device.createPipelineLayout({
+        label: "GlassShader external flowing immediate pipeline layout",
+        bindGroupLayouts: [this.externalBindGroupLayout!],
+        immediateSize: 4,
+      });
+      this.#externalFlowingImmediatePipeline = this.ctx.device.createRenderPipeline({
+        label: "GlassShader external flowing immediate pipeline",
+        layout: externalFlowingImmediatePipelineLayout,
+        vertex: { module: externalFlowingImmediateModule, entryPoint: "vs_main" },
+        fragment: {
+          module: externalFlowingImmediateModule,
+          entryPoint: "fs_main",
+          targets: [{ format: this.ctx.intermediateFormat }],
+        },
+        primitive: { topology: "triangle-list" },
+      });
+    }
   }
 
   writeVariantUniforms(entity: EffectRenderEntity): void {
@@ -174,13 +254,15 @@ export class GlassShader extends ShaderPass {
         "GlassShader external fluted render pass",
       );
     } else if (glassKind === GlassKind.flowing) {
+      const pipeline = this.#externalFlowingImmediatePipeline ?? this.#externalFlowingPipeline;
       this.#executeExternalVariant(
         entity,
         source,
         outputTexture,
         encoder,
-        this.#externalFlowingPipeline,
+        pipeline,
         "GlassShader external flowing render pass",
+        this.#externalFlowingImmediatePipeline ? "flowingImmediate" : "uniform",
       );
       this.#advanceFlowingTime(entity);
     } else {
@@ -195,10 +277,14 @@ export class GlassShader extends ShaderPass {
     encoder: GPUCommandEncoder,
     pipeline: GPURenderPipeline | null,
     label: string,
+    mode: "uniform" | "flowingImmediate" = "uniform",
   ): void {
     if (!pipeline) return;
 
-    const uniformBuffer = this.writeEntityUniformBuffer(entity);
+    const uniformBuffer =
+      mode === "flowingImmediate"
+        ? this.#writeFlowingImmediateUniformBuffer(entity)
+        : this.writeEntityUniformBuffer(entity);
     const bindGroup = this.createExternalBindGroup(source, uniformBuffer);
 
     const pass = encoder.beginRenderPass({
@@ -215,6 +301,7 @@ export class GlassShader extends ShaderPass {
 
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, bindGroup);
+    if (mode === "flowingImmediate") this.#setFlowingTimeImmediate(pass, entity);
     pass.draw(3);
     pass.end();
   }
@@ -254,9 +341,13 @@ export class GlassShader extends ShaderPass {
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,
   ): void {
-    if (!this.#flowingPipeline) return;
+    const pipeline = this.#flowingImmediatePipeline ?? this.#flowingPipeline;
+    if (!pipeline) return;
 
-    const uniformBuffer = this.writeEntityUniformBuffer(entity);
+    const useImmediates = pipeline === this.#flowingImmediatePipeline;
+    const uniformBuffer = useImmediates
+      ? this.#writeFlowingImmediateUniformBuffer(entity)
+      : this.writeEntityUniformBuffer(entity);
     const bindGroup = this.getBindGroup(sourceTexture, uniformBuffer);
 
     const pass = encoder.beginRenderPass({
@@ -271,12 +362,45 @@ export class GlassShader extends ShaderPass {
       ],
     });
 
-    pass.setPipeline(this.#flowingPipeline);
+    pass.setPipeline(pipeline);
     pass.setBindGroup(0, bindGroup);
+    if (useImmediates) this.#setFlowingTimeImmediate(pass, entity);
     pass.draw(3);
     pass.end();
 
     this.#advanceFlowingTime(entity);
+  }
+
+  #getFlowingImmediateUniformBuffer(entityId: string): GPUBuffer {
+    const cached = this.#flowingImmediateUniformBuffers.get(entityId);
+    if (cached) return cached;
+
+    const buffer = this.ctx.device.createBuffer({
+      label: `GlassShader flowing immediate uniforms ${entityId}`,
+      size: this.ctx.uniformData.byteLength,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    this.#flowingImmediateUniformBuffers.set(entityId, buffer);
+    return buffer;
+  }
+
+  #writeFlowingImmediateUniformBuffer(entity: EffectRenderEntity): GPUBuffer {
+    this.writeUniforms(entity);
+    this.ctx.floatView[6] = 0;
+
+    const bytes = new Uint8Array(this.ctx.uniformData);
+    const cached = this.#flowingImmediateUniformDataCache.get(entity.id);
+    const buffer = this.#getFlowingImmediateUniformBuffer(entity.id);
+    if (!cached || !equalBytes(cached, bytes)) {
+      this.ctx.device.queue.writeBuffer(buffer, 0, this.ctx.uniformData);
+      this.#flowingImmediateUniformDataCache.set(entity.id, new Uint8Array(bytes));
+    }
+    return buffer;
+  }
+
+  #setFlowingTimeImmediate(pass: GPURenderPassEncoder, entity: EffectRenderEntity): void {
+    this.#flowingImmediateData[0] = entity.shaderParams.time ?? 0;
+    pass.setImmediates(0, this.#flowingImmediateData);
   }
 
   #advanceFlowingTime(entity: EffectRenderEntity): void {
@@ -297,13 +421,23 @@ export class GlassShader extends ShaderPass {
   /** Clean up tracking for a removed entity */
   removeEntity(entityId: string): void {
     this.#lastFrameTimes.delete(entityId);
+    this.#flowingImmediateUniformBuffers.get(entityId)?.destroy();
+    this.#flowingImmediateUniformBuffers.delete(entityId);
+    this.#flowingImmediateUniformDataCache.delete(entityId);
   }
 
   override destroy(): void {
     this.#flutedPipeline = null;
     this.#flowingPipeline = null;
+    this.#flowingImmediatePipeline = null;
     this.#externalFlutedPipeline = null;
     this.#externalFlowingPipeline = null;
+    this.#externalFlowingImmediatePipeline = null;
+    for (const buffer of this.#flowingImmediateUniformBuffers.values()) {
+      buffer.destroy();
+    }
+    this.#flowingImmediateUniformBuffers.clear();
+    this.#flowingImmediateUniformDataCache.clear();
     this.#lastFrameTimes.clear();
     super.destroy();
   }

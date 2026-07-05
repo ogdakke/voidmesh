@@ -76,6 +76,7 @@ export class EntityShaderRuntime {
       },
       intermediateFormat: this.#colorConfig.intermediateFormat,
       supportsP3: this.#colorConfig.supportsP3,
+      supportsImmediates: supportsShaderImmediates(),
     };
     this.#processingPipeline = new ProcessingPipeline(
       this.#device,
@@ -297,4 +298,15 @@ export class EntityShaderRuntime {
     this.#shaderRegistry.destroy();
     this.#processingPipeline.destroy();
   }
+}
+
+function supportsShaderImmediates(): boolean {
+  if (shaderImmediatesDisabledByLocation()) return false;
+  return globalThis.navigator.gpu?.wgslLanguageFeatures?.has("immediate_address_space") ?? false;
+}
+
+function shaderImmediatesDisabledByLocation(): boolean {
+  const search = globalThis.location?.search;
+  if (!search) return false;
+  return new URLSearchParams(search).get("shaderImmediates") === "0";
 }

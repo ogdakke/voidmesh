@@ -35,13 +35,31 @@ interface BenchScenario {
   samples: number;
 }
 
+interface BenchSample {
+  index: number;
+  frames: number;
+  startFrameIndex: number;
+  totalMs: number;
+  cpuEncodeMs: number;
+  queueDrainMs: number;
+  msPerFrame: number;
+  cpuEncodeMsPerFrame: number;
+  queueDrainMsPerFrame: number;
+}
+
 interface BenchResult {
   id: string;
   label: string;
+  description: string;
+  shaderType: ShaderType;
+  dirtyMode: DirtyMode;
   sourceSize: Size;
   entityCount: number;
   frames: number;
+  warmupFrames: number;
+  sampleCount: number;
   samples: number[];
+  sampleDetails: BenchSample[];
   medianMs: number;
   p95Ms: number;
   msPerFrame: number;
@@ -69,6 +87,23 @@ interface VisualCaptureResult {
   metrics: VisualMetrics;
 }
 
+interface BenchMetadata {
+  createdAt: string;
+  location: string;
+  userAgent: string;
+  platform: string;
+  hardwareConcurrency: number;
+  devicePixelRatio: number;
+  webgpu: {
+    available: boolean;
+    wgslLanguageFeatures: string[];
+    immediatesSupported: boolean;
+    adapterInfo: Record<string, unknown> | null;
+    limits: Record<string, number>;
+    features: string[];
+  };
+}
+
 interface BenchEntitySet {
   entities: ShaderCanvasEntity[];
   beforeFrame?: (frameIndex: number) => void;
@@ -82,6 +117,7 @@ declare global {
     __captureVoidmeshRenderBenchVisual?: () => Promise<VisualCaptureResult>;
     __runVoidmeshRenderBenchScenario?: (scenarioId: string) => Promise<BenchResult>;
     __runVoidmeshRenderBench?: () => Promise<BenchResult[]>;
+    __collectVoidmeshRenderBenchMetadata?: () => Promise<BenchMetadata>;
   }
 }
 
@@ -203,6 +239,60 @@ const scenarios: BenchScenario[] = [
     samples: 5,
   },
   {
+    id: "multi-25-flowing-glass-continuous",
+    label: "25 1024px entities, flowing glass continuous",
+    description:
+      "Many continuously animated flowing-glass entities; stresses per-entity uniform uploads and draw setup.",
+    kind: "multi",
+    entityCount: 25,
+    sourceSize: { width: 1024, height: 1024 },
+    shaderType: ShaderType.glass,
+    params: {
+      size: 28,
+      intensity: 3,
+      scale: 1.35,
+      glass: {
+        kind: GlassKind.flowing,
+        angle: 0,
+        caustic: 1,
+        frostiness: 0.8,
+        highlight: 0.1,
+        dispersion: 0.45,
+        flow: 0.65,
+      },
+      postProcess: { enabled: false },
+      adjustments: { brightness: 0.5, contrast: 0.5, saturation: 0.5, blur: 0 },
+      timeAutoPlay: true,
+    },
+    dirtyMode: "none",
+    frames: 60,
+    warmupFrames: 10,
+    samples: 5,
+  },
+  {
+    id: "image-grain-4k-continuous-postprocess",
+    label: "4K image, animated grain post-process",
+    description:
+      "Static source with animated grain; isolates the 64-byte post-process uniform path and time churn.",
+    kind: "image",
+    sourceSize: { width: 3840, height: 2160 },
+    shaderType: ShaderType.halftone,
+    params: {
+      showOriginal: true,
+      postProcess: {
+        enabled: true,
+        grain: { enabled: true, size: 1.25, intensity: 0.15 },
+        bloom: { enabled: false, threshold: 0.8, intensity: 0, filterRadius: 9, softness: 0.1 },
+        chromaticAberration: { enabled: false, offset: 0 },
+      },
+      adjustments: { brightness: 0.5, contrast: 0.5, saturation: 0.5, blur: 0 },
+    },
+    dirtyMode: "none",
+    frames: 120,
+    warmupFrames: 16,
+    samples: 5,
+  },
+  {
     id: "multi-25-cached-composition",
     label: "25 cached 1024px entities, composition",
     description: "Realistic many-entity composition after textures are already cached.",
@@ -263,6 +353,7 @@ canvas.style.width = `${CANVAS_WIDTH}px`;
 canvas.style.height = `${CANVAS_HEIGHT}px`;
 
 let renderer: InfiniteCanvasRenderer | null = null;
+const gpuErrors: string[] = [];
 
 function writeResults(value: string): void {
   resultsEl.textContent = value;
@@ -318,7 +409,77 @@ async function getRenderer(): Promise<InfiniteCanvasRenderer> {
   if (renderer) return renderer;
   renderer = new InfiniteCanvasRenderer(canvas);
   await renderer.initialize();
+  renderer.device?.addEventListener("uncapturederror", (event) => {
+    const gpuError = (event as GPUUncapturedErrorEvent).error;
+    gpuErrors.push(`${gpuError.constructor.name}: ${gpuError.message}`);
+  });
   return renderer;
+}
+
+async function collectBenchMetadata(): Promise<BenchMetadata> {
+  const gpu = navigator.gpu;
+  const adapter = gpu ? await navigator.gpu.requestAdapter() : null;
+  const wgslLanguageFeatures = gpu?.wgslLanguageFeatures
+    ? [...gpu.wgslLanguageFeatures.values()].sort()
+    : [];
+
+  return {
+    createdAt: new Date().toISOString(),
+    location: window.location.href,
+    userAgent: navigator.userAgent,
+    platform: navigator.platform,
+    hardwareConcurrency: navigator.hardwareConcurrency,
+    devicePixelRatio: window.devicePixelRatio,
+    webgpu: {
+      available: !!gpu,
+      wgslLanguageFeatures,
+      immediatesSupported: wgslLanguageFeatures.includes("immediate_address_space"),
+      adapterInfo: adapter ? serializeAdapterInfo(adapter) : null,
+      limits: adapter ? serializeLimits(adapter.limits) : {},
+      features: adapter ? [...adapter.features.values()].sort() : [],
+    },
+  };
+}
+
+function serializeAdapterInfo(adapter: GPUAdapter): Record<string, unknown> {
+  const maybeInfo = (adapter as GPUAdapter & { info?: Record<string, unknown> }).info;
+  if (!maybeInfo) return {};
+  return Object.fromEntries(
+    Object.entries(maybeInfo).filter(([, value]) => value !== undefined && value !== ""),
+  );
+}
+
+function serializeLimits(limits: GPUSupportedLimits): Record<string, number> {
+  const names = [
+    "maxTextureDimension1D",
+    "maxTextureDimension2D",
+    "maxTextureDimension3D",
+    "maxTextureArrayLayers",
+    "maxBindGroups",
+    "maxBindGroupsPlusVertexBuffers",
+    "maxBindingsPerBindGroup",
+    "maxDynamicUniformBuffersPerPipelineLayout",
+    "maxDynamicStorageBuffersPerPipelineLayout",
+    "maxSampledTexturesPerShaderStage",
+    "maxSamplersPerShaderStage",
+    "maxStorageBuffersPerShaderStage",
+    "maxStorageTexturesPerShaderStage",
+    "maxUniformBuffersPerShaderStage",
+    "maxUniformBufferBindingSize",
+    "maxStorageBufferBindingSize",
+    "minUniformBufferOffsetAlignment",
+    "minStorageBufferOffsetAlignment",
+    "maxVertexBuffers",
+    "maxBufferSize",
+    "maxImmediateSize",
+  ];
+  const record = limits as unknown as Record<string, number | undefined>;
+  return Object.fromEntries(
+    names.flatMap((name) => {
+      const value = record[name];
+      return typeof value === "number" ? [[name, value]] : [];
+    }),
+  );
 }
 
 async function createSyntheticBitmap(size: Size, seed: number): Promise<ImageBitmap> {
@@ -624,6 +785,9 @@ async function runFrames(params: {
   const beforeDrain = performance.now();
   await device.queue.onSubmittedWorkDone();
   const end = performance.now();
+  if (gpuErrors.length > 0) {
+    throw new Error(`WebGPU errors during render bench:\n${gpuErrors.join("\n")}`);
+  }
 
   return {
     totalMs: end - start,
@@ -636,6 +800,7 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
   const benchRenderer = await getRenderer();
   const entitySet = await createEntities(scenario);
   let frameIndex = 0;
+  gpuErrors.length = 0;
 
   try {
     writeResults(`Running ${scenario.label}\n\nWarming up...`);
@@ -651,8 +816,10 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
     const samples: number[] = [];
     const cpuSamples: number[] = [];
     const queueDrainSamples: number[] = [];
+    const sampleDetails: BenchSample[] = [];
     for (let sample = 0; sample < scenario.samples; sample += 1) {
       writeResults(`Running ${scenario.label}\n\nSample ${sample + 1} of ${scenario.samples}...`);
+      const startFrameIndex = frameIndex;
       const result = await runFrames({
         renderer: benchRenderer,
         entities: entitySet.entities,
@@ -664,16 +831,33 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
       samples.push(result.totalMs);
       cpuSamples.push(result.cpuEncodeMs);
       queueDrainSamples.push(result.queueDrainMs);
+      sampleDetails.push({
+        index: sample,
+        frames: scenario.frames,
+        startFrameIndex,
+        totalMs: result.totalMs,
+        cpuEncodeMs: result.cpuEncodeMs,
+        queueDrainMs: result.queueDrainMs,
+        msPerFrame: result.totalMs / scenario.frames,
+        cpuEncodeMsPerFrame: result.cpuEncodeMs / scenario.frames,
+        queueDrainMsPerFrame: result.queueDrainMs / scenario.frames,
+      });
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
     return {
       id: scenario.id,
       label: scenario.label,
+      description: scenario.description,
+      shaderType: scenario.shaderType,
+      dirtyMode: scenario.dirtyMode,
       sourceSize: scenario.sourceSize,
       entityCount: entitySet.entities.length,
       frames: scenario.frames,
+      warmupFrames: scenario.warmupFrames,
+      sampleCount: scenario.samples,
       samples,
+      sampleDetails,
       medianMs: median(samples),
       p95Ms: percentile(samples, 0.95),
       msPerFrame: median(samples) / scenario.frames,
@@ -683,6 +867,9 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
       queueDrainMsPerFrame: median(queueDrainSamples) / scenario.frames,
     };
   } finally {
+    for (const entity of entitySet.entities) {
+      benchRenderer.removeEntityTexture(entity.id);
+    }
     entitySet.cleanup?.();
   }
 }
@@ -814,6 +1001,9 @@ async function captureFlowingGlassVisual(): Promise<VisualCaptureResult> {
     console.log("[voidmesh-render-visual]", JSON.stringify(result, null, 2));
     return result;
   } finally {
+    for (const entity of entitySet.entities) {
+      benchRenderer.removeEntityTexture(entity.id);
+    }
     entitySet.cleanup?.();
   }
 }
@@ -851,6 +1041,7 @@ runAllButton.addEventListener("click", () => {
 window.__runVoidmeshRenderBench = runAll;
 window.__runVoidmeshRenderBenchScenario = runScenarioById;
 window.__captureVoidmeshRenderBenchVisual = captureFlowingGlassVisual;
+window.__collectVoidmeshRenderBenchMetadata = collectBenchMetadata;
 
 const searchParams = new URLSearchParams(window.location.search);
 const scenarioId = searchParams.get("scenario");

@@ -144,6 +144,8 @@ vite.config.ts.timestamp-*
 # data
 data/
 traces/
+bench/results/*
+!bench/results/.gitkeep
 
 # msdf-atlas-gen build tool (cloned and built locally)
 msdf-atlas-gen/
