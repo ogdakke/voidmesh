@@ -19,6 +19,7 @@ import type { easings } from "../canvas-math";
 import { palettes } from "./palettes.config";
 import { DecelerationRate } from "../touch-scroll";
 import { type ActionLayerConfig, actionLayerDefaults } from "./action-layer.config";
+import type { MinimapConfig } from "#renderer/canvas-renderer.ts";
 import { CanvasLensing } from "#types/enums.ts";
 
 // ============================================================================
@@ -566,6 +567,30 @@ export const config = {
         vignetteDark: 0,
       } satisfies ViewportLensDistortionConfig,
     },
+    minimap: {
+      enabled: true,
+      width: 160,
+      height: 120,
+      borderRadius: 32,
+      margin: 8,
+      worldPaddingScale: 1,
+      dragSensitivity: 0.42,
+      backdropScale: 0.75,
+      backdropBlur: 0,
+      mapOpacity: 0.1,
+      mapTint: [1, 1, 0.96],
+      entityOpacity: 0.66,
+      entityColor: [0.88, 0.88, 0.86],
+      strength: 4,
+      edgeWidth: 1.2,
+      falloff: 10,
+      dispersion: 1.3,
+      scale: 1,
+      reflectionIntensity: 0.56,
+      reflectionFocus: 0.45,
+      occlusion: 0.14,
+      vignette: 0,
+    } satisfies MinimapConfig,
   },
   hitTesting: {
     alphaGrid: {
