@@ -6,7 +6,7 @@
  */
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import { screen, act, fireEvent, waitFor } from "@testing-library/react";
-import { MediaControls } from "../../components/infinite-canvas/media-controls.tsx";
+import { MediaControls } from "../../components/media-controls/media-controls.tsx";
 import { renderWithCanvas } from "../helpers/render-with-providers.tsx";
 import { createEntityInput, resetEntityCounter } from "../helpers/test-entity.ts";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
@@ -57,8 +57,8 @@ describe("MediaControls", () => {
     });
   });
 
-  describe("frozen state for exit animation", () => {
-    test("displays frozen time values when deselecting", () => {
+  describe("exit animation state", () => {
+    test("hides the control surface when deselecting", () => {
       const { canvas } = renderWithCanvas(<MediaControls />);
 
       let videoId: string;
@@ -72,16 +72,21 @@ describe("MediaControls", () => {
         canvasStore.seekVideo(videoId!, 45.32);
       });
 
-      // Verify time is displayed (main part in one element, ms in nested span)
-      expect(screen.getByText("45")).toBeInTheDocument();
+      expect(screen.getByRole("slider", { hidden: true })).toHaveAttribute(
+        "aria-valuetext",
+        "45:32 of 1:40:00",
+      );
 
-      // Deselect - controls become hidden but should retain frozen values
       act(() => {
         canvasStore.clearSelection();
       });
 
-      // The frozen values should still be in the DOM (for CSS exit animation)
-      expect(screen.getByText("45")).toBeInTheDocument();
+      const controls = document.querySelector(".media-controls");
+      expect(controls).toHaveAttribute("hidden");
+      expect(screen.getByRole("slider", { hidden: true })).toHaveAttribute(
+        "aria-valuetext",
+        "45:32 of 1:40:00",
+      );
     });
   });
 
@@ -103,7 +108,10 @@ describe("MediaControls", () => {
         canvasStore.seekVideo(idA!, 15);
       });
 
-      expect(screen.getByText("15")).toBeInTheDocument();
+      expect(screen.getByRole("slider", { hidden: true })).toHaveAttribute(
+        "aria-valuetext",
+        "15:00 of 1:40:00",
+      );
 
       // Seek video B while not selected
       act(() => {
@@ -115,9 +123,11 @@ describe("MediaControls", () => {
         canvas.selectEntity(idB!);
       });
 
-      // Should show video B's time (85s = 1:25), not video A's frozen time
-      expect(screen.getByText("1:25")).toBeInTheDocument();
-      expect(screen.queryByText("15")).not.toBeInTheDocument();
+      // Should show video B's time (85s = 1:25), not video A's time
+      expect(screen.getByRole("slider", { hidden: true })).toHaveAttribute(
+        "aria-valuetext",
+        "1:25:00 of 3:20:00",
+      );
     });
 
     test("displays correct duration when switching videos", () => {
@@ -133,14 +143,20 @@ describe("MediaControls", () => {
       });
 
       // Video A duration: 30 seconds
-      expect(screen.getByText("30")).toBeInTheDocument();
+      expect(screen.getByRole("slider", { hidden: true })).toHaveAttribute(
+        "aria-valuetext",
+        "0:00 of 30:00",
+      );
 
       act(() => {
         canvas.selectEntity(idB!);
       });
 
       // Video B duration: 120 seconds = 2:00
-      expect(screen.getByText("2:00")).toBeInTheDocument();
+      expect(screen.getByRole("slider", { hidden: true })).toHaveAttribute(
+        "aria-valuetext",
+        "0:00 of 2:00:00",
+      );
     });
   });
 
@@ -172,6 +188,40 @@ describe("MediaControls", () => {
 
       const button = screen.getByRole("button", { name: /pause/i, hidden: true });
       expect(button).toBeInTheDocument();
+    });
+  });
+
+  describe("keyboard seeking", () => {
+    test("period and comma seek video by one frame", () => {
+      const { canvas } = renderWithCanvas(<MediaControls />);
+
+      let videoId: string;
+      act(() => {
+        videoId = canvas.addEntity(
+          createEntityInput({ mediaType: "video", videoDuration: 60, videoFps: 30 }),
+        );
+        canvas.selectEntity(videoId);
+      });
+
+      const slider = screen.getByRole("slider", { hidden: true });
+
+      act(() => {
+        canvasStore.seekVideo(videoId!, 0.05);
+      });
+
+      act(() => {
+        fireEvent.keyDown(slider, { key: "." });
+      });
+      expect(canvasStore.getState().entities.get(videoId!)?.playback?.currentTime).toBeCloseTo(
+        2 / 30,
+      );
+
+      act(() => {
+        fireEvent.keyDown(slider, { key: "," });
+      });
+      expect(canvasStore.getState().entities.get(videoId!)?.playback?.currentTime).toBeCloseTo(
+        1 / 30,
+      );
     });
   });
 
@@ -312,7 +362,10 @@ describe("MediaControls - GIF support", () => {
       });
 
       // Should display 5:50 (5 seconds, 50 centiseconds)
-      expect(screen.getByText("5")).toBeInTheDocument();
+      expect(screen.getByRole("slider", { hidden: true })).toHaveAttribute(
+        "aria-valuetext",
+        "5:50 of 10:00",
+      );
     });
 
     test("displays correct duration for GIF", () => {
@@ -324,7 +377,10 @@ describe("MediaControls - GIF support", () => {
       });
 
       // Duration should be 3:50 (3 seconds, 50 centiseconds)
-      expect(screen.getByText("3")).toBeInTheDocument();
+      expect(screen.getByRole("slider", { hidden: true })).toHaveAttribute(
+        "aria-valuetext",
+        "0:00 of 3:50",
+      );
     });
   });
 
@@ -356,6 +412,36 @@ describe("MediaControls - GIF support", () => {
 
       const button = screen.getByRole("button", { name: /pause/i, hidden: true });
       expect(button).toBeInTheDocument();
+    });
+  });
+
+  describe("keyboard seeking", () => {
+    test("period and comma seek GIF by one frame", () => {
+      const { canvas } = renderWithCanvas(<MediaControls />);
+
+      let gifId: string;
+      act(() => {
+        gifId = canvas.addEntity(
+          createEntityInput({ mediaType: "gif", gifDuration: 2, gifFrameCount: 10 }),
+        );
+        canvas.selectEntity(gifId);
+      });
+
+      const slider = screen.getByRole("slider", { hidden: true });
+
+      act(() => {
+        canvasStore.seekGif(gifId!, 0.25);
+      });
+
+      act(() => {
+        fireEvent.keyDown(slider, { key: "." });
+      });
+      expect(canvasStore.getState().entities.get(gifId!)?.playback?.currentTime).toBeCloseTo(0.4);
+
+      act(() => {
+        fireEvent.keyDown(slider, { key: "," });
+      });
+      expect(canvasStore.getState().entities.get(gifId!)?.playback?.currentTime).toBeCloseTo(0.2);
     });
   });
 
@@ -408,14 +494,20 @@ describe("MediaControls - GIF support", () => {
       });
 
       // Video duration: 120 seconds = 2:00
-      expect(screen.getByText("2:00")).toBeInTheDocument();
+      expect(screen.getByRole("slider", { hidden: true })).toHaveAttribute(
+        "aria-valuetext",
+        "0:00 of 2:00:00",
+      );
 
       act(() => {
         canvas.selectEntity(gifId!);
       });
 
       // GIF duration: 5 seconds
-      expect(screen.getByText("5")).toBeInTheDocument();
+      expect(screen.getByRole("slider", { hidden: true })).toHaveAttribute(
+        "aria-valuetext",
+        "0:00 of 5:00",
+      );
     });
   });
 });

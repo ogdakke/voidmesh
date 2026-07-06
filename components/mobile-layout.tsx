@@ -10,7 +10,7 @@ import {
   Settings,
 } from "iconoir-react";
 import { Canvas } from "./canvas";
-import { MediaControls } from "./infinite-canvas/media-controls.tsx";
+import { MediaControls } from "./media-controls/media-controls.tsx";
 import { MobileControls } from "./mobile-controls.tsx";
 import { BottomBarItem, MobileBottomBar } from "./mobile-bottom/mobile-bottom-bar.tsx";
 import { debugBarItem, items, type BarItem, type DebugBarItem } from "./mobile-bottom/bar-items.ts";
