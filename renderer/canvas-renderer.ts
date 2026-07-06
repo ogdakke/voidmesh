@@ -1333,12 +1333,10 @@ export class InfiniteCanvasRenderer {
     const height = entity.originalSize.height;
     const useExternalVideoSource = entity.mediaSource.type === "video";
 
-    // Time-based shaders and zero-copy video sources need the shader pass every frame that the
-    // canvas renders. The source frame lives behind the HTMLVideoElement, so reusing an old
-    // processed output can show stale/cross-ticked frames when multiple videos are playing.
-    const needsContinuousShaderRender =
-      this.#entityShaderRuntime.needsContinuousRender(entity) ||
-      (useExternalVideoSource && !entity.shaderParams.showOriginal);
+    // Time-based shaders need the shader pass every canvas render. Processed videos do not:
+    // GameLoop marks them dirty only when a decoded video frame changes, so viewport-only
+    // renders can safely reuse the cached processed texture instead of re-running the shader.
+    const needsContinuousShaderRender = this.#entityShaderRuntime.needsContinuousRender(entity);
 
     // Check if we have a valid processed texture.
     const cachedTexture = this.#entityTextures.get(entity.id);
