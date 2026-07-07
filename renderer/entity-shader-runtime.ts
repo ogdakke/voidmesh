@@ -1,6 +1,6 @@
 import { config } from "#config";
 import { isErrorDiffusion, ShaderType } from "#types/canvas.ts";
-import type { RGBA } from "#types/canvas.ts";
+import type { MediaAlphaMode, RGBA } from "#types/canvas.ts";
 import { AlphaMaskPass } from "./alpha-mask-pass.ts";
 import { CopyPass } from "./copy-pass.ts";
 import type { EffectRenderEntity } from "./effect-render-entity.ts";
@@ -130,6 +130,7 @@ export class EntityShaderRuntime {
     width: number;
     height: number;
     respectShowOriginal: boolean;
+    sourceAlphaMode?: MediaAlphaMode;
   }): void {
     const { entity, source, outputTexture, encoder, width, height } = params;
 
@@ -140,7 +141,7 @@ export class EntityShaderRuntime {
       return;
     }
 
-    const applySourceAlphaMask = shouldApplySourceAlphaMask(entity);
+    const applySourceAlphaMask = shouldApplySourceAlphaMask(entity, params.sourceAlphaMode);
     const needsBlur = this.#processingPipeline.needsBlur(entity);
     const needsAdjustments = this.#processingPipeline.needsAdjustments(entity);
     const postProcessEnabled = entity.shaderParams.postProcess?.enabled ?? false;
@@ -204,6 +205,7 @@ export class EntityShaderRuntime {
     let pipelineOutputTexture = outputTexture;
     let alphaMaskIntermediateTexture: GPUTexture | null = null;
     let postProcessIntermediateTexture: GPUTexture | null = null;
+    const reuseOutputTextureForPostProcessSource = postProcessEnabled && applySourceAlphaMask;
 
     if (applySourceAlphaMask) {
       alphaMaskIntermediateTexture = this.#acquireTexture(
@@ -217,13 +219,17 @@ export class EntityShaderRuntime {
 
     let mainShaderOutputTexture = pipelineOutputTexture;
     if (postProcessEnabled) {
-      postProcessIntermediateTexture = this.#acquireTexture(
-        width,
-        height,
-        postProcessUsage,
-        "Post-process intermediate texture",
-      );
-      mainShaderOutputTexture = postProcessIntermediateTexture;
+      if (reuseOutputTextureForPostProcessSource) {
+        mainShaderOutputTexture = outputTexture;
+      } else {
+        postProcessIntermediateTexture = this.#acquireTexture(
+          width,
+          height,
+          postProcessUsage,
+          "Post-process intermediate texture",
+        );
+        mainShaderOutputTexture = postProcessIntermediateTexture;
+      }
     }
 
     if (shaderSource.kind === "external") {
@@ -249,13 +255,16 @@ export class EntityShaderRuntime {
       this.#releaseTexture(adjustmentsOutputTexture, width, height, preProcessUsage);
     }
 
-    if (postProcessIntermediateTexture) {
+    if (postProcessEnabled) {
       this.#processingPipeline.applyPostProcessing(
         entity,
-        postProcessIntermediateTexture,
+        mainShaderOutputTexture,
         pipelineOutputTexture,
         encoder,
       );
+    }
+
+    if (postProcessIntermediateTexture) {
       this.#releaseTexture(postProcessIntermediateTexture, width, height, postProcessUsage);
     }
 
@@ -336,7 +345,14 @@ function shaderImmediatesDisabledByLocation(): boolean {
   return new URLSearchParams(search).get("shaderImmediates") === "0";
 }
 
-function shouldApplySourceAlphaMask(entity: EffectRenderEntity): boolean {
+function shouldApplySourceAlphaMask(
+  entity: EffectRenderEntity,
+  sourceAlphaMode: MediaAlphaMode | undefined,
+): boolean {
+  if (sourceAlphaMode === "none") {
+    return false;
+  }
+
   if (entity.shaderType !== ShaderType.dithering) return true;
 
   const ditheringKind = entity.shaderParams.dithering?.kind;

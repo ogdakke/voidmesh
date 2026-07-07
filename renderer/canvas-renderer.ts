@@ -13,7 +13,13 @@ import {
   getViewportMatrix,
   getViewportWorldBounds,
 } from "../lib/canvas-math.ts";
-import { type Bounds, type RGBA, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
+import {
+  MediaType,
+  type Bounds,
+  type RGBA,
+  type ShaderCanvasEntity,
+  type Viewport,
+} from "#types/canvas.ts";
 import compositionShaderSource from "./composition.wgsl?raw";
 import { CopyPass } from "./copy-pass.ts";
 import { DisintegrationParticleSystem } from "./disintegration-particles.ts";
@@ -221,7 +227,13 @@ export class InfiniteCanvasRenderer {
   #viewportLensSampler: GPUSampler | null = null;
   #viewportLensUniformData = new ArrayBuffer(48);
   #viewportLensFloatView = new Float32Array(this.#viewportLensUniformData);
-  #viewportLensTexture: { width: number; height: number; texture: GPUTexture } | null = null;
+  #viewportLensTexture: {
+    width: number;
+    height: number;
+    texture: GPUTexture;
+    view: GPUTextureView;
+    bindGroup: GPUBindGroup;
+  } | null = null;
 
   // Wlur progressive full-canvas overlay
   #wlurPass: WlurPass | null = null;
@@ -819,25 +831,58 @@ export class InfiniteCanvasRenderer {
     this.#viewportLensTexture = null;
   }
 
-  #getOrCreateViewportLensTexture(width: number, height: number): GPUTexture {
+  #shouldApplyViewportLensDistortion(): boolean {
+    const lens = this.#viewportLensConfig;
+    return (
+      lens.enabled &&
+      (lens.strength > 0.001 || lens.dispersion > 0.001) &&
+      this.#viewportLensPipeline !== null &&
+      this.#viewportLensBindGroupLayout !== null &&
+      this.#viewportLensUniformBuffer !== null &&
+      this.#viewportLensSampler !== null
+    );
+  }
+
+  #getOrCreateViewportLensTexture(
+    width: number,
+    height: number,
+  ): { texture: GPUTexture; view: GPUTextureView } | null {
     const cached = this.#viewportLensTexture;
     if (cached && cached.width === width && cached.height === height) {
-      return cached.texture;
+      return cached;
+    }
+
+    if (
+      !this.#device ||
+      !this.#viewportLensBindGroupLayout ||
+      !this.#viewportLensUniformBuffer ||
+      !this.#viewportLensSampler
+    ) {
+      return null;
     }
 
     this.#destroyViewportLensTexture();
-    const texture = this.#device!.createTexture({
+    const texture = this.#device.createTexture({
       label: `Viewport lens input (${width}x${height})`,
       size: [width, height],
       format: this.#canvasFormat,
       usage:
         GPUTextureUsage.TEXTURE_BINDING |
         GPUTextureUsage.RENDER_ATTACHMENT |
-        GPUTextureUsage.COPY_DST |
         GPUTextureUsage.COPY_SRC,
     });
-    this.#viewportLensTexture = { width, height, texture };
-    return texture;
+    const view = texture.createView();
+    const bindGroup = this.#device.createBindGroup({
+      label: "Viewport lens distortion bind group",
+      layout: this.#viewportLensBindGroupLayout,
+      entries: [
+        { binding: 0, resource: view },
+        { binding: 1, resource: this.#viewportLensSampler },
+        { binding: 2, resource: { buffer: this.#viewportLensUniformBuffer } },
+      ],
+    });
+    this.#viewportLensTexture = { width, height, texture, view, bindGroup };
+    return this.#viewportLensTexture;
   }
 
   #createViewportLensPipeline(): void {
@@ -891,29 +936,19 @@ export class InfiniteCanvasRenderer {
 
   #encodeViewportLensDistortion(
     encoder: GPUCommandEncoder,
-    sourceTexture: GPUTexture,
     targetView: GPUTextureView,
     width: number,
     height: number,
   ): boolean {
-    const lens = this.#viewportLensConfig;
-    if (
-      !lens.enabled ||
-      (lens.strength <= 0.001 && lens.dispersion <= 0.001) ||
-      !this.#viewportLensPipeline ||
-      !this.#viewportLensBindGroupLayout ||
-      !this.#viewportLensUniformBuffer ||
-      !this.#viewportLensSampler
-    ) {
+    if (!this.#shouldApplyViewportLensDistortion()) {
       return false;
     }
 
-    const inputTexture = this.#getOrCreateViewportLensTexture(width, height);
-    encoder.copyTextureToTexture(
-      { texture: sourceTexture },
-      { texture: inputTexture },
-      { width, height },
-    );
+    const lens = this.#viewportLensConfig;
+    const lensTexture = this.#getOrCreateViewportLensTexture(width, height);
+    if (!lensTexture || !this.#viewportLensUniformBuffer || !this.#viewportLensPipeline) {
+      return false;
+    }
 
     const v = this.#viewportLensFloatView;
     v[0] = width;
@@ -934,16 +969,6 @@ export class InfiniteCanvasRenderer {
       this.#viewportLensUniformData,
     );
 
-    const bindGroup = this.#device!.createBindGroup({
-      label: "Viewport lens distortion bind group",
-      layout: this.#viewportLensBindGroupLayout,
-      entries: [
-        { binding: 0, resource: inputTexture.createView() },
-        { binding: 1, resource: this.#viewportLensSampler },
-        { binding: 2, resource: { buffer: this.#viewportLensUniformBuffer } },
-      ],
-    });
-
     const pass = encoder.beginRenderPass({
       label: "Viewport lens distortion pass",
       colorAttachments: [
@@ -956,7 +981,7 @@ export class InfiniteCanvasRenderer {
       ],
     });
     pass.setPipeline(this.#viewportLensPipeline);
-    pass.setBindGroup(0, bindGroup);
+    pass.setBindGroup(0, this.#viewportLensTexture!.bindGroup);
     pass.draw(3);
     pass.end();
     return true;
@@ -1128,6 +1153,8 @@ export class InfiniteCanvasRenderer {
       width: entity.originalSize.width,
       height: entity.originalSize.height,
       respectShowOriginal: true,
+      sourceAlphaMode:
+        entity.mediaSource.type === MediaType.video ? entity.mediaSource.alphaMode : undefined,
     });
 
     this.#device.queue.submit([encoder.finish()]);
@@ -1465,6 +1492,8 @@ export class InfiniteCanvasRenderer {
       width,
       height,
       respectShowOriginal: true,
+      sourceAlphaMode:
+        entity.mediaSource.type === MediaType.video ? entity.mediaSource.alphaMode : undefined,
     });
 
     // Cache and return (source texture stays in #entitySourceTextures)
@@ -1741,6 +1770,11 @@ export class InfiniteCanvasRenderer {
       return;
     }
     const targetView = texture.createView();
+    const viewportLensTarget = this.#shouldApplyViewportLensDistortion()
+      ? this.#getOrCreateViewportLensTexture(width, height)
+      : null;
+    const sceneTargetTexture = viewportLensTarget?.texture ?? texture;
+    const sceneTargetView = viewportLensTarget?.view ?? targetView;
 
     // Pass 1: Render dot grid background
     markPhaseStart("grid-pass");
@@ -1748,7 +1782,7 @@ export class InfiniteCanvasRenderer {
       label: "Grid render pass",
       colorAttachments: [
         {
-          view: targetView,
+          view: sceneTargetView,
           loadOp: "clear",
           storeOp: "store",
           clearValue: { r: 0, g: 0, b: 0, a: 0 },
@@ -1772,7 +1806,7 @@ export class InfiniteCanvasRenderer {
       label: "Entity composition pass",
       colorAttachments: [
         {
-          view: targetView,
+          view: sceneTargetView,
           loadOp: "load",
           storeOp: "store",
         },
@@ -1808,9 +1842,9 @@ export class InfiniteCanvasRenderer {
           !this.#actionLayerBlurCacheValid || state.dirty || hasAnimatingContent;
 
         if (blurNeedsUpdate) {
-          // Copy swapchain → input texture
+          // Copy the pre-lens scene → input texture
           encoder.copyTextureToTexture(
-            { texture },
+            { texture: sceneTargetTexture },
             { texture: blurTextures.input },
             { width, height },
           );
@@ -1850,7 +1884,7 @@ export class InfiniteCanvasRenderer {
           label: "Action layer blit pass",
           colorAttachments: [
             {
-              view: targetView,
+              view: sceneTargetView,
               loadOp: "load",
               storeOp: "store",
             },
@@ -1876,7 +1910,7 @@ export class InfiniteCanvasRenderer {
         label: "Action layer sharp entity pass",
         colorAttachments: [
           {
-            view: targetView,
+            view: sceneTargetView,
             loadOp: "load",
             storeOp: "store",
           },
@@ -1893,7 +1927,7 @@ export class InfiniteCanvasRenderer {
         label: "Canvas callout pass",
         colorAttachments: [
           {
-            view: targetView,
+            view: sceneTargetView,
             loadOp: "load",
             storeOp: "store",
           },
@@ -1908,7 +1942,7 @@ export class InfiniteCanvasRenderer {
     }
 
     // Pass 2b: Render disintegration overlays (on top of entities)
-    this.#renderDisintegrationOverlays(encoder, targetView, frameDt);
+    this.#renderDisintegrationOverlays(encoder, sceneTargetView, frameDt);
 
     // Pass 3: Render all selection rectangles (drag-select and multi-select bounds)
     // Collect all active rectangles
@@ -1949,7 +1983,7 @@ export class InfiniteCanvasRenderer {
         label: "Selection rectangles render pass",
         colorAttachments: [
           {
-            view: targetView,
+            view: sceneTargetView,
             loadOp: "load", // Preserve previous content
             storeOp: "store",
           },
@@ -1964,13 +1998,9 @@ export class InfiniteCanvasRenderer {
     }
 
     markPhaseStart("viewport-lens-distortion");
-    const lensApplied = this.#encodeViewportLensDistortion(
-      encoder,
-      texture,
-      targetView,
-      width,
-      height,
-    );
+    const lensApplied = viewportLensTarget
+      ? this.#encodeViewportLensDistortion(encoder, targetView, width, height)
+      : false;
     markPhaseEnd("viewport-lens-distortion");
 
     // Final pass: WLUR progressive blur overlay (renders on top of everything)
