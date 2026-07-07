@@ -31,6 +31,9 @@ const DEFAULT_CONFIG: MediaProgressRenderConfig = {
   trackRadius: 999,
 };
 
+const SCRUB_ANIMATION_MS = 170;
+const SCRUB_ANIMATION_EPSILON = 0.001;
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -48,9 +51,9 @@ function resolveRenderConfig(root: HTMLElement): MediaProgressRenderConfig {
 
   return {
     trackColor: resolveCssVarColor("--gray-200", root) ?? DEFAULT_CONFIG.trackColor,
-    progressColor: resolveCssVarColor("--primary", root) ?? DEFAULT_CONFIG.progressColor,
+    progressColor: resolveCssVarColor("--media-progress-bar", root) ?? DEFAULT_CONFIG.progressColor,
     textColor: resolveCssVarColor("--color", root) ?? DEFAULT_CONFIG.textColor,
-    focusColor: resolveCssVarColor("--primary", root) ?? DEFAULT_CONFIG.focusColor,
+    focusColor: resolveCssVarColor("--media-progress-bar", root) ?? DEFAULT_CONFIG.focusColor,
     fontFamily: style.fontFamily || DEFAULT_CONFIG.fontFamily,
     fontWeight: style.fontWeight || DEFAULT_CONFIG.fontWeight,
     fontSize,
@@ -70,6 +73,9 @@ export function MediaProgressCanvas({
   const configRef = useRef<MediaProgressRenderConfig>(DEFAULT_CONFIG);
   const sizeRef = useRef({ width: 0, height: 0 });
   const rafRef = useRef<number | null>(null);
+  const lastFrameTimeRef = useRef(0);
+  const scrubProgressRef = useRef(0);
+  const scrubTargetRef = useRef(0);
   const isDraggingRef = useRef(false);
   const isHoveredRef = useRef(false);
   const isFocusedRef = useRef(false);
@@ -83,6 +89,29 @@ export function MediaProgressCanvas({
     hovered: false,
     focused: false,
     dragging: false,
+    scrubProgress: 0,
+  });
+
+  const updateScrubAnimation = useEffectEvent(() => {
+    const now = performance.now();
+    const previous = lastFrameTimeRef.current || now;
+    lastFrameTimeRef.current = now;
+
+    const target = scrubTargetRef.current;
+    const current = scrubProgressRef.current;
+    const delta = Math.max(0, now - previous);
+    const amount = 1 - Math.exp((-delta * 4) / SCRUB_ANIMATION_MS);
+    const next = current + (target - current) * amount;
+
+    if (Math.abs(target - next) <= SCRUB_ANIMATION_EPSILON) {
+      scrubProgressRef.current = target;
+    } else {
+      scrubProgressRef.current = next;
+    }
+  });
+
+  const isScrubAnimating = useEffectEvent(() => {
+    return Math.abs(scrubTargetRef.current - scrubProgressRef.current) > SCRUB_ANIMATION_EPSILON;
   });
 
   const updateAria = useEffectEvent((force = false) => {
@@ -116,6 +145,7 @@ export function MediaProgressCanvas({
 
     const duration = source.getDuration();
     const currentTime = clamp(source.getCurrentTime(), 0, duration || Number.POSITIVE_INFINITY);
+    updateScrubAnimation();
     const frame: MediaProgressFrame = {
       currentTime,
       duration,
@@ -124,6 +154,7 @@ export function MediaProgressCanvas({
       hovered: isHoveredRef.current,
       focused: isFocusedRef.current,
       dragging: isDraggingRef.current,
+      scrubProgress: scrubProgressRef.current,
     };
     lastFrameRef.current = frame;
     captureMediaControlSnapshot(source);
@@ -141,7 +172,7 @@ export function MediaProgressCanvas({
     if (rafRef.current != null) return;
     const tick = () => {
       draw();
-      if (source.getIsPlaying() || isDraggingRef.current) {
+      if (source.getIsPlaying() || isDraggingRef.current || isScrubAnimating()) {
         rafRef.current = requestAnimationFrame(tick);
       } else {
         rafRef.current = null;
@@ -227,6 +258,8 @@ export function MediaProgressCanvas({
     event.currentTarget.focus();
     event.currentTarget.setPointerCapture(event.pointerId);
     isDraggingRef.current = true;
+    scrubTargetRef.current = 1;
+    lastFrameTimeRef.current = performance.now();
     lastSeekTimeRef.current = null;
     actions.seekStart();
     seekFromClientX(event.clientX);
@@ -246,6 +279,8 @@ export function MediaProgressCanvas({
       // Pointer capture may already be released by the browser.
     }
     isDraggingRef.current = false;
+    scrubTargetRef.current = 0;
+    lastFrameTimeRef.current = performance.now();
     lastSeekTimeRef.current = null;
     actions.seekEnd();
     draw();

@@ -34,6 +34,8 @@
     color-mix(in oklch, var(--destructive) 40%, var(--color))
   );
 
+  --media-progress-bar: light-dark(var(--gray-400), var(--color));
+
   --outline: color-mix(in srgb, var(--color) 50%, var(--background));
   /* Layout */
   --screen-s: calc(384rem / 16);

@@ -8,6 +8,7 @@ export interface MediaProgressFrame {
   hovered: boolean;
   focused: boolean;
   dragging: boolean;
+  scrubProgress: number;
 }
 
 export interface MediaProgressRenderConfig {
@@ -97,8 +98,9 @@ export function renderMediaProgress(
   const progress = frame.duration > 0 ? clamp01(frame.currentTime / frame.duration) : 0;
   const trackX = EDGE_INSET;
   const trackWidth = Math.max(0, width - EDGE_INSET * 2);
-  const trackHeight = cfg.trackHeight;
-  const trackY = Math.round(height / 2 + 4 - trackHeight / 2);
+  const trackHeight = cfg.trackHeight + (cfg.trackHeight / 2) * frame.scrubProgress;
+  const trackY = Math.round(height / 2 + 4 - cfg.trackHeight / 2);
+  const trackRadius = Math.min(cfg.trackRadius, trackHeight / 2);
   const textY = cfg.textY;
 
   ctx.save();
@@ -111,11 +113,11 @@ export function renderMediaProgress(
 
   ctx.save();
   ctx.fillStyle = cfg.trackColor;
-  drawRoundRect(ctx, trackX, trackY, trackWidth, trackHeight, cfg.trackRadius);
+  drawRoundRect(ctx, trackX, trackY, trackWidth, trackHeight, trackRadius);
 
   if (progress > 0) {
     ctx.beginPath();
-    ctx.roundRect(trackX, trackY, trackWidth, trackHeight, cfg.trackRadius);
+    ctx.roundRect(trackX, trackY, trackWidth, trackHeight, trackRadius);
     ctx.clip();
     ctx.fillStyle = cfg.progressColor;
     ctx.fillRect(trackX, trackY, trackWidth * progress, trackHeight);
