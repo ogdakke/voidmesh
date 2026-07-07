@@ -189,7 +189,6 @@
   z-index: var(--canvas-overlay-z-2);
   padding: 0;
   border: 0;
-  border-radius: 50%;
   background: transparent;
   color: transparent;
   cursor: grab;

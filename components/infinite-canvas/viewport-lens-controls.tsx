@@ -240,14 +240,34 @@ export default function ViewportLensControls({
           </Checkbox>
 
           <Slider
-            name="minimap-radius"
-            label="Radius"
-            min={40}
+            name="minimap-width"
+            label="Width"
+            min={80}
+            max={320}
+            step={1}
+            value={minimapConfig.width}
+            showValue
+            onValueChange={(value) => updateMinimapConfig({ width: value })}
+          />
+          <Slider
+            name="minimap-height"
+            label="Height"
+            min={80}
+            max={320}
+            step={1}
+            value={minimapConfig.height}
+            showValue
+            onValueChange={(value) => updateMinimapConfig({ height: value })}
+          />
+          <Slider
+            name="minimap-border-radius"
+            label="Corner radius"
+            min={0}
             max={180}
             step={1}
-            value={minimapConfig.radius}
+            value={minimapConfig.borderRadius}
             showValue
-            onValueChange={(value) => updateMinimapConfig({ radius: value })}
+            onValueChange={(value) => updateMinimapConfig({ borderRadius: value })}
           />
           <Slider
             name="minimap-margin"
