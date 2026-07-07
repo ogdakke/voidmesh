@@ -325,6 +325,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     });
     preferences.getHaptics().then((v) => canvasStore.setHaptics(v));
     preferences.getCanvasLensing().then((v) => canvasStore.setCanvasLensing(v));
+    preferences.getMinimap().then((v) => canvasStore.setMinimap(v));
     preferences.getCustomPalettes().then((palettes) => paletteStore.setPalettes(palettes));
   }, []);
 
@@ -1954,6 +1955,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     preferences.setHaptics(enabled);
   };
 
+  const setMinimapPreference = (enabled: boolean) => {
+    canvasStore.setMinimap(enabled);
+    preferences.setMinimap(enabled);
+  };
+
   const setCanvasLensingPreference = (value: CanvasLensing) => {
     canvasStore.setCanvasLensing(value);
     preferences.setCanvasLensing(value);
@@ -2179,6 +2185,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setSnapToGrid: setSnapToGridPreference,
     setFancyDelete: setFancyDeletePreference,
     setHaptics: setHapticsPreference,
+    setMinimap: setMinimapPreference,
     setCanvasLensing: setCanvasLensingPreference,
     changeSize,
     copySelectedEntityToClipboard,
@@ -2228,6 +2235,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       setSnapToGrid: setSnapToGridPreference,
       setFancyDelete: setFancyDeletePreference,
       setHaptics: setHapticsPreference,
+      setMinimap: setMinimapPreference,
       setCanvasLensing: setCanvasLensingPreference,
       changeSize,
       copySelectedEntityToClipboard,
@@ -2279,6 +2287,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setSnapToGrid: (...args) => commandsImplRef.current.setSnapToGrid(...args),
     setFancyDelete: (...args) => commandsImplRef.current.setFancyDelete(...args),
     setHaptics: (...args) => commandsImplRef.current.setHaptics(...args),
+    setMinimap: (...args) => commandsImplRef.current.setMinimap(...args),
     setCanvasLensing: (...args) => commandsImplRef.current.setCanvasLensing(...args),
     changeSize: (...args) => commandsImplRef.current.changeSize(...args),
     copySelectedEntityToClipboard: () => commandsImplRef.current.copySelectedEntityToClipboard(),

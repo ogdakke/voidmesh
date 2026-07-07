@@ -950,3 +950,10 @@ export function getViewportLensDistortionConfig(
     return { ...config.canvas.lens.extreme, enabled: true };
   return { ...config.canvas.lens.subtle, enabled: false };
 }
+
+export function getMiniMapConfig({ enabled }: { enabled: boolean }): MinimapConfig {
+  return {
+    ...config.canvas.minimap,
+    enabled,
+  };
+}

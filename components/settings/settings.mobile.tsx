@@ -12,6 +12,7 @@ import {
   FeedbackLink,
   HapticsToggle,
   LinkItem,
+  MinimapToggle,
   RedoOnboardingLink,
   ShareLink,
   SnapToGridToggle,
@@ -63,6 +64,9 @@ export default function SettingsDrawer() {
           </div>
           <div className="settings-drawer-switch">
             <HapticsToggle />
+          </div>
+          <div className="settings-drawer-switch">
+            <MinimapToggle />
           </div>
           <div className="settings-drawer-switch">
             <CanvasLensingSelect />

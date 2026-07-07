@@ -3,13 +3,13 @@ import DesktopSettings from "#components/settings/settings.desktop.tsx";
 import {
   useCanvasCommands,
   useCanvasInteraction,
+  useCanvasPreferences,
   useMultiSelectMode,
   useSelectedEntityIds,
   useViewportZoom,
 } from "#context/use-canvas.ts";
 import { useLayout } from "#context/use-layout.ts";
 import { useIsMobile } from "#hooks/use-is-mobile.ts";
-import { config } from "#lib/config/index.ts";
 import { Check, Enlarge, Reduce, Square3dFromCenter } from "iconoir-react";
 import type { RefObject } from "react";
 import SettingsDrawer from "../settings/settings.mobile.tsx";
@@ -34,13 +34,14 @@ export function CanvasOverlay({
 }: CanvasOverlayProps) {
   const isMobile = useIsMobile();
   const { isFullscreen } = useLayout();
+  const { minimap } = useCanvasPreferences();
 
   return (
     <div className="infinite-canvas__overlay">
       <div ref={perfRef} className="infinite-canvas__perf-overlay" style={{ display: "none" }} />
       {!isMobile && (
         <>
-          {config.canvas.minimap.enabled && (
+          {minimap && (
             <MinimapControl containerRef={containerRef} onZoomReset={resetZoom} />
           )}
           <DesktopTopControls />

@@ -38,4 +38,10 @@ export const preferences = {
   async setCanvasLensing(value: CanvasLensing): Promise<void> {
     await storage.setItem("canvasLensing", value);
   },
+  async getMinimap(): Promise<boolean> {
+    return (await storage.getItem<boolean>("minimap")) ?? false;
+  },
+  async setMinimap(enabled: boolean): Promise<void> {
+    await storage.setItem("minimap", enabled);
+  },
 };
