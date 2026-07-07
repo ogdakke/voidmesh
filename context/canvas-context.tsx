@@ -76,6 +76,24 @@ import {
 // only the most recent owner may destroy resources on eviction.
 let nextOwnerToken = 0;
 const resourceOwners = new Map<string, number>();
+const RENDER_ERROR_TOAST_ID = "canvas-render-error";
+
+function formatErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string") return error;
+  return "Unknown error";
+}
+
+function isFirefoxExternalTextureCorsError(error: unknown): boolean {
+  if (!(error instanceof DOMException)) return false;
+
+  const message = error.message;
+  return (
+    error.name === "SecurityError" &&
+    message.includes("GPUDevice.importExternalTexture") &&
+    message.includes("Cross-origin elements require CORS")
+  );
+}
 
 function claimResourceOwnership(entityId: string): number {
   const token = ++nextOwnerToken;
@@ -1751,6 +1769,26 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     rendererRef.current = renderer;
     setRendererState(renderer);
     setColorSpace(renderer.colorConfig.supportsP3 ? ColorSpace.displayP3 : ColorSpace.srgb);
+    gameLoop.setRenderErrorHandler((error) => {
+      // Firefox's WebGPU external texture path can throw this while scrubbing videos:
+      //   DOMException: GPUDevice.importExternalTexture: Cross-origin elements require CORS!
+      //
+      // Our uploaded/dropped/pasted videos are loaded from user-provided File/Blob data via
+      // same-origin blob: URLs. There is no server-side CORS header we can add for local files.
+      // Chrome and Safari accept the same source path, so for now we treat this as a Firefox
+      // WebGPU external-texture edge case and intentionally avoid surfacing it to users.
+      //
+      // TODO: Add the Firefox/Bugzilla issue URL here once filed.
+      if (isFirefoxExternalTextureCorsError(error)) return true;
+
+      const message = formatErrorMessage(error);
+      toastManager.add({
+        id: RENDER_ERROR_TOAST_ID,
+        title: "Canvas render failed",
+        description: message,
+        type: "destructive",
+      });
+    });
     gameLoop.setRenderer(renderer);
   };
 

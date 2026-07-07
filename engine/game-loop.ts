@@ -151,10 +151,13 @@ interface VideoFrameTracker {
   generation: number;
 }
 
+export type RenderErrorHandler = (error: unknown) => boolean | void;
+
 export class GameLoop {
   readonly #deps: GameLoopDeps;
   #logger = logger;
   #renderer: InfiniteCanvasRenderer | null = null;
+  #onRenderError: RenderErrorHandler | null = null;
   #container: HTMLElement | null = null;
   #containerRect: DOMRect = new DOMRect(0, 0, 0, 0);
   #resizeObserver: ResizeObserver | null = null;
@@ -259,6 +262,10 @@ export class GameLoop {
     );
     // Reset first frame flag when renderer changes
     this.#firstFrameRendered = false;
+  }
+
+  setRenderErrorHandler(handler: RenderErrorHandler | null): void {
+    this.#onRenderError = handler;
   }
 
   setContainer(container: HTMLElement): void {
@@ -392,13 +399,20 @@ export class GameLoop {
     // 8. Render only when needed (skip idle frames)
     if (this.#renderer?.isReady && needsRender) {
       if (renderState.debugMode) performance.mark("studio-render-start");
-      this.#renderer.render(renderState);
-      this.#firstFrameRendered = true;
-      if (renderState.debugMode) {
-        performance.mark("studio-render-end");
-        performance.measure("studio-render", "studio-render-start", "studio-render-end");
+      try {
+        this.#renderer.render(renderState);
+        this.#firstFrameRendered = true;
+        if (renderState.debugMode) {
+          performance.mark("studio-render-end");
+          performance.measure("studio-render", "studio-render-start", "studio-render-end");
+        }
+        this.#deps.perf.onRender(this.#renderer.getFrameStats(), renderState.debugMode);
+      } catch (error) {
+        const handled = this.#onRenderError?.(error) === true;
+        if (!handled) {
+          this.#logger.error("[GameLoop] Render failed", error);
+        }
       }
-      this.#deps.perf.onRender(this.#renderer.getFrameStats(), renderState.debugMode);
     }
 
     // 10. Clear dirty flags

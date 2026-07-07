@@ -7,6 +7,8 @@ import { setupCanvasTest } from "../helpers/test-setup.ts";
 import { createTestEntity } from "../helpers/test-entity.ts";
 import { createMockGameLoopDeps } from "../helpers/game-loop-deps.mock.ts";
 import type { Point } from "#types/canvas.ts";
+import type { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
+import { logger } from "#lib/client.logger.ts";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -81,6 +83,60 @@ beforeEach(() => {
 afterEach(() => {
   cleanupCanvas();
   vi.restoreAllMocks();
+});
+
+describe("Render loop errors", () => {
+  test("reports render errors and keeps the animation loop alive", () => {
+    const error = new Error("render boom");
+    const renderErrorHandler = vi.fn<(error: unknown) => void>();
+    const requestAnimationFrame = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation(() => 1);
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const loggerError = vi.spyOn(logger, "error").mockImplementation(() => undefined);
+    const renderer = {
+      isReady: true,
+      device: null,
+      colorConfig: { canvasFormat: "rgba8unorm", canvasColorSpace: "srgb" },
+      render: vi.fn<() => void>(() => {
+        throw error;
+      }),
+      getFrameStats: vi.fn<() => object>(),
+    } as unknown as InfiniteCanvasRenderer;
+
+    gl.setRenderer(renderer);
+    gl.setRenderErrorHandler(renderErrorHandler);
+
+    expect(() => gl.start()).not.toThrow();
+    expect(renderErrorHandler).toHaveBeenCalledWith(error);
+    expect(loggerError).toHaveBeenCalledWith("[GameLoop] Render failed", error);
+    expect(deps.perf.onRender).not.toHaveBeenCalled();
+    expect(requestAnimationFrame).toHaveBeenCalled();
+  });
+
+  test("does not log handled render errors", () => {
+    const error = new Error("expected render failure");
+    const renderErrorHandler = vi.fn<(error: unknown) => boolean>(() => true);
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const loggerError = vi.spyOn(logger, "error").mockImplementation(() => undefined);
+    const renderer = {
+      isReady: true,
+      device: null,
+      colorConfig: { canvasFormat: "rgba8unorm", canvasColorSpace: "srgb" },
+      render: vi.fn<() => void>(() => {
+        throw error;
+      }),
+      getFrameStats: vi.fn<() => object>(),
+    } as unknown as InfiniteCanvasRenderer;
+
+    gl.setRenderer(renderer);
+    gl.setRenderErrorHandler(renderErrorHandler);
+
+    expect(() => gl.start()).not.toThrow();
+    expect(renderErrorHandler).toHaveBeenCalledWith(error);
+    expect(loggerError).not.toHaveBeenCalled();
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
