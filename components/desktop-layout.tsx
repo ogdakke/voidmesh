@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
 import { Canvas } from "./canvas";
-import { MediaControls } from "./infinite-canvas/media-controls.tsx";
+import { MediaControls } from "./media-controls/media-controls.tsx";
 import { SidebarLeft } from "./sidebar-left";
 import { SidebarRight } from "./sidebar-right";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "#ui/resizable/resizable.tsx";
