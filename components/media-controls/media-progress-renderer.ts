@@ -15,7 +15,6 @@ export interface MediaProgressRenderConfig {
   trackColor: string;
   progressColor: string;
   textColor: string;
-  focusColor: string;
   fontFamily: string;
   fontWeight: string;
   fontSize: number;
@@ -123,11 +122,5 @@ export function renderMediaProgress(
     ctx.fillRect(trackX, trackY, trackWidth * progress, trackHeight);
   }
 
-  if (frame.dragging || frame.focused) {
-    const markerX = trackX + trackWidth * progress;
-    ctx.fillStyle = cfg.focusColor;
-    ctx.globalAlpha = frame.dragging ? 0.4 : 0.28;
-    ctx.fillRect(Math.round(markerX) - 1, trackY - 5, 2, trackHeight + 10);
-  }
   ctx.restore();
 }
