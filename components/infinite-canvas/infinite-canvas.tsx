@@ -85,6 +85,7 @@ export function InfiniteCanvas() {
           </div>
         )}
         <CanvasOverlay
+          containerRef={containerRef}
           perfRef={perfRef}
           onboarding={onboarding}
           centerSelection={keybinds.centerSelection}

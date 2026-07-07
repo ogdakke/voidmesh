@@ -9,13 +9,16 @@ import {
 } from "#context/use-canvas.ts";
 import { useLayout } from "#context/use-layout.ts";
 import { useIsMobile } from "#hooks/use-is-mobile.ts";
+import { config } from "#lib/config/index.ts";
 import { Check, Enlarge, Reduce, Square3dFromCenter } from "iconoir-react";
 import type { RefObject } from "react";
 import SettingsDrawer from "../settings/settings.mobile.tsx";
 import { Button } from "../ui/button/index.tsx";
+import { MinimapControl } from "./minimap-control.tsx";
 import { UndoRedoButtons } from "./undo-redo.tsx";
 
 interface CanvasOverlayProps {
+  containerRef: RefObject<HTMLDivElement | null>;
   perfRef: RefObject<HTMLDivElement | null>;
   onboarding: { active: boolean; skip: () => void };
   centerSelection: () => void;
@@ -23,6 +26,7 @@ interface CanvasOverlayProps {
 }
 
 export function CanvasOverlay({
+  containerRef,
   perfRef,
   onboarding,
   centerSelection,
@@ -34,7 +38,14 @@ export function CanvasOverlay({
   return (
     <div className="infinite-canvas__overlay">
       <div ref={perfRef} className="infinite-canvas__perf-overlay" style={{ display: "none" }} />
-      {!isMobile && <DesktopTopControls />}
+      {!isMobile && (
+        <>
+          {config.canvas.minimap.enabled && (
+            <MinimapControl containerRef={containerRef} onZoomReset={resetZoom} />
+          )}
+          <DesktopTopControls />
+        </>
+      )}
       {!(isMobile && isFullscreen) && (
         <div className="infinite-canvas-toolrow">
           <CanvasToolRowStart onboarding={onboarding} />
