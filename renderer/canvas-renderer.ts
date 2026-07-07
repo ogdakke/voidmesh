@@ -13,7 +13,13 @@ import {
   getViewportMatrix,
   getViewportWorldBounds,
 } from "../lib/canvas-math.ts";
-import { type Bounds, type RGBA, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
+import {
+  MediaType,
+  type Bounds,
+  type RGBA,
+  type ShaderCanvasEntity,
+  type Viewport,
+} from "#types/canvas.ts";
 import compositionShaderSource from "./composition.wgsl?raw";
 import { CopyPass } from "./copy-pass.ts";
 import { DisintegrationParticleSystem } from "./disintegration-particles.ts";
@@ -1147,6 +1153,8 @@ export class InfiniteCanvasRenderer {
       width: entity.originalSize.width,
       height: entity.originalSize.height,
       respectShowOriginal: true,
+      sourceAlphaMode:
+        entity.mediaSource.type === MediaType.video ? entity.mediaSource.alphaMode : undefined,
     });
 
     this.#device.queue.submit([encoder.finish()]);
@@ -1484,6 +1492,8 @@ export class InfiniteCanvasRenderer {
       width,
       height,
       respectShowOriginal: true,
+      sourceAlphaMode:
+        entity.mediaSource.type === MediaType.video ? entity.mediaSource.alphaMode : undefined,
     });
 
     // Cache and return (source texture stays in #entitySourceTextures)
