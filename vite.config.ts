@@ -4,11 +4,14 @@ import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import basicSsl from "@vitejs/plugin-basic-ssl";
 import { VitePWA } from "vite-plugin-pwa";
 import babel from "@rolldown/plugin-babel";
+import type { Plugin } from "vite";
 import wgslMinifyPlugin from "./plugins/vite-plugin-wgsl-minify.ts";
 import imagePlugin from "./plugins/vite-plugin-image.ts";
+import { EnvAwareIcon } from "./plugins/vite-plugin-env-aware-icon.ts";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
+  const iconVariant = EnvAwareIcon.getIconVariant(env);
 
   return {
     publicDir: resolve(__dirname, "public"),
@@ -39,6 +42,7 @@ export default defineConfig(({ mode }) => {
       !!env.HTTPS && basicSsl(),
       wgslMinifyPlugin(),
       imagePlugin({ widths: [768, 1152] }),
+      EnvAwareIcon.appIconVariantPlugin(iconVariant),
       react(),
       babel({
         presets: [reactCompilerPreset()],
@@ -58,6 +62,18 @@ export default defineConfig(({ mode }) => {
           "favicon.png",
           "favicon.webp",
           "apple-touch-icon.png",
+          "assets/app-icons/local/favicon-16x16.png",
+          "assets/app-icons/local/favicon-32x32.png",
+          "assets/app-icons/local/favicon-64x64.png",
+          "assets/app-icons/local/favicon.png",
+          "assets/app-icons/local/favicon.webp",
+          "assets/app-icons/local/apple-touch-icon.png",
+          "assets/app-icons/preview/favicon-16x16.png",
+          "assets/app-icons/preview/favicon-32x32.png",
+          "assets/app-icons/preview/favicon-64x64.png",
+          "assets/app-icons/preview/favicon.png",
+          "assets/app-icons/preview/favicon.webp",
+          "assets/app-icons/preview/apple-touch-icon.png",
           "rect_192.png",
           "rect_512.png",
           "assets/manifest-icon-192.maskable.png",
