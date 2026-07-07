@@ -132,7 +132,7 @@ export default function ViewportLensControls({
             name="viewport-lens-strength"
             label="Roll"
             min={0}
-            max={4}
+            max={10}
             step={0.01}
             value={lensConfig.strength}
             showValue
@@ -172,7 +172,7 @@ export default function ViewportLensControls({
             name="viewport-lens-scale"
             label="Stretch"
             min={0}
-            max={4}
+            max={10}
             step={0.01}
             value={lensConfig.scale}
             showValue
