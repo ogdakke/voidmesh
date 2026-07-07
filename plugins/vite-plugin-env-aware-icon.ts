@@ -1,3 +1,5 @@
+import type { Plugin } from "vite";
+
 const iconVariantPaths = {
   local: "/assets/app-icons/local",
   preview: "/assets/app-icons/preview",

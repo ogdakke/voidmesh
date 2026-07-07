@@ -4,7 +4,6 @@ import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import basicSsl from "@vitejs/plugin-basic-ssl";
 import { VitePWA } from "vite-plugin-pwa";
 import babel from "@rolldown/plugin-babel";
-import type { Plugin } from "vite";
 import wgslMinifyPlugin from "./plugins/vite-plugin-wgsl-minify.ts";
 import imagePlugin from "./plugins/vite-plugin-image.ts";
 import { EnvAwareIcon } from "./plugins/vite-plugin-env-aware-icon.ts";
