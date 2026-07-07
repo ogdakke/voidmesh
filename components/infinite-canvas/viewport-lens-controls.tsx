@@ -323,7 +323,7 @@ export default function ViewportLensControls({
             name="minimap-strength"
             label="Roll"
             min={0}
-            max={4}
+            max={10}
             step={0.01}
             value={minimapConfig.strength}
             showValue
@@ -333,7 +333,7 @@ export default function ViewportLensControls({
             name="minimap-edge-width"
             label="Edge width"
             min={0.01}
-            max={0.9}
+            max={3}
             step={0.01}
             value={minimapConfig.edgeWidth}
             showValue
