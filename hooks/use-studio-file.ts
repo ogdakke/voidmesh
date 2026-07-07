@@ -1,5 +1,5 @@
 import { useState, useSyncExternalStore } from "react";
-import { useCanvasCommands } from "../context/use-canvas.ts";
+import { useCanvasCommands } from "#context/use-canvas.ts";
 import { toastManager, ToastType } from "#components/ui/toast/toast-manager.ts";
 import type {
   DeserializeOptions,

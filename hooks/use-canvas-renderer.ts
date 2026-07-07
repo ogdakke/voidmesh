@@ -1,6 +1,6 @@
 import { logger } from "#lib/client.logger.ts";
 import { useEffect, useRef, useState } from "react";
-import { InfiniteCanvasRenderer } from "../renderer/canvas-renderer.ts";
+import { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
 
 export interface UseCanvasRendererResult {
   renderer: InfiniteCanvasRenderer | null;

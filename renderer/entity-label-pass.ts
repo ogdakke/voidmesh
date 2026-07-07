@@ -1,5 +1,5 @@
-import { entityDragVisual } from "../engine/entity-drag-visual.ts";
-import { scheduler, type AnimationHandle } from "../lib/animation-scheduler.ts";
+import { entityDragVisual } from "#engine";
+import { scheduler, type AnimationHandle } from "#lib/animation-scheduler.ts";
 import { getCssVarValue, resolveCssColor, resolveCssVarColor } from "#lib/css.ts";
 import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
 import shaderSource from "./entity-label.wgsl?raw";

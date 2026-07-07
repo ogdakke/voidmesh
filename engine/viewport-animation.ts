@@ -1,12 +1,12 @@
 import { canvasStore } from "./canvas-store.ts";
 import type { Point, Viewport } from "#types/canvas.ts";
-import { lerpExp, lerpPoint, easings, type EasingFunction } from "../lib/canvas-math.ts";
-import { config } from "../lib/config/index.ts";
+import { lerpExp, lerpPoint, easings, type EasingFunction } from "#lib/canvas-math.ts";
+import { config } from "#config";
 import {
   scheduler as defaultScheduler,
   type AnimationScheduler,
   type AnimationHandle,
-} from "../lib/animation-scheduler.ts";
+} from "#lib/animation-scheduler.ts";
 
 export interface ViewportAnimationOptions {
   /** Animation duration in milliseconds (default: 300) */

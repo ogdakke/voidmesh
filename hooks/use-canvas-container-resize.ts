@@ -1,5 +1,5 @@
 import { type RefObject, useEffect, useRef } from "react";
-import { canvasStore } from "../engine/index.ts";
+import { canvasStore } from "#engine";
 
 /**
  * Observes canvas container size changes, adjusts the viewport to keep the

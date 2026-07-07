@@ -1,4 +1,4 @@
-import { PerfGraphRenderer } from "../renderer/perf-graph-renderer.ts";
+import { PerfGraphRenderer } from "#renderer/perf-graph-renderer.ts";
 
 export interface FrameStats {
   renderTime: number;

@@ -11,10 +11,10 @@ import {
   screenToWorld,
   SNAP_GRID_SIZE,
   snapToGrid,
-} from "../lib/canvas-math.ts";
-import { config, type TouchConfig } from "../lib/config/index.ts";
-import { VelocityTracker } from "../lib/touch-scroll/index.ts";
-import type { InfiniteCanvasRenderer } from "../renderer/canvas-renderer.ts";
+} from "#lib/canvas-math.ts";
+import { config, type TouchConfig } from "#config";
+import { VelocityTracker } from "#lib/touch-scroll/index.ts";
+import type { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
 import {
   DragTargetType,
   isAnimatedEntity,
@@ -31,7 +31,7 @@ import { actionLayerController } from "./action-layer-controller.ts";
 import { perfOverlay } from "./perf-overlay.ts";
 import { viewportAnimation } from "./viewport-animation.ts";
 import { MomentumController, type MomentumDeps } from "./momentum-controller.ts";
-import { scheduler, type AnimationHandle } from "../lib/animation-scheduler.ts";
+import { scheduler, type AnimationHandle } from "#lib/animation-scheduler.ts";
 import { haptic } from "#lib/haptic.ts";
 import { OnboardingStepId } from "#lib/onboarding.ts";
 import { completeOnboardingStepFromEvent } from "#lib/onboarding-runtime.ts";

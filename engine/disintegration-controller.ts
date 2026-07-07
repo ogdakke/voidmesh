@@ -1,5 +1,5 @@
 import type { Point } from "#types/canvas.ts";
-import { easings } from "../lib/canvas-math.ts";
+import { easings } from "#lib/canvas-math.ts";
 import { canvasStore } from "./canvas-store.ts";
 import {
   scheduler as defaultScheduler,

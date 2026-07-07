@@ -5,10 +5,10 @@
  * Performant: cached entity order, no expensive operations during rapid key presses.
  */
 import { type RefObject } from "react";
-import { canvasStore, viewportAnimation } from "../engine/index.ts";
+import { canvasStore, viewportAnimation } from "#engine";
 import { useIsMobile } from "./use-is-mobile.ts";
-import { calculateFitToView, easings } from "../lib/canvas-math.ts";
-import { config } from "../lib/config/index.ts";
+import { calculateFitToView, easings } from "#lib/canvas-math.ts";
+import { config } from "#config";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
 
 // Cached entity order - invalidated when entities change

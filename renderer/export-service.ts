@@ -1,5 +1,5 @@
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
-import { getFrameAtTime } from "../lib/gif-decoder.ts";
+import { getFrameAtTime } from "#lib/gif-decoder.ts";
 import { CopyPass } from "./copy-pass.ts";
 import { type ImageExportOptions, getImageMimeType } from "./export-formats.ts";
 import type { GpuColorConfig } from "./gpu-color-space.ts";

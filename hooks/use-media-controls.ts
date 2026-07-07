@@ -8,9 +8,9 @@
  * This prevents components that only need actions from re-rendering every frame during playback.
  */
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { canvasStore } from "../engine/index.ts";
-import { logger } from "../lib/client.logger.ts";
-import { formatMediaTimeParts, type MediaTimeParts } from "../lib/time-format.ts";
+import { canvasStore } from "#engine";
+import { logger } from "#lib/client.logger.ts";
+import { formatMediaTimeParts, type MediaTimeParts } from "#lib/time-format.ts";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
 import { isVideoEntity, isGifEntity, isAnimatedEntity, MediaType } from "#types/canvas.ts";
 

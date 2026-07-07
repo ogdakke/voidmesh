@@ -1,10 +1,10 @@
-import { config, type DragVisualSpringConfig } from "../lib/config/index.ts";
+import { config, type DragVisualSpringConfig } from "#config";
 import { canvasStore } from "./canvas-store.ts";
 import {
   scheduler as defaultScheduler,
   type AnimationScheduler,
   type AnimationHandle,
-} from "../lib/animation-scheduler.ts";
+} from "#lib/animation-scheduler.ts";
 
 const enum DragVisualPhase {
   idle,

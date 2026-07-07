@@ -12,7 +12,7 @@ import { getViewportCenter, screenToWorld } from "#lib/canvas-math.ts";
 import { wait } from "#lib/util.ts";
 import { useRef } from "react";
 import { useCanvasCommands } from "../context/use-canvas.ts";
-import { canvasStore } from "../engine/canvas-store.ts";
+import { canvasStore } from "#engine";
 import { useClipboardPaste } from "./use-clipboard-paste.ts";
 import { useIsMobile } from "./use-is-mobile.ts";
 import { importStudioWithToasts } from "./use-studio-file.ts";

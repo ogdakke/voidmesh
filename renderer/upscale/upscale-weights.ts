@@ -2,7 +2,6 @@ import type { ContentVariant, ModelSize, WeightFile } from "./upscale-types.ts";
 
 type WeightKey = `${ModelSize}-${ContentVariant}`;
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- JSON imports have inferred literal types that don't match our interface exactly
 const weightImporters: Record<WeightKey, () => Promise<any>> = {
   "s-rl": () => import("#weights/cnn-2x-s-rl.json"),
   "s-an": () => import("#weights/cnn-2x-s-an.json"),

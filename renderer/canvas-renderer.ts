@@ -2,17 +2,19 @@ import { config, getViewportLensDistortionConfig, type GridConfig } from "#confi
 import { logger } from "#lib/client.logger.ts";
 import { WlurPass } from "#wlur";
 import { setGpuContext } from "./gpu-color-space.ts";
-import type { RenderState } from "../engine/canvas-store.ts";
-import { actionLayerController } from "../engine/action-layer-controller.ts";
-import { disintegrationController } from "../engine/disintegration-controller.ts";
-import { entityDragVisual } from "../engine/entity-drag-visual.ts";
+import {
+  type RenderState,
+  actionLayerController,
+  disintegrationController,
+  entityDragVisual,
+} from "#engine";
 import {
   boundsIntersect,
   calculateGridLevel,
   getRotatedAABB,
   getViewportMatrix,
   getViewportWorldBounds,
-} from "../lib/canvas-math.ts";
+} from "#lib/canvas-math.ts";
 import {
   MediaType,
   type Bounds,

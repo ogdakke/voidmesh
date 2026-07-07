@@ -1,8 +1,8 @@
-import { Scroller, SpringBack } from "../lib/touch-scroll/index.ts";
-import { clampZoom, screenToWorld } from "../lib/canvas-math.ts";
-import { config, type TouchConfig } from "../lib/config/index.ts";
+import { Scroller, SpringBack } from "#lib/touch-scroll/index.ts";
+import { clampZoom, screenToWorld } from "#lib/canvas-math.ts";
+import { config, type TouchConfig } from "#config";
 import type { Point, Viewport } from "#types/canvas.ts";
-import type { AnimationScheduler, AnimationHandle } from "../lib/animation-scheduler.ts";
+import type { AnimationScheduler, AnimationHandle } from "#lib/animation-scheduler.ts";
 
 export interface MomentumDeps {
   panBy(delta: Point): void;

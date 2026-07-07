@@ -19,3 +19,4 @@ export type { ViewportAnimationOptions } from "./viewport-animation.ts";
 export { disintegrationController } from "./disintegration-controller.ts";
 export { perfOverlay } from "./perf-overlay.ts";
 export type { FrameStats } from "./perf-overlay.ts";
+export { entityDragVisual } from "./entity-drag-visual.ts";
