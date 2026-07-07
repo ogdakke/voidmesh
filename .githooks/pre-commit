@@ -8,7 +8,7 @@ if [ -z "$STAGED_FILES" ]; then
 fi
 
 echo "Formatting staged files..."
-bun run format
+./node_modules/.bin/oxfmt $STAGED_FILES
 
 # Only re-add the files that were originally staged
 echo "$STAGED_FILES" | xargs git add
