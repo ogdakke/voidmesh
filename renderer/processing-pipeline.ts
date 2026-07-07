@@ -113,6 +113,8 @@ export class ProcessingPipeline {
   #postProcessFloatView = new Float32Array(this.#postProcessUniformData);
   #postProcessUintView = new Uint32Array(this.#postProcessUniformData);
   #postProcessTime = 0; // Animated time for grain effect
+  #dummyBloomTexture: GPUTexture | null = null;
+  #dummyBloomTextureView: GPUTextureView | null = null;
 
   // Bloom pipeline (multi-pass downsample/upsample)
   #bloomDownsamplePipeline: GPURenderPipeline | null = null;
@@ -1790,18 +1792,7 @@ export class ProcessingPipeline {
 
     // If no bloom texture was generated, create a 1x1 black texture as placeholder
     // (the shader expects a texture at binding 3)
-    let bloomTextureView: GPUTextureView;
-    if (bloomTexture) {
-      bloomTextureView = bloomTexture.createView();
-    } else {
-      const dummyTexture = this.#device.createTexture({
-        label: "Dummy bloom texture",
-        size: [1, 1],
-        format: this.#intermediateFormat,
-        usage: GPUTextureUsage.TEXTURE_BINDING,
-      });
-      bloomTextureView = dummyTexture.createView();
-    }
+    const bloomTextureView = bloomTexture?.createView() ?? this.#getDummyBloomTextureView();
 
     this.#updatePostProcessUniforms(entity);
     const uniformBuffer = this.#getOrCreateUniformBuffer(
@@ -1842,6 +1833,19 @@ export class ProcessingPipeline {
 
     // Increment time for animated grain
     this.#postProcessTime += 0.016; // ~60fps increment
+  }
+
+  #getDummyBloomTextureView(): GPUTextureView {
+    if (this.#dummyBloomTextureView) return this.#dummyBloomTextureView;
+
+    this.#dummyBloomTexture = this.#device.createTexture({
+      label: "Dummy bloom texture",
+      size: [1, 1],
+      format: this.#intermediateFormat,
+      usage: GPUTextureUsage.TEXTURE_BINDING,
+    });
+    this.#dummyBloomTextureView = this.#dummyBloomTexture.createView();
+    return this.#dummyBloomTextureView;
   }
 
   removeEntity(entityId: string): void {
@@ -1889,6 +1893,9 @@ export class ProcessingPipeline {
     this.#blurMixUniformBuffer?.destroy();
     for (const buf of this.#bloomDownsampleUniformBuffers) buf.destroy();
     for (const buf of this.#bloomUpsampleUniformBuffers) buf.destroy();
+    this.#dummyBloomTexture?.destroy();
+    this.#dummyBloomTexture = null;
+    this.#dummyBloomTextureView = null;
 
     // Destroy blur mip chain textures
     for (const cached of this.#blurMipChainCache.values()) {

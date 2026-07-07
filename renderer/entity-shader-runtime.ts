@@ -204,6 +204,7 @@ export class EntityShaderRuntime {
     let pipelineOutputTexture = outputTexture;
     let alphaMaskIntermediateTexture: GPUTexture | null = null;
     let postProcessIntermediateTexture: GPUTexture | null = null;
+    const reuseOutputTextureForPostProcessSource = postProcessEnabled && applySourceAlphaMask;
 
     if (applySourceAlphaMask) {
       alphaMaskIntermediateTexture = this.#acquireTexture(
@@ -217,13 +218,17 @@ export class EntityShaderRuntime {
 
     let mainShaderOutputTexture = pipelineOutputTexture;
     if (postProcessEnabled) {
-      postProcessIntermediateTexture = this.#acquireTexture(
-        width,
-        height,
-        postProcessUsage,
-        "Post-process intermediate texture",
-      );
-      mainShaderOutputTexture = postProcessIntermediateTexture;
+      if (reuseOutputTextureForPostProcessSource) {
+        mainShaderOutputTexture = outputTexture;
+      } else {
+        postProcessIntermediateTexture = this.#acquireTexture(
+          width,
+          height,
+          postProcessUsage,
+          "Post-process intermediate texture",
+        );
+        mainShaderOutputTexture = postProcessIntermediateTexture;
+      }
     }
 
     if (shaderSource.kind === "external") {
@@ -249,13 +254,16 @@ export class EntityShaderRuntime {
       this.#releaseTexture(adjustmentsOutputTexture, width, height, preProcessUsage);
     }
 
-    if (postProcessIntermediateTexture) {
+    if (postProcessEnabled) {
       this.#processingPipeline.applyPostProcessing(
         entity,
-        postProcessIntermediateTexture,
+        mainShaderOutputTexture,
         pipelineOutputTexture,
         encoder,
       );
+    }
+
+    if (postProcessIntermediateTexture) {
       this.#releaseTexture(postProcessIntermediateTexture, width, height, postProcessUsage);
     }
 
