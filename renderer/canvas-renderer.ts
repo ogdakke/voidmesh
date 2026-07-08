@@ -1,6 +1,5 @@
 import { config, getViewportLensDistortionConfig, type GridConfig } from "#config";
 import { logger } from "#lib/client.logger.ts";
-import { WlurPass } from "#wlur";
 import { setGpuContext } from "./gpu-color-space.ts";
 import { type RenderState, actionLayerController, entityDragVisual } from "#engine";
 import {
@@ -12,21 +11,21 @@ import {
 import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
 import { CanvasLensing } from "#types/enums.ts";
 import { ActionLayerBlurPass } from "./action-layer-blur-pass.ts";
+import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
 import { CompositionPass, type CompositionDrawItem } from "./composition-pass.ts";
-import { CopyPass } from "./copy-pass.ts";
 import { DisintegrationPass } from "./disintegration-pass.ts";
+import { EntityLabelPass } from "./entity-label-pass.ts";
 import { EntityTexturePipeline, type EntityCompositionSource } from "./entity-texture-pipeline.ts";
 import { ExportService } from "./export-service.ts";
 import { ExternalTextureCopyPass } from "./external-texture-copy-pass.ts";
+import type { ImageExportOptions } from "./export-formats.ts";
 import { detectGpuColorConfig, type GpuColorConfig } from "./gpu-color-space.ts";
 import { GridPass } from "./grid-pass.ts";
 import { SelectionRectPass } from "./selection-rect-pass.ts";
-import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
-import { EntityLabelPass } from "./entity-label-pass.ts";
 import { TexturePool } from "./texture-pool.ts";
-import { resolveWlurOverlayRuntimeConfig, type WlurOverlayConfig } from "./wlur-overlay.ts";
-import type { ImageExportOptions } from "./export-formats.ts";
 import { ViewportLensPass, type ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
+import type { WlurOverlayConfig } from "./wlur-overlay.ts";
+import { WlurOverlayPass } from "./wlur-overlay-pass.ts";
 
 export type { ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
 
@@ -72,22 +71,9 @@ export class InfiniteCanvasRenderer {
 
   #selectionRectPass: SelectionRectPass | null = null;
 
-  #presentCopyPass: CopyPass | null = null;
-
   #viewportLensPass: ViewportLensPass | null = null;
 
-  // Wlur progressive full-canvas overlay
-  #wlurPass: WlurPass | null = null;
-  #wlurOverlayConfig: WlurOverlayConfig | null = null;
-  #wlurOverlayTextures: {
-    width: number;
-    height: number;
-    input: GPUTexture;
-    output: GPUTexture;
-  } | null = null;
-  #wlurOverlayCacheValid = false;
-  #wlurOverlayCacheKey = "";
-  #wlurLastQualityKey = "";
+  #wlurOverlayPass: WlurOverlayPass | null = null;
 
   #entityTexturePipeline: EntityTexturePipeline | null = null;
 
@@ -221,13 +207,11 @@ export class InfiniteCanvasRenderer {
       format: this.#canvasFormat,
       initialConfig: getViewportLensDistortionConfig(CanvasLensing.off),
     });
-    this.#presentCopyPass = new CopyPass(this.#device, this.#canvasFormat);
-    this.#wlurPass = new WlurPass({
+    this.#wlurOverlayPass = new WlurOverlayPass({
       device: this.#device,
-      format: this.#colorConfig.intermediateFormat,
-      label: "Wlur",
+      canvasFormat: this.#canvasFormat,
+      intermediateFormat: this.#colorConfig.intermediateFormat,
     });
-    this.#wlurPass.initialize();
 
     // Initialize export service with callbacks into renderer
     this.#exportService = new ExportService(
@@ -286,79 +270,6 @@ export class InfiniteCanvasRenderer {
     const initialRect = this.canvas.getBoundingClientRect();
     this.#cachedCanvasWidth = initialRect.width;
     this.#cachedCanvasHeight = initialRect.height;
-  }
-
-  #invalidateWlurOverlayCache(): void {
-    this.#wlurOverlayCacheValid = false;
-    this.#wlurOverlayCacheKey = "";
-  }
-
-  #destroyWlurOverlayTextures(): void {
-    if (!this.#wlurOverlayTextures) return;
-
-    this.#wlurOverlayTextures.input.destroy();
-    this.#wlurOverlayTextures.output.destroy();
-    this.#wlurOverlayTextures = null;
-  }
-
-  #getOrCreateWlurOverlayTextures(
-    width: number,
-    height: number,
-  ): { input: GPUTexture; output: GPUTexture } {
-    const cached = this.#wlurOverlayTextures;
-    if (cached && cached.width === width && cached.height === height) {
-      return cached;
-    }
-
-    this.#destroyWlurOverlayTextures();
-    this.#invalidateWlurOverlayCache();
-
-    const usage =
-      GPUTextureUsage.TEXTURE_BINDING |
-      GPUTextureUsage.RENDER_ATTACHMENT |
-      GPUTextureUsage.COPY_DST |
-      GPUTextureUsage.COPY_SRC;
-
-    const input = this.#device!.createTexture({
-      label: `Wlur input (${width}x${height})`,
-      size: [width, height],
-      format: this.#colorConfig.intermediateFormat,
-      usage,
-    });
-
-    const output = this.#device!.createTexture({
-      label: `Wlur output (${width}x${height})`,
-      size: [width, height],
-      format: this.#colorConfig.intermediateFormat,
-      usage,
-    });
-
-    this.#wlurOverlayTextures = { width, height, input, output };
-    return this.#wlurOverlayTextures;
-  }
-
-  #buildWlurOverlayCacheKey(
-    width: number,
-    height: number,
-    resolvedConfig: NonNullable<ReturnType<typeof resolveWlurOverlayRuntimeConfig>>,
-  ): string {
-    const { params, quality } = resolvedConfig;
-    return [
-      width,
-      height,
-      quality.kernelSize,
-      quality.resolutionScale,
-      params.radius,
-      params.offset,
-      params.interpolation,
-      params.direction,
-      params.noise,
-      params.curve?.join(",") ?? "",
-      params.mixCurve?.join(",") ?? "",
-      params.tint?.color.join(",") ?? "",
-      params.tint?.amount ?? "",
-      params.tint?.curve?.join(",") ?? "",
-    ].join("|");
   }
 
   #updateViewportUniforms(viewport: Viewport): void {
@@ -670,84 +581,25 @@ export class InfiniteCanvasRenderer {
     markPhaseEnd("viewport-lens-distortion");
 
     // Final pass: WLUR progressive blur overlay (renders on top of everything)
-    const resolvedWlurOverlay = resolveWlurOverlayRuntimeConfig(
-      this.#wlurOverlayConfig,
-      height,
-      dpr,
-    );
-    if (
-      resolvedWlurOverlay &&
-      this.#wlurPass &&
-      this.#entityTexturePipeline &&
-      this.#presentCopyPass
-    ) {
-      const wlurTextures = this.#getOrCreateWlurOverlayTextures(width, height);
-      const wlurCacheKey = this.#buildWlurOverlayCacheKey(width, height, resolvedWlurOverlay);
-      const wlurNeedsUpdate =
-        !resolvedWlurOverlay.cache ||
-        !this.#wlurOverlayCacheValid ||
-        this.#wlurOverlayCacheKey !== wlurCacheKey ||
-        state.dirty ||
-        hasAnimatingContent ||
-        lensApplied ||
-        !!this.#disintegrationPass?.hasOverlays ||
-        blurIntensity > 0.01 ||
-        state.dragSelectBounds !== null;
-
-      const qualityKey = [
-        resolvedWlurOverlay.quality.kernelSize,
-        resolvedWlurOverlay.quality.resolutionScale,
-      ].join("|");
-      if (qualityKey !== this.#wlurLastQualityKey) {
-        this.#wlurPass.updateConfig({ quality: resolvedWlurOverlay.quality });
-        this.#wlurLastQualityKey = qualityKey;
-      }
-
+    if (this.#wlurOverlayPass) {
       markPhaseStart("wlur-overlay");
-      if (wlurNeedsUpdate) {
-        if (this.#canvasFormat === this.#colorConfig.intermediateFormat) {
-          encoder.copyTextureToTexture(
-            { texture },
-            { texture: wlurTextures.input },
-            { width, height },
-          );
-        } else {
-          this.#entityTexturePipeline.passthroughCopyPass.encode(
-            encoder,
-            texture,
-            wlurTextures.input,
-          );
-        }
-
-        this.#wlurPass.encode(
-          encoder,
-          wlurTextures.input,
-          wlurTextures.output,
-          width,
-          height,
-          resolvedWlurOverlay.params,
-        );
-
-        if (resolvedWlurOverlay.cache) {
-          this.#wlurOverlayCacheValid = true;
-          this.#wlurOverlayCacheKey = wlurCacheKey;
-        } else {
-          this.#invalidateWlurOverlayCache();
-        }
-      }
-
-      if (this.#canvasFormat === this.#colorConfig.intermediateFormat) {
-        encoder.copyTextureToTexture(
-          { texture: wlurTextures.output },
-          { texture },
-          { width, height },
-        );
-      } else {
-        this.#presentCopyPass!.encode(encoder, wlurTextures.output, targetView);
-      }
+      this.#wlurOverlayPass.encode({
+        encoder,
+        sourceTexture: texture,
+        targetTexture: texture,
+        targetView,
+        width,
+        height,
+        devicePixelRatio: dpr,
+        contentDirty:
+          state.dirty ||
+          hasAnimatingContent ||
+          lensApplied ||
+          !!this.#disintegrationPass?.hasOverlays ||
+          blurIntensity > 0.01 ||
+          state.dragSelectBounds !== null,
+      });
       markPhaseEnd("wlur-overlay");
-    } else {
-      this.#invalidateWlurOverlayCache();
     }
 
     // Single submission for all passes
@@ -770,7 +622,7 @@ export class InfiniteCanvasRenderer {
    */
   setGridConfig(config: Partial<GridConfig>): void {
     this.#gridPass?.setConfig(config);
-    this.#invalidateWlurOverlayCache();
+    this.#wlurOverlayPass?.invalidateCache();
   }
 
   setActionLayerTint(color: [number, number, number]): void {
@@ -785,24 +637,17 @@ export class InfiniteCanvasRenderer {
   }
 
   setWlurOverlay(config: WlurOverlayConfig | null): void {
-    this.#wlurOverlayConfig = config;
-    this.#wlurLastQualityKey = "";
-    if (config?.quality) {
-      this.#wlurPass?.updateConfig({ quality: config.quality });
-    } else if (!config) {
-      this.#destroyWlurOverlayTextures();
-    }
-    this.#invalidateWlurOverlayCache();
+    this.#wlurOverlayPass?.setConfig(config);
   }
 
   setViewportLensDistortion(config: ViewportLensDistortionConfig): void {
     this.#viewportLensPass?.setConfig(config);
-    this.#invalidateWlurOverlayCache();
+    this.#wlurOverlayPass?.invalidateCache();
   }
 
   setViewportLensColorScheme(isDark: boolean): void {
     if (this.#viewportLensPass?.setColorScheme(isDark)) {
-      this.#invalidateWlurOverlayCache();
+      this.#wlurOverlayPass?.invalidateCache();
     }
   }
 
@@ -1048,13 +893,8 @@ export class InfiniteCanvasRenderer {
     this.#canvasCalloutPass?.destroy();
     this.#canvasCalloutPass = null;
 
-    this.#presentCopyPass = null;
-    this.#wlurPass?.destroy();
-    this.#wlurPass = null;
-    this.#wlurOverlayConfig = null;
-    this.#wlurLastQualityKey = "";
-    this.#destroyWlurOverlayTextures();
-    this.#invalidateWlurOverlayCache();
+    this.#wlurOverlayPass?.destroy();
+    this.#wlurOverlayPass = null;
 
     this.#viewportLensPass?.destroy();
     this.#viewportLensPass = null;
