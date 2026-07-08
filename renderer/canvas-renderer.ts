@@ -2,12 +2,7 @@ import { config, getViewportLensDistortionConfig, type GridConfig } from "#confi
 import { logger } from "#lib/client.logger.ts";
 import { WlurPass } from "#wlur";
 import { setGpuContext } from "./gpu-color-space.ts";
-import {
-  type RenderState,
-  actionLayerController,
-  disintegrationController,
-  entityDragVisual,
-} from "#engine";
+import { type RenderState, actionLayerController, entityDragVisual } from "#engine";
 import {
   boundsIntersect,
   getRotatedAABB,
@@ -18,7 +13,7 @@ import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
 import { CanvasLensing } from "#types/enums.ts";
 import { CompositionPass, type CompositionDrawItem } from "./composition-pass.ts";
 import { CopyPass } from "./copy-pass.ts";
-import { DisintegrationParticleSystem } from "./disintegration-particles.ts";
+import { DisintegrationPass } from "./disintegration-pass.ts";
 import { EntityTexturePipeline, type EntityCompositionSource } from "./entity-texture-pipeline.ts";
 import { ExportService } from "./export-service.ts";
 import { ExternalTextureCopyPass } from "./external-texture-copy-pass.ts";
@@ -75,23 +70,11 @@ export class InfiniteCanvasRenderer {
   // Texture pool for eliminating per-frame allocation churn
   #texturePool: TexturePool | null = null;
 
-  // Disintegration particle system (GPU compute + instanced rendering)
-  #particleSystem: DisintegrationParticleSystem | null = null;
+  #disintegrationPass: DisintegrationPass | null = null;
 
   // Entity label pass (Canvas 2D rasterized → GPU textured quad)
   #entityLabelPass: EntityLabelPass | null = null;
   #canvasCalloutPass: CanvasCalloutPass | null = null;
-
-  // Disintegration overlays — GPU resources for fire-and-forget dust animations
-  #disintegrationOverlays: Map<
-    string,
-    {
-      texture: GPUTexture;
-      textureView: GPUTextureView;
-      uniformBuffer: GPUBuffer;
-      bindGroup: GPUBindGroup;
-    }
-  > = new Map();
 
   // Cached canvas dimensions (updated by ResizeObserver, avoids getBoundingClientRect in render loop)
   #cachedCanvasWidth = 0;
@@ -292,9 +275,13 @@ export class InfiniteCanvasRenderer {
       this.#colorConfig,
     );
 
-    // Initialize disintegration particle system
-    this.#particleSystem = new DisintegrationParticleSystem(this.#device);
-    await this.#particleSystem.initialize(this.#canvasFormat, this.#viewportUniformBuffer!);
+    this.#disintegrationPass = new DisintegrationPass({
+      device: this.#device,
+      canvasFormat: this.#canvasFormat,
+      viewportUniformBuffer: this.#viewportUniformBuffer!,
+      compositionPass: this.#compositionPass,
+    });
+    await this.#disintegrationPass.initialize();
 
     // Initialize entity label pass
     this.#entityLabelPass = new EntityLabelPass(
@@ -714,66 +701,6 @@ export class InfiniteCanvasRenderer {
     }
   }
 
-  #renderDisintegrationOverlays(
-    encoder: GPUCommandEncoder,
-    targetView: GPUTextureView,
-    dt: number,
-  ): void {
-    if (this.#disintegrationOverlays.size === 0) return;
-
-    // Clean up GPU resources for overlays whose animations have completed
-    // (controller removes them from its map when tick() finds them finished)
-    const completedIds: string[] = [];
-    for (const id of this.#disintegrationOverlays.keys()) {
-      if (!disintegrationController.hasOverlay(id)) {
-        completedIds.push(id);
-      }
-    }
-    for (const id of completedIds) {
-      this.#cleanupDisintegrationOverlay(id);
-    }
-
-    // Render active overlays
-    const now = performance.now();
-    for (const overlay of disintegrationController.getOverlays()) {
-      const gpu = this.#disintegrationOverlays.get(overlay.id);
-      if (!gpu) continue;
-      if (now < overlay.startTime) continue;
-
-      const progress = disintegrationController.getProgress(overlay.id);
-
-      // Render dissolve front only while dissolve is still in progress (< 1.0)
-      if (progress > 0 && progress < 1) {
-        this.#compositionPass!.writeDisintegrationUniforms(gpu.uniformBuffer, {
-          position: overlay.position,
-          size: overlay.size,
-          rotation: overlay.rotation,
-          progress,
-          seed: overlay.seed,
-        });
-
-        const pass = encoder.beginRenderPass({
-          label: `Disintegration overlay ${overlay.id}`,
-          colorAttachments: [
-            {
-              view: targetView,
-              loadOp: "load",
-              storeOp: "store",
-            },
-          ],
-        });
-
-        this.#compositionPass!.drawTextureBindGroup(pass, gpu.bindGroup);
-        pass.end();
-      }
-
-      // Update + render particles (compute pass must precede render pass)
-      const elapsed = Math.max(now - overlay.startTime, 0) / 1000;
-      this.#particleSystem?.update(overlay.id, elapsed, dt, encoder);
-      this.#particleSystem?.render(overlay.id, encoder, targetView);
-    }
-  }
-
   /**
    * Render an entity's image through its shader to a texture.
    * Returns the texture, caching it for future frames.
@@ -1083,7 +1010,7 @@ export class InfiniteCanvasRenderer {
     }
 
     // Pass 2b: Render disintegration overlays (on top of entities)
-    this.#renderDisintegrationOverlays(encoder, sceneTargetView, frameDt);
+    this.#disintegrationPass?.encode(encoder, sceneTargetView, frameDt);
 
     // Pass 3: Render all selection rectangles (drag-select and multi-select bounds)
     if ((state.dragSelectBounds || state.multiSelectBounds) && this.#selectionRectPass) {
@@ -1127,7 +1054,7 @@ export class InfiniteCanvasRenderer {
         state.dirty ||
         hasAnimatingContent ||
         lensApplied ||
-        this.#disintegrationOverlays.size > 0 ||
+        !!this.#disintegrationPass?.hasOverlays ||
         blurIntensity > 0.01 ||
         state.dragSelectBounds !== null;
 
@@ -1332,56 +1259,19 @@ export class InfiniteCanvasRenderer {
   }
 
   startDisintegration(entity: ShaderCanvasEntity): void {
-    if (!this.#device || !this.#compositionPass) return;
+    if (!this.#device || !this.#disintegrationPass) return;
 
     const snapshotTexture = this.#createDisintegrationSnapshot(entity);
     if (!snapshotTexture) return;
 
-    const textureView = snapshotTexture.createView();
-    const uniformBuffer = this.#device.createBuffer({
-      label: `Disintegration uniform ${entity.id}`,
-      size: config.rendering.entityUniformSize,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-
-    const bindGroup = this.#compositionPass.createTextureBindGroup(
-      `Disintegration bind group ${entity.id}`,
-      textureView,
-      uniformBuffer,
-    );
-
-    this.#disintegrationOverlays.set(entity.id, {
-      texture: snapshotTexture,
-      textureView,
-      uniformBuffer,
-      bindGroup,
-    });
-
-    // Register with the animation controller
-    disintegrationController.addOverlay(entity.id, entity.position, entity.size, entity.rotation);
-
-    // Spawn particles from the snapshot texture
-    const overlayData = disintegrationController.getOverlay(entity.id);
-    if (overlayData) {
-      this.#particleSystem?.spawn(entity.id, snapshotTexture, overlayData);
-    }
+    this.#disintegrationPass.start(entity, snapshotTexture);
   }
 
   /**
    * Cancel a disintegration overlay (e.g., on undo when entity is restored).
    */
   cancelDisintegration(id: string): void {
-    disintegrationController.cancelOverlay(id);
-    this.#cleanupDisintegrationOverlay(id);
-  }
-
-  #cleanupDisintegrationOverlay(id: string): void {
-    const overlay = this.#disintegrationOverlays.get(id);
-    if (!overlay) return;
-    overlay.texture.destroy();
-    overlay.uniformBuffer.destroy();
-    this.#disintegrationOverlays.delete(id);
-    this.#particleSystem?.remove(id);
+    this.#disintegrationPass?.cancel(id);
   }
 
   /**
@@ -1513,14 +1403,8 @@ export class InfiniteCanvasRenderer {
     this.#compositionPass?.destroy();
     this.#compositionPass = null;
 
-    // Destroy disintegration overlays + particle system
-    for (const overlay of this.#disintegrationOverlays.values()) {
-      overlay.texture.destroy();
-      overlay.uniformBuffer.destroy();
-    }
-    this.#disintegrationOverlays.clear();
-    this.#particleSystem?.destroy();
-    this.#particleSystem = null;
+    this.#disintegrationPass?.destroy();
+    this.#disintegrationPass = null;
 
     // Destroy entity label pass
     this.#entityLabelPass?.destroy();
