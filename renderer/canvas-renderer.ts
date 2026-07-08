@@ -10,7 +10,6 @@ import {
 } from "#engine";
 import {
   boundsIntersect,
-  calculateGridLevel,
   getRotatedAABB,
   getViewportMatrix,
   getViewportWorldBounds,
@@ -25,11 +24,11 @@ import {
 import compositionShaderSource from "./composition.wgsl?raw";
 import { CopyPass } from "./copy-pass.ts";
 import { DisintegrationParticleSystem } from "./disintegration-particles.ts";
-import dotGridShaderSource from "./dot-grid.wgsl?raw";
 import { EntityShaderRuntime, type EntityShaderSource } from "./entity-shader-runtime.ts";
 import { ExportService } from "./export-service.ts";
 import { ExternalTextureCopyPass } from "./external-texture-copy-pass.ts";
 import { detectGpuColorConfig, type GpuColorConfig } from "./gpu-color-space.ts";
+import { GridPass } from "./grid-pass.ts";
 import selectionRectShaderSource from "./selection-rect.wgsl?raw";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
 import { EntityLabelPass } from "./entity-label-pass.ts";
@@ -91,12 +90,7 @@ export class InfiniteCanvasRenderer {
   #canvasFormat!: GPUTextureFormat;
   #colorConfig!: GpuColorConfig;
 
-  // Dot grid pipeline
-  #gridPipeline: GPURenderPipeline | null = null;
-  #gridUniformBuffer: GPUBuffer | null = null;
-  #gridBindGroup: GPUBindGroup | null = null;
-  #gridUniformData = new ArrayBuffer(config.rendering.gridUniformSize);
-  #gridFloatView = new Float32Array(this.#gridUniformData);
+  #gridPass: GridPass | null = null;
 
   // Composition pipeline
   #compositionPipeline: GPURenderPipeline | null = null;
@@ -155,7 +149,6 @@ export class InfiniteCanvasRenderer {
     }
   > = new Map();
 
-  #gridConfig: GridConfig = config.rendering.grid.default;
   #actionLayerTintColor: [number, number, number] = config.actionLayer.dimColor.dark;
   #selectionRectConfig = config.selectionRectangle.light;
   #multiSelectBoundingBoxConfig = config.multiSelectBoundingBox.light;
@@ -265,7 +258,7 @@ export class InfiniteCanvasRenderer {
   }
 
   get isReady(): boolean {
-    return this.#device !== null && this.#gridPipeline !== null;
+    return this.#device !== null && this.#gridPass !== null;
   }
 
   get colorConfig(): GpuColorConfig {
@@ -342,7 +335,7 @@ export class InfiniteCanvasRenderer {
     // Initialize texture pool
     this.#texturePool = new TexturePool(this.#device, this.#colorConfig.intermediateFormat);
 
-    this.#createGridPipeline();
+    this.#gridPass = new GridPass(this.#device, this.#canvasFormat);
     this.#createCompositionPipeline();
     this.#externalTextureCopyPass = new ExternalTextureCopyPass(
       this.#device,
@@ -424,60 +417,6 @@ export class InfiniteCanvasRenderer {
     const initialRect = this.canvas.getBoundingClientRect();
     this.#cachedCanvasWidth = initialRect.width;
     this.#cachedCanvasHeight = initialRect.height;
-  }
-
-  #createGridPipeline(): void {
-    if (!this.#device) return;
-
-    const shaderModule = this.#device.createShaderModule({
-      label: "Dot grid shader",
-      code: dotGridShaderSource,
-    });
-
-    const bindGroupLayout = this.#device.createBindGroupLayout({
-      label: "Grid bind group layout",
-      entries: [
-        {
-          binding: 0,
-          visibility: GPUShaderStage.FRAGMENT,
-          buffer: { type: "uniform" },
-        },
-      ],
-    });
-
-    this.#gridUniformBuffer = this.#device.createBuffer({
-      label: "Grid uniforms",
-      size: config.rendering.gridUniformSize,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-
-    this.#gridBindGroup = this.#device.createBindGroup({
-      label: "Grid bind group",
-      layout: bindGroupLayout,
-      entries: [{ binding: 0, resource: { buffer: this.#gridUniformBuffer } }],
-    });
-
-    const pipelineLayout = this.#device.createPipelineLayout({
-      label: "Grid pipeline layout",
-      bindGroupLayouts: [bindGroupLayout],
-    });
-
-    this.#gridPipeline = this.#device.createRenderPipeline({
-      label: "Grid pipeline",
-      layout: pipelineLayout,
-      vertex: {
-        module: shaderModule,
-        entryPoint: "vs_main",
-      },
-      fragment: {
-        module: shaderModule,
-        entryPoint: "fs_main",
-        targets: [{ format: this.#canvasFormat }],
-      },
-      primitive: {
-        topology: "triangle-list",
-      },
-    });
   }
 
   #createCompositionPipeline(): void {
@@ -1171,37 +1110,6 @@ export class InfiniteCanvasRenderer {
     this.#entitySourceTextures.delete(entityId);
   }
 
-  #updateGridUniforms(viewport: Viewport): void {
-    const width = this.canvas.width;
-    const height = this.canvas.height;
-    const config = this.#gridConfig;
-
-    // Multi-level grid: compute fine grid size and crossfade factor
-    const { fineGridSize, fadeFactor } = calculateGridLevel(config.gridSize, viewport.zoom);
-
-    // Scale dot size by DPR so it's in physical pixels (matching fragCoord space)
-    const dpr = window.devicePixelRatio || 1;
-    const effectiveDotSize = Math.max(1.0, config.dotSize) * dpr;
-
-    // Layout: resolution(8) + offset(8) + zoom(4) + fineGridSize(4) + dotSize(4) + fadeFactor(4) + bgColor(16) + dotColor(16)
-    this.#gridFloatView[0] = width;
-    this.#gridFloatView[1] = height;
-    this.#gridFloatView[2] = viewport.offset.x;
-    this.#gridFloatView[3] = viewport.offset.y;
-    this.#gridFloatView[4] = viewport.zoom;
-    this.#gridFloatView[5] = fineGridSize;
-    this.#gridFloatView[6] = effectiveDotSize;
-    this.#gridFloatView[7] = fadeFactor;
-    this.#gridFloatView[8] = config.backgroundColor[0];
-    this.#gridFloatView[9] = config.backgroundColor[1];
-    this.#gridFloatView[10] = config.backgroundColor[2];
-    this.#gridFloatView[11] = config.backgroundColor[3];
-    this.#gridFloatView[12] = config.dotColor[0];
-    this.#gridFloatView[13] = config.dotColor[1];
-    this.#gridFloatView[14] = config.dotColor[2];
-    this.#gridFloatView[15] = config.dotColor[3];
-  }
-
   #updateViewportUniforms(viewport: Viewport): void {
     const width = this.canvas.width;
     const height = this.canvas.height;
@@ -1511,7 +1419,7 @@ export class InfiniteCanvasRenderer {
     if (
       !this.#device ||
       !this.#context ||
-      !this.#gridPipeline ||
+      !this.#gridPass ||
       !this.#compositionPipeline ||
       !this.#externalCompositionPipeline
     ) {
@@ -1565,11 +1473,9 @@ export class InfiniteCanvasRenderer {
       this.canvas.height = height;
     }
 
-    // Update grid and viewport uniforms
-    this.#updateGridUniforms(viewport);
+    // Update viewport uniforms
     this.#updateViewportUniforms(viewport);
 
-    this.#device.queue.writeBuffer(this.#gridUniformBuffer!, 0, this.#gridUniformData);
     this.#device.queue.writeBuffer(this.#viewportUniformBuffer!, 0, this.#viewportUniformData);
 
     // Sort entities in-place by z-index (avoid array copying)
@@ -1780,22 +1686,7 @@ export class InfiniteCanvasRenderer {
 
     // Pass 1: Render dot grid background
     markPhaseStart("grid-pass");
-    const gridPass = encoder.beginRenderPass({
-      label: "Grid render pass",
-      colorAttachments: [
-        {
-          view: sceneTargetView,
-          loadOp: "clear",
-          storeOp: "store",
-          clearValue: { r: 0, g: 0, b: 0, a: 0 },
-        },
-      ],
-    });
-
-    gridPass.setPipeline(this.#gridPipeline);
-    gridPass.setBindGroup(0, this.#gridBindGroup!);
-    gridPass.draw(3);
-    gridPass.end();
+    this.#gridPass.encode({ encoder, targetView: sceneTargetView, viewport, width, height });
     markPhaseEnd("grid-pass");
 
     // Pass 2: Render all entities with interleaved labels (z-ordered)
@@ -2105,7 +1996,7 @@ export class InfiniteCanvasRenderer {
    * Update grid configuration
    */
   setGridConfig(config: Partial<GridConfig>): void {
-    this.#gridConfig = { ...this.#gridConfig, ...config };
+    this.#gridPass?.setConfig(config);
     this.#invalidateWlurOverlayCache();
   }
 
@@ -2524,8 +2415,10 @@ export class InfiniteCanvasRenderer {
     this.#actionLayerBlitBindGroupLayout = null;
     this.#actionLayerBlitSampler = null;
 
+    this.#gridPass?.destroy();
+    this.#gridPass = null;
+
     // Destroy buffers
-    this.#gridUniformBuffer?.destroy();
     this.#viewportUniformBuffer?.destroy();
     this.#entityUniformBuffer?.destroy();
     this.#selectionRectUniformBuffer?.destroy();
@@ -2541,12 +2434,10 @@ export class InfiniteCanvasRenderer {
     this.#device?.destroy();
 
     // Clear references
-    this.#gridPipeline = null;
     this.#compositionPipeline = null;
     this.#externalCompositionPipeline = null;
     this.#externalTextureCopyPass = null;
     this.#selectionRectPipeline = null;
-    this.#gridBindGroup = null;
     this.#selectionRectBindGroup = null;
     this.#compositionBindGroupLayout = null;
     this.#externalCompositionBindGroupLayout = null;
