@@ -1,0 +1,399 @@
+# Architecture
+
+```mermaid
+flowchart LR
+  %% Voidmesh canvas-focused architecture
+
+  user(("User input<br/>pointer • touch • wheel<br/>drop • paste • keyboard"))
+
+  subgraph UI["React shell — light canvas-facing UI"]
+    app["App providers<br/>CanvasProvider wraps canvas feature"]
+    infinite["InfiniteCanvas component<br/>DOM canvas + container<br/>event wiring"]
+    knobs["Shader knobs / sidebars<br/>param editing<br/>selection controls"]
+    mediaControls["Media controls<br/>play/pause/seek/scrub"]
+  end
+
+  subgraph Context["Canvas context — React mutation boundary"]
+    commands["CanvasCommands<br/>add/update/delete/select<br/>params • export • undo"]
+    rendererSvc["CanvasRendererService<br/>register renderer<br/>color/debug services"]
+    urlState["URL shader state<br/>nuqs query params"]
+    undo["Undo stack<br/>Command pattern<br/>resource ownership"]
+  end
+
+  subgraph Engine["Engine — GPU-agnostic model + controller"]
+    store[("CanvasStore<br/>entities • viewport • selection<br/>dirty flags • version counters")]
+    loop["GameLoop<br/>input state machines<br/>RAF loop"]
+    controllers["Per-frame controllers<br/>momentum<br/>viewport animation<br/>action layer<br/>drag visual<br/>disintegration timing<br/>perf overlay"]
+    renderState["RenderState snapshot<br/>viewport<br/>sorted entities<br/>selection<br/>dirty flags<br/>overlay state"]
+  end
+
+  subgraph MediaLib["Media + pure libraries"]
+    mediaLoader["Media loading<br/>images • video • GIF • SVG<br/>palette extraction"]
+    math["Canvas math<br/>world/screen transforms<br/>bounds • hit testing<br/>zoom/pan"]
+    serialization["Workspace serialization<br/>.vdmsh import/export"]
+    palette["Palette store/config<br/>presets • custom • extracted"]
+  end
+
+  subgraph Renderer["Renderer — WebGPU pixels"]
+    canvasRenderer["InfiniteCanvasRenderer<br/>WebGPU setup<br/>frame orchestration"]
+    color["GPU color config<br/>Display P3 probe<br/>canvas/intermediate formats"]
+    textures["GPU caches<br/>entity textures<br/>source textures<br/>composition bind groups<br/>TexturePool"]
+    shaderRuntime["EntityShaderRuntime<br/>effect dispatch"]
+    shaders["Shader passes + WGSL<br/>dithering • halftone • ascii<br/>glass • blobs • melt • glitch"]
+    processing["ProcessingPipeline<br/>adjustments<br/>blur<br/>bloom<br/>grain<br/>chromatic aberration"]
+    composite["Composition pass<br/>viewport transform<br/>z-order compositing"]
+    overlays["Canvas overlays<br/>grid<br/>selection rects<br/>entity labels/callouts<br/>action-layer blur<br/>disintegration particles"]
+    gpu[("Browser WebGPU<br/>GPUDevice<br/>GPUCanvasContext")]
+  end
+
+  subgraph Outputs["Outputs"]
+    screen(("Visible canvas"))
+    imageExport["Image export<br/>PNG/JPEG readback"]
+    videoExport["Video/GIF export<br/>main-thread render<br/>worker encode/mux"]
+    upscale["Upscale queue<br/>Anime4K WebGPU compute<br/>new entities"]
+  end
+
+  user --> infinite
+  user --> knobs
+  user --> mediaControls
+
+  app --> infinite
+  app --> commands
+  infinite -->|registerRenderer| rendererSvc
+  infinite -->|pointer/touch/wheel/keyboard| loop
+  infinite -->|drop/paste files| mediaLoader
+
+  knobs -->|param changes| commands
+  mediaControls -->|playback changes| commands
+  commands <--> urlState
+  commands --> undo
+  commands --> store
+  mediaLoader --> commands
+  palette --> commands
+  serialization --> commands
+
+  loop -->|mutates viewport/selection/entities| store
+  loop --> controllers
+  controllers --> store
+  loop -->|per animation frame| renderState
+  store -->|getRenderState| renderState
+
+  rendererSvc --> canvasRenderer
+  loop -->|render| canvasRenderer
+  renderState --> canvasRenderer
+
+  canvasRenderer --> color
+  canvasRenderer --> textures
+  canvasRenderer --> shaderRuntime
+  shaderRuntime --> shaders
+  shaderRuntime --> processing
+  processing --> textures
+  canvasRenderer --> composite
+  canvasRenderer --> overlays
+  composite --> gpu
+  overlays --> gpu
+  gpu --> screen
+
+  commands --> imageExport
+  canvasRenderer --> imageExport
+  canvasRenderer --> videoExport
+  commands --> upscale
+  upscale -->|processed media| commands
+
+  math -. used by .-> loop
+  math -. used by .-> canvasRenderer
+  store -. selective subscriptions .-> knobs
+  store -. viewport/selection snapshots .-> infinite
+
+  classDef react fill:#20263a,stroke:#7aa2f7,color:#dbe7ff
+  classDef context fill:#24331f,stroke:#9ece6a,color:#ecffd8
+  classDef engine fill:#332b1f,stroke:#e0af68,color:#fff0d0
+  classDef renderer fill:#331f2f,stroke:#f7768e,color:#ffe1ea
+  classDef lib fill:#1f3331,stroke:#73daca,color:#dcfffb
+  classDef output fill:#2d2338,stroke:#bb9af7,color:#f2e8ff
+
+  class app,infinite,knobs,mediaControls react
+  class commands,rendererSvc,urlState,undo context
+  class store,loop,controllers,renderState engine
+  class mediaLoader,math,serialization,palette lib
+  class canvasRenderer,color,textures,shaderRuntime,shaders,processing,composite,overlays,gpu renderer
+  class screen,imageExport,videoExport,upscale output
+```
+
+## Core loop
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant IC as InfiniteCanvas
+  participant GL as GameLoop
+  participant CS as CanvasStore
+  participant RS as RenderState
+  participant R as InfiniteCanvasRenderer
+  participant GPU as WebGPU
+
+  IC->>GL: pointer/touch/wheel/keyboard events
+  GL->>CS: mutate viewport, selection, entities
+  GL->>CS: getRenderState() each RAF frame
+  CS-->>RS: viewport + entities + dirty flags + overlay state
+  GL->>R: render(RenderState)
+  R->>R: upload dirty source textures
+  R->>R: run entity shader + processing pipeline
+  R->>R: composite entities with viewport transform
+  R->>R: draw grid/selection/action/disintegration overlays
+  R->>GPU: submit command buffer
+  GPU-->>IC: present canvas frame
+```
+
+# Canvas Architecture Proposal
+
+This document is canvas-focused. It describes the current shape, where separation of
+concerns is strong, where it is blurry, and a simpler target architecture that can be
+reached incrementally.
+
+## Assessment
+
+I would rate the current architecture about **7/10**.
+
+### What is already working
+
+- The biggest boundary is correct: the **engine is GPU-agnostic** and the
+  **renderer owns WebGPU resources**.
+- `types/` sits at the bottom of the dependency graph, which keeps the domain model
+  reusable across React, engine, renderer, serialization, and export code.
+- `CanvasStore` uses selective snapshots and version counters, so high-frequency
+  viewport changes do not have to re-render the whole React tree.
+- `InfiniteCanvasRenderer` consumes a `RenderState` snapshot instead of reaching into
+  React state.
+- GPU resource ownership is mostly centralized in renderer/pipeline classes.
+
+### What is blurry
+
+- `CanvasProvider` is doing several jobs: React context wiring, URL state sync,
+  canvas commands, undo resource ownership, media lifecycle, image export, renderer
+  registration, and error handling.
+- `InfiniteCanvas` is a view component, but it also wires a lot of product behavior:
+  DOM events, keybind behavior, renderer configuration, canvas controls, drop/paste,
+  studio file import/export, and viewport actions.
+- `GameLoop` is both an input controller and a frame scheduler. It handles pointer,
+  touch, wheel, mobile gestures, momentum, video frame tracking, RAF scheduling, and
+  renderer calls.
+- `InfiniteCanvasRenderer` has the right ownership boundary, but internally it is a
+  large facade over WebGPU setup, entity rendering, composition, overlays, caches,
+  export readback, and device-loss handling.
+
+## Would MVC help?
+
+Classic MVC roughly maps like this:
+
+| MVC role   | Voidmesh equivalent                                                      |
+| ---------- | ------------------------------------------------------------------------ |
+| Model      | `CanvasStore`, `ShaderCanvasEntity`, `Viewport`, palettes, shader params |
+| View       | React controls **and** the WebGPU canvas                                 |
+| Controller | `GameLoop`, canvas commands, keybind/drop/paste handlers                 |
+
+That mapping is useful vocabulary, but a strict MVC rewrite would not simplify the
+app much. Voidmesh has two very different views:
+
+1. a React UI that edits state, and
+2. a high-frequency WebGPU viewport that renders state.
+
+The better target is a **model + use-cases + adapters** architecture:
+
+- **Model** stores canonical canvas state.
+- **Use cases** mutate the model through named product actions.
+- **Input adapters** translate DOM events into those actions.
+- **Render adapters** turn snapshots into pixels.
+- **React adapters** expose commands and selector hooks to UI components.
+
+This gives the useful parts of MVC without forcing a real-time rendering app into a
+request/response web-app shape.
+
+## Proposed simpler architecture
+
+```mermaid
+flowchart TD
+  %% Proposed Voidmesh canvas architecture
+
+  subgraph Adapters["Adapters: framework/browser edges"]
+    reactUI["React UI adapters<br/>knobs • sidebars • controls<br/>selector hooks + command hooks"]
+    canvasDOM["Canvas DOM adapter<br/>canvas element<br/>pointer/touch/wheel/keyboard/drop"]
+    urlAdapter["URL adapter<br/>shareable shader params"]
+    storageAdapter["Storage adapter<br/>.vdmsh import/export"]
+  end
+
+  subgraph Application["Application use cases: product actions"]
+    actions["CanvasActions<br/>add media<br/>update params<br/>select/duplicate/delete<br/>viewport commands"]
+    undo["Undo + resource lifecycle<br/>Command pattern<br/>media ownership/revocation"]
+    jobs["Long-running jobs<br/>image/video/GIF export<br/>upscale queue"]
+  end
+
+  subgraph Runtime["Runtime controllers: event/frame orchestration"]
+    inputController["CanvasInputController<br/>pointer/touch/wheel state machines<br/>hit testing<br/>gesture intents"]
+    frameLoop["FrameLoop<br/>RAF scheduling<br/>animated media ticks<br/>per-frame controllers"]
+  end
+
+  subgraph Engine["Engine core: model + canvas rules"]
+    store[(CanvasStore<br/>entities • viewport • selection<br/>preferences • dirty flags<br/>subscription snapshots)]
+    viewportController["ViewportController<br/>pan/zoom/fit animations<br/>momentum physics"]
+    selectionController["SelectionController<br/>hit selection<br/>drag select<br/>multi-select rules"]
+    animationControllers["Animation controllers<br/>action layer<br/>drag visual<br/>disintegration timing<br/>perf overlay"]
+    renderSnapshot["RenderState snapshot<br/>immutable frame input<br/>visible entities<br/>viewport + overlays"]
+  end
+
+  subgraph Rendering["Rendering adapter: pixels only"]
+    rendererPort[["CanvasRendererPort<br/>render(snapshot)<br/>snapshotEntityTexture()<br/>exportImage()"]]
+    webgpuRenderer["WebGPUCanvasRenderer<br/>implements renderer port"]
+    entityPipeline["Entity pipeline<br/>source upload<br/>shader runtime<br/>pre/post processing"]
+    composition["Composition pipeline<br/>z-order<br/>viewport transform<br/>color space"]
+    overlays["Overlay pipeline<br/>grid<br/>selection<br/>labels/callouts<br/>action-layer blur<br/>disintegration particles"]
+    gpu[(Browser WebGPU)]
+  end
+
+  reactUI --> actions
+  canvasDOM --> inputController
+  urlAdapter <--> actions
+  storageAdapter <--> actions
+
+  inputController --> actions
+  inputController --> viewportController
+  inputController --> selectionController
+  viewportController --> store
+  selectionController --> store
+  actions --> undo
+  actions --> store
+  actions --> jobs
+
+  frameLoop --> animationControllers
+  animationControllers --> store
+  frameLoop --> store
+  store --> renderSnapshot
+  frameLoop --> rendererPort
+  renderSnapshot --> rendererPort
+
+  rendererPort --> webgpuRenderer
+  webgpuRenderer --> entityPipeline
+  webgpuRenderer --> composition
+  webgpuRenderer --> overlays
+  entityPipeline --> gpu
+  composition --> gpu
+  overlays --> gpu
+```
+
+## Target responsibility boundaries
+
+| Area                   | Owns                                                             | Should not own                                                   |
+| ---------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- |
+| React components       | DOM layout, user-facing controls, calling hooks                  | Canvas business rules, direct `CanvasStore` reads, GPU calls     |
+| React context/hooks    | Exposing selectors and stable command objects                    | Large command implementations, media cleanup rules, render logic |
+| Application actions    | Product use cases and undoable state mutations                   | DOM event details, React state, WebGPU resources                 |
+| `CanvasStore`          | Canonical canvas state, dirty flags, snapshots                   | File loading, URL parsing, GPU cleanup, gesture interpretation   |
+| Input controllers      | Translating pointer/touch/wheel/key events into intents          | Rendering, media loading, React UI state                         |
+| Frame loop             | RAF scheduling and deciding when to render                       | Gesture rules, shader details, command implementations           |
+| Renderer port          | A small interface the engine can call                            | Concrete WebGPU setup details in engine code                     |
+| WebGPU renderer        | GPU resources, texture caches, shader/composition/overlay passes | Canvas state mutation, React subscriptions, product commands     |
+| Media/resource service | Creating/cloning/destroying browser media resources              | Selection rules, rendering passes, UI layout                     |
+
+## Simplified runtime flow
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant User
+  participant DOM as Canvas DOM adapter
+  participant Input as CanvasInputController
+  participant Actions as CanvasActions
+  participant Store as CanvasStore
+  participant Loop as FrameLoop
+  participant Renderer as CanvasRendererPort
+  participant GPU as WebGPU
+
+  User->>DOM: pointer / touch / wheel / keyboard / drop
+  DOM->>Input: normalized browser event
+  Input->>Actions: product intent<br/>select, drag, pan, zoom, add media
+  Actions->>Store: mutate canonical canvas state
+  Loop->>Store: get render snapshot on RAF/media tick
+  Store-->>Loop: RenderState snapshot
+  Loop->>Renderer: render(snapshot)
+  Renderer->>GPU: encode + submit passes
+```
+
+## Incremental migration plan
+
+This should not be a rewrite. Keep the working public APIs and split one seam at a
+time.
+
+1. **Keep `gameLoop` as a facade, split its internals.**
+   - Extract `CanvasInputController` for pointer/touch/wheel/context-menu/space-pan
+     state machines.
+   - Extract `FrameLoop` for RAF scheduling, animated media ticks, dirty checks, and
+     `renderer.render(snapshot)`.
+   - Existing components can still call `gameLoop.handlePointerDown()` while the
+     facade delegates internally.
+
+2. **Move command bodies out of `CanvasProvider`.**
+   - Create canvas action modules for add/update/delete/duplicate/select/viewport
+     operations.
+   - Keep the provider as composition glue: construct actions, provide contexts,
+     connect URL sync, and handle toasts/errors.
+   - This makes commands testable without React.
+
+3. **Make renderer dependency explicit.**
+   - Define a small `CanvasRendererPort` interface consumed by the frame loop.
+   - `WebGPUCanvasRenderer` implements that port.
+   - The engine should not know about concrete renderer internals beyond the port.
+
+4. **Extract media resource lifecycle.**
+   - Centralize clone/destroy/revoke behavior for images, videos, GIF frames, and SVG
+     bitmaps.
+   - Undo commands should claim ownership through this service instead of keeping
+     cleanup details inside React context.
+
+5. **Keep `InfiniteCanvasRenderer` as a facade, split renderer internals only where it
+   reduces complexity.**
+   - Good internal seams: `EntityRenderPipeline`, `OverlayRenderer`,
+     `GpuResourceCache`, and export/readback service.
+   - Do not leak WebGPU resources outside renderer-owned classes.
+
+## What not to do
+
+- Do not pursue MVC as a goal by itself. The useful goal is smaller ownership
+  boundaries, not terminology.
+- Do not create many new React providers. Prefer plain modules/services behind the
+  existing canvas context.
+- Do not move GPU logic into context or components.
+- Do not replace `CanvasStore` unless a concrete performance or correctness problem
+  appears; its snapshot/version design fits this app well.
+- Do not split shader code just to make files smaller. Split around ownership:
+  source upload, effect processing, composition, overlays, export.
+
+## Target dependency direction
+
+Arrows point from code that imports to code it is allowed to import.
+
+```mermaid
+flowchart LR
+  types["types/"]
+  lib["lib/ pure utilities"]
+  engine["engine/<br/>store + controllers + frame loop"]
+  app["application actions<br/>plain TS use cases"]
+  context["context/<br/>React providers/hooks"]
+  components["components/<br/>React UI"]
+  renderer["renderer/<br/>WebGPU adapter"]
+
+  components --> context
+  context --> app
+  context -. wires concrete renderer .-> renderer
+  app --> engine
+  app --> lib
+  app --> types
+  engine --> lib
+  engine --> types
+  renderer --> lib
+  renderer --> types
+  renderer -. type-only RenderState / RendererPort .-> engine
+```
+
+The key rule: **state changes flow through application actions into `CanvasStore`; pixels
+flow from a `RenderState` snapshot into the renderer.** Keeping those flows separate is
+the main architectural simplification.
