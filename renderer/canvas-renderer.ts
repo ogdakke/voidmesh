@@ -14,13 +14,7 @@ import {
   getViewportMatrix,
   getViewportWorldBounds,
 } from "#lib/canvas-math.ts";
-import {
-  MediaType,
-  type Bounds,
-  type RGBA,
-  type ShaderCanvasEntity,
-  type Viewport,
-} from "#types/canvas.ts";
+import { MediaType, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import compositionShaderSource from "./composition.wgsl?raw";
 import { CopyPass } from "./copy-pass.ts";
 import { DisintegrationParticleSystem } from "./disintegration-particles.ts";
@@ -29,7 +23,7 @@ import { ExportService } from "./export-service.ts";
 import { ExternalTextureCopyPass } from "./external-texture-copy-pass.ts";
 import { detectGpuColorConfig, type GpuColorConfig } from "./gpu-color-space.ts";
 import { GridPass } from "./grid-pass.ts";
-import selectionRectShaderSource from "./selection-rect.wgsl?raw";
+import { SelectionRectPass } from "./selection-rect-pass.ts";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
 import { EntityLabelPass } from "./entity-label-pass.ts";
 import { TexturePool } from "./texture-pool.ts";
@@ -150,8 +144,6 @@ export class InfiniteCanvasRenderer {
   > = new Map();
 
   #actionLayerTintColor: [number, number, number] = config.actionLayer.dimColor.dark;
-  #selectionRectConfig = config.selectionRectangle.light;
-  #multiSelectBoundingBoxConfig = config.multiSelectBoundingBox.light;
 
   // Texture pool for eliminating per-frame allocation churn
   #texturePool: TexturePool | null = null;
@@ -180,17 +172,7 @@ export class InfiniteCanvasRenderer {
   #lastFrameTime = 0;
   #resizeObserver: ResizeObserver | null = null;
 
-  // Selection rectangle pipeline (for drag-to-select)
-  #selectionRectPipeline: GPURenderPipeline | null = null;
-  #selectionRectUniformBuffer: GPUBuffer | null = null;
-  #selectionRectBindGroup: GPUBindGroup | null = null;
-  // New uniform layout supporting up to 4 rectangles:
-  // resolution(8) + offset(8) + zoom(4) + rectCount(4) + padding(8) = 32 bytes header
-  // + 4 * RectData(64 bytes each) = 256 bytes
-  // Total = 288 bytes
-  #selectionRectUniformSize = 288;
-  #selectionRectUniformData = new ArrayBuffer(288);
-  #selectionRectFloatView = new Float32Array(this.#selectionRectUniformData);
+  #selectionRectPass: SelectionRectPass | null = null;
 
   // Action layer blit pipeline (fullscreen dimmed blit for blur overlay)
   #actionLayerBlitPipeline: GPURenderPipeline | null = null;
@@ -354,7 +336,7 @@ export class InfiniteCanvasRenderer {
     });
     await this.#entityShaderRuntime.initialize();
 
-    this.#createSelectionRectPipeline();
+    this.#selectionRectPass = new SelectionRectPass(this.#device, this.#canvasFormat);
     this.#createActionLayerBlitPipeline();
     this.#createViewportLensPipeline();
     this.#presentCopyPass = new CopyPass(this.#device, this.#canvasFormat);
@@ -556,76 +538,6 @@ export class InfiniteCanvasRenderer {
       },
       fragment: {
         module: externalShaderModule,
-        entryPoint: "fs_main",
-        targets: [
-          {
-            format: this.#canvasFormat,
-            blend: {
-              color: {
-                srcFactor: "src-alpha",
-                dstFactor: "one-minus-src-alpha",
-                operation: "add",
-              },
-              alpha: {
-                srcFactor: "one",
-                dstFactor: "one-minus-src-alpha",
-                operation: "add",
-              },
-            },
-          },
-        ],
-      },
-      primitive: {
-        topology: "triangle-list",
-      },
-    });
-  }
-
-  #createSelectionRectPipeline(): void {
-    if (!this.#device) return;
-
-    const shaderModule = this.#device.createShaderModule({
-      label: "Selection rect shader",
-      code: selectionRectShaderSource,
-    });
-
-    const bindGroupLayout = this.#device.createBindGroupLayout({
-      label: "Selection rect bind group layout",
-      entries: [
-        {
-          binding: 0,
-          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-          buffer: { type: "uniform" },
-        },
-      ],
-    });
-
-    this.#selectionRectUniformBuffer = this.#device.createBuffer({
-      label: "Selection rect uniforms",
-      size: this.#selectionRectUniformSize,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-
-    this.#selectionRectBindGroup = this.#device.createBindGroup({
-      label: "Selection rect bind group",
-      layout: bindGroupLayout,
-      entries: [{ binding: 0, resource: { buffer: this.#selectionRectUniformBuffer } }],
-    });
-
-    const pipelineLayout = this.#device.createPipelineLayout({
-      label: "Selection rect pipeline layout",
-      bindGroupLayouts: [bindGroupLayout],
-    });
-
-    this.#selectionRectPipeline = this.#device.createRenderPipeline({
-      label: "Selection rect pipeline",
-      layout: pipelineLayout,
-      vertex: {
-        module: shaderModule,
-        entryPoint: "vs_main",
-      },
-      fragment: {
-        module: shaderModule,
         entryPoint: "fs_main",
         targets: [
           {
@@ -993,69 +905,6 @@ export class InfiniteCanvasRenderer {
       },
       primitive: { topology: "triangle-list" },
     });
-  }
-
-  /** Update selection rectangle uniforms with multiple rectangles */
-  #updateSelectionRectUniformsMulti(
-    rects: Array<{
-      bounds: Bounds;
-      config: { borderColor: RGBA; backgroundColor: RGBA; borderWidth: number };
-    }>,
-    viewport: Viewport,
-  ): void {
-    const width = this.canvas.width;
-    const height = this.canvas.height;
-    const v = this.#selectionRectFloatView;
-
-    // Header layout (32 bytes = 8 floats):
-    // resolution(8) + offset(8) + zoom(4) + rectCount(4) + padding(8)
-    v[0] = width;
-    v[1] = height;
-    v[2] = viewport.offset.x;
-    v[3] = viewport.offset.y;
-    v[4] = viewport.zoom;
-    v[5] = Math.min(rects.length, 4); // rectCount (max 4)
-    v[6] = 0; // padding
-    v[7] = 0; // padding
-
-    // Write each RectData (64 bytes = 16 floats each)
-    // RectData[i] starts at float index 8 + (i * 16)
-    const maxRects = Math.min(rects.length, 4);
-    for (let i = 0; i < maxRects; i++) {
-      const rect = rects[i]!;
-      const fillColor = rect.config.backgroundColor;
-      const borderColor = rect.config.borderColor;
-      const base = 8 + i * 16;
-
-      // rect: vec4f (x, y, width, height)
-      v[base + 0] = rect.bounds.x;
-      v[base + 1] = rect.bounds.y;
-      v[base + 2] = rect.bounds.width;
-      v[base + 3] = rect.bounds.height;
-      // fillColor: vec4f (straight alpha — shader handles blending)
-      v[base + 4] = fillColor[0];
-      v[base + 5] = fillColor[1];
-      v[base + 6] = fillColor[2];
-      v[base + 7] = fillColor[3];
-      // borderColor: vec4f (straight alpha — shader handles blending)
-      v[base + 8] = borderColor[0];
-      v[base + 9] = borderColor[1];
-      v[base + 10] = borderColor[2];
-      v[base + 11] = borderColor[3];
-      // borderWidth: vec4f (only .x used, rest padding)
-      v[base + 12] = rect.config.borderWidth;
-      v[base + 13] = 0;
-      v[base + 14] = 0;
-      v[base + 15] = 0;
-    }
-
-    // Zero out unused rect slots
-    for (let i = maxRects; i < 4; i++) {
-      const base = 8 + i * 16;
-      for (let j = 0; j < 16; j++) {
-        v[base + j] = 0;
-      }
-    }
   }
 
   /**
@@ -1838,55 +1687,17 @@ export class InfiniteCanvasRenderer {
     this.#renderDisintegrationOverlays(encoder, sceneTargetView, frameDt);
 
     // Pass 3: Render all selection rectangles (drag-select and multi-select bounds)
-    // Collect all active rectangles
-    const selectionRects: Array<{
-      bounds: Bounds;
-      config: { borderColor: RGBA; backgroundColor: RGBA; borderWidth: number };
-    }> = [];
-
-    if (state.dragSelectBounds) {
-      selectionRects.push({
-        bounds: state.dragSelectBounds,
-        config: this.#selectionRectConfig,
-      });
-    }
-
-    if (state.multiSelectBounds) {
-      selectionRects.push({
-        bounds: state.multiSelectBounds,
-        config: this.#multiSelectBoundingBoxConfig,
-      });
-    }
-
-    if (
-      selectionRects.length > 0 &&
-      this.#selectionRectPipeline &&
-      this.#selectionRectUniformBuffer &&
-      this.#selectionRectBindGroup
-    ) {
+    if ((state.dragSelectBounds || state.multiSelectBounds) && this.#selectionRectPass) {
       markPhaseStart("selection-rects");
-      this.#updateSelectionRectUniformsMulti(selectionRects, viewport);
-      this.#device.queue.writeBuffer(
-        this.#selectionRectUniformBuffer,
-        0,
-        this.#selectionRectUniformData,
-      );
-
-      const selectionRectPass = encoder.beginRenderPass({
-        label: "Selection rectangles render pass",
-        colorAttachments: [
-          {
-            view: sceneTargetView,
-            loadOp: "load", // Preserve previous content
-            storeOp: "store",
-          },
-        ],
+      this.#selectionRectPass.encode({
+        encoder,
+        targetView: sceneTargetView,
+        viewport,
+        width,
+        height,
+        dragSelectBounds: state.dragSelectBounds,
+        multiSelectBounds: state.multiSelectBounds,
       });
-
-      selectionRectPass.setPipeline(this.#selectionRectPipeline);
-      selectionRectPass.setBindGroup(0, this.#selectionRectBindGroup);
-      selectionRectPass.draw(3); // Fullscreen triangle
-      selectionRectPass.end();
       markPhaseEnd("selection-rects");
     }
 
@@ -2008,8 +1819,7 @@ export class InfiniteCanvasRenderer {
     selectionRect: typeof config.selectionRectangle.light,
     multiSelectBox: typeof config.multiSelectBoundingBox.light,
   ): void {
-    this.#selectionRectConfig = selectionRect;
-    this.#multiSelectBoundingBoxConfig = multiSelectBox;
+    this.#selectionRectPass?.setConfig(selectionRect, multiSelectBox);
   }
 
   setWlurOverlay(config: WlurOverlayConfig | null): void {
@@ -2421,7 +2231,9 @@ export class InfiniteCanvasRenderer {
     // Destroy buffers
     this.#viewportUniformBuffer?.destroy();
     this.#entityUniformBuffer?.destroy();
-    this.#selectionRectUniformBuffer?.destroy();
+
+    this.#selectionRectPass?.destroy();
+    this.#selectionRectPass = null;
 
     // Clear entity errors
     this.#entityErrors.clear();
@@ -2437,8 +2249,6 @@ export class InfiniteCanvasRenderer {
     this.#compositionPipeline = null;
     this.#externalCompositionPipeline = null;
     this.#externalTextureCopyPass = null;
-    this.#selectionRectPipeline = null;
-    this.#selectionRectBindGroup = null;
     this.#compositionBindGroupLayout = null;
     this.#externalCompositionBindGroupLayout = null;
     this.#context = null;
