@@ -11,7 +11,7 @@ export type {
 export { actionLayerController } from "./action-layer-controller.ts";
 
 export { GameLoop, gameLoop, SpacePanMode } from "./game-loop.ts";
-export type { InputState } from "./game-loop.ts";
+export type { CanvasRendererPort, InputState } from "./game-loop.ts";
 
 export { viewportAnimation } from "./viewport-animation.ts";
 export type { ViewportAnimationOptions } from "./viewport-animation.ts";

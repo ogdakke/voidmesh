@@ -14,7 +14,6 @@ import {
 } from "#lib/canvas-math.ts";
 import { config, type TouchConfig } from "#config";
 import { VelocityTracker } from "#lib/touch-scroll/index.ts";
-import type { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
 import {
   DragTargetType,
   isAnimatedEntity,
@@ -35,6 +34,7 @@ import { scheduler, type AnimationHandle } from "#lib/animation-scheduler.ts";
 import { haptic } from "#lib/haptic.ts";
 import { OnboardingStepId } from "#lib/onboarding.ts";
 import { completeOnboardingStepFromEvent } from "#lib/onboarding-runtime.ts";
+import { FrameLoop, type CanvasRendererPort } from "./frame-loop.ts";
 import {
   getEntityAlphaGrid,
   isAlphaGridCellOpaque,
@@ -142,32 +142,18 @@ export interface DragSelectState {
   previousSelection: Set<string>;
 }
 
-interface VideoFrameTracker {
-  video: HTMLVideoElement;
-  requestId: number | null;
-  dirty: boolean;
-  initialized: boolean;
-  fallbackFrameIndex: number;
-  generation: number;
-}
-
 export type RenderErrorHandler = (error: unknown) => boolean | void;
+export type { CanvasRendererPort } from "./frame-loop.ts";
 
 export class GameLoop {
   readonly #deps: GameLoopDeps;
   #logger = logger;
-  #renderer: InfiniteCanvasRenderer | null = null;
+  readonly #frameLoop: FrameLoop;
   #onRenderError: RenderErrorHandler | null = null;
   #container: HTMLElement | null = null;
   #containerRect: DOMRect = new DOMRect(0, 0, 0, 0);
   #resizeObserver: ResizeObserver | null = null;
-  #running = false;
-  #animationFrameId: number | null = null;
-  #videoFrameTrackers = new Map<string, VideoFrameTracker>();
-  #videoFrameTrackerGeneration = 0;
   #pendingScrollMomentumVelocity: Point | null = null;
-  #firstFrameRendered = false;
-  #lastFrameTime: number | null = null;
 
   #inputState: InputState = {
     pointerPosition: null,
@@ -251,17 +237,25 @@ export class GameLoop {
   constructor(deps?: Partial<GameLoopDeps>) {
     this.#deps = { ...createDefaultDeps(), ...deps };
     this.#momentum = new MomentumController(this.#deps.scheduler, this.#constructMomentumDeps());
+    this.#frameLoop = new FrameLoop(
+      {
+        scheduler: this.#deps.scheduler,
+        perf: this.#deps.perf,
+      },
+      {
+        processInput: () => this.processInput(),
+        getDragSelectBounds: () => this.getDragSelectBounds(),
+        getMultiSelectBounds: () => this.getMultiSelectBounds(),
+        isPointerDragging: () => this.#inputState.pointerDown && !!this.#dragTarget,
+        isDragSelectActive: () => this.#dragSelect?.isActive === true,
+        onAfterFrame: () => this.#startPendingScrollMomentum(),
+        onRenderError: (error) => this.#handleFrameRenderError(error),
+      },
+    );
   }
 
-  setRenderer(renderer: InfiniteCanvasRenderer): void {
-    this.#renderer = renderer;
-    this.#deps.perf.setRenderer(
-      renderer.device,
-      renderer.colorConfig.canvasFormat,
-      renderer.colorConfig.canvasColorSpace,
-    );
-    // Reset first frame flag when renderer changes
-    this.#firstFrameRendered = false;
+  setRenderer(renderer: CanvasRendererPort): void {
+    this.#frameLoop.setRenderer(renderer);
   }
 
   setRenderErrorHandler(handler: RenderErrorHandler | null): void {
@@ -315,201 +309,21 @@ export class GameLoop {
   }
 
   start(): void {
-    if (this.#running) return;
-    this.#running = true;
-    this.tick();
+    this.#frameLoop.start();
   }
 
   stop(): void {
-    this.#running = false;
-    this.#lastFrameTime = null;
+    this.#frameLoop.stop();
     this.#cancelPendingScrollMomentum();
     this.#cancelLongPressTimer();
     this.#cancelDoubleTapTimer();
-    this.#clearVideoFrameTrackers();
-    if (this.#animationFrameId !== null) {
-      cancelAnimationFrame(this.#animationFrameId);
-      this.#animationFrameId = null;
-    }
   }
 
-  private tick = (): void => {
-    if (!this.#running) return;
-
-    // 1. Compute delta time for GIF playback advancement
-    const now = performance.now();
-    const deltaSeconds = this.#lastFrameTime !== null ? (now - this.#lastFrameTime) / 1000 : 0;
-    this.#lastFrameTime = now;
-
-    let hasAnimatedFrameUpdate = false;
-    let hasContinuousShaderRender = false;
-    this.#videoFrameTrackerGeneration++;
-
-    // 2. Advance GIF playback and update video time for all playing animated entities.
-    // Uses entity refs directly — getRenderState() is deferred until after all ticks
-    // so the viewport snapshot reflects this frame's updates, not the previous frame's.
-    for (const entity of canvasStore.getState().entities.values()) {
-      if (entity.mediaSource.type === MediaType.gif && entity.playback?.isPlaying) {
-        canvasStore.advanceGifPlayback(entity.id, deltaSeconds);
-        // Notify playback subscribers for real-time time display updates
-        canvasStore.updateGifPlaybackTime(entity.id, entity.playback.currentTime);
-        if (entity.textureDirty) hasAnimatedFrameUpdate = true;
-      }
-      // Update video playback time continuously
-      if (entity.mediaSource.type === MediaType.video && entity.playback?.isPlaying) {
-        const video = entity.mediaSource.videoElement;
-        canvasStore.updatePlaybackTime(entity.id, video.currentTime);
-        if (this.#consumeVideoFrameUpdate(entity.id, video, entity.mediaSource.fps)) {
-          canvasStore.markEntityTextureDirty(entity.id);
-          hasAnimatedFrameUpdate = true;
-        }
-      }
-      // Check if any shader needs continuous re-rendering (e.g., time-based animation)
-      if (!hasContinuousShaderRender && this.#renderer?.needsContinuousRenderForEntity(entity)) {
-        hasContinuousShaderRender = true;
-      }
+  #handleFrameRenderError(error: unknown): void {
+    const handled = this.#onRenderError?.(error) === true;
+    if (!handled) {
+      this.#logger.error("[GameLoop] Render failed", error);
     }
-    this.#cleanupInactiveVideoFrameTrackers();
-
-    // 3. Advance all scheduler-managed animations (viewport, etc.)
-    this.#deps.scheduler.tick(now);
-
-    // 4. Process input (hover detection, drag updates)
-    this.processInput();
-
-    // 5. Snapshot render state AFTER all ticks so the viewport reflects
-    // this frame's animation/momentum/input updates, not the previous frame's.
-    const renderState = canvasStore.getRenderState();
-    this.#deps.perf.onFrame(renderState.debugMode, now);
-
-    // 6. Add selection bounds to render state (managed by game-loop, not store)
-    renderState.dragSelectBounds = this.getDragSelectBounds();
-    renderState.multiSelectBounds = this.getMultiSelectBounds();
-
-    // 7. Determine if we need to render this frame
-    const needsRender =
-      !this.#firstFrameRendered ||
-      renderState.dirty ||
-      hasAnimatedFrameUpdate ||
-      hasContinuousShaderRender ||
-      this.#deps.scheduler.hasActive ||
-      (this.#inputState.pointerDown && !!this.#dragTarget) ||
-      this.#dragSelect?.isActive;
-
-    // 8. Render only when needed (skip idle frames)
-    if (this.#renderer?.isReady && needsRender) {
-      if (renderState.debugMode) performance.mark("studio-render-start");
-      try {
-        this.#renderer.render(renderState);
-        this.#firstFrameRendered = true;
-        if (renderState.debugMode) {
-          performance.mark("studio-render-end");
-          performance.measure("studio-render", "studio-render-start", "studio-render-end");
-        }
-        this.#deps.perf.onRender(this.#renderer.getFrameStats(), renderState.debugMode);
-      } catch (error) {
-        const handled = this.#onRenderError?.(error) === true;
-        if (!handled) {
-          this.#logger.error("[GameLoop] Render failed", error);
-        }
-      }
-    }
-
-    // 10. Clear dirty flags
-    canvasStore.clearDirtyFlags();
-
-    // 11. Start queued pan momentum only after the final touch-driven viewport
-    // has passed through this render tick. This prevents the release frame from
-    // combining late touch movement and the first fling delta.
-    this.#startPendingScrollMomentum();
-
-    // 12. Schedule next frame
-    this.#animationFrameId = requestAnimationFrame(this.tick);
-  };
-
-  #consumeVideoFrameUpdate(entityId: string, video: HTMLVideoElement, fps: number | null): boolean {
-    let tracker = this.#videoFrameTrackers.get(entityId);
-    if (!tracker || tracker.video !== video) {
-      if (tracker) this.#cancelVideoFrameCallback(tracker);
-      tracker = {
-        video,
-        requestId: null,
-        dirty: true,
-        initialized: false,
-        fallbackFrameIndex: this.#getVideoFallbackFrameIndex(video, fps),
-        generation: this.#videoFrameTrackerGeneration,
-      };
-      this.#videoFrameTrackers.set(entityId, tracker);
-    }
-
-    tracker.generation = this.#videoFrameTrackerGeneration;
-
-    if ("requestVideoFrameCallback" in video) {
-      this.#scheduleVideoFrameCallback(entityId, tracker);
-      if (!tracker.initialized) {
-        tracker.initialized = true;
-        tracker.dirty = true;
-      }
-      if (!tracker.dirty) return false;
-      tracker.dirty = false;
-      return true;
-    }
-
-    const frameIndex = this.#getVideoFallbackFrameIndex(video, fps);
-    if (!tracker.initialized) {
-      tracker.initialized = true;
-      tracker.fallbackFrameIndex = frameIndex;
-      return true;
-    }
-    if (frameIndex === tracker.fallbackFrameIndex) return false;
-
-    tracker.fallbackFrameIndex = frameIndex;
-    return true;
-  }
-
-  #scheduleVideoFrameCallback(entityId: string, tracker: VideoFrameTracker): void {
-    if (tracker.requestId !== null) return;
-    if (!("requestVideoFrameCallback" in tracker.video)) return;
-
-    tracker.requestId = tracker.video.requestVideoFrameCallback(() => {
-      tracker.requestId = null;
-      if (this.#videoFrameTrackers.get(entityId) !== tracker) return;
-
-      tracker.dirty = true;
-      if (!tracker.video.paused && !tracker.video.ended) {
-        this.#scheduleVideoFrameCallback(entityId, tracker);
-      }
-    });
-  }
-
-  #getVideoFallbackFrameIndex(video: HTMLVideoElement, fps: number | null): number {
-    const effectiveFps = fps && Number.isFinite(fps) && fps > 0 ? fps : 30;
-    return Math.floor(video.currentTime * effectiveFps + 0.0001);
-  }
-
-  #cleanupInactiveVideoFrameTrackers(): void {
-    for (const [entityId, tracker] of this.#videoFrameTrackers) {
-      if (tracker.generation === this.#videoFrameTrackerGeneration) continue;
-
-      this.#cancelVideoFrameCallback(tracker);
-      this.#videoFrameTrackers.delete(entityId);
-    }
-  }
-
-  #clearVideoFrameTrackers(): void {
-    for (const tracker of this.#videoFrameTrackers.values()) {
-      this.#cancelVideoFrameCallback(tracker);
-    }
-    this.#videoFrameTrackers.clear();
-  }
-
-  #cancelVideoFrameCallback(tracker: VideoFrameTracker): void {
-    if (tracker.requestId === null) return;
-
-    if ("cancelVideoFrameCallback" in tracker.video) {
-      tracker.video.cancelVideoFrameCallback(tracker.requestId);
-    }
-    tracker.requestId = null;
   }
 
   /** Stop any active momentum scrolling and zoom momentum (public API for external callers) */
