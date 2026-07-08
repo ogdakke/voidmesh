@@ -25,22 +25,10 @@ import { EntityLabelPass } from "./entity-label-pass.ts";
 import { TexturePool } from "./texture-pool.ts";
 import { resolveWlurOverlayRuntimeConfig, type WlurOverlayConfig } from "./wlur-overlay.ts";
 import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
-import viewportLensDistortionShaderSource from "./viewport-lens-distortion.wgsl?raw";
 import type { ImageExportOptions } from "./export-formats.ts";
+import { ViewportLensPass, type ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
 
-export interface ViewportLensDistortionConfig {
-  enabled: boolean;
-  strength: number;
-  radius: number;
-  falloff: number;
-  dispersion: number;
-  scale: number;
-  reflectionIntensity: number;
-  reflectionFocus: number;
-  occlusion: number;
-  vignetteLight: number;
-  vignetteDark: number;
-}
+export type { ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
 
 export class InfiniteCanvasRenderer {
   readonly canvas: HTMLCanvasElement;
@@ -102,25 +90,7 @@ export class InfiniteCanvasRenderer {
 
   #presentCopyPass: CopyPass | null = null;
 
-  // Full-canvas viewport lens distortion pass. Runs before mobile wlur overlay so
-  // the progressive bottom blur itself stays screen-space rather than warped.
-  #viewportLensConfig: ViewportLensDistortionConfig = getViewportLensDistortionConfig(
-    CanvasLensing.off,
-  );
-  #viewportLensDarkTheme = false;
-  #viewportLensPipeline: GPURenderPipeline | null = null;
-  #viewportLensBindGroupLayout: GPUBindGroupLayout | null = null;
-  #viewportLensUniformBuffer: GPUBuffer | null = null;
-  #viewportLensSampler: GPUSampler | null = null;
-  #viewportLensUniformData = new ArrayBuffer(48);
-  #viewportLensFloatView = new Float32Array(this.#viewportLensUniformData);
-  #viewportLensTexture: {
-    width: number;
-    height: number;
-    texture: GPUTexture;
-    view: GPUTextureView;
-    bindGroup: GPUBindGroup;
-  } | null = null;
+  #viewportLensPass: ViewportLensPass | null = null;
 
   // Wlur progressive full-canvas overlay
   #wlurPass: WlurPass | null = null;
@@ -257,7 +227,11 @@ export class InfiniteCanvasRenderer {
 
     this.#selectionRectPass = new SelectionRectPass(this.#device, this.#canvasFormat);
     this.#createActionLayerBlitPipeline();
-    this.#createViewportLensPipeline();
+    this.#viewportLensPass = new ViewportLensPass({
+      device: this.#device,
+      format: this.#canvasFormat,
+      initialConfig: getViewportLensDistortionConfig(CanvasLensing.off),
+    });
     this.#presentCopyPass = new CopyPass(this.#device, this.#canvasFormat);
     this.#wlurPass = new WlurPass({
       device: this.#device,
@@ -439,167 +413,6 @@ export class InfiniteCanvasRenderer {
       params.tint?.amount ?? "",
       params.tint?.curve?.join(",") ?? "",
     ].join("|");
-  }
-
-  #destroyViewportLensTexture(): void {
-    this.#viewportLensTexture?.texture.destroy();
-    this.#viewportLensTexture = null;
-  }
-
-  #shouldApplyViewportLensDistortion(): boolean {
-    const lens = this.#viewportLensConfig;
-    return (
-      lens.enabled &&
-      (lens.strength > 0.001 || lens.dispersion > 0.001) &&
-      this.#viewportLensPipeline !== null &&
-      this.#viewportLensBindGroupLayout !== null &&
-      this.#viewportLensUniformBuffer !== null &&
-      this.#viewportLensSampler !== null
-    );
-  }
-
-  #getOrCreateViewportLensTexture(
-    width: number,
-    height: number,
-  ): { texture: GPUTexture; view: GPUTextureView } | null {
-    const cached = this.#viewportLensTexture;
-    if (cached && cached.width === width && cached.height === height) {
-      return cached;
-    }
-
-    if (
-      !this.#device ||
-      !this.#viewportLensBindGroupLayout ||
-      !this.#viewportLensUniformBuffer ||
-      !this.#viewportLensSampler
-    ) {
-      return null;
-    }
-
-    this.#destroyViewportLensTexture();
-    const texture = this.#device.createTexture({
-      label: `Viewport lens input (${width}x${height})`,
-      size: [width, height],
-      format: this.#canvasFormat,
-      usage:
-        GPUTextureUsage.TEXTURE_BINDING |
-        GPUTextureUsage.RENDER_ATTACHMENT |
-        GPUTextureUsage.COPY_SRC,
-    });
-    const view = texture.createView();
-    const bindGroup = this.#device.createBindGroup({
-      label: "Viewport lens distortion bind group",
-      layout: this.#viewportLensBindGroupLayout,
-      entries: [
-        { binding: 0, resource: view },
-        { binding: 1, resource: this.#viewportLensSampler },
-        { binding: 2, resource: { buffer: this.#viewportLensUniformBuffer } },
-      ],
-    });
-    this.#viewportLensTexture = { width, height, texture, view, bindGroup };
-    return this.#viewportLensTexture;
-  }
-
-  #createViewportLensPipeline(): void {
-    if (!this.#device) return;
-
-    const shaderModule = this.#device.createShaderModule({
-      label: "Viewport lens distortion shader",
-      code: viewportLensDistortionShaderSource,
-    });
-
-    this.#viewportLensBindGroupLayout = this.#device.createBindGroupLayout({
-      label: "Viewport lens distortion bind group layout",
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
-        { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
-        { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-      ],
-    });
-
-    this.#viewportLensUniformBuffer = this.#device.createBuffer({
-      label: "Viewport lens distortion uniforms",
-      size: this.#viewportLensUniformData.byteLength,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-
-    this.#viewportLensSampler = this.#device.createSampler({
-      label: "Viewport lens distortion sampler",
-      magFilter: "linear",
-      minFilter: "linear",
-      addressModeU: "clamp-to-edge",
-      addressModeV: "clamp-to-edge",
-    });
-
-    const pipelineLayout = this.#device.createPipelineLayout({
-      label: "Viewport lens distortion pipeline layout",
-      bindGroupLayouts: [this.#viewportLensBindGroupLayout],
-    });
-
-    this.#viewportLensPipeline = this.#device.createRenderPipeline({
-      label: "Viewport lens distortion pipeline",
-      layout: pipelineLayout,
-      vertex: { module: shaderModule, entryPoint: "vs_main" },
-      fragment: {
-        module: shaderModule,
-        entryPoint: "fs_main",
-        targets: [{ format: this.#canvasFormat }],
-      },
-      primitive: { topology: "triangle-list" },
-    });
-  }
-
-  #encodeViewportLensDistortion(
-    encoder: GPUCommandEncoder,
-    targetView: GPUTextureView,
-    width: number,
-    height: number,
-  ): boolean {
-    if (!this.#shouldApplyViewportLensDistortion()) {
-      return false;
-    }
-
-    const lens = this.#viewportLensConfig;
-    const lensTexture = this.#getOrCreateViewportLensTexture(width, height);
-    if (!lensTexture || !this.#viewportLensUniformBuffer || !this.#viewportLensPipeline) {
-      return false;
-    }
-
-    const v = this.#viewportLensFloatView;
-    v[0] = width;
-    v[1] = height;
-    v[2] = lens.strength;
-    v[3] = lens.radius;
-    v[4] = lens.falloff;
-    v[5] = lens.dispersion;
-    v[6] = lens.scale;
-    v[7] = lens.reflectionIntensity;
-    v[8] = lens.reflectionFocus;
-    v[9] = lens.occlusion;
-    v[10] = this.#viewportLensDarkTheme ? lens.vignetteDark : lens.vignetteLight;
-    v[11] = 0;
-    this.#device!.queue.writeBuffer(
-      this.#viewportLensUniformBuffer,
-      0,
-      this.#viewportLensUniformData,
-    );
-
-    const pass = encoder.beginRenderPass({
-      label: "Viewport lens distortion pass",
-      colorAttachments: [
-        {
-          view: targetView,
-          loadOp: "clear",
-          storeOp: "store",
-          clearValue: { r: 0, g: 0, b: 0, a: 0 },
-        },
-      ],
-    });
-    pass.setPipeline(this.#viewportLensPipeline);
-    pass.setBindGroup(0, this.#viewportLensTexture!.bindGroup);
-    pass.draw(3);
-    pass.end();
-    return true;
   }
 
   #createActionLayerBlitPipeline(): void {
@@ -853,9 +666,7 @@ export class InfiniteCanvasRenderer {
       return;
     }
     const targetView = texture.createView();
-    const viewportLensTarget = this.#shouldApplyViewportLensDistortion()
-      ? this.#getOrCreateViewportLensTexture(width, height)
-      : null;
+    const viewportLensTarget = this.#viewportLensPass?.getTarget(width, height) ?? null;
     const sceneTargetTexture = viewportLensTarget?.texture ?? texture;
     const sceneTargetView = viewportLensTarget?.view ?? targetView;
 
@@ -1029,7 +840,7 @@ export class InfiniteCanvasRenderer {
 
     markPhaseStart("viewport-lens-distortion");
     const lensApplied = viewportLensTarget
-      ? this.#encodeViewportLensDistortion(encoder, targetView, width, height)
+      ? this.#viewportLensPass!.encode(encoder, targetView, width, height)
       : false;
     markPhaseEnd("viewport-lens-distortion");
 
@@ -1160,18 +971,18 @@ export class InfiniteCanvasRenderer {
   }
 
   setViewportLensDistortion(config: ViewportLensDistortionConfig): void {
-    this.#viewportLensConfig = { ...config };
+    this.#viewportLensPass?.setConfig(config);
     this.#invalidateWlurOverlayCache();
   }
 
   setViewportLensColorScheme(isDark: boolean): void {
-    if (this.#viewportLensDarkTheme === isDark) return;
-    this.#viewportLensDarkTheme = isDark;
-    this.#invalidateWlurOverlayCache();
+    if (this.#viewportLensPass?.setColorScheme(isDark)) {
+      this.#invalidateWlurOverlayCache();
+    }
   }
 
   get viewPortLensConfig(): ViewportLensDistortionConfig {
-    return this.#viewportLensConfig;
+    return this.#viewportLensPass?.config ?? getViewportLensDistortionConfig(CanvasLensing.off);
   }
 
   /**
@@ -1420,12 +1231,8 @@ export class InfiniteCanvasRenderer {
     this.#destroyWlurOverlayTextures();
     this.#invalidateWlurOverlayCache();
 
-    this.#destroyViewportLensTexture();
-    this.#viewportLensUniformBuffer?.destroy();
-    this.#viewportLensPipeline = null;
-    this.#viewportLensBindGroupLayout = null;
-    this.#viewportLensUniformBuffer = null;
-    this.#viewportLensSampler = null;
+    this.#viewportLensPass?.destroy();
+    this.#viewportLensPass = null;
 
     // Destroy export service
     this.#exportService = null;
