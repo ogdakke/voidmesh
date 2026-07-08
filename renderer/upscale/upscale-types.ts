@@ -1,3 +1,5 @@
+import type { QualityPreset } from "#renderer/export-formats.ts";
+
 /** Weight layer from the Anime4K CNN JSON format */
 export interface WeightLayer {
   name: string;
@@ -28,7 +30,7 @@ export interface UpscaleVideoOptions extends UpscaleOptions {
   /** Container format. Default: 'mp4' */
   format?: "mp4" | "mov";
   /** Encoding quality preset. Default: 'high' */
-  quality?: import("#renderer/export-formats.ts").QualityPreset;
+  quality?: QualityPreset;
   /** Include audio from source video. Default: true */
   includeAudio?: boolean;
 }

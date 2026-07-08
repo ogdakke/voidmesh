@@ -14,11 +14,11 @@ import {
   getViewportMatrix,
   getViewportWorldBounds,
 } from "#lib/canvas-math.ts";
-import { MediaType, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
+import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
 import compositionShaderSource from "./composition.wgsl?raw";
 import { CopyPass } from "./copy-pass.ts";
 import { DisintegrationParticleSystem } from "./disintegration-particles.ts";
-import { EntityShaderRuntime, type EntityShaderSource } from "./entity-shader-runtime.ts";
+import { EntityTexturePipeline, type EntityCompositionSource } from "./entity-texture-pipeline.ts";
 import { ExportService } from "./export-service.ts";
 import { ExternalTextureCopyPass } from "./external-texture-copy-pass.ts";
 import { detectGpuColorConfig, type GpuColorConfig } from "./gpu-color-space.ts";
@@ -31,6 +31,7 @@ import { resolveWlurOverlayRuntimeConfig, type WlurOverlayConfig } from "./wlur-
 import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
 import viewportLensDistortionShaderSource from "./viewport-lens-distortion.wgsl?raw";
 import { CanvasLensing } from "#types/enums.ts";
+import type { ImageExportOptions } from "./export-formats.ts";
 
 export interface ViewportLensDistortionConfig {
   enabled: boolean;
@@ -54,10 +55,6 @@ interface CompositionDrawItem {
   offsetX: number;
   offsetY: number;
 }
-
-type CompositionSource =
-  | { kind: "texture"; texture: GPUTexture }
-  | { kind: "external"; texture: GPUExternalTexture };
 
 function createExternalCompositionShaderSource(source: string): string {
   const rewritten = source
@@ -107,19 +104,6 @@ export class InfiniteCanvasRenderer {
   onEntityError?: (entityId: string, error: string) => void;
   // Callback for GPU device lost events
   onDeviceLost?: (reason: string) => void;
-
-  // Entity texture cache
-  #entityTextures: Map<string, GPUTexture> = new Map();
-
-  // Cached source textures per entity (avoids re-uploading unchanged images to GPU)
-  #entitySourceTextures: Map<
-    string,
-    {
-      texture: GPUTexture;
-      width: number;
-      height: number;
-    }
-  > = new Map();
 
   // Entity composition cache (uniform buffers, bind groups, texture views)
   // These are invalidated when entity texture changes
@@ -225,7 +209,7 @@ export class InfiniteCanvasRenderer {
   #wlurOverlayCacheKey = "";
   #wlurLastQualityKey = "";
 
-  #entityShaderRuntime: EntityShaderRuntime | null = null;
+  #entityTexturePipeline: EntityTexturePipeline | null = null;
 
   // Export service for rendering entities to blobs/bitmaps
   #exportService: ExportService | null = null;
@@ -323,7 +307,7 @@ export class InfiniteCanvasRenderer {
       this.#device,
       this.#colorConfig.intermediateFormat,
     );
-    this.#entityShaderRuntime = new EntityShaderRuntime({
+    this.#entityTexturePipeline = new EntityTexturePipeline({
       device: this.#device,
       colorConfig: this.#colorConfig,
       texturePool: this.#texturePool,
@@ -334,7 +318,7 @@ export class InfiniteCanvasRenderer {
         }
       },
     });
-    await this.#entityShaderRuntime.initialize();
+    await this.#entityTexturePipeline.initialize();
 
     this.#selectionRectPass = new SelectionRectPass(this.#device, this.#canvasFormat);
     this.#createActionLayerBlitPipeline();
@@ -351,7 +335,8 @@ export class InfiniteCanvasRenderer {
     this.#exportService = new ExportService(
       this.#device,
       this.#texturePool,
-      (entity, source, output) => this.#applyShaderToTexture(entity, source, output),
+      (entity, source, output) =>
+        this.#entityTexturePipeline!.applyShaderToTexture(entity, source, output),
       this.#colorConfig,
     );
 
@@ -907,58 +892,6 @@ export class InfiniteCanvasRenderer {
     });
   }
 
-  /**
-   * Apply entity shader to source texture, writing result to output texture.
-   * Handles both compute shader (error diffusion) and fragment shader paths.
-   * If adjustments are set, applies them BEFORE the main shader.
-   * If post-processing is enabled, applies effects AFTER the main shader.
-   * This is the core shader application logic used by all rendering methods.
-   *
-   * Pipeline order: Source -> Adjustments -> Main Shader -> Post-Processing -> Output
-   *
-   * @param entity - The entity containing shader params
-   * @param sourceTexture - Input texture with the source image
-   * @param outputTexture - Output texture to write results to
-   * @param outputTextureHasStorageBinding - Whether outputTexture has STORAGE_BINDING (for compute shader direct write)
-   */
-  #applyShaderToTexture(
-    entity: ShaderCanvasEntity,
-    sourceTexture: GPUTexture,
-    outputTexture: GPUTexture,
-    _outputTextureHasStorageBinding: boolean = false,
-  ): void {
-    if (!this.#device || !this.#entityShaderRuntime) {
-      return;
-    }
-
-    // Single encoder for the entire entity pipeline: blur -> adjustments -> shader -> post-process
-    const encoder = this.#device.createCommandEncoder({
-      label: `Entity ${entity.id} pipeline`,
-    });
-    this.#entityShaderRuntime.encode({
-      entity,
-      source: { kind: "texture", texture: sourceTexture },
-      outputTexture,
-      encoder,
-      width: entity.originalSize.width,
-      height: entity.originalSize.height,
-      respectShowOriginal: true,
-      sourceAlphaMode:
-        entity.mediaSource.type === MediaType.video ? entity.mediaSource.alphaMode : undefined,
-    });
-
-    this.#device.queue.submit([encoder.finish()]);
-    this.#entityShaderRuntime.flushTextureReleases();
-  }
-
-  #destroyEntitySourceTexture(entityId: string): void {
-    const cachedSource = this.#entitySourceTextures.get(entityId);
-    if (!cachedSource) return;
-
-    cachedSource.texture.destroy();
-    this.#entitySourceTextures.delete(entityId);
-  }
-
   #updateViewportUniforms(viewport: Viewport): void {
     const width = this.canvas.width;
     const height = this.canvas.height;
@@ -1088,21 +1021,6 @@ export class InfiniteCanvasRenderer {
     }
   }
 
-  #uploadStaticEntitySourceToTexture(
-    entity: ShaderCanvasEntity,
-    texture: GPUTexture,
-    width: number,
-    height: number,
-  ): void {
-    const source =
-      entity.mediaSource.type === "image" ? entity.mediaSource.imageBitmap : entity.imageBitmap;
-    this.#device!.queue.copyExternalImageToTexture(
-      { source },
-      { texture, colorSpace: this.#colorConfig.textureColorSpace },
-      [width, height],
-    );
-  }
-
   /**
    * Render an entity's image through its shader to a texture.
    * Returns the texture, caching it for future frames.
@@ -1110,154 +1028,8 @@ export class InfiniteCanvasRenderer {
   renderEntityToTexture(
     entity: ShaderCanvasEntity,
     encoder: GPUCommandEncoder,
-  ): CompositionSource | null {
-    if (!this.#device || !this.#entityShaderRuntime) {
-      return null;
-    }
-
-    const width = entity.originalSize.width;
-    const height = entity.originalSize.height;
-    const useExternalVideoSource = entity.mediaSource.type === "video";
-
-    // Time-based shaders need the shader pass every canvas render. Processed videos do not:
-    // GameLoop marks them dirty only when a decoded video frame changes, so viewport-only
-    // renders can safely reuse the cached processed texture instead of re-running the shader.
-    const needsContinuousShaderRender = this.#entityShaderRuntime.needsContinuousRender(entity);
-
-    // Check if we have a valid processed texture.
-    const cachedTexture = this.#entityTextures.get(entity.id);
-    if (
-      !entity.shaderParams.showOriginal &&
-      !needsContinuousShaderRender &&
-      cachedTexture &&
-      !entity.textureDirty
-    ) {
-      return { kind: "texture", texture: cachedTexture };
-    }
-    let shaderSource: EntityShaderSource | null = null;
-    let sourceTexture: GPUTexture | null = null;
-
-    if (useExternalVideoSource && entity.mediaSource.type === "video") {
-      this.#destroyEntitySourceTexture(entity.id);
-      const video = entity.mediaSource.videoElement;
-      const externalTexture = this.#device.importExternalTexture({
-        source: video,
-        colorSpace: this.#colorConfig.textureColorSpace,
-      });
-
-      if (entity.shaderParams.showOriginal) {
-        cachedTexture?.destroy();
-        this.#entityTextures.delete(entity.id);
-        return { kind: "external", texture: externalTexture };
-      }
-
-      shaderSource = { kind: "external", texture: externalTexture };
-    }
-
-    // Source texture usage flags
-    const sourceUsage =
-      GPUTextureUsage.TEXTURE_BINDING |
-      GPUTextureUsage.COPY_DST |
-      GPUTextureUsage.COPY_SRC |
-      GPUTextureUsage.RENDER_ATTACHMENT;
-
-    // Check source texture cache for static media: reuse when source dimensions match and
-    // the entity was not marked dirty.
-    const cachedSource = this.#entitySourceTextures.get(entity.id);
-
-    if (!shaderSource) {
-      if (
-        !entity.textureDirty &&
-        cachedSource &&
-        cachedSource.width === width &&
-        cachedSource.height === height
-      ) {
-        sourceTexture = cachedSource.texture;
-      } else {
-        // Source changed, dimensions changed, or a new animated frame arrived: upload.
-        if (cachedSource && (cachedSource.width !== width || cachedSource.height !== height)) {
-          // Dimensions changed — destroy old, create new
-          cachedSource.texture.destroy();
-          sourceTexture = this.#device.createTexture({
-            label: `Entity ${entity.id} cached source`,
-            size: [width, height],
-            format: "rgba8unorm",
-            usage: sourceUsage,
-          });
-        } else if (cachedSource) {
-          // Same dimensions — reuse existing texture object, just re-upload data
-          sourceTexture = cachedSource.texture;
-        } else {
-          // First render — create new long-lived source texture
-          sourceTexture = this.#device.createTexture({
-            label: `Entity ${entity.id} cached source`,
-            size: [width, height],
-            format: "rgba8unorm",
-            usage: sourceUsage,
-          });
-        }
-
-        this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
-
-        this.#entitySourceTextures.set(entity.id, {
-          texture: sourceTexture,
-          width,
-          height,
-        });
-      }
-
-      shaderSource = { kind: "texture", texture: sourceTexture! };
-    }
-
-    // If showOriginal is enabled, compose the source texture directly. The source texture
-    // is owned by #entitySourceTextures, so keep it out of #entityTextures to avoid
-    // double-destroying the same GPU resource during cleanup.
-    if (entity.shaderParams.showOriginal) {
-      if (cachedTexture) {
-        cachedTexture.destroy();
-        this.#entityTextures.delete(entity.id);
-      }
-      return { kind: "texture", texture: sourceTexture! };
-    }
-
-    // Reuse output texture if dimensions match, otherwise create new
-    const outputUsage =
-      GPUTextureUsage.TEXTURE_BINDING |
-      GPUTextureUsage.RENDER_ATTACHMENT |
-      GPUTextureUsage.COPY_DST |
-      GPUTextureUsage.COPY_SRC;
-
-    let outputTexture: GPUTexture;
-    if (cachedTexture && cachedTexture.width === width && cachedTexture.height === height) {
-      // Reuse existing output texture — content will be overwritten by shader
-      outputTexture = cachedTexture;
-    } else {
-      // Dimensions changed or first render — destroy old, create new
-      cachedTexture?.destroy();
-      outputTexture = this.#device.createTexture({
-        label: `Entity ${entity.id} processed texture`,
-        size: [width, height],
-        format: this.#colorConfig.intermediateFormat,
-        usage: outputUsage,
-      });
-    }
-
-    // Apply shader using unified method (handles fragment, external, and compute paths).
-    this.#entityShaderRuntime.encode({
-      entity,
-      source: shaderSource,
-      outputTexture,
-      encoder,
-      width,
-      height,
-      respectShowOriginal: true,
-      sourceAlphaMode:
-        entity.mediaSource.type === MediaType.video ? entity.mediaSource.alphaMode : undefined,
-    });
-
-    // Cache and return (source texture stays in #entitySourceTextures)
-    this.#entityTextures.set(entity.id, outputTexture);
-    return { kind: "texture", texture: outputTexture };
+  ): EntityCompositionSource | null {
+    return this.#entityTexturePipeline?.renderEntityToTexture(entity, encoder) ?? null;
   }
 
   /**
@@ -1523,7 +1295,7 @@ export class InfiniteCanvasRenderer {
     const texture = this.#context.getCurrentTexture();
     // Skip render if swapchain texture is invalid
     if (texture.width === 0 || texture.height === 0) {
-      this.#entityShaderRuntime?.flushTextureReleases();
+      this.#entityTexturePipeline?.flushTextureReleases();
       return;
     }
     const targetView = texture.createView();
@@ -1569,7 +1341,7 @@ export class InfiniteCanvasRenderer {
     if (
       blurIntensity > 0.01 &&
       this.#canvasFormat === this.#colorConfig.intermediateFormat &&
-      this.#entityShaderRuntime &&
+      this.#entityTexturePipeline &&
       this.#actionLayerBlitPipeline &&
       this.#actionLayerBlitBindGroupLayout &&
       this.#actionLayerBlitUniformBuffer &&
@@ -1592,7 +1364,7 @@ export class InfiniteCanvasRenderer {
           );
 
           // Kawase blur: input → output
-          this.#entityShaderRuntime.processingPipeline.encodeFullScreenBlur(
+          this.#entityTexturePipeline.processingPipeline.encodeFullScreenBlur(
             encoder,
             blurTextures.input,
             blurTextures.output,
@@ -1716,7 +1488,7 @@ export class InfiniteCanvasRenderer {
     if (
       resolvedWlurOverlay &&
       this.#wlurPass &&
-      this.#entityShaderRuntime &&
+      this.#entityTexturePipeline &&
       this.#presentCopyPass
     ) {
       const wlurTextures = this.#getOrCreateWlurOverlayTextures(width, height);
@@ -1750,7 +1522,7 @@ export class InfiniteCanvasRenderer {
             { width, height },
           );
         } else {
-          this.#entityShaderRuntime.passthroughCopyPass.encode(
+          this.#entityTexturePipeline.passthroughCopyPass.encode(
             encoder,
             texture,
             wlurTextures.input,
@@ -1791,7 +1563,7 @@ export class InfiniteCanvasRenderer {
     // Single submission for all passes
     markPhaseStart("queue-submit");
     this.#device.queue.submit([encoder.finish()]);
-    this.#entityShaderRuntime?.flushTextureReleases();
+    this.#entityTexturePipeline?.flushTextureReleases();
     markPhaseEnd("queue-submit");
 
     // Record frame stats for performance overlay
@@ -1852,17 +1624,7 @@ export class InfiniteCanvasRenderer {
    * Remove cached resources for an entity
    */
   removeEntityTexture(entityId: string): void {
-    // Remove texture
-    const texture = this.#entityTextures.get(entityId);
-    texture?.destroy();
-    this.#entityTextures.delete(entityId);
-
-    // Remove cached source texture
-    const cachedSource = this.#entitySourceTextures.get(entityId);
-    if (cachedSource) {
-      cachedSource.texture.destroy();
-      this.#entitySourceTextures.delete(entityId);
-    }
+    this.#entityTexturePipeline?.removeEntity(entityId);
 
     // Remove composition cache (uniform buffer, bind group, texture view)
     const cached = this.#entityCompositionCache.get(entityId);
@@ -1876,8 +1638,6 @@ export class InfiniteCanvasRenderer {
       externalCached.uniformBuffer.destroy();
       this.#entityExternalCompositionCache.delete(entityId);
     }
-
-    this.#entityShaderRuntime?.removeEntity(entityId);
 
     // Clear any errors for this entity
     this.#entityErrors.delete(entityId);
@@ -1918,7 +1678,7 @@ export class InfiniteCanvasRenderer {
     if (!this.#device) return null;
     const entityId = entity.id;
 
-    const renderedTexture = this.#entityTextures.get(entityId);
+    const renderedTexture = this.#entityTexturePipeline?.getProcessedEntityTexture(entityId);
     if (renderedTexture) {
       const snapshotTexture = this.#device.createTexture({
         label: `Disintegration snapshot ${entityId}`,
@@ -1935,14 +1695,14 @@ export class InfiniteCanvasRenderer {
       return snapshotTexture;
     }
 
-    let sourceTexture = this.#entitySourceTextures.get(entityId)?.texture ?? null;
+    let sourceTexture = this.#entityTexturePipeline?.getSourceEntityTexture(entityId) ?? null;
     if (!sourceTexture && entity.mediaSource.type === "video") {
       return this.#copyCurrentVideoFrameToTexture(
         entity,
         `Disintegration video snapshot ${entityId}`,
       );
     }
-    if (!sourceTexture || !this.#entityShaderRuntime) return null;
+    if (!sourceTexture || !this.#entityTexturePipeline) return null;
 
     const snapshotTexture = this.#device.createTexture({
       label: `Disintegration snapshot ${entityId}`,
@@ -1951,7 +1711,7 @@ export class InfiniteCanvasRenderer {
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
     });
     const encoder = this.#device.createCommandEncoder();
-    this.#entityShaderRuntime.passthroughCopyPass.encode(encoder, sourceTexture, snapshotTexture);
+    this.#entityTexturePipeline.passthroughCopyPass.encode(encoder, sourceTexture, snapshotTexture);
     this.#device.queue.submit([encoder.finish()]);
     return snapshotTexture;
   }
@@ -2074,9 +1834,9 @@ export class InfiniteCanvasRenderer {
    */
   async renderEntityToBlob(
     entity: ShaderCanvasEntity,
-    options?: import("./export-formats.ts").ImageExportOptions,
+    options?: ImageExportOptions,
   ): Promise<Blob | null> {
-    const displayedTexture = this.#getDisplayedEntityTexture(entity);
+    const displayedTexture = this.#entityTexturePipeline?.getDisplayedEntityTexture(entity) ?? null;
     if (!displayedTexture) {
       if (entity.mediaSource.type !== "video" || !entity.shaderParams.showOriginal) return null;
 
@@ -2106,21 +1866,9 @@ export class InfiniteCanvasRenderer {
     );
   }
 
-  #getDisplayedEntityTexture(entity: ShaderCanvasEntity): GPUTexture | null {
-    if (entity.shaderParams.showOriginal) {
-      return (
-        this.#entitySourceTextures.get(entity.id)?.texture ??
-        this.#entityTextures.get(entity.id) ??
-        null
-      );
-    }
-
-    return this.#entityTextures.get(entity.id) ?? null;
-  }
-
   /** Whether a shader needs continuous re-rendering for the given entity (e.g., time-based animation). */
   needsContinuousRenderForEntity(entity: ShaderCanvasEntity): boolean {
-    return this.#entityShaderRuntime?.needsContinuousRender(entity) ?? false;
+    return this.#entityTexturePipeline?.needsContinuousRenderForEntity(entity) ?? false;
   }
 
   // ── Per-entity time control ─────────────────────────────────────────
@@ -2140,7 +1888,7 @@ export class InfiniteCanvasRenderer {
     entity.shaderParams.timeAutoPlay = playing;
     // Reset delta tracking when pausing so we don't get a jump on resume
     if (!playing) {
-      this.#entityShaderRuntime?.removeGlassEntity(entity.id);
+      this.#entityTexturePipeline?.removeGlassEntity(entity.id);
     }
   }
 
@@ -2150,17 +1898,8 @@ export class InfiniteCanvasRenderer {
   }
 
   destroy(): void {
-    // Destroy entity textures
-    for (const texture of this.#entityTextures.values()) {
-      texture.destroy();
-    }
-    this.#entityTextures.clear();
-
-    // Destroy cached source textures
-    for (const cached of this.#entitySourceTextures.values()) {
-      cached.texture.destroy();
-    }
-    this.#entitySourceTextures.clear();
+    this.#entityTexturePipeline?.destroy();
+    this.#entityTexturePipeline = null;
 
     // Destroy entity composition cache
     for (const cached of this.#entityCompositionCache.values()) {
@@ -2188,8 +1927,6 @@ export class InfiniteCanvasRenderer {
     this.#canvasCalloutPass?.destroy();
     this.#canvasCalloutPass = null;
 
-    this.#entityShaderRuntime?.destroy();
-    this.#entityShaderRuntime = null;
     this.#presentCopyPass = null;
     this.#wlurPass?.destroy();
     this.#wlurPass = null;
