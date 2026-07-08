@@ -15,7 +15,8 @@ import {
   getViewportWorldBounds,
 } from "#lib/canvas-math.ts";
 import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
-import compositionShaderSource from "./composition.wgsl?raw";
+import { CanvasLensing } from "#types/enums.ts";
+import { CompositionPass, type CompositionDrawItem } from "./composition-pass.ts";
 import { CopyPass } from "./copy-pass.ts";
 import { DisintegrationParticleSystem } from "./disintegration-particles.ts";
 import { EntityTexturePipeline, type EntityCompositionSource } from "./entity-texture-pipeline.ts";
@@ -30,7 +31,6 @@ import { TexturePool } from "./texture-pool.ts";
 import { resolveWlurOverlayRuntimeConfig, type WlurOverlayConfig } from "./wlur-overlay.ts";
 import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
 import viewportLensDistortionShaderSource from "./viewport-lens-distortion.wgsl?raw";
-import { CanvasLensing } from "#types/enums.ts";
 import type { ImageExportOptions } from "./export-formats.ts";
 
 export interface ViewportLensDistortionConfig {
@@ -47,32 +47,6 @@ export interface ViewportLensDistortionConfig {
   vignetteDark: number;
 }
 
-interface CompositionDrawItem {
-  bindGroup: GPUBindGroup;
-  pipeline: "texture" | "external";
-  entity: ShaderCanvasEntity;
-  isSelected: boolean;
-  offsetX: number;
-  offsetY: number;
-}
-
-function createExternalCompositionShaderSource(source: string): string {
-  const rewritten = source
-    .replace(
-      /@group\(0\)\s+@binding\(2\)\s+var\s+entityTexture\s*:\s*texture_2d<f32>;/,
-      "@group(0) @binding(2) var entityTexture: texture_external;",
-    )
-    .replace(
-      /textureSample\(entityTexture,\s*entitySampler,/g,
-      "textureSampleBaseClampToEdge(entityTexture, entitySampler,",
-    );
-
-  if (rewritten === source || !rewritten.includes("texture_external")) {
-    throw new Error("Failed to rewrite composition shader source for external texture input.");
-  }
-  return rewritten;
-}
-
 export class InfiniteCanvasRenderer {
   readonly canvas: HTMLCanvasElement;
 
@@ -83,20 +57,11 @@ export class InfiniteCanvasRenderer {
 
   #gridPass: GridPass | null = null;
 
-  // Composition pipeline
-  #compositionPipeline: GPURenderPipeline | null = null;
-  #externalCompositionPipeline: GPURenderPipeline | null = null;
+  #compositionPass: CompositionPass | null = null;
   #externalTextureCopyPass: ExternalTextureCopyPass | null = null;
   #viewportUniformBuffer: GPUBuffer | null = null;
-  #entityUniformBuffer: GPUBuffer | null = null;
-  #compositionSampler: GPUSampler | null = null;
-  #compositionBindGroupLayout: GPUBindGroupLayout | null = null;
-  #externalCompositionBindGroupLayout: GPUBindGroupLayout | null = null;
   #viewportUniformData = new ArrayBuffer(config.rendering.viewportUniformSize);
   #viewportFloatView = new Float32Array(this.#viewportUniformData);
-  #entityUniformData = new ArrayBuffer(config.rendering.entityUniformSize);
-  #entityFloatView = new Float32Array(this.#entityUniformData);
-  #entityUintView = new Uint32Array(this.#entityUniformData);
 
   // Entity error tracking (entityId -> error message)
   #entityErrors: Map<string, string> = new Map();
@@ -104,28 +69,6 @@ export class InfiniteCanvasRenderer {
   onEntityError?: (entityId: string, error: string) => void;
   // Callback for GPU device lost events
   onDeviceLost?: (reason: string) => void;
-
-  // Entity composition cache (uniform buffers, bind groups, texture views)
-  // These are invalidated when entity texture changes
-  #entityCompositionCache: Map<
-    string,
-    {
-      uniformBuffer: GPUBuffer;
-      texture: GPUTexture;
-      textureView: GPUTextureView;
-      bindGroup: GPUBindGroup;
-      lastHovered: boolean;
-      lastSelected: boolean;
-      lastDebugMode: boolean;
-    }
-  > = new Map();
-
-  #entityExternalCompositionCache: Map<
-    string,
-    {
-      uniformBuffer: GPUBuffer;
-    }
-  > = new Map();
 
   #actionLayerTintColor: [number, number, number] = config.actionLayer.dimColor.dark;
 
@@ -302,7 +245,16 @@ export class InfiniteCanvasRenderer {
     this.#texturePool = new TexturePool(this.#device, this.#colorConfig.intermediateFormat);
 
     this.#gridPass = new GridPass(this.#device, this.#canvasFormat);
-    this.#createCompositionPipeline();
+    this.#viewportUniformBuffer = this.#device.createBuffer({
+      label: "Viewport uniforms",
+      size: config.rendering.viewportUniformSize,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    this.#compositionPass = new CompositionPass({
+      device: this.#device,
+      format: this.#canvasFormat,
+      viewportUniformBuffer: this.#viewportUniformBuffer,
+    });
     this.#externalTextureCopyPass = new ExternalTextureCopyPass(
       this.#device,
       this.#colorConfig.intermediateFormat,
@@ -384,168 +336,6 @@ export class InfiniteCanvasRenderer {
     const initialRect = this.canvas.getBoundingClientRect();
     this.#cachedCanvasWidth = initialRect.width;
     this.#cachedCanvasHeight = initialRect.height;
-  }
-
-  #createCompositionPipeline(): void {
-    if (!this.#device) return;
-
-    const shaderModule = this.#device.createShaderModule({
-      label: "Composition shader",
-      code: compositionShaderSource,
-    });
-
-    this.#compositionBindGroupLayout = this.#device.createBindGroupLayout({
-      label: "Composition bind group layout",
-      entries: [
-        {
-          binding: 0,
-          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-          buffer: { type: "uniform" },
-        },
-        {
-          binding: 1,
-          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-          buffer: { type: "uniform" },
-        },
-        {
-          binding: 2,
-          visibility: GPUShaderStage.FRAGMENT,
-          texture: { sampleType: "float" },
-        },
-        {
-          binding: 3,
-          visibility: GPUShaderStage.FRAGMENT,
-          sampler: { type: "filtering" },
-        },
-      ],
-    });
-
-    this.#externalCompositionBindGroupLayout = this.#device.createBindGroupLayout({
-      label: "External composition bind group layout",
-      entries: [
-        {
-          binding: 0,
-          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-          buffer: { type: "uniform" },
-        },
-        {
-          binding: 1,
-          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-          buffer: { type: "uniform" },
-        },
-        {
-          binding: 2,
-          visibility: GPUShaderStage.FRAGMENT,
-          externalTexture: {},
-        },
-        {
-          binding: 3,
-          visibility: GPUShaderStage.FRAGMENT,
-          sampler: { type: "filtering" },
-        },
-      ],
-    });
-
-    this.#viewportUniformBuffer = this.#device.createBuffer({
-      label: "Viewport uniforms",
-      size: config.rendering.viewportUniformSize,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-
-    this.#entityUniformBuffer = this.#device.createBuffer({
-      label: "Entity uniforms",
-      size: config.rendering.entityUniformSize,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-
-    this.#compositionSampler = this.#device.createSampler({
-      label: "Composition sampler",
-      magFilter: "linear",
-      minFilter: "linear",
-      addressModeU: "clamp-to-edge",
-      addressModeV: "clamp-to-edge",
-    });
-
-    const pipelineLayout = this.#device.createPipelineLayout({
-      label: "Composition pipeline layout",
-      bindGroupLayouts: [this.#compositionBindGroupLayout],
-    });
-
-    this.#compositionPipeline = this.#device.createRenderPipeline({
-      label: "Composition pipeline",
-      layout: pipelineLayout,
-      vertex: {
-        module: shaderModule,
-        entryPoint: "vs_main",
-      },
-      fragment: {
-        module: shaderModule,
-        entryPoint: "fs_main",
-        targets: [
-          {
-            format: this.#canvasFormat,
-            blend: {
-              color: {
-                srcFactor: "src-alpha",
-                dstFactor: "one-minus-src-alpha",
-                operation: "add",
-              },
-              alpha: {
-                srcFactor: "one",
-                dstFactor: "one-minus-src-alpha",
-                operation: "add",
-              },
-            },
-          },
-        ],
-      },
-      primitive: {
-        topology: "triangle-list",
-      },
-    });
-
-    const externalShaderModule = this.#device.createShaderModule({
-      label: "External composition shader",
-      code: createExternalCompositionShaderSource(compositionShaderSource),
-    });
-
-    const externalPipelineLayout = this.#device.createPipelineLayout({
-      label: "External composition pipeline layout",
-      bindGroupLayouts: [this.#externalCompositionBindGroupLayout],
-    });
-
-    this.#externalCompositionPipeline = this.#device.createRenderPipeline({
-      label: "External composition pipeline",
-      layout: externalPipelineLayout,
-      vertex: {
-        module: externalShaderModule,
-        entryPoint: "vs_main",
-      },
-      fragment: {
-        module: externalShaderModule,
-        entryPoint: "fs_main",
-        targets: [
-          {
-            format: this.#canvasFormat,
-            blend: {
-              color: {
-                srcFactor: "src-alpha",
-                dstFactor: "one-minus-src-alpha",
-                operation: "add",
-              },
-              alpha: {
-                srcFactor: "one",
-                dstFactor: "one-minus-src-alpha",
-                operation: "add",
-              },
-            },
-          },
-        ],
-      },
-      primitive: {
-        topology: "triangle-list",
-      },
-    });
   }
 
   #getOrCreateActionLayerBlurTextures(
@@ -910,41 +700,13 @@ export class InfiniteCanvasRenderer {
     this.#viewportFloatView[15] = 0;
   }
 
-  #updateEntityUniforms(
-    entity: ShaderCanvasEntity,
-    isHovered: boolean,
-    isSelected: boolean,
-    debugMode: boolean,
-    positionOffsetX = 0,
-    positionOffsetY = 0,
-  ): void {
-    this.#entityFloatView[0] = entity.position.x + positionOffsetX;
-    this.#entityFloatView[1] = entity.position.y + positionOffsetY;
-    this.#entityFloatView[2] = entity.size.width;
-    this.#entityFloatView[3] = entity.size.height;
-    this.#entityFloatView[4] = (entity.rotation * Math.PI) / 180; // Convert to radians
-    this.#entityUintView[5] = isHovered ? 1 : 0; // isHovered flag
-    this.#entityUintView[6] = isSelected ? 1 : 0; // isSelected flag
-    this.#entityUintView[7] = debugMode ? 1 : 0; // debugMode flag
-    this.#entityFloatView[8] = entityDragVisual.getScale(entity.id); // visual drag scale
-    this.#entityFloatView[9] = 0; // disintProgress (unused for live entities)
-    this.#entityFloatView[10] = 0; // disintSeed (unused for live entities)
-    this.#entityFloatView[11] = 0;
-  }
-
   #drawCompositionItems(
     pass: GPURenderPassEncoder,
     items: readonly CompositionDrawItem[],
     selectedEntityCount: number,
   ): void {
     for (const item of items) {
-      pass.setPipeline(
-        item.pipeline === "external"
-          ? this.#externalCompositionPipeline!
-          : this.#compositionPipeline!,
-      );
-      pass.setBindGroup(0, item.bindGroup);
-      pass.draw(6);
+      this.#compositionPass!.drawItem(pass, item);
 
       if (item.isSelected && selectedEntityCount === 1 && this.#entityLabelPass) {
         this.#entityLabelPass.drawLabel(pass, item.entity, item.offsetX, item.offsetY);
@@ -982,20 +744,13 @@ export class InfiniteCanvasRenderer {
 
       // Render dissolve front only while dissolve is still in progress (< 1.0)
       if (progress > 0 && progress < 1) {
-        this.#entityFloatView[0] = overlay.position.x;
-        this.#entityFloatView[1] = overlay.position.y;
-        this.#entityFloatView[2] = overlay.size.width;
-        this.#entityFloatView[3] = overlay.size.height;
-        this.#entityFloatView[4] = (overlay.rotation * Math.PI) / 180;
-        this.#entityUintView[5] = 0; // not hovered
-        this.#entityUintView[6] = 0; // not selected
-        this.#entityUintView[7] = 0; // no debug
-        this.#entityFloatView[8] = 1.0; // scale
-        this.#entityFloatView[9] = progress; // disintProgress
-        this.#entityFloatView[10] = overlay.seed; // disintSeed
-        this.#entityFloatView[11] = 0;
-
-        this.#device!.queue.writeBuffer(gpu.uniformBuffer, 0, this.#entityUniformData);
+        this.#compositionPass!.writeDisintegrationUniforms(gpu.uniformBuffer, {
+          position: overlay.position,
+          size: overlay.size,
+          rotation: overlay.rotation,
+          progress,
+          seed: overlay.seed,
+        });
 
         const pass = encoder.beginRenderPass({
           label: `Disintegration overlay ${overlay.id}`,
@@ -1008,9 +763,7 @@ export class InfiniteCanvasRenderer {
           ],
         });
 
-        pass.setPipeline(this.#compositionPipeline!);
-        pass.setBindGroup(0, gpu.bindGroup);
-        pass.draw(6);
+        this.#compositionPass!.drawTextureBindGroup(pass, gpu.bindGroup);
         pass.end();
       }
 
@@ -1037,13 +790,7 @@ export class InfiniteCanvasRenderer {
    * Optimized to batch all render passes into a single GPU submission.
    */
   render(state: RenderState): void {
-    if (
-      !this.#device ||
-      !this.#context ||
-      !this.#gridPass ||
-      !this.#compositionPipeline ||
-      !this.#externalCompositionPipeline
-    ) {
+    if (!this.#device || !this.#context || !this.#gridPass || !this.#compositionPass) {
       return;
     }
 
@@ -1150,144 +897,24 @@ export class InfiniteCanvasRenderer {
       const isHovered = entity.id === hoveredEntityId;
       const isSelected = selectedEntityIds.has(entity.id);
 
-      let bindGroup: GPUBindGroup;
-      let pipeline: "texture" | "external";
-
-      if (compositionSource.kind === "texture") {
-        pipeline = "texture";
-
-        // Check cache for existing composition resources
-        const cached = this.#entityCompositionCache.get(entity.id);
-        const textureChanged = cached?.texture !== compositionSource.texture;
-        const needsNewBindGroup =
-          !cached ||
-          textureChanged ||
-          cached.lastHovered !== isHovered ||
-          cached.lastSelected !== isSelected ||
-          cached.lastDebugMode !== debugMode;
-
-        if (needsNewBindGroup) {
-          // Create or reuse uniform buffer
-          const uniformBuffer =
-            cached?.uniformBuffer ??
-            this.#device.createBuffer({
-              label: `Entity ${entity.id} composition uniform`,
-              size: config.rendering.entityUniformSize,
-              usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-            });
-
-          // Update and write entity uniforms (apply rubber-band offset for action layer entities)
-          const applyOffset =
-            actionLayerControllerActive && actionLayerController.hasEntity(entity.id);
-          this.#updateEntityUniforms(
-            entity,
-            isHovered,
-            isSelected,
-            debugMode,
-            applyOffset ? actionLayerOffsetX : 0,
-            applyOffset ? actionLayerOffsetY : 0,
-          );
-          this.#device.queue.writeBuffer(uniformBuffer, 0, this.#entityUniformData);
-
-          // Create texture view (reuse if texture didn't change)
-          const textureView =
-            cached && !textureChanged ? cached.textureView : compositionSource.texture.createView();
-
-          // Create bind group with dedicated uniform buffer
-          bindGroup = this.#device.createBindGroup({
-            label: `Entity ${entity.id} composition bind group`,
-            layout: this.#compositionBindGroupLayout!,
-            entries: [
-              { binding: 0, resource: { buffer: this.#viewportUniformBuffer! } },
-              { binding: 1, resource: { buffer: uniformBuffer } },
-              { binding: 2, resource: textureView },
-              { binding: 3, resource: this.#compositionSampler! },
-            ],
-          });
-
-          // Update cache
-          this.#entityCompositionCache.set(entity.id, {
-            uniformBuffer,
-            texture: compositionSource.texture,
-            textureView,
-            bindGroup,
-            lastHovered: isHovered,
-            lastSelected: isSelected,
-            lastDebugMode: debugMode,
-          });
-        } else {
-          // Reuse cached bind group, but ALWAYS update uniform buffer with current position
-          // This is critical for drag operations where position changes every frame
-          const applyOffset2 =
-            actionLayerControllerActive && actionLayerController.hasEntity(entity.id);
-          this.#updateEntityUniforms(
-            entity,
-            isHovered,
-            isSelected,
-            debugMode,
-            applyOffset2 ? actionLayerOffsetX : 0,
-            applyOffset2 ? actionLayerOffsetY : 0,
-          );
-          this.#device.queue.writeBuffer(cached.uniformBuffer, 0, this.#entityUniformData);
-          bindGroup = cached.bindGroup;
-        }
-      } else {
-        pipeline = "external";
-        const cached = this.#entityExternalCompositionCache.get(entity.id);
-        const uniformBuffer =
-          cached?.uniformBuffer ??
-          this.#device.createBuffer({
-            label: `Entity ${entity.id} external composition uniform`,
-            size: config.rendering.entityUniformSize,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-          });
-        const applyOffset =
-          actionLayerControllerActive && actionLayerController.hasEntity(entity.id);
-        this.#updateEntityUniforms(
-          entity,
-          isHovered,
-          isSelected,
-          debugMode,
-          applyOffset ? actionLayerOffsetX : 0,
-          applyOffset ? actionLayerOffsetY : 0,
-        );
-        this.#device.queue.writeBuffer(uniformBuffer, 0, this.#entityUniformData);
-        bindGroup = this.#device.createBindGroup({
-          label: `Entity ${entity.id} external composition bind group`,
-          layout: this.#externalCompositionBindGroupLayout!,
-          entries: [
-            { binding: 0, resource: { buffer: this.#viewportUniformBuffer! } },
-            { binding: 1, resource: { buffer: uniformBuffer } },
-            { binding: 2, resource: compositionSource.texture },
-            { binding: 3, resource: this.#compositionSampler! },
-          ],
-        });
-        if (!cached) {
-          this.#entityExternalCompositionCache.set(entity.id, { uniformBuffer });
-        }
-      }
-
       // Action layer entities are drawn AFTER blur (not in main pass) to avoid halo
       const isActionLayerEntity =
         actionLayerControllerActive && actionLayerController.hasEntity(entity.id);
+      const drawItem = this.#compositionPass.prepareDrawItem({
+        entity,
+        source: compositionSource,
+        isHovered,
+        isSelected,
+        debugMode,
+        positionOffsetX: isActionLayerEntity ? actionLayerOffsetX : 0,
+        positionOffsetY: isActionLayerEntity ? actionLayerOffsetY : 0,
+        visualScale: entityDragVisual.getScale(entity.id),
+      });
+
       if (isActionLayerEntity) {
-        actionLayerDrawItems.push({
-          bindGroup,
-          pipeline,
-          entity,
-          isSelected,
-          offsetX: actionLayerOffsetX,
-          offsetY: actionLayerOffsetY,
-        });
+        actionLayerDrawItems.push(drawItem);
       } else {
-        entityDrawItems.push({
-          bindGroup,
-          pipeline,
-          entity,
-          isSelected,
-          offsetX: 0,
-          offsetY: 0,
-        });
+        entityDrawItems.push(drawItem);
       }
     }
     markPhaseEnd("entity-prep");
@@ -1625,19 +1252,7 @@ export class InfiniteCanvasRenderer {
    */
   removeEntityTexture(entityId: string): void {
     this.#entityTexturePipeline?.removeEntity(entityId);
-
-    // Remove composition cache (uniform buffer, bind group, texture view)
-    const cached = this.#entityCompositionCache.get(entityId);
-    if (cached) {
-      cached.uniformBuffer.destroy();
-      this.#entityCompositionCache.delete(entityId);
-    }
-
-    const externalCached = this.#entityExternalCompositionCache.get(entityId);
-    if (externalCached) {
-      externalCached.uniformBuffer.destroy();
-      this.#entityExternalCompositionCache.delete(entityId);
-    }
+    this.#compositionPass?.removeEntity(entityId);
 
     // Clear any errors for this entity
     this.#entityErrors.delete(entityId);
@@ -1717,7 +1332,7 @@ export class InfiniteCanvasRenderer {
   }
 
   startDisintegration(entity: ShaderCanvasEntity): void {
-    if (!this.#device || !this.#compositionBindGroupLayout) return;
+    if (!this.#device || !this.#compositionPass) return;
 
     const snapshotTexture = this.#createDisintegrationSnapshot(entity);
     if (!snapshotTexture) return;
@@ -1729,16 +1344,11 @@ export class InfiniteCanvasRenderer {
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
-    const bindGroup = this.#device.createBindGroup({
-      label: `Disintegration bind group ${entity.id}`,
-      layout: this.#compositionBindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.#viewportUniformBuffer! } },
-        { binding: 1, resource: { buffer: uniformBuffer } },
-        { binding: 2, resource: textureView },
-        { binding: 3, resource: this.#compositionSampler! },
-      ],
-    });
+    const bindGroup = this.#compositionPass.createTextureBindGroup(
+      `Disintegration bind group ${entity.id}`,
+      textureView,
+      uniformBuffer,
+    );
 
     this.#disintegrationOverlays.set(entity.id, {
       texture: snapshotTexture,
@@ -1900,17 +1510,8 @@ export class InfiniteCanvasRenderer {
   destroy(): void {
     this.#entityTexturePipeline?.destroy();
     this.#entityTexturePipeline = null;
-
-    // Destroy entity composition cache
-    for (const cached of this.#entityCompositionCache.values()) {
-      cached.uniformBuffer.destroy();
-    }
-    this.#entityCompositionCache.clear();
-
-    for (const cached of this.#entityExternalCompositionCache.values()) {
-      cached.uniformBuffer.destroy();
-    }
-    this.#entityExternalCompositionCache.clear();
+    this.#compositionPass?.destroy();
+    this.#compositionPass = null;
 
     // Destroy disintegration overlays + particle system
     for (const overlay of this.#disintegrationOverlays.values()) {
@@ -1967,7 +1568,6 @@ export class InfiniteCanvasRenderer {
 
     // Destroy buffers
     this.#viewportUniformBuffer?.destroy();
-    this.#entityUniformBuffer?.destroy();
 
     this.#selectionRectPass?.destroy();
     this.#selectionRectPass = null;
@@ -1983,11 +1583,7 @@ export class InfiniteCanvasRenderer {
     this.#device?.destroy();
 
     // Clear references
-    this.#compositionPipeline = null;
-    this.#externalCompositionPipeline = null;
     this.#externalTextureCopyPass = null;
-    this.#compositionBindGroupLayout = null;
-    this.#externalCompositionBindGroupLayout = null;
     this.#context = null;
     this.#device = null;
   }
