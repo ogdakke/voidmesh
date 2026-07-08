@@ -2,13 +2,8 @@ import { config, getViewportLensDistortionConfig, type GridConfig } from "#confi
 import { logger } from "#lib/client.logger.ts";
 import { setGpuContext } from "./gpu-color-space.ts";
 import { type RenderState, actionLayerController, entityDragVisual } from "#engine";
-import {
-  boundsIntersect,
-  getRotatedAABB,
-  getViewportMatrix,
-  getViewportWorldBounds,
-} from "#lib/canvas-math.ts";
-import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
+import { boundsIntersect, getRotatedAABB, getViewportWorldBounds } from "#lib/canvas-math.ts";
+import type { ShaderCanvasEntity } from "#types/canvas.ts";
 import { CanvasLensing } from "#types/enums.ts";
 import { ActionLayerBlurPass } from "./action-layer-blur-pass.ts";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
@@ -24,6 +19,7 @@ import { GridPass } from "./grid-pass.ts";
 import { SelectionRectPass } from "./selection-rect-pass.ts";
 import { TexturePool } from "./texture-pool.ts";
 import { ViewportLensPass, type ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
+import { ViewportUniforms } from "./viewport-uniforms.ts";
 import type { WlurOverlayConfig } from "./wlur-overlay.ts";
 import { WlurOverlayPass } from "./wlur-overlay-pass.ts";
 
@@ -41,9 +37,7 @@ export class InfiniteCanvasRenderer {
 
   #compositionPass: CompositionPass | null = null;
   #externalTextureCopyPass: ExternalTextureCopyPass | null = null;
-  #viewportUniformBuffer: GPUBuffer | null = null;
-  #viewportUniformData = new ArrayBuffer(config.rendering.viewportUniformSize);
-  #viewportFloatView = new Float32Array(this.#viewportUniformData);
+  #viewportUniforms: ViewportUniforms | null = null;
 
   // Entity error tracking (entityId -> error message)
   #entityErrors: Map<string, string> = new Map();
@@ -168,15 +162,11 @@ export class InfiniteCanvasRenderer {
     this.#texturePool = new TexturePool(this.#device, this.#colorConfig.intermediateFormat);
 
     this.#gridPass = new GridPass(this.#device, this.#canvasFormat);
-    this.#viewportUniformBuffer = this.#device.createBuffer({
-      label: "Viewport uniforms",
-      size: config.rendering.viewportUniformSize,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
+    this.#viewportUniforms = new ViewportUniforms(this.#device);
     this.#compositionPass = new CompositionPass({
       device: this.#device,
       format: this.#canvasFormat,
-      viewportUniformBuffer: this.#viewportUniformBuffer,
+      viewportUniformBuffer: this.#viewportUniforms.buffer,
     });
     this.#externalTextureCopyPass = new ExternalTextureCopyPass(
       this.#device,
@@ -225,7 +215,7 @@ export class InfiniteCanvasRenderer {
     this.#disintegrationPass = new DisintegrationPass({
       device: this.#device,
       canvasFormat: this.#canvasFormat,
-      viewportUniformBuffer: this.#viewportUniformBuffer!,
+      viewportUniformBuffer: this.#viewportUniforms.buffer,
       compositionPass: this.#compositionPass,
     });
     await this.#disintegrationPass.initialize();
@@ -234,14 +224,14 @@ export class InfiniteCanvasRenderer {
     this.#entityLabelPass = new EntityLabelPass(
       this.#device,
       this.#canvasFormat,
-      this.#viewportUniformBuffer!,
+      this.#viewportUniforms.buffer,
     );
     this.#entityLabelPass.initialize();
 
     this.#canvasCalloutPass = new CanvasCalloutPass(
       this.#device,
       this.#canvasFormat,
-      this.#viewportUniformBuffer!,
+      this.#viewportUniforms.buffer,
     );
     this.#canvasCalloutPass.initialize();
 
@@ -270,24 +260,6 @@ export class InfiniteCanvasRenderer {
     const initialRect = this.canvas.getBoundingClientRect();
     this.#cachedCanvasWidth = initialRect.width;
     this.#cachedCanvasHeight = initialRect.height;
-  }
-
-  #updateViewportUniforms(viewport: Viewport): void {
-    const width = this.canvas.width;
-    const height = this.canvas.height;
-    const matrix = getViewportMatrix(viewport, width, height);
-
-    // Copy matrix rows (3x4 layout for alignment)
-    for (let i = 0; i < 12; i++) {
-      this.#viewportFloatView[i] = matrix[i]!;
-    }
-    // resolution
-    this.#viewportFloatView[12] = width;
-    this.#viewportFloatView[13] = height;
-    // zoom level (for screen-space border calculation)
-    this.#viewportFloatView[14] = viewport.zoom;
-    // padding
-    this.#viewportFloatView[15] = 0;
   }
 
   #drawCompositionItems(
@@ -320,7 +292,13 @@ export class InfiniteCanvasRenderer {
    * Optimized to batch all render passes into a single GPU submission.
    */
   render(state: RenderState): void {
-    if (!this.#device || !this.#context || !this.#gridPass || !this.#compositionPass) {
+    if (
+      !this.#device ||
+      !this.#context ||
+      !this.#gridPass ||
+      !this.#compositionPass ||
+      !this.#viewportUniforms
+    ) {
       return;
     }
 
@@ -371,10 +349,7 @@ export class InfiniteCanvasRenderer {
       this.canvas.height = height;
     }
 
-    // Update viewport uniforms
-    this.#updateViewportUniforms(viewport);
-
-    this.#device.queue.writeBuffer(this.#viewportUniformBuffer!, 0, this.#viewportUniformData);
+    this.#viewportUniforms.update(viewport, width, height);
 
     // Sort entities in-place by z-index (avoid array copying)
     entities.sort((a, b) => a.zIndex - b.zIndex);
@@ -912,8 +887,8 @@ export class InfiniteCanvasRenderer {
     this.#gridPass?.destroy();
     this.#gridPass = null;
 
-    // Destroy buffers
-    this.#viewportUniformBuffer?.destroy();
+    this.#viewportUniforms?.destroy();
+    this.#viewportUniforms = null;
 
     this.#selectionRectPass?.destroy();
     this.#selectionRectPass = null;
