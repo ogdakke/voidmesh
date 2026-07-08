@@ -90,7 +90,7 @@ export function MediaProgressCanvas({
     scrubProgress: 0,
   });
 
-  const updateScrubAnimation = useEffectEvent(() => {
+  function updateScrubAnimation() {
     const now = performance.now();
     const previous = lastFrameTimeRef.current || now;
     lastFrameTimeRef.current = now;
@@ -106,13 +106,13 @@ export function MediaProgressCanvas({
     } else {
       scrubProgressRef.current = next;
     }
-  });
+  }
 
-  const isScrubAnimating = useEffectEvent(() => {
+  function isScrubAnimating() {
     return Math.abs(scrubTargetRef.current - scrubProgressRef.current) > SCRUB_ANIMATION_EPSILON;
-  });
+  }
 
-  const updateAria = useEffectEvent((force = false) => {
+  function updateAria(force = false) {
     const root = rootRef.current;
     if (!root) return;
 
@@ -130,9 +130,9 @@ export function MediaProgressCanvas({
       "aria-valuetext",
       `${formatAriaTime(currentTime)} of ${formatAriaTime(duration)}`,
     );
-  });
+  }
 
-  const draw = useEffectEvent(() => {
+  function draw() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -158,15 +158,15 @@ export function MediaProgressCanvas({
     captureMediaControlSnapshot(source);
     renderMediaProgress(ctx, width, height, frame, configRef.current);
     updateAria();
-  });
+  }
 
-  const stopLoop = useEffectEvent(() => {
+  function stopLoop() {
     if (rafRef.current == null) return;
     cancelAnimationFrame(rafRef.current);
     rafRef.current = null;
-  });
+  }
 
-  const startLoop = useEffectEvent(() => {
+  function startLoop() {
     if (rafRef.current != null) return;
     const tick = () => {
       draw();
@@ -177,9 +177,9 @@ export function MediaProgressCanvas({
       }
     };
     rafRef.current = requestAnimationFrame(tick);
-  });
+  }
 
-  const seekFromClientX = useEffectEvent((clientX: number) => {
+  function seekFromClientX(clientX: number) {
     const root = rootRef.current;
     if (!root) return;
     const duration = source.getDuration();
@@ -194,7 +194,12 @@ export function MediaProgressCanvas({
     actions.seek(nextTime);
     draw();
     updateAria(true);
-  });
+  }
+
+  const drawEffect = useEffectEvent(() => draw());
+  const updateAriaEffect = useEffectEvent((force = false) => updateAria(force));
+  const startLoopEffect = useEffectEvent(() => startLoop());
+  const stopLoopEffect = useEffectEvent(() => stopLoop());
 
   useLayoutEffect(() => {
     const root = rootRef.current;
@@ -202,7 +207,7 @@ export function MediaProgressCanvas({
 
     const resolveAndDraw = () => {
       configRef.current = resolveRenderConfig(root);
-      draw();
+      drawEffect();
     };
 
     resolveAndDraw();
@@ -226,7 +231,7 @@ export function MediaProgressCanvas({
       canvas.height = Math.max(1, Math.round(rect.height * dpr));
       const ctx = canvas.getContext("2d");
       ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
-      draw();
+      drawEffect();
     };
 
     const observer = new ResizeObserver(resizeCanvas);
@@ -237,17 +242,17 @@ export function MediaProgressCanvas({
   }, []);
 
   useEffect(() => {
-    draw();
-    updateAria(true);
-    startLoop();
+    drawEffect();
+    updateAriaEffect(true);
+    startLoopEffect();
     const unsubscribe = source.subscribe(() => {
-      draw();
-      updateAria(true);
-      if (source.getIsPlaying()) startLoop();
+      drawEffect();
+      updateAriaEffect(true);
+      if (source.getIsPlaying()) startLoopEffect();
     });
     return () => {
       unsubscribe();
-      stopLoop();
+      stopLoopEffect();
     };
   }, [source]);
 
