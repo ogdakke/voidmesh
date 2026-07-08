@@ -11,6 +11,7 @@ import {
 } from "#lib/canvas-math.ts";
 import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
 import { CanvasLensing } from "#types/enums.ts";
+import { ActionLayerBlurPass } from "./action-layer-blur-pass.ts";
 import { CompositionPass, type CompositionDrawItem } from "./composition-pass.ts";
 import { CopyPass } from "./copy-pass.ts";
 import { DisintegrationPass } from "./disintegration-pass.ts";
@@ -24,7 +25,6 @@ import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
 import { EntityLabelPass } from "./entity-label-pass.ts";
 import { TexturePool } from "./texture-pool.ts";
 import { resolveWlurOverlayRuntimeConfig, type WlurOverlayConfig } from "./wlur-overlay.ts";
-import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
 import type { ImageExportOptions } from "./export-formats.ts";
 import { ViewportLensPass, type ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
 
@@ -53,7 +53,7 @@ export class InfiniteCanvasRenderer {
   // Callback for GPU device lost events
   onDeviceLost?: (reason: string) => void;
 
-  #actionLayerTintColor: [number, number, number] = config.actionLayer.dimColor.dark;
+  #actionLayerBlurPass: ActionLayerBlurPass | null = null;
 
   // Texture pool for eliminating per-frame allocation churn
   #texturePool: TexturePool | null = null;
@@ -71,22 +71,6 @@ export class InfiniteCanvasRenderer {
   #resizeObserver: ResizeObserver | null = null;
 
   #selectionRectPass: SelectionRectPass | null = null;
-
-  // Action layer blit pipeline (fullscreen dimmed blit for blur overlay)
-  #actionLayerBlitPipeline: GPURenderPipeline | null = null;
-  #actionLayerBlitBindGroupLayout: GPUBindGroupLayout | null = null;
-  #actionLayerBlitUniformBuffer: GPUBuffer | null = null;
-  #actionLayerBlitSampler: GPUSampler | null = null;
-  // Cached intermediate textures for full-screen blur (keyed by "WxH")
-  #actionLayerBlurTextures: {
-    width: number;
-    height: number;
-    input: GPUTexture;
-    output: GPUTexture;
-  } | null = null;
-  // Blur result caching: skip re-running Kawase when content hasn't changed
-  #actionLayerBlurCacheValid = false;
-  #actionLayerBlitBindGroupCached: GPUBindGroup | null = null;
 
   #presentCopyPass: CopyPass | null = null;
 
@@ -226,7 +210,12 @@ export class InfiniteCanvasRenderer {
     await this.#entityTexturePipeline.initialize();
 
     this.#selectionRectPass = new SelectionRectPass(this.#device, this.#canvasFormat);
-    this.#createActionLayerBlitPipeline();
+    this.#actionLayerBlurPass = new ActionLayerBlurPass({
+      device: this.#device,
+      canvasFormat: this.#canvasFormat,
+      intermediateFormat: this.#colorConfig.intermediateFormat,
+      tintColor: config.actionLayer.dimColor.dark,
+    });
     this.#viewportLensPass = new ViewportLensPass({
       device: this.#device,
       format: this.#canvasFormat,
@@ -297,49 +286,6 @@ export class InfiniteCanvasRenderer {
     const initialRect = this.canvas.getBoundingClientRect();
     this.#cachedCanvasWidth = initialRect.width;
     this.#cachedCanvasHeight = initialRect.height;
-  }
-
-  #getOrCreateActionLayerBlurTextures(
-    width: number,
-    height: number,
-  ): { input: GPUTexture; output: GPUTexture } | null {
-    if (!this.#device) return null;
-
-    const cached = this.#actionLayerBlurTextures;
-    if (cached && cached.width === width && cached.height === height) {
-      return cached;
-    }
-
-    // Destroy old textures and invalidate caches
-    if (cached) {
-      cached.input.destroy();
-      cached.output.destroy();
-    }
-    this.#actionLayerBlurCacheValid = false;
-    this.#actionLayerBlitBindGroupCached = null;
-
-    const usage =
-      GPUTextureUsage.TEXTURE_BINDING |
-      GPUTextureUsage.RENDER_ATTACHMENT |
-      GPUTextureUsage.COPY_DST |
-      GPUTextureUsage.COPY_SRC;
-
-    const input = this.#device.createTexture({
-      label: `Action layer blur input (${width}x${height})`,
-      size: [width, height],
-      format: this.#colorConfig.intermediateFormat,
-      usage,
-    });
-
-    const output = this.#device.createTexture({
-      label: `Action layer blur output (${width}x${height})`,
-      size: [width, height],
-      format: this.#colorConfig.intermediateFormat,
-      usage,
-    });
-
-    this.#actionLayerBlurTextures = { width, height, input, output };
-    return this.#actionLayerBlurTextures;
   }
 
   #invalidateWlurOverlayCache(): void {
@@ -413,73 +359,6 @@ export class InfiniteCanvasRenderer {
       params.tint?.amount ?? "",
       params.tint?.curve?.join(",") ?? "",
     ].join("|");
-  }
-
-  #createActionLayerBlitPipeline(): void {
-    if (!this.#device) return;
-
-    const shaderModule = this.#device.createShaderModule({
-      label: "Action layer blit shader",
-      code: actionLayerBlitShaderSource,
-    });
-
-    this.#actionLayerBlitBindGroupLayout = this.#device.createBindGroupLayout({
-      label: "Action layer blit bind group layout",
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
-        { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
-        {
-          binding: 2,
-          visibility: GPUShaderStage.FRAGMENT,
-          buffer: { type: "uniform" },
-        },
-      ],
-    });
-
-    this.#actionLayerBlitUniformBuffer = this.#device.createBuffer({
-      label: "Action layer blit uniforms",
-      size: 32, // 2x vec4f: tint_amount + blend + pad, tint_color
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-
-    this.#actionLayerBlitSampler = this.#device.createSampler({
-      label: "Action layer blit sampler",
-      magFilter: "linear",
-      minFilter: "linear",
-    });
-
-    const pipelineLayout = this.#device.createPipelineLayout({
-      label: "Action layer blit pipeline layout",
-      bindGroupLayouts: [this.#actionLayerBlitBindGroupLayout],
-    });
-
-    this.#actionLayerBlitPipeline = this.#device.createRenderPipeline({
-      label: "Action layer blit pipeline",
-      layout: pipelineLayout,
-      vertex: { module: shaderModule, entryPoint: "vs_main" },
-      fragment: {
-        module: shaderModule,
-        entryPoint: "fs_main",
-        targets: [
-          {
-            format: this.#canvasFormat,
-            blend: {
-              color: {
-                srcFactor: "src-alpha",
-                dstFactor: "one-minus-src-alpha",
-                operation: "add",
-              },
-              alpha: {
-                srcFactor: "one",
-                dstFactor: "one-minus-src-alpha",
-                operation: "add",
-              },
-            },
-          },
-        ],
-      },
-      primitive: { topology: "triangle-list" },
-    });
   }
 
   #updateViewportUniforms(viewport: Viewport): void {
@@ -707,79 +586,25 @@ export class InfiniteCanvasRenderer {
       blurIntensity > 0.01 &&
       this.#canvasFormat === this.#colorConfig.intermediateFormat &&
       this.#entityTexturePipeline &&
-      this.#actionLayerBlitPipeline &&
-      this.#actionLayerBlitBindGroupLayout &&
-      this.#actionLayerBlitUniformBuffer &&
-      this.#actionLayerBlitSampler
+      this.#actionLayerBlurPass
     ) {
       markPhaseStart("action-layer-blur");
-      // Get or create intermediate textures for full-screen blur
-      const blurTextures = this.#getOrCreateActionLayerBlurTextures(width, height);
-      if (blurTextures) {
-        // Only re-run the expensive Kawase blur pipeline when content has actually changed
-        const blurNeedsUpdate =
-          !this.#actionLayerBlurCacheValid || state.dirty || hasAnimatingContent;
-
-        if (blurNeedsUpdate) {
-          // Copy the pre-lens scene → input texture
-          encoder.copyTextureToTexture(
-            { texture: sceneTargetTexture },
-            { texture: blurTextures.input },
-            { width, height },
-          );
-
-          // Kawase blur: input → output
-          this.#entityTexturePipeline.processingPipeline.encodeFullScreenBlur(
-            encoder,
-            blurTextures.input,
-            blurTextures.output,
-            width,
-            height,
-          );
-
-          this.#actionLayerBlurCacheValid = true;
-        }
-
-        // Always update uniforms (intensity may change during fade animation)
-        const tintAmount = config.actionLayer.dimOpacity * blurIntensity;
-        const [tr, tg, tb] = this.#actionLayerTintColor;
-        const uniformData = new Float32Array([tintAmount, blurIntensity, 0, 0, tr, tg, tb, 0]);
-        this.#device.queue.writeBuffer(this.#actionLayerBlitUniformBuffer, 0, uniformData);
-
-        // Cache blit bind group (only recreate when textures change)
-        if (!this.#actionLayerBlitBindGroupCached) {
-          this.#actionLayerBlitBindGroupCached = this.#device.createBindGroup({
-            label: "Action layer blit bind group",
-            layout: this.#actionLayerBlitBindGroupLayout,
-            entries: [
-              { binding: 0, resource: blurTextures.output.createView() },
-              { binding: 1, resource: this.#actionLayerBlitSampler },
-              { binding: 2, resource: { buffer: this.#actionLayerBlitUniformBuffer } },
-            ],
-          });
-        }
-
-        const blitPass = encoder.beginRenderPass({
-          label: "Action layer blit pass",
-          colorAttachments: [
-            {
-              view: sceneTargetView,
-              loadOp: "load",
-              storeOp: "store",
-            },
-          ],
-        });
-        blitPass.setPipeline(this.#actionLayerBlitPipeline);
-        blitPass.setBindGroup(0, this.#actionLayerBlitBindGroupCached);
-        blitPass.draw(3);
-        blitPass.end();
-      }
+      this.#actionLayerBlurPass.encode({
+        encoder,
+        processingPipeline: this.#entityTexturePipeline.processingPipeline,
+        sourceTexture: sceneTargetTexture,
+        targetView: sceneTargetView,
+        width,
+        height,
+        blurIntensity,
+        contentDirty: state.dirty || hasAnimatingContent,
+      });
       markPhaseEnd("action-layer-blur");
     }
 
     // Reset blur cache when action layer blur is no longer rendering
     if (blurIntensity <= 0.01) {
-      this.#actionLayerBlurCacheValid = false;
+      this.#actionLayerBlurPass?.invalidateCache();
     }
 
     // Always render action layer entities on top (sharp, after blur or normally)
@@ -949,7 +774,7 @@ export class InfiniteCanvasRenderer {
   }
 
   setActionLayerTint(color: [number, number, number]): void {
-    this.#actionLayerTintColor = color;
+    this.#actionLayerBlurPass?.setTint(color);
   }
 
   setSelectionRectConfig(
@@ -1241,18 +1066,8 @@ export class InfiniteCanvasRenderer {
     this.#texturePool?.destroy();
     this.#texturePool = null;
 
-    // Destroy action layer blur resources
-    if (this.#actionLayerBlurTextures) {
-      this.#actionLayerBlurTextures.input.destroy();
-      this.#actionLayerBlurTextures.output.destroy();
-      this.#actionLayerBlurTextures = null;
-    }
-    this.#actionLayerBlurCacheValid = false;
-    this.#actionLayerBlitBindGroupCached = null;
-    this.#actionLayerBlitUniformBuffer?.destroy();
-    this.#actionLayerBlitPipeline = null;
-    this.#actionLayerBlitBindGroupLayout = null;
-    this.#actionLayerBlitSampler = null;
+    this.#actionLayerBlurPass?.destroy();
+    this.#actionLayerBlurPass = null;
 
     this.#gridPass?.destroy();
     this.#gridPass = null;
