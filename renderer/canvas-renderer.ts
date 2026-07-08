@@ -31,6 +31,7 @@ import { resolveWlurOverlayRuntimeConfig, type WlurOverlayConfig } from "./wlur-
 import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
 import viewportLensDistortionShaderSource from "./viewport-lens-distortion.wgsl?raw";
 import { CanvasLensing } from "#types/enums.ts";
+import type { ImageExportOptions } from "./export-formats.ts";
 
 export interface ViewportLensDistortionConfig {
   enabled: boolean;
@@ -1833,7 +1834,7 @@ export class InfiniteCanvasRenderer {
    */
   async renderEntityToBlob(
     entity: ShaderCanvasEntity,
-    options?: import("./export-formats.ts").ImageExportOptions,
+    options?: ImageExportOptions,
   ): Promise<Blob | null> {
     const displayedTexture = this.#entityTexturePipeline?.getDisplayedEntityTexture(entity) ?? null;
     if (!displayedTexture) {
