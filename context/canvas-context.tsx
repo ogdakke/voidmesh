@@ -658,7 +658,15 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     // Snapshot the entity's rendered texture and start dust animation overlay.
     // This copies the GPU texture so the entity can be removed immediately.
     if (canvasStore.getState().fancyDelete) {
-      rendererRef.current?.startDisintegration(entity);
+      const overlay = disintegrationController.addOverlay(
+        entity.id,
+        entity.position,
+        entity.size,
+        entity.rotation,
+      );
+      if (!rendererRef.current?.startDisintegration(entity, overlay)) {
+        disintegrationController.cancelOverlay(entity.id);
+      }
     }
 
     // Clean up renderer texture cache and remove from store immediately
@@ -670,6 +678,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       Command.create({
         undo: () => {
           // Cancel any still-playing disintegration overlay
+          disintegrationController.cancelOverlay(entityCopy.id);
           rendererRef.current?.cancelDisintegration(entityCopy.id);
           // Restore the entity with all its resources
           canvasStore.addEntity(entityCopy);
@@ -708,6 +717,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     disintegrationController.clear();
 
     for (const entity of entities) {
+      disintegrationController.cancelOverlay(entity.id);
       rendererRef.current?.cancelDisintegration(entity.id);
       rendererRef.current?.removeEntityTexture(entity.id);
       destroyEntityMediaResources(entity);

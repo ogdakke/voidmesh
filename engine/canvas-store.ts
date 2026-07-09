@@ -133,6 +133,45 @@ export interface SelectedVideoAudioSnapshot {
   version: number;
 }
 
+export interface ActionLayerRenderState {
+  /** Whether the action layer is active or dismiss/transition animation is still visible. */
+  active: boolean;
+  /** Entity IDs to keep sharp and offset while the action layer is rendering. */
+  entityIds: ReadonlySet<string>;
+  /** Rubber-band offset in CSS pixels. */
+  entityOffset: Point;
+  /** Current background blur/dim intensity, 0..1. */
+  blurIntensity: number;
+}
+
+export interface DragVisualRenderState {
+  /** Whether any drag visual animation is active. */
+  active: boolean;
+  /** Whether the active visual is in the dragging phase. */
+  isDragPhase: boolean;
+  /** Entity IDs receiving the shared visual scale. */
+  entityIds: ReadonlySet<string>;
+  /** Shared scale for active drag-visual entities. */
+  scale: number;
+}
+
+export interface DisintegrationRenderOverlay {
+  id: string;
+  startTime: number;
+  dissolveDuration: number;
+  duration: number;
+  seed: number;
+  position: Point;
+  size: { width: number; height: number };
+  rotation: number;
+  progress: number;
+  elapsedSeconds: number;
+}
+
+export interface DisintegrationRenderState {
+  overlays: readonly DisintegrationRenderOverlay[];
+}
+
 export interface RenderState {
   viewport: Viewport;
   entities: ShaderCanvasEntity[];
@@ -145,10 +184,9 @@ export interface RenderState {
   dragSelectBounds: Bounds | null;
   /** Multi-select bounding box in world coordinates (null if < 2 entities selected) */
   multiSelectBounds: Bounds | null;
-  /** Whether the mobile action layer is active (renderer applies blur overlay) */
-  actionLayerActive: boolean;
-  /** Entity IDs to keep sharp when action layer blur is active */
-  actionLayerEntityIds: ReadonlySet<string>;
+  actionLayer: ActionLayerRenderState;
+  dragVisual: DragVisualRenderState;
+  disintegration: DisintegrationRenderState;
 }
 
 export interface ParamResult<T> {
@@ -1000,8 +1038,19 @@ export class CanvasStore extends Store<CanvasState> {
       // dragSelectBounds and multiSelectBounds are set by game-loop after calling this method
       dragSelectBounds: null,
       multiSelectBounds: null,
-      actionLayerActive: this.state.actionLayerActive,
-      actionLayerEntityIds: this.state.actionLayerEntityIds,
+      actionLayer: {
+        active: this.state.actionLayerActive,
+        entityIds: this.state.actionLayerEntityIds,
+        entityOffset: { x: 0, y: 0 },
+        blurIntensity: 0,
+      },
+      dragVisual: {
+        active: this.state.entityDragActive,
+        isDragPhase: false,
+        entityIds: new Set(),
+        scale: 1,
+      },
+      disintegration: { overlays: [] },
     };
   }
 

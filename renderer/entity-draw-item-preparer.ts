@@ -1,24 +1,13 @@
 import { config } from "#config";
+import type { ActionLayerRenderState, DragVisualRenderState } from "#engine";
 import { boundsIntersect, getRotatedAABB, getViewportWorldBounds } from "#lib/canvas-math.ts";
-import type { Point, ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
+import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
 import type { CompositionDrawItem, CompositionPass } from "./composition-pass.ts";
 import type { EntityTexturePipeline } from "./entity-texture-pipeline.ts";
-
-interface ActionLayerEntityState {
-  isActive(): boolean;
-  getEntityOffset(): Point;
-  hasEntity(entityId: string): boolean;
-}
-
-interface DragVisualState {
-  getScale(entityId: string): number;
-}
 
 interface EntityDrawItemPreparerOptions {
   texturePipeline: EntityTexturePipeline;
   compositionPass: CompositionPass;
-  actionLayer: ActionLayerEntityState;
-  dragVisual: DragVisualState;
 }
 
 interface PrepareEntityDrawItemsOptions {
@@ -30,6 +19,8 @@ interface PrepareEntityDrawItemsOptions {
   encoder: GPUCommandEncoder;
   hoveredEntityId: string | null;
   selectedEntityIds: ReadonlySet<string>;
+  actionLayer: ActionLayerRenderState;
+  dragVisual: DragVisualRenderState;
   debugMode: boolean;
 }
 
@@ -42,14 +33,10 @@ export interface PreparedEntityDrawItems {
 export class EntityDrawItemPreparer {
   readonly #texturePipeline: EntityTexturePipeline;
   readonly #compositionPass: CompositionPass;
-  readonly #actionLayer: ActionLayerEntityState;
-  readonly #dragVisual: DragVisualState;
 
   constructor(options: EntityDrawItemPreparerOptions) {
     this.#texturePipeline = options.texturePipeline;
     this.#compositionPass = options.compositionPass;
-    this.#actionLayer = options.actionLayer;
-    this.#dragVisual = options.dragVisual;
   }
 
   prepare(options: PrepareEntityDrawItemsOptions): PreparedEntityDrawItems {
@@ -62,6 +49,8 @@ export class EntityDrawItemPreparer {
       encoder,
       hoveredEntityId,
       selectedEntityIds,
+      actionLayer,
+      dragVisual,
       debugMode,
     } = options;
 
@@ -73,9 +62,9 @@ export class EntityDrawItemPreparer {
 
     let actionLayerOffsetX = 0;
     let actionLayerOffsetY = 0;
-    const actionLayerActive = this.#actionLayer.isActive();
+    const actionLayerActive = actionLayer.active;
     if (actionLayerActive) {
-      const cssOffset = this.#actionLayer.getEntityOffset();
+      const cssOffset = actionLayer.entityOffset;
       actionLayerOffsetX = (cssOffset.x * devicePixelRatio) / viewport.zoom;
       actionLayerOffsetY = (cssOffset.y * devicePixelRatio) / viewport.zoom;
     }
@@ -114,7 +103,7 @@ export class EntityDrawItemPreparer {
       const isSelected = selectedEntityIds.has(entity.id);
 
       // Action layer entities are drawn AFTER blur (not in main pass) to avoid halo
-      const isActionLayerEntity = actionLayerActive && this.#actionLayer.hasEntity(entity.id);
+      const isActionLayerEntity = actionLayerActive && actionLayer.entityIds.has(entity.id);
       const drawItem = this.#compositionPass.prepareDrawItem({
         entity,
         source: compositionSource,
@@ -123,7 +112,8 @@ export class EntityDrawItemPreparer {
         debugMode,
         positionOffsetX: isActionLayerEntity ? actionLayerOffsetX : 0,
         positionOffsetY: isActionLayerEntity ? actionLayerOffsetY : 0,
-        visualScale: this.#dragVisual.getScale(entity.id),
+        visualScale:
+          dragVisual.active && dragVisual.entityIds.has(entity.id) ? dragVisual.scale : 1,
       });
 
       if (isActionLayerEntity) {

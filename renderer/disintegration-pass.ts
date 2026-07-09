@@ -1,5 +1,5 @@
 import { config } from "#config";
-import { disintegrationController } from "#engine";
+import type { DisintegrationRenderOverlay } from "#engine";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
 import { CompositionPass } from "./composition-pass.ts";
 import { DisintegrationParticleSystem } from "./disintegration-particles.ts";
@@ -42,7 +42,11 @@ export class DisintegrationPass {
     await this.#particleSystem.initialize(this.#canvasFormat, this.#viewportUniformBuffer);
   }
 
-  start(entity: ShaderCanvasEntity, snapshotTexture: GPUTexture): void {
+  start(
+    entity: ShaderCanvasEntity,
+    snapshotTexture: GPUTexture,
+    overlay: DisintegrationRenderOverlay,
+  ): void {
     const textureView = snapshotTexture.createView();
     const uniformBuffer = this.#device.createBuffer({
       label: `Disintegration uniform ${entity.id}`,
@@ -63,29 +67,28 @@ export class DisintegrationPass {
       bindGroup,
     });
 
-    // Register with the animation controller.
-    disintegrationController.addOverlay(entity.id, entity.position, entity.size, entity.rotation);
-
     // Spawn particles from the snapshot texture.
-    const overlayData = disintegrationController.getOverlay(entity.id);
-    if (overlayData) {
-      this.#particleSystem.spawn(entity.id, snapshotTexture, overlayData);
-    }
+    this.#particleSystem.spawn(entity.id, snapshotTexture, overlay);
   }
 
   cancel(id: string): void {
-    disintegrationController.cancelOverlay(id);
     this.#cleanupOverlay(id);
   }
 
-  encode(encoder: GPUCommandEncoder, targetView: GPUTextureView, dt: number): void {
-    if (this.#overlays.size === 0) return;
+  encode(
+    encoder: GPUCommandEncoder,
+    targetView: GPUTextureView,
+    dt: number,
+    overlays: readonly DisintegrationRenderOverlay[],
+  ): void {
+    if (this.#overlays.size === 0 && overlays.length === 0) return;
 
     // Clean up GPU resources for overlays whose animations have completed.
-    // The controller removes them from its map when tick() finds them finished.
+    // The engine snapshot omits overlays once their animation has completed.
+    const liveIds = new Set(overlays.map((overlay) => overlay.id));
     const completedIds: string[] = [];
     for (const id of this.#overlays.keys()) {
-      if (!disintegrationController.hasOverlay(id)) {
+      if (!liveIds.has(id)) {
         completedIds.push(id);
       }
     }
@@ -94,21 +97,18 @@ export class DisintegrationPass {
     }
 
     // Render active overlays.
-    const now = performance.now();
-    for (const overlay of disintegrationController.getOverlays()) {
+    for (const overlay of overlays) {
       const gpu = this.#overlays.get(overlay.id);
       if (!gpu) continue;
-      if (now < overlay.startTime) continue;
-
-      const progress = disintegrationController.getProgress(overlay.id);
+      if (overlay.elapsedSeconds <= 0) continue;
 
       // Render dissolve front only while dissolve is still in progress (< 1.0).
-      if (progress > 0 && progress < 1) {
+      if (overlay.progress > 0 && overlay.progress < 1) {
         this.#compositionPass.writeDisintegrationUniforms(gpu.uniformBuffer, {
           position: overlay.position,
           size: overlay.size,
           rotation: overlay.rotation,
-          progress,
+          progress: overlay.progress,
           seed: overlay.seed,
         });
 
@@ -128,8 +128,7 @@ export class DisintegrationPass {
       }
 
       // Update + render particles (compute pass must precede render pass).
-      const elapsed = Math.max(now - overlay.startTime, 0) / 1000;
-      this.#particleSystem.update(overlay.id, elapsed, dt, encoder);
+      this.#particleSystem.update(overlay.id, overlay.elapsedSeconds, dt, encoder);
       this.#particleSystem.render(overlay.id, encoder, targetView);
     }
   }
