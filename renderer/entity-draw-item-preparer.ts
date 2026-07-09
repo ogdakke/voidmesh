@@ -1,0 +1,138 @@
+import { config } from "#config";
+import { boundsIntersect, getRotatedAABB, getViewportWorldBounds } from "#lib/canvas-math.ts";
+import type { Point, ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
+import type { CompositionDrawItem, CompositionPass } from "./composition-pass.ts";
+import type { EntityTexturePipeline } from "./entity-texture-pipeline.ts";
+
+interface ActionLayerEntityState {
+  isActive(): boolean;
+  getEntityOffset(): Point;
+  hasEntity(entityId: string): boolean;
+}
+
+interface DragVisualState {
+  getScale(entityId: string): number;
+}
+
+interface EntityDrawItemPreparerOptions {
+  texturePipeline: EntityTexturePipeline;
+  compositionPass: CompositionPass;
+  actionLayer: ActionLayerEntityState;
+  dragVisual: DragVisualState;
+}
+
+interface PrepareEntityDrawItemsOptions {
+  entities: ShaderCanvasEntity[];
+  viewport: Viewport;
+  width: number;
+  height: number;
+  devicePixelRatio: number;
+  encoder: GPUCommandEncoder;
+  hoveredEntityId: string | null;
+  selectedEntityIds: ReadonlySet<string>;
+  debugMode: boolean;
+}
+
+export interface PreparedEntityDrawItems {
+  entityDrawItems: CompositionDrawItem[];
+  actionLayerDrawItems: CompositionDrawItem[];
+  hasAnimatingContent: boolean;
+}
+
+export class EntityDrawItemPreparer {
+  readonly #texturePipeline: EntityTexturePipeline;
+  readonly #compositionPass: CompositionPass;
+  readonly #actionLayer: ActionLayerEntityState;
+  readonly #dragVisual: DragVisualState;
+
+  constructor(options: EntityDrawItemPreparerOptions) {
+    this.#texturePipeline = options.texturePipeline;
+    this.#compositionPass = options.compositionPass;
+    this.#actionLayer = options.actionLayer;
+    this.#dragVisual = options.dragVisual;
+  }
+
+  prepare(options: PrepareEntityDrawItemsOptions): PreparedEntityDrawItems {
+    const {
+      entities,
+      viewport,
+      width,
+      height,
+      devicePixelRatio,
+      encoder,
+      hoveredEntityId,
+      selectedEntityIds,
+      debugMode,
+    } = options;
+
+    entities.sort((a, b) => a.zIndex - b.zIndex);
+
+    const entityDrawItems: CompositionDrawItem[] = [];
+    const actionLayerDrawItems: CompositionDrawItem[] = [];
+    let hasAnimatingContent = false;
+
+    let actionLayerOffsetX = 0;
+    let actionLayerOffsetY = 0;
+    const actionLayerActive = this.#actionLayer.isActive();
+    if (actionLayerActive) {
+      const cssOffset = this.#actionLayer.getEntityOffset();
+      actionLayerOffsetX = (cssOffset.x * devicePixelRatio) / viewport.zoom;
+      actionLayerOffsetY = (cssOffset.y * devicePixelRatio) / viewport.zoom;
+    }
+
+    const viewportBounds = getViewportWorldBounds(
+      viewport,
+      width,
+      height,
+      config.canvas.cullingBufferFraction,
+    );
+
+    for (const entity of entities) {
+      // Viewport culling: skip all GPU work for entities entirely outside the viewport.
+      // textureDirty is intentionally NOT cleared here — it stays true so the entity
+      // re-renders correctly when it scrolls back into view.
+      const entityAABB = getRotatedAABB(entity.position, entity.size, entity.rotation);
+      if (!boundsIntersect(entityAABB, viewportBounds)) {
+        continue;
+      }
+
+      // Check if texture needs regeneration. Animated media is marked dirty by the
+      // game loop only when the decoded frame changes.
+      const textureWasDirty = !!entity.textureDirty;
+      if (textureWasDirty || this.#texturePipeline.needsContinuousRenderForEntity(entity)) {
+        hasAnimatingContent = true;
+      }
+
+      const compositionSource = this.#texturePipeline.renderEntityToTexture(entity, encoder);
+      if (!compositionSource) continue;
+
+      // Clear dirty flag
+      entity.textureDirty = false;
+
+      // Determine if this entity is hovered or selected
+      const isHovered = entity.id === hoveredEntityId;
+      const isSelected = selectedEntityIds.has(entity.id);
+
+      // Action layer entities are drawn AFTER blur (not in main pass) to avoid halo
+      const isActionLayerEntity = actionLayerActive && this.#actionLayer.hasEntity(entity.id);
+      const drawItem = this.#compositionPass.prepareDrawItem({
+        entity,
+        source: compositionSource,
+        isHovered,
+        isSelected,
+        debugMode,
+        positionOffsetX: isActionLayerEntity ? actionLayerOffsetX : 0,
+        positionOffsetY: isActionLayerEntity ? actionLayerOffsetY : 0,
+        visualScale: this.#dragVisual.getScale(entity.id),
+      });
+
+      if (isActionLayerEntity) {
+        actionLayerDrawItems.push(drawItem);
+      } else {
+        entityDrawItems.push(drawItem);
+      }
+    }
+
+    return { entityDrawItems, actionLayerDrawItems, hasAnimatingContent };
+  }
+}

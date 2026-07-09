@@ -2,13 +2,13 @@ import { config, getViewportLensDistortionConfig, type GridConfig } from "#confi
 import { logger } from "#lib/client.logger.ts";
 import { setGpuContext } from "./gpu-color-space.ts";
 import { type RenderState, actionLayerController, entityDragVisual } from "#engine";
-import { boundsIntersect, getRotatedAABB, getViewportWorldBounds } from "#lib/canvas-math.ts";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
 import { CanvasLensing } from "#types/enums.ts";
 import { ActionLayerBlurPass } from "./action-layer-blur-pass.ts";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
 import { CompositionPass, type CompositionDrawItem } from "./composition-pass.ts";
 import { DisintegrationPass } from "./disintegration-pass.ts";
+import { EntityDrawItemPreparer } from "./entity-draw-item-preparer.ts";
 import { EntityLabelPass } from "./entity-label-pass.ts";
 import { EntityTexturePipeline, type EntityCompositionSource } from "./entity-texture-pipeline.ts";
 import { ExportService } from "./export-service.ts";
@@ -69,6 +69,7 @@ export class InfiniteCanvasRenderer {
 
   #wlurOverlayPass: WlurOverlayPass | null = null;
 
+  #entityDrawItemPreparer: EntityDrawItemPreparer | null = null;
   #entityTexturePipeline: EntityTexturePipeline | null = null;
 
   // Export service for rendering entities to blobs/bitmaps
@@ -184,6 +185,12 @@ export class InfiniteCanvasRenderer {
       },
     });
     await this.#entityTexturePipeline.initialize();
+    this.#entityDrawItemPreparer = new EntityDrawItemPreparer({
+      texturePipeline: this.#entityTexturePipeline,
+      compositionPass: this.#compositionPass,
+      actionLayer: actionLayerController,
+      dragVisual: entityDragVisual,
+    });
 
     this.#selectionRectPass = new SelectionRectPass(this.#device, this.#canvasFormat);
     this.#actionLayerBlurPass = new ActionLayerBlurPass({
@@ -297,7 +304,8 @@ export class InfiniteCanvasRenderer {
       !this.#context ||
       !this.#gridPass ||
       !this.#compositionPass ||
-      !this.#viewportUniforms
+      !this.#viewportUniforms ||
+      !this.#entityDrawItemPreparer
     ) {
       return;
     }
@@ -321,18 +329,6 @@ export class InfiniteCanvasRenderer {
       );
     };
 
-    // Compute action layer rubber-band offset in world coordinates
-    // Use controller state (not store) — offset continues during dismiss animation
-    let actionLayerOffsetX = 0;
-    let actionLayerOffsetY = 0;
-    const actionLayerControllerActive = actionLayerController.isActive();
-    if (actionLayerControllerActive) {
-      const cssOffset = actionLayerController.getEntityOffset();
-      const dprLocal = window.devicePixelRatio || 1;
-      actionLayerOffsetX = (cssOffset.x * dprLocal) / viewport.zoom;
-      actionLayerOffsetY = (cssOffset.y * dprLocal) / viewport.zoom;
-    }
-
     // Update canvas size if needed (uses cached dimensions from ResizeObserver)
     const dpr = window.devicePixelRatio || 1;
     const width = Math.floor(this.#cachedCanvasWidth * dpr);
@@ -351,9 +347,6 @@ export class InfiniteCanvasRenderer {
 
     this.#viewportUniforms.update(viewport, width, height);
 
-    // Sort entities in-place by z-index (avoid array copying)
-    entities.sort((a, b) => a.zIndex - b.zIndex);
-
     // Entity preprocessing can encode shader passes into this same command buffer.
     // External video textures must be imported, bound, encoded, finished, and submitted
     // inside the current render task.
@@ -363,65 +356,20 @@ export class InfiniteCanvasRenderer {
 
     // Pre-process entities: render to textures and prepare bind groups
     // Uses caching to avoid per-frame allocations
-    const entityDrawItems: CompositionDrawItem[] = [];
-    const actionLayerDrawItems: CompositionDrawItem[] = [];
-    let hasAnimatingContent = false;
     markPhaseStart("entity-prep");
-
-    // Compute viewport world bounds once for culling (with buffer to prevent pop-in)
-    const viewportBounds = getViewportWorldBounds(
+    const preparedEntityDrawItems = this.#entityDrawItemPreparer.prepare({
+      entities,
       viewport,
       width,
       height,
-      config.canvas.cullingBufferFraction,
-    );
-
-    for (const entity of entities) {
-      // Viewport culling: skip all GPU work for entities entirely outside the viewport.
-      // textureDirty is intentionally NOT cleared here — it stays true so the entity
-      // re-renders correctly when it scrolls back into view.
-      const entityAABB = getRotatedAABB(entity.position, entity.size, entity.rotation);
-      if (!boundsIntersect(entityAABB, viewportBounds)) {
-        continue;
-      }
-
-      // Check if texture needs regeneration. Animated media is marked dirty by the
-      // game loop only when the decoded frame changes.
-      const textureWasDirty = !!entity.textureDirty;
-      if (textureWasDirty || this.needsContinuousRenderForEntity(entity)) {
-        hasAnimatingContent = true;
-      }
-
-      const compositionSource = this.renderEntityToTexture(entity, encoder);
-      if (!compositionSource) continue;
-
-      // Clear dirty flag
-      entity.textureDirty = false;
-
-      // Determine if this entity is hovered or selected
-      const isHovered = entity.id === hoveredEntityId;
-      const isSelected = selectedEntityIds.has(entity.id);
-
-      // Action layer entities are drawn AFTER blur (not in main pass) to avoid halo
-      const isActionLayerEntity =
-        actionLayerControllerActive && actionLayerController.hasEntity(entity.id);
-      const drawItem = this.#compositionPass.prepareDrawItem({
-        entity,
-        source: compositionSource,
-        isHovered,
-        isSelected,
-        debugMode,
-        positionOffsetX: isActionLayerEntity ? actionLayerOffsetX : 0,
-        positionOffsetY: isActionLayerEntity ? actionLayerOffsetY : 0,
-        visualScale: entityDragVisual.getScale(entity.id),
-      });
-
-      if (isActionLayerEntity) {
-        actionLayerDrawItems.push(drawItem);
-      } else {
-        entityDrawItems.push(drawItem);
-      }
-    }
+      devicePixelRatio: dpr,
+      encoder,
+      hoveredEntityId,
+      selectedEntityIds,
+      debugMode,
+    });
+    const { entityDrawItems, actionLayerDrawItems } = preparedEntityDrawItems;
+    let hasAnimatingContent = preparedEntityDrawItems.hasAnimatingContent;
     markPhaseEnd("entity-prep");
 
     const texture = this.#context.getCurrentTexture();
@@ -854,6 +802,7 @@ export class InfiniteCanvasRenderer {
   }
 
   destroy(): void {
+    this.#entityDrawItemPreparer = null;
     this.#entityTexturePipeline?.destroy();
     this.#entityTexturePipeline = null;
     this.#compositionPass?.destroy();
