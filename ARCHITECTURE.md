@@ -197,13 +197,11 @@ I would rate the current architecture about **7/10**.
 - `InfiniteCanvas` is a view component, but it also wires a lot of product behavior:
   DOM events, keybind behavior, renderer configuration, canvas controls, drop/paste,
   studio file import/export, and viewport actions.
-- `CanvasInputController` has a clearer boundary than the old `GameLoop`: browser
-  input and gesture state machines are separated from the frame scheduler. It is still
-  a broad input controller, though: hit testing, drag-select rules, selection
-  mutations, viewport mutations, action-layer transitions, haptics/analytics, and
-  onboarding completion still happen in one place. That is acceptable as an
-  incremental seam, but later `SelectionController`, `ViewportController`, and
-  `CanvasActions` extraction would make the ownership cleaner.
+- `CanvasInputController` now has a sharper boundary than the old `GameLoop`: it owns
+  event sequencing and gesture state, while selection, hit-testing, viewport/momentum,
+  and entity dragging/snap behavior live in focused engine modules. It still directly
+  coordinates action-layer gesture side effects, haptics/analytics, and onboarding
+  completion; that is the next remaining input-side seam.
 - `InfiniteCanvasRenderer` has the right ownership boundary, but internally it is a
   large facade over WebGPU setup, entity rendering, composition, overlays, caches,
   export readback, and device-loss handling.
@@ -217,8 +215,15 @@ longer centered in one large `GameLoop` class:
   dependencies, delegates input methods, wires render errors, and composes the input
   and frame loops.
 - `CanvasInputController` owns pointer, wheel, context-menu, touch, space-pan,
-  drag-select, long-press action-layer, double-tap zoom, alpha hit-testing, and input
-  momentum handoff state.
+  long-press action-layer, double-tap/hold gesture state, and input momentum samples.
+- `CanvasSelectionController` owns alpha hit-testing, pointer/touch selection rules,
+  drag-select selection updates, multi-select bounds, context-menu selection setup,
+  and playback-toggle decisions from clicks/taps.
+- `CanvasViewportController` owns screen/world conversion, wheel/pinch/double-tap zoom,
+  viewport panning, fit-to-entity animation, saved zoom-back viewport state, and
+  `MomentumController` integration.
+- `EntityDragController` owns active drag targets, selected-entity movement,
+  snap-to-grid accumulation, action-layer-to-drag catch-up, and snap-settle springs.
 - `FrameLoop` owns RAF scheduling, scheduler ticks, GIF/video playback advancement,
   video frame callback tracking, render-state enrichment, render/no-render decisions,
   dirty-flag clearing, and calls to `CanvasRendererPort.render()`.
@@ -226,17 +231,14 @@ longer centered in one large `GameLoop` class:
   `RenderState` fields: action layer, drag visual, disintegration, drag-select bounds,
   and multi-select bounds.
 
-The remaining blurriness is inside `CanvasInputController`, not between input and RAF.
-It currently translates input directly into `CanvasStore` mutations and controller side
-effects. A future split should be behavior-based rather than file-size-based:
+The remaining blurriness is smaller and mostly action-layer related:
 
-- selection hit/toggle/drag-select rules into a `SelectionController` or
-  `CanvasActions` selection use cases;
-- viewport pan/zoom/double-tap-fit commands into viewport actions or a
-  `ViewportController` facade over `viewportAnimation` and `MomentumController`;
-- action-layer open/transition/dismiss orchestration into an action-layer gesture
-  adapter that coordinates `actionLayerController`, `entityDragVisual`, haptics,
-  analytics, and onboarding events.
+- `CanvasInputController` still decides when the long-press action layer opens,
+  transitions to entity drag, dismisses, and emits haptics/analytics/onboarding
+  events. A future `ActionLayerGestureController` could own that orchestration.
+- `CanvasSelectionController` and `CanvasViewportController` still mutate
+  `CanvasStore` directly. That matches the current engine style, but a future
+  `CanvasActions` layer could turn those mutations into named product use cases.
 
 ## Renderer split status
 
@@ -329,15 +331,16 @@ flowchart TD
 
   subgraph Runtime["Runtime controllers: event/frame orchestration"]
     gameLoopFacade["GameLoop facade<br/>stable DOM-facing API<br/>composition boundary"]
-    inputController["CanvasInputController<br/>pointer/touch/wheel state machines<br/>hit testing<br/>direct store mutations for now"]
+    inputController["CanvasInputController<br/>input sequencing<br/>gesture state machines"]
     frameLoop["FrameLoop<br/>RAF scheduling<br/>animated media ticks<br/>per-frame controllers"]
     renderRuntime["Render-time controller snapshots<br/>action-layer<br/>drag visual<br/>disintegration progress"]
   end
 
   subgraph Engine["Engine core: model + canvas rules"]
     store[(CanvasStore<br/>entities • viewport • selection<br/>preferences • dirty flags<br/>subscription snapshots)]
-    viewportController["ViewportController<br/>pan/zoom/fit animations<br/>momentum physics"]
-    selectionController["SelectionController<br/>hit selection<br/>drag select<br/>multi-select rules"]
+    viewportController["CanvasViewportController<br/>screen/world mapping<br/>pan/zoom/fit<br/>momentum physics"]
+    selectionController["CanvasSelectionController<br/>alpha hit testing<br/>selection rules<br/>drag select"]
+    entityDragController["EntityDragController<br/>drag targets<br/>snap/catch-up springs"]
     animationControllers["Animation controllers<br/>action layer<br/>drag visual<br/>disintegration timing<br/>perf overlay"]
     renderSnapshot["RenderState snapshot<br/>immutable frame input<br/>visible entities<br/>viewport + overlays"]
   end
@@ -361,11 +364,12 @@ flowchart TD
   storageAdapter <--> actions
 
   inputController -. future .-> actions
-  inputController --> store
-  inputController --> viewportController
   inputController --> selectionController
+  inputController --> viewportController
+  inputController --> entityDragController
   viewportController --> store
   selectionController --> store
+  entityDragController --> store
   actions --> undo
   actions --> store
   actions --> jobs
@@ -417,6 +421,7 @@ sequenceDiagram
   participant DOM as Canvas DOM adapter
   participant GL as GameLoop facade
   participant Input as CanvasInputController
+  participant Rules as Selection/Viewport/Drag controllers
   participant Actions as CanvasActions
   participant Store as CanvasStore
   participant Loop as FrameLoop
@@ -426,7 +431,8 @@ sequenceDiagram
   User->>DOM: pointer / touch / wheel / keyboard / drop
   DOM->>GL: existing public event API
   GL->>Input: delegate input handling
-  Input->>Store: current implementation mutates directly<br/>select, drag, pan, zoom
+  Input->>Rules: delegate selection, drag, pan, zoom work
+  Rules->>Store: mutate canonical canvas state
   Input-->>Actions: future: emit product intents<br/>instead of direct store writes
   Actions->>Store: mutate canonical canvas state
   Loop->>Store: get render snapshot on RAF/media tick
