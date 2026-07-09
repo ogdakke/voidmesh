@@ -5,7 +5,7 @@ import type {
   DisintegrationRenderState,
   DragVisualRenderState,
 } from "#engine";
-import type { GameLoopDeps } from "../../engine/game-loop.ts";
+import type { GameLoopDeps } from "#engine";
 
 /**
  * Create mock GameLoop dependencies for testing.

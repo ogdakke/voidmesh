@@ -1,8 +1,8 @@
 import { describe, test, expect, beforeEach, vi, afterEach } from "vitest";
 import { AnimationScheduler } from "#lib/animation-scheduler.ts";
-import { screenToWorld } from "../../lib/canvas-math.ts";
-import { GameLoop, SpacePanMode, type GameLoopDeps } from "../../engine/game-loop.ts";
-import { canvasStore } from "../../engine/canvas-store.ts";
+import { screenToWorld } from "#lib/canvas-math.ts";
+import { GameLoop, SpacePanMode, type GameLoopDeps } from "#engine";
+import { canvasStore } from "#engine";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
 import { createTestEntity } from "../helpers/test-entity.ts";
 import { createMockGameLoopDeps } from "../helpers/game-loop-deps.mock.ts";
