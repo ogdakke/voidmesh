@@ -25,6 +25,7 @@ flowchart LR
     loop["GameLoop<br/>input state machines<br/>RAF loop"]
     controllers["Per-frame controllers<br/>momentum<br/>viewport animation<br/>action layer<br/>drag visual<br/>disintegration timing<br/>perf overlay"]
     renderState["RenderState snapshot<br/>viewport<br/>sorted entities<br/>selection<br/>dirty flags<br/>overlay state"]
+    renderRuntime["Render-time controller snapshots<br/>action-layer offset/blur<br/>drag visual scale/phase<br/>disintegration overlay progress"]
   end
 
   subgraph MediaLib["Media + pure libraries"]
@@ -78,7 +79,9 @@ flowchart LR
   loop --> controllers
   controllers --> store
   loop -->|per animation frame| renderState
+  loop -->|attach render-time controller data| renderRuntime
   store -->|getRenderState| renderState
+  renderRuntime --> renderState
 
   rendererSvc --> canvasRenderer
   loop -->|render| canvasRenderer
@@ -119,7 +122,7 @@ flowchart LR
 
   class app,infinite,knobs,mediaControls react
   class commands,rendererSvc,urlState,undo context
-  class store,loop,controllers,renderState engine
+  class store,loop,controllers,renderState,renderRuntime engine
   class mediaLoader,math,serialization,palette lib
   class canvasRenderer,color,viewportUniforms,textures,shaderRuntime,shaders,processing,composite,overlays,lensAndWlur,gpu renderer
   class screen,imageExport,videoExport,upscale output
@@ -202,6 +205,9 @@ Completed internal seams:
 - `EntityDrawItemPreparer`: visible-entity traversal, culling, dirty/animation
   detection, action-layer bucketing, drag visual scale, and composition draw-item
   creation.
+- `RenderState` render-time controller snapshots: action-layer offset/blur, drag
+  visual scale/phase, and disintegration overlay progress now cross the engine →
+  renderer boundary as data instead of renderer modules importing engine singletons.
 - `ViewportUniforms`: shared viewport matrix buffer used by composition, labels,
   callouts, and disintegration overlays.
 - Overlay/effect passes: `GridPass`, `SelectionRectPass`, `DisintegrationPass`,
@@ -223,6 +229,9 @@ What remains in `InfiniteCanvasRenderer` should be orchestration or public facad
 `EntityDrawItemPreparer` now owns the visible-entity loop while the facade still owns
 actual render pass encoding, label drawing, and final overlay ordering. The next likely
 renderer seams are canvas surface/device setup and disintegration snapshot creation.
+Renderer internals should keep consuming `RenderState` or explicit renderer-private
+dependencies; importing engine singletons from renderer modules is not part of the
+target architecture.
 
 ## Would MVC help?
 
@@ -273,6 +282,7 @@ flowchart TD
   subgraph Runtime["Runtime controllers: event/frame orchestration"]
     inputController["CanvasInputController<br/>pointer/touch/wheel state machines<br/>hit testing<br/>gesture intents"]
     frameLoop["FrameLoop<br/>RAF scheduling<br/>animated media ticks<br/>per-frame controllers"]
+    renderRuntime["Render-time controller snapshots<br/>action-layer<br/>drag visual<br/>disintegration progress"]
   end
 
   subgraph Engine["Engine core: model + canvas rules"]
@@ -311,7 +321,9 @@ flowchart TD
   frameLoop --> animationControllers
   animationControllers --> store
   frameLoop --> store
+  frameLoop --> renderRuntime
   store --> renderSnapshot
+  renderRuntime --> renderSnapshot
   frameLoop --> rendererPort
   renderSnapshot --> rendererPort
 
@@ -402,7 +414,8 @@ time.
 5. **Keep `InfiniteCanvasRenderer` as a facade, split renderer internals only where it
    reduces complexity.**
    - Completed seams include entity texture/shader runtime, composition, viewport
-     uniforms, export/readback, and individual overlay/effect passes.
+     uniforms, render-time controller snapshots, export/readback, and individual
+     overlay/effect passes.
    - Next seams should be ownership-based, not file-size-based: canvas surface/device
      setup, disintegration snapshot creation, then an optional overlay coordinator if
      pass orchestration still feels noisy.

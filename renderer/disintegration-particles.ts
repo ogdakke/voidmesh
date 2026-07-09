@@ -1,7 +1,4 @@
-import {
-  PARTICLE_LIFETIME_MS,
-  type DisintegrationOverlay,
-} from "../engine/disintegration-controller.ts";
+import type { DisintegrationRenderOverlay } from "#engine";
 import spawnShaderSource from "./disintegration-spawn.wgsl?raw";
 import updateShaderSource from "./disintegration-update.wgsl?raw";
 import renderShaderSource from "./disintegration-render.wgsl?raw";
@@ -171,7 +168,7 @@ export class DisintegrationParticleSystem {
     });
   }
 
-  spawn(id: string, snapshotTexture: GPUTexture, overlay: DisintegrationOverlay): void {
+  spawn(id: string, snapshotTexture: GPUTexture, overlay: DisintegrationRenderOverlay): void {
     if (
       !this.#spawnPipeline ||
       !this.#spawnBindGroupLayout ||
@@ -198,7 +195,7 @@ export class DisintegrationParticleSystem {
     const cosR = Math.cos(rotRad);
     const sinR = Math.sin(rotRad);
     const dissolveSec = overlay.dissolveDuration / 1000;
-    const particleLifetimeSec = PARTICLE_LIFETIME_MS / 1000;
+    const particleLifetimeSec = Math.max(overlay.duration - overlay.dissolveDuration, 0) / 1000;
 
     // Particle size scales with entity size
     const maxDim = Math.max(overlay.size.width, overlay.size.height);

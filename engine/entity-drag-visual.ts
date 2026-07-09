@@ -1,5 +1,5 @@
 import { config, type DragVisualSpringConfig } from "#config";
-import { canvasStore } from "./canvas-store.ts";
+import { canvasStore, type DragVisualRenderState } from "./canvas-store.ts";
 import {
   scheduler as defaultScheduler,
   type AnimationScheduler,
@@ -54,6 +54,15 @@ class EntityDragVisualController {
   /** Whether we're specifically in the dragging phase (for label state). */
   isDragPhase(): boolean {
     return this.#phase === DragVisualPhase.dragging;
+  }
+
+  getRenderState(): DragVisualRenderState {
+    return {
+      active: this.isActive(),
+      isDragPhase: this.isDragPhase(),
+      entityIds: new Set(this.#entityIds),
+      scale: this.#currentScale,
+    };
   }
 
   /**

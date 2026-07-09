@@ -1,6 +1,6 @@
 import { SpringBack } from "#lib/touch-scroll/spring-back.ts";
 import { config } from "#config";
-import { canvasStore } from "./canvas-store.ts";
+import { canvasStore, type ActionLayerRenderState } from "./canvas-store.ts";
 import type { Point } from "#types/canvas.ts";
 import {
   scheduler as defaultScheduler,
@@ -193,6 +193,15 @@ export class ActionLayerController {
   /** Whether we're in the main active phase (not dismissing/transitioning). */
   isInteractive(): boolean {
     return this.#phase === ActionLayerPhase.active;
+  }
+
+  getRenderState(): ActionLayerRenderState {
+    return {
+      active: this.isActive(),
+      entityIds: new Set(this.#entityIds),
+      entityOffset: this.getEntityOffset(),
+      blurIntensity: this.#blurIntensity,
+    };
   }
 
   /** Transition to entity drag mode. Snap entity and fade blur. */

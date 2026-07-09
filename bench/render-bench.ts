@@ -758,8 +758,19 @@ function createRenderState(entities: ShaderCanvasEntity[], dirty: boolean): Rend
     canvasCallouts: [],
     dragSelectBounds: null,
     multiSelectBounds: null,
-    actionLayerActive: false,
-    actionLayerEntityIds: new Set(),
+    actionLayer: {
+      active: false,
+      entityIds: new Set(),
+      entityOffset: { x: 0, y: 0 },
+      blurIntensity: 0,
+    },
+    dragVisual: {
+      active: false,
+      isDragPhase: false,
+      entityIds: new Set(),
+      scale: 1,
+    },
+    disintegration: { overlays: [] },
   };
 }
 

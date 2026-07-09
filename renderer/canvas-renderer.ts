@@ -1,7 +1,7 @@
 import { config, getViewportLensDistortionConfig, type GridConfig } from "#config";
 import { logger } from "#lib/client.logger.ts";
 import { setGpuContext } from "./gpu-color-space.ts";
-import { type RenderState, actionLayerController, entityDragVisual } from "#engine";
+import type { DisintegrationRenderOverlay, RenderState } from "#engine";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
 import { CanvasLensing } from "#types/enums.ts";
 import { ActionLayerBlurPass } from "./action-layer-blur-pass.ts";
@@ -188,8 +188,6 @@ export class InfiniteCanvasRenderer {
     this.#entityDrawItemPreparer = new EntityDrawItemPreparer({
       texturePipeline: this.#entityTexturePipeline,
       compositionPass: this.#compositionPass,
-      actionLayer: actionLayerController,
-      dragVisual: entityDragVisual,
     });
 
     this.#selectionRectPass = new SelectionRectPass(this.#device, this.#canvasFormat);
@@ -366,6 +364,8 @@ export class InfiniteCanvasRenderer {
       encoder,
       hoveredEntityId,
       selectedEntityIds,
+      actionLayer: state.actionLayer,
+      dragVisual: state.dragVisual,
       debugMode,
     });
     const { entityDrawItems, actionLayerDrawItems } = preparedEntityDrawItems;
@@ -392,7 +392,7 @@ export class InfiniteCanvasRenderer {
     markPhaseStart("entity-pass");
 
     // Update label animation state once per frame
-    this.#entityLabelPass?.beginFrame(viewport, width, height);
+    this.#entityLabelPass?.beginFrame(viewport, width, height, state.dragVisual.isDragPhase);
     const selectedEntityCount = selectedEntityIds.size;
     const entityPass = encoder.beginRenderPass({
       label: "Entity composition pass",
@@ -415,7 +415,7 @@ export class InfiniteCanvasRenderer {
 
     // Pass 2a: Action layer blur overlay
     // Blur+dim everything, then re-render selected entities sharp on top
-    const blurIntensity = actionLayerController.getBlurIntensity();
+    const blurIntensity = state.actionLayer.blurIntensity;
     if (
       blurIntensity > 0.01 &&
       this.#canvasFormat === this.#colorConfig.intermediateFormat &&
@@ -480,7 +480,12 @@ export class InfiniteCanvasRenderer {
     }
 
     // Pass 2b: Render disintegration overlays (on top of entities)
-    this.#disintegrationPass?.encode(encoder, sceneTargetView, frameDt);
+    this.#disintegrationPass?.encode(
+      encoder,
+      sceneTargetView,
+      frameDt,
+      state.disintegration.overlays,
+    );
 
     // Pass 3: Render all selection rectangles (drag-select and multi-select bounds)
     if ((state.dragSelectBounds || state.multiSelectBounds) && this.#selectionRectPass) {
@@ -662,13 +667,14 @@ export class InfiniteCanvasRenderer {
     return snapshotTexture;
   }
 
-  startDisintegration(entity: ShaderCanvasEntity): void {
-    if (!this.#device || !this.#disintegrationPass) return;
+  startDisintegration(entity: ShaderCanvasEntity, overlay: DisintegrationRenderOverlay): boolean {
+    if (!this.#device || !this.#disintegrationPass) return false;
 
     const snapshotTexture = this.#createDisintegrationSnapshot(entity);
-    if (!snapshotTexture) return;
+    if (!snapshotTexture) return false;
 
-    this.#disintegrationPass.start(entity, snapshotTexture);
+    this.#disintegrationPass.start(entity, snapshotTexture, overlay);
+    return true;
   }
 
   /**

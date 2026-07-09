@@ -1,5 +1,10 @@
 import { vi } from "vitest";
 import type { AnimationScheduler } from "#lib/animation-scheduler.ts";
+import type {
+  ActionLayerRenderState,
+  DisintegrationRenderState,
+  DragVisualRenderState,
+} from "#engine";
 import type { GameLoopDeps } from "../../engine/game-loop.ts";
 
 /**
@@ -28,6 +33,12 @@ export function createMockGameLoopDeps(scheduler: AnimationScheduler): GameLoopD
       getBlurIntensity: vi.fn<() => number>(() => 0),
       hasEntity: vi.fn<() => boolean>(() => false),
       updateSafeZoneProgress: vi.fn<() => void>(),
+      getRenderState: vi.fn<() => ActionLayerRenderState>(() => ({
+        active: false,
+        entityIds: new Set<string>(),
+        entityOffset: { x: 0, y: 0 },
+        blurIntensity: 0,
+      })),
     },
     dragVisual: {
       startPossibleDrag: vi.fn<() => void>(),
@@ -37,6 +48,15 @@ export function createMockGameLoopDeps(scheduler: AnimationScheduler): GameLoopD
       isDragPhase: vi.fn<() => boolean>(() => false),
       isActive: vi.fn<() => boolean>(() => false),
       getScale: vi.fn<() => number>(() => 1),
+      getRenderState: vi.fn<() => DragVisualRenderState>(() => ({
+        active: false,
+        isDragPhase: false,
+        entityIds: new Set<string>(),
+        scale: 1,
+      })),
+    },
+    disintegration: {
+      getRenderState: vi.fn<(now?: number) => DisintegrationRenderState>(() => ({ overlays: [] })),
     },
     perf: {
       setElement: vi.fn<() => void>(),

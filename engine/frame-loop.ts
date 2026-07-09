@@ -1,6 +1,12 @@
 import type { AnimationScheduler } from "#lib/animation-scheduler.ts";
 import { MediaType, type Bounds, type ShaderCanvasEntity } from "#types/canvas.ts";
-import { canvasStore, type RenderState } from "./canvas-store.ts";
+import {
+  canvasStore,
+  type ActionLayerRenderState,
+  type DisintegrationRenderState,
+  type DragVisualRenderState,
+  type RenderState,
+} from "./canvas-store.ts";
 import type { FrameStats } from "./perf-overlay.ts";
 
 interface VideoFrameTracker {
@@ -41,6 +47,9 @@ interface FrameLoopCallbacks {
   processInput(): void;
   getDragSelectBounds(): Bounds | null;
   getMultiSelectBounds(): Bounds | null;
+  getActionLayerRenderState(): ActionLayerRenderState;
+  getDragVisualRenderState(): DragVisualRenderState;
+  getDisintegrationRenderState(now: number): DisintegrationRenderState;
   isPointerDragging(): boolean;
   isDragSelectActive(): boolean;
   onAfterFrame(): void;
@@ -141,6 +150,9 @@ export class FrameLoop {
     // 6. Add selection bounds to render state (managed by game-loop, not store)
     renderState.dragSelectBounds = this.#callbacks.getDragSelectBounds();
     renderState.multiSelectBounds = this.#callbacks.getMultiSelectBounds();
+    renderState.actionLayer = this.#callbacks.getActionLayerRenderState();
+    renderState.dragVisual = this.#callbacks.getDragVisualRenderState();
+    renderState.disintegration = this.#callbacks.getDisintegrationRenderState(now);
 
     // 7. Determine if we need to render this frame
     const needsRender =

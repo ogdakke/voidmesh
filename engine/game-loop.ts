@@ -27,6 +27,7 @@ import { createEnum } from "#types/index.ts";
 import { canvasStore, type CanvasState } from "./canvas-store.ts";
 import { entityDragVisual } from "./entity-drag-visual.ts";
 import { actionLayerController } from "./action-layer-controller.ts";
+import { disintegrationController } from "./disintegration-controller.ts";
 import { perfOverlay } from "./perf-overlay.ts";
 import { viewportAnimation } from "./viewport-animation.ts";
 import { MomentumController, type MomentumDeps } from "./momentum-controller.ts";
@@ -50,6 +51,7 @@ function createDefaultDeps() {
     viewportAnimation,
     actionLayer: actionLayerController,
     dragVisual: entityDragVisual,
+    disintegration: disintegrationController,
     perf: perfOverlay,
     haptic,
     analytics,
@@ -246,6 +248,9 @@ export class GameLoop {
         processInput: () => this.processInput(),
         getDragSelectBounds: () => this.getDragSelectBounds(),
         getMultiSelectBounds: () => this.getMultiSelectBounds(),
+        getActionLayerRenderState: () => this.#deps.actionLayer.getRenderState(),
+        getDragVisualRenderState: () => this.#deps.dragVisual.getRenderState(),
+        getDisintegrationRenderState: (now) => this.#deps.disintegration.getRenderState(now),
         isPointerDragging: () => this.#inputState.pointerDown && !!this.#dragTarget,
         isDragSelectActive: () => this.#dragSelect?.isActive === true,
         onAfterFrame: () => this.#startPendingScrollMomentum(),

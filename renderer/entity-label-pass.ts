@@ -1,4 +1,3 @@
-import { entityDragVisual } from "#engine";
 import { scheduler, type AnimationHandle } from "#lib/animation-scheduler.ts";
 import { getCssVarValue, resolveCssColor, resolveCssVarColor } from "#lib/css.ts";
 import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
@@ -192,13 +191,18 @@ export class EntityLabelPass {
    * Update shared animation state for the current frame.
    * Call once per frame before any drawLabel() calls.
    */
-  beginFrame(viewport: Viewport, canvasWidth: number, _canvasHeight: number): void {
+  beginFrame(
+    viewport: Viewport,
+    canvasWidth: number,
+    _canvasHeight: number,
+    isDragPhase: boolean,
+  ): void {
     if (!this.#pipeline) return;
 
     this.#dpr = devicePixelRatio || 1;
     this.#isMobile = canvasWidth / this.#dpr < MOBILE_BREAKPOINT;
     this.#viewport = viewport;
-    this.#syncDragAnimation();
+    this.#syncDragAnimation(isDragPhase);
     this.#isAnimating = this.#dragAnimHandle?.isActive ?? false;
   }
 
@@ -262,8 +266,8 @@ export class EntityLabelPass {
     }
   }
 
-  #syncDragAnimation(): void {
-    const nextTarget = entityDragVisual.isDragPhase() ? 1 : 0;
+  #syncDragAnimation(isDragPhase: boolean): void {
+    const nextTarget = isDragPhase ? 1 : 0;
     if (nextTarget === this.#dragAnimTarget) return;
 
     this.#dragAnimTarget = nextTarget;
