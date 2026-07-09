@@ -22,7 +22,9 @@ flowchart LR
 
   subgraph Engine["Engine — GPU-agnostic model + controller"]
     store[("CanvasStore<br/>entities • viewport • selection<br/>dirty flags • version counters")]
-    loop["GameLoop<br/>input state machines<br/>RAF loop"]
+    gameLoop["GameLoop<br/>public facade<br/>composition boundary"]
+    inputController["CanvasInputController<br/>pointer/touch/wheel<br/>gesture state machines"]
+    frameLoop["FrameLoop<br/>RAF scheduling<br/>animated media ticks<br/>render decisions"]
     controllers["Per-frame controllers<br/>momentum<br/>viewport animation<br/>action layer<br/>drag visual<br/>disintegration timing<br/>perf overlay"]
     renderState["RenderState snapshot<br/>viewport<br/>sorted entities<br/>selection<br/>dirty flags<br/>overlay state"]
     renderRuntime["Render-time controller snapshots<br/>action-layer offset/blur<br/>drag visual scale/phase<br/>disintegration overlay progress"]
@@ -63,7 +65,7 @@ flowchart LR
   app --> infinite
   app --> commands
   infinite -->|registerRenderer| rendererSvc
-  infinite -->|pointer/touch/wheel/keyboard| loop
+  infinite -->|pointer/touch/wheel/keyboard| gameLoop
   infinite -->|drop/paste files| mediaLoader
 
   knobs -->|param changes| commands
@@ -75,16 +77,19 @@ flowchart LR
   palette --> commands
   serialization --> commands
 
-  loop -->|mutates viewport/selection/entities| store
-  loop --> controllers
+  gameLoop --> inputController
+  gameLoop --> frameLoop
+  inputController -->|mutates viewport/selection/entities| store
+  inputController --> controllers
   controllers --> store
-  loop -->|per animation frame| renderState
-  loop -->|attach render-time controller data| renderRuntime
+  frameLoop --> controllers
+  frameLoop -->|per animation frame| renderState
+  frameLoop -->|attach render-time controller data| renderRuntime
   store -->|getRenderState| renderState
   renderRuntime --> renderState
 
   rendererSvc --> canvasRenderer
-  loop -->|render| canvasRenderer
+  frameLoop -->|render| canvasRenderer
   renderState --> canvasRenderer
 
   canvasRenderer --> color
@@ -108,7 +113,7 @@ flowchart LR
   commands --> upscale
   upscale -->|processed media| commands
 
-  math -. used by .-> loop
+  math -. used by .-> inputController
   math -. used by .-> canvasRenderer
   store -. selective subscriptions .-> knobs
   store -. viewport/selection snapshots .-> infinite
@@ -122,7 +127,7 @@ flowchart LR
 
   class app,infinite,knobs,mediaControls react
   class commands,rendererSvc,urlState,undo context
-  class store,loop,controllers,renderState,renderRuntime engine
+  class store,gameLoop,inputController,frameLoop,controllers,renderState,renderRuntime engine
   class mediaLoader,math,serialization,palette lib
   class canvasRenderer,color,viewportUniforms,textures,shaderRuntime,shaders,processing,composite,overlays,lensAndWlur,gpu renderer
   class screen,imageExport,videoExport,upscale output
@@ -135,16 +140,20 @@ sequenceDiagram
   autonumber
   participant IC as InfiniteCanvas
   participant GL as GameLoop
+  participant Input as CanvasInputController
+  participant Loop as FrameLoop
   participant CS as CanvasStore
   participant RS as RenderState
   participant R as InfiniteCanvasRenderer
   participant GPU as WebGPU
 
   IC->>GL: pointer/touch/wheel/keyboard events
-  GL->>CS: mutate viewport, selection, entities
-  GL->>CS: getRenderState() each RAF frame
+  GL->>Input: delegate input API calls
+  Input->>CS: mutate viewport, selection, entities
+  Loop->>Input: process hover/drag state each RAF frame
+  Loop->>CS: tick animated media and getRenderState()
   CS-->>RS: viewport + entities + dirty flags + overlay state
-  GL->>R: render(RenderState)
+  Loop->>R: render(RenderState)
   R->>R: upload dirty source textures
   R->>R: run entity shader + processing pipeline
   R->>R: composite entities with viewport transform
@@ -171,6 +180,11 @@ I would rate the current architecture about **7/10**.
   reusable across React, engine, renderer, serialization, and export code.
 - `CanvasStore` uses selective snapshots and version counters, so high-frequency
   viewport changes do not have to re-render the whole React tree.
+- `GameLoop` is now a small engine facade that composes `CanvasInputController` and
+  `FrameLoop`, so DOM callers keep a stable API while input state and RAF scheduling
+  live behind separate seams.
+- `FrameLoop` owns RAF scheduling, animated media ticks, dirty checks, render-state
+  assembly, and `renderer.render(snapshot)` calls through `CanvasRendererPort`.
 - `InfiniteCanvasRenderer` consumes a `RenderState` snapshot instead of reaching into
   React state.
 - GPU resource ownership is mostly centralized in renderer/pipeline classes.
@@ -183,12 +197,46 @@ I would rate the current architecture about **7/10**.
 - `InfiniteCanvas` is a view component, but it also wires a lot of product behavior:
   DOM events, keybind behavior, renderer configuration, canvas controls, drop/paste,
   studio file import/export, and viewport actions.
-- `GameLoop` is both an input controller and a frame scheduler. It handles pointer,
-  touch, wheel, mobile gestures, momentum, video frame tracking, RAF scheduling, and
-  renderer calls.
+- `CanvasInputController` has a clearer boundary than the old `GameLoop`: browser
+  input and gesture state machines are separated from the frame scheduler. It is still
+  a broad input controller, though: hit testing, drag-select rules, selection
+  mutations, viewport mutations, action-layer transitions, haptics/analytics, and
+  onboarding completion still happen in one place. That is acceptable as an
+  incremental seam, but later `SelectionController`, `ViewportController`, and
+  `CanvasActions` extraction would make the ownership cleaner.
 - `InfiniteCanvasRenderer` has the right ownership boundary, but internally it is a
   large facade over WebGPU setup, entity rendering, composition, overlays, caches,
   export readback, and device-loss handling.
+
+## Engine split status
+
+The first engine split is complete enough that the runtime responsibilities are no
+longer centered in one large `GameLoop` class:
+
+- `GameLoop` remains the stable public facade used by React/DOM callers. It constructs
+  dependencies, delegates input methods, wires render errors, and composes the input
+  and frame loops.
+- `CanvasInputController` owns pointer, wheel, context-menu, touch, space-pan,
+  drag-select, long-press action-layer, double-tap zoom, alpha hit-testing, and input
+  momentum handoff state.
+- `FrameLoop` owns RAF scheduling, scheduler ticks, GIF/video playback advancement,
+  video frame callback tracking, render-state enrichment, render/no-render decisions,
+  dirty-flag clearing, and calls to `CanvasRendererPort.render()`.
+- Render-time controller data crosses the engine → renderer boundary as
+  `RenderState` fields: action layer, drag visual, disintegration, drag-select bounds,
+  and multi-select bounds.
+
+The remaining blurriness is inside `CanvasInputController`, not between input and RAF.
+It currently translates input directly into `CanvasStore` mutations and controller side
+effects. A future split should be behavior-based rather than file-size-based:
+
+- selection hit/toggle/drag-select rules into a `SelectionController` or
+  `CanvasActions` selection use cases;
+- viewport pan/zoom/double-tap-fit commands into viewport actions or a
+  `ViewportController` facade over `viewportAnimation` and `MomentumController`;
+- action-layer open/transition/dismiss orchestration into an action-layer gesture
+  adapter that coordinates `actionLayerController`, `entityDragVisual`, haptics,
+  analytics, and onboarding events.
 
 ## Renderer split status
 
@@ -237,11 +285,11 @@ target architecture.
 
 Classic MVC roughly maps like this:
 
-| MVC role   | Voidmesh equivalent                                                      |
-| ---------- | ------------------------------------------------------------------------ |
-| Model      | `CanvasStore`, `ShaderCanvasEntity`, `Viewport`, palettes, shader params |
-| View       | React controls **and** the WebGPU canvas                                 |
-| Controller | `GameLoop`, canvas commands, keybind/drop/paste handlers                 |
+| MVC role   | Voidmesh equivalent                                                                                   |
+| ---------- | ----------------------------------------------------------------------------------------------------- |
+| Model      | `CanvasStore`, `ShaderCanvasEntity`, `Viewport`, palettes, shader params                              |
+| View       | React controls **and** the WebGPU canvas                                                              |
+| Controller | `GameLoop` facade, `CanvasInputController`, `FrameLoop`, canvas commands, keybind/drop/paste handlers |
 
 That mapping is useful vocabulary, but a strict MVC rewrite would not simplify the
 app much. Voidmesh has two very different views:
@@ -280,7 +328,8 @@ flowchart TD
   end
 
   subgraph Runtime["Runtime controllers: event/frame orchestration"]
-    inputController["CanvasInputController<br/>pointer/touch/wheel state machines<br/>hit testing<br/>gesture intents"]
+    gameLoopFacade["GameLoop facade<br/>stable DOM-facing API<br/>composition boundary"]
+    inputController["CanvasInputController<br/>pointer/touch/wheel state machines<br/>hit testing<br/>direct store mutations for now"]
     frameLoop["FrameLoop<br/>RAF scheduling<br/>animated media ticks<br/>per-frame controllers"]
     renderRuntime["Render-time controller snapshots<br/>action-layer<br/>drag visual<br/>disintegration progress"]
   end
@@ -305,11 +354,14 @@ flowchart TD
   end
 
   reactUI --> actions
-  canvasDOM --> inputController
+  canvasDOM --> gameLoopFacade
+  gameLoopFacade --> inputController
+  gameLoopFacade --> frameLoop
   urlAdapter <--> actions
   storageAdapter <--> actions
 
-  inputController --> actions
+  inputController -. future .-> actions
+  inputController --> store
   inputController --> viewportController
   inputController --> selectionController
   viewportController --> store
@@ -363,6 +415,7 @@ sequenceDiagram
   autonumber
   participant User
   participant DOM as Canvas DOM adapter
+  participant GL as GameLoop facade
   participant Input as CanvasInputController
   participant Actions as CanvasActions
   participant Store as CanvasStore
@@ -371,8 +424,10 @@ sequenceDiagram
   participant GPU as WebGPU
 
   User->>DOM: pointer / touch / wheel / keyboard / drop
-  DOM->>Input: normalized browser event
-  Input->>Actions: product intent<br/>select, drag, pan, zoom, add media
+  DOM->>GL: existing public event API
+  GL->>Input: delegate input handling
+  Input->>Store: current implementation mutates directly<br/>select, drag, pan, zoom
+  Input-->>Actions: future: emit product intents<br/>instead of direct store writes
   Actions->>Store: mutate canonical canvas state
   Loop->>Store: get render snapshot on RAF/media tick
   Store-->>Loop: RenderState snapshot
@@ -385,11 +440,11 @@ sequenceDiagram
 This should not be a rewrite. Keep the working public APIs and split one seam at a
 time.
 
-1. **Keep `gameLoop` as a facade, split its internals.**
-   - Extract `CanvasInputController` for pointer/touch/wheel/context-menu/space-pan
+1. **Done: keep `gameLoop` as a facade, split its internals.**
+   - `CanvasInputController` owns pointer/touch/wheel/context-menu/space-pan gesture
      state machines.
-   - Extract `FrameLoop` for RAF scheduling, animated media ticks, dirty checks, and
-     `renderer.render(snapshot)`.
+   - `FrameLoop` owns RAF scheduling, animated media ticks, dirty checks, and
+     `renderer.render(snapshot)` through `CanvasRendererPort`.
    - Existing components can still call `gameLoop.handlePointerDown()` while the
      facade delegates internally.
 
