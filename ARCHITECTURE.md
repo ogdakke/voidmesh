@@ -35,14 +35,16 @@ flowchart LR
   end
 
   subgraph Renderer["Renderer — WebGPU pixels"]
-    canvasRenderer["InfiniteCanvasRenderer<br/>WebGPU setup<br/>frame orchestration"]
+    canvasRenderer["InfiniteCanvasRenderer<br/>facade<br/>frame orchestration"]
     color["GPU color config<br/>Display P3 probe<br/>canvas/intermediate formats"]
-    textures["GPU caches<br/>entity textures<br/>source textures<br/>composition bind groups<br/>TexturePool"]
+    viewportUniforms["ViewportUniforms<br/>shared viewport matrix buffer"]
+    textures["EntityTexturePipeline<br/>source textures<br/>processed textures<br/>TexturePool"]
     shaderRuntime["EntityShaderRuntime<br/>effect dispatch"]
     shaders["Shader passes + WGSL<br/>dithering • halftone • ascii<br/>glass • blobs • melt • glitch"]
     processing["ProcessingPipeline<br/>adjustments<br/>blur<br/>bloom<br/>grain<br/>chromatic aberration"]
     composite["Composition pass<br/>viewport transform<br/>z-order compositing"]
     overlays["Canvas overlays<br/>grid<br/>selection rects<br/>entity labels/callouts<br/>action-layer blur<br/>disintegration particles"]
+    lensAndWlur["Full-canvas effects<br/>viewport lens<br/>WLUR overlay"]
     gpu[("Browser WebGPU<br/>GPUDevice<br/>GPUCanvasContext")]
   end
 
@@ -83,6 +85,7 @@ flowchart LR
   renderState --> canvasRenderer
 
   canvasRenderer --> color
+  canvasRenderer --> viewportUniforms
   canvasRenderer --> textures
   canvasRenderer --> shaderRuntime
   shaderRuntime --> shaders
@@ -90,8 +93,10 @@ flowchart LR
   processing --> textures
   canvasRenderer --> composite
   canvasRenderer --> overlays
+  canvasRenderer --> lensAndWlur
   composite --> gpu
   overlays --> gpu
+  lensAndWlur --> gpu
   gpu --> screen
 
   commands --> imageExport
@@ -116,7 +121,7 @@ flowchart LR
   class commands,rendererSvc,urlState,undo context
   class store,loop,controllers,renderState engine
   class mediaLoader,math,serialization,palette lib
-  class canvasRenderer,color,textures,shaderRuntime,shaders,processing,composite,overlays,gpu renderer
+  class canvasRenderer,color,viewportUniforms,textures,shaderRuntime,shaders,processing,composite,overlays,lensAndWlur,gpu renderer
   class screen,imageExport,videoExport,upscale output
 ```
 
@@ -182,6 +187,43 @@ I would rate the current architecture about **7/10**.
   large facade over WebGPU setup, entity rendering, composition, overlays, caches,
   export readback, and device-loss handling.
 
+## Renderer split status
+
+The renderer split is intentionally incremental. `InfiniteCanvasRenderer` is still the
+public facade, but most heavy GPU ownership has moved into smaller renderer-owned
+classes.
+
+Completed internal seams:
+
+- `EntityTexturePipeline` / `EntityShaderRuntime`: source upload, source/processed
+  texture caching, shader dispatch, and processing pipeline ownership.
+- `CompositionPass`: composition pipelines, per-entity uniform buffers, bind groups,
+  and composition cache invalidation.
+- `EntityDrawItemPreparer`: visible-entity traversal, culling, dirty/animation
+  detection, action-layer bucketing, drag visual scale, and composition draw-item
+  creation.
+- `ViewportUniforms`: shared viewport matrix buffer used by composition, labels,
+  callouts, and disintegration overlays.
+- Overlay/effect passes: `GridPass`, `SelectionRectPass`, `DisintegrationPass`,
+  `ViewportLensPass`, `ActionLayerBlurPass`, and `WlurOverlayPass`.
+- `ExportService`: image/GIF/video export helpers that render through the existing
+  entity shader path.
+
+What remains in `InfiniteCanvasRenderer` should be orchestration or public facade work:
+
+- WebGPU adapter/device/context setup and device-loss hooks.
+- Canvas sizing and swapchain texture acquisition.
+- Per-frame pass order.
+- Render pass encoding and draw submission for main entities, action-layer sharp
+  entities, overlays, viewport lens, and WLUR.
+- Public methods used by context/UI: renderer config, export helpers, entity time
+  helpers, entity texture removal, and disintegration start/cancel.
+- A few snapshot/copy helpers that still belong to later resource-lifecycle seams.
+
+`EntityDrawItemPreparer` now owns the visible-entity loop while the facade still owns
+actual render pass encoding, label drawing, and final overlay ordering. The next likely
+renderer seams are canvas surface/device setup and disintegration snapshot creation.
+
 ## Would MVC help?
 
 Classic MVC roughly maps like this:
@@ -243,10 +285,12 @@ flowchart TD
 
   subgraph Rendering["Rendering adapter: pixels only"]
     rendererPort[["CanvasRendererPort<br/>render(snapshot)<br/>snapshotEntityTexture()<br/>exportImage()"]]
-    webgpuRenderer["WebGPUCanvasRenderer<br/>implements renderer port"]
+    webgpuRenderer["InfiniteCanvasRenderer facade<br/>implements renderer port later<br/>orchestrates frame passes"]
+    viewportResources["Shared GPU resources<br/>ViewportUniforms<br/>canvas/surface state"]
     entityPipeline["Entity pipeline<br/>source upload<br/>shader runtime<br/>pre/post processing"]
     composition["Composition pipeline<br/>z-order<br/>viewport transform<br/>color space"]
-    overlays["Overlay pipeline<br/>grid<br/>selection<br/>labels/callouts<br/>action-layer blur<br/>disintegration particles"]
+    drawPrep["Entity draw preparation<br/>visibility culling<br/>dirty/animation detection<br/>action-layer bucketing"]
+    overlays["Overlay/effect passes<br/>grid<br/>selection<br/>labels/callouts<br/>action-layer blur<br/>disintegration<br/>viewport lens<br/>WLUR"]
     gpu[(Browser WebGPU)]
   end
 
@@ -272,9 +316,15 @@ flowchart TD
   renderSnapshot --> rendererPort
 
   rendererPort --> webgpuRenderer
+  webgpuRenderer --> viewportResources
+  webgpuRenderer --> drawPrep
   webgpuRenderer --> entityPipeline
   webgpuRenderer --> composition
   webgpuRenderer --> overlays
+  drawPrep --> entityPipeline
+  drawPrep --> composition
+  viewportResources --> composition
+  viewportResources --> overlays
   entityPipeline --> gpu
   composition --> gpu
   overlays --> gpu
@@ -351,8 +401,11 @@ time.
 
 5. **Keep `InfiniteCanvasRenderer` as a facade, split renderer internals only where it
    reduces complexity.**
-   - Good internal seams: `EntityRenderPipeline`, `OverlayRenderer`,
-     `GpuResourceCache`, and export/readback service.
+   - Completed seams include entity texture/shader runtime, composition, viewport
+     uniforms, export/readback, and individual overlay/effect passes.
+   - Next seams should be ownership-based, not file-size-based: canvas surface/device
+     setup, disintegration snapshot creation, then an optional overlay coordinator if
+     pass orchestration still feels noisy.
    - Do not leak WebGPU resources outside renderer-owned classes.
 
 ## What not to do
