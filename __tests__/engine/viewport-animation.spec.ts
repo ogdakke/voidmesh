@@ -1,9 +1,6 @@
 import { describe, test, expect, beforeEach } from "vitest";
 import { AnimationScheduler } from "#lib/animation-scheduler.ts";
-import {
-  ViewportAnimationController,
-  type ViewportStore,
-} from "../../engine/viewport-animation.ts";
+import { ViewportAnimationController, type ViewportStore } from "#engine";
 import type { Viewport } from "#types/canvas.ts";
 
 describe("ViewportAnimationController", () => {
