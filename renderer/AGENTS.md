@@ -5,7 +5,7 @@ WebGPU rendering and export pipelines. Turns engine state into pixels.
 ## Key Files
 
 - `canvas-renderer.ts` (~69KB) — Main renderer. WebGPU setup, entity textures, shader dispatch, composition, overlays.
-- `composition-pass.ts` + `composition-instanced.wgsl` — Final canvas composition. Adjacent regular-texture entities sharing the exact `GPUTexture` use one instanced draw; external textures and disintegration retain their dedicated paths.
+- `composition-pass.ts` + `composition-instanced.wgsl` — Final canvas composition. Adjacent regular-texture entities sharing the same current/previous texture pair use one instanced draw, including LOD crossfades; external textures and disintegration retain their dedicated paths.
 - `processing-pipeline.ts` (~49KB) — Per-entity pre/post-processing: adjustments, blur, bloom, grain, chromatic aberration. Also provides action layer blur.
 - `entity-render-size.ts` — Selects quantized screen-space render tiers from projected physical pixels; exports bypass this path and retain native dimensions.
 - `gpu-color-space.ts` — `detectGpuColorConfig()`. Probes Display P3 support at init, returns frozen `GpuColorConfig` (supportsP3, canvasFormat, canvasColorSpace, intermediateFormat, textureColorSpace).
@@ -63,7 +63,8 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 - Source textures cached by media identity/revision; static image entities sharing one asset also share one GPU texture until the final entity owner is removed
 - Stable processed image outputs are keyed by asset revision, dimensions, shader type, and full shader parameters. Identical instances share one texture; animated effects and non-image media remain entity-scoped.
 - Per-entity source/processed ownership maps point directly to their cached texture entries; retain the cache key on the shared entry for release/eviction instead of restoring a second map lookup to every visible-entity frame path.
-- Canvas media uses 64/128/256/... screen-space LOD tiers with overscan. Promotions wait for camera settle and real texture work remains transition-budgeted. Shared static-image demotions may run during camera motion; after one shared tier exists, every identical instance rebinds immediately without consuming per-entity transition slots.
+- Canvas media uses 64/128/256/... screen-space LOD tiers with overscan. Viewport changes leave an explicit settle-frame countdown reported as pending render work, so promotions converge after zoom animations without another interaction. Real texture work remains transition-budgeted; shared static-image demotions may run during camera motion, and an existing shared tier rebinds every identical instance immediately.
+- Regular-texture tier changes crossfade their current/previous resident textures for a bounded interval. Pin the previous cache entry only while fading, batch adjacent entities by the exact texture pair, and use explicit-level sampling inside per-instance WGSL branches; external video textures never enter this path.
 - Viewport preparation queries `RenderState.entitySpatialIndex`; when its bounds cover the whole scene, reuse the already z-ordered render array instead. Adjacent equal projected sizes reuse one LOD-size calculation, and unchanged static images at the desired resident tier bypass full LOD/texture resolution.
 - Recently released source and processed image tiers remain reusable inside the existing byte-budgeted LRU; reverse zooms should not synchronously rebuild a tier that is still resident.
 - Same-size processed image shader-param changes recycle the entity's unique output texture instead of allocating a replacement; shared outputs allocate a new texture to avoid clobbering siblings.
