@@ -22,6 +22,22 @@ describe("EntityTexturePipeline shared image sources", () => {
       RENDER_ATTACHMENT: 8,
     });
     vi.stubGlobal("GPUShaderStage", { FRAGMENT: 1, VERTEX: 2 });
+    vi.stubGlobal(
+      "OffscreenCanvas",
+      class {
+        readonly width: number;
+        readonly height: number;
+
+        constructor(width: number, height: number) {
+          this.width = width;
+          this.height = height;
+        }
+
+        getContext() {
+          return { drawImage: vi.fn<CanvasRenderingContext2D["drawImage"]>() };
+        }
+      },
+    );
   });
 
   afterAll(() => {
@@ -154,6 +170,42 @@ describe("EntityTexturePipeline shared image sources", () => {
       pipeline.removeEntity(entity.id);
       if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
     }
+  });
+
+  test("reuses a retained image tier when zoom returns to a previous LOD", () => {
+    const entity = createTestEntity({
+      id: "lod-return",
+      shaderParams: { showOriginal: true },
+    });
+    const detailTexture = createTexture(200, 150);
+    const overviewTexture = createTexture(100, 75);
+    const device = createDevice([detailTexture, overviewTexture]);
+    const pipeline = new EntityTexturePipeline({
+      device,
+      colorConfig,
+      texturePool: null,
+    });
+    const encoder = {} as GPUCommandEncoder;
+
+    expect(pipeline.renderEntityToTexture(entity, encoder)).toEqual({
+      kind: "texture",
+      texture: detailTexture,
+    });
+    expect(pipeline.renderEntityToTexture(entity, encoder, { width: 100, height: 75 })).toEqual({
+      kind: "texture",
+      texture: overviewTexture,
+    });
+    expect(pipeline.renderEntityToTexture(entity, encoder)).toEqual({
+      kind: "texture",
+      texture: detailTexture,
+    });
+
+    expect(device.createTexture).toHaveBeenCalledTimes(2);
+    expect(device.queue.copyExternalImageToTexture).toHaveBeenCalledTimes(2);
+    expect(detailTexture.destroy).not.toHaveBeenCalled();
+
+    pipeline.destroy();
+    if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
   });
 });
 
