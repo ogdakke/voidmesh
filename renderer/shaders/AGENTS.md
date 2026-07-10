@@ -6,7 +6,7 @@ Per-effect shader passes. Each shader type gets a class extending `ShaderPass`.
 
 - `shader-pass.ts` — Abstract base class. Defines `ShaderContext` (device, uniform buffer, sampler, palette cache, texture pool, `intermediateFormat`, `supportsP3`). Provides `writeUniforms()` (common 336-byte layout including `is_p3` flag at u[18]), `createPipeline()`, `execute()` (render pass submission). Subclasses implement `getShaderSource()` and `writeVariantUniforms()`.
 - `shader-registry.ts` — `ShaderRegistry`. Maps `ShaderType` -> `ShaderPass` instances. `applyShader()` dispatches. `applyShaderChain()` runs multiple passes with ping-pong textures.
-- `dithering-shader.ts` — Most complex. Fragment pipeline (ordered) and compute pipeline (error diffusion). Error buffers cached per entity.
+- `dithering-shader.ts` — Most complex. Fragment pipeline (ordered) and compute pipeline (error diffusion). Error buffers are cached per entity/dimension under an LRU byte budget.
 - `ascii-shader.ts` — Uses MSDF font atlas. Async atlas init.
 - `glass-shader.ts` — Three variants selected via `GlassKind`.
 - `glitch-shader.ts` — Simple pass. Maps `GlitchKind` to uniform index.
@@ -27,6 +27,7 @@ Per-effect shader passes. Each shader type gets a class extending `ShaderPass`.
 - All shaders share the same 336-byte uniform layout. Common uniforms (size, intensity, scale, shape, colors, palette, `is_p3`) written by base class `writeUniforms()`.
 - `ShaderPass.removeEntity()` owns base uniform-buffer cleanup. Overrides must release their specialized state and call `super.removeEntity()`.
 - Scratch textures may return to `TexturePool` after their final encoded read/copy; command-buffer ordering permits reuse by later passes. They remain protected from destruction until the post-submit `commitSubmitted()` boundary.
+- Error-diffusion buffers are persistent GPU resources; keep them byte-budgeted and release specialized shader state from `removeEntity()` before calling `super.removeEntity()`.
 - Render pipeline targets use `ctx.intermediateFormat` (not hardcoded `rgba8unorm`).
 - Luminance: use `select()` between BT.709 and P3 coefficients based on `uniforms.is_p3`.
 
