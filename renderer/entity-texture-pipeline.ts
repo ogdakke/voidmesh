@@ -49,6 +49,13 @@ interface GifResizeSurface {
   context: OffscreenCanvasRenderingContext2D;
 }
 
+interface LodCacheLookup {
+  width: number;
+  height: number;
+  textureCacheRevision: number;
+  isCached: boolean;
+}
+
 export interface EntityTextureResidencyStats {
   budgetBytes: number;
   residentBytes: number;
@@ -79,6 +86,8 @@ export class EntityTexturePipeline {
   #lodTransitionPixelsRemaining = 0;
   #lodTransitionsUsed = 0;
   #pendingLodWork = false;
+  #textureCacheRevision = 0;
+  readonly #lodCacheLookups = new Map<object, LodCacheLookup>();
   #entityContentRevisions = new Map<string, number>();
   #gifResizeSurfaces = new Map<string, GifResizeSurface>();
   #renderEntityView: EffectRenderEntity | null = null;
@@ -215,6 +224,7 @@ export class EntityTexturePipeline {
       needsContinuousShaderRender,
     );
     let cachedTexture = this.#processedTextures.get(processedKey);
+    const processedKeyWasCached = !!cachedTexture;
     const canReuseDirtyTexture =
       entity.mediaSource.type === MediaType.image && !needsContinuousShaderRender;
     if (
@@ -278,6 +288,7 @@ export class EntityTexturePipeline {
         this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
         this.#sourceTextures.set(sourceKey, cachedSource);
         this.#sourceBytes += cachedSource.byteSize;
+        this.#textureCacheRevision++;
       } else {
         sourceTexture = cachedSource.texture;
         cachedSource.lastUsedFrame = this.#currentFrame;
@@ -378,6 +389,7 @@ export class EntityTexturePipeline {
       entityIds: cachedTexture?.entityIds ?? recycledTexture?.entityIds ?? new Set(),
     };
     this.#processedTextures.set(processedKey, processedEntry);
+    if (!processedKeyWasCached) this.#textureCacheRevision++;
     if (createdOutputTexture) this.#processedBytes += processedEntry.byteSize;
     this.#bindEntityToProcessed(entity.id, processedKey, processedEntry);
     return processedEntry.compositionSource;
@@ -413,6 +425,7 @@ export class EntityTexturePipeline {
     this.#lodTransitionPixelsRemaining = config.rendering.lodTransitionPixelBudget;
     this.#lodTransitionsUsed = 0;
     this.#pendingLodWork = false;
+    this.#lodCacheLookups.clear();
   }
 
   resolveRenderSize(
@@ -426,9 +439,15 @@ export class EntityTexturePipeline {
       return output;
     }
 
-    const current = entity.shaderParams.showOriginal
-      ? this.getSourceEntityTexture(entity.id)
-      : this.getProcessedEntityTexture(entity.id);
+    const currentKey = entity.shaderParams.showOriginal
+      ? this.#entitySourceKeys.get(entity.id)
+      : this.#entityProcessedKeys.get(entity.id);
+    const currentEntry = currentKey
+      ? entity.shaderParams.showOriginal
+        ? this.#sourceTextures.get(currentKey)
+        : this.#processedTextures.get(currentKey)
+      : undefined;
+    const current = currentEntry?.texture;
     if (current?.width === desired.width && current.height === desired.height) {
       output.width = desired.width;
       output.height = desired.height;
@@ -439,7 +458,14 @@ export class EntityTexturePipeline {
     // instance to one is only a cache rebind, so it must not consume the transition
     // budget. Otherwise thousands of duplicates visibly converge a few entities per
     // frame even though they all use the same source and processed texture.
-    if (this.#hasCachedRenderSize(entity, desired.width, desired.height)) {
+    const lookupToken = current ?? getSharedImageAsset(entity);
+    const canReuseSharedTier =
+      !current || (currentEntry?.entityIds.size ?? 0) > 1 || this.#lodCacheLookups.has(current);
+    if (
+      lookupToken &&
+      canReuseSharedTier &&
+      this.#hasCachedRenderSizeMemoized(entity, desired.width, desired.height, lookupToken)
+    ) {
       output.width = desired.width;
       output.height = desired.height;
       return output;
@@ -460,7 +486,13 @@ export class EntityTexturePipeline {
     const pixelCost = desired.width * desired.height;
     const currentPixelCount = current.width * current.height;
     const allowAnimatedDemotion = isAnimatedEntity(entity) && pixelCost < currentPixelCount;
-    if (!this.#tryAdmitLodTransition(pixelCost, allowAnimatedDemotion)) {
+    const allowSharedImageDemotion =
+      entity.mediaSource.type === MediaType.image &&
+      (currentEntry?.entityIds.size ?? 0) > 1 &&
+      pixelCost < currentPixelCount;
+    if (
+      !this.#tryAdmitLodTransition(pixelCost, allowAnimatedDemotion || allowSharedImageDemotion)
+    ) {
       this.#pendingLodWork = true;
       output.width = current.width;
       output.height = current.height;
@@ -642,6 +674,36 @@ export class EntityTexturePipeline {
     );
   }
 
+  #hasCachedRenderSizeMemoized(
+    entity: ShaderCanvasEntity,
+    width: number,
+    height: number,
+    token: object,
+  ): boolean {
+    let lookup = this.#lodCacheLookups.get(token);
+    if (
+      lookup &&
+      lookup.width === width &&
+      lookup.height === height &&
+      lookup.textureCacheRevision === this.#textureCacheRevision
+    ) {
+      return lookup.isCached;
+    }
+
+    const isCached = this.#hasCachedRenderSize(entity, width, height);
+    if (!lookup) {
+      lookup = { width, height, textureCacheRevision: this.#textureCacheRevision, isCached };
+      this.#lodCacheLookups.set(token, lookup);
+      return isCached;
+    }
+
+    lookup.width = width;
+    lookup.height = height;
+    lookup.textureCacheRevision = this.#textureCacheRevision;
+    lookup.isCached = isCached;
+    return isCached;
+  }
+
   #tryAdmitLodTransition(pixelCost: number, allowDuringViewportMotion: boolean): boolean {
     const withinPixelBudget = pixelCost <= this.#lodTransitionPixelsRemaining;
     const canAdmit =
@@ -818,6 +880,10 @@ function getTextureByteSize(width: number, height: number, format: GPUTextureFor
     default:
       throw new Error(`Entity texture format ${format} needs an explicit byte-size mapping`);
   }
+}
+
+function getSharedImageAsset(entity: ShaderCanvasEntity): object | null {
+  return entity.mediaSource.type === MediaType.image ? entity.mediaSource.asset : null;
 }
 
 function getSourceAlphaMode(entity: ShaderCanvasEntity): MediaAlphaMode | undefined {

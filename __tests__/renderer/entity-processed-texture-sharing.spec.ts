@@ -140,16 +140,17 @@ describe("EntityTexturePipeline processed image sharing", () => {
     first.textureDirty = false;
     second.textureDirty = false;
 
-    pipeline.beginFrame(true);
+    // A shared demotion is one small render followed by cache rebinds, so it can safely
+    // start while the viewport is still moving.
+    pipeline.beginFrame(false);
     expect(pipeline.resolveRenderSize(first, { width: 100, height: 75 })).toEqual({
       width: 100,
       height: 75,
     });
     pipeline.renderEntityToTexture(first, encoder, { width: 100, height: 75 });
 
-    // The desired tier now exists. The second instance should switch immediately even
-    // while viewport-motion promotion is frozen; there is no new texture work to budget.
-    pipeline.beginFrame(false);
+    // The desired tier now exists. The second instance should switch immediately in the
+    // same frame; there is no new texture work to budget.
     expect(pipeline.resolveRenderSize(second, { width: 100, height: 75 })).toEqual({
       width: 100,
       height: 75,
