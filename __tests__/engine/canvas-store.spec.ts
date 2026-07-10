@@ -333,3 +333,39 @@ describe("canvasStore.addEntities", () => {
     expect(canvasStore.getState().entitiesDirty).toEqual(new Set([first.id, second.id]));
   });
 });
+
+describe("canvasStore.updateEntities", () => {
+  test("updates a large batch with one version notification", () => {
+    const entities = Array.from({ length: 100 }, (_, index) =>
+      createTestEntity({ id: `bulk-${index}` }),
+    );
+    canvasStore.addEntities(entities);
+    canvasStore.replaceSelection(entities.map((entity) => entity.id));
+    canvasStore.clearDirtyFlags();
+    const initialVersion = canvasStore.getState().version;
+    let subscriberCalls = 0;
+    const unsubscribe = canvasStore.subscribe(() => {
+      subscriberCalls++;
+      canvasStore.getSelectedEntitiesStable();
+    });
+
+    canvasStore.updateEntities(
+      entities.map((entity, index) => ({
+        id: entity.id,
+        updates: { position: { x: index, y: index * 2 }, textureDirty: true },
+      })),
+    );
+
+    expect(canvasStore.getState().version).toBe(initialVersion + 1);
+    expect(canvasStore.getState().entitiesDirty.size).toBe(entities.length);
+    expect(canvasStore.getState().entities.get("bulk-99")?.position).toEqual({ x: 99, y: 198 });
+    expect(subscriberCalls).toBe(1);
+    unsubscribe();
+  });
+
+  test("does not notify when no batch IDs exist", () => {
+    const initialVersion = canvasStore.getState().version;
+    canvasStore.updateEntities([{ id: "missing", updates: { textureDirty: true } }]);
+    expect(canvasStore.getState().version).toBe(initialVersion);
+  });
+});

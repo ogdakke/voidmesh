@@ -887,38 +887,34 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         );
       }
     } else {
-      // Multi-select: update all with transaction
-      if (!skipUndo) undo.beginTransaction();
-      for (const entity of entities) {
-        const previousParams = skipUndo ? null : structuredClone(entity.shaderParams);
-
-        // Deep merge params (handles nested objects at any depth)
-        const newParams: ShaderParams = deepMerge(entity.shaderParams, params);
-
-        canvasStore.updateEntity(entity.id, {
-          shaderParams: newParams,
+      const previousBatch = skipUndo
+        ? null
+        : entities.map((entity) => ({
+            id: entity.id,
+            updates: {
+              shaderParams: structuredClone(entity.shaderParams),
+              textureDirty: true,
+            },
+          }));
+      const nextBatch = entities.map((entity) => ({
+        id: entity.id,
+        updates: {
+          shaderParams: deepMerge(entity.shaderParams, params) as ShaderParams,
           textureDirty: true,
-        });
+        },
+      }));
 
-        if (!skipUndo) {
-          undo.add(
-            Command.create({
-              undo: () =>
-                canvasStore.updateEntity(entity.id, {
-                  shaderParams: previousParams!,
-                  textureDirty: true,
-                }),
-              execute: () =>
-                canvasStore.updateEntity(entity.id, {
-                  shaderParams: newParams,
-                  textureDirty: true,
-                }),
-              description: `Update params for ${entity.id}`,
-            }),
-          );
-        }
+      canvasStore.updateEntities(nextBatch);
+
+      if (previousBatch) {
+        undo.add(
+          Command.create({
+            undo: () => canvasStore.updateEntities(previousBatch),
+            execute: () => canvasStore.updateEntities(nextBatch),
+            description: `Update params for ${entities.length} entities`,
+          }),
+        );
       }
-      if (!skipUndo) undo.commitTransaction(`Update ${entities.length} entities`);
     }
 
     // Show a hint to share the URL at ~100 changes mark (single selection only)

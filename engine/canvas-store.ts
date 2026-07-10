@@ -80,6 +80,11 @@ export interface CanvasState {
   canvasCallouts: readonly CanvasCallout[];
 }
 
+export interface CanvasEntityUpdate {
+  id: string;
+  updates: Partial<ShaderCanvasEntity>;
+}
+
 // Snapshot types for selective subscriptions
 export interface ViewportSnapshot {
   viewport: Viewport;
@@ -452,6 +457,24 @@ export class CanvasStore extends Store<CanvasState> {
       this.notifySelectionChange();
       this.#logger.debug(`Updated entity: ${id}`, { entity: nextEntity, updates });
     }
+  }
+
+  /** Apply a large entity mutation set with one version bump and subscriber notification. */
+  updateEntities(batch: readonly CanvasEntityUpdate[]): void {
+    if (batch.length === 0) return;
+
+    let updatedCount = 0;
+    for (const { id, updates } of batch) {
+      const entity = this.state.entities.get(id);
+      if (!entity) continue;
+      this.state.entities.set(id, { ...entity, ...updates } as ShaderCanvasEntity);
+      this.state.entitiesDirty.add(id);
+      updatedCount++;
+    }
+
+    if (updatedCount === 0) return;
+    this.notifySelectionChange();
+    this.#logger.debug("Updated entity batch", { entityCount: updatedCount });
   }
 
   moveEntity(id: string, delta: Point): void {
