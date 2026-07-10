@@ -50,17 +50,23 @@ describe("CompositionPass draw item reuse", () => {
     };
 
     const first = pass.prepareDrawItem(options);
+    expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
     options.positionOffsetX = 12;
     const moved = pass.prepareDrawItem(options);
     expect(moved).toBe(first);
     expect(moved.offsetX).toBe(12);
     expect(device.createBindGroup).toHaveBeenCalledOnce();
+    expect(device.queue.writeBuffer).toHaveBeenCalledTimes(2);
 
     options.isSelected = true;
     const selected = pass.prepareDrawItem(options);
     expect(selected).toBe(first);
     expect(selected.isSelected).toBe(true);
-    expect(device.createBindGroup).toHaveBeenCalledTimes(2);
+    expect(device.createBindGroup).toHaveBeenCalledOnce();
+    expect(device.queue.writeBuffer).toHaveBeenCalledTimes(3);
+
+    pass.prepareDrawItem(options);
+    expect(device.queue.writeBuffer).toHaveBeenCalledTimes(3);
 
     pass.destroy();
     expect(uniformBuffer.destroy).toHaveBeenCalledOnce();

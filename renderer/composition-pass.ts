@@ -40,6 +40,20 @@ export interface DisintegrationCompositionUniforms {
   seed: number;
 }
 
+interface CompositionUniformState {
+  positionX: number;
+  positionY: number;
+  width: number;
+  height: number;
+  rotation: number;
+  isHovered: boolean;
+  isSelected: boolean;
+  debugMode: boolean;
+  positionOffsetX: number;
+  positionOffsetY: number;
+  visualScale: number;
+}
+
 function createExternalCompositionShaderSource(source: string): string {
   const rewritten = source
     .replace(
@@ -79,9 +93,7 @@ export class CompositionPass {
       texture: GPUTexture;
       textureView: GPUTextureView;
       bindGroup: GPUBindGroup;
-      lastHovered: boolean;
-      lastSelected: boolean;
-      lastDebugMode: boolean;
+      uniformState: CompositionUniformState;
       drawItem: CompositionDrawItem;
     }
   > = new Map();
@@ -90,6 +102,7 @@ export class CompositionPass {
     string,
     {
       uniformBuffer: GPUBuffer;
+      uniformState: CompositionUniformState;
       drawItem: CompositionDrawItem;
     }
   > = new Map();
@@ -246,18 +259,12 @@ export class CompositionPass {
   }
 
   prepareDrawItem(options: PrepareCompositionItemOptions): CompositionDrawItem {
-    const { entity, source, isHovered, isSelected, debugMode, positionOffsetX, positionOffsetY } =
-      options;
+    const { entity, source, isSelected, positionOffsetX, positionOffsetY } = options;
 
     if (source.kind === "texture") {
       const cached = this.#entityCompositionCache.get(entity.id);
       const textureChanged = cached?.texture !== source.texture;
-      const needsNewBindGroup =
-        !cached ||
-        textureChanged ||
-        cached.lastHovered !== isHovered ||
-        cached.lastSelected !== isSelected ||
-        cached.lastDebugMode !== debugMode;
+      const needsNewBindGroup = !cached || textureChanged;
 
       if (needsNewBindGroup) {
         const uniformBuffer =
@@ -268,7 +275,11 @@ export class CompositionPass {
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
           });
 
-        this.#writeLiveEntityUniforms(uniformBuffer, options);
+        const uniformState = this.#writeLiveEntityUniforms(
+          uniformBuffer,
+          options,
+          cached?.uniformState,
+        );
 
         const textureView =
           cached && !textureChanged ? cached.textureView : this.#getTextureView(source.texture);
@@ -303,17 +314,20 @@ export class CompositionPass {
           texture: source.texture,
           textureView,
           bindGroup,
-          lastHovered: isHovered,
-          lastSelected: isSelected,
-          lastDebugMode: debugMode,
+          uniformState,
           drawItem,
         });
 
         return drawItem;
       }
 
-      // Reuse cached bind group, but always update uniforms for drag/position changes.
-      this.#writeLiveEntityUniforms(cached.uniformBuffer, options);
+      // Viewport motion uses the shared viewport buffer. Entity uniforms only need an
+      // upload when entity-local visual state actually changed.
+      cached.uniformState = this.#writeLiveEntityUniforms(
+        cached.uniformBuffer,
+        options,
+        cached.uniformState,
+      );
       cached.drawItem.entity = entity;
       cached.drawItem.isSelected = isSelected;
       cached.drawItem.offsetX = positionOffsetX;
@@ -330,7 +344,11 @@ export class CompositionPass {
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
 
-    this.#writeLiveEntityUniforms(uniformBuffer, options);
+    const uniformState = this.#writeLiveEntityUniforms(
+      uniformBuffer,
+      options,
+      cached?.uniformState,
+    );
 
     const bindGroup = this.#device.createBindGroup({
       label: `Entity ${entity.id} external composition bind group`,
@@ -359,7 +377,13 @@ export class CompositionPass {
     drawItem.offsetY = positionOffsetY;
 
     if (!cached) {
-      this.#entityExternalCompositionCache.set(entity.id, { uniformBuffer, drawItem });
+      this.#entityExternalCompositionCache.set(entity.id, {
+        uniformBuffer,
+        uniformState,
+        drawItem,
+      });
+    } else {
+      cached.uniformState = uniformState;
     }
 
     return drawItem;
@@ -440,7 +464,11 @@ export class CompositionPass {
     this.#entityExternalCompositionCache.clear();
   }
 
-  #writeLiveEntityUniforms(uniformBuffer: GPUBuffer, options: PrepareCompositionItemOptions): void {
+  #writeLiveEntityUniforms(
+    uniformBuffer: GPUBuffer,
+    options: PrepareCompositionItemOptions,
+    previous?: CompositionUniformState,
+  ): CompositionUniformState {
     const {
       entity,
       isHovered,
@@ -450,11 +478,33 @@ export class CompositionPass {
       positionOffsetY,
       visualScale,
     } = options;
-    this.#entityFloatView[0] = entity.position.x + positionOffsetX;
-    this.#entityFloatView[1] = entity.position.y + positionOffsetY;
-    this.#entityFloatView[2] = entity.size.width;
-    this.#entityFloatView[3] = entity.size.height;
-    this.#entityFloatView[4] = (entity.rotation * Math.PI) / 180;
+    const positionX = entity.position.x;
+    const positionY = entity.position.y;
+    const width = entity.size.width;
+    const height = entity.size.height;
+    const rotation = entity.rotation;
+    if (
+      previous &&
+      previous.positionX === positionX &&
+      previous.positionY === positionY &&
+      previous.width === width &&
+      previous.height === height &&
+      previous.rotation === rotation &&
+      previous.isHovered === isHovered &&
+      previous.isSelected === isSelected &&
+      previous.debugMode === debugMode &&
+      previous.positionOffsetX === positionOffsetX &&
+      previous.positionOffsetY === positionOffsetY &&
+      previous.visualScale === visualScale
+    ) {
+      return previous;
+    }
+
+    this.#entityFloatView[0] = positionX + positionOffsetX;
+    this.#entityFloatView[1] = positionY + positionOffsetY;
+    this.#entityFloatView[2] = width;
+    this.#entityFloatView[3] = height;
+    this.#entityFloatView[4] = (rotation * Math.PI) / 180;
     this.#entityUintView[5] = isHovered ? 1 : 0;
     this.#entityUintView[6] = isSelected ? 1 : 0;
     this.#entityUintView[7] = debugMode ? 1 : 0;
@@ -464,6 +514,32 @@ export class CompositionPass {
     this.#entityFloatView[11] = 0;
 
     this.#device.queue.writeBuffer(uniformBuffer, 0, this.#entityUniformData);
+
+    const current = previous ?? {
+      positionX,
+      positionY,
+      width,
+      height,
+      rotation,
+      isHovered,
+      isSelected,
+      debugMode,
+      positionOffsetX,
+      positionOffsetY,
+      visualScale,
+    };
+    current.positionX = positionX;
+    current.positionY = positionY;
+    current.width = width;
+    current.height = height;
+    current.rotation = rotation;
+    current.isHovered = isHovered;
+    current.isSelected = isSelected;
+    current.debugMode = debugMode;
+    current.positionOffsetX = positionOffsetX;
+    current.positionOffsetY = positionOffsetY;
+    current.visualScale = visualScale;
+    return current;
   }
 
   #getTextureView(texture: GPUTexture): GPUTextureView {
