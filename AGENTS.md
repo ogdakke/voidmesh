@@ -54,7 +54,7 @@ bun run test -- __tests__/engine/action-layer-controller.spec.ts
 # Add `-t "test name"` to target a single test, or use `bun run test:watch -- <path>` while iterating.
 ```
 
-The opt-in real Chrome/WebGPU many-entity suite lives in `bench/`. Run it with `bun run bench:render:record -- --suite many-entity`; results include frame timings, rendered counts, decoded estimates, texture residency, allocations, uploads, and evictions. The `zoom-61-unique-mixed-round-trip` and processed variant reproduce the detailed-target → full-overview → target mixed image/video gesture with true RAF pacing.
+The opt-in real Chrome/WebGPU many-entity suite lives in `bench/`. Run it with `bun run bench:render:record -- --suite many-entity`; results include frame timings, rendered counts, decoded estimates, texture residency, allocations, uploads, and evictions. `many-131072-shared-processed-overview-pan` guards the 50k+ visible low-zoom path. The `zoom-61-unique-mixed-round-trip` and processed variant reproduce the detailed-target → full-overview → target mixed image/video gesture with true RAF pacing.
 
 ## Key Patterns
 

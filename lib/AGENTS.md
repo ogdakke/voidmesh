@@ -6,6 +6,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 
 - `config/index.ts` (~25KB) — Central config: feature definitions, defaults, visibility rules, rendering/export settings. Imported as `#config`.
 - `canvas-math.ts` (~15KB) — Coordinate transforms, bounds math, viewport matrices, grid calculations.
+- `entity-spatial-index.ts` — Incremental multi-resolution entity AABB index. Stores each entity in one size-appropriate center bucket and returns exact z-ordered bounds queries without per-query deduplication sets.
 - `store.ts` — `Store<T>` base class for `useSyncExternalStore`. Provides `createSnapshot(versionKey, create)` and `getComputed(key, versionKey, compute)` with structural sharing via `shallowEqual`.
 - `undo.ts` — Command pattern. `Command.create({ execute, undo, onEvict })`. `Undo` class with size limits and transaction grouping. Singleton: `undo`.
 - `media-loader.ts` — Loads/parses images, videos, GIFs, SVGs. Extracts palettes and frame rates.
@@ -32,6 +33,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - Image assets record alpha capability from their encoded format; JPEG assets are known opaque so the renderer can omit alpha-mask intermediates.
 - Config is a frozen object. Do not mutate at runtime.
 - Hot-path bounds helpers accept caller-owned output objects; renderer culling must pass scratch `Bounds` instead of allocating one per entity.
+- Spatial queries reuse caller-owned result arrays. Update the index whenever entity position, size, rotation, z-index, insertion, or removal changes.
 
 ## Anti-Patterns
 

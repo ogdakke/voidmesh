@@ -63,6 +63,7 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 - Source textures cached by media identity/revision; static image entities sharing one asset also share one GPU texture until the final entity owner is removed
 - Stable processed image outputs are keyed by asset revision, dimensions, shader type, and full shader parameters. Identical instances share one texture; animated effects and non-image media remain entity-scoped.
 - Canvas media uses 64/128/256/... screen-space LOD tiers with overscan. Promotions wait for camera settle and real texture work remains transition-budgeted. Shared static-image demotions may run during camera motion; after one shared tier exists, every identical instance rebinds immediately without consuming per-entity transition slots.
+- Viewport preparation queries `RenderState.entitySpatialIndex`; never scan the full entity array during pan/zoom. Adjacent equal projected sizes reuse one LOD-size calculation, and unchanged static images at the desired resident tier bypass full LOD/texture resolution.
 - Recently released source and processed image tiers remain reusable inside the existing byte-budgeted LRU; reverse zooms should not synchronously rebuild a tier that is still resident.
 - Same-size processed image shader-param changes recycle the entity's unique output texture instead of allocating a replacement; shared outputs allocate a new texture to avoid clobbering siblings.
 - Original videos stay on direct external-texture composition so playback and media controls remain continuous. Processed videos use screen-space output LOD, and small outputs shorten the bloom mip chain rather than pausing media.
@@ -70,7 +71,7 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 - Regular-texture composition packs entity transforms and visual flags into one reusable storage buffer. Batch only adjacent entities with the exact same `GPUTexture` so draw order remains unchanged; shader params need not match independently because processing is already baked into that texture.
 - External video textures retain per-entity uniforms and bind groups so direct `GPUExternalTexture` playback never copies into regular textures. Disintegration also retains its non-instanced composition path.
 - Grow the composition instance buffer geometrically and append disjoint ranges for each render phase in a frame. Do not restore per-entity GPU uniform buffers, bind groups, or temporary instance objects for regular textures.
-- Entity draw preparation reuses result arrays, composition-option scratch, and bounds scratch. Do not restore per-entity object construction to the pan/zoom path.
+- Entity draw preparation reuses result arrays and composition-option scratch. Regular composition wrappers are weakly keyed by entity identity; do not restore per-frame object construction or string-keyed lookups to the pan/zoom path.
 - `TexturePool` retains at most 64 MiB of idle transient textures across dimensions/usages. Release scratch after its final encoded use for ordered reuse, but apply destruction limits only in `commitSubmitted()` after `queue.submit()`.
 - Image source changes require a new asset revision. Entity removal releases its source-cache ownership without destroying textures still used by sibling instances.
 
