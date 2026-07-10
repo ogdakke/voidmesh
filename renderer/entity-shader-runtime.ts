@@ -305,6 +305,7 @@ export class EntityShaderRuntime {
   }
 
   flushTextureReleases(): void {
+    this.#texturePool?.commitSubmitted();
     for (const release of this.#pendingTextureReleases) {
       release.texture.destroy();
     }

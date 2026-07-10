@@ -13,6 +13,9 @@ describe("TexturePool byte budget", () => {
     pool.nextFrame();
     pool.release(second, 100, 100, 1);
 
+    expect(first.destroy).not.toHaveBeenCalled();
+    pool.commitSubmitted();
+
     expect(first.destroy).toHaveBeenCalledOnce();
     expect(second.destroy).not.toHaveBeenCalled();
     expect(pool.getStats()).toEqual({
@@ -35,8 +38,37 @@ describe("TexturePool byte budget", () => {
 
     pool.release(texture, 100, 100, 1);
 
+    expect(texture.destroy).not.toHaveBeenCalled();
+    pool.commitSubmitted();
+
     expect(texture.destroy).toHaveBeenCalledOnce();
     expect(pool.getStats()).toMatchObject({ residentBytes: 0, textureCount: 0 });
+  });
+
+  test("reuses a released texture within one submission without making it destroyable", () => {
+    const texture = createTexture();
+    const pool = new TexturePool(createDevice(), "rgba16float", 0);
+
+    pool.release(texture, 100, 100, 1);
+    expect(pool.acquire(100, 100, 1)).toBe(texture);
+    expect(texture.destroy).not.toHaveBeenCalled();
+
+    pool.release(texture, 100, 100, 1);
+    expect(texture.destroy).not.toHaveBeenCalled();
+    pool.commitSubmitted();
+    expect(texture.destroy).toHaveBeenCalledOnce();
+  });
+
+  test("defers per-key overflow destruction until submission commit", () => {
+    const textures = Array.from({ length: 5 }, () => createTexture());
+    const pool = new TexturePool(createDevice(), "rgba16float", 1_000_000);
+
+    for (const texture of textures) pool.release(texture, 10, 10, 1);
+    expect(textures.every((texture) => !vi.mocked(texture.destroy).mock.calls.length)).toBe(true);
+
+    pool.commitSubmitted();
+    expect(textures[0]!.destroy).toHaveBeenCalledOnce();
+    expect(pool.getStats().textureCount).toBe(4);
   });
 });
 

@@ -213,6 +213,7 @@ export class ExportService {
     sourceTexture.destroy();
     if (this.#texturePool) {
       this.#texturePool.release(outputTexture, width, height, outputUsage);
+      this.#texturePool.commitSubmitted();
     } else {
       outputTexture.destroy();
     }

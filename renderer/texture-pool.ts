@@ -77,27 +77,40 @@ export class TexturePool {
       this.#pool.set(key, pool);
     }
 
-    // Limit pool size per key to prevent unbounded growth
-    if (pool.length < 4) {
-      const byteSize = getTextureByteSize(width, height, this.#format);
-      if (byteSize > this.#budgetBytes) {
-        texture.destroy();
-        if (pool.length === 0) this.#pool.delete(key);
-        return;
+    // The texture may still be referenced by the command buffer currently being encoded.
+    // Keep it recyclable, but never destroy released resources before commitSubmitted(),
+    // which callers invoke strictly after queue.submit().
+    const byteSize = getTextureByteSize(width, height, this.#format);
+    pool.push({ texture, lastUsedFrame: this.#currentFrame, byteSize });
+    this.#residentBytes += byteSize;
+  }
+
+  /** Apply retention limits after the encoder containing released textures was submitted. */
+  commitSubmitted(): void {
+    for (const [key, pool] of this.#pool) {
+      for (let index = pool.length - 1; index >= 0; index--) {
+        const entry = pool[index]!;
+        if (entry.byteSize <= this.#budgetBytes) continue;
+        pool.splice(index, 1);
+        entry.texture.destroy();
+        this.#residentBytes -= entry.byteSize;
       }
-      pool.push({ texture, lastUsedFrame: this.#currentFrame, byteSize });
-      this.#residentBytes += byteSize;
-      this.#trimToBudget();
-    } else {
-      // Pool full, destroy the texture
-      texture.destroy();
+
+      while (pool.length > 4) {
+        const entry = pool.shift()!;
+        entry.texture.destroy();
+        this.#residentBytes -= entry.byteSize;
+      }
+      if (pool.length === 0) this.#pool.delete(key);
     }
+    this.#trimToBudget();
   }
 
   /**
    * Call at end of each frame to advance frame counter and cleanup stale textures
    */
   nextFrame(): void {
+    this.commitSubmitted();
     this.#currentFrame++;
 
     // Cleanup stale textures every 60 frames
