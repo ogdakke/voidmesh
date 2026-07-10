@@ -448,20 +448,12 @@ export class CanvasStore extends Store<CanvasState> {
   }
 
   updateEntity(id: string, updates: Partial<ShaderCanvasEntity>): void {
-    const entity = this.state.entities.get(id);
-    if (entity) {
-      const nextEntity = { ...entity, ...updates } as ShaderCanvasEntity;
-      this.state.entities.set(id, nextEntity);
-      // TODO: if z-index can change, we should re-sort the entityIds array here (can't change zindex currently)
-      this.state.entitiesDirty.add(id);
-      this.notifySelectionChange();
-      this.#logger.debug(`Updated entity: ${id}`, { entity: nextEntity, updates });
-    }
+    this.updateEntities([{ id, updates }]);
   }
 
   /** Apply a large entity mutation set with one version bump and subscriber notification. */
-  updateEntities(batch: readonly CanvasEntityUpdate[]): void {
-    if (batch.length === 0) return;
+  updateEntities(batch: readonly CanvasEntityUpdate[]): number {
+    if (batch.length === 0) return 0;
 
     let updatedCount = 0;
     for (const { id, updates } of batch) {
@@ -472,9 +464,10 @@ export class CanvasStore extends Store<CanvasState> {
       updatedCount++;
     }
 
-    if (updatedCount === 0) return;
+    if (updatedCount === 0) return 0;
     this.notifySelectionChange();
     this.#logger.debug("Updated entity batch", { entityCount: updatedCount });
+    return updatedCount;
   }
 
   moveEntity(id: string, delta: Point): void {

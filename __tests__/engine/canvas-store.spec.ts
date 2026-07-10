@@ -349,7 +349,7 @@ describe("canvasStore.updateEntities", () => {
       canvasStore.getSelectedEntitiesStable();
     });
 
-    canvasStore.updateEntities(
+    const updatedCount = canvasStore.updateEntities(
       entities.map((entity, index) => ({
         id: entity.id,
         updates: { position: { x: index, y: index * 2 }, textureDirty: true },
@@ -357,6 +357,7 @@ describe("canvasStore.updateEntities", () => {
     );
 
     expect(canvasStore.getState().version).toBe(initialVersion + 1);
+    expect(updatedCount).toBe(entities.length);
     expect(canvasStore.getState().entitiesDirty.size).toBe(entities.length);
     expect(canvasStore.getState().entities.get("bulk-99")?.position).toEqual({ x: 99, y: 198 });
     expect(subscriberCalls).toBe(1);
@@ -365,7 +366,9 @@ describe("canvasStore.updateEntities", () => {
 
   test("does not notify when no batch IDs exist", () => {
     const initialVersion = canvasStore.getState().version;
-    canvasStore.updateEntities([{ id: "missing", updates: { textureDirty: true } }]);
+    expect(canvasStore.updateEntities([{ id: "missing", updates: { textureDirty: true } }])).toBe(
+      0,
+    );
     expect(canvasStore.getState().version).toBe(initialVersion);
   });
 });
