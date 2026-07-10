@@ -655,6 +655,34 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     );
   };
 
+  const updateShaderParamsBatch = (
+    entities: readonly ShaderCanvasEntity[],
+    createParams: (entity: ShaderCanvasEntity) => ShaderParams,
+    description: string,
+  ) => {
+    const previousBatch: CanvasEntityUpdate[] = [];
+    const nextBatch: CanvasEntityUpdate[] = [];
+    for (const entity of entities) {
+      previousBatch.push({
+        id: entity.id,
+        updates: { shaderParams: entity.shaderParams, textureDirty: true },
+      });
+      nextBatch.push({
+        id: entity.id,
+        updates: { shaderParams: createParams(entity), textureDirty: true },
+      });
+    }
+
+    canvasStore.updateEntities(nextBatch);
+    undo.add(
+      Command.create({
+        undo: () => canvasStore.updateEntities(previousBatch),
+        execute: () => canvasStore.updateEntities(nextBatch),
+        description,
+      }),
+    );
+  };
+
   const removeEntity = (id: string) => {
     // Get entity before removal - deep clone to preserve all data including video element reference
     const entity = canvasStore.getState().entities.get(id);
@@ -924,7 +952,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     if (entities.length === 1) {
       // Single selection: update entity directly
       const entity = entities[0]!;
-      const previousParams = skipUndo ? null : structuredClone(entity.shaderParams);
+      const previousParams = skipUndo ? null : entity.shaderParams;
 
       // Deep merge params (handles nested objects at any depth)
       const newParams = deepMerge(entity.shaderParams, params);
@@ -957,7 +985,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         : entities.map((entity) => ({
             id: entity.id,
             updates: {
-              shaderParams: structuredClone(entity.shaderParams),
+              shaderParams: entity.shaderParams,
               textureDirty: true,
             },
           }));
@@ -1521,12 +1549,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         }),
       );
 
-      for (const entity of entities) {
-        updateEntity(entity.id, {
-          shaderParams: { ...entity.shaderParams, palette },
-          textureDirty: true,
-        });
-      }
+      updateShaderParamsBatch(
+        entities,
+        (entity) => ({ ...entity.shaderParams, palette }),
+        `Apply custom palette to ${entities.length} entities`,
+      );
 
       if (ownTransaction) undo.commitTransaction("Update custom palette");
       return;
@@ -1555,18 +1582,21 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         }),
       );
 
-      for (const entity of entities) {
-        updateEntity(entity.id, {
-          shaderParams: { ...entity.shaderParams, palette: newPalette },
-          textureDirty: true,
-        });
-      }
+      updateShaderParamsBatch(
+        entities,
+        (entity) => ({ ...entity.shaderParams, palette: newPalette }),
+        `Apply new palette to ${entities.length} entities`,
+      );
 
       if (ownTransaction) undo.commitTransaction("Create custom palette");
       return;
     }
 
-    updateSelectedEntityParams({ palette });
+    updateShaderParamsBatch(
+      entities,
+      (entity) => ({ ...entity.shaderParams, palette }),
+      `Change palette for ${entities.length} entities`,
+    );
   };
 
   const uploadPalette = async (files: FileList | File | null) => {
@@ -1609,12 +1639,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         }),
       );
 
-      for (const entity of entities) {
-        updateEntity(entity.id, {
-          shaderParams: { ...entity.shaderParams, palette: extractedPalette },
-          textureDirty: true,
-        });
-      }
+      updateShaderParamsBatch(
+        entities,
+        (entity) => ({ ...entity.shaderParams, palette: extractedPalette }),
+        `Apply extracted palette to ${entities.length} entities`,
+      );
 
       if (ownTransaction) undo.commitTransaction("Extract palette from image");
     } catch (err) {
