@@ -71,8 +71,6 @@ export class EntityDrawItemPreparer {
       debugMode,
     } = options;
 
-    entities.sort((a, b) => a.zIndex - b.zIndex);
-
     const entityDrawItems = this.#entityDrawItems;
     const actionLayerDrawItems = this.#actionLayerDrawItems;
     entityDrawItems.length = 0;
