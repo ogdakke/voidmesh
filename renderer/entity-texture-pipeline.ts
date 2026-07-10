@@ -33,6 +33,7 @@ interface CachedEntityTexture {
   byteSize: number;
   lastUsedFrame: number;
   contentRevision: number;
+  pinnedUntilFrame: number;
 }
 
 interface CachedSourceTexture extends CachedEntityTexture {
@@ -280,6 +281,7 @@ export class EntityTexturePipeline {
           byteSize: getTextureByteSize(width, height, "rgba8unorm"),
           lastUsedFrame: this.#currentFrame,
           contentRevision,
+          pinnedUntilFrame: -1,
           entityIds: new Set(),
         };
         this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
@@ -385,6 +387,7 @@ export class EntityTexturePipeline {
       byteSize: getTextureByteSize(width, height, this.#colorConfig.intermediateFormat),
       lastUsedFrame: this.#currentFrame,
       contentRevision,
+      pinnedUntilFrame: cachedTexture?.pinnedUntilFrame ?? recycledTexture?.pinnedUntilFrame ?? -1,
       entityIds: cachedTexture?.entityIds ?? recycledTexture?.entityIds ?? new Set(),
     };
     this.#processedTextures.set(processedKey, processedEntry);
@@ -530,9 +533,21 @@ export class EntityTexturePipeline {
   }
 
   /** Keep a previous regular-texture tier resident while composition crossfades it. */
-  touchCompositionTexture(texture: GPUTexture): void {
+  pinCompositionTexture(texture: GPUTexture): boolean {
     const entry = this.#cacheEntriesByTexture.get(texture);
-    if (entry) entry.lastUsedFrame = this.#currentFrame;
+    if (!entry) return false;
+    const isResident =
+      this.#processedTextures.get(entry.key) === entry ||
+      this.#sourceTextures.get(entry.key) === entry;
+    if (!isResident) return false;
+
+    entry.lastUsedFrame = this.#currentFrame;
+    const transitionFrames = Math.ceil(config.rendering.lodCrossfadeDurationMs / (1000 / 120));
+    entry.pinnedUntilFrame = Math.max(
+      entry.pinnedUntilFrame,
+      this.#currentFrame + transitionFrames + 2,
+    );
+    return true;
   }
 
   endFrame(): void {
@@ -805,7 +820,11 @@ export class EntityTexturePipeline {
     this.#entityProcessedBindings.delete(entityId);
 
     cachedProcessed.entityIds.delete(entityId);
-    if (destroyOrphan && cachedProcessed.entityIds.size === 0) {
+    if (
+      destroyOrphan &&
+      cachedProcessed.entityIds.size === 0 &&
+      cachedProcessed.pinnedUntilFrame < this.#currentFrame
+    ) {
       cachedProcessed.texture.destroy();
       this.#processedTextures.delete(cachedProcessed.key);
       this.#processedBytes -= cachedProcessed.byteSize;
@@ -833,7 +852,11 @@ export class EntityTexturePipeline {
     this.#entitySourceBindings.delete(entityId);
 
     cachedSource.entityIds.delete(entityId);
-    if (destroyOrphan && cachedSource.entityIds.size === 0) {
+    if (
+      destroyOrphan &&
+      cachedSource.entityIds.size === 0 &&
+      cachedSource.pinnedUntilFrame < this.#currentFrame
+    ) {
       cachedSource.texture.destroy();
       this.#sourceTextures.delete(cachedSource.key);
       this.#sourceBytes -= cachedSource.byteSize;
@@ -850,12 +873,18 @@ export class EntityTexturePipeline {
     > = [];
 
     for (const [key, cached] of this.#processedTextures) {
-      if (cached.lastUsedFrame !== this.#currentFrame) {
+      if (
+        cached.lastUsedFrame !== this.#currentFrame &&
+        cached.pinnedUntilFrame < this.#currentFrame
+      ) {
         candidates.push({ kind: "processed", key, cached });
       }
     }
     for (const [key, cached] of this.#sourceTextures) {
-      if (cached.lastUsedFrame !== this.#currentFrame) {
+      if (
+        cached.lastUsedFrame !== this.#currentFrame &&
+        cached.pinnedUntilFrame < this.#currentFrame
+      ) {
         candidates.push({ kind: "source", key, cached });
       }
     }

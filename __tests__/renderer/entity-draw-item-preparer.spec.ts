@@ -15,7 +15,7 @@ describe("EntityDrawItemPreparer LOD transitions", () => {
     const lowTexture = createTexture(128, 128);
     const highTexture = createTexture(512, 512);
     let sourceTexture = lowTexture;
-    const touchCompositionTexture = vi.fn<(texture: GPUTexture) => void>();
+    const pinCompositionTexture = vi.fn<(texture: GPUTexture) => boolean>(() => true);
     const texturePipeline = {
       needsContinuousRenderForEntity: vi.fn<
         EntityTexturePipeline["needsContinuousRenderForEntity"]
@@ -23,7 +23,7 @@ describe("EntityDrawItemPreparer LOD transitions", () => {
       getReusableStaticCompositionSource: vi.fn<
         EntityTexturePipeline["getReusableStaticCompositionSource"]
       >(() => ({ kind: "texture", texture: sourceTexture })),
-      touchCompositionTexture,
+      pinCompositionTexture,
     } as unknown as EntityTexturePipeline;
     let preparedTexture: GPUTexture | null = null;
     const compositionPass = {
@@ -61,7 +61,7 @@ describe("EntityDrawItemPreparer LOD transitions", () => {
     expect(prepared.entityDrawItems[0]?.previousTexture).toBe(lowTexture);
     expect(prepared.entityDrawItems[0]?.lodBlend).toBe(0);
     expect(preparer.hasActiveLodTransitions).toBe(true);
-    expect(touchCompositionTexture).toHaveBeenCalledWith(lowTexture);
+    expect(pinCompositionTexture).toHaveBeenCalledWith(lowTexture);
 
     now.mockReturnValue(170);
     prepared = prepare(preparer, entity, spatialIndex);
@@ -76,7 +76,67 @@ describe("EntityDrawItemPreparer LOD transitions", () => {
 
     if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
   });
+
+  test("cancels a crossfade when its previous tier is no longer resident", () => {
+    const entity = createTestEntity({ id: "evicted-lod-crossfade" });
+    entity.textureDirty = false;
+    const lowTexture = createTexture(128, 128);
+    const highTexture = createTexture(512, 512);
+    let sourceTexture = lowTexture;
+    let preparedTexture: GPUTexture | null = null;
+    const texturePipeline = {
+      needsContinuousRenderForEntity: vi.fn<
+        EntityTexturePipeline["needsContinuousRenderForEntity"]
+      >(() => false),
+      getReusableStaticCompositionSource: vi.fn<
+        EntityTexturePipeline["getReusableStaticCompositionSource"]
+      >(() => ({ kind: "texture", texture: sourceTexture })),
+      pinCompositionTexture: vi.fn<EntityTexturePipeline["pinCompositionTexture"]>(() => false),
+    } as unknown as EntityTexturePipeline;
+    const compositionPass = {
+      getPreparedRegularTexture: vi.fn<CompositionPass["getPreparedRegularTexture"]>(
+        () => preparedTexture,
+      ),
+      prepareDrawItem: vi.fn<CompositionPass["prepareDrawItem"]>((options) => {
+        preparedTexture = options.source.kind === "texture" ? options.source.texture : null;
+        return createDrawItem(options, preparedTexture);
+      }),
+    } as unknown as CompositionPass;
+    const preparer = new EntityDrawItemPreparer({ texturePipeline, compositionPass });
+    const spatialIndex = new EntitySpatialIndex();
+    spatialIndex.upsert(entity);
+    vi.spyOn(performance, "now").mockReturnValue(0);
+    prepare(preparer, entity, spatialIndex);
+
+    sourceTexture = highTexture;
+    const prepared = prepare(preparer, entity, spatialIndex);
+
+    expect(prepared.entityDrawItems[0]?.previousTexture).toBeNull();
+    expect(prepared.entityDrawItems[0]?.lodBlend).toBe(1);
+    expect(preparer.hasActiveLodTransitions).toBe(false);
+
+    if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
+  });
 });
+
+function createDrawItem(
+  options: Parameters<CompositionPass["prepareDrawItem"]>[0],
+  texture: GPUTexture | null,
+) {
+  return {
+    bindGroup: null,
+    texture,
+    pipeline: options.source.kind,
+    entity: options.entity,
+    isSelected: options.isSelected,
+    debugMode: options.debugMode,
+    offsetX: options.positionOffsetX,
+    offsetY: options.positionOffsetY,
+    visualScale: options.visualScale,
+    previousTexture: options.previousTexture,
+    lodBlend: options.lodBlend,
+  };
+}
 
 function prepare(
   preparer: EntityDrawItemPreparer,

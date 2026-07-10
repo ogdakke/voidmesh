@@ -194,11 +194,14 @@ export class EntityDrawItemPreparer {
             (now - lodTransition.transitionStart) / config.rendering.lodCrossfadeDurationMs,
           );
           if (linearProgress < 1) {
-            previousTexture = lodTransition.previousTexture;
-            lodBlend = linearProgress * linearProgress * (3 - 2 * linearProgress);
-            this.#texturePipeline.touchCompositionTexture(previousTexture);
-            this.#hasActiveLodTransitions = true;
-            hasAnimatingContent = true;
+            if (this.#texturePipeline.pinCompositionTexture(lodTransition.previousTexture)) {
+              previousTexture = lodTransition.previousTexture;
+              lodBlend = linearProgress * linearProgress * (3 - 2 * linearProgress);
+              this.#hasActiveLodTransitions = true;
+              hasAnimatingContent = true;
+            } else {
+              this.#lodTransitions.delete(entity);
+            }
           } else {
             this.#lodTransitions.delete(entity);
           }
