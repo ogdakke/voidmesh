@@ -461,6 +461,32 @@ describe("canvasStore spatial queries", () => {
   });
 });
 
+describe("canvasStore.removeEntities", () => {
+  test("compacts entity and selection state with one notification", () => {
+    const entities = Array.from({ length: 1_000 }, (_, index) =>
+      createTestEntity({ id: `remove-${index}`, zIndex: index }),
+    );
+    canvasStore.addEntities(entities);
+    const removedIds = new Set(entities.filter((_, index) => index % 2 === 0).map(({ id }) => id));
+    canvasStore.replaceSelection(entities.map(({ id }) => id));
+    let notifications = 0;
+    const unsubscribe = canvasStore.subscribe(() => notifications++);
+
+    expect(canvasStore.removeEntities(removedIds)).toBe(500);
+
+    expect(notifications).toBe(1);
+    expect(canvasStore.getState().entityIds).toEqual(
+      entities.filter((_, index) => index % 2 === 1).map(({ id }) => id),
+    );
+    expect(canvasStore.getSelectedEntityIds().size).toBe(500);
+    expect(
+      canvasStore.queryEntitiesInBounds({ x: -1, y: -1, width: 1_000, height: 1_000 }, []),
+    ).toEqual(entities.filter((_, index) => index % 2 === 1));
+
+    unsubscribe();
+  });
+});
+
 describe("canvasStore.updateEntities", () => {
   test("updates a large batch with one version notification", () => {
     const entities = Array.from({ length: 100 }, (_, index) =>

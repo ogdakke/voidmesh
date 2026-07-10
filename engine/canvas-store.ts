@@ -589,6 +589,37 @@ export class CanvasStore extends Store<CanvasState> {
     this.notifySelectionChange();
   }
 
+  removeEntities(entityIds: ReadonlySet<string>): number {
+    if (entityIds.size === 0) return 0;
+
+    let removedCount = 0;
+    for (const id of entityIds) {
+      if (!this.state.entities.delete(id)) continue;
+      this.#entitySpatialIndex.remove(id);
+      this.state.entitiesDirty.delete(id);
+      removedCount++;
+    }
+    if (removedCount === 0) return 0;
+
+    const orderedIds = this.state.entityIds;
+    let writeIndex = 0;
+    for (let readIndex = 0; readIndex < orderedIds.length; readIndex++) {
+      const id = orderedIds[readIndex]!;
+      if (!entityIds.has(id)) orderedIds[writeIndex++] = id;
+    }
+    orderedIds.length = writeIndex;
+
+    const nextSelection = new Set<string>();
+    for (const id of this.state.selectedEntityIds) {
+      if (!entityIds.has(id)) nextSelection.add(id);
+    }
+    this.state.selectedEntityIds = nextSelection;
+    this.state.selectionDirty = true;
+    this.notifySelectionChange();
+    this.#logger.debug("Removed entity batch", { entityCount: removedCount });
+    return removedCount;
+  }
+
   // Interaction state
   setHoveredEntity(id: string | null): void {
     this.state.hoveredEntityId = id;
@@ -638,7 +669,12 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.selectedEntityIds = newSelection;
     this.state.selectionDirty = true;
     completeOnboardingStarterSelectionFromEvent(this.state.selectedEntityIds);
-    this.#logger.debug(`Selection replaced with: ${ids.join(", ")}`);
+    this.#logger.debug("Selection replaced", {
+      entityCount: newSelection.size,
+      requestedCount: ids.length,
+      firstEntityId: ids[0] ?? null,
+      lastEntityId: ids.at(-1) ?? null,
+    });
     this.notifySelectionChange();
   }
 

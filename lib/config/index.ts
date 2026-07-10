@@ -514,6 +514,8 @@ export const config = {
     minZoom: 0.01,
     maxZoom: 10,
     staggerMultiplier: 60,
+    /** Maximum deletion batch that may allocate per-entity disintegration snapshots. */
+    fancyDeleteMaxBatchSize: 32,
     /** Gap between entities in layout (world pixels). Equals SNAP_GRID_SIZE (1 snap cell). */
     layoutGap: 125,
     /** Maximum columns in grid layout */

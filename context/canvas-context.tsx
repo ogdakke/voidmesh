@@ -85,6 +85,31 @@ function formatErrorMessage(error: unknown): string {
   return "Unknown error";
 }
 
+function captureEntityForDeletion(entity: ShaderCanvasEntity): ShaderCanvasEntity {
+  // The entity leaves live store/renderer state synchronously and cannot be edited
+  // until undo restores it. Any edit after undo clears the redo branch, so retaining
+  // this object is both stable and dramatically cheaper than cloning shader params.
+  return entity;
+}
+
+function pauseDeletedEntity(entity: ShaderCanvasEntity): boolean {
+  const wasPlaying = entity.playback?.isPlaying ?? false;
+  if (entity.mediaSource.type === MediaType.video) {
+    entity.mediaSource.videoElement.pause();
+  } else if (isGifEntity(entity) && entity.playback) {
+    entity.playback.isPlaying = false;
+  }
+  return wasPlaying;
+}
+
+function resumeDeletedEntity(entity: ShaderCanvasEntity, wasPlaying: boolean): void {
+  if (!wasPlaying) return;
+  if (entity.mediaSource.type === MediaType.video) {
+    entity.mediaSource.videoElement.play().catch((error) => logger.error(error));
+  }
+  if (entity.playback) entity.playback.isPlaying = true;
+}
+
 function isFirefoxExternalTextureCorsError(error: unknown): boolean {
   if (!(error instanceof DOMException)) return false;
 
@@ -636,25 +661,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     if (!entity) return;
 
     // Clone the entity but keep the video element reference (we need it for restore)
-    const entityCopy: ShaderCanvasEntity = {
-      ...entity,
-      position: { ...entity.position },
-      size: { ...entity.size },
-      shaderParams: structuredClone(entity.shaderParams),
-      originalPalette: entity.originalPalette ? structuredClone(entity.originalPalette) : undefined,
-      // Keep mediaSource as-is (references to videoElement/imageBitmap are needed for restore)
-      mediaSource: entity.mediaSource as any,
-    };
+    const entityCopy = captureEntityForDeletion(entity);
 
     // Capture playback state before pausing (entityCopy.playback is a shared reference)
-    const wasPlaying = entity.playback?.isPlaying ?? false;
-
-    // For animated entities, pause but DON'T destroy resources yet
-    if (entity.mediaSource.type === MediaType.video) {
-      entity.mediaSource.videoElement.pause();
-    } else if (isGifEntity(entity) && entity.playback) {
-      entity.playback.isPlaying = false;
-    }
+    const wasPlaying = pauseDeletedEntity(entity);
 
     // Snapshot the entity's rendered texture and start dust animation overlay.
     // This copies the GPU texture so the entity can be removed immediately.
@@ -684,27 +694,82 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           // Restore the entity with all its resources
           canvasStore.addEntity(entityCopy);
           // Resume playback if entity was playing when deleted
-          if (wasPlaying) {
-            if (entityCopy.mediaSource.type === MediaType.video) {
-              entityCopy.mediaSource.videoElement.play().catch((e) => logger.error(e));
-            }
-            if (entityCopy.playback) {
-              entityCopy.playback.isPlaying = true;
-            }
-          }
+          resumeDeletedEntity(entityCopy, wasPlaying);
         },
         execute: () => {
           // Re-delete the entity (no animation on redo)
-          if (entityCopy.mediaSource.type === MediaType.video) {
-            entityCopy.mediaSource.videoElement.pause();
-          } else if (isGifEntity(entityCopy) && entityCopy.playback) {
-            entityCopy.playback.isPlaying = false;
-          }
+          pauseDeletedEntity(entityCopy);
           rendererRef.current?.removeEntityTexture(entityCopy.id);
           canvasStore.removeEntity(entityCopy.id);
         },
         onEvict: () => tryCleanupEntityResources(entityCopy, ownerToken),
         description: `Delete entity ${entity.name}`,
+      }),
+    );
+  };
+
+  const removeEntityBatch = (entities: readonly ShaderCanvasEntity[]) => {
+    const entityCopies = new Array<ShaderCanvasEntity>(entities.length);
+    const wasPlaying = new Array<boolean>(entities.length);
+    const ownerTokens = new Array<number>(entities.length);
+    const entityIds = new Set<string>();
+    const renderer = rendererRef.current;
+    const animate =
+      canvasStore.getState().fancyDelete &&
+      entities.length <= config.canvas.fancyDeleteMaxBatchSize;
+
+    for (let index = 0; index < entities.length; index++) {
+      const entity = entities[index]!;
+      const entityCopy = captureEntityForDeletion(entity);
+      entityCopies[index] = entityCopy;
+      wasPlaying[index] = pauseDeletedEntity(entity);
+      entityIds.add(entity.id);
+
+      if (animate) {
+        const overlay = disintegrationController.addOverlay(
+          entity.id,
+          entity.position,
+          entity.size,
+          entity.rotation,
+        );
+        if (!renderer?.startDisintegration(entity, overlay)) {
+          disintegrationController.cancelOverlay(entity.id);
+        }
+      }
+      renderer?.removeEntityTexture(entity.id);
+    }
+    canvasStore.removeEntities(entityIds);
+    for (let index = 0; index < entityCopies.length; index++) {
+      ownerTokens[index] = claimResourceOwnership(entityCopies[index]!.id);
+    }
+
+    undo.add(
+      Command.create({
+        undo: () => {
+          for (let index = 0; index < entityCopies.length; index++) {
+            const entity = entityCopies[index]!;
+            disintegrationController.cancelOverlay(entity.id);
+            rendererRef.current?.cancelDisintegration(entity.id);
+          }
+          canvasStore.addEntities(entityCopies);
+          for (let index = 0; index < entityCopies.length; index++) {
+            resumeDeletedEntity(entityCopies[index]!, wasPlaying[index]!);
+          }
+        },
+        execute: () => {
+          const currentRenderer = rendererRef.current;
+          for (const entity of entityCopies) {
+            pauseDeletedEntity(entity);
+            currentRenderer?.removeEntityTexture(entity.id);
+          }
+          canvasStore.removeEntities(entityIds);
+        },
+        onEvict: () => {
+          for (let index = 0; index < entityCopies.length; index++) {
+            tryCleanupEntityResources(entityCopies[index]!, ownerTokens[index]!);
+          }
+        },
+        description: `Delete ${entityCopies.length} entities`,
       }),
     );
   };
@@ -1632,11 +1697,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    undo.beginTransaction();
-    for (const entity of entities) {
-      removeEntity(entity.id);
-    }
-    undo.commitTransaction(`Delete ${entities.length} entities`);
+    removeEntityBatch(entities);
   };
 
   const copySelectionImage = async (e?: KeyboardEvent) => {
