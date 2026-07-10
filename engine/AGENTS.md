@@ -5,6 +5,7 @@ Canvas state management and input processing. This is the "model + controller" l
 ## Key Files
 
 - `canvas-store.ts` — Central canvas state: viewport, entities, selection, version counters. Singleton.
+- `frame-loop.ts` — RAF orchestration. Tracks small active sets for playing media/continuous shaders and defers render-state allocation until a frame is required.
 - `game-loop.ts` (~86KB) — Main input/animation loop. Handles pointer, touch, pinch, drag, pan. Ticks per-frame controllers.
 - `action-layer-controller.ts` — Mobile action layer physics and phase state machine. Singleton.
 - `momentum-controller.ts` — Pan/zoom fling physics (exponential deceleration, elastic spring-back at zoom bounds). Injected deps for testability.
@@ -20,6 +21,7 @@ Canvas state management and input processing. This is the "model + controller" l
 - Snapshot types (`ViewportSnapshot`, `SelectionSnapshot`, `PlaybackSnapshot`, `DragSnapshot`, `ActionLayerSnapshot`) isolate subscription scopes — sidebar components don't re-render on viewport pan.
 - Dirty flags (`viewportDirty`, `entitiesDirty`, `selectionDirty`) tell the renderer what needs redrawing.
 - `RenderState` is a per-frame snapshot consumed by `InfiniteCanvasRenderer.render()`.
+- `CanvasStore.hasRenderChanges()` checks dirty state without allocating the O(entity count) `RenderState.entities` array.
 
 ## Patterns
 
@@ -29,6 +31,7 @@ Canvas state management and input processing. This is the "model + controller" l
 - Touch handling uses a state machine: `TouchGestureState` tracks active touches, pinch distance, long-press timers.
 - Space+drag panning uses `SpacePanMode` enum (`idle` → `ready` → `panning` → `panned`).
 - Per-frame controllers (disintegration, drag visuals, action layer) are ticked each frame; return `true` while animations are active to keep the render loop running.
+- The frame loop rebuilds animated-media and continuous-shader active sets only when the general entity `version` changes; do not reintroduce all-entity scans on every idle RAF.
 - `notifyViewportChange()` increments only `viewportVersion`. `notifySelectionChange()` increments `selectionVersion` + `version` + `playbackVersion`.
 
 ## Anti-Patterns
