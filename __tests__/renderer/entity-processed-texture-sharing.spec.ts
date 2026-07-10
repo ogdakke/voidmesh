@@ -113,6 +113,59 @@ describe("EntityTexturePipeline processed image sharing", () => {
     releaseImageAsset(first.mediaSource.asset);
   });
 
+  test("rebinds every identical instance to a resident LOD tier without transition throttling", () => {
+    runtimeEncode.mockClear();
+    const first = createTestEntity({ id: "lod-shared-first" });
+    if (first.mediaSource.type !== "image") throw new Error("Expected image entity");
+    retainImageAsset(first.mediaSource.asset);
+    const second: ShaderCanvasEntity = {
+      ...first,
+      id: "lod-shared-second",
+      shaderParams: structuredClone(first.shaderParams),
+      mediaSource: { type: "image", asset: first.mediaSource.asset },
+      textureDirty: true,
+    };
+
+    const detailSource = createTexture(200, 150);
+    const detailProcessed = createTexture(200, 150);
+    const overviewSource = createTexture(100, 75);
+    const overviewProcessed = createTexture(100, 75);
+    const pipeline = createPipeline(
+      createDevice([detailSource, detailProcessed, overviewSource, overviewProcessed]),
+    );
+    const encoder = {} as GPUCommandEncoder;
+
+    pipeline.renderEntityToTexture(first, encoder);
+    pipeline.renderEntityToTexture(second, encoder);
+    first.textureDirty = false;
+    second.textureDirty = false;
+
+    pipeline.beginFrame(true);
+    expect(pipeline.resolveRenderSize(first, { width: 100, height: 75 })).toEqual({
+      width: 100,
+      height: 75,
+    });
+    pipeline.renderEntityToTexture(first, encoder, { width: 100, height: 75 });
+
+    // The desired tier now exists. The second instance should switch immediately even
+    // while viewport-motion promotion is frozen; there is no new texture work to budget.
+    pipeline.beginFrame(false);
+    expect(pipeline.resolveRenderSize(second, { width: 100, height: 75 })).toEqual({
+      width: 100,
+      height: 75,
+    });
+    expect(pipeline.hasPendingLodWork).toBe(false);
+    expect(pipeline.renderEntityToTexture(second, encoder, { width: 100, height: 75 })).toEqual({
+      kind: "texture",
+      texture: overviewProcessed,
+    });
+    expect(runtimeEncode).toHaveBeenCalledTimes(2);
+
+    pipeline.destroy();
+    releaseImageAsset(first.mediaSource.asset);
+    releaseImageAsset(first.mediaSource.asset);
+  });
+
   test("recycles a unique same-size processed output when shader params change", () => {
     runtimeEncode.mockClear();
     const entity = createTestEntity({ id: "processed-param-change" });

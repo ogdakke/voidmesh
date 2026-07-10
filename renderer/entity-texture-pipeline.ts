@@ -435,13 +435,17 @@ export class EntityTexturePipeline {
       return output;
     }
 
-    if (!current) {
-      if (this.#hasCachedRenderSize(entity, desired.width, desired.height)) {
-        output.width = desired.width;
-        output.height = desired.height;
-        return output;
-      }
+    // Shared static-image tiers are already rendered GPU resources. Switching another
+    // instance to one is only a cache rebind, so it must not consume the transition
+    // budget. Otherwise thousands of duplicates visibly converge a few entities per
+    // frame even though they all use the same source and processed texture.
+    if (this.#hasCachedRenderSize(entity, desired.width, desired.height)) {
+      output.width = desired.width;
+      output.height = desired.height;
+      return output;
+    }
 
+    if (!current) {
       // Cold visible entities are real upload/shader work. Keep that work under the
       // transition budget even during viewport motion so pan/zoom frames do not spike.
       if (!this.#tryAdmitLodTransition(desired.width * desired.height, true)) {
