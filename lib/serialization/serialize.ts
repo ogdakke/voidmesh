@@ -40,12 +40,13 @@ export async function serialize(): Promise<Blob | null> {
     // Prepare entity metadata and media data in parallel (main thread)
     const serializedEntities: SerializedEntity[] = [];
     const mediaEntries: SerializeMediaEntry[] = [];
+    const serializedImageAssets = new Set<string>();
 
     await Promise.all(
       entities.map(async (entity) => {
-        const { serialized, media } = await prepareEntity(entity);
+        const { serialized, media } = await prepareEntity(entity, serializedImageAssets);
         serializedEntities.push(serialized);
-        mediaEntries.push(media);
+        if (media) mediaEntries.push(media);
       }),
     );
 
@@ -122,10 +123,13 @@ function compressInWorker(manifest: string, mediaEntries: SerializeMediaEntry[])
 
 interface PreparedEntity {
   serialized: SerializedEntity;
-  media: SerializeMediaEntry;
+  media?: SerializeMediaEntry;
 }
 
-async function prepareEntity(entity: ShaderCanvasEntity): Promise<PreparedEntity> {
+async function prepareEntity(
+  entity: ShaderCanvasEntity,
+  serializedImageAssets: Set<string>,
+): Promise<PreparedEntity> {
   const base = {
     id: entity.id,
     name: entity.name,
@@ -148,9 +152,14 @@ async function prepareEntity(entity: ShaderCanvasEntity): Promise<PreparedEntity
 
   switch (entity.mediaSource.type) {
     case "image": {
-      const path = `media/${entity.id}.png`;
+      const asset = entity.mediaSource.asset;
+      const path = `media/assets/${encodeURIComponent(asset.id)}-${asset.revision}.png`;
+      if (serializedImageAssets.has(path)) {
+        return { serialized: { ...base, mediaType: "image", mediaFile: path } };
+      }
+      serializedImageAssets.add(path);
       // Clone bitmap — transfer destroys the source, entity still needs it for rendering
-      const cloned = await createImageBitmap(entity.imageBitmap);
+      const cloned = await createImageBitmap(asset.imageBitmap);
       return {
         serialized: { ...base, mediaType: "image", mediaFile: path },
         media: { path, type: "imageBitmap", bitmap: cloned },

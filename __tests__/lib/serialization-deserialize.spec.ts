@@ -7,12 +7,12 @@ import { deserialize } from "#lib/serialization/deserialize.ts";
 import { CURRENT_VERSION } from "#lib/serialization/version.ts";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
 
-function createImageWorkspace(entityCount = 1): ArrayBuffer {
+function createImageWorkspace(entityCount = 1, sharedMedia = false): ArrayBuffer {
   const entities = Array.from({ length: entityCount }, (_, index) => ({
     id: `entity-${index + 1}`,
     name: `Image ${index + 1}`,
     mediaType: "image" as const,
-    mediaFile: `media/image-${index + 1}.png`,
+    mediaFile: sharedMedia ? "media/assets/shared.png" : `media/image-${index + 1}.png`,
     position: { x: index * 10, y: index * 20 },
     size: { width: 100, height: 100 },
     originalSize: { width: 100, height: 100 },
@@ -118,5 +118,18 @@ describe("deserialize workspace", () => {
       offset: { x: 900, y: 450 },
       zoom: 3,
     });
+  });
+
+  test("restores repeated image paths as one shared media asset", async () => {
+    const result = await deserialize(createImageWorkspace(2, true));
+    const entities = [...canvasStore.getState().entities.values()];
+
+    expect(result.success).toBe(true);
+    expect(entities).toHaveLength(2);
+    if (entities[0]?.mediaSource.type !== "image" || entities[1]?.mediaSource.type !== "image") {
+      throw new Error("Expected image entities");
+    }
+    expect(entities[0].mediaSource.asset).toBe(entities[1].mediaSource.asset);
+    expect(entities[0].imageBitmap).toBe(entities[1].imageBitmap);
   });
 });

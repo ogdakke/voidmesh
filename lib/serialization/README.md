@@ -9,12 +9,14 @@ A `.vdmsh` file is a zip containing:
 ```
 manifest.json     # viewport + entity metadata (versioned)
 media/
-  <entity-id>.png   # images (re-encoded as PNG)
+  assets/<asset-id>-<revision>.png # shared images (one PNG per asset)
   <entity-id>.mp4   # videos (original bytes)
   <entity-id>.gif   # GIFs (original bytes)
 ```
 
 `manifest.json` schema: `StudioManifest` (see `types.ts`), currently **v1**.
+
+Multiple image entities may reference the same `mediaFile`. Serialization writes one PNG per shared image asset, and deserialization restores one reference-counted `MediaImageAsset` for every repeated path.
 
 ## API
 

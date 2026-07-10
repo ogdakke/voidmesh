@@ -1,4 +1,9 @@
-import { ShaderType, type ShaderCanvasEntity, type ShaderParams } from "#types/canvas.ts";
+import {
+  ShaderType,
+  type MediaImageAsset,
+  type ShaderCanvasEntity,
+  type ShaderParams,
+} from "#types/canvas.ts";
 import { unzip, type AsyncTerminable } from "fflate";
 import { canvasStore } from "#engine";
 import { config } from "#config";
@@ -20,7 +25,7 @@ import type {
 import { isStudioManifest, toPlaybackState } from "./types.ts";
 import { CURRENT_VERSION } from "./version.ts";
 import { analytics } from "#lib/analytics.ts";
-import { createImageAsset } from "#lib/media-assets.ts";
+import { createImageAsset, retainImageAsset } from "#lib/media-assets.ts";
 
 const MIME_BY_EXT: Record<string, string> = {
   mp4: "video/mp4",
@@ -138,6 +143,7 @@ export async function deserialize(
   //    destroy the current workspace. Keep this sequential to reduce memory
   //    pressure on iOS Safari and give cancellation/progress updates time to run.
   const validEntities: ShaderCanvasEntity[] = [];
+  const imageAssets = new Map<string, MediaImageAsset>();
   for (let index = 0; index < doc.entities.length; index++) {
     const serialized = doc.entities[index]!;
     reportProgress({
@@ -158,6 +164,7 @@ export async function deserialize(
       const entity = await deserializeEntity(serialized, zipEntries, warnings, {
         workspaceEntityCount,
         videoEntityCount,
+        imageAssets,
         onVideoSeekTimeout: () => {
           videoSeekTimeoutCount++;
         },
@@ -217,10 +224,8 @@ export async function deserialize(
     zoom: doc.viewport.zoom,
   });
 
-  // 8. Add decoded entities sequentially (maintains zIndex ordering from manifest)
-  for (const entity of validEntities) {
-    canvasStore.addEntity(entity);
-  }
+  // 8. Add decoded entities in one notification (array order preserves manifest z-index order)
+  canvasStore.addEntities(validEntities);
 
   // 9. Resume playback for entities that were playing when saved
   for (const entity of validEntities) {
@@ -369,6 +374,7 @@ async function deserializeEntity(
   analyticsContext: {
     workspaceEntityCount: number;
     videoEntityCount: number;
+    imageAssets: Map<string, MediaImageAsset>;
     onVideoSeekTimeout: () => void;
   },
 ): Promise<ShaderCanvasEntity> {
@@ -413,6 +419,15 @@ async function deserializeEntity(
 
   switch (serialized.mediaType) {
     case "image": {
+      const cachedAsset = analyticsContext.imageAssets.get(serialized.mediaFile);
+      if (cachedAsset) {
+        retainImageAsset(cachedAsset);
+        return {
+          ...base,
+          imageBitmap: cachedAsset.imageBitmap,
+          mediaSource: { type: "image" as const, asset: cachedAsset },
+        };
+      }
       const bytes = zipEntries[serialized.mediaFile];
       if (!bytes) throw new Error(`Missing media file: ${serialized.mediaFile}`);
       const imageBlob = new Blob([bytes.slice()]);
@@ -422,6 +437,7 @@ async function deserializeEntity(
         blob: imageBlob,
         alphaHitGrid: createAlphaHitGrid(bitmap, config.hitTesting.alphaGrid),
       });
+      analyticsContext.imageAssets.set(serialized.mediaFile, asset);
       return {
         ...base,
         imageBitmap: bitmap,
