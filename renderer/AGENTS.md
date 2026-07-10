@@ -61,12 +61,13 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 - Dimension-keyed blur mip, bloom mip, and blur blend textures share a 128 MiB budget; current-frame dimensions stay pinned and older dimensions are evicted LRU.
 - Source textures cached by media identity/revision; static image entities sharing one asset also share one GPU texture until the final entity owner is removed
 - Stable processed image outputs are keyed by asset revision, dimensions, shader type, and full shader parameters. Identical instances share one texture; animated effects and non-image media remain entity-scoped.
-- Canvas media uses 64/128/256/... screen-space LOD tiers with overscan. Camera motion holds the current tier, then settled frames admit a bounded number of final tier changes to avoid synchronized allocation/upload bursts. Cold visible uploads/shader outputs also enter through this budget unless the desired texture is already resident.
+- Canvas media uses 64/128/256/... screen-space LOD tiers with overscan. Promotions wait for camera settle and real texture work remains transition-budgeted. Shared static-image demotions may run during camera motion; after one shared tier exists, every identical instance rebinds immediately without consuming per-entity transition slots.
 - Recently released source and processed image tiers remain reusable inside the existing byte-budgeted LRU; reverse zooms should not synchronously rebuild a tier that is still resident.
 - Same-size processed image shader-param changes recycle the entity's unique output texture instead of allocating a replacement; shared outputs allocate a new texture to avoid clobbering siblings.
 - Original videos stay on direct external-texture composition so playback and media controls remain continuous. Processed videos use screen-space output LOD, and small outputs shorten the bloom mip chain rather than pausing media.
 - Entity image export renders from native media sources at `originalSize`; it must not read back the current preview LOD texture.
-- Composition cache (`#entityCompositionCache`) reuses uniform buffers and bind groups; a weak texture-view cache shares one view across instances sampling the same texture.
+- Composition cache (`#entityCompositionCache`) reuses uniform buffers, bind groups, and stable draw-item wrappers; entity uniform buffers upload only when entity-local visual state changes, while pan/zoom updates the shared viewport buffer.
+- Entity draw preparation reuses result arrays, composition-option scratch, and bounds scratch. Do not restore per-entity object construction to the pan/zoom path.
 - `TexturePool` retains at most 64 MiB of idle transient textures across dimensions/usages. Release scratch after its final encoded use for ordered reuse, but apply destruction limits only in `commitSubmitted()` after `queue.submit()`.
 - Image source changes require a new asset revision. Entity removal releases its source-cache ownership without destroying textures still used by sibling instances.
 
