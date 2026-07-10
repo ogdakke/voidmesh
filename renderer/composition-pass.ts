@@ -68,6 +68,7 @@ export class CompositionPass {
   readonly #entityUniformData = new ArrayBuffer(config.rendering.entityUniformSize);
   readonly #entityFloatView = new Float32Array(this.#entityUniformData);
   readonly #entityUintView = new Uint32Array(this.#entityUniformData);
+  readonly #textureViewCache = new WeakMap<GPUTexture, GPUTextureView>();
 
   // Entity composition cache (uniform buffers, bind groups, texture views).
   // Invalidated when entity composition texture or visual state changes.
@@ -268,7 +269,7 @@ export class CompositionPass {
         this.#writeLiveEntityUniforms(uniformBuffer, options);
 
         const textureView =
-          cached && !textureChanged ? cached.textureView : source.texture.createView();
+          cached && !textureChanged ? cached.textureView : this.#getTextureView(source.texture);
         const bindGroup = this.#device.createBindGroup({
           label: `Entity ${entity.id} composition bind group`,
           layout: this.#bindGroupLayout,
@@ -447,5 +448,13 @@ export class CompositionPass {
     this.#entityFloatView[11] = 0;
 
     this.#device.queue.writeBuffer(uniformBuffer, 0, this.#entityUniformData);
+  }
+
+  #getTextureView(texture: GPUTexture): GPUTextureView {
+    const cached = this.#textureViewCache.get(texture);
+    if (cached) return cached;
+    const view = texture.createView();
+    this.#textureViewCache.set(texture, view);
+    return view;
   }
 }
