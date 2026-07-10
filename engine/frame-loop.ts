@@ -1,5 +1,5 @@
 import type { AnimationScheduler } from "#lib/animation-scheduler.ts";
-import { MediaType, type Bounds, type ShaderCanvasEntity } from "#types/canvas.ts";
+import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import {
   canvasStore,
   type ActionLayerRenderState,
@@ -16,6 +16,7 @@ interface VideoFrameTracker {
   initialized: boolean;
   fallbackFrameIndex: number;
   generation: number;
+  visible: boolean;
 }
 
 export interface CanvasRendererPort {
@@ -29,6 +30,7 @@ export interface CanvasRendererPort {
   getFrameStats(): FrameStats;
   hasPendingRenderWork(): boolean;
   needsContinuousRenderForEntity(entity: ShaderCanvasEntity): boolean;
+  isEntityVisible(entity: ShaderCanvasEntity, viewport: Viewport): boolean;
 }
 
 interface FrameLoopDeps {
@@ -119,17 +121,20 @@ export class FrameLoop {
     // 2. Advance GIF playback and update video time for all playing animated entities.
     // Uses entity refs directly — getRenderState() is deferred until after all ticks
     // so the viewport snapshot reflects this frame's updates, not the previous frame's.
+    const viewport = canvasStore.getState().viewport;
     for (const entity of this.#playingGifs) {
       if (entity.mediaSource.type !== MediaType.gif || !entity.playback?.isPlaying) continue;
-      canvasStore.advanceGifPlayback(entity.id, deltaSeconds);
+      const updateFrame = this.#renderer?.isEntityVisible(entity, viewport) ?? true;
+      const frameChanged = canvasStore.advanceGifPlayback(entity.id, deltaSeconds, updateFrame);
       canvasStore.updateGifPlaybackTime(entity.id, entity.playback.currentTime);
-      if (entity.textureDirty) hasAnimatedFrameUpdate = true;
+      if (frameChanged) hasAnimatedFrameUpdate = true;
     }
     for (const entity of this.#playingVideos) {
       if (entity.mediaSource.type !== MediaType.video || !entity.playback?.isPlaying) continue;
       const video = entity.mediaSource.videoElement;
+      const isVisible = this.#renderer?.isEntityVisible(entity, viewport) ?? true;
       canvasStore.updatePlaybackTime(entity.id, video.currentTime);
-      if (this.#consumeVideoFrameUpdate(entity.id, video, entity.mediaSource.fps)) {
+      if (this.#consumeVideoFrameUpdate(entity.id, video, entity.mediaSource.fps, isVisible)) {
         canvasStore.markEntityTextureDirty(entity.id);
         hasAnimatedFrameUpdate = true;
       }
@@ -211,7 +216,12 @@ export class FrameLoop {
     }
   }
 
-  #consumeVideoFrameUpdate(entityId: string, video: HTMLVideoElement, fps: number | null): boolean {
+  #consumeVideoFrameUpdate(
+    entityId: string,
+    video: HTMLVideoElement,
+    fps: number | null,
+    isVisible: boolean,
+  ): boolean {
     let tracker = this.#videoFrameTrackers.get(entityId);
     if (!tracker || tracker.video !== video) {
       if (tracker) this.#cancelVideoFrameCallback(tracker);
@@ -222,11 +232,14 @@ export class FrameLoop {
         initialized: false,
         fallbackFrameIndex: this.#getVideoFallbackFrameIndex(video, fps),
         generation: this.#videoFrameTrackerGeneration,
+        visible: false,
       };
       this.#videoFrameTrackers.set(entityId, tracker);
     }
 
     tracker.generation = this.#videoFrameTrackerGeneration;
+    const becameVisible = isVisible && !tracker.visible;
+    tracker.visible = isVisible;
 
     if ("requestVideoFrameCallback" in video) {
       this.#scheduleVideoFrameCallback(entityId, tracker);
@@ -234,21 +247,21 @@ export class FrameLoop {
         tracker.initialized = true;
         tracker.dirty = true;
       }
-      if (!tracker.dirty) return false;
+      if (!tracker.dirty) return becameVisible;
       tracker.dirty = false;
-      return true;
+      return isVisible;
     }
 
     const frameIndex = this.#getVideoFallbackFrameIndex(video, fps);
     if (!tracker.initialized) {
       tracker.initialized = true;
       tracker.fallbackFrameIndex = frameIndex;
-      return true;
+      return isVisible;
     }
-    if (frameIndex === tracker.fallbackFrameIndex) return false;
+    if (frameIndex === tracker.fallbackFrameIndex) return becameVisible;
 
     tracker.fallbackFrameIndex = frameIndex;
-    return true;
+    return isVisible;
   }
 
   #scheduleVideoFrameCallback(entityId: string, tracker: VideoFrameTracker): void {

@@ -1,8 +1,9 @@
 import { config, getViewportLensDistortionConfig, type GridConfig } from "#config";
 import { logger } from "#lib/client.logger.ts";
+import { boundsIntersect, getRotatedAABB, getViewportWorldBounds } from "#lib/canvas-math.ts";
 import { setGpuContext } from "./gpu-color-space.ts";
 import type { DisintegrationRenderOverlay, RenderState } from "#engine";
-import type { ShaderCanvasEntity } from "#types/canvas.ts";
+import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
 import { CanvasLensing } from "#types/enums.ts";
 import { ActionLayerBlurPass } from "./action-layer-blur-pass.ts";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
@@ -110,6 +111,18 @@ export class InfiniteCanvasRenderer {
 
   get device(): GPUDevice | null {
     return this.#device;
+  }
+
+  isEntityVisible(entity: ShaderCanvasEntity, viewport: Viewport): boolean {
+    const dpr = window.devicePixelRatio || 1;
+    const width = Math.floor(this.#cachedCanvasWidth * dpr);
+    const height = Math.floor(this.#cachedCanvasHeight * dpr);
+    if (width <= 0 || height <= 0) return true;
+
+    return boundsIntersect(
+      getRotatedAABB(entity.position, entity.size, entity.rotation),
+      getViewportWorldBounds(viewport, width, height, config.canvas.cullingBufferFraction),
+    );
   }
 
   getFrameStats() {

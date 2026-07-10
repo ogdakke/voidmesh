@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from "vitest";
+import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import { canvasStore } from "#engine";
 import { isVideoEntity, type ShaderCanvasEntity } from "#types/canvas.ts";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
@@ -169,6 +169,18 @@ describe("canvasStore.updatePlaybackTime", () => {
     expect(canvasStore.getSelectionSnapshot().version).toBe(initialSelectionVersion);
   });
 
+  test("does not increment playbackVersion for unselected videos", () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
+    canvasStore.addEntity(entity);
+
+    const initialVersion = canvasStore.getPlaybackSnapshot().version;
+
+    canvasStore.updatePlaybackTime(entity.id, 50);
+
+    expect(entity.playback?.currentTime).toBe(50);
+    expect(canvasStore.getPlaybackSnapshot().version).toBe(initialVersion);
+  });
+
   test("increments playbackVersion via forcePlaybackNotify", () => {
     const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
     canvasStore.addEntity(entity);
@@ -192,6 +204,21 @@ describe("canvasStore.updatePlaybackTime", () => {
     const snapshot = canvasStore.getPlaybackSnapshot();
     expect(snapshot.currentTime).toBe(75);
     expect(snapshot.entityId).toBe(entity.id);
+  });
+});
+
+describe("canvasStore.pauseVideo", () => {
+  test("replaces the pause snapshot bitmap and closes the previous fallback bitmap", async () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
+    const previousClose = vi.fn<() => void>();
+    entity.imageBitmap = { ...entity.imageBitmap, close: previousClose };
+    canvasStore.addEntity(entity);
+
+    canvasStore.pauseVideo(entity.id);
+    await Promise.resolve();
+
+    expect(previousClose).toHaveBeenCalledOnce();
+    expect(entity.textureDirty).toBe(true);
   });
 });
 
@@ -263,6 +290,18 @@ describe("canvasStore.updateGifPlaybackTime", () => {
     canvasStore.updateGifPlaybackTime(entity.id, 1.0);
 
     expect(canvasStore.getSelectionSnapshot().version).toBe(initialSelectionVersion);
+  });
+
+  test("does not increment playbackVersion for unselected GIFs", () => {
+    const entity = createTestEntity({ mediaType: "gif", gifDuration: 2 });
+    canvasStore.addEntity(entity);
+
+    const initialVersion = canvasStore.getPlaybackSnapshot().version;
+
+    canvasStore.updateGifPlaybackTime(entity.id, 1.0);
+
+    expect(entity.playback?.currentTime).toBe(1.0);
+    expect(canvasStore.getPlaybackSnapshot().version).toBe(initialVersion);
   });
 
   test("increments playbackVersion via forcePlaybackNotify", () => {

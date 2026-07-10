@@ -840,16 +840,23 @@ export class CanvasStore extends Store<CanvasState> {
     }
 
     // Snapshot current frame for static display
-    const canvas = new OffscreenCanvas(video.videoWidth, video.videoHeight);
+    const width = video.videoWidth || entity.originalSize.width;
+    const height = video.videoHeight || entity.originalSize.height;
+    const canvas = new OffscreenCanvas(width, height);
     const ctx = canvas.getContext("2d");
     if (ctx) {
-      ctx.drawImage(video, 0, 0);
+      ctx.drawImage(video, 0, 0, width, height);
+      const previousBitmap = entity.imageBitmap;
       createImageBitmap(canvas)
         .then((bitmap) => {
+          if (this.state.entities.get(entityId) !== entity) {
+            bitmap.close();
+            return;
+          }
           entity.imageBitmap = bitmap;
+          previousBitmap.close();
           entity.textureDirty = true;
           this.state.entitiesDirty.add(entityId);
-          this.notifySelectionChange();
         })
         .catch((e) => logger.error(e));
     }
@@ -891,6 +898,7 @@ export class CanvasStore extends Store<CanvasState> {
     if (!entity || entity.mediaSource.type !== MediaType.video || !entity.playback) return;
 
     entity.playback.currentTime = currentTime;
+    if (!this.state.selectedEntityIds.has(entityId)) return;
 
     const now = performance.now();
     if (now - this.#lastPlaybackNotifyTime < CanvasStore.#PLAYBACK_NOTIFY_INTERVAL_MS) {
@@ -969,6 +977,7 @@ export class CanvasStore extends Store<CanvasState> {
     if (!entity || entity.mediaSource.type !== MediaType.gif || !entity.playback) return;
 
     entity.playback.currentTime = currentTime;
+    if (!this.state.selectedEntityIds.has(entityId)) return;
 
     const now = performance.now();
     if (now - this.#lastPlaybackNotifyTime < CanvasStore.#PLAYBACK_NOTIFY_INTERVAL_MS) {
@@ -1008,9 +1017,11 @@ export class CanvasStore extends Store<CanvasState> {
    * Advance GIF playback by deltaSeconds.
    * Resolves the current frame and swaps entity.imageBitmap.
    */
-  advanceGifPlayback(entityId: string, deltaSeconds: number): void {
+  advanceGifPlayback(entityId: string, deltaSeconds: number, updateFrame = true): boolean {
     const entity = this.state.entities.get(entityId);
-    if (!entity || entity.mediaSource.type !== MediaType.gif || !entity.playback?.isPlaying) return;
+    if (!entity || entity.mediaSource.type !== MediaType.gif || !entity.playback?.isPlaying) {
+      return false;
+    }
 
     const { frames, duration } = entity.mediaSource;
     const loop = entity.playback.loop;
@@ -1026,16 +1037,19 @@ export class CanvasStore extends Store<CanvasState> {
       entity.playback.isPlaying = false;
     }
 
+    if (!updateFrame) return false;
+
     // Resolve the frame to display
     const frame = getFrameAtTime(frames, entity.playback.currentTime, loop);
     if (entity.imageBitmap === frame.bitmap) {
-      return;
+      return false;
     }
 
     entity.imageBitmap = frame.bitmap;
     // Mark as dirty so renderer picks up the new frame
     entity.textureDirty = true;
     this.state.entitiesDirty.add(entityId);
+    return true;
   }
 
   // Mark container as needing resize handling (no React notification needed)

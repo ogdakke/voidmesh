@@ -66,6 +66,19 @@ function getViewportValues() {
   };
 }
 
+function createLoopRenderer(isEntityVisible = true): InfiniteCanvasRenderer {
+  return {
+    isReady: true,
+    device: null,
+    colorConfig: { canvasFormat: "rgba8unorm", canvasColorSpace: "srgb" },
+    render: vi.fn<() => void>(),
+    getFrameStats: vi.fn<() => object>(),
+    hasPendingRenderWork: vi.fn<() => boolean>(() => false),
+    needsContinuousRenderForEntity: vi.fn<() => boolean>(() => false),
+    isEntityVisible: vi.fn<() => boolean>(() => isEntityVisible),
+  } as unknown as InfiniteCanvasRenderer;
+}
+
 // ── Setup ───────────────────────────────────────────────────────────────────
 
 let gl: GameLoop;
@@ -94,15 +107,10 @@ describe("Render loop errors", () => {
       .mockImplementation(() => 1);
     vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
     const loggerError = vi.spyOn(logger, "error").mockImplementation(() => undefined);
-    const renderer = {
-      isReady: true,
-      device: null,
-      colorConfig: { canvasFormat: "rgba8unorm", canvasColorSpace: "srgb" },
-      render: vi.fn<() => void>(() => {
-        throw error;
-      }),
-      getFrameStats: vi.fn<() => object>(),
-    } as unknown as InfiniteCanvasRenderer;
+    const renderer = createLoopRenderer();
+    vi.mocked(renderer.render).mockImplementation(() => {
+      throw error;
+    });
 
     gl.setRenderer(renderer);
     gl.setRenderErrorHandler(renderErrorHandler);
@@ -120,15 +128,10 @@ describe("Render loop errors", () => {
     vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
     vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
     const loggerError = vi.spyOn(logger, "error").mockImplementation(() => undefined);
-    const renderer = {
-      isReady: true,
-      device: null,
-      colorConfig: { canvasFormat: "rgba8unorm", canvasColorSpace: "srgb" },
-      render: vi.fn<() => void>(() => {
-        throw error;
-      }),
-      getFrameStats: vi.fn<() => object>(),
-    } as unknown as InfiniteCanvasRenderer;
+    const renderer = createLoopRenderer();
+    vi.mocked(renderer.render).mockImplementation(() => {
+      throw error;
+    });
 
     gl.setRenderer(renderer);
     gl.setRenderErrorHandler(renderErrorHandler);
@@ -136,6 +139,52 @@ describe("Render loop errors", () => {
     expect(() => gl.start()).not.toThrow();
     expect(renderErrorHandler).toHaveBeenCalledWith(error);
     expect(loggerError).not.toHaveBeenCalled();
+  });
+});
+
+describe("Animated media render scheduling", () => {
+  test("does not keep rendering for an offscreen playing GIF", () => {
+    const renderer = createLoopRenderer(false);
+    let nextFrame: FrameRequestCallback | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      nextFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValueOnce(250);
+    const entity = createTestEntity({ mediaType: "gif", gifDuration: 1, gifFrameCount: 10 });
+    if (entity.playback) entity.playback.isPlaying = true;
+    canvasStore.addEntity(entity);
+    canvasStore.clearDirtyFlags();
+
+    gl.setRenderer(renderer);
+    gl.start();
+    if (!nextFrame) throw new Error("Expected frame loop to schedule another frame");
+    (nextFrame as FrameRequestCallback)(250);
+
+    expect(renderer.render).toHaveBeenCalledOnce();
+  });
+
+  test("renders a playing GIF frame when the entity is visible", () => {
+    const renderer = createLoopRenderer(true);
+    let nextFrame: FrameRequestCallback | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      nextFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValueOnce(250);
+    const entity = createTestEntity({ mediaType: "gif", gifDuration: 1, gifFrameCount: 10 });
+    if (entity.playback) entity.playback.isPlaying = true;
+    canvasStore.addEntity(entity);
+    canvasStore.clearDirtyFlags();
+
+    gl.setRenderer(renderer);
+    gl.start();
+    if (!nextFrame) throw new Error("Expected frame loop to schedule another frame");
+    (nextFrame as FrameRequestCallback)(250);
+
+    expect(renderer.render).toHaveBeenCalledTimes(2);
   });
 });
 
