@@ -26,6 +26,7 @@ Canvas state management and input processing. This is the "model + controller" l
 ## Patterns
 
 - State mutated imperatively through `CanvasStore` methods, then `notify()` triggers React re-renders via the appropriate version counter.
+- Use `CanvasStore.addEntities()` for bulk insertion so large imports/duplicates produce one version update and subscriber notification.
 - `GameLoop` uses dependency injection (`GameLoopDeps`) for testability. Default deps created via `createDefaultDeps()`. Receives renderer via `setRenderer()`.
 - `MomentumController` also uses DI (`MomentumDeps`) — inject viewport/pan callbacks for unit testing without a real canvas.
 - Touch handling uses a state machine: `TouchGestureState` tracks active touches, pinch distance, long-press timers.
