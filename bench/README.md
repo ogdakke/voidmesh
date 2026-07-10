@@ -45,6 +45,48 @@ Run one scenario:
 bun run bench:render:record -- --scenario image-flowing-glass-4k-continuous
 ```
 
+## Many-entity suite
+
+The opt-in many-entity suite keeps the original core suite fast while covering
+the canvas virtualization and texture-residency paths:
+
+- 10,000 instances sharing one 1024px asset, both all-visible and culled;
+- a viewport sweep across the 10,000-instance world;
+- 4,096 unique thumbnail assets, both all-visible and swept through the cache;
+- 2,048 identically processed instances sharing one source and processed result.
+
+Run the whole suite headlessly:
+
+```bash
+bun run bench:render:record -- --suite many-entity
+```
+
+Run one large scenario without running the rest:
+
+```bash
+bun run bench:render:record -- --scenario many-10000-shared-original-all-visible
+bun run bench:render:record -- --scenario many-4096-unique-thumbnails-pan
+```
+
+In the interactive page, use **Run Many Entity**, or open:
+
+```text
+http://127.0.0.1:5175/bench/render.html?suite=many-entity
+```
+
+Large-result records include more than timings. Each scenario reports:
+
+- estimated decoded image bytes (unique assets, not entity count);
+- current and peak resident GPU bytes;
+- source, processed-output, processing-cache, and pooled texture counts and bytes;
+- average/min/max rendered entities per frame;
+- source uploads, source/processed allocations, and cache evictions.
+
+The decoded-byte value is a deterministic RGBA estimate. GPU values come from
+the renderer's own resource accounting and therefore cover persistent entity
+textures and idle pooled textures, but not implementation-private browser/driver
+memory.
+
 Run multiple rounds and store a median aggregate:
 
 ```bash
@@ -77,6 +119,8 @@ Other useful compare modes:
 
 ```bash
 bun run bench:render:compare -- baseline.json candidate.json --metric queueDrainMsPerFrame
+bun run bench:render:compare -- baseline.json candidate.json --metric peakResidentBytes
+bun run bench:render:compare -- baseline.json candidate.json --metric sourceUploads
 bun run bench:render:compare -- baseline.json candidate.json --warn-regression 3 --fail-regression 7
 bun run bench:render:compare -- baseline.json candidate.json --min-regression-ms 0.25
 bun run bench:render:compare -- baseline.json candidate.json --json
@@ -89,6 +133,7 @@ BENCH_CHROME="/path/to/Google Chrome" bun run bench:render:record
 BENCH_OUT_DIR=bench/results/immediates bun run bench:render:record
 BENCH_HEADLESS=0 bun run bench:render:record
 BENCH_DISABLE_IMMEDIATES=1 bun run bench:render:record
+BENCH_SUITE=many-entity bun run bench:render:record
 ```
 
 Recommended local A/B loop:

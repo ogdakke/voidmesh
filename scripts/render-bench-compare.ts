@@ -9,6 +9,23 @@ interface BenchSummary {
   cpuEncodeMsPerFrame: number;
   queueDrainMsPerFrame: number;
   p95Ms: number;
+  decodedAssetEstimateBytes: number;
+  peakResidentBytes: number;
+  residentBytes: number;
+  sourceBytes: number;
+  processedBytes: number;
+  sourceTextureCount: number;
+  processedTextureCount: number;
+  processingTextureBytes: number;
+  processingTextureCount: number;
+  processingTextureEvictions: number;
+  pooledTextureBytes: number;
+  pooledTextureCount: number;
+  renderedEntitiesPerFrame: number;
+  sourceTextureAllocations: number;
+  processedTextureAllocations: number;
+  sourceUploads: number;
+  evictions: number;
 }
 
 interface BenchRecord {
@@ -30,10 +47,7 @@ interface BenchRecord {
 interface CliOptions {
   baselinePath: string;
   candidatePath: string;
-  metric: keyof Pick<
-    BenchSummary,
-    "msPerFrame" | "cpuEncodeMsPerFrame" | "queueDrainMsPerFrame" | "p95Ms"
-  >;
+  metric: keyof Omit<BenchSummary, "id" | "label" | "shaderType">;
   warnRegressionPercent: number;
   failRegressionPercent: number;
   minRegressionMs: number;
@@ -127,7 +141,29 @@ function readArgValue(argv: string[], index: number, flag: string): string {
 }
 
 function parseMetric(value: string): CliOptions["metric"] {
-  const allowed = ["msPerFrame", "cpuEncodeMsPerFrame", "queueDrainMsPerFrame", "p95Ms"] as const;
+  const allowed: CliOptions["metric"][] = [
+    "msPerFrame",
+    "cpuEncodeMsPerFrame",
+    "queueDrainMsPerFrame",
+    "p95Ms",
+    "decodedAssetEstimateBytes",
+    "peakResidentBytes",
+    "residentBytes",
+    "sourceBytes",
+    "processedBytes",
+    "sourceTextureCount",
+    "processedTextureCount",
+    "processingTextureBytes",
+    "processingTextureCount",
+    "processingTextureEvictions",
+    "pooledTextureBytes",
+    "pooledTextureCount",
+    "renderedEntitiesPerFrame",
+    "sourceTextureAllocations",
+    "processedTextureAllocations",
+    "sourceUploads",
+    "evictions",
+  ];
   if (!allowed.includes(value as CliOptions["metric"])) {
     throw new Error(`Unknown metric "${value}". Use one of: ${allowed.join(", ")}`);
   }
