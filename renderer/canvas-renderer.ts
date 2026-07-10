@@ -92,7 +92,6 @@ export class InfiniteCanvasRenderer {
   #lastRenderedCount = 0;
   #lastLodViewport: { offset: { x: number; y: number }; zoom: number } | null = null;
   #lodStableFrames = 0;
-  #liveVideoEntityIds = new Set<string>();
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -150,10 +149,6 @@ export class InfiniteCanvasRenderer {
 
   hasPendingRenderWork(): boolean {
     return this.#entityTexturePipeline?.hasPendingLodWork ?? false;
-  }
-
-  shouldAnimateVideoEntity(entityId: string): boolean {
-    return this.#liveVideoEntityIds.has(entityId);
   }
 
   async initialize(): Promise<void> {
@@ -437,7 +432,6 @@ export class InfiniteCanvasRenderer {
       debugMode,
     });
     const { entityDrawItems, actionLayerDrawItems } = preparedEntityDrawItems;
-    this.#liveVideoEntityIds = preparedEntityDrawItems.liveVideoEntityIds;
     let hasAnimatingContent = preparedEntityDrawItems.hasAnimatingContent;
     markPhaseEnd("entity-prep");
 

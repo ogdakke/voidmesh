@@ -148,7 +148,6 @@ export class EntityTexturePipeline {
     entity: ShaderCanvasEntity,
     encoder: GPUCommandEncoder,
     renderSize: { width: number; height: number } = entity.originalSize,
-    useLiveVideo = true,
   ): EntityCompositionSource | null {
     const width = renderSize.width;
     const height = renderSize.height;
@@ -156,15 +155,13 @@ export class EntityTexturePipeline {
       width === entity.originalSize.width && height === entity.originalSize.height
         ? entity
         : { ...entity, originalSize: renderSize };
-    const useExternalVideoSource = entity.mediaSource.type === MediaType.video && useLiveVideo;
+    const useExternalVideoSource = entity.mediaSource.type === MediaType.video;
 
     // Time-based shaders need the shader pass every canvas render. Processed videos do not:
     // GameLoop marks them dirty only when a decoded video frame changes, so viewport-only
     // renders can safely reuse the cached processed texture instead of re-running the shader.
     const needsContinuousShaderRender =
-      !entity.shaderParams.showOriginal &&
-      !(entity.mediaSource.type === MediaType.video && !useLiveVideo) &&
-      this.#runtime.needsContinuousRender(renderEntity);
+      !entity.shaderParams.showOriginal && this.#runtime.needsContinuousRender(renderEntity);
 
     // Check if we have a valid processed texture.
     const processedKey = this.#getProcessedCacheKey(
@@ -172,13 +169,10 @@ export class EntityTexturePipeline {
       width,
       height,
       needsContinuousShaderRender,
-      useLiveVideo,
     );
     let cachedTexture = this.#processedTextures.get(processedKey);
     const canReuseDirtyTexture =
-      (entity.mediaSource.type === MediaType.image ||
-        (entity.mediaSource.type === MediaType.video && !useLiveVideo)) &&
-      !needsContinuousShaderRender;
+      entity.mediaSource.type === MediaType.image && !needsContinuousShaderRender;
     if (
       !entity.shaderParams.showOriginal &&
       !needsContinuousShaderRender &&
@@ -193,7 +187,7 @@ export class EntityTexturePipeline {
     let sourceTexture: GPUTexture | null = null;
 
     if (useExternalVideoSource && entity.mediaSource.type === MediaType.video) {
-      this.#releaseEntitySourceTexture(entity.id, false);
+      this.#releaseEntitySourceTexture(entity.id);
       const video = entity.mediaSource.videoElement;
       const externalTexture = this.#device.importExternalTexture({
         source: video,
@@ -201,7 +195,7 @@ export class EntityTexturePipeline {
       });
 
       if (entity.shaderParams.showOriginal) {
-        this.#releaseEntityProcessedTexture(entity.id, false);
+        this.#releaseEntityProcessedTexture(entity.id);
         return { kind: "external", texture: externalTexture };
       }
 
@@ -253,13 +247,13 @@ export class EntityTexturePipeline {
     // is owned by #sourceTextures, so keep it out of #entityTextures to avoid
     // double-destroying the same GPU resource during cleanup.
     if (entity.shaderParams.showOriginal && sourceTexture) {
-      this.#releaseEntityProcessedTexture(entity.id, false);
+      this.#releaseEntityProcessedTexture(entity.id);
       return { kind: "texture", texture: sourceTexture! };
     }
 
     const previousProcessedKey = this.#entityProcessedKeys.get(entity.id);
     if (previousProcessedKey && previousProcessedKey !== processedKey) {
-      this.#releaseEntityProcessedTexture(entity.id, false);
+      this.#releaseEntityProcessedTexture(entity.id);
       cachedTexture = this.#processedTextures.get(processedKey);
     }
 
@@ -474,7 +468,7 @@ export class EntityTexturePipeline {
       case MediaType.svg:
         return `svg:${entity.id}:${width}x${height}`;
       case MediaType.video:
-        return `video-poster:${entity.id}:${width}x${height}`;
+        throw new Error("External video textures do not have source cache keys");
     }
   }
 
@@ -483,12 +477,9 @@ export class EntityTexturePipeline {
     width: number,
     height: number,
     needsContinuousShaderRender: boolean,
-    useLiveVideo: boolean,
   ): string {
     if (entity.mediaSource.type !== MediaType.image || needsContinuousShaderRender) {
-      const sourceKind =
-        entity.mediaSource.type === MediaType.video && !useLiveVideo ? "poster" : "live";
-      return `entity:${entity.id}:${sourceKind}:${width}x${height}`;
+      return `entity:${entity.id}:${width}x${height}`;
     }
 
     let signature = this.#shaderSignatureCache.get(entity.shaderParams);
@@ -510,13 +501,13 @@ export class EntityTexturePipeline {
       cachedProcessed.entityIds.add(entityId);
       return;
     }
-    if (previousKey) this.#releaseEntityProcessedTexture(entityId, false);
+    if (previousKey) this.#releaseEntityProcessedTexture(entityId);
 
     cachedProcessed.entityIds.add(entityId);
     this.#entityProcessedKeys.set(entityId, processedKey);
   }
 
-  #releaseEntityProcessedTexture(entityId: string, destroyOrphan = true): void {
+  #releaseEntityProcessedTexture(entityId: string): void {
     const processedKey = this.#entityProcessedKeys.get(entityId);
     if (!processedKey) return;
 
@@ -525,7 +516,7 @@ export class EntityTexturePipeline {
     if (!cachedProcessed) return;
 
     cachedProcessed.entityIds.delete(entityId);
-    if (destroyOrphan && cachedProcessed.entityIds.size === 0) {
+    if (cachedProcessed.entityIds.size === 0) {
       cachedProcessed.texture.destroy();
       this.#processedTextures.delete(processedKey);
     }
@@ -538,13 +529,13 @@ export class EntityTexturePipeline {
   ): void {
     const previousKey = this.#entitySourceKeys.get(entityId);
     if (previousKey === sourceKey) return;
-    if (previousKey) this.#releaseEntitySourceTexture(entityId, false);
+    if (previousKey) this.#releaseEntitySourceTexture(entityId);
 
     cachedSource.entityIds.add(entityId);
     this.#entitySourceKeys.set(entityId, sourceKey);
   }
 
-  #releaseEntitySourceTexture(entityId: string, destroyOrphan = true): void {
+  #releaseEntitySourceTexture(entityId: string): void {
     const sourceKey = this.#entitySourceKeys.get(entityId);
     if (!sourceKey) return;
 
@@ -553,7 +544,7 @@ export class EntityTexturePipeline {
     if (!cachedSource) return;
 
     cachedSource.entityIds.delete(entityId);
-    if (destroyOrphan && cachedSource.entityIds.size === 0) {
+    if (cachedSource.entityIds.size === 0) {
       cachedSource.texture.destroy();
       this.#sourceTextures.delete(sourceKey);
     }

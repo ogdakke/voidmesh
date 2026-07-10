@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { getEntityRenderSize, shouldUseLiveVideo } from "#renderer/entity-render-size.ts";
+import { getEntityRenderSize } from "#renderer/entity-render-size.ts";
 import { createTestEntity } from "../helpers/test-entity.ts";
 
 describe("getEntityRenderSize", () => {
@@ -29,13 +29,5 @@ describe("getEntityRenderSize", () => {
       width: 128,
       height: 72,
     });
-  });
-
-  test("freezes video previews that are too small to show meaningful motion", () => {
-    const entity = createTestEntity({ mediaType: "video", size: { width: 420, height: 236 } });
-    const viewport = { offset: { x: 0, y: 0 }, zoom: 0.14 };
-
-    expect(shouldUseLiveVideo(entity, viewport, 1)).toBe(false);
-    expect(shouldUseLiveVideo(entity, { ...viewport, zoom: 1 }, 1)).toBe(true);
   });
 });

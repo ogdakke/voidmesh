@@ -502,8 +502,6 @@ export const config = {
     lodTransitionsPerFrame: 4,
     /** Maximum target pixels admitted per settled frame (one oversized item may progress). */
     lodTransitionPixelBudget: 2 * 1024 * 1024,
-    /** Videos below this projected physical size use a cached poster instead of live frames. */
-    liveVideoMinProjectedPixels: 192,
     grid: {
       default: DEFAULT_GRID_CONFIG,
       dark: DEFAULT_GRID_CONFIG_DARK,

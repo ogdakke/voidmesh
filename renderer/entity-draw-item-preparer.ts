@@ -1,10 +1,10 @@
 import { config } from "#config";
 import type { ActionLayerRenderState, DragVisualRenderState } from "#engine";
 import { boundsIntersect, getRotatedAABB, getViewportWorldBounds } from "#lib/canvas-math.ts";
-import { MediaType, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
+import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
 import type { CompositionDrawItem, CompositionPass } from "./composition-pass.ts";
 import type { EntityTexturePipeline } from "./entity-texture-pipeline.ts";
-import { getEntityRenderSize, shouldUseLiveVideo } from "./entity-render-size.ts";
+import { getEntityRenderSize } from "./entity-render-size.ts";
 
 interface EntityDrawItemPreparerOptions {
   texturePipeline: EntityTexturePipeline;
@@ -29,7 +29,6 @@ export interface PreparedEntityDrawItems {
   entityDrawItems: CompositionDrawItem[];
   actionLayerDrawItems: CompositionDrawItem[];
   hasAnimatingContent: boolean;
-  liveVideoEntityIds: Set<string>;
 }
 
 export class EntityDrawItemPreparer {
@@ -61,7 +60,6 @@ export class EntityDrawItemPreparer {
     const entityDrawItems: CompositionDrawItem[] = [];
     const actionLayerDrawItems: CompositionDrawItem[] = [];
     let hasAnimatingContent = false;
-    const liveVideoEntityIds = new Set<string>();
 
     let actionLayerOffsetX = 0;
     let actionLayerOffsetY = 0;
@@ -97,15 +95,10 @@ export class EntityDrawItemPreparer {
 
       const desiredRenderSize = getEntityRenderSize(entity, viewport, devicePixelRatio);
       const renderSize = this.#texturePipeline.resolveRenderSize(entity, desiredRenderSize);
-      const useLiveVideo = shouldUseLiveVideo(entity, viewport, devicePixelRatio);
-      if (entity.mediaSource.type === MediaType.video && useLiveVideo) {
-        liveVideoEntityIds.add(entity.id);
-      }
       const compositionSource = this.#texturePipeline.renderEntityToTexture(
         entity,
         encoder,
         renderSize,
-        useLiveVideo,
       );
       if (!compositionSource) continue;
 
@@ -137,6 +130,6 @@ export class EntityDrawItemPreparer {
       }
     }
 
-    return { entityDrawItems, actionLayerDrawItems, hasAnimatingContent, liveVideoEntityIds };
+    return { entityDrawItems, actionLayerDrawItems, hasAnimatingContent };
   }
 }

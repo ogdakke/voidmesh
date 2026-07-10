@@ -28,7 +28,6 @@ export interface CanvasRendererPort {
   render(state: RenderState): void;
   getFrameStats(): FrameStats;
   hasPendingRenderWork(): boolean;
-  shouldAnimateVideoEntity(entityId: string): boolean;
   needsContinuousRenderForEntity(entity: ShaderCanvasEntity): boolean;
 }
 
@@ -128,7 +127,6 @@ export class FrameLoop {
     }
     for (const entity of this.#playingVideos) {
       if (entity.mediaSource.type !== MediaType.video || !entity.playback?.isPlaying) continue;
-      if (!this.#renderer?.shouldAnimateVideoEntity(entity.id)) continue;
       const video = entity.mediaSource.videoElement;
       canvasStore.updatePlaybackTime(entity.id, video.currentTime);
       if (this.#consumeVideoFrameUpdate(entity.id, video, entity.mediaSource.fps)) {
