@@ -20,4 +20,14 @@ describe("getEntityRenderSize", () => {
       entity.originalSize,
     );
   });
+
+  test("applies projected output LOD to video entities", () => {
+    const entity = createTestEntity({ mediaType: "video", size: { width: 320, height: 180 } });
+    entity.originalSize = { width: 1920, height: 1080 };
+
+    expect(getEntityRenderSize(entity, { offset: { x: 0, y: 0 }, zoom: 0.25 }, 1)).toEqual({
+      width: 128,
+      height: 72,
+    });
+  });
 });

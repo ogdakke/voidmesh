@@ -10,6 +10,7 @@ import { EntityShaderRuntime, type EntityShaderSource } from "./entity-shader-ru
 import type { GpuColorConfig } from "./gpu-color-space.ts";
 import type { ProcessingPipeline } from "./processing-pipeline.ts";
 import type { TexturePool } from "./texture-pool.ts";
+import { ExternalTextureCopyPass } from "./external-texture-copy-pass.ts";
 
 export type EntityCompositionSource =
   | { kind: "texture"; texture: GPUTexture }
@@ -60,6 +61,7 @@ export class EntityTexturePipeline {
   readonly #runtime: EntityShaderRuntime;
   readonly #textureBudgetBytes: number;
   readonly #onTextureEvicted?: (entityIds: ReadonlySet<string>) => void;
+  #externalTextureCopyPass: ExternalTextureCopyPass | null = null;
   #currentFrame = 0;
   #sourceTextureAllocations = 0;
   #processedTextureAllocations = 0;
@@ -155,7 +157,8 @@ export class EntityTexturePipeline {
     // Time-based shaders need the shader pass every canvas render. Processed videos do not:
     // GameLoop marks them dirty only when a decoded video frame changes, so viewport-only
     // renders can safely reuse the cached processed texture instead of re-running the shader.
-    const needsContinuousShaderRender = this.#runtime.needsContinuousRender(renderEntity);
+    const needsContinuousShaderRender =
+      !entity.shaderParams.showOriginal && this.#runtime.needsContinuousRender(renderEntity);
 
     // Check if we have a valid processed texture.
     const processedKey = this.#getProcessedCacheKey(
@@ -168,7 +171,7 @@ export class EntityTexturePipeline {
     const canReuseDirtyTexture =
       entity.mediaSource.type === MediaType.image && !needsContinuousShaderRender;
     if (
-      !entity.shaderParams.showOriginal &&
+      (!entity.shaderParams.showOriginal || entity.mediaSource.type === MediaType.video) &&
       !needsContinuousShaderRender &&
       cachedTexture &&
       (!entity.textureDirty || canReuseDirtyTexture)
@@ -187,11 +190,6 @@ export class EntityTexturePipeline {
         source: video,
         colorSpace: this.#colorConfig.textureColorSpace,
       });
-
-      if (entity.shaderParams.showOriginal) {
-        this.#releaseEntityProcessedTexture(entity.id);
-        return { kind: "external", texture: externalTexture };
-      }
 
       shaderSource = { kind: "external", texture: externalTexture };
     }
@@ -240,7 +238,7 @@ export class EntityTexturePipeline {
     // If showOriginal is enabled, compose the source texture directly. The source texture
     // is owned by #sourceTextures, so keep it out of #entityTextures to avoid
     // double-destroying the same GPU resource during cleanup.
-    if (entity.shaderParams.showOriginal) {
+    if (entity.shaderParams.showOriginal && sourceTexture) {
       this.#releaseEntityProcessedTexture(entity.id);
       return { kind: "texture", texture: sourceTexture! };
     }
@@ -278,17 +276,23 @@ export class EntityTexturePipeline {
       this.#processedTextureAllocations++;
     }
 
-    // Apply shader using unified method (handles fragment, external, and compute paths).
-    this.#runtime.encode({
-      entity: renderEntity,
-      source: shaderSource,
-      outputTexture,
-      encoder,
-      width,
-      height,
-      respectShowOriginal: true,
-      sourceAlphaMode: getSourceAlphaMode(entity),
-    });
+    // External show-original video frames are first reduced to the projected LOD.
+    // Composing the native external texture directly makes overview cost scale with
+    // source resolution and number of videos rather than visible pixels.
+    if (entity.shaderParams.showOriginal && shaderSource.kind === "external") {
+      this.#getExternalTextureCopyPass().encode(encoder, shaderSource.texture, outputTexture);
+    } else {
+      this.#runtime.encode({
+        entity: renderEntity,
+        source: shaderSource,
+        outputTexture,
+        encoder,
+        width,
+        height,
+        respectShowOriginal: true,
+        sourceAlphaMode: getSourceAlphaMode(entity),
+      });
+    }
 
     // Cache and return (source texture stays in the shared source cache)
     const processedEntry: CachedProcessedTexture = {
@@ -323,7 +327,7 @@ export class EntityTexturePipeline {
   }
 
   needsContinuousRenderForEntity(entity: ShaderCanvasEntity): boolean {
-    return this.#runtime.needsContinuousRender(entity);
+    return !entity.shaderParams.showOriginal && this.#runtime.needsContinuousRender(entity);
   }
 
   endFrame(): void {
@@ -431,7 +435,7 @@ export class EntityTexturePipeline {
     needsContinuousShaderRender: boolean,
   ): string {
     if (entity.mediaSource.type !== MediaType.image || needsContinuousShaderRender) {
-      return `entity:${entity.id}`;
+      return `entity:${entity.id}:${width}x${height}`;
     }
 
     let signature = this.#shaderSignatureCache.get(entity.shaderParams);
@@ -441,6 +445,14 @@ export class EntityTexturePipeline {
     }
     const asset = entity.mediaSource.asset;
     return `image:${asset.id}:${asset.revision}:${width}x${height}:${entity.shaderType}:${signature}`;
+  }
+
+  #getExternalTextureCopyPass(): ExternalTextureCopyPass {
+    this.#externalTextureCopyPass ??= new ExternalTextureCopyPass(
+      this.#device,
+      this.#colorConfig.intermediateFormat,
+    );
+    return this.#externalTextureCopyPass;
   }
 
   #bindEntityToProcessed(
