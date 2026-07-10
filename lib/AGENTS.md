@@ -9,6 +9,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `store.ts` — `Store<T>` base class for `useSyncExternalStore`. Provides `createSnapshot(versionKey, create)` and `getComputed(key, versionKey, compute)` with structural sharing via `shallowEqual`.
 - `undo.ts` — Command pattern. `Command.create({ execute, undo, onEvict })`. `Undo` class with size limits and transaction grouping. Singleton: `undo`.
 - `media-loader.ts` — Loads/parses images, videos, GIFs, SVGs. Extracts palettes and frame rates.
+- `media-assets.ts` — Creates shared image assets and manages decoded-bitmap lifetime with explicit retain/release ownership.
 - `app-loader.ts` — Controls the HTML loading screen. `setText()` updates status text, `dismiss()` hides with min-display guarantee.
 - `serialization/` — `.vdmsh` zip format with versioning and migrations. Encoding/compression in Web Worker.
 - `files/file-handle.ts` — File System Access API handle storage for in-place workspace saving (Chromium only).
@@ -27,6 +28,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 ## Patterns
 
 - Pure functions where possible. No side effects, no singletons (except `undo`, `logger`, `paletteStore`, `scheduler`).
+- Image duplication shares `MediaImageAsset` objects. Retain before attaching an asset to another entity and release only when that entity's undo-owned resources are evicted.
 - Config is a frozen object. Do not mutate at runtime.
 
 ## Anti-Patterns

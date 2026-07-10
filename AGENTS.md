@@ -5,6 +5,7 @@ Infinite canvas app with real-time WebGPU shader effects. Users drop images/vide
 ## Domain Glossary
 
 - **Entity** — A media item on the canvas (image, video, GIF, SVG). Has position, size, rotation, z-index in world coordinates. Each entity has one active shader effect and its own params. Type: `ShaderCanvasEntity`.
+- **Media Asset** — Shared immutable image payload (bitmap, encoded Blob, alpha grid, revision). Multiple image entities can reference one asset; ownership is reference-counted so duplicates do not decode or retain separate pixels.
 - **Shader / Effect** — WebGPU rendering algorithm that stylizes an entity. 7 types: dithering, halftone, ascii, glass, blobs, melt, glitch. Each is a `ShaderPass` subclass in `renderer/shaders/`.
 - **Kind** — Sub-variant within a shader type. E.g. dithering has 12 kinds (bayer4x4, floydSteinberg…), glass has 3, glitch has 4, ascii has 4.
 - **Knobs** — UI panels for editing shader parameters. Each shader type has its own `*-knobs.tsx`. Read/write params via `useParamValue()` hook.
