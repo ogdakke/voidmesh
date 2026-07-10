@@ -44,7 +44,7 @@ import {
 import type { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
 import type { DeserializeOptions, DeserializeResult } from "#lib/serialization/types.ts";
 import { type ImageExportOptions, getImageExtension } from "#renderer/export-formats.ts";
-import { canvasStore, disintegrationController, gameLoop } from "#engine";
+import { canvasStore, disintegrationController, gameLoop, type CanvasEntityUpdate } from "#engine";
 
 import { toastManager } from "#components/ui/toast/toast-manager.ts";
 import { hints } from "#components/ui/hint/hint-manager.ts";
@@ -1884,14 +1884,30 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     nextZIndexRef.current = maxZIndex + 1;
     nextImageNumberRef.current = result.entityCount + 1;
 
-    // Re-extract original palettes for entities that don't have them (legacy v3 files)
+    // Re-extract original palettes for entities that don't have them (legacy v3 files).
+    // Repeated image instances share one bitmap, so extract once and apply one store batch.
+    const missingPaletteEntityIds = new Map<ImageBitmap, string[]>();
     for (const entity of canvasStore.getState().entities.values()) {
       if (entity.originalPalette) continue;
-      extractOriginalPalette(entity.imageBitmap, colorSpaceRef.current)
+      let entityIds = missingPaletteEntityIds.get(entity.imageBitmap);
+      if (!entityIds) {
+        entityIds = [];
+        missingPaletteEntityIds.set(entity.imageBitmap, entityIds);
+      }
+      entityIds.push(entity.id);
+    }
+    for (const [bitmap, entityIds] of missingPaletteEntityIds) {
+      extractOriginalPalette(bitmap, colorSpaceRef.current)
         .then((palette) => {
-          const current = canvasStore.getState().entities.get(entity.id);
-          if (!current) return;
-          canvasStore.updateEntity(entity.id, { originalPalette: palette });
+          const updates: CanvasEntityUpdate[] = [];
+          const currentEntities = canvasStore.getState().entities;
+          for (const entityId of entityIds) {
+            const current = currentEntities.get(entityId);
+            if (current && !current.originalPalette) {
+              updates.push({ id: entityId, updates: { originalPalette: palette } });
+            }
+          }
+          canvasStore.updateEntities(updates);
         })
         .catch((err) => logger.warn("Failed to extract palette on deserialize:", err));
     }

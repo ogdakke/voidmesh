@@ -393,6 +393,40 @@ describe("canvasStore.addEntities", () => {
   });
 });
 
+describe("canvasStore.restoreWorkspace", () => {
+  test("restores entities, viewport, and spatial state with one notification", () => {
+    const entities = Array.from({ length: 100 }, (_, index) =>
+      createTestEntity({
+        id: `restored-${index}`,
+        position: { x: index * 20, y: 0 },
+        size: { width: 10, height: 10 },
+        zIndex: index,
+      }),
+    );
+    let generalNotifications = 0;
+    let viewportNotifications = 0;
+    const unsubscribeGeneral = canvasStore.subscribe(() => generalNotifications++);
+    const unsubscribeViewport = canvasStore.subscribeViewport(() => viewportNotifications++);
+
+    canvasStore.restoreWorkspace(entities, {
+      offset: { x: 500, y: 250 },
+      zoom: 0.5,
+    });
+
+    expect(generalNotifications).toBe(1);
+    expect(viewportNotifications).toBe(1);
+    expect(canvasStore.getState().entitiesDirty.size).toBe(0);
+    expect(canvasStore.getRenderState().dirty).toBe(true);
+    expect(canvasStore.getViewport()).toEqual({ offset: { x: 500, y: 250 }, zoom: 0.5 });
+    expect(canvasStore.queryEntitiesInBounds({ x: 401, y: 1, width: 1, height: 1 }, [])).toEqual([
+      entities[20],
+    ]);
+
+    unsubscribeGeneral();
+    unsubscribeViewport();
+  });
+});
+
 describe("canvasStore spatial queries", () => {
   test("tracks batch insertion, movement, and removal", () => {
     const first = createTestEntity({
@@ -463,5 +497,19 @@ describe("canvasStore.updateEntities", () => {
       0,
     );
     expect(canvasStore.getState().version).toBe(initialVersion);
+  });
+
+  test("refreshes indexed entity references for non-spatial updates", () => {
+    const entity = createTestEntity({ id: "indexed-param-update" });
+    canvasStore.addEntity(entity);
+
+    canvasStore.updateEntity(entity.id, { edited: true });
+
+    const [indexed] = canvasStore.queryEntitiesInBounds(
+      { x: entity.position.x, y: entity.position.y, width: 1, height: 1 },
+      [],
+    );
+    expect(indexed).toBe(canvasStore.getState().entities.get(entity.id));
+    expect(indexed?.edited).toBe(true);
   });
 });

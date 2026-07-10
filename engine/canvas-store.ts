@@ -483,6 +483,51 @@ export class CanvasStore extends Store<CanvasState> {
     this.notifySelectionChange();
   }
 
+  /** Atomically replace canvas content after a workspace has decoded successfully. */
+  restoreWorkspace(entities: readonly ShaderCanvasEntity[], viewport: Viewport): void {
+    this.state.entities.clear();
+    this.state.entityIds.length = 0;
+    this.#entitySpatialIndex.clear();
+    for (const entity of entities) {
+      if (entity.mediaSource.type === MediaType.video) this.#syncVideoElementPlayback(entity);
+      this.state.entities.set(entity.id, entity);
+      this.state.entityIds.push(entity.id);
+      this.#entitySpatialIndex.upsert(entity);
+    }
+
+    this.state.viewport = {
+      offset: { x: viewport.offset.x, y: viewport.offset.y },
+      zoom: viewport.zoom,
+    };
+    this.state.selectedEntityIds = new Set();
+    this.state.hoveredEntityId = null;
+    this.state.contextOpenEntityId = null;
+    this.state.multiSelectMode = false;
+    this.state.entityDragActive = false;
+    this.state.actionLayerActive = false;
+    this.state.actionLayerEntityIds = new Set();
+    this.state.actionLayerTouchOrigin = { x: 0, y: 0 };
+    this.state.canvasCallouts = [];
+    // Every restored entity is already textureDirty. One scene-level dirty flag is
+    // sufficient; retaining 131k duplicate IDs until the first frame is wasted memory.
+    this.state.entitiesDirty.clear();
+    this.state.selectionDirty = true;
+    this.state.viewportDirty = true;
+    this.state.containerSizeDirty = false;
+    this.state.canvasCalloutsDirty = false;
+    this.state.version++;
+    this.state.selectionVersion++;
+    this.state.viewportVersion++;
+    this.state.preferencesVersion++;
+    this.state.playbackVersion++;
+    this.state.dragVersion++;
+    this.state.actionLayerVersion++;
+    this.clearComputedCache();
+    this.#resetSelectorCaches();
+    this.notify();
+    for (const listener of this.#viewportListeners) listener();
+  }
+
   updateEntity(id: string, updates: Partial<ShaderCanvasEntity>): void {
     this.updateEntities([{ id, updates }]);
   }
@@ -497,7 +542,11 @@ export class CanvasStore extends Store<CanvasState> {
       if (!entity) continue;
       const updatedEntity = { ...entity, ...updates } as ShaderCanvasEntity;
       this.state.entities.set(id, updatedEntity);
-      this.#entitySpatialIndex.upsert(updatedEntity);
+      if (hasSpatialEntityUpdates(updates)) {
+        this.#entitySpatialIndex.upsert(updatedEntity);
+      } else {
+        this.#entitySpatialIndex.updateEntityReference(updatedEntity);
+      }
       this.state.entitiesDirty.add(id);
       updatedCount++;
     }
@@ -1296,6 +1345,15 @@ export class CanvasStore extends Store<CanvasState> {
     this.#selectionStateCache = null;
     this.#paramResultCache.clear();
   }
+}
+
+function hasSpatialEntityUpdates(updates: Partial<ShaderCanvasEntity>): boolean {
+  return (
+    updates.position !== undefined ||
+    updates.size !== undefined ||
+    updates.rotation !== undefined ||
+    updates.zIndex !== undefined
+  );
 }
 
 /**

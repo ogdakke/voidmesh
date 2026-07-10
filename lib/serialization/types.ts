@@ -111,6 +111,8 @@ export interface SerializedPlaybackState {
 export interface DeserializeResult {
   success: boolean;
   entityCount: number;
+  maxEntityId: number;
+  maxZIndex: number;
   warnings: string[];
   errors: { entityId: string; entityName: string; error: string }[];
 }

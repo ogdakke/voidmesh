@@ -7,7 +7,11 @@ import { deserialize } from "#lib/serialization/deserialize.ts";
 import { CURRENT_VERSION } from "#lib/serialization/version.ts";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
 
-function createImageWorkspace(entityCount = 1, sharedMedia = false): ArrayBuffer {
+function createImageWorkspace(
+  entityCount = 1,
+  sharedMedia = false,
+  minimalShaderParams = false,
+): ArrayBuffer {
   const entities = Array.from({ length: entityCount }, (_, index) => ({
     id: `entity-${index + 1}`,
     name: `Image ${index + 1}`,
@@ -21,7 +25,7 @@ function createImageWorkspace(entityCount = 1, sharedMedia = false): ArrayBuffer
     locked: false,
     edited: false,
     shaderType: config.defaults.shader,
-    shaderParams: structuredClone(config.defaults.shaderParams),
+    shaderParams: minimalShaderParams ? {} : structuredClone(config.defaults.shaderParams),
   }));
 
   const archive = zipSync({
@@ -131,5 +135,27 @@ describe("deserialize workspace", () => {
     }
     expect(entities[0].mediaSource.asset).toBe(entities[1].mediaSource.asset);
     expect(entities[0].imageBitmap).toBe(entities[1].imageBitmap);
+  });
+
+  test("chunks large shared-image workspaces and restores them atomically", async () => {
+    const decodingIndexes: number[] = [];
+    let notifications = 0;
+    const unsubscribe = canvasStore.subscribe(() => notifications++);
+
+    const result = await deserialize(createImageWorkspace(1_500, true, true), {
+      onProgress: (progress) => {
+        if (progress.stage === "decoding" && progress.entityIndex) {
+          decodingIndexes.push(progress.entityIndex);
+        }
+      },
+    });
+
+    expect(result).toMatchObject({ success: true, entityCount: 1_500 });
+    expect(decodingIndexes).toEqual([1, 512, 1024, 1500]);
+    expect(notifications).toBe(1);
+    expect(canvasStore.getState().entitiesDirty.size).toBe(0);
+    expect(canvasStore.getState().entities.size).toBe(1_500);
+
+    unsubscribe();
   });
 });

@@ -80,6 +80,11 @@ export class EntitySpatialIndex {
     this.#entries.delete(entityId);
   }
 
+  updateEntityReference(entity: ShaderCanvasEntity): void {
+    const entry = this.#entries.get(entity.id);
+    if (entry) entry.entity = entity;
+  }
+
   clear(): void {
     this.#levels.clear();
     this.#entries.clear();

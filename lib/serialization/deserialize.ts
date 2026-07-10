@@ -35,6 +35,10 @@ const MIME_BY_EXT: Record<string, string> = {
   mkv: "video/x-matroska",
 };
 
+const LARGE_WORKSPACE_PROGRESS_THRESHOLD = 1_000;
+const DESERIALIZE_CHUNK_SIZE = 512;
+const VALID_SHADER_TYPES = new Set<string>(Object.values(ShaderType));
+
 /**
  * Deserialize a .vdmsh archive (Blob or ArrayBuffer) and restore the canvas.
  *
@@ -113,8 +117,12 @@ export async function deserialize(
 
   // 3. Run migrations if needed
   let doc = manifest as StudioManifest;
+  const mergeShaderParamDefaults = doc.version !== CURRENT_VERSION;
   const workspaceEntityCount = doc.entities.length;
-  const videoEntityCount = doc.entities.filter((entity) => entity.mediaType === "video").length;
+  let videoEntityCount = 0;
+  for (const entity of doc.entities) {
+    if (entity.mediaType === "video") videoEntityCount++;
+  }
   let videoSeekTimeoutCount = 0;
   if (doc.version < CURRENT_VERSION) {
     doc = runMigrations(doc);
@@ -144,38 +152,54 @@ export async function deserialize(
   //    pressure on iOS Safari and give cancellation/progress updates time to run.
   const validEntities: ShaderCanvasEntity[] = [];
   const imageAssets = new Map<string, MediaImageAsset>();
+  let maxEntityId = 0;
+  let maxZIndex = 0;
   for (let index = 0; index < doc.entities.length; index++) {
     const serialized = doc.entities[index]!;
-    reportProgress({
-      stage: "decoding",
-      entityIndex: index + 1,
-      entityCount: doc.entities.length,
-      entityName: serialized.name,
-      fileSizeBytes: buffer.byteLength,
-    });
+    if (shouldReportEntityProgress(index, doc.entities.length)) {
+      reportProgress({
+        stage: "decoding",
+        entityIndex: index + 1,
+        entityCount: doc.entities.length,
+        entityName: serialized.name,
+        fileSizeBytes: buffer.byteLength,
+      });
+    }
     throwIfAborted(signal);
 
-    if (index > 0) {
+    if (index > 0 && index % DESERIALIZE_CHUNK_SIZE === 0) {
       await yieldToMainThread();
       throwIfAborted(signal);
     }
 
     try {
+      if (serialized.mediaType === "image") {
+        const cachedAsset = imageAssets.get(serialized.mediaFile);
+        if (cachedAsset) {
+          retainImageAsset(cachedAsset);
+          const entity: ShaderCanvasEntity = {
+            ...createDeserializedEntityBase(serialized, warnings, mergeShaderParamDefaults),
+            imageBitmap: cachedAsset.imageBitmap,
+            mediaSource: { type: "image", asset: cachedAsset },
+          };
+          validEntities.push(entity);
+          maxEntityId = Math.max(maxEntityId, parseEntityIdNumber(entity.id));
+          maxZIndex = Math.max(maxZIndex, entity.zIndex);
+          continue;
+        }
+      }
       const entity = await deserializeEntity(serialized, zipEntries, warnings, {
         workspaceEntityCount,
         videoEntityCount,
         imageAssets,
+        mergeShaderParamDefaults,
         onVideoSeekTimeout: () => {
           videoSeekTimeoutCount++;
         },
       });
       validEntities.push(entity);
-      logger.debug("[workspace-import] restored entity", {
-        entityId: serialized.id,
-        entityName: serialized.name,
-        mediaType: serialized.mediaType,
-        restoredCount: validEntities.length,
-      });
+      maxEntityId = Math.max(maxEntityId, parseEntityIdNumber(entity.id));
+      maxZIndex = Math.max(maxZIndex, entity.zIndex);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       errors.push({
@@ -200,6 +224,8 @@ export async function deserialize(
     return {
       success: false,
       entityCount: 0,
+      maxEntityId: 0,
+      maxZIndex: 0,
       warnings,
       errors,
     };
@@ -217,15 +243,9 @@ export async function deserialize(
     }
   }
 
-  // 7. Clear canvas and restore viewport
-  canvasStore.reset();
-  canvasStore.setViewport({
-    offset: { x: doc.viewport.offset.x, y: doc.viewport.offset.y },
-    zoom: doc.viewport.zoom,
-  });
-
-  // 8. Add decoded entities in one notification (array order preserves manifest z-index order)
-  canvasStore.addEntities(validEntities);
+  // 7. Replace canvas, viewport, spatial index, and subscriptions atomically. Array
+  //    order preserves the manifest's z-index order.
+  canvasStore.restoreWorkspace(validEntities, doc.viewport);
 
   // 9. Resume playback for entities that were playing when saved
   for (const entity of validEntities) {
@@ -260,6 +280,8 @@ export async function deserialize(
   return {
     success: errors.length === 0,
     entityCount: validEntities.length,
+    maxEntityId,
+    maxZIndex,
     warnings,
     errors,
   };
@@ -286,6 +308,15 @@ async function yieldToMainThread(): Promise<void> {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, 0);
   });
+}
+
+function shouldReportEntityProgress(index: number, entityCount: number): boolean {
+  return (
+    entityCount < LARGE_WORKSPACE_PROGRESS_THRESHOLD ||
+    index === 0 ||
+    index === entityCount - 1 ||
+    (index + 1) % DESERIALIZE_CHUNK_SIZE === 0
+  );
 }
 
 function unzipArchive(
@@ -337,24 +368,23 @@ function unzipArchive(
  * Returns the maximum entity ID number and zIndex from the restored entities.
  * Used by canvas-context to update its counters after deserialization.
  */
-export function getMaxCounters(_result: DeserializeResult): {
+export function getMaxCounters(result: DeserializeResult): {
   maxId: number;
   maxZIndex: number;
 } {
-  const state = canvasStore.getState();
-  let maxId = 0;
-  let maxZIndex = 0;
+  return { maxId: result.maxEntityId, maxZIndex: result.maxZIndex };
+}
 
-  for (const entity of state.entities.values()) {
-    // Extract numeric part from "entity-N" IDs
-    const match = entity.id.match(/^entity-(\d+)$/);
-    if (match) {
-      maxId = Math.max(maxId, Number(match[1]));
-    }
-    maxZIndex = Math.max(maxZIndex, entity.zIndex);
+function parseEntityIdNumber(entityId: string): number {
+  const prefixLength = 7;
+  if (!entityId.startsWith("entity-") || entityId.length === prefixLength) return 0;
+  let value = 0;
+  for (let index = prefixLength; index < entityId.length; index++) {
+    const digit = entityId.charCodeAt(index) - 48;
+    if (digit < 0 || digit > 9) return 0;
+    value = value * 10 + digit;
   }
-
-  return { maxId, maxZIndex };
+  return value;
 }
 
 // ============================================================================
@@ -363,8 +393,7 @@ export function getMaxCounters(_result: DeserializeResult): {
 
 /** Validate shaderType against known values, falling back to the default */
 function validateShaderType(raw: string): ShaderType {
-  const valid = Object.values(ShaderType) as string[];
-  return valid.includes(raw) ? (raw as ShaderType) : config.defaults.shader;
+  return VALID_SHADER_TYPES.has(raw) ? (raw as ShaderType) : config.defaults.shader;
 }
 
 async function deserializeEntity(
@@ -375,47 +404,15 @@ async function deserializeEntity(
     workspaceEntityCount: number;
     videoEntityCount: number;
     imageAssets: Map<string, MediaImageAsset>;
+    mergeShaderParamDefaults: boolean;
     onVideoSeekTimeout: () => void;
   },
 ): Promise<ShaderCanvasEntity> {
-  logger.debug("[workspace-import] deserialize entity start", {
-    entityId: serialized.id,
-    entityName: serialized.name,
-    mediaType: serialized.mediaType,
-    mediaFile: serialized.mediaFile,
-  });
-
-  // Validate shaderType (1b) and merge shaderParams with defaults (1c/3d)
-  const shaderType = validateShaderType(serialized.shaderType);
-  if (shaderType !== serialized.shaderType) {
-    warnings.push(
-      `Entity "${serialized.name}": unknown shader "${serialized.shaderType}", using "${shaderType}"`,
-    );
-  }
-
-  const shaderParams = deepMerge(
-    structuredClone(config.defaults.shaderParams) as ShaderParams,
-    serialized.shaderParams,
+  const base = createDeserializedEntityBase(
+    serialized,
+    warnings,
+    analyticsContext.mergeShaderParamDefaults,
   );
-
-  const base = {
-    id: serialized.id,
-    name: serialized.name,
-    position: { ...serialized.position },
-    size: { ...serialized.size },
-    originalSize: { ...serialized.originalSize },
-    zIndex: serialized.zIndex,
-    rotation: serialized.rotation,
-    locked: serialized.locked,
-    edited: serialized.edited,
-    shaderType,
-    shaderParams,
-    textureDirty: true as const,
-    selected: false as const,
-    ...(serialized.originalPalette && {
-      originalPalette: serialized.originalPalette,
-    }),
-  };
 
   switch (serialized.mediaType) {
     case "image": {
@@ -559,6 +556,47 @@ async function deserializeEntity(
     default:
       throw new Error(`Unknown media type: ${(serialized as Record<string, unknown>).mediaType}`);
   }
+}
+
+function createDeserializedEntityBase(
+  serialized: SerializedEntity,
+  warnings: string[],
+  mergeShaderParamDefaults: boolean,
+) {
+  const shaderType = validateShaderType(serialized.shaderType);
+  if (shaderType !== serialized.shaderType) {
+    warnings.push(
+      `Entity "${serialized.name}": unknown shader "${serialized.shaderType}", using "${shaderType}"`,
+    );
+  }
+
+  // JSON.parse already created a unique params object for every current-version entity.
+  // Only schema-mismatched documents need compatibility defaults filled recursively.
+  const shaderParams = mergeShaderParamDefaults
+    ? deepMerge(
+        structuredClone(config.defaults.shaderParams) as ShaderParams,
+        serialized.shaderParams,
+      )
+    : serialized.shaderParams;
+
+  return {
+    id: serialized.id,
+    name: serialized.name,
+    position: serialized.position,
+    size: serialized.size,
+    originalSize: serialized.originalSize,
+    zIndex: serialized.zIndex,
+    rotation: serialized.rotation,
+    locked: serialized.locked,
+    edited: serialized.edited,
+    shaderType,
+    shaderParams,
+    textureDirty: true as const,
+    selected: false as const,
+    ...(serialized.originalPalette && {
+      originalPalette: serialized.originalPalette,
+    }),
+  };
 }
 
 async function probeTimedOutVideoSeekMetadata(videoBlob: Blob): Promise<{
