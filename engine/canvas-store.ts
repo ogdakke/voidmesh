@@ -429,6 +429,19 @@ export class CanvasStore extends Store<CanvasState> {
     this.notifySelectionChange();
   }
 
+  addEntities(entities: readonly ShaderCanvasEntity[]): void {
+    if (entities.length === 0) return;
+    for (const entity of entities) {
+      if (entity.mediaSource.type === MediaType.video) {
+        this.#syncVideoElementPlayback(entity);
+      }
+      this.state.entities.set(entity.id, entity);
+      this.state.entityIds.push(entity.id);
+      this.state.entitiesDirty.add(entity.id);
+    }
+    this.notifySelectionChange();
+  }
+
   updateEntity(id: string, updates: Partial<ShaderCanvasEntity>): void {
     const entity = this.state.entities.get(id);
     if (entity) {

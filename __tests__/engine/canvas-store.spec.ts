@@ -319,3 +319,17 @@ describe("canvasStore.moveEntity", () => {
     expect(canvasStore.hasRenderChanges()).toBe(true);
   });
 });
+
+describe("canvasStore.addEntities", () => {
+  test("adds a batch with one version notification", () => {
+    const first = createTestEntity({ id: "batch-first" });
+    const second = createTestEntity({ id: "batch-second" });
+    const initialVersion = canvasStore.getState().version;
+
+    canvasStore.addEntities([first, second]);
+
+    expect(canvasStore.getState().version).toBe(initialVersion + 1);
+    expect(canvasStore.getState().entities.size).toBe(2);
+    expect(canvasStore.getState().entitiesDirty).toEqual(new Set([first.id, second.id]));
+  });
+});

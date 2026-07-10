@@ -774,6 +774,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     );
 
     const newIds: string[] = [];
+    const duplicateBatch: ShaderCanvasEntity[] = [];
+    const existingNames = new Set(
+      Array.from(canvasStore.getState().entities.values(), (entity) => entity.name),
+    );
     const useTransaction = clones.length > 1;
     if (useTransaction) undo.beginTransaction();
 
@@ -781,10 +785,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       const id = `entity-${nextIdRef.current++}`;
       const zIndex = nextZIndexRef.current++;
       const baseName = entity.name;
-      const entities = canvasStore.getState().entities;
       let n = 1;
-      while (entities.values().some((e) => e.name === `${baseName} (${n})`)) n++;
+      while (existingNames.has(`${baseName} (${n})`)) n++;
       const name = `${baseName} (${n})`;
+      existingNames.add(name);
       const playback = createDuplicatePlaybackState(entity);
       resetDuplicatedMediaPlayback(mediaSource, playback);
 
@@ -809,7 +813,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         edited: false,
       };
 
-      canvasStore.addEntity(clone);
+      duplicateBatch.push(clone);
       newIds.push(id);
 
       const ownerToken = claimResourceOwnership(clone.id);
@@ -832,6 +836,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         }),
       );
     }
+
+    canvasStore.addEntities(duplicateBatch);
 
     if (useTransaction) undo.commitTransaction(`Duplicate ${selected.length} entities`);
 
