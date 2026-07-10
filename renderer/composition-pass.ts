@@ -483,7 +483,13 @@ export class CompositionPass {
         pass.draw(6);
       }
 
-      if (command.item?.isSelected) afterItem?.(command.item);
+      if (command.item?.isSelected && afterItem) {
+        afterItem(command.item);
+        // Overlay callbacks encode into the same render pass and may replace the
+        // active pipeline/bind groups. Force composition state to be rebound for
+        // the next command instead of relying on our now-stale local tracker.
+        currentPipeline = null;
+      }
     }
   }
 

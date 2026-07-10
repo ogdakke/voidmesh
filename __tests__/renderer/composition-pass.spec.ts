@@ -64,7 +64,10 @@ describe("CompositionPass instancing", () => {
       prepare(pass, final, textureB),
     ];
     const renderPass = createRenderPass();
-    const afterItem = vi.fn<(item: CompositionDrawItem) => void>();
+    const labelPipeline = { kind: "label" } as unknown as GPURenderPipeline;
+    const afterItem = vi.fn<(item: CompositionDrawItem) => void>(() => {
+      renderPass.setPipeline(labelPipeline);
+    });
 
     pass.drawItems(renderPass, items, afterItem);
 
@@ -77,7 +80,11 @@ describe("CompositionPass instancing", () => {
     expect(afterItem).toHaveBeenCalledOnce();
     expect(afterItem).toHaveBeenCalledWith(items[2]);
     expect(device.createBindGroup).toHaveBeenCalledTimes(2);
-    expect(renderPass.setPipeline).toHaveBeenCalledOnce();
+    expect(renderPass.setPipeline).toHaveBeenCalledTimes(3);
+    expect(renderPass.setPipeline.mock.calls[1]?.[0]).toBe(labelPipeline);
+    expect(renderPass.setPipeline.mock.calls[2]?.[0]).toBe(
+      renderPass.setPipeline.mock.calls[0]?.[0],
+    );
 
     pass.destroy();
     releaseImageEntity(base);
