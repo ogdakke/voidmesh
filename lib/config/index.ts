@@ -488,6 +488,8 @@ export const config = {
     maxStorageBufferSizeBytes: DEFAULT_MAX_STORAGE_BUFFER_SIZE_BYTES,
     /** Persistent source + processed entity texture budget. Visible textures stay pinned. */
     entityTextureBudgetBytes: 512 * 1024 * 1024,
+    /** Maximum idle scratch memory retained by TexturePool across dimensions/usages. */
+    texturePoolBudgetBytes: 64 * 1024 * 1024,
     grid: {
       default: DEFAULT_GRID_CONFIG,
       dark: DEFAULT_GRID_CONFIG_DARK,

@@ -10,20 +10,29 @@ import { CompositionPass, type CompositionDrawItem } from "./composition-pass.ts
 import { DisintegrationPass } from "./disintegration-pass.ts";
 import { EntityDrawItemPreparer } from "./entity-draw-item-preparer.ts";
 import { EntityLabelPass } from "./entity-label-pass.ts";
-import { EntityTexturePipeline, type EntityCompositionSource } from "./entity-texture-pipeline.ts";
+import {
+  EntityTexturePipeline,
+  type EntityCompositionSource,
+  type EntityTextureResidencyStats,
+} from "./entity-texture-pipeline.ts";
 import { ExportService } from "./export-service.ts";
 import { ExternalTextureCopyPass } from "./external-texture-copy-pass.ts";
 import type { ImageExportOptions } from "./export-formats.ts";
 import { detectGpuColorConfig, type GpuColorConfig } from "./gpu-color-space.ts";
 import { GridPass } from "./grid-pass.ts";
 import { SelectionRectPass } from "./selection-rect-pass.ts";
-import { TexturePool } from "./texture-pool.ts";
+import { TexturePool, type TexturePoolStats } from "./texture-pool.ts";
 import { ViewportLensPass, type ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
 import { ViewportUniforms } from "./viewport-uniforms.ts";
 import type { WlurOverlayConfig } from "./wlur-overlay.ts";
 import { WlurOverlayPass } from "./wlur-overlay-pass.ts";
 
 export type { ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
+
+export interface RendererResourceStats {
+  entityTextures: EntityTextureResidencyStats;
+  texturePool: TexturePoolStats;
+}
 
 export class InfiniteCanvasRenderer {
   readonly canvas: HTMLCanvasElement;
@@ -101,6 +110,29 @@ export class InfiniteCanvasRenderer {
       renderTime: this.#lastRenderTime,
       entityCount: this.#lastEntityCount,
       renderedCount: this.#lastRenderedCount,
+    };
+  }
+
+  /** Snapshot of GPU texture residency and cumulative allocation churn. */
+  getResourceStats(): RendererResourceStats {
+    return {
+      entityTextures: this.#entityTexturePipeline?.getResidencyStats() ?? {
+        budgetBytes: config.rendering.entityTextureBudgetBytes,
+        residentBytes: 0,
+        sourceBytes: 0,
+        processedBytes: 0,
+        sourceTextureCount: 0,
+        processedTextureCount: 0,
+        sourceTextureAllocations: 0,
+        processedTextureAllocations: 0,
+        sourceUploads: 0,
+        evictions: 0,
+      },
+      texturePool: this.#texturePool?.getStats() ?? {
+        budgetBytes: config.rendering.texturePoolBudgetBytes,
+        residentBytes: 0,
+        textureCount: 0,
+      },
     };
   }
 

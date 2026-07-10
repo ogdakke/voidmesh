@@ -38,6 +38,11 @@ export interface EntityTextureResidencyStats {
   processedBytes: number;
   sourceTextureCount: number;
   processedTextureCount: number;
+  /** Cumulative counters since pipeline initialization, useful for benchmarks. */
+  sourceTextureAllocations: number;
+  processedTextureAllocations: number;
+  sourceUploads: number;
+  evictions: number;
 }
 
 export class EntityTexturePipeline {
@@ -47,6 +52,10 @@ export class EntityTexturePipeline {
   readonly #textureBudgetBytes: number;
   readonly #onTextureEvicted?: (entityIds: ReadonlySet<string>) => void;
   #currentFrame = 0;
+  #sourceTextureAllocations = 0;
+  #processedTextureAllocations = 0;
+  #sourceUploads = 0;
+  #evictions = 0;
 
   // Entity texture cache
   #entityTextures: Map<string, CachedEntityTexture> = new Map();
@@ -179,6 +188,7 @@ export class EntityTexturePipeline {
           format: "rgba8unorm",
           usage: sourceUsage,
         });
+        this.#sourceTextureAllocations++;
         this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
         cachedSource = {
           texture: sourceTexture,
@@ -237,6 +247,7 @@ export class EntityTexturePipeline {
         format: this.#colorConfig.intermediateFormat,
         usage: outputUsage,
       });
+      this.#processedTextureAllocations++;
     }
 
     // Apply shader using unified method (handles fragment, external, and compute paths).
@@ -302,6 +313,10 @@ export class EntityTexturePipeline {
       processedBytes,
       sourceTextureCount: this.#sourceTextures.size,
       processedTextureCount: this.#entityTextures.size,
+      sourceTextureAllocations: this.#sourceTextureAllocations,
+      processedTextureAllocations: this.#processedTextureAllocations,
+      sourceUploads: this.#sourceUploads,
+      evictions: this.#evictions,
     };
   }
 
@@ -356,6 +371,7 @@ export class EntityTexturePipeline {
       { texture, colorSpace: this.#colorConfig.textureColorSpace },
       [width, height],
     );
+    this.#sourceUploads++;
   }
 
   #getSourceCacheKey(entity: ShaderCanvasEntity, width: number, height: number): string {
@@ -425,6 +441,7 @@ export class EntityTexturePipeline {
       if (residentBytes <= this.#textureBudgetBytes) break;
       candidate.cached.texture.destroy();
       residentBytes -= candidate.cached.byteSize;
+      this.#evictions++;
 
       if (candidate.kind === "processed") {
         this.#entityTextures.delete(candidate.key);
