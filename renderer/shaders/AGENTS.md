@@ -24,7 +24,7 @@ Per-effect shader passes. Each shader type gets a class extending `ShaderPass`.
 
 - Simple shaders: ~20 lines. Extend `ShaderPass`, import WGSL, write variant uniform at `uintView[7]` / `floatView[7]`.
 - Complex shaders (dithering, ascii) override `initialize()`, `createBindGroupLayout()`, `createBindGroup()`, and/or `execute()`.
-- All shaders share the same 336-byte uniform layout. Common uniforms (size, intensity, scale, shape, colors, palette, `is_p3`) written by base class `writeUniforms()`.
+- All shaders share the same 336-byte uniform layout. Common uniforms (size, intensity, scale, shape, colors, palette, `is_p3`) are written by base class `writeUniforms()`. Pixel-space `size` is multiplied by `EffectRenderEntity.pixelScale`; keep dimensionless `scale` unchanged except for dithering, where it is a pixel-period control and scales with LOD too.
 - `ShaderPass.removeEntity()` owns base uniform-buffer cleanup. Overrides must release their specialized state and call `super.removeEntity()`.
 - Scratch textures may return to `TexturePool` after their final encoded read/copy; command-buffer ordering permits reuse by later passes. They remain protected from destruction until the post-submit `commitSubmitted()` boundary.
 - Error-diffusion buffers are persistent GPU resources; keep them byte-budgeted and release specialized shader state from `removeEntity()` before calling `super.removeEntity()`.
