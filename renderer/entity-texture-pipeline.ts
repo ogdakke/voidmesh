@@ -142,15 +142,20 @@ export class EntityTexturePipeline {
   renderEntityToTexture(
     entity: ShaderCanvasEntity,
     encoder: GPUCommandEncoder,
+    renderSize: { width: number; height: number } = entity.originalSize,
   ): EntityCompositionSource | null {
-    const width = entity.originalSize.width;
-    const height = entity.originalSize.height;
+    const width = renderSize.width;
+    const height = renderSize.height;
+    const renderEntity =
+      width === entity.originalSize.width && height === entity.originalSize.height
+        ? entity
+        : { ...entity, originalSize: renderSize };
     const useExternalVideoSource = entity.mediaSource.type === MediaType.video;
 
     // Time-based shaders need the shader pass every canvas render. Processed videos do not:
     // GameLoop marks them dirty only when a decoded video frame changes, so viewport-only
     // renders can safely reuse the cached processed texture instead of re-running the shader.
-    const needsContinuousShaderRender = this.#runtime.needsContinuousRender(entity);
+    const needsContinuousShaderRender = this.#runtime.needsContinuousRender(renderEntity);
 
     // Check if we have a valid processed texture.
     const processedKey = this.#getProcessedCacheKey(
@@ -275,7 +280,7 @@ export class EntityTexturePipeline {
 
     // Apply shader using unified method (handles fragment, external, and compute paths).
     this.#runtime.encode({
-      entity,
+      entity: renderEntity,
       source: shaderSource,
       outputTexture,
       encoder,
@@ -387,10 +392,17 @@ export class EntityTexturePipeline {
     width: number,
     height: number,
   ): void {
-    const source =
+    let source: CanvasImageSource =
       entity.mediaSource.type === MediaType.image
         ? entity.mediaSource.asset.imageBitmap
         : entity.imageBitmap;
+    if (source.width !== width || source.height !== height) {
+      const resized = new OffscreenCanvas(width, height);
+      const context = resized.getContext("2d", { alpha: getSourceAlphaMode(entity) !== "none" });
+      if (!context) throw new Error("Could not create static-image LOD resize context");
+      context.drawImage(source, 0, 0, width, height);
+      source = resized;
+    }
     this.#device.queue.copyExternalImageToTexture(
       { source },
       { texture, colorSpace: this.#colorConfig.textureColorSpace },

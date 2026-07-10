@@ -1,0 +1,23 @@
+import { describe, expect, test } from "vitest";
+import { getEntityRenderSize } from "#renderer/entity-render-size.ts";
+import { createTestEntity } from "../helpers/test-entity.ts";
+
+describe("getEntityRenderSize", () => {
+  test("selects a quantized tier from projected physical size", () => {
+    const entity = createTestEntity({ size: { width: 100, height: 75 } });
+    entity.originalSize = { width: 1600, height: 1200 };
+
+    expect(getEntityRenderSize(entity, { offset: { x: 0, y: 0 }, zoom: 0.5 }, 2)).toEqual({
+      width: 128,
+      height: 96,
+    });
+  });
+
+  test("keeps native resolution when projected near or above it", () => {
+    const entity = createTestEntity({ size: { width: 1600, height: 1200 } });
+
+    expect(getEntityRenderSize(entity, { offset: { x: 0, y: 0 }, zoom: 1 }, 1)).toEqual(
+      entity.originalSize,
+    );
+  });
+});

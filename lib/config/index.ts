@@ -492,6 +492,10 @@ export const config = {
     texturePoolBudgetBytes: 64 * 1024 * 1024,
     /** Persistent dimension-keyed blur and bloom texture budget. */
     processingTextureBudgetBytes: 128 * 1024 * 1024,
+    /** Quantized maximum dimensions for static-image viewport rendering. */
+    imageLodTiers: [64, 128, 256, 512, 1024, 2048, 4096] as const,
+    /** Extra physical pixels retained around the projected size before promotion. */
+    imageLodOverscan: 1.25,
     grid: {
       default: DEFAULT_GRID_CONFIG,
       dark: DEFAULT_GRID_CONFIG_DARK,

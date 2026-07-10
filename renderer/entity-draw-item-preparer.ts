@@ -4,6 +4,7 @@ import { boundsIntersect, getRotatedAABB, getViewportWorldBounds } from "#lib/ca
 import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
 import type { CompositionDrawItem, CompositionPass } from "./composition-pass.ts";
 import type { EntityTexturePipeline } from "./entity-texture-pipeline.ts";
+import { getEntityRenderSize } from "./entity-render-size.ts";
 
 interface EntityDrawItemPreparerOptions {
   texturePipeline: EntityTexturePipeline;
@@ -92,7 +93,11 @@ export class EntityDrawItemPreparer {
         hasAnimatingContent = true;
       }
 
-      const compositionSource = this.#texturePipeline.renderEntityToTexture(entity, encoder);
+      const compositionSource = this.#texturePipeline.renderEntityToTexture(
+        entity,
+        encoder,
+        getEntityRenderSize(entity, viewport, devicePixelRatio),
+      );
       if (!compositionSource) continue;
 
       // Clear dirty flag
