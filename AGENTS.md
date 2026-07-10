@@ -99,7 +99,7 @@ Static media images live in `media/` (not `public/media/`). Import via `#media/*
 
 `.vdmsh` zip files (`application/vdmsh` MIME type) via fflate. Media encoding and compression runs in a Web Worker (`lib/serialization/serialize-worker.ts`). Supports file handle saving (File System Access API) for in-place overwrites. See `lib/serialization/` for format docs.
 
-Repeated image entities share one archive media path per asset revision; deserialization preserves that sharing rather than decoding the same PNG per entity.
+Repeated image entities share one archive media path per asset revision; deserialization decodes that path once, restores duplicate entities synchronously in 512-entity cooperative chunks, and atomically replaces store/index state without retaining a dirty-ID set for every entity.
 
 <!-- opensrc:start -->
 

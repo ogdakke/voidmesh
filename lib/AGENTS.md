@@ -12,7 +12,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `media-loader.ts` — Loads/parses images, videos, GIFs, SVGs. Extracts palettes and frame rates.
 - `media-assets.ts` — Creates shared image assets and manages decoded-bitmap lifetime with explicit retain/release ownership.
 - `app-loader.ts` — Controls the HTML loading screen. `setText()` updates status text, `dismiss()` hides with min-display guarantee.
-- `serialization/` — `.vdmsh` zip format with versioning and migrations. Encoding/compression runs in a Web Worker; repeated image entities store one PNG per shared asset revision and restore one reference-counted asset per media path.
+- `serialization/` — `.vdmsh` zip format with versioning and migrations. Encoding/compression runs in a Web Worker; large imports yield/report by bounded chunks, decode each repeated image path once, and avoid per-entity async/log/progress work for shared instances.
 - `files/file-handle.ts` — File System Access API handle storage for in-place workspace saving (Chromium only).
 - `files/random-filename.ts` + `files/filename-words.ts` — Random filename generation for workspace files.
 - `palette-extraction/` — K-means clustering for color palettes.
@@ -34,6 +34,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - Config is a frozen object. Do not mutate at runtime.
 - Hot-path bounds helpers accept caller-owned output objects; renderer culling must pass scratch `Bounds` instead of allocating one per entity.
 - Spatial queries reuse caller-owned result arrays. Update the index whenever entity position, size, rotation, z-index, insertion, or removal changes.
+- Current-version deserialization reuses the unique objects produced by `JSON.parse`; recursively merge cloned defaults only for schema-mismatched documents that require compatibility filling.
 
 ## Anti-Patterns
 

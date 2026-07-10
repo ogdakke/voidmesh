@@ -28,7 +28,9 @@ Canvas state management and input processing. This is the "model + controller" l
 
 - State mutated imperatively through `CanvasStore` methods, then `notify()` triggers React re-renders via the appropriate version counter.
 - Use `CanvasStore.addEntities()` for bulk insertion so large imports/duplicates produce one version update and subscriber notification.
+- Use `CanvasStore.restoreWorkspace()` after a complete workspace decode. It replaces entities, viewport, and spatial state with one notification and one scene-level dirty flag; do not populate `entitiesDirty` with every restored ID.
 - Use `CanvasStore.updateEntities()` for multi-selection mutations. It applies every replacement/dirty ID before one version bump, subscriber notification, and aggregate debug log.
+- Non-spatial entity replacements update the spatial index's entity reference without removing/reinserting its cell; only position, size, rotation, and z-index changes reindex geometry.
 - Use `CanvasStore.queryEntitiesInBounds()` for broad-phase canvas queries; results are exact, duplicate-free, and z-ordered. Do not restore full-map viewport or hit-test scans.
 - `GameLoop` uses dependency injection (`GameLoopDeps`) for testability. Default deps created via `createDefaultDeps()`. Receives renderer via `setRenderer()`.
 - `MomentumController` also uses DI (`MomentumDeps`) — inject viewport/pan callbacks for unit testing without a real canvas.
