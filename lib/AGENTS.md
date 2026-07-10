@@ -11,7 +11,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `media-loader.ts` — Loads/parses images, videos, GIFs, SVGs. Extracts palettes and frame rates.
 - `media-assets.ts` — Creates shared image assets and manages decoded-bitmap lifetime with explicit retain/release ownership.
 - `app-loader.ts` — Controls the HTML loading screen. `setText()` updates status text, `dismiss()` hides with min-display guarantee.
-- `serialization/` — `.vdmsh` zip format with versioning and migrations. Encoding/compression in Web Worker.
+- `serialization/` — `.vdmsh` zip format with versioning and migrations. Encoding/compression runs in a Web Worker; repeated image entities store one PNG per shared asset revision and restore one reference-counted asset per media path.
 - `files/file-handle.ts` — File System Access API handle storage for in-place workspace saving (Chromium only).
 - `files/random-filename.ts` + `files/filename-words.ts` — Random filename generation for workspace files.
 - `palette-extraction/` — K-means clustering for color palettes.
