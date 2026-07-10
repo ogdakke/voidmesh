@@ -268,6 +268,7 @@ function CanvasContextMenuItems({
 
   // Get palette info with multi-select support
   const paletteParam = useParamValue("palette", null);
+  const showOriginalParam = useParamValue("showOriginal", false);
   const preserveColorsParam = useParamValue("preserveColors", null);
   const reversePaletteParam = useParamValue("reversePalette", null);
 
@@ -392,9 +393,9 @@ function CanvasContextMenuItems({
   const presets = paletteList.map((item) => item.palette);
 
   // Compute mixed state for checkboxes
-  const showOriginalMixed = isMultiple && !selectionState.paramValues.showOriginal?.isUniform;
-  const preserveColorsMixed = isMultiple && !selectionState.paramValues.preserveColors?.isUniform;
-  const reversePaletteMixed = isMultiple && !selectionState.paramValues.reversePalette?.isUniform;
+  const showOriginalMixed = isMultiple && showOriginalParam.isMixed;
+  const preserveColorsMixed = isMultiple && preserveColorsParam.isMixed;
+  const reversePaletteMixed = isMultiple && reversePaletteParam.isMixed;
 
   return (
     <>
@@ -537,11 +538,7 @@ function CanvasContextMenuItems({
       {/* Show Original Checkbox - with mixed state visual indicator */}
       <ContextMenu.CheckboxItem
         className="menu-checkbox-item menu-item--icon-right"
-        checked={
-          showOriginalMixed
-            ? false
-            : ((selectionState.paramValues.showOriginal?.value as boolean) ?? false)
-        }
+        checked={showOriginalMixed ? false : showOriginalParam.value}
         data-mixed={showOriginalMixed ? "" : undefined}
         onCheckedChange={(checked) => {
           // When mixed, clicking sets ALL to true; when uniform, toggle as normal
@@ -560,11 +557,7 @@ function CanvasContextMenuItems({
       {preserveColorsParam.isSupported && (
         <ContextMenu.CheckboxItem
           className="menu-checkbox-item menu-item--icon-right"
-          checked={
-            preserveColorsMixed
-              ? false
-              : ((selectionState.paramValues.preserveColors?.value as boolean) ?? false)
-          }
+          checked={preserveColorsMixed ? false : (preserveColorsParam.value ?? false)}
           data-mixed={preserveColorsMixed ? "" : undefined}
           onCheckedChange={(checked) => {
             // When mixed, clicking sets ALL to true; when uniform, toggle as normal
@@ -584,11 +577,7 @@ function CanvasContextMenuItems({
       {reversePaletteParam.isSupported && (
         <ContextMenu.CheckboxItem
           className="menu-checkbox-item menu-item--icon-right"
-          checked={
-            reversePaletteMixed
-              ? false
-              : ((selectionState.paramValues.reversePalette?.value as boolean) ?? false)
-          }
+          checked={reversePaletteMixed ? false : (reversePaletteParam.value ?? false)}
           data-mixed={reversePaletteMixed ? "" : undefined}
           onCheckedChange={(checked) => {
             const newValue = reversePaletteMixed ? true : checked;

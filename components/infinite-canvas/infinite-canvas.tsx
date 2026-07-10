@@ -570,10 +570,7 @@ export function InfiniteCanvas() {
   // Select all entities
   const selectAllShortcutHandler = (e: KeyboardEvent) => {
     e.preventDefault();
-    const allIds = [...canvasStore.getState().entities.keys()];
-    if (allIds.length > 0) {
-      canvasStore.replaceSelection(allIds);
-    }
+    canvasStore.selectAll();
   };
 
   // Clear selection

@@ -11,6 +11,7 @@ import {
   type ParamPaths,
   type GetParamByPath,
   type SelectionState,
+  type ShaderType,
   MediaType,
 } from "#types/canvas.ts";
 import { getFrameAtTime } from "#lib/gif-decoder.ts";
@@ -58,6 +59,7 @@ export interface CanvasState {
   // Version counters for React change detection (selective subscriptions)
   version: number; // Overall version (for backward compat)
   entityVersion: number; // Entity membership/reference/animation classification changes
+  geometryVersion: number; // Imperative position changes that do not notify React
   viewportVersion: number; // Incremented only on viewport changes
   selectionVersion: number; // Incremented on selection/entity changes
   preferencesVersion: number; // Incremented on preference changes
@@ -221,6 +223,7 @@ export class CanvasStore extends Store<CanvasState> {
   #logger: Logger;
   #viewportListeners = new Set<() => void>();
   #selectedEntitiesCache: ShaderCanvasEntity[] = [];
+  #selectedEntitiesVersion = -1;
   #selectionStateCache: { entities: ShaderCanvasEntity[]; value: SelectionState } | null = null;
   #paramResultCache = new Map<
     string,
@@ -301,6 +304,7 @@ export class CanvasStore extends Store<CanvasState> {
       frameCount: 0,
       version: 0,
       entityVersion: 0,
+      geometryVersion: 0,
       viewportVersion: 0,
       selectionVersion: 0,
       preferencesVersion: 0,
@@ -519,6 +523,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.canvasCalloutsDirty = false;
     this.state.version++;
     this.state.entityVersion++;
+    this.state.geometryVersion++;
     this.state.selectionVersion++;
     this.state.viewportVersion++;
     this.state.preferencesVersion++;
@@ -566,6 +571,7 @@ export class CanvasStore extends Store<CanvasState> {
       entity.position.x += delta.x;
       entity.position.y += delta.y;
       this.#entitySpatialIndex.upsert(entity);
+      this.state.geometryVersion++;
       // Position-only updates still change the composed scene and must invalidate
       // renderer caches such as the fullscreen wlur overlay during drag.
       this.state.entitiesDirty.add(id);
@@ -681,6 +687,21 @@ export class CanvasStore extends Store<CanvasState> {
     this.notifySelectionChange();
   }
 
+  /** Select every entity without materializing and revalidating an intermediate ID array. */
+  selectAll(): void {
+    if (
+      this.state.entities.size === 0 ||
+      this.state.selectedEntityIds.size === this.state.entities.size
+    ) {
+      return;
+    }
+    this.state.selectedEntityIds = new Set(this.state.entityIds);
+    this.state.selectionDirty = true;
+    completeOnboardingStarterSelectionFromEvent(this.state.selectedEntityIds);
+    this.#logger.debug("All entities selected", { entityCount: this.state.selectedEntityIds.size });
+    this.notifySelectionChange();
+  }
+
   /** Adopt a validated drag-selection set without notifying React mid-gesture. */
   replaceTransientSelection(ids: Set<string>): Set<string> {
     const previousSelection = this.state.selectedEntityIds;
@@ -718,19 +739,22 @@ export class CanvasStore extends Store<CanvasState> {
 
   /** Get all selected entities */
   getSelectedEntities(): ShaderCanvasEntity[] {
-    return [...this.state.selectedEntityIds]
-      .map((id) => this.state.entities.get(id))
-      .filter((e): e is ShaderCanvasEntity => e !== undefined);
+    const entities: ShaderCanvasEntity[] = [];
+    for (const id of this.state.selectedEntityIds) {
+      const entity = this.state.entities.get(id);
+      if (entity) entities.push(entity);
+    }
+    return entities;
   }
 
   /** Get selected entities with structural sharing for selector subscriptions. */
   getSelectedEntitiesStable(): ShaderCanvasEntity[] {
-    const next = this.getSelectedEntities();
-    if (sameReferenceArray(this.#selectedEntitiesCache, next)) {
+    if (this.#selectedEntitiesVersion === this.state.selectionVersion) {
       return this.#selectedEntitiesCache;
     }
-    this.#selectedEntitiesCache = next;
-    return next;
+    this.#selectedEntitiesCache = this.getSelectedEntities();
+    this.#selectedEntitiesVersion = this.state.selectionVersion;
+    return this.#selectedEntitiesCache;
   }
 
   /** Get the count of selected entities */
@@ -751,7 +775,7 @@ export class CanvasStore extends Store<CanvasState> {
       return this.#selectionStateCache.value;
     }
 
-    const next = computeSelectionState(entities);
+    const next = computeSelectionState(entities, this.state.selectedEntityIds);
     this.#selectionStateCache = { entities, value: next };
     return next;
   }
@@ -818,6 +842,7 @@ export class CanvasStore extends Store<CanvasState> {
     // Increment versions to invalidate cached snapshots
     this.state.version++;
     this.state.entityVersion++;
+    this.state.geometryVersion++;
     this.state.selectionVersion++;
     this.state.viewportVersion++;
     this.state.preferencesVersion++;
@@ -1411,6 +1436,7 @@ export class CanvasStore extends Store<CanvasState> {
 
   #resetSelectorCaches(): void {
     this.#selectedEntitiesCache = [];
+    this.#selectedEntitiesVersion = -1;
     this.#selectionStateCache = null;
     this.#paramResultCache.clear();
   }
@@ -1437,10 +1463,13 @@ function getNestedValue<T>(params: ShaderParams, pathParts: string[]): T | undef
   return current as T | undefined;
 }
 
-function computeSelectionState(entities: ShaderCanvasEntity[]): SelectionState {
+function computeSelectionState(
+  entities: ShaderCanvasEntity[],
+  selectedEntityIds: ReadonlySet<string>,
+): SelectionState {
   if (entities.length === 0) {
     return {
-      entityIds: new Set(),
+      entityIds: selectedEntityIds,
       count: 0,
       isEmpty: true,
       isSingle: false,
@@ -1449,32 +1478,15 @@ function computeSelectionState(entities: ShaderCanvasEntity[]): SelectionState {
       hasUniformShader: false,
       commonParams: [],
       colorMode: "mixed",
-      paramValues: {},
     };
   }
 
-  const shaderTypes = new Set(entities.map((entity) => entity.shaderType));
+  const shaderTypes = new Set<ShaderType>();
+  for (const entity of entities) shaderTypes.add(entity.shaderType);
   const { params: commonParams, colorMode } = getCommonFeatures([...shaderTypes]);
-  const paramValues: Record<string, { isUniform: boolean; value: unknown; values: Set<unknown> }> =
-    {};
-
-  for (const param of commonParams) {
-    const values = new Set(
-      entities.map((entity) => {
-        const value = entity.shaderParams[param];
-        return typeof value === "object" ? JSON.stringify(value) : value;
-      }),
-    );
-    const firstValue = entities[0]?.shaderParams[param];
-    paramValues[param] = {
-      isUniform: values.size === 1,
-      value: values.size === 1 ? (firstValue ?? null) : null,
-      values: new Set(entities.map((entity) => entity.shaderParams[param])),
-    };
-  }
 
   return {
-    entityIds: new Set(entities.map((entity) => entity.id)),
+    entityIds: selectedEntityIds,
     count: entities.length,
     isEmpty: false,
     isSingle: entities.length === 1,
@@ -1483,17 +1495,7 @@ function computeSelectionState(entities: ShaderCanvasEntity[]): SelectionState {
     hasUniformShader: shaderTypes.size === 1,
     commonParams,
     colorMode,
-    paramValues: paramValues as SelectionState["paramValues"],
   };
-}
-
-function sameReferenceArray<T>(a: readonly T[], b: readonly T[]): boolean {
-  if (a === b) return true;
-  if (a.length !== b.length) return false;
-  for (let index = 0; index < a.length; index += 1) {
-    if (a[index] !== b[index]) return false;
-  }
-  return true;
 }
 
 function sameCanvasCallouts(a: readonly CanvasCallout[], b: readonly CanvasCallout[]): boolean {

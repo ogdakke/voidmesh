@@ -589,7 +589,7 @@ export type DragTargetType = typeof DragTargetType.infer;
 
 /** Selection state computed from selected entities */
 export interface SelectionState {
-  entityIds: Set<string>;
+  entityIds: ReadonlySet<string>;
   count: number;
   isEmpty: boolean;
   isSingle: boolean;
@@ -600,15 +600,6 @@ export interface SelectionState {
   hasUniformShader: boolean;
   commonParams: (keyof ShaderParams)[];
   colorMode: ColorMode | "mixed";
-
-  // For specific params, whether all selected have same value
-  paramValues: {
-    [K in keyof ShaderParams]?: {
-      isUniform: boolean;
-      value: ShaderParams[K] | null; // null if mixed
-      values: Set<ShaderParams[K]>; // all distinct values
-    };
-  };
 }
 
 /** For UI components to know what selection mode they're in */

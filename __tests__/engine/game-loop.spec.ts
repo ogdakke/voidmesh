@@ -408,6 +408,24 @@ describe("Desktop pointer interactions", () => {
     });
   });
 
+  test("multi-selection bounds do not materialize a selected-entity array", () => {
+    const first = addEntity(100, 100, 100, 100);
+    const second = addEntity(300, 100, 100, 100);
+    canvasStore.replaceSelection([first, second]);
+    const materialize = vi.spyOn(canvasStore, "getSelectedEntities");
+    const entityLookup = vi.spyOn(canvasStore.getState().entities, "get");
+
+    expect(gl.getMultiSelectBounds()).toEqual({ x: 100, y: 100, width: 300, height: 100 });
+    canvasStore.panBy({ x: 50, y: 50 });
+    expect(gl.getMultiSelectBounds()).toEqual({ x: 100, y: 100, width: 300, height: 100 });
+    expect(materialize).not.toHaveBeenCalled();
+    expect(entityLookup).toHaveBeenCalledTimes(2);
+
+    canvasStore.moveEntity(first, { x: 10, y: 0 });
+    expect(gl.getMultiSelectBounds()).toEqual({ x: 110, y: 100, width: 290, height: 100 });
+    expect(entityLookup).toHaveBeenCalledTimes(5);
+  });
+
   describe("Click on multi-selection", () => {
     test("click on entity in multi-selection collapses to single on pointerUp", () => {
       const id1 = addEntity(100, 100);

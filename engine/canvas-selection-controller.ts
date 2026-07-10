@@ -30,8 +30,13 @@ export class CanvasSelectionController {
   readonly #spatialQueryBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
   readonly #dragSelectionBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
   readonly #multiSelectionBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #cachedMultiSelectionBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
   readonly #intersectingEntityIds: string[] = [];
   #nextSelection = new Set<string>();
+  #cachedBoundsEntityIds: ReadonlySet<string> | null = null;
+  #cachedBoundsEntityVersion = -1;
+  #cachedBoundsGeometryVersion = -1;
+  #cachedBoundsHasValue = false;
 
   isInMultiSelectMode(): boolean {
     return canvasStore.getState().multiSelectMode;
@@ -112,7 +117,7 @@ export class CanvasSelectionController {
   }
 
   computeMultiSelectBounds(state: CanvasState): Bounds | null {
-    return this.#computeBoundsForEntityIds(state.selectedEntityIds, state);
+    return this.#getCachedBoundsForEntityIds(state.selectedEntityIds, state);
   }
 
   getMultiSelectBounds(
@@ -123,7 +128,8 @@ export class CanvasSelectionController {
     if (isActionLayerActive) return null;
 
     if (dragSelect?.isActive && dragSelect.mode === "subtractive") {
-      return this.#computeBoundsForEntityIds(canvasStore.getSelectedEntityIds());
+      const state = canvasStore.getState();
+      return this.#getCachedBoundsForEntityIds(state.selectedEntityIds, state);
     }
 
     if (dragSelect?.isActive) return null;
@@ -131,31 +137,27 @@ export class CanvasSelectionController {
     const selectedIds = canvasStore.getSelectedEntityIds();
     if (selectedIds.size <= 1) return null;
 
-    const entities = canvasStore.getSelectedEntities();
-    if (entities.length === 0) return null;
+    const isDragVisualActive = dragVisual.isActive();
+    if (!isDragVisualActive) {
+      const state = canvasStore.getState();
+      return this.#getCachedBoundsForEntityIds(selectedIds, state);
+    }
+
+    const entities = canvasStore.getSelectedEntitiesStable();
 
     let minX = Infinity,
       minY = Infinity;
     let maxX = -Infinity,
       maxY = -Infinity;
 
-    const isDragVisualActive = dragVisual.isActive();
-
     for (const entity of entities) {
-      if (isDragVisualActive) {
-        const scale = dragVisual.getScale(entity.id);
-        const offsetX = ((1 - scale) * entity.size.width) / 2;
-        const offsetY = ((1 - scale) * entity.size.height) / 2;
-        minX = Math.min(minX, entity.position.x + offsetX);
-        minY = Math.min(minY, entity.position.y + offsetY);
-        maxX = Math.max(maxX, entity.position.x + offsetX + entity.size.width * scale);
-        maxY = Math.max(maxY, entity.position.y + offsetY + entity.size.height * scale);
-      } else {
-        minX = Math.min(minX, entity.position.x);
-        minY = Math.min(minY, entity.position.y);
-        maxX = Math.max(maxX, entity.position.x + entity.size.width);
-        maxY = Math.max(maxY, entity.position.y + entity.size.height);
-      }
+      const scale = dragVisual.getScale(entity.id);
+      const offsetX = ((1 - scale) * entity.size.width) / 2;
+      const offsetY = ((1 - scale) * entity.size.height) / 2;
+      minX = Math.min(minX, entity.position.x + offsetX);
+      minY = Math.min(minY, entity.position.y + offsetY);
+      maxX = Math.max(maxX, entity.position.x + offsetX + entity.size.width * scale);
+      maxY = Math.max(maxY, entity.position.y + offsetY + entity.size.height * scale);
     }
 
     return this.#setMultiSelectionBounds(minX, minY, maxX, maxY);
@@ -297,6 +299,7 @@ export class CanvasSelectionController {
   #computeBoundsForEntityIds(
     entityIds: ReadonlySet<string>,
     state = canvasStore.getState(),
+    output = this.#multiSelectionBounds,
   ): Bounds | null {
     if (entityIds.size <= 1) return null;
 
@@ -318,11 +321,35 @@ export class CanvasSelectionController {
 
     if (count < 2) return null;
 
-    return this.#setMultiSelectionBounds(minX, minY, maxX, maxY);
+    return this.#setBounds(output, minX, minY, maxX, maxY);
   }
 
   #setMultiSelectionBounds(minX: number, minY: number, maxX: number, maxY: number): Bounds {
-    const bounds = this.#multiSelectionBounds;
+    return this.#setBounds(this.#multiSelectionBounds, minX, minY, maxX, maxY);
+  }
+
+  #getCachedBoundsForEntityIds(entityIds: ReadonlySet<string>, state: CanvasState): Bounds | null {
+    if (
+      this.#cachedBoundsEntityIds === entityIds &&
+      this.#cachedBoundsEntityVersion === state.entityVersion &&
+      this.#cachedBoundsGeometryVersion === state.geometryVersion
+    ) {
+      return this.#cachedBoundsHasValue ? this.#cachedMultiSelectionBounds : null;
+    }
+
+    const bounds = this.#computeBoundsForEntityIds(
+      entityIds,
+      state,
+      this.#cachedMultiSelectionBounds,
+    );
+    this.#cachedBoundsEntityIds = entityIds;
+    this.#cachedBoundsEntityVersion = state.entityVersion;
+    this.#cachedBoundsGeometryVersion = state.geometryVersion;
+    this.#cachedBoundsHasValue = bounds !== null;
+    return bounds;
+  }
+
+  #setBounds(bounds: Bounds, minX: number, minY: number, maxX: number, maxY: number): Bounds {
     bounds.x = minX;
     bounds.y = minY;
     bounds.width = maxX - minX;

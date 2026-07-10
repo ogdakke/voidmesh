@@ -69,6 +69,45 @@ describe("canvasStore entity versioning", () => {
   });
 });
 
+describe("canvasStore large selection access", () => {
+  test("selects all entities without an intermediate caller-owned ID array", () => {
+    const entities = [
+      createTestEntity({ id: "select-all-first" }),
+      createTestEntity({ id: "select-all-second" }),
+    ];
+    canvasStore.addEntities(entities);
+    const listener = vi.fn<() => void>();
+    const unsubscribe = canvasStore.subscribe(listener);
+
+    canvasStore.selectAll();
+    canvasStore.selectAll();
+
+    expect([...canvasStore.getSelectedEntityIds()]).toEqual(entities.map(({ id }) => id));
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  test("materializes selected entities once per selection version", () => {
+    const entities = [
+      createTestEntity({ id: "stable-selection-first" }),
+      createTestEntity({ id: "stable-selection-second" }),
+    ];
+    canvasStore.addEntities(entities);
+    canvasStore.selectAll();
+    const materialize = vi.spyOn(canvasStore, "getSelectedEntities");
+
+    const first = canvasStore.getSelectedEntitiesStable();
+    const second = canvasStore.getSelectedEntitiesStable();
+
+    expect(second).toBe(first);
+    expect(materialize).toHaveBeenCalledTimes(1);
+
+    canvasStore.clearSelection();
+    expect(canvasStore.getSelectedEntitiesStable()).toEqual([]);
+    expect(materialize).toHaveBeenCalledTimes(2);
+  });
+});
+
 // ============================================================================
 // Video Playback Store Methods
 // ============================================================================
