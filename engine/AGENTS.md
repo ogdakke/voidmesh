@@ -17,10 +17,10 @@ Canvas state management and input processing. This is the "model + controller" l
 
 ## State Architecture
 
-- `CanvasState` uses version counters (`version`, `viewportVersion`, `selectionVersion`, `playbackVersion`, `dragVersion`) for selective React subscriptions.
+- `CanvasState` uses version counters (`version`, `entityVersion`, `viewportVersion`, `selectionVersion`, `playbackVersion`, `dragVersion`) for selective cache invalidation and React subscriptions.
 - Snapshot types (`ViewportSnapshot`, `SelectionSnapshot`, `PlaybackSnapshot`, `DragSnapshot`, `ActionLayerSnapshot`) isolate subscription scopes — sidebar components don't re-render on viewport pan.
 - Dirty flags (`viewportDirty`, `entitiesDirty`, `selectionDirty`) tell the renderer what needs redrawing.
-- `RenderState` is a stable mutable frame view consumed synchronously by `InfiniteCanvasRenderer.render()`; its sorted entity array is rebuilt only when the general entity version changes.
+- `RenderState` is a stable mutable frame view consumed synchronously by `InfiniteCanvasRenderer.render()`; its sorted entity array is rebuilt only when `entityVersion` changes, never for selection-only changes.
 - `CanvasStore` owns the incremental `EntitySpatialIndex` shared by renderer visibility, point hit testing, and drag selection. Every geometry mutation must upsert or remove its entity from the index.
 - `CanvasStore.hasRenderChanges()` checks dirty state without materializing or mutating render state.
 
@@ -33,17 +33,20 @@ Canvas state management and input processing. This is the "model + controller" l
 - Use `CanvasStore.removeEntities()` for bulk deletion. It deletes maps/index entries, compacts the ordered ID array once, rebuilds selection once, and emits one notification; never loop over `removeEntity()` for a selection.
 - Non-spatial entity replacements update the spatial index's entity reference without removing/reinserting its cell; only position, size, rotation, and z-index changes reindex geometry.
 - Use `CanvasStore.queryEntitiesInBounds()` for broad-phase canvas queries; results are exact, duplicate-free, and z-ordered. Do not restore full-map viewport or hit-test scans.
+- Use `CanvasStore.queryEntitiesInBoundsUnordered()` for membership-only work such as drag selection; do not pay to sort results that are consumed as a set.
+- Drag selection coalesces pointer moves in `processInput()`, swaps reusable selection sets into the store without notifying React mid-gesture, and publishes one final notification on pointer-up or cancellation.
 - `GameLoop` uses dependency injection (`GameLoopDeps`) for testability. Default deps created via `createDefaultDeps()`. Receives renderer via `setRenderer()`.
 - `MomentumController` also uses DI (`MomentumDeps`) — inject viewport/pan callbacks for unit testing without a real canvas.
 - Touch handling uses a state machine: `TouchGestureState` tracks active touches, pinch distance, long-press timers.
 - Space+drag panning uses `SpacePanMode` enum (`idle` → `ready` → `panning` → `panned`).
 - Per-frame controllers (disintegration, drag visuals, action layer) are ticked each frame; return `true` while animations are active to keep the render loop running.
-- The frame loop rebuilds animated-media and continuous-shader active sets only when the general entity `version` changes; do not reintroduce all-entity scans on every idle RAF.
+- The frame loop rebuilds animated-media and continuous-shader active sets only when `entityVersion` changes; selection-only changes must not trigger all-entity scans.
 - Playing media advances playback time every RAF, but only visible animated entities mark textures dirty and force render; passive playback notifications are limited to the selected entity.
 - Renderer-reported pending work keeps RAF alive for settled, budgeted LOD transitions after viewport input stops; it must not be implemented by pausing video playback.
 - Action-layer, drag-visual, and disintegration controllers reuse their render-state wrappers; mutate stable scratch state instead of allocating objects, sets, or overlay arrays every frame.
 - The FPS overlay reads direct renderer timing. Do not add `performance.mark()`/`measure()` calls to debug-mode render loops; Performance Timeline entry churn materially distorts the frames being measured.
 - `notifyViewportChange()` increments only `viewportVersion`. `notifySelectionChange()` increments `selectionVersion` + `version` + `playbackVersion`.
+- Entity membership, reference, effect, or playback-classification changes must increment `entityVersion`; selection and UI-only changes must not.
 - Hot-path selection logs contain counts plus bounded first/last IDs. Never join or serialize an unbounded selection into a log message.
 
 ## Anti-Patterns
