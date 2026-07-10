@@ -21,6 +21,7 @@ export class TexturePool {
   #format: GPUTextureFormat;
   #budgetBytes: number;
   #residentBytes = 0;
+  #textureCount = 0;
   #pool: Map<string, PooledTexture[]> = new Map();
   #currentFrame = 0;
   #staleFrameThreshold = 60; // Clean up textures unused for 60 frames
@@ -52,6 +53,7 @@ export class TexturePool {
     if (pool && pool.length > 0) {
       const entry = pool.pop()!;
       this.#residentBytes -= entry.byteSize;
+      this.#textureCount--;
       if (pool.length === 0) this.#pool.delete(key);
       return entry.texture;
     }
@@ -83,6 +85,7 @@ export class TexturePool {
     const byteSize = getTextureByteSize(width, height, this.#format);
     pool.push({ texture, lastUsedFrame: this.#currentFrame, byteSize });
     this.#residentBytes += byteSize;
+    this.#textureCount++;
   }
 
   /** Apply retention limits after the encoder containing released textures was submitted. */
@@ -94,12 +97,14 @@ export class TexturePool {
         pool.splice(index, 1);
         entry.texture.destroy();
         this.#residentBytes -= entry.byteSize;
+        this.#textureCount--;
       }
 
       while (pool.length > 4) {
         const entry = pool.shift()!;
         entry.texture.destroy();
         this.#residentBytes -= entry.byteSize;
+        this.#textureCount--;
       }
       if (pool.length === 0) this.#pool.delete(key);
     }
@@ -117,30 +122,26 @@ export class TexturePool {
     if (this.#currentFrame % 60 !== 0) return;
 
     for (const [key, pool] of this.#pool.entries()) {
-      const filtered = pool.filter((entry) => {
+      for (let index = pool.length - 1; index >= 0; index--) {
+        const entry = pool[index]!;
         const isStale = this.#currentFrame - entry.lastUsedFrame > this.#staleFrameThreshold;
         if (isStale) {
           entry.texture.destroy();
           this.#residentBytes -= entry.byteSize;
+          this.#textureCount--;
+          pool.splice(index, 1);
         }
-        return !isStale;
-      });
-
-      if (filtered.length === 0) {
-        this.#pool.delete(key);
-      } else {
-        this.#pool.set(key, filtered);
       }
+
+      if (pool.length === 0) this.#pool.delete(key);
     }
   }
 
   getStats(): TexturePoolStats {
-    let textureCount = 0;
-    for (const pool of this.#pool.values()) textureCount += pool.length;
     return {
       budgetBytes: this.#budgetBytes,
       residentBytes: this.#residentBytes,
-      textureCount,
+      textureCount: this.#textureCount,
     };
   }
 
@@ -155,6 +156,7 @@ export class TexturePool {
     }
     this.#pool.clear();
     this.#residentBytes = 0;
+    this.#textureCount = 0;
   }
 
   #trimToBudget(): void {
@@ -182,6 +184,7 @@ export class TexturePool {
       const [entry] = pool.splice(oldestIndex, 1);
       entry!.texture.destroy();
       this.#residentBytes -= entry!.byteSize;
+      this.#textureCount--;
       if (pool.length === 0) this.#pool.delete(oldestKey);
     }
   }
