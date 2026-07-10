@@ -1073,18 +1073,38 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    undo.beginTransaction();
+    const previousBatch: CanvasEntityUpdate[] = [];
+    const nextBatch: CanvasEntityUpdate[] = [];
     for (const entity of entities) {
-      updateEntity(entity.id, {
-        shaderType: targetShaderType,
-        shaderParams:
-          entity.shaderType === targetShaderType
-            ? entity.shaderParams
-            : applyShaderDefaults(entity.shaderParams, entity.shaderType, targetShaderType),
-        textureDirty: true,
+      previousBatch.push({
+        id: entity.id,
+        updates: {
+          shaderType: entity.shaderType,
+          shaderParams: entity.shaderParams,
+          // Both directions need to invalidate the resident processed texture.
+          textureDirty: true,
+        },
+      });
+      nextBatch.push({
+        id: entity.id,
+        updates: {
+          shaderType: targetShaderType,
+          shaderParams:
+            entity.shaderType === targetShaderType
+              ? entity.shaderParams
+              : applyShaderDefaults(entity.shaderParams, entity.shaderType, targetShaderType),
+          textureDirty: true,
+        },
       });
     }
-    undo.commitTransaction(`Update ${entities.length} entities`);
+    canvasStore.updateEntities(nextBatch);
+    undo.add(
+      Command.create({
+        undo: () => canvasStore.updateEntities(previousBatch),
+        execute: () => canvasStore.updateEntities(nextBatch),
+        description: `Change shader for ${entities.length} entities`,
+      }),
+    );
   };
 
   const changeDitheringKind = (value: string | null) => {
