@@ -106,6 +106,21 @@ describe("canvasStore large selection access", () => {
     expect(canvasStore.getSelectedEntitiesStable()).toEqual([]);
     expect(materialize).toHaveBeenCalledTimes(2);
   });
+
+  test("deduplicates structurally equal object params across cloned entities", () => {
+    const first = createTestEntity({ id: "cloned-param-first" });
+    const second = createTestEntity({
+      id: "cloned-param-second",
+      shaderParams: { palette: structuredClone(first.shaderParams.palette) },
+    });
+    canvasStore.addEntities([first, second]);
+    canvasStore.selectAll();
+
+    const palette = canvasStore.getParamResult("palette", null);
+
+    expect(palette.isMixed).toBe(false);
+    expect(palette.values.size).toBe(1);
+  });
 });
 
 // ============================================================================

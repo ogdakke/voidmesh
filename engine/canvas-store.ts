@@ -1411,24 +1411,33 @@ export class CanvasStore extends Store<CanvasState> {
 
     // Multi-select: check uniformity and collect distinct values
     const values = new Set<NonNullable<T>>();
+    if (firstValue != null) values.add(firstValue as NonNullable<T>);
     let isMixed = false;
+    let objectValueKeys: Set<string> | null = null;
 
-    for (const entity of entities) {
+    for (let index = 1; index < entities.length; index++) {
+      const entity = entities[index]!;
       // Apply default to get effective value (matches how firstValue is computed)
       const val = getNestedValue<T>(entity.shaderParams, pathParts) ?? defaultValue;
-      if (val != null) values.add(val as NonNullable<T>);
+      const matchesFirst = paramValueEqual(val, firstValue);
+      if (!matchesFirst) isMixed = true;
+      if (val == null || Object.is(val, firstValue)) continue;
 
-      if (!isMixed) {
-        if (val !== firstValue) {
-          if (typeof val === "object" && typeof firstValue === "object") {
-            if (JSON.stringify(val) !== JSON.stringify(firstValue)) {
-              isMixed = true;
-            }
-          } else {
-            isMixed = true;
-          }
-        }
+      if (typeof val !== "object") {
+        values.add(val as NonNullable<T>);
+        continue;
       }
+
+      // Object-valued params (currently palettes) are commonly cloned per entity.
+      // Keep one semantic value without retaining every clone in a giant Set.
+      if (matchesFirst) continue;
+      objectValueKeys ??= new Set(
+        firstValue != null && typeof firstValue === "object" ? [JSON.stringify(firstValue)] : [],
+      );
+      const key = JSON.stringify(val);
+      if (objectValueKeys.has(key)) continue;
+      objectValueKeys.add(key);
+      values.add(val as NonNullable<T>);
     }
 
     return { value: firstValue, isMixed, isSupported, values };
@@ -1461,6 +1470,30 @@ function getNestedValue<T>(params: ShaderParams, pathParts: string[]): T | undef
     current = (current as Record<string, unknown>)[part];
   }
   return current as T | undefined;
+}
+
+function paramValueEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
+
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    for (let index = 0; index < a.length; index++) {
+      if (!paramValueEqual(a[index], b[index])) return false;
+    }
+    return true;
+  }
+  if (Array.isArray(b)) return false;
+
+  const aRecord = a as Record<string, unknown>;
+  const bRecord = b as Record<string, unknown>;
+  const aKeys = Object.keys(aRecord);
+  const bKeys = Object.keys(bRecord);
+  if (aKeys.length !== bKeys.length) return false;
+  for (const key of aKeys) {
+    if (!Object.hasOwn(bRecord, key) || !paramValueEqual(aRecord[key], bRecord[key])) return false;
+  }
+  return true;
 }
 
 function computeSelectionState(
