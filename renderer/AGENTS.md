@@ -63,7 +63,7 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 - Stable processed image outputs are keyed by asset revision, dimensions, shader type, and full shader parameters. Identical instances share one texture; animated effects and non-image media remain entity-scoped.
 - Static images use 64/128/256/... screen-space LOD tiers with overscan. Source and processed cache keys include tier dimensions so canvas residency follows projected pixels.
 - Composition cache (`#entityCompositionCache`) reuses uniform buffers and bind groups; a weak texture-view cache shares one view across instances sampling the same texture.
-- `TexturePool` retains at most 64 MiB of idle transient textures across dimensions/usages. Release scratch immediately after its final encoded use so later ordered passes in the same command buffer can reuse it.
+- `TexturePool` retains at most 64 MiB of idle transient textures across dimensions/usages. Release scratch after its final encoded use for ordered reuse, but apply destruction limits only in `commitSubmitted()` after `queue.submit()`.
 - Image source changes require a new asset revision. Entity removal releases its source-cache ownership without destroying textures still used by sibling instances.
 
 ## Shader Uniform Layout

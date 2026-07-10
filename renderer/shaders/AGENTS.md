@@ -26,7 +26,7 @@ Per-effect shader passes. Each shader type gets a class extending `ShaderPass`.
 - Complex shaders (dithering, ascii) override `initialize()`, `createBindGroupLayout()`, `createBindGroup()`, and/or `execute()`.
 - All shaders share the same 336-byte uniform layout. Common uniforms (size, intensity, scale, shape, colors, palette, `is_p3`) written by base class `writeUniforms()`.
 - `ShaderPass.removeEntity()` owns base uniform-buffer cleanup. Overrides must release their specialized state and call `super.removeEntity()`.
-- Scratch textures may return to `TexturePool` after their final encoded read/copy; command-buffer ordering permits reuse by later passes.
+- Scratch textures may return to `TexturePool` after their final encoded read/copy; command-buffer ordering permits reuse by later passes. They remain protected from destruction until the post-submit `commitSubmitted()` boundary.
 - Render pipeline targets use `ctx.intermediateFormat` (not hardcoded `rgba8unorm`).
 - Luminance: use `select()` between BT.709 and P3 coefficients based on `uniforms.is_p3`.
 
