@@ -102,6 +102,7 @@ export class EntityDrawItemPreparer {
       this.#visibleEntities,
       entities,
     );
+    const allEntitiesSelected = entities.length > 0 && selectedEntityIds.size === entities.length;
     let previousSizedEntity: ShaderCanvasEntity | null = null;
     let previousDesiredWidth = 0;
     let previousDesiredHeight = 0;
@@ -155,7 +156,7 @@ export class EntityDrawItemPreparer {
 
       // Determine if this entity is hovered or selected
       const isHovered = entity.id === hoveredEntityId;
-      const isSelected = selectedEntityIds.has(entity.id);
+      const isSelected = allEntitiesSelected || selectedEntityIds.has(entity.id);
 
       // Action layer entities are drawn AFTER blur (not in main pass) to avoid halo
       const isActionLayerEntity = actionLayerActive && actionLayer.entityIds.has(entity.id);
