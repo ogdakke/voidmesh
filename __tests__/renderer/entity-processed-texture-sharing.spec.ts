@@ -90,6 +90,54 @@ describe("EntityTexturePipeline processed image sharing", () => {
     releaseImageAsset(first.mediaSource.asset);
     releaseImageAsset(first.mediaSource.asset);
   });
+
+  test("reuses a video poster texture while live preview is suppressed", () => {
+    const entity = createTestEntity({
+      id: "video-poster",
+      mediaType: "video",
+      shaderParams: { showOriginal: true },
+    });
+    entity.textureDirty = true;
+    const posterTexture = createTexture();
+    const device = {
+      queue: {
+        copyExternalImageToTexture: vi.fn<GPUQueue["copyExternalImageToTexture"]>(),
+      },
+      createTexture: vi.fn<GPUDevice["createTexture"]>(() => posterTexture),
+      createSampler: vi.fn<GPUDevice["createSampler"]>(() => ({}) as GPUSampler),
+    } as unknown as GPUDevice;
+    const pipeline = new EntityTexturePipeline({
+      device,
+      colorConfig: {
+        supportsP3: false,
+        canvasFormat: "bgra8unorm",
+        canvasColorSpace: "srgb",
+        intermediateFormat: "rgba16float",
+        textureColorSpace: "srgb",
+      },
+      texturePool: null,
+    });
+
+    const first = pipeline.renderEntityToTexture(
+      entity,
+      {} as GPUCommandEncoder,
+      entity.originalSize,
+      false,
+    );
+    entity.textureDirty = true;
+    const second = pipeline.renderEntityToTexture(
+      entity,
+      {} as GPUCommandEncoder,
+      entity.originalSize,
+      false,
+    );
+
+    expect(first).toEqual({ kind: "texture", texture: posterTexture });
+    expect(second).toEqual(first);
+    expect(device.createTexture).toHaveBeenCalledOnce();
+    expect(device.queue.copyExternalImageToTexture).toHaveBeenCalledOnce();
+    expect(pipeline.getResidencyStats().sourceTextureCount).toBe(1);
+  });
 });
 
 function createTexture(): GPUTexture {
