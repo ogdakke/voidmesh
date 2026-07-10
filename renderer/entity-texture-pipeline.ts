@@ -24,15 +24,17 @@ export class EntityTexturePipeline {
   // Entity texture cache
   #entityTextures: Map<string, GPUTexture> = new Map();
 
-  // Cached source textures per entity (avoids re-uploading unchanged images to GPU)
-  #entitySourceTextures: Map<
+  // Cached source textures per asset/frame identity. Static image instances share entries.
+  #sourceTextures: Map<
     string,
     {
       texture: GPUTexture;
       width: number;
       height: number;
+      entityIds: Set<string>;
     }
   > = new Map();
+  #entitySourceKeys: Map<string, string> = new Map();
 
   constructor(options: EntityTexturePipelineOptions) {
     this.#device = options.device;
@@ -122,7 +124,7 @@ export class EntityTexturePipeline {
     let sourceTexture: GPUTexture | null = null;
 
     if (useExternalVideoSource && entity.mediaSource.type === MediaType.video) {
-      this.#destroyEntitySourceTexture(entity.id);
+      this.#releaseEntitySourceTexture(entity.id);
       const video = entity.mediaSource.videoElement;
       const externalTexture = this.#device.importExternalTexture({
         source: video,
@@ -145,56 +147,38 @@ export class EntityTexturePipeline {
       GPUTextureUsage.COPY_SRC |
       GPUTextureUsage.RENDER_ATTACHMENT;
 
-    // Check source texture cache for static media: reuse when source dimensions match and
-    // the entity was not marked dirty.
-    const cachedSource = this.#entitySourceTextures.get(entity.id);
-
     if (!shaderSource) {
-      if (
-        !entity.textureDirty &&
-        cachedSource &&
-        cachedSource.width === width &&
-        cachedSource.height === height
-      ) {
-        sourceTexture = cachedSource.texture;
-      } else {
-        // Source changed, dimensions changed, or a new animated frame arrived: upload.
-        if (cachedSource && (cachedSource.width !== width || cachedSource.height !== height)) {
-          // Dimensions changed — destroy old, create new
-          cachedSource.texture.destroy();
-          sourceTexture = this.#device.createTexture({
-            label: `Entity ${entity.id} cached source`,
-            size: [width, height],
-            format: "rgba8unorm",
-            usage: sourceUsage,
-          });
-        } else if (cachedSource) {
-          // Same dimensions — reuse existing texture object, just re-upload data
-          sourceTexture = cachedSource.texture;
-        } else {
-          // First render — create new long-lived source texture
-          sourceTexture = this.#device.createTexture({
-            label: `Entity ${entity.id} cached source`,
-            size: [width, height],
-            format: "rgba8unorm",
-            usage: sourceUsage,
-          });
-        }
-
+      const sourceKey = this.#getSourceCacheKey(entity, width, height);
+      let cachedSource = this.#sourceTextures.get(sourceKey);
+      if (!cachedSource) {
+        sourceTexture = this.#device.createTexture({
+          label: `Source ${sourceKey}`,
+          size: [width, height],
+          format: "rgba8unorm",
+          usage: sourceUsage,
+        });
         this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
-
-        this.#entitySourceTextures.set(entity.id, {
+        cachedSource = {
           texture: sourceTexture,
           width,
           height,
-        });
+          entityIds: new Set(),
+        };
+        this.#sourceTextures.set(sourceKey, cachedSource);
+      } else {
+        sourceTexture = cachedSource.texture;
+        if (entity.mediaSource.type === MediaType.gif && entity.textureDirty) {
+          this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
+        }
       }
+
+      this.#bindEntityToSource(entity.id, sourceKey, cachedSource);
 
       shaderSource = { kind: "texture", texture: sourceTexture! };
     }
 
     // If showOriginal is enabled, compose the source texture directly. The source texture
-    // is owned by #entitySourceTextures, so keep it out of #entityTextures to avoid
+    // is owned by #sourceTextures, so keep it out of #entityTextures to avoid
     // double-destroying the same GPU resource during cleanup.
     if (entity.shaderParams.showOriginal) {
       if (cachedTexture) {
@@ -239,18 +223,14 @@ export class EntityTexturePipeline {
         entity.mediaSource.type === MediaType.video ? entity.mediaSource.alphaMode : undefined,
     });
 
-    // Cache and return (source texture stays in #entitySourceTextures)
+    // Cache and return (source texture stays in the shared source cache)
     this.#entityTextures.set(entity.id, outputTexture);
     return { kind: "texture", texture: outputTexture };
   }
 
   getDisplayedEntityTexture(entity: ShaderCanvasEntity): GPUTexture | null {
     if (entity.shaderParams.showOriginal) {
-      return (
-        this.#entitySourceTextures.get(entity.id)?.texture ??
-        this.#entityTextures.get(entity.id) ??
-        null
-      );
+      return this.getSourceEntityTexture(entity.id) ?? this.#entityTextures.get(entity.id) ?? null;
     }
 
     return this.#entityTextures.get(entity.id) ?? null;
@@ -261,7 +241,8 @@ export class EntityTexturePipeline {
   }
 
   getSourceEntityTexture(entityId: string): GPUTexture | null {
-    return this.#entitySourceTextures.get(entityId)?.texture ?? null;
+    const sourceKey = this.#entitySourceKeys.get(entityId);
+    return sourceKey ? (this.#sourceTextures.get(sourceKey)?.texture ?? null) : null;
   }
 
   needsContinuousRenderForEntity(entity: ShaderCanvasEntity): boolean {
@@ -274,12 +255,7 @@ export class EntityTexturePipeline {
     texture?.destroy();
     this.#entityTextures.delete(entityId);
 
-    // Remove cached source texture
-    const cachedSource = this.#entitySourceTextures.get(entityId);
-    if (cachedSource) {
-      cachedSource.texture.destroy();
-      this.#entitySourceTextures.delete(entityId);
-    }
+    this.#releaseEntitySourceTexture(entityId);
 
     this.#runtime.removeEntity(entityId);
   }
@@ -300,10 +276,11 @@ export class EntityTexturePipeline {
     this.#entityTextures.clear();
 
     // Destroy cached source textures
-    for (const cached of this.#entitySourceTextures.values()) {
+    for (const cached of this.#sourceTextures.values()) {
       cached.texture.destroy();
     }
-    this.#entitySourceTextures.clear();
+    this.#sourceTextures.clear();
+    this.#entitySourceKeys.clear();
 
     this.#runtime.destroy();
   }
@@ -325,11 +302,44 @@ export class EntityTexturePipeline {
     );
   }
 
-  #destroyEntitySourceTexture(entityId: string): void {
-    const cachedSource = this.#entitySourceTextures.get(entityId);
+  #getSourceCacheKey(entity: ShaderCanvasEntity, width: number, height: number): string {
+    switch (entity.mediaSource.type) {
+      case MediaType.image:
+        return `image:${entity.mediaSource.asset.id}:${entity.mediaSource.asset.revision}:${width}x${height}`;
+      case MediaType.gif:
+        return `gif:${entity.id}:${width}x${height}`;
+      case MediaType.svg:
+        return `svg:${entity.id}:${width}x${height}`;
+      case MediaType.video:
+        throw new Error("External video textures do not have source cache keys");
+    }
+  }
+
+  #bindEntityToSource(
+    entityId: string,
+    sourceKey: string,
+    cachedSource: { texture: GPUTexture; width: number; height: number; entityIds: Set<string> },
+  ): void {
+    const previousKey = this.#entitySourceKeys.get(entityId);
+    if (previousKey === sourceKey) return;
+    if (previousKey) this.#releaseEntitySourceTexture(entityId);
+
+    cachedSource.entityIds.add(entityId);
+    this.#entitySourceKeys.set(entityId, sourceKey);
+  }
+
+  #releaseEntitySourceTexture(entityId: string): void {
+    const sourceKey = this.#entitySourceKeys.get(entityId);
+    if (!sourceKey) return;
+
+    this.#entitySourceKeys.delete(entityId);
+    const cachedSource = this.#sourceTextures.get(sourceKey);
     if (!cachedSource) return;
 
-    cachedSource.texture.destroy();
-    this.#entitySourceTextures.delete(entityId);
+    cachedSource.entityIds.delete(entityId);
+    if (cachedSource.entityIds.size === 0) {
+      cachedSource.texture.destroy();
+      this.#sourceTextures.delete(sourceKey);
+    }
   }
 }
