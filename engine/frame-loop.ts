@@ -27,6 +27,7 @@ export interface CanvasRendererPort {
   };
   render(state: RenderState): void;
   getFrameStats(): FrameStats;
+  hasPendingRenderWork(): boolean;
   needsContinuousRenderForEntity(entity: ShaderCanvasEntity): boolean;
 }
 
@@ -152,7 +153,8 @@ export class FrameLoop {
       this.#continuousShaderEntities.length > 0 ||
       this.#deps.scheduler.hasActive ||
       this.#callbacks.isPointerDragging() ||
-      this.#callbacks.isDragSelectActive();
+      this.#callbacks.isDragSelectActive() ||
+      this.#renderer?.hasPendingRenderWork();
 
     // 8. Render only when needed (skip idle frames)
     if (this.#renderer?.isReady && needsRender) {

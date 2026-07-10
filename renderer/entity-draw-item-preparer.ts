@@ -93,10 +93,12 @@ export class EntityDrawItemPreparer {
         hasAnimatingContent = true;
       }
 
+      const desiredRenderSize = getEntityRenderSize(entity, viewport, devicePixelRatio);
+      const renderSize = this.#texturePipeline.resolveRenderSize(entity, desiredRenderSize);
       const compositionSource = this.#texturePipeline.renderEntityToTexture(
         entity,
         encoder,
-        getEntityRenderSize(entity, viewport, devicePixelRatio),
+        renderSize,
       );
       if (!compositionSource) continue;
 

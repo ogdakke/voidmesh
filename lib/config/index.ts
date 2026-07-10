@@ -496,6 +496,12 @@ export const config = {
     imageLodTiers: [64, 128, 256, 512, 1024, 2048, 4096] as const,
     /** Extra physical pixels retained around the projected size before promotion. */
     imageLodOverscan: 1.25,
+    /** Unchanged rendered frames required before LOD convergence begins. */
+    lodSettleFrames: 2,
+    /** Maximum source/processed dimension changes admitted in one settled frame. */
+    lodTransitionsPerFrame: 4,
+    /** Maximum target pixels admitted per settled frame (one oversized item may progress). */
+    lodTransitionPixelBudget: 2 * 1024 * 1024,
     grid: {
       default: DEFAULT_GRID_CONFIG,
       dark: DEFAULT_GRID_CONFIG_DARK,

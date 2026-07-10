@@ -116,6 +116,45 @@ describe("EntityTexturePipeline shared image sources", () => {
     releaseImageAsset(first.mediaSource.asset);
     releaseImageAsset(second.mediaSource.asset);
   });
+
+  test("freezes LOD during viewport motion and bounds settled transitions per frame", () => {
+    const entities = Array.from({ length: 5 }, (_, index) =>
+      createTestEntity({
+        id: `lod-${index}`,
+        shaderParams: { showOriginal: true },
+      }),
+    );
+    const textures = entities.map(() => createTexture(200, 150));
+    const pipeline = new EntityTexturePipeline({
+      device: createDevice(textures),
+      colorConfig,
+      texturePool: null,
+    });
+    const encoder = {} as GPUCommandEncoder;
+    for (const entity of entities) pipeline.renderEntityToTexture(entity, encoder);
+
+    pipeline.beginFrame(false);
+    expect(pipeline.resolveRenderSize(entities[0]!, { width: 100, height: 75 })).toEqual({
+      width: 200,
+      height: 150,
+    });
+    expect(pipeline.hasPendingLodWork).toBe(true);
+
+    pipeline.beginFrame(true);
+    const resolved = entities.map((entity) =>
+      pipeline.resolveRenderSize(entity, { width: 100, height: 75 }),
+    );
+    expect(resolved.slice(0, 4)).toEqual(
+      Array.from({ length: 4 }, () => ({ width: 100, height: 75 })),
+    );
+    expect(resolved[4]).toEqual({ width: 200, height: 150 });
+    expect(pipeline.hasPendingLodWork).toBe(true);
+
+    for (const entity of entities) {
+      pipeline.removeEntity(entity.id);
+      if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
+    }
+  });
 });
 
 function createTexture(width: number, height: number): GPUTexture {

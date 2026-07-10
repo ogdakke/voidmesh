@@ -65,6 +65,11 @@ export class EntityTexturePipeline {
   #processedTextureAllocations = 0;
   #sourceUploads = 0;
   #evictions = 0;
+  #allowLodTransitions = false;
+  #lodTransitionsRemaining = 0;
+  #lodTransitionPixelsRemaining = 0;
+  #lodTransitionsUsed = 0;
+  #pendingLodWork = false;
 
   // Processed textures keyed by immutable source + effect identity when shareable.
   #processedTextures: Map<string, CachedProcessedTexture> = new Map();
@@ -324,6 +329,49 @@ export class EntityTexturePipeline {
 
   needsContinuousRenderForEntity(entity: ShaderCanvasEntity): boolean {
     return !entity.shaderParams.showOriginal && this.#runtime.needsContinuousRender(entity);
+  }
+
+  beginFrame(allowLodTransitions: boolean): void {
+    this.#allowLodTransitions = allowLodTransitions;
+    this.#lodTransitionsRemaining = config.rendering.lodTransitionsPerFrame;
+    this.#lodTransitionPixelsRemaining = config.rendering.lodTransitionPixelBudget;
+    this.#lodTransitionsUsed = 0;
+    this.#pendingLodWork = false;
+  }
+
+  resolveRenderSize(
+    entity: ShaderCanvasEntity,
+    desired: { width: number; height: number },
+  ): { width: number; height: number } {
+    const current = entity.shaderParams.showOriginal
+      ? this.getSourceEntityTexture(entity.id)
+      : this.getProcessedEntityTexture(entity.id);
+    if (!current || (current.width === desired.width && current.height === desired.height)) {
+      return desired;
+    }
+
+    const pixelCost = desired.width * desired.height;
+    const withinPixelBudget = pixelCost <= this.#lodTransitionPixelsRemaining;
+    const canAdmit =
+      this.#allowLodTransitions &&
+      this.#lodTransitionsRemaining > 0 &&
+      (withinPixelBudget || this.#lodTransitionsUsed === 0);
+    if (!canAdmit) {
+      this.#pendingLodWork = true;
+      return { width: current.width, height: current.height };
+    }
+
+    this.#lodTransitionsRemaining--;
+    this.#lodTransitionsUsed++;
+    this.#lodTransitionPixelsRemaining = Math.max(
+      0,
+      this.#lodTransitionPixelsRemaining - pixelCost,
+    );
+    return desired;
+  }
+
+  get hasPendingLodWork(): boolean {
+    return this.#pendingLodWork;
   }
 
   endFrame(): void {

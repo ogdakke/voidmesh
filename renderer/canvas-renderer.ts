@@ -90,6 +90,8 @@ export class InfiniteCanvasRenderer {
   #lastRenderTime = 0;
   #lastEntityCount = 0;
   #lastRenderedCount = 0;
+  #lastLodViewport: { offset: { x: number; y: number }; zoom: number } | null = null;
+  #lodStableFrames = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -143,6 +145,10 @@ export class InfiniteCanvasRenderer {
         textureCount: 0,
       },
     };
+  }
+
+  hasPendingRenderWork(): boolean {
+    return this.#entityTexturePipeline?.hasPendingLodWork ?? false;
   }
 
   async initialize(): Promise<void> {
@@ -388,6 +394,19 @@ export class InfiniteCanvasRenderer {
     }
 
     this.#viewportUniforms.update(viewport, width, height);
+    const viewportChanged =
+      !this.#lastLodViewport ||
+      this.#lastLodViewport.zoom !== viewport.zoom ||
+      this.#lastLodViewport.offset.x !== viewport.offset.x ||
+      this.#lastLodViewport.offset.y !== viewport.offset.y;
+    this.#lodStableFrames = viewportChanged ? 0 : this.#lodStableFrames + 1;
+    this.#lastLodViewport = {
+      offset: { x: viewport.offset.x, y: viewport.offset.y },
+      zoom: viewport.zoom,
+    };
+    this.#entityTexturePipeline?.beginFrame(
+      this.#lodStableFrames >= config.rendering.lodSettleFrames,
+    );
 
     // Entity preprocessing can encode shader passes into this same command buffer.
     // External video textures must be imported, bound, encoded, finished, and submitted
