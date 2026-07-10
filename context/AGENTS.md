@@ -32,7 +32,8 @@ Note: `KeybindProvider` wraps outside `App()` at the root render level.
 - Large duplicate operations precompute names with a `Set` and insert the completed batch through `CanvasStore.addEntities()`; avoid per-clone full-map name scans and notifications.
 - Legacy workspace palette recovery groups missing palettes by shared `ImageBitmap`, extracts once per bitmap, and applies one `CanvasStore.updateEntities()` batch per result. Never launch extraction per duplicate entity.
 - Multi-selection shader changes use one `CanvasStore.updateEntities()` call and one bulk `Command`. Do not create per-entity commands or nested undo transactions inside slider-owned transactions.
-- Entity deletion triggers disintegration animation (if `fancyDelete` enabled): renderer snapshots the texture, entity is removed immediately, overlay plays independently. Undo cancels the overlay.
+- Multi-entity deletion uses one `CanvasStore.removeEntities()` mutation and one bulk undo `Command`. Retain removed entity objects as undo snapshots; do not deep-clone every shader-param tree or construct one command per entity.
+- Entity deletion triggers disintegration animation when `fancyDelete` is enabled, but per-entity snapshots/particle systems are capped by `config.canvas.fancyDeleteMaxBatchSize`; larger selections delete without animation. Undo cancels any created overlays.
 - `fancyDelete` preference defaults to `true` unless `prefers-reduced-motion: reduce` is active.
 - Export queue clones video elements to isolate export playback from preview playback.
 

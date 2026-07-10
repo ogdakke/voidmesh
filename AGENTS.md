@@ -17,6 +17,7 @@ Infinite canvas app with real-time WebGPU shader effects. Users drop images/vide
 - **World Space / Screen Space** — World coordinates = infinite canvas system. Screen coordinates = CSS pixels. Viewport maps world → screen.
 - **Action Layer** — Mobile-only overlay triggered by long-press. Shows action buttons; rest of canvas blurred.
 - **Disintegration** — Particle break-apart animation on entity deletion. Toggled by "fancy delete" setting.
+- **Bulk deletion** — Selection deletion is one store mutation and one undo command. Fancy-delete snapshots are bounded to 32 entities so large selections cannot allocate thousands of GPU overlays.
 - **Workspace** — Full saved canvas state (entities, viewport, palettes). Persisted as `.vdmsh` zip files.
 
 ## Architecture
