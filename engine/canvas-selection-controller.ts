@@ -28,7 +28,10 @@ interface DragVisualBoundsPort {
 export class CanvasSelectionController {
   readonly #spatialQueryEntities: ShaderCanvasEntity[] = [];
   readonly #spatialQueryBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #dragSelectionBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #multiSelectionBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
   readonly #intersectingEntityIds: string[] = [];
+  #nextSelection = new Set<string>();
 
   isInMultiSelectMode(): boolean {
     return canvasStore.getState().multiSelectMode;
@@ -72,39 +75,40 @@ export class CanvasSelectionController {
     const selectionRect = this.computeDragSelectBounds(dragSelect);
     const entitiesInRect = this.#findEntitiesIntersectingBounds(selectionRect);
 
-    let newSelection: Set<string>;
+    const newSelection = this.#nextSelection;
+    newSelection.clear();
     switch (dragSelect.mode) {
       case "additive":
-        newSelection = new Set(dragSelect.previousSelection);
+        for (const entityId of dragSelect.previousSelection) newSelection.add(entityId);
         for (const entityId of entitiesInRect) {
           newSelection.add(entityId);
         }
         break;
       case "subtractive":
-        newSelection = new Set(dragSelect.previousSelection);
+        for (const entityId of dragSelect.previousSelection) newSelection.add(entityId);
         for (const entityId of entitiesInRect) {
           newSelection.delete(entityId);
         }
         break;
       case "replace":
       default:
-        newSelection = new Set(entitiesInRect);
+        for (const entityId of entitiesInRect) newSelection.add(entityId);
         break;
     }
 
     if (!this.#setsEqual(newSelection, canvasStore.getSelectedEntityIds())) {
-      canvasStore.replaceSelection([...newSelection]);
+      this.#nextSelection = canvasStore.replaceTransientSelection(newSelection);
     }
   }
 
   computeDragSelectBounds(dragSelect: DragSelectState): Bounds {
     const { startPoint, currentPoint } = dragSelect;
-    return {
-      x: Math.min(startPoint.x, currentPoint.x),
-      y: Math.min(startPoint.y, currentPoint.y),
-      width: Math.abs(currentPoint.x - startPoint.x),
-      height: Math.abs(currentPoint.y - startPoint.y),
-    };
+    const bounds = this.#dragSelectionBounds;
+    bounds.x = Math.min(startPoint.x, currentPoint.x);
+    bounds.y = Math.min(startPoint.y, currentPoint.y);
+    bounds.width = Math.abs(currentPoint.x - startPoint.x);
+    bounds.height = Math.abs(currentPoint.y - startPoint.y);
+    return bounds;
   }
 
   computeMultiSelectBounds(state: CanvasState): Bounds | null {
@@ -119,7 +123,7 @@ export class CanvasSelectionController {
     if (isActionLayerActive) return null;
 
     if (dragSelect?.isActive && dragSelect.mode === "subtractive") {
-      return this.#computeBoundsForEntityIds(new Set(canvasStore.getSelectedEntityIds()));
+      return this.#computeBoundsForEntityIds(canvasStore.getSelectedEntityIds());
     }
 
     if (dragSelect?.isActive) return null;
@@ -154,12 +158,7 @@ export class CanvasSelectionController {
       }
     }
 
-    return {
-      x: minX,
-      y: minY,
-      width: maxX - minX,
-      height: maxY - minY,
-    };
+    return this.#setMultiSelectionBounds(minX, minY, maxX, maxY);
   }
 
   choosePointerDownEntityTarget(
@@ -283,7 +282,10 @@ export class CanvasSelectionController {
   #findEntitiesIntersectingBounds(bounds: Bounds): string[] {
     const result = this.#intersectingEntityIds;
     result.length = 0;
-    const candidates = canvasStore.queryEntitiesInBounds(bounds, this.#spatialQueryEntities);
+    const candidates = canvasStore.queryEntitiesInBoundsUnordered(
+      bounds,
+      this.#spatialQueryEntities,
+    );
     for (const entity of candidates) {
       if (entity.locked) continue;
       result.push(entity.id);
@@ -316,12 +318,16 @@ export class CanvasSelectionController {
 
     if (count < 2) return null;
 
-    return {
-      x: minX,
-      y: minY,
-      width: maxX - minX,
-      height: maxY - minY,
-    };
+    return this.#setMultiSelectionBounds(minX, minY, maxX, maxY);
+  }
+
+  #setMultiSelectionBounds(minX: number, minY: number, maxX: number, maxY: number): Bounds {
+    const bounds = this.#multiSelectionBounds;
+    bounds.x = minX;
+    bounds.y = minY;
+    bounds.width = maxX - minX;
+    bounds.height = maxY - minY;
+    return bounds;
   }
 
   #setsEqual<T>(a: Set<T>, b: ReadonlySet<T>): boolean {

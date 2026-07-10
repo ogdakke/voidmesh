@@ -25,6 +25,23 @@ describe("EntitySpatialIndex", () => {
     expect(result.map((entity) => entity.id)).toEqual(["back", "front"]);
   });
 
+  test("can skip z-order work for membership-only queries", () => {
+    const index = new EntitySpatialIndex(10);
+    const front = createTestEntity({ id: "front", zIndex: 2 });
+    const back = createTestEntity({ id: "back", zIndex: 1 });
+    index.upsert(front);
+    index.upsert(back);
+
+    const result = index.queryBounds(
+      { x: -1, y: -1, width: 202, height: 152 },
+      [],
+      undefined,
+      false,
+    );
+
+    expect(result.map((entity) => entity.id)).toEqual(["front", "back"]);
+  });
+
   test("updates moved and rotated entity bounds", () => {
     const index = new EntitySpatialIndex(10);
     const entity = createTestEntity({

@@ -351,6 +351,7 @@ describe("Desktop pointer interactions", () => {
 
       gl.handlePointerDown({ x: 500, y: 500 });
       gl.handlePointerMove({ x: 600, y: 600 });
+      gl.processInput();
 
       const bounds = gl.getDragSelectBounds();
       expect(bounds).not.toBeNull();
@@ -374,6 +375,26 @@ describe("Desktop pointer interactions", () => {
 
       gl.handlePointerDown({ x: 500, y: 500 });
       expect(canvasStore.getSelectedEntityIds().size).toBe(0);
+    });
+
+    test("coalesces drag-selection queries to one per processed frame", () => {
+      addEntity(100, 100, 100, 100);
+      const query = vi.spyOn(canvasStore, "queryEntitiesInBoundsUnordered");
+
+      gl.handlePointerDown({ x: 500, y: 500 });
+      const versionAfterPointerDown = canvasStore.getState().version;
+      gl.handlePointerMove({ x: 450, y: 450 });
+      gl.handlePointerMove({ x: 300, y: 300 });
+      gl.handlePointerMove({ x: 50, y: 50 });
+
+      expect(query).not.toHaveBeenCalled();
+      gl.processInput();
+      expect(query).toHaveBeenCalledTimes(1);
+      expect(canvasStore.getSelectedEntityIds().size).toBe(1);
+      expect(canvasStore.getState().version).toBe(versionAfterPointerDown);
+
+      gl.handlePointerUp({ x: 50, y: 50 });
+      expect(canvasStore.getState().version).toBe(versionAfterPointerDown + 1);
     });
 
     test("shift+drag with existing selection uses subtractive mode", () => {

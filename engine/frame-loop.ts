@@ -193,9 +193,9 @@ export class FrameLoop {
 
   #refreshActiveEntities(): void {
     const state = canvasStore.getState();
-    if (state.version === this.#activeEntityVersion) return;
+    if (state.entityVersion === this.#activeEntityVersion) return;
 
-    this.#activeEntityVersion = state.version;
+    this.#activeEntityVersion = state.entityVersion;
     this.#playingGifs = [];
     this.#playingVideos = [];
     this.#continuousShaderEntities = [];

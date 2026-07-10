@@ -135,6 +135,7 @@ export class CanvasInputController {
   #viewport: CanvasViewportController;
   #entityDrag: EntityDragController;
   #dragSelect: DragSelectState | null = null;
+  #dragSelectPendingUpdate = false;
   /** Touch gesture state for mobile interactions */
   #touchState: TouchGestureState = {
     touchCount: 0,
@@ -268,6 +269,14 @@ export class CanvasInputController {
 
     const worldPoint = this.#viewport.screenToWorld(pointerPosition);
 
+    // Pointer events may arrive faster than RAF. Only do the spatial query and
+    // selection-set construction once for the latest point in each frame.
+    if (this.#dragSelect?.isActive && this.#dragSelectPendingUpdate) {
+      this.#dragSelect.currentPoint = worldPoint;
+      this.#selection.updateDragSelection(this.#dragSelect);
+      this.#dragSelectPendingUpdate = false;
+    }
+
     // Update hover state
     if (!pointerDown) {
       // TODO: this was too costly
@@ -355,6 +364,7 @@ export class CanvasInputController {
       this.#inputState.pointerDownWasSelected = false;
       this.#entityDrag.clear();
       this.#dragSelect = this.#selection.createDragSelect(worldPoint, shiftKey, state);
+      this.#dragSelectPendingUpdate = false;
     }
   }
 
@@ -369,13 +379,7 @@ export class CanvasInputController {
       return;
     }
 
-    // Update drag-select rectangle if active
-    if (this.#dragSelect?.isActive && this.#container) {
-      this.#dragSelect.currentPoint = this.#viewport.screenToWorld(screenPoint);
-
-      // Live update selection based on entities in rectangle
-      this.#selection.updateDragSelection(this.#dragSelect);
-    }
+    if (this.#dragSelect?.isActive) this.#dragSelectPendingUpdate = true;
   }
 
   handlePointerUp(screenPoint: Point): void {
@@ -398,15 +402,22 @@ export class CanvasInputController {
       this.#inputState.pointerDownEntityId = null;
       this.#inputState.pointerDownWasSelected = false;
       this.#entityDrag.clear();
+      if (this.#dragSelect?.isActive) canvasStore.commitTransientSelection();
       this.#dragSelect = null;
+      this.#dragSelectPendingUpdate = false;
       this.#deps.dragVisual.release();
       return;
     }
 
     // Complete drag-select if active
     if (this.#dragSelect?.isActive) {
-      // Selection was already updated during drag via updateDragSelection
+      if (this.#container) {
+        this.#dragSelect.currentPoint = this.#viewport.screenToWorld(screenPoint);
+        this.#selection.updateDragSelection(this.#dragSelect);
+      }
+      canvasStore.commitTransientSelection();
       this.#dragSelect = null;
+      this.#dragSelectPendingUpdate = false;
       // Force re-render to clear the drag-select rectangle from screen
       canvasStore.setContainerDirty();
       this.#inputState.pointerDown = false;
@@ -496,7 +507,9 @@ export class CanvasInputController {
     // Reset any drag state from preceding pointerdown
     this.#inputState.pointerDown = false;
     this.#entityDrag.clear();
+    if (this.#dragSelect?.isActive) canvasStore.commitTransientSelection();
     this.#dragSelect = null;
+    this.#dragSelectPendingUpdate = false;
     this.#deps.dragVisual.cancel();
 
     this.#inputState.contextOpen = true;

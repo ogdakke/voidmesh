@@ -57,6 +57,7 @@ export interface CanvasState {
 
   // Version counters for React change detection (selective subscriptions)
   version: number; // Overall version (for backward compat)
+  entityVersion: number; // Entity membership/reference/animation classification changes
   viewportVersion: number; // Incremented only on viewport changes
   selectionVersion: number; // Incremented on selection/entity changes
   preferencesVersion: number; // Incremented on preference changes
@@ -299,6 +300,7 @@ export class CanvasStore extends Store<CanvasState> {
       canvasCalloutsDirty: false,
       frameCount: 0,
       version: 0,
+      entityVersion: 0,
       viewportVersion: 0,
       selectionVersion: 0,
       preferencesVersion: 0,
@@ -466,7 +468,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.entityIds.push(entity.id);
     this.#entitySpatialIndex.upsert(entity);
     this.state.entitiesDirty.add(entity.id);
-    this.notifySelectionChange();
+    this.notifyEntityChange();
   }
 
   addEntities(entities: readonly ShaderCanvasEntity[]): void {
@@ -480,7 +482,7 @@ export class CanvasStore extends Store<CanvasState> {
       this.#entitySpatialIndex.upsert(entity);
       this.state.entitiesDirty.add(entity.id);
     }
-    this.notifySelectionChange();
+    this.notifyEntityChange();
   }
 
   /** Atomically replace canvas content after a workspace has decoded successfully. */
@@ -516,6 +518,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.containerSizeDirty = false;
     this.state.canvasCalloutsDirty = false;
     this.state.version++;
+    this.state.entityVersion++;
     this.state.selectionVersion++;
     this.state.viewportVersion++;
     this.state.preferencesVersion++;
@@ -552,7 +555,7 @@ export class CanvasStore extends Store<CanvasState> {
     }
 
     if (updatedCount === 0) return 0;
-    this.notifySelectionChange();
+    this.notifyEntityChange();
     this.#logger.debug("Updated entity batch", { entityCount: updatedCount });
     return updatedCount;
   }
@@ -586,7 +589,7 @@ export class CanvasStore extends Store<CanvasState> {
       newSelection.delete(id);
       this.state.selectedEntityIds = newSelection;
     }
-    this.notifySelectionChange();
+    this.notifyEntityChange();
   }
 
   removeEntities(entityIds: ReadonlySet<string>): number {
@@ -615,7 +618,7 @@ export class CanvasStore extends Store<CanvasState> {
     }
     this.state.selectedEntityIds = nextSelection;
     this.state.selectionDirty = true;
-    this.notifySelectionChange();
+    this.notifyEntityChange();
     this.#logger.debug("Removed entity batch", { entityCount: removedCount });
     return removedCount;
   }
@@ -674,6 +677,23 @@ export class CanvasStore extends Store<CanvasState> {
       requestedCount: ids.length,
       firstEntityId: ids[0] ?? null,
       lastEntityId: ids.at(-1) ?? null,
+    });
+    this.notifySelectionChange();
+  }
+
+  /** Adopt a validated drag-selection set without notifying React mid-gesture. */
+  replaceTransientSelection(ids: Set<string>): Set<string> {
+    const previousSelection = this.state.selectedEntityIds;
+    this.state.selectedEntityIds = ids;
+    this.state.selectionDirty = true;
+    return previousSelection;
+  }
+
+  /** Publish the final transient selection once when drag selection completes. */
+  commitTransientSelection(): void {
+    completeOnboardingStarterSelectionFromEvent(this.state.selectedEntityIds);
+    this.#logger.debug("Drag selection committed", {
+      entityCount: this.state.selectedEntityIds.size,
     });
     this.notifySelectionChange();
   }
@@ -797,6 +817,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.canvasCalloutsDirty = false;
     // Increment versions to invalidate cached snapshots
     this.state.version++;
+    this.state.entityVersion++;
     this.state.selectionVersion++;
     this.state.viewportVersion++;
     this.state.preferencesVersion++;
@@ -927,7 +948,7 @@ export class CanvasStore extends Store<CanvasState> {
       entity.playback.currentTime = video.currentTime;
     }
     this.state.entitiesDirty.add(entityId);
-    this.notifySelectionChange();
+    this.notifyEntityChange();
   }
 
   setVideoMuted(entityId: string, muted: boolean): void {
@@ -989,7 +1010,7 @@ export class CanvasStore extends Store<CanvasState> {
     }
 
     this.state.entitiesDirty.add(entityId);
-    this.notifySelectionChange();
+    this.notifyEntityChange();
   }
 
   /**
@@ -1053,7 +1074,7 @@ export class CanvasStore extends Store<CanvasState> {
       entity.playback.isPlaying = true;
     }
     this.state.entitiesDirty.add(entityId);
-    this.notifySelectionChange();
+    this.notifyEntityChange();
   }
 
   pauseGif(entityId: string): void {
@@ -1067,7 +1088,7 @@ export class CanvasStore extends Store<CanvasState> {
     // Snapshot current frame for static display (already set by advanceGifPlayback)
     entity.textureDirty = true;
     this.state.entitiesDirty.add(entityId);
-    this.notifySelectionChange();
+    this.notifyEntityChange();
   }
 
   /**
@@ -1196,11 +1217,11 @@ export class CanvasStore extends Store<CanvasState> {
   }
 
   getRenderState(): RenderState {
-    if (this.#renderEntitiesVersion !== this.state.version) {
+    if (this.#renderEntitiesVersion !== this.state.entityVersion) {
       this.#renderEntities.length = 0;
       for (const entity of this.state.entities.values()) this.#renderEntities.push(entity);
       this.#renderEntities.sort((a, b) => a.zIndex - b.zIndex);
-      this.#renderEntitiesVersion = this.state.version;
+      this.#renderEntitiesVersion = this.state.entityVersion;
     }
 
     this.#renderViewport.offset.x = this.state.viewport.offset.x;
@@ -1226,6 +1247,13 @@ export class CanvasStore extends Store<CanvasState> {
 
   queryEntitiesInBounds(bounds: Bounds, output: ShaderCanvasEntity[]): ShaderCanvasEntity[] {
     return this.#entitySpatialIndex.queryBounds(bounds, output);
+  }
+
+  queryEntitiesInBoundsUnordered(
+    bounds: Bounds,
+    output: ShaderCanvasEntity[],
+  ): ShaderCanvasEntity[] {
+    return this.#entitySpatialIndex.queryBounds(bounds, output, undefined, false);
   }
 
   // Clear dirty flags after render
@@ -1268,6 +1296,11 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.version++;
     this.state.playbackVersion++;
     this.notify();
+  }
+
+  private notifyEntityChange(): void {
+    this.state.entityVersion++;
+    this.notifySelectionChange();
   }
 
   private notifyPreferencesChange(): void {

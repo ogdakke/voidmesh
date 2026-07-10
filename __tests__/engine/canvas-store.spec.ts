@@ -45,6 +45,30 @@ describe("canvasStore viewport subscriptions", () => {
   });
 });
 
+describe("canvasStore entity versioning", () => {
+  test("selection changes do not invalidate entity-derived caches", () => {
+    const entity = createTestEntity();
+    canvasStore.addEntity(entity);
+    const entityVersion = canvasStore.getState().entityVersion;
+
+    canvasStore.replaceSelection([entity.id]);
+    canvasStore.clearSelection();
+
+    expect(canvasStore.getState().entityVersion).toBe(entityVersion);
+  });
+
+  test("entity changes increment the entity version", () => {
+    const entity = createTestEntity();
+    const initialVersion = canvasStore.getState().entityVersion;
+
+    canvasStore.addEntity(entity);
+    canvasStore.updateEntity(entity.id, { zIndex: 4 });
+    canvasStore.removeEntity(entity.id);
+
+    expect(canvasStore.getState().entityVersion).toBe(initialVersion + 3);
+  });
+});
+
 // ============================================================================
 // Video Playback Store Methods
 // ============================================================================
