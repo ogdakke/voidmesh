@@ -122,8 +122,6 @@ describe("EntityTexturePipeline shared image sources", () => {
 
     expect(firstTexture.destroy).toHaveBeenCalledOnce();
     expect(secondTexture.destroy).not.toHaveBeenCalled();
-    expect(pipeline.pinCompositionTexture(firstTexture)).toBe(false);
-    expect(pipeline.pinCompositionTexture(secondTexture)).toBe(true);
     expect(pipeline.getResidencyStats()).toMatchObject({
       residentBytes: 200 * 150 * 4,
       sourceTextureCount: 1,

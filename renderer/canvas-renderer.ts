@@ -175,8 +175,7 @@ export class InfiniteCanvasRenderer {
   hasPendingRenderWork(): boolean {
     return (
       this.#lodSettleFramesRemaining > 0 ||
-      (this.#entityTexturePipeline?.hasPendingLodWork ?? false) ||
-      (this.#entityDrawItemPreparer?.hasActiveLodTransitions ?? false)
+      (this.#entityTexturePipeline?.hasPendingLodWork ?? false)
     );
   }
 

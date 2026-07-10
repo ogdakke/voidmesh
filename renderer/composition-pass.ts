@@ -17,8 +17,6 @@ export interface CompositionDrawItem {
   offsetX: number;
   offsetY: number;
   visualScale: number;
-  previousTexture: GPUTexture | null;
-  lodBlend: number;
 }
 
 export interface CompositionPassOptions {
@@ -36,8 +34,6 @@ export interface PrepareCompositionItemOptions {
   positionOffsetX: number;
   positionOffsetY: number;
   visualScale: number;
-  previousTexture: GPUTexture | null;
-  lodBlend: number;
 }
 
 export interface DisintegrationCompositionUniforms {
@@ -65,13 +61,12 @@ interface CompositionUniformState {
 interface CompositionDrawCommand {
   kind: "texture" | "external";
   texture: GPUTexture | null;
-  previousTexture: GPUTexture | null;
   firstInstance: number;
   instanceCount: number;
   item: CompositionDrawItem | null;
 }
 
-const INSTANCE_STRIDE_BYTES = 40;
+const INSTANCE_STRIDE_BYTES = 32;
 const INSTANCE_STRIDE_VALUES = INSTANCE_STRIDE_BYTES / 4;
 const INITIAL_INSTANCE_CAPACITY = 256;
 
@@ -112,7 +107,7 @@ export class CompositionPass {
   #instanceFloatView = new Float32Array(0);
   #instanceUintView = new Uint32Array(0);
   #instanceWriteCursor = 0;
-  #instanceBindGroupCache = new WeakMap<GPUTexture, WeakMap<GPUTexture, GPUBindGroup>>();
+  #instanceBindGroupCache = new WeakMap<GPUTexture, GPUBindGroup>();
   readonly #drawCommands: CompositionDrawCommand[] = [];
 
   // Entity composition cache (uniform buffers, bind groups, texture views).
@@ -191,11 +186,6 @@ export class CompositionPass {
           binding: 3,
           visibility: GPUShaderStage.FRAGMENT,
           sampler: { type: "filtering" },
-        },
-        {
-          binding: 4,
-          visibility: GPUShaderStage.FRAGMENT,
-          texture: { sampleType: "float" },
         },
       ],
     });
@@ -372,8 +362,6 @@ export class CompositionPass {
         offsetX: positionOffsetX,
         offsetY: positionOffsetY,
         visualScale: options.visualScale,
-        previousTexture: options.previousTexture,
-        lodBlend: options.lodBlend,
       };
       drawItem.texture = source.texture;
       drawItem.entity = entity;
@@ -382,8 +370,6 @@ export class CompositionPass {
       drawItem.offsetX = positionOffsetX;
       drawItem.offsetY = positionOffsetY;
       drawItem.visualScale = options.visualScale;
-      drawItem.previousTexture = options.previousTexture;
-      drawItem.lodBlend = options.lodBlend;
       if (!cached) {
         this.#entityCompositionCache.set(entity, { texture: source.texture, drawItem });
       } else {
@@ -428,8 +414,6 @@ export class CompositionPass {
       offsetX: positionOffsetX,
       offsetY: positionOffsetY,
       visualScale: options.visualScale,
-      previousTexture: null,
-      lodBlend: 1,
     };
     drawItem.bindGroup = bindGroup;
     drawItem.texture = null;
@@ -440,8 +424,6 @@ export class CompositionPass {
     drawItem.offsetX = positionOffsetX;
     drawItem.offsetY = positionOffsetY;
     drawItem.visualScale = options.visualScale;
-    drawItem.previousTexture = null;
-    drawItem.lodBlend = 1;
 
     if (!cached) {
       this.#entityExternalCompositionCache.set(entity.id, {
@@ -454,10 +436,6 @@ export class CompositionPass {
     }
 
     return drawItem;
-  }
-
-  getPreparedRegularTexture(entity: ShaderCanvasEntity): GPUTexture | null {
-    return this.#entityCompositionCache.get(entity)?.texture ?? null;
   }
 
   beginFrame(maximumInstanceCount: number): void {
@@ -492,10 +470,7 @@ export class CompositionPass {
           pass.setPipeline(this.#instancedPipeline);
           currentPipeline = "texture";
         }
-        pass.setBindGroup(
-          0,
-          this.#getInstancedBindGroup(texture, command.previousTexture ?? texture),
-        );
+        pass.setBindGroup(0, this.#getInstancedBindGroup(texture));
         pass.draw(6, command.instanceCount, 0, command.firstInstance);
       } else {
         const item = command.item;
@@ -606,7 +581,6 @@ export class CompositionPass {
           !labelBoundary &&
           previous?.kind === "texture" &&
           previous.texture === texture &&
-          previous.previousTexture === (item.previousTexture ?? texture) &&
           previous.item === null
         ) {
           previous.instanceCount++;
@@ -614,7 +588,6 @@ export class CompositionPass {
           const command = this.#getDrawCommand(commandCount++);
           command.kind = "texture";
           command.texture = texture;
-          command.previousTexture = item.previousTexture ?? texture;
           command.firstInstance = instanceIndex;
           command.instanceCount = 1;
           command.item = labelBoundary ? item : null;
@@ -626,7 +599,6 @@ export class CompositionPass {
       const command = this.#getDrawCommand(commandCount++);
       command.kind = "external";
       command.texture = null;
-      command.previousTexture = null;
       command.firstInstance = 0;
       command.instanceCount = 1;
       command.item = item;
@@ -643,7 +615,6 @@ export class CompositionPass {
     command = {
       kind: "texture",
       texture: null,
-      previousTexture: null,
       firstInstance: 0,
       instanceCount: 0,
       item: null,
@@ -690,13 +661,10 @@ export class CompositionPass {
     this.#instanceUintView[offset + 5] = item.isSelected ? 1 : 0;
     this.#instanceUintView[offset + 6] = item.debugMode ? 1 : 0;
     this.#instanceFloatView[offset + 7] = item.visualScale;
-    this.#instanceFloatView[offset + 8] = item.lodBlend;
-    this.#instanceUintView[offset + 9] = 0;
   }
 
-  #getInstancedBindGroup(texture: GPUTexture, previousTexture: GPUTexture): GPUBindGroup {
-    let previousTextureCache = this.#instanceBindGroupCache.get(texture);
-    const cached = previousTextureCache?.get(previousTexture);
+  #getInstancedBindGroup(texture: GPUTexture): GPUBindGroup {
+    const cached = this.#instanceBindGroupCache.get(texture);
     if (cached) return cached;
     if (!this.#instanceBuffer) throw new Error("Instanced composition buffer is unavailable");
 
@@ -708,14 +676,9 @@ export class CompositionPass {
         { binding: 1, resource: { buffer: this.#instanceBuffer } },
         { binding: 2, resource: this.#getTextureView(texture) },
         { binding: 3, resource: this.#sampler },
-        { binding: 4, resource: this.#getTextureView(previousTexture) },
       ],
     });
-    if (!previousTextureCache) {
-      previousTextureCache = new WeakMap();
-      this.#instanceBindGroupCache.set(texture, previousTextureCache);
-    }
-    previousTextureCache.set(previousTexture, bindGroup);
+    this.#instanceBindGroupCache.set(texture, bindGroup);
     return bindGroup;
   }
 
