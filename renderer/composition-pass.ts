@@ -82,6 +82,7 @@ export class CompositionPass {
       lastHovered: boolean;
       lastSelected: boolean;
       lastDebugMode: boolean;
+      drawItem: CompositionDrawItem;
     }
   > = new Map();
 
@@ -89,6 +90,7 @@ export class CompositionPass {
     string,
     {
       uniformBuffer: GPUBuffer;
+      drawItem: CompositionDrawItem;
     }
   > = new Map();
 
@@ -281,6 +283,21 @@ export class CompositionPass {
           ],
         });
 
+        const drawItem: CompositionDrawItem = cached?.drawItem ?? {
+          bindGroup,
+          pipeline: "texture",
+          entity,
+          isSelected,
+          offsetX: positionOffsetX,
+          offsetY: positionOffsetY,
+        };
+        drawItem.bindGroup = bindGroup;
+        drawItem.pipeline = "texture";
+        drawItem.entity = entity;
+        drawItem.isSelected = isSelected;
+        drawItem.offsetX = positionOffsetX;
+        drawItem.offsetY = positionOffsetY;
+
         this.#entityCompositionCache.set(entity.id, {
           uniformBuffer,
           texture: source.texture,
@@ -289,28 +306,19 @@ export class CompositionPass {
           lastHovered: isHovered,
           lastSelected: isSelected,
           lastDebugMode: debugMode,
+          drawItem,
         });
 
-        return {
-          bindGroup,
-          pipeline: "texture",
-          entity,
-          isSelected,
-          offsetX: positionOffsetX,
-          offsetY: positionOffsetY,
-        };
+        return drawItem;
       }
 
       // Reuse cached bind group, but always update uniforms for drag/position changes.
       this.#writeLiveEntityUniforms(cached.uniformBuffer, options);
-      return {
-        bindGroup: cached.bindGroup,
-        pipeline: "texture",
-        entity,
-        isSelected,
-        offsetX: positionOffsetX,
-        offsetY: positionOffsetY,
-      };
+      cached.drawItem.entity = entity;
+      cached.drawItem.isSelected = isSelected;
+      cached.drawItem.offsetX = positionOffsetX;
+      cached.drawItem.offsetY = positionOffsetY;
+      return cached.drawItem;
     }
 
     const cached = this.#entityExternalCompositionCache.get(entity.id);
@@ -335,11 +343,7 @@ export class CompositionPass {
       ],
     });
 
-    if (!cached) {
-      this.#entityExternalCompositionCache.set(entity.id, { uniformBuffer });
-    }
-
-    return {
+    const drawItem: CompositionDrawItem = cached?.drawItem ?? {
       bindGroup,
       pipeline: "external",
       entity,
@@ -347,6 +351,18 @@ export class CompositionPass {
       offsetX: positionOffsetX,
       offsetY: positionOffsetY,
     };
+    drawItem.bindGroup = bindGroup;
+    drawItem.pipeline = "external";
+    drawItem.entity = entity;
+    drawItem.isSelected = isSelected;
+    drawItem.offsetX = positionOffsetX;
+    drawItem.offsetY = positionOffsetY;
+
+    if (!cached) {
+      this.#entityExternalCompositionCache.set(entity.id, { uniformBuffer, drawItem });
+    }
+
+    return drawItem;
   }
 
   drawItem(pass: GPURenderPassEncoder, item: CompositionDrawItem): void {

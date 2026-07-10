@@ -223,6 +223,36 @@ export class CanvasStore extends Store<CanvasState> {
     string,
     { entities: ShaderCanvasEntity[]; value: ParamResult<unknown> }
   >();
+  readonly #renderEntities: ShaderCanvasEntity[] = [];
+  #renderEntitiesVersion = -1;
+  readonly #renderViewport: Viewport = { offset: { x: 0, y: 0 }, zoom: 1 };
+  readonly #renderActionLayer: ActionLayerRenderState = {
+    active: false,
+    entityIds: new Set<string>(),
+    entityOffset: { x: 0, y: 0 },
+    blurIntensity: 0,
+  };
+  readonly #renderDragVisual: DragVisualRenderState = {
+    active: false,
+    isDragPhase: false,
+    entityIds: new Set<string>(),
+    scale: 1,
+  };
+  readonly #renderDisintegration: DisintegrationRenderState = { overlays: [] };
+  readonly #renderState: RenderState = {
+    viewport: this.#renderViewport,
+    entities: this.#renderEntities,
+    selectedEntityIds: new Set<string>(),
+    hoveredEntityId: null,
+    debugMode: false,
+    dirty: false,
+    canvasCallouts: [],
+    dragSelectBounds: null,
+    multiSelectBounds: null,
+    actionLayer: this.#renderActionLayer,
+    dragVisual: this.#renderDragVisual,
+    disintegration: this.#renderDisintegration,
+  };
 
   /** Throttle interval for passive playback notifications (hard cap at 60fps) */
   static readonly #PLAYBACK_NOTIFY_INTERVAL_MS = 16.67;
@@ -1069,37 +1099,32 @@ export class CanvasStore extends Store<CanvasState> {
   }
 
   getRenderState(): RenderState {
-    return {
-      viewport: {
-        offset: {
-          x: this.state.viewport.offset.x,
-          y: this.state.viewport.offset.y,
-        },
-        zoom: this.state.viewport.zoom,
-      },
-      entities: Array.from(this.state.entities.values()),
-      selectedEntityIds: this.state.selectedEntityIds,
-      hoveredEntityId: this.state.hoveredEntityId,
-      debugMode: this.state.debugMode,
-      dirty: this.hasRenderChanges(),
-      canvasCallouts: this.state.canvasCallouts,
-      // dragSelectBounds and multiSelectBounds are set by game-loop after calling this method
-      dragSelectBounds: null,
-      multiSelectBounds: null,
-      actionLayer: {
-        active: this.state.actionLayerActive,
-        entityIds: this.state.actionLayerEntityIds,
-        entityOffset: { x: 0, y: 0 },
-        blurIntensity: 0,
-      },
-      dragVisual: {
-        active: this.state.entityDragActive,
-        isDragPhase: false,
-        entityIds: new Set(),
-        scale: 1,
-      },
-      disintegration: { overlays: [] },
-    };
+    if (this.#renderEntitiesVersion !== this.state.version) {
+      this.#renderEntities.length = 0;
+      for (const entity of this.state.entities.values()) this.#renderEntities.push(entity);
+      this.#renderEntities.sort((a, b) => a.zIndex - b.zIndex);
+      this.#renderEntitiesVersion = this.state.version;
+    }
+
+    this.#renderViewport.offset.x = this.state.viewport.offset.x;
+    this.#renderViewport.offset.y = this.state.viewport.offset.y;
+    this.#renderViewport.zoom = this.state.viewport.zoom;
+    this.#renderActionLayer.active = this.state.actionLayerActive;
+    this.#renderActionLayer.entityIds = this.state.actionLayerEntityIds;
+    this.#renderDragVisual.active = this.state.entityDragActive;
+
+    const renderState = this.#renderState;
+    renderState.selectedEntityIds = this.state.selectedEntityIds;
+    renderState.hoveredEntityId = this.state.hoveredEntityId;
+    renderState.debugMode = this.state.debugMode;
+    renderState.dirty = this.hasRenderChanges();
+    renderState.canvasCallouts = this.state.canvasCallouts;
+    renderState.dragSelectBounds = null;
+    renderState.multiSelectBounds = null;
+    renderState.actionLayer = this.#renderActionLayer;
+    renderState.dragVisual = this.#renderDragVisual;
+    renderState.disintegration = this.#renderDisintegration;
+    return renderState;
   }
 
   // Clear dirty flags after render

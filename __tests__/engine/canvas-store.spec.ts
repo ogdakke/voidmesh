@@ -319,6 +319,26 @@ describe("canvasStore.updateGifPlaybackTime", () => {
 });
 
 describe("canvasStore.moveEntity", () => {
+  test("reuses one render state and entity array across viewport-only frames", () => {
+    const firstEntity = createTestEntity({ id: "stable-render-first", zIndex: 2 });
+    const secondEntity = createTestEntity({ id: "stable-render-second", zIndex: 1 });
+    canvasStore.addEntities([firstEntity, secondEntity]);
+
+    const first = canvasStore.getRenderState();
+    const entities = first.entities;
+    const initialOffset = { ...first.viewport.offset };
+    expect(entities.map(({ id }) => id)).toEqual([secondEntity.id, firstEntity.id]);
+
+    canvasStore.panBy({ x: 40, y: 20 });
+    const second = canvasStore.getRenderState();
+    expect(second).toBe(first);
+    expect(second.entities).toBe(entities);
+    expect(second.viewport.offset).toEqual({
+      x: initialOffset.x + 40,
+      y: initialOffset.y + 20,
+    });
+  });
+
   test("marks render state dirty for position-only updates", () => {
     const entity = createTestEntity();
     canvasStore.addEntity(entity);

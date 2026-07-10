@@ -4,7 +4,7 @@ import { boundsIntersect, getRotatedAABB, getViewportWorldBounds } from "#lib/ca
 import { getFrameAtTime } from "#lib/gif-decoder.ts";
 import { setGpuContext } from "./gpu-color-space.ts";
 import type { DisintegrationRenderOverlay, RenderState } from "#engine";
-import { MediaType, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
+import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import { CanvasLensing } from "#types/enums.ts";
 import { ActionLayerBlurPass } from "./action-layer-blur-pass.ts";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
@@ -97,6 +97,8 @@ export class InfiniteCanvasRenderer {
   #lastLodOffsetY = 0;
   #lastLodZoom = 0;
   #lodStableFrames = 0;
+  readonly #visibilityViewportBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #visibilityEntityBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -121,8 +123,14 @@ export class InfiniteCanvasRenderer {
     if (width <= 0 || height <= 0) return true;
 
     return boundsIntersect(
-      getRotatedAABB(entity.position, entity.size, entity.rotation),
-      getViewportWorldBounds(viewport, width, height, config.canvas.cullingBufferFraction),
+      getRotatedAABB(entity.position, entity.size, entity.rotation, this.#visibilityEntityBounds),
+      getViewportWorldBounds(
+        viewport,
+        width,
+        height,
+        config.canvas.cullingBufferFraction,
+        this.#visibilityViewportBounds,
+      ),
     );
   }
 
