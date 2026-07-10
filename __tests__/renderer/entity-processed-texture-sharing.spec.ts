@@ -3,8 +3,6 @@ import type { ShaderCanvasEntity } from "#types/canvas.ts";
 import { releaseImageAsset, retainImageAsset } from "#lib/media-assets.ts";
 import { createTestEntity } from "../helpers/test-entity.ts";
 
-const externalCopyEncode = vi.hoisted(() => vi.fn<() => void>());
-
 vi.mock("#renderer/entity-shader-runtime.ts", () => ({
   EntityShaderRuntime: class {
     processingPipeline = {};
@@ -17,12 +15,6 @@ vi.mock("#renderer/entity-shader-runtime.ts", () => ({
     flushTextureReleases = vi.fn<() => void>();
     endFrame = vi.fn<() => void>();
     destroy = vi.fn<() => void>();
-  },
-}));
-
-vi.mock("#renderer/external-texture-copy-pass.ts", () => ({
-  ExternalTextureCopyPass: class {
-    encode = externalCopyEncode;
   },
 }));
 
@@ -98,55 +90,12 @@ describe("EntityTexturePipeline processed image sharing", () => {
     releaseImageAsset(first.mediaSource.asset);
     releaseImageAsset(first.mediaSource.asset);
   });
-
-  test("copies show-original video frames into a projected LOD texture", () => {
-    externalCopyEncode.mockClear();
-    const entity = createTestEntity({
-      id: "video-lod",
-      mediaType: "video",
-      shaderParams: { showOriginal: true },
-    });
-    const externalTexture = {} as GPUExternalTexture;
-    const outputTexture = createTexture(128, 72);
-    const device = {
-      importExternalTexture: vi.fn<GPUDevice["importExternalTexture"]>(() => externalTexture),
-      createTexture: vi.fn<GPUDevice["createTexture"]>(() => outputTexture),
-      createSampler: vi.fn<GPUDevice["createSampler"]>(() => ({}) as GPUSampler),
-    } as unknown as GPUDevice;
-    const pipeline = new EntityTexturePipeline({
-      device,
-      colorConfig: {
-        supportsP3: false,
-        canvasFormat: "bgra8unorm",
-        canvasColorSpace: "srgb",
-        intermediateFormat: "rgba16float",
-        textureColorSpace: "srgb",
-      },
-      texturePool: null,
-    });
-
-    const result = pipeline.renderEntityToTexture(entity, {} as GPUCommandEncoder, {
-      width: 128,
-      height: 72,
-    });
-
-    expect(result).toEqual({ kind: "texture", texture: outputTexture });
-    expect(externalCopyEncode).toHaveBeenCalledWith(
-      expect.anything(),
-      externalTexture,
-      outputTexture,
-    );
-    expect(pipeline.getResidencyStats()).toMatchObject({
-      processedBytes: 128 * 72 * 8,
-      processedTextureCount: 1,
-    });
-  });
 });
 
-function createTexture(width = 200, height = 150): GPUTexture {
+function createTexture(): GPUTexture {
   return {
-    width,
-    height,
+    width: 200,
+    height: 150,
     destroy: vi.fn<() => void>(),
   } as unknown as GPUTexture;
 }

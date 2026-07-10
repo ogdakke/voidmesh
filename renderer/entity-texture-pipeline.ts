@@ -10,7 +10,6 @@ import { EntityShaderRuntime, type EntityShaderSource } from "./entity-shader-ru
 import type { GpuColorConfig } from "./gpu-color-space.ts";
 import type { ProcessingPipeline } from "./processing-pipeline.ts";
 import type { TexturePool } from "./texture-pool.ts";
-import { ExternalTextureCopyPass } from "./external-texture-copy-pass.ts";
 
 export type EntityCompositionSource =
   | { kind: "texture"; texture: GPUTexture }
@@ -61,7 +60,6 @@ export class EntityTexturePipeline {
   readonly #runtime: EntityShaderRuntime;
   readonly #textureBudgetBytes: number;
   readonly #onTextureEvicted?: (entityIds: ReadonlySet<string>) => void;
-  #externalTextureCopyPass: ExternalTextureCopyPass | null = null;
   #currentFrame = 0;
   #sourceTextureAllocations = 0;
   #processedTextureAllocations = 0;
@@ -171,7 +169,7 @@ export class EntityTexturePipeline {
     const canReuseDirtyTexture =
       entity.mediaSource.type === MediaType.image && !needsContinuousShaderRender;
     if (
-      (!entity.shaderParams.showOriginal || entity.mediaSource.type === MediaType.video) &&
+      !entity.shaderParams.showOriginal &&
       !needsContinuousShaderRender &&
       cachedTexture &&
       (!entity.textureDirty || canReuseDirtyTexture)
@@ -190,6 +188,11 @@ export class EntityTexturePipeline {
         source: video,
         colorSpace: this.#colorConfig.textureColorSpace,
       });
+
+      if (entity.shaderParams.showOriginal) {
+        this.#releaseEntityProcessedTexture(entity.id);
+        return { kind: "external", texture: externalTexture };
+      }
 
       shaderSource = { kind: "external", texture: externalTexture };
     }
@@ -276,23 +279,16 @@ export class EntityTexturePipeline {
       this.#processedTextureAllocations++;
     }
 
-    // External show-original video frames are first reduced to the projected LOD.
-    // Composing the native external texture directly makes overview cost scale with
-    // source resolution and number of videos rather than visible pixels.
-    if (entity.shaderParams.showOriginal && shaderSource.kind === "external") {
-      this.#getExternalTextureCopyPass().encode(encoder, shaderSource.texture, outputTexture);
-    } else {
-      this.#runtime.encode({
-        entity: renderEntity,
-        source: shaderSource,
-        outputTexture,
-        encoder,
-        width,
-        height,
-        respectShowOriginal: true,
-        sourceAlphaMode: getSourceAlphaMode(entity),
-      });
-    }
+    this.#runtime.encode({
+      entity: renderEntity,
+      source: shaderSource,
+      outputTexture,
+      encoder,
+      width,
+      height,
+      respectShowOriginal: true,
+      sourceAlphaMode: getSourceAlphaMode(entity),
+    });
 
     // Cache and return (source texture stays in the shared source cache)
     const processedEntry: CachedProcessedTexture = {
@@ -445,14 +441,6 @@ export class EntityTexturePipeline {
     }
     const asset = entity.mediaSource.asset;
     return `image:${asset.id}:${asset.revision}:${width}x${height}:${entity.shaderType}:${signature}`;
-  }
-
-  #getExternalTextureCopyPass(): ExternalTextureCopyPass {
-    this.#externalTextureCopyPass ??= new ExternalTextureCopyPass(
-      this.#device,
-      this.#colorConfig.intermediateFormat,
-    );
-    return this.#externalTextureCopyPass;
   }
 
   #bindEntityToProcessed(
