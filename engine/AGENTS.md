@@ -37,6 +37,7 @@ Canvas state management and input processing. This is the "model + controller" l
 - Use `CanvasStore.queryEntitiesInBoundsUnordered()` for membership-only work such as drag selection; do not pay to sort results that are consumed as a set.
 - Drag selection coalesces pointer moves in `processInput()`, swaps reusable selection sets into the store without notifying React mid-gesture, and publishes one final notification on pointer-up or cancellation.
 - Selection-derived entity arrays are materialized at most once per `selectionVersion`. Multi-selection world bounds are cached across viewport-only frames and invalidated by selected-set identity, `entityVersion`, or `geometryVersion`.
+- Object-valued multi-selection params deduplicate structurally equal clones; do not retain one object per selected entity in `ParamResult.values` or stringify equal objects on every comparison.
 - `GameLoop` uses dependency injection (`GameLoopDeps`) for testability. Default deps created via `createDefaultDeps()`. Receives renderer via `setRenderer()`.
 - `MomentumController` also uses DI (`MomentumDeps`) — inject viewport/pan callbacks for unit testing without a real canvas.
 - Touch handling uses a state machine: `TouchGestureState` tracks active touches, pinch distance, long-press timers.
