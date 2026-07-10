@@ -60,7 +60,7 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 - Dimension-keyed blur mip, bloom mip, and blur blend textures share a 128 MiB budget; current-frame dimensions stay pinned and older dimensions are evicted LRU.
 - Source textures cached by media identity/revision; static image entities sharing one asset also share one GPU texture until the final entity owner is removed
 - Stable processed image outputs are keyed by asset revision, dimensions, shader type, and full shader parameters. Identical instances share one texture; animated effects and non-image media remain entity-scoped.
-- Composition cache (`#entityCompositionCache`) reuses uniform buffers and bind groups
+- Composition cache (`#entityCompositionCache`) reuses uniform buffers and bind groups; a weak texture-view cache shares one view across instances sampling the same texture.
 - `TexturePool` retains at most 64 MiB of idle transient textures across dimensions/usages. Release scratch immediately after its final encoded use so later ordered passes in the same command buffer can reuse it.
 - Image source changes require a new asset revision. Entity removal releases its source-cache ownership without destroying textures still used by sibling instances.
 
