@@ -427,6 +427,7 @@ export class InfiniteCanvasRenderer {
     // Pre-process entities: render to textures and prepare bind groups
     // Uses caching to avoid per-frame allocations
     const preparedEntityDrawItems = this.#entityDrawItemPreparer.prepare({
+      entities,
       entitySpatialIndex: state.entitySpatialIndex,
       viewport,
       width,

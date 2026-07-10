@@ -22,6 +22,8 @@ export class EntitySpatialIndex {
   readonly #minimumCellSize: number;
   readonly #levels = new Map<number, SpatialLevel>();
   readonly #entries = new Map<string, IndexedEntity>();
+  readonly #overallBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  #overallBoundsDirty = false;
 
   constructor(minimumCellSize = DEFAULT_CELL_SIZE) {
     this.#minimumCellSize = minimumCellSize;
@@ -29,7 +31,10 @@ export class EntitySpatialIndex {
 
   upsert(entity: ShaderCanvasEntity): void {
     let entry = this.#entries.get(entity.id);
-    if (entry) this.#removeFromCell(entry);
+    if (entry) {
+      if (touchesBoundsEdge(entry.bounds, this.#overallBounds)) this.#overallBoundsDirty = true;
+      this.#removeFromCell(entry);
+    }
 
     const bounds = getRotatedAABB(
       entity.position,
@@ -63,11 +68,14 @@ export class EntitySpatialIndex {
       level.cellCount++;
     }
     ids.add(entry);
+    if (!this.#overallBoundsDirty)
+      expandBounds(this.#overallBounds, bounds, this.#entries.size === 1);
   }
 
   remove(entityId: string): void {
     const entry = this.#entries.get(entityId);
     if (!entry) return;
+    if (touchesBoundsEdge(entry.bounds, this.#overallBounds)) this.#overallBoundsDirty = true;
     this.#removeFromCell(entry);
     this.#entries.delete(entityId);
   }
@@ -75,13 +83,47 @@ export class EntitySpatialIndex {
   clear(): void {
     this.#levels.clear();
     this.#entries.clear();
+    this.#overallBounds.x = 0;
+    this.#overallBounds.y = 0;
+    this.#overallBounds.width = 0;
+    this.#overallBounds.height = 0;
+    this.#overallBoundsDirty = false;
   }
 
-  queryBounds(bounds: Bounds, output: ShaderCanvasEntity[]): ShaderCanvasEntity[] {
+  queryBounds(
+    bounds: Bounds,
+    output: ShaderCanvasEntity[],
+    orderedEntities?: readonly ShaderCanvasEntity[],
+  ): ShaderCanvasEntity[] {
     output.length = 0;
+    if (orderedEntities && this.#containsEveryEntity(bounds)) {
+      for (const entity of orderedEntities) output.push(entity);
+      return output;
+    }
     for (const level of this.#levels.values()) this.#queryLevel(level, bounds, output);
     if (!isEntityZOrdered(output)) output.sort(compareEntityZIndex);
     return output;
+  }
+
+  #containsEveryEntity(bounds: Bounds): boolean {
+    if (this.#entries.size === 0) return true;
+    if (this.#overallBoundsDirty) this.#recomputeOverallBounds();
+    const overall = this.#overallBounds;
+    return (
+      bounds.x <= overall.x &&
+      bounds.y <= overall.y &&
+      bounds.x + bounds.width >= overall.x + overall.width &&
+      bounds.y + bounds.height >= overall.y + overall.height
+    );
+  }
+
+  #recomputeOverallBounds(): void {
+    let first = true;
+    for (const entry of this.#entries.values()) {
+      expandBounds(this.#overallBounds, entry.bounds, first);
+      first = false;
+    }
+    this.#overallBoundsDirty = false;
   }
 
   #queryLevel(level: SpatialLevel, bounds: Bounds, output: ShaderCanvasEntity[]): void {
@@ -165,4 +207,29 @@ function isEntityZOrdered(entities: readonly ShaderCanvasEntity[]): boolean {
     if (entities[index - 1]!.zIndex > entities[index]!.zIndex) return false;
   }
   return true;
+}
+
+function touchesBoundsEdge(inner: Bounds, outer: Bounds): boolean {
+  return (
+    inner.x <= outer.x ||
+    inner.y <= outer.y ||
+    inner.x + inner.width >= outer.x + outer.width ||
+    inner.y + inner.height >= outer.y + outer.height
+  );
+}
+
+function expandBounds(target: Bounds, bounds: Bounds, initialize: boolean): void {
+  if (initialize) {
+    target.x = bounds.x;
+    target.y = bounds.y;
+    target.width = bounds.width;
+    target.height = bounds.height;
+    return;
+  }
+  const maxX = Math.max(target.x + target.width, bounds.x + bounds.width);
+  const maxY = Math.max(target.y + target.height, bounds.y + bounds.height);
+  target.x = Math.min(target.x, bounds.x);
+  target.y = Math.min(target.y, bounds.y);
+  target.width = maxX - target.x;
+  target.height = maxY - target.y;
 }

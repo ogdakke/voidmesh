@@ -17,6 +17,7 @@ interface EntityDrawItemPreparerOptions {
 }
 
 interface PrepareEntityDrawItemsOptions {
+  entities: ShaderCanvasEntity[];
   entitySpatialIndex: EntitySpatialIndex;
   viewport: Viewport;
   width: number;
@@ -59,6 +60,7 @@ export class EntityDrawItemPreparer {
 
   prepare(options: PrepareEntityDrawItemsOptions): PreparedEntityDrawItems {
     const {
+      entities,
       entitySpatialIndex,
       viewport,
       width,
@@ -95,7 +97,11 @@ export class EntityDrawItemPreparer {
       this.#viewportBounds,
     );
 
-    const visibleEntities = entitySpatialIndex.queryBounds(viewportBounds, this.#visibleEntities);
+    const visibleEntities = entitySpatialIndex.queryBounds(
+      viewportBounds,
+      this.#visibleEntities,
+      entities,
+    );
     let previousSizedEntity: ShaderCanvasEntity | null = null;
     let previousDesiredWidth = 0;
     let previousDesiredHeight = 0;

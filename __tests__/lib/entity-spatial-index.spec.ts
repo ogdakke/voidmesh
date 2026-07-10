@@ -55,4 +55,33 @@ describe("EntitySpatialIndex", () => {
     index.remove(large.id);
     expect(index.queryBounds({ x: 200, y: 200, width: 1, height: 1 }, [])).toEqual([]);
   });
+
+  test("returns the existing ordered array when the query covers the entire index", () => {
+    const index = new EntitySpatialIndex(10);
+    const front = createTestEntity({
+      id: "all-front",
+      position: { x: 5, y: 5 },
+      size: { width: 2, height: 2 },
+      zIndex: 2,
+    });
+    const back = createTestEntity({
+      id: "all-back",
+      position: { x: 0, y: 0 },
+      size: { width: 2, height: 2 },
+      zIndex: 1,
+    });
+    index.upsert(front);
+    index.upsert(back);
+    const ordered = [back, front];
+
+    expect(index.queryBounds({ x: -1, y: -1, width: 10, height: 10 }, [], ordered)).toEqual(
+      ordered,
+    );
+
+    back.position = { x: 100, y: 100 };
+    index.upsert(back);
+    expect(index.queryBounds({ x: -1, y: -1, width: 10, height: 10 }, [], ordered)).toEqual([
+      front,
+    ]);
+  });
 });
