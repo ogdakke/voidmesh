@@ -943,11 +943,15 @@ async function createZoomStressEntitySet(
     throw new Error(`Zoom stress media mix produced ${imageIndex} images and ${videoIndex} videos`);
   }
 
+  let lastSyntheticVideoFrameIndex = -1;
   return {
     entities,
-    beforeFrame: (frameIndex) => {
+    beforeFrame: () => {
+      const videoFrameIndex = Math.floor((performance.now() * 30) / 1000);
+      if (videoFrameIndex === lastSyntheticVideoFrameIndex) return;
+      lastSyntheticVideoFrameIndex = videoFrameIndex;
       for (let index = 0; index < syntheticVideos.length; index += 1) {
-        syntheticVideos[index]!.drawFrame(frameIndex + index * 3);
+        syntheticVideos[index]!.drawFrame(videoFrameIndex + index * 3);
       }
       for (const entity of entities) {
         if (entity.mediaSource.type === MediaType.video) entity.textureDirty = true;
