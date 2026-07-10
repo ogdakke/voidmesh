@@ -30,6 +30,7 @@ Note: `KeybindProvider` wraps outside `App()` at the root render level.
 - Resource ownership for undo: `resourceOwners` Map tracks which undo command may cleanup media resources on stack eviction.
 - Static image cleanup releases the entity's shared media-asset reference; the final release closes the decoded bitmap. Never close an image entity's bitmap directly.
 - Large duplicate operations precompute names with a `Set` and insert the completed batch through `CanvasStore.addEntities()`; avoid per-clone full-map name scans and notifications.
+- Multi-selection shader changes use one `CanvasStore.updateEntities()` call and one bulk `Command`. Do not create per-entity commands or nested undo transactions inside slider-owned transactions.
 - Entity deletion triggers disintegration animation (if `fancyDelete` enabled): renderer snapshots the texture, entity is removed immediately, overlay plays independently. Undo cancels the overlay.
 - `fancyDelete` preference defaults to `true` unless `prefers-reduced-motion: reduce` is active.
 - Export queue clones video elements to isolate export playback from preview playback.
