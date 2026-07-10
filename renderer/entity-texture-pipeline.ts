@@ -8,6 +8,7 @@ import {
 } from "#types/canvas.ts";
 import type { CopyPass } from "./copy-pass.ts";
 import type { EffectRenderEntity } from "./effect-render-entity.ts";
+import { getEntityRenderPixelScale } from "./entity-render-size.ts";
 import { EntityShaderRuntime, type EntityShaderSource } from "./entity-shader-runtime.ts";
 import type { GpuColorConfig } from "./gpu-color-space.ts";
 import type { ProcessingPipeline } from "./processing-pipeline.ts";
@@ -148,7 +149,11 @@ export class EntityTexturePipeline {
       label: `Entity ${entity.id} pipeline`,
     });
     this.#runtime.encode({
-      entity,
+      entity: this.#getRenderEntityView(
+        entity,
+        entity.originalSize.width,
+        entity.originalSize.height,
+      ),
       source: { kind: "texture", texture: sourceTexture },
       outputTexture,
       encoder,
@@ -176,13 +181,12 @@ export class EntityTexturePipeline {
     const height = renderSize.height;
     const useExternalVideoSource = entity.mediaSource.type === MediaType.video;
     const contentRevision = this.#resolveContentRevision(entity);
-    const renderEntity = this.#getRenderEntityView(entity, width, height);
 
     // Time-based shaders need the shader pass every canvas render. Processed videos do not:
     // GameLoop marks them dirty only when a decoded video frame changes, so viewport-only
     // renders can safely reuse the cached processed texture instead of re-running the shader.
     const needsContinuousShaderRender =
-      !entity.shaderParams.showOriginal && this.#runtime.needsContinuousRender(renderEntity);
+      !entity.shaderParams.showOriginal && this.#runtime.needsContinuousRender(entity);
 
     if (!entity.textureDirty) {
       if (entity.shaderParams.showOriginal && !useExternalVideoSource) {
@@ -361,7 +365,7 @@ export class EntityTexturePipeline {
     }
 
     this.#runtime.encode({
-      entity: renderEntity,
+      entity: this.#getRenderEntityView(entity, width, height),
       source: shaderSource,
       outputTexture,
       encoder,
@@ -653,15 +657,13 @@ export class EntityTexturePipeline {
     width: number,
     height: number,
   ): EffectRenderEntity {
-    if (width === entity.originalSize.width && height === entity.originalSize.height) {
-      return entity;
-    }
-
     let view = this.#renderEntityView;
+    const pixelScale = getEntityRenderPixelScale(entity, width, height);
     if (!view) {
       view = {
         id: entity.id,
         originalSize: { width, height },
+        pixelScale,
         shaderType: entity.shaderType,
         shaderParams: entity.shaderParams,
       };
@@ -672,6 +674,7 @@ export class EntityTexturePipeline {
     view.id = entity.id;
     view.originalSize.width = width;
     view.originalSize.height = height;
+    view.pixelScale = pixelScale;
     view.shaderType = entity.shaderType;
     view.shaderParams = entity.shaderParams;
     return view;

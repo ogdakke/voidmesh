@@ -54,6 +54,7 @@ function createEntity(id: string, width: number, height: number): EffectRenderEn
   return {
     id,
     originalSize: { width, height },
+    pixelScale: 1,
     shaderType: ShaderType.dithering,
     shaderParams,
   };

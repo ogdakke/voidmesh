@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { getEntityRenderSize } from "#renderer/entity-render-size.ts";
+import { getEntityRenderPixelScale, getEntityRenderSize } from "#renderer/entity-render-size.ts";
 import { createTestEntity } from "../helpers/test-entity.ts";
 
 describe("getEntityRenderSize", () => {
@@ -29,5 +29,12 @@ describe("getEntityRenderSize", () => {
       width: 128,
       height: 72,
     });
+  });
+
+  test("reports the authored-pixel scale for a quantized render size", () => {
+    const entity = createTestEntity();
+    entity.originalSize = { width: 2048, height: 1536 };
+
+    expect(getEntityRenderPixelScale(entity, 256, 192)).toBe(0.125);
   });
 });

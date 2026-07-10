@@ -3,7 +3,7 @@ import { isErrorDiffusion, ShaderType } from "#types/canvas.ts";
 import type { MediaAlphaMode, RGBA } from "#types/canvas.ts";
 import { AlphaMaskPass } from "./alpha-mask-pass.ts";
 import { CopyPass } from "./copy-pass.ts";
-import type { EffectRenderEntity } from "./effect-render-entity.ts";
+import type { EffectRenderEntity, EffectShaderSettings } from "./effect-render-entity.ts";
 import type { GpuColorConfig } from "./gpu-color-space.ts";
 import { ProcessingPipeline } from "./processing-pipeline.ts";
 import { AsciiShader } from "./shaders/ascii-shader.ts";
@@ -312,7 +312,7 @@ export class EntityShaderRuntime {
     this.#pendingTextureReleases = [];
   }
 
-  needsContinuousRender(entity: EffectRenderEntity): boolean {
+  needsContinuousRender(entity: EffectShaderSettings): boolean {
     return this.#shaderRegistry.get(entity.shaderType)?.needsContinuousRender(entity) ?? false;
   }
 

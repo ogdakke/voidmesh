@@ -1,5 +1,5 @@
 import { GlassKind } from "#types/canvas.ts";
-import type { EffectRenderEntity } from "../effect-render-entity.ts";
+import type { EffectRenderEntity, EffectShaderSettings } from "../effect-render-entity.ts";
 import glassFlowingSource from "../glass-flowing.wgsl?raw";
 import glassFlutedSource from "../glass-fluted.wgsl?raw";
 import glassFrostedSource from "../glass-frosted.wgsl?raw";
@@ -53,7 +53,7 @@ export class GlassShader extends ShaderPass {
   /** Per-entity last frame timestamps for delta-time calculation */
   #lastFrameTimes = new Map<string, number>();
 
-  override needsContinuousRender(entity: EffectRenderEntity): boolean {
+  override needsContinuousRender(entity: EffectShaderSettings): boolean {
     return (
       entity.shaderParams.glass?.kind === GlassKind.flowing &&
       entity.shaderParams.timeAutoPlay !== false

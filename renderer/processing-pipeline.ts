@@ -1145,7 +1145,7 @@ export class ProcessingPipeline {
    */
   needsBlur(entity: EffectRenderEntity): boolean {
     const blur = entity.shaderParams.adjustments?.blur;
-    return blur != null && blur > 0.001;
+    return blur != null && blur * entity.pixelScale > 0.001;
   }
 
   /**
@@ -1534,8 +1534,9 @@ export class ProcessingPipeline {
     const width = entity.originalSize.width;
     const height = entity.originalSize.height;
     const blur = entity.shaderParams.adjustments?.blur ?? 0;
-    const { levelsLow, levelsHigh, offsetLow, offsetHigh, blendFactor } =
-      blurParamToKawaseParams(blur);
+    const { levelsLow, levelsHigh, offsetLow, offsetHigh, blendFactor } = blurParamToKawaseParams(
+      blur * entity.pixelScale,
+    );
 
     const needsBlend = blendFactor > 0.001 && blendFactor < 0.999;
     const levels = needsBlend ? levelsLow : blendFactor >= 0.999 ? levelsHigh : levelsLow;
@@ -1626,8 +1627,9 @@ export class ProcessingPipeline {
     const width = entity.originalSize.width;
     const height = entity.originalSize.height;
     const blur = entity.shaderParams.adjustments?.blur ?? 0;
-    const { levelsLow, levelsHigh, offsetLow, offsetHigh, blendFactor } =
-      blurParamToKawaseParams(blur);
+    const { levelsLow, levelsHigh, offsetLow, offsetHigh, blendFactor } = blurParamToKawaseParams(
+      blur * entity.pixelScale,
+    );
 
     const needsBlend = blendFactor > 0.001 && blendFactor < 0.999;
     const levels = needsBlend ? levelsLow : blendFactor >= 0.999 ? levelsHigh : levelsLow;
@@ -1878,12 +1880,12 @@ export class ProcessingPipeline {
     //         enabled_flags(4) + time(4) + padding(24) = 64 bytes
     f[0] = width; // resolution.x
     f[1] = height; // resolution.y
-    f[2] = grain.size; // grain_size
+    f[2] = grain.size * entity.pixelScale; // grain_size
     f[3] = grain.intensity; // grain_intensity
     f[4] = bloom.threshold; // bloom_threshold (used in downsample for soft threshold)
     f[5] = bloom.intensity; // bloom_intensity (mix strength)
     f[6] = bloomFilterRadiusToRenderer(bloom.filterRadius); // bloom_filter_radius (UV-space radius for upsample)
-    f[7] = chromaticAberration.offset; // chromatic_offset
+    f[7] = chromaticAberration.offset * entity.pixelScale; // chromatic_offset
     u[8] = flags; // enabled_flags
     f[9] = this.#postProcessTime; // time (for animated grain)
     // Padding fills the rest to 64 bytes

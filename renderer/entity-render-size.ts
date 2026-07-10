@@ -1,6 +1,17 @@
 import { config } from "#config";
 import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
 
+export function getEntityRenderPixelScale(
+  entity: ShaderCanvasEntity,
+  renderWidth: number,
+  renderHeight: number,
+): number {
+  return (
+    Math.max(renderWidth, renderHeight) /
+    Math.max(entity.originalSize.width, entity.originalSize.height)
+  );
+}
+
 export function getEntityRenderSize(
   entity: ShaderCanvasEntity,
   viewport: Viewport,

@@ -63,6 +63,7 @@ export class DitheringShader extends ShaderPass {
 
   override writeVariantUniforms(entity: EffectRenderEntity): void {
     const ditheringKind = entity.shaderParams.dithering?.kind ?? DitheringKind.bayer4x4;
+    this.ctx.floatView[2] = entity.shaderParams.scale * entity.pixelScale;
     this.ctx.uintView[7] = DITHERING_KIND_INDEX[ditheringKind];
   }
 

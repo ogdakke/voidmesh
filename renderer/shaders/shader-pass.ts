@@ -2,7 +2,7 @@ import type { RGBA } from "#types/canvas.ts";
 import { ColorSpace } from "#types/enums.ts";
 import { sortPaletteByLuminance } from "#lib/color-utils.ts";
 import type { TexturePool } from "../texture-pool.ts";
-import type { EffectRenderEntity } from "../effect-render-entity.ts";
+import type { EffectRenderEntity, EffectShaderSettings } from "../effect-render-entity.ts";
 
 export interface ShaderContext {
   device: GPUDevice;
@@ -75,7 +75,7 @@ export abstract class ShaderPass {
   constructor(protected readonly ctx: ShaderContext) {}
 
   /** Whether this shader needs re-rendering every frame for the given entity (e.g., time-based animation). */
-  needsContinuousRender(_entity: EffectRenderEntity): boolean {
+  needsContinuousRender(_entity: EffectShaderSettings): boolean {
     return false;
   }
 
@@ -113,7 +113,7 @@ export abstract class ShaderPass {
     f[1] = height;
     f[2] = params.scale;
     f[3] = params.intensity;
-    f[4] = params.size;
+    f[4] = params.size * entity.pixelScale;
     u[5] = params.shape === "circle" ? 0 : params.shape === "square" ? 1 : 2;
     u[6] = params.preserveColors ? 1 : 0;
 
