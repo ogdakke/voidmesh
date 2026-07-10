@@ -419,6 +419,39 @@ export class EntityTexturePipeline {
     return !entity.shaderParams.showOriginal && this.#runtime.needsContinuousRender(entity);
   }
 
+  getReusableStaticCompositionSource(
+    entity: ShaderCanvasEntity,
+    desired: { width: number; height: number },
+    needsContinuousRender: boolean,
+  ): EntityCompositionSource | null {
+    if (
+      entity.textureDirty ||
+      entity.mediaSource.type !== MediaType.image ||
+      needsContinuousRender
+    ) {
+      return null;
+    }
+
+    const key = entity.shaderParams.showOriginal
+      ? this.#entitySourceKeys.get(entity.id)
+      : this.#entityProcessedKeys.get(entity.id);
+    const entry = key
+      ? entity.shaderParams.showOriginal
+        ? this.#sourceTextures.get(key)
+        : this.#processedTextures.get(key)
+      : undefined;
+    if (
+      !entry ||
+      entry.texture.width !== desired.width ||
+      entry.texture.height !== desired.height
+    ) {
+      return null;
+    }
+
+    entry.lastUsedFrame = this.#currentFrame;
+    return entry.compositionSource;
+  }
+
   beginFrame(allowLodTransitions: boolean): void {
     this.#allowLodTransitions = allowLodTransitions;
     this.#lodTransitionsRemaining = config.rendering.lodTransitionsPerFrame;

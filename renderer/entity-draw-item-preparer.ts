@@ -1,6 +1,7 @@
 import { config } from "#config";
 import type { ActionLayerRenderState, DragVisualRenderState } from "#engine";
-import { boundsIntersect, getRotatedAABB, getViewportWorldBounds } from "#lib/canvas-math.ts";
+import { getViewportWorldBounds } from "#lib/canvas-math.ts";
+import type { EntitySpatialIndex } from "#lib/entity-spatial-index.ts";
 import type { Bounds, ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
 import type {
   CompositionDrawItem,
@@ -16,7 +17,7 @@ interface EntityDrawItemPreparerOptions {
 }
 
 interface PrepareEntityDrawItemsOptions {
-  entities: ShaderCanvasEntity[];
+  entitySpatialIndex: EntitySpatialIndex;
   viewport: Viewport;
   width: number;
   height: number;
@@ -41,7 +42,7 @@ export class EntityDrawItemPreparer {
   readonly #desiredRenderSize = { width: 0, height: 0 };
   readonly #resolvedRenderSize = { width: 0, height: 0 };
   readonly #viewportBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
-  readonly #entityBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #visibleEntities: ShaderCanvasEntity[] = [];
   readonly #entityDrawItems: CompositionDrawItem[] = [];
   readonly #actionLayerDrawItems: CompositionDrawItem[] = [];
   readonly #prepared: PreparedEntityDrawItems = {
@@ -58,7 +59,7 @@ export class EntityDrawItemPreparer {
 
   prepare(options: PrepareEntityDrawItemsOptions): PreparedEntityDrawItems {
     const {
-      entities,
+      entitySpatialIndex,
       viewport,
       width,
       height,
@@ -94,44 +95,53 @@ export class EntityDrawItemPreparer {
       this.#viewportBounds,
     );
 
-    for (const entity of entities) {
-      // Viewport culling: skip all GPU work for entities entirely outside the viewport.
-      // textureDirty is intentionally NOT cleared here — it stays true so the entity
-      // re-renders correctly when it scrolls back into view.
-      const entityAABB = getRotatedAABB(
-        entity.position,
-        entity.size,
-        entity.rotation,
-        this.#entityBounds,
-      );
-      if (!boundsIntersect(entityAABB, viewportBounds)) {
-        continue;
-      }
-
+    const visibleEntities = entitySpatialIndex.queryBounds(viewportBounds, this.#visibleEntities);
+    let previousSizedEntity: ShaderCanvasEntity | null = null;
+    let previousDesiredWidth = 0;
+    let previousDesiredHeight = 0;
+    for (const entity of visibleEntities) {
       // Check if texture needs regeneration. Animated media is marked dirty by the
       // game loop only when the decoded frame changes.
       const textureWasDirty = !!entity.textureDirty;
-      if (textureWasDirty || this.#texturePipeline.needsContinuousRenderForEntity(entity)) {
+      const needsContinuousRender = this.#texturePipeline.needsContinuousRenderForEntity(entity);
+      if (textureWasDirty || needsContinuousRender) {
         hasAnimatingContent = true;
       }
 
-      const desiredRenderSize = getEntityRenderSize(
-        entity,
-        viewport,
-        devicePixelRatio,
-        this.#desiredRenderSize,
-      );
-      const renderSize = this.#texturePipeline.resolveRenderSize(
+      const sameProjectedSize =
+        previousSizedEntity !== null &&
+        previousSizedEntity.size.width === entity.size.width &&
+        previousSizedEntity.size.height === entity.size.height &&
+        previousSizedEntity.originalSize.width === entity.originalSize.width &&
+        previousSizedEntity.originalSize.height === entity.originalSize.height;
+      const desiredRenderSize = this.#desiredRenderSize;
+      if (sameProjectedSize) {
+        desiredRenderSize.width = previousDesiredWidth;
+        desiredRenderSize.height = previousDesiredHeight;
+      } else {
+        getEntityRenderSize(entity, viewport, devicePixelRatio, desiredRenderSize);
+        previousSizedEntity = entity;
+        previousDesiredWidth = desiredRenderSize.width;
+        previousDesiredHeight = desiredRenderSize.height;
+      }
+      let compositionSource = this.#texturePipeline.getReusableStaticCompositionSource(
         entity,
         desiredRenderSize,
-        this.#resolvedRenderSize,
+        needsContinuousRender,
       );
-      if (!renderSize) continue;
-      const compositionSource = this.#texturePipeline.renderEntityToTexture(
-        entity,
-        encoder,
-        renderSize,
-      );
+      if (!compositionSource) {
+        const renderSize = this.#texturePipeline.resolveRenderSize(
+          entity,
+          desiredRenderSize,
+          this.#resolvedRenderSize,
+        );
+        if (!renderSize) continue;
+        compositionSource = this.#texturePipeline.renderEntityToTexture(
+          entity,
+          encoder,
+          renderSize,
+        );
+      }
       if (!compositionSource) continue;
 
       // Clear dirty flag

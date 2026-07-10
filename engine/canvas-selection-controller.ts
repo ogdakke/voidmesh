@@ -1,6 +1,11 @@
 import { logger } from "#lib/client.logger.ts";
-import { boundsIntersect, createBounds } from "#lib/canvas-math.ts";
-import { DragTargetType, isAnimatedEntity, type Bounds, type Point } from "#types/canvas.ts";
+import {
+  DragTargetType,
+  isAnimatedEntity,
+  type Bounds,
+  type Point,
+  type ShaderCanvasEntity,
+} from "#types/canvas.ts";
 import { canvasStore, type CanvasState } from "./canvas-store.ts";
 import type { EntityDragTarget } from "./entity-drag-controller.ts";
 import { findEntityAtPoint } from "./canvas-hit-testing.ts";
@@ -21,12 +26,22 @@ interface DragVisualBoundsPort {
 }
 
 export class CanvasSelectionController {
+  readonly #spatialQueryEntities: ShaderCanvasEntity[] = [];
+  readonly #spatialQueryBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #intersectingEntityIds: string[] = [];
+
   isInMultiSelectMode(): boolean {
     return canvasStore.getState().multiSelectMode;
   }
 
-  findEntityAtPoint(worldPoint: Point, state: CanvasState): string | null {
-    return findEntityAtPoint(worldPoint, state);
+  findEntityAtPoint(worldPoint: Point, _state: CanvasState): string | null {
+    const bounds = this.#spatialQueryBounds;
+    bounds.x = worldPoint.x;
+    bounds.y = worldPoint.y;
+    bounds.width = 0;
+    bounds.height = 0;
+    const candidates = canvasStore.queryEntitiesInBounds(bounds, this.#spatialQueryEntities);
+    return findEntityAtPoint(worldPoint, candidates);
   }
 
   createDragSelect(worldPoint: Point, shiftKey: boolean, state: CanvasState): DragSelectState {
@@ -54,9 +69,8 @@ export class CanvasSelectionController {
   }
 
   updateDragSelection(dragSelect: DragSelectState): void {
-    const state = canvasStore.getState();
     const selectionRect = this.computeDragSelectBounds(dragSelect);
-    const entitiesInRect = this.#findEntitiesIntersectingBounds(selectionRect, state);
+    const entitiesInRect = this.#findEntitiesIntersectingBounds(selectionRect);
 
     let newSelection: Set<string>;
     switch (dragSelect.mode) {
@@ -266,16 +280,13 @@ export class CanvasSelectionController {
     }, delay);
   }
 
-  #findEntitiesIntersectingBounds(bounds: Bounds, state: CanvasState): string[] {
-    const result: string[] = [];
-
-    for (const [id, entity] of state.entities) {
+  #findEntitiesIntersectingBounds(bounds: Bounds): string[] {
+    const result = this.#intersectingEntityIds;
+    result.length = 0;
+    const candidates = canvasStore.queryEntitiesInBounds(bounds, this.#spatialQueryEntities);
+    for (const entity of candidates) {
       if (entity.locked) continue;
-
-      const entityBounds = createBounds(entity.position, entity.size);
-      if (boundsIntersect(bounds, entityBounds)) {
-        result.push(id);
-      }
+      result.push(entity.id);
     }
 
     return result;

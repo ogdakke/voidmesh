@@ -112,13 +112,13 @@ export class CompositionPass {
 
   // Entity composition cache (uniform buffers, bind groups, texture views).
   // Invalidated when entity composition texture or visual state changes.
-  readonly #entityCompositionCache: Map<
-    string,
+  #entityCompositionCache: WeakMap<
+    ShaderCanvasEntity,
     {
       texture: GPUTexture;
       drawItem: CompositionDrawItem;
     }
-  > = new Map();
+  > = new WeakMap();
 
   readonly #entityExternalCompositionCache: Map<
     string,
@@ -351,7 +351,7 @@ export class CompositionPass {
     const { entity, source, isSelected, positionOffsetX, positionOffsetY } = options;
 
     if (source.kind === "texture") {
-      const cached = this.#entityCompositionCache.get(entity.id);
+      const cached = this.#entityCompositionCache.get(entity);
       const drawItem: CompositionDrawItem = cached?.drawItem ?? {
         bindGroup: null,
         texture: source.texture,
@@ -371,7 +371,7 @@ export class CompositionPass {
       drawItem.offsetY = positionOffsetY;
       drawItem.visualScale = options.visualScale;
       if (!cached) {
-        this.#entityCompositionCache.set(entity.id, { texture: source.texture, drawItem });
+        this.#entityCompositionCache.set(entity, { texture: source.texture, drawItem });
       } else {
         cached.texture = source.texture;
       }
@@ -537,8 +537,6 @@ export class CompositionPass {
   }
 
   removeEntity(entityId: string): void {
-    this.#entityCompositionCache.delete(entityId);
-
     const externalCached = this.#entityExternalCompositionCache.get(entityId);
     if (externalCached) {
       externalCached.uniformBuffer.destroy();
@@ -547,7 +545,7 @@ export class CompositionPass {
   }
 
   destroy(): void {
-    this.#entityCompositionCache.clear();
+    this.#entityCompositionCache = new WeakMap();
 
     for (const cached of this.#entityExternalCompositionCache.values()) {
       cached.uniformBuffer.destroy();

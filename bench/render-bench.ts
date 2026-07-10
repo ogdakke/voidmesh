@@ -15,6 +15,7 @@ import {
 } from "#types/canvas.ts";
 import type { RenderState } from "../engine/canvas-store.ts";
 import { createImageAsset } from "#lib/media-assets.ts";
+import { EntitySpatialIndex } from "#lib/entity-spatial-index.ts";
 import {
   MANY_ENTITY_SCENARIOS,
   estimateDecodedAssetBytes,
@@ -1038,6 +1039,15 @@ async function createManyEntitySet(
         width: CANVAS_WIDTH,
         height: CANVAS_HEIGHT,
       }),
+    getViewport: config.zoom
+      ? (frameIndex) => ({
+          offset: getManyEntityViewportOffset(config, frameIndex, {
+            width: CANVAS_WIDTH,
+            height: CANVAS_HEIGHT,
+          }),
+          zoom: config.zoom!,
+        })
+      : undefined,
     cleanup: () => {
       for (const bitmap of bitmaps) bitmap.close();
     },
@@ -1149,9 +1159,12 @@ function createRenderState(
   dirty: boolean,
   viewport: Viewport = { offset: { x: 0, y: 0 }, zoom: 1 },
 ): RenderState {
+  const entitySpatialIndex = new EntitySpatialIndex();
+  for (const entity of entities) entitySpatialIndex.upsert(entity);
   return {
     viewport,
     entities,
+    entitySpatialIndex,
     selectedEntityIds: new Set(),
     hoveredEntityId: null,
     debugMode: false,
@@ -1218,6 +1231,7 @@ async function runFrames(params: {
   const sourceUpdateSamples: number[] = [];
   const cpuRenderSamples: number[] = [];
   const endToEndSamples: number[] = [];
+  const renderState = createRenderState(params.entities, true);
 
   for (let index = 0; index < params.frameCount; index += 1) {
     const frameIndex = params.startFrameIndex + index;
@@ -1240,7 +1254,8 @@ async function runFrames(params: {
       } satisfies Viewport);
     const frameStart = performance.now();
     const cpuStart = performance.now();
-    params.renderer.render(createRenderState([...params.entities], true, viewport));
+    renderState.viewport = viewport;
+    params.renderer.render(renderState);
     const cpuEnd = performance.now();
     cpuEncodeMs += cpuEnd - cpuStart;
     const frameStats = params.renderer.getFrameStats();

@@ -12,6 +12,7 @@ export interface ManyEntityScenarioConfig {
   assetMode: ManyEntityAssetMode;
   layout: ManyEntityLayout;
   pan: boolean;
+  zoom?: number;
   processPixels: boolean;
   frames: number;
   warmupFrames: number;
@@ -135,6 +136,24 @@ export const MANY_ENTITY_SCENARIOS: readonly ManyEntityScenarioConfig[] = [
     pan: false,
     processPixels: true,
     frames: 24,
+    warmupFrames: 4,
+    samples: 3,
+  },
+  {
+    id: "many-131072-shared-processed-overview-pan",
+    label: "131,072 shared instances, 50k+ visible overview",
+    description:
+      "Pans a low-zoom viewport containing roughly 50,000–60,000 visible processed instances through a 2^17-entity world.",
+    entityCount: 131_072,
+    uniqueAssetCount: 1,
+    sourceSize: { width: 1024, height: 1024 },
+    displaySize: { width: 6, height: 6 },
+    assetMode: "shared",
+    layout: "world-grid",
+    pan: true,
+    zoom: 0.18,
+    processPixels: true,
+    frames: 18,
     warmupFrames: 4,
     samples: 3,
   },

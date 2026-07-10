@@ -15,6 +15,7 @@ import {
 } from "#types/canvas.ts";
 import { getFrameAtTime } from "#lib/gif-decoder.ts";
 import { completeOnboardingStarterSelectionFromEvent } from "#lib/onboarding-runtime.ts";
+import { EntitySpatialIndex } from "#lib/entity-spatial-index.ts";
 import { CanvasLensing } from "#types/enums.ts";
 
 export interface CanvasState {
@@ -180,6 +181,7 @@ export interface DisintegrationRenderState {
 export interface RenderState {
   viewport: Viewport;
   entities: ShaderCanvasEntity[];
+  entitySpatialIndex: EntitySpatialIndex;
   selectedEntityIds: ReadonlySet<string>;
   hoveredEntityId: string | null;
   debugMode: boolean;
@@ -224,6 +226,7 @@ export class CanvasStore extends Store<CanvasState> {
     { entities: ShaderCanvasEntity[]; value: ParamResult<unknown> }
   >();
   readonly #renderEntities: ShaderCanvasEntity[] = [];
+  readonly #entitySpatialIndex = new EntitySpatialIndex();
   #renderEntitiesVersion = -1;
   readonly #renderViewport: Viewport = { offset: { x: 0, y: 0 }, zoom: 1 };
   readonly #renderActionLayer: ActionLayerRenderState = {
@@ -242,6 +245,7 @@ export class CanvasStore extends Store<CanvasState> {
   readonly #renderState: RenderState = {
     viewport: this.#renderViewport,
     entities: this.#renderEntities,
+    entitySpatialIndex: this.#entitySpatialIndex,
     selectedEntityIds: new Set<string>(),
     hoveredEntityId: null,
     debugMode: false,
@@ -460,6 +464,7 @@ export class CanvasStore extends Store<CanvasState> {
     }
     this.state.entities.set(entity.id, entity);
     this.state.entityIds.push(entity.id);
+    this.#entitySpatialIndex.upsert(entity);
     this.state.entitiesDirty.add(entity.id);
     this.notifySelectionChange();
   }
@@ -472,6 +477,7 @@ export class CanvasStore extends Store<CanvasState> {
       }
       this.state.entities.set(entity.id, entity);
       this.state.entityIds.push(entity.id);
+      this.#entitySpatialIndex.upsert(entity);
       this.state.entitiesDirty.add(entity.id);
     }
     this.notifySelectionChange();
@@ -489,7 +495,9 @@ export class CanvasStore extends Store<CanvasState> {
     for (const { id, updates } of batch) {
       const entity = this.state.entities.get(id);
       if (!entity) continue;
-      this.state.entities.set(id, { ...entity, ...updates } as ShaderCanvasEntity);
+      const updatedEntity = { ...entity, ...updates } as ShaderCanvasEntity;
+      this.state.entities.set(id, updatedEntity);
+      this.#entitySpatialIndex.upsert(updatedEntity);
       this.state.entitiesDirty.add(id);
       updatedCount++;
     }
@@ -505,6 +513,7 @@ export class CanvasStore extends Store<CanvasState> {
     if (entity) {
       entity.position.x += delta.x;
       entity.position.y += delta.y;
+      this.#entitySpatialIndex.upsert(entity);
       // Position-only updates still change the composed scene and must invalidate
       // renderer caches such as the fullscreen wlur overlay during drag.
       this.state.entitiesDirty.add(id);
@@ -513,6 +522,7 @@ export class CanvasStore extends Store<CanvasState> {
 
   removeEntity(id: string): void {
     this.state.entities.delete(id);
+    this.#entitySpatialIndex.remove(id);
     const index = this.state.entityIds.indexOf(id);
     if (index !== -1) {
       this.state.entityIds.splice(index, 1);
@@ -684,6 +694,8 @@ export class CanvasStore extends Store<CanvasState> {
    */
   reset(): void {
     this.state.entities.clear();
+    this.state.entityIds.length = 0;
+    this.#entitySpatialIndex.clear();
     this.state.selectedEntityIds = new Set();
     this.state.hoveredEntityId = null;
     this.state.contextOpenEntityId = null;
@@ -1125,6 +1137,10 @@ export class CanvasStore extends Store<CanvasState> {
     renderState.dragVisual = this.#renderDragVisual;
     renderState.disintegration = this.#renderDisintegration;
     return renderState;
+  }
+
+  queryEntitiesInBounds(bounds: Bounds, output: ShaderCanvasEntity[]): ShaderCanvasEntity[] {
+    return this.#entitySpatialIndex.queryBounds(bounds, output);
   }
 
   // Clear dirty flags after render

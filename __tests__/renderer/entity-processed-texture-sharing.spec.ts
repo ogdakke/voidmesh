@@ -103,6 +103,25 @@ describe("EntityTexturePipeline processed image sharing", () => {
       processedTextureCount: 1,
       processedTextureAllocations: 1,
     });
+    first.textureDirty = false;
+    expect(
+      pipeline.getReusableStaticCompositionSource(
+        first,
+        { width: processedTexture.width, height: processedTexture.height },
+        false,
+      ),
+    ).toEqual(firstResult);
+    expect(
+      pipeline.getReusableStaticCompositionSource(first, { width: 100, height: 75 }, false),
+    ).toBeNull();
+    first.textureDirty = true;
+    expect(
+      pipeline.getReusableStaticCompositionSource(
+        first,
+        { width: processedTexture.width, height: processedTexture.height },
+        false,
+      ),
+    ).toBeNull();
 
     pipeline.removeEntity(first.id);
     expect(processedTexture.destroy).not.toHaveBeenCalled();

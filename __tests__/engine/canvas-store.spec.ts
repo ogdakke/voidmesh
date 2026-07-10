@@ -393,6 +393,40 @@ describe("canvasStore.addEntities", () => {
   });
 });
 
+describe("canvasStore spatial queries", () => {
+  test("tracks batch insertion, movement, and removal", () => {
+    const first = createTestEntity({
+      id: "indexed-first",
+      position: { x: 0, y: 0 },
+      size: { width: 10, height: 10 },
+      zIndex: 2,
+    });
+    const second = createTestEntity({
+      id: "indexed-second",
+      position: { x: 5, y: 5 },
+      size: { width: 10, height: 10 },
+      zIndex: 1,
+    });
+    canvasStore.addEntities([first, second]);
+
+    expect(
+      canvasStore
+        .queryEntitiesInBounds({ x: 0, y: 0, width: 20, height: 20 }, [])
+        .map((entity) => entity.id),
+    ).toEqual([second.id, first.id]);
+
+    canvasStore.moveEntity(first.id, { x: 100, y: 100 });
+    canvasStore.removeEntity(second.id);
+
+    expect(canvasStore.queryEntitiesInBounds({ x: 0, y: 0, width: 20, height: 20 }, [])).toEqual(
+      [],
+    );
+    expect(canvasStore.queryEntitiesInBounds({ x: 95, y: 95, width: 20, height: 20 }, [])).toEqual([
+      first,
+    ]);
+  });
+});
+
 describe("canvasStore.updateEntities", () => {
   test("updates a large batch with one version notification", () => {
     const entities = Array.from({ length: 100 }, (_, index) =>
