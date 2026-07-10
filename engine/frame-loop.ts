@@ -171,14 +171,9 @@ export class FrameLoop {
       renderState.dragVisual = this.#callbacks.getDragVisualRenderState();
       renderState.disintegration = this.#callbacks.getDisintegrationRenderState(now);
 
-      if (debugMode) performance.mark("studio-render-start");
       try {
         this.#renderer.render(renderState);
         this.#firstFrameRendered = true;
-        if (debugMode) {
-          performance.mark("studio-render-end");
-          performance.measure("studio-render", "studio-render-start", "studio-render-end");
-        }
         this.#deps.perf.onRender(this.#renderer.getFrameStats(), debugMode);
       } catch (error) {
         this.#callbacks.onRenderError(error);

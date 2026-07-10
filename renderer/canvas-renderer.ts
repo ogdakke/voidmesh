@@ -376,20 +376,6 @@ export class InfiniteCanvasRenderer {
     const frameDt = this.#lastFrameTime > 0 ? (renderStart - this.#lastFrameTime) / 1000 : 1 / 60;
     this.#lastFrameTime = renderStart;
     const { entities, viewport, hoveredEntityId, selectedEntityIds, debugMode } = state;
-    const traceId = Math.round(renderStart * 1000).toString(36);
-    const markPhaseStart = (phase: string) => {
-      if (!debugMode) return;
-      performance.mark(`canvas:${phase}:start:${traceId}`);
-    };
-    const markPhaseEnd = (phase: string) => {
-      if (!debugMode) return;
-      performance.mark(`canvas:${phase}:end:${traceId}`);
-      performance.measure(
-        `canvas:${phase}`,
-        `canvas:${phase}:start:${traceId}`,
-        `canvas:${phase}:end:${traceId}`,
-      );
-    };
 
     // Update canvas size if needed (uses cached dimensions from ResizeObserver)
     const dpr = window.devicePixelRatio || 1;
@@ -431,7 +417,6 @@ export class InfiniteCanvasRenderer {
 
     // Pre-process entities: render to textures and prepare bind groups
     // Uses caching to avoid per-frame allocations
-    markPhaseStart("entity-prep");
     const preparedEntityDrawItems = this.#entityDrawItemPreparer.prepare({
       entities,
       viewport,
@@ -447,7 +432,6 @@ export class InfiniteCanvasRenderer {
     });
     const { entityDrawItems, actionLayerDrawItems } = preparedEntityDrawItems;
     let hasAnimatingContent = preparedEntityDrawItems.hasAnimatingContent;
-    markPhaseEnd("entity-prep");
 
     const texture = this.#context.getCurrentTexture();
     // Skip render if swapchain texture is invalid
@@ -461,13 +445,9 @@ export class InfiniteCanvasRenderer {
     const sceneTargetView = viewportLensTarget?.view ?? targetView;
 
     // Pass 1: Render dot grid background
-    markPhaseStart("grid-pass");
     this.#gridPass.encode({ encoder, targetView: sceneTargetView, viewport, width, height });
-    markPhaseEnd("grid-pass");
 
     // Pass 2: Render all entities with interleaved labels (z-ordered)
-    markPhaseStart("entity-pass");
-
     // Update label animation state once per frame
     this.#entityLabelPass?.beginFrame(viewport, width, height, state.dragVisual.isDragPhase);
     const selectedEntityCount = selectedEntityIds.size;
@@ -488,8 +468,6 @@ export class InfiniteCanvasRenderer {
     this.#entityLabelPass?.endFrame(selectedEntityIds);
     if (this.#entityLabelPass?.isAnimating) hasAnimatingContent = true;
 
-    markPhaseEnd("entity-pass");
-
     // Pass 2a: Action layer blur overlay
     // Blur+dim everything, then re-render selected entities sharp on top
     const blurIntensity = state.actionLayer.blurIntensity;
@@ -499,7 +477,6 @@ export class InfiniteCanvasRenderer {
       this.#entityTexturePipeline &&
       this.#actionLayerBlurPass
     ) {
-      markPhaseStart("action-layer-blur");
       this.#actionLayerBlurPass.encode({
         encoder,
         processingPipeline: this.#entityTexturePipeline.processingPipeline,
@@ -510,7 +487,6 @@ export class InfiniteCanvasRenderer {
         blurIntensity,
         contentDirty: state.dirty || hasAnimatingContent,
       });
-      markPhaseEnd("action-layer-blur");
     }
 
     // Reset blur cache when action layer blur is no longer rendering
@@ -519,7 +495,6 @@ export class InfiniteCanvasRenderer {
     }
 
     // Always render action layer entities on top (sharp, after blur or normally)
-    markPhaseStart("action-layer-sharp");
     if (actionLayerDrawItems.length > 0) {
       const sharpPass = encoder.beginRenderPass({
         label: "Action layer sharp entity pass",
@@ -534,7 +509,6 @@ export class InfiniteCanvasRenderer {
       this.#drawCompositionItems(sharpPass, actionLayerDrawItems, selectedEntityCount);
       sharpPass.end();
     }
-    markPhaseEnd("action-layer-sharp");
 
     if (state.canvasCallouts.length > 0 && this.#canvasCalloutPass) {
       this.#canvasCalloutPass.beginFrame(viewport, width);
@@ -566,7 +540,6 @@ export class InfiniteCanvasRenderer {
 
     // Pass 3: Render all selection rectangles (drag-select and multi-select bounds)
     if ((state.dragSelectBounds || state.multiSelectBounds) && this.#selectionRectPass) {
-      markPhaseStart("selection-rects");
       this.#selectionRectPass.encode({
         encoder,
         targetView: sceneTargetView,
@@ -576,18 +549,14 @@ export class InfiniteCanvasRenderer {
         dragSelectBounds: state.dragSelectBounds,
         multiSelectBounds: state.multiSelectBounds,
       });
-      markPhaseEnd("selection-rects");
     }
 
-    markPhaseStart("viewport-lens-distortion");
     const lensApplied = viewportLensTarget
       ? this.#viewportLensPass!.encode(encoder, targetView, width, height)
       : false;
-    markPhaseEnd("viewport-lens-distortion");
 
     // Final pass: WLUR progressive blur overlay (renders on top of everything)
     if (this.#wlurOverlayPass) {
-      markPhaseStart("wlur-overlay");
       this.#wlurOverlayPass.encode({
         encoder,
         sourceTexture: texture,
@@ -604,15 +573,12 @@ export class InfiniteCanvasRenderer {
           blurIntensity > 0.01 ||
           state.dragSelectBounds !== null,
       });
-      markPhaseEnd("wlur-overlay");
     }
 
     // Single submission for all passes
-    markPhaseStart("queue-submit");
     this.#device.queue.submit([encoder.finish()]);
     this.#entityTexturePipeline?.flushTextureReleases();
     this.#entityTexturePipeline?.endFrame();
-    markPhaseEnd("queue-submit");
 
     // Record frame stats for performance overlay
     this.#lastRenderTime = performance.now() - renderStart;
