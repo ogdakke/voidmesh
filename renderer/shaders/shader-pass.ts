@@ -16,7 +16,7 @@ export interface ShaderContext {
   sortedPaletteCache: { original: readonly RGBA[]; reversed: boolean; sorted: RGBA[] } | null;
   /** Texture pool for intermediate textures (used by compute shaders) */
   texturePool: TexturePool | null;
-  /** Defer release until the command buffer using the texture has been submitted. */
+  /** Release scratch after its final encoded use; later ordered passes may reuse it. */
   releaseTexture: (
     texture: GPUTexture,
     width: number,
@@ -402,6 +402,12 @@ export abstract class ShaderPass {
     pass.setBindGroup(0, bindGroup);
     pass.draw(3);
     pass.end();
+  }
+
+  /** Release per-entity resources when an entity no longer uses this pass. */
+  removeEntity(entityId: string): void {
+    this.#uniformBufferCache.get(entityId)?.destroy();
+    this.#uniformBufferCache.delete(entityId);
   }
 
   /** Cleanup GPU resources. Override to clean up additional resources. */

@@ -486,6 +486,8 @@ export const config = {
     adjustmentsUniformSize: ADJUSTMENTS_UNIFORM_SIZE,
     blurUniformSize: BLUR_UNIFORM_SIZE,
     maxStorageBufferSizeBytes: DEFAULT_MAX_STORAGE_BUFFER_SIZE_BYTES,
+    /** Persistent source + processed entity texture budget. Visible textures stay pinned. */
+    entityTextureBudgetBytes: 512 * 1024 * 1024,
     grid: {
       default: DEFAULT_GRID_CONFIG,
       dark: DEFAULT_GRID_CONFIG_DARK,

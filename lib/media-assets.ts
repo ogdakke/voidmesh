@@ -1,4 +1,4 @@
-import type { AlphaHitGrid, MediaImageAsset } from "#types/canvas.ts";
+import type { AlphaHitGrid, MediaAlphaMode, MediaImageAsset } from "#types/canvas.ts";
 
 interface ImageAssetLifetime {
   referenceCount: number;
@@ -13,6 +13,7 @@ export interface CreateImageAssetOptions {
   alphaHitGrid?: AlphaHitGrid;
   id?: string;
   revision?: number;
+  alphaMode?: MediaAlphaMode;
 }
 
 /** Create a shared image payload with one owning reference. */
@@ -20,12 +21,17 @@ export function createImageAsset(options: CreateImageAssetOptions): MediaImageAs
   const asset: MediaImageAsset = {
     id: options.id ?? `image-${crypto.randomUUID()}`,
     revision: options.revision ?? 0,
+    alphaMode: options.alphaMode ?? getImageAlphaMode(options.blob),
     imageBitmap: options.imageBitmap,
     blob: options.blob,
     alphaHitGrid: options.alphaHitGrid,
   };
   imageAssetLifetimes.set(asset, { referenceCount: 1, released: false });
   return asset;
+}
+
+function getImageAlphaMode(blob: Blob): MediaAlphaMode {
+  return blob.type.toLowerCase() === "image/jpeg" ? "none" : "unknown";
 }
 
 /** Add one owner for an existing image asset. */

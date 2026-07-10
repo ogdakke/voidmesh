@@ -1,4 +1,5 @@
-import { MediaType, type ShaderCanvasEntity } from "#types/canvas.ts";
+import { config } from "#config";
+import { MediaType, type MediaAlphaMode, type ShaderCanvasEntity } from "#types/canvas.ts";
 import type { CopyPass } from "./copy-pass.ts";
 import { EntityShaderRuntime, type EntityShaderSource } from "./entity-shader-runtime.ts";
 import type { GpuColorConfig } from "./gpu-color-space.ts";
@@ -13,32 +14,53 @@ export interface EntityTexturePipelineOptions {
   device: GPUDevice;
   colorConfig: GpuColorConfig;
   texturePool: TexturePool | null;
+  textureBudgetBytes?: number;
   onEntityError?: (entityId: string, error: string) => void;
+  onTextureEvicted?: (entityIds: ReadonlySet<string>) => void;
+}
+
+interface CachedEntityTexture {
+  texture: GPUTexture;
+  byteSize: number;
+  lastUsedFrame: number;
+}
+
+interface CachedSourceTexture extends CachedEntityTexture {
+  width: number;
+  height: number;
+  entityIds: Set<string>;
+}
+
+export interface EntityTextureResidencyStats {
+  budgetBytes: number;
+  residentBytes: number;
+  sourceBytes: number;
+  processedBytes: number;
+  sourceTextureCount: number;
+  processedTextureCount: number;
 }
 
 export class EntityTexturePipeline {
   readonly #device: GPUDevice;
   readonly #colorConfig: GpuColorConfig;
   readonly #runtime: EntityShaderRuntime;
+  readonly #textureBudgetBytes: number;
+  readonly #onTextureEvicted?: (entityIds: ReadonlySet<string>) => void;
+  #currentFrame = 0;
 
   // Entity texture cache
-  #entityTextures: Map<string, GPUTexture> = new Map();
+  #entityTextures: Map<string, CachedEntityTexture> = new Map();
 
   // Cached source textures per asset/frame identity. Static image instances share entries.
-  #sourceTextures: Map<
-    string,
-    {
-      texture: GPUTexture;
-      width: number;
-      height: number;
-      entityIds: Set<string>;
-    }
-  > = new Map();
+  #sourceTextures: Map<string, CachedSourceTexture> = new Map();
   #entitySourceKeys: Map<string, string> = new Map();
 
   constructor(options: EntityTexturePipelineOptions) {
     this.#device = options.device;
     this.#colorConfig = options.colorConfig;
+    this.#textureBudgetBytes =
+      options.textureBudgetBytes ?? config.rendering.entityTextureBudgetBytes;
+    this.#onTextureEvicted = options.onTextureEvicted;
     this.#runtime = new EntityShaderRuntime({
       device: options.device,
       colorConfig: options.colorConfig,
@@ -85,8 +107,7 @@ export class EntityTexturePipeline {
       width: entity.originalSize.width,
       height: entity.originalSize.height,
       respectShowOriginal: true,
-      sourceAlphaMode:
-        entity.mediaSource.type === MediaType.video ? entity.mediaSource.alphaMode : undefined,
+      sourceAlphaMode: getSourceAlphaMode(entity),
     });
 
     this.#device.queue.submit([encoder.finish()]);
@@ -118,7 +139,8 @@ export class EntityTexturePipeline {
       cachedTexture &&
       !entity.textureDirty
     ) {
-      return { kind: "texture", texture: cachedTexture };
+      cachedTexture.lastUsedFrame = this.#currentFrame;
+      return { kind: "texture", texture: cachedTexture.texture };
     }
     let shaderSource: EntityShaderSource | null = null;
     let sourceTexture: GPUTexture | null = null;
@@ -132,7 +154,7 @@ export class EntityTexturePipeline {
       });
 
       if (entity.shaderParams.showOriginal) {
-        cachedTexture?.destroy();
+        cachedTexture?.texture.destroy();
         this.#entityTextures.delete(entity.id);
         return { kind: "external", texture: externalTexture };
       }
@@ -162,11 +184,14 @@ export class EntityTexturePipeline {
           texture: sourceTexture,
           width,
           height,
+          byteSize: getTextureByteSize(width, height, "rgba8unorm"),
+          lastUsedFrame: this.#currentFrame,
           entityIds: new Set(),
         };
         this.#sourceTextures.set(sourceKey, cachedSource);
       } else {
         sourceTexture = cachedSource.texture;
+        cachedSource.lastUsedFrame = this.#currentFrame;
         if (entity.mediaSource.type === MediaType.gif && entity.textureDirty) {
           this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
         }
@@ -182,7 +207,7 @@ export class EntityTexturePipeline {
     // double-destroying the same GPU resource during cleanup.
     if (entity.shaderParams.showOriginal) {
       if (cachedTexture) {
-        cachedTexture.destroy();
+        cachedTexture.texture.destroy();
         this.#entityTextures.delete(entity.id);
       }
       return { kind: "texture", texture: sourceTexture! };
@@ -196,12 +221,16 @@ export class EntityTexturePipeline {
       GPUTextureUsage.COPY_SRC;
 
     let outputTexture: GPUTexture;
-    if (cachedTexture && cachedTexture.width === width && cachedTexture.height === height) {
+    if (
+      cachedTexture &&
+      cachedTexture.texture.width === width &&
+      cachedTexture.texture.height === height
+    ) {
       // Reuse existing output texture — content will be overwritten by shader
-      outputTexture = cachedTexture;
+      outputTexture = cachedTexture.texture;
     } else {
       // Dimensions changed or first render — destroy old, create new
-      cachedTexture?.destroy();
+      cachedTexture?.texture.destroy();
       outputTexture = this.#device.createTexture({
         label: `Entity ${entity.id} processed texture`,
         size: [width, height],
@@ -219,25 +248,32 @@ export class EntityTexturePipeline {
       width,
       height,
       respectShowOriginal: true,
-      sourceAlphaMode:
-        entity.mediaSource.type === MediaType.video ? entity.mediaSource.alphaMode : undefined,
+      sourceAlphaMode: getSourceAlphaMode(entity),
     });
 
     // Cache and return (source texture stays in the shared source cache)
-    this.#entityTextures.set(entity.id, outputTexture);
+    this.#entityTextures.set(entity.id, {
+      texture: outputTexture,
+      byteSize: getTextureByteSize(width, height, this.#colorConfig.intermediateFormat),
+      lastUsedFrame: this.#currentFrame,
+    });
     return { kind: "texture", texture: outputTexture };
   }
 
   getDisplayedEntityTexture(entity: ShaderCanvasEntity): GPUTexture | null {
     if (entity.shaderParams.showOriginal) {
-      return this.getSourceEntityTexture(entity.id) ?? this.#entityTextures.get(entity.id) ?? null;
+      return (
+        this.getSourceEntityTexture(entity.id) ??
+        this.#entityTextures.get(entity.id)?.texture ??
+        null
+      );
     }
 
-    return this.#entityTextures.get(entity.id) ?? null;
+    return this.#entityTextures.get(entity.id)?.texture ?? null;
   }
 
   getProcessedEntityTexture(entityId: string): GPUTexture | null {
-    return this.#entityTextures.get(entityId) ?? null;
+    return this.#entityTextures.get(entityId)?.texture ?? null;
   }
 
   getSourceEntityTexture(entityId: string): GPUTexture | null {
@@ -249,10 +285,30 @@ export class EntityTexturePipeline {
     return this.#runtime.needsContinuousRender(entity);
   }
 
+  endFrame(): void {
+    this.#evictToBudget();
+    this.#currentFrame++;
+  }
+
+  getResidencyStats(): EntityTextureResidencyStats {
+    let sourceBytes = 0;
+    let processedBytes = 0;
+    for (const cached of this.#sourceTextures.values()) sourceBytes += cached.byteSize;
+    for (const cached of this.#entityTextures.values()) processedBytes += cached.byteSize;
+    return {
+      budgetBytes: this.#textureBudgetBytes,
+      residentBytes: sourceBytes + processedBytes,
+      sourceBytes,
+      processedBytes,
+      sourceTextureCount: this.#sourceTextures.size,
+      processedTextureCount: this.#entityTextures.size,
+    };
+  }
+
   removeEntity(entityId: string): void {
     // Remove texture
-    const texture = this.#entityTextures.get(entityId);
-    texture?.destroy();
+    const cachedTexture = this.#entityTextures.get(entityId);
+    cachedTexture?.texture.destroy();
     this.#entityTextures.delete(entityId);
 
     this.#releaseEntitySourceTexture(entityId);
@@ -270,8 +326,8 @@ export class EntityTexturePipeline {
 
   destroy(): void {
     // Destroy entity textures
-    for (const texture of this.#entityTextures.values()) {
-      texture.destroy();
+    for (const cached of this.#entityTextures.values()) {
+      cached.texture.destroy();
     }
     this.#entityTextures.clear();
 
@@ -318,7 +374,7 @@ export class EntityTexturePipeline {
   #bindEntityToSource(
     entityId: string,
     sourceKey: string,
-    cachedSource: { texture: GPUTexture; width: number; height: number; entityIds: Set<string> },
+    cachedSource: CachedSourceTexture,
   ): void {
     const previousKey = this.#entitySourceKeys.get(entityId);
     if (previousKey === sourceKey) return;
@@ -342,4 +398,65 @@ export class EntityTexturePipeline {
       this.#sourceTextures.delete(sourceKey);
     }
   }
+
+  #evictToBudget(): void {
+    const stats = this.getResidencyStats();
+    if (stats.residentBytes <= this.#textureBudgetBytes) return;
+
+    let residentBytes = stats.residentBytes;
+    const candidates: Array<
+      | { kind: "processed"; key: string; cached: CachedEntityTexture }
+      | { kind: "source"; key: string; cached: CachedSourceTexture }
+    > = [];
+
+    for (const [key, cached] of this.#entityTextures) {
+      if (cached.lastUsedFrame !== this.#currentFrame) {
+        candidates.push({ kind: "processed", key, cached });
+      }
+    }
+    for (const [key, cached] of this.#sourceTextures) {
+      if (cached.lastUsedFrame !== this.#currentFrame) {
+        candidates.push({ kind: "source", key, cached });
+      }
+    }
+    candidates.sort((a, b) => a.cached.lastUsedFrame - b.cached.lastUsedFrame);
+
+    for (const candidate of candidates) {
+      if (residentBytes <= this.#textureBudgetBytes) break;
+      candidate.cached.texture.destroy();
+      residentBytes -= candidate.cached.byteSize;
+
+      if (candidate.kind === "processed") {
+        this.#entityTextures.delete(candidate.key);
+        this.#onTextureEvicted?.(new Set([candidate.key]));
+        continue;
+      }
+
+      this.#sourceTextures.delete(candidate.key);
+      for (const entityId of candidate.cached.entityIds) {
+        this.#entitySourceKeys.delete(entityId);
+      }
+      this.#onTextureEvicted?.(candidate.cached.entityIds);
+    }
+  }
+}
+
+function getTextureByteSize(width: number, height: number, format: GPUTextureFormat): number {
+  switch (format) {
+    case "rgba8unorm":
+    case "bgra8unorm":
+    case "rgba8unorm-srgb":
+    case "bgra8unorm-srgb":
+      return width * height * 4;
+    case "rgba16float":
+      return width * height * 8;
+    default:
+      throw new Error(`Entity texture format ${format} needs an explicit byte-size mapping`);
+  }
+}
+
+function getSourceAlphaMode(entity: ShaderCanvasEntity): MediaAlphaMode | undefined {
+  if (entity.mediaSource.type === MediaType.video) return entity.mediaSource.alphaMode;
+  if (entity.mediaSource.type === MediaType.image) return entity.mediaSource.asset.alphaMode;
+  return undefined;
 }

@@ -346,13 +346,14 @@ export class DitheringShader extends ShaderPass {
   }
 
   /** Remove cached error buffers for an entity (call when entity is removed) */
-  removeEntity(entityId: string): void {
+  override removeEntity(entityId: string): void {
     for (const [key, buffer] of this.#errorBufferCache.entries()) {
       if (key.startsWith(entityId + "-")) {
         buffer.destroy();
         this.#errorBufferCache.delete(key);
       }
     }
+    super.removeEntity(entityId);
   }
 
   override destroy(): void {

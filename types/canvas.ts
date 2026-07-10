@@ -394,6 +394,8 @@ export interface MediaImageAsset {
   id: string;
   /** Incremented when the underlying image pixels change. */
   revision: number;
+  /** Whether decoded samples can carry alpha. JPEG assets are known opaque. */
+  alphaMode: MediaAlphaMode;
   imageBitmap: ImageBitmap;
   /** Original source data for lossless duplication */
   blob: Blob;

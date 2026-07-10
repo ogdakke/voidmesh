@@ -49,6 +49,17 @@ describe("shared image asset lifetime", () => {
     releaseImageAsset(asset);
   });
 
+  test("marks JPEG assets opaque so rendering can skip alpha-mask intermediates", () => {
+    const asset = createImageAsset({
+      id: "image-opaque",
+      imageBitmap: createBitmap(),
+      blob: new Blob(["image"], { type: "image/jpeg" }),
+    });
+
+    expect(asset.alphaMode).toBe("none");
+    releaseImageAsset(asset);
+  });
+
   test("rejects retaining an asset after its decoded payload was released", () => {
     const asset = createImageAsset({
       id: "image-released",

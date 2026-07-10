@@ -419,11 +419,12 @@ export class GlassShader extends ShaderPass {
   }
 
   /** Clean up tracking for a removed entity */
-  removeEntity(entityId: string): void {
+  override removeEntity(entityId: string): void {
     this.#lastFrameTimes.delete(entityId);
     this.#flowingImmediateUniformBuffers.get(entityId)?.destroy();
     this.#flowingImmediateUniformBuffers.delete(entityId);
     this.#flowingImmediateUniformDataCache.delete(entityId);
+    super.removeEntity(entityId);
   }
 
   override destroy(): void {

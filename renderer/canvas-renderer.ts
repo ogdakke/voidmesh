@@ -183,6 +183,9 @@ export class InfiniteCanvasRenderer {
           this.onEntityError?.(entityId, error);
         }
       },
+      onTextureEvicted: (entityIds) => {
+        for (const entityId of entityIds) this.#compositionPass?.removeEntity(entityId);
+      },
     });
     await this.#entityTexturePipeline.initialize();
     this.#entityDrawItemPreparer = new EntityDrawItemPreparer({
@@ -534,6 +537,7 @@ export class InfiniteCanvasRenderer {
     markPhaseStart("queue-submit");
     this.#device.queue.submit([encoder.finish()]);
     this.#entityTexturePipeline?.flushTextureReleases();
+    this.#entityTexturePipeline?.endFrame();
     markPhaseEnd("queue-submit");
 
     // Record frame stats for performance overlay

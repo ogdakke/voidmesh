@@ -295,16 +295,18 @@ export class EntityShaderRuntime {
     height: number,
     usage: GPUTextureUsageFlags,
   ): void {
+    // Passes are encoded in order, so pooled scratch can be reused by a later pass in the
+    // same command buffer once the final read/copy using this texture has been encoded.
+    if (this.#texturePool) {
+      this.#texturePool.release(texture, width, height, usage);
+      return;
+    }
     this.#pendingTextureReleases.push({ texture, width, height, usage });
   }
 
   flushTextureReleases(): void {
     for (const release of this.#pendingTextureReleases) {
-      if (this.#texturePool) {
-        this.#texturePool.release(release.texture, release.width, release.height, release.usage);
-      } else {
-        release.texture.destroy();
-      }
+      release.texture.destroy();
     }
     this.#pendingTextureReleases = [];
   }
@@ -314,12 +316,8 @@ export class EntityShaderRuntime {
   }
 
   removeEntity(entityId: string): void {
-    const ditheringShader = this.#shaderRegistry.get(ShaderType.dithering) as
-      | DitheringShader
-      | undefined;
-    ditheringShader?.removeEntity(entityId);
+    this.#shaderRegistry.removeEntity(entityId);
     this.#processingPipeline.removeEntity(entityId);
-    this.removeGlassEntity(entityId);
   }
 
   removeGlassEntity(entityId: string): void {

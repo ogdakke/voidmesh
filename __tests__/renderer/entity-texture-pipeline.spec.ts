@@ -44,7 +44,7 @@ describe("EntityTexturePipeline shared image sources", () => {
     };
 
     const sourceTexture = createTexture(200, 150);
-    const device = createDevice(sourceTexture);
+    const device = createDevice([sourceTexture]);
     const pipeline = new EntityTexturePipeline({
       device,
       colorConfig,
@@ -68,6 +68,54 @@ describe("EntityTexturePipeline shared image sources", () => {
     releaseImageAsset(first.mediaSource.asset);
     releaseImageAsset(first.mediaSource.asset);
   });
+
+  test("evicts least-recently-used offscreen sources when the byte budget is exceeded", () => {
+    const first = createTestEntity({
+      id: "unique-first",
+      shaderParams: { showOriginal: true },
+    });
+    const second = createTestEntity({
+      id: "unique-second",
+      shaderParams: { showOriginal: true },
+    });
+    if (first.mediaSource.type !== "image" || second.mediaSource.type !== "image") {
+      throw new Error("Expected image entities");
+    }
+
+    const firstTexture = createTexture(200, 150);
+    const secondTexture = createTexture(200, 150);
+    const onTextureEvicted = vi.fn<(entityIds: ReadonlySet<string>) => void>();
+    const pipeline = new EntityTexturePipeline({
+      device: createDevice([firstTexture, secondTexture]),
+      colorConfig,
+      texturePool: null,
+      textureBudgetBytes: 200 * 150 * 4,
+      onTextureEvicted,
+    });
+    const encoder = {} as GPUCommandEncoder;
+
+    pipeline.renderEntityToTexture(first, encoder);
+    pipeline.renderEntityToTexture(second, encoder);
+    pipeline.endFrame();
+    expect(pipeline.getResidencyStats().residentBytes).toBe(200 * 150 * 4 * 2);
+
+    second.textureDirty = false;
+    pipeline.renderEntityToTexture(second, encoder);
+    pipeline.endFrame();
+
+    expect(firstTexture.destroy).toHaveBeenCalledOnce();
+    expect(secondTexture.destroy).not.toHaveBeenCalled();
+    expect(pipeline.getResidencyStats()).toMatchObject({
+      residentBytes: 200 * 150 * 4,
+      sourceTextureCount: 1,
+    });
+    expect(onTextureEvicted).toHaveBeenCalledWith(new Set([first.id]));
+
+    pipeline.removeEntity(first.id);
+    pipeline.removeEntity(second.id);
+    releaseImageAsset(first.mediaSource.asset);
+    releaseImageAsset(second.mediaSource.asset);
+  });
 });
 
 function createTexture(width: number, height: number): GPUTexture {
@@ -80,7 +128,7 @@ function createTexture(width: number, height: number): GPUTexture {
   } as unknown as GPUTexture;
 }
 
-function createDevice(sourceTexture: GPUTexture): GPUDevice {
+function createDevice(sourceTextures: GPUTexture[]): GPUDevice {
   const device = {
     queue: {
       copyExternalImageToTexture: vi.fn<GPUQueue["copyExternalImageToTexture"]>(),
@@ -92,7 +140,11 @@ function createDevice(sourceTexture: GPUTexture): GPUDevice {
     createShaderModule: vi.fn<GPUDevice["createShaderModule"]>(() => ({}) as GPUShaderModule),
     createPipelineLayout: vi.fn<GPUDevice["createPipelineLayout"]>(() => ({}) as GPUPipelineLayout),
     createRenderPipeline: vi.fn<GPUDevice["createRenderPipeline"]>(() => ({}) as GPURenderPipeline),
-    createTexture: vi.fn<GPUDevice["createTexture"]>(() => sourceTexture),
+    createTexture: vi.fn<GPUDevice["createTexture"]>(() => {
+      const texture = sourceTextures.shift();
+      if (!texture) throw new Error("Test requested an unexpected texture allocation");
+      return texture;
+    }),
   };
   return device as unknown as GPUDevice;
 }
