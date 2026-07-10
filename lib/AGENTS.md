@@ -29,6 +29,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 
 - Pure functions where possible. No side effects, no singletons (except `undo`, `logger`, `paletteStore`, `scheduler`).
 - Image duplication shares `MediaImageAsset` objects. Retain before attaching an asset to another entity and release only when that entity's undo-owned resources are evicted.
+- Image assets record alpha capability from their encoded format; JPEG assets are known opaque so the renderer can omit alpha-mask intermediates.
 - Config is a frozen object. Do not mutate at runtime.
 
 ## Anti-Patterns

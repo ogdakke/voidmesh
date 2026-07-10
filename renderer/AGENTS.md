@@ -54,10 +54,10 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 
 ## GPU Resource Management
 
-- Entity textures cached in `#entityTextures` Map (keyed by entity ID)
+- Persistent source + processed entity textures have exact byte accounting and share a configurable LRU budget. Current-frame textures are pinned; offscreen entries are eviction candidates.
 - Source textures cached by media identity/revision; static image entities sharing one asset also share one GPU texture until the final entity owner is removed
 - Composition cache (`#entityCompositionCache`) reuses uniform buffers and bind groups
-- `TexturePool` for transient intermediate textures
+- `TexturePool` for transient intermediate textures. Release scratch immediately after its final encoded use so later ordered passes in the same command buffer can reuse it.
 - Image source changes require a new asset revision. Entity removal releases its source-cache ownership without destroying textures still used by sibling instances.
 
 ## Shader Uniform Layout
@@ -67,6 +67,7 @@ All shaders share a 336-byte uniform buffer. First 64 bytes are common (size, in
 ## Anti-Patterns
 
 - Do not create GPU resources outside of renderer/pipeline classes. Use `TexturePool` for transients.
+- Persistent renderer caches must report byte cost and participate in a budget; do not add unbounded per-entity or per-dimension GPU maps.
 - Do not call `device.queue.submit()` outside of shader pass `execute()` methods except in the compositor.
 - WGSL files must use `?raw` import suffix for Vite. Minified in production builds via `miniray` (WGSL minifier).
 - Export: GPU device cannot be transferred to workers. Main thread renders frames; worker encodes/muxes.

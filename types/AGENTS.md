@@ -23,7 +23,7 @@ type ShaderType = typeof ShaderType.infer;
 
 `ShaderCanvasEntity` is a discriminated union on `mediaSource.type` (`image`, `video`, `gif`, `svg`). Use type guards `isVideoEntity()`, `isGifEntity()`, `isAnimatedEntity()`, `isSvgEntity()` — do not check `.mediaSource.type` directly in consuming code.
 
-Static image entities reference a shared `MediaImageAsset` through `mediaSource.asset`. Entity transforms and shader state remain per-instance; decoded pixels, encoded source data, alpha metadata, identity, and revision live on the asset.
+Static image entities reference a shared `MediaImageAsset` through `mediaSource.asset`. Entity transforms and shader state remain per-instance; decoded pixels, encoded source data, alpha capability, identity, and revision live on the asset.
 
 ## Anti-Patterns
 
