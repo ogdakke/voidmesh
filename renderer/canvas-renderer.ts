@@ -1,9 +1,10 @@
 import { config, getViewportLensDistortionConfig, type GridConfig } from "#config";
 import { logger } from "#lib/client.logger.ts";
 import { boundsIntersect, getRotatedAABB, getViewportWorldBounds } from "#lib/canvas-math.ts";
+import { getFrameAtTime } from "#lib/gif-decoder.ts";
 import { setGpuContext } from "./gpu-color-space.ts";
 import type { DisintegrationRenderOverlay, RenderState } from "#engine";
-import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
+import { MediaType, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import { CanvasLensing } from "#types/enums.ts";
 import { ActionLayerBlurPass } from "./action-layer-blur-pass.ts";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
@@ -823,34 +824,35 @@ export class InfiniteCanvasRenderer {
     entity: ShaderCanvasEntity,
     options?: ImageExportOptions,
   ): Promise<Blob | null> {
-    const displayedTexture = this.#entityTexturePipeline?.getDisplayedEntityTexture(entity) ?? null;
-    if (!displayedTexture) {
-      if (entity.mediaSource.type !== "video" || !entity.shaderParams.showOriginal) return null;
+    const exportSource = this.#getNativeExportSource(entity);
+    if (!exportSource || !this.#exportService) return null;
 
-      const capturedTexture = this.#copyCurrentVideoFrameToTexture(
-        entity,
-        `Entity ${entity.id} original video export texture`,
-      );
-      if (!capturedTexture) return null;
-
-      try {
-        return await this.#exportService!.renderTextureToBlob(
-          capturedTexture,
-          entity.originalSize.width,
-          entity.originalSize.height,
-          options,
-        );
-      } finally {
-        capturedTexture.destroy();
-      }
-    }
-
-    return this.#exportService!.renderTextureToBlob(
-      displayedTexture,
+    return this.#exportService.renderSourceToBlob(
+      entity,
+      exportSource,
       entity.originalSize.width,
       entity.originalSize.height,
       options,
     );
+  }
+
+  #getNativeExportSource(
+    entity: ShaderCanvasEntity,
+  ): ImageBitmap | OffscreenCanvas | HTMLCanvasElement | HTMLVideoElement | null {
+    switch (entity.mediaSource.type) {
+      case MediaType.image:
+        return entity.mediaSource.asset.imageBitmap;
+      case MediaType.gif:
+        return getFrameAtTime(
+          entity.mediaSource.frames,
+          entity.playback?.currentTime ?? 0,
+          entity.playback?.loop ?? true,
+        ).bitmap;
+      case MediaType.svg:
+        return entity.imageBitmap;
+      case MediaType.video:
+        return entity.mediaSource.videoElement;
+    }
   }
 
   /** Whether a shader needs continuous re-rendering for the given entity (e.g., time-based animation). */
