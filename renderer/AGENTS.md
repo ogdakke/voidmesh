@@ -46,7 +46,7 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 ## Rendering Pipeline (per frame)
 
 1. `GameLoop` calls `renderer.render(state)` each frame
-2. For each visible entity: upload source texture if dirty, apply shader via `ShaderRegistry.applyShader()`, apply pre/post processing via `ProcessingPipeline`
+2. For each visible entity: resolve its shared source texture (uploading absent or changed sources), apply shader via `ShaderRegistry.applyShader()`, apply pre/post processing via `ProcessingPipeline`
 3. Composite all processed entities onto canvas with viewport transform
 4. If action layer active: blur+dim canvas, re-render targeted entities sharp on top
 5. Render grid overlay, selection rectangles, drag visuals
@@ -55,10 +55,10 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 ## GPU Resource Management
 
 - Entity textures cached in `#entityTextures` Map (keyed by entity ID)
-- Source texture cache (`#entitySourceTextures`) avoids re-uploading unchanged bitmaps
+- Source textures cached by media identity/revision; static image entities sharing one asset also share one GPU texture until the final entity owner is removed
 - Composition cache (`#entityCompositionCache`) reuses uniform buffers and bind groups
 - `TexturePool` for transient intermediate textures
-- All caches invalidated when entity source changes; cleaned up on entity removal
+- Image source changes require a new asset revision. Entity removal releases its source-cache ownership without destroying textures still used by sibling instances.
 
 ## Shader Uniform Layout
 
