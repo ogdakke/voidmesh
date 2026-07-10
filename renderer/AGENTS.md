@@ -8,7 +8,7 @@ WebGPU rendering and export pipelines. Turns engine state into pixels.
 - `processing-pipeline.ts` (~49KB) — Per-entity pre/post-processing: adjustments, blur, bloom, grain, chromatic aberration. Also provides action layer blur.
 - `gpu-color-space.ts` — `detectGpuColorConfig()`. Probes Display P3 support at init, returns frozen `GpuColorConfig` (supportsP3, canvasFormat, canvasColorSpace, intermediateFormat, textureColorSpace).
 - `copy-pass.ts` + `copy-pass.wgsl` — `CopyPass`. Full-screen format conversion (rgba16float ↔ rgba8unorm) for export readback and showOriginal passthrough.
-- `texture-pool.ts` — GPU texture recycling. Parameterized by `GPUTextureFormat` (receives `intermediateFormat` from renderer).
+- `texture-pool.ts` — GPU texture recycling with exact idle-byte accounting and a global 64 MiB LRU budget. Parameterized by `GPUTextureFormat` (receives `intermediateFormat` from renderer).
 - `export-service.ts` — `ExportService`. Reads GPU textures back to CPU for image export (PNG/JPEG). Uses `CopyPass` for rgba16float→rgba8unorm conversion, color-space-aware texture operations.
 - `video-exporter.ts` (~19KB) — WebCodecs H.264 encoding + mediabunny muxing via Web Worker.
 - `video-export.worker.ts` (~10KB) — Worker receiving encoded `VideoFrame` chunks, muxes into MP4/MOV.
@@ -55,9 +55,10 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 ## GPU Resource Management
 
 - Persistent source + processed entity textures have exact byte accounting and share a configurable LRU budget. Current-frame textures are pinned; offscreen entries are eviction candidates.
+- `InfiniteCanvasRenderer.getResourceStats()` exposes residency plus cumulative allocation, upload, and eviction counters for performance benchmarks.
 - Source textures cached by media identity/revision; static image entities sharing one asset also share one GPU texture until the final entity owner is removed
 - Composition cache (`#entityCompositionCache`) reuses uniform buffers and bind groups
-- `TexturePool` for transient intermediate textures. Release scratch immediately after its final encoded use so later ordered passes in the same command buffer can reuse it.
+- `TexturePool` retains at most 64 MiB of idle transient textures across dimensions/usages. Release scratch immediately after its final encoded use so later ordered passes in the same command buffer can reuse it.
 - Image source changes require a new asset revision. Entity removal releases its source-cache ownership without destroying textures still used by sibling instances.
 
 ## Shader Uniform Layout
