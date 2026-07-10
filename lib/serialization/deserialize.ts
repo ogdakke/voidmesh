@@ -20,6 +20,7 @@ import type {
 import { isStudioManifest, toPlaybackState } from "./types.ts";
 import { CURRENT_VERSION } from "./version.ts";
 import { analytics } from "#lib/analytics.ts";
+import { createImageAsset } from "#lib/media-assets.ts";
 
 const MIME_BY_EXT: Record<string, string> = {
   mp4: "video/mp4",
@@ -416,15 +417,15 @@ async function deserializeEntity(
       if (!bytes) throw new Error(`Missing media file: ${serialized.mediaFile}`);
       const imageBlob = new Blob([bytes.slice()]);
       const bitmap = await bytesToImageBitmap(bytes);
+      const asset = createImageAsset({
+        imageBitmap: bitmap,
+        blob: imageBlob,
+        alphaHitGrid: createAlphaHitGrid(bitmap, config.hitTesting.alphaGrid),
+      });
       return {
         ...base,
         imageBitmap: bitmap,
-        mediaSource: {
-          type: "image" as const,
-          imageBitmap: bitmap,
-          blob: imageBlob,
-          alphaHitGrid: createAlphaHitGrid(bitmap, config.hitTesting.alphaGrid),
-        },
+        mediaSource: { type: "image" as const, asset },
       };
     }
 

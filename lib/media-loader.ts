@@ -14,6 +14,7 @@ import { extractPaletteFromImage } from "./palette-extraction/index.ts";
 import { decodeGif, isAnimatedGif, type GifDecodeResult } from "./gif-decoder.ts";
 import { createPlaybackState } from "./media-playback.ts";
 import { createAlphaHitGrid } from "./alpha-hit-testing.ts";
+import { createImageAsset, retainImageAsset } from "./media-assets.ts";
 
 /** Check if a file is a video */
 export function isVideoFile(file: File): boolean {
@@ -452,9 +453,10 @@ export function createImageEntityData(
   filename?: string,
 ): Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string } {
   const alphaHitGrid = createMediaAlphaHitGrid(bitmap);
+  const asset = createImageAsset({ imageBitmap: bitmap, blob, alphaHitGrid });
   return {
     name: filename,
-    mediaSource: { type: "image", imageBitmap: bitmap, blob, alphaHitGrid },
+    mediaSource: { type: "image", asset },
     imageBitmap: bitmap,
     position,
     size: { width: bitmap.width, height: bitmap.height },
@@ -794,15 +796,10 @@ export async function cloneMediaSource(
 ): Promise<{ mediaSource: MediaSource; imageBitmap: ImageBitmap }> {
   switch (source.type) {
     case "image": {
-      const bitmap = await createImageBitmap(source.blob);
+      retainImageAsset(source.asset);
       return {
-        mediaSource: {
-          type: "image",
-          imageBitmap: bitmap,
-          blob: source.blob,
-          alphaHitGrid: createMediaAlphaHitGrid(bitmap),
-        },
-        imageBitmap: bitmap,
+        mediaSource: { type: "image", asset: source.asset },
+        imageBitmap: source.asset.imageBitmap,
       };
     }
 

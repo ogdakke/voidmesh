@@ -389,13 +389,22 @@ export const MediaType = createEnum({
 
 export type MediaType = typeof MediaType.infer;
 
-export type MediaSourceImage = {
-  type: typeof MediaType.image;
+export interface MediaImageAsset {
+  /** Stable identity shared by every canvas instance of this image. */
+  id: string;
+  /** Incremented when the underlying image pixels change. */
+  revision: number;
   imageBitmap: ImageBitmap;
   /** Original source data for lossless duplication */
   blob: Blob;
   /** Derived alpha occupancy grid for pointer hit testing */
   alphaHitGrid?: AlphaHitGrid;
+}
+
+export type MediaSourceImage = {
+  type: typeof MediaType.image;
+  /** Shared media payload. Per-entity state belongs on the entity. */
+  asset: MediaImageAsset;
 };
 export type MediaAlphaMode = "none" | "supported" | "unknown";
 

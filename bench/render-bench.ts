@@ -12,6 +12,7 @@ import {
   type Size,
 } from "#types/canvas.ts";
 import type { RenderState } from "../engine/canvas-store.ts";
+import { createImageAsset } from "#lib/media-assets.ts";
 
 import "../styles/reset.css";
 
@@ -723,8 +724,10 @@ function createEntity(options: {
     originalSize: options.size,
     mediaSource: options.mediaSource ?? {
       type: MediaType.image,
-      imageBitmap: options.bitmap,
-      blob: new Blob([], { type: "image/png" }),
+      asset: createImageAsset({
+        imageBitmap: options.bitmap,
+        blob: new Blob([], { type: "image/png" }),
+      }),
     },
     playback: options.playback,
     shaderType: options.shaderType,

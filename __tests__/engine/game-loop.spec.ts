@@ -196,7 +196,7 @@ describe("Desktop pointer interactions", () => {
       const frontId = addEntity(100, 100, 200, 150, { zIndex: 10 });
       const front = canvasStore.getState().entities.get(frontId);
       if (!front || front.mediaSource.type !== "image") throw new Error("Expected image entity");
-      front.mediaSource.alphaHitGrid = {
+      front.mediaSource.asset.alphaHitGrid = {
         width: 2,
         height: 2,
         cellSize: 1,
@@ -218,7 +218,7 @@ describe("Desktop pointer interactions", () => {
       const frontId = addEntity(100, 100, 200, 150, { zIndex: 10 });
       const front = canvasStore.getState().entities.get(frontId);
       if (!front || front.mediaSource.type !== "image") throw new Error("Expected image entity");
-      front.mediaSource.alphaHitGrid = {
+      front.mediaSource.asset.alphaHitGrid = {
         width: 2,
         height: 2,
         cellSize: 1,

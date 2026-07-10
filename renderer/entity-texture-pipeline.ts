@@ -316,7 +316,7 @@ export class EntityTexturePipeline {
   ): void {
     const source =
       entity.mediaSource.type === MediaType.image
-        ? entity.mediaSource.imageBitmap
+        ? entity.mediaSource.asset.imageBitmap
         : entity.imageBitmap;
     this.#device.queue.copyExternalImageToTexture(
       { source },

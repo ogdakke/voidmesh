@@ -15,6 +15,7 @@ import {
 } from "#types/canvas.ts";
 import { config } from "#config";
 import { deepMerge } from "#lib/deep-merge.ts";
+import { createImageAsset } from "#lib/media-assets.ts";
 import { createMockImageBitmap } from "../mocks/media.mock.ts";
 
 let entityCounter = 0;
@@ -186,8 +187,10 @@ export function createTestEntity(options: CreateEntityOptions = {}): ShaderCanva
   // Default: image entity
   const mediaSource: MediaSourceImage = {
     type: "image",
-    imageBitmap: mockBitmap,
-    blob: new Blob(["mock-image"], { type: "image/png" }),
+    asset: createImageAsset({
+      imageBitmap: mockBitmap,
+      blob: new Blob(["mock-image"], { type: "image/png" }),
+    }),
   };
   return { ...baseProps, mediaSource };
 }

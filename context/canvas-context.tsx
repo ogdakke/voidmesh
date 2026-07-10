@@ -49,6 +49,7 @@ import { canvasStore, disintegrationController, gameLoop } from "#engine";
 import { toastManager } from "#components/ui/toast/toast-manager.ts";
 import { hints } from "#components/ui/hint/hint-manager.ts";
 import { extractOriginalPalette, cloneMediaSource } from "#lib/media-loader.ts";
+import { releaseImageAsset } from "#lib/media-assets.ts";
 import { Command, undo } from "#lib/undo.ts";
 import {
   createDuplicatePlaybackState,
@@ -128,7 +129,7 @@ function destroyEntityMediaResources(entity: ShaderCanvasEntity): void {
   } else if (entity.mediaSource.type === MediaType.svg) {
     entity.imageBitmap.close();
   } else if (entity.mediaSource.type === MediaType.image) {
-    entity.imageBitmap.close();
+    releaseImageAsset(entity.mediaSource.asset);
   }
 
   resourceOwners.delete(entity.id);

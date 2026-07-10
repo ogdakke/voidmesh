@@ -1,5 +1,6 @@
 import { palettes } from "#lib/config/palettes.config.ts";
 import { GlassKind, ShaderType } from "#types/canvas.ts";
+import { createImageAsset } from "#lib/media-assets.ts";
 import type { CanvasStore } from "./canvas-store";
 
 export async function debugCanvas(store: CanvasStore) {
@@ -10,11 +11,12 @@ export async function debugCanvas(store: CanvasStore) {
   const imageBitmap = await createImageBitmap(blob);
 
   const entityId = "debug-entity";
+  const asset = createImageAsset({ imageBitmap, blob });
 
   store.addEntity({
     id: entityId,
     name: "Debug Image",
-    mediaSource: { type: "image", imageBitmap, blob },
+    mediaSource: { type: "image", asset },
     imageBitmap,
     originalSize: { width: imageBitmap.width, height: imageBitmap.height },
     position: { x: -400, y: -600 },
