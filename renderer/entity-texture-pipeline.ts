@@ -121,6 +121,7 @@ export class EntityTexturePipeline {
 
     this.#device.queue.submit([encoder.finish()]);
     this.#runtime.flushTextureReleases();
+    this.#runtime.endFrame();
   }
 
   /**
@@ -297,6 +298,7 @@ export class EntityTexturePipeline {
   }
 
   endFrame(): void {
+    this.#runtime.endFrame();
     this.#evictToBudget();
     this.#currentFrame++;
   }

@@ -20,6 +20,7 @@ import { ExternalTextureCopyPass } from "./external-texture-copy-pass.ts";
 import type { ImageExportOptions } from "./export-formats.ts";
 import { detectGpuColorConfig, type GpuColorConfig } from "./gpu-color-space.ts";
 import { GridPass } from "./grid-pass.ts";
+import type { ByteBudgetCacheStats } from "./byte-budget-cache.ts";
 import { SelectionRectPass } from "./selection-rect-pass.ts";
 import { TexturePool, type TexturePoolStats } from "./texture-pool.ts";
 import { ViewportLensPass, type ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
@@ -31,6 +32,7 @@ export type { ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
 
 export interface RendererResourceStats {
   entityTextures: EntityTextureResidencyStats;
+  processingTextures: ByteBudgetCacheStats;
   texturePool: TexturePoolStats;
 }
 
@@ -128,6 +130,13 @@ export class InfiniteCanvasRenderer {
         sourceUploads: 0,
         evictions: 0,
       },
+      processingTextures:
+        this.#entityTexturePipeline?.processingPipeline.getTextureCacheStats() ?? {
+          budgetBytes: config.rendering.processingTextureBudgetBytes,
+          residentBytes: 0,
+          entryCount: 0,
+          evictions: 0,
+        },
       texturePool: this.#texturePool?.getStats() ?? {
         budgetBytes: config.rendering.texturePoolBudgetBytes,
         residentBytes: 0,

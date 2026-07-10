@@ -490,6 +490,8 @@ export const config = {
     entityTextureBudgetBytes: 512 * 1024 * 1024,
     /** Maximum idle scratch memory retained by TexturePool across dimensions/usages. */
     texturePoolBudgetBytes: 64 * 1024 * 1024,
+    /** Persistent dimension-keyed blur and bloom texture budget. */
+    processingTextureBudgetBytes: 128 * 1024 * 1024,
     grid: {
       default: DEFAULT_GRID_CONFIG,
       dark: DEFAULT_GRID_CONFIG_DARK,

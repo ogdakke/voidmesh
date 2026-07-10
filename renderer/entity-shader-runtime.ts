@@ -320,6 +320,10 @@ export class EntityShaderRuntime {
     this.#processingPipeline.removeEntity(entityId);
   }
 
+  endFrame(): void {
+    this.#processingPipeline.endFrame();
+  }
+
   removeGlassEntity(entityId: string): void {
     const glassShader = this.#shaderRegistry.get(ShaderType.glass) as GlassShader | undefined;
     glassShader?.removeEntity(entityId);

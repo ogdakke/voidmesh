@@ -12,6 +12,7 @@ import kawaseDownsampleShaderSource from "./kawase-downsample.wgsl?raw";
 import kawaseUpsampleShaderSource from "./kawase-upsample.wgsl?raw";
 import postProcessShaderSource from "./post-process.wgsl?raw";
 import textureMixShaderSource from "./texture-mix.wgsl?raw";
+import { ByteBudgetCache, type ByteBudgetCacheStats } from "./byte-budget-cache.ts";
 /** Number of mip levels in the bloom chain (determines blur spread) */
 const BLOOM_MIP_LEVELS = 5;
 
@@ -101,6 +102,7 @@ export class ProcessingPipeline {
       textures: GPUTexture[];
       width: number;
       height: number;
+      byteSize: number;
     }
   > = new Map();
   // Cross-level blend mix pipeline
@@ -115,6 +117,7 @@ export class ProcessingPipeline {
       textureB: GPUTexture;
       width: number;
       height: number;
+      byteSize: number;
     }
   > = new Map();
 
@@ -150,15 +153,31 @@ export class ProcessingPipeline {
       views: GPUTextureView[];
       width: number;
       height: number;
+      byteSize: number;
     }
   > = new Map();
   #entityBlurUniforms = new Map<string, BlurUniformSet>();
   #entityBloomUniforms = new Map<string, BloomUniformSet>();
+  #textureCacheBudget: ByteBudgetCache;
 
-  constructor(device: GPUDevice, intermediateFormat: GPUTextureFormat, supportsP3: boolean) {
+  constructor(
+    device: GPUDevice,
+    intermediateFormat: GPUTextureFormat,
+    supportsP3: boolean,
+    textureBudgetBytes = config.rendering.processingTextureBudgetBytes,
+  ) {
     this.#device = device;
     this.#intermediateFormat = intermediateFormat;
     this.#supportsP3 = supportsP3;
+    this.#textureCacheBudget = new ByteBudgetCache(textureBudgetBytes);
+  }
+
+  getTextureCacheStats(): ByteBudgetCacheStats {
+    return this.#textureCacheBudget.getStats();
+  }
+
+  endFrame(): void {
+    this.#textureCacheBudget.endFrame();
   }
 
   #getOrCreateUniformBuffer(
@@ -826,10 +845,15 @@ export class ProcessingPipeline {
   #getOrCreateBloomMipChain(width: number, height: number): GPUTexture[] {
     const key = `${width}x${height}`;
     const cached = this.#bloomMipChainCache.get(key);
-    if (cached) return cached.textures;
+    const budgetKey = `bloom:${key}`;
+    if (cached) {
+      this.#textureCacheBudget.markUsed(budgetKey);
+      return cached.textures;
+    }
 
     const textures: GPUTexture[] = [];
     const views: GPUTextureView[] = [];
+    let byteSize = 0;
     let mipWidth = Math.floor(width / 2);
     let mipHeight = Math.floor(height / 2);
 
@@ -850,13 +874,27 @@ export class ProcessingPipeline {
 
       textures.push(texture);
       views.push(this.#getTextureView(texture));
+      byteSize += getTextureByteSize(mipWidth, mipHeight, this.#intermediateFormat);
 
       // Halve for next mip
       mipWidth = Math.floor(mipWidth / 2);
       mipHeight = Math.floor(mipHeight / 2);
     }
 
-    this.#bloomMipChainCache.set(key, { textures, views, width, height });
+    this.#bloomMipChainCache.set(key, { textures, views, width, height, byteSize });
+    this.#textureCacheBudget.register(budgetKey, byteSize, () => {
+      this.#bloomMipChainCache.delete(key);
+      for (const texture of textures) texture.destroy();
+      const textureSet = new Set(textures);
+      for (const [entityId, entry] of this.#bloomBindGroupCache) {
+        if (entry.dimensionsKey === key) this.#bloomBindGroupCache.delete(entityId);
+      }
+      for (const [entityId, entry] of this.#postProcessBindGroupCache) {
+        if (entry.bloomTexture && textureSet.has(entry.bloomTexture)) {
+          this.#postProcessBindGroupCache.delete(entityId);
+        }
+      }
+    });
     return textures;
   }
 
@@ -1109,9 +1147,14 @@ export class ProcessingPipeline {
   #getOrCreateBlurMipChain(width: number, height: number): GPUTexture[] {
     const key = `${width}x${height}`;
     const cached = this.#blurMipChainCache.get(key);
-    if (cached) return cached.textures;
+    const budgetKey = `blur:${key}`;
+    if (cached) {
+      this.#textureCacheBudget.markUsed(budgetKey);
+      return cached.textures;
+    }
 
     const textures: GPUTexture[] = [];
+    let byteSize = 0;
     let mipWidth = Math.floor(width / 2);
     let mipHeight = Math.floor(height / 2);
 
@@ -1130,12 +1173,17 @@ export class ProcessingPipeline {
       });
 
       textures.push(texture);
+      byteSize += getTextureByteSize(mipWidth, mipHeight, this.#intermediateFormat);
 
       mipWidth = Math.floor(mipWidth / 2);
       mipHeight = Math.floor(mipHeight / 2);
     }
 
-    this.#blurMipChainCache.set(key, { textures, width, height });
+    this.#blurMipChainCache.set(key, { textures, width, height, byteSize });
+    this.#textureCacheBudget.register(budgetKey, byteSize, () => {
+      this.#blurMipChainCache.delete(key);
+      for (const texture of textures) texture.destroy();
+    });
     return textures;
   }
 
@@ -1150,7 +1198,11 @@ export class ProcessingPipeline {
   ): { textureA: GPUTexture; textureB: GPUTexture } {
     const key = `${width}x${height}`;
     const cached = this.#blurBlendTextureCache.get(key);
-    if (cached) return cached;
+    const budgetKey = `blur-blend:${key}`;
+    if (cached) {
+      this.#textureCacheBudget.markUsed(budgetKey);
+      return cached;
+    }
 
     const usage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT;
     const textureA = this.#device.createTexture({
@@ -1166,8 +1218,14 @@ export class ProcessingPipeline {
       usage,
     });
 
-    const entry = { textureA, textureB, width, height };
+    const byteSize = getTextureByteSize(width, height, this.#intermediateFormat) * 2;
+    const entry = { textureA, textureB, width, height, byteSize };
     this.#blurBlendTextureCache.set(key, entry);
+    this.#textureCacheBudget.register(budgetKey, byteSize, () => {
+      this.#blurBlendTextureCache.delete(key);
+      textureA.destroy();
+      textureB.destroy();
+    });
     return entry;
   }
 
@@ -1995,28 +2053,7 @@ export class ProcessingPipeline {
     this.#dummyBloomTexture = null;
     this.#dummyBloomTextureView = null;
 
-    // Destroy blur mip chain textures
-    for (const cached of this.#blurMipChainCache.values()) {
-      for (const texture of cached.textures) {
-        texture.destroy();
-      }
-    }
-    this.#blurMipChainCache.clear();
-
-    // Destroy blur blend textures
-    for (const cached of this.#blurBlendTextureCache.values()) {
-      cached.textureA.destroy();
-      cached.textureB.destroy();
-    }
-    this.#blurBlendTextureCache.clear();
-
-    // Destroy bloom mip chain textures
-    for (const cached of this.#bloomMipChainCache.values()) {
-      for (const texture of cached.textures) {
-        texture.destroy();
-      }
-    }
-    this.#bloomMipChainCache.clear();
+    this.#textureCacheBudget.destroy();
 
     // Clear pipeline references
     this.#adjustmentsPipeline = null;
@@ -2046,5 +2083,19 @@ export class ProcessingPipeline {
     this.#bloomDownsampleUniformBuffers = [];
     this.#bloomUpsampleUniformBuffers = [];
     this.#bloomSampler = null;
+  }
+}
+
+function getTextureByteSize(width: number, height: number, format: GPUTextureFormat): number {
+  switch (format) {
+    case "rgba8unorm":
+    case "bgra8unorm":
+    case "rgba8unorm-srgb":
+    case "bgra8unorm-srgb":
+      return width * height * 4;
+    case "rgba16float":
+      return width * height * 8;
+    default:
+      throw new Error(`Processing texture format ${format} needs an explicit byte-size mapping`);
   }
 }
