@@ -17,7 +17,7 @@ Canvas state management and input processing. This is the "model + controller" l
 
 ## State Architecture
 
-- `CanvasState` uses version counters (`version`, `entityVersion`, `viewportVersion`, `selectionVersion`, `playbackVersion`, `dragVersion`) for selective cache invalidation and React subscriptions.
+- `CanvasState` uses version counters (`version`, `entityVersion`, `geometryVersion`, `viewportVersion`, `selectionVersion`, `playbackVersion`, `dragVersion`) for selective cache invalidation and React subscriptions. Imperative moves increment `geometryVersion` without notifying React.
 - Snapshot types (`ViewportSnapshot`, `SelectionSnapshot`, `PlaybackSnapshot`, `DragSnapshot`, `ActionLayerSnapshot`) isolate subscription scopes — sidebar components don't re-render on viewport pan.
 - Dirty flags (`viewportDirty`, `entitiesDirty`, `selectionDirty`) tell the renderer what needs redrawing.
 - `RenderState` is a stable mutable frame view consumed synchronously by `InfiniteCanvasRenderer.render()`; its sorted entity array is rebuilt only when `entityVersion` changes, never for selection-only changes.
@@ -31,10 +31,12 @@ Canvas state management and input processing. This is the "model + controller" l
 - Use `CanvasStore.restoreWorkspace()` after a complete workspace decode. It replaces entities, viewport, and spatial state with one notification and one scene-level dirty flag; do not populate `entitiesDirty` with every restored ID.
 - Use `CanvasStore.updateEntities()` for multi-selection mutations. It applies every replacement/dirty ID before one version bump, subscriber notification, and aggregate debug log.
 - Use `CanvasStore.removeEntities()` for bulk deletion. It deletes maps/index entries, compacts the ordered ID array once, rebuilds selection once, and emits one notification; never loop over `removeEntity()` for a selection.
+- Use `CanvasStore.selectAll()` for whole-canvas selection; it builds the selected-ID set directly from the ordered IDs without an intermediate array or redundant membership checks.
 - Non-spatial entity replacements update the spatial index's entity reference without removing/reinserting its cell; only position, size, rotation, and z-index changes reindex geometry.
 - Use `CanvasStore.queryEntitiesInBounds()` for broad-phase canvas queries; results are exact, duplicate-free, and z-ordered. Do not restore full-map viewport or hit-test scans.
 - Use `CanvasStore.queryEntitiesInBoundsUnordered()` for membership-only work such as drag selection; do not pay to sort results that are consumed as a set.
 - Drag selection coalesces pointer moves in `processInput()`, swaps reusable selection sets into the store without notifying React mid-gesture, and publishes one final notification on pointer-up or cancellation.
+- Selection-derived entity arrays are materialized at most once per `selectionVersion`. Multi-selection world bounds are cached across viewport-only frames and invalidated by selected-set identity, `entityVersion`, or `geometryVersion`.
 - `GameLoop` uses dependency injection (`GameLoopDeps`) for testability. Default deps created via `createDefaultDeps()`. Receives renderer via `setRenderer()`.
 - `MomentumController` also uses DI (`MomentumDeps`) — inject viewport/pan callbacks for unit testing without a real canvas.
 - Touch handling uses a state machine: `TouchGestureState` tracks active touches, pinch distance, long-press timers.
