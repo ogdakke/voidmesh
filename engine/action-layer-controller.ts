@@ -59,6 +59,13 @@ export class ActionLayerController {
 
   // Entity IDs targeted by this activation (persists through dismiss for renderer)
   #entityIds: ReadonlySet<string> = new Set();
+  readonly #renderOffset: Point = { x: 0, y: 0 };
+  readonly #renderState: ActionLayerRenderState = {
+    active: false,
+    entityIds: this.#entityIds,
+    entityOffset: this.#renderOffset,
+    blurIntensity: 0,
+  };
 
   constructor(scheduler: AnimationScheduler) {
     this.#scheduler = scheduler;
@@ -196,12 +203,12 @@ export class ActionLayerController {
   }
 
   getRenderState(): ActionLayerRenderState {
-    return {
-      active: this.isActive(),
-      entityIds: new Set(this.#entityIds),
-      entityOffset: this.getEntityOffset(),
-      blurIntensity: this.#blurIntensity,
-    };
+    this.#renderOffset.x = this.#currentOffsetX;
+    this.#renderOffset.y = this.#currentOffsetY;
+    this.#renderState.active = this.isActive();
+    this.#renderState.entityIds = this.#entityIds;
+    this.#renderState.blurIntensity = this.#blurIntensity;
+    return this.#renderState;
   }
 
   /** Transition to entity drag mode. Snap entity and fade blur. */

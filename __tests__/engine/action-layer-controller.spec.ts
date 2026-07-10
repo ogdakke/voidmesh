@@ -104,6 +104,18 @@ describe("ActionLayerController", () => {
     expect(canvasStore.getRenderState().dirty).toBe(true);
   });
 
+  test("reuses its render state and offset objects", () => {
+    const first = controller.getRenderState();
+    controller.activate({ x: 200, y: 200 }, new Set(["entity"]));
+    controller.updateFingerPosition({ x: 400, y: 200 });
+    clock.advanceBy(16);
+
+    const second = controller.getRenderState();
+    expect(second).toBe(first);
+    expect(second.entityOffset).toBe(first.entityOffset);
+    expect(second.entityIds.has("entity")).toBe(true);
+  });
+
   // ── Core behavior tests ─────────────────────────────────────────────────
 
   test("activate fades blur in from 0 to 1", () => {

@@ -34,6 +34,12 @@ class EntityDragVisualController {
   #handle: AnimationHandle | null = null;
   /** Entity IDs with active visual (single entity during possibleDrag, full selection during drag) */
   #entityIds = new Set<string>();
+  readonly #renderState: DragVisualRenderState = {
+    active: false,
+    isDragPhase: false,
+    entityIds: this.#entityIds,
+    scale: 1,
+  };
 
   static readonly #SETTLE_THRESHOLD = 0.0001;
 
@@ -57,12 +63,10 @@ class EntityDragVisualController {
   }
 
   getRenderState(): DragVisualRenderState {
-    return {
-      active: this.isActive(),
-      isDragPhase: this.isDragPhase(),
-      entityIds: new Set(this.#entityIds),
-      scale: this.#currentScale,
-    };
+    this.#renderState.active = this.isActive();
+    this.#renderState.isDragPhase = this.isDragPhase();
+    this.#renderState.scale = this.#currentScale;
+    return this.#renderState;
   }
 
   /**
