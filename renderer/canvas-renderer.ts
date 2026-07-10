@@ -96,7 +96,7 @@ export class InfiniteCanvasRenderer {
   #lastLodOffsetX = 0;
   #lastLodOffsetY = 0;
   #lastLodZoom = 0;
-  #lodStableFrames = 0;
+  #lodSettleFramesRemaining = 0;
   readonly #visibilityViewportBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
   readonly #visibilityEntityBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
 
@@ -173,7 +173,11 @@ export class InfiniteCanvasRenderer {
   }
 
   hasPendingRenderWork(): boolean {
-    return this.#entityTexturePipeline?.hasPendingLodWork ?? false;
+    return (
+      this.#lodSettleFramesRemaining > 0 ||
+      (this.#entityTexturePipeline?.hasPendingLodWork ?? false) ||
+      (this.#entityDrawItemPreparer?.hasActiveLodTransitions ?? false)
+    );
   }
 
   async initialize(): Promise<void> {
@@ -408,14 +412,16 @@ export class InfiniteCanvasRenderer {
       this.#lastLodZoom !== viewport.zoom ||
       this.#lastLodOffsetX !== viewport.offset.x ||
       this.#lastLodOffsetY !== viewport.offset.y;
-    this.#lodStableFrames = viewportChanged ? 0 : this.#lodStableFrames + 1;
+    if (viewportChanged) {
+      this.#lodSettleFramesRemaining = config.rendering.lodSettleFrames;
+    } else if (this.#lodSettleFramesRemaining > 0) {
+      this.#lodSettleFramesRemaining--;
+    }
     this.#hasLastLodViewport = true;
     this.#lastLodOffsetX = viewport.offset.x;
     this.#lastLodOffsetY = viewport.offset.y;
     this.#lastLodZoom = viewport.zoom;
-    this.#entityTexturePipeline?.beginFrame(
-      this.#lodStableFrames >= config.rendering.lodSettleFrames,
-    );
+    this.#entityTexturePipeline?.beginFrame(this.#lodSettleFramesRemaining === 0);
 
     // Entity preprocessing can encode shader passes into this same command buffer.
     // External video textures must be imported, bound, encoded, finished, and submitted

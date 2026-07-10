@@ -94,6 +94,7 @@ export class EntityTexturePipeline {
   #renderEntityView: EffectRenderEntity | null = null;
   #sourceBytes = 0;
   #processedBytes = 0;
+  readonly #cacheEntriesByTexture = new WeakMap<GPUTexture, CachedEntityTexture>();
 
   // Processed textures keyed by immutable source + effect identity when shareable.
   #processedTextures: Map<string, CachedProcessedTexture> = new Map();
@@ -283,6 +284,7 @@ export class EntityTexturePipeline {
         };
         this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
         this.#sourceTextures.set(sourceKey, cachedSource);
+        this.#cacheEntriesByTexture.set(sourceTexture, cachedSource);
         this.#sourceBytes += cachedSource.byteSize;
         this.#textureCacheRevision++;
       } else {
@@ -386,6 +388,7 @@ export class EntityTexturePipeline {
       entityIds: cachedTexture?.entityIds ?? recycledTexture?.entityIds ?? new Set(),
     };
     this.#processedTextures.set(processedKey, processedEntry);
+    this.#cacheEntriesByTexture.set(outputTexture, processedEntry);
     if (!processedKeyWasCached) this.#textureCacheRevision++;
     if (createdOutputTexture) this.#processedBytes += processedEntry.byteSize;
     this.#bindEntityToProcessed(entity.id, processedKey, processedEntry);
@@ -524,6 +527,12 @@ export class EntityTexturePipeline {
 
   get hasPendingLodWork(): boolean {
     return this.#pendingLodWork;
+  }
+
+  /** Keep a previous regular-texture tier resident while composition crossfades it. */
+  touchCompositionTexture(texture: GPUTexture): void {
+    const entry = this.#cacheEntriesByTexture.get(texture);
+    if (entry) entry.lastUsedFrame = this.#currentFrame;
   }
 
   endFrame(): void {

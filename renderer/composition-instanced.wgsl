@@ -9,7 +9,7 @@ struct ViewportUniforms {
   _padding: f32,
 }
 
-// Eight 32-bit values, 32-byte storage-buffer stride.
+// Ten 32-bit values, 40-byte storage-buffer stride.
 struct EntityInstance {
   position: vec2f,
   size: vec2f,
@@ -17,12 +17,15 @@ struct EntityInstance {
   isSelected: u32,
   debugMode: u32,
   scale: f32,
+  lodBlend: f32,
+  _padding: u32,
 }
 
 @group(0) @binding(0) var<uniform> viewport: ViewportUniforms;
 @group(0) @binding(1) var<storage, read> entities: array<EntityInstance>;
 @group(0) @binding(2) var entityTexture: texture_2d<f32>;
 @group(0) @binding(3) var entitySampler: sampler;
+@group(0) @binding(4) var previousEntityTexture: texture_2d<f32>;
 
 const BORDER_PX: f32 = 2.0;
 
@@ -31,6 +34,7 @@ struct VertexOutput {
   @location(0) uv: vec2f,
   @location(1) @interpolate(flat) isSelected: u32,
   @location(2) @interpolate(flat) debugMode: u32,
+  @location(3) @interpolate(flat) lodBlend: f32,
 }
 
 @vertex
@@ -95,16 +99,26 @@ fn vs_main(
   output.uv = expandedUV;
   output.isSelected = entity.isSelected;
   output.debugMode = entity.debugMode;
+  output.lodBlend = entity.lodBlend;
   return output;
 }
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
-  let textureColor = textureSample(
+  var textureColor = textureSample(
     entityTexture,
     entitySampler,
     clamp(input.uv, vec2f(0.0), vec2f(1.0)),
   );
+  if (input.lodBlend < 0.999) {
+    let previousColor = textureSampleLevel(
+      previousEntityTexture,
+      entitySampler,
+      clamp(input.uv, vec2f(0.0), vec2f(1.0)),
+      0.0,
+    );
+    textureColor = mix(previousColor, textureColor, input.lodBlend);
+  }
   let inBorder =
     input.uv.x < 0.0 || input.uv.x > 1.0 || input.uv.y < 0.0 || input.uv.y > 1.0;
 

@@ -19,6 +19,9 @@ describe("CompositionPass instancing", () => {
   test("draws adjacent entities sharing one texture as one instance batch", () => {
     const { device, instanceBuffer } = createDevice();
     const pass = createPass(device);
+    const layoutCalls = vi.mocked(device.createBindGroupLayout).mock.calls;
+    expect(layoutCalls[0]?.[0].entries.some(({ binding }) => binding === 4)).toBe(false);
+    expect(layoutCalls[1]?.[0].entries.some(({ binding }) => binding === 4)).toBe(true);
     const firstEntity = createTestEntity({ id: "instance-first", position: { x: 10, y: 20 } });
     const secondEntity = cloneImageEntity(firstEntity, "instance-second", { x: 30, y: 40 });
     const texture = createTexture();
@@ -38,7 +41,7 @@ describe("CompositionPass instancing", () => {
     const upload = device.queue.writeBuffer.mock.calls[0]![2] as ArrayBuffer;
     const floats = new Float32Array(upload);
     expect(Array.from(floats.slice(0, 5))).toEqual([10, 20, 200, 150, 0]);
-    expect(Array.from(floats.slice(8, 13))).toEqual([30, 40, 200, 150, 0]);
+    expect(Array.from(floats.slice(10, 15))).toEqual([30, 40, 200, 150, 0]);
 
     pass.destroy();
     expect(instanceBuffer.destroy).toHaveBeenCalledOnce();
@@ -111,7 +114,7 @@ describe("CompositionPass instancing", () => {
     pass.drawItems(actionPass, actionItems);
 
     expect(device.queue.writeBuffer.mock.calls[0]![1]).toBe(0);
-    expect(device.queue.writeBuffer.mock.calls[1]![1]).toBe(2 * 32);
+    expect(device.queue.writeBuffer.mock.calls[1]![1]).toBe(2 * 40);
     expect(scenePass.draw).toHaveBeenCalledWith(6, 2, 0, 0);
     expect(actionPass.draw).toHaveBeenCalledWith(6, 1, 0, 2);
 
@@ -119,6 +122,29 @@ describe("CompositionPass instancing", () => {
     releaseImageEntity(base);
     releaseImageEntity(second);
     releaseImageEntity(actionLayer);
+  });
+
+  test("batches adjacent entities sharing the same LOD texture pair", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const firstEntity = createTestEntity({ id: "lod-blend-first" });
+    const secondEntity = cloneImageEntity(firstEntity, "lod-blend-second", { x: 20, y: 0 });
+    const currentTexture = createTexture();
+    const previousTexture = createTexture();
+    const first = prepare(pass, firstEntity, currentTexture, false, previousTexture, 0.25);
+    const second = prepare(pass, secondEntity, currentTexture, false, previousTexture, 0.25);
+    const renderPass = createRenderPass();
+
+    pass.drawItems(renderPass, [first, second]);
+
+    expect(renderPass.draw).toHaveBeenCalledWith(6, 2, 0, 0);
+    expect(device.createBindGroup).toHaveBeenCalledOnce();
+    const upload = device.queue.writeBuffer.mock.calls[0]![2] as ArrayBuffer;
+    expect(new Float32Array(upload)[8]).toBeCloseTo(0.25);
+
+    pass.destroy();
+    releaseImageEntity(firstEntity);
+    releaseImageEntity(secondEntity);
   });
 });
 
@@ -135,6 +161,8 @@ function prepare(
   entity: ShaderCanvasEntity,
   texture: GPUTexture,
   isSelected = false,
+  previousTexture: GPUTexture | null = null,
+  lodBlend = 1,
 ): CompositionDrawItem {
   const options: PrepareCompositionItemOptions = {
     entity,
@@ -145,6 +173,8 @@ function prepare(
     positionOffsetX: 0,
     positionOffsetY: 0,
     visualScale: 1,
+    previousTexture,
+    lodBlend,
   };
   return pass.prepareDrawItem(options);
 }

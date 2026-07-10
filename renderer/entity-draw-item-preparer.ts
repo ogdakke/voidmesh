@@ -16,6 +16,12 @@ interface EntityDrawItemPreparerOptions {
   compositionPass: CompositionPass;
 }
 
+interface EntityLodTransition {
+  currentTexture: GPUTexture;
+  previousTexture: GPUTexture;
+  transitionStart: number;
+}
+
 interface PrepareEntityDrawItemsOptions {
   entities: ShaderCanvasEntity[];
   entitySpatialIndex: EntitySpatialIndex;
@@ -52,10 +58,16 @@ export class EntityDrawItemPreparer {
     hasAnimatingContent: false,
   };
   #compositionOptions: PrepareCompositionItemOptions | null = null;
+  readonly #lodTransitions = new WeakMap<ShaderCanvasEntity, EntityLodTransition>();
+  #hasActiveLodTransitions = false;
 
   constructor(options: EntityDrawItemPreparerOptions) {
     this.#texturePipeline = options.texturePipeline;
     this.#compositionPass = options.compositionPass;
+  }
+
+  get hasActiveLodTransitions(): boolean {
+    return this.#hasActiveLodTransitions;
   }
 
   prepare(options: PrepareEntityDrawItemsOptions): PreparedEntityDrawItems {
@@ -79,6 +91,8 @@ export class EntityDrawItemPreparer {
     entityDrawItems.length = 0;
     actionLayerDrawItems.length = 0;
     let hasAnimatingContent = false;
+    this.#hasActiveLodTransitions = false;
+    const now = performance.now();
 
     let actionLayerOffsetX = 0;
     let actionLayerOffsetY = 0;
@@ -151,6 +165,46 @@ export class EntityDrawItemPreparer {
       }
       if (!compositionSource) continue;
 
+      let previousTexture: GPUTexture | null = null;
+      let lodBlend = 1;
+      if (compositionSource.kind === "texture") {
+        let lodTransition = this.#lodTransitions.get(entity);
+        const preparedTexture = this.#compositionPass.getPreparedRegularTexture(entity);
+        const priorTexture = lodTransition?.currentTexture ?? preparedTexture;
+        if (priorTexture && priorTexture !== compositionSource.texture) {
+          const dimensionsChanged =
+            priorTexture.width !== compositionSource.texture.width ||
+            priorTexture.height !== compositionSource.texture.height;
+          if (dimensionsChanged) {
+            lodTransition = {
+              currentTexture: compositionSource.texture,
+              previousTexture: priorTexture,
+              transitionStart: now,
+            };
+            this.#lodTransitions.set(entity, lodTransition);
+          } else {
+            lodTransition = undefined;
+            this.#lodTransitions.delete(entity);
+          }
+        }
+
+        if (lodTransition) {
+          const linearProgress = Math.min(
+            1,
+            (now - lodTransition.transitionStart) / config.rendering.lodCrossfadeDurationMs,
+          );
+          if (linearProgress < 1) {
+            previousTexture = lodTransition.previousTexture;
+            lodBlend = linearProgress * linearProgress * (3 - 2 * linearProgress);
+            this.#texturePipeline.touchCompositionTexture(previousTexture);
+            this.#hasActiveLodTransitions = true;
+            hasAnimatingContent = true;
+          } else {
+            this.#lodTransitions.delete(entity);
+          }
+        }
+      }
+
       // Clear dirty flag
       entity.textureDirty = false;
 
@@ -175,6 +229,8 @@ export class EntityDrawItemPreparer {
           positionOffsetX,
           positionOffsetY,
           visualScale,
+          previousTexture,
+          lodBlend,
         };
         this.#compositionOptions = compositionOptions;
       } else {
@@ -186,6 +242,8 @@ export class EntityDrawItemPreparer {
         compositionOptions.positionOffsetX = positionOffsetX;
         compositionOptions.positionOffsetY = positionOffsetY;
         compositionOptions.visualScale = visualScale;
+        compositionOptions.previousTexture = previousTexture;
+        compositionOptions.lodBlend = lodBlend;
       }
       const drawItem = this.#compositionPass.prepareDrawItem(compositionOptions);
 

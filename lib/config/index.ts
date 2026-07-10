@@ -498,6 +498,8 @@ export const config = {
     imageLodOverscan: 1.25,
     /** Unchanged rendered frames required before LOD convergence begins. */
     lodSettleFrames: 2,
+    /** Duration of the visual blend from the previous resident tier to the new tier. */
+    lodCrossfadeDurationMs: 140,
     /** Maximum source/processed dimension changes admitted in one settled frame. */
     lodTransitionsPerFrame: 4,
     /** Maximum target pixels admitted per settled frame (one oversized item may progress). */
