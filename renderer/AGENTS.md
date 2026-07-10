@@ -5,6 +5,7 @@ WebGPU rendering and export pipelines. Turns engine state into pixels.
 ## Key Files
 
 - `canvas-renderer.ts` (~69KB) — Main renderer. WebGPU setup, entity textures, shader dispatch, composition, overlays.
+- `composition-pass.ts` + `composition-instanced.wgsl` — Final canvas composition. Adjacent regular-texture entities sharing the exact `GPUTexture` use one instanced draw; external textures and disintegration retain their dedicated paths.
 - `processing-pipeline.ts` (~49KB) — Per-entity pre/post-processing: adjustments, blur, bloom, grain, chromatic aberration. Also provides action layer blur.
 - `entity-render-size.ts` — Selects quantized screen-space render tiers from projected physical pixels; exports bypass this path and retain native dimensions.
 - `gpu-color-space.ts` — `detectGpuColorConfig()`. Probes Display P3 support at init, returns frozen `GpuColorConfig` (supportsP3, canvasFormat, canvasColorSpace, intermediateFormat, textureColorSpace).
@@ -66,7 +67,9 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 - Same-size processed image shader-param changes recycle the entity's unique output texture instead of allocating a replacement; shared outputs allocate a new texture to avoid clobbering siblings.
 - Original videos stay on direct external-texture composition so playback and media controls remain continuous. Processed videos use screen-space output LOD, and small outputs shorten the bloom mip chain rather than pausing media.
 - Entity image export renders from native media sources at `originalSize`; it must not read back the current preview LOD texture.
-- Composition cache (`#entityCompositionCache`) reuses uniform buffers, bind groups, and stable draw-item wrappers; entity uniform buffers upload only when entity-local visual state changes, while pan/zoom updates the shared viewport buffer.
+- Regular-texture composition packs entity transforms and visual flags into one reusable storage buffer. Batch only adjacent entities with the exact same `GPUTexture` so draw order remains unchanged; shader params need not match independently because processing is already baked into that texture.
+- External video textures retain per-entity uniforms and bind groups so direct `GPUExternalTexture` playback never copies into regular textures. Disintegration also retains its non-instanced composition path.
+- Grow the composition instance buffer geometrically and append disjoint ranges for each render phase in a frame. Do not restore per-entity GPU uniform buffers, bind groups, or temporary instance objects for regular textures.
 - Entity draw preparation reuses result arrays, composition-option scratch, and bounds scratch. Do not restore per-entity object construction to the pan/zoom path.
 - `TexturePool` retains at most 64 MiB of idle transient textures across dimensions/usages. Release scratch after its final encoded use for ordered reuse, but apply destruction limits only in `commitSubmitted()` after `queue.submit()`.
 - Image source changes require a new asset revision. Entity removal releases its source-cache ownership without destroying textures still used by sibling instances.
