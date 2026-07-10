@@ -113,6 +113,39 @@ describe("EntityTexturePipeline processed image sharing", () => {
     releaseImageAsset(first.mediaSource.asset);
   });
 
+  test("recycles a unique same-size processed output when shader params change", () => {
+    runtimeEncode.mockClear();
+    const entity = createTestEntity({ id: "processed-param-change" });
+    const sourceTexture = createTexture();
+    const processedTexture = createTexture();
+    const device = createDevice([sourceTexture, processedTexture]);
+    const pipeline = createPipeline(device);
+
+    expect(pipeline.renderEntityToTexture(entity, {} as GPUCommandEncoder)).toEqual({
+      kind: "texture",
+      texture: processedTexture,
+    });
+
+    entity.shaderParams = structuredClone(entity.shaderParams);
+    entity.shaderParams.size += 1;
+    entity.textureDirty = true;
+
+    expect(pipeline.renderEntityToTexture(entity, {} as GPUCommandEncoder)).toEqual({
+      kind: "texture",
+      texture: processedTexture,
+    });
+    expect(device.createTexture).toHaveBeenCalledTimes(2);
+    expect(runtimeEncode).toHaveBeenCalledTimes(2);
+    expect(pipeline.getResidencyStats()).toMatchObject({
+      processedTextureCount: 1,
+      processedTextureAllocations: 1,
+    });
+    expect(processedTexture.destroy).not.toHaveBeenCalled();
+
+    pipeline.destroy();
+    if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
+  });
+
   test("overwrites a retained processed video tier when its decoded-frame revision changed", () => {
     runtimeEncode.mockClear();
     const entity = createTestEntity({ id: "video-lod", mediaType: "video" });

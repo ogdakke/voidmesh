@@ -90,7 +90,10 @@ export class InfiniteCanvasRenderer {
   #lastRenderTime = 0;
   #lastEntityCount = 0;
   #lastRenderedCount = 0;
-  #lastLodViewport: { offset: { x: number; y: number }; zoom: number } | null = null;
+  #hasLastLodViewport = false;
+  #lastLodOffsetX = 0;
+  #lastLodOffsetY = 0;
+  #lastLodZoom = 0;
   #lodStableFrames = 0;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -229,9 +232,6 @@ export class InfiniteCanvasRenderer {
           this.#entityErrors.set(entityId, error);
           this.onEntityError?.(entityId, error);
         }
-      },
-      onTextureEvicted: (entityIds) => {
-        for (const entityId of entityIds) this.#compositionPass?.removeEntity(entityId);
       },
     });
     await this.#entityTexturePipeline.initialize();
@@ -395,15 +395,15 @@ export class InfiniteCanvasRenderer {
 
     this.#viewportUniforms.update(viewport, width, height);
     const viewportChanged =
-      !this.#lastLodViewport ||
-      this.#lastLodViewport.zoom !== viewport.zoom ||
-      this.#lastLodViewport.offset.x !== viewport.offset.x ||
-      this.#lastLodViewport.offset.y !== viewport.offset.y;
+      !this.#hasLastLodViewport ||
+      this.#lastLodZoom !== viewport.zoom ||
+      this.#lastLodOffsetX !== viewport.offset.x ||
+      this.#lastLodOffsetY !== viewport.offset.y;
     this.#lodStableFrames = viewportChanged ? 0 : this.#lodStableFrames + 1;
-    this.#lastLodViewport = {
-      offset: { x: viewport.offset.x, y: viewport.offset.y },
-      zoom: viewport.zoom,
-    };
+    this.#hasLastLodViewport = true;
+    this.#lastLodOffsetX = viewport.offset.x;
+    this.#lastLodOffsetY = viewport.offset.y;
+    this.#lastLodZoom = viewport.zoom;
     this.#entityTexturePipeline?.beginFrame(
       this.#lodStableFrames >= config.rendering.lodSettleFrames,
     );

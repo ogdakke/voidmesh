@@ -34,6 +34,8 @@ export interface PreparedEntityDrawItems {
 export class EntityDrawItemPreparer {
   readonly #texturePipeline: EntityTexturePipeline;
   readonly #compositionPass: CompositionPass;
+  readonly #desiredRenderSize = { width: 0, height: 0 };
+  readonly #resolvedRenderSize = { width: 0, height: 0 };
 
   constructor(options: EntityDrawItemPreparerOptions) {
     this.#texturePipeline = options.texturePipeline;
@@ -93,8 +95,18 @@ export class EntityDrawItemPreparer {
         hasAnimatingContent = true;
       }
 
-      const desiredRenderSize = getEntityRenderSize(entity, viewport, devicePixelRatio);
-      const renderSize = this.#texturePipeline.resolveRenderSize(entity, desiredRenderSize);
+      const desiredRenderSize = getEntityRenderSize(
+        entity,
+        viewport,
+        devicePixelRatio,
+        this.#desiredRenderSize,
+      );
+      const renderSize = this.#texturePipeline.resolveRenderSize(
+        entity,
+        desiredRenderSize,
+        this.#resolvedRenderSize,
+      );
+      if (!renderSize) continue;
       const compositionSource = this.#texturePipeline.renderEntityToTexture(
         entity,
         encoder,

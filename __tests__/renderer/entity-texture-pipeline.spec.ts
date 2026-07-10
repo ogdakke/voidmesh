@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { config } from "#config";
 import { EntityTexturePipeline } from "#renderer/entity-texture-pipeline.ts";
 import type { GpuColorConfig } from "#renderer/gpu-color-space.ts";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
@@ -170,6 +171,87 @@ describe("EntityTexturePipeline shared image sources", () => {
       pipeline.removeEntity(entity.id);
       if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
     }
+  });
+
+  test("bounds cold visible source uploads during viewport motion", () => {
+    const entities = Array.from(
+      { length: config.rendering.lodTransitionsPerFrame + 1 },
+      (_, index) =>
+        createTestEntity({
+          id: `cold-lod-${index}`,
+          shaderParams: { showOriginal: true },
+        }),
+    );
+    const pipeline = new EntityTexturePipeline({
+      device: createDevice([]),
+      colorConfig,
+      texturePool: null,
+    });
+
+    pipeline.beginFrame(false);
+    const resolved = entities.map((entity) =>
+      pipeline.resolveRenderSize(entity, { width: 100, height: 75 }),
+    );
+
+    expect(resolved.slice(0, config.rendering.lodTransitionsPerFrame)).toEqual(
+      Array.from({ length: config.rendering.lodTransitionsPerFrame }, () => ({
+        width: 100,
+        height: 75,
+      })),
+    );
+    expect(resolved[config.rendering.lodTransitionsPerFrame]).toBeNull();
+    expect(pipeline.hasPendingLodWork).toBe(true);
+
+    for (const entity of entities) {
+      if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
+    }
+  });
+
+  test("resolves a cold entity immediately when its desired source texture is resident", () => {
+    const first = createTestEntity({
+      id: "resident-first",
+      shaderParams: { showOriginal: true },
+    });
+    if (first.mediaSource.type !== "image") throw new Error("Expected image entity");
+    retainImageAsset(first.mediaSource.asset);
+    const second: ShaderCanvasEntity = {
+      ...first,
+      id: "resident-second",
+      mediaSource: { type: "image", asset: first.mediaSource.asset },
+      textureDirty: true,
+    };
+    const pipeline = new EntityTexturePipeline({
+      device: createDevice([createTexture(200, 150)]),
+      colorConfig,
+      texturePool: null,
+    });
+
+    pipeline.renderEntityToTexture(first, {} as GPUCommandEncoder);
+    pipeline.beginFrame(false);
+    const budgetFillers: ShaderCanvasEntity[] = [];
+    for (let index = 0; index < config.rendering.lodTransitionsPerFrame; index++) {
+      const filler = createTestEntity({
+        id: `budget-filler-${index}`,
+        shaderParams: { showOriginal: true },
+      });
+      budgetFillers.push(filler);
+      expect(pipeline.resolveRenderSize(filler, { width: 100, height: 75 })).toEqual({
+        width: 100,
+        height: 75,
+      });
+    }
+
+    expect(pipeline.resolveRenderSize(second, { width: 200, height: 150 })).toEqual({
+      width: 200,
+      height: 150,
+    });
+
+    pipeline.destroy();
+    for (const filler of budgetFillers) {
+      if (filler.mediaSource.type === "image") releaseImageAsset(filler.mediaSource.asset);
+    }
+    releaseImageAsset(first.mediaSource.asset);
+    releaseImageAsset(first.mediaSource.asset);
   });
 
   test("reuses a retained image tier when zoom returns to a previous LOD", () => {
