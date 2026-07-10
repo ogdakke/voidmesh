@@ -66,6 +66,10 @@ export class FrameLoop {
   #videoFrameTrackerGeneration = 0;
   #firstFrameRendered = false;
   #lastFrameTime: number | null = null;
+  #activeEntityVersion = -1;
+  #playingGifs: ShaderCanvasEntity[] = [];
+  #playingVideos: ShaderCanvasEntity[] = [];
+  #continuousShaderEntities: ShaderCanvasEntity[] = [];
 
   constructor(deps: FrameLoopDeps, callbacks: FrameLoopCallbacks) {
     this.#deps = deps;
@@ -80,6 +84,7 @@ export class FrameLoop {
       renderer.colorConfig.canvasColorSpace,
     );
     this.#firstFrameRendered = false;
+    this.#activeEntityVersion = -1;
   }
 
   start(): void {
@@ -107,31 +112,25 @@ export class FrameLoop {
     this.#lastFrameTime = now;
 
     let hasAnimatedFrameUpdate = false;
-    let hasContinuousShaderRender = false;
     this.#videoFrameTrackerGeneration++;
+    this.#refreshActiveEntities();
 
     // 2. Advance GIF playback and update video time for all playing animated entities.
     // Uses entity refs directly — getRenderState() is deferred until after all ticks
     // so the viewport snapshot reflects this frame's updates, not the previous frame's.
-    for (const entity of canvasStore.getState().entities.values()) {
-      if (entity.mediaSource.type === MediaType.gif && entity.playback?.isPlaying) {
-        canvasStore.advanceGifPlayback(entity.id, deltaSeconds);
-        // Notify playback subscribers for real-time time display updates
-        canvasStore.updateGifPlaybackTime(entity.id, entity.playback.currentTime);
-        if (entity.textureDirty) hasAnimatedFrameUpdate = true;
-      }
-      // Update video playback time continuously
-      if (entity.mediaSource.type === MediaType.video && entity.playback?.isPlaying) {
-        const video = entity.mediaSource.videoElement;
-        canvasStore.updatePlaybackTime(entity.id, video.currentTime);
-        if (this.#consumeVideoFrameUpdate(entity.id, video, entity.mediaSource.fps)) {
-          canvasStore.markEntityTextureDirty(entity.id);
-          hasAnimatedFrameUpdate = true;
-        }
-      }
-      // Check if any shader needs continuous re-rendering (e.g., time-based animation)
-      if (!hasContinuousShaderRender && this.#renderer?.needsContinuousRenderForEntity(entity)) {
-        hasContinuousShaderRender = true;
+    for (const entity of this.#playingGifs) {
+      if (entity.mediaSource.type !== MediaType.gif || !entity.playback?.isPlaying) continue;
+      canvasStore.advanceGifPlayback(entity.id, deltaSeconds);
+      canvasStore.updateGifPlaybackTime(entity.id, entity.playback.currentTime);
+      if (entity.textureDirty) hasAnimatedFrameUpdate = true;
+    }
+    for (const entity of this.#playingVideos) {
+      if (entity.mediaSource.type !== MediaType.video || !entity.playback?.isPlaying) continue;
+      const video = entity.mediaSource.videoElement;
+      canvasStore.updatePlaybackTime(entity.id, video.currentTime);
+      if (this.#consumeVideoFrameUpdate(entity.id, video, entity.mediaSource.fps)) {
+        canvasStore.markEntityTextureDirty(entity.id);
+        hasAnimatedFrameUpdate = true;
       }
     }
     this.#cleanupInactiveVideoFrameTrackers();
@@ -142,39 +141,38 @@ export class FrameLoop {
     // 4. Process input (hover detection, drag updates)
     this.#callbacks.processInput();
 
-    // 5. Snapshot render state AFTER all ticks so the viewport reflects
-    // this frame's animation/momentum/input updates, not the previous frame's.
-    const renderState = canvasStore.getRenderState();
-    this.#deps.perf.onFrame(renderState.debugMode, now);
-
-    // 6. Add selection bounds to render state (managed by game-loop, not store)
-    renderState.dragSelectBounds = this.#callbacks.getDragSelectBounds();
-    renderState.multiSelectBounds = this.#callbacks.getMultiSelectBounds();
-    renderState.actionLayer = this.#callbacks.getActionLayerRenderState();
-    renderState.dragVisual = this.#callbacks.getDragVisualRenderState();
-    renderState.disintegration = this.#callbacks.getDisintegrationRenderState(now);
+    const debugMode = canvasStore.getState().debugMode;
+    this.#deps.perf.onFrame(debugMode, now);
 
     // 7. Determine if we need to render this frame
     const needsRender =
       !this.#firstFrameRendered ||
-      renderState.dirty ||
+      canvasStore.hasRenderChanges() ||
       hasAnimatedFrameUpdate ||
-      hasContinuousShaderRender ||
+      this.#continuousShaderEntities.length > 0 ||
       this.#deps.scheduler.hasActive ||
       this.#callbacks.isPointerDragging() ||
       this.#callbacks.isDragSelectActive();
 
     // 8. Render only when needed (skip idle frames)
     if (this.#renderer?.isReady && needsRender) {
-      if (renderState.debugMode) performance.mark("studio-render-start");
+      // Snapshot the O(entity count) render array only after deciding that a frame is needed.
+      const renderState = canvasStore.getRenderState();
+      renderState.dragSelectBounds = this.#callbacks.getDragSelectBounds();
+      renderState.multiSelectBounds = this.#callbacks.getMultiSelectBounds();
+      renderState.actionLayer = this.#callbacks.getActionLayerRenderState();
+      renderState.dragVisual = this.#callbacks.getDragVisualRenderState();
+      renderState.disintegration = this.#callbacks.getDisintegrationRenderState(now);
+
+      if (debugMode) performance.mark("studio-render-start");
       try {
         this.#renderer.render(renderState);
         this.#firstFrameRendered = true;
-        if (renderState.debugMode) {
+        if (debugMode) {
           performance.mark("studio-render-end");
           performance.measure("studio-render", "studio-render-start", "studio-render-end");
         }
-        this.#deps.perf.onRender(this.#renderer.getFrameStats(), renderState.debugMode);
+        this.#deps.perf.onRender(this.#renderer.getFrameStats(), debugMode);
       } catch (error) {
         this.#callbacks.onRenderError(error);
       }
@@ -190,6 +188,26 @@ export class FrameLoop {
     // 12. Schedule next frame
     this.#animationFrameId = requestAnimationFrame(this.#tick);
   };
+
+  #refreshActiveEntities(): void {
+    const state = canvasStore.getState();
+    if (state.version === this.#activeEntityVersion) return;
+
+    this.#activeEntityVersion = state.version;
+    this.#playingGifs = [];
+    this.#playingVideos = [];
+    this.#continuousShaderEntities = [];
+    for (const entity of state.entities.values()) {
+      if (entity.mediaSource.type === MediaType.gif && entity.playback?.isPlaying) {
+        this.#playingGifs.push(entity);
+      } else if (entity.mediaSource.type === MediaType.video && entity.playback?.isPlaying) {
+        this.#playingVideos.push(entity);
+      }
+      if (this.#renderer?.needsContinuousRenderForEntity(entity)) {
+        this.#continuousShaderEntities.push(entity);
+      }
+    }
+  }
 
   #consumeVideoFrameUpdate(entityId: string, video: HTMLVideoElement, fps: number | null): boolean {
     let tracker = this.#videoFrameTrackers.get(entityId);

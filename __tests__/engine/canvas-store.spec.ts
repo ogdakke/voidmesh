@@ -306,4 +306,16 @@ describe("canvasStore.moveEntity", () => {
 
     expect(canvasStore.getRenderState().dirty).toBe(false);
   });
+
+  test("reports render changes without allocating a render snapshot", () => {
+    const entity = createTestEntity();
+    canvasStore.addEntity(entity);
+    expect(canvasStore.hasRenderChanges()).toBe(true);
+
+    canvasStore.clearDirtyFlags();
+    expect(canvasStore.hasRenderChanges()).toBe(false);
+
+    canvasStore.moveEntity(entity.id, { x: 2, y: 3 });
+    expect(canvasStore.hasRenderChanges()).toBe(true);
+  });
 });

@@ -1015,6 +1015,16 @@ export class CanvasStore extends Store<CanvasState> {
   }
 
   // Snapshot for rendering (called once per frame)
+  hasRenderChanges(): boolean {
+    return (
+      this.state.viewportDirty ||
+      this.state.entitiesDirty.size > 0 ||
+      this.state.selectionDirty ||
+      this.state.containerSizeDirty ||
+      this.state.canvasCalloutsDirty
+    );
+  }
+
   getRenderState(): RenderState {
     return {
       viewport: {
@@ -1028,12 +1038,7 @@ export class CanvasStore extends Store<CanvasState> {
       selectedEntityIds: this.state.selectedEntityIds,
       hoveredEntityId: this.state.hoveredEntityId,
       debugMode: this.state.debugMode,
-      dirty:
-        this.state.viewportDirty ||
-        this.state.entitiesDirty.size > 0 ||
-        this.state.selectionDirty ||
-        this.state.containerSizeDirty ||
-        this.state.canvasCalloutsDirty,
+      dirty: this.hasRenderChanges(),
       canvasCallouts: this.state.canvasCallouts,
       // dragSelectBounds and multiSelectBounds are set by game-loop after calling this method
       dragSelectBounds: null,
