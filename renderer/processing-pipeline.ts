@@ -16,6 +16,14 @@ import { ByteBudgetCache, type ByteBudgetCacheStats } from "./byte-budget-cache.
 /** Number of mip levels in the bloom chain (determines blur spread) */
 const BLOOM_MIP_LEVELS = 5;
 
+export function getBloomMipLevelCount(width: number, height: number): number {
+  const maxDimension = Math.max(width, height);
+  if (maxDimension <= 128) return 2;
+  if (maxDimension <= 256) return 3;
+  if (maxDimension <= 512) return 4;
+  return BLOOM_MIP_LEVELS;
+}
+
 interface ExternalTextureSource {
   texture: GPUExternalTexture;
 }
@@ -857,7 +865,8 @@ export class ProcessingPipeline {
     let mipWidth = Math.floor(width / 2);
     let mipHeight = Math.floor(height / 2);
 
-    for (let i = 0; i < BLOOM_MIP_LEVELS; i++) {
+    const mipLevelCount = getBloomMipLevelCount(width, height);
+    for (let i = 0; i < mipLevelCount; i++) {
       // Ensure minimum size of 1x1
       mipWidth = Math.max(1, mipWidth);
       mipHeight = Math.max(1, mipHeight);
@@ -1046,7 +1055,7 @@ export class ProcessingPipeline {
     }
 
     const downsample: GPUBindGroup[] = [];
-    for (let i = 0; i < BLOOM_MIP_LEVELS; i++) {
+    for (let i = 0; i < mipViews.length; i++) {
       downsample.push(
         this.#device.createBindGroup({
           label: `Bloom downsample bind group mip ${i}`,
@@ -1067,8 +1076,8 @@ export class ProcessingPipeline {
     }
 
     const upsample: GPUBindGroup[] = [];
-    for (let i = BLOOM_MIP_LEVELS - 1; i > 0; i--) {
-      const bufIdx = BLOOM_MIP_LEVELS - 1 - i;
+    for (let i = mipViews.length - 1; i > 0; i--) {
+      const bufIdx = mipViews.length - 1 - i;
       upsample.push(
         this.#device.createBindGroup({
           label: `Bloom upsample bind group mip ${i}`,
