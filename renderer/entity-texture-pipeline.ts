@@ -1,5 +1,10 @@
 import { config } from "#config";
-import { MediaType, type MediaAlphaMode, type ShaderCanvasEntity } from "#types/canvas.ts";
+import {
+  MediaType,
+  type MediaAlphaMode,
+  type ShaderCanvasEntity,
+  type ShaderParams,
+} from "#types/canvas.ts";
 import type { CopyPass } from "./copy-pass.ts";
 import { EntityShaderRuntime, type EntityShaderSource } from "./entity-shader-runtime.ts";
 import type { GpuColorConfig } from "./gpu-color-space.ts";
@@ -31,6 +36,10 @@ interface CachedSourceTexture extends CachedEntityTexture {
   entityIds: Set<string>;
 }
 
+interface CachedProcessedTexture extends CachedEntityTexture {
+  entityIds: Set<string>;
+}
+
 export interface EntityTextureResidencyStats {
   budgetBytes: number;
   residentBytes: number;
@@ -57,8 +66,10 @@ export class EntityTexturePipeline {
   #sourceUploads = 0;
   #evictions = 0;
 
-  // Entity texture cache
-  #entityTextures: Map<string, CachedEntityTexture> = new Map();
+  // Processed textures keyed by immutable source + effect identity when shareable.
+  #processedTextures: Map<string, CachedProcessedTexture> = new Map();
+  #entityProcessedKeys: Map<string, string> = new Map();
+  #shaderSignatureCache = new WeakMap<ShaderParams, string>();
 
   // Cached source textures per asset/frame identity. Static image instances share entries.
   #sourceTextures: Map<string, CachedSourceTexture> = new Map();
@@ -142,14 +153,23 @@ export class EntityTexturePipeline {
     const needsContinuousShaderRender = this.#runtime.needsContinuousRender(entity);
 
     // Check if we have a valid processed texture.
-    const cachedTexture = this.#entityTextures.get(entity.id);
+    const processedKey = this.#getProcessedCacheKey(
+      entity,
+      width,
+      height,
+      needsContinuousShaderRender,
+    );
+    let cachedTexture = this.#processedTextures.get(processedKey);
+    const canReuseDirtyTexture =
+      entity.mediaSource.type === MediaType.image && !needsContinuousShaderRender;
     if (
       !entity.shaderParams.showOriginal &&
       !needsContinuousShaderRender &&
       cachedTexture &&
-      !entity.textureDirty
+      (!entity.textureDirty || canReuseDirtyTexture)
     ) {
       cachedTexture.lastUsedFrame = this.#currentFrame;
+      this.#bindEntityToProcessed(entity.id, processedKey, cachedTexture);
       return { kind: "texture", texture: cachedTexture.texture };
     }
     let shaderSource: EntityShaderSource | null = null;
@@ -164,8 +184,7 @@ export class EntityTexturePipeline {
       });
 
       if (entity.shaderParams.showOriginal) {
-        cachedTexture?.texture.destroy();
-        this.#entityTextures.delete(entity.id);
+        this.#releaseEntityProcessedTexture(entity.id);
         return { kind: "external", texture: externalTexture };
       }
 
@@ -217,11 +236,14 @@ export class EntityTexturePipeline {
     // is owned by #sourceTextures, so keep it out of #entityTextures to avoid
     // double-destroying the same GPU resource during cleanup.
     if (entity.shaderParams.showOriginal) {
-      if (cachedTexture) {
-        cachedTexture.texture.destroy();
-        this.#entityTextures.delete(entity.id);
-      }
+      this.#releaseEntityProcessedTexture(entity.id);
       return { kind: "texture", texture: sourceTexture! };
+    }
+
+    const previousProcessedKey = this.#entityProcessedKeys.get(entity.id);
+    if (previousProcessedKey && previousProcessedKey !== processedKey) {
+      this.#releaseEntityProcessedTexture(entity.id);
+      cachedTexture = this.#processedTextures.get(processedKey);
     }
 
     // Reuse output texture if dimensions match, otherwise create new
@@ -264,28 +286,30 @@ export class EntityTexturePipeline {
     });
 
     // Cache and return (source texture stays in the shared source cache)
-    this.#entityTextures.set(entity.id, {
+    const processedEntry: CachedProcessedTexture = {
       texture: outputTexture,
       byteSize: getTextureByteSize(width, height, this.#colorConfig.intermediateFormat),
       lastUsedFrame: this.#currentFrame,
-    });
+      entityIds: cachedTexture?.entityIds ?? new Set(),
+    };
+    this.#processedTextures.set(processedKey, processedEntry);
+    this.#bindEntityToProcessed(entity.id, processedKey, processedEntry);
     return { kind: "texture", texture: outputTexture };
   }
 
   getDisplayedEntityTexture(entity: ShaderCanvasEntity): GPUTexture | null {
     if (entity.shaderParams.showOriginal) {
       return (
-        this.getSourceEntityTexture(entity.id) ??
-        this.#entityTextures.get(entity.id)?.texture ??
-        null
+        this.getSourceEntityTexture(entity.id) ?? this.getProcessedEntityTexture(entity.id) ?? null
       );
     }
 
-    return this.#entityTextures.get(entity.id)?.texture ?? null;
+    return this.getProcessedEntityTexture(entity.id);
   }
 
   getProcessedEntityTexture(entityId: string): GPUTexture | null {
-    return this.#entityTextures.get(entityId)?.texture ?? null;
+    const processedKey = this.#entityProcessedKeys.get(entityId);
+    return processedKey ? (this.#processedTextures.get(processedKey)?.texture ?? null) : null;
   }
 
   getSourceEntityTexture(entityId: string): GPUTexture | null {
@@ -307,14 +331,14 @@ export class EntityTexturePipeline {
     let sourceBytes = 0;
     let processedBytes = 0;
     for (const cached of this.#sourceTextures.values()) sourceBytes += cached.byteSize;
-    for (const cached of this.#entityTextures.values()) processedBytes += cached.byteSize;
+    for (const cached of this.#processedTextures.values()) processedBytes += cached.byteSize;
     return {
       budgetBytes: this.#textureBudgetBytes,
       residentBytes: sourceBytes + processedBytes,
       sourceBytes,
       processedBytes,
       sourceTextureCount: this.#sourceTextures.size,
-      processedTextureCount: this.#entityTextures.size,
+      processedTextureCount: this.#processedTextures.size,
       sourceTextureAllocations: this.#sourceTextureAllocations,
       processedTextureAllocations: this.#processedTextureAllocations,
       sourceUploads: this.#sourceUploads,
@@ -324,9 +348,7 @@ export class EntityTexturePipeline {
 
   removeEntity(entityId: string): void {
     // Remove texture
-    const cachedTexture = this.#entityTextures.get(entityId);
-    cachedTexture?.texture.destroy();
-    this.#entityTextures.delete(entityId);
+    this.#releaseEntityProcessedTexture(entityId);
 
     this.#releaseEntitySourceTexture(entityId);
 
@@ -343,10 +365,11 @@ export class EntityTexturePipeline {
 
   destroy(): void {
     // Destroy entity textures
-    for (const cached of this.#entityTextures.values()) {
+    for (const cached of this.#processedTextures.values()) {
       cached.texture.destroy();
     }
-    this.#entityTextures.clear();
+    this.#processedTextures.clear();
+    this.#entityProcessedKeys.clear();
 
     // Destroy cached source textures
     for (const cached of this.#sourceTextures.values()) {
@@ -389,6 +412,56 @@ export class EntityTexturePipeline {
     }
   }
 
+  #getProcessedCacheKey(
+    entity: ShaderCanvasEntity,
+    width: number,
+    height: number,
+    needsContinuousShaderRender: boolean,
+  ): string {
+    if (entity.mediaSource.type !== MediaType.image || needsContinuousShaderRender) {
+      return `entity:${entity.id}`;
+    }
+
+    let signature = this.#shaderSignatureCache.get(entity.shaderParams);
+    if (!signature) {
+      signature = JSON.stringify(entity.shaderParams);
+      this.#shaderSignatureCache.set(entity.shaderParams, signature);
+    }
+    const asset = entity.mediaSource.asset;
+    return `image:${asset.id}:${asset.revision}:${width}x${height}:${entity.shaderType}:${signature}`;
+  }
+
+  #bindEntityToProcessed(
+    entityId: string,
+    processedKey: string,
+    cachedProcessed: CachedProcessedTexture,
+  ): void {
+    const previousKey = this.#entityProcessedKeys.get(entityId);
+    if (previousKey === processedKey) {
+      cachedProcessed.entityIds.add(entityId);
+      return;
+    }
+    if (previousKey) this.#releaseEntityProcessedTexture(entityId);
+
+    cachedProcessed.entityIds.add(entityId);
+    this.#entityProcessedKeys.set(entityId, processedKey);
+  }
+
+  #releaseEntityProcessedTexture(entityId: string): void {
+    const processedKey = this.#entityProcessedKeys.get(entityId);
+    if (!processedKey) return;
+
+    this.#entityProcessedKeys.delete(entityId);
+    const cachedProcessed = this.#processedTextures.get(processedKey);
+    if (!cachedProcessed) return;
+
+    cachedProcessed.entityIds.delete(entityId);
+    if (cachedProcessed.entityIds.size === 0) {
+      cachedProcessed.texture.destroy();
+      this.#processedTextures.delete(processedKey);
+    }
+  }
+
   #bindEntityToSource(
     entityId: string,
     sourceKey: string,
@@ -423,11 +496,11 @@ export class EntityTexturePipeline {
 
     let residentBytes = stats.residentBytes;
     const candidates: Array<
-      | { kind: "processed"; key: string; cached: CachedEntityTexture }
+      | { kind: "processed"; key: string; cached: CachedProcessedTexture }
       | { kind: "source"; key: string; cached: CachedSourceTexture }
     > = [];
 
-    for (const [key, cached] of this.#entityTextures) {
+    for (const [key, cached] of this.#processedTextures) {
       if (cached.lastUsedFrame !== this.#currentFrame) {
         candidates.push({ kind: "processed", key, cached });
       }
@@ -446,8 +519,11 @@ export class EntityTexturePipeline {
       this.#evictions++;
 
       if (candidate.kind === "processed") {
-        this.#entityTextures.delete(candidate.key);
-        this.#onTextureEvicted?.(new Set([candidate.key]));
+        this.#processedTextures.delete(candidate.key);
+        for (const entityId of candidate.cached.entityIds) {
+          this.#entityProcessedKeys.delete(entityId);
+        }
+        this.#onTextureEvicted?.(candidate.cached.entityIds);
         continue;
       }
 
