@@ -1,5 +1,6 @@
 import { config } from "#config";
 import {
+  isAnimatedEntity,
   MediaType,
   type MediaAlphaMode,
   type ShaderCanvasEntity,
@@ -28,6 +29,7 @@ interface CachedEntityTexture {
   texture: GPUTexture;
   byteSize: number;
   lastUsedFrame: number;
+  contentRevision: number;
 }
 
 interface CachedSourceTexture extends CachedEntityTexture {
@@ -38,6 +40,11 @@ interface CachedSourceTexture extends CachedEntityTexture {
 
 interface CachedProcessedTexture extends CachedEntityTexture {
   entityIds: Set<string>;
+}
+
+interface GifResizeSurface {
+  canvas: OffscreenCanvas;
+  context: OffscreenCanvasRenderingContext2D;
 }
 
 export interface EntityTextureResidencyStats {
@@ -70,6 +77,8 @@ export class EntityTexturePipeline {
   #lodTransitionPixelsRemaining = 0;
   #lodTransitionsUsed = 0;
   #pendingLodWork = false;
+  #entityContentRevisions = new Map<string, number>();
+  #gifResizeSurfaces = new Map<string, GifResizeSurface>();
 
   // Processed textures keyed by immutable source + effect identity when shareable.
   #processedTextures: Map<string, CachedProcessedTexture> = new Map();
@@ -156,6 +165,7 @@ export class EntityTexturePipeline {
         ? entity
         : { ...entity, originalSize: renderSize };
     const useExternalVideoSource = entity.mediaSource.type === MediaType.video;
+    const contentRevision = this.#resolveContentRevision(entity);
 
     // Time-based shaders need the shader pass every canvas render. Processed videos do not:
     // GameLoop marks them dirty only when a decoded video frame changes, so viewport-only
@@ -177,6 +187,7 @@ export class EntityTexturePipeline {
       !entity.shaderParams.showOriginal &&
       !needsContinuousShaderRender &&
       cachedTexture &&
+      cachedTexture.contentRevision === contentRevision &&
       (!entity.textureDirty || canReuseDirtyTexture)
     ) {
       cachedTexture.lastUsedFrame = this.#currentFrame;
@@ -220,21 +231,23 @@ export class EntityTexturePipeline {
           usage: sourceUsage,
         });
         this.#sourceTextureAllocations++;
-        this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
         cachedSource = {
           texture: sourceTexture,
           width,
           height,
           byteSize: getTextureByteSize(width, height, "rgba8unorm"),
           lastUsedFrame: this.#currentFrame,
+          contentRevision,
           entityIds: new Set(),
         };
+        this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
         this.#sourceTextures.set(sourceKey, cachedSource);
       } else {
         sourceTexture = cachedSource.texture;
         cachedSource.lastUsedFrame = this.#currentFrame;
-        if (entity.mediaSource.type === MediaType.gif && entity.textureDirty) {
+        if (cachedSource.contentRevision !== contentRevision) {
           this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
+          cachedSource.contentRevision = contentRevision;
         }
       }
 
@@ -300,6 +313,7 @@ export class EntityTexturePipeline {
       texture: outputTexture,
       byteSize: getTextureByteSize(width, height, this.#colorConfig.intermediateFormat),
       lastUsedFrame: this.#currentFrame,
+      contentRevision,
       entityIds: cachedTexture?.entityIds ?? new Set(),
     };
     this.#processedTextures.set(processedKey, processedEntry);
@@ -351,9 +365,11 @@ export class EntityTexturePipeline {
     }
 
     const pixelCost = desired.width * desired.height;
+    const currentPixelCount = current.width * current.height;
+    const allowAnimatedDemotion = isAnimatedEntity(entity) && pixelCost < currentPixelCount;
     const withinPixelBudget = pixelCost <= this.#lodTransitionPixelsRemaining;
     const canAdmit =
-      this.#allowLodTransitions &&
+      (this.#allowLodTransitions || allowAnimatedDemotion) &&
       this.#lodTransitionsRemaining > 0 &&
       (withinPixelBudget || this.#lodTransitionsUsed === 0);
     if (!canAdmit) {
@@ -405,6 +421,14 @@ export class EntityTexturePipeline {
 
     this.#releaseEntitySourceTexture(entityId);
 
+    this.#entityContentRevisions.delete(entityId);
+    const resizeSurface = this.#gifResizeSurfaces.get(entityId);
+    if (resizeSurface) {
+      resizeSurface.canvas.width = 1;
+      resizeSurface.canvas.height = 1;
+      this.#gifResizeSurfaces.delete(entityId);
+    }
+
     this.#runtime.removeEntity(entityId);
   }
 
@@ -431,6 +455,13 @@ export class EntityTexturePipeline {
     this.#sourceTextures.clear();
     this.#entitySourceKeys.clear();
 
+    for (const { canvas } of this.#gifResizeSurfaces.values()) {
+      canvas.width = 1;
+      canvas.height = 1;
+    }
+    this.#gifResizeSurfaces.clear();
+    this.#entityContentRevisions.clear();
+
     this.#runtime.destroy();
   }
 
@@ -445,11 +476,12 @@ export class EntityTexturePipeline {
         ? entity.mediaSource.asset.imageBitmap
         : entity.imageBitmap;
     if (source.width !== width || source.height !== height) {
-      const resized = new OffscreenCanvas(width, height);
-      const context = resized.getContext("2d", { alpha: getSourceAlphaMode(entity) !== "none" });
-      if (!context) throw new Error("Could not create static-image LOD resize context");
-      context.drawImage(source, 0, 0, width, height);
-      source = resized;
+      const surface =
+        entity.mediaSource.type === MediaType.gif
+          ? this.#getGifResizeSurface(entity.id, width, height)
+          : createResizeSurface(width, height, getSourceAlphaMode(entity) !== "none");
+      surface.context.drawImage(source, 0, 0, width, height);
+      source = surface.canvas;
     }
     this.#device.queue.copyExternalImageToTexture(
       { source },
@@ -457,6 +489,30 @@ export class EntityTexturePipeline {
       [width, height],
     );
     this.#sourceUploads++;
+  }
+
+  #getGifResizeSurface(entityId: string, width: number, height: number): GifResizeSurface {
+    let surface = this.#gifResizeSurfaces.get(entityId);
+    if (!surface) {
+      surface = createResizeSurface(width, height, true);
+      this.#gifResizeSurfaces.set(entityId, surface);
+      return surface;
+    }
+
+    if (surface.canvas.width !== width) surface.canvas.width = width;
+    if (surface.canvas.height !== height) surface.canvas.height = height;
+    return surface;
+  }
+
+  #resolveContentRevision(entity: ShaderCanvasEntity): number {
+    if (!isAnimatedEntity(entity)) return 0;
+
+    const current = this.#entityContentRevisions.get(entity.id) ?? 0;
+    if (!entity.textureDirty) return current;
+
+    const next = current + 1;
+    this.#entityContentRevisions.set(entity.id, next);
+    return next;
   }
 
   #getSourceCacheKey(entity: ShaderCanvasEntity, width: number, height: number): string {
@@ -594,6 +650,13 @@ export class EntityTexturePipeline {
       this.#onTextureEvicted?.(candidate.cached.entityIds);
     }
   }
+}
+
+function createResizeSurface(width: number, height: number, alpha: boolean): GifResizeSurface {
+  const canvas = new OffscreenCanvas(width, height);
+  const context = canvas.getContext("2d", { alpha });
+  if (!context) throw new Error("Could not create static-image LOD resize context");
+  return { canvas, context };
 }
 
 function getTextureByteSize(width: number, height: number, format: GPUTextureFormat): number {
