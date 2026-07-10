@@ -6,7 +6,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 
 - `config/index.ts` (~25KB) — Central config: feature definitions, defaults, visibility rules, rendering/export settings. Imported as `#config`.
 - `canvas-math.ts` (~15KB) — Coordinate transforms, bounds math, viewport matrices, grid calculations.
-- `entity-spatial-index.ts` — Incremental multi-resolution entity AABB index. Stores each entity in one size-appropriate center bucket and returns exact z-ordered bounds queries without per-query deduplication sets.
+- `entity-spatial-index.ts` — Incremental multi-resolution entity AABB index. Stores each entity in one size-appropriate center bucket, returns exact z-ordered queries without deduplication sets, and reuses the store's ordered array when the viewport covers the entire index.
 - `store.ts` — `Store<T>` base class for `useSyncExternalStore`. Provides `createSnapshot(versionKey, create)` and `getComputed(key, versionKey, compute)` with structural sharing via `shallowEqual`.
 - `undo.ts` — Command pattern. `Command.create({ execute, undo, onEvict })`. `Undo` class with size limits and transaction grouping. Singleton: `undo`.
 - `media-loader.ts` — Loads/parses images, videos, GIFs, SVGs. Extracts palettes and frame rates.
