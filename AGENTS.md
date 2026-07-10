@@ -54,13 +54,15 @@ bun run test -- __tests__/engine/action-layer-controller.spec.ts
 # Add `-t "test name"` to target a single test, or use `bun run test:watch -- <path>` while iterating.
 ```
 
+The opt-in real Chrome/WebGPU many-entity suite lives in `bench/`. Run it with `bun run bench:render:record -- --suite many-entity`; results include frame timings, rendered counts, decoded estimates, texture residency, allocations, uploads, and evictions.
+
 ## Key Patterns
 
 1. **Enum pattern**: Use `createEnum()` from `types/index.ts`, not TypeScript `enum`. Produces both value object and type via `.infer`. Example: `ShaderType.dithering` (value), `ShaderType` (type).
 2. **Store pattern**: Extend `Store<T>` from `lib/store.ts` for reactive state. Use `createSnapshot(versionKey, create)` for `useSyncExternalStore`, `getComputed(key, versionKey, compute)` for derived values with structural sharing.
 3. **Private fields**: Use `#` private class fields, not `private` keyword.
 4. **No barrel exports**: Only `engine/index.ts` and `types/index.ts` have barrels. Import directly from files elsewhere.
-5. **GPU resources**: Always clean up buffers/textures. Use `TexturePool` for intermediates. Track entity textures in Maps keyed by entity ID.
+5. **GPU resources**: Always clean up buffers/textures. Use `TexturePool` for intermediates. Key shareable source/processed textures by immutable asset and effect identity; entity IDs track ownership, not duplicate resources.
 6. **Undo pattern**: Wrap state mutations in `Command.create({ execute, undo, onEvict })`, push to `undo` singleton from `lib/undo.ts`.
 
 ## Anti-Patterns
