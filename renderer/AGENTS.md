@@ -6,7 +6,7 @@ WebGPU rendering and export pipelines. Turns engine state into pixels.
 
 - `canvas-renderer.ts` (~69KB) — Main renderer. WebGPU setup, entity textures, shader dispatch, composition, overlays.
 - `processing-pipeline.ts` (~49KB) — Per-entity pre/post-processing: adjustments, blur, bloom, grain, chromatic aberration. Also provides action layer blur.
-- `entity-render-size.ts` — Selects quantized static-image render tiers from projected physical pixels; exports bypass this path and retain native dimensions.
+- `entity-render-size.ts` — Selects quantized screen-space render tiers from projected physical pixels; exports bypass this path and retain native dimensions.
 - `gpu-color-space.ts` — `detectGpuColorConfig()`. Probes Display P3 support at init, returns frozen `GpuColorConfig` (supportsP3, canvasFormat, canvasColorSpace, intermediateFormat, textureColorSpace).
 - `copy-pass.ts` + `copy-pass.wgsl` — `CopyPass`. Full-screen format conversion (rgba16float ↔ rgba8unorm) for export readback and showOriginal passthrough.
 - `texture-pool.ts` — GPU texture recycling with exact idle-byte accounting and a global 64 MiB LRU budget. Parameterized by `GPUTextureFormat` (receives `intermediateFormat` from renderer).
@@ -61,7 +61,9 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 - Dimension-keyed blur mip, bloom mip, and blur blend textures share a 128 MiB budget; current-frame dimensions stay pinned and older dimensions are evicted LRU.
 - Source textures cached by media identity/revision; static image entities sharing one asset also share one GPU texture until the final entity owner is removed
 - Stable processed image outputs are keyed by asset revision, dimensions, shader type, and full shader parameters. Identical instances share one texture; animated effects and non-image media remain entity-scoped.
-- Static images use 64/128/256/... screen-space LOD tiers with overscan. Source and processed cache keys include tier dimensions so canvas residency follows projected pixels.
+- Canvas media uses 64/128/256/... screen-space LOD tiers with overscan. Camera motion holds the current tier, then settled frames admit a bounded number of final tier changes to avoid synchronized allocation/upload bursts.
+- Recently released source and processed image tiers remain reusable inside the existing byte-budgeted LRU; reverse zooms should not synchronously rebuild a tier that is still resident.
+- Original videos stay on direct external-texture composition so playback and media controls remain continuous. Processed videos use screen-space output LOD, and small outputs shorten the bloom mip chain rather than pausing media.
 - Composition cache (`#entityCompositionCache`) reuses uniform buffers and bind groups; a weak texture-view cache shares one view across instances sampling the same texture.
 - `TexturePool` retains at most 64 MiB of idle transient textures across dimensions/usages. Release scratch after its final encoded use for ordered reuse, but apply destruction limits only in `commitSubmitted()` after `queue.submit()`.
 - Image source changes require a new asset revision. Entity removal releases its source-cache ownership without destroying textures still used by sibling instances.

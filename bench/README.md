@@ -106,8 +106,8 @@ steady-state render loop:
 
 `zoom-61-unique-mixed-round-trip` uses `showOriginal: true` to isolate image LOD
 and external-video composition. The `processed` variant uses the application
-defaults (dithering, grain, and bloom) and therefore also measures
-native-resolution video processing.
+defaults (dithering, grain, and bloom) and therefore also measures screen-space
+video processing without pausing playback or media timeline progression.
 
 Each recorded frame contains its phase, zoom, rAF interval, renderer CPU time,
 rendered entity count, resident bytes, texture counts, and per-frame
