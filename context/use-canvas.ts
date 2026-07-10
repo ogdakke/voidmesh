@@ -161,7 +161,7 @@ export function useSelectedEntityParams(): ShaderParams | null {
 
 export function useSelectedShaderType(): ShaderType {
   return useCanvasSelector(
-    () => canvasStore.getSelectedEntity()?.shaderType ?? config.defaults.shader,
+    () => canvasStore.getSelectedEntitiesStable()[0]?.shaderType ?? config.defaults.shader,
   );
 }
 
