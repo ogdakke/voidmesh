@@ -121,6 +121,23 @@ export const MANY_ENTITY_SCENARIOS: readonly ManyEntityScenarioConfig[] = [
     warmupFrames: 2,
     samples: 3,
   },
+  {
+    id: "many-16384-shared-processed-all-visible",
+    label: "16,384 shared instances, instanced processed result",
+    description:
+      "Composes 2^14 identical processed instances in one viewport to guard shared-texture instancing and command submission scaling.",
+    entityCount: 16_384,
+    uniqueAssetCount: 1,
+    sourceSize: { width: 1024, height: 1024 },
+    displaySize: { width: 6, height: 6 },
+    assetMode: "shared",
+    layout: "all-visible",
+    pan: false,
+    processPixels: true,
+    frames: 24,
+    warmupFrames: 4,
+    samples: 3,
+  },
 ] as const;
 
 export interface ManyEntityPositionOptions {

@@ -344,13 +344,14 @@ export class InfiniteCanvasRenderer {
     items: readonly CompositionDrawItem[],
     selectedEntityCount: number,
   ): void {
-    for (const item of items) {
-      this.#compositionPass!.drawItem(pass, item);
-
-      if (item.isSelected && selectedEntityCount === 1 && this.#entityLabelPass) {
-        this.#entityLabelPass.drawLabel(pass, item.entity, item.offsetX, item.offsetY);
-      }
-    }
+    const labelPass = selectedEntityCount === 1 ? this.#entityLabelPass : null;
+    this.#compositionPass!.drawItems(
+      pass,
+      items,
+      labelPass
+        ? (item) => labelPass.drawLabel(pass, item.entity, item.offsetX, item.offsetY)
+        : undefined,
+    );
   }
 
   /**
@@ -440,6 +441,7 @@ export class InfiniteCanvasRenderer {
     });
     const { entityDrawItems, actionLayerDrawItems } = preparedEntityDrawItems;
     let hasAnimatingContent = preparedEntityDrawItems.hasAnimatingContent;
+    this.#compositionPass.beginFrame(entityDrawItems.length + actionLayerDrawItems.length);
 
     const texture = this.#context.getCurrentTexture();
     // Skip render if swapchain texture is invalid
