@@ -54,6 +54,8 @@ the canvas virtualization and texture-residency paths:
 - a viewport sweep across the 10,000-instance world;
 - 4,096 unique thumbnail assets, both all-visible and swept through the cache;
 - 2,048 identically processed instances sharing one source and processed result.
+- a 61-source mixed image/video canvas zoomed from one detailed entity out to
+  the full overview and back, both original and default-effect variants.
 
 Run the whole suite headlessly:
 
@@ -66,6 +68,8 @@ Run one large scenario without running the rest:
 ```bash
 bun run bench:render:record -- --scenario many-10000-shared-original-all-visible
 bun run bench:render:record -- --scenario many-4096-unique-thumbnails-pan
+bun run bench:render:record -- --scenario zoom-61-unique-mixed-round-trip
+bun run bench:render:record -- --scenario zoom-61-unique-mixed-processed-round-trip
 ```
 
 In the interactive page, use **Run Many Entity**, or open:
@@ -86,6 +90,38 @@ The decoded-byte value is a deterministic RGBA estimate. GPU values come from
 the renderer's own resource accounting and therefore cover persistent entity
 textures and idle pooled textures, but not implementation-private browser/driver
 memory.
+
+### Mixed-media zoom regression
+
+The zoom scenarios model the reported interactive workspace rather than a
+steady-state render loop:
+
+- 45 unique 2048×1365 images and 16 unique 1280×720 canvas-backed videos;
+- a world grid that starts with one target in detail, zooms out until all 61
+  entities are visible, holds the overview, then zooms back into that target;
+- three independent runs with renderer-owned entity textures cleared before
+  each gesture;
+- actual `requestAnimationFrame` pacing, with the GPU queue drained only after
+  the gesture, so browser/GPU backpressure remains visible.
+
+`zoom-61-unique-mixed-round-trip` uses `showOriginal: true` to isolate image LOD
+and external-video composition. The `processed` variant uses the application
+defaults (dithering, grain, and bloom) and therefore also measures
+native-resolution video processing.
+
+Each recorded frame contains its phase, zoom, rAF interval, renderer CPU time,
+rendered entity count, resident bytes, texture counts, and per-frame
+allocation/upload/eviction deltas. Synthetic video source drawing is excluded
+from renderer timing and reported separately as `sourceUpdateMs`.
+
+For this regression, compare `rafIntervalP95Ms` for visible stutter and
+`cpuRenderP95Ms` for the same CPU duration shown by the in-app performance
+overlay:
+
+```bash
+bun run bench:render:compare -- baseline.json candidate.json --metric rafIntervalP95Ms
+bun run bench:render:compare -- baseline.json candidate.json --metric cpuRenderP95Ms
+```
 
 Run multiple rounds and store a median aggregate:
 
@@ -144,10 +180,13 @@ BENCH_OUT_DIR=bench/results/candidate bun run bench:render:record -- --rounds 3
 bun run bench:render:compare -- bench/results/baseline/latest.json bench/results/candidate/latest.json
 ```
 
-The timings are queue-drain batch timings using `GPUQueue.onSubmittedWorkDone()`.
-They are relative measurements, not exact per-pass GPU timestamps. They are meant
-for A/B comparison of renderer and shader changes when WebGPU timestamp queries
-are unavailable.
+Most scenarios use queue-drain batch timings through
+`GPUQueue.onSubmittedWorkDone()`. The mixed-media zoom scenarios instead use
+real rAF pacing and drain once after each gesture; per-frame GPU-complete timing
+is intentionally omitted there because synchronizing every frame removes the
+queue backpressure being measured. These are relative measurements, not exact
+per-pass GPU timestamps, and are intended for A/B comparison when WebGPU
+timestamp queries are unavailable.
 
 For deterministic flowing-glass visual comparisons, open:
 

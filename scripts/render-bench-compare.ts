@@ -8,6 +8,17 @@ interface BenchSummary {
   msPerFrame: number;
   cpuEncodeMsPerFrame: number;
   queueDrainMsPerFrame: number;
+  sourceUpdateMedianMs: number;
+  sourceUpdateP95Ms: number;
+  rafIntervalMedianMs: number;
+  rafIntervalP95Ms: number;
+  rafIntervalMaxMs: number;
+  cpuRenderMedianMs: number;
+  cpuRenderP95Ms: number;
+  cpuRenderMaxMs: number;
+  endToEndMedianMs: number;
+  endToEndP95Ms: number;
+  endToEndMaxMs: number;
   p95Ms: number;
   decodedAssetEstimateBytes: number;
   peakResidentBytes: number;
@@ -145,6 +156,17 @@ function parseMetric(value: string): CliOptions["metric"] {
     "msPerFrame",
     "cpuEncodeMsPerFrame",
     "queueDrainMsPerFrame",
+    "sourceUpdateMedianMs",
+    "sourceUpdateP95Ms",
+    "rafIntervalMedianMs",
+    "rafIntervalP95Ms",
+    "rafIntervalMaxMs",
+    "cpuRenderMedianMs",
+    "cpuRenderP95Ms",
+    "cpuRenderMaxMs",
+    "endToEndMedianMs",
+    "endToEndP95Ms",
+    "endToEndMaxMs",
     "p95Ms",
     "decodedAssetEstimateBytes",
     "peakResidentBytes",

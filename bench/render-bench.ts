@@ -11,6 +11,7 @@ import {
   type MediaImageAsset,
   type ShaderParams,
   type Size,
+  type Viewport,
 } from "#types/canvas.ts";
 import type { RenderState } from "../engine/canvas-store.ts";
 import { createImageAsset } from "#lib/media-assets.ts";
@@ -21,6 +22,18 @@ import {
   getManyEntityViewportOffset,
   type ManyEntityScenarioConfig,
 } from "./many-entity-scenarios.ts";
+import {
+  ZOOM_STRESS_SCENARIO,
+  estimateZoomStressDecodedBytes,
+  getZoomStressDisplaySize,
+  getZoomStressFrame,
+  getZoomStressFrameCount,
+  getZoomStressMediaKind,
+  getZoomStressPosition,
+  getZoomStressSourceSize,
+  type ZoomStressPhase,
+  type ZoomStressScenarioConfig,
+} from "./zoom-stress-scenario.ts";
 
 import "../styles/reset.css";
 
@@ -43,6 +56,11 @@ interface BenchScenario {
   warmupFrames: number;
   samples: number;
   manyEntity?: ManyEntityScenarioConfig;
+  zoomStress?: ZoomStressScenarioConfig;
+  synchronizeEachFrame?: boolean;
+  paceWithAnimationFrame?: boolean;
+  recordPerFrame?: boolean;
+  resetTexturesBeforeSample?: boolean;
 }
 
 type BenchResourceStats = ReturnType<InfiniteCanvasRenderer["getResourceStats"]>;
@@ -52,6 +70,29 @@ interface BenchActivityMetrics {
   renderedEntitiesPerFrame: number;
   minRenderedEntitiesPerFrame: number;
   maxRenderedEntitiesPerFrame: number;
+  sourceTextureAllocations: number;
+  processedTextureAllocations: number;
+  sourceUploads: number;
+  evictions: number;
+}
+
+interface BenchFrameSample {
+  index: number;
+  frameIndex: number;
+  phase: ZoomStressPhase | null;
+  zoom: number;
+  rafIntervalMs: number | null;
+  sourceUpdateMs: number;
+  cpuCallMs: number;
+  cpuRenderMs: number;
+  queueWaitMs: number | null;
+  endToEndMs: number | null;
+  renderedEntities: number;
+  residentBytes: number;
+  sourceBytes: number;
+  processedBytes: number;
+  sourceTextureCount: number;
+  processedTextureCount: number;
   sourceTextureAllocations: number;
   processedTextureAllocations: number;
   sourceUploads: number;
@@ -71,6 +112,19 @@ interface BenchSample {
   peakResidentBytes: number;
   resources: BenchResourceStats;
   activity: BenchActivityMetrics;
+  frameSamples: BenchFrameSample[];
+  sourceUpdateMedianMs: number;
+  sourceUpdateP95Ms: number;
+  sourceUpdateMaxMs: number;
+  rafIntervalMedianMs: number;
+  rafIntervalP95Ms: number;
+  rafIntervalMaxMs: number;
+  cpuRenderMedianMs: number;
+  cpuRenderP95Ms: number;
+  cpuRenderMaxMs: number;
+  endToEndMedianMs: number;
+  endToEndP95Ms: number;
+  endToEndMaxMs: number;
 }
 
 interface BenchResult {
@@ -93,10 +147,24 @@ interface BenchResult {
   queueDrainMedianMs: number;
   cpuEncodeMsPerFrame: number;
   queueDrainMsPerFrame: number;
+  timingMode: "batched" | "gpu-synchronized" | "raf-paced";
+  sourceUpdateMedianMs: number;
+  sourceUpdateP95Ms: number;
+  sourceUpdateMaxMs: number;
+  rafIntervalMedianMs: number;
+  rafIntervalP95Ms: number;
+  rafIntervalMaxMs: number;
+  cpuRenderMedianMs: number;
+  cpuRenderP95Ms: number;
+  cpuRenderMaxMs: number;
+  endToEndMedianMs: number;
+  endToEndP95Ms: number;
+  endToEndMaxMs: number;
   decodedAssetEstimateBytes: number;
   peakResidentBytes: number;
   resources: BenchResourceStats;
   activity: BenchActivityMetrics;
+  mediaCounts?: { image: number; video: number };
 }
 
 interface VisualMetrics {
@@ -138,7 +206,10 @@ interface BenchEntitySet {
   entities: ShaderCanvasEntity[];
   beforeFrame?: (frameIndex: number) => void;
   getViewportOffset?: (frameIndex: number) => { x: number; y: number };
+  getViewport?: (frameIndex: number, sampleFrameIndex: number) => Viewport;
+  getFramePhase?: (frameIndex: number, sampleFrameIndex: number) => ZoomStressPhase | null;
   decodedAssetEstimateBytes?: number;
+  mediaCounts?: { image: number; video: number };
   cleanup?: () => void;
 }
 
@@ -345,7 +416,7 @@ const scenarios: BenchScenario[] = [
   },
 ];
 
-const manyEntityScenarios: BenchScenario[] = MANY_ENTITY_SCENARIOS.map((scenario) => ({
+const imageManyEntityScenarios: BenchScenario[] = MANY_ENTITY_SCENARIOS.map((scenario) => ({
   id: scenario.id,
   label: scenario.label,
   description: scenario.description,
@@ -368,6 +439,45 @@ const manyEntityScenarios: BenchScenario[] = MANY_ENTITY_SCENARIOS.map((scenario
   samples: scenario.samples,
   manyEntity: scenario,
 }));
+
+const zoomStressOriginalScenario: BenchScenario = {
+  id: ZOOM_STRESS_SCENARIO.id,
+  label: ZOOM_STRESS_SCENARIO.label,
+  description: ZOOM_STRESS_SCENARIO.description,
+  kind: "multi",
+  entityCount: ZOOM_STRESS_SCENARIO.entityCount,
+  sourceSize: ZOOM_STRESS_SCENARIO.imageSourceSize,
+  shaderType: ShaderType.dithering,
+  params: {
+    showOriginal: true,
+    postProcess: { enabled: false },
+    adjustments: { brightness: 0.5, contrast: 0.5, saturation: 0.5, blur: 0 },
+  },
+  dirtyMode: "video",
+  frames: getZoomStressFrameCount(ZOOM_STRESS_SCENARIO),
+  warmupFrames: ZOOM_STRESS_SCENARIO.warmupFrames,
+  samples: ZOOM_STRESS_SCENARIO.samples,
+  zoomStress: ZOOM_STRESS_SCENARIO,
+  synchronizeEachFrame: false,
+  paceWithAnimationFrame: true,
+  recordPerFrame: true,
+  resetTexturesBeforeSample: true,
+};
+
+const zoomStressProcessedScenario: BenchScenario = {
+  ...zoomStressOriginalScenario,
+  id: "zoom-61-unique-mixed-processed-round-trip",
+  label: "61 unique mixed media with default effects, overview to detail",
+  description:
+    "Runs the same 61-source zoom gesture with default dithering, grain, and bloom so native-resolution video processing is represented.",
+  params: {},
+};
+
+const manyEntityScenarios = [
+  ...imageManyEntityScenarios,
+  zoomStressOriginalScenario,
+  zoomStressProcessedScenario,
+];
 
 const allScenarios = [...scenarios, ...manyEntityScenarios];
 
@@ -585,7 +695,10 @@ function pseudoRandom(seed: number, index: number): number {
   return x - Math.floor(x);
 }
 
-async function createSyntheticVideo(size: Size): Promise<{
+async function createSyntheticVideo(
+  size: Size,
+  seed = 1,
+): Promise<{
   video: HTMLVideoElement;
   drawFrame: (frameIndex: number) => void;
   cleanup: () => void;
@@ -605,27 +718,27 @@ async function createSyntheticVideo(size: Size): Promise<{
 
   const drawFrame = (frameIndex: number): void => {
     const t = frameIndex / 30;
-    ctx.fillStyle = `hsl(${(t * 52) % 360} 70% 15%)`;
+    ctx.fillStyle = `hsl(${(t * 52 + seed * 37) % 360} 70% 15%)`;
     ctx.fillRect(0, 0, size.width, size.height);
 
     const gradient = ctx.createRadialGradient(
-      size.width * (0.5 + Math.sin(t) * 0.25),
-      size.height * (0.5 + Math.cos(t * 1.3) * 0.25),
+      size.width * (0.5 + Math.sin(t + seed * 0.31) * 0.25),
+      size.height * (0.5 + Math.cos(t * 1.3 + seed * 0.17) * 0.25),
       size.width * 0.05,
       size.width * 0.5,
       size.height * 0.5,
       size.width * 0.7,
     );
     gradient.addColorStop(0, "rgb(255 255 255)");
-    gradient.addColorStop(0.35, `hsl(${(t * 90 + 80) % 360} 90% 60%)`);
-    gradient.addColorStop(1, `hsl(${(t * 90 + 220) % 360} 80% 35%)`);
+    gradient.addColorStop(0.35, `hsl(${(t * 90 + seed * 41 + 80) % 360} 90% 60%)`);
+    gradient.addColorStop(1, `hsl(${(t * 90 + seed * 41 + 220) % 360} 80% 35%)`);
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, size.width, size.height);
 
     ctx.fillStyle = "rgb(0 0 0 / 0.25)";
     const block = Math.max(24, Math.floor(size.width / 48));
     for (let x = 0; x < size.width; x += block * 2) {
-      ctx.fillRect((x + frameIndex * 7) % size.width, 0, block, size.height);
+      ctx.fillRect((x + frameIndex * 7 + seed * 13) % size.width, 0, block, size.height);
     }
   };
 
@@ -708,6 +821,10 @@ async function createEntities(scenario: BenchScenario): Promise<BenchEntitySet> 
     };
   }
 
+  if (scenario.zoomStress) {
+    return createZoomStressEntitySet(scenario, scenario.zoomStress);
+  }
+
   if (scenario.manyEntity) {
     return createManyEntitySet(scenario, scenario.manyEntity);
   }
@@ -747,6 +864,131 @@ async function createEntities(scenario: BenchScenario): Promise<BenchEntitySet> 
       }
     },
   };
+}
+
+async function createZoomStressEntitySet(
+  scenario: BenchScenario,
+  config: ZoomStressScenarioConfig,
+): Promise<BenchEntitySet> {
+  const imageBitmaps = await createSyntheticBitmaps(config.imageSourceSize, config.imageCount);
+  const imageAssets = imageBitmaps.map((bitmap, index) =>
+    createImageAsset({
+      id: `${scenario.id}-image-asset-${index}`,
+      imageBitmap: bitmap,
+      blob: new Blob([], { type: "image/jpeg" }),
+    }),
+  );
+  const syntheticVideos = await createSyntheticVideos(config.videoSourceSize, config.videoCount);
+  const videoBitmaps = await Promise.all(
+    syntheticVideos.map((synthetic) => createImageBitmap(synthetic.video)),
+  );
+
+  let imageIndex = 0;
+  let videoIndex = 0;
+  const entities = Array.from({ length: config.entityCount }, (_, index) => {
+    const sourceSize = getZoomStressSourceSize(config, index);
+    const displaySize = getZoomStressDisplaySize(config, index);
+    const position = getZoomStressPosition(config, index);
+    if (getZoomStressMediaKind(config, index) === "video") {
+      const synthetic = syntheticVideos[videoIndex]!;
+      const bitmap = videoBitmaps[videoIndex]!;
+      videoIndex += 1;
+      return createEntity({
+        id: `${scenario.id}-video-${index}`,
+        name: `${scenario.label} video ${videoIndex}`,
+        bitmap,
+        size: sourceSize,
+        displaySize,
+        shaderType: scenario.shaderType,
+        params: scenario.params,
+        mediaSource: {
+          type: MediaType.video,
+          videoElement: synthetic.video,
+          blob: new Blob([], { type: "video/mp4" }),
+          duration: 60,
+          fps: 30,
+          hasAudio: false,
+          alphaMode: "none",
+        },
+        playback: {
+          isPlaying: true,
+          currentTime: 0,
+          loop: true,
+          playbackRate: 1,
+          muted: true,
+          volume: 0,
+        },
+        zIndex: index,
+        position,
+      });
+    }
+
+    const asset = imageAssets[imageIndex]!;
+    imageIndex += 1;
+    return createEntity({
+      id: `${scenario.id}-image-${index}`,
+      name: `${scenario.label} image ${imageIndex}`,
+      bitmap: asset.imageBitmap,
+      asset,
+      size: sourceSize,
+      displaySize,
+      shaderType: scenario.shaderType,
+      params: scenario.params,
+      zIndex: index,
+      position,
+    });
+  });
+
+  if (imageIndex !== config.imageCount || videoIndex !== config.videoCount) {
+    throw new Error(`Zoom stress media mix produced ${imageIndex} images and ${videoIndex} videos`);
+  }
+
+  return {
+    entities,
+    beforeFrame: (frameIndex) => {
+      for (let index = 0; index < syntheticVideos.length; index += 1) {
+        syntheticVideos[index]!.drawFrame(frameIndex + index * 3);
+      }
+      for (const entity of entities) {
+        if (entity.mediaSource.type === MediaType.video) entity.textureDirty = true;
+      }
+    },
+    getViewport: (_frameIndex, sampleFrameIndex) =>
+      getZoomStressFrame(config, sampleFrameIndex, {
+        width: CANVAS_WIDTH,
+        height: CANVAS_HEIGHT,
+      }).viewport,
+    getFramePhase: (_frameIndex, sampleFrameIndex) =>
+      getZoomStressFrame(config, sampleFrameIndex, {
+        width: CANVAS_WIDTH,
+        height: CANVAS_HEIGHT,
+      }).phase,
+    decodedAssetEstimateBytes: estimateZoomStressDecodedBytes(config),
+    mediaCounts: { image: config.imageCount, video: config.videoCount },
+    cleanup: () => {
+      for (const bitmap of imageBitmaps) bitmap.close();
+      for (const bitmap of videoBitmaps) bitmap.close();
+      for (const synthetic of syntheticVideos) synthetic.cleanup();
+    },
+  };
+}
+
+async function createSyntheticVideos(
+  size: Size,
+  count: number,
+): Promise<Array<Awaited<ReturnType<typeof createSyntheticVideo>>>> {
+  const videos: Array<Awaited<ReturnType<typeof createSyntheticVideo>>> = [];
+  const batchSize = 4;
+  for (let offset = 0; offset < count; offset += batchSize) {
+    const batchCount = Math.min(batchSize, count - offset);
+    const batch = await Promise.all(
+      Array.from({ length: batchCount }, (_, index) =>
+        createSyntheticVideo(size, offset + index + 1),
+      ),
+    );
+    videos.push(...batch);
+  }
+  return videos;
 }
 
 async function createManyEntitySet(
@@ -901,10 +1143,10 @@ function getEntityPosition(index: number, count: number): { x: number; y: number
 function createRenderState(
   entities: ShaderCanvasEntity[],
   dirty: boolean,
-  viewportOffset: { x: number; y: number } = { x: 0, y: 0 },
+  viewport: Viewport = { offset: { x: 0, y: 0 }, zoom: 1 },
 ): RenderState {
   return {
-    viewport: { offset: viewportOffset, zoom: 1 },
+    viewport,
     entities,
     selectedEntityIds: new Set(),
     hoveredEntityId: null,
@@ -935,7 +1177,12 @@ async function runFrames(params: {
   frameCount: number;
   beforeFrame?: (frameIndex: number) => void;
   getViewportOffset?: (frameIndex: number) => { x: number; y: number };
+  getViewport?: (frameIndex: number, sampleFrameIndex: number) => Viewport;
+  getFramePhase?: (frameIndex: number, sampleFrameIndex: number) => ZoomStressPhase | null;
   startFrameIndex: number;
+  synchronizeEachFrame?: boolean;
+  paceWithAnimationFrame?: boolean;
+  recordPerFrame?: boolean;
 }): Promise<{
   totalMs: number;
   cpuEncodeMs: number;
@@ -943,6 +1190,11 @@ async function runFrames(params: {
   peakResidentBytes: number;
   resources: BenchResourceStats;
   activity: BenchActivityMetrics;
+  frameSamples: BenchFrameSample[];
+  rafIntervalSamples: number[];
+  sourceUpdateSamples: number[];
+  cpuRenderSamples: number[];
+  endToEndSamples: number[];
 }> {
   const device = params.renderer.device;
   if (!device) throw new Error("Renderer device is unavailable");
@@ -955,25 +1207,81 @@ async function runFrames(params: {
   let renderedEntities = 0;
   let minRenderedEntitiesPerFrame = Infinity;
   let maxRenderedEntitiesPerFrame = 0;
+  let previousResources = resourcesBefore;
+  let previousRafTimestamp: number | null = null;
+  const frameSamples: BenchFrameSample[] = [];
+  const rafIntervalSamples: number[] = [];
+  const sourceUpdateSamples: number[] = [];
+  const cpuRenderSamples: number[] = [];
+  const endToEndSamples: number[] = [];
 
   for (let index = 0; index < params.frameCount; index += 1) {
     const frameIndex = params.startFrameIndex + index;
+    const rafTimestamp = params.paceWithAnimationFrame ? await nextAnimationFrame() : null;
+    const rafIntervalMs =
+      rafTimestamp !== null && previousRafTimestamp !== null
+        ? rafTimestamp - previousRafTimestamp
+        : null;
+    if (rafIntervalMs !== null) rafIntervalSamples.push(rafIntervalMs);
+    previousRafTimestamp = rafTimestamp;
+    const sourceUpdateStart = performance.now();
     params.beforeFrame?.(frameIndex);
+    const sourceUpdateMs = performance.now() - sourceUpdateStart;
+    sourceUpdateSamples.push(sourceUpdateMs);
+    const viewport =
+      params.getViewport?.(frameIndex, index) ??
+      ({
+        offset: params.getViewportOffset?.(frameIndex) ?? { x: 0, y: 0 },
+        zoom: 1,
+      } satisfies Viewport);
+    const frameStart = performance.now();
     const cpuStart = performance.now();
-    params.renderer.render(
-      createRenderState(
-        [...params.entities],
-        true,
-        params.getViewportOffset?.(frameIndex) ?? { x: 0, y: 0 },
-      ),
-    );
-    cpuEncodeMs += performance.now() - cpuStart;
-    const frameRenderedCount = params.renderer.getFrameStats().renderedCount;
+    params.renderer.render(createRenderState([...params.entities], true, viewport));
+    const cpuEnd = performance.now();
+    cpuEncodeMs += cpuEnd - cpuStart;
+    const frameStats = params.renderer.getFrameStats();
+    cpuRenderSamples.push(frameStats.renderTime);
+    if (params.synchronizeEachFrame) await device.queue.onSubmittedWorkDone();
+    const frameEnd = performance.now();
+    const endToEndMs = params.synchronizeEachFrame ? frameEnd - frameStart : null;
+    if (endToEndMs !== null) endToEndSamples.push(endToEndMs);
+
+    const frameRenderedCount = frameStats.renderedCount;
     renderedEntities += frameRenderedCount;
     minRenderedEntitiesPerFrame = Math.min(minRenderedEntitiesPerFrame, frameRenderedCount);
     maxRenderedEntitiesPerFrame = Math.max(maxRenderedEntitiesPerFrame, frameRenderedCount);
     resources = params.renderer.getResourceStats();
     peakResidentBytes = Math.max(peakResidentBytes, getTotalResidentBytes(resources));
+    if (params.recordPerFrame) {
+      frameSamples.push({
+        index,
+        frameIndex,
+        phase: params.getFramePhase?.(frameIndex, index) ?? null,
+        zoom: viewport.zoom,
+        rafIntervalMs,
+        sourceUpdateMs,
+        cpuCallMs: cpuEnd - cpuStart,
+        cpuRenderMs: frameStats.renderTime,
+        queueWaitMs: params.synchronizeEachFrame ? frameEnd - cpuEnd : null,
+        endToEndMs,
+        renderedEntities: frameRenderedCount,
+        residentBytes: getTotalResidentBytes(resources),
+        sourceBytes: resources.entityTextures.sourceBytes,
+        processedBytes: resources.entityTextures.processedBytes,
+        sourceTextureCount: resources.entityTextures.sourceTextureCount,
+        processedTextureCount: resources.entityTextures.processedTextureCount,
+        sourceTextureAllocations:
+          resources.entityTextures.sourceTextureAllocations -
+          previousResources.entityTextures.sourceTextureAllocations,
+        processedTextureAllocations:
+          resources.entityTextures.processedTextureAllocations -
+          previousResources.entityTextures.processedTextureAllocations,
+        sourceUploads:
+          resources.entityTextures.sourceUploads - previousResources.entityTextures.sourceUploads,
+        evictions: resources.entityTextures.evictions - previousResources.entityTextures.evictions,
+      });
+    }
+    previousResources = resources;
   }
 
   const beforeDrain = performance.now();
@@ -989,6 +1297,11 @@ async function runFrames(params: {
     queueDrainMs: end - beforeDrain,
     peakResidentBytes,
     resources,
+    frameSamples,
+    rafIntervalSamples,
+    sourceUpdateSamples,
+    cpuRenderSamples,
+    endToEndSamples,
     activity: {
       renderedEntities,
       renderedEntitiesPerFrame: params.frameCount === 0 ? 0 : renderedEntities / params.frameCount,
@@ -1006,6 +1319,10 @@ async function runFrames(params: {
       evictions: resources.entityTextures.evictions - resourcesBefore.entityTextures.evictions,
     },
   };
+}
+
+async function nextAnimationFrame(): Promise<number> {
+  return await new Promise<number>((resolve) => requestAnimationFrame(resolve));
 }
 
 function getTotalResidentBytes(resources: BenchResourceStats): number {
@@ -1031,16 +1348,31 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
       frameCount: scenario.warmupFrames,
       beforeFrame: entitySet.beforeFrame,
       getViewportOffset: entitySet.getViewportOffset,
+      getViewport: entitySet.getViewport,
+      getFramePhase: entitySet.getFramePhase,
       startFrameIndex: frameIndex,
+      synchronizeEachFrame: scenario.synchronizeEachFrame,
+      paceWithAnimationFrame: scenario.paceWithAnimationFrame,
     });
     frameIndex += scenario.warmupFrames;
 
     const samples: number[] = [];
     const cpuSamples: number[] = [];
     const queueDrainSamples: number[] = [];
+    const rafIntervalFrameSamples: number[] = [];
+    const sourceUpdateFrameSamples: number[] = [];
+    const cpuRenderFrameSamples: number[] = [];
+    const endToEndFrameSamples: number[] = [];
     const sampleDetails: BenchSample[] = [];
     for (let sample = 0; sample < scenario.samples; sample += 1) {
       writeResults(`Running ${scenario.label}\n\nSample ${sample + 1} of ${scenario.samples}...`);
+      if (scenario.resetTexturesBeforeSample) {
+        await benchRenderer.waitForGPU();
+        for (const entity of entitySet.entities) {
+          benchRenderer.removeEntityTexture(entity.id);
+          entity.textureDirty = true;
+        }
+      }
       const startFrameIndex = frameIndex;
       const result = await runFrames({
         renderer: benchRenderer,
@@ -1048,12 +1380,21 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
         frameCount: scenario.frames,
         beforeFrame: entitySet.beforeFrame,
         getViewportOffset: entitySet.getViewportOffset,
+        getViewport: entitySet.getViewport,
+        getFramePhase: entitySet.getFramePhase,
         startFrameIndex: frameIndex,
+        synchronizeEachFrame: scenario.synchronizeEachFrame,
+        paceWithAnimationFrame: scenario.paceWithAnimationFrame,
+        recordPerFrame: scenario.recordPerFrame,
       });
       frameIndex += scenario.frames;
       samples.push(result.totalMs);
       cpuSamples.push(result.cpuEncodeMs);
       queueDrainSamples.push(result.queueDrainMs);
+      rafIntervalFrameSamples.push(...result.rafIntervalSamples);
+      sourceUpdateFrameSamples.push(...result.sourceUpdateSamples);
+      cpuRenderFrameSamples.push(...result.cpuRenderSamples);
+      endToEndFrameSamples.push(...result.endToEndSamples);
       sampleDetails.push({
         index: sample,
         frames: scenario.frames,
@@ -1067,6 +1408,19 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
         peakResidentBytes: result.peakResidentBytes,
         resources: result.resources,
         activity: result.activity,
+        frameSamples: result.frameSamples,
+        sourceUpdateMedianMs: median(result.sourceUpdateSamples),
+        sourceUpdateP95Ms: percentile(result.sourceUpdateSamples, 0.95),
+        sourceUpdateMaxMs: max(result.sourceUpdateSamples),
+        rafIntervalMedianMs: median(result.rafIntervalSamples),
+        rafIntervalP95Ms: percentile(result.rafIntervalSamples, 0.95),
+        rafIntervalMaxMs: max(result.rafIntervalSamples),
+        cpuRenderMedianMs: median(result.cpuRenderSamples),
+        cpuRenderP95Ms: percentile(result.cpuRenderSamples, 0.95),
+        cpuRenderMaxMs: max(result.cpuRenderSamples),
+        endToEndMedianMs: median(result.endToEndSamples),
+        endToEndP95Ms: percentile(result.endToEndSamples, 0.95),
+        endToEndMaxMs: max(result.endToEndSamples),
       });
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
@@ -1093,6 +1447,23 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
       queueDrainMedianMs: median(queueDrainSamples),
       cpuEncodeMsPerFrame: median(cpuSamples) / scenario.frames,
       queueDrainMsPerFrame: median(queueDrainSamples) / scenario.frames,
+      timingMode: scenario.paceWithAnimationFrame
+        ? "raf-paced"
+        : scenario.synchronizeEachFrame
+          ? "gpu-synchronized"
+          : "batched",
+      sourceUpdateMedianMs: median(sourceUpdateFrameSamples),
+      sourceUpdateP95Ms: percentile(sourceUpdateFrameSamples, 0.95),
+      sourceUpdateMaxMs: max(sourceUpdateFrameSamples),
+      rafIntervalMedianMs: median(rafIntervalFrameSamples),
+      rafIntervalP95Ms: percentile(rafIntervalFrameSamples, 0.95),
+      rafIntervalMaxMs: max(rafIntervalFrameSamples),
+      cpuRenderMedianMs: median(cpuRenderFrameSamples),
+      cpuRenderP95Ms: percentile(cpuRenderFrameSamples, 0.95),
+      cpuRenderMaxMs: max(cpuRenderFrameSamples),
+      endToEndMedianMs: median(endToEndFrameSamples),
+      endToEndP95Ms: percentile(endToEndFrameSamples, 0.95),
+      endToEndMaxMs: max(endToEndFrameSamples),
       decodedAssetEstimateBytes:
         entitySet.decodedAssetEstimateBytes ??
         entitySet.entities.length * scenario.sourceSize.width * scenario.sourceSize.height * 4,
@@ -1101,6 +1472,7 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
         ...sampleDetails.map((sample) => sample.peakResidentBytes),
       ),
       resources: latestSample.resources,
+      mediaCounts: entitySet.mediaCounts,
       activity: {
         ...medianActivity(sampleDetails.map((sample) => sample.activity)),
         ...getResourceCounterDelta(scenarioResourcesBefore, latestSample.resources),
@@ -1150,6 +1522,10 @@ function medianActivity(samples: readonly BenchActivityMetrics[]): BenchActivity
 
 function median(values: readonly number[]): number {
   return percentile(values, 0.5);
+}
+
+function max(values: readonly number[]): number {
+  return values.length === 0 ? 0 : Math.max(...values);
 }
 
 function percentile(values: readonly number[], p: number): number {

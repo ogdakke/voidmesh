@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 interface BenchRecord {
-  schemaVersion: 3;
+  schemaVersion: 4;
   createdAt: string;
   repo: {
     branch: string | null;
@@ -36,11 +36,25 @@ interface BenchSummary {
   label: string;
   shaderType: string;
   entityCount: number;
+  imageCount: number;
+  videoCount: number;
+  timingMode: string;
   frames: number;
   sampleCount: number;
   msPerFrame: number;
   cpuEncodeMsPerFrame: number;
   queueDrainMsPerFrame: number;
+  sourceUpdateMedianMs: number;
+  sourceUpdateP95Ms: number;
+  rafIntervalMedianMs: number;
+  rafIntervalP95Ms: number;
+  rafIntervalMaxMs: number;
+  cpuRenderMedianMs: number;
+  cpuRenderP95Ms: number;
+  cpuRenderMaxMs: number;
+  endToEndMedianMs: number;
+  endToEndP95Ms: number;
+  endToEndMaxMs: number;
   p95Ms: number;
   decodedAssetEstimateBytes: number;
   peakResidentBytes: number;
@@ -144,7 +158,7 @@ async function main(): Promise<void> {
       const rounds = extractRounds(payload);
       const results = rounds.at(-1)?.results ?? [];
       const record: BenchRecord = {
-        schemaVersion: 3,
+        schemaVersion: 4,
         createdAt,
         repo,
         run: {
@@ -427,16 +441,31 @@ function summarizeResults(results: unknown[]): BenchSummary[] {
     const processingTextures = (resources.processingTextures ?? {}) as Record<string, unknown>;
     const texturePool = (resources.texturePool ?? {}) as Record<string, unknown>;
     const activity = (result.activity ?? {}) as Record<string, unknown>;
+    const mediaCounts = (result.mediaCounts ?? {}) as Record<string, unknown>;
     return {
       id: String(result.id),
       label: String(result.label),
       shaderType: String(result.shaderType),
       entityCount: Number(result.entityCount),
+      imageCount: Number(mediaCounts.image ?? 0),
+      videoCount: Number(mediaCounts.video ?? 0),
+      timingMode: String(result.timingMode ?? "batched"),
       frames: Number(result.frames),
       sampleCount: Number(result.sampleCount ?? result.samples),
       msPerFrame: round(Number(result.msPerFrame)),
       cpuEncodeMsPerFrame: round(Number(result.cpuEncodeMsPerFrame)),
       queueDrainMsPerFrame: round(Number(result.queueDrainMsPerFrame)),
+      sourceUpdateMedianMs: round(Number(result.sourceUpdateMedianMs ?? 0)),
+      sourceUpdateP95Ms: round(Number(result.sourceUpdateP95Ms ?? 0)),
+      rafIntervalMedianMs: round(Number(result.rafIntervalMedianMs ?? 0)),
+      rafIntervalP95Ms: round(Number(result.rafIntervalP95Ms ?? 0)),
+      rafIntervalMaxMs: round(Number(result.rafIntervalMaxMs ?? 0)),
+      cpuRenderMedianMs: round(Number(result.cpuRenderMedianMs ?? 0)),
+      cpuRenderP95Ms: round(Number(result.cpuRenderP95Ms ?? 0)),
+      cpuRenderMaxMs: round(Number(result.cpuRenderMaxMs ?? 0)),
+      endToEndMedianMs: round(Number(result.endToEndMedianMs ?? 0)),
+      endToEndP95Ms: round(Number(result.endToEndP95Ms ?? 0)),
+      endToEndMaxMs: round(Number(result.endToEndMaxMs ?? 0)),
       p95Ms: round(Number(result.p95Ms)),
       decodedAssetEstimateBytes: Number(result.decodedAssetEstimateBytes ?? 0),
       peakResidentBytes: Number(result.peakResidentBytes ?? 0),
@@ -479,11 +508,25 @@ function summarizeRounds(rounds: readonly BenchRoundRecord[]): BenchSummary[] {
       label: first.label,
       shaderType: first.shaderType,
       entityCount: first.entityCount,
+      imageCount: first.imageCount,
+      videoCount: first.videoCount,
+      timingMode: first.timingMode,
       frames: first.frames,
       sampleCount: first.sampleCount,
       msPerFrame: round(median(summaries.map((item) => item.msPerFrame))),
       cpuEncodeMsPerFrame: round(median(summaries.map((item) => item.cpuEncodeMsPerFrame))),
       queueDrainMsPerFrame: round(median(summaries.map((item) => item.queueDrainMsPerFrame))),
+      sourceUpdateMedianMs: round(median(summaries.map((item) => item.sourceUpdateMedianMs))),
+      sourceUpdateP95Ms: round(median(summaries.map((item) => item.sourceUpdateP95Ms))),
+      rafIntervalMedianMs: round(median(summaries.map((item) => item.rafIntervalMedianMs))),
+      rafIntervalP95Ms: round(median(summaries.map((item) => item.rafIntervalP95Ms))),
+      rafIntervalMaxMs: round(median(summaries.map((item) => item.rafIntervalMaxMs))),
+      cpuRenderMedianMs: round(median(summaries.map((item) => item.cpuRenderMedianMs))),
+      cpuRenderP95Ms: round(median(summaries.map((item) => item.cpuRenderP95Ms))),
+      cpuRenderMaxMs: round(median(summaries.map((item) => item.cpuRenderMaxMs))),
+      endToEndMedianMs: round(median(summaries.map((item) => item.endToEndMedianMs))),
+      endToEndP95Ms: round(median(summaries.map((item) => item.endToEndP95Ms))),
+      endToEndMaxMs: round(median(summaries.map((item) => item.endToEndMaxMs))),
       p95Ms: round(median(summaries.map((item) => item.p95Ms))),
       decodedAssetEstimateBytes: median(summaries.map((item) => item.decodedAssetEstimateBytes)),
       peakResidentBytes: median(summaries.map((item) => item.peakResidentBytes)),
