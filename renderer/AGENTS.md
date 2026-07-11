@@ -5,7 +5,8 @@ WebGPU rendering and export pipelines. Turns engine state into pixels.
 ## Key Files
 
 - `canvas-renderer.ts` (~69KB) — Main renderer. WebGPU setup, entity textures, shader dispatch, composition, overlays.
-- `composition-pass.ts` + `composition-instanced.wgsl` — Final canvas composition. Adjacent regular-texture entities sharing the same texture use one instanced draw; external textures and disintegration retain their dedicated paths.
+- `composition-pass.ts` + `composition-instanced.wgsl` — Final canvas composition. Adjacent regular-texture entities sharing the same texture use instanced draws; large homogeneous overview scenes persist the full instance payload across viewport-only frames.
+- `entity-draw-item-preparer.ts` — Visibility/LOD preparation plus conservative admission of versioned full-scene batches for large homogeneous static-image scenes.
 - `processing-pipeline.ts` (~49KB) — Per-entity pre/post-processing: adjustments, blur, bloom, grain, chromatic aberration. Also provides action layer blur.
 - `entity-render-size.ts` — Selects quantized screen-space render tiers from projected physical pixels and derives the render-to-authored pixel scale; exports bypass preview LOD and retain scale 1.
 - `gpu-color-space.ts` — `detectGpuColorConfig()`. Probes Display P3 support at init, returns frozen `GpuColorConfig` (supportsP3, canvasFormat, canvasColorSpace, intermediateFormat, textureColorSpace).
@@ -72,12 +73,16 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 - Original videos stay on direct external-texture composition so playback and media controls remain continuous. Processed videos use screen-space output LOD, and small outputs shorten the bloom mip chain rather than pausing media.
 - Entity image export renders from native media sources at `originalSize`; it must not read back the current preview LOD texture.
 - Regular-texture composition packs entity transforms and visual flags into one reusable storage buffer. Batch only adjacent entities with the exact same `GPUTexture` so draw order remains unchanged; shader params need not match independently because processing is already baked into that texture.
+- A full-scene batch is admitted only for 16k+ static image entities sharing asset, authored/display size, shader type, and structurally equal params with at least 25% visible. Cache hits skip spatial queries and instance uploads; entity/geometry versions, LOD texture identity, or any normal composition write invalidate it.
+- Selection, debug mode, action-layer fade/blur, drag/drag-select, callouts, continuous shaders, and heterogeneous media must use normal preparation. The batch may submit offscreen instances after admission; hardware clipping keeps the pan path CPU-constant.
+- Full-scene fancy-delete snapshots borrow the representative texture. Defer removal of that texture owner until the next render so bulk deletion can snapshot non-representative entities safely.
 - External video textures retain per-entity uniforms and bind groups so direct `GPUExternalTexture` playback never copies into regular textures. Disintegration also retains its non-instanced composition path.
 - Grow the composition instance buffer geometrically and append disjoint ranges for each render phase in a frame. Do not restore per-entity GPU uniform buffers, bind groups, or temporary instance objects for regular textures.
 - Entity draw preparation reuses result arrays and composition-option scratch. Regular composition wrappers are weakly keyed by entity identity; do not restore per-frame object construction or string-keyed lookups to the pan/zoom path.
 - When every entity is selected, draw preparation treats visible entities as selected without hashing every ID; selection cardinality is sufficient because store selections contain only existing IDs.
 - `TexturePool` retains at most 64 MiB of idle transient textures across dimensions/usages. Release scratch after its final encoded use for ordered reuse, but apply destruction limits only in `commitSubmitted()` after `queue.submit()`.
 - Image source changes require a new asset revision. Entity removal releases its source-cache ownership without destroying textures still used by sibling instances.
+- Composition keeps the former hover uniform slot reserved for layout stability, but no hover state/effect is prepared. Do not add passive alpha hit testing to feed it.
 
 ## Shader Uniform Layout
 

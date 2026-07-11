@@ -194,6 +194,16 @@ describe("Animated media render scheduling", () => {
 
 describe("Desktop pointer interactions", () => {
   describe("Click to select", () => {
+    test("passive pointer movement does not hit-test entities", () => {
+      addEntity(100, 100);
+      const spatialQuery = vi.spyOn(canvasStore, "queryEntitiesInBounds");
+
+      gl.handlePointerMove({ x: 150, y: 150 });
+      gl.processInput();
+
+      expect(spatialQuery).not.toHaveBeenCalled();
+    });
+
     test("click on entity selects it", () => {
       const id = addEntity(100, 100);
       click(gl, { x: 150, y: 150 });

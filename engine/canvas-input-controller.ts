@@ -277,13 +277,6 @@ export class CanvasInputController {
       this.#dragSelectPendingUpdate = false;
     }
 
-    // Update hover state
-    if (!pointerDown) {
-      // TODO: this was too costly
-      // const hoveredId = this.findEntityAtPoint(worldPoint, state);
-      canvasStore.setHoveredEntity(null);
-    }
-
     // Handle dragging (skip if context menu is open or touch is handling drag directly)
     if (
       pointerDown &&

@@ -84,6 +84,8 @@ export class InfiniteCanvasRenderer {
 
   #entityDrawItemPreparer: EntityDrawItemPreparer | null = null;
   #entityTexturePipeline: EntityTexturePipeline | null = null;
+  readonly #protectedFullSceneTextureOwners = new Set<string>();
+  readonly #deferredEntityTextureRemovals = new Set<string>();
 
   // Export service for rendering entities to blobs/bitmaps
   #exportService: ExportService | null = null;
@@ -384,10 +386,16 @@ export class InfiniteCanvasRenderer {
       return;
     }
 
+    for (const entityId of this.#deferredEntityTextureRemovals) {
+      this.#entityTexturePipeline?.removeEntity(entityId);
+    }
+    this.#deferredEntityTextureRemovals.clear();
+    this.#protectedFullSceneTextureOwners.clear();
+
     const renderStart = performance.now();
     const frameDt = this.#lastFrameTime > 0 ? (renderStart - this.#lastFrameTime) / 1000 : 1 / 60;
     this.#lastFrameTime = renderStart;
-    const { entities, viewport, hoveredEntityId, selectedEntityIds, debugMode } = state;
+    const { entities, viewport, selectedEntityIds, debugMode } = state;
 
     // Update canvas size if needed (uses cached dimensions from ResizeObserver)
     const dpr = window.devicePixelRatio || 1;
@@ -434,20 +442,25 @@ export class InfiniteCanvasRenderer {
     const preparedEntityDrawItems = this.#entityDrawItemPreparer.prepare({
       entities,
       entitySpatialIndex: state.entitySpatialIndex,
+      entityVersion: state.entityVersion,
+      geometryVersion: state.geometryVersion,
       viewport,
       width,
       height,
       devicePixelRatio: dpr,
       encoder,
-      hoveredEntityId,
       selectedEntityIds,
       actionLayer: state.actionLayer,
       dragVisual: state.dragVisual,
+      dragSelectActive: state.dragSelectBounds !== null,
+      hasCanvasCallouts: state.canvasCallouts.length > 0,
       debugMode,
     });
-    const { entityDrawItems, actionLayerDrawItems } = preparedEntityDrawItems;
+    const { entityDrawItems, actionLayerDrawItems, fullSceneBatch } = preparedEntityDrawItems;
     let hasAnimatingContent = preparedEntityDrawItems.hasAnimatingContent;
-    this.#compositionPass.beginFrame(entityDrawItems.length + actionLayerDrawItems.length);
+    this.#compositionPass.beginFrame(
+      fullSceneBatch?.instanceCount ?? entityDrawItems.length + actionLayerDrawItems.length,
+    );
 
     const texture = this.#context.getCurrentTexture();
     // Skip render if swapchain texture is invalid
@@ -477,7 +490,13 @@ export class InfiniteCanvasRenderer {
         },
       ],
     });
-    this.#drawCompositionItems(entityPass, entityDrawItems, selectedEntityCount);
+    if (fullSceneBatch) {
+      if (!this.#compositionPass.drawFullSceneBatch(entityPass, fullSceneBatch)) {
+        throw new Error("Prepared full-scene composition batch was invalidated before drawing");
+      }
+    } else {
+      this.#drawCompositionItems(entityPass, entityDrawItems, selectedEntityCount);
+    }
     entityPass.end();
 
     // Evict label caches for deselected entities
@@ -599,7 +618,7 @@ export class InfiniteCanvasRenderer {
     // Record frame stats for performance overlay
     this.#lastRenderTime = performance.now() - renderStart;
     this.#lastEntityCount = entities.length;
-    this.#lastRenderedCount = entityDrawItems.length;
+    this.#lastRenderedCount = fullSceneBatch?.instanceCount ?? entityDrawItems.length;
 
     // Advance texture pool frame counter and cleanup stale textures
     this.#texturePool?.nextFrame();
@@ -647,7 +666,13 @@ export class InfiniteCanvasRenderer {
    * Remove cached resources for an entity
    */
   removeEntityTexture(entityId: string): void {
-    this.#entityTexturePipeline?.removeEntity(entityId);
+    if (!this.#deferredEntityTextureRemovals.has(entityId)) {
+      if (this.#protectedFullSceneTextureOwners.delete(entityId)) {
+        this.#deferredEntityTextureRemovals.add(entityId);
+      } else {
+        this.#entityTexturePipeline?.removeEntity(entityId);
+      }
+    }
     this.#compositionPass?.removeEntity(entityId);
 
     // Clear any errors for this entity
@@ -688,8 +713,14 @@ export class InfiniteCanvasRenderer {
   #createDisintegrationSnapshot(entity: ShaderCanvasEntity): GPUTexture | null {
     if (!this.#device) return null;
     const entityId = entity.id;
+    const fullSceneSource = this.#entityDrawItemPreparer?.getFullSceneSnapshotSource(entity);
+    if (fullSceneSource) {
+      this.#protectedFullSceneTextureOwners.add(fullSceneSource.ownerEntityId);
+    }
 
-    const renderedTexture = this.#entityTexturePipeline?.getProcessedEntityTexture(entityId);
+    const renderedTexture =
+      this.#entityTexturePipeline?.getProcessedEntityTexture(entityId) ??
+      (fullSceneSource?.kind === "processed" ? fullSceneSource.texture : null);
     if (renderedTexture) {
       const snapshotTexture = this.#device.createTexture({
         label: `Disintegration snapshot ${entityId}`,
@@ -706,7 +737,9 @@ export class InfiniteCanvasRenderer {
       return snapshotTexture;
     }
 
-    let sourceTexture = this.#entityTexturePipeline?.getSourceEntityTexture(entityId) ?? null;
+    let sourceTexture =
+      this.#entityTexturePipeline?.getSourceEntityTexture(entityId) ??
+      (fullSceneSource?.kind === "source" ? fullSceneSource.texture : null);
     if (!sourceTexture && entity.mediaSource.type === "video") {
       return this.#copyCurrentVideoFrameToTexture(
         entity,
@@ -911,6 +944,8 @@ export class InfiniteCanvasRenderer {
 
     // Clear entity errors
     this.#entityErrors.clear();
+    this.#protectedFullSceneTextureOwners.clear();
+    this.#deferredEntityTextureRemovals.clear();
 
     // Disconnect resize observer
     this.#resizeObserver?.disconnect();

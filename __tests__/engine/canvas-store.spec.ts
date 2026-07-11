@@ -67,6 +67,33 @@ describe("canvasStore entity versioning", () => {
 
     expect(canvasStore.getState().entityVersion).toBe(initialVersion + 3);
   });
+
+  test("exposes transform-cache versions without invalidating them for viewport or selection", () => {
+    const entity = createTestEntity({ id: "render-version-entity" });
+    canvasStore.addEntity(entity);
+    const initial = canvasStore.getRenderState();
+    const initialEntityVersion = initial.entityVersion;
+    const initialGeometryVersion = initial.geometryVersion;
+
+    canvasStore.panBy({ x: 20, y: 10 });
+    canvasStore.replaceSelection([entity.id]);
+    expect(canvasStore.getRenderState()).toMatchObject({
+      entityVersion: initialEntityVersion,
+      geometryVersion: initialGeometryVersion,
+    });
+
+    canvasStore.moveEntity(entity.id, { x: 5, y: -2 });
+    expect(canvasStore.getRenderState()).toMatchObject({
+      entityVersion: initialEntityVersion,
+      geometryVersion: initialGeometryVersion + 1,
+    });
+
+    canvasStore.updateEntity(entity.id, { rotation: 15 });
+    expect(canvasStore.getRenderState()).toMatchObject({
+      entityVersion: initialEntityVersion + 1,
+      geometryVersion: initialGeometryVersion + 1,
+    });
+  });
 });
 
 describe("canvasStore large selection access", () => {
@@ -502,6 +529,24 @@ describe("canvasStore.restoreWorkspace", () => {
 
     unsubscribeGeneral();
     unsubscribeViewport();
+  });
+
+  test("rejects duplicate IDs without replacing the current workspace", () => {
+    const existing = createTestEntity({ id: "existing" });
+    const first = createTestEntity({ id: "duplicate" });
+    const second = createTestEntity({ id: "duplicate" });
+    canvasStore.addEntity(existing);
+    const previousViewport = structuredClone(canvasStore.getViewport());
+
+    expect(() =>
+      canvasStore.restoreWorkspace([first, second], {
+        offset: { x: 100, y: 200 },
+        zoom: 0.5,
+      }),
+    ).toThrow('Cannot restore duplicate entity ID "duplicate"');
+
+    expect(canvasStore.getState().entities).toEqual(new Map([[existing.id, existing]]));
+    expect(canvasStore.getViewport()).toEqual(previousViewport);
   });
 });
 

@@ -91,9 +91,7 @@ describe("EntitySpatialIndex", () => {
     index.upsert(back);
     const ordered = [back, front];
 
-    expect(index.queryBounds({ x: -1, y: -1, width: 10, height: 10 }, [], ordered)).toEqual(
-      ordered,
-    );
+    expect(index.queryBounds({ x: -1, y: -1, width: 10, height: 10 }, [], ordered)).toBe(ordered);
 
     back.position = { x: 100, y: 100 };
     index.upsert(back);

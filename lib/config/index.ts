@@ -328,7 +328,7 @@ export const paramVisibilityRules: Partial<
 // Uniform buffer sizes (16-byte aligned)
 const GRID_UNIFORM_SIZE = 64; // resolution(8) + offset(8) + zoom(4) + gridSize(4) + dotSize(4) + padding(4) + bgColor(16) + dotColor(16)
 const VIEWPORT_UNIFORM_SIZE = 64; // matrix(48) + resolution(8) + padding(8)
-const ENTITY_UNIFORM_SIZE = 48; // position(8) + size(8) + rotation(4) + isHovered(4) + isSelected(4) + padding(8)
+const ENTITY_UNIFORM_SIZE = 48; // position(8) + size(8) + rotation(4) + reserved(4) + isSelected(4) + padding(8)
 const HALFTONE_UNIFORM_SIZE = 336; // Extended to match dithering for palette support
 // Dithering uniform buffer (extended for palette support):
 // Base (64 bytes) + paletteCount(4) + padding(12) + palette[16](256) = 336 bytes
@@ -502,6 +502,10 @@ export const config = {
     lodTransitionsPerFrame: 4,
     /** Maximum target pixels admitted per settled frame (one oversized item may progress). */
     lodTransitionPixelBudget: 2 * 1024 * 1024,
+    /** Minimum homogeneous static-image scene size worth caching as one persistent draw. */
+    fullSceneBatchMinEntityCount: 16_384,
+    /** Minimum visible fraction required when admitting or rebuilding a full-scene batch. */
+    fullSceneBatchMinVisibleFraction: 0.25,
     grid: {
       default: DEFAULT_GRID_CONFIG,
       dark: DEFAULT_GRID_CONFIG_DARK,

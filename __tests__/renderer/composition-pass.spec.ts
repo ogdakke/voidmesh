@@ -3,6 +3,7 @@ import { releaseImageAsset, retainImageAsset } from "#lib/media-assets.ts";
 import {
   CompositionPass,
   type CompositionDrawItem,
+  type FullSceneBatchKey,
   type PrepareCompositionItemOptions,
 } from "#renderer/composition-pass.ts";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
@@ -120,7 +121,69 @@ describe("CompositionPass instancing", () => {
     releaseImageEntity(second);
     releaseImageEntity(actionLayer);
   });
+
+  test("uploads a full-scene instance payload once across viewport-only frames", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const first = createTestEntity({ id: "full-scene-first", position: { x: 10, y: 20 } });
+    const second = cloneImageEntity(first, "full-scene-second", { x: 30, y: 40 });
+    const texture = createTexture();
+    const key = createFullSceneKey(texture, 2);
+
+    pass.prepareFullSceneBatch({ ...key, entities: [first, second] });
+    pass.beginFrame(2);
+    expect(pass.drawFullSceneBatch(createRenderPass(), key)).toBe(true);
+
+    pass.prepareFullSceneBatch({ ...key, entities: [first, second] });
+    pass.beginFrame(2);
+    const secondFramePass = createRenderPass();
+    expect(pass.drawFullSceneBatch(secondFramePass, key)).toBe(true);
+
+    expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
+    expect(secondFramePass.draw).toHaveBeenCalledWith(6, 2, 0, 0);
+    expect(first.textureDirty).toBe(false);
+    expect(second.textureDirty).toBe(false);
+
+    pass.destroy();
+    releaseImageEntity(first);
+    releaseImageEntity(second);
+  });
+
+  test("invalidates the full-scene payload after geometry or normal instance writes", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const first = createTestEntity({ id: "full-scene-rebuild-first" });
+    const second = cloneImageEntity(first, "full-scene-rebuild-second", { x: 20, y: 0 });
+    const texture = createTexture();
+    const key = createFullSceneKey(texture, 2);
+    const movedKey = { ...key, geometryVersion: 2 };
+
+    pass.prepareFullSceneBatch({ ...key, entities: [first, second] });
+    first.position.x = 5;
+    pass.prepareFullSceneBatch({ ...movedKey, entities: [first, second] });
+    expect(device.queue.writeBuffer).toHaveBeenCalledTimes(2);
+
+    pass.beginFrame(3);
+    pass.drawItems(createRenderPass(), [prepare(pass, first, texture)]);
+    expect(pass.hasFullSceneBatch(movedKey)).toBe(false);
+    expect(pass.drawFullSceneBatch(createRenderPass(), movedKey)).toBe(false);
+
+    pass.destroy();
+    releaseImageEntity(first);
+    releaseImageEntity(second);
+  });
 });
+
+function createFullSceneKey(texture: GPUTexture, instanceCount: number): FullSceneBatchKey {
+  return {
+    entityVersion: 1,
+    geometryVersion: 1,
+    renderWidth: 64,
+    renderHeight: 64,
+    texture,
+    instanceCount,
+  };
+}
 
 function createPass(device: GPUDevice): CompositionPass {
   return new CompositionPass({
@@ -139,7 +202,6 @@ function prepare(
   const options: PrepareCompositionItemOptions = {
     entity,
     source: { kind: "texture", texture },
-    isHovered: false,
     isSelected,
     debugMode: false,
     positionOffsetX: 0,

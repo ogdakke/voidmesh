@@ -11,8 +11,9 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `undo.ts` — Command pattern. `Command.create({ execute, undo, onEvict })`. `Undo` class with size limits and transaction grouping. Singleton: `undo`.
 - `media-loader.ts` — Loads/parses images, videos, GIFs, SVGs. Extracts palettes and frame rates.
 - `media-assets.ts` — Creates shared image assets and manages decoded-bitmap lifetime with explicit retain/release ownership.
+- `media-resources.ts` — Central exception-safe disposal for entity/detached media and video elements.
 - `app-loader.ts` — Controls the HTML loading screen. `setText()` updates status text, `dismiss()` hides with min-display guarantee.
-- `serialization/` — `.vdmsh` zip format with versioning and migrations. Encoding/compression runs in a Web Worker; large imports yield/report by bounded chunks, decode each repeated image path once, and avoid per-entity async/log/progress work for shared instances.
+- `serialization/` — `.vdmsh` zip format with versioning and migrations. Imports validate manifests/duplicate IDs, stage decoded ownership until adoption, yield in bounded chunks, and decode each repeated image path once.
 - `files/file-handle.ts` — File System Access API handle storage for in-place workspace saving (Chromium only).
 - `files/random-filename.ts` + `files/filename-words.ts` — Random filename generation for workspace files.
 - `palette-extraction/` — K-means clustering for color palettes.
@@ -35,6 +36,9 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - Hot-path bounds helpers accept caller-owned output objects; renderer culling must pass scratch `Bounds` instead of allocating one per entity.
 - Spatial queries reuse caller-owned result arrays. Preserve z-order for rendering/hit testing; disable sorting for membership-only consumers. Update the index whenever entity position, size, rotation, z-index, insertion, or removal changes.
 - Current-version deserialization reuses the unique objects produced by `JSON.parse`; recursively merge cloned defaults only for schema-mismatched documents that require compatibility filling.
+- Resource-producing async batches must await every sibling before unwinding fulfilled results. Use `disposeMediaSource()`/`disposeEntityMedia()`; do not close a shared image bitmap directly.
+- `Undo.clear()` evicts committed stacks and any active transaction. Workspace replacement relies on this to prevent late transaction commits from targeting imported colliding IDs.
+- GIF/video decode paths close decoders, frames, snapshots, and blob-backed elements on every exception path.
 
 ## Anti-Patterns
 

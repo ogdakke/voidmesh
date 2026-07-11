@@ -7,5 +7,7 @@ export type {
   DeserializeProgress,
   DeserializeResult,
   DeserializeStage,
+  DecodedWorkspace,
+  CommitDecodedWorkspace,
 } from "./types.ts";
 export { CURRENT_VERSION } from "./version.ts";

@@ -42,14 +42,18 @@ import {
   generatePaletteShortName,
 } from "#components/palette-preset/palette-presets.ts";
 import type { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
-import type { DeserializeOptions, DeserializeResult } from "#lib/serialization/types.ts";
+import type {
+  DecodedWorkspace,
+  DeserializeOptions,
+  DeserializeResult,
+} from "#lib/serialization/types.ts";
 import { type ImageExportOptions, getImageExtension } from "#renderer/export-formats.ts";
 import { canvasStore, disintegrationController, gameLoop, type CanvasEntityUpdate } from "#engine";
 
 import { toastManager } from "#components/ui/toast/toast-manager.ts";
 import { hints } from "#components/ui/hint/hint-manager.ts";
 import { extractOriginalPalette, cloneMediaSource } from "#lib/media-loader.ts";
-import { releaseImageAsset } from "#lib/media-assets.ts";
+import { disposeEntityMedia, disposeMediaSource } from "#lib/media-resources.ts";
 import { Command, undo } from "#lib/undo.ts";
 import {
   createDuplicatePlaybackState,
@@ -139,24 +143,7 @@ function tryCleanupEntityResources(entity: ShaderCanvasEntity, ownerToken: numbe
 }
 
 function destroyEntityMediaResources(entity: ShaderCanvasEntity): void {
-  if (entity.mediaSource.type === MediaType.video) {
-    const video = entity.mediaSource.videoElement;
-    const videoSrc = video.src;
-    video.pause();
-    video.src = "";
-    video.load();
-    URL.revokeObjectURL(videoSrc);
-    entity.imageBitmap.close();
-  } else if (isGifEntity(entity)) {
-    for (const frame of entity.mediaSource.frames) {
-      frame.bitmap.close();
-    }
-  } else if (entity.mediaSource.type === MediaType.svg) {
-    entity.imageBitmap.close();
-  } else if (entity.mediaSource.type === MediaType.image) {
-    releaseImageAsset(entity.mediaSource.asset);
-  }
-
+  disposeEntityMedia(entity);
   resourceOwners.delete(entity.id);
 }
 
@@ -603,7 +590,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         extractOriginalPalette(entity.imageBitmap, colorSpaceRef.current)
           .then((palette) => {
             const currentEntity = canvasStore.getState().entities.get(id);
-            if (!currentEntity) return; // Entity was deleted
+            if (currentEntity?.mediaSource !== newEntity.mediaSource) return;
 
             canvasStore.updateEntity(id, { originalPalette: palette });
 
@@ -855,8 +842,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
     analytics.track("entity.duplicated", { entity_count: selected.length });
 
-    // Clone all media sources in parallel (async: creates independent video elements, bitmaps, etc.)
-    const clones = await Promise.all(
+    // Wait for every clone so a sibling failure cannot strand already-created media.
+    const cloneResults = await Promise.allSettled(
       selected.map(async (entity) => {
         const { mediaSource, imageBitmap } = await cloneMediaSource(
           entity.mediaSource,
@@ -865,6 +852,27 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         return { entity, mediaSource, imageBitmap };
       }),
     );
+    const clones: Array<{
+      entity: ShaderCanvasEntity;
+      mediaSource: ShaderCanvasEntity["mediaSource"];
+      imageBitmap: ImageBitmap;
+    }> = [];
+    let cloneFailed = false;
+    let cloneFailure: unknown;
+    for (const result of cloneResults) {
+      if (result.status === "fulfilled") {
+        clones.push(result.value);
+      } else if (!cloneFailed) {
+        cloneFailed = true;
+        cloneFailure = result.reason;
+      }
+    }
+    if (cloneFailed) {
+      for (const clone of clones) {
+        disposeMediaSource(clone.mediaSource, clone.imageBitmap);
+      }
+      throw cloneFailure;
+    }
 
     const newIds: string[] = [];
     const duplicateBatch: ShaderCanvasEntity[] = [];
@@ -895,10 +903,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         originalSize: { ...entity.originalSize },
         mediaSource: mediaSource as any,
         imageBitmap,
-        shaderParams: structuredClone(entity.shaderParams),
-        originalPalette: entity.originalPalette
-          ? structuredClone(entity.originalPalette)
-          : undefined,
+        // Nested shader state is replaced immutably and can stay shared. Keep the
+        // top level independent because renderer time controls mutate it in place.
+        shaderParams: { ...entity.shaderParams },
+        originalPalette: entity.originalPalette,
         playback,
         texture: undefined,
         textureDirty: true,
@@ -1986,7 +1994,45 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     options?: DeserializeOptions,
   ): Promise<DeserializeResult> => {
     const { deserialize, getMaxCounters } = await import("#lib/serialization/index.ts");
-    const result = await deserialize(source, options);
+    const result = await deserialize(
+      source,
+      (workspace: DecodedWorkspace) => {
+        const previousEntities = Array.from(canvasStore.getState().entities.values());
+
+        // Evict commands while the old IDs are still the live store entries. This
+        // prevents an imported entity with the same ID from inheriting cleanup or
+        // undo behavior that belongs to the previous workspace.
+        undo.clear();
+        disintegrationController.clear();
+        for (const entity of previousEntities) {
+          rendererRef.current?.cancelDisintegration(entity.id);
+          rendererRef.current?.removeEntityTexture(entity.id);
+        }
+
+        const restoredEntities = workspace.adopt((entities, viewport) => {
+          canvasStore.restoreWorkspace(entities, viewport);
+        });
+
+        // The new workspace owns its decoded media now. Release each live owner
+        // from the previous workspace exactly once, then publish staged palettes.
+        for (const entity of previousEntities) destroyEntityMediaResources(entity);
+        paletteStore.mergePalettes(workspace.palettes);
+
+        for (const entity of restoredEntities) {
+          if (!entity.playback?.isPlaying) continue;
+          if (entity.mediaSource.type === MediaType.video) {
+            void canvasStore.playVideo(entity.id).catch((error) => logger.error(error));
+          } else if (entity.mediaSource.type === MediaType.gif) {
+            canvasStore.playGif(entity.id);
+          }
+        }
+      },
+      options,
+    );
+
+    // A non-empty manifest whose entities all failed decoding never reached the
+    // commit callback, so the existing workspace and its counters stay authoritative.
+    if (!result.success && result.entityCount === 0) return result;
 
     // Update ID counters to avoid collisions with future entities
     const { maxId, maxZIndex } = getMaxCounters(result);
@@ -1996,25 +2042,25 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
     // Re-extract original palettes for entities that don't have them (legacy v3 files).
     // Repeated image instances share one bitmap, so extract once and apply one store batch.
-    const missingPaletteEntityIds = new Map<ImageBitmap, string[]>();
+    const missingPaletteEntities = new Map<ImageBitmap, ShaderCanvasEntity[]>();
     for (const entity of canvasStore.getState().entities.values()) {
       if (entity.originalPalette) continue;
-      let entityIds = missingPaletteEntityIds.get(entity.imageBitmap);
-      if (!entityIds) {
-        entityIds = [];
-        missingPaletteEntityIds.set(entity.imageBitmap, entityIds);
+      let entities = missingPaletteEntities.get(entity.imageBitmap);
+      if (!entities) {
+        entities = [];
+        missingPaletteEntities.set(entity.imageBitmap, entities);
       }
-      entityIds.push(entity.id);
+      entities.push(entity);
     }
-    for (const [bitmap, entityIds] of missingPaletteEntityIds) {
+    for (const [bitmap, entities] of missingPaletteEntities) {
       extractOriginalPalette(bitmap, colorSpaceRef.current)
         .then((palette) => {
           const updates: CanvasEntityUpdate[] = [];
           const currentEntities = canvasStore.getState().entities;
-          for (const entityId of entityIds) {
-            const current = currentEntities.get(entityId);
-            if (current && !current.originalPalette) {
-              updates.push({ id: entityId, updates: { originalPalette: palette } });
+          for (const entity of entities) {
+            const current = currentEntities.get(entity.id);
+            if (current?.mediaSource === entity.mediaSource && !current.originalPalette) {
+              updates.push({ id: entity.id, updates: { originalPalette: palette } });
             }
           }
           canvasStore.updateEntities(updates);

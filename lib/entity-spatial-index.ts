@@ -95,16 +95,34 @@ export class EntitySpatialIndex {
     this.#overallBoundsDirty = false;
   }
 
+  queryBounds(bounds: Bounds, output: ShaderCanvasEntity[]): ShaderCanvasEntity[];
+  queryBounds(
+    bounds: Bounds,
+    output: ShaderCanvasEntity[],
+    orderedEntities: undefined,
+    preserveZOrder?: boolean,
+  ): ShaderCanvasEntity[];
+  queryBounds(
+    bounds: Bounds,
+    output: ShaderCanvasEntity[],
+    orderedEntities: readonly ShaderCanvasEntity[],
+    preserveZOrder?: true,
+  ): readonly ShaderCanvasEntity[];
+  queryBounds(
+    bounds: Bounds,
+    output: ShaderCanvasEntity[],
+    orderedEntities: readonly ShaderCanvasEntity[],
+    preserveZOrder: false,
+  ): ShaderCanvasEntity[];
   queryBounds(
     bounds: Bounds,
     output: ShaderCanvasEntity[],
     orderedEntities?: readonly ShaderCanvasEntity[],
     preserveZOrder = true,
-  ): ShaderCanvasEntity[] {
+  ): readonly ShaderCanvasEntity[] {
     output.length = 0;
     if (preserveZOrder && orderedEntities && this.#containsEveryEntity(bounds)) {
-      for (const entity of orderedEntities) output.push(entity);
-      return output;
+      return orderedEntities;
     }
     for (const level of this.#levels.values()) this.#queryLevel(level, bounds, output);
     if (preserveZOrder && !isEntityZOrdered(output)) output.sort(compareEntityZIndex);

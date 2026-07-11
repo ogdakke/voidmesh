@@ -1,4 +1,5 @@
 import { logger } from "../client.logger.ts";
+import { disposeVideoElement } from "../media-resources.ts";
 import { wait } from "../util.ts";
 
 const VIDEO_SEEK_TIMEOUT_MS = 1500;
@@ -130,38 +131,46 @@ export async function bytesToVideoElement(
 }> {
   const blob = new Blob([bytes.slice()], { type: mimeType });
   let video = createArchiveVideoElement(blob);
-  await waitForVideoMetadata(video);
-  let seekApplied = true;
+  let initialFrame: ImageBitmap | null = null;
 
-  // Seek to the requested time before capturing
-  if (seekTime > 0) {
-    const seekResult = await seekVideoWithTimeout(video, seekTime, "initial frame");
-    if (seekResult === "timeout") {
-      seekApplied = false;
-      logger.debug("[workspace-import] rebuilding video element after timed out seek", {
-        seekTime,
-        currentTime: video.currentTime,
-      });
-      cleanupVideoElement(video);
-      video = createArchiveVideoElement(blob);
-      await waitForVideoMetadata(video);
+  try {
+    await waitForVideoMetadata(video);
+    let seekApplied = true;
+
+    // Seek to the requested time before capturing
+    if (seekTime > 0) {
+      const seekResult = await seekVideoWithTimeout(video, seekTime, "initial frame");
+      if (seekResult === "timeout") {
+        seekApplied = false;
+        logger.debug("[workspace-import] rebuilding video element after timed out seek", {
+          seekTime,
+          currentTime: video.currentTime,
+        });
+        disposeVideoElement(video);
+        video = createArchiveVideoElement(blob);
+        await waitForVideoMetadata(video);
+      }
     }
+
+    // Capture frame using play-then-capture for reliable decode (fixes iOS blank frames)
+    const width = video.videoWidth;
+    const height = video.videoHeight;
+    initialFrame = await captureVideoFrame(video, width, height);
+
+    return {
+      videoElement: video,
+      initialFrame,
+      width,
+      height,
+      duration: video.duration,
+      currentTime: video.currentTime,
+      seekApplied,
+    };
+  } catch (error) {
+    initialFrame?.close();
+    disposeVideoElement(video);
+    throw error;
   }
-
-  // Capture frame using play-then-capture for reliable decode (fixes iOS blank frames)
-  const width = video.videoWidth;
-  const height = video.videoHeight;
-  const initialFrame = await captureVideoFrame(video, width, height);
-
-  return {
-    videoElement: video,
-    initialFrame,
-    width,
-    height,
-    duration: video.duration,
-    currentTime: video.currentTime,
-    seekApplied,
-  };
 }
 
 async function seekVideoWithTimeout(
@@ -217,14 +226,4 @@ async function waitForVideoMetadata(video: HTMLVideoElement): Promise<void> {
     video.onloadedmetadata = () => resolve();
     video.onerror = () => reject(new Error("Failed to load video from archive"));
   });
-}
-
-function cleanupVideoElement(video: HTMLVideoElement): void {
-  const src = video.src;
-  video.pause();
-  video.src = "";
-  video.load();
-  if (src.startsWith("blob:")) {
-    URL.revokeObjectURL(src);
-  }
 }

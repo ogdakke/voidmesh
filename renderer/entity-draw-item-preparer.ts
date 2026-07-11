@@ -2,10 +2,11 @@ import { config } from "#config";
 import type { ActionLayerRenderState, DragVisualRenderState } from "#engine";
 import { getViewportWorldBounds } from "#lib/canvas-math.ts";
 import type { EntitySpatialIndex } from "#lib/entity-spatial-index.ts";
-import type { Bounds, ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
+import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import type {
   CompositionDrawItem,
   CompositionPass,
+  FullSceneBatchKey,
   PrepareCompositionItemOptions,
 } from "./composition-pass.ts";
 import type { EntityTexturePipeline } from "./entity-texture-pipeline.ts";
@@ -19,22 +20,32 @@ interface EntityDrawItemPreparerOptions {
 interface PrepareEntityDrawItemsOptions {
   entities: ShaderCanvasEntity[];
   entitySpatialIndex: EntitySpatialIndex;
+  entityVersion: number;
+  geometryVersion: number;
   viewport: Viewport;
   width: number;
   height: number;
   devicePixelRatio: number;
   encoder: GPUCommandEncoder;
-  hoveredEntityId: string | null;
   selectedEntityIds: ReadonlySet<string>;
   actionLayer: ActionLayerRenderState;
   dragVisual: DragVisualRenderState;
+  dragSelectActive: boolean;
+  hasCanvasCallouts: boolean;
   debugMode: boolean;
 }
 
 export interface PreparedEntityDrawItems {
   entityDrawItems: CompositionDrawItem[];
   actionLayerDrawItems: CompositionDrawItem[];
+  fullSceneBatch: FullSceneBatchKey | null;
   hasAnimatingContent: boolean;
+}
+
+export interface FullSceneSnapshotSource {
+  kind: "processed" | "source";
+  texture: GPUTexture;
+  ownerEntityId: string;
 }
 
 export class EntityDrawItemPreparer {
@@ -49,8 +60,18 @@ export class EntityDrawItemPreparer {
   readonly #prepared: PreparedEntityDrawItems = {
     entityDrawItems: this.#entityDrawItems,
     actionLayerDrawItems: this.#actionLayerDrawItems,
+    fullSceneBatch: null,
     hasAnimatingContent: false,
   };
+  #fullSceneBatchKey: FullSceneBatchKey | null = null;
+  #homogeneousEntityVersion = -1;
+  #homogeneousEntities: readonly ShaderCanvasEntity[] | null = null;
+  #homogeneousRepresentative: ShaderCanvasEntity | null = null;
+  #snapshotRepresentative: ShaderCanvasEntity | null = null;
+  #snapshotEntityVersion = -1;
+  #snapshotRenderWidth = 0;
+  #snapshotRenderHeight = 0;
+  #fullSceneAdmissionQueried = false;
   #compositionOptions: PrepareCompositionItemOptions | null = null;
 
   constructor(options: EntityDrawItemPreparerOptions) {
@@ -67,7 +88,6 @@ export class EntityDrawItemPreparer {
       height,
       devicePixelRatio,
       encoder,
-      hoveredEntityId,
       selectedEntityIds,
       actionLayer,
       dragVisual,
@@ -78,7 +98,20 @@ export class EntityDrawItemPreparer {
     const actionLayerDrawItems = this.#actionLayerDrawItems;
     entityDrawItems.length = 0;
     actionLayerDrawItems.length = 0;
+    if (this.#snapshotEntityVersion !== options.entityVersion) {
+      this.#snapshotRepresentative = null;
+      this.#snapshotEntityVersion = options.entityVersion;
+    }
+    this.#prepared.fullSceneBatch = null;
+    this.#fullSceneAdmissionQueried = false;
     let hasAnimatingContent = false;
+
+    const fullSceneBatch = this.#prepareFullSceneBatch(options);
+    if (fullSceneBatch) {
+      this.#prepared.fullSceneBatch = fullSceneBatch;
+      this.#prepared.hasAnimatingContent = false;
+      return this.#prepared;
+    }
 
     let actionLayerOffsetX = 0;
     let actionLayerOffsetY = 0;
@@ -97,11 +130,9 @@ export class EntityDrawItemPreparer {
       this.#viewportBounds,
     );
 
-    const visibleEntities = entitySpatialIndex.queryBounds(
-      viewportBounds,
-      this.#visibleEntities,
-      entities,
-    );
+    const visibleEntities = this.#fullSceneAdmissionQueried
+      ? this.#visibleEntities
+      : entitySpatialIndex.queryBounds(viewportBounds, this.#visibleEntities, entities);
     const allEntitiesSelected = entities.length > 0 && selectedEntityIds.size === entities.length;
     let previousSizedEntity: ShaderCanvasEntity | null = null;
     let previousDesiredWidth = 0;
@@ -154,8 +185,7 @@ export class EntityDrawItemPreparer {
       // Clear dirty flag
       entity.textureDirty = false;
 
-      // Determine if this entity is hovered or selected
-      const isHovered = entity.id === hoveredEntityId;
+      // Determine whether this entity is selected.
       const isSelected = allEntitiesSelected || selectedEntityIds.has(entity.id);
 
       // Action layer entities are drawn AFTER blur (not in main pass) to avoid halo
@@ -169,7 +199,6 @@ export class EntityDrawItemPreparer {
         compositionOptions = {
           entity,
           source: compositionSource,
-          isHovered,
           isSelected,
           debugMode,
           positionOffsetX,
@@ -180,7 +209,6 @@ export class EntityDrawItemPreparer {
       } else {
         compositionOptions.entity = entity;
         compositionOptions.source = compositionSource;
-        compositionOptions.isHovered = isHovered;
         compositionOptions.isSelected = isSelected;
         compositionOptions.debugMode = debugMode;
         compositionOptions.positionOffsetX = positionOffsetX;
@@ -199,4 +227,222 @@ export class EntityDrawItemPreparer {
     this.#prepared.hasAnimatingContent = hasAnimatingContent;
     return this.#prepared;
   }
+
+  getFullSceneSnapshotSource(entity: ShaderCanvasEntity): FullSceneSnapshotSource | null {
+    const representative = this.#snapshotRepresentative;
+    if (!representative || !isFullSceneEquivalent(entity, representative)) return null;
+    const source = this.#texturePipeline.getReusableStaticCompositionSource(
+      representative,
+      { width: this.#snapshotRenderWidth, height: this.#snapshotRenderHeight },
+      false,
+    );
+    if (source?.kind !== "texture") return null;
+    return {
+      kind: representative.shaderParams.showOriginal ? "source" : "processed",
+      texture: source.texture,
+      ownerEntityId: representative.id,
+    };
+  }
+
+  #prepareFullSceneBatch(options: PrepareEntityDrawItemsOptions): FullSceneBatchKey | null {
+    const {
+      entities,
+      entitySpatialIndex,
+      entityVersion,
+      geometryVersion,
+      viewport,
+      width,
+      height,
+      devicePixelRatio,
+      encoder,
+      selectedEntityIds,
+      actionLayer,
+      dragVisual,
+      dragSelectActive,
+      hasCanvasCallouts,
+      debugMode,
+    } = options;
+    if (
+      entities.length < config.rendering.fullSceneBatchMinEntityCount ||
+      selectedEntityIds.size > 0 ||
+      actionLayer.active ||
+      actionLayer.blurIntensity > 0.01 ||
+      dragVisual.active ||
+      dragSelectActive ||
+      hasCanvasCallouts ||
+      debugMode
+    ) {
+      return null;
+    }
+
+    const representative = this.#getHomogeneousRepresentative(entities, entityVersion);
+    if (!representative || this.#texturePipeline.needsContinuousRenderForEntity(representative)) {
+      return null;
+    }
+
+    const desiredRenderSize = getEntityRenderSize(
+      representative,
+      viewport,
+      devicePixelRatio,
+      this.#desiredRenderSize,
+    );
+    let renderWidth = desiredRenderSize.width;
+    let renderHeight = desiredRenderSize.height;
+    let compositionSource = this.#texturePipeline.getReusableStaticCompositionSource(
+      representative,
+      desiredRenderSize,
+      false,
+    );
+    if (!compositionSource) {
+      const renderSize = this.#texturePipeline.resolveRenderSize(
+        representative,
+        desiredRenderSize,
+        this.#resolvedRenderSize,
+      );
+      if (!renderSize) return null;
+      renderWidth = renderSize.width;
+      renderHeight = renderSize.height;
+      compositionSource = this.#texturePipeline.renderEntityToTexture(
+        representative,
+        encoder,
+        renderSize,
+      );
+    }
+    if (compositionSource?.kind !== "texture") return null;
+    representative.textureDirty = false;
+
+    const key = this.#fullSceneBatchKey ?? {
+      entityVersion,
+      geometryVersion,
+      renderWidth,
+      renderHeight,
+      texture: compositionSource.texture,
+      instanceCount: entities.length,
+    };
+    this.#fullSceneBatchKey = key;
+    key.entityVersion = entityVersion;
+    key.geometryVersion = geometryVersion;
+    key.renderWidth = renderWidth;
+    key.renderHeight = renderHeight;
+    key.texture = compositionSource.texture;
+    key.instanceCount = entities.length;
+    if (this.#compositionPass.hasFullSceneBatch(key)) {
+      this.#rememberSnapshotSource(representative, entityVersion, renderWidth, renderHeight);
+      return key;
+    }
+
+    const viewportBounds = getViewportWorldBounds(
+      viewport,
+      width,
+      height,
+      config.canvas.cullingBufferFraction,
+      this.#viewportBounds,
+    );
+    const visibleEntities = entitySpatialIndex.queryBounds(
+      viewportBounds,
+      this.#visibleEntities,
+      entities,
+    );
+    this.#fullSceneAdmissionQueried = true;
+    if (
+      visibleEntities.length / entities.length <
+      config.rendering.fullSceneBatchMinVisibleFraction
+    ) {
+      return null;
+    }
+
+    this.#compositionPass.prepareFullSceneBatch({ ...key, entities });
+    this.#rememberSnapshotSource(representative, entityVersion, renderWidth, renderHeight);
+    return key;
+  }
+
+  #rememberSnapshotSource(
+    representative: ShaderCanvasEntity,
+    entityVersion: number,
+    renderWidth: number,
+    renderHeight: number,
+  ): void {
+    this.#snapshotRepresentative = representative;
+    this.#snapshotEntityVersion = entityVersion;
+    this.#snapshotRenderWidth = renderWidth;
+    this.#snapshotRenderHeight = renderHeight;
+  }
+
+  #getHomogeneousRepresentative(
+    entities: readonly ShaderCanvasEntity[],
+    entityVersion: number,
+  ): ShaderCanvasEntity | null {
+    if (
+      this.#homogeneousEntityVersion === entityVersion &&
+      this.#homogeneousEntities === entities
+    ) {
+      return this.#homogeneousRepresentative;
+    }
+    this.#homogeneousEntityVersion = entityVersion;
+    this.#homogeneousEntities = entities;
+    this.#homogeneousRepresentative = null;
+
+    const representative = entities[0];
+    if (!representative || representative.mediaSource.type !== MediaType.image) return null;
+    const asset = representative.mediaSource.asset;
+    for (let index = 1; index < entities.length; index++) {
+      const entity = entities[index]!;
+      if (!isFullSceneEquivalent(entity, representative, asset)) {
+        return null;
+      }
+    }
+
+    this.#homogeneousRepresentative = representative;
+    return representative;
+  }
+}
+
+function isFullSceneEquivalent(
+  entity: ShaderCanvasEntity,
+  representative: ShaderCanvasEntity,
+  representativeAsset = representative.mediaSource.type === MediaType.image
+    ? representative.mediaSource.asset
+    : null,
+): boolean {
+  return (
+    representativeAsset !== null &&
+    entity.mediaSource.type === MediaType.image &&
+    entity.mediaSource.asset === representativeAsset &&
+    entity.shaderType === representative.shaderType &&
+    entity.originalSize.width === representative.originalSize.width &&
+    entity.originalSize.height === representative.originalSize.height &&
+    entity.size.width === representative.size.width &&
+    entity.size.height === representative.size.height &&
+    structurallyEqual(entity.shaderParams, representative.shaderParams)
+  );
+}
+
+function structurallyEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
+
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    for (let index = 0; index < a.length; index++) {
+      if (!structurallyEqual(a[index], b[index])) return false;
+    }
+    return true;
+  }
+  if (Array.isArray(b)) return false;
+
+  const aRecord = a as Record<string, unknown>;
+  const bRecord = b as Record<string, unknown>;
+  let aKeyCount = 0;
+  let bKeyCount = 0;
+  for (const key in aRecord) {
+    if (!Object.hasOwn(aRecord, key)) continue;
+    aKeyCount++;
+    if (!Object.hasOwn(bRecord, key) || !structurallyEqual(aRecord[key], bRecord[key])) {
+      return false;
+    }
+  }
+  for (const key in bRecord) {
+    if (Object.hasOwn(bRecord, key)) bKeyCount++;
+  }
+  return aKeyCount === bKeyCount;
 }

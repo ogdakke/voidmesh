@@ -20,7 +20,7 @@ Canvas state management and input processing. This is the "model + controller" l
 - `CanvasState` uses version counters (`version`, `entityVersion`, `geometryVersion`, `viewportVersion`, `selectionVersion`, `playbackVersion`, `dragVersion`) for selective cache invalidation and React subscriptions. Imperative moves increment `geometryVersion` without notifying React.
 - Snapshot types (`ViewportSnapshot`, `SelectionSnapshot`, `PlaybackSnapshot`, `DragSnapshot`, `ActionLayerSnapshot`) isolate subscription scopes — sidebar components don't re-render on viewport pan.
 - Dirty flags (`viewportDirty`, `entitiesDirty`, `selectionDirty`) tell the renderer what needs redrawing.
-- `RenderState` is a stable mutable frame view consumed synchronously by `InfiniteCanvasRenderer.render()`; its sorted entity array is rebuilt only when `entityVersion` changes, never for selection-only changes.
+- `RenderState` is a stable mutable frame view consumed synchronously by `InfiniteCanvasRenderer.render()`; it exposes `entityVersion`/`geometryVersion` for renderer caches, and its sorted entity array is rebuilt only when `entityVersion` changes.
 - `CanvasStore` owns the incremental `EntitySpatialIndex` shared by renderer visibility, point hit testing, and drag selection. Every geometry mutation must upsert or remove its entity from the index.
 - `CanvasStore.hasRenderChanges()` checks dirty state without materializing or mutating render state.
 
@@ -28,7 +28,7 @@ Canvas state management and input processing. This is the "model + controller" l
 
 - State mutated imperatively through `CanvasStore` methods, then `notify()` triggers React re-renders via the appropriate version counter.
 - Use `CanvasStore.addEntities()` for bulk insertion so large imports/duplicates produce one version update and subscriber notification.
-- Use `CanvasStore.restoreWorkspace()` after a complete workspace decode. It replaces entities, viewport, and spatial state with one notification and one scene-level dirty flag; do not populate `entitiesDirty` with every restored ID.
+- Use `CanvasStore.restoreWorkspace()` after a complete workspace decode. It builds and validates the next entity map/spatial index before swapping them, rejects duplicate IDs, then publishes one notification and one scene-level dirty flag; do not populate `entitiesDirty` with every restored ID.
 - Use `CanvasStore.updateEntities()` for multi-selection mutations. It applies every replacement/dirty ID before one version bump, subscriber notification, and aggregate debug log.
 - Use `CanvasStore.removeEntities()` for bulk deletion. It deletes maps/index entries, compacts the ordered ID array once, rebuilds selection once, and emits one notification; never loop over `removeEntity()` for a selection.
 - Use `CanvasStore.selectAll()` for whole-canvas selection; it builds the selected-ID set directly from the ordered IDs without an intermediate array or redundant membership checks.
@@ -51,6 +51,7 @@ Canvas state management and input processing. This is the "model + controller" l
 - `notifyViewportChange()` increments only `viewportVersion`. `notifySelectionChange()` increments `selectionVersion` + `version` + `playbackVersion`.
 - Entity membership, reference, effect, or playback-classification changes must increment `entityVersion`; selection and UI-only changes must not.
 - Hot-path selection logs contain counts plus bounded first/last IDs. Never join or serialize an unbounded selection into a log message.
+- Passive pointer movement does not perform entity or alpha hit testing. Keep hit testing tied to explicit click/touch/drag interactions until a bounded hover effect exists.
 
 ## Anti-Patterns
 

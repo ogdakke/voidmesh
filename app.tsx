@@ -17,7 +17,6 @@ import { PostHogProvider, usePostHog } from "@posthog/react";
 import type { PostHogConfig } from "posthog-js";
 import { analytics } from "#lib/analytics.ts";
 import { PostHogAnalyticsProvider } from "#lib/analytics-posthog.ts";
-import { Agentation } from "agentation";
 
 import "./styles/app.css";
 
@@ -104,7 +103,7 @@ ReactDOM.createRoot(document.getElementById("root")!, {
         </KeybindProvider>
       </NuqsAdapter>
     </AnalyticsProvider>
-    {import.meta.env.DEV && <Agentation />}
+    {/*{import.meta.env.DEV && <Agentation />}*/}
   </React.StrictMode>,
 );
 

@@ -1,4 +1,3 @@
-import { config } from "#config";
 import { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
 import {
   DitheringKind,
@@ -9,13 +8,24 @@ import {
   Shape,
   type ShaderCanvasEntity,
   type MediaImageAsset,
+  type MediaSourceVideo,
+  type PlaybackState,
   type ShaderParams,
   type Size,
   type Viewport,
 } from "#types/canvas.ts";
 import type { RenderState } from "../engine/canvas-store.ts";
-import { createImageAsset } from "#lib/media-assets.ts";
+import { createImageAsset, releaseImageAsset } from "#lib/media-assets.ts";
 import { EntitySpatialIndex } from "#lib/entity-spatial-index.ts";
+import {
+  createBatchedBenchResources,
+  disposeBenchEntities,
+  disposeBenchResources,
+  getBenchEntityShaderParams,
+  resolveBenchShaderParams,
+  retainBenchImageMedia,
+  type ResolvedBenchShaderParams,
+} from "./render-bench-fixtures.ts";
 import {
   MANY_ENTITY_SCENARIOS,
   estimateDecodedAssetBytes,
@@ -540,40 +550,10 @@ function markVisualComplete(result: VisualCaptureResult): void {
   document.documentElement.dataset.benchVisualId = result.id;
 }
 
-function cloneParams(overrides: Partial<ShaderParams>): ShaderParams {
-  return deepMergeShaderParams(structuredClone(config.defaults.shaderParams), overrides);
-}
-
 function queryRequired<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
   if (!element) throw new Error(`Benchmark DOM is missing ${selector}`);
   return element;
-}
-
-function deepMergeShaderParams(base: ShaderParams, overrides: Partial<ShaderParams>): ShaderParams {
-  deepMergeRecord(base as unknown as Record<string, unknown>, overrides as Record<string, unknown>);
-  return base;
-}
-
-function deepMergeRecord(
-  base: Record<string, unknown>,
-  overrides: Record<string, unknown>,
-): Record<string, unknown> {
-  for (const [key, value] of Object.entries(overrides)) {
-    if (
-      value !== null &&
-      typeof value === "object" &&
-      !Array.isArray(value) &&
-      typeof base[key] === "object" &&
-      base[key] !== null &&
-      !Array.isArray(base[key])
-    ) {
-      deepMergeRecord(base[key] as Record<string, unknown>, value as Record<string, unknown>);
-    } else {
-      base[key] = value;
-    }
-  }
-  return base;
 }
 
 async function getRenderer(): Promise<InfiniteCanvasRenderer> {
@@ -717,6 +697,15 @@ async function createSyntheticVideo(
   video.autoplay = true;
   video.srcObject = stream;
 
+  let cleanedUp = false;
+  const cleanup = (): void => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    video.pause();
+    for (const track of stream.getTracks()) track.stop();
+    video.srcObject = null;
+  };
+
   const drawFrame = (frameIndex: number): void => {
     const t = frameIndex / 30;
     ctx.fillStyle = `hsl(${(t * 52 + seed * 37) % 360} 70% 15%)`;
@@ -743,20 +732,19 @@ async function createSyntheticVideo(
     }
   };
 
-  drawFrame(0);
-  await video.play();
-  await waitForVideoMetadata(video);
+  try {
+    drawFrame(0);
+    await video.play();
+    await waitForVideoMetadata(video);
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
 
   return {
     video,
     drawFrame,
-    cleanup: () => {
-      video.pause();
-      for (const track of stream.getTracks()) {
-        track.stop();
-      }
-      video.srcObject = null;
-    },
+    cleanup,
   };
 }
 
@@ -781,127 +769,21 @@ async function waitForVideoMetadata(video: HTMLVideoElement): Promise<void> {
 }
 
 async function createEntities(scenario: BenchScenario): Promise<BenchEntitySet> {
+  const params = resolveBenchShaderParams(scenario.params);
+
   if (scenario.kind === "video") {
     const synthetic = await createSyntheticVideo(scenario.sourceSize);
-    const bitmap = await createImageBitmap(synthetic.video);
-    const entity = createEntity({
-      id: scenario.id,
-      name: scenario.label,
-      bitmap,
-      size: scenario.sourceSize,
-      shaderType: scenario.shaderType,
-      params: scenario.params,
-      mediaSource: {
-        type: MediaType.video,
-        videoElement: synthetic.video,
-        blob: new Blob([], { type: "video/mp4" }),
-        duration: 60,
-        fps: 30,
-        hasAudio: false,
-        alphaMode: "none",
-      },
-      playback: {
-        isPlaying: true,
-        currentTime: 0,
-        loop: true,
-        playbackRate: 1,
-        muted: true,
-        volume: 0,
-      },
-    });
-    return {
-      entities: [entity],
-      beforeFrame: (frameIndex) => {
-        synthetic.drawFrame(frameIndex);
-        entity.textureDirty = true;
-      },
-      cleanup: () => {
-        bitmap.close();
-        synthetic.cleanup();
-      },
-    };
-  }
-
-  if (scenario.zoomStress) {
-    return createZoomStressEntitySet(scenario, scenario.zoomStress);
-  }
-
-  if (scenario.manyEntity) {
-    return createManyEntitySet(scenario, scenario.manyEntity);
-  }
-
-  const count = scenario.kind === "multi" ? (scenario.entityCount ?? 25) : 1;
-  const bitmaps = await Promise.all(
-    Array.from({ length: count }, (_, index) =>
-      createSyntheticBitmap(scenario.sourceSize, index + 1),
-    ),
-  );
-  const entities = bitmaps.map((bitmap, index) =>
-    createEntity({
-      id: `${scenario.id}-${index}`,
-      name: `${scenario.label} ${index + 1}`,
-      bitmap,
-      size: scenario.sourceSize,
-      shaderType: scenario.shaderType,
-      params: scenario.params,
-      zIndex: index,
-      position: getEntityPosition(index, count),
-    }),
-  );
-
-  return {
-    entities,
-    beforeFrame:
-      scenario.dirtyMode === "texture"
-        ? () => {
-            for (const entity of entities) {
-              entity.textureDirty = true;
-            }
-          }
-        : undefined,
-    cleanup: () => {
-      for (const bitmap of bitmaps) {
-        bitmap.close();
-      }
-    },
-  };
-}
-
-async function createZoomStressEntitySet(
-  scenario: BenchScenario,
-  config: ZoomStressScenarioConfig,
-): Promise<BenchEntitySet> {
-  const imageBitmaps = await createSyntheticBitmaps(config.imageSourceSize, config.imageCount);
-  const imageAssets = imageBitmaps.map((bitmap, index) =>
-    createImageAsset({
-      id: `${scenario.id}-image-asset-${index}`,
-      imageBitmap: bitmap,
-      blob: new Blob([], { type: "image/jpeg" }),
-    }),
-  );
-  const syntheticVideos = await createSyntheticVideos(config.videoSourceSize, config.videoCount);
-  const videoBitmaps = await Promise.all(
-    syntheticVideos.map((synthetic) => createImageBitmap(synthetic.video)),
-  );
-
-  let imageIndex = 0;
-  let videoIndex = 0;
-  const entities = Array.from({ length: config.entityCount }, (_, index) => {
-    const sourceSize = getZoomStressSourceSize(config, index);
-    const displaySize = getZoomStressDisplaySize(config, index);
-    const position = getZoomStressPosition(config, index);
-    if (getZoomStressMediaKind(config, index) === "video") {
-      const synthetic = syntheticVideos[videoIndex]!;
-      const bitmap = videoBitmaps[videoIndex]!;
-      videoIndex += 1;
-      return createEntity({
-        id: `${scenario.id}-video-${index}`,
-        name: `${scenario.label} video ${videoIndex}`,
+    let bitmap: ImageBitmap | undefined;
+    let entity: ShaderCanvasEntity | undefined;
+    try {
+      bitmap = await createImageBitmap(synthetic.video);
+      entity = createEntity({
+        id: scenario.id,
+        name: scenario.label,
         bitmap,
-        size: sourceSize,
-        displaySize,
+        size: scenario.sourceSize,
         shaderType: scenario.shaderType,
-        params: scenario.params,
+        params,
         mediaSource: {
           type: MediaType.video,
           videoElement: synthetic.video,
@@ -919,154 +801,349 @@ async function createZoomStressEntitySet(
           muted: true,
           volume: 0,
         },
-        zIndex: index,
-        position,
       });
+      bitmap = undefined;
+      const createdEntity = entity;
+      return {
+        entities: [createdEntity],
+        beforeFrame: (frameIndex) => {
+          synthetic.drawFrame(frameIndex);
+          createdEntity.textureDirty = true;
+        },
+        cleanup: () => {
+          disposeBenchCleanupActions(synthetic.cleanup, () =>
+            disposeBenchEntities([createdEntity]),
+          );
+        },
+      };
+    } catch (error) {
+      disposeBenchCleanupActions(
+        synthetic.cleanup,
+        () => bitmap?.close(),
+        () => {
+          if (entity) disposeBenchEntities([entity]);
+        },
+      );
+      throw error;
     }
-
-    const asset = imageAssets[imageIndex]!;
-    imageIndex += 1;
-    return createEntity({
-      id: `${scenario.id}-image-${index}`,
-      name: `${scenario.label} image ${imageIndex}`,
-      bitmap: asset.imageBitmap,
-      asset,
-      size: sourceSize,
-      displaySize,
-      shaderType: scenario.shaderType,
-      params: scenario.params,
-      zIndex: index,
-      position,
-    });
-  });
-
-  if (imageIndex !== config.imageCount || videoIndex !== config.videoCount) {
-    throw new Error(`Zoom stress media mix produced ${imageIndex} images and ${videoIndex} videos`);
   }
 
-  let lastSyntheticVideoFrameIndex = -1;
-  return {
-    entities,
-    beforeFrame: () => {
-      const videoFrameIndex = Math.floor((performance.now() * 30) / 1000);
-      if (videoFrameIndex === lastSyntheticVideoFrameIndex) return;
-      lastSyntheticVideoFrameIndex = videoFrameIndex;
-      for (let index = 0; index < syntheticVideos.length; index += 1) {
-        syntheticVideos[index]!.drawFrame(videoFrameIndex + index * 3);
+  if (scenario.zoomStress) {
+    return createZoomStressEntitySet(scenario, scenario.zoomStress, params);
+  }
+
+  if (scenario.manyEntity) {
+    return createManyEntitySet(scenario, scenario.manyEntity, params);
+  }
+
+  const count = scenario.kind === "multi" ? (scenario.entityCount ?? 25) : 1;
+  const assets = await createSyntheticImageAssets({
+    count,
+    blobType: "image/png",
+    createBitmap: (index) => createSyntheticBitmap(scenario.sourceSize, index + 1),
+  });
+  const ownedAssets = [...assets];
+  const entities: ShaderCanvasEntity[] = [];
+
+  try {
+    for (let index = 0; index < assets.length; index += 1) {
+      const asset = assets[index]!;
+      entities.push(
+        createEntity({
+          id: `${scenario.id}-${index}`,
+          name: `${scenario.label} ${index + 1}`,
+          asset,
+          size: scenario.sourceSize,
+          shaderType: scenario.shaderType,
+          params,
+          zIndex: index,
+          position: getEntityPosition(index, count),
+        }),
+      );
+    }
+    releaseOwnedImageAssets(ownedAssets);
+
+    return {
+      entities,
+      beforeFrame:
+        scenario.dirtyMode === "texture"
+          ? () => {
+              for (const entity of entities) entity.textureDirty = true;
+            }
+          : undefined,
+      cleanup: () => disposeBenchEntities(entities),
+    };
+  } catch (error) {
+    disposeBenchCleanupActions(
+      () => releaseOwnedImageAssets(ownedAssets),
+      () => disposeBenchEntities(entities),
+    );
+    throw error;
+  }
+}
+
+async function createZoomStressEntitySet(
+  scenario: BenchScenario,
+  config: ZoomStressScenarioConfig,
+  params: ResolvedBenchShaderParams,
+): Promise<BenchEntitySet> {
+  const imageAssets = await createSyntheticImageAssets({
+    count: config.imageCount,
+    blobType: "image/jpeg",
+    id: (index) => `${scenario.id}-image-asset-${index}`,
+    createBitmap: (index) => createSyntheticThumbnailBitmap(config.imageSourceSize, index + 1),
+  });
+  const ownedImageAssets = [...imageAssets];
+  let syntheticVideos: Array<Awaited<ReturnType<typeof createSyntheticVideo>>> = [];
+  let videoBitmaps: Array<ImageBitmap | undefined> = [];
+  const entities: ShaderCanvasEntity[] = [];
+
+  try {
+    syntheticVideos = await createSyntheticVideos(config.videoSourceSize, config.videoCount);
+    videoBitmaps = await createSyntheticVideoBitmaps(syntheticVideos);
+
+    let imageIndex = 0;
+    let videoIndex = 0;
+    for (let index = 0; index < config.entityCount; index += 1) {
+      const sourceSize = getZoomStressSourceSize(config, index);
+      const displaySize = getZoomStressDisplaySize(config, index);
+      const position = getZoomStressPosition(config, index);
+      if (getZoomStressMediaKind(config, index) === "video") {
+        const synthetic = syntheticVideos[videoIndex]!;
+        const bitmap = videoBitmaps[videoIndex]!;
+        const entity = createEntity({
+          id: `${scenario.id}-video-${index}`,
+          name: `${scenario.label} video ${videoIndex + 1}`,
+          bitmap,
+          size: sourceSize,
+          displaySize,
+          shaderType: scenario.shaderType,
+          params,
+          mediaSource: {
+            type: MediaType.video,
+            videoElement: synthetic.video,
+            blob: new Blob([], { type: "video/mp4" }),
+            duration: 60,
+            fps: 30,
+            hasAudio: false,
+            alphaMode: "none",
+          },
+          playback: {
+            isPlaying: true,
+            currentTime: 0,
+            loop: true,
+            playbackRate: 1,
+            muted: true,
+            volume: 0,
+          },
+          zIndex: index,
+          position,
+        });
+        entities.push(entity);
+        videoBitmaps[videoIndex] = undefined;
+        videoIndex += 1;
+        continue;
       }
-      for (const entity of entities) {
-        if (entity.mediaSource.type === MediaType.video) entity.textureDirty = true;
-      }
-    },
-    getViewport: (_frameIndex, sampleFrameIndex) =>
-      getZoomStressFrame(config, sampleFrameIndex, {
-        width: CANVAS_WIDTH,
-        height: CANVAS_HEIGHT,
-      }).viewport,
-    getFramePhase: (_frameIndex, sampleFrameIndex) =>
-      getZoomStressFrame(config, sampleFrameIndex, {
-        width: CANVAS_WIDTH,
-        height: CANVAS_HEIGHT,
-      }).phase,
-    decodedAssetEstimateBytes: estimateZoomStressDecodedBytes(config),
-    mediaCounts: { image: config.imageCount, video: config.videoCount },
-    cleanup: () => {
-      for (const bitmap of imageBitmaps) bitmap.close();
-      for (const bitmap of videoBitmaps) bitmap.close();
-      for (const synthetic of syntheticVideos) synthetic.cleanup();
-    },
-  };
+
+      const asset = imageAssets[imageIndex]!;
+      imageIndex += 1;
+      entities.push(
+        createEntity({
+          id: `${scenario.id}-image-${index}`,
+          name: `${scenario.label} image ${imageIndex}`,
+          asset,
+          size: sourceSize,
+          displaySize,
+          shaderType: scenario.shaderType,
+          params,
+          zIndex: index,
+          position,
+        }),
+      );
+    }
+
+    if (imageIndex !== config.imageCount || videoIndex !== config.videoCount) {
+      throw new Error(
+        `Zoom stress media mix produced ${imageIndex} images and ${videoIndex} videos`,
+      );
+    }
+    releaseOwnedImageAssets(ownedImageAssets);
+
+    let lastSyntheticVideoFrameIndex = -1;
+    return {
+      entities,
+      beforeFrame: () => {
+        const videoFrameIndex = Math.floor((performance.now() * 30) / 1000);
+        if (videoFrameIndex === lastSyntheticVideoFrameIndex) return;
+        lastSyntheticVideoFrameIndex = videoFrameIndex;
+        for (let index = 0; index < syntheticVideos.length; index += 1) {
+          syntheticVideos[index]!.drawFrame(videoFrameIndex + index * 3);
+        }
+        for (const entity of entities) {
+          if (entity.mediaSource.type === MediaType.video) entity.textureDirty = true;
+        }
+      },
+      getViewport: (_frameIndex, sampleFrameIndex) =>
+        getZoomStressFrame(config, sampleFrameIndex, {
+          width: CANVAS_WIDTH,
+          height: CANVAS_HEIGHT,
+        }).viewport,
+      getFramePhase: (_frameIndex, sampleFrameIndex) =>
+        getZoomStressFrame(config, sampleFrameIndex, {
+          width: CANVAS_WIDTH,
+          height: CANVAS_HEIGHT,
+        }).phase,
+      decodedAssetEstimateBytes: estimateZoomStressDecodedBytes(config),
+      mediaCounts: { image: config.imageCount, video: config.videoCount },
+      cleanup: () => {
+        disposeBenchCleanupActions(
+          () => disposeBenchResources(syntheticVideos, (synthetic) => synthetic.cleanup()),
+          () => disposeBenchEntities(entities),
+        );
+      },
+    };
+  } catch (error) {
+    disposeBenchCleanupActions(
+      () => releaseOwnedImageAssets(ownedImageAssets),
+      () => disposeBenchResources(syntheticVideos, (synthetic) => synthetic.cleanup()),
+      () => disposeRemainingBitmaps(videoBitmaps),
+      () => disposeBenchEntities(entities),
+    );
+    throw error;
+  }
 }
 
 async function createSyntheticVideos(
   size: Size,
   count: number,
 ): Promise<Array<Awaited<ReturnType<typeof createSyntheticVideo>>>> {
-  const videos: Array<Awaited<ReturnType<typeof createSyntheticVideo>>> = [];
-  const batchSize = 4;
-  for (let offset = 0; offset < count; offset += batchSize) {
-    const batchCount = Math.min(batchSize, count - offset);
-    const batch = await Promise.all(
-      Array.from({ length: batchCount }, (_, index) =>
-        createSyntheticVideo(size, offset + index + 1),
-      ),
-    );
-    videos.push(...batch);
-  }
-  return videos;
+  return createBatchedBenchResources({
+    count,
+    batchSize: 4,
+    create: (index) => createSyntheticVideo(size, index + 1),
+    dispose: (synthetic) => synthetic.cleanup(),
+  });
 }
 
 async function createManyEntitySet(
   scenario: BenchScenario,
   config: ManyEntityScenarioConfig,
+  params: ResolvedBenchShaderParams,
 ): Promise<BenchEntitySet> {
   const bitmapCount = config.assetMode === "shared" ? 1 : config.uniqueAssetCount;
-  const bitmaps = await createSyntheticBitmaps(config.sourceSize, bitmapCount);
-  const assets = bitmaps.map((bitmap, index) =>
-    createImageAsset({
-      id: `${scenario.id}-asset-${index}`,
-      imageBitmap: bitmap,
-      blob: new Blob([], { type: "image/jpeg" }),
-    }),
-  );
-  const entities = Array.from({ length: config.entityCount }, (_, index) => {
-    const asset = assets[index % assets.length]!;
-    return createEntity({
-      id: `${scenario.id}-${index}`,
-      name: `${scenario.label} ${index + 1}`,
-      bitmap: asset.imageBitmap,
-      asset,
-      size: scenario.sourceSize,
-      displaySize: config.displaySize,
-      shaderType: scenario.shaderType,
-      params: scenario.params,
-      zIndex: index,
-      position: getManyEntityPosition({
-        index,
-        entityCount: config.entityCount,
-        displaySize: config.displaySize,
-        layout: config.layout,
-        canvasSize: { width: CANVAS_WIDTH, height: CANVAS_HEIGHT },
-      }),
-    });
+  const assets = await createSyntheticImageAssets({
+    count: bitmapCount,
+    blobType: "image/jpeg",
+    id: (index) => `${scenario.id}-asset-${index}`,
+    createBitmap: (index) => createSyntheticThumbnailBitmap(config.sourceSize, index + 1),
   });
+  const ownedAssets = [...assets];
+  const entities: ShaderCanvasEntity[] = [];
 
-  return {
-    entities,
-    decodedAssetEstimateBytes: estimateDecodedAssetBytes(config),
-    getViewportOffset: (frameIndex) =>
-      getManyEntityViewportOffset(config, frameIndex, {
-        width: CANVAS_WIDTH,
-        height: CANVAS_HEIGHT,
-      }),
-    getViewport: config.zoom
-      ? (frameIndex) => ({
-          offset: getManyEntityViewportOffset(config, frameIndex, {
-            width: CANVAS_WIDTH,
-            height: CANVAS_HEIGHT,
+  try {
+    for (let index = 0; index < config.entityCount; index += 1) {
+      const asset = assets[index % assets.length]!;
+      entities.push(
+        createEntity({
+          id: `${scenario.id}-${index}`,
+          name: `${scenario.label} ${index + 1}`,
+          asset,
+          size: scenario.sourceSize,
+          displaySize: config.displaySize,
+          shaderType: scenario.shaderType,
+          params,
+          zIndex: index,
+          position: getManyEntityPosition({
+            index,
+            entityCount: config.entityCount,
+            displaySize: config.displaySize,
+            layout: config.layout,
+            canvasSize: { width: CANVAS_WIDTH, height: CANVAS_HEIGHT },
           }),
-          zoom: config.zoom!,
-        })
-      : undefined,
-    cleanup: () => {
-      for (const bitmap of bitmaps) bitmap.close();
-    },
-  };
+        }),
+      );
+    }
+    releaseOwnedImageAssets(ownedAssets);
+
+    return {
+      entities,
+      decodedAssetEstimateBytes: estimateDecodedAssetBytes(config),
+      getViewportOffset: (frameIndex) =>
+        getManyEntityViewportOffset(config, frameIndex, {
+          width: CANVAS_WIDTH,
+          height: CANVAS_HEIGHT,
+        }),
+      getViewport: config.zoom
+        ? (frameIndex) => ({
+            offset: getManyEntityViewportOffset(config, frameIndex, {
+              width: CANVAS_WIDTH,
+              height: CANVAS_HEIGHT,
+            }),
+            zoom: config.zoom!,
+          })
+        : undefined,
+      cleanup: () => disposeBenchEntities(entities),
+    };
+  } catch (error) {
+    disposeBenchCleanupActions(
+      () => releaseOwnedImageAssets(ownedAssets),
+      () => disposeBenchEntities(entities),
+    );
+    throw error;
+  }
 }
 
-async function createSyntheticBitmaps(size: Size, count: number): Promise<ImageBitmap[]> {
-  const bitmaps: ImageBitmap[] = [];
-  const batchSize = 32;
-  for (let offset = 0; offset < count; offset += batchSize) {
-    const batchCount = Math.min(batchSize, count - offset);
-    const batch = await Promise.all(
-      Array.from({ length: batchCount }, (_, index) =>
-        createSyntheticThumbnailBitmap(size, offset + index + 1),
-      ),
-    );
-    bitmaps.push(...batch);
-  }
-  return bitmaps;
+async function createSyntheticImageAssets(options: {
+  count: number;
+  blobType: string;
+  id?: (index: number) => string;
+  createBitmap: (index: number) => Promise<ImageBitmap>;
+}): Promise<MediaImageAsset[]> {
+  return createBatchedBenchResources({
+    count: options.count,
+    batchSize: 32,
+    create: async (index) => {
+      const bitmap = await options.createBitmap(index);
+      try {
+        return createImageAsset({
+          id: options.id?.(index),
+          imageBitmap: bitmap,
+          blob: new Blob([], { type: options.blobType }),
+        });
+      } catch (error) {
+        bitmap.close();
+        throw error;
+      }
+    },
+    dispose: releaseImageAsset,
+  });
+}
+
+async function createSyntheticVideoBitmaps(
+  syntheticVideos: readonly Awaited<ReturnType<typeof createSyntheticVideo>>[],
+): Promise<Array<ImageBitmap | undefined>> {
+  return createBatchedBenchResources({
+    count: syntheticVideos.length,
+    batchSize: 32,
+    create: (index) => createImageBitmap(syntheticVideos[index]!.video),
+    dispose: (bitmap) => bitmap.close(),
+  });
+}
+
+function releaseOwnedImageAssets(assets: MediaImageAsset[]): void {
+  while (assets.length > 0) releaseImageAsset(assets.pop()!);
+}
+
+function disposeRemainingBitmaps(bitmaps: readonly (ImageBitmap | undefined)[]): void {
+  disposeBenchResources(
+    bitmaps.filter((bitmap): bitmap is ImageBitmap => bitmap !== undefined),
+    (bitmap) => bitmap.close(),
+  );
+}
+
+/** Run cleanup actions in reverse ownership order and continue after individual failures. */
+function disposeBenchCleanupActions(...actions: Array<() => void>): void {
+  disposeBenchResources(actions, (cleanup) => cleanup());
 }
 
 async function createSyntheticThumbnailBitmap(size: Size, seed: number): Promise<ImageBitmap> {
@@ -1086,20 +1163,31 @@ async function createSyntheticThumbnailBitmap(size: Size, seed: number): Promise
   return createImageBitmap(offscreen);
 }
 
-function createEntity(options: {
+type CreateEntityOptions = {
   id: string;
   name: string;
-  bitmap: ImageBitmap;
-  asset?: MediaImageAsset;
   size: Size;
   displaySize?: Size;
   shaderType: ShaderType;
-  params: Partial<ShaderParams>;
-  mediaSource?: ShaderCanvasEntity["mediaSource"];
-  playback?: ShaderCanvasEntity["playback"];
+  params: ResolvedBenchShaderParams;
   zIndex?: number;
   position?: { x: number; y: number };
-}): ShaderCanvasEntity {
+} & (
+  | {
+      asset: MediaImageAsset;
+      bitmap?: never;
+      mediaSource?: never;
+      playback?: never;
+    }
+  | {
+      asset?: never;
+      bitmap: ImageBitmap;
+      mediaSource: MediaSourceVideo;
+      playback: PlaybackState;
+    }
+);
+
+function createEntity(options: CreateEntityOptions): ShaderCanvasEntity {
   const displayScale =
     options.size.width > CANVAS_WIDTH || options.size.height > CANVAS_HEIGHT
       ? Math.min(
@@ -1111,8 +1199,7 @@ function createEntity(options: {
     width: Math.max(1, Math.round(options.size.width * displayScale)),
     height: Math.max(1, Math.round(options.size.height * displayScale)),
   };
-
-  return {
+  const base = {
     id: options.id,
     name: options.name,
     position: options.position ?? {
@@ -1122,25 +1209,31 @@ function createEntity(options: {
     size: displaySize,
     zIndex: options.zIndex ?? 0,
     rotation: 0,
-    imageBitmap: options.bitmap,
     originalSize: options.size,
-    mediaSource: options.mediaSource ?? {
-      type: MediaType.image,
-      asset:
-        options.asset ??
-        createImageAsset({
-          imageBitmap: options.bitmap,
-          blob: new Blob([], { type: "image/png" }),
-        }),
-    },
-    playback: options.playback,
     shaderType: options.shaderType,
-    shaderParams: cloneParams(options.params),
+    shaderParams: getBenchEntityShaderParams(
+      options.params,
+      options.shaderType === ShaderType.glass &&
+        options.params.glass?.kind === GlassKind.flowing &&
+        options.params.timeAutoPlay !== false,
+    ),
     textureDirty: true,
     selected: false,
     locked: false,
     edited: false,
-  } as ShaderCanvasEntity;
+  };
+
+  if (options.asset !== undefined) {
+    const imageMedia = retainBenchImageMedia(options.asset);
+    return { ...base, ...imageMedia };
+  }
+
+  return {
+    ...base,
+    imageBitmap: options.bitmap,
+    mediaSource: options.mediaSource,
+    playback: options.playback,
+  };
 }
 
 function getEntityPosition(index: number, count: number): { x: number; y: number } {
@@ -1165,8 +1258,9 @@ function createRenderState(
     viewport,
     entities,
     entitySpatialIndex,
+    entityVersion: 0,
+    geometryVersion: 0,
     selectedEntityIds: new Set(),
-    hoveredEntityId: null,
     debugMode: false,
     dirty,
     canvasCallouts: [],
@@ -1498,10 +1592,13 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
       },
     };
   } finally {
-    for (const entity of entitySet.entities) {
-      benchRenderer.removeEntityTexture(entity.id);
+    try {
+      for (const entity of entitySet.entities) {
+        benchRenderer.removeEntityTexture(entity.id);
+      }
+    } finally {
+      entitySet.cleanup?.();
     }
-    entitySet.cleanup?.();
   }
 }
 
@@ -1654,10 +1751,10 @@ async function captureBlobMetrics(blob: Blob): Promise<VisualMetrics> {
 async function captureFlowingGlassVisual(): Promise<VisualCaptureResult> {
   const benchRenderer = await getRenderer();
   const entitySet = await createEntities(flowingGlassVisualScenario);
-  const device = benchRenderer.device;
-  if (!device) throw new Error("Renderer device is unavailable");
 
   try {
+    const device = benchRenderer.device;
+    if (!device) throw new Error("Renderer device is unavailable");
     benchRenderer.render(createRenderState(entitySet.entities, true));
     await device.queue.onSubmittedWorkDone();
     const blob = await benchRenderer.renderEntityToBlob(entitySet.entities[0]!, {
@@ -1681,10 +1778,13 @@ async function captureFlowingGlassVisual(): Promise<VisualCaptureResult> {
     console.log("[voidmesh-render-visual]", JSON.stringify(result, null, 2));
     return result;
   } finally {
-    for (const entity of entitySet.entities) {
-      benchRenderer.removeEntityTexture(entity.id);
+    try {
+      for (const entity of entitySet.entities) {
+        benchRenderer.removeEntityTexture(entity.id);
+      }
+    } finally {
+      entitySet.cleanup?.();
     }
-    entitySet.cleanup?.();
   }
 }
 

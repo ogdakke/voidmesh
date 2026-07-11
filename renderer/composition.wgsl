@@ -16,7 +16,7 @@ struct EntityUniforms {
   position: vec2f,    // Entity position in world coordinates
   size: vec2f,        // Entity size in world coordinates
   rotation: f32,      // Rotation in radians
-  isHovered: u32,     // 1 if entity is hovered, 0 otherwise
+  _reserved: u32,     // Reserved to keep the uniform layout stable
   isSelected: u32,    // 1 if entity is selected, 0 otherwise
   debugMode: u32,     // 1 if debug mode is enabled, 0 otherwise
   scale: f32,         // Visual drag scale (1.0 = normal, < 1.0 = shrunk)

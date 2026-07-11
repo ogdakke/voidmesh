@@ -1,4 +1,10 @@
-import type { ColorPalette, PlaybackState, ShaderParams } from "#types/canvas.ts";
+import type {
+  ColorPalette,
+  PlaybackState,
+  ShaderCanvasEntity,
+  ShaderParams,
+  Viewport,
+} from "#types/canvas.ts";
 import { createPlaybackState } from "#lib/media-playback.ts";
 
 // ============================================================================
@@ -138,6 +144,16 @@ export interface DeserializeOptions {
   onProgress?: (progress: DeserializeProgress) => void;
 }
 
+/** Decoded workspace whose media ownership remains staged until adopt succeeds. */
+export interface DecodedWorkspace {
+  readonly palettes: readonly ColorPalette[];
+  adopt(
+    replaceWorkspace: (entities: readonly ShaderCanvasEntity[], viewport: Viewport) => void,
+  ): readonly ShaderCanvasEntity[];
+}
+
+export type CommitDecodedWorkspace = (workspace: DecodedWorkspace) => void;
+
 // ============================================================================
 // Serialize Worker
 // ============================================================================
@@ -156,29 +172,129 @@ export interface SerializeMediaEntry {
 
 /** Validate the top-level manifest envelope */
 export function isStudioManifest(data: unknown): data is StudioManifest {
-  if (typeof data !== "object" || data === null) return false;
-  const obj = data as Record<string, unknown>;
+  if (!isRecord(data)) return false;
+  const obj = data;
   return (
     obj.type === "studio-canvas" &&
-    typeof obj.version === "number" &&
+    isFiniteNumber(obj.version) &&
+    Number.isInteger(obj.version) &&
+    obj.version >= 1 &&
+    typeof obj.createdAt === "string" &&
+    isSerializedViewport(obj.viewport) &&
     Array.isArray(obj.entities) &&
-    typeof obj.viewport === "object" &&
-    obj.viewport !== null
+    obj.entities.every(isSerializedEntity) &&
+    (obj.palettes === undefined ||
+      (Array.isArray(obj.palettes) && obj.palettes.every(isColorPalette)))
   );
 }
 
-/** Minimal validation that a serialized entity has required fields */
+/** Validate fields consumed synchronously while an entity is decoded and indexed. */
 export function isSerializedEntity(data: unknown): data is SerializedEntity {
-  if (typeof data !== "object" || data === null) return false;
-  const e = data as Record<string, unknown>;
-  return (
+  if (!isRecord(data)) return false;
+  const e = data;
+  const validBase =
     typeof e.id === "string" &&
+    e.id.length > 0 &&
     typeof e.name === "string" &&
-    typeof e.mediaType === "string" &&
     typeof e.shaderType === "string" &&
-    typeof e.position === "object" &&
-    typeof e.size === "object"
+    isPoint(e.position) &&
+    isSize(e.size) &&
+    isSize(e.originalSize) &&
+    isFiniteNumber(e.zIndex) &&
+    isFiniteNumber(e.rotation) &&
+    typeof e.locked === "boolean" &&
+    typeof e.edited === "boolean" &&
+    isRecord(e.shaderParams) &&
+    (e.originalPalette === undefined || isColorPalette(e.originalPalette));
+  if (!validBase || typeof e.mediaFile !== "string" || e.mediaFile.length === 0) return false;
+
+  switch (e.mediaType) {
+    case "image":
+    case "svg":
+      return true;
+    case "video":
+      return (
+        isNonNegativeNumber(e.duration) &&
+        (e.fps === null || (isFiniteNumber(e.fps) && e.fps > 0)) &&
+        (e.hasAudio === undefined || typeof e.hasAudio === "boolean") &&
+        isSerializedPlaybackState(e.playback)
+      );
+    case "gif":
+      return (
+        isNonNegativeNumber(e.duration) &&
+        isFiniteNumber(e.fps) &&
+        e.fps > 0 &&
+        isSerializedPlaybackState(e.playback)
+      );
+    default:
+      return false;
+  }
+}
+
+function isSerializedViewport(value: unknown): value is SerializedViewport {
+  return isRecord(value) && isPoint(value.offset) && isFiniteNumber(value.zoom) && value.zoom > 0;
+}
+
+function isSerializedPlaybackState(value: unknown): value is SerializedPlaybackState {
+  if (value === undefined) return true;
+  if (!isRecord(value)) return false;
+  return (
+    (value.currentTime === undefined || isNonNegativeNumber(value.currentTime)) &&
+    (value.loop === undefined || typeof value.loop === "boolean") &&
+    (value.playbackRate === undefined ||
+      (isFiniteNumber(value.playbackRate) && value.playbackRate > 0)) &&
+    (value.muted === undefined || typeof value.muted === "boolean") &&
+    (value.volume === undefined ||
+      (isFiniteNumber(value.volume) && value.volume >= 0 && value.volume <= 1)) &&
+    (value.isPlaying === undefined || typeof value.isPlaying === "boolean")
   );
+}
+
+function isColorPalette(value: unknown): value is ColorPalette {
+  if (!isRecord(value)) return false;
+  return (
+    (value.id === undefined || typeof value.id === "string") &&
+    typeof value.name === "string" &&
+    typeof value.shortName === "string" &&
+    Array.isArray(value.colors) &&
+    value.colors.length >= 2 &&
+    value.colors.length <= 16 &&
+    value.colors.every(isRgba)
+  );
+}
+
+function isRgba(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length === 4 &&
+    value.every((channel) => isFiniteNumber(channel) && channel >= 0 && channel <= 1)
+  );
+}
+
+function isPoint(value: unknown): boolean {
+  return isRecord(value) && isFiniteNumber(value.x) && isFiniteNumber(value.y);
+}
+
+function isSize(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isFiniteNumber(value.width) &&
+    value.width > 0 &&
+    isFiniteNumber(value.height) &&
+    value.height > 0
+  );
+}
+
+function isNonNegativeNumber(value: unknown): value is number {
+  return isFiniteNumber(value) && value >= 0;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Playback state with safe defaults */

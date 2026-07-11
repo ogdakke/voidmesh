@@ -65,6 +65,7 @@ The opt-in real Chrome/WebGPU many-entity suite lives in `bench/`. Run it with `
 4. **No barrel exports**: Only `engine/index.ts` and `types/index.ts` have barrels. Import directly from files elsewhere.
 5. **GPU resources**: Always clean up buffers/textures. Use `TexturePool` for intermediates. Key shareable source/processed textures by immutable asset and effect identity; entity IDs track ownership, not duplicate resources.
 6. **Undo pattern**: Wrap state mutations in `Command.create({ execute, undo, onEvict })`, push to `undo` singleton from `lib/undo.ts`.
+7. **Overview batching**: Large homogeneous static-image scenes keep one versioned composition instance buffer. Pan-only frames update viewport state and issue one draw; entity/geometry changes rebuild, and interactive/heterogeneous scenes use normal preparation.
 
 ## Anti-Patterns
 
@@ -100,7 +101,7 @@ Static media images live in `media/` (not `public/media/`). Import via `#media/*
 
 `.vdmsh` zip files (`application/vdmsh` MIME type) via fflate. Media encoding and compression runs in a Web Worker (`lib/serialization/serialize-worker.ts`). Supports file handle saving (File System Access API) for in-place overwrites. See `lib/serialization/` for format docs.
 
-Repeated image entities share one archive media path per asset revision; deserialization decodes that path once, restores duplicate entities synchronously in 512-entity cooperative chunks, and atomically replaces store/index state without retaining a dirty-ID set for every entity.
+Repeated image entities share one archive media path per asset revision. Deserialization validates IDs and geometry before decoding, stages all media ownership, restores duplicate entities in 512-entity cooperative chunks, and atomically swaps store/index state only after adoption. Abort, decode, and pre-adoption failures dispose staged media without changing the live workspace.
 
 <!-- opensrc:start -->
 

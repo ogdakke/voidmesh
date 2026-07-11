@@ -29,8 +29,6 @@ export interface CanvasState {
   // Interaction state (transient, not persisted)
   /** Selected entity IDs (multi-select support) */
   selectedEntityIds: Set<string>;
-  /** @deprecated this is not used anywhere */
-  hoveredEntityId: string | null;
   contextOpenEntityId: string | null;
   /** Multi-select mode: tapping toggles selection, empty space tap is ignored */
   multiSelectMode: boolean;
@@ -97,7 +95,6 @@ export interface ViewportSnapshot {
 
 export interface SelectionSnapshot {
   selectedEntityIds: ReadonlySet<string>;
-  hoveredEntityId: string | null;
   contextOpenEntityId: string | null;
   entities: Map<string, ShaderCanvasEntity>;
   multiSelectMode: boolean;
@@ -185,8 +182,9 @@ export interface RenderState {
   viewport: Viewport;
   entities: ShaderCanvasEntity[];
   entitySpatialIndex: EntitySpatialIndex;
+  entityVersion: number;
+  geometryVersion: number;
   selectedEntityIds: ReadonlySet<string>;
-  hoveredEntityId: string | null;
   debugMode: boolean;
   dirty: boolean;
   canvasCallouts: readonly CanvasCallout[];
@@ -230,7 +228,7 @@ export class CanvasStore extends Store<CanvasState> {
     { entities: ShaderCanvasEntity[]; value: ParamResult<unknown> }
   >();
   readonly #renderEntities: ShaderCanvasEntity[] = [];
-  readonly #entitySpatialIndex = new EntitySpatialIndex();
+  #entitySpatialIndex = new EntitySpatialIndex();
   #renderEntitiesVersion = -1;
   readonly #renderViewport: Viewport = { offset: { x: 0, y: 0 }, zoom: 1 };
   readonly #renderActionLayer: ActionLayerRenderState = {
@@ -250,8 +248,9 @@ export class CanvasStore extends Store<CanvasState> {
     viewport: this.#renderViewport,
     entities: this.#renderEntities,
     entitySpatialIndex: this.#entitySpatialIndex,
+    entityVersion: 0,
+    geometryVersion: 0,
     selectedEntityIds: new Set<string>(),
-    hoveredEntityId: null,
     debugMode: false,
     dirty: false,
     canvasCallouts: [],
@@ -289,7 +288,6 @@ export class CanvasStore extends Store<CanvasState> {
       entityIds: [],
       selectedEntityIds: new Set(),
       contextOpenEntityId: null,
-      hoveredEntityId: null,
       multiSelectMode: false,
       debugMode: false,
       snapToGrid: false,
@@ -328,7 +326,6 @@ export class CanvasStore extends Store<CanvasState> {
 
     this.getSelectionSnapshot = this.createSnapshot("selectionVersion", (s) => ({
       selectedEntityIds: s.selectedEntityIds,
-      hoveredEntityId: s.hoveredEntityId,
       contextOpenEntityId: s.contextOpenEntityId,
       entities: s.entities,
       multiSelectMode: s.multiSelectMode,
@@ -491,22 +488,28 @@ export class CanvasStore extends Store<CanvasState> {
 
   /** Atomically replace canvas content after a workspace has decoded successfully. */
   restoreWorkspace(entities: readonly ShaderCanvasEntity[], viewport: Viewport): void {
-    this.state.entities.clear();
-    this.state.entityIds.length = 0;
-    this.#entitySpatialIndex.clear();
+    const nextEntities = new Map<string, ShaderCanvasEntity>();
+    const nextEntityIds: string[] = [];
+    const nextSpatialIndex = new EntitySpatialIndex();
     for (const entity of entities) {
+      if (nextEntities.has(entity.id)) {
+        throw new Error(`Cannot restore duplicate entity ID "${entity.id}"`);
+      }
       if (entity.mediaSource.type === MediaType.video) this.#syncVideoElementPlayback(entity);
-      this.state.entities.set(entity.id, entity);
-      this.state.entityIds.push(entity.id);
-      this.#entitySpatialIndex.upsert(entity);
+      nextEntities.set(entity.id, entity);
+      nextEntityIds.push(entity.id);
+      nextSpatialIndex.upsert(entity);
     }
 
+    this.state.entities = nextEntities;
+    this.state.entityIds = nextEntityIds;
+    this.#entitySpatialIndex = nextSpatialIndex;
+    this.#renderState.entitySpatialIndex = nextSpatialIndex;
     this.state.viewport = {
       offset: { x: viewport.offset.x, y: viewport.offset.y },
       zoom: viewport.zoom,
     };
     this.state.selectedEntityIds = new Set();
-    this.state.hoveredEntityId = null;
     this.state.contextOpenEntityId = null;
     this.state.multiSelectMode = false;
     this.state.entityDragActive = false;
@@ -627,11 +630,6 @@ export class CanvasStore extends Store<CanvasState> {
     this.notifyEntityChange();
     this.#logger.debug("Removed entity batch", { entityCount: removedCount });
     return removedCount;
-  }
-
-  // Interaction state
-  setHoveredEntity(id: string | null): void {
-    this.state.hoveredEntityId = id;
   }
 
   // ============================================================================
@@ -826,7 +824,6 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.entityIds.length = 0;
     this.#entitySpatialIndex.clear();
     this.state.selectedEntityIds = new Set();
-    this.state.hoveredEntityId = null;
     this.state.contextOpenEntityId = null;
     this.state.multiSelectMode = false;
     this.state.entityDragActive = false;
@@ -1257,8 +1254,9 @@ export class CanvasStore extends Store<CanvasState> {
     this.#renderDragVisual.active = this.state.entityDragActive;
 
     const renderState = this.#renderState;
+    renderState.entityVersion = this.state.entityVersion;
+    renderState.geometryVersion = this.state.geometryVersion;
     renderState.selectedEntityIds = this.state.selectedEntityIds;
-    renderState.hoveredEntityId = this.state.hoveredEntityId;
     renderState.debugMode = this.state.debugMode;
     renderState.dirty = this.hasRenderChanges();
     renderState.canvasCallouts = this.state.canvasCallouts;
