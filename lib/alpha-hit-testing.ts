@@ -170,6 +170,7 @@ export function sampleCanvasSourceCellOpacity(
 export function getEntityAlphaGrid(entity: ShaderCanvasEntity): AlphaHitGrid | undefined {
   switch (entity.mediaSource.type) {
     case MediaType.image:
+      return entity.mediaSource.asset.alphaHitGrid;
     case MediaType.svg:
       return entity.mediaSource.alphaHitGrid;
     case MediaType.gif: {

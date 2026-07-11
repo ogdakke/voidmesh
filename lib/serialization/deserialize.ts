@@ -1,16 +1,21 @@
-import { ShaderType, type ShaderCanvasEntity, type ShaderParams } from "#types/canvas.ts";
+import {
+  ShaderType,
+  type MediaImageAsset,
+  type ShaderCanvasEntity,
+  type ShaderParams,
+} from "#types/canvas.ts";
 import { unzip, type AsyncTerminable } from "fflate";
-import { canvasStore } from "#engine";
 import { config } from "#config";
 import { deepMerge } from "../deep-merge.ts";
 import { decodeGif } from "../gif-decoder.ts";
 import { probeVideoAlphaMode, rasterizeSvg } from "../media-loader.ts";
 import { createAlphaHitGrid } from "../alpha-hit-testing.ts";
-import { paletteStore } from "../palette-store.ts";
 import { logger } from "../client.logger.ts";
+import { disposeEntityMedia, disposeVideoElement } from "../media-resources.ts";
 import { bytesToImageBitmap, bytesToVideoElement } from "./media.ts";
 import { runMigrations } from "./migrations.ts";
 import type {
+  CommitDecodedWorkspace,
   DeserializeOptions,
   DeserializeProgress,
   DeserializeResult,
@@ -20,6 +25,7 @@ import type {
 import { isStudioManifest, toPlaybackState } from "./types.ts";
 import { CURRENT_VERSION } from "./version.ts";
 import { analytics } from "#lib/analytics.ts";
+import { createImageAsset, retainImageAsset } from "#lib/media-assets.ts";
 
 const MIME_BY_EXT: Record<string, string> = {
   mp4: "video/mp4",
@@ -29,6 +35,10 @@ const MIME_BY_EXT: Record<string, string> = {
   mkv: "video/x-matroska",
 };
 
+const LARGE_WORKSPACE_PROGRESS_THRESHOLD = 1_000;
+const DESERIALIZE_CHUNK_SIZE = 512;
+const VALID_SHADER_TYPES = new Set<string>(Object.values(ShaderType));
+
 /**
  * Deserialize a .vdmsh archive (Blob or ArrayBuffer) and restore the canvas.
  *
@@ -37,6 +47,7 @@ const MIME_BY_EXT: Record<string, string> = {
  */
 export async function deserialize(
   source: Blob | ArrayBuffer,
+  commitWorkspace: CommitDecodedWorkspace,
   options: DeserializeOptions = {},
 ): Promise<DeserializeResult> {
   const { signal, onProgress } = options;
@@ -94,9 +105,11 @@ export async function deserialize(
   }
 
   if (!isStudioManifest(manifest)) {
-    throw new Error(
-      "Invalid .vdmsh file: manifest missing 'type: \"studio-canvas\"' or 'version' field",
-    );
+    throw new Error("Invalid .vdmsh file: manifest contains missing or invalid workspace fields");
+  }
+  const duplicateEntityId = findDuplicateEntityId(manifest.entities);
+  if (duplicateEntityId) {
+    throw new Error(`Invalid .vdmsh file: duplicate entity ID "${duplicateEntityId}"`);
   }
   throwIfAborted(signal);
   logger.debug("[workspace-import] manifest parsed", {
@@ -107,8 +120,12 @@ export async function deserialize(
 
   // 3. Run migrations if needed
   let doc = manifest as StudioManifest;
+  const mergeShaderParamDefaults = doc.version !== CURRENT_VERSION;
   const workspaceEntityCount = doc.entities.length;
-  const videoEntityCount = doc.entities.filter((entity) => entity.mediaType === "video").length;
+  let videoEntityCount = 0;
+  for (const entity of doc.entities) {
+    if (entity.mediaType === "video") videoEntityCount++;
+  }
   let videoSeekTimeoutCount = 0;
   if (doc.version < CURRENT_VERSION) {
     doc = runMigrations(doc);
@@ -123,140 +140,154 @@ export async function deserialize(
     logger.debug("[workspace-import] manifest warnings", warnings);
   }
 
-  // 4. Import custom/extracted palettes that don't already exist locally
-  if (doc.palettes?.length) {
-    const existingIds = new Set(paletteStore.getPalettes().map((p) => p.id));
-    for (const palette of doc.palettes) {
-      if (palette.id && !existingIds.has(palette.id)) {
-        paletteStore.addPalette(palette);
+  // 4. Decode entities before committing so a failed import cannot mutate the
+  //    current workspace or palette store. This function owns every successfully
+  //    decoded media reference until the commit callback adopts the batch.
+  //    Keep decoding sequential to reduce memory pressure on iOS Safari and give
+  //    cancellation/progress updates time to run.
+  const validEntities: ShaderCanvasEntity[] = [];
+  const imageAssets = new Map<string, MediaImageAsset>();
+  let maxEntityId = 0;
+  let maxZIndex = 0;
+  let ownershipTransferred = false;
+
+  try {
+    for (let index = 0; index < doc.entities.length; index++) {
+      const serialized = doc.entities[index]!;
+      if (shouldReportEntityProgress(index, doc.entities.length)) {
+        reportProgress({
+          stage: "decoding",
+          entityIndex: index + 1,
+          entityCount: doc.entities.length,
+          entityName: serialized.name,
+          fileSizeBytes: buffer.byteLength,
+        });
+      }
+      throwIfAborted(signal);
+
+      if (index > 0 && index % DESERIALIZE_CHUNK_SIZE === 0) {
+        await yieldToMainThread();
+        throwIfAborted(signal);
+      }
+
+      try {
+        if (serialized.mediaType === "image") {
+          const cachedAsset = imageAssets.get(serialized.mediaFile);
+          if (cachedAsset) {
+            const base = createDeserializedEntityBase(
+              serialized,
+              warnings,
+              mergeShaderParamDefaults,
+            );
+            retainImageAsset(cachedAsset);
+            const entity: ShaderCanvasEntity = {
+              ...base,
+              imageBitmap: cachedAsset.imageBitmap,
+              mediaSource: { type: "image", asset: cachedAsset },
+            };
+            validEntities.push(entity);
+            maxEntityId = Math.max(maxEntityId, parseEntityIdNumber(entity.id));
+            maxZIndex = Math.max(maxZIndex, entity.zIndex);
+            continue;
+          }
+        }
+        const entity = await deserializeEntity(serialized, zipEntries, warnings, {
+          workspaceEntityCount,
+          videoEntityCount,
+          imageAssets,
+          mergeShaderParamDefaults,
+          onVideoSeekTimeout: () => {
+            videoSeekTimeoutCount++;
+          },
+        });
+        validEntities.push(entity);
+        maxEntityId = Math.max(maxEntityId, parseEntityIdNumber(entity.id));
+        maxZIndex = Math.max(maxZIndex, entity.zIndex);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        errors.push({
+          entityId: serialized.id,
+          entityName: serialized.name,
+          error: message,
+        });
+        logger.warn(`[deserialize] Failed to restore "${serialized.name}": ${message}`);
       }
     }
-  }
 
-  // 5. Decode entities BEFORE clearing canvas so a failed import does not
-  //    destroy the current workspace. Keep this sequential to reduce memory
-  //    pressure on iOS Safari and give cancellation/progress updates time to run.
-  const validEntities: ShaderCanvasEntity[] = [];
-  for (let index = 0; index < doc.entities.length; index++) {
-    const serialized = doc.entities[index]!;
-    reportProgress({
-      stage: "decoding",
-      entityIndex: index + 1,
-      entityCount: doc.entities.length,
-      entityName: serialized.name,
-      fileSizeBytes: buffer.byteLength,
-    });
-    throwIfAborted(signal);
-
-    if (index > 0) {
-      await yieldToMainThread();
-      throwIfAborted(signal);
-    }
-
-    try {
-      const entity = await deserializeEntity(serialized, zipEntries, warnings, {
+    // If nothing decoded at all, bail without touching the current workspace.
+    if (validEntities.length === 0 && doc.entities.length > 0) {
+      analytics.track("deserialization.import_summary", {
         workspaceEntityCount,
         videoEntityCount,
-        onVideoSeekTimeout: () => {
-          videoSeekTimeoutCount++;
-        },
+        videoSeekTimeoutCount,
+        errorCount: errors.length,
+        success: false,
+        durationMs: Math.round(performance.now() - startedAt),
       });
-      validEntities.push(entity);
-      logger.debug("[workspace-import] restored entity", {
-        entityId: serialized.id,
-        entityName: serialized.name,
-        mediaType: serialized.mediaType,
-        restoredCount: validEntities.length,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      errors.push({
-        entityId: serialized.id,
-        entityName: serialized.name,
-        error: message,
-      });
-      logger.warn(`[deserialize] Failed to restore "${serialized.name}": ${message}`);
+      return {
+        success: false,
+        entityCount: 0,
+        maxEntityId: 0,
+        maxZIndex: 0,
+        warnings,
+        errors,
+      };
     }
-  }
 
-  // If nothing decoded at all, bail without touching the canvas
-  if (validEntities.length === 0 && doc.entities.length > 0) {
+    reportProgress({
+      stage: "restoring",
+      entityCount: doc.entities.length,
+      fileSizeBytes: buffer.byteLength,
+    });
+
+    commitWorkspace({
+      palettes: doc.palettes ?? [],
+      adopt: (replaceWorkspace) => {
+        if (ownershipTransferred) {
+          throw new Error("Decoded workspace has already been adopted");
+        }
+        replaceWorkspace(validEntities, doc.viewport);
+        ownershipTransferred = true;
+        return validEntities;
+      },
+    });
+    if (!ownershipTransferred) {
+      throw new Error("Workspace commit returned without adopting decoded media");
+    }
+
+    reportProgress({
+      stage: "done",
+      entityCount: validEntities.length,
+      fileSizeBytes: buffer.byteLength,
+    });
+    logger.debug("[workspace-import] deserialize complete", {
+      durationMs: Math.round(performance.now() - startedAt),
+      entityCount: validEntities.length,
+      errorCount: errors.length,
+      warningCount: warnings.length,
+    });
     analytics.track("deserialization.import_summary", {
       workspaceEntityCount,
       videoEntityCount,
       videoSeekTimeoutCount,
       errorCount: errors.length,
-      success: false,
+      success: errors.length === 0,
       durationMs: Math.round(performance.now() - startedAt),
     });
+
     return {
-      success: false,
-      entityCount: 0,
+      success: errors.length === 0,
+      entityCount: validEntities.length,
+      maxEntityId,
+      maxZIndex,
       warnings,
       errors,
     };
-  }
-
-  // 6. Pause all existing animated entities before clearing
-  reportProgress({
-    stage: "restoring",
-    entityCount: doc.entities.length,
-    fileSizeBytes: buffer.byteLength,
-  });
-  for (const entity of canvasStore.getState().entities.values()) {
-    if (entity.mediaSource.type === "video") {
-      entity.mediaSource.videoElement.pause();
+  } finally {
+    if (!ownershipTransferred) {
+      for (const entity of validEntities) disposeEntityMedia(entity);
     }
   }
-
-  // 7. Clear canvas and restore viewport
-  canvasStore.reset();
-  canvasStore.setViewport({
-    offset: { x: doc.viewport.offset.x, y: doc.viewport.offset.y },
-    zoom: doc.viewport.zoom,
-  });
-
-  // 8. Add decoded entities sequentially (maintains zIndex ordering from manifest)
-  for (const entity of validEntities) {
-    canvasStore.addEntity(entity);
-  }
-
-  // 9. Resume playback for entities that were playing when saved
-  for (const entity of validEntities) {
-    if (!entity.playback?.isPlaying) continue;
-    if (entity.mediaSource.type === "video") {
-      canvasStore.playVideo(entity.id);
-    } else if (entity.mediaSource.type === "gif") {
-      canvasStore.playGif(entity.id);
-    }
-  }
-
-  reportProgress({
-    stage: "done",
-    entityCount: validEntities.length,
-    fileSizeBytes: buffer.byteLength,
-  });
-  logger.debug("[workspace-import] deserialize complete", {
-    durationMs: Math.round(performance.now() - startedAt),
-    entityCount: validEntities.length,
-    errorCount: errors.length,
-    warningCount: warnings.length,
-  });
-  analytics.track("deserialization.import_summary", {
-    workspaceEntityCount,
-    videoEntityCount,
-    videoSeekTimeoutCount,
-    errorCount: errors.length,
-    success: errors.length === 0,
-    durationMs: Math.round(performance.now() - startedAt),
-  });
-
-  return {
-    success: errors.length === 0,
-    entityCount: validEntities.length,
-    warnings,
-    errors,
-  };
 }
 
 function createAbortError(): Error {
@@ -280,6 +311,15 @@ async function yieldToMainThread(): Promise<void> {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, 0);
   });
+}
+
+function shouldReportEntityProgress(index: number, entityCount: number): boolean {
+  return (
+    entityCount < LARGE_WORKSPACE_PROGRESS_THRESHOLD ||
+    index === 0 ||
+    index === entityCount - 1 ||
+    (index + 1) % DESERIALIZE_CHUNK_SIZE === 0
+  );
 }
 
 function unzipArchive(
@@ -331,24 +371,32 @@ function unzipArchive(
  * Returns the maximum entity ID number and zIndex from the restored entities.
  * Used by canvas-context to update its counters after deserialization.
  */
-export function getMaxCounters(_result: DeserializeResult): {
+export function getMaxCounters(result: DeserializeResult): {
   maxId: number;
   maxZIndex: number;
 } {
-  const state = canvasStore.getState();
-  let maxId = 0;
-  let maxZIndex = 0;
+  return { maxId: result.maxEntityId, maxZIndex: result.maxZIndex };
+}
 
-  for (const entity of state.entities.values()) {
-    // Extract numeric part from "entity-N" IDs
-    const match = entity.id.match(/^entity-(\d+)$/);
-    if (match) {
-      maxId = Math.max(maxId, Number(match[1]));
-    }
-    maxZIndex = Math.max(maxZIndex, entity.zIndex);
+function parseEntityIdNumber(entityId: string): number {
+  const prefixLength = 7;
+  if (!entityId.startsWith("entity-") || entityId.length === prefixLength) return 0;
+  let value = 0;
+  for (let index = prefixLength; index < entityId.length; index++) {
+    const digit = entityId.charCodeAt(index) - 48;
+    if (digit < 0 || digit > 9) return 0;
+    value = value * 10 + digit;
   }
+  return value;
+}
 
-  return { maxId, maxZIndex };
+function findDuplicateEntityId(entities: readonly SerializedEntity[]): string | null {
+  const seen = new Set<string>();
+  for (const entity of entities) {
+    if (seen.has(entity.id)) return entity.id;
+    seen.add(entity.id);
+  }
+  return null;
 }
 
 // ============================================================================
@@ -357,8 +405,7 @@ export function getMaxCounters(_result: DeserializeResult): {
 
 /** Validate shaderType against known values, falling back to the default */
 function validateShaderType(raw: string): ShaderType {
-  const valid = Object.values(ShaderType) as string[];
-  return valid.includes(raw) ? (raw as ShaderType) : config.defaults.shader;
+  return VALID_SHADER_TYPES.has(raw) ? (raw as ShaderType) : config.defaults.shader;
 }
 
 async function deserializeEntity(
@@ -368,47 +415,16 @@ async function deserializeEntity(
   analyticsContext: {
     workspaceEntityCount: number;
     videoEntityCount: number;
+    imageAssets: Map<string, MediaImageAsset>;
+    mergeShaderParamDefaults: boolean;
     onVideoSeekTimeout: () => void;
   },
 ): Promise<ShaderCanvasEntity> {
-  logger.debug("[workspace-import] deserialize entity start", {
-    entityId: serialized.id,
-    entityName: serialized.name,
-    mediaType: serialized.mediaType,
-    mediaFile: serialized.mediaFile,
-  });
-
-  // Validate shaderType (1b) and merge shaderParams with defaults (1c/3d)
-  const shaderType = validateShaderType(serialized.shaderType);
-  if (shaderType !== serialized.shaderType) {
-    warnings.push(
-      `Entity "${serialized.name}": unknown shader "${serialized.shaderType}", using "${shaderType}"`,
-    );
-  }
-
-  const shaderParams = deepMerge(
-    structuredClone(config.defaults.shaderParams) as ShaderParams,
-    serialized.shaderParams,
+  const base = createDeserializedEntityBase(
+    serialized,
+    warnings,
+    analyticsContext.mergeShaderParamDefaults,
   );
-
-  const base = {
-    id: serialized.id,
-    name: serialized.name,
-    position: { ...serialized.position },
-    size: { ...serialized.size },
-    originalSize: { ...serialized.originalSize },
-    zIndex: serialized.zIndex,
-    rotation: serialized.rotation,
-    locked: serialized.locked,
-    edited: serialized.edited,
-    shaderType,
-    shaderParams,
-    textureDirty: true as const,
-    selected: false as const,
-    ...(serialized.originalPalette && {
-      originalPalette: serialized.originalPalette,
-    }),
-  };
 
   switch (serialized.mediaType) {
     case "image": {
@@ -416,15 +432,22 @@ async function deserializeEntity(
       if (!bytes) throw new Error(`Missing media file: ${serialized.mediaFile}`);
       const imageBlob = new Blob([bytes.slice()]);
       const bitmap = await bytesToImageBitmap(bytes);
-      return {
-        ...base,
-        imageBitmap: bitmap,
-        mediaSource: {
-          type: "image" as const,
+      let asset: MediaImageAsset;
+      try {
+        asset = createImageAsset({
           imageBitmap: bitmap,
           blob: imageBlob,
           alphaHitGrid: createAlphaHitGrid(bitmap, config.hitTesting.alphaGrid),
-        },
+        });
+      } catch (error) {
+        bitmap.close();
+        throw error;
+      }
+      analyticsContext.imageAssets.set(serialized.mediaFile, asset);
+      return {
+        ...base,
+        imageBitmap: bitmap,
+        mediaSource: { type: "image" as const, asset },
       };
     }
 
@@ -440,57 +463,66 @@ async function deserializeEntity(
       const savedTime = serialized.playback?.currentTime ?? 0;
       const { videoElement, initialFrame, duration, currentTime, seekApplied } =
         await bytesToVideoElement(bytes, mimeType, savedTime);
-      const playback = toPlaybackState(serialized.playback);
-      playback.currentTime = currentTime;
+      try {
+        const playback = toPlaybackState(serialized.playback);
+        playback.currentTime = currentTime;
 
-      let timedOutSeekMetadata: Awaited<ReturnType<typeof probeTimedOutVideoSeekMetadata>> | null =
-        null;
-      if (!seekApplied && savedTime > 0) {
-        analyticsContext.onVideoSeekTimeout();
-        timedOutSeekMetadata = await probeTimedOutVideoSeekMetadata(videoBlob);
-        const hasAudio = serialized.hasAudio ?? timedOutSeekMetadata.hasAudio;
-        analytics.track("deserialization.video_seek_timed_out", {
-          mediaType: "video",
-          container,
-          mimeType,
-          videoCodec: timedOutSeekMetadata.videoCodec,
-          audioCodec: timedOutSeekMetadata.audioCodec,
-          sizeBytes: bytes.length,
-          duration,
-          width: videoElement.videoWidth,
-          height: videoElement.videoHeight,
-          fps: serialized.fps,
-          hasAudio,
-          savedSeekTime: savedTime,
-          savedSeekRatio: duration > 0 ? savedTime / duration : null,
-          currentTimeAfterRecovery: currentTime,
-          bitrateEstimate: duration > 0 ? (bytes.length * 8) / duration : null,
-          workspaceEntityCount: analyticsContext.workspaceEntityCount,
-          videoEntityCount: analyticsContext.videoEntityCount,
-        });
+        let timedOutSeekMetadata: Awaited<
+          ReturnType<typeof probeTimedOutVideoSeekMetadata>
+        > | null = null;
+        if (!seekApplied && savedTime > 0) {
+          analyticsContext.onVideoSeekTimeout();
+          timedOutSeekMetadata = await probeTimedOutVideoSeekMetadata(videoBlob);
+          const hasAudio = serialized.hasAudio ?? timedOutSeekMetadata.hasAudio;
+          analytics.track("deserialization.video_seek_timed_out", {
+            mediaType: "video",
+            container,
+            mimeType,
+            videoCodec: timedOutSeekMetadata.videoCodec,
+            audioCodec: timedOutSeekMetadata.audioCodec,
+            sizeBytes: bytes.length,
+            duration,
+            width: videoElement.videoWidth,
+            height: videoElement.videoHeight,
+            fps: serialized.fps,
+            hasAudio,
+            savedSeekTime: savedTime,
+            savedSeekRatio: duration > 0 ? savedTime / duration : null,
+            currentTimeAfterRecovery: currentTime,
+            bitrateEstimate: duration > 0 ? (bytes.length * 8) / duration : null,
+            workspaceEntityCount: analyticsContext.workspaceEntityCount,
+            videoEntityCount: analyticsContext.videoEntityCount,
+          });
+        }
+
+        // v3+ files have hasAudio in the manifest; legacy files need a probe
+        const hasAudio =
+          serialized.hasAudio ??
+          timedOutSeekMetadata?.hasAudio ??
+          (await import("#lib/audio-demux.ts").then(({ hasAudioTrack }) =>
+            hasAudioTrack(videoBlob),
+          ));
+        const alphaMode = await probeVideoAlphaMode(videoBlob);
+
+        return {
+          ...base,
+          imageBitmap: initialFrame,
+          mediaSource: {
+            type: "video" as const,
+            videoElement,
+            blob: videoBlob,
+            duration,
+            fps: serialized.fps,
+            hasAudio,
+            alphaMode,
+          },
+          playback,
+        };
+      } catch (error) {
+        disposeVideoElement(videoElement);
+        initialFrame.close();
+        throw error;
       }
-
-      // v3+ files have hasAudio in the manifest; legacy files need a probe
-      const hasAudio =
-        serialized.hasAudio ??
-        timedOutSeekMetadata?.hasAudio ??
-        (await import("#lib/audio-demux.ts").then(({ hasAudioTrack }) => hasAudioTrack(videoBlob)));
-      const alphaMode = await probeVideoAlphaMode(videoBlob);
-
-      return {
-        ...base,
-        imageBitmap: initialFrame,
-        mediaSource: {
-          type: "video" as const,
-          videoElement,
-          blob: videoBlob,
-          duration,
-          fps: serialized.fps,
-          hasAudio,
-          alphaMode,
-        },
-        playback,
-      };
     }
 
     case "gif": {
@@ -499,25 +531,30 @@ async function deserializeEntity(
 
       const blob = new Blob([bytes.slice()], { type: "image/gif" });
       const { frames, duration, fps } = await decodeGif(blob);
-      const framesWithAlpha = frames.map((frame) => ({
-        ...frame,
-        alphaHitGrid: createAlphaHitGrid(frame.bitmap, config.hitTesting.alphaGrid),
-      }));
+      try {
+        const framesWithAlpha = frames.map((frame) => ({
+          ...frame,
+          alphaHitGrid: createAlphaHitGrid(frame.bitmap, config.hitTesting.alphaGrid),
+        }));
 
-      if (framesWithAlpha.length === 0) throw new Error("GIF has no frames");
+        if (framesWithAlpha.length === 0) throw new Error("GIF has no frames");
 
-      return {
-        ...base,
-        imageBitmap: framesWithAlpha[0]!.bitmap,
-        mediaSource: {
-          type: "gif" as const,
-          frames: framesWithAlpha,
-          duration,
-          fps,
-          blob,
-        },
-        playback: toPlaybackState(serialized.playback),
-      };
+        return {
+          ...base,
+          imageBitmap: framesWithAlpha[0]!.bitmap,
+          mediaSource: {
+            type: "gif" as const,
+            frames: framesWithAlpha,
+            duration,
+            fps,
+            blob,
+          },
+          playback: toPlaybackState(serialized.playback),
+        };
+      } catch (error) {
+        for (const frame of frames) frame.bitmap.close();
+        throw error;
+      }
     }
 
     case "svg": {
@@ -527,21 +564,66 @@ async function deserializeEntity(
       const text = new TextDecoder().decode(bytes);
       const blob = new Blob([bytes.slice()], { type: "image/svg+xml" });
       const { bitmap } = await rasterizeSvg(text);
-
-      return {
-        ...base,
-        imageBitmap: bitmap,
-        mediaSource: {
-          type: "svg" as const,
-          blob,
-          alphaHitGrid: createAlphaHitGrid(bitmap, config.hitTesting.alphaGrid),
-        },
-      };
+      try {
+        return {
+          ...base,
+          imageBitmap: bitmap,
+          mediaSource: {
+            type: "svg" as const,
+            blob,
+            alphaHitGrid: createAlphaHitGrid(bitmap, config.hitTesting.alphaGrid),
+          },
+        };
+      } catch (error) {
+        bitmap.close();
+        throw error;
+      }
     }
 
     default:
       throw new Error(`Unknown media type: ${(serialized as Record<string, unknown>).mediaType}`);
   }
+}
+
+function createDeserializedEntityBase(
+  serialized: SerializedEntity,
+  warnings: string[],
+  mergeShaderParamDefaults: boolean,
+) {
+  const shaderType = validateShaderType(serialized.shaderType);
+  if (shaderType !== serialized.shaderType) {
+    warnings.push(
+      `Entity "${serialized.name}": unknown shader "${serialized.shaderType}", using "${shaderType}"`,
+    );
+  }
+
+  // JSON.parse already created a unique params object for every current-version entity.
+  // Only schema-mismatched documents need compatibility defaults filled recursively.
+  const shaderParams = mergeShaderParamDefaults
+    ? deepMerge(
+        structuredClone(config.defaults.shaderParams) as ShaderParams,
+        serialized.shaderParams,
+      )
+    : serialized.shaderParams;
+
+  return {
+    id: serialized.id,
+    name: serialized.name,
+    position: serialized.position,
+    size: serialized.size,
+    originalSize: serialized.originalSize,
+    zIndex: serialized.zIndex,
+    rotation: serialized.rotation,
+    locked: serialized.locked,
+    edited: serialized.edited,
+    shaderType,
+    shaderParams,
+    textureDirty: true as const,
+    selected: false as const,
+    ...(serialized.originalPalette && {
+      originalPalette: serialized.originalPalette,
+    }),
+  };
 }
 
 async function probeTimedOutVideoSeekMetadata(videoBlob: Blob): Promise<{

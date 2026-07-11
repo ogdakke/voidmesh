@@ -222,9 +222,12 @@ export class Undo {
     return this.#redoStack.length > 0;
   }
 
-  /** Clear all undo/redo history */
+  /** Clear all active and committed undo/redo history. */
   clear() {
     // Evict all commands before clearing
+    for (const cmd of this.#transactionStack ?? []) {
+      cmd.evict();
+    }
     for (const cmd of this.#undoStack) {
       cmd.evict();
     }
@@ -232,6 +235,7 @@ export class Undo {
       cmd.evict();
     }
 
+    this.#transactionStack = null;
     this.#undoStack = [];
     this.#redoStack = [];
     this.#notify();

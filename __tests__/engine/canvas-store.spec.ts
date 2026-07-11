@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from "vitest";
+import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import { canvasStore } from "#engine";
 import { isVideoEntity, type ShaderCanvasEntity } from "#types/canvas.ts";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
@@ -42,6 +42,111 @@ describe("canvasStore viewport subscriptions", () => {
 
     unsubscribeGeneral();
     unsubscribeViewport();
+  });
+});
+
+describe("canvasStore entity versioning", () => {
+  test("selection changes do not invalidate entity-derived caches", () => {
+    const entity = createTestEntity();
+    canvasStore.addEntity(entity);
+    const entityVersion = canvasStore.getState().entityVersion;
+
+    canvasStore.replaceSelection([entity.id]);
+    canvasStore.clearSelection();
+
+    expect(canvasStore.getState().entityVersion).toBe(entityVersion);
+  });
+
+  test("entity changes increment the entity version", () => {
+    const entity = createTestEntity();
+    const initialVersion = canvasStore.getState().entityVersion;
+
+    canvasStore.addEntity(entity);
+    canvasStore.updateEntity(entity.id, { zIndex: 4 });
+    canvasStore.removeEntity(entity.id);
+
+    expect(canvasStore.getState().entityVersion).toBe(initialVersion + 3);
+  });
+
+  test("exposes transform-cache versions without invalidating them for viewport or selection", () => {
+    const entity = createTestEntity({ id: "render-version-entity" });
+    canvasStore.addEntity(entity);
+    const initial = canvasStore.getRenderState();
+    const initialEntityVersion = initial.entityVersion;
+    const initialGeometryVersion = initial.geometryVersion;
+
+    canvasStore.panBy({ x: 20, y: 10 });
+    canvasStore.replaceSelection([entity.id]);
+    expect(canvasStore.getRenderState()).toMatchObject({
+      entityVersion: initialEntityVersion,
+      geometryVersion: initialGeometryVersion,
+    });
+
+    canvasStore.moveEntity(entity.id, { x: 5, y: -2 });
+    expect(canvasStore.getRenderState()).toMatchObject({
+      entityVersion: initialEntityVersion,
+      geometryVersion: initialGeometryVersion + 1,
+    });
+
+    canvasStore.updateEntity(entity.id, { rotation: 15 });
+    expect(canvasStore.getRenderState()).toMatchObject({
+      entityVersion: initialEntityVersion + 1,
+      geometryVersion: initialGeometryVersion + 1,
+    });
+  });
+});
+
+describe("canvasStore large selection access", () => {
+  test("selects all entities without an intermediate caller-owned ID array", () => {
+    const entities = [
+      createTestEntity({ id: "select-all-first" }),
+      createTestEntity({ id: "select-all-second" }),
+    ];
+    canvasStore.addEntities(entities);
+    const listener = vi.fn<() => void>();
+    const unsubscribe = canvasStore.subscribe(listener);
+
+    canvasStore.selectAll();
+    canvasStore.selectAll();
+
+    expect([...canvasStore.getSelectedEntityIds()]).toEqual(entities.map(({ id }) => id));
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  test("materializes selected entities once per selection version", () => {
+    const entities = [
+      createTestEntity({ id: "stable-selection-first" }),
+      createTestEntity({ id: "stable-selection-second" }),
+    ];
+    canvasStore.addEntities(entities);
+    canvasStore.selectAll();
+    const materialize = vi.spyOn(canvasStore, "getSelectedEntities");
+
+    const first = canvasStore.getSelectedEntitiesStable();
+    const second = canvasStore.getSelectedEntitiesStable();
+
+    expect(second).toBe(first);
+    expect(materialize).toHaveBeenCalledTimes(1);
+
+    canvasStore.clearSelection();
+    expect(canvasStore.getSelectedEntitiesStable()).toEqual([]);
+    expect(materialize).toHaveBeenCalledTimes(2);
+  });
+
+  test("deduplicates structurally equal object params across cloned entities", () => {
+    const first = createTestEntity({ id: "cloned-param-first" });
+    const second = createTestEntity({
+      id: "cloned-param-second",
+      shaderParams: { palette: structuredClone(first.shaderParams.palette) },
+    });
+    canvasStore.addEntities([first, second]);
+    canvasStore.selectAll();
+
+    const palette = canvasStore.getParamResult("palette", null);
+
+    expect(palette.isMixed).toBe(false);
+    expect(palette.values.size).toBe(1);
   });
 });
 
@@ -169,6 +274,18 @@ describe("canvasStore.updatePlaybackTime", () => {
     expect(canvasStore.getSelectionSnapshot().version).toBe(initialSelectionVersion);
   });
 
+  test("does not increment playbackVersion for unselected videos", () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
+    canvasStore.addEntity(entity);
+
+    const initialVersion = canvasStore.getPlaybackSnapshot().version;
+
+    canvasStore.updatePlaybackTime(entity.id, 50);
+
+    expect(entity.playback?.currentTime).toBe(50);
+    expect(canvasStore.getPlaybackSnapshot().version).toBe(initialVersion);
+  });
+
   test("increments playbackVersion via forcePlaybackNotify", () => {
     const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
     canvasStore.addEntity(entity);
@@ -192,6 +309,21 @@ describe("canvasStore.updatePlaybackTime", () => {
     const snapshot = canvasStore.getPlaybackSnapshot();
     expect(snapshot.currentTime).toBe(75);
     expect(snapshot.entityId).toBe(entity.id);
+  });
+});
+
+describe("canvasStore.pauseVideo", () => {
+  test("replaces the pause snapshot bitmap and closes the previous fallback bitmap", async () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
+    const previousClose = vi.fn<() => void>();
+    entity.imageBitmap = { ...entity.imageBitmap, close: previousClose };
+    canvasStore.addEntity(entity);
+
+    canvasStore.pauseVideo(entity.id);
+    await Promise.resolve();
+
+    expect(previousClose).toHaveBeenCalledOnce();
+    expect(entity.textureDirty).toBe(true);
   });
 });
 
@@ -265,6 +397,18 @@ describe("canvasStore.updateGifPlaybackTime", () => {
     expect(canvasStore.getSelectionSnapshot().version).toBe(initialSelectionVersion);
   });
 
+  test("does not increment playbackVersion for unselected GIFs", () => {
+    const entity = createTestEntity({ mediaType: "gif", gifDuration: 2 });
+    canvasStore.addEntity(entity);
+
+    const initialVersion = canvasStore.getPlaybackSnapshot().version;
+
+    canvasStore.updateGifPlaybackTime(entity.id, 1.0);
+
+    expect(entity.playback?.currentTime).toBe(1.0);
+    expect(canvasStore.getPlaybackSnapshot().version).toBe(initialVersion);
+  });
+
   test("increments playbackVersion via forcePlaybackNotify", () => {
     const entity = createTestEntity({ mediaType: "gif", gifDuration: 2 });
     canvasStore.addEntity(entity);
@@ -280,6 +424,26 @@ describe("canvasStore.updateGifPlaybackTime", () => {
 });
 
 describe("canvasStore.moveEntity", () => {
+  test("reuses one render state and entity array across viewport-only frames", () => {
+    const firstEntity = createTestEntity({ id: "stable-render-first", zIndex: 2 });
+    const secondEntity = createTestEntity({ id: "stable-render-second", zIndex: 1 });
+    canvasStore.addEntities([firstEntity, secondEntity]);
+
+    const first = canvasStore.getRenderState();
+    const entities = first.entities;
+    const initialOffset = { ...first.viewport.offset };
+    expect(entities.map(({ id }) => id)).toEqual([secondEntity.id, firstEntity.id]);
+
+    canvasStore.panBy({ x: 40, y: 20 });
+    const second = canvasStore.getRenderState();
+    expect(second).toBe(first);
+    expect(second.entities).toBe(entities);
+    expect(second.viewport.offset).toEqual({
+      x: initialOffset.x + 40,
+      y: initialOffset.y + 20,
+    });
+  });
+
   test("marks render state dirty for position-only updates", () => {
     const entity = createTestEntity();
     canvasStore.addEntity(entity);
@@ -305,5 +469,196 @@ describe("canvasStore.moveEntity", () => {
     canvasStore.clearDirtyFlags();
 
     expect(canvasStore.getRenderState().dirty).toBe(false);
+  });
+
+  test("reports render changes without allocating a render snapshot", () => {
+    const entity = createTestEntity();
+    canvasStore.addEntity(entity);
+    expect(canvasStore.hasRenderChanges()).toBe(true);
+
+    canvasStore.clearDirtyFlags();
+    expect(canvasStore.hasRenderChanges()).toBe(false);
+
+    canvasStore.moveEntity(entity.id, { x: 2, y: 3 });
+    expect(canvasStore.hasRenderChanges()).toBe(true);
+  });
+});
+
+describe("canvasStore.addEntities", () => {
+  test("adds a batch with one version notification", () => {
+    const first = createTestEntity({ id: "batch-first" });
+    const second = createTestEntity({ id: "batch-second" });
+    const initialVersion = canvasStore.getState().version;
+
+    canvasStore.addEntities([first, second]);
+
+    expect(canvasStore.getState().version).toBe(initialVersion + 1);
+    expect(canvasStore.getState().entities.size).toBe(2);
+    expect(canvasStore.getState().entitiesDirty).toEqual(new Set([first.id, second.id]));
+  });
+});
+
+describe("canvasStore.restoreWorkspace", () => {
+  test("restores entities, viewport, and spatial state with one notification", () => {
+    const entities = Array.from({ length: 100 }, (_, index) =>
+      createTestEntity({
+        id: `restored-${index}`,
+        position: { x: index * 20, y: 0 },
+        size: { width: 10, height: 10 },
+        zIndex: index,
+      }),
+    );
+    let generalNotifications = 0;
+    let viewportNotifications = 0;
+    const unsubscribeGeneral = canvasStore.subscribe(() => generalNotifications++);
+    const unsubscribeViewport = canvasStore.subscribeViewport(() => viewportNotifications++);
+
+    canvasStore.restoreWorkspace(entities, {
+      offset: { x: 500, y: 250 },
+      zoom: 0.5,
+    });
+
+    expect(generalNotifications).toBe(1);
+    expect(viewportNotifications).toBe(1);
+    expect(canvasStore.getState().entitiesDirty.size).toBe(0);
+    expect(canvasStore.getRenderState().dirty).toBe(true);
+    expect(canvasStore.getViewport()).toEqual({ offset: { x: 500, y: 250 }, zoom: 0.5 });
+    expect(canvasStore.queryEntitiesInBounds({ x: 401, y: 1, width: 1, height: 1 }, [])).toEqual([
+      entities[20],
+    ]);
+
+    unsubscribeGeneral();
+    unsubscribeViewport();
+  });
+
+  test("rejects duplicate IDs without replacing the current workspace", () => {
+    const existing = createTestEntity({ id: "existing" });
+    const first = createTestEntity({ id: "duplicate" });
+    const second = createTestEntity({ id: "duplicate" });
+    canvasStore.addEntity(existing);
+    const previousViewport = structuredClone(canvasStore.getViewport());
+
+    expect(() =>
+      canvasStore.restoreWorkspace([first, second], {
+        offset: { x: 100, y: 200 },
+        zoom: 0.5,
+      }),
+    ).toThrow('Cannot restore duplicate entity ID "duplicate"');
+
+    expect(canvasStore.getState().entities).toEqual(new Map([[existing.id, existing]]));
+    expect(canvasStore.getViewport()).toEqual(previousViewport);
+  });
+});
+
+describe("canvasStore spatial queries", () => {
+  test("tracks batch insertion, movement, and removal", () => {
+    const first = createTestEntity({
+      id: "indexed-first",
+      position: { x: 0, y: 0 },
+      size: { width: 10, height: 10 },
+      zIndex: 2,
+    });
+    const second = createTestEntity({
+      id: "indexed-second",
+      position: { x: 5, y: 5 },
+      size: { width: 10, height: 10 },
+      zIndex: 1,
+    });
+    canvasStore.addEntities([first, second]);
+
+    expect(
+      canvasStore
+        .queryEntitiesInBounds({ x: 0, y: 0, width: 20, height: 20 }, [])
+        .map((entity) => entity.id),
+    ).toEqual([second.id, first.id]);
+
+    canvasStore.moveEntity(first.id, { x: 100, y: 100 });
+    canvasStore.removeEntity(second.id);
+
+    expect(canvasStore.queryEntitiesInBounds({ x: 0, y: 0, width: 20, height: 20 }, [])).toEqual(
+      [],
+    );
+    expect(canvasStore.queryEntitiesInBounds({ x: 95, y: 95, width: 20, height: 20 }, [])).toEqual([
+      first,
+    ]);
+  });
+});
+
+describe("canvasStore.removeEntities", () => {
+  test("compacts entity and selection state with one notification", () => {
+    const entities = Array.from({ length: 1_000 }, (_, index) =>
+      createTestEntity({ id: `remove-${index}`, zIndex: index }),
+    );
+    canvasStore.addEntities(entities);
+    const removedIds = new Set(entities.filter((_, index) => index % 2 === 0).map(({ id }) => id));
+    canvasStore.replaceSelection(entities.map(({ id }) => id));
+    let notifications = 0;
+    const unsubscribe = canvasStore.subscribe(() => notifications++);
+
+    expect(canvasStore.removeEntities(removedIds)).toBe(500);
+
+    expect(notifications).toBe(1);
+    expect(canvasStore.getState().entityIds).toEqual(
+      entities.filter((_, index) => index % 2 === 1).map(({ id }) => id),
+    );
+    expect(canvasStore.getSelectedEntityIds().size).toBe(500);
+    expect(
+      canvasStore.queryEntitiesInBounds({ x: -1, y: -1, width: 1_000, height: 1_000 }, []),
+    ).toEqual(entities.filter((_, index) => index % 2 === 1));
+
+    unsubscribe();
+  });
+});
+
+describe("canvasStore.updateEntities", () => {
+  test("updates a large batch with one version notification", () => {
+    const entities = Array.from({ length: 100 }, (_, index) =>
+      createTestEntity({ id: `bulk-${index}` }),
+    );
+    canvasStore.addEntities(entities);
+    canvasStore.replaceSelection(entities.map((entity) => entity.id));
+    canvasStore.clearDirtyFlags();
+    const initialVersion = canvasStore.getState().version;
+    let subscriberCalls = 0;
+    const unsubscribe = canvasStore.subscribe(() => {
+      subscriberCalls++;
+      canvasStore.getSelectedEntitiesStable();
+    });
+
+    const updatedCount = canvasStore.updateEntities(
+      entities.map((entity, index) => ({
+        id: entity.id,
+        updates: { position: { x: index, y: index * 2 }, textureDirty: true },
+      })),
+    );
+
+    expect(canvasStore.getState().version).toBe(initialVersion + 1);
+    expect(updatedCount).toBe(entities.length);
+    expect(canvasStore.getState().entitiesDirty.size).toBe(entities.length);
+    expect(canvasStore.getState().entities.get("bulk-99")?.position).toEqual({ x: 99, y: 198 });
+    expect(subscriberCalls).toBe(1);
+    unsubscribe();
+  });
+
+  test("does not notify when no batch IDs exist", () => {
+    const initialVersion = canvasStore.getState().version;
+    expect(canvasStore.updateEntities([{ id: "missing", updates: { textureDirty: true } }])).toBe(
+      0,
+    );
+    expect(canvasStore.getState().version).toBe(initialVersion);
+  });
+
+  test("refreshes indexed entity references for non-spatial updates", () => {
+    const entity = createTestEntity({ id: "indexed-param-update" });
+    canvasStore.addEntity(entity);
+
+    canvasStore.updateEntity(entity.id, { edited: true });
+
+    const [indexed] = canvasStore.queryEntitiesInBounds(
+      { x: entity.position.x, y: entity.position.y, width: 1, height: 1 },
+      [],
+    );
+    expect(indexed).toBe(canvasStore.getState().entities.get(entity.id));
+    expect(indexed?.edited).toBe(true);
   });
 });

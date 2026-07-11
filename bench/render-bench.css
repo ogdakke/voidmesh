@@ -53,6 +53,7 @@ button {
 }
 
 #run-all,
+#run-many,
 .scenario-button {
   border: 1px solid #3c3c3c;
   background: #1f1f1f;
@@ -61,16 +62,23 @@ button {
   cursor: pointer;
 }
 
-#run-all {
+#run-all,
+#run-many {
   min-width: 112px;
   height: 40px;
   padding: 0 16px;
 }
 
 #run-all:disabled,
+#run-many:disabled,
 .scenario-button:disabled {
   cursor: wait;
   opacity: 0.62;
+}
+
+.bench-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .bench-grid {

@@ -10,6 +10,8 @@ import {
 } from "./gpu-texture-io.ts";
 import type { TexturePool } from "./texture-pool.ts";
 
+type ExportImageSource = ImageBitmap | OffscreenCanvas | HTMLCanvasElement | HTMLVideoElement;
+
 export type ApplyShaderFn = (
   entity: ShaderCanvasEntity,
   sourceTexture: GPUTexture,
@@ -165,10 +167,35 @@ export class ExportService {
    */
   async #renderSourceToImageBitmap(
     entity: ShaderCanvasEntity,
-    source: ImageBitmap | OffscreenCanvas,
+    source: ExportImageSource,
     width: number,
     height: number,
   ): Promise<ImageBitmap | null> {
+    const outputTexture = this.#renderSourceToTexture(entity, source, width, height);
+    const bitmap = await this.#convertToImageBitmap(outputTexture, width, height);
+    this.#releaseRenderedSourceTexture(outputTexture, width, height);
+    return bitmap;
+  }
+
+  async renderSourceToBlob(
+    entity: ShaderCanvasEntity,
+    source: ExportImageSource,
+    width: number,
+    height: number,
+    options?: ImageExportOptions,
+  ): Promise<Blob | null> {
+    const outputTexture = this.#renderSourceToTexture(entity, source, width, height);
+    const blob = await this.#convertTextureToBlob(outputTexture, width, height, options);
+    this.#releaseRenderedSourceTexture(outputTexture, width, height);
+    return blob;
+  }
+
+  #renderSourceToTexture(
+    entity: ShaderCanvasEntity,
+    source: ExportImageSource,
+    width: number,
+    height: number,
+  ): GPUTexture {
     const sourceUsage =
       GPUTextureUsage.TEXTURE_BINDING |
       GPUTextureUsage.COPY_DST |
@@ -207,17 +234,22 @@ export class ExportService {
 
     this.#applyShader(entity, sourceTexture, outputTexture);
 
-    const bitmap = await this.#convertToImageBitmap(outputTexture, width, height);
-
-    // Cleanup
     sourceTexture.destroy();
-    if (this.#texturePool) {
-      this.#texturePool.release(outputTexture, width, height, outputUsage);
-    } else {
-      outputTexture.destroy();
-    }
+    return outputTexture;
+  }
 
-    return bitmap;
+  #releaseRenderedSourceTexture(texture: GPUTexture, width: number, height: number): void {
+    const outputUsage =
+      GPUTextureUsage.TEXTURE_BINDING |
+      GPUTextureUsage.RENDER_ATTACHMENT |
+      GPUTextureUsage.COPY_SRC |
+      GPUTextureUsage.COPY_DST;
+    if (this.#texturePool) {
+      this.#texturePool.release(texture, width, height, outputUsage);
+      this.#texturePool.commitSubmitted();
+    } else {
+      texture.destroy();
+    }
   }
 
   /**

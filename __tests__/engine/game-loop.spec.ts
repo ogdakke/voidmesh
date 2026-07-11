@@ -66,6 +66,19 @@ function getViewportValues() {
   };
 }
 
+function createLoopRenderer(isEntityVisible = true): InfiniteCanvasRenderer {
+  return {
+    isReady: true,
+    device: null,
+    colorConfig: { canvasFormat: "rgba8unorm", canvasColorSpace: "srgb" },
+    render: vi.fn<() => void>(),
+    getFrameStats: vi.fn<() => object>(),
+    hasPendingRenderWork: vi.fn<() => boolean>(() => false),
+    needsContinuousRenderForEntity: vi.fn<() => boolean>(() => false),
+    isEntityVisible: vi.fn<() => boolean>(() => isEntityVisible),
+  } as unknown as InfiniteCanvasRenderer;
+}
+
 // ── Setup ───────────────────────────────────────────────────────────────────
 
 let gl: GameLoop;
@@ -94,15 +107,10 @@ describe("Render loop errors", () => {
       .mockImplementation(() => 1);
     vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
     const loggerError = vi.spyOn(logger, "error").mockImplementation(() => undefined);
-    const renderer = {
-      isReady: true,
-      device: null,
-      colorConfig: { canvasFormat: "rgba8unorm", canvasColorSpace: "srgb" },
-      render: vi.fn<() => void>(() => {
-        throw error;
-      }),
-      getFrameStats: vi.fn<() => object>(),
-    } as unknown as InfiniteCanvasRenderer;
+    const renderer = createLoopRenderer();
+    vi.mocked(renderer.render).mockImplementation(() => {
+      throw error;
+    });
 
     gl.setRenderer(renderer);
     gl.setRenderErrorHandler(renderErrorHandler);
@@ -120,15 +128,10 @@ describe("Render loop errors", () => {
     vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
     vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
     const loggerError = vi.spyOn(logger, "error").mockImplementation(() => undefined);
-    const renderer = {
-      isReady: true,
-      device: null,
-      colorConfig: { canvasFormat: "rgba8unorm", canvasColorSpace: "srgb" },
-      render: vi.fn<() => void>(() => {
-        throw error;
-      }),
-      getFrameStats: vi.fn<() => object>(),
-    } as unknown as InfiniteCanvasRenderer;
+    const renderer = createLoopRenderer();
+    vi.mocked(renderer.render).mockImplementation(() => {
+      throw error;
+    });
 
     gl.setRenderer(renderer);
     gl.setRenderErrorHandler(renderErrorHandler);
@@ -139,12 +142,68 @@ describe("Render loop errors", () => {
   });
 });
 
+describe("Animated media render scheduling", () => {
+  test("does not keep rendering for an offscreen playing GIF", () => {
+    const renderer = createLoopRenderer(false);
+    let nextFrame: FrameRequestCallback | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      nextFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValueOnce(250);
+    const entity = createTestEntity({ mediaType: "gif", gifDuration: 1, gifFrameCount: 10 });
+    if (entity.playback) entity.playback.isPlaying = true;
+    canvasStore.addEntity(entity);
+    canvasStore.clearDirtyFlags();
+
+    gl.setRenderer(renderer);
+    gl.start();
+    if (!nextFrame) throw new Error("Expected frame loop to schedule another frame");
+    (nextFrame as FrameRequestCallback)(250);
+
+    expect(renderer.render).toHaveBeenCalledOnce();
+  });
+
+  test("renders a playing GIF frame when the entity is visible", () => {
+    const renderer = createLoopRenderer(true);
+    let nextFrame: FrameRequestCallback | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      nextFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValueOnce(250);
+    const entity = createTestEntity({ mediaType: "gif", gifDuration: 1, gifFrameCount: 10 });
+    if (entity.playback) entity.playback.isPlaying = true;
+    canvasStore.addEntity(entity);
+    canvasStore.clearDirtyFlags();
+
+    gl.setRenderer(renderer);
+    gl.start();
+    if (!nextFrame) throw new Error("Expected frame loop to schedule another frame");
+    (nextFrame as FrameRequestCallback)(250);
+
+    expect(renderer.render).toHaveBeenCalledTimes(2);
+  });
+});
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Desktop Pointer Interactions
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("Desktop pointer interactions", () => {
   describe("Click to select", () => {
+    test("passive pointer movement does not hit-test entities", () => {
+      addEntity(100, 100);
+      const spatialQuery = vi.spyOn(canvasStore, "queryEntitiesInBounds");
+
+      gl.handlePointerMove({ x: 150, y: 150 });
+      gl.processInput();
+
+      expect(spatialQuery).not.toHaveBeenCalled();
+    });
+
     test("click on entity selects it", () => {
       const id = addEntity(100, 100);
       click(gl, { x: 150, y: 150 });
@@ -196,7 +255,7 @@ describe("Desktop pointer interactions", () => {
       const frontId = addEntity(100, 100, 200, 150, { zIndex: 10 });
       const front = canvasStore.getState().entities.get(frontId);
       if (!front || front.mediaSource.type !== "image") throw new Error("Expected image entity");
-      front.mediaSource.alphaHitGrid = {
+      front.mediaSource.asset.alphaHitGrid = {
         width: 2,
         height: 2,
         cellSize: 1,
@@ -218,7 +277,7 @@ describe("Desktop pointer interactions", () => {
       const frontId = addEntity(100, 100, 200, 150, { zIndex: 10 });
       const front = canvasStore.getState().entities.get(frontId);
       if (!front || front.mediaSource.type !== "image") throw new Error("Expected image entity");
-      front.mediaSource.alphaHitGrid = {
+      front.mediaSource.asset.alphaHitGrid = {
         width: 2,
         height: 2,
         cellSize: 1,
@@ -302,6 +361,7 @@ describe("Desktop pointer interactions", () => {
 
       gl.handlePointerDown({ x: 500, y: 500 });
       gl.handlePointerMove({ x: 600, y: 600 });
+      gl.processInput();
 
       const bounds = gl.getDragSelectBounds();
       expect(bounds).not.toBeNull();
@@ -327,6 +387,26 @@ describe("Desktop pointer interactions", () => {
       expect(canvasStore.getSelectedEntityIds().size).toBe(0);
     });
 
+    test("coalesces drag-selection queries to one per processed frame", () => {
+      addEntity(100, 100, 100, 100);
+      const query = vi.spyOn(canvasStore, "queryEntitiesInBoundsUnordered");
+
+      gl.handlePointerDown({ x: 500, y: 500 });
+      const versionAfterPointerDown = canvasStore.getState().version;
+      gl.handlePointerMove({ x: 450, y: 450 });
+      gl.handlePointerMove({ x: 300, y: 300 });
+      gl.handlePointerMove({ x: 50, y: 50 });
+
+      expect(query).not.toHaveBeenCalled();
+      gl.processInput();
+      expect(query).toHaveBeenCalledTimes(1);
+      expect(canvasStore.getSelectedEntityIds().size).toBe(1);
+      expect(canvasStore.getState().version).toBe(versionAfterPointerDown);
+
+      gl.handlePointerUp({ x: 50, y: 50 });
+      expect(canvasStore.getState().version).toBe(versionAfterPointerDown + 1);
+    });
+
     test("shift+drag with existing selection uses subtractive mode", () => {
       addEntity(100, 100, 100, 100);
       click(gl, { x: 150, y: 150 });
@@ -336,6 +416,24 @@ describe("Desktop pointer interactions", () => {
       expect(gl.getDragSelectMode()).toBe("subtractive");
       gl.handlePointerUp({ x: 600, y: 600 });
     });
+  });
+
+  test("multi-selection bounds do not materialize a selected-entity array", () => {
+    const first = addEntity(100, 100, 100, 100);
+    const second = addEntity(300, 100, 100, 100);
+    canvasStore.replaceSelection([first, second]);
+    const materialize = vi.spyOn(canvasStore, "getSelectedEntities");
+    const entityLookup = vi.spyOn(canvasStore.getState().entities, "get");
+
+    expect(gl.getMultiSelectBounds()).toEqual({ x: 100, y: 100, width: 300, height: 100 });
+    canvasStore.panBy({ x: 50, y: 50 });
+    expect(gl.getMultiSelectBounds()).toEqual({ x: 100, y: 100, width: 300, height: 100 });
+    expect(materialize).not.toHaveBeenCalled();
+    expect(entityLookup).toHaveBeenCalledTimes(2);
+
+    canvasStore.moveEntity(first, { x: 10, y: 0 });
+    expect(gl.getMultiSelectBounds()).toEqual({ x: 110, y: 100, width: 290, height: 100 });
+    expect(entityLookup).toHaveBeenCalledTimes(5);
   });
 
   describe("Click on multi-selection", () => {

@@ -159,17 +159,17 @@ export function getViewportWorldBounds(
   canvasWidth: number,
   canvasHeight: number,
   bufferFraction: number,
+  output: Bounds = { x: 0, y: 0, width: 0, height: 0 },
 ): Bounds {
   const viewportWidth = canvasWidth / viewport.zoom;
   const viewportHeight = canvasHeight / viewport.zoom;
   const margin = Math.max(viewportWidth, viewportHeight) * bufferFraction;
 
-  return {
-    x: viewport.offset.x - margin,
-    y: viewport.offset.y - margin,
-    width: viewportWidth + 2 * margin,
-    height: viewportHeight + 2 * margin,
-  };
+  output.x = viewport.offset.x - margin;
+  output.y = viewport.offset.y - margin;
+  output.width = viewportWidth + 2 * margin;
+  output.height = viewportHeight + 2 * margin;
+  return output;
 }
 
 /**
@@ -184,9 +184,14 @@ export function getRotatedAABB(
   position: Point,
   size: { width: number; height: number },
   rotationDeg: number,
+  output: Bounds = { x: 0, y: 0, width: 0, height: 0 },
 ): Bounds {
   if (rotationDeg === 0) {
-    return createBounds(position, size);
+    output.x = position.x;
+    output.y = position.y;
+    output.width = size.width;
+    output.height = size.height;
+    return output;
   }
 
   const cx = position.x + size.width / 2;
@@ -202,12 +207,11 @@ export function getRotatedAABB(
   const rotatedHW = hw * cos + hh * sin;
   const rotatedHH = hw * sin + hh * cos;
 
-  return {
-    x: cx - rotatedHW,
-    y: cy - rotatedHH,
-    width: rotatedHW * 2,
-    height: rotatedHH * 2,
-  };
+  output.x = cx - rotatedHW;
+  output.y = cy - rotatedHH;
+  output.width = rotatedHW * 2;
+  output.height = rotatedHH * 2;
+  return output;
 }
 
 /**

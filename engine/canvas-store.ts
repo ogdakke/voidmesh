@@ -11,10 +11,12 @@ import {
   type ParamPaths,
   type GetParamByPath,
   type SelectionState,
+  type ShaderType,
   MediaType,
 } from "#types/canvas.ts";
 import { getFrameAtTime } from "#lib/gif-decoder.ts";
 import { completeOnboardingStarterSelectionFromEvent } from "#lib/onboarding-runtime.ts";
+import { EntitySpatialIndex } from "#lib/entity-spatial-index.ts";
 import { CanvasLensing } from "#types/enums.ts";
 
 export interface CanvasState {
@@ -27,8 +29,6 @@ export interface CanvasState {
   // Interaction state (transient, not persisted)
   /** Selected entity IDs (multi-select support) */
   selectedEntityIds: Set<string>;
-  /** @deprecated this is not used anywhere */
-  hoveredEntityId: string | null;
   contextOpenEntityId: string | null;
   /** Multi-select mode: tapping toggles selection, empty space tap is ignored */
   multiSelectMode: boolean;
@@ -56,6 +56,8 @@ export interface CanvasState {
 
   // Version counters for React change detection (selective subscriptions)
   version: number; // Overall version (for backward compat)
+  entityVersion: number; // Entity membership/reference/animation classification changes
+  geometryVersion: number; // Imperative position changes that do not notify React
   viewportVersion: number; // Incremented only on viewport changes
   selectionVersion: number; // Incremented on selection/entity changes
   preferencesVersion: number; // Incremented on preference changes
@@ -80,6 +82,11 @@ export interface CanvasState {
   canvasCallouts: readonly CanvasCallout[];
 }
 
+export interface CanvasEntityUpdate {
+  id: string;
+  updates: Partial<ShaderCanvasEntity>;
+}
+
 // Snapshot types for selective subscriptions
 export interface ViewportSnapshot {
   viewport: Viewport;
@@ -88,7 +95,6 @@ export interface ViewportSnapshot {
 
 export interface SelectionSnapshot {
   selectedEntityIds: ReadonlySet<string>;
-  hoveredEntityId: string | null;
   contextOpenEntityId: string | null;
   entities: Map<string, ShaderCanvasEntity>;
   multiSelectMode: boolean;
@@ -175,8 +181,10 @@ export interface DisintegrationRenderState {
 export interface RenderState {
   viewport: Viewport;
   entities: ShaderCanvasEntity[];
+  entitySpatialIndex: EntitySpatialIndex;
+  entityVersion: number;
+  geometryVersion: number;
   selectedEntityIds: ReadonlySet<string>;
-  hoveredEntityId: string | null;
   debugMode: boolean;
   dirty: boolean;
   canvasCallouts: readonly CanvasCallout[];
@@ -213,11 +221,45 @@ export class CanvasStore extends Store<CanvasState> {
   #logger: Logger;
   #viewportListeners = new Set<() => void>();
   #selectedEntitiesCache: ShaderCanvasEntity[] = [];
+  #selectedEntitiesVersion = -1;
   #selectionStateCache: { entities: ShaderCanvasEntity[]; value: SelectionState } | null = null;
   #paramResultCache = new Map<
     string,
     { entities: ShaderCanvasEntity[]; value: ParamResult<unknown> }
   >();
+  readonly #renderEntities: ShaderCanvasEntity[] = [];
+  #entitySpatialIndex = new EntitySpatialIndex();
+  #renderEntitiesVersion = -1;
+  readonly #renderViewport: Viewport = { offset: { x: 0, y: 0 }, zoom: 1 };
+  readonly #renderActionLayer: ActionLayerRenderState = {
+    active: false,
+    entityIds: new Set<string>(),
+    entityOffset: { x: 0, y: 0 },
+    blurIntensity: 0,
+  };
+  readonly #renderDragVisual: DragVisualRenderState = {
+    active: false,
+    isDragPhase: false,
+    entityIds: new Set<string>(),
+    scale: 1,
+  };
+  readonly #renderDisintegration: DisintegrationRenderState = { overlays: [] };
+  readonly #renderState: RenderState = {
+    viewport: this.#renderViewport,
+    entities: this.#renderEntities,
+    entitySpatialIndex: this.#entitySpatialIndex,
+    entityVersion: 0,
+    geometryVersion: 0,
+    selectedEntityIds: new Set<string>(),
+    debugMode: false,
+    dirty: false,
+    canvasCallouts: [],
+    dragSelectBounds: null,
+    multiSelectBounds: null,
+    actionLayer: this.#renderActionLayer,
+    dragVisual: this.#renderDragVisual,
+    disintegration: this.#renderDisintegration,
+  };
 
   /** Throttle interval for passive playback notifications (hard cap at 60fps) */
   static readonly #PLAYBACK_NOTIFY_INTERVAL_MS = 16.67;
@@ -246,7 +288,6 @@ export class CanvasStore extends Store<CanvasState> {
       entityIds: [],
       selectedEntityIds: new Set(),
       contextOpenEntityId: null,
-      hoveredEntityId: null,
       multiSelectMode: false,
       debugMode: false,
       snapToGrid: false,
@@ -260,6 +301,8 @@ export class CanvasStore extends Store<CanvasState> {
       canvasCalloutsDirty: false,
       frameCount: 0,
       version: 0,
+      entityVersion: 0,
+      geometryVersion: 0,
       viewportVersion: 0,
       selectionVersion: 0,
       preferencesVersion: 0,
@@ -283,7 +326,6 @@ export class CanvasStore extends Store<CanvasState> {
 
     this.getSelectionSnapshot = this.createSnapshot("selectionVersion", (s) => ({
       selectedEntityIds: s.selectedEntityIds,
-      hoveredEntityId: s.hoveredEntityId,
       contextOpenEntityId: s.contextOpenEntityId,
       entities: s.entities,
       multiSelectMode: s.multiSelectMode,
@@ -425,20 +467,105 @@ export class CanvasStore extends Store<CanvasState> {
     }
     this.state.entities.set(entity.id, entity);
     this.state.entityIds.push(entity.id);
+    this.#entitySpatialIndex.upsert(entity);
     this.state.entitiesDirty.add(entity.id);
-    this.notifySelectionChange();
+    this.notifyEntityChange();
+  }
+
+  addEntities(entities: readonly ShaderCanvasEntity[]): void {
+    if (entities.length === 0) return;
+    for (const entity of entities) {
+      if (entity.mediaSource.type === MediaType.video) {
+        this.#syncVideoElementPlayback(entity);
+      }
+      this.state.entities.set(entity.id, entity);
+      this.state.entityIds.push(entity.id);
+      this.#entitySpatialIndex.upsert(entity);
+      this.state.entitiesDirty.add(entity.id);
+    }
+    this.notifyEntityChange();
+  }
+
+  /** Atomically replace canvas content after a workspace has decoded successfully. */
+  restoreWorkspace(entities: readonly ShaderCanvasEntity[], viewport: Viewport): void {
+    const nextEntities = new Map<string, ShaderCanvasEntity>();
+    const nextEntityIds: string[] = [];
+    const nextSpatialIndex = new EntitySpatialIndex();
+    for (const entity of entities) {
+      if (nextEntities.has(entity.id)) {
+        throw new Error(`Cannot restore duplicate entity ID "${entity.id}"`);
+      }
+      if (entity.mediaSource.type === MediaType.video) this.#syncVideoElementPlayback(entity);
+      nextEntities.set(entity.id, entity);
+      nextEntityIds.push(entity.id);
+      nextSpatialIndex.upsert(entity);
+    }
+
+    this.state.entities = nextEntities;
+    this.state.entityIds = nextEntityIds;
+    this.#entitySpatialIndex = nextSpatialIndex;
+    this.#renderState.entitySpatialIndex = nextSpatialIndex;
+    this.state.viewport = {
+      offset: { x: viewport.offset.x, y: viewport.offset.y },
+      zoom: viewport.zoom,
+    };
+    this.state.selectedEntityIds = new Set();
+    this.state.contextOpenEntityId = null;
+    this.state.multiSelectMode = false;
+    this.state.entityDragActive = false;
+    this.state.actionLayerActive = false;
+    this.state.actionLayerEntityIds = new Set();
+    this.state.actionLayerTouchOrigin = { x: 0, y: 0 };
+    this.state.canvasCallouts = [];
+    // Every restored entity is already textureDirty. One scene-level dirty flag is
+    // sufficient; retaining 131k duplicate IDs until the first frame is wasted memory.
+    this.state.entitiesDirty.clear();
+    this.state.selectionDirty = true;
+    this.state.viewportDirty = true;
+    this.state.containerSizeDirty = false;
+    this.state.canvasCalloutsDirty = false;
+    this.state.version++;
+    this.state.entityVersion++;
+    this.state.geometryVersion++;
+    this.state.selectionVersion++;
+    this.state.viewportVersion++;
+    this.state.preferencesVersion++;
+    this.state.playbackVersion++;
+    this.state.dragVersion++;
+    this.state.actionLayerVersion++;
+    this.clearComputedCache();
+    this.#resetSelectorCaches();
+    this.notify();
+    for (const listener of this.#viewportListeners) listener();
   }
 
   updateEntity(id: string, updates: Partial<ShaderCanvasEntity>): void {
-    const entity = this.state.entities.get(id);
-    if (entity) {
-      const nextEntity = { ...entity, ...updates } as ShaderCanvasEntity;
-      this.state.entities.set(id, nextEntity);
-      // TODO: if z-index can change, we should re-sort the entityIds array here (can't change zindex currently)
+    this.updateEntities([{ id, updates }]);
+  }
+
+  /** Apply a large entity mutation set with one version bump and subscriber notification. */
+  updateEntities(batch: readonly CanvasEntityUpdate[]): number {
+    if (batch.length === 0) return 0;
+
+    let updatedCount = 0;
+    for (const { id, updates } of batch) {
+      const entity = this.state.entities.get(id);
+      if (!entity) continue;
+      const updatedEntity = { ...entity, ...updates } as ShaderCanvasEntity;
+      this.state.entities.set(id, updatedEntity);
+      if (hasSpatialEntityUpdates(updates)) {
+        this.#entitySpatialIndex.upsert(updatedEntity);
+      } else {
+        this.#entitySpatialIndex.updateEntityReference(updatedEntity);
+      }
       this.state.entitiesDirty.add(id);
-      this.notifySelectionChange();
-      this.#logger.debug(`Updated entity: ${id}`, { entity: nextEntity, updates });
+      updatedCount++;
     }
+
+    if (updatedCount === 0) return 0;
+    this.notifyEntityChange();
+    this.#logger.debug("Updated entity batch", { entityCount: updatedCount });
+    return updatedCount;
   }
 
   moveEntity(id: string, delta: Point): void {
@@ -446,6 +573,8 @@ export class CanvasStore extends Store<CanvasState> {
     if (entity) {
       entity.position.x += delta.x;
       entity.position.y += delta.y;
+      this.#entitySpatialIndex.upsert(entity);
+      this.state.geometryVersion++;
       // Position-only updates still change the composed scene and must invalidate
       // renderer caches such as the fullscreen wlur overlay during drag.
       this.state.entitiesDirty.add(id);
@@ -454,6 +583,7 @@ export class CanvasStore extends Store<CanvasState> {
 
   removeEntity(id: string): void {
     this.state.entities.delete(id);
+    this.#entitySpatialIndex.remove(id);
     const index = this.state.entityIds.indexOf(id);
     if (index !== -1) {
       this.state.entityIds.splice(index, 1);
@@ -468,12 +598,38 @@ export class CanvasStore extends Store<CanvasState> {
       newSelection.delete(id);
       this.state.selectedEntityIds = newSelection;
     }
-    this.notifySelectionChange();
+    this.notifyEntityChange();
   }
 
-  // Interaction state
-  setHoveredEntity(id: string | null): void {
-    this.state.hoveredEntityId = id;
+  removeEntities(entityIds: ReadonlySet<string>): number {
+    if (entityIds.size === 0) return 0;
+
+    let removedCount = 0;
+    for (const id of entityIds) {
+      if (!this.state.entities.delete(id)) continue;
+      this.#entitySpatialIndex.remove(id);
+      this.state.entitiesDirty.delete(id);
+      removedCount++;
+    }
+    if (removedCount === 0) return 0;
+
+    const orderedIds = this.state.entityIds;
+    let writeIndex = 0;
+    for (let readIndex = 0; readIndex < orderedIds.length; readIndex++) {
+      const id = orderedIds[readIndex]!;
+      if (!entityIds.has(id)) orderedIds[writeIndex++] = id;
+    }
+    orderedIds.length = writeIndex;
+
+    const nextSelection = new Set<string>();
+    for (const id of this.state.selectedEntityIds) {
+      if (!entityIds.has(id)) nextSelection.add(id);
+    }
+    this.state.selectedEntityIds = nextSelection;
+    this.state.selectionDirty = true;
+    this.notifyEntityChange();
+    this.#logger.debug("Removed entity batch", { entityCount: removedCount });
+    return removedCount;
   }
 
   // ============================================================================
@@ -520,7 +676,44 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.selectedEntityIds = newSelection;
     this.state.selectionDirty = true;
     completeOnboardingStarterSelectionFromEvent(this.state.selectedEntityIds);
-    this.#logger.debug(`Selection replaced with: ${ids.join(", ")}`);
+    this.#logger.debug("Selection replaced", {
+      entityCount: newSelection.size,
+      requestedCount: ids.length,
+      firstEntityId: ids[0] ?? null,
+      lastEntityId: ids.at(-1) ?? null,
+    });
+    this.notifySelectionChange();
+  }
+
+  /** Select every entity without materializing and revalidating an intermediate ID array. */
+  selectAll(): void {
+    if (
+      this.state.entities.size === 0 ||
+      this.state.selectedEntityIds.size === this.state.entities.size
+    ) {
+      return;
+    }
+    this.state.selectedEntityIds = new Set(this.state.entityIds);
+    this.state.selectionDirty = true;
+    completeOnboardingStarterSelectionFromEvent(this.state.selectedEntityIds);
+    this.#logger.debug("All entities selected", { entityCount: this.state.selectedEntityIds.size });
+    this.notifySelectionChange();
+  }
+
+  /** Adopt a validated drag-selection set without notifying React mid-gesture. */
+  replaceTransientSelection(ids: Set<string>): Set<string> {
+    const previousSelection = this.state.selectedEntityIds;
+    this.state.selectedEntityIds = ids;
+    this.state.selectionDirty = true;
+    return previousSelection;
+  }
+
+  /** Publish the final transient selection once when drag selection completes. */
+  commitTransientSelection(): void {
+    completeOnboardingStarterSelectionFromEvent(this.state.selectedEntityIds);
+    this.#logger.debug("Drag selection committed", {
+      entityCount: this.state.selectedEntityIds.size,
+    });
     this.notifySelectionChange();
   }
 
@@ -544,19 +737,22 @@ export class CanvasStore extends Store<CanvasState> {
 
   /** Get all selected entities */
   getSelectedEntities(): ShaderCanvasEntity[] {
-    return [...this.state.selectedEntityIds]
-      .map((id) => this.state.entities.get(id))
-      .filter((e): e is ShaderCanvasEntity => e !== undefined);
+    const entities: ShaderCanvasEntity[] = [];
+    for (const id of this.state.selectedEntityIds) {
+      const entity = this.state.entities.get(id);
+      if (entity) entities.push(entity);
+    }
+    return entities;
   }
 
   /** Get selected entities with structural sharing for selector subscriptions. */
   getSelectedEntitiesStable(): ShaderCanvasEntity[] {
-    const next = this.getSelectedEntities();
-    if (sameReferenceArray(this.#selectedEntitiesCache, next)) {
+    if (this.#selectedEntitiesVersion === this.state.selectionVersion) {
       return this.#selectedEntitiesCache;
     }
-    this.#selectedEntitiesCache = next;
-    return next;
+    this.#selectedEntitiesCache = this.getSelectedEntities();
+    this.#selectedEntitiesVersion = this.state.selectionVersion;
+    return this.#selectedEntitiesCache;
   }
 
   /** Get the count of selected entities */
@@ -577,7 +773,7 @@ export class CanvasStore extends Store<CanvasState> {
       return this.#selectionStateCache.value;
     }
 
-    const next = computeSelectionState(entities);
+    const next = computeSelectionState(entities, this.state.selectedEntityIds);
     this.#selectionStateCache = { entities, value: next };
     return next;
   }
@@ -625,8 +821,9 @@ export class CanvasStore extends Store<CanvasState> {
    */
   reset(): void {
     this.state.entities.clear();
+    this.state.entityIds.length = 0;
+    this.#entitySpatialIndex.clear();
     this.state.selectedEntityIds = new Set();
-    this.state.hoveredEntityId = null;
     this.state.contextOpenEntityId = null;
     this.state.multiSelectMode = false;
     this.state.entityDragActive = false;
@@ -641,6 +838,8 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.canvasCalloutsDirty = false;
     // Increment versions to invalidate cached snapshots
     this.state.version++;
+    this.state.entityVersion++;
+    this.state.geometryVersion++;
     this.state.selectionVersion++;
     this.state.viewportVersion++;
     this.state.preferencesVersion++;
@@ -771,7 +970,7 @@ export class CanvasStore extends Store<CanvasState> {
       entity.playback.currentTime = video.currentTime;
     }
     this.state.entitiesDirty.add(entityId);
-    this.notifySelectionChange();
+    this.notifyEntityChange();
   }
 
   setVideoMuted(entityId: string, muted: boolean): void {
@@ -811,22 +1010,29 @@ export class CanvasStore extends Store<CanvasState> {
     }
 
     // Snapshot current frame for static display
-    const canvas = new OffscreenCanvas(video.videoWidth, video.videoHeight);
+    const width = video.videoWidth || entity.originalSize.width;
+    const height = video.videoHeight || entity.originalSize.height;
+    const canvas = new OffscreenCanvas(width, height);
     const ctx = canvas.getContext("2d");
     if (ctx) {
-      ctx.drawImage(video, 0, 0);
+      ctx.drawImage(video, 0, 0, width, height);
+      const previousBitmap = entity.imageBitmap;
       createImageBitmap(canvas)
         .then((bitmap) => {
+          if (this.state.entities.get(entityId) !== entity) {
+            bitmap.close();
+            return;
+          }
           entity.imageBitmap = bitmap;
+          previousBitmap.close();
           entity.textureDirty = true;
           this.state.entitiesDirty.add(entityId);
-          this.notifySelectionChange();
         })
         .catch((e) => logger.error(e));
     }
 
     this.state.entitiesDirty.add(entityId);
-    this.notifySelectionChange();
+    this.notifyEntityChange();
   }
 
   /**
@@ -862,6 +1068,7 @@ export class CanvasStore extends Store<CanvasState> {
     if (!entity || entity.mediaSource.type !== MediaType.video || !entity.playback) return;
 
     entity.playback.currentTime = currentTime;
+    if (!this.state.selectedEntityIds.has(entityId)) return;
 
     const now = performance.now();
     if (now - this.#lastPlaybackNotifyTime < CanvasStore.#PLAYBACK_NOTIFY_INTERVAL_MS) {
@@ -889,7 +1096,7 @@ export class CanvasStore extends Store<CanvasState> {
       entity.playback.isPlaying = true;
     }
     this.state.entitiesDirty.add(entityId);
-    this.notifySelectionChange();
+    this.notifyEntityChange();
   }
 
   pauseGif(entityId: string): void {
@@ -903,7 +1110,7 @@ export class CanvasStore extends Store<CanvasState> {
     // Snapshot current frame for static display (already set by advanceGifPlayback)
     entity.textureDirty = true;
     this.state.entitiesDirty.add(entityId);
-    this.notifySelectionChange();
+    this.notifyEntityChange();
   }
 
   /**
@@ -940,6 +1147,7 @@ export class CanvasStore extends Store<CanvasState> {
     if (!entity || entity.mediaSource.type !== MediaType.gif || !entity.playback) return;
 
     entity.playback.currentTime = currentTime;
+    if (!this.state.selectedEntityIds.has(entityId)) return;
 
     const now = performance.now();
     if (now - this.#lastPlaybackNotifyTime < CanvasStore.#PLAYBACK_NOTIFY_INTERVAL_MS) {
@@ -979,9 +1187,11 @@ export class CanvasStore extends Store<CanvasState> {
    * Advance GIF playback by deltaSeconds.
    * Resolves the current frame and swaps entity.imageBitmap.
    */
-  advanceGifPlayback(entityId: string, deltaSeconds: number): void {
+  advanceGifPlayback(entityId: string, deltaSeconds: number, updateFrame = true): boolean {
     const entity = this.state.entities.get(entityId);
-    if (!entity || entity.mediaSource.type !== MediaType.gif || !entity.playback?.isPlaying) return;
+    if (!entity || entity.mediaSource.type !== MediaType.gif || !entity.playback?.isPlaying) {
+      return false;
+    }
 
     const { frames, duration } = entity.mediaSource;
     const loop = entity.playback.loop;
@@ -997,16 +1207,19 @@ export class CanvasStore extends Store<CanvasState> {
       entity.playback.isPlaying = false;
     }
 
+    if (!updateFrame) return false;
+
     // Resolve the frame to display
     const frame = getFrameAtTime(frames, entity.playback.currentTime, loop);
     if (entity.imageBitmap === frame.bitmap) {
-      return;
+      return false;
     }
 
     entity.imageBitmap = frame.bitmap;
     // Mark as dirty so renderer picks up the new frame
     entity.textureDirty = true;
     this.state.entitiesDirty.add(entityId);
+    return true;
   }
 
   // Mark container as needing resize handling (no React notification needed)
@@ -1015,43 +1228,55 @@ export class CanvasStore extends Store<CanvasState> {
   }
 
   // Snapshot for rendering (called once per frame)
+  hasRenderChanges(): boolean {
+    return (
+      this.state.viewportDirty ||
+      this.state.entitiesDirty.size > 0 ||
+      this.state.selectionDirty ||
+      this.state.containerSizeDirty ||
+      this.state.canvasCalloutsDirty
+    );
+  }
+
   getRenderState(): RenderState {
-    return {
-      viewport: {
-        offset: {
-          x: this.state.viewport.offset.x,
-          y: this.state.viewport.offset.y,
-        },
-        zoom: this.state.viewport.zoom,
-      },
-      entities: Array.from(this.state.entities.values()),
-      selectedEntityIds: this.state.selectedEntityIds,
-      hoveredEntityId: this.state.hoveredEntityId,
-      debugMode: this.state.debugMode,
-      dirty:
-        this.state.viewportDirty ||
-        this.state.entitiesDirty.size > 0 ||
-        this.state.selectionDirty ||
-        this.state.containerSizeDirty ||
-        this.state.canvasCalloutsDirty,
-      canvasCallouts: this.state.canvasCallouts,
-      // dragSelectBounds and multiSelectBounds are set by game-loop after calling this method
-      dragSelectBounds: null,
-      multiSelectBounds: null,
-      actionLayer: {
-        active: this.state.actionLayerActive,
-        entityIds: this.state.actionLayerEntityIds,
-        entityOffset: { x: 0, y: 0 },
-        blurIntensity: 0,
-      },
-      dragVisual: {
-        active: this.state.entityDragActive,
-        isDragPhase: false,
-        entityIds: new Set(),
-        scale: 1,
-      },
-      disintegration: { overlays: [] },
-    };
+    if (this.#renderEntitiesVersion !== this.state.entityVersion) {
+      this.#renderEntities.length = 0;
+      for (const entity of this.state.entities.values()) this.#renderEntities.push(entity);
+      this.#renderEntities.sort((a, b) => a.zIndex - b.zIndex);
+      this.#renderEntitiesVersion = this.state.entityVersion;
+    }
+
+    this.#renderViewport.offset.x = this.state.viewport.offset.x;
+    this.#renderViewport.offset.y = this.state.viewport.offset.y;
+    this.#renderViewport.zoom = this.state.viewport.zoom;
+    this.#renderActionLayer.active = this.state.actionLayerActive;
+    this.#renderActionLayer.entityIds = this.state.actionLayerEntityIds;
+    this.#renderDragVisual.active = this.state.entityDragActive;
+
+    const renderState = this.#renderState;
+    renderState.entityVersion = this.state.entityVersion;
+    renderState.geometryVersion = this.state.geometryVersion;
+    renderState.selectedEntityIds = this.state.selectedEntityIds;
+    renderState.debugMode = this.state.debugMode;
+    renderState.dirty = this.hasRenderChanges();
+    renderState.canvasCallouts = this.state.canvasCallouts;
+    renderState.dragSelectBounds = null;
+    renderState.multiSelectBounds = null;
+    renderState.actionLayer = this.#renderActionLayer;
+    renderState.dragVisual = this.#renderDragVisual;
+    renderState.disintegration = this.#renderDisintegration;
+    return renderState;
+  }
+
+  queryEntitiesInBounds(bounds: Bounds, output: ShaderCanvasEntity[]): ShaderCanvasEntity[] {
+    return this.#entitySpatialIndex.queryBounds(bounds, output);
+  }
+
+  queryEntitiesInBoundsUnordered(
+    bounds: Bounds,
+    output: ShaderCanvasEntity[],
+  ): ShaderCanvasEntity[] {
+    return this.#entitySpatialIndex.queryBounds(bounds, output, undefined, false);
   }
 
   // Clear dirty flags after render
@@ -1094,6 +1319,11 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.version++;
     this.state.playbackVersion++;
     this.notify();
+  }
+
+  private notifyEntityChange(): void {
+    this.state.entityVersion++;
+    this.notifySelectionChange();
   }
 
   private notifyPreferencesChange(): void {
@@ -1179,24 +1409,33 @@ export class CanvasStore extends Store<CanvasState> {
 
     // Multi-select: check uniformity and collect distinct values
     const values = new Set<NonNullable<T>>();
+    if (firstValue != null) values.add(firstValue as NonNullable<T>);
     let isMixed = false;
+    let objectValueKeys: Set<string> | null = null;
 
-    for (const entity of entities) {
+    for (let index = 1; index < entities.length; index++) {
+      const entity = entities[index]!;
       // Apply default to get effective value (matches how firstValue is computed)
       const val = getNestedValue<T>(entity.shaderParams, pathParts) ?? defaultValue;
-      if (val != null) values.add(val as NonNullable<T>);
+      const matchesFirst = paramValueEqual(val, firstValue);
+      if (!matchesFirst) isMixed = true;
+      if (val == null || Object.is(val, firstValue)) continue;
 
-      if (!isMixed) {
-        if (val !== firstValue) {
-          if (typeof val === "object" && typeof firstValue === "object") {
-            if (JSON.stringify(val) !== JSON.stringify(firstValue)) {
-              isMixed = true;
-            }
-          } else {
-            isMixed = true;
-          }
-        }
+      if (typeof val !== "object") {
+        values.add(val as NonNullable<T>);
+        continue;
       }
+
+      // Object-valued params (currently palettes) are commonly cloned per entity.
+      // Keep one semantic value without retaining every clone in a giant Set.
+      if (matchesFirst) continue;
+      objectValueKeys ??= new Set(
+        firstValue != null && typeof firstValue === "object" ? [JSON.stringify(firstValue)] : [],
+      );
+      const key = JSON.stringify(val);
+      if (objectValueKeys.has(key)) continue;
+      objectValueKeys.add(key);
+      values.add(val as NonNullable<T>);
     }
 
     return { value: firstValue, isMixed, isSupported, values };
@@ -1204,9 +1443,19 @@ export class CanvasStore extends Store<CanvasState> {
 
   #resetSelectorCaches(): void {
     this.#selectedEntitiesCache = [];
+    this.#selectedEntitiesVersion = -1;
     this.#selectionStateCache = null;
     this.#paramResultCache.clear();
   }
+}
+
+function hasSpatialEntityUpdates(updates: Partial<ShaderCanvasEntity>): boolean {
+  return (
+    updates.position !== undefined ||
+    updates.size !== undefined ||
+    updates.rotation !== undefined ||
+    updates.zIndex !== undefined
+  );
 }
 
 /**
@@ -1221,10 +1470,37 @@ function getNestedValue<T>(params: ShaderParams, pathParts: string[]): T | undef
   return current as T | undefined;
 }
 
-function computeSelectionState(entities: ShaderCanvasEntity[]): SelectionState {
+function paramValueEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
+
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    for (let index = 0; index < a.length; index++) {
+      if (!paramValueEqual(a[index], b[index])) return false;
+    }
+    return true;
+  }
+  if (Array.isArray(b)) return false;
+
+  const aRecord = a as Record<string, unknown>;
+  const bRecord = b as Record<string, unknown>;
+  const aKeys = Object.keys(aRecord);
+  const bKeys = Object.keys(bRecord);
+  if (aKeys.length !== bKeys.length) return false;
+  for (const key of aKeys) {
+    if (!Object.hasOwn(bRecord, key) || !paramValueEqual(aRecord[key], bRecord[key])) return false;
+  }
+  return true;
+}
+
+function computeSelectionState(
+  entities: ShaderCanvasEntity[],
+  selectedEntityIds: ReadonlySet<string>,
+): SelectionState {
   if (entities.length === 0) {
     return {
-      entityIds: new Set(),
+      entityIds: selectedEntityIds,
       count: 0,
       isEmpty: true,
       isSingle: false,
@@ -1233,32 +1509,15 @@ function computeSelectionState(entities: ShaderCanvasEntity[]): SelectionState {
       hasUniformShader: false,
       commonParams: [],
       colorMode: "mixed",
-      paramValues: {},
     };
   }
 
-  const shaderTypes = new Set(entities.map((entity) => entity.shaderType));
+  const shaderTypes = new Set<ShaderType>();
+  for (const entity of entities) shaderTypes.add(entity.shaderType);
   const { params: commonParams, colorMode } = getCommonFeatures([...shaderTypes]);
-  const paramValues: Record<string, { isUniform: boolean; value: unknown; values: Set<unknown> }> =
-    {};
-
-  for (const param of commonParams) {
-    const values = new Set(
-      entities.map((entity) => {
-        const value = entity.shaderParams[param];
-        return typeof value === "object" ? JSON.stringify(value) : value;
-      }),
-    );
-    const firstValue = entities[0]?.shaderParams[param];
-    paramValues[param] = {
-      isUniform: values.size === 1,
-      value: values.size === 1 ? (firstValue ?? null) : null,
-      values: new Set(entities.map((entity) => entity.shaderParams[param])),
-    };
-  }
 
   return {
-    entityIds: new Set(entities.map((entity) => entity.id)),
+    entityIds: selectedEntityIds,
     count: entities.length,
     isEmpty: false,
     isSingle: entities.length === 1,
@@ -1267,17 +1526,7 @@ function computeSelectionState(entities: ShaderCanvasEntity[]): SelectionState {
     hasUniformShader: shaderTypes.size === 1,
     commonParams,
     colorMode,
-    paramValues: paramValues as SelectionState["paramValues"],
   };
-}
-
-function sameReferenceArray<T>(a: readonly T[], b: readonly T[]): boolean {
-  if (a === b) return true;
-  if (a.length !== b.length) return false;
-  for (let index = 0; index < a.length; index += 1) {
-    if (a[index] !== b[index]) return false;
-  }
-  return true;
 }
 
 function sameCanvasCallouts(a: readonly CanvasCallout[], b: readonly CanvasCallout[]): boolean {

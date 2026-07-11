@@ -1,3 +1,4 @@
+import { config } from "#config";
 import { DitheringKind, isErrorDiffusion } from "#types/canvas.ts";
 import type { EffectRenderEntity } from "../effect-render-entity.ts";
 import ditheringComputeShaderSource from "../dithering-compute.wgsl?raw";
@@ -20,6 +21,13 @@ const DITHERING_KIND_INDEX: Record<DitheringKind, number> = {
   [DitheringKind.sierra]: 10,
   [DitheringKind.sierraLite]: 11,
 };
+
+interface ErrorBufferEntry {
+  buffer: GPUBuffer;
+  entityId: string;
+  byteSize: number;
+  lastUsed: number;
+}
 
 function createExternalComputeShaderSource(source: string): string {
   const rewritten = source
@@ -44,7 +52,10 @@ export class DitheringShader extends ShaderPass {
   #computeBindGroupLayout: GPUBindGroupLayout | null = null;
   #externalComputeBindGroupLayout: GPUBindGroupLayout | null = null;
   // Error buffer cache per entity (keyed by entityId-width-height)
-  #errorBufferCache: Map<string, GPUBuffer> = new Map();
+  #errorBufferCache: Map<string, ErrorBufferEntry> = new Map();
+  #errorBufferBytes = 0;
+  #errorBufferUseCounter = 0;
+  readonly #errorBufferBudgetBytes = config.rendering.processingTextureBudgetBytes;
 
   override getShaderSource(): string {
     return ditheringShaderSource;
@@ -52,6 +63,7 @@ export class DitheringShader extends ShaderPass {
 
   override writeVariantUniforms(entity: EffectRenderEntity): void {
     const ditheringKind = entity.shaderParams.dithering?.kind ?? DitheringKind.bayer4x4;
+    this.ctx.floatView[2] = entity.shaderParams.scale * entity.pixelScale;
     this.ctx.uintView[7] = DITHERING_KIND_INDEX[ditheringKind];
   }
 
@@ -179,7 +191,10 @@ export class DitheringShader extends ShaderPass {
   #getOrCreateErrorBuffer(entityId: string, width: number, height: number): GPUBuffer {
     const key = `${entityId}-${width}-${height}`;
     const cached = this.#errorBufferCache.get(key);
-    if (cached) return cached;
+    if (cached) {
+      cached.lastUsed = ++this.#errorBufferUseCounter;
+      return cached.buffer;
+    }
 
     // 4 floats per pixel (RGBA error), 4 bytes per float
     const bufferSize = width * height * 4 * 4;
@@ -189,8 +204,41 @@ export class DitheringShader extends ShaderPass {
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
 
-    this.#errorBufferCache.set(key, buffer);
+    this.#errorBufferCache.set(key, {
+      buffer,
+      entityId,
+      byteSize: bufferSize,
+      lastUsed: ++this.#errorBufferUseCounter,
+    });
+    this.#errorBufferBytes += bufferSize;
+    this.#trimErrorBufferCache(key);
     return buffer;
+  }
+
+  #trimErrorBufferCache(protectedKey: string): void {
+    while (this.#errorBufferBytes > this.#errorBufferBudgetBytes) {
+      let oldestKey: string | null = null;
+      let oldestUse = Infinity;
+
+      for (const [key, entry] of this.#errorBufferCache) {
+        if (key === protectedKey) continue;
+        if (entry.lastUsed < oldestUse) {
+          oldestKey = key;
+          oldestUse = entry.lastUsed;
+        }
+      }
+
+      if (!oldestKey) return;
+      this.#deleteErrorBuffer(oldestKey);
+    }
+  }
+
+  #deleteErrorBuffer(key: string): void {
+    const entry = this.#errorBufferCache.get(key);
+    if (!entry) return;
+    entry.buffer.destroy();
+    this.#errorBufferCache.delete(key);
+    this.#errorBufferBytes -= entry.byteSize;
   }
 
   override execute(
@@ -346,20 +394,21 @@ export class DitheringShader extends ShaderPass {
   }
 
   /** Remove cached error buffers for an entity (call when entity is removed) */
-  removeEntity(entityId: string): void {
-    for (const [key, buffer] of this.#errorBufferCache.entries()) {
-      if (key.startsWith(entityId + "-")) {
-        buffer.destroy();
-        this.#errorBufferCache.delete(key);
+  override removeEntity(entityId: string): void {
+    for (const [key, entry] of this.#errorBufferCache) {
+      if (entry.entityId === entityId) {
+        this.#deleteErrorBuffer(key);
       }
     }
+    super.removeEntity(entityId);
   }
 
   override destroy(): void {
-    for (const buffer of this.#errorBufferCache.values()) {
-      buffer.destroy();
+    for (const entry of this.#errorBufferCache.values()) {
+      entry.buffer.destroy();
     }
     this.#errorBufferCache.clear();
+    this.#errorBufferBytes = 0;
     this.#computePipeline = null;
     this.#externalComputePipeline = null;
     this.#computeBindGroupLayout = null;

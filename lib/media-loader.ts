@@ -14,6 +14,8 @@ import { extractPaletteFromImage } from "./palette-extraction/index.ts";
 import { decodeGif, isAnimatedGif, type GifDecodeResult } from "./gif-decoder.ts";
 import { createPlaybackState } from "./media-playback.ts";
 import { createAlphaHitGrid } from "./alpha-hit-testing.ts";
+import { createImageAsset, retainImageAsset } from "./media-assets.ts";
+import { disposeVideoElement } from "./media-resources.ts";
 
 /** Check if a file is a video */
 export function isVideoFile(file: File): boolean {
@@ -197,57 +199,58 @@ export async function loadVideo(blob: Blob): Promise<VideoLoadResult> {
   video.preload = "auto";
   video.src = URL.createObjectURL(blob);
 
-  // Wait for metadata to load
+  let initialFrame: ImageBitmap | null = null;
   try {
-    await new Promise<void>((resolve, reject) => {
-      video.onloadedmetadata = () => resolve();
-      video.onerror = () => {
-        void createVideoLoadError(video, blob).then(reject);
-      };
+    try {
+      await new Promise<void>((resolve, reject) => {
+        video.onloadedmetadata = () => resolve();
+        video.onerror = () => {
+          void createVideoLoadError(video, blob).then(reject);
+        };
+      });
+    } catch (error) {
+      trackUnsupportedVideoLoad(blob, error);
+      throw error;
+    }
+
+    const width = video.videoWidth;
+    const height = video.videoHeight;
+
+    video.currentTime = 0;
+    await new Promise<void>((resolve) => {
+      video.onseeked = () => resolve();
     });
+
+    const canvas = new OffscreenCanvas(width, height);
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(video, 0, 0);
+    initialFrame = await createImageBitmap(canvas);
+
+    await video.play().catch((e) => {
+      logger.error("Failed to autoplay video", e);
+    });
+
+    const [fps, hasAudio, alphaMode] = await Promise.all([
+      detectVideoFps(video),
+      import("#lib/audio-demux.ts").then(({ hasAudioTrack }) => hasAudioTrack(blob)),
+      probeVideoAlphaMode(blob),
+    ]);
+
+    return {
+      videoElement: video,
+      initialFrame,
+      width,
+      height,
+      duration: video.duration,
+      fps,
+      hasAudio,
+      alphaMode,
+    };
   } catch (error) {
-    cleanupVideoElement(video);
-    trackUnsupportedVideoLoad(blob, error);
+    initialFrame?.close();
+    disposeVideoElement(video);
     throw error;
   }
-
-  const width = video.videoWidth;
-  const height = video.videoHeight;
-
-  // Seek to first frame and wait for it
-  video.currentTime = 0;
-  await new Promise<void>((resolve) => {
-    video.onseeked = () => resolve();
-  });
-
-  // Create initial frame snapshot
-  const canvas = new OffscreenCanvas(width, height);
-  const ctx = canvas.getContext("2d")!;
-  ctx.drawImage(video, 0, 0);
-  const initialFrame = await createImageBitmap(canvas);
-
-  // Start playing for autoplay
-  await video.play().catch((e) => {
-    logger.error("Failed to autoplay video", e);
-  });
-
-  // Detect fps and probe tracks in parallel
-  const [fps, hasAudio, alphaMode] = await Promise.all([
-    detectVideoFps(video),
-    import("#lib/audio-demux.ts").then(({ hasAudioTrack }) => hasAudioTrack(blob)),
-    probeVideoAlphaMode(blob),
-  ]);
-
-  return {
-    videoElement: video,
-    initialFrame,
-    width,
-    height,
-    duration: video.duration,
-    fps,
-    hasAudio,
-    alphaMode,
-  };
 }
 
 export async function probeVideoAlphaMode(blob: Blob): Promise<MediaAlphaMode> {
@@ -432,16 +435,6 @@ async function checkVideoDecoderSupport(
   }
 }
 
-function cleanupVideoElement(video: HTMLVideoElement): void {
-  const { src } = video;
-  video.pause();
-  video.removeAttribute("src");
-  video.load();
-  if (src.startsWith("blob:")) {
-    URL.revokeObjectURL(src);
-  }
-}
-
 /**
  * Create entity data from an ImageBitmap (for images)
  */
@@ -452,9 +445,10 @@ export function createImageEntityData(
   filename?: string,
 ): Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string } {
   const alphaHitGrid = createMediaAlphaHitGrid(bitmap);
+  const asset = createImageAsset({ imageBitmap: bitmap, blob, alphaHitGrid });
   return {
     name: filename,
-    mediaSource: { type: "image", imageBitmap: bitmap, blob, alphaHitGrid },
+    mediaSource: { type: "image", asset },
     imageBitmap: bitmap,
     position,
     size: { width: bitmap.width, height: bitmap.height },
@@ -794,15 +788,10 @@ export async function cloneMediaSource(
 ): Promise<{ mediaSource: MediaSource; imageBitmap: ImageBitmap }> {
   switch (source.type) {
     case "image": {
-      const bitmap = await createImageBitmap(source.blob);
+      retainImageAsset(source.asset);
       return {
-        mediaSource: {
-          type: "image",
-          imageBitmap: bitmap,
-          blob: source.blob,
-          alphaHitGrid: createMediaAlphaHitGrid(bitmap),
-        },
-        imageBitmap: bitmap,
+        mediaSource: { type: "image", asset: source.asset },
+        imageBitmap: source.asset.imageBitmap,
       };
     }
 
@@ -824,30 +813,40 @@ export async function cloneMediaSource(
 
     case "gif": {
       const gifResult = await decodeGif(source.blob);
-      const frames = withGifAlphaHitGrids(gifResult.frames);
-      return {
-        mediaSource: {
-          type: "gif",
-          frames,
-          duration: source.duration,
-          fps: source.fps,
-          blob: source.blob,
-        },
-        imageBitmap: frames[0]?.bitmap ?? currentBitmap,
-      };
+      try {
+        const frames = withGifAlphaHitGrids(gifResult.frames);
+        return {
+          mediaSource: {
+            type: "gif",
+            frames,
+            duration: source.duration,
+            fps: source.fps,
+            blob: source.blob,
+          },
+          imageBitmap: frames[0]?.bitmap ?? currentBitmap,
+        };
+      } catch (error) {
+        for (const frame of gifResult.frames) frame.bitmap.close();
+        throw error;
+      }
     }
 
     case "svg": {
       const text = await source.blob.text();
       const rasterResult = await rasterizeSvg(text);
-      return {
-        mediaSource: {
-          type: "svg",
-          blob: source.blob,
-          alphaHitGrid: createMediaAlphaHitGrid(rasterResult.bitmap),
-        },
-        imageBitmap: rasterResult.bitmap,
-      };
+      try {
+        return {
+          mediaSource: {
+            type: "svg",
+            blob: source.blob,
+            alphaHitGrid: createMediaAlphaHitGrid(rasterResult.bitmap),
+          },
+          imageBitmap: rasterResult.bitmap,
+        };
+      } catch (error) {
+        rasterResult.bitmap.close();
+        throw error;
+      }
     }
   }
 }

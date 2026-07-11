@@ -44,6 +44,10 @@ export class ShaderRegistry {
     pass.executeExternal(entity, source, outputTexture, encoder);
   }
 
+  removeEntity(entityId: string): void {
+    for (const pass of this.#passes.values()) pass.removeEntity(entityId);
+  }
+
   /**
    * Execute a chain of shader passes using ping-pong textures.
    * Each pass reads from one texture and writes to the other, alternating.

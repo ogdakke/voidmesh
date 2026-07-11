@@ -40,6 +40,9 @@ const STAGGER_DELAY_MS = 0;
 class DisintegrationController {
   #scheduler: AnimationScheduler;
   #overlays = new Map<string, DisintegrationOverlay>();
+  readonly #renderOverlays: DisintegrationRenderOverlay[] = [];
+  readonly #renderOverlayCache = new Map<string, DisintegrationRenderOverlay>();
+  readonly #renderState: DisintegrationRenderState = { overlays: this.#renderOverlays };
   #staggerIndex = 0;
   #handle: AnimationHandle | null = null;
 
@@ -81,6 +84,7 @@ class DisintegrationController {
           for (const [overlayId, overlay] of this.#overlays) {
             if (now >= overlay.startTime && now - overlay.startTime >= overlay.duration) {
               this.#overlays.delete(overlayId);
+              this.#renderOverlayCache.delete(overlayId);
               removed = true;
             }
           }
@@ -125,16 +129,17 @@ class DisintegrationController {
   }
 
   getRenderState(now = performance.now()): DisintegrationRenderState {
-    return {
-      overlays: Array.from(this.#overlays.values(), (overlay) =>
-        this.#toRenderOverlay(overlay, now),
-      ),
-    };
+    this.#renderOverlays.length = 0;
+    for (const overlay of this.#overlays.values()) {
+      this.#renderOverlays.push(this.#toRenderOverlay(overlay, now));
+    }
+    return this.#renderState;
   }
 
   /** Cancel a specific overlay (e.g., on undo). */
   cancelOverlay(id: string): void {
     if (this.#overlays.delete(id)) {
+      this.#renderOverlayCache.delete(id);
       canvasStore.setContainerDirty();
     }
   }
@@ -142,23 +147,42 @@ class DisintegrationController {
   /** Cancel all active overlays. */
   clear(): void {
     this.#overlays.clear();
+    this.#renderOverlays.length = 0;
+    this.#renderOverlayCache.clear();
     this.#staggerIndex = 0;
     canvasStore.setContainerDirty();
   }
 
   #toRenderOverlay(overlay: DisintegrationOverlay, now: number): DisintegrationRenderOverlay {
-    return {
-      id: overlay.id,
-      startTime: overlay.startTime,
-      dissolveDuration: overlay.dissolveDuration,
-      duration: overlay.duration,
-      seed: overlay.seed,
-      position: { x: overlay.position.x, y: overlay.position.y },
-      size: { width: overlay.size.width, height: overlay.size.height },
-      rotation: overlay.rotation,
-      progress: this.#getProgressAt(overlay, now),
-      elapsedSeconds: Math.max(now - overlay.startTime, 0) / 1000,
-    };
+    let rendered = this.#renderOverlayCache.get(overlay.id);
+    if (!rendered) {
+      rendered = {
+        id: overlay.id,
+        startTime: overlay.startTime,
+        dissolveDuration: overlay.dissolveDuration,
+        duration: overlay.duration,
+        seed: overlay.seed,
+        position: { x: overlay.position.x, y: overlay.position.y },
+        size: { width: overlay.size.width, height: overlay.size.height },
+        rotation: overlay.rotation,
+        progress: 0,
+        elapsedSeconds: 0,
+      };
+      this.#renderOverlayCache.set(overlay.id, rendered);
+    }
+
+    rendered.startTime = overlay.startTime;
+    rendered.dissolveDuration = overlay.dissolveDuration;
+    rendered.duration = overlay.duration;
+    rendered.seed = overlay.seed;
+    rendered.position.x = overlay.position.x;
+    rendered.position.y = overlay.position.y;
+    rendered.size.width = overlay.size.width;
+    rendered.size.height = overlay.size.height;
+    rendered.rotation = overlay.rotation;
+    rendered.progress = this.#getProgressAt(overlay, now);
+    rendered.elapsedSeconds = Math.max(now - overlay.startTime, 0) / 1000;
+    return rendered;
   }
 
   #getProgressAt(overlay: DisintegrationOverlay, now: number): number {

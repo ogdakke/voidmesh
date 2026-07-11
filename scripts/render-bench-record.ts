@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 interface BenchRecord {
-  schemaVersion: 2;
+  schemaVersion: 4;
   createdAt: string;
   repo: {
     branch: string | null;
@@ -15,6 +15,7 @@ interface BenchRecord {
   run: {
     pageUrl: string;
     scenario: string | null;
+    suite: "core" | "many-entity";
     headless: boolean;
     rounds: number;
   };
@@ -35,16 +36,48 @@ interface BenchSummary {
   label: string;
   shaderType: string;
   entityCount: number;
+  imageCount: number;
+  videoCount: number;
+  timingMode: string;
   frames: number;
   sampleCount: number;
   msPerFrame: number;
   cpuEncodeMsPerFrame: number;
   queueDrainMsPerFrame: number;
+  sourceUpdateMedianMs: number;
+  sourceUpdateP95Ms: number;
+  rafIntervalMedianMs: number;
+  rafIntervalP95Ms: number;
+  rafIntervalMaxMs: number;
+  cpuRenderMedianMs: number;
+  cpuRenderP95Ms: number;
+  cpuRenderMaxMs: number;
+  endToEndMedianMs: number;
+  endToEndP95Ms: number;
+  endToEndMaxMs: number;
   p95Ms: number;
+  decodedAssetEstimateBytes: number;
+  peakResidentBytes: number;
+  residentBytes: number;
+  sourceBytes: number;
+  processedBytes: number;
+  sourceTextureCount: number;
+  processedTextureCount: number;
+  processingTextureBytes: number;
+  processingTextureCount: number;
+  processingTextureEvictions: number;
+  pooledTextureBytes: number;
+  pooledTextureCount: number;
+  renderedEntitiesPerFrame: number;
+  sourceTextureAllocations: number;
+  processedTextureAllocations: number;
+  sourceUploads: number;
+  evictions: number;
 }
 
 interface CliOptions {
   scenario: string | null;
+  suite: "core" | "many-entity";
   outDir: string;
   port: number;
   cdpPort: number | null;
@@ -115,17 +148,23 @@ async function main(): Promise<void> {
 
     try {
       await pageClient.send("Runtime.enable");
-      const payload = await runBenchInPage(pageClient, options.scenario, options.rounds);
+      const payload = await runBenchInPage(
+        pageClient,
+        options.scenario,
+        options.suite,
+        options.rounds,
+      );
       const repo = await collectRepoState();
       const rounds = extractRounds(payload);
       const results = rounds.at(-1)?.results ?? [];
       const record: BenchRecord = {
-        schemaVersion: 2,
+        schemaVersion: 4,
         createdAt,
         repo,
         run: {
           pageUrl,
           scenario: options.scenario,
+          suite: options.suite,
           headless: options.headless,
           rounds: options.rounds,
         },
@@ -150,6 +189,7 @@ async function main(): Promise<void> {
 async function parseOptions(argv: string[]): Promise<CliOptions> {
   const options: CliOptions = {
     scenario: process.env.BENCH_SCENARIO ?? null,
+    suite: process.env.BENCH_SUITE === "many-entity" ? "many-entity" : "core",
     outDir: process.env.BENCH_OUT_DIR ?? "bench/results",
     port: Number(process.env.BENCH_PORT ?? DEFAULT_PORT),
     cdpPort: process.env.BENCH_CDP_PORT ? Number(process.env.BENCH_CDP_PORT) : null,
@@ -164,6 +204,12 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
     const arg = argv[index]!;
     if (arg === "--scenario") {
       options.scenario = readArgValue(argv, ++index, arg);
+    } else if (arg === "--suite") {
+      const suite = readArgValue(argv, ++index, arg);
+      if (suite !== "core" && suite !== "many-entity") {
+        throw new Error('--suite must be either "core" or "many-entity"');
+      }
+      options.suite = suite;
     } else if (arg === "--out-dir") {
       options.outDir = readArgValue(argv, ++index, arg);
     } else if (arg === "--port") {
@@ -246,6 +292,7 @@ function startChrome(
     "--disable-extensions",
     "--enable-unsafe-webgpu",
     "--enable-features=WebGPUDeveloperFeatures",
+    "--window-size=1920,1080",
     "about:blank",
   ];
   if (headless) args.unshift("--headless=new");
@@ -308,6 +355,7 @@ async function openBenchPage(cdpPort: number, pageUrl: string): Promise<string> 
 async function runBenchInPage(
   client: CdpClient,
   scenario: string | null,
+  suite: CliOptions["suite"],
   rounds: number,
 ): Promise<{ metadata: unknown; rounds: Array<{ index: number; results: unknown }> }> {
   const expression = `
@@ -318,6 +366,7 @@ async function runBenchInPage(
           if (
             typeof window.__collectVoidmeshRenderBenchMetadata === "function" &&
             typeof window.__runVoidmeshRenderBench === "function" &&
+            typeof window.__runVoidmeshManyEntityBench === "function" &&
             typeof window.__runVoidmeshRenderBenchScenario === "function"
           ) {
             resolve();
@@ -333,12 +382,15 @@ async function runBenchInPage(
       });
       const metadata = await window.__collectVoidmeshRenderBenchMetadata();
       const scenario = ${JSON.stringify(scenario)};
+      const suite = ${JSON.stringify(suite)};
       const roundCount = ${JSON.stringify(rounds)};
       const rounds = [];
       for (let index = 0; index < roundCount; index += 1) {
         const results = scenario
           ? [await window.__runVoidmeshRenderBenchScenario(scenario)]
-          : await window.__runVoidmeshRenderBench();
+          : suite === "many-entity"
+            ? await window.__runVoidmeshManyEntityBench()
+            : await window.__runVoidmeshRenderBench();
         rounds.push({ index, results });
       }
       return { metadata, rounds };
@@ -384,17 +436,54 @@ function extractRounds(payload: {
 function summarizeResults(results: unknown[]): BenchSummary[] {
   return results.map((item) => {
     const result = item as Record<string, unknown>;
+    const resources = (result.resources ?? {}) as Record<string, unknown>;
+    const entityTextures = (resources.entityTextures ?? {}) as Record<string, unknown>;
+    const processingTextures = (resources.processingTextures ?? {}) as Record<string, unknown>;
+    const texturePool = (resources.texturePool ?? {}) as Record<string, unknown>;
+    const activity = (result.activity ?? {}) as Record<string, unknown>;
+    const mediaCounts = (result.mediaCounts ?? {}) as Record<string, unknown>;
     return {
       id: String(result.id),
       label: String(result.label),
       shaderType: String(result.shaderType),
       entityCount: Number(result.entityCount),
+      imageCount: Number(mediaCounts.image ?? 0),
+      videoCount: Number(mediaCounts.video ?? 0),
+      timingMode: String(result.timingMode ?? "batched"),
       frames: Number(result.frames),
       sampleCount: Number(result.sampleCount ?? result.samples),
       msPerFrame: round(Number(result.msPerFrame)),
       cpuEncodeMsPerFrame: round(Number(result.cpuEncodeMsPerFrame)),
       queueDrainMsPerFrame: round(Number(result.queueDrainMsPerFrame)),
+      sourceUpdateMedianMs: round(Number(result.sourceUpdateMedianMs ?? 0)),
+      sourceUpdateP95Ms: round(Number(result.sourceUpdateP95Ms ?? 0)),
+      rafIntervalMedianMs: round(Number(result.rafIntervalMedianMs ?? 0)),
+      rafIntervalP95Ms: round(Number(result.rafIntervalP95Ms ?? 0)),
+      rafIntervalMaxMs: round(Number(result.rafIntervalMaxMs ?? 0)),
+      cpuRenderMedianMs: round(Number(result.cpuRenderMedianMs ?? 0)),
+      cpuRenderP95Ms: round(Number(result.cpuRenderP95Ms ?? 0)),
+      cpuRenderMaxMs: round(Number(result.cpuRenderMaxMs ?? 0)),
+      endToEndMedianMs: round(Number(result.endToEndMedianMs ?? 0)),
+      endToEndP95Ms: round(Number(result.endToEndP95Ms ?? 0)),
+      endToEndMaxMs: round(Number(result.endToEndMaxMs ?? 0)),
       p95Ms: round(Number(result.p95Ms)),
+      decodedAssetEstimateBytes: Number(result.decodedAssetEstimateBytes ?? 0),
+      peakResidentBytes: Number(result.peakResidentBytes ?? 0),
+      residentBytes: Number(entityTextures.residentBytes ?? 0),
+      sourceBytes: Number(entityTextures.sourceBytes ?? 0),
+      processedBytes: Number(entityTextures.processedBytes ?? 0),
+      sourceTextureCount: Number(entityTextures.sourceTextureCount ?? 0),
+      processedTextureCount: Number(entityTextures.processedTextureCount ?? 0),
+      processingTextureBytes: Number(processingTextures.residentBytes ?? 0),
+      processingTextureCount: Number(processingTextures.entryCount ?? 0),
+      processingTextureEvictions: Number(processingTextures.evictions ?? 0),
+      pooledTextureBytes: Number(texturePool.residentBytes ?? 0),
+      pooledTextureCount: Number(texturePool.textureCount ?? 0),
+      renderedEntitiesPerFrame: round(Number(activity.renderedEntitiesPerFrame ?? 0)),
+      sourceTextureAllocations: Number(activity.sourceTextureAllocations ?? 0),
+      processedTextureAllocations: Number(activity.processedTextureAllocations ?? 0),
+      sourceUploads: Number(activity.sourceUploads ?? 0),
+      evictions: Number(activity.evictions ?? 0),
     };
   });
 }
@@ -419,12 +508,47 @@ function summarizeRounds(rounds: readonly BenchRoundRecord[]): BenchSummary[] {
       label: first.label,
       shaderType: first.shaderType,
       entityCount: first.entityCount,
+      imageCount: first.imageCount,
+      videoCount: first.videoCount,
+      timingMode: first.timingMode,
       frames: first.frames,
       sampleCount: first.sampleCount,
       msPerFrame: round(median(summaries.map((item) => item.msPerFrame))),
       cpuEncodeMsPerFrame: round(median(summaries.map((item) => item.cpuEncodeMsPerFrame))),
       queueDrainMsPerFrame: round(median(summaries.map((item) => item.queueDrainMsPerFrame))),
+      sourceUpdateMedianMs: round(median(summaries.map((item) => item.sourceUpdateMedianMs))),
+      sourceUpdateP95Ms: round(median(summaries.map((item) => item.sourceUpdateP95Ms))),
+      rafIntervalMedianMs: round(median(summaries.map((item) => item.rafIntervalMedianMs))),
+      rafIntervalP95Ms: round(median(summaries.map((item) => item.rafIntervalP95Ms))),
+      rafIntervalMaxMs: round(median(summaries.map((item) => item.rafIntervalMaxMs))),
+      cpuRenderMedianMs: round(median(summaries.map((item) => item.cpuRenderMedianMs))),
+      cpuRenderP95Ms: round(median(summaries.map((item) => item.cpuRenderP95Ms))),
+      cpuRenderMaxMs: round(median(summaries.map((item) => item.cpuRenderMaxMs))),
+      endToEndMedianMs: round(median(summaries.map((item) => item.endToEndMedianMs))),
+      endToEndP95Ms: round(median(summaries.map((item) => item.endToEndP95Ms))),
+      endToEndMaxMs: round(median(summaries.map((item) => item.endToEndMaxMs))),
       p95Ms: round(median(summaries.map((item) => item.p95Ms))),
+      decodedAssetEstimateBytes: median(summaries.map((item) => item.decodedAssetEstimateBytes)),
+      peakResidentBytes: median(summaries.map((item) => item.peakResidentBytes)),
+      residentBytes: median(summaries.map((item) => item.residentBytes)),
+      sourceBytes: median(summaries.map((item) => item.sourceBytes)),
+      processedBytes: median(summaries.map((item) => item.processedBytes)),
+      sourceTextureCount: median(summaries.map((item) => item.sourceTextureCount)),
+      processedTextureCount: median(summaries.map((item) => item.processedTextureCount)),
+      processingTextureBytes: median(summaries.map((item) => item.processingTextureBytes)),
+      processingTextureCount: median(summaries.map((item) => item.processingTextureCount)),
+      processingTextureEvictions: median(summaries.map((item) => item.processingTextureEvictions)),
+      pooledTextureBytes: median(summaries.map((item) => item.pooledTextureBytes)),
+      pooledTextureCount: median(summaries.map((item) => item.pooledTextureCount)),
+      renderedEntitiesPerFrame: round(
+        median(summaries.map((item) => item.renderedEntitiesPerFrame)),
+      ),
+      sourceTextureAllocations: median(summaries.map((item) => item.sourceTextureAllocations)),
+      processedTextureAllocations: median(
+        summaries.map((item) => item.processedTextureAllocations),
+      ),
+      sourceUploads: median(summaries.map((item) => item.sourceUploads)),
+      evictions: median(summaries.map((item) => item.evictions)),
     };
   });
 }
@@ -433,9 +557,10 @@ async function writeRecord(record: BenchRecord, outDir: string): Promise<string>
   const resolvedOutDir = resolve(outDir);
   await mkdir(resolvedOutDir, { recursive: true });
   const commit = record.repo.commit?.slice(0, 12) ?? "unknown";
+  const suite = !record.run.scenario && record.run.suite === "many-entity" ? "-many-entity" : "";
   const scenario = record.run.scenario ? `-${record.run.scenario}` : "";
   const timestamp = record.createdAt.replace(/[:.]/g, "-");
-  const fileName = `render-bench-${timestamp}-${commit}${scenario}.json`;
+  const fileName = `render-bench-${timestamp}-${commit}${suite}${scenario}.json`;
   const outputPath = join(resolvedOutDir, fileName);
   const contents = `${JSON.stringify(record, null, 2)}\n`;
   await Bun.write(outputPath, contents);

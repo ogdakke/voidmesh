@@ -1,8 +1,10 @@
 import { config, getViewportLensDistortionConfig, type GridConfig } from "#config";
 import { logger } from "#lib/client.logger.ts";
+import { boundsIntersect, getRotatedAABB, getViewportWorldBounds } from "#lib/canvas-math.ts";
+import { getFrameAtTime } from "#lib/gif-decoder.ts";
 import { setGpuContext } from "./gpu-color-space.ts";
 import type { DisintegrationRenderOverlay, RenderState } from "#engine";
-import type { ShaderCanvasEntity } from "#types/canvas.ts";
+import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import { CanvasLensing } from "#types/enums.ts";
 import { ActionLayerBlurPass } from "./action-layer-blur-pass.ts";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
@@ -10,20 +12,31 @@ import { CompositionPass, type CompositionDrawItem } from "./composition-pass.ts
 import { DisintegrationPass } from "./disintegration-pass.ts";
 import { EntityDrawItemPreparer } from "./entity-draw-item-preparer.ts";
 import { EntityLabelPass } from "./entity-label-pass.ts";
-import { EntityTexturePipeline, type EntityCompositionSource } from "./entity-texture-pipeline.ts";
+import {
+  EntityTexturePipeline,
+  type EntityCompositionSource,
+  type EntityTextureResidencyStats,
+} from "./entity-texture-pipeline.ts";
 import { ExportService } from "./export-service.ts";
 import { ExternalTextureCopyPass } from "./external-texture-copy-pass.ts";
 import type { ImageExportOptions } from "./export-formats.ts";
 import { detectGpuColorConfig, type GpuColorConfig } from "./gpu-color-space.ts";
 import { GridPass } from "./grid-pass.ts";
+import type { ByteBudgetCacheStats } from "./byte-budget-cache.ts";
 import { SelectionRectPass } from "./selection-rect-pass.ts";
-import { TexturePool } from "./texture-pool.ts";
+import { TexturePool, type TexturePoolStats } from "./texture-pool.ts";
 import { ViewportLensPass, type ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
 import { ViewportUniforms } from "./viewport-uniforms.ts";
 import type { WlurOverlayConfig } from "./wlur-overlay.ts";
 import { WlurOverlayPass } from "./wlur-overlay-pass.ts";
 
 export type { ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
+
+export interface RendererResourceStats {
+  entityTextures: EntityTextureResidencyStats;
+  processingTextures: ByteBudgetCacheStats;
+  texturePool: TexturePoolStats;
+}
 
 export class InfiniteCanvasRenderer {
   readonly canvas: HTMLCanvasElement;
@@ -71,6 +84,8 @@ export class InfiniteCanvasRenderer {
 
   #entityDrawItemPreparer: EntityDrawItemPreparer | null = null;
   #entityTexturePipeline: EntityTexturePipeline | null = null;
+  readonly #protectedFullSceneTextureOwners = new Set<string>();
+  readonly #deferredEntityTextureRemovals = new Set<string>();
 
   // Export service for rendering entities to blobs/bitmaps
   #exportService: ExportService | null = null;
@@ -79,6 +94,13 @@ export class InfiniteCanvasRenderer {
   #lastRenderTime = 0;
   #lastEntityCount = 0;
   #lastRenderedCount = 0;
+  #hasLastLodViewport = false;
+  #lastLodOffsetX = 0;
+  #lastLodOffsetY = 0;
+  #lastLodZoom = 0;
+  #lodSettleFramesRemaining = 0;
+  readonly #visibilityViewportBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #visibilityEntityBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -96,12 +118,67 @@ export class InfiniteCanvasRenderer {
     return this.#device;
   }
 
+  isEntityVisible(entity: ShaderCanvasEntity, viewport: Viewport): boolean {
+    const dpr = window.devicePixelRatio || 1;
+    const width = Math.floor(this.#cachedCanvasWidth * dpr);
+    const height = Math.floor(this.#cachedCanvasHeight * dpr);
+    if (width <= 0 || height <= 0) return true;
+
+    return boundsIntersect(
+      getRotatedAABB(entity.position, entity.size, entity.rotation, this.#visibilityEntityBounds),
+      getViewportWorldBounds(
+        viewport,
+        width,
+        height,
+        config.canvas.cullingBufferFraction,
+        this.#visibilityViewportBounds,
+      ),
+    );
+  }
+
   getFrameStats() {
     return {
       renderTime: this.#lastRenderTime,
       entityCount: this.#lastEntityCount,
       renderedCount: this.#lastRenderedCount,
     };
+  }
+
+  /** Snapshot of GPU texture residency and cumulative allocation churn. */
+  getResourceStats(): RendererResourceStats {
+    return {
+      entityTextures: this.#entityTexturePipeline?.getResidencyStats() ?? {
+        budgetBytes: config.rendering.entityTextureBudgetBytes,
+        residentBytes: 0,
+        sourceBytes: 0,
+        processedBytes: 0,
+        sourceTextureCount: 0,
+        processedTextureCount: 0,
+        sourceTextureAllocations: 0,
+        processedTextureAllocations: 0,
+        sourceUploads: 0,
+        evictions: 0,
+      },
+      processingTextures:
+        this.#entityTexturePipeline?.processingPipeline.getTextureCacheStats() ?? {
+          budgetBytes: config.rendering.processingTextureBudgetBytes,
+          residentBytes: 0,
+          entryCount: 0,
+          evictions: 0,
+        },
+      texturePool: this.#texturePool?.getStats() ?? {
+        budgetBytes: config.rendering.texturePoolBudgetBytes,
+        residentBytes: 0,
+        textureCount: 0,
+      },
+    };
+  }
+
+  hasPendingRenderWork(): boolean {
+    return (
+      this.#lodSettleFramesRemaining > 0 ||
+      (this.#entityTexturePipeline?.hasPendingLodWork ?? false)
+    );
   }
 
   async initialize(): Promise<void> {
@@ -272,13 +349,14 @@ export class InfiniteCanvasRenderer {
     items: readonly CompositionDrawItem[],
     selectedEntityCount: number,
   ): void {
-    for (const item of items) {
-      this.#compositionPass!.drawItem(pass, item);
-
-      if (item.isSelected && selectedEntityCount === 1 && this.#entityLabelPass) {
-        this.#entityLabelPass.drawLabel(pass, item.entity, item.offsetX, item.offsetY);
-      }
-    }
+    const labelPass = selectedEntityCount === 1 ? this.#entityLabelPass : null;
+    this.#compositionPass!.drawItems(
+      pass,
+      items,
+      labelPass
+        ? (item) => labelPass.drawLabel(pass, item.entity, item.offsetX, item.offsetY)
+        : undefined,
+    );
   }
 
   /**
@@ -308,24 +386,16 @@ export class InfiniteCanvasRenderer {
       return;
     }
 
+    for (const entityId of this.#deferredEntityTextureRemovals) {
+      this.#entityTexturePipeline?.removeEntity(entityId);
+    }
+    this.#deferredEntityTextureRemovals.clear();
+    this.#protectedFullSceneTextureOwners.clear();
+
     const renderStart = performance.now();
     const frameDt = this.#lastFrameTime > 0 ? (renderStart - this.#lastFrameTime) / 1000 : 1 / 60;
     this.#lastFrameTime = renderStart;
-    const { entities, viewport, hoveredEntityId, selectedEntityIds, debugMode } = state;
-    const traceId = Math.round(renderStart * 1000).toString(36);
-    const markPhaseStart = (phase: string) => {
-      if (!debugMode) return;
-      performance.mark(`canvas:${phase}:start:${traceId}`);
-    };
-    const markPhaseEnd = (phase: string) => {
-      if (!debugMode) return;
-      performance.mark(`canvas:${phase}:end:${traceId}`);
-      performance.measure(
-        `canvas:${phase}`,
-        `canvas:${phase}:start:${traceId}`,
-        `canvas:${phase}:end:${traceId}`,
-      );
-    };
+    const { entities, viewport, selectedEntityIds, debugMode } = state;
 
     // Update canvas size if needed (uses cached dimensions from ResizeObserver)
     const dpr = window.devicePixelRatio || 1;
@@ -344,6 +414,21 @@ export class InfiniteCanvasRenderer {
     }
 
     this.#viewportUniforms.update(viewport, width, height);
+    const viewportChanged =
+      !this.#hasLastLodViewport ||
+      this.#lastLodZoom !== viewport.zoom ||
+      this.#lastLodOffsetX !== viewport.offset.x ||
+      this.#lastLodOffsetY !== viewport.offset.y;
+    if (viewportChanged) {
+      this.#lodSettleFramesRemaining = config.rendering.lodSettleFrames;
+    } else if (this.#lodSettleFramesRemaining > 0) {
+      this.#lodSettleFramesRemaining--;
+    }
+    this.#hasLastLodViewport = true;
+    this.#lastLodOffsetX = viewport.offset.x;
+    this.#lastLodOffsetY = viewport.offset.y;
+    this.#lastLodZoom = viewport.zoom;
+    this.#entityTexturePipeline?.beginFrame(this.#lodSettleFramesRemaining === 0);
 
     // Entity preprocessing can encode shader passes into this same command buffer.
     // External video textures must be imported, bound, encoded, finished, and submitted
@@ -354,23 +439,28 @@ export class InfiniteCanvasRenderer {
 
     // Pre-process entities: render to textures and prepare bind groups
     // Uses caching to avoid per-frame allocations
-    markPhaseStart("entity-prep");
     const preparedEntityDrawItems = this.#entityDrawItemPreparer.prepare({
       entities,
+      entitySpatialIndex: state.entitySpatialIndex,
+      entityVersion: state.entityVersion,
+      geometryVersion: state.geometryVersion,
       viewport,
       width,
       height,
       devicePixelRatio: dpr,
       encoder,
-      hoveredEntityId,
       selectedEntityIds,
       actionLayer: state.actionLayer,
       dragVisual: state.dragVisual,
+      dragSelectActive: state.dragSelectBounds !== null,
+      hasCanvasCallouts: state.canvasCallouts.length > 0,
       debugMode,
     });
-    const { entityDrawItems, actionLayerDrawItems } = preparedEntityDrawItems;
+    const { entityDrawItems, actionLayerDrawItems, fullSceneBatch } = preparedEntityDrawItems;
     let hasAnimatingContent = preparedEntityDrawItems.hasAnimatingContent;
-    markPhaseEnd("entity-prep");
+    this.#compositionPass.beginFrame(
+      fullSceneBatch?.instanceCount ?? entityDrawItems.length + actionLayerDrawItems.length,
+    );
 
     const texture = this.#context.getCurrentTexture();
     // Skip render if swapchain texture is invalid
@@ -384,13 +474,9 @@ export class InfiniteCanvasRenderer {
     const sceneTargetView = viewportLensTarget?.view ?? targetView;
 
     // Pass 1: Render dot grid background
-    markPhaseStart("grid-pass");
     this.#gridPass.encode({ encoder, targetView: sceneTargetView, viewport, width, height });
-    markPhaseEnd("grid-pass");
 
     // Pass 2: Render all entities with interleaved labels (z-ordered)
-    markPhaseStart("entity-pass");
-
     // Update label animation state once per frame
     this.#entityLabelPass?.beginFrame(viewport, width, height, state.dragVisual.isDragPhase);
     const selectedEntityCount = selectedEntityIds.size;
@@ -404,14 +490,18 @@ export class InfiniteCanvasRenderer {
         },
       ],
     });
-    this.#drawCompositionItems(entityPass, entityDrawItems, selectedEntityCount);
+    if (fullSceneBatch) {
+      if (!this.#compositionPass.drawFullSceneBatch(entityPass, fullSceneBatch)) {
+        throw new Error("Prepared full-scene composition batch was invalidated before drawing");
+      }
+    } else {
+      this.#drawCompositionItems(entityPass, entityDrawItems, selectedEntityCount);
+    }
     entityPass.end();
 
     // Evict label caches for deselected entities
     this.#entityLabelPass?.endFrame(selectedEntityIds);
     if (this.#entityLabelPass?.isAnimating) hasAnimatingContent = true;
-
-    markPhaseEnd("entity-pass");
 
     // Pass 2a: Action layer blur overlay
     // Blur+dim everything, then re-render selected entities sharp on top
@@ -422,7 +512,6 @@ export class InfiniteCanvasRenderer {
       this.#entityTexturePipeline &&
       this.#actionLayerBlurPass
     ) {
-      markPhaseStart("action-layer-blur");
       this.#actionLayerBlurPass.encode({
         encoder,
         processingPipeline: this.#entityTexturePipeline.processingPipeline,
@@ -433,7 +522,6 @@ export class InfiniteCanvasRenderer {
         blurIntensity,
         contentDirty: state.dirty || hasAnimatingContent,
       });
-      markPhaseEnd("action-layer-blur");
     }
 
     // Reset blur cache when action layer blur is no longer rendering
@@ -442,7 +530,6 @@ export class InfiniteCanvasRenderer {
     }
 
     // Always render action layer entities on top (sharp, after blur or normally)
-    markPhaseStart("action-layer-sharp");
     if (actionLayerDrawItems.length > 0) {
       const sharpPass = encoder.beginRenderPass({
         label: "Action layer sharp entity pass",
@@ -457,7 +544,6 @@ export class InfiniteCanvasRenderer {
       this.#drawCompositionItems(sharpPass, actionLayerDrawItems, selectedEntityCount);
       sharpPass.end();
     }
-    markPhaseEnd("action-layer-sharp");
 
     if (state.canvasCallouts.length > 0 && this.#canvasCalloutPass) {
       this.#canvasCalloutPass.beginFrame(viewport, width);
@@ -489,7 +575,6 @@ export class InfiniteCanvasRenderer {
 
     // Pass 3: Render all selection rectangles (drag-select and multi-select bounds)
     if ((state.dragSelectBounds || state.multiSelectBounds) && this.#selectionRectPass) {
-      markPhaseStart("selection-rects");
       this.#selectionRectPass.encode({
         encoder,
         targetView: sceneTargetView,
@@ -499,18 +584,14 @@ export class InfiniteCanvasRenderer {
         dragSelectBounds: state.dragSelectBounds,
         multiSelectBounds: state.multiSelectBounds,
       });
-      markPhaseEnd("selection-rects");
     }
 
-    markPhaseStart("viewport-lens-distortion");
     const lensApplied = viewportLensTarget
       ? this.#viewportLensPass!.encode(encoder, targetView, width, height)
       : false;
-    markPhaseEnd("viewport-lens-distortion");
 
     // Final pass: WLUR progressive blur overlay (renders on top of everything)
     if (this.#wlurOverlayPass) {
-      markPhaseStart("wlur-overlay");
       this.#wlurOverlayPass.encode({
         encoder,
         sourceTexture: texture,
@@ -527,19 +608,17 @@ export class InfiniteCanvasRenderer {
           blurIntensity > 0.01 ||
           state.dragSelectBounds !== null,
       });
-      markPhaseEnd("wlur-overlay");
     }
 
     // Single submission for all passes
-    markPhaseStart("queue-submit");
     this.#device.queue.submit([encoder.finish()]);
     this.#entityTexturePipeline?.flushTextureReleases();
-    markPhaseEnd("queue-submit");
+    this.#entityTexturePipeline?.endFrame();
 
     // Record frame stats for performance overlay
     this.#lastRenderTime = performance.now() - renderStart;
     this.#lastEntityCount = entities.length;
-    this.#lastRenderedCount = entityDrawItems.length;
+    this.#lastRenderedCount = fullSceneBatch?.instanceCount ?? entityDrawItems.length;
 
     // Advance texture pool frame counter and cleanup stale textures
     this.#texturePool?.nextFrame();
@@ -587,7 +666,13 @@ export class InfiniteCanvasRenderer {
    * Remove cached resources for an entity
    */
   removeEntityTexture(entityId: string): void {
-    this.#entityTexturePipeline?.removeEntity(entityId);
+    if (!this.#deferredEntityTextureRemovals.has(entityId)) {
+      if (this.#protectedFullSceneTextureOwners.delete(entityId)) {
+        this.#deferredEntityTextureRemovals.add(entityId);
+      } else {
+        this.#entityTexturePipeline?.removeEntity(entityId);
+      }
+    }
     this.#compositionPass?.removeEntity(entityId);
 
     // Clear any errors for this entity
@@ -628,8 +713,14 @@ export class InfiniteCanvasRenderer {
   #createDisintegrationSnapshot(entity: ShaderCanvasEntity): GPUTexture | null {
     if (!this.#device) return null;
     const entityId = entity.id;
+    const fullSceneSource = this.#entityDrawItemPreparer?.getFullSceneSnapshotSource(entity);
+    if (fullSceneSource) {
+      this.#protectedFullSceneTextureOwners.add(fullSceneSource.ownerEntityId);
+    }
 
-    const renderedTexture = this.#entityTexturePipeline?.getProcessedEntityTexture(entityId);
+    const renderedTexture =
+      this.#entityTexturePipeline?.getProcessedEntityTexture(entityId) ??
+      (fullSceneSource?.kind === "processed" ? fullSceneSource.texture : null);
     if (renderedTexture) {
       const snapshotTexture = this.#device.createTexture({
         label: `Disintegration snapshot ${entityId}`,
@@ -646,7 +737,9 @@ export class InfiniteCanvasRenderer {
       return snapshotTexture;
     }
 
-    let sourceTexture = this.#entityTexturePipeline?.getSourceEntityTexture(entityId) ?? null;
+    let sourceTexture =
+      this.#entityTexturePipeline?.getSourceEntityTexture(entityId) ??
+      (fullSceneSource?.kind === "source" ? fullSceneSource.texture : null);
     if (!sourceTexture && entity.mediaSource.type === "video") {
       return this.#copyCurrentVideoFrameToTexture(
         entity,
@@ -746,34 +839,35 @@ export class InfiniteCanvasRenderer {
     entity: ShaderCanvasEntity,
     options?: ImageExportOptions,
   ): Promise<Blob | null> {
-    const displayedTexture = this.#entityTexturePipeline?.getDisplayedEntityTexture(entity) ?? null;
-    if (!displayedTexture) {
-      if (entity.mediaSource.type !== "video" || !entity.shaderParams.showOriginal) return null;
+    const exportSource = this.#getNativeExportSource(entity);
+    if (!exportSource || !this.#exportService) return null;
 
-      const capturedTexture = this.#copyCurrentVideoFrameToTexture(
-        entity,
-        `Entity ${entity.id} original video export texture`,
-      );
-      if (!capturedTexture) return null;
-
-      try {
-        return await this.#exportService!.renderTextureToBlob(
-          capturedTexture,
-          entity.originalSize.width,
-          entity.originalSize.height,
-          options,
-        );
-      } finally {
-        capturedTexture.destroy();
-      }
-    }
-
-    return this.#exportService!.renderTextureToBlob(
-      displayedTexture,
+    return this.#exportService.renderSourceToBlob(
+      entity,
+      exportSource,
       entity.originalSize.width,
       entity.originalSize.height,
       options,
     );
+  }
+
+  #getNativeExportSource(
+    entity: ShaderCanvasEntity,
+  ): ImageBitmap | OffscreenCanvas | HTMLCanvasElement | HTMLVideoElement | null {
+    switch (entity.mediaSource.type) {
+      case MediaType.image:
+        return entity.mediaSource.asset.imageBitmap;
+      case MediaType.gif:
+        return getFrameAtTime(
+          entity.mediaSource.frames,
+          entity.playback?.currentTime ?? 0,
+          entity.playback?.loop ?? true,
+        ).bitmap;
+      case MediaType.svg:
+        return entity.imageBitmap;
+      case MediaType.video:
+        return entity.mediaSource.videoElement;
+    }
   }
 
   /** Whether a shader needs continuous re-rendering for the given entity (e.g., time-based animation). */
@@ -850,6 +944,8 @@ export class InfiniteCanvasRenderer {
 
     // Clear entity errors
     this.#entityErrors.clear();
+    this.#protectedFullSceneTextureOwners.clear();
+    this.#deferredEntityTextureRemovals.clear();
 
     // Disconnect resize observer
     this.#resizeObserver?.disconnect();

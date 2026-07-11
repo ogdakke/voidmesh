@@ -1,3 +1,18 @@
+import { config } from "#config";
+import { getTextureByteSize } from "#lib/textures.ts";
+
+interface PooledTexture {
+  texture: GPUTexture;
+  lastUsedFrame: number;
+  byteSize: number;
+}
+
+export interface TexturePoolStats {
+  budgetBytes: number;
+  residentBytes: number;
+  textureCount: number;
+}
+
 /**
  * Texture pool to eliminate per-frame allocation churn.
  * Caches textures by dimensions and usage flags for reuse.
@@ -5,13 +20,21 @@
 export class TexturePool {
   #device: GPUDevice;
   #format: GPUTextureFormat;
-  #pool: Map<string, { texture: GPUTexture; lastUsedFrame: number }[]> = new Map();
+  #budgetBytes: number;
+  #residentBytes = 0;
+  #textureCount = 0;
+  #pool: Map<string, PooledTexture[]> = new Map();
   #currentFrame = 0;
   #staleFrameThreshold = 60; // Clean up textures unused for 60 frames
 
-  constructor(device: GPUDevice, format: GPUTextureFormat) {
+  constructor(
+    device: GPUDevice,
+    format: GPUTextureFormat,
+    budgetBytes = config.rendering.texturePoolBudgetBytes,
+  ) {
     this.#device = device;
     this.#format = format;
+    this.#budgetBytes = budgetBytes;
   }
 
   /**
@@ -30,7 +53,9 @@ export class TexturePool {
 
     if (pool && pool.length > 0) {
       const entry = pool.pop()!;
-      entry.lastUsedFrame = this.#currentFrame;
+      this.#residentBytes -= entry.byteSize;
+      this.#textureCount--;
+      if (pool.length === 0) this.#pool.delete(key);
       return entry.texture;
     }
 
@@ -55,39 +80,70 @@ export class TexturePool {
       this.#pool.set(key, pool);
     }
 
-    // Limit pool size per key to prevent unbounded growth
-    if (pool.length < 4) {
-      pool.push({ texture, lastUsedFrame: this.#currentFrame });
-    } else {
-      // Pool full, destroy the texture
-      texture.destroy();
+    // The texture may still be referenced by the command buffer currently being encoded.
+    // Keep it recyclable, but never destroy released resources before commitSubmitted(),
+    // which callers invoke strictly after queue.submit().
+    const byteSize = getTextureByteSize(width, height, this.#format);
+    pool.push({ texture, lastUsedFrame: this.#currentFrame, byteSize });
+    this.#residentBytes += byteSize;
+    this.#textureCount++;
+  }
+
+  /** Apply retention limits after the encoder containing released textures was submitted. */
+  commitSubmitted(): void {
+    for (const [key, pool] of this.#pool) {
+      for (let index = pool.length - 1; index >= 0; index--) {
+        const entry = pool[index]!;
+        if (entry.byteSize <= this.#budgetBytes) continue;
+        pool.splice(index, 1);
+        entry.texture.destroy();
+        this.#residentBytes -= entry.byteSize;
+        this.#textureCount--;
+      }
+
+      while (pool.length > 4) {
+        const entry = pool.shift()!;
+        entry.texture.destroy();
+        this.#residentBytes -= entry.byteSize;
+        this.#textureCount--;
+      }
+      if (pool.length === 0) this.#pool.delete(key);
     }
+    this.#trimToBudget();
   }
 
   /**
    * Call at end of each frame to advance frame counter and cleanup stale textures
    */
   nextFrame(): void {
+    this.commitSubmitted();
     this.#currentFrame++;
 
     // Cleanup stale textures every 60 frames
     if (this.#currentFrame % 60 !== 0) return;
 
     for (const [key, pool] of this.#pool.entries()) {
-      const filtered = pool.filter((entry) => {
+      for (let index = pool.length - 1; index >= 0; index--) {
+        const entry = pool[index]!;
         const isStale = this.#currentFrame - entry.lastUsedFrame > this.#staleFrameThreshold;
         if (isStale) {
           entry.texture.destroy();
+          this.#residentBytes -= entry.byteSize;
+          this.#textureCount--;
+          pool.splice(index, 1);
         }
-        return !isStale;
-      });
-
-      if (filtered.length === 0) {
-        this.#pool.delete(key);
-      } else {
-        this.#pool.set(key, filtered);
       }
+
+      if (pool.length === 0) this.#pool.delete(key);
     }
+  }
+
+  getStats(): TexturePoolStats {
+    return {
+      budgetBytes: this.#budgetBytes,
+      residentBytes: this.#residentBytes,
+      textureCount: this.#textureCount,
+    };
   }
 
   /**
@@ -100,5 +156,37 @@ export class TexturePool {
       }
     }
     this.#pool.clear();
+    this.#residentBytes = 0;
+    this.#textureCount = 0;
+  }
+
+  #trimToBudget(): void {
+    while (this.#residentBytes > this.#budgetBytes) {
+      let oldestKey: string | null = null;
+      let oldestIndex = -1;
+      let oldestFrame = Infinity;
+
+      for (const [key, pool] of this.#pool) {
+        for (let index = 0; index < pool.length; index++) {
+          const entry = pool[index]!;
+          if (entry.lastUsedFrame < oldestFrame) {
+            oldestKey = key;
+            oldestIndex = index;
+            oldestFrame = entry.lastUsedFrame;
+          }
+        }
+      }
+
+      if (oldestKey === null) {
+        throw new Error("TexturePool byte accounting exceeded its budget without an entry");
+      }
+
+      const pool = this.#pool.get(oldestKey)!;
+      const [entry] = pool.splice(oldestIndex, 1);
+      entry!.texture.destroy();
+      this.#residentBytes -= entry!.byteSize;
+      this.#textureCount--;
+      if (pool.length === 0) this.#pool.delete(oldestKey);
+    }
   }
 }

@@ -1,5 +1,5 @@
 import type { AnimationScheduler } from "#lib/animation-scheduler.ts";
-import { MediaType, type Bounds, type ShaderCanvasEntity } from "#types/canvas.ts";
+import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import {
   canvasStore,
   type ActionLayerRenderState,
@@ -16,6 +16,7 @@ interface VideoFrameTracker {
   initialized: boolean;
   fallbackFrameIndex: number;
   generation: number;
+  visible: boolean;
 }
 
 export interface CanvasRendererPort {
@@ -27,7 +28,9 @@ export interface CanvasRendererPort {
   };
   render(state: RenderState): void;
   getFrameStats(): FrameStats;
+  hasPendingRenderWork(): boolean;
   needsContinuousRenderForEntity(entity: ShaderCanvasEntity): boolean;
+  isEntityVisible(entity: ShaderCanvasEntity, viewport: Viewport): boolean;
 }
 
 interface FrameLoopDeps {
@@ -66,6 +69,10 @@ export class FrameLoop {
   #videoFrameTrackerGeneration = 0;
   #firstFrameRendered = false;
   #lastFrameTime: number | null = null;
+  #activeEntityVersion = -1;
+  #playingGifs: ShaderCanvasEntity[] = [];
+  #playingVideos: ShaderCanvasEntity[] = [];
+  #continuousShaderEntities: ShaderCanvasEntity[] = [];
 
   constructor(deps: FrameLoopDeps, callbacks: FrameLoopCallbacks) {
     this.#deps = deps;
@@ -80,6 +87,7 @@ export class FrameLoop {
       renderer.colorConfig.canvasColorSpace,
     );
     this.#firstFrameRendered = false;
+    this.#activeEntityVersion = -1;
   }
 
   start(): void {
@@ -107,31 +115,28 @@ export class FrameLoop {
     this.#lastFrameTime = now;
 
     let hasAnimatedFrameUpdate = false;
-    let hasContinuousShaderRender = false;
     this.#videoFrameTrackerGeneration++;
+    this.#refreshActiveEntities();
 
     // 2. Advance GIF playback and update video time for all playing animated entities.
     // Uses entity refs directly — getRenderState() is deferred until after all ticks
     // so the viewport snapshot reflects this frame's updates, not the previous frame's.
-    for (const entity of canvasStore.getState().entities.values()) {
-      if (entity.mediaSource.type === MediaType.gif && entity.playback?.isPlaying) {
-        canvasStore.advanceGifPlayback(entity.id, deltaSeconds);
-        // Notify playback subscribers for real-time time display updates
-        canvasStore.updateGifPlaybackTime(entity.id, entity.playback.currentTime);
-        if (entity.textureDirty) hasAnimatedFrameUpdate = true;
-      }
-      // Update video playback time continuously
-      if (entity.mediaSource.type === MediaType.video && entity.playback?.isPlaying) {
-        const video = entity.mediaSource.videoElement;
-        canvasStore.updatePlaybackTime(entity.id, video.currentTime);
-        if (this.#consumeVideoFrameUpdate(entity.id, video, entity.mediaSource.fps)) {
-          canvasStore.markEntityTextureDirty(entity.id);
-          hasAnimatedFrameUpdate = true;
-        }
-      }
-      // Check if any shader needs continuous re-rendering (e.g., time-based animation)
-      if (!hasContinuousShaderRender && this.#renderer?.needsContinuousRenderForEntity(entity)) {
-        hasContinuousShaderRender = true;
+    const viewport = canvasStore.getState().viewport;
+    for (const entity of this.#playingGifs) {
+      if (entity.mediaSource.type !== MediaType.gif || !entity.playback?.isPlaying) continue;
+      const updateFrame = this.#renderer?.isEntityVisible(entity, viewport) ?? true;
+      const frameChanged = canvasStore.advanceGifPlayback(entity.id, deltaSeconds, updateFrame);
+      canvasStore.updateGifPlaybackTime(entity.id, entity.playback.currentTime);
+      if (frameChanged) hasAnimatedFrameUpdate = true;
+    }
+    for (const entity of this.#playingVideos) {
+      if (entity.mediaSource.type !== MediaType.video || !entity.playback?.isPlaying) continue;
+      const video = entity.mediaSource.videoElement;
+      const isVisible = this.#renderer?.isEntityVisible(entity, viewport) ?? true;
+      canvasStore.updatePlaybackTime(entity.id, video.currentTime);
+      if (this.#consumeVideoFrameUpdate(entity.id, video, entity.mediaSource.fps, isVisible)) {
+        canvasStore.markEntityTextureDirty(entity.id);
+        hasAnimatedFrameUpdate = true;
       }
     }
     this.#cleanupInactiveVideoFrameTrackers();
@@ -142,39 +147,34 @@ export class FrameLoop {
     // 4. Process input (hover detection, drag updates)
     this.#callbacks.processInput();
 
-    // 5. Snapshot render state AFTER all ticks so the viewport reflects
-    // this frame's animation/momentum/input updates, not the previous frame's.
-    const renderState = canvasStore.getRenderState();
-    this.#deps.perf.onFrame(renderState.debugMode, now);
-
-    // 6. Add selection bounds to render state (managed by game-loop, not store)
-    renderState.dragSelectBounds = this.#callbacks.getDragSelectBounds();
-    renderState.multiSelectBounds = this.#callbacks.getMultiSelectBounds();
-    renderState.actionLayer = this.#callbacks.getActionLayerRenderState();
-    renderState.dragVisual = this.#callbacks.getDragVisualRenderState();
-    renderState.disintegration = this.#callbacks.getDisintegrationRenderState(now);
+    const debugMode = canvasStore.getState().debugMode;
+    this.#deps.perf.onFrame(debugMode, now);
 
     // 7. Determine if we need to render this frame
     const needsRender =
       !this.#firstFrameRendered ||
-      renderState.dirty ||
+      canvasStore.hasRenderChanges() ||
       hasAnimatedFrameUpdate ||
-      hasContinuousShaderRender ||
+      this.#continuousShaderEntities.length > 0 ||
       this.#deps.scheduler.hasActive ||
       this.#callbacks.isPointerDragging() ||
-      this.#callbacks.isDragSelectActive();
+      this.#callbacks.isDragSelectActive() ||
+      this.#renderer?.hasPendingRenderWork();
 
     // 8. Render only when needed (skip idle frames)
     if (this.#renderer?.isReady && needsRender) {
-      if (renderState.debugMode) performance.mark("studio-render-start");
+      // Snapshot the O(entity count) render array only after deciding that a frame is needed.
+      const renderState = canvasStore.getRenderState();
+      renderState.dragSelectBounds = this.#callbacks.getDragSelectBounds();
+      renderState.multiSelectBounds = this.#callbacks.getMultiSelectBounds();
+      renderState.actionLayer = this.#callbacks.getActionLayerRenderState();
+      renderState.dragVisual = this.#callbacks.getDragVisualRenderState();
+      renderState.disintegration = this.#callbacks.getDisintegrationRenderState(now);
+
       try {
         this.#renderer.render(renderState);
         this.#firstFrameRendered = true;
-        if (renderState.debugMode) {
-          performance.mark("studio-render-end");
-          performance.measure("studio-render", "studio-render-start", "studio-render-end");
-        }
-        this.#deps.perf.onRender(this.#renderer.getFrameStats(), renderState.debugMode);
+        this.#deps.perf.onRender(this.#renderer.getFrameStats(), debugMode);
       } catch (error) {
         this.#callbacks.onRenderError(error);
       }
@@ -191,7 +191,32 @@ export class FrameLoop {
     this.#animationFrameId = requestAnimationFrame(this.#tick);
   };
 
-  #consumeVideoFrameUpdate(entityId: string, video: HTMLVideoElement, fps: number | null): boolean {
+  #refreshActiveEntities(): void {
+    const state = canvasStore.getState();
+    if (state.entityVersion === this.#activeEntityVersion) return;
+
+    this.#activeEntityVersion = state.entityVersion;
+    this.#playingGifs = [];
+    this.#playingVideos = [];
+    this.#continuousShaderEntities = [];
+    for (const entity of state.entities.values()) {
+      if (entity.mediaSource.type === MediaType.gif && entity.playback?.isPlaying) {
+        this.#playingGifs.push(entity);
+      } else if (entity.mediaSource.type === MediaType.video && entity.playback?.isPlaying) {
+        this.#playingVideos.push(entity);
+      }
+      if (this.#renderer?.needsContinuousRenderForEntity(entity)) {
+        this.#continuousShaderEntities.push(entity);
+      }
+    }
+  }
+
+  #consumeVideoFrameUpdate(
+    entityId: string,
+    video: HTMLVideoElement,
+    fps: number | null,
+    isVisible: boolean,
+  ): boolean {
     let tracker = this.#videoFrameTrackers.get(entityId);
     if (!tracker || tracker.video !== video) {
       if (tracker) this.#cancelVideoFrameCallback(tracker);
@@ -202,11 +227,14 @@ export class FrameLoop {
         initialized: false,
         fallbackFrameIndex: this.#getVideoFallbackFrameIndex(video, fps),
         generation: this.#videoFrameTrackerGeneration,
+        visible: false,
       };
       this.#videoFrameTrackers.set(entityId, tracker);
     }
 
     tracker.generation = this.#videoFrameTrackerGeneration;
+    const becameVisible = isVisible && !tracker.visible;
+    tracker.visible = isVisible;
 
     if ("requestVideoFrameCallback" in video) {
       this.#scheduleVideoFrameCallback(entityId, tracker);
@@ -214,21 +242,21 @@ export class FrameLoop {
         tracker.initialized = true;
         tracker.dirty = true;
       }
-      if (!tracker.dirty) return false;
+      if (!tracker.dirty) return becameVisible;
       tracker.dirty = false;
-      return true;
+      return isVisible;
     }
 
     const frameIndex = this.#getVideoFallbackFrameIndex(video, fps);
     if (!tracker.initialized) {
       tracker.initialized = true;
       tracker.fallbackFrameIndex = frameIndex;
-      return true;
+      return isVisible;
     }
-    if (frameIndex === tracker.fallbackFrameIndex) return false;
+    if (frameIndex === tracker.fallbackFrameIndex) return becameVisible;
 
     tracker.fallbackFrameIndex = frameIndex;
-    return true;
+    return isVisible;
   }
 
   #scheduleVideoFrameCallback(entityId: string, tracker: VideoFrameTracker): void {

@@ -9,12 +9,16 @@ A `.vdmsh` file is a zip containing:
 ```
 manifest.json     # viewport + entity metadata (versioned)
 media/
-  <entity-id>.png   # images (re-encoded as PNG)
+  assets/<asset-id>-<revision>.png # shared images (one PNG per asset)
   <entity-id>.mp4   # videos (original bytes)
   <entity-id>.gif   # GIFs (original bytes)
 ```
 
-`manifest.json` schema: `StudioManifest` (see `types.ts`), currently **v1**.
+`manifest.json` schema: `StudioManifest` (see `types.ts`), currently **v5**.
+
+Multiple image entities may reference the same `mediaFile`. Serialization writes one PNG per shared image asset, and deserialization restores one reference-counted `MediaImageAsset` for every repeated path.
+
+Import validates and decodes into staged ownership first. The live workspace is replaced only when the caller adopts the complete decoded batch; aborts and pre-adoption failures dispose the staged media without changing live state.
 
 ## API
 
@@ -24,8 +28,13 @@ import { serialize, deserialize, getMaxCounters } from "./index.ts";
 // Save
 const blob: Blob = await serialize();
 
-// Load — clears canvas and restores all entities + viewport
-const result = await deserialize(blob); // or ArrayBuffer
+// Load — decoding stays staged until the owner adopts the complete workspace
+const result = await deserialize(blob, (workspace) => {
+  workspace.adopt((entities, viewport) => {
+    canvasStore.restoreWorkspace(entities, viewport);
+  });
+  paletteStore.mergePalettes(workspace.palettes);
+});
 // result: { success, entityCount, warnings, errors[] }
 
 // After load, sync canvas ID/zIndex counters

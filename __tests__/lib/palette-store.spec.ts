@@ -46,6 +46,20 @@ describe("PaletteStore", () => {
     expect(paletteStore.getPalettes()).toEqual([p1, p2]);
   });
 
+  test("mergePalettes adds missing IDs in one notification", () => {
+    const existing = makePalette("cstm_existing");
+    const added = makePalette("cstm_added");
+    paletteStore.addPalette(existing);
+    let notifications = 0;
+    const unsubscribe = paletteStore.subscribe(() => notifications++);
+
+    paletteStore.mergePalettes([existing, added, added, makePalette("")]);
+
+    expect(paletteStore.getPalettes()).toEqual([existing, added]);
+    expect(notifications).toBe(1);
+    unsubscribe();
+  });
+
   test("updatePalette replaces by ID", () => {
     const original = makePalette("cstm_a", "Original");
     paletteStore.addPalette(original);

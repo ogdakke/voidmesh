@@ -328,7 +328,7 @@ export const paramVisibilityRules: Partial<
 // Uniform buffer sizes (16-byte aligned)
 const GRID_UNIFORM_SIZE = 64; // resolution(8) + offset(8) + zoom(4) + gridSize(4) + dotSize(4) + padding(4) + bgColor(16) + dotColor(16)
 const VIEWPORT_UNIFORM_SIZE = 64; // matrix(48) + resolution(8) + padding(8)
-const ENTITY_UNIFORM_SIZE = 48; // position(8) + size(8) + rotation(4) + isHovered(4) + isSelected(4) + padding(8)
+const ENTITY_UNIFORM_SIZE = 48; // position(8) + size(8) + rotation(4) + reserved(4) + isSelected(4) + padding(8)
 const HALFTONE_UNIFORM_SIZE = 336; // Extended to match dithering for palette support
 // Dithering uniform buffer (extended for palette support):
 // Base (64 bytes) + paletteCount(4) + padding(12) + palette[16](256) = 336 bytes
@@ -486,6 +486,26 @@ export const config = {
     adjustmentsUniformSize: ADJUSTMENTS_UNIFORM_SIZE,
     blurUniformSize: BLUR_UNIFORM_SIZE,
     maxStorageBufferSizeBytes: DEFAULT_MAX_STORAGE_BUFFER_SIZE_BYTES,
+    /** Persistent source + processed entity texture budget. Visible textures stay pinned. */
+    entityTextureBudgetBytes: 512 * 1024 * 1024,
+    /** Maximum idle scratch memory retained by TexturePool across dimensions/usages. */
+    texturePoolBudgetBytes: 64 * 1024 * 1024,
+    /** Persistent dimension-keyed blur and bloom texture budget. */
+    processingTextureBudgetBytes: 128 * 1024 * 1024,
+    /** Quantized maximum dimensions for static-image viewport rendering. */
+    imageLodTiers: [64, 128, 256, 512, 1024, 2048, 4096] as const,
+    /** Extra physical pixels retained around the projected size before promotion. */
+    imageLodOverscan: 1.25,
+    /** Unchanged rendered frames required before LOD convergence begins. */
+    lodSettleFrames: 2,
+    /** Maximum source/processed dimension changes admitted in one settled frame. */
+    lodTransitionsPerFrame: 4,
+    /** Maximum target pixels admitted per settled frame (one oversized item may progress). */
+    lodTransitionPixelBudget: 2 * 1024 * 1024,
+    /** Minimum homogeneous static-image scene size worth caching as one persistent draw. */
+    fullSceneBatchMinEntityCount: 16_384,
+    /** Minimum visible fraction required when admitting or rebuilding a full-scene batch. */
+    fullSceneBatchMinVisibleFraction: 0.25,
     grid: {
       default: DEFAULT_GRID_CONFIG,
       dark: DEFAULT_GRID_CONFIG_DARK,
@@ -498,6 +518,8 @@ export const config = {
     minZoom: 0.01,
     maxZoom: 10,
     staggerMultiplier: 60,
+    /** Maximum deletion batch that may allocate per-entity disintegration snapshots. */
+    fancyDeleteMaxBatchSize: 32,
     /** Gap between entities in layout (world pixels). Equals SNAP_GRID_SIZE (1 snap cell). */
     layoutGap: 125,
     /** Maximum columns in grid layout */

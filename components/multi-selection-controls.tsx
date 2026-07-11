@@ -12,12 +12,7 @@ export function MultiSelectionControls() {
         <Button
           variant="primary"
           disabled={entityCount === 0 || allSelected}
-          onClick={() => {
-            const allIds = [...canvasStore.getState().entities.keys()];
-            if (allIds.length > 0) {
-              canvasStore.replaceSelection(allIds);
-            }
-          }}
+          onClick={() => canvasStore.selectAll()}
         >
           Select All
         </Button>

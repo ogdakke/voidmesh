@@ -246,6 +246,7 @@ export class HeadlessExportRenderer {
     return {
       id: snapshot.id,
       originalSize: { width, height },
+      pixelScale: 1,
       shaderType: snapshot.shaderType,
       shaderParams: snapshot.shaderParams,
     };

@@ -389,13 +389,24 @@ export const MediaType = createEnum({
 
 export type MediaType = typeof MediaType.infer;
 
-export type MediaSourceImage = {
-  type: typeof MediaType.image;
+export interface MediaImageAsset {
+  /** Stable identity shared by every canvas instance of this image. */
+  id: string;
+  /** Incremented when the underlying image pixels change. */
+  revision: number;
+  /** Whether decoded samples can carry alpha. JPEG assets are known opaque. */
+  alphaMode: MediaAlphaMode;
   imageBitmap: ImageBitmap;
   /** Original source data for lossless duplication */
   blob: Blob;
   /** Derived alpha occupancy grid for pointer hit testing */
   alphaHitGrid?: AlphaHitGrid;
+}
+
+export type MediaSourceImage = {
+  type: typeof MediaType.image;
+  /** Shared media payload. Per-entity state belongs on the entity. */
+  asset: MediaImageAsset;
 };
 export type MediaAlphaMode = "none" | "supported" | "unknown";
 
@@ -578,7 +589,7 @@ export type DragTargetType = typeof DragTargetType.infer;
 
 /** Selection state computed from selected entities */
 export interface SelectionState {
-  entityIds: Set<string>;
+  entityIds: ReadonlySet<string>;
   count: number;
   isEmpty: boolean;
   isSingle: boolean;
@@ -589,15 +600,6 @@ export interface SelectionState {
   hasUniformShader: boolean;
   commonParams: (keyof ShaderParams)[];
   colorMode: ColorMode | "mixed";
-
-  // For specific params, whether all selected have same value
-  paramValues: {
-    [K in keyof ShaderParams]?: {
-      isUniform: boolean;
-      value: ShaderParams[K] | null; // null if mixed
-      values: Set<ShaderParams[K]>; // all distinct values
-    };
-  };
 }
 
 /** For UI components to know what selection mode they're in */

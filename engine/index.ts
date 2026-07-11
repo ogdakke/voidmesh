@@ -2,6 +2,7 @@ export { CanvasStore, canvasStore } from "./canvas-store.ts";
 export type {
   CanvasState,
   RenderState,
+  CanvasEntityUpdate,
   ActionLayerRenderState,
   DragVisualRenderState,
   DisintegrationRenderOverlay,

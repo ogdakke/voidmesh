@@ -6,12 +6,14 @@ import {
   worldPointToEntityLocal,
 } from "#lib/alpha-hit-testing.ts";
 import { MediaType, type Point, type ShaderCanvasEntity } from "#types/canvas.ts";
-import type { CanvasState } from "./canvas-store.ts";
 
-export function findEntityAtPoint(worldPoint: Point, state: CanvasState): string | null {
-  for (let i = state.entityIds.length - 1; i >= 0; i--) {
-    const entity = state.entities.get(state.entityIds[i]!);
-    if (!entity || entity.locked) continue;
+export function findEntityAtPoint(
+  worldPoint: Point,
+  candidates: readonly ShaderCanvasEntity[],
+): string | null {
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    const entity = candidates[i]!;
+    if (entity.locked) continue;
 
     const localPoint = worldPointToEntityLocal(worldPoint, entity);
     if (!localPoint) continue;

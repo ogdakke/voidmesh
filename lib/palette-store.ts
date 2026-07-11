@@ -40,6 +40,28 @@ class PaletteStore extends Store<PaletteStoreState> {
     this.#persist();
   }
 
+  /** Add palettes whose IDs are not already present, in one mutation. */
+  mergePalettes(palettes: readonly ColorPalette[]): void {
+    if (palettes.length === 0) return;
+
+    const knownIds = new Set<string>();
+    for (const palette of this.state.customPalettes) {
+      if (palette.id) knownIds.add(palette.id);
+    }
+    const additions: ColorPalette[] = [];
+    for (const palette of palettes) {
+      if (!palette.id || knownIds.has(palette.id)) continue;
+      knownIds.add(palette.id);
+      additions.push(palette);
+    }
+    if (additions.length === 0) return;
+
+    this.state.customPalettes = [...this.state.customPalettes, ...additions];
+    this.state.version++;
+    this.notify();
+    this.#persist();
+  }
+
   /** Update an existing palette by ID */
   updatePalette(id: string, palette: ColorPalette): void {
     this.state.customPalettes = this.state.customPalettes.map((p) => (p.id === id ? palette : p));

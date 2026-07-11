@@ -42,13 +42,18 @@ import {
   generatePaletteShortName,
 } from "#components/palette-preset/palette-presets.ts";
 import type { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
-import type { DeserializeOptions, DeserializeResult } from "#lib/serialization/types.ts";
+import type {
+  DecodedWorkspace,
+  DeserializeOptions,
+  DeserializeResult,
+} from "#lib/serialization/types.ts";
 import { type ImageExportOptions, getImageExtension } from "#renderer/export-formats.ts";
-import { canvasStore, disintegrationController, gameLoop } from "#engine";
+import { canvasStore, disintegrationController, gameLoop, type CanvasEntityUpdate } from "#engine";
 
 import { toastManager } from "#components/ui/toast/toast-manager.ts";
 import { hints } from "#components/ui/hint/hint-manager.ts";
 import { extractOriginalPalette, cloneMediaSource } from "#lib/media-loader.ts";
+import { disposeEntityMedia, disposeMediaSource } from "#lib/media-resources.ts";
 import { Command, undo } from "#lib/undo.ts";
 import {
   createDuplicatePlaybackState,
@@ -84,6 +89,31 @@ function formatErrorMessage(error: unknown): string {
   return "Unknown error";
 }
 
+function captureEntityForDeletion(entity: ShaderCanvasEntity): ShaderCanvasEntity {
+  // The entity leaves live store/renderer state synchronously and cannot be edited
+  // until undo restores it. Any edit after undo clears the redo branch, so retaining
+  // this object is both stable and dramatically cheaper than cloning shader params.
+  return entity;
+}
+
+function pauseDeletedEntity(entity: ShaderCanvasEntity): boolean {
+  const wasPlaying = entity.playback?.isPlaying ?? false;
+  if (entity.mediaSource.type === MediaType.video) {
+    entity.mediaSource.videoElement.pause();
+  } else if (isGifEntity(entity) && entity.playback) {
+    entity.playback.isPlaying = false;
+  }
+  return wasPlaying;
+}
+
+function resumeDeletedEntity(entity: ShaderCanvasEntity, wasPlaying: boolean): void {
+  if (!wasPlaying) return;
+  if (entity.mediaSource.type === MediaType.video) {
+    entity.mediaSource.videoElement.play().catch((error) => logger.error(error));
+  }
+  if (entity.playback) entity.playback.isPlaying = true;
+}
+
 function isFirefoxExternalTextureCorsError(error: unknown): boolean {
   if (!(error instanceof DOMException)) return false;
 
@@ -113,24 +143,7 @@ function tryCleanupEntityResources(entity: ShaderCanvasEntity, ownerToken: numbe
 }
 
 function destroyEntityMediaResources(entity: ShaderCanvasEntity): void {
-  if (entity.mediaSource.type === MediaType.video) {
-    const video = entity.mediaSource.videoElement;
-    const videoSrc = video.src;
-    video.pause();
-    video.src = "";
-    video.load();
-    URL.revokeObjectURL(videoSrc);
-    entity.imageBitmap.close();
-  } else if (isGifEntity(entity)) {
-    for (const frame of entity.mediaSource.frames) {
-      frame.bitmap.close();
-    }
-  } else if (entity.mediaSource.type === MediaType.svg) {
-    entity.imageBitmap.close();
-  } else if (entity.mediaSource.type === MediaType.image) {
-    entity.imageBitmap.close();
-  }
-
+  disposeEntityMedia(entity);
   resourceOwners.delete(entity.id);
 }
 
@@ -577,7 +590,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         extractOriginalPalette(entity.imageBitmap, colorSpaceRef.current)
           .then((palette) => {
             const currentEntity = canvasStore.getState().entities.get(id);
-            if (!currentEntity) return; // Entity was deleted
+            if (currentEntity?.mediaSource !== newEntity.mediaSource) return;
 
             canvasStore.updateEntity(id, { originalPalette: palette });
 
@@ -629,31 +642,44 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     );
   };
 
+  const updateShaderParamsBatch = (
+    entities: readonly ShaderCanvasEntity[],
+    createParams: (entity: ShaderCanvasEntity) => ShaderParams,
+    description: string,
+  ) => {
+    const previousBatch: CanvasEntityUpdate[] = [];
+    const nextBatch: CanvasEntityUpdate[] = [];
+    for (const entity of entities) {
+      previousBatch.push({
+        id: entity.id,
+        updates: { shaderParams: entity.shaderParams, textureDirty: true },
+      });
+      nextBatch.push({
+        id: entity.id,
+        updates: { shaderParams: createParams(entity), textureDirty: true },
+      });
+    }
+
+    canvasStore.updateEntities(nextBatch);
+    undo.add(
+      Command.create({
+        undo: () => canvasStore.updateEntities(previousBatch),
+        execute: () => canvasStore.updateEntities(nextBatch),
+        description,
+      }),
+    );
+  };
+
   const removeEntity = (id: string) => {
     // Get entity before removal - deep clone to preserve all data including video element reference
     const entity = canvasStore.getState().entities.get(id);
     if (!entity) return;
 
     // Clone the entity but keep the video element reference (we need it for restore)
-    const entityCopy: ShaderCanvasEntity = {
-      ...entity,
-      position: { ...entity.position },
-      size: { ...entity.size },
-      shaderParams: structuredClone(entity.shaderParams),
-      originalPalette: entity.originalPalette ? structuredClone(entity.originalPalette) : undefined,
-      // Keep mediaSource as-is (references to videoElement/imageBitmap are needed for restore)
-      mediaSource: entity.mediaSource as any,
-    };
+    const entityCopy = captureEntityForDeletion(entity);
 
     // Capture playback state before pausing (entityCopy.playback is a shared reference)
-    const wasPlaying = entity.playback?.isPlaying ?? false;
-
-    // For animated entities, pause but DON'T destroy resources yet
-    if (entity.mediaSource.type === MediaType.video) {
-      entity.mediaSource.videoElement.pause();
-    } else if (isGifEntity(entity) && entity.playback) {
-      entity.playback.isPlaying = false;
-    }
+    const wasPlaying = pauseDeletedEntity(entity);
 
     // Snapshot the entity's rendered texture and start dust animation overlay.
     // This copies the GPU texture so the entity can be removed immediately.
@@ -683,27 +709,82 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           // Restore the entity with all its resources
           canvasStore.addEntity(entityCopy);
           // Resume playback if entity was playing when deleted
-          if (wasPlaying) {
-            if (entityCopy.mediaSource.type === MediaType.video) {
-              entityCopy.mediaSource.videoElement.play().catch((e) => logger.error(e));
-            }
-            if (entityCopy.playback) {
-              entityCopy.playback.isPlaying = true;
-            }
-          }
+          resumeDeletedEntity(entityCopy, wasPlaying);
         },
         execute: () => {
           // Re-delete the entity (no animation on redo)
-          if (entityCopy.mediaSource.type === MediaType.video) {
-            entityCopy.mediaSource.videoElement.pause();
-          } else if (isGifEntity(entityCopy) && entityCopy.playback) {
-            entityCopy.playback.isPlaying = false;
-          }
+          pauseDeletedEntity(entityCopy);
           rendererRef.current?.removeEntityTexture(entityCopy.id);
           canvasStore.removeEntity(entityCopy.id);
         },
         onEvict: () => tryCleanupEntityResources(entityCopy, ownerToken),
         description: `Delete entity ${entity.name}`,
+      }),
+    );
+  };
+
+  const removeEntityBatch = (entities: readonly ShaderCanvasEntity[]) => {
+    const entityCopies = new Array<ShaderCanvasEntity>(entities.length);
+    const wasPlaying = new Array<boolean>(entities.length);
+    const ownerTokens = new Array<number>(entities.length);
+    const entityIds = new Set<string>();
+    const renderer = rendererRef.current;
+    const animate =
+      canvasStore.getState().fancyDelete &&
+      entities.length <= config.canvas.fancyDeleteMaxBatchSize;
+
+    for (let index = 0; index < entities.length; index++) {
+      const entity = entities[index]!;
+      const entityCopy = captureEntityForDeletion(entity);
+      entityCopies[index] = entityCopy;
+      wasPlaying[index] = pauseDeletedEntity(entity);
+      entityIds.add(entity.id);
+
+      if (animate) {
+        const overlay = disintegrationController.addOverlay(
+          entity.id,
+          entity.position,
+          entity.size,
+          entity.rotation,
+        );
+        if (!renderer?.startDisintegration(entity, overlay)) {
+          disintegrationController.cancelOverlay(entity.id);
+        }
+      }
+      renderer?.removeEntityTexture(entity.id);
+    }
+    canvasStore.removeEntities(entityIds);
+    for (let index = 0; index < entityCopies.length; index++) {
+      ownerTokens[index] = claimResourceOwnership(entityCopies[index]!.id);
+    }
+
+    undo.add(
+      Command.create({
+        undo: () => {
+          for (let index = 0; index < entityCopies.length; index++) {
+            const entity = entityCopies[index]!;
+            disintegrationController.cancelOverlay(entity.id);
+            rendererRef.current?.cancelDisintegration(entity.id);
+          }
+          canvasStore.addEntities(entityCopies);
+          for (let index = 0; index < entityCopies.length; index++) {
+            resumeDeletedEntity(entityCopies[index]!, wasPlaying[index]!);
+          }
+        },
+        execute: () => {
+          const currentRenderer = rendererRef.current;
+          for (const entity of entityCopies) {
+            pauseDeletedEntity(entity);
+            currentRenderer?.removeEntityTexture(entity.id);
+          }
+          canvasStore.removeEntities(entityIds);
+        },
+        onEvict: () => {
+          for (let index = 0; index < entityCopies.length; index++) {
+            tryCleanupEntityResources(entityCopies[index]!, ownerTokens[index]!);
+          }
+        },
+        description: `Delete ${entityCopies.length} entities`,
       }),
     );
   };
@@ -761,8 +842,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
     analytics.track("entity.duplicated", { entity_count: selected.length });
 
-    // Clone all media sources in parallel (async: creates independent video elements, bitmaps, etc.)
-    const clones = await Promise.all(
+    // Wait for every clone so a sibling failure cannot strand already-created media.
+    const cloneResults = await Promise.allSettled(
       selected.map(async (entity) => {
         const { mediaSource, imageBitmap } = await cloneMediaSource(
           entity.mediaSource,
@@ -771,8 +852,33 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         return { entity, mediaSource, imageBitmap };
       }),
     );
+    const clones: Array<{
+      entity: ShaderCanvasEntity;
+      mediaSource: ShaderCanvasEntity["mediaSource"];
+      imageBitmap: ImageBitmap;
+    }> = [];
+    let cloneFailed = false;
+    let cloneFailure: unknown;
+    for (const result of cloneResults) {
+      if (result.status === "fulfilled") {
+        clones.push(result.value);
+      } else if (!cloneFailed) {
+        cloneFailed = true;
+        cloneFailure = result.reason;
+      }
+    }
+    if (cloneFailed) {
+      for (const clone of clones) {
+        disposeMediaSource(clone.mediaSource, clone.imageBitmap);
+      }
+      throw cloneFailure;
+    }
 
     const newIds: string[] = [];
+    const duplicateBatch: ShaderCanvasEntity[] = [];
+    const existingNames = new Set(
+      Array.from(canvasStore.getState().entities.values(), (entity) => entity.name),
+    );
     const useTransaction = clones.length > 1;
     if (useTransaction) undo.beginTransaction();
 
@@ -780,10 +886,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       const id = `entity-${nextIdRef.current++}`;
       const zIndex = nextZIndexRef.current++;
       const baseName = entity.name;
-      const entities = canvasStore.getState().entities;
       let n = 1;
-      while (entities.values().some((e) => e.name === `${baseName} (${n})`)) n++;
+      while (existingNames.has(`${baseName} (${n})`)) n++;
       const name = `${baseName} (${n})`;
+      existingNames.add(name);
       const playback = createDuplicatePlaybackState(entity);
       resetDuplicatedMediaPlayback(mediaSource, playback);
 
@@ -797,10 +903,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         originalSize: { ...entity.originalSize },
         mediaSource: mediaSource as any,
         imageBitmap,
-        shaderParams: structuredClone(entity.shaderParams),
-        originalPalette: entity.originalPalette
-          ? structuredClone(entity.originalPalette)
-          : undefined,
+        // Nested shader state is replaced immutably and can stay shared. Keep the
+        // top level independent because renderer time controls mutate it in place.
+        shaderParams: { ...entity.shaderParams },
+        originalPalette: entity.originalPalette,
         playback,
         texture: undefined,
         textureDirty: true,
@@ -808,7 +914,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         edited: false,
       };
 
-      canvasStore.addEntity(clone);
+      duplicateBatch.push(clone);
       newIds.push(id);
 
       const ownerToken = claimResourceOwnership(clone.id);
@@ -832,6 +938,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       );
     }
 
+    canvasStore.addEntities(duplicateBatch);
+
     if (useTransaction) undo.commitTransaction(`Duplicate ${selected.length} entities`);
 
     canvasStore.replaceSelection(newIds);
@@ -852,7 +960,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     if (entities.length === 1) {
       // Single selection: update entity directly
       const entity = entities[0]!;
-      const previousParams = skipUndo ? null : structuredClone(entity.shaderParams);
+      const previousParams = skipUndo ? null : entity.shaderParams;
 
       // Deep merge params (handles nested objects at any depth)
       const newParams = deepMerge(entity.shaderParams, params);
@@ -880,38 +988,34 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         );
       }
     } else {
-      // Multi-select: update all with transaction
-      if (!skipUndo) undo.beginTransaction();
-      for (const entity of entities) {
-        const previousParams = skipUndo ? null : structuredClone(entity.shaderParams);
-
-        // Deep merge params (handles nested objects at any depth)
-        const newParams: ShaderParams = deepMerge(entity.shaderParams, params);
-
-        canvasStore.updateEntity(entity.id, {
-          shaderParams: newParams,
+      const previousBatch = skipUndo
+        ? null
+        : entities.map((entity) => ({
+            id: entity.id,
+            updates: {
+              shaderParams: entity.shaderParams,
+              textureDirty: true,
+            },
+          }));
+      const nextBatch = entities.map((entity) => ({
+        id: entity.id,
+        updates: {
+          shaderParams: deepMerge(entity.shaderParams, params) as ShaderParams,
           textureDirty: true,
-        });
+        },
+      }));
 
-        if (!skipUndo) {
-          undo.add(
-            Command.create({
-              undo: () =>
-                canvasStore.updateEntity(entity.id, {
-                  shaderParams: previousParams!,
-                  textureDirty: true,
-                }),
-              execute: () =>
-                canvasStore.updateEntity(entity.id, {
-                  shaderParams: newParams,
-                  textureDirty: true,
-                }),
-              description: `Update params for ${entity.id}`,
-            }),
-          );
-        }
+      canvasStore.updateEntities(nextBatch);
+
+      if (previousBatch) {
+        undo.add(
+          Command.create({
+            undo: () => canvasStore.updateEntities(previousBatch),
+            execute: () => canvasStore.updateEntities(nextBatch),
+            description: `Update params for ${entities.length} entities`,
+          }),
+        );
       }
-      if (!skipUndo) undo.commitTransaction(`Update ${entities.length} entities`);
     }
 
     // Show a hint to share the URL at ~100 changes mark (single selection only)
@@ -1005,18 +1109,38 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    undo.beginTransaction();
+    const previousBatch: CanvasEntityUpdate[] = [];
+    const nextBatch: CanvasEntityUpdate[] = [];
     for (const entity of entities) {
-      updateEntity(entity.id, {
-        shaderType: targetShaderType,
-        shaderParams:
-          entity.shaderType === targetShaderType
-            ? entity.shaderParams
-            : applyShaderDefaults(entity.shaderParams, entity.shaderType, targetShaderType),
-        textureDirty: true,
+      previousBatch.push({
+        id: entity.id,
+        updates: {
+          shaderType: entity.shaderType,
+          shaderParams: entity.shaderParams,
+          // Both directions need to invalidate the resident processed texture.
+          textureDirty: true,
+        },
+      });
+      nextBatch.push({
+        id: entity.id,
+        updates: {
+          shaderType: targetShaderType,
+          shaderParams:
+            entity.shaderType === targetShaderType
+              ? entity.shaderParams
+              : applyShaderDefaults(entity.shaderParams, entity.shaderType, targetShaderType),
+          textureDirty: true,
+        },
       });
     }
-    undo.commitTransaction(`Update ${entities.length} entities`);
+    canvasStore.updateEntities(nextBatch);
+    undo.add(
+      Command.create({
+        undo: () => canvasStore.updateEntities(previousBatch),
+        execute: () => canvasStore.updateEntities(nextBatch),
+        description: `Change shader for ${entities.length} entities`,
+      }),
+    );
   };
 
   const changeDitheringKind = (value: string | null) => {
@@ -1433,12 +1557,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         }),
       );
 
-      for (const entity of entities) {
-        updateEntity(entity.id, {
-          shaderParams: { ...entity.shaderParams, palette },
-          textureDirty: true,
-        });
-      }
+      updateShaderParamsBatch(
+        entities,
+        (entity) => ({ ...entity.shaderParams, palette }),
+        `Apply custom palette to ${entities.length} entities`,
+      );
 
       if (ownTransaction) undo.commitTransaction("Update custom palette");
       return;
@@ -1467,18 +1590,21 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         }),
       );
 
-      for (const entity of entities) {
-        updateEntity(entity.id, {
-          shaderParams: { ...entity.shaderParams, palette: newPalette },
-          textureDirty: true,
-        });
-      }
+      updateShaderParamsBatch(
+        entities,
+        (entity) => ({ ...entity.shaderParams, palette: newPalette }),
+        `Apply new palette to ${entities.length} entities`,
+      );
 
       if (ownTransaction) undo.commitTransaction("Create custom palette");
       return;
     }
 
-    updateSelectedEntityParams({ palette });
+    updateShaderParamsBatch(
+      entities,
+      (entity) => ({ ...entity.shaderParams, palette }),
+      `Change palette for ${entities.length} entities`,
+    );
   };
 
   const uploadPalette = async (files: FileList | File | null) => {
@@ -1521,12 +1647,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         }),
       );
 
-      for (const entity of entities) {
-        updateEntity(entity.id, {
-          shaderParams: { ...entity.shaderParams, palette: extractedPalette },
-          textureDirty: true,
-        });
-      }
+      updateShaderParamsBatch(
+        entities,
+        (entity) => ({ ...entity.shaderParams, palette: extractedPalette }),
+        `Apply extracted palette to ${entities.length} entities`,
+      );
 
       if (ownTransaction) undo.commitTransaction("Extract palette from image");
     } catch (err) {
@@ -1629,11 +1754,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    undo.beginTransaction();
-    for (const entity of entities) {
-      removeEntity(entity.id);
-    }
-    undo.commitTransaction(`Delete ${entities.length} entities`);
+    removeEntityBatch(entities);
   };
 
   const copySelectionImage = async (e?: KeyboardEvent) => {
@@ -1873,7 +1994,45 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     options?: DeserializeOptions,
   ): Promise<DeserializeResult> => {
     const { deserialize, getMaxCounters } = await import("#lib/serialization/index.ts");
-    const result = await deserialize(source, options);
+    const result = await deserialize(
+      source,
+      (workspace: DecodedWorkspace) => {
+        const previousEntities = Array.from(canvasStore.getState().entities.values());
+
+        // Evict commands while the old IDs are still the live store entries. This
+        // prevents an imported entity with the same ID from inheriting cleanup or
+        // undo behavior that belongs to the previous workspace.
+        undo.clear();
+        disintegrationController.clear();
+        for (const entity of previousEntities) {
+          rendererRef.current?.cancelDisintegration(entity.id);
+          rendererRef.current?.removeEntityTexture(entity.id);
+        }
+
+        const restoredEntities = workspace.adopt((entities, viewport) => {
+          canvasStore.restoreWorkspace(entities, viewport);
+        });
+
+        // The new workspace owns its decoded media now. Release each live owner
+        // from the previous workspace exactly once, then publish staged palettes.
+        for (const entity of previousEntities) destroyEntityMediaResources(entity);
+        paletteStore.mergePalettes(workspace.palettes);
+
+        for (const entity of restoredEntities) {
+          if (!entity.playback?.isPlaying) continue;
+          if (entity.mediaSource.type === MediaType.video) {
+            void canvasStore.playVideo(entity.id).catch((error) => logger.error(error));
+          } else if (entity.mediaSource.type === MediaType.gif) {
+            canvasStore.playGif(entity.id);
+          }
+        }
+      },
+      options,
+    );
+
+    // A non-empty manifest whose entities all failed decoding never reached the
+    // commit callback, so the existing workspace and its counters stay authoritative.
+    if (!result.success && result.entityCount === 0) return result;
 
     // Update ID counters to avoid collisions with future entities
     const { maxId, maxZIndex } = getMaxCounters(result);
@@ -1881,14 +2040,30 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     nextZIndexRef.current = maxZIndex + 1;
     nextImageNumberRef.current = result.entityCount + 1;
 
-    // Re-extract original palettes for entities that don't have them (legacy v3 files)
+    // Re-extract original palettes for entities that don't have them (legacy v3 files).
+    // Repeated image instances share one bitmap, so extract once and apply one store batch.
+    const missingPaletteEntities = new Map<ImageBitmap, ShaderCanvasEntity[]>();
     for (const entity of canvasStore.getState().entities.values()) {
       if (entity.originalPalette) continue;
-      extractOriginalPalette(entity.imageBitmap, colorSpaceRef.current)
+      let entities = missingPaletteEntities.get(entity.imageBitmap);
+      if (!entities) {
+        entities = [];
+        missingPaletteEntities.set(entity.imageBitmap, entities);
+      }
+      entities.push(entity);
+    }
+    for (const [bitmap, entities] of missingPaletteEntities) {
+      extractOriginalPalette(bitmap, colorSpaceRef.current)
         .then((palette) => {
-          const current = canvasStore.getState().entities.get(entity.id);
-          if (!current) return;
-          canvasStore.updateEntity(entity.id, { originalPalette: palette });
+          const updates: CanvasEntityUpdate[] = [];
+          const currentEntities = canvasStore.getState().entities;
+          for (const entity of entities) {
+            const current = currentEntities.get(entity.id);
+            if (current?.mediaSource === entity.mediaSource && !current.originalPalette) {
+              updates.push({ id: entity.id, updates: { originalPalette: palette } });
+            }
+          }
+          canvasStore.updateEntities(updates);
         })
         .catch((err) => logger.warn("Failed to extract palette on deserialize:", err));
     }

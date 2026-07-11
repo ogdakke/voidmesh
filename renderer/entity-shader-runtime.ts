@@ -3,7 +3,7 @@ import { isErrorDiffusion, ShaderType } from "#types/canvas.ts";
 import type { MediaAlphaMode, RGBA } from "#types/canvas.ts";
 import { AlphaMaskPass } from "./alpha-mask-pass.ts";
 import { CopyPass } from "./copy-pass.ts";
-import type { EffectRenderEntity } from "./effect-render-entity.ts";
+import type { EffectRenderEntity, EffectShaderSettings } from "./effect-render-entity.ts";
 import type { GpuColorConfig } from "./gpu-color-space.ts";
 import { ProcessingPipeline } from "./processing-pipeline.ts";
 import { AsciiShader } from "./shaders/ascii-shader.ts";
@@ -295,31 +295,34 @@ export class EntityShaderRuntime {
     height: number,
     usage: GPUTextureUsageFlags,
   ): void {
+    // Passes are encoded in order, so pooled scratch can be reused by a later pass in the
+    // same command buffer once the final read/copy using this texture has been encoded.
+    if (this.#texturePool) {
+      this.#texturePool.release(texture, width, height, usage);
+      return;
+    }
     this.#pendingTextureReleases.push({ texture, width, height, usage });
   }
 
   flushTextureReleases(): void {
+    this.#texturePool?.commitSubmitted();
     for (const release of this.#pendingTextureReleases) {
-      if (this.#texturePool) {
-        this.#texturePool.release(release.texture, release.width, release.height, release.usage);
-      } else {
-        release.texture.destroy();
-      }
+      release.texture.destroy();
     }
     this.#pendingTextureReleases = [];
   }
 
-  needsContinuousRender(entity: EffectRenderEntity): boolean {
+  needsContinuousRender(entity: EffectShaderSettings): boolean {
     return this.#shaderRegistry.get(entity.shaderType)?.needsContinuousRender(entity) ?? false;
   }
 
   removeEntity(entityId: string): void {
-    const ditheringShader = this.#shaderRegistry.get(ShaderType.dithering) as
-      | DitheringShader
-      | undefined;
-    ditheringShader?.removeEntity(entityId);
+    this.#shaderRegistry.removeEntity(entityId);
     this.#processingPipeline.removeEntity(entityId);
-    this.removeGlassEntity(entityId);
+  }
+
+  endFrame(): void {
+    this.#processingPipeline.endFrame();
   }
 
   removeGlassEntity(entityId: string): void {

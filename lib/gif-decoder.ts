@@ -59,70 +59,61 @@ export async function decodeGif(source: Blob): Promise<GifDecodeResult> {
     data: source.stream(),
     type: "image/gif",
   });
-
-  // Wait for the full stream to be parsed so frameCount is accurate
-  await decoder.completed;
-
-  const track = decoder.tracks.selectedTrack;
-  if (!track) {
-    decoder.close();
-    throw new Error("No image track found in GIF");
-  }
-
-  const frameCount = track.frameCount;
-  if (frameCount === 0) {
-    decoder.close();
-    throw new Error("GIF has no frames");
-  }
-
   const frames: GifFrame[] = [];
-  let cumulativeTimestamp = 0;
+  try {
+    // Wait for the full stream to be parsed so frameCount is accurate
+    await decoder.completed;
 
-  for (let i = 0; i < frameCount; i++) {
-    const result = await decoder.decode({ frameIndex: i });
-    const videoFrame = result.image;
+    const track = decoder.tracks.selectedTrack;
+    if (!track) throw new Error("No image track found in GIF");
 
-    // Read duration BEFORE closing the frame
-    const durationUs = videoFrame.duration ?? 100_000; // default 100ms if missing
-    const delayMs = durationUs / 1000;
+    const frameCount = track.frameCount;
+    if (frameCount === 0) throw new Error("GIF has no frames");
 
-    // Create ImageBitmap from the VideoFrame (handles disposal methods correctly)
-    const bitmap = await createImageBitmap(videoFrame);
-    videoFrame.close();
+    let cumulativeTimestamp = 0;
+    for (let i = 0; i < frameCount; i++) {
+      const result = await decoder.decode({ frameIndex: i });
+      const videoFrame = result.image;
+      let bitmap: ImageBitmap;
+      try {
+        const durationUs = videoFrame.duration ?? 100_000;
+        const delayMs = durationUs / 1000;
+        bitmap = await createImageBitmap(videoFrame);
+        frames.push({
+          bitmap,
+          delay: delayMs,
+          timestamp: cumulativeTimestamp,
+        });
+        cumulativeTimestamp += delayMs;
+      } finally {
+        videoFrame.close();
+      }
 
-    frames.push({
-      bitmap,
-      delay: delayMs,
-      timestamp: cumulativeTimestamp,
-    });
-
-    cumulativeTimestamp += delayMs;
-
-    // Warn about memory after first frame
-    if (i === 0 && frameCount > 1) {
-      const estimatedBytes = bitmap.width * bitmap.height * 4 * frameCount;
-      if (estimatedBytes > MEMORY_WARNING_BYTES) {
-        const estimatedMB = Math.round(estimatedBytes / (1024 * 1024));
-        logger.warn(
-          `Large GIF: ${frameCount} frames at ${bitmap.width}x${bitmap.height} ≈ ${estimatedMB}MB decoded`,
-        );
+      if (i === 0 && frameCount > 1) {
+        const estimatedBytes = bitmap.width * bitmap.height * 4 * frameCount;
+        if (estimatedBytes > MEMORY_WARNING_BYTES) {
+          const estimatedMB = Math.round(estimatedBytes / (1024 * 1024));
+          logger.warn(
+            `Large GIF: ${frameCount} frames at ${bitmap.width}x${bitmap.height} ≈ ${estimatedMB}MB decoded`,
+          );
+        }
       }
     }
+
+    const totalDurationMs = cumulativeTimestamp;
+    return {
+      frames,
+      width: frames[0]!.bitmap.width,
+      height: frames[0]!.bitmap.height,
+      duration: totalDurationMs / 1000,
+      fps: totalDurationMs > 0 ? (frameCount / totalDurationMs) * 1000 : 10,
+    };
+  } catch (error) {
+    for (const frame of frames) frame.bitmap.close();
+    throw error;
+  } finally {
+    decoder.close();
   }
-
-  decoder.close();
-
-  const totalDurationMs = cumulativeTimestamp;
-  const duration = totalDurationMs / 1000;
-  const fps = totalDurationMs > 0 ? (frameCount / totalDurationMs) * 1000 : 10;
-
-  return {
-    frames,
-    width: frames[0]!.bitmap.width,
-    height: frames[0]!.bitmap.height,
-    duration,
-    fps,
-  };
 }
 
 /**

@@ -5,11 +5,15 @@ WebGPU rendering and export pipelines. Turns engine state into pixels.
 ## Key Files
 
 - `canvas-renderer.ts` (~69KB) — Main renderer. WebGPU setup, entity textures, shader dispatch, composition, overlays.
+- `composition-pass.ts` + `composition-instanced.wgsl` — Final canvas composition. Adjacent regular-texture entities sharing the same texture use instanced draws; large homogeneous overview scenes persist the full instance payload across viewport-only frames.
+- `entity-draw-item-preparer.ts` — Visibility/LOD preparation plus conservative admission of versioned full-scene batches for large homogeneous static-image scenes.
 - `processing-pipeline.ts` (~49KB) — Per-entity pre/post-processing: adjustments, blur, bloom, grain, chromatic aberration. Also provides action layer blur.
+- `entity-render-size.ts` — Selects quantized screen-space render tiers from projected physical pixels and derives the render-to-authored pixel scale; exports bypass preview LOD and retain scale 1.
 - `gpu-color-space.ts` — `detectGpuColorConfig()`. Probes Display P3 support at init, returns frozen `GpuColorConfig` (supportsP3, canvasFormat, canvasColorSpace, intermediateFormat, textureColorSpace).
 - `copy-pass.ts` + `copy-pass.wgsl` — `CopyPass`. Full-screen format conversion (rgba16float ↔ rgba8unorm) for export readback and showOriginal passthrough.
-- `texture-pool.ts` — GPU texture recycling. Parameterized by `GPUTextureFormat` (receives `intermediateFormat` from renderer).
-- `export-service.ts` — `ExportService`. Reads GPU textures back to CPU for image export (PNG/JPEG). Uses `CopyPass` for rgba16float→rgba8unorm conversion, color-space-aware texture operations.
+- `texture-pool.ts` — GPU texture recycling with exact idle-byte accounting and a global 64 MiB LRU budget. Parameterized by `GPUTextureFormat` (receives `intermediateFormat` from renderer).
+- `byte-budget-cache.ts` — Frame-pinned byte-budget tracker for persistent renderer caches. Eviction callbacks own resource destruction and cache invalidation.
+- `export-service.ts` — `ExportService`. Renders native media sources for entity export, reads GPU textures back to CPU for PNG/JPEG, and uses `CopyPass` for rgba16float→rgba8unorm conversion.
 - `video-exporter.ts` (~19KB) — WebCodecs H.264 encoding + mediabunny muxing via Web Worker.
 - `video-export.worker.ts` (~10KB) — Worker receiving encoded `VideoFrame` chunks, muxes into MP4/MOV.
 - `gif-export.ts` — GIF export orchestration. Palette sampling, Floyd-Steinberg dithering, frame encoding (actual work in `lib/gif-encoder-worker.ts`).
@@ -46,7 +50,7 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 ## Rendering Pipeline (per frame)
 
 1. `GameLoop` calls `renderer.render(state)` each frame
-2. For each visible entity: upload source texture if dirty, apply shader via `ShaderRegistry.applyShader()`, apply pre/post processing via `ProcessingPipeline`
+2. For each visible entity: resolve its shared source texture (uploading absent or changed sources), apply shader via `ShaderRegistry.applyShader()`, apply pre/post processing via `ProcessingPipeline`
 3. Composite all processed entities onto canvas with viewport transform
 4. If action layer active: blur+dim canvas, re-render targeted entities sharp on top
 5. Render grid overlay, selection rectangles, drag visuals
@@ -54,11 +58,31 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 
 ## GPU Resource Management
 
-- Entity textures cached in `#entityTextures` Map (keyed by entity ID)
-- Source texture cache (`#entitySourceTextures`) avoids re-uploading unchanged bitmaps
-- Composition cache (`#entityCompositionCache`) reuses uniform buffers and bind groups
-- `TexturePool` for transient intermediate textures
-- All caches invalidated when entity source changes; cleaned up on entity removal
+- Persistent source + processed entity textures have exact byte accounting and share a configurable LRU budget. Current-frame textures are pinned; offscreen entries are eviction candidates.
+- `InfiniteCanvasRenderer.getResourceStats()` exposes residency plus cumulative allocation, upload, and eviction counters for performance benchmarks.
+- Dimension-keyed blur mip, bloom mip, and blur blend textures share a 128 MiB budget; current-frame dimensions stay pinned and older dimensions are evicted LRU.
+- Source textures cached by media identity/revision; static image entities sharing one asset also share one GPU texture until the final entity owner is removed
+- Stable processed image outputs are keyed by asset revision, dimensions, shader type, and full shader parameters. Identical instances share one texture; animated effects and non-image media remain entity-scoped.
+- Per-entity source/processed ownership maps point directly to their cached texture entries; retain the cache key on the shared entry for release/eviction instead of restoring a second map lookup to every visible-entity frame path.
+- Canvas media uses 64/128/256/... screen-space LOD tiers with overscan. Viewport changes leave an explicit settle-frame countdown reported as pending render work, so promotions converge after zoom animations without another interaction. Real texture work remains transition-budgeted; shared static-image demotions may run during camera motion, and an existing shared tier rebinds every identical instance immediately.
+- Pixel-space shader parameters are authored against native media resolution and multiplied by `EffectRenderEntity.pixelScale` only when an LOD texture is rendered. This covers common cell size, dithering pattern period, blur strength, grain size, and chromatic offset; dimensionless controls and UV-space bloom radius stay unchanged. Populate the reusable effect view after cached-texture early returns so this normalization adds no steady-state entity work or parameter clones.
+- LOD tier changes switch directly to the new resident texture. Do not retain or sample the previous tier for cosmetic crossfades: dual-tier residency and replacement/intermediate allocations can exceed mobile WebGPU memory limits. External video textures remain on their dedicated path.
+- Viewport preparation queries `RenderState.entitySpatialIndex`; when its bounds cover the whole scene, reuse the already z-ordered render array instead. Adjacent equal projected sizes reuse one LOD-size calculation, and unchanged static images at the desired resident tier bypass full LOD/texture resolution.
+- Recently released source and processed image tiers remain reusable inside the existing byte-budgeted LRU; reverse zooms should not synchronously rebuild a tier that is still resident.
+- Same-size processed image shader-param changes recycle the entity's unique output texture instead of allocating a replacement; shared outputs allocate a new texture to avoid clobbering siblings.
+- Original videos stay on direct external-texture composition so playback and media controls remain continuous. Processed videos use screen-space output LOD, and small outputs shorten the bloom mip chain rather than pausing media.
+- Entity image export renders from native media sources at `originalSize`; it must not read back the current preview LOD texture.
+- Regular-texture composition packs entity transforms and visual flags into one reusable storage buffer. Batch only adjacent entities with the exact same `GPUTexture` so draw order remains unchanged; shader params need not match independently because processing is already baked into that texture.
+- A full-scene batch is admitted only for 16k+ static image entities sharing asset, authored/display size, shader type, and structurally equal params with at least 25% visible. Cache hits skip spatial queries and instance uploads; entity/geometry versions, LOD texture identity, or any normal composition write invalidate it.
+- Selection, debug mode, action-layer fade/blur, drag/drag-select, callouts, continuous shaders, and heterogeneous media must use normal preparation. The batch may submit offscreen instances after admission; hardware clipping keeps the pan path CPU-constant.
+- Full-scene fancy-delete snapshots borrow the representative texture. Defer removal of that texture owner until the next render so bulk deletion can snapshot non-representative entities safely.
+- External video textures retain per-entity uniforms and bind groups so direct `GPUExternalTexture` playback never copies into regular textures. Disintegration also retains its non-instanced composition path.
+- Grow the composition instance buffer geometrically and append disjoint ranges for each render phase in a frame. Do not restore per-entity GPU uniform buffers, bind groups, or temporary instance objects for regular textures.
+- Entity draw preparation reuses result arrays and composition-option scratch. Regular composition wrappers are weakly keyed by entity identity; do not restore per-frame object construction or string-keyed lookups to the pan/zoom path.
+- When every entity is selected, draw preparation treats visible entities as selected without hashing every ID; selection cardinality is sufficient because store selections contain only existing IDs.
+- `TexturePool` retains at most 64 MiB of idle transient textures across dimensions/usages. Release scratch after its final encoded use for ordered reuse, but apply destruction limits only in `commitSubmitted()` after `queue.submit()`.
+- Image source changes require a new asset revision. Entity removal releases its source-cache ownership without destroying textures still used by sibling instances.
+- Composition keeps the former hover uniform slot reserved for layout stability, but no hover state/effect is prepared. Do not add passive alpha hit testing to feed it.
 
 ## Shader Uniform Layout
 
@@ -67,6 +91,7 @@ All shaders share a 336-byte uniform buffer. First 64 bytes are common (size, in
 ## Anti-Patterns
 
 - Do not create GPU resources outside of renderer/pipeline classes. Use `TexturePool` for transients.
+- Persistent renderer caches must report byte cost and participate in a budget; do not add unbounded per-entity or per-dimension GPU maps.
 - Do not call `device.queue.submit()` outside of shader pass `execute()` methods except in the compositor.
 - WGSL files must use `?raw` import suffix for Vite. Minified in production builds via `miniray` (WGSL minifier).
 - Export: GPU device cannot be transferred to workers. Main thread renders frames; worker encodes/muxes.
