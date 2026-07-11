@@ -13,6 +13,7 @@ import kawaseUpsampleShaderSource from "./kawase-upsample.wgsl?raw";
 import postProcessShaderSource from "./post-process.wgsl?raw";
 import textureMixShaderSource from "./texture-mix.wgsl?raw";
 import { ByteBudgetCache, type ByteBudgetCacheStats } from "./byte-budget-cache.ts";
+import { getTextureByteSize } from "#lib/textures.ts";
 /** Number of mip levels in the bloom chain (determines blur spread) */
 const BLOOM_MIP_LEVELS = 5;
 
@@ -2094,19 +2095,5 @@ export class ProcessingPipeline {
     this.#bloomDownsampleUniformBuffers = [];
     this.#bloomUpsampleUniformBuffers = [];
     this.#bloomSampler = null;
-  }
-}
-
-function getTextureByteSize(width: number, height: number, format: GPUTextureFormat): number {
-  switch (format) {
-    case "rgba8unorm":
-    case "bgra8unorm":
-    case "rgba8unorm-srgb":
-    case "bgra8unorm-srgb":
-      return width * height * 4;
-    case "rgba16float":
-      return width * height * 8;
-    default:
-      throw new Error(`Processing texture format ${format} needs an explicit byte-size mapping`);
   }
 }
