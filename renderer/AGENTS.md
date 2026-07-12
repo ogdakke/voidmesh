@@ -58,7 +58,7 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 
 ## GPU Resource Management
 
-- Persistent source + processed entity textures have exact byte accounting and share a configurable LRU budget. Current-frame textures are pinned; offscreen entries are eviction candidates.
+- Persistent source + processed entity textures have exact byte accounting and share a configurable LRU budget. Current-frame textures are pinned; offscreen entries are eviction candidates and are also trimmed after the configured idle window even below the emergency byte ceiling. The renderer's idle timer must preserve the most recently completed frame so a settled visible viewport stays resident.
 - `InfiniteCanvasRenderer.getResourceStats()` exposes residency plus cumulative allocation, upload, and eviction counters for performance benchmarks.
 - Dimension-keyed blur mip, bloom mip, and blur blend textures share a 128 MiB budget; current-frame dimensions stay pinned and older dimensions are evicted LRU.
 - Source textures cached by media identity/revision; static image entities sharing one asset also share one GPU texture until the final entity owner is removed

@@ -134,6 +134,49 @@ describe("EntityTexturePipeline shared image sources", () => {
     releaseImageAsset(second.mediaSource.asset);
   });
 
+  test("trims offscreen textures after the idle window and keeps visible textures pinned", () => {
+    const first = createTestEntity({
+      id: "idle-first",
+      shaderParams: { showOriginal: true },
+    });
+    const second = createTestEntity({
+      id: "idle-second",
+      shaderParams: { showOriginal: true },
+    });
+    const firstTexture = createTexture(200, 150);
+    const secondTexture = createTexture(200, 150);
+    const pipeline = new EntityTexturePipeline({
+      device: createDevice([firstTexture, secondTexture]),
+      colorConfig,
+      texturePool: null,
+    });
+    const encoder = {} as GPUCommandEncoder;
+
+    pipeline.beginFrame(true, 0);
+    pipeline.renderEntityToTexture(first, encoder);
+    pipeline.renderEntityToTexture(second, encoder);
+    pipeline.endFrame();
+
+    pipeline.beginFrame(true, 10_000);
+    second.textureDirty = false;
+    pipeline.renderEntityToTexture(second, encoder);
+    pipeline.endFrame();
+    expect(pipeline.trimIdleTextures(10_000, 10_000)).toBe(1);
+
+    expect(firstTexture.destroy).toHaveBeenCalledOnce();
+    expect(secondTexture.destroy).not.toHaveBeenCalled();
+    expect(pipeline.getResidencyStats()).toMatchObject({
+      residentBytes: 200 * 150 * 4,
+      sourceTextureCount: 1,
+      evictions: 1,
+    });
+
+    pipeline.removeEntity(first.id);
+    pipeline.removeEntity(second.id);
+    if (first.mediaSource.type === "image") releaseImageAsset(first.mediaSource.asset);
+    if (second.mediaSource.type === "image") releaseImageAsset(second.mediaSource.asset);
+  });
+
   test("freezes LOD during viewport motion and bounds settled transitions per frame", () => {
     const entities = Array.from({ length: 5 }, (_, index) =>
       createTestEntity({

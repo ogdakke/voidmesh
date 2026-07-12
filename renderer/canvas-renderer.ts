@@ -99,6 +99,7 @@ export class InfiniteCanvasRenderer {
   #lastLodOffsetY = 0;
   #lastLodZoom = 0;
   #lodSettleFramesRemaining = 0;
+  #entityTextureIdleTrimTimer: ReturnType<typeof setTimeout> | null = null;
   readonly #visibilityViewportBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
   readonly #visibilityEntityBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
 
@@ -428,7 +429,7 @@ export class InfiniteCanvasRenderer {
     this.#lastLodOffsetX = viewport.offset.x;
     this.#lastLodOffsetY = viewport.offset.y;
     this.#lastLodZoom = viewport.zoom;
-    this.#entityTexturePipeline?.beginFrame(this.#lodSettleFramesRemaining === 0);
+    this.#entityTexturePipeline?.beginFrame(this.#lodSettleFramesRemaining === 0, renderStart);
 
     // Entity preprocessing can encode shader passes into this same command buffer.
     // External video textures must be imported, bound, encoded, finished, and submitted
@@ -614,6 +615,7 @@ export class InfiniteCanvasRenderer {
     this.#device.queue.submit([encoder.finish()]);
     this.#entityTexturePipeline?.flushTextureReleases();
     this.#entityTexturePipeline?.endFrame();
+    this.#scheduleEntityTextureIdleTrim();
 
     // Record frame stats for performance overlay
     this.#lastRenderTime = performance.now() - renderStart;
@@ -901,7 +903,20 @@ export class InfiniteCanvasRenderer {
     return entity.shaderParams.timeAutoPlay !== false;
   }
 
+  #scheduleEntityTextureIdleTrim(): void {
+    if (this.#entityTextureIdleTrimTimer !== null) return;
+    this.#entityTextureIdleTrimTimer = setTimeout(() => {
+      this.#entityTextureIdleTrimTimer = null;
+      this.#entityTexturePipeline?.trimIdleTextures();
+      if (this.#entityTexturePipeline) this.#scheduleEntityTextureIdleTrim();
+    }, config.rendering.entityTextureIdleTrimMs);
+  }
+
   destroy(): void {
+    if (this.#entityTextureIdleTrimTimer !== null) {
+      clearTimeout(this.#entityTextureIdleTrimTimer);
+      this.#entityTextureIdleTrimTimer = null;
+    }
     this.#entityDrawItemPreparer = null;
     this.#entityTexturePipeline?.destroy();
     this.#entityTexturePipeline = null;

@@ -34,6 +34,7 @@ interface CachedEntityTexture {
   compositionSource: { kind: "texture"; texture: GPUTexture };
   byteSize: number;
   lastUsedFrame: number;
+  lastUsedAtMs: number;
   contentRevision: number;
 }
 
@@ -59,6 +60,10 @@ interface LodCacheLookup {
   isCached: boolean;
 }
 
+type TextureEvictionCandidate =
+  | { kind: "processed"; key: string; cached: CachedProcessedTexture }
+  | { kind: "source"; key: string; cached: CachedSourceTexture };
+
 export interface EntityTextureResidencyStats {
   budgetBytes: number;
   residentBytes: number;
@@ -80,6 +85,7 @@ export class EntityTexturePipeline {
   readonly #textureBudgetBytes: number;
   readonly #onTextureEvicted?: (entityIds: ReadonlySet<string>) => void;
   #currentFrame = 0;
+  #currentTimeMs = 0;
   #sourceTextureAllocations = 0;
   #processedTextureAllocations = 0;
   #sourceUploads = 0;
@@ -199,6 +205,7 @@ export class EntityTexturePipeline {
           currentSource.contentRevision === contentRevision
         ) {
           currentSource.lastUsedFrame = this.#currentFrame;
+          currentSource.lastUsedAtMs = this.#currentTimeMs;
           return currentSource.compositionSource;
         }
       } else if (!entity.shaderParams.showOriginal && !needsContinuousShaderRender) {
@@ -210,6 +217,7 @@ export class EntityTexturePipeline {
           currentProcessed.contentRevision === contentRevision
         ) {
           currentProcessed.lastUsedFrame = this.#currentFrame;
+          currentProcessed.lastUsedAtMs = this.#currentTimeMs;
           return currentProcessed.compositionSource;
         }
       }
@@ -234,6 +242,7 @@ export class EntityTexturePipeline {
       (!entity.textureDirty || canReuseDirtyTexture)
     ) {
       cachedTexture.lastUsedFrame = this.#currentFrame;
+      cachedTexture.lastUsedAtMs = this.#currentTimeMs;
       this.#bindEntityToProcessed(entity.id, processedKey, cachedTexture);
       return cachedTexture.compositionSource;
     }
@@ -282,6 +291,7 @@ export class EntityTexturePipeline {
           height,
           byteSize: getTextureByteSize(width, height, "rgba8unorm"),
           lastUsedFrame: this.#currentFrame,
+          lastUsedAtMs: this.#currentTimeMs,
           contentRevision,
           entityIds: new Set(),
         };
@@ -292,6 +302,7 @@ export class EntityTexturePipeline {
       } else {
         sourceTexture = cachedSource.texture;
         cachedSource.lastUsedFrame = this.#currentFrame;
+        cachedSource.lastUsedAtMs = this.#currentTimeMs;
         if (cachedSource.contentRevision !== contentRevision) {
           this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
           cachedSource.contentRevision = contentRevision;
@@ -386,6 +397,7 @@ export class EntityTexturePipeline {
         ({ kind: "texture", texture: outputTexture } as const),
       byteSize: getTextureByteSize(width, height, this.#colorConfig.intermediateFormat),
       lastUsedFrame: this.#currentFrame,
+      lastUsedAtMs: this.#currentTimeMs,
       contentRevision,
       entityIds: cachedTexture?.entityIds ?? recycledTexture?.entityIds ?? new Set(),
     };
@@ -443,10 +455,12 @@ export class EntityTexturePipeline {
     }
 
     entry.lastUsedFrame = this.#currentFrame;
+    entry.lastUsedAtMs = this.#currentTimeMs;
     return entry.compositionSource;
   }
 
-  beginFrame(allowLodTransitions: boolean): void {
+  beginFrame(allowLodTransitions: boolean, nowMs = performance.now()): void {
+    this.#currentTimeMs = nowMs;
     this.#allowLodTransitions = allowLodTransitions;
     this.#lodTransitionsRemaining = config.rendering.lodTransitionsPerFrame;
     this.#lodTransitionPixelsRemaining = config.rendering.lodTransitionPixelBudget;
@@ -534,6 +548,23 @@ export class EntityTexturePipeline {
     this.#runtime.endFrame();
     this.#evictToBudget();
     this.#currentFrame++;
+  }
+
+  /**
+   * Release persistent textures which have stayed offscreen past the idle window.
+   * Current-frame entries remain pinned. Returns the number of textures released.
+   */
+  trimIdleTextures(
+    nowMs = performance.now(),
+    idleMs = config.rendering.entityTextureIdleTrimMs,
+  ): number {
+    if (idleMs <= 0) return 0;
+    const candidates = this.#getEvictionCandidates(
+      (cached) => nowMs - cached.lastUsedAtMs >= idleMs,
+      this.#currentFrame - 1,
+    );
+    for (const candidate of candidates) this.#evictCandidate(candidate);
+    return candidates.length;
   }
 
   getResidencyStats(): EntityTextureResidencyStats {
@@ -838,46 +869,52 @@ export class EntityTexturePipeline {
     if (this.#sourceBytes + this.#processedBytes <= this.#textureBudgetBytes) return;
 
     let residentBytes = this.#sourceBytes + this.#processedBytes;
-    const candidates: Array<
-      | { kind: "processed"; key: string; cached: CachedProcessedTexture }
-      | { kind: "source"; key: string; cached: CachedSourceTexture }
-    > = [];
+    for (const candidate of this.#getEvictionCandidates()) {
+      if (residentBytes <= this.#textureBudgetBytes) break;
+      residentBytes -= candidate.cached.byteSize;
+      this.#evictCandidate(candidate);
+    }
+  }
 
+  #getEvictionCandidates(
+    predicate: (cached: CachedEntityTexture) => boolean = () => true,
+    pinnedFrame = this.#currentFrame,
+  ): TextureEvictionCandidate[] {
+    const candidates: TextureEvictionCandidate[] = [];
     for (const [key, cached] of this.#processedTextures) {
-      if (cached.lastUsedFrame !== this.#currentFrame) {
+      if (cached.lastUsedFrame !== pinnedFrame && predicate(cached)) {
         candidates.push({ kind: "processed", key, cached });
       }
     }
     for (const [key, cached] of this.#sourceTextures) {
-      if (cached.lastUsedFrame !== this.#currentFrame) {
+      if (cached.lastUsedFrame !== pinnedFrame && predicate(cached)) {
         candidates.push({ kind: "source", key, cached });
       }
     }
     candidates.sort((a, b) => a.cached.lastUsedFrame - b.cached.lastUsedFrame);
+    return candidates;
+  }
 
-    for (const candidate of candidates) {
-      if (residentBytes <= this.#textureBudgetBytes) break;
-      candidate.cached.texture.destroy();
-      residentBytes -= candidate.cached.byteSize;
-      this.#evictions++;
+  #evictCandidate(candidate: TextureEvictionCandidate): void {
+    candidate.cached.texture.destroy();
+    this.#evictions++;
 
-      if (candidate.kind === "processed") {
-        this.#processedTextures.delete(candidate.key);
-        this.#processedBytes -= candidate.cached.byteSize;
-        for (const entityId of candidate.cached.entityIds) {
-          this.#entityProcessedBindings.delete(entityId);
-        }
-        this.#onTextureEvicted?.(candidate.cached.entityIds);
-        continue;
-      }
-
-      this.#sourceTextures.delete(candidate.key);
-      this.#sourceBytes -= candidate.cached.byteSize;
+    if (candidate.kind === "processed") {
+      this.#processedTextures.delete(candidate.key);
+      this.#processedBytes -= candidate.cached.byteSize;
       for (const entityId of candidate.cached.entityIds) {
-        this.#entitySourceBindings.delete(entityId);
+        this.#entityProcessedBindings.delete(entityId);
       }
       this.#onTextureEvicted?.(candidate.cached.entityIds);
+      return;
     }
+
+    this.#sourceTextures.delete(candidate.key);
+    this.#sourceBytes -= candidate.cached.byteSize;
+    for (const entityId of candidate.cached.entityIds) {
+      this.#entitySourceBindings.delete(entityId);
+    }
+    this.#onTextureEvicted?.(candidate.cached.entityIds);
   }
 }
 
