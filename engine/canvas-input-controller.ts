@@ -26,6 +26,7 @@ import { CanvasViewportController } from "./canvas-viewport-controller.ts";
 export type { DragSelectMode, DragSelectState } from "./canvas-selection-controller.ts";
 
 const RELEASE_TERMINAL_SPEED_MULTIPLIER = 1.15;
+const POINTER_CLICK_THRESHOLD = 5;
 
 export function createDefaultGameLoopDeps() {
   return {
@@ -271,7 +272,11 @@ export class CanvasInputController {
 
     // Pointer events may arrive faster than RAF. Only do the spatial query and
     // selection-set construction once for the latest point in each frame.
-    if (this.#dragSelect?.isActive && this.#dragSelectPendingUpdate) {
+    if (
+      this.#dragSelect?.isActive &&
+      this.#dragSelectPendingUpdate &&
+      this.#hasPointerMovedBeyondClickThreshold(pointerPosition)
+    ) {
       this.#dragSelect.currentPoint = worldPoint;
       this.#selection.updateDragSelection(this.#dragSelect);
       this.#dragSelectPendingUpdate = false;
@@ -404,7 +409,7 @@ export class CanvasInputController {
 
     // Complete drag-select if active
     if (this.#dragSelect?.isActive) {
-      if (this.#container) {
+      if (this.#container && this.#hasPointerMovedBeyondClickThreshold(screenPoint)) {
         this.#dragSelect.currentPoint = this.#viewport.screenToWorld(screenPoint);
         this.#selection.updateDragSelection(this.#dragSelect);
       }
@@ -423,16 +428,13 @@ export class CanvasInputController {
     const downPos = this.#inputState.pointerDownPosition;
     const downEntityId = this.#inputState.pointerDownEntityId;
 
-    // 5 pixels is the threshold for distinguishing click from drag
-    const CLICK_THRESHOLD = 5;
-
     // Check if this was a click (not a drag) on an entity
     if (downPos && downEntityId && this.#container) {
       const dx = screenPoint.x - downPos.x;
       const dy = screenPoint.y - downPos.y;
       const distanceMoved = Math.sqrt(dx * dx + dy * dy);
 
-      if (distanceMoved < CLICK_THRESHOLD) {
+      if (distanceMoved < POINTER_CLICK_THRESHOLD) {
         // This was a click, not a drag
         // Check if pointer is still over the same entity
         const state = canvasStore.getState();
@@ -460,7 +462,7 @@ export class CanvasInputController {
       const dy = screenPoint.y - downPos.y;
       const distanceMoved = Math.sqrt(dx * dx + dy * dy);
 
-      if (distanceMoved < CLICK_THRESHOLD) {
+      if (distanceMoved < POINTER_CLICK_THRESHOLD) {
         // Clicked (not dragged) on empty space in selection bounds - clear selection
         canvasStore.clearSelection();
       }
@@ -477,6 +479,15 @@ export class CanvasInputController {
     this.#inputState.pointerDownEntityId = null;
     this.#inputState.pointerDownWasSelected = false;
     this.#entityDrag.clear();
+  }
+
+  #hasPointerMovedBeyondClickThreshold(screenPoint: Point): boolean {
+    const downPoint = this.#inputState.pointerDownPosition;
+    if (!downPoint) return false;
+    return (
+      Math.hypot(screenPoint.x - downPoint.x, screenPoint.y - downPoint.y) >=
+      POINTER_CLICK_THRESHOLD
+    );
   }
 
   handleWheel(deltaX: number, deltaY: number, screenPoint: Point, ctrlKey: boolean): void {

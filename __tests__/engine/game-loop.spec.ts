@@ -272,6 +272,27 @@ describe("Desktop pointer interactions", () => {
       expect(canvasStore.getSelectedEntityIds().has(frontId)).toBe(false);
     });
 
+    test("click on a selected entity's transparent cell clears selection", () => {
+      const id = addEntity(100, 100, 200, 150);
+      const entity = canvasStore.getState().entities.get(id);
+      if (!entity || entity.mediaSource.type !== "image") throw new Error("Expected image entity");
+      entity.mediaSource.asset.alphaHitGrid = {
+        width: 2,
+        height: 2,
+        cellSize: 1,
+        cols: 2,
+        rows: 2,
+        cells: new Uint8Array([0, 1, 1, 1]),
+        hasTransparentCells: true,
+        hasOpaqueCells: true,
+      };
+      canvasStore.replaceSelection([id]);
+
+      click(gl, { x: 125, y: 125 });
+
+      expect(canvasStore.getSelectedEntityIds().size).toBe(0);
+    });
+
     test("click on opaque top entity cell selects top entity", () => {
       const backId = addEntity(100, 100, 200, 150, { zIndex: 1 });
       const frontId = addEntity(100, 100, 200, 150, { zIndex: 10 });
