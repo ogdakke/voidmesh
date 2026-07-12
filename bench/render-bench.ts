@@ -1262,6 +1262,7 @@ function createRenderState(
     geometryVersion: 0,
     selectedEntityIds: new Set(),
     debugMode: false,
+    debugView: "none",
     dirty,
     canvasCallouts: [],
     dragSelectBounds: null,

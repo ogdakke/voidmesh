@@ -186,6 +186,7 @@ export interface RenderState {
   geometryVersion: number;
   selectedEntityIds: ReadonlySet<string>;
   debugMode: boolean;
+  debugView: "none" | "alpha" | "spatial" | "all";
   dirty: boolean;
   canvasCallouts: readonly CanvasCallout[];
   /** Drag-select rectangle bounds in world coordinates (null if not active) */
@@ -252,6 +253,7 @@ export class CanvasStore extends Store<CanvasState> {
     geometryVersion: 0,
     selectedEntityIds: new Set<string>(),
     debugMode: false,
+    debugView: "none",
     dirty: false,
     canvasCallouts: [],
     dragSelectBounds: null,
@@ -870,6 +872,10 @@ export class CanvasStore extends Store<CanvasState> {
     this.#logger.setLevel(enabled ? LogLevel.DEBUG : LogLevel.ERROR);
     this.notifySelectionChange();
     this.#logger.debug(`Debug mode set to: ${this.state.debugMode}`);
+  }
+
+  setDebugView(view: RenderState["debugView"]): void {
+    this.#renderState.debugView = view;
   }
 
   // Snap-to-grid toggle

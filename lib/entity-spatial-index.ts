@@ -15,6 +15,18 @@ interface IndexedEntity {
   cellY: number;
 }
 
+export interface SpatialDebugBucket {
+  cellSize: number;
+  cellX: number;
+  cellY: number;
+}
+
+export interface SpatialDebugCenter {
+  x: number;
+  y: number;
+  cellSize: number;
+}
+
 const DEFAULT_CELL_SIZE = 256;
 
 /** Incremental multi-resolution broad-phase index for viewport and point queries. */
@@ -93,6 +105,36 @@ export class EntitySpatialIndex {
     this.#overallBounds.width = 0;
     this.#overallBounds.height = 0;
     this.#overallBoundsDirty = false;
+  }
+
+  /** Collects occupied buckets and indexed centers for development visualization. */
+  collectDebugGeometry(
+    bounds: Bounds,
+    buckets: SpatialDebugBucket[],
+    centers: SpatialDebugCenter[],
+  ): void {
+    buckets.length = 0;
+    centers.length = 0;
+    for (const level of this.#levels.values()) {
+      const minCellX = this.#cellCoordinate(bounds.x, level.cellSize);
+      const minCellY = this.#cellCoordinate(bounds.y, level.cellSize);
+      const maxCellX = this.#cellCoordinate(bounds.x + bounds.width, level.cellSize);
+      const maxCellY = this.#cellCoordinate(bounds.y + bounds.height, level.cellSize);
+      for (const [cellY, row] of level.rows) {
+        if (cellY < minCellY || cellY > maxCellY) continue;
+        for (const [cellX, entries] of row) {
+          if (cellX < minCellX || cellX > maxCellX) continue;
+          buckets.push({ cellSize: level.cellSize, cellX, cellY });
+          for (const entry of entries) {
+            centers.push({
+              x: entry.bounds.x + entry.bounds.width / 2,
+              y: entry.bounds.y + entry.bounds.height / 2,
+              cellSize: level.cellSize,
+            });
+          }
+        }
+      }
+    }
   }
 
   queryBounds(bounds: Bounds, output: ShaderCanvasEntity[]): ShaderCanvasEntity[];

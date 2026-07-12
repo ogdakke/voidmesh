@@ -23,6 +23,12 @@ export const DebugType = createEnum({
   load: "load",
   /** just set debug mode */
   default: "default",
+  /** visualize alpha hit-test occupancy */
+  alpha: "alpha",
+  /** visualize occupied spatial-index buckets */
+  spatial: "spatial",
+  /** visualize both canvas debug grids */
+  all: "all",
 });
 export type DebugType = typeof DebugType.infer;
 

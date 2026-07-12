@@ -255,7 +255,9 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     "debug",
     parseAsStringEnum(Object.values(DebugType)),
   );
-  const debug = debugType !== null;
+  const isCanvasDebugType =
+    debugType === DebugType.alpha || debugType === DebugType.spatial || debugType === DebugType.all;
+  const debug = debugType !== null && (import.meta.env.DEV || !isCanvasDebugType);
   const [wlurDebugConfig, setWlurDebugConfigState] = useState<WlurOverlayDebugConfig>(() =>
     createDefaultWlurOverlayDebugConfig(),
   );
@@ -276,7 +278,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         .catch(console.error);
     }
     canvasStore.setDebugMode(debug);
-  }, [debugType, debug]);
+    canvasStore.setDebugView(import.meta.env.DEV && isCanvasDebugType ? debugType : "none");
+  }, [debugType, debug, isCanvasDebugType]);
 
   // Hydrate persisted preferences on mount
   useEffect(() => {
