@@ -99,4 +99,47 @@ describe("EntitySpatialIndex", () => {
       front,
     ]);
   });
+
+  test("collects visible occupied buckets and entity centers across index levels", () => {
+    const index = new EntitySpatialIndex(16);
+    const smallA = createTestEntity({
+      id: "small-a",
+      position: { x: -15, y: -15 },
+      size: { width: 4, height: 4 },
+    });
+    const smallB = createTestEntity({
+      id: "small-b",
+      position: { x: -12, y: -12 },
+      size: { width: 4, height: 4 },
+    });
+    const large = createTestEntity({
+      id: "large-debug",
+      position: { x: 32, y: 0 },
+      size: { width: 30, height: 10 },
+    });
+    index.upsert(smallA);
+    index.upsert(smallB);
+    index.upsert(large);
+
+    const buckets: Parameters<EntitySpatialIndex["collectDebugGeometry"]>[1] = [];
+    const centers: Parameters<EntitySpatialIndex["collectDebugGeometry"]>[2] = [];
+    index.collectDebugGeometry({ x: -20, y: -20, width: 80, height: 40 }, buckets, centers);
+
+    expect(buckets).toEqual([
+      { cellSize: 16, cellX: -1, cellY: -1 },
+      { cellSize: 32, cellX: 1, cellY: 0 },
+    ]);
+    expect(centers).toEqual([
+      { x: -13, y: -13, cellSize: 16 },
+      { x: -10, y: -10, cellSize: 16 },
+      { x: 47, y: 5, cellSize: 32 },
+    ]);
+
+    smallA.position = { x: 200, y: 200 };
+    index.upsert(smallA);
+    index.remove(smallB.id);
+    index.collectDebugGeometry({ x: -20, y: -20, width: 80, height: 40 }, buckets, centers);
+    expect(buckets).toEqual([{ cellSize: 32, cellX: 1, cellY: 0 }]);
+    expect(centers).toEqual([{ x: 47, y: 5, cellSize: 32 }]);
+  });
 });

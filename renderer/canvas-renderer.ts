@@ -8,6 +8,7 @@ import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "
 import { CanvasLensing } from "#types/enums.ts";
 import { ActionLayerBlurPass } from "./action-layer-blur-pass.ts";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
+import { CanvasDebugPass } from "./canvas-debug-pass.ts";
 import { CompositionPass, type CompositionDrawItem } from "./composition-pass.ts";
 import { DisintegrationPass } from "./disintegration-pass.ts";
 import { EntityDrawItemPreparer } from "./entity-draw-item-preparer.ts";
@@ -69,6 +70,7 @@ export class InfiniteCanvasRenderer {
   // Entity label pass (Canvas 2D rasterized → GPU textured quad)
   #entityLabelPass: EntityLabelPass | null = null;
   #canvasCalloutPass: CanvasCalloutPass | null = null;
+  #canvasDebugPass: CanvasDebugPass | null = null;
 
   // Cached canvas dimensions (updated by ResizeObserver, avoids getBoundingClientRect in render loop)
   #cachedCanvasWidth = 0;
@@ -316,6 +318,14 @@ export class InfiniteCanvasRenderer {
       this.#viewportUniforms.buffer,
     );
     this.#canvasCalloutPass.initialize();
+
+    if (import.meta.env.DEV) {
+      this.#canvasDebugPass = new CanvasDebugPass(
+        this.#device,
+        this.#canvasFormat,
+        this.#viewportUniforms.buffer,
+      );
+    }
 
     // Set up ResizeObserver to cache canvas dimensions (avoids getBoundingClientRect in render loop)
     this.#resizeObserver = new ResizeObserver((entries) => {
@@ -583,6 +593,19 @@ export class InfiniteCanvasRenderer {
         height,
         dragSelectBounds: state.dragSelectBounds,
         multiSelectBounds: state.multiSelectBounds,
+      });
+    }
+
+    if (import.meta.env.DEV && state.debugView !== "none" && this.#canvasDebugPass) {
+      this.#canvasDebugPass.encode({
+        encoder,
+        targetView: sceneTargetView,
+        view: state.debugView,
+        viewport,
+        width,
+        height,
+        entities: entityDrawItems.map((item) => item.entity),
+        spatialIndex: state.entitySpatialIndex,
       });
     }
 
@@ -916,6 +939,8 @@ export class InfiniteCanvasRenderer {
     this.#entityLabelPass = null;
     this.#canvasCalloutPass?.destroy();
     this.#canvasCalloutPass = null;
+    this.#canvasDebugPass?.destroy();
+    this.#canvasDebugPass = null;
 
     this.#wlurOverlayPass?.destroy();
     this.#wlurOverlayPass = null;
