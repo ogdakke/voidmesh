@@ -11,6 +11,7 @@ import {
   type ParamPaths,
   type GetParamByPath,
   type SelectionState,
+  type PlaybackState,
   type ShaderType,
   MediaType,
 } from "#types/canvas.ts";
@@ -86,6 +87,16 @@ export interface CanvasEntityUpdate {
   id: string;
   updates: Partial<ShaderCanvasEntity>;
 }
+
+export type CanvasEntityMutation =
+  | { type: "add"; entities: readonly ShaderCanvasEntity[] }
+  | { type: "update"; batch: readonly CanvasEntityUpdate[] }
+  | { type: "move"; entityId: string; position: Point }
+  | { type: "remove"; entityIds: readonly string[] }
+  | { type: "replace"; entities: readonly ShaderCanvasEntity[] }
+  | { type: "playback"; entityId: string; playback: PlaybackState };
+
+export type CanvasEntityMutationListener = (mutation: CanvasEntityMutation) => void;
 
 // Snapshot types for selective subscriptions
 export interface ViewportSnapshot {
@@ -221,6 +232,7 @@ export interface ParamResult<T> {
 export class CanvasStore extends Store<CanvasState> {
   #logger: Logger;
   #viewportListeners = new Set<() => void>();
+  #entityMutationListeners = new Set<CanvasEntityMutationListener>();
   #selectedEntitiesCache: ShaderCanvasEntity[] = [];
   #selectedEntitiesVersion = -1;
   #selectionStateCache: { entities: ShaderCanvasEntity[]; value: SelectionState } | null = null;
@@ -448,6 +460,11 @@ export class CanvasStore extends Store<CanvasState> {
     return super.getState();
   }
 
+  subscribeEntityMutations(listener: CanvasEntityMutationListener): () => void {
+    this.#entityMutationListeners.add(listener);
+    return () => this.#entityMutationListeners.delete(listener);
+  }
+
   // Viewport mutations (only notify viewport subscribers)
   setViewport(viewport: Viewport): void {
     this.state.viewport = { ...viewport, offset: { ...viewport.offset } };
@@ -472,6 +489,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.#entitySpatialIndex.upsert(entity);
     this.state.entitiesDirty.add(entity.id);
     this.notifyEntityChange();
+    this.#emitEntityMutation({ type: "add", entities: [entity] });
   }
 
   addEntities(entities: readonly ShaderCanvasEntity[]): void {
@@ -486,6 +504,7 @@ export class CanvasStore extends Store<CanvasState> {
       this.state.entitiesDirty.add(entity.id);
     }
     this.notifyEntityChange();
+    this.#emitEntityMutation({ type: "add", entities });
   }
 
   /** Atomically replace canvas content after a workspace has decoded successfully. */
@@ -539,6 +558,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.#resetSelectorCaches();
     this.notify();
     for (const listener of this.#viewportListeners) listener();
+    this.#emitEntityMutation({ type: "replace", entities });
   }
 
   updateEntity(id: string, updates: Partial<ShaderCanvasEntity>): void {
@@ -567,6 +587,7 @@ export class CanvasStore extends Store<CanvasState> {
     if (updatedCount === 0) return 0;
     this.notifyEntityChange();
     this.#logger.debug("Updated entity batch", { entityCount: updatedCount });
+    this.#emitEntityMutation({ type: "update", batch });
     return updatedCount;
   }
 
@@ -580,6 +601,7 @@ export class CanvasStore extends Store<CanvasState> {
       // Position-only updates still change the composed scene and must invalidate
       // renderer caches such as the fullscreen wlur overlay during drag.
       this.state.entitiesDirty.add(id);
+      this.#emitEntityMutation({ type: "move", entityId: id, position: { ...entity.position } });
     }
   }
 
@@ -601,6 +623,7 @@ export class CanvasStore extends Store<CanvasState> {
       this.state.selectedEntityIds = newSelection;
     }
     this.notifyEntityChange();
+    this.#emitEntityMutation({ type: "remove", entityIds: [id] });
   }
 
   removeEntities(entityIds: ReadonlySet<string>): number {
@@ -631,6 +654,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.selectionDirty = true;
     this.notifyEntityChange();
     this.#logger.debug("Removed entity batch", { entityCount: removedCount });
+    this.#emitEntityMutation({ type: "remove", entityIds: [...entityIds] });
     return removedCount;
   }
 
@@ -853,6 +877,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.#resetSelectorCaches();
     // Notify all subscribers
     this.notify();
+    this.#emitEntityMutation({ type: "replace", entities: [] });
   }
 
   // Debug mode toggle
@@ -977,6 +1002,7 @@ export class CanvasStore extends Store<CanvasState> {
     }
     this.state.entitiesDirty.add(entityId);
     this.notifyEntityChange();
+    this.#emitPlaybackMutation(entity);
   }
 
   setVideoMuted(entityId: string, muted: boolean): void {
@@ -991,6 +1017,7 @@ export class CanvasStore extends Store<CanvasState> {
     entity.mediaSource.videoElement.muted = muted;
     this.state.entitiesDirty.add(entityId);
     this.notifySelectionChange();
+    this.#emitPlaybackMutation(entity);
   }
 
   toggleVideoMuted(entityId: string): void {
@@ -1039,6 +1066,7 @@ export class CanvasStore extends Store<CanvasState> {
 
     this.state.entitiesDirty.add(entityId);
     this.notifyEntityChange();
+    this.#emitPlaybackMutation(entity);
   }
 
   /**
@@ -1062,6 +1090,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.entitiesDirty.add(entityId);
     this.state.playbackVersion++;
     this.notify();
+    this.#emitPlaybackMutation(entity);
   }
 
   /**
@@ -1074,6 +1103,7 @@ export class CanvasStore extends Store<CanvasState> {
     if (!entity || entity.mediaSource.type !== MediaType.video || !entity.playback) return;
 
     entity.playback.currentTime = currentTime;
+    this.#emitPlaybackMutation(entity);
     if (!this.state.selectedEntityIds.has(entityId)) return;
 
     const now = performance.now();
@@ -1103,6 +1133,7 @@ export class CanvasStore extends Store<CanvasState> {
     }
     this.state.entitiesDirty.add(entityId);
     this.notifyEntityChange();
+    this.#emitPlaybackMutation(entity);
   }
 
   pauseGif(entityId: string): void {
@@ -1117,6 +1148,7 @@ export class CanvasStore extends Store<CanvasState> {
     entity.textureDirty = true;
     this.state.entitiesDirty.add(entityId);
     this.notifyEntityChange();
+    this.#emitPlaybackMutation(entity);
   }
 
   /**
@@ -1141,6 +1173,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.entitiesDirty.add(entityId);
     this.state.playbackVersion++;
     this.notify();
+    this.#emitPlaybackMutation(entity);
   }
 
   /**
@@ -1153,6 +1186,7 @@ export class CanvasStore extends Store<CanvasState> {
     if (!entity || entity.mediaSource.type !== MediaType.gif || !entity.playback) return;
 
     entity.playback.currentTime = currentTime;
+    this.#emitPlaybackMutation(entity);
     if (!this.state.selectedEntityIds.has(entityId)) return;
 
     const now = performance.now();
@@ -1176,6 +1210,19 @@ export class CanvasStore extends Store<CanvasState> {
     this.#lastPlaybackNotifyTime = performance.now();
     this.state.playbackVersion++;
     this.notify();
+  }
+
+  #emitPlaybackMutation(entity: ShaderCanvasEntity): void {
+    if (!entity.playback) return;
+    this.#emitEntityMutation({
+      type: "playback",
+      entityId: entity.id,
+      playback: { ...entity.playback },
+    });
+  }
+
+  #emitEntityMutation(mutation: CanvasEntityMutation): void {
+    for (const listener of this.#entityMutationListeners) listener(mutation);
   }
 
   #syncVideoElementPlayback(entity: ShaderCanvasEntity): void {

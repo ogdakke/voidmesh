@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
-import { canvasStore } from "#engine";
+import { canvasStore, type CanvasEntityMutationListener } from "#engine";
 import { isVideoEntity, type ShaderCanvasEntity } from "#types/canvas.ts";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
 import { createTestEntity, resetEntityCounter } from "../helpers/test-entity.ts";
@@ -93,6 +93,37 @@ describe("canvasStore entity versioning", () => {
       entityVersion: initialEntityVersion + 1,
       geometryVersion: initialGeometryVersion + 1,
     });
+  });
+});
+
+describe("canvasStore entity mutation feed", () => {
+  test("publishes collaboration-facing add, update, move, playback, and remove mutations", () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 10 });
+    const listener = vi.fn<CanvasEntityMutationListener>();
+    const unsubscribe = canvasStore.subscribeEntityMutations(listener);
+
+    canvasStore.addEntity(entity);
+    canvasStore.updateEntity(entity.id, { rotation: 15 });
+    canvasStore.moveEntity(entity.id, { x: 4, y: 5 });
+    canvasStore.seekVideo(entity.id, 3);
+    canvasStore.removeEntity(entity.id);
+
+    expect(listener.mock.calls.map(([mutation]) => mutation.type)).toEqual([
+      "add",
+      "update",
+      "move",
+      "playback",
+      "remove",
+    ]);
+    expect(listener.mock.calls[2]?.[0]).toMatchObject({
+      entityId: entity.id,
+      position: { x: 4, y: 5 },
+    });
+    expect(listener.mock.calls[3]?.[0]).toMatchObject({
+      entityId: entity.id,
+      playback: { currentTime: 3 },
+    });
+    unsubscribe();
   });
 });
 

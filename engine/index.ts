@@ -3,6 +3,8 @@ export type {
   CanvasState,
   RenderState,
   CanvasEntityUpdate,
+  CanvasEntityMutation,
+  CanvasEntityMutationListener,
   ActionLayerRenderState,
   DragVisualRenderState,
   DisintegrationRenderOverlay,
