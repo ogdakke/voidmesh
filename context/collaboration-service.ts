@@ -48,6 +48,7 @@ const PRESENCE_SYNC_INTERVAL_MS = 16;
 const ICE_CREDENTIAL_REFRESH_RATIO = 0.75;
 const ICE_CREDENTIAL_REFRESH_RETRY_MS = 60_000;
 const MAX_CONCURRENT_ASSET_REQUESTS = 4;
+const MAX_UNACKNOWLEDGED_ASSETS_PER_PEER = 4;
 const MAX_ASSET_SEND_ATTEMPTS = 2;
 const ASSET_ACK_TIMEOUT_MS = 120_000;
 const ASSET_PROGRESS_TIMEOUT_MS = 20_000;
@@ -131,6 +132,7 @@ export class CollaborationService {
   #assetSources = new Map<string, Set<string>>();
   #pendingAssets = new AssetRequestPool(MAX_CONCURRENT_ASSET_REQUESTS);
   #assetReceiveProgress = new Map<string, number>();
+  #assetReceiveStartedAt = new Map<string, number>();
   #assetRequestTimers = new Map<string, ReturnType<typeof setTimeout>>();
   #assetSendQueues = new Map<string, QueuedAssetSend[]>();
   #queuedAssetSends = new Map<string, Set<string>>();
@@ -344,6 +346,9 @@ export class CollaborationService {
     assetAction.onReceiveProgress = (progress, { metadata }) => {
       if (!isReceivedAssetMetadata(metadata)) return;
       if (!this.#pendingAssets.has(metadata.hash)) return;
+      if (!this.#assetReceiveStartedAt.has(metadata.hash)) {
+        this.#assetReceiveStartedAt.set(metadata.hash, performance.now());
+      }
       if (progress < 1) this.#assetReceiveProgress.set(metadata.hash, progress);
       else this.#assetReceiveProgress.delete(metadata.hash);
       this.#scheduleAssetRequestTimeout(
@@ -452,6 +457,9 @@ export class CollaborationService {
       for (const hash of this.#assetReceiveProgress.keys()) {
         if (this.#pendingAssets.peerFor(hash) === peerId) this.#assetReceiveProgress.delete(hash);
       }
+      for (const hash of this.#assetReceiveStartedAt.keys()) {
+        if (this.#pendingAssets.peerFor(hash) === peerId) this.#assetReceiveStartedAt.delete(hash);
+      }
       for (const hash of this.#assetRequestTimers.keys()) {
         if (this.#pendingAssets.peerFor(hash) === peerId) this.#clearAssetRequestTimeout(hash);
       }
@@ -517,6 +525,7 @@ export class CollaborationService {
     this.#iceCredentialRefreshTimer = null;
     this.#pendingAssets.clear();
     this.#assetReceiveProgress.clear();
+    this.#assetReceiveStartedAt.clear();
     for (const timer of this.#assetRequestTimers.values()) clearTimeout(timer);
     this.#assetRequestTimers.clear();
     this.#assetSendQueues.clear();
@@ -947,30 +956,29 @@ export class CollaborationService {
 
   async #drainAssetSendQueue(peerId: string): Promise<void> {
     const sessionRevision = this.#sessionRevision;
+    const inFlight = new Set<Promise<void>>();
     this.#assetSendDraining.add(peerId);
     try {
       while (this.#sessionRevision === sessionRevision && this.#room?.getPeers()[peerId]) {
         const queue = this.#assetSendQueues.get(peerId);
-        const next = queue?.shift();
-        if (!next) break;
-        try {
-          await this.#sendAssetToPeer(next.hash, peerId);
-          this.#queuedAssetSends.get(peerId)?.delete(next.hash);
-        } catch (error) {
-          collaborationMetrics.recordAssetTransferRetry();
-          logger.warn(
-            `[collaboration] asset ${next.hash} send attempt ${next.attempt + 1} failed`,
-            error,
-          );
-          if (next.attempt + 1 < MAX_ASSET_SEND_ATTEMPTS && this.#room?.getPeers()[peerId]) {
-            queue?.unshift({ hash: next.hash, attempt: next.attempt + 1 });
-            continue;
+        while (inFlight.size < MAX_UNACKNOWLEDGED_ASSETS_PER_PEER) {
+          const next = queue?.shift();
+          if (!next) break;
+          try {
+            const acknowledgement = await this.#beginAssetSendToPeer(next.hash, peerId);
+            let completion!: Promise<void>;
+            completion = this.#settleAssetAcknowledgement(
+              next,
+              peerId,
+              acknowledgement.promise,
+            ).finally(() => inFlight.delete(completion));
+            inFlight.add(completion);
+          } catch (error) {
+            this.#handleAssetSendFailure(next, peerId, error);
           }
-          this.#queuedAssetSends.get(peerId)?.delete(next.hash);
-          void this.#sendAssetNack?.(next.hash, peerId).catch((sendError) =>
-            logger.warn(`[collaboration] could not report failed asset ${next.hash}`, sendError),
-          );
         }
+        if (inFlight.size === 0 && (queue?.length ?? 0) === 0) break;
+        if (inFlight.size > 0) await Promise.race(inFlight);
       }
     } finally {
       this.#assetSendDraining.delete(peerId);
@@ -981,10 +989,44 @@ export class CollaborationService {
     }
   }
 
-  async #sendAssetToPeer(hash: string, peerId: string): Promise<void> {
+  async #settleAssetAcknowledgement(
+    next: QueuedAssetSend,
+    peerId: string,
+    acknowledgement: Promise<void>,
+  ): Promise<void> {
+    try {
+      await acknowledgement;
+      this.#queuedAssetSends.get(peerId)?.delete(next.hash);
+    } catch (error) {
+      this.#handleAssetSendFailure(next, peerId, error);
+    }
+  }
+
+  #handleAssetSendFailure(next: QueuedAssetSend, peerId: string, error: unknown): void {
+    collaborationMetrics.recordAssetTransferRetry();
+    logger.warn(
+      `[collaboration] asset ${next.hash} send attempt ${next.attempt + 1} failed`,
+      error,
+    );
+    if (next.attempt + 1 < MAX_ASSET_SEND_ATTEMPTS && this.#room?.getPeers()[peerId]) {
+      this.#assetSendQueues.get(peerId)?.unshift({ hash: next.hash, attempt: next.attempt + 1 });
+      return;
+    }
+    this.#queuedAssetSends.get(peerId)?.delete(next.hash);
+    void this.#sendAssetNack?.(next.hash, peerId).catch((sendError) =>
+      logger.warn(`[collaboration] could not report failed asset ${next.hash}`, sendError),
+    );
+  }
+
+  async #beginAssetSendToPeer(
+    hash: string,
+    peerId: string,
+  ): Promise<{ promise: Promise<void>; cancel: () => void }> {
     const blob = this.#assets.get(hash);
     const descriptor = this.#assetDescriptors.get(hash);
-    if (!blob || !descriptor || !this.#sendAsset) return;
+    if (!blob || !descriptor || !this.#sendAsset) {
+      throw new Error(`Cannot send unavailable asset ${hash}`);
+    }
     const compressionStartedAt = performance.now();
     const prepared = await prepareAssetPayload(blob, descriptor.mimeType);
     collaborationMetrics.recordCompressionDuration(performance.now() - compressionStartedAt);
@@ -1004,7 +1046,7 @@ export class CollaborationService {
         },
         peerId,
       );
-      await acknowledgement.promise;
+      return acknowledgement;
     } catch (error) {
       acknowledgement.cancel();
       throw error;
@@ -1026,7 +1068,7 @@ export class CollaborationService {
         throw new Error(`Rejected oversized collaboration asset ${metadata.hash}`);
       }
       if (!this.#assets.has(metadata.hash)) {
-        const startedAt = performance.now();
+        const startedAt = this.#assetReceiveStartedAt.get(metadata.hash) ?? performance.now();
         const blob = await restoreAssetPayload(payload, metadata);
         const hashStartedAt = performance.now();
         const actualHash = await hashBlob(blob);
@@ -1069,6 +1111,7 @@ export class CollaborationService {
   #releasePendingAsset(hash: string): void {
     this.#pendingAssets.delete(hash);
     this.#assetReceiveProgress.delete(hash);
+    this.#assetReceiveStartedAt.delete(hash);
     this.#clearAssetRequestTimeout(hash);
     this.#updateAssetQueueMetrics();
   }

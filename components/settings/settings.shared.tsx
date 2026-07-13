@@ -186,8 +186,8 @@ export function CollaborationMetrics() {
         <Metric label="Reconcile" value={formatDuration(metrics.documentReconcileDurationMs)} />
         {lastTransfer && (
           <Metric
-            label="Last asset"
-            value={`${formatBytes(lastTransfer.transmittedBytes)} · ${formatBytes(lastTransfer.throughputBytesPerSecond)}/s · ${lastTransfer.compression}`}
+            label={`Last asset ${lastTransfer.direction === "receive" ? "↓" : "↑"}`}
+            value={`${formatBytes(lastTransfer.transmittedBytes)} · ${formatBytes(lastTransfer.throughputBytesPerSecond)}/s · ${formatDuration(lastTransfer.durationMs)} · ${lastTransfer.compression}`}
           />
         )}
       </dl>
