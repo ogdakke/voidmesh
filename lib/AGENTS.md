@@ -27,7 +27,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `download.ts` — File downloads and file picker (with iOS compatibility).
 - `storage.ts` — Browser storage abstraction (unstorage) for persisted preferences.
 - `collaboration/protocol.ts` — Invite fragments, provisional preview descriptors, content-addressed final assets, hashing, validation, and selective gzip for compressible text payloads.
-- `collaboration/document.ts` — Yjs entity/layer document with grouped identity, geometry, appearance, asset, and playback fields.
+- `collaboration/document.ts` — Yjs entity/layer document with grouped identity, geometry, appearance, asset, and playback fields. Playback anchors carry unique command IDs plus media duration so readers can distinguish new intent and wrap advancing loops.
 - `collaboration/metrics.ts` — Reactive counters and bounded transfer diagnostics for collaboration sessions.
 - Also: `config/action-layer.config.ts`, `entity-placement.ts`, `deep-merge.ts`, `shader-defaults.ts`, `gif-decoder.ts`.
 
