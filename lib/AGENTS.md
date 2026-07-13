@@ -33,6 +33,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `collaboration/ice-server-provider.ts` — Provider-neutral same-origin TURN credential client, strict ICE response validation, and selected candidate-pair route inspection.
 - `collaboration/metrics.ts` — Reactive counters and bounded transfer diagnostics for collaboration sessions.
 - `collaboration/asset-hash-cache.ts` — Blob-identity promise cache that hashes a shared source once across duplicate registrations.
+- `collaboration/asset-request-pool.ts` — Bounded hash-to-source request ownership used to cap concurrent incoming asset reassembly and release requests when a peer leaves.
 - `collaboration/shared-image-asset-registry.ts` — Short-lived reference-counted lookup for sharing decoded preview/final image assets across one remote projection batch.
 - Also: `config/action-layer.config.ts`, `entity-placement.ts`, `deep-merge.ts`, `shader-defaults.ts`, `gif-decoder.ts`.
 

@@ -30,6 +30,10 @@ export interface CollaborationMetricsState {
   documentUpdatesReceived: number;
   assetTransfersSent: number;
   assetTransfersReceived: number;
+  assetRequestsPending: number;
+  assetReceivesActive: number;
+  assetReceiveProgress: number | null;
+  assetTransferRetries: number;
   assetHashDurationMs: number;
   assetCompressionDurationMs: number;
   assetDecodeDurationMs: number;
@@ -169,6 +173,25 @@ export class CollaborationMetricsStore extends Store<CollaborationMetricsState> 
     this.publish();
   }
 
+  setAssetQueue(pending: number, active: number, progress: number | null): void {
+    if (
+      this.state.assetRequestsPending === pending &&
+      this.state.assetReceivesActive === active &&
+      this.state.assetReceiveProgress === progress
+    ) {
+      return;
+    }
+    this.state.assetRequestsPending = pending;
+    this.state.assetReceivesActive = active;
+    this.state.assetReceiveProgress = progress;
+    this.publish();
+  }
+
+  recordAssetTransferRetry(): void {
+    this.state.assetTransferRetries++;
+    this.publish();
+  }
+
   recordRoundTripTime(durationMs: number): void {
     this.state.lastRoundTripTimeMs = durationMs;
     this.publish();
@@ -232,6 +255,10 @@ function createInitialState(): CollaborationMetricsState {
     documentUpdatesReceived: 0,
     assetTransfersSent: 0,
     assetTransfersReceived: 0,
+    assetRequestsPending: 0,
+    assetReceivesActive: 0,
+    assetReceiveProgress: null,
+    assetTransferRetries: 0,
     assetHashDurationMs: 0,
     assetCompressionDurationMs: 0,
     assetDecodeDurationMs: 0,

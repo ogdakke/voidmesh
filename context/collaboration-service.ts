@@ -38,6 +38,7 @@ import {
   type IceServerCredentials,
   type IceServerProvider,
 } from "#lib/collaboration/ice-server-provider.ts";
+import { AssetRequestPool } from "#lib/collaboration/asset-request-pool.ts";
 
 const APP_ID = "voidmesh-collaboration-v3";
 const GEOMETRY_SYNC_INTERVAL_MS = 16;
@@ -46,6 +47,9 @@ const PLAYBACK_DRIFT_INTERVAL_MS = 1_000;
 const PRESENCE_SYNC_INTERVAL_MS = 16;
 const ICE_CREDENTIAL_REFRESH_RATIO = 0.75;
 const ICE_CREDENTIAL_REFRESH_RETRY_MS = 60_000;
+const MAX_CONCURRENT_ASSET_REQUESTS = 4;
+const MAX_ASSET_SEND_ATTEMPTS = 2;
+const ASSET_ACK_TIMEOUT_MS = 120_000;
 const MAX_ASSET_BYTES = 512 * 1024 * 1024;
 
 interface CollaborationCanvasAdapter {
@@ -87,6 +91,18 @@ interface RemotePlaybackAnchor {
 
 type PendingPresenceUpdate = Omit<CollaborationPresenceUpdate, "sequence">;
 
+interface QueuedAssetSend {
+  hash: string;
+  attempt: number;
+}
+
+interface AssetAckWaiter {
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 export class CollaborationService {
   readonly #iceServerProvider: IceServerProvider;
   #adapter: CollaborationCanvasAdapter | null = null;
@@ -103,13 +119,20 @@ export class CollaborationService {
   #sendAsset:
     | ((payload: Uint8Array, metadata: ReceivedAssetMetadata, peerId: string) => Promise<void>)
     | null = null;
+  #sendAssetAck: ((hash: string, peerId: string) => Promise<void>) | null = null;
+  #sendAssetNack: ((hash: string, peerId: string) => Promise<void>) | null = null;
   #sendClock: ((message: ClockSyncMessage, peerId: string) => Promise<void>) | null = null;
   #sendPresence: ((message: CollaborationPresenceUpdate, peerId?: string) => Promise<void>) | null =
     null;
   #assets = new Map<string, Blob>();
   #assetDescriptors = new Map<string, CollaborativeAssetDescriptor>();
   #assetSources = new Map<string, Set<string>>();
-  #pendingAssets = new Set<string>();
+  #pendingAssets = new AssetRequestPool(MAX_CONCURRENT_ASSET_REQUESTS);
+  #assetReceiveProgress = new Map<string, number>();
+  #assetSendQueues = new Map<string, QueuedAssetSend[]>();
+  #queuedAssetSends = new Map<string, Set<string>>();
+  #assetSendDraining = new Set<string>();
+  #assetAckWaiters = new Map<string, AssetAckWaiter>();
   #pendingMaterializations = new Set<string>();
   #pendingLocalRegistrations = new Set<string>();
   #materializedAssetHashes = new Map<string, string>();
@@ -232,6 +255,8 @@ export class CollaborationService {
     const inventoryAction = room.makeAction<string[]>("inventory");
     const assetRequestAction = room.makeAction<string>("asset-request");
     const assetAction = room.makeAction<Uint8Array>("asset");
+    const assetAckAction = room.makeAction<string>("asset-ack");
+    const assetNackAction = room.makeAction<string>("asset-nack");
     const clockAction = room.makeAction<ClockSyncMessage>("clock");
     const presenceAction = room.makeAction<JsonValue>("presence");
 
@@ -252,10 +277,17 @@ export class CollaborationService {
     };
     this.#sendAsset = async (payload, metadata, peerId) => {
       const startedAt = performance.now();
+      let completed = false;
       await assetAction.send(payload, {
         target: peerId,
         metadata: { ...metadata },
+        onProgress: (progress, context) => {
+          if (context.peerId === peerId && progress >= 1) completed = true;
+        },
       });
+      if (!completed) {
+        throw new Error(`Asset transfer ${metadata.hash} stopped before all chunks were queued`);
+      }
       const durationMs = performance.now() - startedAt;
       collaborationMetrics.recordMessage("send", payload.byteLength);
       collaborationMetrics.recordTransfer({
@@ -269,6 +301,14 @@ export class CollaborationService {
         peerId,
         completedAt: Date.now(),
       });
+    };
+    this.#sendAssetAck = async (hash, peerId) => {
+      await assetAckAction.send(hash, { target: peerId });
+      collaborationMetrics.recordMessage("send", hash.length);
+    };
+    this.#sendAssetNack = async (hash, peerId) => {
+      await assetNackAction.send(hash, { target: peerId });
+      collaborationMetrics.recordMessage("send", hash.length);
     };
     this.#sendClock = async (message, peerId) => {
       await clockAction.send(message, { target: peerId });
@@ -296,10 +336,40 @@ export class CollaborationService {
     };
     assetRequestAction.onMessage = (hash, { peerId }) => {
       collaborationMetrics.recordMessage("receive", hash.length);
-      void this.#sendAssetToPeer(hash, peerId).catch((error) => this.#fail(error));
+      this.#queueAssetSend(hash, peerId);
+    };
+    assetAction.onReceiveProgress = (progress, { metadata }) => {
+      if (!isReceivedAssetMetadata(metadata)) return;
+      if (!this.#pendingAssets.has(metadata.hash)) return;
+      if (progress < 1) this.#assetReceiveProgress.set(metadata.hash, progress);
+      else this.#assetReceiveProgress.delete(metadata.hash);
+      this.#updateAssetQueueMetrics();
     };
     assetAction.onMessage = (payload, { peerId, metadata }) => {
-      void this.#receiveAsset(payload, peerId, metadata).catch((error) => this.#fail(error));
+      void this.#receiveAsset(payload, peerId, metadata).catch((error) => {
+        collaborationMetrics.recordAssetTransferRetry();
+        logger.warn("[collaboration] asset receive failed; requesting another copy", error);
+      });
+    };
+    assetAckAction.onMessage = (hash, { peerId }) => {
+      collaborationMetrics.recordMessage("receive", hash.length);
+      this.#resolveAssetAck(peerId, hash);
+    };
+    assetNackAction.onMessage = (hash, { peerId }) => {
+      collaborationMetrics.recordMessage("receive", hash.length);
+      const rejectedSend = this.#rejectAssetAck(
+        peerId,
+        hash,
+        new Error(`Peer ${peerId} could not verify asset ${hash}`),
+      );
+      if (this.#pendingAssets.has(hash)) {
+        collaborationMetrics.recordAssetTransferRetry();
+        logger.warn(`[collaboration] peer ${peerId} could not send asset ${hash}; retrying`);
+        this.#releasePendingAsset(hash);
+        this.#requestMissingAssets();
+      } else if (!rejectedSend) {
+        logger.warn(`[collaboration] received an unexpected rejection for asset ${hash}`);
+      }
     };
     clockAction.onMessage = (message, { peerId }) => {
       collaborationMetrics.recordMessage("receive", estimateJsonBytes(message));
@@ -371,6 +441,16 @@ export class CollaborationService {
       void this.#sendPresenceSnapshot(peerId).catch((error) => this.#fail(error));
     };
     room.onPeerLeave = (peerId) => {
+      for (const sources of this.#assetSources.values()) sources.delete(peerId);
+      for (const hash of this.#assetReceiveProgress.keys()) {
+        if (this.#pendingAssets.peerFor(hash) === peerId) this.#assetReceiveProgress.delete(hash);
+      }
+      this.#pendingAssets.deletePeer(peerId);
+      this.#assetSendQueues.delete(peerId);
+      this.#queuedAssetSends.delete(peerId);
+      this.#rejectAssetAcksForPeer(peerId, new Error(`Peer ${peerId} left during asset transfer`));
+      this.#updateAssetQueueMetrics();
+      this.#requestMissingAssets();
       this.#bestClockRoundTrips.delete(peerId);
       this.#remotePresenceSequences.delete(peerId);
       this.#remotePresences.delete(peerId);
@@ -415,6 +495,8 @@ export class CollaborationService {
     this.#sendInventory = null;
     this.#sendAssetRequest = null;
     this.#sendAsset = null;
+    this.#sendAssetAck = null;
+    this.#sendAssetNack = null;
     this.#sendClock = null;
     this.#sendPresence = null;
     this.#selfId = null;
@@ -424,6 +506,11 @@ export class CollaborationService {
     if (this.#iceCredentialRefreshTimer) clearTimeout(this.#iceCredentialRefreshTimer);
     this.#iceCredentialRefreshTimer = null;
     this.#pendingAssets.clear();
+    this.#assetReceiveProgress.clear();
+    this.#assetSendQueues.clear();
+    this.#queuedAssetSends.clear();
+    this.#assetSendDraining.clear();
+    this.#rejectAllAssetAcks(new Error("Collaboration session stopped"));
     this.#pendingMaterializations.clear();
     this.#pendingLocalRegistrations.clear();
     this.#materializedAssetHashes.clear();
@@ -817,12 +904,68 @@ export class CollaborationService {
 
   #requestAsset(hash: string): void {
     if (this.#pendingAssets.has(hash) || !this.#sendAssetRequest) return;
-    this.#pendingAssets.add(hash);
     const source = this.#assetSources.get(hash)?.values().next().value;
+    if (!source || !this.#pendingAssets.add(hash, source)) return;
+    this.#updateAssetQueueMetrics();
     void this.#sendAssetRequest(hash, source).catch((error) => {
-      this.#pendingAssets.delete(hash);
-      this.#fail(error);
+      this.#releasePendingAsset(hash);
+      collaborationMetrics.recordAssetTransferRetry();
+      logger.warn(`[collaboration] could not request asset ${hash}; retrying`, error);
+      this.#requestMissingAssets();
     });
+  }
+
+  #queueAssetSend(hash: string, peerId: string): void {
+    if (!this.#assets.has(hash) || !this.#assetDescriptors.has(hash)) {
+      void this.#sendAssetNack?.(hash, peerId).catch((error) =>
+        logger.warn(`[collaboration] could not reject missing asset ${hash}`, error),
+      );
+      return;
+    }
+    let queued = this.#queuedAssetSends.get(peerId);
+    if (!queued) this.#queuedAssetSends.set(peerId, (queued = new Set()));
+    if (queued.has(hash)) return;
+    queued.add(hash);
+    let queue = this.#assetSendQueues.get(peerId);
+    if (!queue) this.#assetSendQueues.set(peerId, (queue = []));
+    queue.push({ hash, attempt: 0 });
+    if (!this.#assetSendDraining.has(peerId)) void this.#drainAssetSendQueue(peerId);
+  }
+
+  async #drainAssetSendQueue(peerId: string): Promise<void> {
+    const sessionRevision = this.#sessionRevision;
+    this.#assetSendDraining.add(peerId);
+    try {
+      while (this.#sessionRevision === sessionRevision && this.#room?.getPeers()[peerId]) {
+        const queue = this.#assetSendQueues.get(peerId);
+        const next = queue?.shift();
+        if (!next) break;
+        try {
+          await this.#sendAssetToPeer(next.hash, peerId);
+          this.#queuedAssetSends.get(peerId)?.delete(next.hash);
+        } catch (error) {
+          collaborationMetrics.recordAssetTransferRetry();
+          logger.warn(
+            `[collaboration] asset ${next.hash} send attempt ${next.attempt + 1} failed`,
+            error,
+          );
+          if (next.attempt + 1 < MAX_ASSET_SEND_ATTEMPTS && this.#room?.getPeers()[peerId]) {
+            queue?.unshift({ hash: next.hash, attempt: next.attempt + 1 });
+            continue;
+          }
+          this.#queuedAssetSends.get(peerId)?.delete(next.hash);
+          void this.#sendAssetNack?.(next.hash, peerId).catch((sendError) =>
+            logger.warn(`[collaboration] could not report failed asset ${next.hash}`, sendError),
+          );
+        }
+      }
+    } finally {
+      this.#assetSendDraining.delete(peerId);
+      if ((this.#assetSendQueues.get(peerId)?.length ?? 0) === 0) {
+        this.#assetSendQueues.delete(peerId);
+        this.#queuedAssetSends.delete(peerId);
+      }
+    }
   }
 
   async #sendAssetToPeer(hash: string, peerId: string): Promise<void> {
@@ -832,20 +975,27 @@ export class CollaborationService {
     const compressionStartedAt = performance.now();
     const prepared = await prepareAssetPayload(blob, descriptor.mimeType);
     collaborationMetrics.recordCompressionDuration(performance.now() - compressionStartedAt);
-    await this.#sendAsset(
-      prepared.bytes,
-      {
-        transferId: descriptor.transferId,
-        hash,
-        mimeType: descriptor.mimeType,
-        byteLength: descriptor.byteLength,
-        filename: descriptor.filename,
-        compression: prepared.compression,
-        originalByteLength: prepared.originalByteLength,
-        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
-      },
-      peerId,
-    );
+    const acknowledgement = this.#createAssetAckWaiter(peerId, hash);
+    try {
+      await this.#sendAsset(
+        prepared.bytes,
+        {
+          transferId: descriptor.transferId,
+          hash,
+          mimeType: descriptor.mimeType,
+          byteLength: descriptor.byteLength,
+          filename: descriptor.filename,
+          compression: prepared.compression,
+          originalByteLength: prepared.originalByteLength,
+          protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        },
+        peerId,
+      );
+      await acknowledgement.promise;
+    } catch (error) {
+      acknowledgement.cancel();
+      throw error;
+    }
   }
 
   async #receiveAsset(
@@ -858,38 +1008,143 @@ export class CollaborationService {
       return;
     }
     const metadata = metadataValue;
-    if (metadata.originalByteLength > MAX_ASSET_BYTES) {
-      this.#fail(new Error(`Rejected oversized collaboration asset ${metadata.hash}`));
-      return;
-    }
-    const startedAt = performance.now();
-    const blob = await restoreAssetPayload(payload, metadata);
-    const hashStartedAt = performance.now();
-    const actualHash = await hashBlob(blob);
-    collaborationMetrics.recordHashDuration(performance.now() - hashStartedAt);
-    if (actualHash !== metadata.hash)
-      throw new Error(`Asset hash mismatch for ${metadata.filename}`);
+    try {
+      if (metadata.originalByteLength > MAX_ASSET_BYTES) {
+        throw new Error(`Rejected oversized collaboration asset ${metadata.hash}`);
+      }
+      if (!this.#assets.has(metadata.hash)) {
+        const startedAt = performance.now();
+        const blob = await restoreAssetPayload(payload, metadata);
+        const hashStartedAt = performance.now();
+        const actualHash = await hashBlob(blob);
+        collaborationMetrics.recordHashDuration(performance.now() - hashStartedAt);
+        if (actualHash !== metadata.hash)
+          throw new Error(`Asset hash mismatch for ${metadata.filename}`);
 
-    this.#assets.set(metadata.hash, blob);
-    const descriptor = this.#document
-      ?.getEntities()
-      .find((entity) => entity.asset.hash === metadata.hash)?.asset;
-    if (descriptor) this.#assetDescriptors.set(metadata.hash, descriptor);
-    this.#pendingAssets.delete(metadata.hash);
-    const durationMs = performance.now() - startedAt;
-    collaborationMetrics.recordMessage("receive", payload.byteLength);
-    collaborationMetrics.recordTransfer({
-      assetHash: metadata.hash,
-      direction: "receive",
-      originalBytes: metadata.originalByteLength,
-      transmittedBytes: payload.byteLength,
-      compression: metadata.compression,
-      durationMs,
-      throughputBytesPerSecond: bytesPerSecond(payload.byteLength, durationMs),
-      peerId,
-      completedAt: Date.now(),
+        this.#assets.set(metadata.hash, blob);
+        const descriptor = this.#document
+          ?.getEntities()
+          .find((entity) => entity.asset.hash === metadata.hash)?.asset;
+        if (descriptor) this.#assetDescriptors.set(metadata.hash, descriptor);
+        const durationMs = performance.now() - startedAt;
+        collaborationMetrics.recordMessage("receive", payload.byteLength);
+        collaborationMetrics.recordTransfer({
+          assetHash: metadata.hash,
+          direction: "receive",
+          originalBytes: metadata.originalByteLength,
+          transmittedBytes: payload.byteLength,
+          compression: metadata.compression,
+          durationMs,
+          throughputBytesPerSecond: bytesPerSecond(payload.byteLength, durationMs),
+          peerId,
+          completedAt: Date.now(),
+        });
+        this.#scheduleReconcile();
+      }
+      await this.#sendAssetAck?.(metadata.hash, peerId);
+    } catch (error) {
+      await this.#sendAssetNack?.(metadata.hash, peerId).catch((sendError) =>
+        logger.warn(`[collaboration] could not reject invalid asset ${metadata.hash}`, sendError),
+      );
+      throw error;
+    } finally {
+      this.#releasePendingAsset(metadata.hash);
+      this.#requestMissingAssets();
+    }
+  }
+
+  #releasePendingAsset(hash: string): void {
+    this.#pendingAssets.delete(hash);
+    this.#assetReceiveProgress.delete(hash);
+    this.#updateAssetQueueMetrics();
+  }
+
+  #updateAssetQueueMetrics(): void {
+    const progressValues = [...this.#assetReceiveProgress.values()];
+    collaborationMetrics.setAssetQueue(
+      this.#pendingAssets.size,
+      progressValues.length,
+      progressValues.length > 0
+        ? progressValues.reduce((sum, progress) => sum + progress, 0) / progressValues.length
+        : null,
+    );
+  }
+
+  #createAssetAckWaiter(
+    peerId: string,
+    hash: string,
+  ): { promise: Promise<void>; cancel: () => void } {
+    const key = assetAckKey(peerId, hash);
+    const existing = this.#assetAckWaiters.get(key);
+    if (existing) {
+      clearTimeout(existing.timer);
+      existing.reject(new Error(`Asset ${hash} was requested twice by peer ${peerId}`));
+    }
+    let resolvePromise = () => {};
+    let rejectPromise = (_error: Error) => {};
+    const promise = new Promise<void>((resolve, reject) => {
+      resolvePromise = resolve;
+      rejectPromise = reject;
     });
-    this.#scheduleReconcile();
+    const timer = setTimeout(() => {
+      const waiter = this.#assetAckWaiters.get(key);
+      if (!waiter) return;
+      this.#assetAckWaiters.delete(key);
+      waiter.reject(new Error(`Timed out waiting for peer ${peerId} to verify asset ${hash}`));
+    }, ASSET_ACK_TIMEOUT_MS);
+    const waiter: AssetAckWaiter = {
+      promise,
+      resolve: resolvePromise,
+      reject: rejectPromise,
+      timer,
+    };
+    this.#assetAckWaiters.set(key, waiter);
+    return {
+      promise,
+      cancel: () => {
+        if (this.#assetAckWaiters.get(key) !== waiter) return;
+        clearTimeout(waiter.timer);
+        this.#assetAckWaiters.delete(key);
+        waiter.resolve();
+      },
+    };
+  }
+
+  #resolveAssetAck(peerId: string, hash: string): void {
+    const key = assetAckKey(peerId, hash);
+    const waiter = this.#assetAckWaiters.get(key);
+    if (!waiter) return;
+    clearTimeout(waiter.timer);
+    this.#assetAckWaiters.delete(key);
+    waiter.resolve();
+  }
+
+  #rejectAssetAck(peerId: string, hash: string, error: Error): boolean {
+    const key = assetAckKey(peerId, hash);
+    const waiter = this.#assetAckWaiters.get(key);
+    if (!waiter) return false;
+    clearTimeout(waiter.timer);
+    this.#assetAckWaiters.delete(key);
+    waiter.reject(error);
+    return true;
+  }
+
+  #rejectAssetAcksForPeer(peerId: string, error: Error): void {
+    const prefix = `${peerId}:`;
+    for (const [key, waiter] of this.#assetAckWaiters) {
+      if (!key.startsWith(prefix)) continue;
+      clearTimeout(waiter.timer);
+      this.#assetAckWaiters.delete(key);
+      waiter.reject(error);
+    }
+  }
+
+  #rejectAllAssetAcks(error: Error): void {
+    for (const [key, waiter] of this.#assetAckWaiters) {
+      clearTimeout(waiter.timer);
+      this.#assetAckWaiters.delete(key);
+      waiter.reject(error);
+    }
   }
 
   async #measureRoundTripTime(): Promise<void> {
@@ -1201,6 +1456,10 @@ function estimateJsonBytes(value: unknown): number {
 
 function bytesPerSecond(byteLength: number, durationMs: number): number {
   return durationMs > 0 ? (byteLength / durationMs) * 1000 : 0;
+}
+
+function assetAckKey(peerId: string, hash: string): string {
+  return `${peerId}:${hash}`;
 }
 
 function requireBlobMimeType(blob: Blob, entityName: string): string {

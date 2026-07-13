@@ -156,6 +156,15 @@ export function CollaborationMetrics() {
         />
         <Metric label="Sent" value={formatBytes(metrics.bytesSent)} />
         <Metric label="Received" value={formatBytes(metrics.bytesReceived)} />
+        <Metric
+          label="Assets"
+          value={formatAssetQueue(
+            metrics.assetRequestsPending,
+            metrics.assetReceivesActive,
+            metrics.assetReceiveProgress,
+            metrics.assetTransferRetries,
+          )}
+        />
         <Metric label="Hashing" value={formatDuration(metrics.assetHashDurationMs)} />
         <Metric label="Compression" value={formatDuration(metrics.assetCompressionDurationMs)} />
         <Metric label="Media decode" value={formatDuration(metrics.assetDecodeDurationMs)} />
@@ -205,6 +214,16 @@ function formatDuration(durationMs: number | null): string {
   if (durationMs === null) return "—";
   if (durationMs < 1000) return `${durationMs.toFixed(1)} ms`;
   return `${(durationMs / 1000).toFixed(2)} s`;
+}
+
+function formatAssetQueue(
+  pending: number,
+  active: number,
+  progress: number | null,
+  retries: number,
+): string {
+  const progressLabel = progress === null ? "" : ` · ${Math.round(progress * 100)}%`;
+  return `${pending} pending · ${active} active${progressLabel} · ${retries} retries`;
 }
 
 function formatConnectionPath(path: string, relayProtocol: string | null): string {

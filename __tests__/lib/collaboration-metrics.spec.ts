@@ -31,6 +31,8 @@ describe("CollaborationMetricsStore", () => {
     store.recordIceCredentials(8, 7_200_000, true);
     store.recordIceCredentialRefreshFailure();
     store.setConnectionPath("relay", "udp");
+    store.setAssetQueue(4, 1, 0.625);
+    store.recordAssetTransferRetry();
 
     for (let index = 0; index < 55; index++) {
       store.recordTransfer({
@@ -66,6 +68,10 @@ describe("CollaborationMetricsStore", () => {
     expect(state.iceCredentialRefreshFailures).toBe(1);
     expect(state.connectionPath).toBe("relay");
     expect(state.relayProtocol).toBe("udp");
+    expect(state.assetRequestsPending).toBe(4);
+    expect(state.assetReceivesActive).toBe(1);
+    expect(state.assetReceiveProgress).toBe(0.625);
+    expect(state.assetTransferRetries).toBe(1);
     expect(state.transfers).toHaveLength(50);
     expect(state.transfers[0]?.assetHash).toBe("asset-5");
   });
