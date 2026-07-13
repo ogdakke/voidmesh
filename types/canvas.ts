@@ -470,6 +470,17 @@ export interface PlaybackState {
   volume: number;
 }
 
+export interface CollaborationPeerIdentity {
+  name: string;
+  color: RGBA;
+}
+
+export interface CollaborationPeerPresence extends CollaborationPeerIdentity {
+  peerId: string;
+  cursor: Point | null;
+  selectedEntityIds: readonly string[];
+}
+
 type ShaderCanvasEntityBase = {
   id: string;
   /** Display name (filename or "Image N") */

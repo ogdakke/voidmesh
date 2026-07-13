@@ -1280,6 +1280,9 @@ function createRenderState(
       scale: 1,
     },
     disintegration: { overlays: [] },
+    remotePeerPresences: [],
+    presenceVersion: 0,
+    presenceSelectionVersion: 0,
   };
 }
 

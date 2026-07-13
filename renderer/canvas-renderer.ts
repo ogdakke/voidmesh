@@ -8,6 +8,7 @@ import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "
 import { CanvasLensing } from "#types/enums.ts";
 import { ActionLayerBlurPass } from "./action-layer-blur-pass.ts";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
+import { CollaborationPresencePass } from "./collaboration-presence-pass.ts";
 import { CanvasDebugPass } from "./canvas-debug-pass.ts";
 import { CompositionPass, type CompositionDrawItem } from "./composition-pass.ts";
 import { DisintegrationPass } from "./disintegration-pass.ts";
@@ -71,6 +72,7 @@ export class InfiniteCanvasRenderer {
   #entityLabelPass: EntityLabelPass | null = null;
   #canvasCalloutPass: CanvasCalloutPass | null = null;
   #canvasDebugPass: CanvasDebugPass | null = null;
+  #collaborationPresencePass: CollaborationPresencePass | null = null;
 
   // Cached canvas dimensions (updated by ResizeObserver, avoids getBoundingClientRect in render loop)
   #cachedCanvasWidth = 0;
@@ -311,6 +313,12 @@ export class InfiniteCanvasRenderer {
       this.#viewportUniforms.buffer,
     );
     this.#entityLabelPass.initialize();
+
+    this.#collaborationPresencePass = new CollaborationPresencePass(
+      this.#device,
+      this.#canvasFormat,
+      this.#viewportUniforms.buffer,
+    );
 
     this.#canvasCalloutPass = new CanvasCalloutPass(
       this.#device,
@@ -633,6 +641,17 @@ export class InfiniteCanvasRenderer {
       });
     }
 
+    this.#collaborationPresencePass?.encode({
+      encoder,
+      targetView,
+      presences: state.remotePeerPresences,
+      entities,
+      presenceSelectionVersion: state.presenceSelectionVersion,
+      entityVersion: state.entityVersion,
+      geometryVersion: state.geometryVersion,
+      viewport,
+    });
+
     // Single submission for all passes
     this.#device.queue.submit([encoder.finish()]);
     this.#entityTexturePipeline?.flushTextureReleases();
@@ -941,6 +960,8 @@ export class InfiniteCanvasRenderer {
     this.#canvasCalloutPass = null;
     this.#canvasDebugPass?.destroy();
     this.#canvasDebugPass = null;
+    this.#collaborationPresencePass?.destroy();
+    this.#collaborationPresencePass = null;
 
     this.#wlurOverlayPass?.destroy();
     this.#wlurOverlayPass = null;

@@ -1,7 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CollaborationMetricsStore } from "#lib/collaboration/metrics.ts";
 
 describe("CollaborationMetricsStore", () => {
+  it("coalesces high-frequency presence metric publications", () => {
+    vi.useFakeTimers();
+    try {
+      const store = new CollaborationMetricsStore();
+      expect(store.getSnapshot().messagesSent).toBe(0);
+      store.recordRealtimeMessage("send", 10);
+      store.recordRealtimeMessage("send", 20);
+      expect(store.getSnapshot().messagesSent).toBe(0);
+
+      vi.advanceTimersByTime(250);
+      expect(store.getSnapshot()).toMatchObject({ messagesSent: 2, bytesSent: 30 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("tracks connection, messages, and bounded asset transfer measurements", () => {
     const store = new CollaborationMetricsStore();
     store.beginConnection("room", 10);

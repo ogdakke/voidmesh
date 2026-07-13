@@ -1,4 +1,5 @@
 import { canvasStore, type CanvasEntityMutation } from "#engine";
+import type { JsonValue } from "trystero";
 import { CollaborationDocument } from "#lib/collaboration/document.ts";
 import { AssetHashCache } from "#lib/collaboration/asset-hash-cache.ts";
 import { collaborationMetrics } from "#lib/collaboration/metrics.ts";
@@ -19,17 +20,24 @@ import {
 import { logger } from "#lib/client.logger.ts";
 import { getEntityThumbhash } from "#lib/thumbhash.ts";
 import type { MediaPreview, ShaderCanvasEntity } from "#types/canvas.ts";
+import type { CollaborationPeerIdentity, CollaborationPeerPresence, Point } from "#types/canvas.ts";
 import {
   calculatePeerClockSample,
   isClockSyncMessage,
   monotonicEpochNow,
   type ClockSyncMessage,
 } from "#lib/collaboration/clock.ts";
+import {
+  createPeerIdentity,
+  isCollaborationPresenceUpdate,
+  type CollaborationPresenceUpdate,
+} from "#lib/collaboration/presence.ts";
 
 const APP_ID = "voidmesh-collaboration-v3";
 const GEOMETRY_SYNC_INTERVAL_MS = 16;
 const PING_INTERVAL_MS = 5_000;
 const PLAYBACK_DRIFT_INTERVAL_MS = 1_000;
+const PRESENCE_SYNC_INTERVAL_MS = 16;
 const MAX_ASSET_BYTES = 512 * 1024 * 1024;
 
 interface CollaborationCanvasAdapter {
@@ -40,6 +48,9 @@ interface CollaborationCanvasAdapter {
     entries: readonly CollaborationHydration[],
   ): Promise<CollaborationProjectionTiming>;
   applyRemotePlayback(entity: CollaborativeEntity): Promise<void>;
+  updateRemotePresence(presence: CollaborationPeerPresence): void;
+  removeRemotePresence(peerId: string): void;
+  clearRemotePresence(): void;
   updateRemoteEntity(entity: CollaborativeEntity, applyPlayback: boolean): Promise<void>;
   removeRemoteEntities(entityIds: readonly string[]): void;
 }
@@ -66,6 +77,8 @@ interface RemotePlaybackAnchor {
   anchoredAt: number;
 }
 
+type PendingPresenceUpdate = Omit<CollaborationPresenceUpdate, "sequence">;
+
 export class CollaborationService {
   #adapter: CollaborationCanvasAdapter | null = null;
   #document: CollaborationDocument | null = null;
@@ -74,6 +87,7 @@ export class CollaborationService {
   #unsubscribeMutations: (() => void) | null = null;
   #unsubscribeDocumentUpdate: (() => void) | null = null;
   #unsubscribeDocumentChange: (() => void) | null = null;
+  #unsubscribeLocalPresence: (() => void) | null = null;
   #sendDocument: ((update: Uint8Array, peerId?: string) => Promise<void>) | null = null;
   #sendInventory: ((hashes: string[], peerId?: string) => Promise<void>) | null = null;
   #sendAssetRequest: ((hash: string, peerId?: string) => Promise<void>) | null = null;
@@ -81,6 +95,8 @@ export class CollaborationService {
     | ((payload: Uint8Array, metadata: ReceivedAssetMetadata, peerId: string) => Promise<void>)
     | null = null;
   #sendClock: ((message: ClockSyncMessage, peerId: string) => Promise<void>) | null = null;
+  #sendPresence: ((message: CollaborationPresenceUpdate, peerId?: string) => Promise<void>) | null =
+    null;
   #assets = new Map<string, Blob>();
   #assetDescriptors = new Map<string, CollaborativeAssetDescriptor>();
   #assetSources = new Map<string, Set<string>>();
@@ -92,6 +108,8 @@ export class CollaborationService {
   #remotePlaybackAnchors = new Map<string, RemotePlaybackAnchor>();
   #pendingClockRequests = new Map<string, { peerId: string; sentAt: number }>();
   #bestClockRoundTrips = new Map<string, number>();
+  #remotePresences = new Map<string, CollaborationPeerPresence>();
+  #remotePresenceSequences = new Map<string, number>();
   #placeholderEntityIds = new Set<string>();
   #placeholderStartedAt = new Map<string, number>();
   #assetTransferIds = new WeakMap<Blob, string>();
@@ -108,6 +126,15 @@ export class CollaborationService {
   #sessionRevision = 0;
   #pingTimer: ReturnType<typeof setInterval> | null = null;
   #playbackDriftTimer: ReturnType<typeof setInterval> | null = null;
+  #presenceTimer: ReturnType<typeof setTimeout> | null = null;
+  #presenceSending = false;
+  #presenceSequence = 0;
+  #presenceLastSentAt = 0;
+  #pendingPresence: PendingPresenceUpdate | null = null;
+  #localIdentity: CollaborationPeerIdentity | null = null;
+  #localCursor: Point | null = null;
+  #localSelectionReference: ReadonlySet<string> | null = null;
+  #localSelectedEntityIds: string[] = [];
   #selfId: string | null = null;
 
   configure(adapter: CollaborationCanvasAdapter): () => void {
@@ -161,6 +188,7 @@ export class CollaborationService {
     const assetRequestAction = room.makeAction<string>("asset-request");
     const assetAction = room.makeAction<Uint8Array>("asset");
     const clockAction = room.makeAction<ClockSyncMessage>("clock");
+    const presenceAction = room.makeAction<JsonValue>("presence");
 
     this.#sendDocument = async (update, peerId) => {
       await documentAction.send(update, { target: peerId });
@@ -200,6 +228,10 @@ export class CollaborationService {
     this.#sendClock = async (message, peerId) => {
       await clockAction.send(message, { target: peerId });
       collaborationMetrics.recordMessage("send", estimateJsonBytes(message));
+    };
+    this.#sendPresence = async (message, peerId) => {
+      await presenceAction.send(message as unknown as JsonValue, { target: peerId });
+      collaborationMetrics.recordRealtimeMessage("send", estimateJsonBytes(message));
     };
 
     documentAction.onMessage = (update) => {
@@ -258,6 +290,30 @@ export class CollaborationService {
         void this.#refreshRemotePlaybackClock(peerId).catch((error) => this.#fail(error));
       }
     };
+    presenceAction.onMessage = (update, { peerId }) => {
+      collaborationMetrics.recordRealtimeMessage("receive", estimateJsonBytes(update));
+      if (!isCollaborationPresenceUpdate(update)) return;
+      const previousSequence = this.#remotePresenceSequences.get(peerId) ?? -1;
+      if (update.sequence <= previousSequence) return;
+      this.#remotePresenceSequences.set(peerId, update.sequence);
+      const previous = this.#remotePresences.get(peerId);
+      const identity = update.identity ?? previous ?? createPeerIdentity(peerId);
+      const presence: CollaborationPeerPresence = {
+        peerId,
+        name: identity.name,
+        color: [...identity.color],
+        cursor: Object.hasOwn(update, "cursor")
+          ? update.cursor
+            ? { ...update.cursor }
+            : null
+          : (previous?.cursor ?? null),
+        selectedEntityIds: update.selectedEntityIds
+          ? [...update.selectedEntityIds]
+          : (previous?.selectedEntityIds ?? []),
+      };
+      this.#remotePresences.set(peerId, presence);
+      this.#adapter?.updateRemotePresence(presence);
+    };
 
     room.onPeerJoin = (peerId) => {
       this.#updatePeerCount();
@@ -266,9 +322,13 @@ export class CollaborationService {
         this.#fail(error),
       );
       this.#requestClockSync(peerId);
+      void this.#sendPresenceSnapshot(peerId).catch((error) => this.#fail(error));
     };
     room.onPeerLeave = (peerId) => {
       this.#bestClockRoundTrips.delete(peerId);
+      this.#remotePresenceSequences.delete(peerId);
+      this.#remotePresences.delete(peerId);
+      this.#adapter?.removeRemotePresence(peerId);
       this.#updatePeerCount();
     };
 
@@ -278,6 +338,11 @@ export class CollaborationService {
     this.#playbackDriftTimer = setInterval(
       () => void this.#correctPlaybackDrift().catch((error) => this.#fail(error)),
       PLAYBACK_DRIFT_INTERVAL_MS,
+    );
+    this.#localIdentity = createPeerIdentity(selfId);
+    this.#queuePresence({ identity: this.#localIdentity });
+    this.#unsubscribeLocalPresence = canvasStore.subscribeLocalPresence(
+      (cursor, selectedEntityIds) => this.#handleLocalPresence(cursor, selectedEntityIds),
     );
     for (const entity of canvasStore.getState().entities.values()) {
       this.#queueEntityRegistration(entity);
@@ -292,6 +357,8 @@ export class CollaborationService {
     this.#unsubscribeDocumentUpdate = null;
     this.#unsubscribeDocumentChange?.();
     this.#unsubscribeDocumentChange = null;
+    this.#unsubscribeLocalPresence?.();
+    this.#unsubscribeLocalPresence = null;
     this.#document?.destroy();
     this.#document = null;
     this.#room?.leave();
@@ -302,6 +369,7 @@ export class CollaborationService {
     this.#sendAssetRequest = null;
     this.#sendAsset = null;
     this.#sendClock = null;
+    this.#sendPresence = null;
     this.#selfId = null;
     this.#pendingAssets.clear();
     this.#pendingMaterializations.clear();
@@ -311,6 +379,9 @@ export class CollaborationService {
     this.#remotePlaybackAnchors.clear();
     this.#pendingClockRequests.clear();
     this.#bestClockRoundTrips.clear();
+    this.#remotePresences.clear();
+    this.#remotePresenceSequences.clear();
+    this.#adapter?.clearRemotePresence();
     this.#placeholderEntityIds.clear();
     this.#placeholderStartedAt.clear();
     this.#assetTransferIds = new WeakMap();
@@ -326,6 +397,16 @@ export class CollaborationService {
     this.#pingTimer = null;
     if (this.#playbackDriftTimer) clearInterval(this.#playbackDriftTimer);
     this.#playbackDriftTimer = null;
+    if (this.#presenceTimer) clearTimeout(this.#presenceTimer);
+    this.#presenceTimer = null;
+    this.#presenceSending = false;
+    this.#presenceSequence = 0;
+    this.#presenceLastSentAt = 0;
+    this.#pendingPresence = null;
+    this.#localIdentity = null;
+    this.#localCursor = null;
+    this.#localSelectionReference = null;
+    this.#localSelectedEntityIds = [];
     collaborationMetrics.reset();
   }
 
@@ -828,6 +909,65 @@ export class CollaborationService {
     }
   }
 
+  #handleLocalPresence(cursor: Point | null, selectedEntityIds: ReadonlySet<string>): void {
+    const update: PendingPresenceUpdate = {};
+    if (!samePoint(this.#localCursor, cursor)) {
+      this.#localCursor = cursor ? { ...cursor } : null;
+      update.cursor = this.#localCursor;
+    }
+    if (this.#localSelectionReference !== selectedEntityIds) {
+      this.#localSelectionReference = selectedEntityIds;
+      this.#localSelectedEntityIds = [...selectedEntityIds];
+      update.selectedEntityIds = this.#localSelectedEntityIds;
+    }
+    if (Object.keys(update).length > 0) this.#queuePresence(update);
+  }
+
+  #queuePresence(update: PendingPresenceUpdate): void {
+    this.#pendingPresence = { ...this.#pendingPresence, ...update };
+    this.#schedulePresenceFlush();
+  }
+
+  #schedulePresenceFlush(): void {
+    if (this.#presenceTimer || this.#presenceSending || !this.#pendingPresence) return;
+    const delay = Math.max(
+      0,
+      PRESENCE_SYNC_INTERVAL_MS - (performance.now() - this.#presenceLastSentAt),
+    );
+    this.#presenceTimer = setTimeout(() => {
+      this.#presenceTimer = null;
+      void this.#flushPresence().catch((error) => this.#fail(error));
+    }, delay);
+  }
+
+  async #flushPresence(): Promise<void> {
+    const send = this.#sendPresence;
+    const pending = this.#pendingPresence;
+    if (!send || !pending || this.#presenceSending) return;
+    this.#pendingPresence = null;
+    this.#presenceSending = true;
+    try {
+      await send({ ...pending, sequence: ++this.#presenceSequence });
+    } finally {
+      this.#presenceSending = false;
+      this.#presenceLastSentAt = performance.now();
+      this.#schedulePresenceFlush();
+    }
+  }
+
+  async #sendPresenceSnapshot(peerId: string): Promise<void> {
+    if (!this.#sendPresence || !this.#localIdentity) return;
+    await this.#sendPresence(
+      {
+        sequence: ++this.#presenceSequence,
+        identity: this.#localIdentity,
+        cursor: this.#localCursor,
+        selectedEntityIds: this.#localSelectedEntityIds,
+      },
+      peerId,
+    );
+  }
+
   #updatePeerCount(): void {
     collaborationMetrics.setPeerCount(this.#peerCount);
   }
@@ -921,6 +1061,11 @@ function advancePlayback(entity: CollaborativeEntity, elapsedSeconds: number) {
     }
   }
   return state;
+}
+
+function samePoint(left: Point | null, right: Point | null): boolean {
+  if (!left || !right) return left === right;
+  return left.x === right.x && left.y === right.y;
 }
 
 function estimateJsonBytes(value: unknown): number {

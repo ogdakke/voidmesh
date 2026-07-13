@@ -786,6 +786,15 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         const current = canvasStore.getState().entities.get(entity.id);
         if (current) await applyCollaborativePlayback(current, entity.playback);
       },
+      updateRemotePresence(presence) {
+        canvasStore.setRemotePeerPresence(presence);
+      },
+      removeRemotePresence(peerId) {
+        canvasStore.removeRemotePeerPresence(peerId);
+      },
+      clearRemotePresence() {
+        canvasStore.clearRemotePeerPresences();
+      },
       async updateRemoteEntity(entity, applyPlayback) {
         const current = canvasStore.getState().entities.get(entity.id);
         if (!current) return;

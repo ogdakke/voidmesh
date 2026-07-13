@@ -13,6 +13,7 @@ export type {
   DragSnapshot,
   ActionLayerSnapshot,
   PreferencesSnapshot,
+  LocalPresenceListener,
 } from "./canvas-store.ts";
 
 export { actionLayerController } from "./action-layer-controller.ts";

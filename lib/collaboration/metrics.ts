@@ -49,6 +49,7 @@ const MAX_TRANSFER_METRICS = 50;
 
 export class CollaborationMetricsStore extends Store<CollaborationMetricsState> {
   readonly getSnapshot: () => CollaborationMetricsState;
+  #realtimePublishTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     super(createInitialState());
@@ -59,6 +60,7 @@ export class CollaborationMetricsStore extends Store<CollaborationMetricsState> 
   }
 
   beginConnection(roomId: string, startedAt = performance.now()): void {
+    this.#clearRealtimePublishTimer();
     Object.assign(this.state, createInitialState(), {
       status: "connecting" as const,
       roomId,
@@ -81,6 +83,20 @@ export class CollaborationMetricsStore extends Store<CollaborationMetricsState> 
   }
 
   recordMessage(direction: CollaborationTransferDirection, byteLength: number): void {
+    this.#accumulateMessage(direction, byteLength);
+    this.publish();
+  }
+
+  recordRealtimeMessage(direction: CollaborationTransferDirection, byteLength: number): void {
+    this.#accumulateMessage(direction, byteLength);
+    if (this.#realtimePublishTimer) return;
+    this.#realtimePublishTimer = setTimeout(() => {
+      this.#realtimePublishTimer = null;
+      this.publish();
+    }, 250);
+  }
+
+  #accumulateMessage(direction: CollaborationTransferDirection, byteLength: number): void {
     if (direction === "send") {
       this.state.messagesSent++;
       this.state.bytesSent += byteLength;
@@ -88,7 +104,6 @@ export class CollaborationMetricsStore extends Store<CollaborationMetricsState> 
       this.state.messagesReceived++;
       this.state.bytesReceived += byteLength;
     }
-    this.publish();
   }
 
   recordDocumentUpdate(direction: CollaborationTransferDirection, byteLength: number): void {
@@ -159,6 +174,7 @@ export class CollaborationMetricsStore extends Store<CollaborationMetricsState> 
   }
 
   reset(): void {
+    this.#clearRealtimePublishTimer();
     const version = this.state.version + 1;
     Object.assign(this.state, createInitialState(), { version });
     this.notify();
@@ -167,6 +183,11 @@ export class CollaborationMetricsStore extends Store<CollaborationMetricsState> 
   private publish(): void {
     this.state.version++;
     this.notify();
+  }
+
+  #clearRealtimePublishTimer(): void {
+    if (this.#realtimePublishTimer) clearTimeout(this.#realtimePublishTimer);
+    this.#realtimePublishTimer = null;
   }
 }
 

@@ -246,6 +246,10 @@ export function InfiniteCanvas() {
     gameLoop.handlePointerUp({ x: e.clientX, y: e.clientY });
   };
 
+  const handlePointerLeave = (e: React.PointerEvent) => {
+    if (e.pointerType !== "touch") gameLoop.handlePointerLeave();
+  };
+
   const getTouchPoints = (touches: React.TouchList) => {
     const points = touchPointsRef.current;
     points.length = touches.length;
@@ -893,6 +897,7 @@ export function InfiniteCanvas() {
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               onPointerCancel={handlePointerUp}
+              onPointerLeave={handlePointerLeave}
               onTouchStart={handleTouchStart}
               onTouchMove={handleTouchMove}
               onTouchEnd={handleTouchEnd}
