@@ -9,8 +9,8 @@ describe("CollaborationMetricsStore", () => {
     store.recordDocumentUpdate("send", 120);
     store.recordMessage("receive", 80);
     store.recordPreviewEncodeDuration(2);
-    store.recordPreviewPlaceholder(3);
-    store.recordPreviewHydration(40);
+    store.recordPreviewPlaceholder(3, 2_048);
+    store.recordPreviewHydration(40, 2_048);
 
     for (let index = 0; index < 55; index++) {
       store.recordTransfer({
@@ -37,8 +37,8 @@ describe("CollaborationMetricsStore", () => {
     expect(state.assetTransfersSent).toBe(55);
     expect(state.previewEncodeDurationMs).toBe(2);
     expect(state.previewDecodeDurationMs).toBe(3);
-    expect(state.previewPlaceholdersCreated).toBe(1);
-    expect(state.previewHydrations).toBe(1);
+    expect(state.previewPlaceholdersCreated).toBe(2_048);
+    expect(state.previewHydrations).toBe(2_048);
     expect(state.previewDwellDurationMs).toBe(40);
     expect(state.transfers).toHaveLength(50);
     expect(state.transfers[0]?.assetHash).toBe("asset-5");

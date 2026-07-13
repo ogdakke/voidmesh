@@ -113,14 +113,14 @@ export class CollaborationMetricsStore extends Store<CollaborationMetricsState> 
     this.publish();
   }
 
-  recordPreviewPlaceholder(decodeDurationMs: number): void {
+  recordPreviewPlaceholder(decodeDurationMs: number, count = 1): void {
     this.state.previewDecodeDurationMs += decodeDurationMs;
-    this.state.previewPlaceholdersCreated++;
+    this.state.previewPlaceholdersCreated += count;
     this.publish();
   }
 
-  recordPreviewHydration(dwellDurationMs: number): void {
-    this.state.previewHydrations++;
+  recordPreviewHydration(dwellDurationMs: number, count = 1): void {
+    this.state.previewHydrations += count;
     this.state.previewDwellDurationMs += dwellDurationMs;
     this.publish();
   }

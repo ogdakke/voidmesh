@@ -26,11 +26,23 @@ const PING_INTERVAL_MS = 5_000;
 const MAX_ASSET_BYTES = 512 * 1024 * 1024;
 
 interface CollaborationCanvasAdapter {
-  adoptRemoteEntity(entity: CollaborativeEntity, blob: Blob): Promise<void>;
-  adoptRemotePlaceholder(entity: CollaborativeEntity): Promise<void>;
-  hydrateRemoteEntity(entity: CollaborativeEntity, blob: Blob): Promise<void>;
+  adoptRemotePlaceholders(
+    entities: readonly CollaborativeEntity[],
+  ): Promise<CollaborationProjectionTiming>;
+  hydrateRemoteEntities(
+    entries: readonly CollaborationHydration[],
+  ): Promise<CollaborationProjectionTiming>;
   updateRemoteEntity(entity: CollaborativeEntity, applyPlayback: boolean): Promise<void>;
   removeRemoteEntities(entityIds: readonly string[]): void;
+}
+
+interface CollaborationProjectionTiming {
+  decodeDurationMs: number;
+}
+
+interface CollaborationHydration {
+  entity: CollaborativeEntity;
+  blob: Blob;
 }
 
 interface CollaborationRoom {
@@ -475,6 +487,46 @@ export class CollaborationService {
           this.#placeholderStartedAt.delete(id);
         }
       }
+
+      const placeholders: CollaborativeEntity[] = [];
+      const replacedIds: string[] = [];
+      for (const entity of entities) {
+        if (this.#pendingLocalRegistrations.has(entity.id)) continue;
+        const current = canvasStore.getState().entities.get(entity.id);
+        const materializedHash = this.#materializedAssetHashes.get(entity.id);
+        if (current && entity.asset.hash && materializedHash === entity.asset.hash) {
+          continue;
+        }
+        const needsPlaceholder =
+          !current ||
+          (!this.#placeholderEntityIds.has(entity.id) &&
+            (!entity.asset.hash || materializedHash !== entity.asset.hash));
+        if (needsPlaceholder) {
+          if (current) replacedIds.push(entity.id);
+          placeholders.push(entity);
+        }
+      }
+      if (replacedIds.length > 0) {
+        adapter.removeRemoteEntities(replacedIds);
+        for (const id of replacedIds) {
+          this.#materializedAssetHashes.delete(id);
+          this.#appliedPlaybackCommandIds.delete(id);
+          this.#placeholderEntityIds.delete(id);
+          this.#placeholderStartedAt.delete(id);
+        }
+      }
+      if (placeholders.length > 0) {
+        const timing = await adapter.adoptRemotePlaceholders(placeholders);
+        const visibleAt = performance.now();
+        for (const entity of placeholders) {
+          this.#placeholderEntityIds.add(entity.id);
+          this.#placeholderStartedAt.set(entity.id, visibleAt);
+        }
+        collaborationMetrics.recordPreviewPlaceholder(timing.decodeDurationMs, placeholders.length);
+      }
+      const adoptedPlaceholderIds = new Set(placeholders.map(({ id }) => id));
+
+      const hydrations: CollaborationHydration[] = [];
       for (const entity of entities) {
         if (this.#pendingLocalRegistrations.has(entity.id)) continue;
         const current = canvasStore.getState().entities.get(entity.id);
@@ -487,18 +539,9 @@ export class CollaborationService {
           }
           continue;
         }
-        const needsPlaceholder =
-          !current ||
-          (!this.#placeholderEntityIds.has(entity.id) &&
-            (!entity.asset.hash || materializedHash !== entity.asset.hash));
-        if (needsPlaceholder) {
-          if (current) adapter.removeRemoteEntities([entity.id]);
-          const startedAt = performance.now();
-          await adapter.adoptRemotePlaceholder(entity);
-          this.#placeholderEntityIds.add(entity.id);
-          this.#placeholderStartedAt.set(entity.id, performance.now());
-          collaborationMetrics.recordPreviewPlaceholder(performance.now() - startedAt);
-        } else if (
+        if (
+          current &&
+          !adoptedPlaceholderIds.has(entity.id) &&
           this.#placeholderEntityIds.has(entity.id) &&
           (!sameProjectedEntity(current, entity) || applyPlayback)
         ) {
@@ -514,24 +557,36 @@ export class CollaborationService {
         }
         if (this.#pendingMaterializations.has(entity.id)) continue;
         this.#pendingMaterializations.add(entity.id);
+        hydrations.push({ entity, blob });
+      }
+
+      if (hydrations.length > 0) {
         try {
-          const startedAt = performance.now();
-          if (this.#placeholderEntityIds.has(entity.id)) {
-            await adapter.hydrateRemoteEntity(entity, blob);
-            this.#placeholderEntityIds.delete(entity.id);
-            collaborationMetrics.recordPreviewHydration(
-              performance.now() - (this.#placeholderStartedAt.get(entity.id) ?? performance.now()),
-            );
-            this.#placeholderStartedAt.delete(entity.id);
-          } else {
-            if (current) adapter.removeRemoteEntities([entity.id]);
-            await adapter.adoptRemoteEntity(entity, blob);
+          const timing = await adapter.hydrateRemoteEntities(hydrations);
+          const hydratedAt = performance.now();
+          let totalPreviewDwellMs = 0;
+          let hydratedPreviewCount = 0;
+          for (const { entity } of hydrations) {
+            if (this.#placeholderEntityIds.has(entity.id)) {
+              this.#placeholderEntityIds.delete(entity.id);
+              totalPreviewDwellMs +=
+                hydratedAt - (this.#placeholderStartedAt.get(entity.id) ?? hydratedAt);
+              hydratedPreviewCount++;
+              this.#placeholderStartedAt.delete(entity.id);
+            }
+            if (entity.asset.hash) {
+              this.#materializedAssetHashes.set(entity.id, entity.asset.hash);
+            }
+            this.#markPlaybackApplied(entity);
           }
-          this.#materializedAssetHashes.set(entity.id, entity.asset.hash);
-          this.#markPlaybackApplied(entity);
-          collaborationMetrics.recordDecodeDuration(performance.now() - startedAt);
+          if (hydratedPreviewCount > 0) {
+            collaborationMetrics.recordPreviewHydration(totalPreviewDwellMs, hydratedPreviewCount);
+          }
+          collaborationMetrics.recordDecodeDuration(timing.decodeDurationMs);
         } finally {
-          this.#pendingMaterializations.delete(entity.id);
+          for (const { entity } of hydrations) {
+            this.#pendingMaterializations.delete(entity.id);
+          }
         }
       }
     } finally {
