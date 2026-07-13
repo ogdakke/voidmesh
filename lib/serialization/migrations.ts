@@ -1,5 +1,6 @@
 import type { StudioManifest } from "./types.ts";
 import { CURRENT_VERSION } from "./version.ts";
+import { inferLegacyMediaMimeType, type SerializedMediaType } from "./mime.ts";
 
 type Migration = (doc: Record<string, unknown>) => Record<string, unknown>;
 
@@ -40,6 +41,20 @@ const migrations: Record<number, Migration> = {
   // toPlaybackState() supplies defaults for old manifests, so no rewrite needed.
   4: (doc) => {
     doc.version = 5;
+    return doc;
+  },
+
+  // Version 5 -> 6: Record the MIME type of each archived media payload.
+  // Images were always PNG-encoded through v5; the remaining formats retained
+  // their original container extension.
+  5: (doc) => {
+    for (const entity of doc.entities as Array<Record<string, unknown>>) {
+      entity.mimeType = inferLegacyMediaMimeType(
+        entity.mediaType as SerializedMediaType,
+        entity.mediaFile as string,
+      );
+    }
+    doc.version = 6;
     return doc;
   },
 };

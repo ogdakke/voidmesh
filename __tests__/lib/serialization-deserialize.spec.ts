@@ -26,6 +26,7 @@ function createImageWorkspace(
     name: `Image ${index + 1}`,
     mediaType: "image" as const,
     mediaFile: sharedMedia ? "media/assets/shared.png" : `media/image-${index + 1}.png`,
+    mimeType: "image/png",
     position: { x: index * 10, y: index * 20 },
     size: { width: 100, height: 100 },
     originalSize: { width: 100, height: 100 },
@@ -128,6 +129,38 @@ describe("deserialize workspace", () => {
         success: true,
       }),
     });
+  });
+
+  test("restores the archived MIME type on image asset blobs", async () => {
+    const result = await deserializeIntoCanvas(createImageWorkspace());
+    const entity = canvasStore.getState().entities.get("entity-1");
+
+    expect(result.success).toBe(true);
+    if (entity?.mediaSource.type !== "image") throw new Error("Expected image entity");
+    expect(entity.mediaSource.asset.blob.type).toBe("image/png");
+  });
+
+  test("migrates v5 PNG image payloads to explicit MIME metadata", async () => {
+    const entity = createSerializedImageEntity("entity-1", "media/assets/source-0.png");
+    const { mimeType: _mimeType, ...legacyEntity } = entity;
+    const archive = createManifestArchive(
+      {
+        type: "studio-canvas",
+        version: 5,
+        createdAt: new Date("2026-07-10T10:00:00.000Z").toISOString(),
+        viewport: { offset: { x: 0, y: 0 }, zoom: 1 },
+        entities: [{ ...legacyEntity, name: "IMG_5040.JPG" }],
+        palettes: [],
+      },
+      { [legacyEntity.mediaFile]: new Uint8Array([1, 2, 3]) },
+    );
+
+    const result = await deserializeIntoCanvas(archive);
+    const restored = canvasStore.getState().entities.get("entity-1");
+
+    expect(result.success).toBe(true);
+    if (restored?.mediaSource.type !== "image") throw new Error("Expected image entity");
+    expect(restored.mediaSource.asset.blob.type).toBe("image/png");
   });
 
   test("aborting during decode disposes staged media and defers palettes", async () => {
@@ -279,6 +312,7 @@ function createSerializedImageEntity(id: string, mediaFile: string) {
     name: id,
     mediaType: "image" as const,
     mediaFile,
+    mimeType: "image/png",
     position: { x: 0, y: 0 },
     size: { width: 100, height: 100 },
     originalSize: { width: 100, height: 100 },

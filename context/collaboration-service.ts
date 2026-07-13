@@ -191,8 +191,9 @@ export class CollaborationService {
     collaborationMetrics.markConnected();
     this.#updatePeerCount();
     this.#pingTimer = setInterval(() => void this.#measureRoundTripTime(), PING_INTERVAL_MS);
-    for (const entity of canvasStore.getState().entities.values())
-      void this.#registerEntity(entity);
+    for (const entity of canvasStore.getState().entities.values()) {
+      this.#queueEntityRegistration(entity);
+    }
   }
 
   stop(): void {
@@ -232,14 +233,14 @@ export class CollaborationService {
   #handleCanvasMutation(mutation: CanvasEntityMutation): void {
     switch (mutation.type) {
       case "add":
-        for (const entity of mutation.entities) void this.#registerEntity(entity);
+        for (const entity of mutation.entities) this.#queueEntityRegistration(entity);
         break;
       case "update":
         for (const { id, updates } of mutation.batch) {
           const entity = canvasStore.getState().entities.get(id);
           if (!entity) continue;
           if (!this.#document?.hasEntity(id) || updates.mediaSource) {
-            void this.#registerEntity(entity);
+            this.#queueEntityRegistration(entity);
             continue;
           }
           if (
@@ -276,7 +277,7 @@ export class CollaborationService {
         this.#document?.removeEntities(mutation.entityIds);
         break;
       case "replace":
-        void this.#replaceDocument(mutation.entities);
+        void this.#replaceDocument(mutation.entities).catch((error) => this.#fail(error));
         break;
       case "playback":
         this.#schedulePlaybackSync(mutation.entityId);
@@ -287,9 +288,10 @@ export class CollaborationService {
   async #registerEntity(entity: ShaderCanvasEntity): Promise<void> {
     const document = this.#document;
     if (!document) return;
+    const blob = getEntityAssetBlob(entity);
+    const mimeType = requireBlobMimeType(blob, entity.name);
     const revision = this.#bumpEntityRevision(entity.id);
     this.#pendingLocalRegistrations.add(entity.id);
-    const blob = getEntityAssetBlob(entity);
     if (blob.size > MAX_ASSET_BYTES) {
       this.#fail(
         new Error(
@@ -309,7 +311,7 @@ export class CollaborationService {
 
     const descriptor: CollaborativeAssetDescriptor = {
       hash,
-      mimeType: blob.type || "application/octet-stream",
+      mimeType,
       byteLength: blob.size,
       filename: entity.name,
     };
@@ -330,6 +332,10 @@ export class CollaborationService {
     void this.#sendInventory?.([hash]);
   }
 
+  #queueEntityRegistration(entity: ShaderCanvasEntity): void {
+    void this.#registerEntity(entity).catch((error) => this.#fail(error));
+  }
+
   async #replaceDocument(entities: readonly ShaderCanvasEntity[]): Promise<void> {
     const document = this.#document;
     if (!document) return;
@@ -344,7 +350,7 @@ export class CollaborationService {
       if (replaceRevision !== this.#replaceRevision || this.#document !== document) return;
       const descriptor = {
         hash,
-        mimeType: blob.type || "application/octet-stream",
+        mimeType: requireBlobMimeType(blob, entity.name),
         byteLength: blob.size,
         filename: entity.name,
       };
@@ -575,6 +581,11 @@ function estimateJsonBytes(value: unknown): number {
 
 function bytesPerSecond(byteLength: number, durationMs: number): number {
   return durationMs > 0 ? (byteLength / durationMs) * 1000 : 0;
+}
+
+function requireBlobMimeType(blob: Blob, entityName: string): string {
+  if (blob.type) return blob.type;
+  throw new Error(`Cannot share ${entityName}: its media Blob has no MIME type`);
 }
 
 function sameProjectedEntity(

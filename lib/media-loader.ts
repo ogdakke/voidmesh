@@ -715,6 +715,8 @@ export async function loadMediaFromBlob(
   position: Point = { x: 0, y: 0 },
   filename?: string,
 ): Promise<(Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string }) | null> {
+  if (blob.type !== mimeType) blob = blob.slice(0, blob.size, mimeType);
+
   if (isVideoMimeType(mimeType)) {
     const videoResult = await loadVideo(blob);
     return createVideoEntityData(videoResult, blob, position, filename);

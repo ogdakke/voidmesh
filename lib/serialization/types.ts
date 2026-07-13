@@ -56,6 +56,8 @@ interface SerializedEntityBase {
   rotation: number;
   locked: boolean;
   edited: boolean;
+  /** MIME type of the exact bytes stored at mediaFile (v6+) */
+  mimeType?: string;
   shaderType: string;
   shaderParams: ShaderParams;
   /** Palette extracted from source image (v4+) */
@@ -161,9 +163,7 @@ export type CommitDecodedWorkspace = (workspace: DecodedWorkspace) => void;
 /** Media data passed between main thread and serialization worker. */
 export interface SerializeMediaEntry {
   path: string;
-  type: "imageBitmap" | "bytes";
-  bitmap?: ImageBitmap;
-  bytes?: Uint8Array;
+  bytes: Uint8Array;
 }
 
 // ============================================================================
@@ -174,6 +174,7 @@ export interface SerializeMediaEntry {
 export function isStudioManifest(data: unknown): data is StudioManifest {
   if (!isRecord(data)) return false;
   const obj = data;
+  const requiresMimeType = typeof obj.version === "number" && obj.version >= 6;
   return (
     obj.type === "studio-canvas" &&
     isFiniteNumber(obj.version) &&
@@ -182,14 +183,17 @@ export function isStudioManifest(data: unknown): data is StudioManifest {
     typeof obj.createdAt === "string" &&
     isSerializedViewport(obj.viewport) &&
     Array.isArray(obj.entities) &&
-    obj.entities.every(isSerializedEntity) &&
+    obj.entities.every((entity) => isSerializedEntity(entity, requiresMimeType)) &&
     (obj.palettes === undefined ||
       (Array.isArray(obj.palettes) && obj.palettes.every(isColorPalette)))
   );
 }
 
 /** Validate fields consumed synchronously while an entity is decoded and indexed. */
-export function isSerializedEntity(data: unknown): data is SerializedEntity {
+export function isSerializedEntity(
+  data: unknown,
+  requireMimeType = false,
+): data is SerializedEntity {
   if (!isRecord(data)) return false;
   const e = data;
   const validBase =
@@ -206,14 +210,24 @@ export function isSerializedEntity(data: unknown): data is SerializedEntity {
     typeof e.edited === "boolean" &&
     isRecord(e.shaderParams) &&
     (e.originalPalette === undefined || isColorPalette(e.originalPalette));
-  if (!validBase || typeof e.mediaFile !== "string" || e.mediaFile.length === 0) return false;
+  if (
+    !validBase ||
+    typeof e.mediaFile !== "string" ||
+    e.mediaFile.length === 0 ||
+    (requireMimeType && (typeof e.mimeType !== "string" || e.mimeType.length === 0)) ||
+    (e.mimeType !== undefined && (typeof e.mimeType !== "string" || e.mimeType.length === 0))
+  ) {
+    return false;
+  }
 
   switch (e.mediaType) {
     case "image":
+      return e.mimeType === undefined || e.mimeType.startsWith("image/");
     case "svg":
-      return true;
+      return e.mimeType === undefined || e.mimeType === "image/svg+xml";
     case "video":
       return (
+        (e.mimeType === undefined || e.mimeType.startsWith("video/")) &&
         isNonNegativeNumber(e.duration) &&
         (e.fps === null || (isFiniteNumber(e.fps) && e.fps > 0)) &&
         (e.hasAudio === undefined || typeof e.hasAudio === "boolean") &&
@@ -221,6 +235,7 @@ export function isSerializedEntity(data: unknown): data is SerializedEntity {
       );
     case "gif":
       return (
+        (e.mimeType === undefined || e.mimeType === "image/gif") &&
         isNonNegativeNumber(e.duration) &&
         isFiniteNumber(e.fps) &&
         e.fps > 0 &&

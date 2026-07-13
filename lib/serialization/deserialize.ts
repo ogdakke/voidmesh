@@ -26,14 +26,7 @@ import { isStudioManifest, toPlaybackState } from "./types.ts";
 import { CURRENT_VERSION } from "./version.ts";
 import { analytics } from "#lib/analytics.ts";
 import { createImageAsset, retainImageAsset } from "#lib/media-assets.ts";
-
-const MIME_BY_EXT: Record<string, string> = {
-  mp4: "video/mp4",
-  webm: "video/webm",
-  mov: "video/quicktime",
-  avi: "video/x-msvideo",
-  mkv: "video/x-matroska",
-};
+import { inferLegacyMediaMimeType } from "./mime.ts";
 
 const LARGE_WORKSPACE_PROGRESS_THRESHOLD = 1_000;
 const DESERIALIZE_CHUNK_SIZE = 512;
@@ -430,8 +423,10 @@ async function deserializeEntity(
     case "image": {
       const bytes = zipEntries[serialized.mediaFile];
       if (!bytes) throw new Error(`Missing media file: ${serialized.mediaFile}`);
-      const imageBlob = new Blob([bytes.slice()]);
-      const bitmap = await bytesToImageBitmap(bytes);
+      const mimeType =
+        serialized.mimeType ?? inferLegacyMediaMimeType("image", serialized.mediaFile);
+      const imageBlob = new Blob([bytes.slice()], { type: mimeType });
+      const bitmap = await bytesToImageBitmap(bytes, mimeType);
       let asset: MediaImageAsset;
       try {
         asset = createImageAsset({
@@ -456,7 +451,8 @@ async function deserializeEntity(
       if (!bytes) throw new Error(`Missing media file: ${serialized.mediaFile}`);
 
       const ext = serialized.mediaFile.split(".").pop() ?? "mp4";
-      const mimeType = MIME_BY_EXT[ext] ?? "video/mp4";
+      const mimeType =
+        serialized.mimeType ?? inferLegacyMediaMimeType("video", serialized.mediaFile);
       const container = ext.toLowerCase();
 
       const videoBlob = new Blob([bytes.slice()], { type: mimeType });
@@ -529,7 +525,8 @@ async function deserializeEntity(
       const bytes = zipEntries[serialized.mediaFile];
       if (!bytes) throw new Error(`Missing media file: ${serialized.mediaFile}`);
 
-      const blob = new Blob([bytes.slice()], { type: "image/gif" });
+      const mimeType = serialized.mimeType ?? inferLegacyMediaMimeType("gif", serialized.mediaFile);
+      const blob = new Blob([bytes.slice()], { type: mimeType });
       const { frames, duration, fps } = await decodeGif(blob);
       try {
         const framesWithAlpha = frames.map((frame) => ({
@@ -562,7 +559,8 @@ async function deserializeEntity(
       if (!bytes) throw new Error(`Missing media file: ${serialized.mediaFile}`);
 
       const text = new TextDecoder().decode(bytes);
-      const blob = new Blob([bytes.slice()], { type: "image/svg+xml" });
+      const mimeType = serialized.mimeType ?? inferLegacyMediaMimeType("svg", serialized.mediaFile);
+      const blob = new Blob([bytes.slice()], { type: mimeType });
       const { bitmap } = await rasterizeSvg(text);
       try {
         return {
