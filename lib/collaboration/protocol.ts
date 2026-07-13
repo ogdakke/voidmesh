@@ -9,7 +9,7 @@ import type {
 } from "#types/canvas.ts";
 import { isMediaPreview } from "#lib/thumbhash.ts";
 
-export const COLLABORATION_PROTOCOL_VERSION = 2;
+export const COLLABORATION_PROTOCOL_VERSION = 3;
 export const COLLABORATION_INVITE_PREFIX = "collab";
 
 export interface CollaborationInvite {
@@ -41,6 +41,8 @@ export interface CollaborativeEntity {
   shaderParams: ShaderParams;
   originalPalette?: ColorPalette;
   playback?: PlaybackState;
+  playbackDuration?: number;
+  playbackCommandId?: string;
   asset: CollaborativeAssetDescriptor;
 }
 
@@ -132,8 +134,16 @@ export function createCollaborativeEntity(
     shaderParams: structuredClone(entity.shaderParams),
     ...(entity.originalPalette && { originalPalette: structuredClone(entity.originalPalette) }),
     ...(entity.playback && { playback: { ...entity.playback } }),
+    ...(entity.playback && { playbackDuration: getEntityPlaybackDuration(entity) }),
     asset,
   };
+}
+
+export function getEntityPlaybackDuration(entity: ShaderCanvasEntity): number {
+  if (entity.mediaSource.type === "video" || entity.mediaSource.type === "gif") {
+    return entity.mediaSource.duration;
+  }
+  return 0;
 }
 
 export async function prepareAssetPayload(

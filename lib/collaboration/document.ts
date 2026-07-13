@@ -33,6 +33,8 @@ export interface CollaborativeAppearance {
 export interface CollaborativePlayback {
   state: NonNullable<CollaborativeEntity["playback"]>;
   updatedAt: number;
+  duration: number;
+  commandId: string;
 }
 
 export class CollaborationDocument {
@@ -99,13 +101,24 @@ export class CollaborationDocument {
     }, LOCAL_ORIGIN);
   }
 
-  setPlayback(entityId: string, state: NonNullable<CollaborativeEntity["playback"]>): void {
+  setPlayback(
+    entityId: string,
+    state: NonNullable<CollaborativeEntity["playback"]>,
+    duration: number,
+  ): string | null {
     const map = this.#entities.get(entityId);
-    if (!map) return;
+    if (!map) return null;
+    const commandId = crypto.randomUUID();
     this.#document.transact(() => {
-      const playback: CollaborativePlayback = { state: { ...state }, updatedAt: Date.now() };
+      const playback: CollaborativePlayback = {
+        state: { ...state },
+        updatedAt: Date.now(),
+        duration,
+        commandId,
+      };
       map.set("playback", playback);
     }, LOCAL_ORIGIN);
+    return commandId;
   }
 
   setAsset(entityId: string, asset: CollaborativeAssetDescriptor): void {
@@ -177,6 +190,8 @@ export class CollaborationDocument {
       map.set("playback", {
         state: entity.playback,
         updatedAt: Date.now(),
+        duration: entity.playbackDuration ?? 0,
+        commandId: crypto.randomUUID(),
       } satisfies CollaborativePlayback);
     }
   }
@@ -238,7 +253,11 @@ function readEntity(
     ...(identity.originalPalette && {
       originalPalette: structuredClone(identity.originalPalette),
     }),
-    ...(playback && { playback: advancePlayback(playback) }),
+    ...(playback && {
+      playback: advancePlayback(playback),
+      playbackDuration: playback.duration,
+      playbackCommandId: playback.commandId,
+    }),
     asset: { ...asset },
   };
 }
@@ -248,5 +267,13 @@ function advancePlayback(playback: CollaborativePlayback): CollaborativePlayback
   if (!state.isPlaying) return state;
   const elapsedSeconds = Math.max(0, Date.now() - playback.updatedAt) / 1000;
   state.currentTime += elapsedSeconds * state.playbackRate;
+  if (playback.duration > 0) {
+    if (state.loop) {
+      state.currentTime %= playback.duration;
+    } else if (state.currentTime >= playback.duration) {
+      state.currentTime = playback.duration;
+      state.isPlaying = false;
+    }
+  }
   return state;
 }

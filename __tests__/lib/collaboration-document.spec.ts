@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CollaborationDocument } from "#lib/collaboration/document.ts";
 import { createCollaborativeEntity } from "#lib/collaboration/protocol.ts";
 import { createTestEntity } from "../helpers/test-entity.ts";
@@ -32,6 +32,62 @@ function toCollaborative(id: string) {
 }
 
 describe("CollaborationDocument", () => {
+  it("keeps unrelated playback commands stable across other entity updates", () => {
+    const document = new CollaborationDocument();
+    const entity = createTestEntity({
+      id: "playing-video",
+      mediaType: "video",
+      videoDuration: 10,
+    });
+    const collaborative = createCollaborativeEntity(entity, {
+      transferId: "video-transfer",
+      hash: "video-hash",
+      mimeType: "video/mp4",
+      byteLength: 10,
+      filename: "video.mp4",
+      preview: { codec: "thumbhash-v1", bytes: new Uint8Array([1]) },
+    });
+    document.addEntity(collaborative);
+    const initialCommandId = document.getEntities()[0]?.playbackCommandId;
+
+    entity.position = { x: 20, y: 30 };
+    document.setGeometry(entity);
+    expect(document.getEntities()[0]?.playbackCommandId).toBe(initialCommandId);
+
+    document.setPlayback(entity.id, { ...entity.playback!, isPlaying: true }, 10);
+    expect(document.getEntities()[0]?.playbackCommandId).not.toBe(initialCommandId);
+  });
+
+  it("wraps an advancing loop clock by media duration", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const document = new CollaborationDocument();
+    const entity = createTestEntity({
+      id: "looping-video",
+      mediaType: "video",
+      videoDuration: 10,
+    });
+    if (!entity.playback) throw new Error("Expected playback state");
+    entity.playback = { ...entity.playback, isPlaying: true, currentTime: 9, loop: true };
+    document.addEntity(
+      createCollaborativeEntity(entity, {
+        transferId: "loop-transfer",
+        hash: "loop-hash",
+        mimeType: "video/mp4",
+        byteLength: 10,
+        filename: "loop.mp4",
+        preview: { codec: "thumbhash-v1", bytes: new Uint8Array([1]) },
+      }),
+    );
+
+    now.mockReturnValue(3_500);
+
+    expect(document.getEntities()[0]?.playback).toMatchObject({
+      isPlaying: true,
+      currentTime: 1.5,
+    });
+    now.mockRestore();
+  });
+
   it("publishes a provisional preview before the content hash is available", () => {
     const left = new CollaborationDocument();
     const right = new CollaborationDocument();

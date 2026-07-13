@@ -22,7 +22,7 @@ describe("collaboration invite links", () => {
   });
 
   it("rejects malformed or incompatible invites", () => {
-    expect(parseCollaborationInvite("https://voidmesh.app/#collab=v3.room.key")).toBeNull();
+    expect(parseCollaborationInvite("https://voidmesh.app/#collab=v4.room.key")).toBeNull();
     expect(parseCollaborationInvite("https://voidmesh.app/#anything-else")).toBeNull();
   });
 });

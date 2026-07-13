@@ -653,7 +653,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         if (hydrated) await applyCollaborativePlayback(hydrated, entity.playback);
         scheduleCollaborativeRender(entity.id);
       },
-      async updateRemoteEntity(entity) {
+      async updateRemoteEntity(entity, applyPlayback) {
         const current = canvasStore.getState().entities.get(entity.id);
         if (!current) return;
         undo.clear();
@@ -671,11 +671,13 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           originalPalette: entity.originalPalette
             ? structuredClone(entity.originalPalette)
             : undefined,
-          ...(entity.playback && { playback: { ...entity.playback } }),
+          ...(applyPlayback && entity.playback && { playback: { ...entity.playback } }),
           textureDirty: true,
         });
         const updated = canvasStore.getState().entities.get(entity.id);
-        if (updated) await applyCollaborativePlayback(updated, entity.playback);
+        if (applyPlayback && updated) {
+          await applyCollaborativePlayback(updated, entity.playback);
+        }
         scheduleCollaborativeRender(entity.id);
       },
       removeRemoteEntities(entityIds) {

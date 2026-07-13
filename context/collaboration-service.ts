@@ -5,6 +5,7 @@ import {
   COLLABORATION_PROTOCOL_VERSION,
   createCollaborativeEntity,
   getEntityAssetBlob,
+  getEntityPlaybackDuration,
   hashBlob,
   isReceivedAssetMetadata,
   prepareAssetPayload,
@@ -18,7 +19,7 @@ import { logger } from "#lib/client.logger.ts";
 import { getEntityThumbhash } from "#lib/thumbhash.ts";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
 
-const APP_ID = "voidmesh-collaboration-v2";
+const APP_ID = "voidmesh-collaboration-v3";
 const GEOMETRY_SYNC_INTERVAL_MS = 33;
 const PING_INTERVAL_MS = 5_000;
 const MAX_ASSET_BYTES = 512 * 1024 * 1024;
@@ -27,7 +28,7 @@ interface CollaborationCanvasAdapter {
   adoptRemoteEntity(entity: CollaborativeEntity, blob: Blob): Promise<void>;
   adoptRemotePlaceholder(entity: CollaborativeEntity): Promise<void>;
   hydrateRemoteEntity(entity: CollaborativeEntity, blob: Blob): Promise<void>;
-  updateRemoteEntity(entity: CollaborativeEntity): Promise<void>;
+  updateRemoteEntity(entity: CollaborativeEntity, applyPlayback: boolean): Promise<void>;
   removeRemoteEntities(entityIds: readonly string[]): void;
 }
 
@@ -60,6 +61,7 @@ export class CollaborationService {
   #pendingMaterializations = new Set<string>();
   #pendingLocalRegistrations = new Set<string>();
   #materializedAssetHashes = new Map<string, string>();
+  #appliedPlaybackCommandIds = new Map<string, string>();
   #placeholderEntityIds = new Set<string>();
   #placeholderStartedAt = new Map<string, number>();
   #assetTransferIds = new WeakMap<Blob, string>();
@@ -221,6 +223,7 @@ export class CollaborationService {
     this.#pendingMaterializations.clear();
     this.#pendingLocalRegistrations.clear();
     this.#materializedAssetHashes.clear();
+    this.#appliedPlaybackCommandIds.clear();
     this.#placeholderEntityIds.clear();
     this.#placeholderStartedAt.clear();
     this.#assetTransferIds = new WeakMap();
@@ -267,7 +270,7 @@ export class CollaborationService {
           if (updates.shaderType !== undefined || updates.shaderParams !== undefined) {
             this.#document.setAppearance(entity);
           }
-          if (updates.playback && entity.playback) this.#document.setPlayback(id, entity.playback);
+          if (updates.playback && entity.playback) this.#publishPlayback(entity);
         }
         break;
       case "move":
@@ -278,6 +281,7 @@ export class CollaborationService {
           this.#bumpEntityRevision(entityId);
           this.#pendingLocalRegistrations.delete(entityId);
           this.#materializedAssetHashes.delete(entityId);
+          this.#appliedPlaybackCommandIds.delete(entityId);
         }
         this.#document?.removeEntities(mutation.entityIds);
         break;
@@ -285,7 +289,10 @@ export class CollaborationService {
         void this.#replaceDocument(mutation.entities).catch((error) => this.#fail(error));
         break;
       case "playback":
-        this.#document?.setPlayback(mutation.entityId, mutation.playback);
+        this.#publishPlayback(
+          canvasStore.getState().entities.get(mutation.entityId),
+          mutation.playback,
+        );
         break;
     }
   }
@@ -312,7 +319,7 @@ export class CollaborationService {
       document.setGeometry(entity);
       document.setIdentity(entity);
       document.setAppearance(entity);
-      if (entity.playback) document.setPlayback(entity.id, entity.playback);
+      if (entity.playback) this.#publishPlayback(entity);
       document.setAsset(entity.id, descriptor);
     } else {
       document.addEntity(collaborative);
@@ -438,6 +445,7 @@ export class CollaborationService {
         adapter.removeRemoteEntities(removedIds);
         for (const id of removedIds) {
           this.#materializedAssetHashes.delete(id);
+          this.#appliedPlaybackCommandIds.delete(id);
           this.#placeholderEntityIds.delete(id);
           this.#placeholderStartedAt.delete(id);
         }
@@ -446,8 +454,12 @@ export class CollaborationService {
         if (this.#pendingLocalRegistrations.has(entity.id)) continue;
         const current = canvasStore.getState().entities.get(entity.id);
         const materializedHash = this.#materializedAssetHashes.get(entity.id);
+        const applyPlayback = this.#shouldApplyPlayback(entity);
         if (current && entity.asset.hash && materializedHash === entity.asset.hash) {
-          if (!sameProjectedEntity(current, entity)) await adapter.updateRemoteEntity(entity);
+          if (!sameProjectedEntity(current, entity) || applyPlayback) {
+            await adapter.updateRemoteEntity(entity, applyPlayback);
+            this.#markPlaybackApplied(entity);
+          }
           continue;
         }
         const needsPlaceholder =
@@ -463,9 +475,10 @@ export class CollaborationService {
           collaborationMetrics.recordPreviewPlaceholder(performance.now() - startedAt);
         } else if (
           this.#placeholderEntityIds.has(entity.id) &&
-          !sameProjectedEntity(current, entity)
+          (!sameProjectedEntity(current, entity) || applyPlayback)
         ) {
-          await adapter.updateRemoteEntity(entity);
+          await adapter.updateRemoteEntity(entity, applyPlayback);
+          this.#markPlaybackApplied(entity);
         }
 
         if (!entity.asset.hash) continue;
@@ -490,6 +503,7 @@ export class CollaborationService {
             await adapter.adoptRemoteEntity(entity, blob);
           }
           this.#materializedAssetHashes.set(entity.id, entity.asset.hash);
+          this.#markPlaybackApplied(entity);
           collaborationMetrics.recordDecodeDuration(performance.now() - startedAt);
         } finally {
           this.#pendingMaterializations.delete(entity.id);
@@ -636,6 +650,29 @@ export class CollaborationService {
     };
   }
 
+  #publishPlayback(entity: ShaderCanvasEntity | undefined, playback = entity?.playback): void {
+    if (!entity || !playback || !this.#document) return;
+    const commandId = this.#document.setPlayback(
+      entity.id,
+      playback,
+      getEntityPlaybackDuration(entity),
+    );
+    if (commandId) this.#appliedPlaybackCommandIds.set(entity.id, commandId);
+  }
+
+  #shouldApplyPlayback(entity: CollaborativeEntity): boolean {
+    return (
+      !!entity.playbackCommandId &&
+      this.#appliedPlaybackCommandIds.get(entity.id) !== entity.playbackCommandId
+    );
+  }
+
+  #markPlaybackApplied(entity: CollaborativeEntity): void {
+    if (entity.playbackCommandId) {
+      this.#appliedPlaybackCommandIds.set(entity.id, entity.playbackCommandId);
+    }
+  }
+
   #fail(error: unknown): void {
     collaborationMetrics.fail(error);
     logger.error("[collaboration]", error);
@@ -673,23 +710,7 @@ function sameProjectedEntity(
     current.edited === collaborative.edited &&
     current.shaderType === collaborative.shaderType &&
     JSON.stringify(current.shaderParams) === JSON.stringify(collaborative.shaderParams) &&
-    JSON.stringify(current.originalPalette) === JSON.stringify(collaborative.originalPalette) &&
-    samePlayback(current.playback, collaborative.playback)
-  );
-}
-
-function samePlayback(
-  current: ShaderCanvasEntity["playback"],
-  collaborative: CollaborativeEntity["playback"],
-): boolean {
-  if (!current || !collaborative) return current === collaborative;
-  return (
-    current.isPlaying === collaborative.isPlaying &&
-    current.loop === collaborative.loop &&
-    current.playbackRate === collaborative.playbackRate &&
-    current.muted === collaborative.muted &&
-    current.volume === collaborative.volume &&
-    Math.abs(current.currentTime - collaborative.currentTime) < 0.15
+    JSON.stringify(current.originalPalette) === JSON.stringify(collaborative.originalPalette)
   );
 }
 
