@@ -5,7 +5,7 @@ The prototype uses a password-bearing invite fragment, Trystero's Nostr strategy
 ## Implemented
 
 - Entity identity, geometry, layer order, appearance, asset references, and playback state converge through Yjs.
-- Media uses SHA-256 content addresses, inventory exchange, explicit requests, integrity verification, and a 512 MB per-asset safety limit. Receivers bound their request window, senders serialize whole-asset delivery per peer, and verification acknowledgements prevent the next transfer from starting until the receiver has restored and hash-checked the current Blob; incomplete sends and peer departures release or retry pending work.
+- Media uses SHA-256 content addresses, inventory exchange, explicit requests, integrity verification, and a 512 MB per-asset safety limit. Receivers bound their request window, senders serialize whole-asset delivery per peer, and verification acknowledgements prevent the next transfer from starting until the receiver has restored and hash-checked the current Blob. A progress watchdog plus peer-departure cleanup releases and retries work stranded by mobile page suspension or an incomplete send.
 - Images, SVGs, GIFs, and videos transfer as their encoded Blobs. Gzip is attempted only for SVG/JSON payloads and retained only when smaller; encoded image/video formats use identity transfer.
 - Entities publish a bounded ThumbHash first-frame preview before content hashing begins. Peers create a full-geometry placeholder immediately and hydrate its media in place after verified Blob transfer.
 - Workspace v7 manifests cache ThumbHashes, so an atomically restored heavy workspace can publish all previews without re-reading decoded pixels.

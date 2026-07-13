@@ -50,6 +50,8 @@ const ICE_CREDENTIAL_REFRESH_RETRY_MS = 60_000;
 const MAX_CONCURRENT_ASSET_REQUESTS = 4;
 const MAX_ASSET_SEND_ATTEMPTS = 2;
 const ASSET_ACK_TIMEOUT_MS = 120_000;
+const ASSET_PROGRESS_TIMEOUT_MS = 20_000;
+const ASSET_VERIFY_TIMEOUT_MS = 120_000;
 const MAX_ASSET_BYTES = 512 * 1024 * 1024;
 
 interface CollaborationCanvasAdapter {
@@ -129,6 +131,7 @@ export class CollaborationService {
   #assetSources = new Map<string, Set<string>>();
   #pendingAssets = new AssetRequestPool(MAX_CONCURRENT_ASSET_REQUESTS);
   #assetReceiveProgress = new Map<string, number>();
+  #assetRequestTimers = new Map<string, ReturnType<typeof setTimeout>>();
   #assetSendQueues = new Map<string, QueuedAssetSend[]>();
   #queuedAssetSends = new Map<string, Set<string>>();
   #assetSendDraining = new Set<string>();
@@ -343,6 +346,10 @@ export class CollaborationService {
       if (!this.#pendingAssets.has(metadata.hash)) return;
       if (progress < 1) this.#assetReceiveProgress.set(metadata.hash, progress);
       else this.#assetReceiveProgress.delete(metadata.hash);
+      this.#scheduleAssetRequestTimeout(
+        metadata.hash,
+        progress < 1 ? ASSET_PROGRESS_TIMEOUT_MS : ASSET_VERIFY_TIMEOUT_MS,
+      );
       this.#updateAssetQueueMetrics();
     };
     assetAction.onMessage = (payload, { peerId, metadata }) => {
@@ -445,6 +452,9 @@ export class CollaborationService {
       for (const hash of this.#assetReceiveProgress.keys()) {
         if (this.#pendingAssets.peerFor(hash) === peerId) this.#assetReceiveProgress.delete(hash);
       }
+      for (const hash of this.#assetRequestTimers.keys()) {
+        if (this.#pendingAssets.peerFor(hash) === peerId) this.#clearAssetRequestTimeout(hash);
+      }
       this.#pendingAssets.deletePeer(peerId);
       this.#assetSendQueues.delete(peerId);
       this.#queuedAssetSends.delete(peerId);
@@ -507,6 +517,8 @@ export class CollaborationService {
     this.#iceCredentialRefreshTimer = null;
     this.#pendingAssets.clear();
     this.#assetReceiveProgress.clear();
+    for (const timer of this.#assetRequestTimers.values()) clearTimeout(timer);
+    this.#assetRequestTimers.clear();
     this.#assetSendQueues.clear();
     this.#queuedAssetSends.clear();
     this.#assetSendDraining.clear();
@@ -906,6 +918,7 @@ export class CollaborationService {
     if (this.#pendingAssets.has(hash) || !this.#sendAssetRequest) return;
     const source = this.#assetSources.get(hash)?.values().next().value;
     if (!source || !this.#pendingAssets.add(hash, source)) return;
+    this.#scheduleAssetRequestTimeout(hash, ASSET_PROGRESS_TIMEOUT_MS);
     this.#updateAssetQueueMetrics();
     void this.#sendAssetRequest(hash, source).catch((error) => {
       this.#releasePendingAsset(hash);
@@ -1056,7 +1069,29 @@ export class CollaborationService {
   #releasePendingAsset(hash: string): void {
     this.#pendingAssets.delete(hash);
     this.#assetReceiveProgress.delete(hash);
+    this.#clearAssetRequestTimeout(hash);
     this.#updateAssetQueueMetrics();
+  }
+
+  #scheduleAssetRequestTimeout(hash: string, timeoutMs: number): void {
+    this.#clearAssetRequestTimeout(hash);
+    this.#assetRequestTimers.set(
+      hash,
+      setTimeout(() => {
+        this.#assetRequestTimers.delete(hash);
+        if (!this.#pendingAssets.has(hash)) return;
+        collaborationMetrics.recordAssetTransferRetry();
+        logger.warn(`[collaboration] asset ${hash} stopped making progress; retrying`);
+        this.#releasePendingAsset(hash);
+        this.#requestMissingAssets();
+      }, timeoutMs),
+    );
+  }
+
+  #clearAssetRequestTimeout(hash: string): void {
+    const timer = this.#assetRequestTimers.get(hash);
+    if (timer) clearTimeout(timer);
+    this.#assetRequestTimers.delete(hash);
   }
 
   #updateAssetQueueMetrics(): void {
