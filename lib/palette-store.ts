@@ -103,6 +103,7 @@ class PaletteStore extends Store<PaletteStoreState> {
   /** Remove a palette by ID */
   removePalette(id: string): void {
     this.state.customPalettes = this.state.customPalettes.filter((p) => p.id !== id);
+    this.state.transientPalettes = this.state.transientPalettes.filter((p) => p.id !== id);
     this.state.version++;
     this.notify();
     this.#persist();

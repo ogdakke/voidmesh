@@ -7,7 +7,7 @@ import { ShaderType, type ColorPalette } from "#types/canvas.ts";
 import { createTestEntity } from "../helpers/test-entity.ts";
 import { renderWithCanvas } from "../helpers/render-with-providers.tsx";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
-import { clearUndoHistory, performUndo } from "../helpers/undo-helpers.ts";
+import { clearUndoHistory, performRedo, performUndo } from "../helpers/undo-helpers.ts";
 
 const skipProviders = {
   iconoir: true,
@@ -74,6 +74,53 @@ describe("CanvasCommands.changePalette", () => {
       ),
     ).toBe(true);
     unsubscribe();
+  });
+
+  test("deletes an owned palette from every entity and restores it through undo", () => {
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
+    const ownedPalette: ColorPalette = {
+      id: "cstm_delete-everywhere",
+      name: "Owned palette",
+      shortName: "Owned",
+      colors: [
+        [0, 0, 0, 1],
+        [1, 1, 1, 1],
+      ],
+    };
+    paletteStore.addPalette(ownedPalette);
+    const first = createTestEntity({ id: "delete-palette-first" });
+    const second = createTestEntity({ id: "delete-palette-second" });
+    first.shaderParams.palette = ownedPalette;
+    second.shaderParams.palette = ownedPalette;
+    canvasStore.addEntities([first, second]);
+    canvasStore.replaceSelection([first.id]);
+
+    act(() => canvas.deletePalette(ownedPalette.id!));
+
+    expect(paletteStore.getPalettes()).not.toContainEqual(ownedPalette);
+    expect(
+      [...canvasStore.getState().entities.values()].every(
+        (entity) => entity.shaderParams.palette?.id !== ownedPalette.id,
+      ),
+    ).toBe(true);
+
+    performUndo();
+
+    expect(paletteStore.isPersonalPalette(ownedPalette.id!)).toBe(true);
+    expect(
+      [...canvasStore.getState().entities.values()].every(
+        (entity) => entity.shaderParams.palette?.id === ownedPalette.id,
+      ),
+    ).toBe(true);
+
+    performRedo();
+
+    expect(paletteStore.getPalettes()).not.toContainEqual(ownedPalette);
+    expect(
+      [...canvasStore.getState().entities.values()].every(
+        (entity) => entity.shaderParams.palette?.id !== ownedPalette.id,
+      ),
+    ).toBe(true);
   });
 });
 

@@ -217,6 +217,14 @@ export class CollaborationService {
     return this.isActive ? `entity-${crypto.randomUUID()}` : fallback();
   }
 
+  removePalette(paletteId: string): void {
+    this.#document?.removePalette(paletteId);
+  }
+
+  restorePalette(palette: ColorPalette): void {
+    this.#document?.restorePalette(palette);
+  }
+
   async start(invite: CollaborationInvite): Promise<void> {
     if (!this.#adapter) throw new Error("Collaboration canvas adapter is not configured");
     this.stop();

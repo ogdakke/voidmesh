@@ -132,6 +132,18 @@ describe("PaletteStore", () => {
     expect(paletteStore.getPersonalPalettes()).toEqual([personal]);
   });
 
+  test("removing an owned room palette clears both local and transient copies", () => {
+    const personal = makePalette("cstm_same", "Personal");
+    const room = makePalette("cstm_same", "Room");
+    paletteStore.addPalette(personal);
+    paletteStore.setTransientPalettes([room]);
+
+    paletteStore.removePalette(personal.id!);
+
+    expect(paletteStore.getPalettes()).toEqual([]);
+    expect(paletteStore.getPersonalPalettes()).toEqual([]);
+  });
+
   test("getSnapshot returns new reference after mutation", () => {
     const snap1 = paletteStore.getSnapshot();
     paletteStore.addPalette(makePalette("cstm_a"));

@@ -18,7 +18,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `files/file-handle.ts` — File System Access API handle storage for in-place workspace saving (Chromium only).
 - `files/random-filename.ts` + `files/filename-words.ts` — Random filename generation for workspace files.
 - `palette-extraction/` — K-means clustering for color palettes.
-- `palette-store.ts` — User palette CRUD (persisted via unstorage).
+- `palette-store.ts` — Persisted personal palette ownership plus transient room/workspace palette projection; room metadata wins ID collisions.
 - `animation-scheduler.ts` — `AnimationScheduler`. Tick-driven scheduler for tweens, 2D springs, and custom animations. Handles lifecycle (cancel, complete callbacks), tag-based cancellation. Singleton: `scheduler`.
 - `touch-scroll/` — Physics-based momentum scrolling with springs and velocity tracking.
 - `client.logger.ts` — Logger with levels. `console.log`/`debug` stripped in production via Vite/oxc config.
@@ -43,6 +43,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - Pure functions where possible. No side effects, no singletons (except `undo`, `logger`, `paletteStore`, `scheduler`).
 - Image duplication shares `MediaImageAsset` objects. Retain before attaching an asset to another entity and release only when that entity's undo-owned resources are evicted.
 - Collaboration duplicates reuse work by immutable identity: one Blob preview/hash/transfer and one decoded static-image asset. Batch repeated Yjs asset-field completion in one transaction instead of publishing per entity.
+- Collaboration palette deletion writes a Yjs tombstone as well as removing metadata. Automatic entity appearance publication must respect tombstones; only explicit undo restoration may clear one and republish that palette ID.
 - Collaboration decode metrics time decoder work only; preview dwell measures visible placeholder latency, while reconcile measures end-to-end projection. Batch metric count/total updates so large duplicate documents do not publish once per entity.
 - High-frequency presence metrics accumulate every message but publish snapshots at a bounded cadence; do not notify React for every cursor packet.
 - Treat usable TURN credentials as a room-start prerequisite. Validate expiry, URL schemes, credential presence, and at least one relay URL before passing ICE configuration to Trystero; do not fall back silently to STUN-only operation.

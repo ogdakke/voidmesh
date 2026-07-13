@@ -39,6 +39,7 @@ export class CollaborationDocument {
   readonly #document = new Y.Doc();
   readonly #entities = this.#document.getMap<CollaborativeEntityMap>("entities");
   readonly #palettes = this.#document.getMap<ColorPalette>("palettes");
+  readonly #deletedPalettes = this.#document.getMap<boolean>("deletedPalettes");
   readonly #sourceId: string;
   readonly #now: MonotonicClock;
   readonly #peerClockOffsets = new Map<string, number>();
@@ -92,11 +93,20 @@ export class CollaborationDocument {
         isRemote: transaction.origin === REMOTE_ORIGIN,
       });
     };
+    const handleDeletedPalettes = (_event: Y.YMapEvent<boolean>, transaction: Y.Transaction) => {
+      listener({
+        entityIds: new Set(),
+        paletteIds: new Set(_event.keysChanged),
+        isRemote: transaction.origin === REMOTE_ORIGIN,
+      });
+    };
     this.#entities.observeDeep(handleEntities);
     this.#palettes.observe(handlePalettes);
+    this.#deletedPalettes.observe(handleDeletedPalettes);
     return () => {
       this.#entities.unobserveDeep(handleEntities);
       this.#palettes.unobserve(handlePalettes);
+      this.#deletedPalettes.unobserve(handleDeletedPalettes);
     };
   }
 
@@ -232,6 +242,7 @@ export class CollaborationDocument {
           isColorPalette(palette) &&
           palette.id &&
           isRoomPaletteId(palette.id) &&
+          !this.#deletedPalettes.has(palette.id) &&
           !sameValue(this.#palettes.get(palette.id), palette)
         ) {
           this.#palettes.set(palette.id, clone(palette));
@@ -240,10 +251,28 @@ export class CollaborationDocument {
     }, LOCAL_ORIGIN);
   }
 
+  removePalette(paletteId: string): void {
+    if (!isRoomPaletteId(paletteId)) return;
+    this.#document.transact(() => {
+      this.#palettes.delete(paletteId);
+      this.#deletedPalettes.set(paletteId, true);
+    }, LOCAL_ORIGIN);
+  }
+
+  restorePalette(palette: ColorPalette): void {
+    if (!palette.id || !isRoomPaletteId(palette.id) || !isColorPalette(palette)) return;
+    this.#document.transact(() => {
+      this.#deletedPalettes.delete(palette.id!);
+      this.#palettes.set(palette.id!, clone(palette));
+    }, LOCAL_ORIGIN);
+  }
+
   getPalettes(): ColorPalette[] {
     const palettes: ColorPalette[] = [];
-    for (const palette of this.#palettes.values()) {
-      if (isColorPalette(palette)) palettes.push(clone(palette));
+    for (const [paletteId, palette] of this.#palettes) {
+      if (!this.#deletedPalettes.has(paletteId) && isColorPalette(palette)) {
+        palettes.push(clone(palette));
+      }
     }
     return palettes;
   }
@@ -290,6 +319,7 @@ export class CollaborationDocument {
     if (
       palette?.id &&
       isRoomPaletteId(palette.id) &&
+      !this.#deletedPalettes.has(palette.id) &&
       isColorPalette(palette) &&
       !sameValue(this.#palettes.get(palette.id), palette)
     ) {

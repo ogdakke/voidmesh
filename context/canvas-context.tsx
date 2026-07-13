@@ -2225,19 +2225,28 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   };
 
   const deletePalette = (paletteId: string) => {
-    const entities = canvasStore.getSelectedEntities();
-    if (entities.length === 0) return;
+    if (!paletteStore.isPersonalPalette(paletteId)) return;
 
     const oldPalette = paletteStore.getPalettes().find((palette) => palette.id === paletteId);
     if (!oldPalette) return;
+    const entities = [...canvasStore.getState().entities.values()].filter(
+      (entity) => entity.shaderParams.palette?.id === paletteId,
+    );
 
     const ownTransaction = !undo.isInTransaction();
     if (ownTransaction) undo.beginTransaction();
     paletteStore.removePalette(paletteId);
+    collaborationService.removePalette(paletteId);
     undo.add(
       Command.create({
-        execute: () => paletteStore.removePalette(paletteId),
-        undo: () => paletteStore.addPalette(oldPalette),
+        execute: () => {
+          paletteStore.removePalette(paletteId);
+          collaborationService.removePalette(paletteId);
+        },
+        undo: () => {
+          paletteStore.addPalette(oldPalette);
+          collaborationService.restorePalette(oldPalette);
+        },
         description: "Delete custom palette",
       }),
     );

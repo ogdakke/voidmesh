@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ColorPalette } from "#types/canvas.ts";
 import { CollaborationDocument } from "#lib/collaboration/document.ts";
 import { createCollaborativeEntity } from "#lib/collaboration/protocol.ts";
 import { createTestEntity } from "../helpers/test-entity.ts";
@@ -256,6 +257,36 @@ describe("CollaborationDocument", () => {
     left.addEntity(collaborative);
 
     expect(right.getPalettes()).toEqual([collaborative.shaderParams.palette]);
+    disconnect();
+  });
+
+  it("replicates palette deletion and blocks stale entity resurrection until undo", () => {
+    const left = new CollaborationDocument();
+    const right = new CollaborationDocument();
+    const disconnect = connect(left, right);
+    const palette: ColorPalette = {
+      id: "cstm_deleted",
+      name: "Deleted Sunset",
+      shortName: "Sunset",
+      colors: [
+        [0, 0, 0, 1],
+        [1, 0.5, 0, 1],
+      ],
+    };
+    left.setPalettes([palette]);
+    const stale = toCollaborative("stale-palette-entity").collaborative;
+    stale.shaderParams.palette = structuredClone(palette);
+
+    left.removePalette(palette.id!);
+    right.addEntity(stale);
+
+    expect(left.getPalettes()).toEqual([]);
+    expect(right.getPalettes()).toEqual([]);
+
+    left.restorePalette(palette);
+
+    expect(left.getPalettes()).toEqual([palette]);
+    expect(right.getPalettes()).toEqual([palette]);
     disconnect();
   });
 
