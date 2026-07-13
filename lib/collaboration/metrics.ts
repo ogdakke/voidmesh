@@ -30,7 +30,10 @@ export interface CollaborationMetricsState {
   assetTransfersSent: number;
   assetTransfersReceived: number;
   assetHashDurationMs: number;
+  assetCompressionDurationMs: number;
   assetDecodeDurationMs: number;
+  documentApplyDurationMs: number;
+  documentReconcileDurationMs: number;
   lastRoundTripTimeMs: number | null;
   lastError: string | null;
   transfers: readonly CollaborationTransferMetric[];
@@ -100,6 +103,21 @@ export class CollaborationMetricsStore extends Store<CollaborationMetricsState> 
     this.publish();
   }
 
+  recordCompressionDuration(durationMs: number): void {
+    this.state.assetCompressionDurationMs += durationMs;
+    this.publish();
+  }
+
+  recordDocumentApplyDuration(durationMs: number): void {
+    this.state.documentApplyDurationMs += durationMs;
+    this.publish();
+  }
+
+  recordDocumentReconcileDuration(durationMs: number): void {
+    this.state.documentReconcileDurationMs += durationMs;
+    this.publish();
+  }
+
   recordTransfer(metric: CollaborationTransferMetric): void {
     if (metric.direction === "send") this.state.assetTransfersSent++;
     else this.state.assetTransfersReceived++;
@@ -146,7 +164,10 @@ function createInitialState(): CollaborationMetricsState {
     assetTransfersSent: 0,
     assetTransfersReceived: 0,
     assetHashDurationMs: 0,
+    assetCompressionDurationMs: 0,
     assetDecodeDurationMs: 0,
+    documentApplyDurationMs: 0,
+    documentReconcileDurationMs: 0,
     lastRoundTripTimeMs: null,
     lastError: null,
     transfers: [],

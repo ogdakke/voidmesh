@@ -41,6 +41,8 @@ export interface CanvasCommands {
   setViewport: (viewport: Viewport) => void;
   panBy: (delta: Point) => void;
   resetViewport: () => void;
+  startCollaboration: () => Promise<string>;
+  stopCollaboration: () => void;
   addEntity: (
     entity: Omit<ShaderCanvasEntity, "id" | "zIndex" | "name">,
     filename?: string,

@@ -8,10 +8,13 @@ import { useState } from "react";
 import "./settings.mobile.css";
 import {
   CanvasLensingSelect,
+  CollaborationLink,
+  CollaborationMetrics,
   FancyDeleteToggle,
   FeedbackLink,
   HapticsToggle,
   LinkItem,
+  LeaveCollaborationLink,
   RedoOnboardingLink,
   ShareLink,
   SnapToGridToggle,
@@ -67,6 +70,16 @@ export default function SettingsDrawer() {
           <div className="settings-drawer-switch">
             <CanvasLensingSelect />
           </div>
+          <hr className="divider" />
+          <div className="settings-drawer-ext-item field-label">
+            <LinkItem>
+              <CollaborationLink />
+            </LinkItem>
+          </div>
+          <div className="settings-drawer-ext-item field-label">
+            <LeaveCollaborationLink />
+          </div>
+          <CollaborationMetrics />
           <hr className="divider" />
           <div className="settings-drawer-ext-item field-label">
             <LinkItem>

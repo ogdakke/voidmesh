@@ -93,17 +93,35 @@ export class FrameLoop {
   start(): void {
     if (this.#running) return;
     this.#running = true;
+    document.addEventListener("visibilitychange", this.#handleVisibilityChange);
+    window.addEventListener("pageshow", this.#handlePageShow);
     this.#tick();
   }
 
   stop(): void {
     this.#running = false;
+    document.removeEventListener("visibilitychange", this.#handleVisibilityChange);
+    window.removeEventListener("pageshow", this.#handlePageShow);
     this.#lastFrameTime = null;
     this.#clearVideoFrameTrackers();
     if (this.#animationFrameId !== null) {
       cancelAnimationFrame(this.#animationFrameId);
       this.#animationFrameId = null;
     }
+  }
+
+  #handleVisibilityChange = (): void => {
+    if (document.visibilityState !== "visible") return;
+    this.#invalidatePresentedFrame();
+  };
+
+  #handlePageShow = (): void => this.#invalidatePresentedFrame();
+
+  #invalidatePresentedFrame(): void {
+    // A browser may discard the WebGPU canvas backing surface in a background tab.
+    // The GPU texture cache remains valid, so a scene redraw is sufficient.
+    this.#lastFrameTime = null;
+    canvasStore.setContainerDirty();
   }
 
   #tick = (): void => {

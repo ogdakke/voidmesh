@@ -1,3 +1,36 @@
 .settings-label {
   color: var(--gray-900);
 }
+
+.collaboration-metrics {
+  padding: 0.75rem 0;
+  color: var(--gray-900);
+  font-size: 0.72rem;
+}
+
+.collaboration-metrics dl {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+}
+
+.collaboration-metrics dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.collaboration-metrics dt,
+.collaboration-metrics dd {
+  margin: 0;
+}
+
+.collaboration-metrics dd {
+  color: var(--color);
+  text-align: right;
+}
+
+.collaboration-metrics-error {
+  margin: 0 0 0.5rem;
+  color: var(--destructive);
+}

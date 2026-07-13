@@ -32,6 +32,7 @@ import {
   GlitchKind,
   MediaType,
   isGifEntity,
+  isVideoEntity,
 } from "#types/canvas.ts";
 import {
   getPalettePreset,
@@ -52,7 +53,7 @@ import { canvasStore, disintegrationController, gameLoop, type CanvasEntityUpdat
 
 import { toastManager } from "#components/ui/toast/toast-manager.ts";
 import { hints } from "#components/ui/hint/hint-manager.ts";
-import { extractOriginalPalette, cloneMediaSource } from "#lib/media-loader.ts";
+import { extractOriginalPalette, cloneMediaSource, loadMediaFromBlob } from "#lib/media-loader.ts";
 import { disposeEntityMedia, disposeMediaSource } from "#lib/media-resources.ts";
 import { Command, undo } from "#lib/undo.ts";
 import {
@@ -74,6 +75,14 @@ import {
   createDefaultWlurOverlayDebugConfig,
   type WlurOverlayDebugConfig,
 } from "#renderer/wlur-debug.ts";
+import { collaborationService } from "./collaboration-service.ts";
+import {
+  clearCollaborationInvite,
+  createCollaborationInvite,
+  createCollaborationInviteUrl,
+  parseCollaborationInvite,
+  type CollaborativeEntity,
+} from "#lib/collaboration/protocol.ts";
 
 // --- Resource ownership for undo/redo cleanup ---
 // Tracks which undo command "owns" cleanup rights for each entity's media resources.
@@ -112,6 +121,43 @@ function resumeDeletedEntity(entity: ShaderCanvasEntity, wasPlaying: boolean): v
     entity.mediaSource.videoElement.play().catch((error) => logger.error(error));
   }
   if (entity.playback) entity.playback.isPlaying = true;
+}
+
+async function applyCollaborativePlayback(
+  entity: ShaderCanvasEntity,
+  playback: CollaborativeEntity["playback"],
+): Promise<void> {
+  if (!playback || !entity.playback) return;
+
+  if (isVideoEntity(entity)) {
+    const video = entity.mediaSource.videoElement;
+    video.loop = playback.loop;
+    video.playbackRate = playback.playbackRate;
+    video.muted = playback.muted;
+    video.volume = playback.volume;
+    if (Math.abs(video.currentTime - playback.currentTime) >= 0.15) {
+      canvasStore.seekVideo(entity.id, playback.currentTime);
+    }
+    if (playback.isPlaying && video.paused) {
+      await canvasStore.playVideo(entity.id);
+    } else if (!playback.isPlaying && !video.paused) {
+      canvasStore.pauseVideo(entity.id);
+    }
+    return;
+  }
+
+  if (isGifEntity(entity)) {
+    canvasStore.seekGif(entity.id, playback.currentTime);
+    if (playback.isPlaying) canvasStore.playGif(entity.id);
+    else canvasStore.pauseGif(entity.id);
+  }
+}
+
+function scheduleCollaborativeRender(entityId: string): void {
+  // Remote assets arrive asynchronously. If projection lands after the frame loop has
+  // sampled dirty state but before it clears that state, the first invalidation can be
+  // consumed without drawing the new texture. Reassert it on the next frame boundary.
+  requestAnimationFrame(() => canvasStore.markEntityTextureDirty(entityId));
 }
 
 function isFirefoxExternalTextureCorsError(error: unknown): boolean {
@@ -500,6 +546,106 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     colorSpaceRef.current = colorSpace;
   }, [colorSpace]);
 
+  useEffect(() => {
+    const unconfigure = collaborationService.configure({
+      async adoptRemoteEntity(entity, blob) {
+        const loaded = await loadMediaFromBlob(
+          blob,
+          entity.asset.mimeType,
+          entity.position,
+          entity.name,
+        );
+        if (!loaded) throw new Error(`Unable to decode collaborative asset ${entity.name}`);
+        const { name: _loadedName, ...entityData } = loaded;
+        const remoteEntity: ShaderCanvasEntity = {
+          ...entityData,
+          id: entity.id,
+          name: entity.name,
+          position: { ...entity.position },
+          size: { ...entity.size },
+          originalSize: { ...entity.originalSize },
+          zIndex: entity.zIndex,
+          rotation: entity.rotation,
+          locked: entity.locked,
+          edited: entity.edited,
+          shaderType: entity.shaderType,
+          shaderParams: structuredClone(entity.shaderParams),
+          ...(entity.originalPalette && {
+            originalPalette: structuredClone(entity.originalPalette),
+          }),
+          ...(entity.playback && { playback: { ...entity.playback } }),
+          textureDirty: true,
+        } as ShaderCanvasEntity;
+        undo.clear();
+        canvasStore.addEntity(remoteEntity);
+        await applyCollaborativePlayback(remoteEntity, entity.playback);
+        scheduleCollaborativeRender(remoteEntity.id);
+      },
+      async updateRemoteEntity(entity) {
+        const current = canvasStore.getState().entities.get(entity.id);
+        if (!current) return;
+        undo.clear();
+        canvasStore.updateEntity(entity.id, {
+          name: entity.name,
+          position: { ...entity.position },
+          size: { ...entity.size },
+          originalSize: { ...entity.originalSize },
+          zIndex: entity.zIndex,
+          rotation: entity.rotation,
+          locked: entity.locked,
+          edited: entity.edited,
+          shaderType: entity.shaderType,
+          shaderParams: structuredClone(entity.shaderParams),
+          originalPalette: entity.originalPalette
+            ? structuredClone(entity.originalPalette)
+            : undefined,
+          ...(entity.playback && { playback: { ...entity.playback } }),
+          textureDirty: true,
+        });
+        const updated = canvasStore.getState().entities.get(entity.id);
+        if (updated) await applyCollaborativePlayback(updated, entity.playback);
+        scheduleCollaborativeRender(entity.id);
+      },
+      removeRemoteEntities(entityIds) {
+        undo.clear();
+        for (const entityId of entityIds) {
+          const entity = canvasStore.getState().entities.get(entityId);
+          if (!entity) continue;
+          pauseDeletedEntity(entity);
+          rendererRef.current?.removeEntityTexture(entityId);
+          canvasStore.removeEntity(entityId);
+          destroyEntityMediaResources(entity);
+        }
+      },
+    });
+
+    const invite = parseCollaborationInvite(window.location.href);
+    if (invite) {
+      undo.clear();
+      void collaborationService.start(invite).catch((error) => logger.error(error));
+    }
+
+    return () => {
+      collaborationService.stop();
+      unconfigure();
+    };
+  }, []);
+
+  const startCollaboration = async (): Promise<string> => {
+    const invite = collaborationService.invite ?? createCollaborationInvite();
+    undo.clear();
+    await collaborationService.start(invite);
+    const url = createCollaborationInviteUrl(invite, window.location.href);
+    window.history.replaceState(window.history.state, "", url);
+    return url;
+  };
+
+  const stopCollaboration = () => {
+    collaborationService.stop();
+    const url = clearCollaborationInvite(window.location.href);
+    window.history.replaceState(window.history.state, "", url);
+  };
+
   // Viewport operations - delegate to store
   const setViewport = (newViewport: Viewport) => {
     canvasStore.setViewport(newViewport);
@@ -519,7 +665,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     filename?: string,
     options?: AddEntityOptions,
   ): string => {
-    const id = `entity-${nextIdRef.current++}`;
+    const id = collaborationService.createEntityId(() => `entity-${nextIdRef.current++}`);
     const zIndex = nextZIndexRef.current++;
     const name = filename || `Image ${nextImageNumberRef.current++}`;
 
@@ -886,7 +1032,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     if (useTransaction) undo.beginTransaction();
 
     for (const { entity, mediaSource, imageBitmap } of clones) {
-      const id = `entity-${nextIdRef.current++}`;
+      const id = collaborationService.createEntityId(() => `entity-${nextIdRef.current++}`);
       const zIndex = nextZIndexRef.current++;
       const baseName = entity.name;
       let n = 1;
@@ -2078,6 +2224,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setViewport,
     panBy,
     resetViewport,
+    startCollaboration,
+    stopCollaboration,
     addEntity,
     updateEntity,
     removeEntity,
@@ -2127,6 +2275,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       setViewport,
       panBy,
       resetViewport,
+      startCollaboration,
+      stopCollaboration,
       addEntity,
       updateEntity,
       removeEntity,
@@ -2176,6 +2326,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setViewport: (...args) => commandsImplRef.current.setViewport(...args),
     panBy: (...args) => commandsImplRef.current.panBy(...args),
     resetViewport: () => commandsImplRef.current.resetViewport(),
+    startCollaboration: () => commandsImplRef.current.startCollaboration(),
+    stopCollaboration: () => commandsImplRef.current.stopCollaboration(),
     addEntity: (...args) => commandsImplRef.current.addEntity(...args),
     updateEntity: (...args) => commandsImplRef.current.updateEntity(...args),
     removeEntity: (...args) => commandsImplRef.current.removeEntity(...args),

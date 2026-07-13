@@ -57,6 +57,10 @@ export class CollaborationDocument {
     return Y.encodeStateAsUpdate(this.#document);
   }
 
+  hasEntity(entityId: string): boolean {
+    return this.#entities.has(entityId);
+  }
+
   applyUpdate(update: Uint8Array): void {
     Y.applyUpdate(this.#document, update, REMOTE_ORIGIN);
   }
