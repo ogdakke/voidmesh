@@ -1,8 +1,11 @@
 import { canvasStore, type CanvasEntityMutation } from "#engine";
 import type { JsonValue } from "trystero";
-import { CollaborationDocument } from "#lib/collaboration/document.ts";
+import {
+  CollaborationDocument,
+  type CollaborationDocumentChange,
+} from "#lib/collaboration/document.ts";
 import { AssetHashCache } from "#lib/collaboration/asset-hash-cache.ts";
-import { collaborationMetrics } from "#lib/collaboration/metrics.ts";
+import { collaborationMetrics, type CollaborationErrorCode } from "#lib/collaboration/metrics.ts";
 import {
   COLLABORATION_PROTOCOL_VERSION,
   createCollaborativeEntity,
@@ -19,7 +22,7 @@ import {
 } from "#lib/collaboration/protocol.ts";
 import { logger } from "#lib/client.logger.ts";
 import { getEntityThumbhash } from "#lib/thumbhash.ts";
-import type { MediaPreview, ShaderCanvasEntity } from "#types/canvas.ts";
+import type { ColorPalette, MediaPreview, ShaderCanvasEntity } from "#types/canvas.ts";
 import type { CollaborationPeerIdentity, CollaborationPeerPresence, Point } from "#types/canvas.ts";
 import {
   calculatePeerClockSample,
@@ -51,6 +54,8 @@ const ICE_CREDENTIAL_REFRESH_RETRY_MS = 60_000;
 const MAX_CONCURRENT_ASSET_REQUESTS = 4;
 const MAX_CONCURRENT_ASSET_SENDS_PER_PEER = 4;
 const MAX_CONCURRENT_ASSET_SEND_BYTES = 32 * 1024 * 1024;
+const MAX_CONCURRENT_ASSET_SENDS_GLOBAL = 8;
+const MAX_CONCURRENT_ASSET_SEND_BYTES_GLOBAL = 64 * 1024 * 1024;
 const MAX_ASSET_SEND_ATTEMPTS = 2;
 const ASSET_ACK_TIMEOUT_MS = 120_000;
 const ASSET_PROGRESS_TIMEOUT_MS = 20_000;
@@ -60,9 +65,11 @@ const MAX_ASSET_BYTES = 512 * 1024 * 1024;
 interface CollaborationCanvasAdapter {
   adoptRemotePlaceholders(
     entities: readonly CollaborativeEntity[],
+    signal: AbortSignal,
   ): Promise<CollaborationProjectionTiming>;
   hydrateRemoteEntities(
     entries: readonly CollaborationHydration[],
+    signal: AbortSignal,
   ): Promise<CollaborationProjectionTiming>;
   applyRemotePlayback(entity: CollaborativeEntity): Promise<void>;
   updateRemotePresence(presence: CollaborationPeerPresence): void;
@@ -70,6 +77,7 @@ interface CollaborationCanvasAdapter {
   clearRemotePresence(): void;
   updateRemoteEntity(entity: CollaborativeEntity, applyPlayback: boolean): Promise<void>;
   removeRemoteEntities(entityIds: readonly string[]): void;
+  updateRemotePalettes(palettes: readonly ColorPalette[]): void;
 }
 
 interface CollaborationProjectionTiming {
@@ -140,6 +148,10 @@ export class CollaborationService {
   #queuedAssetSends = new Map<string, Set<string>>();
   #assetSendWorkers = new Map<string, number>();
   #assetTransferLimiters = new Map<string, AssetTransferLimiter>();
+  #globalAssetTransferLimiter = new AssetTransferLimiter(
+    MAX_CONCURRENT_ASSET_SENDS_GLOBAL,
+    MAX_CONCURRENT_ASSET_SEND_BYTES_GLOBAL,
+  );
   #assetAckWaiters = new Map<string, AssetAckWaiter>();
   #pendingMaterializations = new Set<string>();
   #pendingLocalRegistrations = new Set<string>();
@@ -162,8 +174,9 @@ export class CollaborationService {
   #reconcileQueued = false;
   #reconcileRunning = false;
   #reconcileAgain = false;
-  #lastDocumentEntityIds = new Set<string>();
+  #pendingReconcileEntityIds = new Set<string>();
   #sessionRevision = 0;
+  #sessionAbortController: AbortController | null = null;
   #pingTimer: ReturnType<typeof setInterval> | null = null;
   #playbackDriftTimer: ReturnType<typeof setInterval> | null = null;
   #presenceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -179,6 +192,7 @@ export class CollaborationService {
   #iceServers: RTCIceServer[] = [];
   #iceCredentialAbortController: AbortController | null = null;
   #iceCredentialRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  #peerConnectionListeners = new Map<string, () => void>();
 
   constructor(iceServerProvider: IceServerProvider = new HttpIceServerProvider()) {
     this.#iceServerProvider = iceServerProvider;
@@ -192,7 +206,7 @@ export class CollaborationService {
   }
 
   get isActive(): boolean {
-    return this.#invite !== null;
+    return this.#room !== null;
   }
 
   get invite(): CollaborationInvite | null {
@@ -209,6 +223,8 @@ export class CollaborationService {
     const sessionRevision = ++this.#sessionRevision;
     this.#invite = invite;
     collaborationMetrics.beginConnection(invite.roomId);
+    const sessionAbortController = new AbortController();
+    this.#sessionAbortController = sessionAbortController;
 
     const iceCredentialAbortController = new AbortController();
     this.#iceCredentialAbortController = iceCredentialAbortController;
@@ -220,7 +236,7 @@ export class CollaborationService {
       );
     } catch (error) {
       if (this.#sessionRevision !== sessionRevision) return;
-      this.#fail(error);
+      this.#handleFatalError(error, "relay-unavailable");
       throw error;
     }
     if (this.#sessionRevision !== sessionRevision) return;
@@ -231,279 +247,315 @@ export class CollaborationService {
       false,
     );
 
-    const { joinRoom, selfId } = await import("trystero");
-    if (this.#sessionRevision !== sessionRevision) return;
-    this.#selfId = selfId;
-    const document = new CollaborationDocument({ sourceId: selfId });
-    this.#document = document;
-    this.#unsubscribeDocumentUpdate = document.onUpdate((update, isRemote) => {
-      if (isRemote || !this.#sendDocument) return;
-      void this.#sendDocument(update).catch((error) => this.#fail(error));
-    });
-    this.#unsubscribeDocumentChange = document.onChange(() => this.#scheduleReconcile());
-    this.#unsubscribeMutations = canvasStore.subscribeEntityMutations((mutation) => {
-      if (this.#projectionDepth > 0) return;
-      this.#handleCanvasMutation(mutation);
-    });
-
-    const room = joinRoom(
-      {
-        appId: APP_ID,
-        password: invite.password,
-        rtcConfig: { iceServers: this.#iceServers },
-      },
-      invite.roomId,
-      {
-        onJoinError: ({ error }) => this.#fail(error),
-      },
-    );
-    this.#room = room;
-
-    const documentAction = room.makeAction<Uint8Array>("document");
-    const inventoryAction = room.makeAction<string[]>("inventory");
-    const assetRequestAction = room.makeAction<string>("asset-request");
-    const assetAction = room.makeAction<Uint8Array>("asset");
-    const assetAckAction = room.makeAction<string>("asset-ack");
-    const assetNackAction = room.makeAction<string>("asset-nack");
-    const clockAction = room.makeAction<ClockSyncMessage>("clock");
-    const presenceAction = room.makeAction<JsonValue>("presence");
-
-    this.#sendDocument = async (update, peerId) => {
-      await documentAction.send(update, { target: peerId });
-      collaborationMetrics.recordDocumentUpdate(
-        "send",
-        update.byteLength * (peerId ? 1 : Math.max(1, this.#peerCount)),
+    try {
+      const { joinRoom, selfId } = await import("trystero");
+      if (this.#sessionRevision !== sessionRevision) return;
+      this.#selfId = selfId;
+      const document = new CollaborationDocument({ sourceId: selfId });
+      this.#document = document;
+      this.#unsubscribeDocumentUpdate = document.onUpdate((update, isRemote) => {
+        if (isRemote || !this.#sendDocument) return;
+        void this.#sendDocument(update).catch((error) => this.#reportIssue(error));
+      });
+      this.#unsubscribeDocumentChange = document.onChange((change) =>
+        this.#handleDocumentChange(change),
       );
-    };
-    this.#sendInventory = async (hashes, peerId) => {
-      await inventoryAction.send(hashes, { target: peerId });
-      collaborationMetrics.recordMessage("send", estimateJsonBytes(hashes));
-    };
-    this.#sendAssetRequest = async (hash, peerId) => {
-      await assetRequestAction.send(hash, { target: peerId });
-      collaborationMetrics.recordMessage("send", hash.length);
-    };
-    this.#sendAsset = async (payload, metadata, peerId) => {
-      const startedAt = performance.now();
-      let completed = false;
-      await assetAction.send(payload, {
-        target: peerId,
-        metadata: { ...metadata },
-        onProgress: (progress, context) => {
-          if (context.peerId === peerId && progress >= 1) completed = true;
+      this.#unsubscribeMutations = canvasStore.subscribeEntityMutations((mutation) => {
+        if (this.#projectionDepth > 0) return;
+        this.#handleCanvasMutation(mutation);
+      });
+
+      const room = joinRoom(
+        {
+          appId: APP_ID,
+          password: invite.password,
+          rtcConfig: { iceServers: this.#iceServers },
         },
-      });
-      if (!completed) {
-        throw new Error(`Asset transfer ${metadata.hash} stopped before all chunks were queued`);
-      }
-      const durationMs = performance.now() - startedAt;
-      collaborationMetrics.recordMessage("send", payload.byteLength);
-      collaborationMetrics.recordTransfer({
-        assetHash: metadata.hash,
-        direction: "send",
-        originalBytes: metadata.originalByteLength,
-        transmittedBytes: payload.byteLength,
-        compression: metadata.compression,
-        durationMs,
-        throughputBytesPerSecond: bytesPerSecond(payload.byteLength, durationMs),
-        peerId,
-        completedAt: Date.now(),
-      });
-    };
-    this.#sendAssetAck = async (hash, peerId) => {
-      await assetAckAction.send(hash, { target: peerId });
-      collaborationMetrics.recordMessage("send", hash.length);
-    };
-    this.#sendAssetNack = async (hash, peerId) => {
-      await assetNackAction.send(hash, { target: peerId });
-      collaborationMetrics.recordMessage("send", hash.length);
-    };
-    this.#sendClock = async (message, peerId) => {
-      await clockAction.send(message, { target: peerId });
-      collaborationMetrics.recordMessage("send", estimateJsonBytes(message));
-    };
-    this.#sendPresence = async (message, peerId) => {
-      await presenceAction.send(message as unknown as JsonValue, { target: peerId });
-      collaborationMetrics.recordRealtimeMessage("send", estimateJsonBytes(message));
-    };
-
-    documentAction.onMessage = (update) => {
-      const startedAt = performance.now();
-      document.applyUpdate(new Uint8Array(update));
-      collaborationMetrics.recordDocumentUpdate("receive", update.byteLength);
-      collaborationMetrics.recordDocumentApplyDuration(performance.now() - startedAt);
-    };
-    inventoryAction.onMessage = (hashes, { peerId }) => {
-      collaborationMetrics.recordMessage("receive", estimateJsonBytes(hashes));
-      for (const hash of hashes) {
-        let sources = this.#assetSources.get(hash);
-        if (!sources) this.#assetSources.set(hash, (sources = new Set()));
-        sources.add(peerId);
-      }
-      this.#requestMissingAssets();
-    };
-    assetRequestAction.onMessage = (hash, { peerId }) => {
-      collaborationMetrics.recordMessage("receive", hash.length);
-      this.#queueAssetSend(hash, peerId);
-    };
-    assetAction.onReceiveProgress = (progress, { metadata }) => {
-      if (!isReceivedAssetMetadata(metadata)) return;
-      if (!this.#pendingAssets.has(metadata.hash)) return;
-      if (!this.#assetReceiveStartedAt.has(metadata.hash)) {
-        this.#assetReceiveStartedAt.set(metadata.hash, performance.now());
-      }
-      if (progress < 1) this.#assetReceiveProgress.set(metadata.hash, progress);
-      else this.#assetReceiveProgress.delete(metadata.hash);
-      this.#scheduleAssetRequestTimeout(
-        metadata.hash,
-        progress < 1 ? ASSET_PROGRESS_TIMEOUT_MS : ASSET_VERIFY_TIMEOUT_MS,
-      );
-      this.#updateAssetQueueMetrics();
-    };
-    assetAction.onMessage = (payload, { peerId, metadata }) => {
-      void this.#receiveAsset(payload, peerId, metadata).catch((error) => {
-        collaborationMetrics.recordAssetTransferRetry();
-        logger.warn("[collaboration] asset receive failed; requesting another copy", error);
-      });
-    };
-    assetAckAction.onMessage = (hash, { peerId }) => {
-      collaborationMetrics.recordMessage("receive", hash.length);
-      this.#resolveAssetAck(peerId, hash);
-    };
-    assetNackAction.onMessage = (hash, { peerId }) => {
-      collaborationMetrics.recordMessage("receive", hash.length);
-      const rejectedSend = this.#rejectAssetAck(
-        peerId,
-        hash,
-        new Error(`Peer ${peerId} could not verify asset ${hash}`),
-      );
-      if (this.#pendingAssets.has(hash)) {
-        collaborationMetrics.recordAssetTransferRetry();
-        logger.warn(`[collaboration] peer ${peerId} could not send asset ${hash}; retrying`);
-        this.#releasePendingAsset(hash);
-        this.#requestMissingAssets();
-      } else if (!rejectedSend) {
-        logger.warn(`[collaboration] received an unexpected rejection for asset ${hash}`);
-      }
-    };
-    clockAction.onMessage = (message, { peerId }) => {
-      collaborationMetrics.recordMessage("receive", estimateJsonBytes(message));
-      if (!isClockSyncMessage(message)) return;
-      const receivedAt = monotonicEpochNow();
-      if (message.type === "request") {
-        void this.#sendClock?.(
-          {
-            type: "response",
-            requestId: message.requestId,
-            requesterSentAt: message.sentAt,
-            receiverReceivedAt: receivedAt,
-            receiverSentAt: monotonicEpochNow(),
+        invite.roomId,
+        {
+          onJoinError: ({ error }) => {
+            if (this.#sessionRevision === sessionRevision) {
+              this.#handleFatalError(error, "signaling-unavailable");
+            }
           },
-          peerId,
-        ).catch((error) => this.#fail(error));
-        return;
-      }
-      const pending = this.#pendingClockRequests.get(message.requestId);
-      if (!pending || pending.peerId !== peerId || pending.sentAt !== message.requesterSentAt)
-        return;
-      this.#pendingClockRequests.delete(message.requestId);
-      const sample = calculatePeerClockSample(
-        message.requesterSentAt,
-        message.receiverReceivedAt,
-        message.receiverSentAt,
-        receivedAt,
+        },
       );
-      const bestRoundTrip = this.#bestClockRoundTrips.get(peerId);
-      if (bestRoundTrip === undefined || sample.roundTripMs <= bestRoundTrip) {
-        this.#bestClockRoundTrips.set(peerId, sample.roundTripMs);
-        document.setPeerClockOffset(peerId, sample.offsetMs);
-        void this.#refreshRemotePlaybackClock(peerId).catch((error) => this.#fail(error));
+      if (this.#sessionRevision !== sessionRevision) {
+        room.leave();
+        return;
       }
-    };
-    presenceAction.onMessage = (update, { peerId }) => {
-      collaborationMetrics.recordRealtimeMessage("receive", estimateJsonBytes(update));
-      if (!isCollaborationPresenceUpdate(update)) return;
-      const previousSequence = this.#remotePresenceSequences.get(peerId) ?? -1;
-      if (update.sequence <= previousSequence) return;
-      this.#remotePresenceSequences.set(peerId, update.sequence);
-      const previous = this.#remotePresences.get(peerId);
-      const identity = update.identity ?? previous ?? createPeerIdentity(peerId);
-      const presence: CollaborationPeerPresence = {
-        peerId,
-        name: identity.name,
-        color: [...identity.color],
-        cursor: Object.hasOwn(update, "cursor")
-          ? update.cursor
-            ? { ...update.cursor }
-            : null
-          : (previous?.cursor ?? null),
-        selectedEntityIds: update.selectedEntityIds
-          ? [...update.selectedEntityIds]
-          : (previous?.selectedEntityIds ?? []),
+      this.#room = room;
+
+      const documentAction = room.makeAction<Uint8Array>("document");
+      const inventoryAction = room.makeAction<string[]>("inventory");
+      const assetRequestAction = room.makeAction<string>("asset-request");
+      const assetAction = room.makeAction<Uint8Array>("asset");
+      const assetAckAction = room.makeAction<string>("asset-ack");
+      const assetNackAction = room.makeAction<string>("asset-nack");
+      const clockAction = room.makeAction<ClockSyncMessage>("clock");
+      const presenceAction = room.makeAction<JsonValue>("presence");
+
+      this.#sendDocument = async (update, peerId) => {
+        await documentAction.send(update, { target: peerId });
+        collaborationMetrics.recordDocumentUpdate(
+          "send",
+          update.byteLength * (peerId ? 1 : Math.max(1, this.#peerCount)),
+        );
       };
-      this.#remotePresences.set(peerId, presence);
-      this.#adapter?.updateRemotePresence(presence);
-    };
+      this.#sendInventory = async (hashes, peerId) => {
+        await inventoryAction.send(hashes, { target: peerId });
+        collaborationMetrics.recordMessage("send", estimateJsonBytes(hashes));
+      };
+      this.#sendAssetRequest = async (hash, peerId) => {
+        await assetRequestAction.send(hash, { target: peerId });
+        collaborationMetrics.recordMessage("send", hash.length);
+      };
+      this.#sendAsset = async (payload, metadata, peerId) => {
+        const startedAt = performance.now();
+        let completed = false;
+        await assetAction.send(payload, {
+          target: peerId,
+          metadata: { ...metadata },
+          onProgress: (progress, context) => {
+            if (context.peerId === peerId && progress >= 1) completed = true;
+          },
+        });
+        if (!completed) {
+          throw new Error(`Asset transfer ${metadata.hash} stopped before all chunks were queued`);
+        }
+        const durationMs = performance.now() - startedAt;
+        collaborationMetrics.recordMessage("send", payload.byteLength);
+        collaborationMetrics.recordTransfer({
+          assetHash: metadata.hash,
+          direction: "send",
+          originalBytes: metadata.originalByteLength,
+          transmittedBytes: payload.byteLength,
+          compression: metadata.compression,
+          durationMs,
+          throughputBytesPerSecond: bytesPerSecond(payload.byteLength, durationMs),
+          peerId,
+          completedAt: Date.now(),
+        });
+      };
+      this.#sendAssetAck = async (hash, peerId) => {
+        await assetAckAction.send(hash, { target: peerId });
+        collaborationMetrics.recordMessage("send", hash.length);
+      };
+      this.#sendAssetNack = async (hash, peerId) => {
+        await assetNackAction.send(hash, { target: peerId });
+        collaborationMetrics.recordMessage("send", hash.length);
+      };
+      this.#sendClock = async (message, peerId) => {
+        await clockAction.send(message, { target: peerId });
+        collaborationMetrics.recordMessage("send", estimateJsonBytes(message));
+      };
+      this.#sendPresence = async (message, peerId) => {
+        await presenceAction.send(message as unknown as JsonValue, { target: peerId });
+        collaborationMetrics.recordRealtimeMessage("send", estimateJsonBytes(message));
+      };
 
-    room.onPeerJoin = (peerId) => {
+      documentAction.onMessage = (update) => {
+        const startedAt = performance.now();
+        document.applyUpdate(new Uint8Array(update));
+        collaborationMetrics.recordDocumentUpdate("receive", update.byteLength);
+        collaborationMetrics.recordDocumentApplyDuration(performance.now() - startedAt);
+      };
+      inventoryAction.onMessage = (hashes, { peerId }) => {
+        collaborationMetrics.recordMessage("receive", estimateJsonBytes(hashes));
+        for (const hash of hashes) {
+          let sources = this.#assetSources.get(hash);
+          if (!sources) this.#assetSources.set(hash, (sources = new Set()));
+          sources.add(peerId);
+        }
+        this.#requestMissingAssets();
+      };
+      assetRequestAction.onMessage = (hash, { peerId }) => {
+        collaborationMetrics.recordMessage("receive", hash.length);
+        this.#queueAssetSend(hash, peerId);
+      };
+      assetAction.onReceiveProgress = (progress, { metadata }) => {
+        if (!isReceivedAssetMetadata(metadata)) return;
+        if (!this.#pendingAssets.has(metadata.hash)) return;
+        if (!this.#assetReceiveStartedAt.has(metadata.hash)) {
+          this.#assetReceiveStartedAt.set(metadata.hash, performance.now());
+        }
+        if (progress < 1) this.#assetReceiveProgress.set(metadata.hash, progress);
+        else this.#assetReceiveProgress.delete(metadata.hash);
+        this.#scheduleAssetRequestTimeout(
+          metadata.hash,
+          progress < 1 ? ASSET_PROGRESS_TIMEOUT_MS : ASSET_VERIFY_TIMEOUT_MS,
+        );
+        this.#updateAssetQueueMetrics();
+      };
+      assetAction.onMessage = (payload, { peerId, metadata }) => {
+        void this.#receiveAsset(payload, peerId, metadata).catch((error) => {
+          collaborationMetrics.recordAssetTransferRetry();
+          logger.warn("[collaboration] asset receive failed; requesting another copy", error);
+        });
+      };
+      assetAckAction.onMessage = (hash, { peerId }) => {
+        collaborationMetrics.recordMessage("receive", hash.length);
+        this.#resolveAssetAck(peerId, hash);
+      };
+      assetNackAction.onMessage = (hash, { peerId }) => {
+        collaborationMetrics.recordMessage("receive", hash.length);
+        const rejectedSend = this.#rejectAssetAck(
+          peerId,
+          hash,
+          new Error(`Peer ${peerId} could not verify asset ${hash}`),
+        );
+        if (this.#pendingAssets.has(hash)) {
+          collaborationMetrics.recordAssetTransferRetry();
+          logger.warn(`[collaboration] peer ${peerId} could not send asset ${hash}; retrying`);
+          this.#releasePendingAsset(hash);
+          this.#requestMissingAssets();
+        } else if (!rejectedSend) {
+          logger.warn(`[collaboration] received an unexpected rejection for asset ${hash}`);
+        }
+      };
+      clockAction.onMessage = (message, { peerId }) => {
+        collaborationMetrics.recordMessage("receive", estimateJsonBytes(message));
+        if (!isClockSyncMessage(message)) return;
+        const receivedAt = monotonicEpochNow();
+        if (message.type === "request") {
+          void this.#sendClock?.(
+            {
+              type: "response",
+              requestId: message.requestId,
+              requesterSentAt: message.sentAt,
+              receiverReceivedAt: receivedAt,
+              receiverSentAt: monotonicEpochNow(),
+            },
+            peerId,
+          ).catch((error) => this.#reportIssue(error));
+          return;
+        }
+        const pending = this.#pendingClockRequests.get(message.requestId);
+        if (!pending || pending.peerId !== peerId || pending.sentAt !== message.requesterSentAt)
+          return;
+        this.#pendingClockRequests.delete(message.requestId);
+        const sample = calculatePeerClockSample(
+          message.requesterSentAt,
+          message.receiverReceivedAt,
+          message.receiverSentAt,
+          receivedAt,
+        );
+        const bestRoundTrip = this.#bestClockRoundTrips.get(peerId);
+        if (bestRoundTrip === undefined || sample.roundTripMs <= bestRoundTrip) {
+          this.#bestClockRoundTrips.set(peerId, sample.roundTripMs);
+          document.setPeerClockOffset(peerId, sample.offsetMs);
+          void this.#refreshRemotePlaybackClock(peerId).catch((error) => this.#reportIssue(error));
+        }
+      };
+      presenceAction.onMessage = (update, { peerId }) => {
+        collaborationMetrics.recordRealtimeMessage("receive", estimateJsonBytes(update));
+        if (!isCollaborationPresenceUpdate(update)) return;
+        const previousSequence = this.#remotePresenceSequences.get(peerId) ?? -1;
+        if (update.sequence <= previousSequence) return;
+        this.#remotePresenceSequences.set(peerId, update.sequence);
+        const previous = this.#remotePresences.get(peerId);
+        const identity = update.identity ?? previous ?? createPeerIdentity(peerId);
+        const presence: CollaborationPeerPresence = {
+          peerId,
+          name: identity.name,
+          color: [...identity.color],
+          cursor: Object.hasOwn(update, "cursor")
+            ? update.cursor
+              ? { ...update.cursor }
+              : null
+            : (previous?.cursor ?? null),
+          selectedEntityIds: update.selectedEntityIds
+            ? [...update.selectedEntityIds]
+            : (previous?.selectedEntityIds ?? []),
+        };
+        this.#remotePresences.set(peerId, presence);
+        this.#adapter?.updateRemotePresence(presence);
+      };
+
+      room.onPeerJoin = (peerId) => {
+        this.#updatePeerCount();
+        this.#observePeerConnection(peerId);
+        void this.#measureConnectionPaths();
+        const sendDocument = this.#sendDocument;
+        if (sendDocument) {
+          void sendDocument(document.encodeState(), peerId).catch((error) =>
+            this.#reportIssue(error),
+          );
+        }
+        void this.#sendInventory?.([...this.#assets.keys()], peerId).catch((error) =>
+          this.#reportIssue(error),
+        );
+        this.#requestClockSync(peerId);
+        void this.#sendPresenceSnapshot(peerId).catch((error) => this.#reportIssue(error));
+      };
+      room.onPeerLeave = (peerId) => {
+        for (const sources of this.#assetSources.values()) sources.delete(peerId);
+        for (const hash of this.#assetReceiveProgress.keys()) {
+          if (this.#pendingAssets.peerFor(hash) === peerId) this.#assetReceiveProgress.delete(hash);
+        }
+        for (const hash of this.#assetReceiveStartedAt.keys()) {
+          if (this.#pendingAssets.peerFor(hash) === peerId)
+            this.#assetReceiveStartedAt.delete(hash);
+        }
+        for (const hash of this.#assetRequestTimers.keys()) {
+          if (this.#pendingAssets.peerFor(hash) === peerId) this.#clearAssetRequestTimeout(hash);
+        }
+        this.#pendingAssets.deletePeer(peerId);
+        this.#assetSendQueues.delete(peerId);
+        this.#queuedAssetSends.delete(peerId);
+        this.#assetSendWorkers.delete(peerId);
+        this.#assetTransferLimiters
+          .get(peerId)
+          ?.cancel(new Error(`Peer ${peerId} left during asset transfer`));
+        this.#assetTransferLimiters.delete(peerId);
+        this.#rejectAssetAcksForPeer(
+          peerId,
+          new Error(`Peer ${peerId} left during asset transfer`),
+        );
+        this.#updateAssetQueueMetrics();
+        this.#requestMissingAssets();
+        this.#bestClockRoundTrips.delete(peerId);
+        this.#remotePresenceSequences.delete(peerId);
+        this.#remotePresences.delete(peerId);
+        this.#adapter?.removeRemotePresence(peerId);
+        this.#peerConnectionListeners.get(peerId)?.();
+        this.#peerConnectionListeners.delete(peerId);
+        this.#updatePeerCount();
+      };
+
+      collaborationMetrics.markReady();
       this.#updatePeerCount();
-      void this.#measureConnectionPaths();
-      void this.#sendDocument?.(document.encodeState(), peerId).catch((error) => this.#fail(error));
-      void this.#sendInventory?.([...this.#assets.keys()], peerId).catch((error) =>
-        this.#fail(error),
+      this.#scheduleIceCredentialRefresh(iceCredentials, sessionRevision);
+      this.#pingTimer = setInterval(() => void this.#measureRoundTripTime(), PING_INTERVAL_MS);
+      this.#playbackDriftTimer = setInterval(
+        () => void this.#correctPlaybackDrift().catch((error) => this.#reportIssue(error)),
+        PLAYBACK_DRIFT_INTERVAL_MS,
       );
-      this.#requestClockSync(peerId);
-      void this.#sendPresenceSnapshot(peerId).catch((error) => this.#fail(error));
-    };
-    room.onPeerLeave = (peerId) => {
-      for (const sources of this.#assetSources.values()) sources.delete(peerId);
-      for (const hash of this.#assetReceiveProgress.keys()) {
-        if (this.#pendingAssets.peerFor(hash) === peerId) this.#assetReceiveProgress.delete(hash);
+      this.#localIdentity = createPeerIdentity(selfId);
+      this.#queuePresence({ identity: this.#localIdentity });
+      this.#unsubscribeLocalPresence = canvasStore.subscribeLocalPresence(
+        (cursor, selectedEntityIds) => this.#handleLocalPresence(cursor, selectedEntityIds),
+      );
+      window.addEventListener("online", this.#handleOnline);
+      for (const entity of canvasStore.getState().entities.values()) {
+        this.#queueEntityRegistration(entity);
       }
-      for (const hash of this.#assetReceiveStartedAt.keys()) {
-        if (this.#pendingAssets.peerFor(hash) === peerId) this.#assetReceiveStartedAt.delete(hash);
-      }
-      for (const hash of this.#assetRequestTimers.keys()) {
-        if (this.#pendingAssets.peerFor(hash) === peerId) this.#clearAssetRequestTimeout(hash);
-      }
-      this.#pendingAssets.deletePeer(peerId);
-      this.#assetSendQueues.delete(peerId);
-      this.#queuedAssetSends.delete(peerId);
-      this.#assetSendWorkers.delete(peerId);
-      this.#assetTransferLimiters
-        .get(peerId)
-        ?.cancel(new Error(`Peer ${peerId} left during asset transfer`));
-      this.#assetTransferLimiters.delete(peerId);
-      this.#rejectAssetAcksForPeer(peerId, new Error(`Peer ${peerId} left during asset transfer`));
-      this.#updateAssetQueueMetrics();
-      this.#requestMissingAssets();
-      this.#bestClockRoundTrips.delete(peerId);
-      this.#remotePresenceSequences.delete(peerId);
-      this.#remotePresences.delete(peerId);
-      this.#adapter?.removeRemotePresence(peerId);
-      this.#updatePeerCount();
-    };
-
-    collaborationMetrics.markConnected();
-    this.#updatePeerCount();
-    this.#scheduleIceCredentialRefresh(iceCredentials, sessionRevision);
-    this.#pingTimer = setInterval(() => void this.#measureRoundTripTime(), PING_INTERVAL_MS);
-    this.#playbackDriftTimer = setInterval(
-      () => void this.#correctPlaybackDrift().catch((error) => this.#fail(error)),
-      PLAYBACK_DRIFT_INTERVAL_MS,
-    );
-    this.#localIdentity = createPeerIdentity(selfId);
-    this.#queuePresence({ identity: this.#localIdentity });
-    this.#unsubscribeLocalPresence = canvasStore.subscribeLocalPresence(
-      (cursor, selectedEntityIds) => this.#handleLocalPresence(cursor, selectedEntityIds),
-    );
-    for (const entity of canvasStore.getState().entities.values()) {
-      this.#queueEntityRegistration(entity);
+    } catch (error) {
+      if (this.#sessionRevision !== sessionRevision || sessionAbortController.signal.aborted)
+        return;
+      this.#handleFatalError(error, "signaling-unavailable");
+      throw error;
     }
   }
 
   stop(): void {
+    this.#teardownSession(true);
+  }
+
+  #teardownSession(resetMetrics: boolean): void {
     this.#sessionRevision++;
+    this.#sessionAbortController?.abort();
+    this.#sessionAbortController = null;
     this.#unsubscribeMutations?.();
     this.#unsubscribeMutations = null;
     this.#unsubscribeDocumentUpdate?.();
@@ -543,7 +595,15 @@ export class CollaborationService {
       limiter.cancel(new Error("Collaboration session stopped"));
     }
     this.#assetTransferLimiters.clear();
+    this.#globalAssetTransferLimiter.cancel(new Error("Collaboration session stopped"));
+    this.#globalAssetTransferLimiter = new AssetTransferLimiter(
+      MAX_CONCURRENT_ASSET_SENDS_GLOBAL,
+      MAX_CONCURRENT_ASSET_SEND_BYTES_GLOBAL,
+    );
     this.#rejectAllAssetAcks(new Error("Collaboration session stopped"));
+    this.#assets.clear();
+    this.#assetDescriptors.clear();
+    this.#assetSources.clear();
     this.#pendingMaterializations.clear();
     this.#pendingLocalRegistrations.clear();
     this.#materializedAssetHashes.clear();
@@ -560,7 +620,7 @@ export class CollaborationService {
     this.#assetPreviews = new WeakMap();
     this.#assetHashes.clear();
     this.#entityRevisions.clear();
-    this.#lastDocumentEntityIds.clear();
+    this.#pendingReconcileEntityIds.clear();
     this.#reconcileQueued = false;
     this.#reconcileAgain = false;
     for (const timer of this.#geometryTimers.values()) clearTimeout(timer);
@@ -579,7 +639,10 @@ export class CollaborationService {
     this.#localCursor = null;
     this.#localSelectionReference = null;
     this.#localSelectedEntityIds = [];
-    collaborationMetrics.reset();
+    for (const removeListener of this.#peerConnectionListeners.values()) removeListener();
+    this.#peerConnectionListeners.clear();
+    window.removeEventListener("online", this.#handleOnline);
+    if (resetMetrics) collaborationMetrics.reset();
   }
 
   #handleCanvasMutation(mutation: CanvasEntityMutation): void {
@@ -599,7 +662,8 @@ export class CollaborationService {
             updates.position ||
             updates.size ||
             updates.originalSize ||
-            updates.rotation !== undefined
+            updates.rotation !== undefined ||
+            updates.zIndex !== undefined
           ) {
             this.#document.setGeometry(entity);
           }
@@ -629,9 +693,10 @@ export class CollaborationService {
           this.#remotePlaybackAnchors.delete(entityId);
         }
         this.#document?.removeEntities(mutation.entityIds);
+        this.#pruneUnreferencedAssets();
         break;
       case "replace":
-        void this.#replaceDocument(mutation.entities).catch((error) => this.#fail(error));
+        void this.#replaceDocument(mutation.entities).catch((error) => this.#reportIssue(error));
         break;
       case "playback":
         this.#publishPlayback(
@@ -650,7 +715,7 @@ export class CollaborationService {
     const revision = this.#bumpEntityRevision(entity.id);
     this.#pendingLocalRegistrations.add(entity.id);
     if (blob.size > MAX_ASSET_BYTES) {
-      this.#fail(
+      this.#reportIssue(
         new Error(
           `${entity.name} is ${(blob.size / 1024 / 1024).toFixed(1)} MB; the collaboration prototype currently supports assets up to 512 MB`,
         ),
@@ -670,11 +735,10 @@ export class CollaborationService {
       document.addEntity(collaborative);
     }
 
-    const hash = await this.#assetHashes.get(blob, (durationMs) =>
-      collaborationMetrics.recordHashDuration(durationMs),
-    );
+    const hash = await this.#assetHashes.get(blob, (durationMs) => {
+      if (this.#document === document) collaborationMetrics.recordHashDuration(durationMs);
+    });
     if (this.#entityRevisions.get(entity.id) !== revision || this.#document !== document) {
-      this.#pendingLocalRegistrations.delete(entity.id);
       return;
     }
 
@@ -688,7 +752,7 @@ export class CollaborationService {
   }
 
   #queueEntityRegistration(entity: ShaderCanvasEntity): void {
-    void this.#registerEntity(entity).catch((error) => this.#fail(error));
+    void this.#registerEntity(entity).catch((error) => this.#reportIssue(error));
   }
 
   async #replaceDocument(entities: readonly ShaderCanvasEntity[]): Promise<void> {
@@ -722,9 +786,9 @@ export class CollaborationService {
       [...registrationGroups].map(async ([blob, group]) => ({
         blob,
         group,
-        hash: await this.#assetHashes.get(blob, (durationMs) =>
-          collaborationMetrics.recordHashDuration(durationMs),
-        ),
+        hash: await this.#assetHashes.get(blob, (durationMs) => {
+          if (this.#document === document) collaborationMetrics.recordHashDuration(durationMs);
+        }),
       })),
     );
     if (replaceRevision !== this.#replaceRevision || this.#document !== document) return;
@@ -747,6 +811,7 @@ export class CollaborationService {
     }
     document.setAssets(assetUpdates);
     void this.#sendInventory?.([...inventory]);
+    this.#pruneUnreferencedAssets();
   }
 
   #scheduleGeometrySync(entityId: string): void {
@@ -759,12 +824,21 @@ export class CollaborationService {
     this.#geometryTimers.set(entityId, timer);
   }
 
-  #scheduleReconcile(): void {
+  #handleDocumentChange(change: CollaborationDocumentChange): void {
+    if (!change.isRemote) return;
+    if (change.paletteIds.size > 0) {
+      this.#adapter?.updateRemotePalettes(this.#document?.getPalettes() ?? []);
+    }
+    this.#scheduleReconcile(change.entityIds);
+  }
+
+  #scheduleReconcile(entityIds: Iterable<string> = []): void {
+    for (const entityId of entityIds) this.#pendingReconcileEntityIds.add(entityId);
     if (this.#reconcileQueued) return;
     this.#reconcileQueued = true;
     queueMicrotask(() => {
       this.#reconcileQueued = false;
-      void this.#reconcileDocument().catch((error) => this.#fail(error));
+      void this.#reconcileDocument().catch((error) => this.#reportIssue(error));
     });
   }
 
@@ -777,35 +851,40 @@ export class CollaborationService {
     try {
       do {
         this.#reconcileAgain = false;
-        await this.#reconcileDocumentOnce();
+        const entityIds = new Set(this.#pendingReconcileEntityIds);
+        this.#pendingReconcileEntityIds.clear();
+        if (entityIds.size > 0) await this.#reconcileDocumentOnce(entityIds);
       } while (this.#reconcileAgain);
     } finally {
       this.#reconcileRunning = false;
+      if (this.#pendingReconcileEntityIds.size > 0) this.#scheduleReconcile();
     }
   }
 
-  async #reconcileDocumentOnce(): Promise<void> {
+  async #reconcileDocumentOnce(changedEntityIds: ReadonlySet<string>): Promise<void> {
     const reconcileStartedAt = performance.now();
+    const sessionRevision = this.#sessionRevision;
     const adapter = this.#adapter;
     const document = this.#document;
-    if (!adapter || !document) return;
-    const entities = document.getEntities();
-    const documentIds = new Set(entities.map(({ id }) => id));
+    const signal = this.#sessionAbortController?.signal;
+    if (!adapter || !document || !signal || signal.aborted) return;
     const currentState = canvasStore.getState();
     const removedIds: string[] = [];
-    for (const id of this.#lastDocumentEntityIds) {
-      if (
-        !documentIds.has(id) &&
-        currentState.entities.has(id) &&
-        !this.#pendingLocalRegistrations.has(id)
-      ) {
-        removedIds.push(id);
+    const entities: CollaborativeEntity[] = [];
+    for (const entityId of changedEntityIds) {
+      if (this.#pendingLocalRegistrations.has(entityId)) continue;
+      if (!document.hasEntity(entityId)) {
+        if (currentState.entities.has(entityId)) removedIds.push(entityId);
+        continue;
       }
+      const entity = document.getEntity(entityId);
+      if (entity) entities.push(entity);
+      else this.#reportIssue(new Error(`Ignored invalid collaborative entity ${entityId}`));
     }
-    this.#lastDocumentEntityIds = documentIds;
 
     this.#projectionDepth++;
     try {
+      signal.throwIfAborted();
       if (removedIds.length > 0) {
         adapter.removeRemoteEntities(removedIds);
         for (const id of removedIds) {
@@ -816,6 +895,7 @@ export class CollaborationService {
           this.#placeholderStartedAt.delete(id);
         }
       }
+      this.#pruneUnreferencedAssets();
 
       const placeholders: CollaborativeEntity[] = [];
       const replacedIds: string[] = [];
@@ -846,7 +926,8 @@ export class CollaborationService {
         }
       }
       if (placeholders.length > 0) {
-        const timing = await adapter.adoptRemotePlaceholders(placeholders);
+        const timing = await adapter.adoptRemotePlaceholders(placeholders, signal);
+        signal.throwIfAborted();
         const visibleAt = performance.now();
         for (const entity of placeholders) {
           this.#placeholderEntityIds.add(entity.id);
@@ -863,17 +944,14 @@ export class CollaborationService {
         const materializedHash = this.#materializedAssetHashes.get(entity.id);
         const applyPlayback = this.#shouldApplyPlayback(entity);
         if (current && entity.asset.hash && materializedHash === entity.asset.hash) {
-          if (!sameProjectedEntity(current, entity) || applyPlayback) {
-            await adapter.updateRemoteEntity(entity, applyPlayback);
-            this.#markPlaybackApplied(entity);
-          }
+          await adapter.updateRemoteEntity(entity, applyPlayback);
+          this.#markPlaybackApplied(entity);
           continue;
         }
         if (
           current &&
           !adoptedPlaceholderIds.has(entity.id) &&
-          this.#placeholderEntityIds.has(entity.id) &&
-          (!sameProjectedEntity(current, entity) || applyPlayback)
+          this.#placeholderEntityIds.has(entity.id)
         ) {
           await adapter.updateRemoteEntity(entity, applyPlayback);
           this.#markPlaybackApplied(entity);
@@ -892,7 +970,8 @@ export class CollaborationService {
 
       if (hydrations.length > 0) {
         try {
-          const timing = await adapter.hydrateRemoteEntities(hydrations);
+          const timing = await adapter.hydrateRemoteEntities(hydrations, signal);
+          signal.throwIfAborted();
           const hydratedAt = performance.now();
           let totalPreviewDwellMs = 0;
           let hydratedPreviewCount = 0;
@@ -914,24 +993,28 @@ export class CollaborationService {
           }
           collaborationMetrics.recordDecodeDuration(timing.decodeDurationMs);
         } finally {
-          for (const { entity } of hydrations) {
-            this.#pendingMaterializations.delete(entity.id);
+          if (this.#sessionRevision === sessionRevision) {
+            for (const { entity } of hydrations) {
+              this.#pendingMaterializations.delete(entity.id);
+            }
           }
         }
       }
     } finally {
       this.#projectionDepth--;
-      collaborationMetrics.recordDocumentReconcileDuration(performance.now() - reconcileStartedAt);
+      if (this.#sessionRevision === sessionRevision) {
+        collaborationMetrics.recordDocumentReconcileDuration(
+          performance.now() - reconcileStartedAt,
+        );
+      }
     }
   }
 
   #requestMissingAssets(): void {
     const document = this.#document;
     if (!document) return;
-    for (const entity of document.getEntities()) {
-      if (entity.asset.hash && !this.#assets.has(entity.asset.hash)) {
-        this.#requestAsset(entity.asset.hash);
-      }
+    for (const hash of document.getAssetHashes()) {
+      if (!this.#assets.has(hash)) this.#requestAsset(hash);
     }
   }
 
@@ -985,21 +1068,27 @@ export class CollaborationService {
         if (!next) break;
         try {
           await this.#sendAssetToPeer(next.hash, peerId);
-          this.#queuedAssetSends.get(peerId)?.delete(next.hash);
+          if (this.#sessionRevision === sessionRevision) {
+            this.#queuedAssetSends.get(peerId)?.delete(next.hash);
+          }
         } catch (error) {
-          this.#handleAssetSendFailure(next, peerId, error);
+          if (this.#sessionRevision === sessionRevision) {
+            this.#handleAssetSendFailure(next, peerId, error);
+          }
         }
       }
     } finally {
-      const workerCount = Math.max(0, (this.#assetSendWorkers.get(peerId) ?? 1) - 1);
-      if (workerCount > 0) this.#assetSendWorkers.set(peerId, workerCount);
-      else this.#assetSendWorkers.delete(peerId);
-      if ((this.#assetSendQueues.get(peerId)?.length ?? 0) > 0) {
-        this.#startAssetSendWorkers(peerId);
-      } else if (workerCount === 0) {
-        this.#assetSendQueues.delete(peerId);
-        this.#queuedAssetSends.delete(peerId);
-        this.#assetTransferLimiters.delete(peerId);
+      if (this.#sessionRevision === sessionRevision) {
+        const workerCount = Math.max(0, (this.#assetSendWorkers.get(peerId) ?? 1) - 1);
+        if (workerCount > 0) this.#assetSendWorkers.set(peerId, workerCount);
+        else this.#assetSendWorkers.delete(peerId);
+        if ((this.#assetSendQueues.get(peerId)?.length ?? 0) > 0) {
+          this.#startAssetSendWorkers(peerId);
+        } else if (workerCount === 0) {
+          this.#assetSendQueues.delete(peerId);
+          this.#queuedAssetSends.delete(peerId);
+          this.#assetTransferLimiters.delete(peerId);
+        }
       }
     }
   }
@@ -1021,9 +1110,11 @@ export class CollaborationService {
   }
 
   async #sendAssetToPeer(hash: string, peerId: string): Promise<void> {
+    const sessionRevision = this.#sessionRevision;
     const blob = this.#assets.get(hash);
     const descriptor = this.#assetDescriptors.get(hash);
-    if (!blob || !descriptor || !this.#sendAsset) {
+    const sendAsset = this.#sendAsset;
+    if (!blob || !descriptor || !sendAsset) {
       throw new Error(`Cannot send unavailable asset ${hash}`);
     }
     let limiter = this.#assetTransferLimiters.get(peerId);
@@ -1034,15 +1125,19 @@ export class CollaborationService {
       );
       this.#assetTransferLimiters.set(peerId, limiter);
     }
-    const release = await limiter.acquire(blob.size);
+    const releaseGlobal = await this.#globalAssetTransferLimiter.acquire(blob.size);
+    let releasePeer: (() => void) | null = null;
     let acknowledgement: { promise: Promise<void>; cancel: () => void } | null = null;
     try {
+      releasePeer = await limiter.acquire(blob.size);
+      throwIfSessionChanged(this.#sessionRevision, sessionRevision);
       if (!this.#room?.getPeers()[peerId]) throw new Error(`Peer ${peerId} left before transfer`);
       const compressionStartedAt = performance.now();
       const prepared = await prepareAssetPayload(blob, descriptor.mimeType);
+      throwIfSessionChanged(this.#sessionRevision, sessionRevision);
       collaborationMetrics.recordCompressionDuration(performance.now() - compressionStartedAt);
       acknowledgement = this.#createAssetAckWaiter(peerId, hash);
-      await this.#sendAsset(
+      await sendAsset(
         prepared.bytes,
         {
           transferId: descriptor.transferId,
@@ -1060,7 +1155,8 @@ export class CollaborationService {
       acknowledgement?.cancel();
       throw error;
     } finally {
-      release();
+      releasePeer?.();
+      releaseGlobal();
     }
     try {
       await acknowledgement.promise;
@@ -1076,9 +1172,10 @@ export class CollaborationService {
     metadataValue: unknown,
   ): Promise<void> {
     if (!isReceivedAssetMetadata(metadataValue)) {
-      this.#fail(new Error("Received asset with invalid metadata"));
+      this.#reportIssue(new Error("Received asset with invalid metadata"));
       return;
     }
+    const sessionRevision = this.#sessionRevision;
     const metadata = metadataValue;
     try {
       if (metadata.originalByteLength > MAX_ASSET_BYTES) {
@@ -1087,16 +1184,16 @@ export class CollaborationService {
       if (!this.#assets.has(metadata.hash)) {
         const startedAt = this.#assetReceiveStartedAt.get(metadata.hash) ?? performance.now();
         const blob = await restoreAssetPayload(payload, metadata);
+        if (this.#sessionRevision !== sessionRevision) return;
         const hashStartedAt = performance.now();
         const actualHash = await hashBlob(blob);
+        if (this.#sessionRevision !== sessionRevision) return;
         collaborationMetrics.recordHashDuration(performance.now() - hashStartedAt);
         if (actualHash !== metadata.hash)
           throw new Error(`Asset hash mismatch for ${metadata.filename}`);
 
         this.#assets.set(metadata.hash, blob);
-        const descriptor = this.#document
-          ?.getEntities()
-          .find((entity) => entity.asset.hash === metadata.hash)?.asset;
+        const descriptor = this.#document?.getAssetDescriptor(metadata.hash);
         if (descriptor) this.#assetDescriptors.set(metadata.hash, descriptor);
         const durationMs = performance.now() - startedAt;
         collaborationMetrics.recordMessage("receive", payload.byteLength);
@@ -1111,17 +1208,20 @@ export class CollaborationService {
           peerId,
           completedAt: Date.now(),
         });
-        this.#scheduleReconcile();
+        this.#scheduleReconcile(this.#document?.getEntityIdsForAssetHash(metadata.hash) ?? []);
       }
       await this.#sendAssetAck?.(metadata.hash, peerId);
     } catch (error) {
+      if (this.#sessionRevision !== sessionRevision) return;
       await this.#sendAssetNack?.(metadata.hash, peerId).catch((sendError) =>
         logger.warn(`[collaboration] could not reject invalid asset ${metadata.hash}`, sendError),
       );
       throw error;
     } finally {
-      this.#releasePendingAsset(metadata.hash);
-      this.#requestMissingAssets();
+      if (this.#sessionRevision === sessionRevision) {
+        this.#releasePendingAsset(metadata.hash);
+        this.#requestMissingAssets();
+      }
     }
   }
 
@@ -1280,6 +1380,7 @@ export class CollaborationService {
           ...peer.getConfiguration(),
           iceServers: this.#iceServers,
         });
+        peer.restartIce();
       }
       collaborationMetrics.recordIceCredentials(
         performance.now() - startedAt,
@@ -1339,7 +1440,7 @@ export class CollaborationService {
     const requestId = crypto.randomUUID();
     this.#pendingClockRequests.set(requestId, { peerId, sentAt });
     void this.#sendClock?.({ type: "request", requestId, sentAt }, peerId).catch((error) =>
-      this.#fail(error),
+      this.#reportIssue(error),
     );
   }
 
@@ -1413,7 +1514,7 @@ export class CollaborationService {
     );
     this.#presenceTimer = setTimeout(() => {
       this.#presenceTimer = null;
-      void this.#flushPresence().catch((error) => this.#fail(error));
+      void this.#flushPresence().catch((error) => this.#reportIssue(error));
     }, delay);
   }
 
@@ -1447,6 +1548,47 @@ export class CollaborationService {
 
   #updatePeerCount(): void {
     collaborationMetrics.setPeerCount(this.#peerCount);
+  }
+
+  #observePeerConnection(peerId: string): void {
+    this.#peerConnectionListeners.get(peerId)?.();
+    const connection = this.#room?.getPeers()[peerId];
+    if (!connection) return;
+    const handleConnectionState = () => {
+      if (
+        connection.connectionState === "failed" ||
+        connection.connectionState === "disconnected"
+      ) {
+        collaborationMetrics.markReconnecting();
+        if (connection.connectionState === "failed") connection.restartIce();
+      } else if (connection.connectionState === "connected") {
+        collaborationMetrics.markReady();
+        this.#updatePeerCount();
+        void this.#measureConnectionPaths();
+      }
+    };
+    connection.addEventListener("connectionstatechange", handleConnectionState);
+    this.#peerConnectionListeners.set(peerId, () =>
+      connection.removeEventListener("connectionstatechange", handleConnectionState),
+    );
+    handleConnectionState();
+  }
+
+  #handleOnline = (): void => {
+    const peers = Object.values(this.#room?.getPeers() ?? {});
+    if (peers.length === 0) return;
+    collaborationMetrics.markReconnecting();
+    for (const peer of peers) peer.restartIce();
+  };
+
+  #pruneUnreferencedAssets(): void {
+    const referencedHashes = this.#document?.getAssetHashes() ?? new Set<string>();
+    for (const hash of this.#assets.keys()) {
+      if (referencedHashes.has(hash)) continue;
+      this.#assets.delete(hash);
+      this.#assetDescriptors.delete(hash);
+      this.#assetSources.delete(hash);
+    }
   }
 
   get #peerCount(): number {
@@ -1519,8 +1661,21 @@ export class CollaborationService {
     }
   }
 
-  #fail(error: unknown): void {
-    collaborationMetrics.fail(error);
+  #handleFatalError(error: unknown, code: CollaborationErrorCode): void {
+    const failedInvite = this.#invite;
+    this.#teardownSession(false);
+    this.#invite = failedInvite;
+    this.#fail(error, code);
+  }
+
+  #reportIssue(error: unknown, code: CollaborationErrorCode = "session-failed"): void {
+    if (isAbortError(error)) return;
+    collaborationMetrics.recordIssue(error, code);
+    logger.warn("[collaboration]", error);
+  }
+
+  #fail(error: unknown, code: CollaborationErrorCode = "unexpected"): void {
+    collaborationMetrics.fail(error, code);
     logger.error("[collaboration]", error);
   }
 }
@@ -1562,26 +1717,14 @@ function requireBlobMimeType(blob: Blob, entityName: string): string {
   throw new Error(`Cannot share ${entityName}: its media Blob has no MIME type`);
 }
 
-function sameProjectedEntity(
-  current: ShaderCanvasEntity,
-  collaborative: CollaborativeEntity,
-): boolean {
-  return (
-    current.name === collaborative.name &&
-    current.position.x === collaborative.position.x &&
-    current.position.y === collaborative.position.y &&
-    current.size.width === collaborative.size.width &&
-    current.size.height === collaborative.size.height &&
-    current.originalSize.width === collaborative.originalSize.width &&
-    current.originalSize.height === collaborative.originalSize.height &&
-    current.zIndex === collaborative.zIndex &&
-    current.rotation === collaborative.rotation &&
-    (current.locked ?? false) === collaborative.locked &&
-    current.edited === collaborative.edited &&
-    current.shaderType === collaborative.shaderType &&
-    JSON.stringify(current.shaderParams) === JSON.stringify(collaborative.shaderParams) &&
-    JSON.stringify(current.originalPalette) === JSON.stringify(collaborative.originalPalette)
-  );
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+function throwIfSessionChanged(currentRevision: number, expectedRevision: number): void {
+  if (currentRevision !== expectedRevision) {
+    throw new DOMException("Collaboration session changed", "AbortError");
+  }
 }
 
 export const collaborationService = new CollaborationService();

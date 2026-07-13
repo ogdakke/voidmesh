@@ -92,28 +92,36 @@ export function CollaborationLink() {
   const metrics = useCollaborationMetrics();
 
   const startOrShare = async () => {
-    if (metrics.status === "idle" || metrics.status === "error") {
-      await startCollaboration();
+    try {
+      if (metrics.status === "error") {
+        await startCollaboration();
+        return;
+      }
+      if (metrics.status === "idle") await startCollaboration();
+      await shareOrCopyUrl();
+    } catch {
+      // The collaboration status toast owns user-facing failure reporting.
     }
-    await shareOrCopyUrl();
   };
 
   const label =
     metrics.status === "connecting"
       ? "Multiplayer connecting…"
-      : metrics.status === "connected"
-        ? metrics.peerCount > 0
-          ? `Multiplayer · ${metrics.peerCount + 1} here`
-          : "Multiplayer · waiting for peers"
-        : metrics.status === "error"
-          ? "Retry multiplayer"
-          : "Start multiplayer";
+      : metrics.status === "reconnecting"
+        ? "Multiplayer reconnecting…"
+        : metrics.status === "waiting"
+          ? "Share multiplayer invite"
+          : metrics.status === "connected"
+            ? `Multiplayer · ${metrics.peerCount + 1} here`
+            : metrics.status === "error"
+              ? "Retry multiplayer"
+              : "Start multiplayer";
 
   return (
     <button
       type="button"
       onClick={() => void startOrShare()}
-      disabled={metrics.status === "connecting"}
+      disabled={metrics.status === "connecting" || metrics.status === "reconnecting"}
     >
       <span>{label}</span>
     </button>
@@ -135,62 +143,78 @@ export function CollaborationMetrics() {
   const metrics = useCollaborationMetrics();
   if (metrics.status === "idle") return null;
   const lastTransfer = metrics.transfers.at(-1);
+  const statusLabel =
+    metrics.status === "connecting"
+      ? "Joining multiplayer…"
+      : metrics.status === "waiting"
+        ? "Room ready · waiting for peers"
+        : metrics.status === "connected"
+          ? `${metrics.peerCount + 1} people connected`
+          : metrics.status === "reconnecting"
+            ? "Reconnecting multiplayer…"
+            : "Multiplayer connection failed";
   return (
-    <div className="collaboration-metrics" aria-label="Multiplayer diagnostics">
-      {metrics.lastError && <p className="collaboration-metrics-error">{metrics.lastError}</p>}
-      <dl>
-        <Metric label="Peers" value={String(metrics.peerCount)} />
-        <Metric label="RTT" value={formatDuration(metrics.lastRoundTripTimeMs)} />
-        <Metric
-          label="Route"
-          value={formatConnectionPath(metrics.connectionPath, metrics.relayProtocol)}
-        />
-        <Metric
-          label="TURN credentials"
-          value={formatTurnCredentials(
-            metrics.iceCredentialFetchDurationMs,
-            metrics.iceCredentialExpiresAt,
-            metrics.iceCredentialRefreshes,
-            metrics.iceCredentialRefreshFailures,
-          )}
-        />
-        <Metric label="Sent" value={formatBytes(metrics.bytesSent)} />
-        <Metric label="Received" value={formatBytes(metrics.bytesReceived)} />
-        <Metric
-          label="Assets"
-          value={formatAssetQueue(
-            metrics.assetRequestsPending,
-            metrics.assetReceivesActive,
-            metrics.assetReceiveProgress,
-            metrics.assetTransferRetries,
-          )}
-        />
-        <Metric label="Hashing" value={formatDuration(metrics.assetHashDurationMs)} />
-        <Metric label="Compression" value={formatDuration(metrics.assetCompressionDurationMs)} />
-        <Metric label="Media decode" value={formatDuration(metrics.assetDecodeDurationMs)} />
-        <Metric label="Preview encode" value={formatDuration(metrics.previewEncodeDurationMs)} />
-        <Metric label="Preview decode" value={formatDuration(metrics.previewDecodeDurationMs)} />
-        <Metric
-          label="Placeholders"
-          value={`${metrics.previewPlaceholdersCreated} · ${metrics.previewHydrations} hydrated`}
-        />
-        <Metric
-          label="Preview dwell"
-          value={formatDuration(
-            metrics.previewHydrations > 0
-              ? metrics.previewDwellDurationMs / metrics.previewHydrations
-              : null,
-          )}
-        />
-        <Metric label="CRDT apply" value={formatDuration(metrics.documentApplyDurationMs)} />
-        <Metric label="Reconcile" value={formatDuration(metrics.documentReconcileDurationMs)} />
-        {lastTransfer && (
+    <div className="collaboration-metrics">
+      <p className="collaboration-status" aria-live="polite">
+        {statusLabel}
+      </p>
+      <details className="collaboration-diagnostics">
+        <summary>Connection diagnostics</summary>
+        {metrics.lastError && <p className="collaboration-metrics-error">{metrics.lastError}</p>}
+        <dl aria-label="Multiplayer diagnostics">
+          <Metric label="Peers" value={String(metrics.peerCount)} />
+          <Metric label="RTT" value={formatDuration(metrics.lastRoundTripTimeMs)} />
           <Metric
-            label={`Last asset ${lastTransfer.direction === "receive" ? "↓" : "↑"}`}
-            value={`${formatBytes(lastTransfer.transmittedBytes)} · ${formatBytes(lastTransfer.throughputBytesPerSecond)}/s · ${formatDuration(lastTransfer.durationMs)} · ${lastTransfer.compression}`}
+            label="Route"
+            value={formatConnectionPath(metrics.connectionPath, metrics.relayProtocol)}
           />
-        )}
-      </dl>
+          <Metric
+            label="TURN credentials"
+            value={formatTurnCredentials(
+              metrics.iceCredentialFetchDurationMs,
+              metrics.iceCredentialExpiresAt,
+              metrics.iceCredentialRefreshes,
+              metrics.iceCredentialRefreshFailures,
+            )}
+          />
+          <Metric label="Sent" value={formatBytes(metrics.bytesSent)} />
+          <Metric label="Received" value={formatBytes(metrics.bytesReceived)} />
+          <Metric
+            label="Assets"
+            value={formatAssetQueue(
+              metrics.assetRequestsPending,
+              metrics.assetReceivesActive,
+              metrics.assetReceiveProgress,
+              metrics.assetTransferRetries,
+            )}
+          />
+          <Metric label="Hashing" value={formatDuration(metrics.assetHashDurationMs)} />
+          <Metric label="Compression" value={formatDuration(metrics.assetCompressionDurationMs)} />
+          <Metric label="Media decode" value={formatDuration(metrics.assetDecodeDurationMs)} />
+          <Metric label="Preview encode" value={formatDuration(metrics.previewEncodeDurationMs)} />
+          <Metric label="Preview decode" value={formatDuration(metrics.previewDecodeDurationMs)} />
+          <Metric
+            label="Placeholders"
+            value={`${metrics.previewPlaceholdersCreated} · ${metrics.previewHydrations} hydrated`}
+          />
+          <Metric
+            label="Preview dwell"
+            value={formatDuration(
+              metrics.previewHydrations > 0
+                ? metrics.previewDwellDurationMs / metrics.previewHydrations
+                : null,
+            )}
+          />
+          <Metric label="CRDT apply" value={formatDuration(metrics.documentApplyDurationMs)} />
+          <Metric label="Reconcile" value={formatDuration(metrics.documentReconcileDurationMs)} />
+          {lastTransfer && (
+            <Metric
+              label={`Last asset ${lastTransfer.direction === "receive" ? "↓" : "↑"}`}
+              value={`${formatBytes(lastTransfer.transmittedBytes)} · ${formatBytes(lastTransfer.throughputBytesPerSecond)}/s · ${formatDuration(lastTransfer.durationMs)} · ${lastTransfer.compression}`}
+            />
+          )}
+        </dl>
+      </details>
     </div>
   );
 }

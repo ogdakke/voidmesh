@@ -15,6 +15,7 @@ export default function DesktopSettings() {
         variant="secondary"
         className="settings-trigger"
         onClick={() => setIsOpen(true)}
+        aria-label="Settings"
       >
         <MoreVert />
       </Button>

@@ -9,7 +9,7 @@ Infinite canvas app with real-time WebGPU shader effects. Users drop images/vide
 - **Shader / Effect** — WebGPU rendering algorithm that stylizes an entity. 7 types: dithering, halftone, ascii, glass, blobs, melt, glitch. Each is a `ShaderPass` subclass in `renderer/shaders/`.
 - **Kind** — Sub-variant within a shader type. E.g. dithering has 12 kinds (bayer4x4, floydSteinberg…), glass has 3, glitch has 4, ascii has 4.
 - **Knobs** — UI panels for editing shader parameters. Each shader type has its own `*-knobs.tsx`. Read/write params via `useParamValue()` hook.
-- **Palette** — 2–16 colors for quantization. Types: preset (built-in), custom (`cstm_` prefix), extracted (`ext_` prefix), original (auto-extracted 6-color per entity).
+- **Palette** — 2–16 colors for quantization. Types: preset (built-in), custom (`cstm_` prefix), extracted (`ext_` prefix), original (auto-extracted 6-color per entity). Palettes discovered from a collaboration room are transient list entries: usable and named like local palettes, but not persisted to personal preferences.
 - **Preserve Colors** — Boolean. True: per-channel RGB processing. False: monochrome. All shaders except glass.
 - **Adjustments** — Pre-processing effects applied before shader: brightness, contrast, saturation, blur.
 - **Post-processing** — Effects applied after shader: grain, bloom, chromatic aberration.
@@ -66,9 +66,9 @@ The opt-in real Chrome/WebGPU many-entity suite lives in `bench/`. Run it with `
 3. **Private fields**: Use `#` private class fields, not `private` keyword.
 4. **No barrel exports**: Only `engine/index.ts` and `types/index.ts` have barrels. Import directly from files elsewhere.
 5. **GPU resources**: Always clean up buffers/textures. Use `TexturePool` for intermediates. Key shareable source/processed textures by immutable asset and effect identity; entity IDs track ownership, not duplicate resources.
-6. **Undo pattern**: Wrap state mutations in `Command.create({ execute, undo, onEvict })`, push to `undo` singleton from `lib/undo.ts`.
+6. **Undo pattern**: Wrap state mutations in `Command.create({ execute, undo, onEvict })`, push to `undo` singleton from `lib/undo.ts`. Entity update commands rebase only leaves changed by that command so undo/redo preserves unrelated remote collaboration edits; remote projections never clear local undo history.
 7. **Overview batching**: Large homogeneous static-image scenes keep one versioned composition instance buffer. Pan-only frames update viewport state and issue one draw; entity/geometry changes rebuild, and interactive/heterogeneous scenes use normal preparation.
-8. **Collaboration**: Keep peer transport/orchestration outside `CanvasStore`. Durable entity state uses Yjs and re-enters through the context/store mutation boundary; cursor/selection presence uses ephemeral coalesced actions and transient GPU-agnostic render state. Fetch provider-neutral, short-lived ICE credentials from the same-origin server broker before joining a room; provider secrets never enter client bundles or replicated state.
+8. **Collaboration**: Keep peer transport/orchestration outside `CanvasStore`. Durable entity state uses validated, leaf-level Yjs fields and projects only transaction-changed entity IDs through the context/store mutation boundary; cursor/selection presence uses ephemeral coalesced actions and transient GPU-agnostic render state. Room palettes replicate as transient metadata. Media inventories, sources, cancellation signals, and transfer budgets are scoped to one room session, with both per-peer and global send limits. Fetch provider-neutral, short-lived ICE credentials from the same-origin server broker before joining a room; provider secrets never enter client bundles or replicated state.
 
 ## Anti-Patterns
 

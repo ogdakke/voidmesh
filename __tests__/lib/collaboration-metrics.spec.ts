@@ -21,7 +21,7 @@ describe("CollaborationMetricsStore", () => {
   it("tracks connection, messages, and bounded asset transfer measurements", () => {
     const store = new CollaborationMetricsStore();
     store.beginConnection("room", 10);
-    store.markConnected(35);
+    store.markReady(35);
     store.recordDocumentUpdate("send", 120);
     store.recordMessage("receive", 80);
     store.recordPreviewEncodeDuration(2);
@@ -49,7 +49,7 @@ describe("CollaborationMetricsStore", () => {
     }
 
     const state = store.getSnapshot();
-    expect(state.status).toBe("connected");
+    expect(state.status).toBe("waiting");
     expect(state.connectionDurationMs).toBe(25);
     expect(state.documentUpdatesSent).toBe(1);
     expect(state.messagesSent).toBe(1);
@@ -74,5 +74,19 @@ describe("CollaborationMetricsStore", () => {
     expect(state.assetTransferRetries).toBe(1);
     expect(state.transfers).toHaveLength(50);
     expect(state.transfers[0]?.assetHash).toBe("asset-5");
+  });
+
+  it("leaves reconnecting when a peer recovers or the room becomes empty", () => {
+    const store = new CollaborationMetricsStore();
+    store.beginConnection("room");
+    store.setPeerCount(1);
+    store.markReady();
+    store.markReconnecting();
+    store.markReady();
+    expect(store.getSnapshot().status).toBe("connected");
+
+    store.markReconnecting();
+    store.setPeerCount(0);
+    expect(store.getSnapshot().status).toBe("waiting");
   });
 });

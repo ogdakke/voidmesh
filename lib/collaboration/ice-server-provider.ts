@@ -15,25 +15,48 @@ export interface PeerConnectionPath {
 export class HttpIceServerProvider implements IceServerProvider {
   readonly #endpoint: string;
   readonly #fetch: typeof fetch;
+  readonly #timeoutMs: number;
 
-  constructor(endpoint = "/api/ice-servers", fetcher: typeof fetch = fetch) {
+  constructor(endpoint = "/api/ice-servers", fetcher: typeof fetch = fetch, timeoutMs = 15_000) {
     this.#endpoint = endpoint;
     this.#fetch = fetcher.bind(globalThis);
+    this.#timeoutMs = timeoutMs;
   }
 
   async getCredentials(signal?: AbortSignal): Promise<IceServerCredentials> {
-    const response = await this.#fetch(this.#endpoint, {
-      method: "POST",
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: "{}",
-      cache: "no-store",
-      credentials: "same-origin",
-      signal,
-    });
-    if (!response.ok) {
-      throw new Error(`Unable to acquire relay credentials (${response.status})`);
+    const requestController = new AbortController();
+    let timedOut = false;
+    const handleAbort = () => requestController.abort(signal?.reason);
+    if (signal?.aborted) handleAbort();
+    else signal?.addEventListener("abort", handleAbort, { once: true });
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      requestController.abort(
+        new DOMException("Relay credential request timed out", "TimeoutError"),
+      );
+    }, this.#timeoutMs);
+    try {
+      const response = await this.#fetch(this.#endpoint, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: "{}",
+        cache: "no-store",
+        credentials: "same-origin",
+        signal: requestController.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`Unable to acquire relay credentials (${response.status})`);
+      }
+      return parseIceServerCredentials(await response.json());
+    } catch (error) {
+      if (timedOut && !signal?.aborted) {
+        throw new Error("Timed out while acquiring relay credentials", { cause: error });
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", handleAbort);
     }
-    return parseIceServerCredentials(await response.json());
   }
 }
 

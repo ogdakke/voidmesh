@@ -80,6 +80,8 @@ import { collaborationService } from "./collaboration-service.ts";
 import { createImageAsset } from "#lib/media-assets.ts";
 import { decodeThumbhashMedia } from "#lib/thumbhash.ts";
 import { SharedImageAssetRegistry } from "#lib/collaboration/shared-image-asset-registry.ts";
+import { collaborationMetrics } from "#lib/collaboration/metrics.ts";
+import { createRebasedEntityUpdate } from "#lib/rebased-entity-update.ts";
 import {
   clearCollaborationInvite,
   createCollaborationInvite,
@@ -97,6 +99,19 @@ const resourceOwners = new Map<string, number>();
 const RENDER_ERROR_TOAST_ID = "canvas-render-error";
 const collaborativeAutoplayBlockedEntityIds = new Set<string>();
 
+function collaborationErrorDescription(code: string | null): string {
+  switch (code) {
+    case "invalid-invite":
+      return "Ask the room owner for a new invite link.";
+    case "relay-unavailable":
+      return "Check your connection, then retry.";
+    case "signaling-unavailable":
+      return "The room could not be reached. Retry in a moment.";
+    default:
+      return "The room is still safe to leave. Retry to reconnect.";
+  }
+}
+
 function formatErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
   if (typeof error === "string") return error;
@@ -108,6 +123,41 @@ function captureEntityForDeletion(entity: ShaderCanvasEntity): ShaderCanvasEntit
   // until undo restores it. Any edit after undo clears the redo branch, so retaining
   // this object is both stable and dramatically cheaper than cloning shader params.
   return entity;
+}
+
+function applyRebasedEntityUpdate(
+  entityId: string,
+  before: Partial<ShaderCanvasEntity>,
+  after: Partial<ShaderCanvasEntity>,
+  target: Partial<ShaderCanvasEntity>,
+): void {
+  const current = canvasStore.getState().entities.get(entityId);
+  if (!current) return;
+  canvasStore.updateEntity(entityId, createRebasedEntityUpdate(current, before, after, target));
+}
+
+function applyRebasedEntityBatch(
+  before: readonly CanvasEntityUpdate[],
+  after: readonly CanvasEntityUpdate[],
+  target: readonly CanvasEntityUpdate[],
+): void {
+  const currentEntities = canvasStore.getState().entities;
+  const updates: CanvasEntityUpdate[] = [];
+  for (let index = 0; index < target.length; index++) {
+    const targetUpdate = target[index]!;
+    const current = currentEntities.get(targetUpdate.id);
+    if (!current) continue;
+    updates.push({
+      id: targetUpdate.id,
+      updates: createRebasedEntityUpdate(
+        current,
+        before[index]!.updates,
+        after[index]!.updates,
+        targetUpdate.updates,
+      ),
+    });
+  }
+  canvasStore.updateEntities(updates);
 }
 
 function pauseDeletedEntity(entity: ShaderCanvasEntity): boolean {
@@ -669,11 +719,13 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     };
 
     const unconfigure = collaborationService.configure({
-      async adoptRemotePlaceholders(entities) {
+      async adoptRemotePlaceholders(entities, signal) {
         const placeholders: ShaderCanvasEntity[] = [];
         let decodeDurationMs = 0;
         try {
+          signal.throwIfAborted();
           for (const entity of entities) {
+            signal.throwIfAborted();
             const previewKey = `preview:${entity.asset.transferId}`;
             let asset = acquireSharedImageAsset(previewKey);
             if (!asset) {
@@ -711,7 +763,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
               textureDirty: true,
             } as ShaderCanvasEntity);
           }
-          undo.clear();
+          signal.throwIfAborted();
           canvasStore.addEntities(placeholders);
           scheduleCollaborativeRender();
           return { decodeDurationMs };
@@ -723,14 +775,16 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           throw error;
         }
       },
-      async hydrateRemoteEntities(entries) {
+      async hydrateRemoteEntities(entries, signal) {
         const updates: CanvasEntityUpdate[] = [];
         const previousEntities: ShaderCanvasEntity[] = [];
         const acquiredMedia: Pick<ShaderCanvasEntity, "imageBitmap" | "mediaSource">[] = [];
         let decodeDurationMs = 0;
         let committed = false;
         try {
+          signal.throwIfAborted();
           for (const { entity, blob } of entries) {
+            signal.throwIfAborted();
             const current = canvasStore.getState().entities.get(entity.id);
             if (!current) continue;
             const loaded = await loadCollaborativeMedia(entity, blob);
@@ -761,7 +815,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
               } as Partial<ShaderCanvasEntity>,
             });
           }
-          undo.clear();
+          signal.throwIfAborted();
           for (const { id } of updates) rendererRef.current?.removeEntityTexture(id);
           canvasStore.updateEntities(updates);
           committed = true;
@@ -798,7 +852,6 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       async updateRemoteEntity(entity, applyPlayback) {
         const current = canvasStore.getState().entities.get(entity.id);
         if (!current) return;
-        undo.clear();
         canvasStore.updateEntity(entity.id, {
           name: entity.name,
           position: { ...entity.position },
@@ -825,7 +878,6 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       removeRemoteEntities(entityIds) {
         const removedEntities: ShaderCanvasEntity[] = [];
         const removedIds = new Set<string>();
-        undo.clear();
         for (const entityId of entityIds) {
           const entity = canvasStore.getState().entities.get(entityId);
           if (!entity) continue;
@@ -842,12 +894,89 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         }
         scheduleCollaborativeRender();
       },
+      updateRemotePalettes(palettes) {
+        paletteStore.setTransientPalettes(palettes);
+      },
     });
+
+    let collaborationToastId: string | null = null;
+    let collaborationToastKey = "idle";
+    let lastIssue: string | null = null;
+    const updateCollaborationToast = () => {
+      const metrics = collaborationMetrics.getSnapshot();
+      const key = `${metrics.status}:${metrics.peerCount}`;
+      if (key !== collaborationToastKey) {
+        collaborationToastKey = key;
+        const retry = () => {
+          const retryInvite = collaborationService.invite;
+          if (retryInvite) void collaborationService.start(retryInvite).catch(() => {});
+        };
+        const toast =
+          metrics.status === "connecting"
+            ? {
+                title: "Joining multiplayer…",
+                description: "Preparing a secure connection.",
+                timeout: 0,
+              }
+            : metrics.status === "waiting"
+              ? {
+                  title: "Multiplayer ready",
+                  description: "Waiting for someone else to open the invite link.",
+                  timeout: 8_000,
+                }
+              : metrics.status === "connected"
+                ? {
+                    title: "Multiplayer connected",
+                    description: `${metrics.peerCount + 1} people are here.`,
+                    timeout: 4_000,
+                  }
+                : metrics.status === "reconnecting"
+                  ? {
+                      title: "Reconnecting multiplayer…",
+                      description: "Trying the latest secure network route.",
+                      timeout: 0,
+                    }
+                  : metrics.status === "error"
+                    ? {
+                        title: "Couldn’t join multiplayer",
+                        description: collaborationErrorDescription(metrics.lastErrorCode),
+                        type: "destructive" as const,
+                        timeout: 0,
+                        actionProps: collaborationService.invite
+                          ? { children: "Retry", onClick: retry }
+                          : { children: null },
+                      }
+                    : null;
+        if (!toast) {
+          if (collaborationToastId) toastManager.close(collaborationToastId);
+          collaborationToastId = null;
+        } else if (collaborationToastId) {
+          toastManager.update(collaborationToastId, toast);
+        } else {
+          collaborationToastId = toastManager.add(toast);
+        }
+      }
+      if (metrics.status !== "error" && metrics.lastError && metrics.lastError !== lastIssue) {
+        lastIssue = metrics.lastError;
+        toastManager.add({
+          title: "Multiplayer needs attention",
+          description: collaborationErrorDescription(metrics.lastErrorCode),
+          type: "destructive",
+          timeout: 8_000,
+        });
+      }
+    };
+    const unsubscribeMetrics = collaborationMetrics.subscribe(updateCollaborationToast);
+    updateCollaborationToast();
 
     const invite = parseCollaborationInvite(window.location.href);
     if (invite) {
-      undo.clear();
       void collaborationService.start(invite).catch((error) => logger.error(error));
+    } else if (window.location.hash.startsWith("#collab=")) {
+      collaborationMetrics.fail(
+        new Error("Invalid or outdated multiplayer invite"),
+        "invalid-invite",
+      );
     }
 
     return () => {
@@ -855,13 +984,14 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       collaborativeAutoplayBlockedEntityIds.clear();
       sharedImageAssets.clear();
       collaborationService.stop();
+      unsubscribeMetrics();
+      if (collaborationToastId) toastManager.close(collaborationToastId);
       unconfigure();
     };
   }, []);
 
   const startCollaboration = async (): Promise<string> => {
     const invite = collaborationService.invite ?? createCollaborationInvite();
-    undo.clear();
     await collaborationService.start(invite);
     const url = createCollaborationInviteUrl(invite, window.location.href);
     window.history.replaceState(window.history.state, "", url);
@@ -1012,8 +1142,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
     undo.add(
       Command.create({
-        undo: () => canvasStore.updateEntity(id, previousValues),
-        execute: () => canvasStore.updateEntity(id, updates),
+        undo: () => applyRebasedEntityUpdate(id, previousValues, updates, previousValues),
+        execute: () => applyRebasedEntityUpdate(id, previousValues, updates, updates),
         description: `Update entity ${id}`,
       }),
     );
@@ -1040,8 +1170,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     canvasStore.updateEntities(nextBatch);
     undo.add(
       Command.create({
-        undo: () => canvasStore.updateEntities(previousBatch),
-        execute: () => canvasStore.updateEntities(nextBatch),
+        undo: () => applyRebasedEntityBatch(previousBatch, nextBatch, previousBatch),
+        execute: () => applyRebasedEntityBatch(previousBatch, nextBatch, nextBatch),
         description,
       }),
     );
@@ -1351,15 +1481,25 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         undo.add(
           Command.create({
             undo: () =>
-              canvasStore.updateEntity(entity.id, {
-                shaderParams: previousParams!,
-                textureDirty: true,
-              }),
+              applyRebasedEntityUpdate(
+                entity.id,
+                { shaderParams: previousParams!, textureDirty: true },
+                { shaderParams: newParams, textureDirty: true },
+                {
+                  shaderParams: previousParams!,
+                  textureDirty: true,
+                },
+              ),
             execute: () =>
-              canvasStore.updateEntity(entity.id, {
-                shaderParams: newParams,
-                textureDirty: true,
-              }),
+              applyRebasedEntityUpdate(
+                entity.id,
+                { shaderParams: previousParams!, textureDirty: true },
+                { shaderParams: newParams, textureDirty: true },
+                {
+                  shaderParams: newParams,
+                  textureDirty: true,
+                },
+              ),
             description: "Update shader params",
           }),
         );
@@ -1387,8 +1527,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       if (previousBatch) {
         undo.add(
           Command.create({
-            undo: () => canvasStore.updateEntities(previousBatch),
-            execute: () => canvasStore.updateEntities(nextBatch),
+            undo: () => applyRebasedEntityBatch(previousBatch, nextBatch, previousBatch),
+            execute: () => applyRebasedEntityBatch(previousBatch, nextBatch, nextBatch),
             description: `Update params for ${entities.length} entities`,
           }),
         );

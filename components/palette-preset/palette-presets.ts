@@ -40,19 +40,19 @@ export function isExtractedPalette(paletteId: string | null | undefined): boolea
 }
 
 /**
- * Generate a short hash from timestamp (7 characters, base36)
+ * Generate a cryptographically random base36 identifier.
  */
 function generateShortHash(): string {
-  // Use timestamp + random component for uniqueness
-  const timestamp = Date.now();
-  const random = Math.floor(Math.random() * 0xffffff);
-  // Combine and convert to base36, take last 7 chars
-  return ((timestamp << 8) ^ random).toString(36).slice(-7);
+  const bytes = new Uint8Array(5);
+  crypto.getRandomValues(bytes);
+  let value = 0n;
+  for (const byte of bytes) value = (value << 8n) | BigInt(byte);
+  return value.toString(36).padStart(8, "0");
 }
 
 /**
  * Generate a unique palette ID with short hash format
- * @example "cstm_a1b2c3d" or "ext_x7y8z9a"
+ * @example "cstm_0a1b2c3d" or "ext_1a2b3c4d"
  */
 export function generatePaletteId(type: "custom" | "extracted"): string {
   const prefix = config.paletteIdPrefix[type];

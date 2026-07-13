@@ -15,7 +15,7 @@ import {
   type PaletteListItem,
 } from "#components/palette-preset/palette-presets.ts";
 import type { ColorPalette as ColorPaletteType } from "#types/canvas.ts";
-import { usePaletteStore } from "#lib/palette-store.ts";
+import { paletteStore, usePaletteStore } from "#lib/palette-store.ts";
 import {
   SliderPicker,
   SliderPickerItem,
@@ -307,12 +307,14 @@ export function MobileColorKnobs() {
               : undefined
           }
           onDelete={
-            paletteParam.value?.id && isUserPalette(paletteParam.value.id)
+            paletteParam.value?.id && paletteStore.isPersonalPalette(paletteParam.value.id)
               ? () => deletePalette(paletteParam.value.id!)
               : undefined
           }
           canRename={!!paletteParam.value?.id && isUserPalette(paletteParam.value.id)}
-          canDelete={!!paletteParam.value?.id && isUserPalette(paletteParam.value.id)}
+          canDelete={
+            !!paletteParam.value?.id && paletteStore.isPersonalPalette(paletteParam.value.id)
+          }
           actionMode="manage"
           editableLabel={false}
           className="mobile-color__palette"

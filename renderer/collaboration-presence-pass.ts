@@ -92,7 +92,11 @@ export class CollaborationPresencePass {
       this.#selectionZoom !== viewport.zoom ||
       this.#selectionDpr !== dpr
     ) {
-      this.#rebuildSelectionGeometry(presences, entities, viewport);
+      if (presences.some((presence) => presence.selectedEntityIds.length > 0)) {
+        this.#rebuildSelectionGeometry(presences, entities, viewport);
+      } else {
+        this.#selectionVertexCount = 0;
+      }
       this.#selectionPresenceVersion = presenceSelectionVersion;
       this.#selectionEntityVersion = entityVersion;
       this.#selectionGeometryVersion = geometryVersion;
@@ -100,8 +104,8 @@ export class CollaborationPresencePass {
       this.#selectionDpr = dpr;
     }
 
-    const visibleCursors = presences.filter((presence) => presence.cursor !== null);
-    if (this.#selectionVertexCount === 0 && visibleCursors.length === 0) return;
+    const hasVisibleCursor = presences.some((presence) => presence.cursor !== null);
+    if (this.#selectionVertexCount === 0 && !hasVisibleCursor) return;
     const pass = encoder.beginRenderPass({
       label: "Collaboration presence pass",
       colorAttachments: [{ view: targetView, loadOp: "load", storeOp: "store" }],
@@ -114,7 +118,8 @@ export class CollaborationPresencePass {
     }
 
     const livePeerIds = new Set<string>();
-    for (const presence of visibleCursors) {
+    for (const presence of presences) {
+      if (!presence.cursor) continue;
       livePeerIds.add(presence.peerId);
       this.#drawCursorLabel(pass, presence, viewport);
     }

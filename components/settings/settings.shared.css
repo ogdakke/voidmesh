@@ -8,6 +8,26 @@
   font-size: 0.72rem;
 }
 
+.collaboration-status {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.collaboration-diagnostics {
+  margin-top: 0.75rem;
+}
+
+.collaboration-diagnostics summary {
+  cursor: pointer;
+  color: var(--gray-900);
+  font-size: 0.8rem;
+}
+
+.collaboration-diagnostics dl {
+  margin-top: 0.75rem;
+}
+
 .collaboration-metrics dl {
   display: grid;
   gap: 0.35rem;

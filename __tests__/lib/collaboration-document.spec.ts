@@ -167,6 +167,98 @@ describe("CollaborationDocument", () => {
     unsubscribeRight();
   });
 
+  it("converges concurrent edits to separate shader parameter leaves", () => {
+    const left = new CollaborationDocument();
+    const right = new CollaborationDocument();
+    const { entity, collaborative } = toCollaborative("leaf-edits");
+    left.addEntity(collaborative);
+    right.applyUpdate(left.encodeState());
+    const leftUpdates: Uint8Array[] = [];
+    const rightUpdates: Uint8Array[] = [];
+    const unsubscribeLeft = left.onUpdate((update, remote) => {
+      if (!remote) leftUpdates.push(update);
+    });
+    const unsubscribeRight = right.onUpdate((update, remote) => {
+      if (!remote) rightUpdates.push(update);
+    });
+
+    entity.shaderParams = {
+      ...entity.shaderParams,
+      adjustments: { ...entity.shaderParams.adjustments!, brightness: 0.75 },
+    };
+    left.setAppearance(entity);
+    entity.shaderParams = {
+      ...entity.shaderParams,
+      adjustments: { ...entity.shaderParams.adjustments!, brightness: 0.5, contrast: 0.9 },
+    };
+    right.setAppearance(entity);
+    for (const update of leftUpdates) right.applyUpdate(update);
+    for (const update of rightUpdates) left.applyUpdate(update);
+
+    expect(left.getEntity(entity.id)?.shaderParams.adjustments).toMatchObject({
+      brightness: 0.75,
+      contrast: 0.9,
+    });
+    expect(left.getEntities()).toEqual(right.getEntities());
+    unsubscribeLeft();
+    unsubscribeRight();
+  });
+
+  it("reports only changed entity IDs and distinguishes local from remote transactions", () => {
+    const left = new CollaborationDocument();
+    const right = new CollaborationDocument();
+    for (let index = 0; index < 1_000; index++) {
+      left.addEntity(toCollaborative(`entity-${index}`).collaborative);
+    }
+    right.applyUpdate(left.encodeState());
+    const changes: Array<{ ids: string[]; remote: boolean }> = [];
+    const unsubscribe = right.onChange((change) => {
+      if (change.entityIds.size > 0) {
+        changes.push({ ids: [...change.entityIds], remote: change.isRemote });
+      }
+    });
+    const target = toCollaborative("entity-500").entity;
+    target.position = { x: 42, y: 84 };
+    right.setGeometry(target);
+
+    expect(changes.at(-1)).toEqual({ ids: ["entity-500"], remote: false });
+
+    const update = (() => {
+      let result: Uint8Array | undefined;
+      const stop = left.onUpdate((next, remote) => {
+        if (!remote) result = next;
+      });
+      target.position = { x: 12, y: 24 };
+      left.setGeometry(target);
+      stop();
+      return result!;
+    })();
+    right.applyUpdate(update);
+    expect(changes.at(-1)).toEqual({ ids: ["entity-500"], remote: true });
+    unsubscribe();
+  });
+
+  it("replicates custom palette metadata independently from entity projection", () => {
+    const left = new CollaborationDocument();
+    const right = new CollaborationDocument();
+    const disconnect = connect(left, right);
+    const { collaborative } = toCollaborative("palette-entity");
+    collaborative.shaderParams.palette = {
+      id: "cstm_shared",
+      name: "Shared Sunset",
+      shortName: "Sunset",
+      colors: [
+        [0, 0, 0, 1],
+        [1, 0.5, 0, 1],
+      ],
+    };
+
+    left.addEntity(collaborative);
+
+    expect(right.getPalettes()).toEqual([collaborative.shaderParams.palette]);
+    disconnect();
+  });
+
   it("synchronizes additions and deletions over an update bridge", () => {
     const left = new CollaborationDocument();
     const right = new CollaborationDocument();

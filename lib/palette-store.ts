@@ -5,6 +5,7 @@ import { preferences } from "./preferences.ts";
 
 interface PaletteStoreState {
   customPalettes: ColorPalette[];
+  transientPalettes: ColorPalette[];
   version: number;
 }
 
@@ -12,16 +13,25 @@ class PaletteStore extends Store<PaletteStoreState> {
   readonly getSnapshot: () => PaletteStoreState;
 
   constructor() {
-    super({ customPalettes: [], version: 0 });
+    super({ customPalettes: [], transientPalettes: [], version: 0 });
     this.getSnapshot = this.createSnapshot("version", (s) => ({
-      customPalettes: s.customPalettes,
+      customPalettes: combinePalettes(s.transientPalettes, s.customPalettes),
+      transientPalettes: s.transientPalettes,
       version: s.version,
     }));
   }
 
-  /** Get current custom palettes (synchronous) */
+  /** Get personal and transient workspace palettes, with room values winning ID conflicts. */
   getPalettes(): ColorPalette[] {
+    return combinePalettes(this.state.transientPalettes, this.state.customPalettes);
+  }
+
+  getPersonalPalettes(): ColorPalette[] {
     return this.state.customPalettes;
+  }
+
+  isPersonalPalette(id: string): boolean {
+    return this.state.customPalettes.some((palette) => palette.id === id);
   }
 
   /** Bulk set palettes (for hydration from localStorage) */
@@ -62,12 +72,32 @@ class PaletteStore extends Store<PaletteStoreState> {
     this.#persist();
   }
 
-  /** Update an existing palette by ID */
-  updatePalette(id: string, palette: ColorPalette): void {
-    this.state.customPalettes = this.state.customPalettes.map((p) => (p.id === id ? palette : p));
+  /** Replace non-persistent palettes discovered from the active workspace or room. */
+  setTransientPalettes(palettes: readonly ColorPalette[]): void {
+    const unique = new Map<string, ColorPalette>();
+    for (const palette of palettes) {
+      if (palette.id) unique.set(palette.id, palette);
+    }
+    const next = [...unique.values()];
+    if (samePaletteList(this.state.transientPalettes, next)) return;
+    this.state.transientPalettes = next;
     this.state.version++;
     this.notify();
-    this.#persist();
+  }
+
+  /** Update an existing palette by ID */
+  updatePalette(id: string, palette: ColorPalette): void {
+    const isPersonal = this.isPersonalPalette(id);
+    if (isPersonal) {
+      this.state.customPalettes = this.state.customPalettes.map((p) => (p.id === id ? palette : p));
+    } else {
+      this.state.transientPalettes = this.state.transientPalettes.map((p) =>
+        p.id === id ? palette : p,
+      );
+    }
+    this.state.version++;
+    this.notify();
+    if (isPersonal) this.#persist();
   }
 
   /** Remove a palette by ID */
@@ -90,4 +120,23 @@ export const paletteStore = new PaletteStore();
 export function usePaletteStore(): ColorPalette[] {
   const snapshot = useSyncExternalStore(paletteStore.subscribe, paletteStore.getSnapshot);
   return snapshot.customPalettes;
+}
+
+function combinePalettes(
+  transientPalettes: readonly ColorPalette[],
+  personalPalettes: readonly ColorPalette[],
+): ColorPalette[] {
+  const transientIds = new Set(transientPalettes.map(({ id }) => id).filter(Boolean));
+  return [
+    ...transientPalettes,
+    ...personalPalettes.filter((palette) => !palette.id || !transientIds.has(palette.id)),
+  ];
+}
+
+function samePaletteList(left: readonly ColorPalette[], right: readonly ColorPalette[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((palette, index) => {
+    const candidate = right[index];
+    return candidate?.id === palette.id && JSON.stringify(candidate) === JSON.stringify(palette);
+  });
 }

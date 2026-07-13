@@ -43,6 +43,42 @@ describe("collaboration ICE server provider", () => {
     await expect(provider.getCredentials()).resolves.toMatchObject({ expiresAt });
   });
 
+  it("times out a stalled credential request", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetcher = vi.fn<(...args: Parameters<typeof fetch>) => Promise<Response>>(
+        (_input, init) => {
+          return new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+              once: true,
+            });
+          });
+        },
+      );
+      const provider = new HttpIceServerProvider(
+        "/api/test-ice",
+        fetcher as unknown as typeof fetch,
+        5_000,
+      );
+      const credentials = provider.getCredentials();
+      const rejection = credentials.then(
+        () => {
+          throw new Error("Expected the credential request to time out");
+        },
+        (error: unknown) =>
+          expect(error).toEqual(
+            expect.objectContaining({ message: "Timed out while acquiring relay credentials" }),
+          ),
+      );
+
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects expired credentials and unauthenticated TURN servers", () => {
     expect(() =>
       parseIceServerCredentials({ iceServers: [TURN_SERVER], expiresAt: 999 }, 1_000),

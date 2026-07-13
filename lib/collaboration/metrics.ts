@@ -1,6 +1,18 @@
 import { Store } from "#lib/store.ts";
 
-export type CollaborationStatus = "idle" | "connecting" | "connected" | "error";
+export type CollaborationStatus =
+  | "idle"
+  | "connecting"
+  | "waiting"
+  | "connected"
+  | "reconnecting"
+  | "error";
+export type CollaborationErrorCode =
+  | "invalid-invite"
+  | "relay-unavailable"
+  | "signaling-unavailable"
+  | "session-failed"
+  | "unexpected";
 export type CollaborationTransferDirection = "send" | "receive";
 export type CollaborationConnectionPath = "unknown" | "direct" | "relay" | "mixed";
 
@@ -52,6 +64,7 @@ export interface CollaborationMetricsState {
   connectionPath: CollaborationConnectionPath;
   relayProtocol: string | null;
   lastError: string | null;
+  lastErrorCode: CollaborationErrorCode | null;
   transfers: readonly CollaborationTransferMetric[];
   version: number;
 }
@@ -81,15 +94,28 @@ export class CollaborationMetricsStore extends Store<CollaborationMetricsState> 
     this.notify();
   }
 
-  markConnected(now = performance.now()): void {
-    this.state.status = "connected";
+  markReady(now = performance.now()): void {
+    this.state.status = this.state.peerCount > 0 ? "connected" : "waiting";
     this.state.connectionDurationMs = Math.max(0, now - (this.state.connectedAt ?? now));
+    this.publish();
+  }
+
+  markReconnecting(): void {
+    if (this.state.status === "idle" || this.state.status === "error") return;
+    this.state.status = "reconnecting";
     this.publish();
   }
 
   setPeerCount(peerCount: number): void {
     if (this.state.peerCount === peerCount) return;
     this.state.peerCount = peerCount;
+    if (
+      this.state.status === "waiting" ||
+      this.state.status === "connected" ||
+      (this.state.status === "reconnecting" && peerCount === 0)
+    ) {
+      this.state.status = peerCount > 0 ? "connected" : "waiting";
+    }
     this.publish();
   }
 
@@ -118,7 +144,7 @@ export class CollaborationMetricsStore extends Store<CollaborationMetricsState> 
   }
 
   recordDocumentUpdate(direction: CollaborationTransferDirection, byteLength: number): void {
-    this.recordMessage(direction, byteLength);
+    this.#accumulateMessage(direction, byteLength);
     if (direction === "send") this.state.documentUpdatesSent++;
     else this.state.documentUpdatesReceived++;
     this.publish();
@@ -216,9 +242,16 @@ export class CollaborationMetricsStore extends Store<CollaborationMetricsState> 
     this.publish();
   }
 
-  fail(error: unknown): void {
+  fail(error: unknown, code: CollaborationErrorCode = "unexpected"): void {
     this.state.status = "error";
     this.state.lastError = error instanceof Error ? error.message : String(error);
+    this.state.lastErrorCode = code;
+    this.publish();
+  }
+
+  recordIssue(error: unknown, code: CollaborationErrorCode = "unexpected"): void {
+    this.state.lastError = error instanceof Error ? error.message : String(error);
+    this.state.lastErrorCode = code;
     this.publish();
   }
 
@@ -277,6 +310,7 @@ function createInitialState(): CollaborationMetricsState {
     connectionPath: "unknown",
     relayProtocol: null,
     lastError: null,
+    lastErrorCode: null,
     transfers: [],
     version: 0,
   };
