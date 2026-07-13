@@ -20,7 +20,6 @@ import type { ShaderCanvasEntity } from "#types/canvas.ts";
 
 const APP_ID = "voidmesh-collaboration-v2";
 const GEOMETRY_SYNC_INTERVAL_MS = 33;
-const PLAYBACK_SYNC_INTERVAL_MS = 250;
 const PING_INTERVAL_MS = 5_000;
 const MAX_ASSET_BYTES = 512 * 1024 * 1024;
 
@@ -67,7 +66,6 @@ export class CollaborationService {
   #entityRevisions = new Map<string, number>();
   #replaceRevision = 0;
   #geometryTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  #playbackTimers = new Map<string, ReturnType<typeof setTimeout>>();
   #projectionDepth = 0;
   #reconcileQueued = false;
   #reconcileRunning = false;
@@ -231,9 +229,7 @@ export class CollaborationService {
     this.#reconcileQueued = false;
     this.#reconcileAgain = false;
     for (const timer of this.#geometryTimers.values()) clearTimeout(timer);
-    for (const timer of this.#playbackTimers.values()) clearTimeout(timer);
     this.#geometryTimers.clear();
-    this.#playbackTimers.clear();
     if (this.#pingTimer) clearInterval(this.#pingTimer);
     this.#pingTimer = null;
     collaborationMetrics.reset();
@@ -289,7 +285,7 @@ export class CollaborationService {
         void this.#replaceDocument(mutation.entities).catch((error) => this.#fail(error));
         break;
       case "playback":
-        this.#schedulePlaybackSync(mutation.entityId);
+        this.#document?.setPlayback(mutation.entityId, mutation.playback);
         break;
     }
   }
@@ -389,16 +385,6 @@ export class CollaborationService {
       if (entity) this.#document?.setGeometry(entity);
     }, GEOMETRY_SYNC_INTERVAL_MS);
     this.#geometryTimers.set(entityId, timer);
-  }
-
-  #schedulePlaybackSync(entityId: string): void {
-    if (this.#playbackTimers.has(entityId)) return;
-    const timer = setTimeout(() => {
-      this.#playbackTimers.delete(entityId);
-      const entity = canvasStore.getState().entities.get(entityId);
-      if (entity?.playback) this.#document?.setPlayback(entityId, entity.playback);
-    }, PLAYBACK_SYNC_INTERVAL_MS);
-    this.#playbackTimers.set(entityId, timer);
   }
 
   #scheduleReconcile(): void {

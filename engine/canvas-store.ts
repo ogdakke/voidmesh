@@ -994,7 +994,7 @@ export class CanvasStore extends Store<CanvasState> {
 
     const video = entity.mediaSource.videoElement;
     this.#syncVideoElementPlayback(entity);
-    await video.play();
+    const playPromise = video.play();
 
     if (entity.playback) {
       entity.playback.isPlaying = true;
@@ -1003,6 +1003,19 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.entitiesDirty.add(entityId);
     this.notifyEntityChange();
     this.#emitPlaybackMutation(entity);
+
+    try {
+      await playPromise;
+    } catch (error) {
+      if (this.state.entities.get(entityId) === entity && entity.playback?.isPlaying) {
+        entity.playback.isPlaying = false;
+        entity.playback.currentTime = video.currentTime;
+        this.state.entitiesDirty.add(entityId);
+        this.notifyEntityChange();
+        this.#emitPlaybackMutation(entity);
+      }
+      throw error;
+    }
   }
 
   setVideoMuted(entityId: string, muted: boolean): void {
@@ -1103,7 +1116,6 @@ export class CanvasStore extends Store<CanvasState> {
     if (!entity || entity.mediaSource.type !== MediaType.video || !entity.playback) return;
 
     entity.playback.currentTime = currentTime;
-    this.#emitPlaybackMutation(entity);
     if (!this.state.selectedEntityIds.has(entityId)) return;
 
     const now = performance.now();
@@ -1186,7 +1198,6 @@ export class CanvasStore extends Store<CanvasState> {
     if (!entity || entity.mediaSource.type !== MediaType.gif || !entity.playback) return;
 
     entity.playback.currentTime = currentTime;
-    this.#emitPlaybackMutation(entity);
     if (!this.state.selectedEntityIds.has(entityId)) return;
 
     const now = performance.now();
