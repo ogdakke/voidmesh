@@ -29,6 +29,20 @@ describe("collaboration ICE server provider", () => {
     );
   });
 
+  it("invokes native fetch with the browser global as its receiver", async () => {
+    const expiresAt = Date.now() + 20_000;
+    const fetcher = vi.fn<
+      (this: unknown, ...arguments_: Parameters<typeof fetch>) => ReturnType<typeof fetch>
+    >(function (this: unknown, ..._arguments: Parameters<typeof fetch>): ReturnType<typeof fetch> {
+      expect(this).toBe(globalThis);
+      return Promise.resolve(Response.json({ iceServers: [TURN_SERVER], expiresAt }));
+    });
+
+    const provider = new HttpIceServerProvider("/api/test-ice", fetcher as unknown as typeof fetch);
+
+    await expect(provider.getCredentials()).resolves.toMatchObject({ expiresAt });
+  });
+
   it("rejects expired credentials and unauthenticated TURN servers", () => {
     expect(() =>
       parseIceServerCredentials({ iceServers: [TURN_SERVER], expiresAt: 999 }, 1_000),

@@ -18,7 +18,7 @@ export class HttpIceServerProvider implements IceServerProvider {
 
   constructor(endpoint = "/api/ice-servers", fetcher: typeof fetch = fetch) {
     this.#endpoint = endpoint;
-    this.#fetch = fetcher;
+    this.#fetch = fetcher.bind(globalThis);
   }
 
   async getCredentials(signal?: AbortSignal): Promise<IceServerCredentials> {
