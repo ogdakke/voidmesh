@@ -25,6 +25,9 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `gif-encoder.ts` + `gif-encoder-worker.ts` — GIF encoding via gifenc in Web Worker.
 - `download.ts` — File downloads and file picker (with iOS compatibility).
 - `storage.ts` — Browser storage abstraction (unstorage) for persisted preferences.
+- `collaboration/protocol.ts` — Invite fragments, content-addressed asset descriptors, hashing, validation, and selective gzip for compressible text payloads.
+- `collaboration/document.ts` — Yjs entity/layer document with grouped identity, geometry, appearance, asset, and playback fields.
+- `collaboration/metrics.ts` — Reactive counters and bounded transfer diagnostics for collaboration sessions.
 - Also: `config/action-layer.config.ts`, `entity-placement.ts`, `deep-merge.ts`, `shader-defaults.ts`, `gif-decoder.ts`.
 
 ## Patterns
@@ -39,6 +42,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - Resource-producing async batches must await every sibling before unwinding fulfilled results. Use `disposeMediaSource()`/`disposeEntityMedia()`; do not close a shared image bitmap directly.
 - `Undo.clear()` evicts committed stacks and any active transaction. Workspace replacement relies on this to prevent late transaction commits from targeting imported colliding IDs.
 - GIF/video decode paths close decoders, frames, snapshots, and blob-backed elements on every exception path.
+- Treat already-encoded image/video/GIF payloads as identity transfers; gzip only explicitly compressible formats and only when the result is smaller.
 
 ## Anti-Patterns
 

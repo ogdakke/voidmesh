@@ -12,6 +12,7 @@ Custom React hooks bridging engine/renderer state to components.
 - `use-clipboard-paste.ts` — Ctrl+V paste handling.
 - Also: `use-canvas-container-resize.ts`, `use-action-layer.ts`, `use-is-mobile.ts`, `use-media-query.ts`, `use-carousel-dots.ts`.
 - `use-studio-file.ts` — `.vdmsh` file open/save via serialization module. Supports file handle saving (save to same file without re-picking on Chromium).
+- `use-collaboration.ts` — Narrow `useSyncExternalStore` subscription to collaboration status, peer counts, timings, bytes, and recent transfers.
 
 ## Patterns
 

@@ -5,6 +5,7 @@ React context providers wiring subsystems together. The "glue" layer between eng
 ## Key Files
 
 - `canvas-context.tsx` (~52KB) — `CanvasProvider`. Main orchestrator. Bridges URL query state (nuqs) to canvas state, entity CRUD with undo support, renderer registration, image export (copy/save). Largest, most complex file in the codebase.
+- `collaboration-service.ts` — Trystero room lifecycle, Yjs replication, asset inventory/request/transfer, remote projection, throttling, and session measurements. Uses direct WebRTC with no TURN in the prototype.
 - `use-canvas.ts` — Commands/renderer contexts and selector hooks. `useCanvasCommands()` exposes stable mutations, `useCanvasRendererService()` exposes renderer/color-space services, and selector hooks like `useSelectedEntity()` / `useViewport()` provide fine-grained reads.
 - `export-queue-context.tsx` (~16KB) — Sequential video export queue with auto-download.
 - `video-export-context.tsx` — Export options state (format, quality, resolution).
@@ -39,6 +40,7 @@ Note: `KeybindProvider` wraps outside `App()` at the root render level.
 - Entity deletion triggers disintegration animation when `fancyDelete` is enabled, but per-entity snapshots/particle systems are capped by `config.canvas.fancyDeleteMaxBatchSize`; larger selections delete without animation. Undo cancels any created overlays.
 - `fancyDelete` preference defaults to `true` unless `prefers-reduced-motion: reduce` is active.
 - Export queue clones video elements to isolate export playback from preview playback.
+- Collaboration assets are SHA-256-addressed immutable blobs. Serialize asynchronous remote reconciliation, suppress projection echoes, and reassert renderer dirtiness on the next frame after remote media adoption.
 
 ## Anti-Patterns
 
