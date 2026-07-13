@@ -41,6 +41,7 @@ Note: `KeybindProvider` wraps outside `App()` at the root render level.
 - `fancyDelete` preference defaults to `true` unless `prefers-reduced-motion: reduce` is active.
 - Export queue clones video elements to isolate export playback from preview playback.
 - Collaboration publishes a validated ThumbHash descriptor before SHA-256 completes, materializes it as a full-geometry placeholder, then hydrates verified media in place. Serialize asynchronous remote reconciliation, suppress projection echoes, preserve the entity ID/state across hydration, dispose replaced preview resources, and reassert renderer dirtiness on the next frame.
+- Duplicate collaborative entities sharing one Blob must share preview generation, hashing, inventory/transfer, and decoded image assets. Keep the decode registry projection-batch-scoped so it does not retain closed media after ordinary canvas deletion.
 - Collaborative playback writes immediate per-entity shared-clock commands only for discrete controls. Track applied command IDs so unrelated document transactions never re-project media state, derive passive progress locally, and normalize advancing clocks by media duration for loops and late joiners.
 
 ## Anti-Patterns

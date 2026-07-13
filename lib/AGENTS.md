@@ -29,12 +29,15 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `collaboration/protocol.ts` — Invite fragments, provisional preview descriptors, content-addressed final assets, hashing, validation, and selective gzip for compressible text payloads.
 - `collaboration/document.ts` — Yjs entity/layer document with grouped identity, geometry, appearance, asset, and playback fields. Playback anchors carry unique command IDs plus media duration so readers can distinguish new intent and wrap advancing loops.
 - `collaboration/metrics.ts` — Reactive counters and bounded transfer diagnostics for collaboration sessions.
+- `collaboration/asset-hash-cache.ts` — Blob-identity promise cache that hashes a shared source once across duplicate registrations.
+- `collaboration/shared-image-asset-registry.ts` — Short-lived reference-counted lookup for sharing decoded preview/final image assets across one remote projection batch.
 - Also: `config/action-layer.config.ts`, `entity-placement.ts`, `deep-merge.ts`, `shader-defaults.ts`, `gif-decoder.ts`.
 
 ## Patterns
 
 - Pure functions where possible. No side effects, no singletons (except `undo`, `logger`, `paletteStore`, `scheduler`).
 - Image duplication shares `MediaImageAsset` objects. Retain before attaching an asset to another entity and release only when that entity's undo-owned resources are evicted.
+- Collaboration duplicates reuse work by immutable identity: one Blob preview/hash/transfer and one decoded static-image asset. Batch repeated Yjs asset-field completion in one transaction instead of publishing per entity.
 - Image assets record alpha capability from their encoded format; JPEG assets are known opaque so the renderer can omit alpha-mask intermediates.
 - Config is a frozen object. Do not mutate at runtime.
 - Hot-path bounds helpers accept caller-owned output objects; renderer culling must pass scratch `Bounds` instead of allocating one per entity.
