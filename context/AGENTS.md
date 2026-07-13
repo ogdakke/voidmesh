@@ -5,7 +5,7 @@ React context providers wiring subsystems together. The "glue" layer between eng
 ## Key Files
 
 - `canvas-context.tsx` (~52KB) — `CanvasProvider`. Main orchestrator. Bridges URL query state (nuqs) to canvas state, entity CRUD with undo support, renderer registration, image export (copy/save). Largest, most complex file in the codebase.
-- `collaboration-service.ts` — Trystero room lifecycle, Yjs replication, asset inventory/request/transfer, remote projection, throttling, and session measurements. Uses direct WebRTC with no TURN in the prototype.
+- `collaboration-service.ts` — Trystero room lifecycle, Yjs replication, asset inventory/request/transfer, peer clock synchronization, ephemeral presence, remote projection, throttling, and session measurements. Uses direct WebRTC with no TURN in the prototype.
 - `use-canvas.ts` — Commands/renderer contexts and selector hooks. `useCanvasCommands()` exposes stable mutations, `useCanvasRendererService()` exposes renderer/color-space services, and selector hooks like `useSelectedEntity()` / `useViewport()` provide fine-grained reads.
 - `export-queue-context.tsx` (~16KB) — Sequential video export queue with auto-download.
 - `video-export-context.tsx` — Export options state (format, quality, resolution).
@@ -43,7 +43,8 @@ Note: `KeybindProvider` wraps outside `App()` at the root render level.
 - Collaboration publishes a validated ThumbHash descriptor before SHA-256 completes, materializes it as a full-geometry placeholder, then hydrates verified media in place. Serialize asynchronous remote reconciliation, suppress projection echoes, preserve the entity ID/state across hydration, dispose replaced preview resources, and reassert renderer dirtiness on the next frame.
 - Duplicate collaborative entities sharing one Blob must share preview generation, hashing, inventory/transfer, and decoded image assets. Keep the decode registry projection-batch-scoped so it does not retain closed media after ordinary canvas deletion.
 - Remote reconciliation batches placeholder insertion, media hydration, removal, and scene invalidation. Never project a large document through per-entity store mutations or animation-frame callbacks.
-- Collaborative playback writes immediate per-entity shared-clock commands only for discrete controls. Track applied command IDs so unrelated document transactions never re-project media state, derive passive progress locally, and normalize advancing clocks by media duration for loops and late joiners.
+- Collaborative playback writes immediate per-entity shared-clock commands only for discrete controls. Estimate remote-minus-local monotonic clock offsets, correct bounded drift from local anchors, and never hold reconciliation open on a remote `play()` promise. Surface blocked unmuted autoplay once and keep the room healthy.
+- Presence is an ephemeral Trystero action, not Yjs state. Coalesce cursor packets to 60 Hz with at most one reliable send in flight; send identity/selection only when changed, discard stale sequences, and remove transient peers immediately on disconnect.
 
 ## Anti-Patterns
 

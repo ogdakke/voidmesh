@@ -27,7 +27,9 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `download.ts` — File downloads and file picker (with iOS compatibility).
 - `storage.ts` — Browser storage abstraction (unstorage) for persisted preferences.
 - `collaboration/protocol.ts` — Invite fragments, provisional preview descriptors, content-addressed final assets, hashing, validation, and selective gzip for compressible text payloads.
-- `collaboration/document.ts` — Yjs entity/layer document with grouped identity, geometry, appearance, asset, and playback fields. Playback anchors carry unique command IDs plus media duration so readers can distinguish new intent and wrap advancing loops.
+- `collaboration/document.ts` — Yjs entity/layer document with grouped identity, geometry, appearance, asset, and playback fields. Playback anchors carry source IDs, monotonic timestamps, unique command IDs, and media duration.
+- `collaboration/clock.ts` — Monotonic epoch timestamps, NTP-style peer offset/RTT samples, and validated clock messages.
+- `collaboration/presence.ts` — Validated partial presence messages plus deterministic shader-word names and peer colors.
 - `collaboration/metrics.ts` — Reactive counters and bounded transfer diagnostics for collaboration sessions.
 - `collaboration/asset-hash-cache.ts` — Blob-identity promise cache that hashes a shared source once across duplicate registrations.
 - `collaboration/shared-image-asset-registry.ts` — Short-lived reference-counted lookup for sharing decoded preview/final image assets across one remote projection batch.
@@ -39,6 +41,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - Image duplication shares `MediaImageAsset` objects. Retain before attaching an asset to another entity and release only when that entity's undo-owned resources are evicted.
 - Collaboration duplicates reuse work by immutable identity: one Blob preview/hash/transfer and one decoded static-image asset. Batch repeated Yjs asset-field completion in one transaction instead of publishing per entity.
 - Collaboration decode metrics time decoder work only; preview dwell measures visible placeholder latency, while reconcile measures end-to-end projection. Batch metric count/total updates so large duplicate documents do not publish once per entity.
+- High-frequency presence metrics accumulate every message but publish snapshots at a bounded cadence; do not notify React for every cursor packet.
 - Image assets record alpha capability from their encoded format; JPEG assets are known opaque so the renderer can omit alpha-mask intermediates.
 - Config is a frozen object. Do not mutate at runtime.
 - Hot-path bounds helpers accept caller-owned output objects; renderer culling must pass scratch `Bounds` instead of allocating one per entity.

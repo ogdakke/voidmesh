@@ -67,7 +67,7 @@ The opt-in real Chrome/WebGPU many-entity suite lives in `bench/`. Run it with `
 5. **GPU resources**: Always clean up buffers/textures. Use `TexturePool` for intermediates. Key shareable source/processed textures by immutable asset and effect identity; entity IDs track ownership, not duplicate resources.
 6. **Undo pattern**: Wrap state mutations in `Command.create({ execute, undo, onEvict })`, push to `undo` singleton from `lib/undo.ts`.
 7. **Overview batching**: Large homogeneous static-image scenes keep one versioned composition instance buffer. Pan-only frames update viewport state and issue one draw; entity/geometry changes rebuild, and interactive/heterogeneous scenes use normal preparation.
-8. **Collaboration**: Keep peer transport/orchestration outside `CanvasStore`. Store mutations publish a GPU-agnostic change feed; remote Yjs projections re-enter through the existing context/store mutation boundary.
+8. **Collaboration**: Keep peer transport/orchestration outside `CanvasStore`. Durable entity state uses Yjs and re-enters through the context/store mutation boundary; cursor/selection presence uses ephemeral coalesced actions and transient GPU-agnostic render state.
 
 ## Anti-Patterns
 

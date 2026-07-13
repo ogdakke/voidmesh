@@ -20,6 +20,7 @@ WebGPU rendering and export pipelines. Turns engine state into pixels.
 - `frame-encoder.ts` — Shared core for encoding ImageBitmap sequences into video blobs via Web Worker. Used by both video export and upscale pipelines. Handles WebCodecs init, mediabunny muxing, progress async generator, cancel, audio passthrough.
 - `progress-channel.ts` — Push-to-pull async generator bridge for progress reporting. Used by frame-encoder and video-exporter.
 - `export-formats.ts` — Format/quality/resolution type definitions.
+- `collaboration-presence-pass.ts` + `collaboration-presence.wgsl` — WebGPU peer overlay. Caches selection-outline geometry separately from 60 Hz cursor uniforms and rasterized name labels.
 
 ### Upscale (`upscale/`)
 
@@ -55,6 +56,7 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 4. If action layer active: blur+dim canvas, re-render targeted entities sharp on top
 5. Render grid overlay, selection rectangles, drag visuals
 6. Render disintegration particle overlays for any active "fancy delete" animations
+7. Render collaboration selections and cursor labels as the final canvas overlay
 
 ## GPU Resource Management
 
@@ -83,6 +85,7 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 - `TexturePool` retains at most 64 MiB of idle transient textures across dimensions/usages. Release scratch after its final encoded use for ordered reuse, but apply destruction limits only in `commitSubmitted()` after `queue.submit()`.
 - Image source changes require a new asset revision. Entity removal releases its source-cache ownership without destroying textures still used by sibling instances.
 - Composition keeps the former hover uniform slot reserved for layout stability, but no hover state/effect is prepared. Do not add passive alpha hit testing to feed it.
+- Collaboration presence uses one cached vertex-buffer draw for colored selection outlines plus small per-peer cursor-label draws. Cursor-only updates must not rebuild outlines, source textures, or processed effects.
 
 ## Shader Uniform Layout
 

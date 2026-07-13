@@ -27,6 +27,8 @@ Static image entities reference a shared `MediaImageAsset` through `mediaSource.
 
 Every entity may retain a `MediaPreview` (`thumbhash-v1`) for workspace persistence and provisional collaboration rendering. The preview represents the image or first decoded frame; it is metadata, not the authoritative media source.
 
+`CollaborationPeerIdentity` and `CollaborationPeerPresence` describe transient peer render data. They are not entity fields and are never serialized into workspaces or Yjs.
+
 ## Anti-Patterns
 
 - Do not put runtime logic here beyond type guards and `createEnum()`. Utility functions go in `lib/`.

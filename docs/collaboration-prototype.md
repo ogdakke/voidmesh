@@ -10,8 +10,9 @@ The prototype uses a password-bearing invite fragment, Trystero's Nostr strategy
 - Entities publish a bounded ThumbHash first-frame preview before content hashing begins. Peers create a full-geometry placeholder immediately and hydrate its media in place after verified Blob transfer.
 - Workspace v7 manifests cache ThumbHashes, so an atomically restored heavy workspace can publish all previews without re-reading decoded pixels.
 - Duplicate entities sharing one Blob reuse a single preview, hash operation, inventory entry, transferred payload, and decoded static-image asset. Final asset descriptors publish in one Yjs transaction so duplicate-heavy workspace replacement does not reconcile once per entity.
-- Video/GIF play, pause, seek, loop, rate, mute, and volume publish immediate per-entity shared-clock commands. Passive frame progress stays local; command IDs prevent unrelated document changes from re-seeking other media, and duration-aware clocks wrap loops for late joiners.
-- Geometry updates coalesce to roughly 30 Hz. Remote projections are serialized and suppress mutation echoes.
+- Video/GIF play, pause, seek, loop, rate, mute, and volume publish immediate per-entity shared-clock commands. Peers estimate monotonic clock offsets with NTP-style samples, correct drift without republishing passive progress, wrap duration-aware loops for late joiners, and surface browser-blocked unmuted autoplay without failing the room.
+- Ephemeral presence assigns each peer a stable shader-themed name and color, then sends canvas cursors at up to 60 Hz and selections only when changed. A dedicated WebGPU overlay renders cached color-coded entity/group outlines plus cursor name labels without dirtying entity textures or shader outputs.
+- Geometry updates coalesce to roughly 60 Hz. Remote projections are serialized and suppress mutation echoes.
 - Diagnostics measure connection setup, peer count, messages/bytes, Yjs updates/apply/reconcile time, preview encode/decode/dwell, hashing, compression, media decoding, RTT, transfers, throughput, and compression ratios.
 
 ## TODO
@@ -19,8 +20,7 @@ The prototype uses a password-bearing invite fragment, Trystero's Nostr strategy
 - Add optional TURN configuration and expose direct-versus-relayed connection diagnostics.
 - Replace whole-payload buffering with chunked transfer, backpressure, resumable requests, incremental hashing, and multi-peer source selection for large videos.
 - Mark provisional entities explicitly in the UI and disable media-specific operations that cannot be valid until the source Blob is hydrated.
-- Synchronize playback against a shared monotonic clock to compensate for transport latency and drift; handle blocked unmuted autoplay explicitly.
-- Add ephemeral presence: cursors, selections, user labels, drag previews, and soft edit locks.
+- Extend ephemeral presence with drag previews and soft edit locks.
 - Merge shader parameters at leaf paths instead of treating the appearance group as one last-writer-wins value.
 - Replace `undo.clear()` on remote projection with origin-aware collaborative undo using `Y.UndoManager`.
 - Add room membership controls, identity, invite revocation, and abuse limits. The current URL secret grants full room access.

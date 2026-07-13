@@ -17,9 +17,9 @@ Canvas state management and input processing. This is the "model + controller" l
 
 ## State Architecture
 
-- `CanvasState` uses version counters (`version`, `entityVersion`, `geometryVersion`, `viewportVersion`, `selectionVersion`, `playbackVersion`, `dragVersion`) for selective cache invalidation and React subscriptions. Imperative moves increment `geometryVersion` without notifying React.
+- `CanvasState` uses version counters (`version`, `entityVersion`, `geometryVersion`, `viewportVersion`, `selectionVersion`, `playbackVersion`, `dragVersion`, `presenceVersion`, `presenceSelectionVersion`) for selective cache invalidation and React subscriptions. Imperative moves and ephemeral presence stay off React notifications.
 - Snapshot types (`ViewportSnapshot`, `SelectionSnapshot`, `PlaybackSnapshot`, `DragSnapshot`, `ActionLayerSnapshot`) isolate subscription scopes — sidebar components don't re-render on viewport pan.
-- Dirty flags (`viewportDirty`, `entitiesDirty`, `selectionDirty`) tell the renderer what needs redrawing.
+- Dirty flags (`viewportDirty`, `entitiesDirty`, `selectionDirty`, `presenceDirty`) tell the renderer what needs redrawing.
 - `RenderState` is a stable mutable frame view consumed synchronously by `InfiniteCanvasRenderer.render()`; it exposes `entityVersion`/`geometryVersion` for renderer caches, and its sorted entity array is rebuilt only when `entityVersion` changes.
 - `CanvasStore` owns the incremental `EntitySpatialIndex` shared by renderer visibility, point hit testing, and drag selection. Every geometry mutation must upsert or remove its entity from the index.
 - `CanvasStore.hasRenderChanges()` checks dirty state without materializing or mutating render state.
@@ -54,6 +54,7 @@ Canvas state management and input processing. This is the "model + controller" l
 - Entity membership, reference, effect, or playback-classification changes must increment `entityVersion`; selection and UI-only changes must not.
 - Hot-path selection logs contain counts plus bounded first/last IDs. Never join or serialize an unbounded selection into a log message.
 - Passive pointer movement does not perform entity or alpha hit testing. Keep hit testing tied to explicit click/touch/drag interactions until a bounded hover effect exists.
+- Local cursor world coordinates publish from RAF-coalesced input; remote peer cursors/selections live in transient store state with independent cursor/selection versions. Never dirty entity textures or notify React for presence motion.
 
 ## Anti-Patterns
 
