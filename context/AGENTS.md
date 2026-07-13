@@ -41,6 +41,7 @@ Note: `KeybindProvider` wraps outside `App()` at the root render level.
 - `fancyDelete` preference defaults to `true` unless `prefers-reduced-motion: reduce` is active.
 - Export queue clones video elements to isolate export playback from preview playback.
 - Collaboration publishes a validated ThumbHash descriptor before SHA-256 completes, materializes it as a full-geometry placeholder, then hydrates verified media in place. Serialize asynchronous remote reconciliation, suppress projection echoes, preserve the entity ID/state across hydration, dispose replaced preview resources, and reassert renderer dirtiness on the next frame.
+- Collaborative playback writes immediate shared-clock anchors only for discrete controls. Derive passive progress locally from the latest anchor; never throttle and republish every peer's per-frame progress or the peers become competing clock writers.
 
 ## Anti-Patterns
 
