@@ -617,6 +617,19 @@ export class InfiniteCanvasRenderer {
       });
     }
 
+    // Presence is part of the canvas scene so lensing and WLUR transform it
+    // together with entities instead of leaving it as an unaffected UI overlay.
+    this.#collaborationPresencePass?.encode({
+      encoder,
+      targetView: sceneTargetView,
+      presences: state.remotePeerPresences,
+      entities,
+      presenceSelectionVersion: state.presenceSelectionVersion,
+      entityVersion: state.entityVersion,
+      geometryVersion: state.geometryVersion,
+      viewport,
+    });
+
     const lensApplied = viewportLensTarget
       ? this.#viewportLensPass!.encode(encoder, targetView, width, height)
       : false;
@@ -640,17 +653,6 @@ export class InfiniteCanvasRenderer {
           state.dragSelectBounds !== null,
       });
     }
-
-    this.#collaborationPresencePass?.encode({
-      encoder,
-      targetView,
-      presences: state.remotePeerPresences,
-      entities,
-      presenceSelectionVersion: state.presenceSelectionVersion,
-      entityVersion: state.entityVersion,
-      geometryVersion: state.geometryVersion,
-      viewport,
-    });
 
     // Single submission for all passes
     this.#device.queue.submit([encoder.finish()]);
