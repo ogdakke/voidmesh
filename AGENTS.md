@@ -94,6 +94,7 @@ WebGPU compute-based 2x upscaling via Anime4K CNN models. `renderer/upscale/` co
 ## Vite Plugins (plugins/)
 
 - `vite-plugin-image.ts` — `?img` import suffix. Generates responsive `<picture>` data: multi-width srcsets in avif/webp, thumbhash blur-up placeholders. Uses `sharp` for resizing.
+- `vite-plugin-turn-credentials.ts` — Development-only `/api/ice-servers` middleware that reuses the production TURN credential handler without exposing server secrets to Vite client modules.
 - `vite-plugin-wgsl-minify.ts` — Minifies `.wgsl?raw` imports in production builds using `miniray`.
 
 ## Media Assets

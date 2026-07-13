@@ -49,6 +49,14 @@ export function createCloudflareTurnProvider({
   };
 }
 
+/**
+ * @param {{
+ *   provider: TurnCredentialProvider;
+ *   ttlSeconds?: number;
+ *   now?: () => number;
+ * }} options
+ * @returns {(request: Request) => Promise<Response>}
+ */
 export function createIceServerHandler({
   provider,
   ttlSeconds = CREDENTIAL_TTL_SECONDS,

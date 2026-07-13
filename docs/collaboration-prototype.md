@@ -19,7 +19,7 @@ The prototype uses a password-bearing invite fragment, Trystero's Nostr strategy
 ## TURN configuration
 
 - Set `CF_TURN_ID` and `CF_TURN_API_TOKEN` in every Vercel environment that supports collaboration. Both values are server-only.
-- Use `vercel dev` when testing multiplayer locally; the plain Vite development server does not host `/api/ice-servers`.
+- The Vite development server mounts the same credential handler at `/api/ice-servers`, so `bun run dev` supports local multiplayer with the two variables in `.env`/`.env.local`.
 - The credential endpoint accepts same-origin `POST` requests, disables caching, filters Cloudflare's port 53 URLs for browser compatibility, and never returns the Cloudflare API token.
 
 ## TODO
