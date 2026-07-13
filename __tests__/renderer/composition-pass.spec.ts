@@ -95,6 +95,44 @@ describe("CompositionPass instancing", () => {
     releaseImageEntity(final);
   });
 
+  test("interleaves a requested overlay before later z-index entities", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const first = createTestEntity({ id: "overlay-first" });
+    const outlined = cloneImageEntity(first, "overlay-outlined", { x: 10, y: 0 });
+    const covering = cloneImageEntity(first, "overlay-covering", { x: 20, y: 0 });
+    const texture = createTexture();
+    const items = [
+      prepare(pass, first, texture),
+      prepare(pass, outlined, texture),
+      prepare(pass, covering, texture),
+    ];
+    const renderPass = createRenderPass();
+    const overlayPipeline = { kind: "overlay" } as unknown as GPURenderPipeline;
+    const afterItem = vi.fn<(item: CompositionDrawItem) => void>(() => {
+      renderPass.setPipeline(overlayPipeline);
+    });
+
+    pass.drawItems(renderPass, items, afterItem, (item) => item.entity.id === outlined.id);
+
+    expect(renderPass.draw.mock.calls).toEqual([
+      [6, 1, 0, 0],
+      [6, 1, 0, 1],
+      [6, 1, 0, 2],
+    ]);
+    expect(afterItem).toHaveBeenCalledOnce();
+    expect(afterItem).toHaveBeenCalledWith(items[1]);
+    expect(renderPass.setPipeline.mock.calls[1]?.[0]).toBe(overlayPipeline);
+    expect(renderPass.setPipeline.mock.calls[2]?.[0]).toBe(
+      renderPass.setPipeline.mock.calls[0]?.[0],
+    );
+
+    pass.destroy();
+    releaseImageEntity(first);
+    releaseImageEntity(outlined);
+    releaseImageEntity(covering);
+  });
+
   test("appends multiple render phases into disjoint instance-buffer ranges", () => {
     const { device } = createDevice();
     const pass = createPass(device);

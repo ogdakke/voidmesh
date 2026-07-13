@@ -32,6 +32,7 @@ interface PrepareEntityDrawItemsOptions {
   dragVisual: DragVisualRenderState;
   dragSelectActive: boolean;
   hasCanvasCallouts: boolean;
+  hasCollaborationSelections: boolean;
   debugMode: boolean;
 }
 
@@ -260,6 +261,7 @@ export class EntityDrawItemPreparer {
       dragVisual,
       dragSelectActive,
       hasCanvasCallouts,
+      hasCollaborationSelections,
       debugMode,
     } = options;
     if (
@@ -270,6 +272,7 @@ export class EntityDrawItemPreparer {
       dragVisual.active ||
       dragSelectActive ||
       hasCanvasCallouts ||
+      hasCollaborationSelections ||
       debugMode
     ) {
       return null;

@@ -106,6 +106,10 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     ["drag visual", (options: PrepareOptions) => (options.dragVisual.active = true)],
     ["drag selection", (options: PrepareOptions) => (options.dragSelectActive = true)],
     ["canvas callouts", (options: PrepareOptions) => (options.hasCanvasCallouts = true)],
+    [
+      "collaboration selection",
+      (options: PrepareOptions) => (options.hasCollaborationSelections = true),
+    ],
     ["debug mode", (options: PrepareOptions) => (options.debugMode = true)],
   ])("rejects batching during %s", (_label, configure) => {
     const scene = createScene();
@@ -207,6 +211,7 @@ function createHarness(
     },
     dragSelectActive: false,
     hasCanvasCallouts: false,
+    hasCollaborationSelections: false,
     debugMode: false,
   };
   return { preparer, options, spatialIndex, compositionPass, texturePipeline, texture };

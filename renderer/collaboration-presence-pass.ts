@@ -30,6 +30,16 @@ interface LabelEntry {
   identityKey: string;
 }
 
+interface SelectionDrawRange {
+  firstVertex: number;
+  vertexCount: number;
+}
+
+interface GroupOutline {
+  entities: ShaderCanvasEntity[];
+  color: RGBA;
+}
+
 export class CollaborationPresencePass {
   readonly #device: GPUDevice;
   readonly #format: GPUTextureFormat;
@@ -44,6 +54,7 @@ export class CollaborationPresencePass {
   #selectionBuffer: GPUBuffer | null = null;
   #selectionBufferBytes = 0;
   #selectionVertexCount = 0;
+  readonly #selectionRanges = new Map<string, SelectionDrawRange>();
   #selectionPresenceVersion = -1;
   #selectionEntityVersion = -1;
   #selectionGeometryVersion = -1;
@@ -61,9 +72,7 @@ export class CollaborationPresencePass {
     this.#initialize();
   }
 
-  encode({
-    encoder,
-    targetView,
+  prepareSelections({
     presences,
     entities,
     presenceSelectionVersion,
@@ -71,8 +80,6 @@ export class CollaborationPresencePass {
     geometryVersion,
     viewport,
   }: {
-    encoder: GPUCommandEncoder;
-    targetView: GPUTextureView;
     presences: readonly CollaborationPeerPresence[];
     entities: readonly ShaderCanvasEntity[];
     presenceSelectionVersion: number;
@@ -80,10 +87,7 @@ export class CollaborationPresencePass {
     geometryVersion: number;
     viewport: Viewport;
   }): void {
-    if (presences.length === 0 || !this.#shapePipeline || !this.#labelPipeline) {
-      this.#pruneLabels(new Set());
-      return;
-    }
+    if (!this.#shapePipeline) return;
     const dpr = devicePixelRatio || 1;
     if (
       this.#selectionPresenceVersion !== presenceSelectionVersion ||
@@ -96,6 +100,7 @@ export class CollaborationPresencePass {
         this.#rebuildSelectionGeometry(presences, entities, viewport);
       } else {
         this.#selectionVertexCount = 0;
+        this.#selectionRanges.clear();
       }
       this.#selectionPresenceVersion = presenceSelectionVersion;
       this.#selectionEntityVersion = entityVersion;
@@ -103,20 +108,46 @@ export class CollaborationPresencePass {
       this.#selectionZoom = viewport.zoom;
       this.#selectionDpr = dpr;
     }
+  }
 
+  get hasSelections(): boolean {
+    return this.#selectionVertexCount > 0;
+  }
+
+  hasSelection(entityId: string): boolean {
+    return this.#selectionRanges.has(entityId);
+  }
+
+  drawSelection(pass: GPURenderPassEncoder, entityId: string): void {
+    const range = this.#selectionRanges.get(entityId);
+    if (!range || !this.#selectionBuffer || !this.#shapePipeline || !this.#shapeBindGroup) return;
+    pass.setPipeline(this.#shapePipeline);
+    pass.setBindGroup(0, this.#shapeBindGroup);
+    pass.setVertexBuffer(0, this.#selectionBuffer);
+    pass.draw(range.vertexCount, 1, range.firstVertex);
+  }
+
+  encodeCursors({
+    encoder,
+    targetView,
+    presences,
+    viewport,
+  }: {
+    encoder: GPUCommandEncoder;
+    targetView: GPUTextureView;
+    presences: readonly CollaborationPeerPresence[];
+    viewport: Viewport;
+  }): void {
+    if (!this.#labelPipeline) return;
     const hasVisibleCursor = presences.some((presence) => presence.cursor !== null);
-    if (this.#selectionVertexCount === 0 && !hasVisibleCursor) return;
+    if (!hasVisibleCursor) {
+      this.#pruneLabels(new Set());
+      return;
+    }
     const pass = encoder.beginRenderPass({
-      label: "Collaboration presence pass",
+      label: "Collaboration cursor pass",
       colorAttachments: [{ view: targetView, loadOp: "load", storeOp: "store" }],
     });
-    if (this.#selectionVertexCount > 0 && this.#selectionBuffer) {
-      pass.setPipeline(this.#shapePipeline);
-      pass.setBindGroup(0, this.#shapeBindGroup!);
-      pass.setVertexBuffer(0, this.#selectionBuffer);
-      pass.draw(this.#selectionVertexCount);
-    }
-
     const livePeerIds = new Set<string>();
     for (const presence of presences) {
       if (!presence.cursor) continue;
@@ -130,6 +161,7 @@ export class CollaborationPresencePass {
   destroy(): void {
     this.#selectionBuffer?.destroy();
     this.#selectionBuffer = null;
+    this.#selectionRanges.clear();
     for (const entry of this.#labels.values()) {
       entry.texture.destroy();
       entry.uniformBuffer.destroy();
@@ -227,18 +259,42 @@ export class CollaborationPresencePass {
     viewport: Viewport,
   ): void {
     const entitiesById = new Map(entities.map((entity) => [entity.id, entity]));
-    const vertices: number[] = [];
-    const borderWidth = (2 * (devicePixelRatio || 1)) / viewport.zoom;
+    const colorsByEntity = new Map<string, RGBA[]>();
+    const groupsByAnchor = new Map<string, GroupOutline[]>();
     for (const presence of presences) {
       const selected: ShaderCanvasEntity[] = [];
       for (const entityId of presence.selectedEntityIds) {
         const entity = entitiesById.get(entityId);
         if (!entity) continue;
         selected.push(entity);
-        appendRotatedOutline(vertices, entity, borderWidth, presence.color);
+        let colors = colorsByEntity.get(entityId);
+        if (!colors) colorsByEntity.set(entityId, (colors = []));
+        colors.push(presence.color);
       }
       if (selected.length > 1) {
-        appendGroupOutline(vertices, selected, borderWidth * 0.65, presence.color);
+        const anchor = selected.reduce((highest, entity) =>
+          entity.zIndex > highest.zIndex ? entity : highest,
+        );
+        let groups = groupsByAnchor.get(anchor.id);
+        if (!groups) groupsByAnchor.set(anchor.id, (groups = []));
+        groups.push({ entities: selected, color: presence.color });
+      }
+    }
+
+    const vertices: number[] = [];
+    const borderWidth = (2 * (devicePixelRatio || 1)) / viewport.zoom;
+    this.#selectionRanges.clear();
+    for (const entity of entities) {
+      const firstVertex = vertices.length / VERTEX_FLOATS;
+      for (const color of colorsByEntity.get(entity.id) ?? []) {
+        appendRotatedOutline(vertices, entity, borderWidth, color);
+      }
+      for (const group of groupsByAnchor.get(entity.id) ?? []) {
+        appendGroupOutline(vertices, group.entities, borderWidth * 0.65, group.color);
+      }
+      const vertexCount = vertices.length / VERTEX_FLOATS - firstVertex;
+      if (vertexCount > 0) {
+        this.#selectionRanges.set(entity.id, { firstVertex, vertexCount });
       }
     }
     const data = new Float32Array(vertices);

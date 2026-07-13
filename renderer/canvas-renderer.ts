@@ -368,12 +368,24 @@ export class InfiniteCanvasRenderer {
     selectedEntityCount: number,
   ): void {
     const labelPass = selectedEntityCount === 1 ? this.#entityLabelPass : null;
+    const presencePass = this.#collaborationPresencePass;
+    const hasRemoteSelections = presencePass?.hasSelections ?? false;
+    if (!labelPass && !hasRemoteSelections) {
+      this.#compositionPass!.drawItems(pass, items);
+      return;
+    }
     this.#compositionPass!.drawItems(
       pass,
       items,
-      labelPass
-        ? (item) => labelPass.drawLabel(pass, item.entity, item.offsetX, item.offsetY)
-        : undefined,
+      (item) => {
+        if (item.isSelected) {
+          labelPass?.drawLabel(pass, item.entity, item.offsetX, item.offsetY);
+        }
+        presencePass?.drawSelection(pass, item.entity.id);
+      },
+      (item) =>
+        (item.isSelected && labelPass !== null) ||
+        (hasRemoteSelections && presencePass!.hasSelection(item.entity.id)),
     );
   }
 
@@ -455,6 +467,15 @@ export class InfiniteCanvasRenderer {
       label: "Canvas render encoder",
     });
 
+    this.#collaborationPresencePass?.prepareSelections({
+      presences: state.remotePeerPresences,
+      entities,
+      presenceSelectionVersion: state.presenceSelectionVersion,
+      entityVersion: state.entityVersion,
+      geometryVersion: state.geometryVersion,
+      viewport,
+    });
+
     // Pre-process entities: render to textures and prepare bind groups
     // Uses caching to avoid per-frame allocations
     const preparedEntityDrawItems = this.#entityDrawItemPreparer.prepare({
@@ -472,6 +493,7 @@ export class InfiniteCanvasRenderer {
       dragVisual: state.dragVisual,
       dragSelectActive: state.dragSelectBounds !== null,
       hasCanvasCallouts: state.canvasCallouts.length > 0,
+      hasCollaborationSelections: this.#collaborationPresencePass?.hasSelections ?? false,
       debugMode,
     });
     const { entityDrawItems, actionLayerDrawItems, fullSceneBatch } = preparedEntityDrawItems;
@@ -617,16 +639,12 @@ export class InfiniteCanvasRenderer {
       });
     }
 
-    // Presence is part of the canvas scene so lensing and WLUR transform it
-    // together with entities instead of leaving it as an unaffected UI overlay.
-    this.#collaborationPresencePass?.encode({
+    // Cursor labels stay above the scene, while remote selection outlines are
+    // interleaved with entity composition so later z-index entities occlude them.
+    this.#collaborationPresencePass?.encodeCursors({
       encoder,
       targetView: sceneTargetView,
       presences: state.remotePeerPresences,
-      entities,
-      presenceSelectionVersion: state.presenceSelectionVersion,
-      entityVersion: state.entityVersion,
-      geometryVersion: state.geometryVersion,
       viewport,
     });
 
