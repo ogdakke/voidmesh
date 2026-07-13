@@ -86,9 +86,7 @@ export function filterBrowserIceServers(value) {
     const record = /** @type {Record<string, unknown>} */ (server);
     const sourceUrls = typeof record.urls === "string" ? [record.urls] : record.urls;
     if (!Array.isArray(sourceUrls)) return [];
-    const urls = sourceUrls.filter(
-      (url) => typeof url === "string" && !/:53(?:\?|$)/.test(url),
-    );
+    const urls = sourceUrls.filter((url) => typeof url === "string" && !/:53(?:\?|$)/.test(url));
     if (urls.length === 0) return [];
     return [
       {
