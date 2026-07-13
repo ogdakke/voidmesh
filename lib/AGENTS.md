@@ -38,6 +38,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - Pure functions where possible. No side effects, no singletons (except `undo`, `logger`, `paletteStore`, `scheduler`).
 - Image duplication shares `MediaImageAsset` objects. Retain before attaching an asset to another entity and release only when that entity's undo-owned resources are evicted.
 - Collaboration duplicates reuse work by immutable identity: one Blob preview/hash/transfer and one decoded static-image asset. Batch repeated Yjs asset-field completion in one transaction instead of publishing per entity.
+- Collaboration decode metrics time decoder work only; preview dwell measures visible placeholder latency, while reconcile measures end-to-end projection. Batch metric count/total updates so large duplicate documents do not publish once per entity.
 - Image assets record alpha capability from their encoded format; JPEG assets are known opaque so the renderer can omit alpha-mask intermediates.
 - Config is a frozen object. Do not mutate at runtime.
 - Hot-path bounds helpers accept caller-owned output objects; renderer culling must pass scratch `Bounds` instead of allocating one per entity.
