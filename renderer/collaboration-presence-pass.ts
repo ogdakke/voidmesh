@@ -282,7 +282,10 @@ export class CollaborationPresencePass {
       label: `Collaboration cursor ${presence.peerId}`,
       size: [size.width, size.height],
       format: "rgba8unorm",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+      usage:
+        GPUTextureUsage.TEXTURE_BINDING |
+        GPUTextureUsage.COPY_DST |
+        GPUTextureUsage.RENDER_ATTACHMENT,
     });
     const uniformBuffer = this.#device.createBuffer({
       label: `Collaboration cursor ${presence.peerId} uniforms`,
