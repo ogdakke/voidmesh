@@ -2,7 +2,7 @@ import { useCanvasCommands, useSelectedEntities } from "#context/use-canvas.ts";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
 import { useParamValue } from "./use-param-value.ts";
 
-const SKIP_UNDO = { skipUndo: true } as const;
+const LIVE_TIME_SYNC = { skipUndo: true, syncShaderPlayback: true } as const;
 const TIME_EPSILON = 0.0001;
 
 function getTimeSourceEntity(entities: ShaderCanvasEntity[]): ShaderCanvasEntity | null {
@@ -16,8 +16,12 @@ function areTimesEqual(a: number, b: number): boolean {
 }
 
 export function useTimeControl() {
-  const { updateSelectedEntityParams, setSelectedEntityTimeAutoPlay, syncSelectedEntityTimes } =
-    useCanvasCommands();
+  const {
+    updateSelectedEntityParams,
+    setSelectedEntityTimeAutoPlay,
+    syncSelectedEntityTimes,
+    commitSelectedEntityTimes,
+  } = useCanvasCommands();
   const selectedEntities = useSelectedEntities();
   const timeParam = useParamValue("time", null);
 
@@ -41,7 +45,7 @@ export function useTimeControl() {
 
   const handleTimeChange = (time: number) => {
     if (selectedEntities.length === 0) return;
-    updateSelectedEntityParams({ time }, SKIP_UNDO);
+    updateSelectedEntityParams({ time }, LIVE_TIME_SYNC);
   };
 
   const handleTimeInteractionStart = () => {
@@ -58,5 +62,6 @@ export function useTimeControl() {
     handleToggle,
     handleTimeChange,
     handleTimeInteractionStart,
+    handleTimeCommit: commitSelectedEntityTimes,
   };
 }

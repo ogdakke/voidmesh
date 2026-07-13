@@ -93,6 +93,8 @@ export interface CanvasState {
 export interface CanvasEntityUpdate {
   id: string;
   updates: Partial<ShaderCanvasEntity>;
+  /** Override shader-clock publication; otherwise inferred from time/play-state changes. */
+  syncShaderPlayback?: boolean;
 }
 
 export type CanvasEntityMutation =
@@ -101,7 +103,8 @@ export type CanvasEntityMutation =
   | { type: "move"; entityId: string; position: Point }
   | { type: "remove"; entityIds: readonly string[] }
   | { type: "replace"; entities: readonly ShaderCanvasEntity[] }
-  | { type: "playback"; entityId: string; playback: PlaybackState };
+  | { type: "playback"; entityId: string; playback: PlaybackState }
+  | { type: "shaderPlayback"; entityIds: readonly string[] };
 
 export type CanvasEntityMutationListener = (mutation: CanvasEntityMutation) => void;
 
@@ -592,14 +595,29 @@ export class CanvasStore extends Store<CanvasState> {
     this.updateEntities([{ id, updates }]);
   }
 
+  commitShaderPlayback(entityIds: readonly string[]): void {
+    if (entityIds.length > 0) this.#emitEntityMutation({ type: "shaderPlayback", entityIds });
+  }
+
   /** Apply a large entity mutation set with one version bump and subscriber notification. */
   updateEntities(batch: readonly CanvasEntityUpdate[]): number {
     if (batch.length === 0) return 0;
 
     let updatedCount = 0;
-    for (const { id, updates } of batch) {
+    let mutationBatch: CanvasEntityUpdate[] | null = null;
+    for (let index = 0; index < batch.length; index++) {
+      const update = batch[index]!;
+      const { id, updates } = update;
       const entity = this.state.entities.get(id);
       if (!entity) continue;
+      const syncShaderPlayback =
+        update.syncShaderPlayback ?? hasShaderPlaybackUpdate(entity, updates);
+      if (update.syncShaderPlayback === undefined && syncShaderPlayback) {
+        mutationBatch ??= batch.slice(0, index) as CanvasEntityUpdate[];
+        mutationBatch.push({ ...update, syncShaderPlayback });
+      } else if (mutationBatch) {
+        mutationBatch.push(update);
+      }
       const updatedEntity = { ...entity, ...updates } as ShaderCanvasEntity;
       this.state.entities.set(id, updatedEntity);
       if (hasSpatialEntityUpdates(updates)) {
@@ -614,7 +632,7 @@ export class CanvasStore extends Store<CanvasState> {
     if (updatedCount === 0) return 0;
     this.notifyEntityChange();
     this.#logger.debug("Updated entity batch", { entityCount: updatedCount });
-    this.#emitEntityMutation({ type: "update", batch });
+    this.#emitEntityMutation({ type: "update", batch: mutationBatch ?? batch });
     return updatedCount;
   }
 
@@ -1616,6 +1634,18 @@ function hasSpatialEntityUpdates(updates: Partial<ShaderCanvasEntity>): boolean 
     updates.size !== undefined ||
     updates.rotation !== undefined ||
     updates.zIndex !== undefined
+  );
+}
+
+function hasShaderPlaybackUpdate(
+  entity: ShaderCanvasEntity,
+  updates: Partial<ShaderCanvasEntity>,
+): boolean {
+  const params = updates.shaderParams;
+  if (!params) return false;
+  return (
+    (params.time ?? 0) !== (entity.shaderParams.time ?? 0) ||
+    (params.timeAutoPlay !== false) !== (entity.shaderParams.timeAutoPlay !== false)
   );
 }
 

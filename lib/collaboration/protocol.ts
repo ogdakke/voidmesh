@@ -9,7 +9,7 @@ import type {
 } from "#types/canvas.ts";
 import { isMediaPreview } from "#lib/thumbhash.ts";
 
-export const COLLABORATION_PROTOCOL_VERSION = 4;
+export const COLLABORATION_PROTOCOL_VERSION = 5;
 export const COLLABORATION_INVITE_PREFIX = "collab";
 
 export interface CollaborationInvite {
@@ -44,6 +44,8 @@ export interface CollaborativeEntity {
   playbackDuration?: number;
   playbackCommandId?: string;
   playbackSourceId?: string;
+  shaderPlaybackCommandId?: string;
+  shaderPlaybackSourceId?: string;
   asset: CollaborativeAssetDescriptor;
 }
 

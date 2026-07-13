@@ -7,6 +7,7 @@ Custom React hooks bridging engine/renderer state to components.
 - `use-canvas-renderer.ts` — `InfiniteCanvasRenderer` lifecycle (init, cleanup, error handling). Polls for canvas element changes.
 - `use-entity-cycling.ts` — Arrow-key entity cycling and focus management.
 - `use-media-controls.ts` (~11KB) — Video/GIF playback controls.
+- `use-time-control.ts` — Animated-shader play/pause and live scrub commands; scrubs publish coalesced clock anchors and flush their final value.
 - `use-image-input.ts` — File input for image/video/GIF upload. Validates types, loads media, creates entities.
 - `use-param-value.ts` — `useParamValue<T>(path, default)`. Reads shader param for selected entities. Returns `{ value, isSupported, isMixed, update }`. Used by all knob components.
 - `use-clipboard-paste.ts` — Ctrl+V paste handling.

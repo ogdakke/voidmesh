@@ -279,6 +279,30 @@ describe("canvasStore video audio controls", () => {
     expect(entity.playback?.isPlaying).toBe(true);
     expect(canvasStore.getSelectedEntity()?.id).toBe(selectedBefore);
   });
+
+  test("marks shader time changes for clock sync without marking unrelated params", () => {
+    const entity = createTestEntity();
+    const listener = vi.fn<CanvasEntityMutationListener>();
+    canvasStore.addEntity(entity);
+    const unsubscribe = canvasStore.subscribeEntityMutations(listener);
+
+    canvasStore.updateEntity(entity.id, {
+      shaderParams: { ...entity.shaderParams, intensity: 2 },
+    });
+    canvasStore.updateEntity(entity.id, {
+      shaderParams: { ...entity.shaderParams, time: (entity.shaderParams.time ?? 0) + 1 },
+    });
+
+    const unrelatedMutation = listener.mock.calls[0]?.[0];
+    expect(unrelatedMutation?.type).toBe("update");
+    if (unrelatedMutation?.type !== "update") throw new Error("Expected update mutation");
+    expect(unrelatedMutation.batch[0]?.syncShaderPlayback).toBeUndefined();
+    expect(listener.mock.calls[1]?.[0]).toMatchObject({
+      type: "update",
+      batch: [{ syncShaderPlayback: true }],
+    });
+    unsubscribe();
+  });
 });
 
 describe("canvasStore.updatePlaybackTime", () => {

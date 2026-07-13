@@ -35,6 +35,7 @@ export function DesktopTimeSlider() {
             entityTime={timeControl.entityTime}
             onInteractionStart={timeControl.handleTimeInteractionStart}
             onValueChange={timeControl.handleTimeChange}
+            onValueCommit={timeControl.handleTimeCommit}
           />
         </div>
       </div>

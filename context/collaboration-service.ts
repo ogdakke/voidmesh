@@ -44,8 +44,9 @@ import {
 import { AssetRequestPool } from "#lib/collaboration/asset-request-pool.ts";
 import { AssetTransferLimiter } from "#lib/collaboration/asset-transfer-limiter.ts";
 
-const APP_ID = "voidmesh-collaboration-v3";
+const APP_ID = "voidmesh-collaboration-v4";
 const GEOMETRY_SYNC_INTERVAL_MS = 16;
+const SHADER_PLAYBACK_SYNC_INTERVAL_MS = 16;
 const PING_INTERVAL_MS = 5_000;
 const PLAYBACK_DRIFT_INTERVAL_MS = 1_000;
 const PRESENCE_SYNC_INTERVAL_MS = 16;
@@ -72,6 +73,7 @@ interface CollaborationCanvasAdapter {
     signal: AbortSignal,
   ): Promise<CollaborationProjectionTiming>;
   applyRemotePlayback(entity: CollaborativeEntity): Promise<void>;
+  applyRemoteShaderPlayback(entityId: string, time: number, playing: boolean): void;
   updateRemotePresence(presence: CollaborationPeerPresence): void;
   removeRemotePresence(peerId: string): void;
   clearRemotePresence(): void;
@@ -98,6 +100,11 @@ interface CollaborationRoom {
 }
 
 interface RemotePlaybackAnchor {
+  entity: CollaborativeEntity;
+  anchoredAt: number;
+}
+
+interface RemoteShaderPlaybackAnchor {
   entity: CollaborativeEntity;
   anchoredAt: number;
 }
@@ -158,6 +165,7 @@ export class CollaborationService {
   #materializedAssetHashes = new Map<string, string>();
   #appliedPlaybackCommandIds = new Map<string, string>();
   #remotePlaybackAnchors = new Map<string, RemotePlaybackAnchor>();
+  #remoteShaderPlaybackAnchors = new Map<string, RemoteShaderPlaybackAnchor>();
   #pendingClockRequests = new Map<string, { peerId: string; sentAt: number }>();
   #bestClockRoundTrips = new Map<string, number>();
   #remotePresences = new Map<string, CollaborationPeerPresence>();
@@ -170,6 +178,8 @@ export class CollaborationService {
   #entityRevisions = new Map<string, number>();
   #replaceRevision = 0;
   #geometryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  #shaderPlaybackTimer: ReturnType<typeof setTimeout> | null = null;
+  #pendingShaderPlaybackEntityIds = new Set<string>();
   #projectionDepth = 0;
   #reconcileQueued = false;
   #reconcileRunning = false;
@@ -617,6 +627,7 @@ export class CollaborationService {
     this.#materializedAssetHashes.clear();
     this.#appliedPlaybackCommandIds.clear();
     this.#remotePlaybackAnchors.clear();
+    this.#remoteShaderPlaybackAnchors.clear();
     this.#pendingClockRequests.clear();
     this.#bestClockRoundTrips.clear();
     this.#remotePresences.clear();
@@ -633,6 +644,9 @@ export class CollaborationService {
     this.#reconcileAgain = false;
     for (const timer of this.#geometryTimers.values()) clearTimeout(timer);
     this.#geometryTimers.clear();
+    if (this.#shaderPlaybackTimer) clearTimeout(this.#shaderPlaybackTimer);
+    this.#shaderPlaybackTimer = null;
+    this.#pendingShaderPlaybackEntityIds.clear();
     if (this.#pingTimer) clearInterval(this.#pingTimer);
     this.#pingTimer = null;
     if (this.#playbackDriftTimer) clearInterval(this.#playbackDriftTimer);
@@ -659,7 +673,7 @@ export class CollaborationService {
         for (const entity of mutation.entities) this.#queueEntityRegistration(entity);
         break;
       case "update":
-        for (const { id, updates } of mutation.batch) {
+        for (const { id, updates, syncShaderPlayback } of mutation.batch) {
           const entity = canvasStore.getState().entities.get(id);
           if (!entity) continue;
           if (!this.#document?.hasEntity(id) || updates.mediaSource) {
@@ -684,10 +698,14 @@ export class CollaborationService {
             this.#document.setIdentity(entity);
           }
           if (updates.shaderType !== undefined || updates.shaderParams !== undefined) {
-            this.#document.setAppearance(entity);
+            this.#document.setAppearance(entity, false);
+            if (syncShaderPlayback === true) this.#scheduleShaderPlaybackSync(id);
           }
           if (updates.playback && entity.playback) this.#publishPlayback(entity);
         }
+        break;
+      case "shaderPlayback":
+        this.#flushShaderPlaybackSync(mutation.entityIds);
         break;
       case "move":
         this.#scheduleGeometrySync(mutation.entityId);
@@ -699,6 +717,7 @@ export class CollaborationService {
           this.#materializedAssetHashes.delete(entityId);
           this.#appliedPlaybackCommandIds.delete(entityId);
           this.#remotePlaybackAnchors.delete(entityId);
+          this.#remoteShaderPlaybackAnchors.delete(entityId);
         }
         this.#document?.removeEntities(mutation.entityIds);
         this.#pruneUnreferencedAssets();
@@ -832,6 +851,35 @@ export class CollaborationService {
     this.#geometryTimers.set(entityId, timer);
   }
 
+  #scheduleShaderPlaybackSync(entityId: string): void {
+    this.#pendingShaderPlaybackEntityIds.add(entityId);
+    if (this.#shaderPlaybackTimer) return;
+    this.#shaderPlaybackTimer = setTimeout(() => {
+      this.#shaderPlaybackTimer = null;
+      const entityIds = [...this.#pendingShaderPlaybackEntityIds];
+      this.#pendingShaderPlaybackEntityIds.clear();
+      this.#publishShaderPlayback(entityIds);
+    }, SHADER_PLAYBACK_SYNC_INTERVAL_MS);
+  }
+
+  #flushShaderPlaybackSync(entityIds: readonly string[]): void {
+    for (const entityId of entityIds) this.#pendingShaderPlaybackEntityIds.delete(entityId);
+    if (this.#pendingShaderPlaybackEntityIds.size === 0 && this.#shaderPlaybackTimer) {
+      clearTimeout(this.#shaderPlaybackTimer);
+      this.#shaderPlaybackTimer = null;
+    }
+    this.#publishShaderPlayback(entityIds);
+  }
+
+  #publishShaderPlayback(entityIds: readonly string[]): void {
+    const entities: ShaderCanvasEntity[] = [];
+    for (const entityId of entityIds) {
+      const entity = canvasStore.getState().entities.get(entityId);
+      if (entity) entities.push(entity);
+    }
+    this.#document?.setShaderPlayback(entities);
+  }
+
   #handleDocumentChange(change: CollaborationDocumentChange): void {
     if (!change.isRemote) return;
     if (change.paletteIds.size > 0) {
@@ -899,6 +947,7 @@ export class CollaborationService {
           this.#materializedAssetHashes.delete(id);
           this.#appliedPlaybackCommandIds.delete(id);
           this.#remotePlaybackAnchors.delete(id);
+          this.#remoteShaderPlaybackAnchors.delete(id);
           this.#placeholderEntityIds.delete(id);
           this.#placeholderStartedAt.delete(id);
         }
@@ -929,6 +978,7 @@ export class CollaborationService {
           this.#materializedAssetHashes.delete(id);
           this.#appliedPlaybackCommandIds.delete(id);
           this.#remotePlaybackAnchors.delete(id);
+          this.#remoteShaderPlaybackAnchors.delete(id);
           this.#placeholderEntityIds.delete(id);
           this.#placeholderStartedAt.delete(id);
         }
@@ -954,6 +1004,7 @@ export class CollaborationService {
         if (current && entity.asset.hash && materializedHash === entity.asset.hash) {
           await adapter.updateRemoteEntity(entity, applyPlayback);
           this.#markPlaybackApplied(entity);
+          this.#markShaderPlaybackApplied(entity);
           continue;
         }
         if (
@@ -963,6 +1014,7 @@ export class CollaborationService {
         ) {
           await adapter.updateRemoteEntity(entity, applyPlayback);
           this.#markPlaybackApplied(entity);
+          this.#markShaderPlaybackApplied(entity);
         }
 
         if (!entity.asset.hash) continue;
@@ -995,6 +1047,7 @@ export class CollaborationService {
               this.#materializedAssetHashes.set(entity.id, entity.asset.hash);
             }
             this.#markPlaybackApplied(entity);
+            this.#markShaderPlaybackApplied(entity);
           }
           if (hydratedPreviewCount > 0) {
             collaborationMetrics.recordPreviewHydration(totalPreviewDwellMs, hydratedPreviewCount);
@@ -1454,7 +1507,12 @@ export class CollaborationService {
 
   async #correctPlaybackDrift(): Promise<void> {
     const adapter = this.#adapter;
-    if (!adapter || this.#remotePlaybackAnchors.size === 0) return;
+    if (
+      !adapter ||
+      (this.#remotePlaybackAnchors.size === 0 && this.#remoteShaderPlaybackAnchors.size === 0)
+    ) {
+      return;
+    }
     const now = performance.now();
     this.#projectionDepth++;
     try {
@@ -1466,6 +1524,17 @@ export class CollaborationService {
         const playback = advancePlayback(anchor.entity, (now - anchor.anchoredAt) / 1_000);
         await adapter.applyRemotePlayback({ ...anchor.entity, playback });
       }
+      for (const [entityId, anchor] of this.#remoteShaderPlaybackAnchors) {
+        if (!canvasStore.getState().entities.has(entityId)) {
+          this.#remoteShaderPlaybackAnchors.delete(entityId);
+          continue;
+        }
+        adapter.applyRemoteShaderPlayback(
+          entityId,
+          advanceShaderPlayback(anchor.entity, (now - anchor.anchoredAt) / 1_000),
+          anchor.entity.shaderParams.timeAutoPlay !== false,
+        );
+      }
     } finally {
       this.#projectionDepth--;
     }
@@ -1475,20 +1544,36 @@ export class CollaborationService {
     const adapter = this.#adapter;
     const document = this.#document;
     if (!adapter || !document) return;
-    const refreshed: CollaborativeEntity[] = [];
+    const refreshedPlayback: CollaborativeEntity[] = [];
     for (const [entityId, anchor] of this.#remotePlaybackAnchors) {
       if (anchor.entity.playbackSourceId !== peerId) continue;
       const entity = document.getEntity(entityId);
       if (entity && entity.playbackCommandId === anchor.entity.playbackCommandId) {
-        refreshed.push(entity);
+        refreshedPlayback.push(entity);
       }
     }
-    if (refreshed.length === 0) return;
+    const refreshedShaderPlayback: CollaborativeEntity[] = [];
+    for (const [entityId, anchor] of this.#remoteShaderPlaybackAnchors) {
+      if (anchor.entity.shaderPlaybackSourceId !== peerId) continue;
+      const entity = document.getEntity(entityId);
+      if (entity && entity.shaderPlaybackCommandId === anchor.entity.shaderPlaybackCommandId) {
+        refreshedShaderPlayback.push(entity);
+      }
+    }
+    if (refreshedPlayback.length === 0 && refreshedShaderPlayback.length === 0) return;
     this.#projectionDepth++;
     try {
-      for (const entity of refreshed) {
+      for (const entity of refreshedPlayback) {
         await adapter.applyRemotePlayback(entity);
         this.#markPlaybackApplied(entity);
+      }
+      for (const entity of refreshedShaderPlayback) {
+        adapter.applyRemoteShaderPlayback(
+          entity.id,
+          entity.shaderParams.time ?? 0,
+          entity.shaderParams.timeAutoPlay !== false,
+        );
+        this.#markShaderPlaybackApplied(entity);
       }
     } finally {
       this.#projectionDepth--;
@@ -1669,6 +1754,24 @@ export class CollaborationService {
     }
   }
 
+  #markShaderPlaybackApplied(entity: CollaborativeEntity): void {
+    if (!entity.shaderPlaybackCommandId) return;
+    if (
+      entity.shaderPlaybackSourceId !== this.#selfId &&
+      entity.shaderParams.timeAutoPlay !== false
+    ) {
+      this.#remoteShaderPlaybackAnchors.set(entity.id, {
+        entity: {
+          ...entity,
+          shaderParams: { ...entity.shaderParams },
+        },
+        anchoredAt: performance.now(),
+      });
+    } else {
+      this.#remoteShaderPlaybackAnchors.delete(entity.id);
+    }
+  }
+
   #handleFatalError(error: unknown, code: CollaborationErrorCode): void {
     const failedInvite = this.#invite;
     this.#teardownSession(false);
@@ -1701,6 +1804,11 @@ function advancePlayback(entity: CollaborativeEntity, elapsedSeconds: number) {
     }
   }
   return state;
+}
+
+function advanceShaderPlayback(entity: CollaborativeEntity, elapsedSeconds: number): number {
+  const time = entity.shaderParams.time ?? 0;
+  return entity.shaderParams.timeAutoPlay === false ? time : time + Math.max(0, elapsedSeconds);
 }
 
 function samePoint(left: Point | null, right: Point | null): boolean {

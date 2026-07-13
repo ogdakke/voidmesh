@@ -13,6 +13,7 @@ const REMOTE_ORIGIN = Symbol("voidmesh-collaboration-remote");
 const LOCAL_ORIGIN = Symbol("voidmesh-collaboration-local");
 const PARAM_PREFIX = "appearance.params.";
 const MAX_SCENE_COORDINATE = 100_000_000;
+const SHADER_PLAYBACK_PARAM_KEYS = new Set(["time", "timeAutoPlay"]);
 
 type CollaborativeEntityMap = Y.Map<unknown>;
 
@@ -26,6 +27,14 @@ export interface CollaborativePlayback {
   state: NonNullable<CollaborativeEntity["playback"]>;
   updatedAt: number;
   duration: number;
+  commandId: string;
+  sourceId: string;
+}
+
+interface CollaborativeShaderPlayback {
+  time: number;
+  isPlaying: boolean;
+  updatedAt: number;
   commandId: string;
   sourceId: string;
 }
@@ -173,12 +182,22 @@ export class CollaborationDocument {
     this.#document.transact(() => writeIdentity(map, entity), LOCAL_ORIGIN);
   }
 
-  setAppearance(entity: ShaderCanvasEntity): void {
+  setAppearance(entity: ShaderCanvasEntity, syncShaderPlayback = true): void {
     const map = this.#entities.get(entity.id);
     if (!map) return;
     this.#document.transact(() => {
       writeAppearance(map, entity.shaderType, entity.shaderParams);
+      if (syncShaderPlayback) this.#writeShaderPlayback(map, entity);
       this.#publishPalette(entity.shaderParams.palette);
+    }, LOCAL_ORIGIN);
+  }
+
+  setShaderPlayback(entities: readonly ShaderCanvasEntity[]): void {
+    this.#document.transact(() => {
+      for (const entity of entities) {
+        const map = this.#entities.get(entity.id);
+        if (map) this.#writeShaderPlayback(map, entity);
+      }
     }, LOCAL_ORIGIN);
   }
 
@@ -303,6 +322,7 @@ export class CollaborationDocument {
     writeIdentity(map, entity);
     writeGeometry(map, entity);
     writeAppearance(map, entity.shaderType, entity.shaderParams);
+    this.#writeShaderPlayback(map, entity);
     map.set("asset", clone(entity.asset));
     if (entity.playback) {
       map.set("playback", {
@@ -313,6 +333,20 @@ export class CollaborationDocument {
         sourceId: this.#sourceId,
       } satisfies CollaborativePlayback);
     }
+  }
+
+  #writeShaderPlayback(
+    map: CollaborativeEntityMap,
+    entity: ShaderCanvasEntity | CollaborativeEntity,
+  ): void {
+    const shaderPlayback: CollaborativeShaderPlayback = {
+      time: entity.shaderParams.time ?? 0,
+      isPlaying: entity.shaderParams.timeAutoPlay !== false,
+      updatedAt: this.#now(),
+      commandId: crypto.randomUUID(),
+      sourceId: this.#sourceId,
+    };
+    map.set("appearance.shaderPlayback", shaderPlayback);
   }
 
   #publishPalette(palette: ColorPalette | undefined): void {
@@ -359,16 +393,22 @@ function writeAppearance(
   shaderParams: ShaderParams,
 ) {
   setIfChanged(map, "appearance.shaderType", shaderType);
-  syncFlatRecord(map, PARAM_PREFIX, shaderParams as unknown as Record<string, unknown>);
+  syncFlatRecord(
+    map,
+    PARAM_PREFIX,
+    shaderParams as unknown as Record<string, unknown>,
+    SHADER_PLAYBACK_PARAM_KEYS,
+  );
 }
 
 function syncFlatRecord(
   map: CollaborativeEntityMap,
   prefix: string,
   value: Record<string, unknown>,
+  excludedRootKeys?: ReadonlySet<string>,
 ) {
   const flattened = new Map<string, unknown>();
-  flattenRecord(value, prefix, flattened);
+  flattenRecord(value, prefix, flattened, excludedRootKeys);
   for (const key of map.keys()) {
     if (key.startsWith(prefix) && !flattened.has(key)) map.delete(key);
   }
@@ -403,8 +443,10 @@ function flattenRecord(
   value: Record<string, unknown>,
   prefix: string,
   output: Map<string, unknown>,
+  excludedKeys?: ReadonlySet<string>,
 ) {
   for (const [key, entry] of Object.entries(value)) {
+    if (excludedKeys?.has(key)) continue;
     const path = `${prefix}${key}`;
     if (isRecord(entry)) flattenRecord(entry, `${path}.`, output);
     else if (entry !== undefined) output.set(path, entry);
@@ -457,6 +499,7 @@ function readEntity(
   const shaderParams = readFlatRecord(map, PARAM_PREFIX);
   const asset = map.get("asset");
   const playback = map.get("playback");
+  const shaderPlayback = map.get("appearance.shaderPlayback");
   if (
     typeof id !== "string" ||
     id.length === 0 ||
@@ -474,9 +517,20 @@ function readEntity(
     !isShaderParams(shaderParams) ||
     !isCollaborativeAssetDescriptor(asset) ||
     (originalPalette !== undefined && !isColorPalette(originalPalette)) ||
-    (playback !== undefined && !isCollaborativePlayback(playback))
+    (playback !== undefined && !isCollaborativePlayback(playback)) ||
+    (shaderPlayback !== undefined && !isCollaborativeShaderPlayback(shaderPlayback))
   ) {
     return null;
+  }
+
+  if (shaderPlayback) {
+    shaderParams.time = advanceShaderPlayback(
+      shaderPlayback,
+      localSourceId,
+      localNow,
+      getPeerClockOffset(shaderPlayback.sourceId),
+    );
+    shaderParams.timeAutoPlay = shaderPlayback.isPlaying;
   }
 
   return {
@@ -503,8 +557,24 @@ function readEntity(
       playbackCommandId: playback.commandId,
       playbackSourceId: playback.sourceId,
     }),
+    ...(shaderPlayback && {
+      shaderPlaybackCommandId: shaderPlayback.commandId,
+      shaderPlaybackSourceId: shaderPlayback.sourceId,
+    }),
     asset: clone(asset),
   };
+}
+
+function advanceShaderPlayback(
+  playback: CollaborativeShaderPlayback,
+  localSourceId: string,
+  localNow: number,
+  peerClockOffset: number | undefined,
+): number {
+  if (!playback.isPlaying) return playback.time;
+  const clockOffset = playback.sourceId === localSourceId ? 0 : peerClockOffset;
+  if (clockOffset === undefined) return playback.time;
+  return playback.time + Math.max(0, localNow + clockOffset - playback.updatedAt) / 1000;
 }
 
 function advancePlayback(
@@ -535,6 +605,19 @@ function isCollaborativePlayback(value: unknown): value is CollaborativePlayback
     isFiniteNumber(value.updatedAt) &&
     isFiniteNumber(value.duration) &&
     value.duration >= 0 &&
+    typeof value.commandId === "string" &&
+    value.commandId.length > 0 &&
+    typeof value.sourceId === "string" &&
+    value.sourceId.length > 0
+  );
+}
+
+function isCollaborativeShaderPlayback(value: unknown): value is CollaborativeShaderPlayback {
+  return (
+    isRecord(value) &&
+    isFiniteNumber(value.time) &&
+    typeof value.isPlaying === "boolean" &&
+    isFiniteNumber(value.updatedAt) &&
     typeof value.commandId === "string" &&
     value.commandId.length > 0 &&
     typeof value.sourceId === "string" &&

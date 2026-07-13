@@ -89,6 +89,7 @@ function createAdapter(overrides: Partial<CanvasAdapter> = {}): CanvasAdapter {
       decodeDurationMs: 0,
     })),
     applyRemotePlayback: vi.fn<CanvasAdapter["applyRemotePlayback"]>(async () => undefined),
+    applyRemoteShaderPlayback: vi.fn<CanvasAdapter["applyRemoteShaderPlayback"]>(),
     updateRemotePresence: vi.fn<CanvasAdapter["updateRemotePresence"]>(),
     removeRemotePresence: vi.fn<CanvasAdapter["removeRemotePresence"]>(),
     clearRemotePresence: vi.fn<CanvasAdapter["clearRemotePresence"]>(),
@@ -195,6 +196,46 @@ describe("CollaborationService", () => {
       );
     });
     unsubscribe();
+    service.stop();
+  });
+
+  it("coalesces live shader scrubbing and flushes the final time", async () => {
+    const service = new CollaborationService(iceServerProvider);
+    service.configure(createAdapter());
+    const entity = createTestEntity({ id: "live-shader-scrub" });
+    canvasStore.addEntity(entity);
+    await service.start(invite("shader-scrub"));
+    const documentAction = rooms[0]!.actions.get("document")!;
+    await vi.waitFor(() => expect(documentAction.send).toHaveBeenCalled());
+    await vi.waitFor(() => expect(rooms[0]!.actions.get("inventory")?.send).toHaveBeenCalled());
+    vi.mocked(documentAction.send).mockClear();
+
+    for (let index = 1; index <= 20; index++) {
+      const current = canvasStore.getState().entities.get(entity.id)!;
+      canvasStore.updateEntities([
+        {
+          id: entity.id,
+          updates: {
+            shaderParams: { ...current.shaderParams, time: index / 10, timeAutoPlay: false },
+          },
+          syncShaderPlayback: true,
+        },
+      ]);
+    }
+
+    await vi.waitFor(() => expect(documentAction.send).toHaveBeenCalledTimes(1));
+
+    const current = canvasStore.getState().entities.get(entity.id)!;
+    canvasStore.updateEntities([
+      {
+        id: entity.id,
+        updates: { shaderParams: { ...current.shaderParams, time: 2.5 } },
+        syncShaderPlayback: true,
+      },
+    ]);
+    canvasStore.commitShaderPlayback([entity.id]);
+
+    expect(documentAction.send).toHaveBeenCalledTimes(2);
     service.stop();
   });
 

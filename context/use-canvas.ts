@@ -56,10 +56,11 @@ export interface CanvasCommands {
   duplicateEntities: () => Promise<string[]>;
   updateSelectedEntityParams: (
     updates: PartialDeep<ShaderParams>,
-    options?: { skipUndo?: boolean },
+    options?: { skipUndo?: boolean; syncShaderPlayback?: boolean },
   ) => void;
   setSelectedEntityTimeAutoPlay: (playing: boolean) => void;
   syncSelectedEntityTimes: () => void;
+  commitSelectedEntityTimes: () => void;
   changeShaderType: (value: string | null) => void;
   changeDitheringKind: (value: string | null) => void;
   changeAsciiKind: (value: string | null) => void;

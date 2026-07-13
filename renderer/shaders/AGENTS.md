@@ -28,6 +28,7 @@ Per-effect shader passes. Each shader type gets a class extending `ShaderPass`.
 - `ShaderPass.removeEntity()` owns base uniform-buffer cleanup. Overrides must release their specialized state and call `super.removeEntity()`.
 - Scratch textures may return to `TexturePool` after their final encoded read/copy; command-buffer ordering permits reuse by later passes. They remain protected from destruction until the post-submit `commitSubmitted()` boundary.
 - Error-diffusion buffers are persistent GPU resources; keep them byte-budgeted and release specialized shader state from `removeEntity()` before calling `super.removeEntity()`.
+- Flowing-glass time advances from a monotonic base-time anchor, never accumulated frame deltas. Treat an externally corrected `shaderParams.time` as a new anchor so collaboration catches up after throttling, suspension, or clock refinement.
 - Render pipeline targets use `ctx.intermediateFormat` (not hardcoded `rgba8unorm`).
 - Luminance: use `select()` between BT.709 and P3 coefficients based on `uniforms.is_p3`.
 

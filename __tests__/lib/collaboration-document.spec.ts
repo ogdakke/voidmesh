@@ -121,6 +121,45 @@ describe("CollaborationDocument", () => {
     });
   });
 
+  it("advances animated shader time from a shared clock anchor", () => {
+    let leftNow = 11_000;
+    let rightNow = 1_000;
+    const left = new CollaborationDocument({ sourceId: "left", now: () => leftNow });
+    const right = new CollaborationDocument({ sourceId: "right", now: () => rightNow });
+    right.setPeerClockOffset("left", 10_000);
+    const { entity, collaborative } = toCollaborative("clocked-shader");
+    entity.shaderParams.time = 4;
+    entity.shaderParams.timeAutoPlay = true;
+    collaborative.shaderParams = structuredClone(entity.shaderParams);
+
+    left.addEntity(collaborative);
+    right.applyUpdate(left.encodeState());
+    rightNow = 2_500;
+    leftNow = 12_500;
+
+    expect(right.getEntity(entity.id)).toMatchObject({
+      shaderParams: { time: 5.5, timeAutoPlay: true },
+      shaderPlaybackSourceId: "left",
+    });
+  });
+
+  it("keeps scrubbed shader time fixed while paused", () => {
+    let now = 1_000;
+    const document = new CollaborationDocument({ now: () => now });
+    const { entity, collaborative } = toCollaborative("scrubbed-shader");
+    document.addEntity(collaborative);
+    entity.shaderParams.time = 8.25;
+    entity.shaderParams.timeAutoPlay = false;
+
+    document.setShaderPlayback([entity]);
+    now = 10_000;
+
+    expect(document.getEntity(entity.id)?.shaderParams).toMatchObject({
+      time: 8.25,
+      timeAutoPlay: false,
+    });
+  });
+
   it("publishes a provisional preview before the content hash is available", () => {
     const left = new CollaborationDocument();
     const right = new CollaborationDocument();
@@ -137,8 +176,8 @@ describe("CollaborationDocument", () => {
   });
 
   it("converges concurrent geometry and appearance edits without overwriting either", () => {
-    const left = new CollaborationDocument();
-    const right = new CollaborationDocument();
+    const left = new CollaborationDocument({ now: () => 1_000 });
+    const right = new CollaborationDocument({ now: () => 1_000 });
     const { entity, collaborative } = toCollaborative("shared");
     left.addEntity(collaborative);
     right.applyUpdate(left.encodeState());
@@ -169,8 +208,8 @@ describe("CollaborationDocument", () => {
   });
 
   it("converges concurrent edits to separate shader parameter leaves", () => {
-    const left = new CollaborationDocument();
-    const right = new CollaborationDocument();
+    const left = new CollaborationDocument({ now: () => 1_000 });
+    const right = new CollaborationDocument({ now: () => 1_000 });
     const { entity, collaborative } = toCollaborative("leaf-edits");
     left.addEntity(collaborative);
     right.applyUpdate(left.encodeState());

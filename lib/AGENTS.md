@@ -27,7 +27,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `download.ts` — File downloads and file picker (with iOS compatibility).
 - `storage.ts` — Browser storage abstraction (unstorage) for persisted preferences.
 - `collaboration/protocol.ts` — Invite fragments, provisional preview descriptors, content-addressed final assets, hashing, validation, and selective gzip for compressible text payloads.
-- `collaboration/document.ts` — Yjs entity/layer document with grouped identity, geometry, appearance, asset, and playback fields. Playback anchors carry source IDs, monotonic timestamps, unique command IDs, and media duration.
+- `collaboration/document.ts` — Yjs entity/layer document with grouped identity, geometry, appearance, asset, media playback, and shader playback fields. Clock anchors carry source IDs, monotonic timestamps, and unique command IDs; media anchors also carry duration.
 - `collaboration/clock.ts` — Monotonic epoch timestamps, NTP-style peer offset/RTT samples, and validated clock messages.
 - `collaboration/presence.ts` — Validated partial presence messages plus deterministic shader-word names and peer colors.
 - `collaboration/ice-server-provider.ts` — Provider-neutral same-origin TURN credential client, strict ICE response validation, and selected candidate-pair route inspection.

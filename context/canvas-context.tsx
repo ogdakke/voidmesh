@@ -52,7 +52,7 @@ import type {
 import { type ImageExportOptions, getImageExtension } from "#renderer/export-formats.ts";
 import { canvasStore, disintegrationController, gameLoop, type CanvasEntityUpdate } from "#engine";
 
-import { toastManager } from "#components/ui/toast/toast-manager.ts";
+import { toastManager, ToastType } from "#components/ui/toast/toast-manager.ts";
 import { hints } from "#components/ui/hint/hint-manager.ts";
 import { extractOriginalPalette, cloneMediaSource, loadMediaFromBlob } from "#lib/media-loader.ts";
 import { disposeEntityMedia, disposeMediaSource } from "#lib/media-resources.ts";
@@ -840,6 +840,16 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         const current = canvasStore.getState().entities.get(entity.id);
         if (current) await applyCollaborativePlayback(current, entity.playback);
       },
+      applyRemoteShaderPlayback(entityId, time, playing) {
+        const entity = canvasStore.getState().entities.get(entityId);
+        if (!entity) return;
+        rendererRef.current?.setEntityTime(entity, time);
+        rendererRef.current?.setEntityTimeAutoPlay(entity, playing);
+        entity.shaderParams.time = time;
+        entity.shaderParams.timeAutoPlay = playing;
+        entity.textureDirty = true;
+        scheduleCollaborativeRender(entityId);
+      },
       updateRemotePresence(presence) {
         canvasStore.setRemotePeerPresence(presence);
       },
@@ -915,32 +925,32 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           metrics.status === "connecting"
             ? {
                 title: "Joining multiplayer…",
-                description: "Preparing a secure connection.",
+                description: "Preparing a secure connection",
                 timeout: 0,
               }
             : metrics.status === "waiting"
               ? {
                   title: "Multiplayer ready",
-                  description: "Waiting for someone else to open the invite link.",
+                  description: "Waiting for someone to join",
                   timeout: 8_000,
                 }
               : metrics.status === "connected"
                 ? {
                     title: "Multiplayer connected",
-                    description: `${metrics.peerCount + 1} people are here.`,
+                    description: `${metrics.peerCount + 1} people are here`,
                     timeout: 4_000,
                   }
                 : metrics.status === "reconnecting"
                   ? {
                       title: "Reconnecting multiplayer…",
-                      description: "Trying the latest secure network route.",
+                      description: "Trying the latest secure network route",
                       timeout: 0,
                     }
                   : metrics.status === "error"
                     ? {
                         title: "Couldn’t join multiplayer",
                         description: collaborationErrorDescription(metrics.lastErrorCode),
-                        type: "destructive" as const,
+                        type: ToastType.destructive,
                         timeout: 0,
                         actionProps: collaborationService.invite
                           ? { children: "Retry", onClick: retry }
@@ -1456,7 +1466,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   // Update shader params - DIRECT entity update (no URL race condition)
   const updateSelectedEntityParams = (
     params: PartialDeep<ShaderParams>,
-    options?: { skipUndo?: boolean },
+    options?: { skipUndo?: boolean; syncShaderPlayback?: boolean },
   ) => {
     const entities = canvasStore.getSelectedEntities();
     if (entities.length === 0) return;
@@ -1472,10 +1482,13 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       // Deep merge params (handles nested objects at any depth)
       const newParams = deepMerge(entity.shaderParams, params);
 
-      canvasStore.updateEntity(entity.id, {
-        shaderParams: newParams,
-        textureDirty: true,
-      });
+      canvasStore.updateEntities([
+        {
+          id: entity.id,
+          updates: { shaderParams: newParams, textureDirty: true },
+          syncShaderPlayback: options?.syncShaderPlayback,
+        },
+      ]);
 
       if (!skipUndo) {
         undo.add(
@@ -1520,6 +1533,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           shaderParams: deepMerge(entity.shaderParams, params) as ShaderParams,
           textureDirty: true,
         },
+        syncShaderPlayback: options?.syncShaderPlayback,
       }));
 
       canvasStore.updateEntities(nextBatch);
@@ -1579,6 +1593,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         textureDirty: true,
       });
     }
+    canvasStore.commitShaderPlayback(entities.map(({ id }) => id));
   };
 
   const syncSelectedEntityTimes = () => {
@@ -1604,6 +1619,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         textureDirty: true,
       });
     }
+    canvasStore.commitShaderPlayback(entities.map(({ id }) => id));
+  };
+
+  const commitSelectedEntityTimes = () => {
+    canvasStore.commitShaderPlayback([...canvasStore.getState().selectedEntityIds]);
   };
 
   const changeShaderType = (value: string | null) => {
@@ -2613,6 +2633,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     updateSelectedEntityParams,
     setSelectedEntityTimeAutoPlay,
     syncSelectedEntityTimes,
+    commitSelectedEntityTimes,
     changeShaderType,
     changeDitheringKind,
     changeAsciiKind,
@@ -2664,6 +2685,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       updateSelectedEntityParams,
       setSelectedEntityTimeAutoPlay,
       syncSelectedEntityTimes,
+      commitSelectedEntityTimes,
       changeShaderType,
       changeDitheringKind,
       changeAsciiKind,
@@ -2717,6 +2739,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setSelectedEntityTimeAutoPlay: (...args) =>
       commandsImplRef.current.setSelectedEntityTimeAutoPlay(...args),
     syncSelectedEntityTimes: () => commandsImplRef.current.syncSelectedEntityTimes(),
+    commitSelectedEntityTimes: () => commandsImplRef.current.commitSelectedEntityTimes(),
     changeShaderType: (...args) => commandsImplRef.current.changeShaderType(...args),
     changeDitheringKind: (...args) => commandsImplRef.current.changeDitheringKind(...args),
     changeAsciiKind: (...args) => commandsImplRef.current.changeAsciiKind(...args),

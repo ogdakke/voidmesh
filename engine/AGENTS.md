@@ -24,6 +24,7 @@ Canvas state management and input processing. This is the "model + controller" l
 - `CanvasStore` owns the incremental `EntitySpatialIndex` shared by renderer visibility, point hit testing, and drag selection. Every geometry mutation must upsert or remove its entity from the index.
 - `CanvasStore.hasRenderChanges()` checks dirty state without materializing or mutating render state.
 - Entity mutations publish a typed change feed for non-React integrations such as collaboration; remote projections must suppress echo at their orchestrator boundary.
+- Shader-time mutations infer clock intent from `time`/`timeAutoPlay` changes. Live scrubs may opt in explicitly, while `commitShaderPlayback()` flushes an exact shared anchor without another store mutation.
 
 ## Patterns
 
