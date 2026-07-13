@@ -24,6 +24,7 @@ import {
   type ShaderParams,
   type ColorPalette,
   type PostProcessParams,
+  type MediaImageAsset,
   ShaderType,
   Shape,
   DitheringKind,
@@ -78,6 +79,7 @@ import {
 import { collaborationService } from "./collaboration-service.ts";
 import { createImageAsset } from "#lib/media-assets.ts";
 import { decodeThumbhashMedia } from "#lib/thumbhash.ts";
+import { SharedImageAssetRegistry } from "#lib/collaboration/shared-image-asset-registry.ts";
 import {
   clearCollaborationInvite,
   createCollaborationInvite,
@@ -549,18 +551,63 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   }, [colorSpace]);
 
   useEffect(() => {
+    const sharedImageAssets = new SharedImageAssetRegistry();
+    let clearSharedImageAssetsTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const acquireSharedImageAsset = (
+      key: string,
+      create?: () => MediaImageAsset,
+    ): MediaImageAsset | null => {
+      const asset = sharedImageAssets.acquire(key, create);
+      if (asset && !clearSharedImageAssetsTimer) {
+        clearSharedImageAssetsTimer = setTimeout(() => {
+          clearSharedImageAssetsTimer = null;
+          sharedImageAssets.clear();
+        }, 0);
+      }
+      return asset;
+    };
+
+    const releaseSharedImageAsset = (entity: ShaderCanvasEntity): void => {
+      if (entity.mediaSource.type !== MediaType.image) return;
+      sharedImageAssets.forgetOwner(entity.mediaSource.asset);
+    };
+
+    const loadCollaborativeMedia = async (entity: CollaborativeEntity, blob: Blob) => {
+      const assetKey = entity.asset.hash ? `asset:${entity.asset.hash}` : null;
+      const cachedAsset = assetKey ? acquireSharedImageAsset(assetKey) : null;
+      if (cachedAsset) {
+        return {
+          imageBitmap: cachedAsset.imageBitmap,
+          mediaSource: { type: MediaType.image, asset: cachedAsset } as const,
+        };
+      }
+
+      const loaded = await loadMediaFromBlob(
+        blob,
+        entity.asset.mimeType,
+        entity.position,
+        entity.name,
+      );
+      if (!loaded) throw new Error(`Unable to decode collaborative asset ${entity.name}`);
+      if (assetKey && loaded.mediaSource.type === MediaType.image) {
+        const loadedAsset = loaded.mediaSource.asset;
+        const sharedAsset = acquireSharedImageAsset(assetKey, () => loadedAsset);
+        if (sharedAsset && sharedAsset !== loadedAsset) {
+          disposeMediaSource(loaded.mediaSource, loaded.imageBitmap);
+          return {
+            imageBitmap: sharedAsset.imageBitmap,
+            mediaSource: { type: MediaType.image, asset: sharedAsset } as const,
+          };
+        }
+      }
+      return { imageBitmap: loaded.imageBitmap, mediaSource: loaded.mediaSource };
+    };
+
     const unconfigure = collaborationService.configure({
       async adoptRemoteEntity(entity, blob) {
-        const loaded = await loadMediaFromBlob(
-          blob,
-          entity.asset.mimeType,
-          entity.position,
-          entity.name,
-        );
-        if (!loaded) throw new Error(`Unable to decode collaborative asset ${entity.name}`);
-        const { name: _loadedName, ...entityData } = loaded;
+        const media = await loadCollaborativeMedia(entity, blob);
         const remoteEntity: ShaderCanvasEntity = {
-          ...entityData,
           id: entity.id,
           name: entity.name,
           position: { ...entity.position },
@@ -577,6 +624,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           }),
           ...(entity.playback && { playback: { ...entity.playback } }),
           preview: entity.asset.preview,
+          ...media,
           textureDirty: true,
         } as ShaderCanvasEntity;
         undo.clear();
@@ -585,12 +633,20 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         scheduleCollaborativeRender(remoteEntity.id);
       },
       async adoptRemotePlaceholder(entity) {
-        const { imageBitmap, blob } = await decodeThumbhashMedia(entity.asset.preview);
-        const asset = createImageAsset({
-          id: `collaboration-preview-${entity.asset.transferId}`,
-          imageBitmap,
-          blob,
-        });
+        const previewKey = `preview:${entity.asset.transferId}`;
+        let asset = acquireSharedImageAsset(previewKey);
+        if (!asset) {
+          const decoded = await decodeThumbhashMedia(entity.asset.preview);
+          asset = acquireSharedImageAsset(previewKey, () =>
+            createImageAsset({
+              id: `collaboration-preview-${entity.asset.transferId}`,
+              imageBitmap: decoded.imageBitmap,
+              blob: decoded.blob,
+            }),
+          );
+        }
+        if (!asset) throw new Error(`Unable to create collaborative preview ${entity.name}`);
+        const imageBitmap = asset.imageBitmap;
         const placeholder: ShaderCanvasEntity = {
           id: entity.id,
           name: entity.name,
@@ -619,18 +675,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       async hydrateRemoteEntity(entity, blob) {
         const current = canvasStore.getState().entities.get(entity.id);
         if (!current) return;
-        const loaded = await loadMediaFromBlob(
-          blob,
-          entity.asset.mimeType,
-          entity.position,
-          entity.name,
-        );
-        if (!loaded) throw new Error(`Unable to decode collaborative asset ${entity.name}`);
-        const { name: _loadedName, ...entityData } = loaded;
+        const media = await loadCollaborativeMedia(entity, blob);
         undo.clear();
         rendererRef.current?.removeEntityTexture(entity.id);
         canvasStore.updateEntity(entity.id, {
-          ...entityData,
+          ...media,
           name: entity.name,
           position: { ...entity.position },
           size: { ...entity.size },
@@ -648,6 +697,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           preview: entity.asset.preview,
           textureDirty: true,
         } as Partial<ShaderCanvasEntity>);
+        releaseSharedImageAsset(current);
         destroyEntityMediaResources(current);
         const hydrated = canvasStore.getState().entities.get(entity.id);
         if (hydrated) await applyCollaborativePlayback(hydrated, entity.playback);
@@ -688,6 +738,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           pauseDeletedEntity(entity);
           rendererRef.current?.removeEntityTexture(entityId);
           canvasStore.removeEntity(entityId);
+          releaseSharedImageAsset(entity);
           destroyEntityMediaResources(entity);
         }
       },
@@ -700,6 +751,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     }
 
     return () => {
+      if (clearSharedImageAssetsTimer) clearTimeout(clearSharedImageAssetsTimer);
+      sharedImageAssets.clear();
       collaborationService.stop();
       unconfigure();
     };

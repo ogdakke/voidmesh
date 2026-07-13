@@ -148,4 +148,28 @@ describe("CollaborationDocument", () => {
     expect(right.getEntities().map(({ id }) => id)).toEqual(["second"]);
     disconnect();
   });
+
+  it("publishes duplicate asset completion as one document update", () => {
+    const document = new CollaborationDocument();
+    const first = toCollaborative("first").collaborative;
+    const second = toCollaborative("second").collaborative;
+    document.addEntity(first);
+    document.addEntity(second);
+    const updates: Uint8Array[] = [];
+    const unsubscribe = document.onUpdate((update, remote) => {
+      if (!remote) updates.push(update);
+    });
+
+    document.setAssets([
+      { entityId: first.id, asset: { ...first.asset, hash: "shared-hash" } },
+      { entityId: second.id, asset: { ...second.asset, hash: "shared-hash" } },
+    ]);
+
+    expect(updates).toHaveLength(1);
+    expect(document.getEntities().map((entity) => entity.asset.hash)).toEqual([
+      "shared-hash",
+      "shared-hash",
+    ]);
+    unsubscribe();
+  });
 });

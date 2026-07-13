@@ -129,6 +129,14 @@ export class CollaborationDocument {
     }, LOCAL_ORIGIN);
   }
 
+  setAssets(updates: readonly { entityId: string; asset: CollaborativeAssetDescriptor }[]): void {
+    this.#document.transact(() => {
+      for (const { entityId, asset } of updates) {
+        this.#entities.get(entityId)?.set("asset", asset);
+      }
+    }, LOCAL_ORIGIN);
+  }
+
   removeEntities(entityIds: readonly string[]): void {
     this.#document.transact(() => {
       for (const entityId of entityIds) {

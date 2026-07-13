@@ -9,6 +9,7 @@ The prototype uses a password-bearing invite fragment, Trystero's Nostr strategy
 - Images, SVGs, GIFs, and videos transfer as their encoded Blobs. Gzip is attempted only for SVG/JSON payloads and retained only when smaller; encoded image/video formats use identity transfer.
 - Entities publish a bounded ThumbHash first-frame preview before content hashing begins. Peers create a full-geometry placeholder immediately and hydrate its media in place after verified Blob transfer.
 - Workspace v7 manifests cache ThumbHashes, so an atomically restored heavy workspace can publish all previews without re-reading decoded pixels.
+- Duplicate entities sharing one Blob reuse a single preview, hash operation, inventory entry, transferred payload, and decoded static-image asset. Final asset descriptors publish in one Yjs transaction so duplicate-heavy workspace replacement does not reconcile once per entity.
 - Video/GIF play, pause, seek, loop, rate, mute, and volume publish immediate per-entity shared-clock commands. Passive frame progress stays local; command IDs prevent unrelated document changes from re-seeking other media, and duration-aware clocks wrap loops for late joiners.
 - Geometry updates coalesce to roughly 30 Hz. Remote projections are serialized and suppress mutation echoes.
 - Diagnostics measure connection setup, peer count, messages/bytes, Yjs updates/apply/reconcile time, preview encode/decode/dwell, hashing, compression, media decoding, RTT, transfers, throughput, and compression ratios.

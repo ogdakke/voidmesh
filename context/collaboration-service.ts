@@ -1,5 +1,6 @@
 import { canvasStore, type CanvasEntityMutation } from "#engine";
 import { CollaborationDocument } from "#lib/collaboration/document.ts";
+import { AssetHashCache } from "#lib/collaboration/asset-hash-cache.ts";
 import { collaborationMetrics } from "#lib/collaboration/metrics.ts";
 import {
   COLLABORATION_PROTOCOL_VERSION,
@@ -17,7 +18,7 @@ import {
 } from "#lib/collaboration/protocol.ts";
 import { logger } from "#lib/client.logger.ts";
 import { getEntityThumbhash } from "#lib/thumbhash.ts";
-import type { ShaderCanvasEntity } from "#types/canvas.ts";
+import type { MediaPreview, ShaderCanvasEntity } from "#types/canvas.ts";
 
 const APP_ID = "voidmesh-collaboration-v3";
 const GEOMETRY_SYNC_INTERVAL_MS = 33;
@@ -65,6 +66,8 @@ export class CollaborationService {
   #placeholderEntityIds = new Set<string>();
   #placeholderStartedAt = new Map<string, number>();
   #assetTransferIds = new WeakMap<Blob, string>();
+  #assetPreviews = new WeakMap<Blob, MediaPreview>();
+  #assetHashes = new AssetHashCache();
   #entityRevisions = new Map<string, number>();
   #replaceRevision = 0;
   #geometryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -227,6 +230,8 @@ export class CollaborationService {
     this.#placeholderEntityIds.clear();
     this.#placeholderStartedAt.clear();
     this.#assetTransferIds = new WeakMap();
+    this.#assetPreviews = new WeakMap();
+    this.#assetHashes.clear();
     this.#entityRevisions.clear();
     this.#lastDocumentEntityIds.clear();
     this.#reconcileQueued = false;
@@ -325,9 +330,9 @@ export class CollaborationService {
       document.addEntity(collaborative);
     }
 
-    const hashStartedAt = performance.now();
-    const hash = await hashBlob(blob);
-    collaborationMetrics.recordHashDuration(performance.now() - hashStartedAt);
+    const hash = await this.#assetHashes.get(blob, (durationMs) =>
+      collaborationMetrics.recordHashDuration(durationMs),
+    );
     if (this.#entityRevisions.get(entity.id) !== revision || this.#document !== document) {
       this.#pendingLocalRegistrations.delete(entity.id);
       return;
@@ -367,21 +372,41 @@ export class CollaborationService {
       registrations.map(({ entity, descriptor }) => createCollaborativeEntity(entity, descriptor)),
     );
 
-    await Promise.all(
-      registrations.map(async ({ entity, blob, descriptor }) => {
-        const hashStartedAt = performance.now();
-        const hash = await hashBlob(blob);
-        collaborationMetrics.recordHashDuration(performance.now() - hashStartedAt);
-        if (replaceRevision !== this.#replaceRevision || this.#document !== document) return;
+    const registrationGroups = new Map<Blob, typeof registrations>();
+    for (const registration of registrations) {
+      let group = registrationGroups.get(registration.blob);
+      if (!group) registrationGroups.set(registration.blob, (group = []));
+      group.push(registration);
+    }
+    const completedGroups = await Promise.all(
+      [...registrationGroups].map(async ([blob, group]) => ({
+        blob,
+        group,
+        hash: await this.#assetHashes.get(blob, (durationMs) =>
+          collaborationMetrics.recordHashDuration(durationMs),
+        ),
+      })),
+    );
+    if (replaceRevision !== this.#replaceRevision || this.#document !== document) return;
+
+    const assetUpdates: Array<{
+      entityId: string;
+      asset: CollaborativeAssetDescriptor;
+    }> = [];
+    const inventory = new Set<string>();
+    for (const { blob, group, hash } of completedGroups) {
+      inventory.add(hash);
+      for (const { entity, descriptor } of group) {
         const completeDescriptor: CollaborativeAssetDescriptor = { ...descriptor, hash };
         this.#assets.set(hash, blob);
         this.#assetDescriptors.set(hash, completeDescriptor);
         this.#materializedAssetHashes.set(entity.id, hash);
         this.#pendingLocalRegistrations.delete(entity.id);
-        document.setAsset(entity.id, completeDescriptor);
-        void this.#sendInventory?.([hash]);
-      }),
-    );
+        assetUpdates.push({ entityId: entity.id, asset: completeDescriptor });
+      }
+    }
+    document.setAssets(assetUpdates);
+    void this.#sendInventory?.([...inventory]);
   }
 
   #scheduleGeometrySync(entityId: string): void {
@@ -633,9 +658,13 @@ export class CollaborationService {
     blob: Blob,
     mimeType: string,
   ): CollaborativeAssetDescriptor {
-    const previewStartedAt = performance.now();
-    const preview = getEntityThumbhash(entity);
-    collaborationMetrics.recordPreviewEncodeDuration(performance.now() - previewStartedAt);
+    let preview = this.#assetPreviews.get(blob);
+    if (!preview) {
+      const previewStartedAt = performance.now();
+      preview = getEntityThumbhash(entity);
+      collaborationMetrics.recordPreviewEncodeDuration(performance.now() - previewStartedAt);
+      this.#assetPreviews.set(blob, preview);
+    }
     let transferId = this.#assetTransferIds.get(blob);
     if (!transferId) {
       transferId = crypto.randomUUID();
