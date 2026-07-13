@@ -5,6 +5,7 @@ import type {
   CollaborativeEntity,
 } from "#lib/collaboration/protocol.ts";
 import { isCollaborativeAssetDescriptor } from "#lib/collaboration/protocol.ts";
+import { monotonicEpochNow, type MonotonicClock } from "#lib/collaboration/clock.ts";
 
 const REMOTE_ORIGIN = Symbol("voidmesh-collaboration-remote");
 const LOCAL_ORIGIN = Symbol("voidmesh-collaboration-local");
@@ -35,12 +36,31 @@ export interface CollaborativePlayback {
   updatedAt: number;
   duration: number;
   commandId: string;
+  sourceId: string;
+}
+
+interface CollaborationDocumentOptions {
+  sourceId?: string;
+  now?: MonotonicClock;
 }
 
 export class CollaborationDocument {
   readonly #document = new Y.Doc();
   readonly #entities = this.#document.getMap<CollaborativeEntityMap>("entities");
   readonly #layers = this.#document.getArray<string>("layers");
+  readonly #sourceId: string;
+  readonly #now: MonotonicClock;
+  readonly #peerClockOffsets = new Map<string, number>();
+
+  constructor(options: CollaborationDocumentOptions = {}) {
+    this.#sourceId = options.sourceId ?? "local";
+    this.#now = options.now ?? monotonicEpochNow;
+  }
+
+  setPeerClockOffset(peerId: string, offsetMs: number): void {
+    if (!Number.isFinite(offsetMs)) throw new Error("Peer clock offset must be finite");
+    this.#peerClockOffsets.set(peerId, offsetMs);
+  }
 
   onUpdate(listener: (update: Uint8Array, isRemote: boolean) => void): () => void {
     const handleUpdate = (update: Uint8Array, origin: unknown) => {
@@ -112,9 +132,10 @@ export class CollaborationDocument {
     this.#document.transact(() => {
       const playback: CollaborativePlayback = {
         state: { ...state },
-        updatedAt: Date.now(),
+        updatedAt: this.#now(),
         duration,
         commandId,
+        sourceId: this.#sourceId,
       };
       map.set("playback", playback);
     }, LOCAL_ORIGIN);
@@ -165,11 +186,33 @@ export class CollaborationDocument {
     const layerIndex = new Map(layerIds.map((id, index) => [id, index + 1]));
     const entities: CollaborativeEntity[] = [];
     for (const [id, map] of this.#entities) {
-      const entity = readEntity(id, map, layerIndex.get(id) ?? layerIds.length + 1);
+      const entity = readEntity(
+        id,
+        map,
+        layerIndex.get(id) ?? layerIds.length + 1,
+        this.#sourceId,
+        this.#now(),
+        (sourceId) => this.#peerClockOffsets.get(sourceId),
+      );
       if (entity) entities.push(entity);
     }
     entities.sort((left, right) => left.zIndex - right.zIndex || left.id.localeCompare(right.id));
     return entities;
+  }
+
+  getEntity(entityId: string): CollaborativeEntity | null {
+    const map = this.#entities.get(entityId);
+    if (!map) return null;
+    const layerIds = this.#layers.toArray();
+    const layerIndex = layerIds.indexOf(entityId);
+    return readEntity(
+      entityId,
+      map,
+      layerIndex >= 0 ? layerIndex + 1 : layerIds.length + 1,
+      this.#sourceId,
+      this.#now(),
+      (sourceId) => this.#peerClockOffsets.get(sourceId),
+    );
   }
 
   destroy(): void {
@@ -197,9 +240,10 @@ export class CollaborationDocument {
     if (entity.playback) {
       map.set("playback", {
         state: entity.playback,
-        updatedAt: Date.now(),
+        updatedAt: this.#now(),
         duration: entity.playbackDuration ?? 0,
         commandId: crypto.randomUUID(),
+        sourceId: this.#sourceId,
       } satisfies CollaborativePlayback);
     }
   }
@@ -238,6 +282,9 @@ function readEntity(
   id: string,
   map: CollaborativeEntityMap,
   zIndex: number,
+  localSourceId: string,
+  localNow: number,
+  getPeerClockOffset: (sourceId: string) => number | undefined,
 ): CollaborativeEntity | null {
   const identity = map.get("identity") as CollaborativeIdentity | undefined;
   const geometry = map.get("geometry") as CollaborativeGeometry | undefined;
@@ -262,18 +309,31 @@ function readEntity(
       originalPalette: structuredClone(identity.originalPalette),
     }),
     ...(playback && {
-      playback: advancePlayback(playback),
+      playback: advancePlayback(
+        playback,
+        localSourceId,
+        localNow,
+        getPeerClockOffset(playback.sourceId),
+      ),
       playbackDuration: playback.duration,
       playbackCommandId: playback.commandId,
+      playbackSourceId: playback.sourceId,
     }),
     asset: { ...asset },
   };
 }
 
-function advancePlayback(playback: CollaborativePlayback): CollaborativePlayback["state"] {
+function advancePlayback(
+  playback: CollaborativePlayback,
+  localSourceId: string,
+  localNow: number,
+  peerClockOffset: number | undefined,
+): CollaborativePlayback["state"] {
   const state = { ...playback.state };
   if (!state.isPlaying) return state;
-  const elapsedSeconds = Math.max(0, Date.now() - playback.updatedAt) / 1000;
+  const clockOffset = playback.sourceId === localSourceId ? 0 : peerClockOffset;
+  if (clockOffset === undefined) return state;
+  const elapsedSeconds = Math.max(0, localNow + clockOffset - playback.updatedAt) / 1000;
   state.currentTime += elapsedSeconds * state.playbackRate;
   if (playback.duration > 0) {
     if (state.loop) {

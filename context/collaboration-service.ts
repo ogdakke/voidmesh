@@ -19,10 +19,17 @@ import {
 import { logger } from "#lib/client.logger.ts";
 import { getEntityThumbhash } from "#lib/thumbhash.ts";
 import type { MediaPreview, ShaderCanvasEntity } from "#types/canvas.ts";
+import {
+  calculatePeerClockSample,
+  isClockSyncMessage,
+  monotonicEpochNow,
+  type ClockSyncMessage,
+} from "#lib/collaboration/clock.ts";
 
 const APP_ID = "voidmesh-collaboration-v3";
-const GEOMETRY_SYNC_INTERVAL_MS = 33;
+const GEOMETRY_SYNC_INTERVAL_MS = 16;
 const PING_INTERVAL_MS = 5_000;
+const PLAYBACK_DRIFT_INTERVAL_MS = 1_000;
 const MAX_ASSET_BYTES = 512 * 1024 * 1024;
 
 interface CollaborationCanvasAdapter {
@@ -32,6 +39,7 @@ interface CollaborationCanvasAdapter {
   hydrateRemoteEntities(
     entries: readonly CollaborationHydration[],
   ): Promise<CollaborationProjectionTiming>;
+  applyRemotePlayback(entity: CollaborativeEntity): Promise<void>;
   updateRemoteEntity(entity: CollaborativeEntity, applyPlayback: boolean): Promise<void>;
   removeRemoteEntities(entityIds: readonly string[]): void;
 }
@@ -53,6 +61,11 @@ interface CollaborationRoom {
   onPeerLeave: ((peerId: string) => void) | null;
 }
 
+interface RemotePlaybackAnchor {
+  entity: CollaborativeEntity;
+  anchoredAt: number;
+}
+
 export class CollaborationService {
   #adapter: CollaborationCanvasAdapter | null = null;
   #document: CollaborationDocument | null = null;
@@ -67,6 +80,7 @@ export class CollaborationService {
   #sendAsset:
     | ((payload: Uint8Array, metadata: ReceivedAssetMetadata, peerId: string) => Promise<void>)
     | null = null;
+  #sendClock: ((message: ClockSyncMessage, peerId: string) => Promise<void>) | null = null;
   #assets = new Map<string, Blob>();
   #assetDescriptors = new Map<string, CollaborativeAssetDescriptor>();
   #assetSources = new Map<string, Set<string>>();
@@ -75,6 +89,9 @@ export class CollaborationService {
   #pendingLocalRegistrations = new Set<string>();
   #materializedAssetHashes = new Map<string, string>();
   #appliedPlaybackCommandIds = new Map<string, string>();
+  #remotePlaybackAnchors = new Map<string, RemotePlaybackAnchor>();
+  #pendingClockRequests = new Map<string, { peerId: string; sentAt: number }>();
+  #bestClockRoundTrips = new Map<string, number>();
   #placeholderEntityIds = new Set<string>();
   #placeholderStartedAt = new Map<string, number>();
   #assetTransferIds = new WeakMap<Blob, string>();
@@ -90,6 +107,8 @@ export class CollaborationService {
   #lastDocumentEntityIds = new Set<string>();
   #sessionRevision = 0;
   #pingTimer: ReturnType<typeof setInterval> | null = null;
+  #playbackDriftTimer: ReturnType<typeof setInterval> | null = null;
+  #selfId: string | null = null;
 
   configure(adapter: CollaborationCanvasAdapter): () => void {
     this.#adapter = adapter;
@@ -117,7 +136,10 @@ export class CollaborationService {
     this.#invite = invite;
     collaborationMetrics.beginConnection(invite.roomId);
 
-    const document = new CollaborationDocument();
+    const { joinRoom, selfId } = await import("trystero");
+    if (this.#sessionRevision !== sessionRevision) return;
+    this.#selfId = selfId;
+    const document = new CollaborationDocument({ sourceId: selfId });
     this.#document = document;
     this.#unsubscribeDocumentUpdate = document.onUpdate((update, isRemote) => {
       if (isRemote || !this.#sendDocument) return;
@@ -129,8 +151,6 @@ export class CollaborationService {
       this.#handleCanvasMutation(mutation);
     });
 
-    const { joinRoom } = await import("trystero");
-    if (this.#sessionRevision !== sessionRevision) return;
     const room = joinRoom({ appId: APP_ID, password: invite.password }, invite.roomId, {
       onJoinError: ({ error }) => this.#fail(error),
     });
@@ -140,6 +160,7 @@ export class CollaborationService {
     const inventoryAction = room.makeAction<string[]>("inventory");
     const assetRequestAction = room.makeAction<string>("asset-request");
     const assetAction = room.makeAction<Uint8Array>("asset");
+    const clockAction = room.makeAction<ClockSyncMessage>("clock");
 
     this.#sendDocument = async (update, peerId) => {
       await documentAction.send(update, { target: peerId });
@@ -176,6 +197,10 @@ export class CollaborationService {
         completedAt: Date.now(),
       });
     };
+    this.#sendClock = async (message, peerId) => {
+      await clockAction.send(message, { target: peerId });
+      collaborationMetrics.recordMessage("send", estimateJsonBytes(message));
+    };
 
     documentAction.onMessage = (update) => {
       const startedAt = performance.now();
@@ -199,6 +224,40 @@ export class CollaborationService {
     assetAction.onMessage = (payload, { peerId, metadata }) => {
       void this.#receiveAsset(payload, peerId, metadata).catch((error) => this.#fail(error));
     };
+    clockAction.onMessage = (message, { peerId }) => {
+      collaborationMetrics.recordMessage("receive", estimateJsonBytes(message));
+      if (!isClockSyncMessage(message)) return;
+      const receivedAt = monotonicEpochNow();
+      if (message.type === "request") {
+        void this.#sendClock?.(
+          {
+            type: "response",
+            requestId: message.requestId,
+            requesterSentAt: message.sentAt,
+            receiverReceivedAt: receivedAt,
+            receiverSentAt: monotonicEpochNow(),
+          },
+          peerId,
+        ).catch((error) => this.#fail(error));
+        return;
+      }
+      const pending = this.#pendingClockRequests.get(message.requestId);
+      if (!pending || pending.peerId !== peerId || pending.sentAt !== message.requesterSentAt)
+        return;
+      this.#pendingClockRequests.delete(message.requestId);
+      const sample = calculatePeerClockSample(
+        message.requesterSentAt,
+        message.receiverReceivedAt,
+        message.receiverSentAt,
+        receivedAt,
+      );
+      const bestRoundTrip = this.#bestClockRoundTrips.get(peerId);
+      if (bestRoundTrip === undefined || sample.roundTripMs <= bestRoundTrip) {
+        this.#bestClockRoundTrips.set(peerId, sample.roundTripMs);
+        document.setPeerClockOffset(peerId, sample.offsetMs);
+        void this.#refreshRemotePlaybackClock(peerId).catch((error) => this.#fail(error));
+      }
+    };
 
     room.onPeerJoin = (peerId) => {
       this.#updatePeerCount();
@@ -206,12 +265,20 @@ export class CollaborationService {
       void this.#sendInventory?.([...this.#assets.keys()], peerId).catch((error) =>
         this.#fail(error),
       );
+      this.#requestClockSync(peerId);
     };
-    room.onPeerLeave = () => this.#updatePeerCount();
+    room.onPeerLeave = (peerId) => {
+      this.#bestClockRoundTrips.delete(peerId);
+      this.#updatePeerCount();
+    };
 
     collaborationMetrics.markConnected();
     this.#updatePeerCount();
     this.#pingTimer = setInterval(() => void this.#measureRoundTripTime(), PING_INTERVAL_MS);
+    this.#playbackDriftTimer = setInterval(
+      () => void this.#correctPlaybackDrift().catch((error) => this.#fail(error)),
+      PLAYBACK_DRIFT_INTERVAL_MS,
+    );
     for (const entity of canvasStore.getState().entities.values()) {
       this.#queueEntityRegistration(entity);
     }
@@ -234,11 +301,16 @@ export class CollaborationService {
     this.#sendInventory = null;
     this.#sendAssetRequest = null;
     this.#sendAsset = null;
+    this.#sendClock = null;
+    this.#selfId = null;
     this.#pendingAssets.clear();
     this.#pendingMaterializations.clear();
     this.#pendingLocalRegistrations.clear();
     this.#materializedAssetHashes.clear();
     this.#appliedPlaybackCommandIds.clear();
+    this.#remotePlaybackAnchors.clear();
+    this.#pendingClockRequests.clear();
+    this.#bestClockRoundTrips.clear();
     this.#placeholderEntityIds.clear();
     this.#placeholderStartedAt.clear();
     this.#assetTransferIds = new WeakMap();
@@ -252,6 +324,8 @@ export class CollaborationService {
     this.#geometryTimers.clear();
     if (this.#pingTimer) clearInterval(this.#pingTimer);
     this.#pingTimer = null;
+    if (this.#playbackDriftTimer) clearInterval(this.#playbackDriftTimer);
+    this.#playbackDriftTimer = null;
     collaborationMetrics.reset();
   }
 
@@ -299,6 +373,7 @@ export class CollaborationService {
           this.#pendingLocalRegistrations.delete(entityId);
           this.#materializedAssetHashes.delete(entityId);
           this.#appliedPlaybackCommandIds.delete(entityId);
+          this.#remotePlaybackAnchors.delete(entityId);
         }
         this.#document?.removeEntities(mutation.entityIds);
         break;
@@ -483,6 +558,7 @@ export class CollaborationService {
         for (const id of removedIds) {
           this.#materializedAssetHashes.delete(id);
           this.#appliedPlaybackCommandIds.delete(id);
+          this.#remotePlaybackAnchors.delete(id);
           this.#placeholderEntityIds.delete(id);
           this.#placeholderStartedAt.delete(id);
         }
@@ -511,6 +587,7 @@ export class CollaborationService {
         for (const id of replacedIds) {
           this.#materializedAssetHashes.delete(id);
           this.#appliedPlaybackCommandIds.delete(id);
+          this.#remotePlaybackAnchors.delete(id);
           this.#placeholderEntityIds.delete(id);
           this.#placeholderStartedAt.delete(id);
         }
@@ -685,12 +762,69 @@ export class CollaborationService {
   async #measureRoundTripTime(): Promise<void> {
     const room = this.#room;
     if (!room) return;
-    const peerId = Object.keys(room.getPeers())[0];
+    const peerIds = Object.keys(room.getPeers());
+    for (const id of peerIds) this.#requestClockSync(id);
+    const peerId = peerIds[0];
     if (!peerId) return;
     try {
       collaborationMetrics.recordRoundTripTime(await room.ping(peerId));
     } catch (error) {
       logger.warn("[collaboration] ping failed", error);
+    }
+  }
+
+  #requestClockSync(peerId: string): void {
+    for (const [requestId, pending] of this.#pendingClockRequests) {
+      if (pending.peerId === peerId) this.#pendingClockRequests.delete(requestId);
+    }
+    const sentAt = monotonicEpochNow();
+    const requestId = crypto.randomUUID();
+    this.#pendingClockRequests.set(requestId, { peerId, sentAt });
+    void this.#sendClock?.({ type: "request", requestId, sentAt }, peerId).catch((error) =>
+      this.#fail(error),
+    );
+  }
+
+  async #correctPlaybackDrift(): Promise<void> {
+    const adapter = this.#adapter;
+    if (!adapter || this.#remotePlaybackAnchors.size === 0) return;
+    const now = performance.now();
+    this.#projectionDepth++;
+    try {
+      for (const [entityId, anchor] of this.#remotePlaybackAnchors) {
+        if (!canvasStore.getState().entities.has(entityId)) {
+          this.#remotePlaybackAnchors.delete(entityId);
+          continue;
+        }
+        const playback = advancePlayback(anchor.entity, (now - anchor.anchoredAt) / 1_000);
+        await adapter.applyRemotePlayback({ ...anchor.entity, playback });
+      }
+    } finally {
+      this.#projectionDepth--;
+    }
+  }
+
+  async #refreshRemotePlaybackClock(peerId: string): Promise<void> {
+    const adapter = this.#adapter;
+    const document = this.#document;
+    if (!adapter || !document) return;
+    const refreshed: CollaborativeEntity[] = [];
+    for (const [entityId, anchor] of this.#remotePlaybackAnchors) {
+      if (anchor.entity.playbackSourceId !== peerId) continue;
+      const entity = document.getEntity(entityId);
+      if (entity && entity.playbackCommandId === anchor.entity.playbackCommandId) {
+        refreshed.push(entity);
+      }
+    }
+    if (refreshed.length === 0) return;
+    this.#projectionDepth++;
+    try {
+      for (const entity of refreshed) {
+        await adapter.applyRemotePlayback(entity);
+        this.#markPlaybackApplied(entity);
+      }
+    } finally {
+      this.#projectionDepth--;
     }
   }
 
@@ -741,7 +875,10 @@ export class CollaborationService {
       playback,
       getEntityPlaybackDuration(entity),
     );
-    if (commandId) this.#appliedPlaybackCommandIds.set(entity.id, commandId);
+    if (commandId) {
+      this.#appliedPlaybackCommandIds.set(entity.id, commandId);
+      this.#remotePlaybackAnchors.delete(entity.id);
+    }
   }
 
   #shouldApplyPlayback(entity: CollaborativeEntity): boolean {
@@ -754,6 +891,14 @@ export class CollaborationService {
   #markPlaybackApplied(entity: CollaborativeEntity): void {
     if (entity.playbackCommandId) {
       this.#appliedPlaybackCommandIds.set(entity.id, entity.playbackCommandId);
+      if (entity.playback && entity.playbackSourceId !== this.#selfId) {
+        this.#remotePlaybackAnchors.set(entity.id, {
+          entity: { ...entity, playback: { ...entity.playback } },
+          anchoredAt: performance.now(),
+        });
+      } else {
+        this.#remotePlaybackAnchors.delete(entity.id);
+      }
     }
   }
 
@@ -761,6 +906,21 @@ export class CollaborationService {
     collaborationMetrics.fail(error);
     logger.error("[collaboration]", error);
   }
+}
+
+function advancePlayback(entity: CollaborativeEntity, elapsedSeconds: number) {
+  const state = { ...entity.playback! };
+  if (!state.isPlaying) return state;
+  state.currentTime += Math.max(0, elapsedSeconds) * state.playbackRate;
+  const duration = entity.playbackDuration ?? 0;
+  if (duration > 0) {
+    if (state.loop) state.currentTime %= duration;
+    else if (state.currentTime >= duration) {
+      state.currentTime = duration;
+      state.isPlaying = false;
+    }
+  }
+  return state;
 }
 
 function estimateJsonBytes(value: unknown): number {

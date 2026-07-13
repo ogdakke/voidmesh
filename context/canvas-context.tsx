@@ -95,6 +95,7 @@ import {
 let nextOwnerToken = 0;
 const resourceOwners = new Map<string, number>();
 const RENDER_ERROR_TOAST_ID = "canvas-render-error";
+const collaborativeAutoplayBlockedEntityIds = new Set<string>();
 
 function formatErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
@@ -139,22 +140,65 @@ async function applyCollaborativePlayback(
     video.playbackRate = playback.playbackRate;
     video.muted = playback.muted;
     video.volume = playback.volume;
-    if (Math.abs(video.currentTime - playback.currentTime) >= 0.15) {
+    if (
+      playbackDistance(video.currentTime, playback.currentTime, video.duration, playback.loop) >=
+      0.15
+    ) {
       canvasStore.seekVideo(entity.id, playback.currentTime);
     }
+    if (!playback.isPlaying) collaborativeAutoplayBlockedEntityIds.delete(entity.id);
     if (playback.isPlaying && video.paused) {
-      await canvasStore.playVideo(entity.id);
+      if (collaborativeAutoplayBlockedEntityIds.has(entity.id) && !playback.muted) return;
+      void canvasStore
+        .playVideo(entity.id)
+        .then(() => collaborativeAutoplayBlockedEntityIds.delete(entity.id))
+        .catch((error) => {
+          if (!isAutoplayBlockedError(error)) {
+            logger.error("Unable to apply collaborative playback", error);
+            return;
+          }
+          if (collaborativeAutoplayBlockedEntityIds.has(entity.id)) return;
+          collaborativeAutoplayBlockedEntityIds.add(entity.id);
+          toastManager.add({
+            title: "Playback needs a click",
+            description: `${entity.name} was started by a peer, but the browser blocked unmuted autoplay.`,
+          });
+        });
     } else if (!playback.isPlaying && !video.paused) {
+      collaborativeAutoplayBlockedEntityIds.delete(entity.id);
       canvasStore.pauseVideo(entity.id);
     }
     return;
   }
 
   if (isGifEntity(entity)) {
-    canvasStore.seekGif(entity.id, playback.currentTime);
-    if (playback.isPlaying) canvasStore.playGif(entity.id);
-    else canvasStore.pauseGif(entity.id);
+    if (
+      playbackDistance(
+        entity.playback.currentTime,
+        playback.currentTime,
+        entity.mediaSource.duration,
+        playback.loop,
+      ) >= 0.15
+    ) {
+      canvasStore.seekGif(entity.id, playback.currentTime);
+    }
+    if (playback.isPlaying && !entity.playback.isPlaying) canvasStore.playGif(entity.id);
+    else if (!playback.isPlaying && entity.playback.isPlaying) canvasStore.pauseGif(entity.id);
   }
+}
+
+function playbackDistance(
+  current: number,
+  target: number,
+  duration: number,
+  loop: boolean,
+): number {
+  const direct = Math.abs(current - target);
+  return loop && duration > 0 ? Math.min(direct, Math.abs(duration - direct)) : direct;
+}
+
+function isAutoplayBlockedError(error: unknown): boolean {
+  return error instanceof Error && error.name === "NotAllowedError";
 }
 
 function scheduleCollaborativeRender(entityId?: string): void {
@@ -738,6 +782,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           throw error;
         }
       },
+      async applyRemotePlayback(entity) {
+        const current = canvasStore.getState().entities.get(entity.id);
+        if (current) await applyCollaborativePlayback(current, entity.playback);
+      },
       async updateRemoteEntity(entity, applyPlayback) {
         const current = canvasStore.getState().entities.get(entity.id);
         if (!current) return;
@@ -779,6 +827,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         }
         canvasStore.removeEntities(removedIds);
         for (const entity of removedEntities) {
+          collaborativeAutoplayBlockedEntityIds.delete(entity.id);
           releaseSharedImageAsset(entity);
           destroyEntityMediaResources(entity);
         }
@@ -794,6 +843,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
     return () => {
       if (clearSharedImageAssetsTimer) clearTimeout(clearSharedImageAssetsTimer);
+      collaborativeAutoplayBlockedEntityIds.clear();
       sharedImageAssets.clear();
       collaborationService.stop();
       unconfigure();

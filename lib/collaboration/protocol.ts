@@ -43,6 +43,7 @@ export interface CollaborativeEntity {
   playback?: PlaybackState;
   playbackDuration?: number;
   playbackCommandId?: string;
+  playbackSourceId?: string;
   asset: CollaborativeAssetDescriptor;
 }
 

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { CollaborationDocument } from "#lib/collaboration/document.ts";
 import { createCollaborativeEntity } from "#lib/collaboration/protocol.ts";
 import { createTestEntity } from "../helpers/test-entity.ts";
@@ -59,8 +59,8 @@ describe("CollaborationDocument", () => {
   });
 
   it("wraps an advancing loop clock by media duration", () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const document = new CollaborationDocument();
+    let now = 1_000;
+    const document = new CollaborationDocument({ now: () => now });
     const entity = createTestEntity({
       id: "looping-video",
       mediaType: "video",
@@ -79,13 +79,45 @@ describe("CollaborationDocument", () => {
       }),
     );
 
-    now.mockReturnValue(3_500);
+    now = 3_500;
 
     expect(document.getEntities()[0]?.playback).toMatchObject({
       isPlaying: true,
       currentTime: 1.5,
     });
-    now.mockRestore();
+  });
+
+  it("advances remote playback using the measured peer clock offset", () => {
+    let leftNow = 11_000;
+    let rightNow = 1_000;
+    const left = new CollaborationDocument({ sourceId: "left", now: () => leftNow });
+    const right = new CollaborationDocument({ sourceId: "right", now: () => rightNow });
+    right.setPeerClockOffset("left", 10_000);
+    const entity = createTestEntity({
+      id: "clocked-video",
+      mediaType: "video",
+      videoDuration: 30,
+    });
+    if (!entity.playback) throw new Error("Expected playback state");
+    entity.playback = { ...entity.playback, isPlaying: true, currentTime: 4 };
+    left.addEntity(
+      createCollaborativeEntity(entity, {
+        transferId: "clocked-transfer",
+        hash: "clocked-hash",
+        mimeType: "video/mp4",
+        byteLength: 10,
+        filename: "clocked.mp4",
+        preview: { codec: "thumbhash-v1", bytes: new Uint8Array([1]) },
+      }),
+    );
+    right.applyUpdate(left.encodeState());
+    rightNow = 2_500;
+    leftNow = 12_500;
+
+    expect(right.getEntities()[0]).toMatchObject({
+      playback: { isPlaying: true, currentTime: 5.5 },
+      playbackSourceId: "left",
+    });
   });
 
   it("publishes a provisional preview before the content hash is available", () => {
