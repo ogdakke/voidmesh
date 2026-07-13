@@ -40,7 +40,7 @@ Note: `KeybindProvider` wraps outside `App()` at the root render level.
 - Entity deletion triggers disintegration animation when `fancyDelete` is enabled, but per-entity snapshots/particle systems are capped by `config.canvas.fancyDeleteMaxBatchSize`; larger selections delete without animation. Undo cancels any created overlays.
 - `fancyDelete` preference defaults to `true` unless `prefers-reduced-motion: reduce` is active.
 - Export queue clones video elements to isolate export playback from preview playback.
-- Collaboration assets are SHA-256-addressed immutable blobs. Serialize asynchronous remote reconciliation, suppress projection echoes, and reassert renderer dirtiness on the next frame after remote media adoption.
+- Collaboration publishes a validated ThumbHash descriptor before SHA-256 completes, materializes it as a full-geometry placeholder, then hydrates verified media in place. Serialize asynchronous remote reconciliation, suppress projection echoes, preserve the entity ID/state across hydration, dispose replaced preview resources, and reassert renderer dirtiness on the next frame.
 
 ## Anti-Patterns
 

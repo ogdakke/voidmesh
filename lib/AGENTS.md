@@ -13,7 +13,8 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `media-assets.ts` — Creates shared image assets and manages decoded-bitmap lifetime with explicit retain/release ownership.
 - `media-resources.ts` — Central exception-safe disposal for entity/detached media and video elements.
 - `app-loader.ts` — Controls the HTML loading screen. `setText()` updates status text, `dismiss()` hides with min-display guarantee.
-- `serialization/` — `.vdmsh` zip format with versioning and migrations. v6 preserves original encoded media bytes with explicit MIME metadata; imports validate manifests/duplicate IDs, stage decoded ownership until adoption, yield in bounded chunks, and decode each repeated image path once.
+- `serialization/` — `.vdmsh` zip format with versioning and migrations. v7 caches per-entity ThumbHashes; v6 preserves original encoded media bytes with explicit MIME metadata. Imports validate manifests/duplicate IDs, stage decoded ownership until adoption, yield in bounded chunks, and decode each repeated image path once.
+- `thumbhash.ts` — Bounded first-frame ThumbHash encode/decode, runtime bitmap caching, preview validation, and workspace base64 conversion.
 - `files/file-handle.ts` — File System Access API handle storage for in-place workspace saving (Chromium only).
 - `files/random-filename.ts` + `files/filename-words.ts` — Random filename generation for workspace files.
 - `palette-extraction/` — K-means clustering for color palettes.
@@ -25,7 +26,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `gif-encoder.ts` + `gif-encoder-worker.ts` — GIF encoding via gifenc in Web Worker.
 - `download.ts` — File downloads and file picker (with iOS compatibility).
 - `storage.ts` — Browser storage abstraction (unstorage) for persisted preferences.
-- `collaboration/protocol.ts` — Invite fragments, content-addressed asset descriptors, hashing, validation, and selective gzip for compressible text payloads.
+- `collaboration/protocol.ts` — Invite fragments, provisional preview descriptors, content-addressed final assets, hashing, validation, and selective gzip for compressible text payloads.
 - `collaboration/document.ts` — Yjs entity/layer document with grouped identity, geometry, appearance, asset, and playback fields.
 - `collaboration/metrics.ts` — Reactive counters and bounded transfer diagnostics for collaboration sessions.
 - Also: `config/action-layer.config.ts`, `entity-placement.ts`, `deep-merge.ts`, `shader-defaults.ts`, `gif-decoder.ts`.
@@ -44,6 +45,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `Undo.clear()` evicts committed stacks and any active transaction. Workspace replacement relies on this to prevent late transaction commits from targeting imported colliding IDs.
 - GIF/video decode paths close decoders, frames, snapshots, and blob-backed elements on every exception path.
 - Treat already-encoded image/video/GIF payloads as identity transfers; gzip only explicitly compressible formats and only when the result is smaller.
+- Persist validated ThumbHashes as manifest metadata and reuse them after import; do not re-read decoded pixels when an entity already carries a preview.
 
 ## Anti-Patterns
 

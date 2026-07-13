@@ -25,6 +25,8 @@ type ShaderType = typeof ShaderType.infer;
 
 Static image entities reference a shared `MediaImageAsset` through `mediaSource.asset`. Entity transforms and shader state remain per-instance; decoded pixels, encoded source data, alpha capability, identity, and revision live on the asset.
 
+Every entity may retain a `MediaPreview` (`thumbhash-v1`) for workspace persistence and provisional collaboration rendering. The preview represents the image or first decoded frame; it is metadata, not the authoritative media source.
+
 ## Anti-Patterns
 
 - Do not put runtime logic here beyond type guards and `createEnum()`. Utility functions go in `lib/`.
