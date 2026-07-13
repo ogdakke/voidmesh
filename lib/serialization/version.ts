@@ -1,2 +1,2 @@
 /** Current schema version for the studio document format */
-export const CURRENT_VERSION = 6;
+export const CURRENT_VERSION = 7;

@@ -11,6 +11,7 @@ import type {
 } from "./types.ts";
 import { CURRENT_VERSION } from "./version.ts";
 import { getMediaExtension, requireMediaBlobMimeType } from "./mime.ts";
+import { getEntityThumbhash, thumbhashToBase64 } from "#lib/thumbhash.ts";
 
 /** Synchronous flag — prevents overlapping saves even when React state hasn't flushed yet. */
 let isSaving = false;
@@ -124,6 +125,7 @@ async function prepareEntity(
   entity: ShaderCanvasEntity,
   serializedImageAssets: Set<string>,
 ): Promise<PreparedEntity> {
+  const thumbhash = thumbhashToBase64(getEntityThumbhash(entity));
   const base = {
     id: entity.id,
     name: entity.name,
@@ -137,6 +139,7 @@ async function prepareEntity(
     rotation: entity.rotation,
     locked: entity.locked ?? false,
     edited: entity.edited,
+    thumbhash,
     shaderType: entity.shaderType,
     shaderParams: structuredClone(entity.shaderParams),
     ...(entity.originalPalette && {

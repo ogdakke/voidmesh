@@ -21,15 +21,32 @@ function toCollaborative(id: string) {
   return {
     entity,
     collaborative: createCollaborativeEntity(entity, {
+      transferId: `${id}-transfer`,
       hash: `${id}-hash`,
       mimeType: "image/png",
       byteLength: 10,
       filename: `${id}.png`,
+      preview: { codec: "thumbhash-v1", bytes: new Uint8Array([1]) },
     }),
   };
 }
 
 describe("CollaborationDocument", () => {
+  it("publishes a provisional preview before the content hash is available", () => {
+    const left = new CollaborationDocument();
+    const right = new CollaborationDocument();
+    const disconnect = connect(left, right);
+    const { collaborative } = toCollaborative("previewed");
+    const { hash: _hash, ...provisionalAsset } = collaborative.asset;
+
+    left.addEntity({ ...collaborative, asset: provisionalAsset });
+    expect(right.getEntities()[0]?.asset).toEqual(provisionalAsset);
+
+    left.setAsset("previewed", collaborative.asset);
+    expect(right.getEntities()[0]?.asset).toEqual(collaborative.asset);
+    disconnect();
+  });
+
   it("converges concurrent geometry and appearance edits without overwriting either", () => {
     const left = new CollaborationDocument();
     const right = new CollaborationDocument();

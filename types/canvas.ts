@@ -453,6 +453,11 @@ export type MediaSourceSvg = {
 /** Media source for an entity - an image, video, animated GIF, or SVG */
 export type MediaSource = MediaSourceImage | MediaSourceVideo | MediaSourceGif | MediaSourceSvg;
 
+export interface MediaPreview {
+  codec: "thumbhash-v1";
+  bytes: Uint8Array;
+}
+
 /** Video playback state */
 export interface PlaybackState {
   isPlaying: boolean;
@@ -482,6 +487,8 @@ type ShaderCanvasEntityBase = {
   imageBitmap: ImageBitmap;
   /** Original media dimensions (for aspect ratio preservation) */
   originalSize: Size;
+  /** Compact first-frame preview retained across workspace saves and collaboration. */
+  preview?: MediaPreview;
   /** Video playback state (only for video entities) */
   playback?: PlaybackState;
 

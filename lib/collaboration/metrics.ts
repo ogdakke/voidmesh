@@ -32,6 +32,11 @@ export interface CollaborationMetricsState {
   assetHashDurationMs: number;
   assetCompressionDurationMs: number;
   assetDecodeDurationMs: number;
+  previewEncodeDurationMs: number;
+  previewDecodeDurationMs: number;
+  previewPlaceholdersCreated: number;
+  previewHydrations: number;
+  previewDwellDurationMs: number;
   documentApplyDurationMs: number;
   documentReconcileDurationMs: number;
   lastRoundTripTimeMs: number | null;
@@ -103,6 +108,23 @@ export class CollaborationMetricsStore extends Store<CollaborationMetricsState> 
     this.publish();
   }
 
+  recordPreviewEncodeDuration(durationMs: number): void {
+    this.state.previewEncodeDurationMs += durationMs;
+    this.publish();
+  }
+
+  recordPreviewPlaceholder(decodeDurationMs: number): void {
+    this.state.previewDecodeDurationMs += decodeDurationMs;
+    this.state.previewPlaceholdersCreated++;
+    this.publish();
+  }
+
+  recordPreviewHydration(dwellDurationMs: number): void {
+    this.state.previewHydrations++;
+    this.state.previewDwellDurationMs += dwellDurationMs;
+    this.publish();
+  }
+
   recordCompressionDuration(durationMs: number): void {
     this.state.assetCompressionDurationMs += durationMs;
     this.publish();
@@ -166,6 +188,11 @@ function createInitialState(): CollaborationMetricsState {
     assetHashDurationMs: 0,
     assetCompressionDurationMs: 0,
     assetDecodeDurationMs: 0,
+    previewEncodeDurationMs: 0,
+    previewDecodeDurationMs: 0,
+    previewPlaceholdersCreated: 0,
+    previewHydrations: 0,
+    previewDwellDurationMs: 0,
     documentApplyDurationMs: 0,
     documentReconcileDurationMs: 0,
     lastRoundTripTimeMs: null,

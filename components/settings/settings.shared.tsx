@@ -146,6 +146,20 @@ export function CollaborationMetrics() {
         <Metric label="Hashing" value={formatDuration(metrics.assetHashDurationMs)} />
         <Metric label="Compression" value={formatDuration(metrics.assetCompressionDurationMs)} />
         <Metric label="Media decode" value={formatDuration(metrics.assetDecodeDurationMs)} />
+        <Metric label="Preview encode" value={formatDuration(metrics.previewEncodeDurationMs)} />
+        <Metric label="Preview decode" value={formatDuration(metrics.previewDecodeDurationMs)} />
+        <Metric
+          label="Placeholders"
+          value={`${metrics.previewPlaceholdersCreated} · ${metrics.previewHydrations} hydrated`}
+        />
+        <Metric
+          label="Preview dwell"
+          value={formatDuration(
+            metrics.previewHydrations > 0
+              ? metrics.previewDwellDurationMs / metrics.previewHydrations
+              : null,
+          )}
+        />
         <Metric label="CRDT apply" value={formatDuration(metrics.documentApplyDurationMs)} />
         <Metric label="Reconcile" value={formatDuration(metrics.documentReconcileDurationMs)} />
         {lastTransfer && (

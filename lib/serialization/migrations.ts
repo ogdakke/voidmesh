@@ -57,6 +57,13 @@ const migrations: Record<number, Migration> = {
     doc.version = 6;
     return doc;
   },
+
+  // Version 6 -> 7: ThumbHash previews are optional and are generated on the
+  // next save when absent, so no manifest rewrite is necessary.
+  6: (doc) => {
+    doc.version = 7;
+    return doc;
+  },
 };
 
 /**

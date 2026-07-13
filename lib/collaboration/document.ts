@@ -4,6 +4,7 @@ import type {
   CollaborativeAssetDescriptor,
   CollaborativeEntity,
 } from "#lib/collaboration/protocol.ts";
+import { isCollaborativeAssetDescriptor } from "#lib/collaboration/protocol.ts";
 
 const REMOTE_ORIGIN = Symbol("voidmesh-collaboration-remote");
 const LOCAL_ORIGIN = Symbol("voidmesh-collaboration-local");
@@ -220,7 +221,7 @@ function readEntity(
   const appearance = map.get("appearance") as CollaborativeAppearance | undefined;
   const asset = map.get("asset") as CollaborativeAssetDescriptor | undefined;
   const playback = map.get("playback") as CollaborativePlayback | undefined;
-  if (!identity || !geometry || !appearance || !asset) return null;
+  if (!identity || !geometry || !appearance || !isCollaborativeAssetDescriptor(asset)) return null;
 
   return {
     id,

@@ -140,6 +140,29 @@ describe("deserialize workspace", () => {
     expect(entity.mediaSource.asset.blob.type).toBe("image/png");
   });
 
+  test("restores an archived ThumbHash without regenerating it", async () => {
+    const entity = createSerializedImageEntity("entity-1", "media/assets/source.png");
+    const previewBytes = new Uint8Array([1, 2, 3, 4]);
+    const archive = createManifestArchive(
+      {
+        type: "studio-canvas",
+        version: CURRENT_VERSION,
+        createdAt: new Date("2026-07-13T10:00:00.000Z").toISOString(),
+        viewport: { offset: { x: 0, y: 0 }, zoom: 1 },
+        entities: [{ ...entity, thumbhash: btoa(String.fromCharCode(...previewBytes)) }],
+        palettes: [],
+      },
+      { [entity.mediaFile]: new Uint8Array([1, 2, 3]) },
+    );
+
+    const result = await deserializeIntoCanvas(archive);
+    expect(result.success).toBe(true);
+    expect(canvasStore.getState().entities.get("entity-1")?.preview).toEqual({
+      codec: "thumbhash-v1",
+      bytes: previewBytes,
+    });
+  });
+
   test("migrates v5 PNG image payloads to explicit MIME metadata", async () => {
     const entity = createSerializedImageEntity("entity-1", "media/assets/source-0.png");
     const { mimeType: _mimeType, ...legacyEntity } = entity;

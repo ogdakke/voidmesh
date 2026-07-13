@@ -58,6 +58,8 @@ interface SerializedEntityBase {
   edited: boolean;
   /** MIME type of the exact bytes stored at mediaFile (v6+) */
   mimeType?: string;
+  /** Base64 ThumbHash of the entity's image or first frame (v7+) */
+  thumbhash?: string;
   shaderType: string;
   shaderParams: ShaderParams;
   /** Palette extracted from source image (v4+) */
@@ -209,6 +211,7 @@ export function isSerializedEntity(
     typeof e.locked === "boolean" &&
     typeof e.edited === "boolean" &&
     isRecord(e.shaderParams) &&
+    (e.thumbhash === undefined || isValidThumbhash(e.thumbhash)) &&
     (e.originalPalette === undefined || isColorPalette(e.originalPalette));
   if (
     !validBase ||
@@ -243,6 +246,16 @@ export function isSerializedEntity(
       );
     default:
       return false;
+  }
+}
+
+function isValidThumbhash(value: unknown): boolean {
+  if (typeof value !== "string" || value.length === 0 || value.length > 256) return false;
+  try {
+    const bytes = Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+    return bytes.byteLength > 0 && bytes.byteLength <= 128;
+  } catch {
+    return false;
   }
 }
 

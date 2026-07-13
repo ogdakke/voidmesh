@@ -22,7 +22,7 @@ describe("collaboration invite links", () => {
   });
 
   it("rejects malformed or incompatible invites", () => {
-    expect(parseCollaborationInvite("https://voidmesh.app/#collab=v2.room.key")).toBeNull();
+    expect(parseCollaborationInvite("https://voidmesh.app/#collab=v3.room.key")).toBeNull();
     expect(parseCollaborationInvite("https://voidmesh.app/#anything-else")).toBeNull();
   });
 });
@@ -33,6 +33,7 @@ describe("collaboration asset payloads", () => {
     const blob = new Blob([source], { type: "image/svg+xml" });
     const prepared = await prepareAssetPayload(blob, blob.type);
     const metadata: ReceivedAssetMetadata = {
+      transferId: "svg-transfer",
       hash: await hashBlob(blob),
       mimeType: blob.type,
       byteLength: blob.size,
@@ -60,6 +61,7 @@ describe("collaboration asset payloads", () => {
 
   it("detects a corrupt decompressed length", async () => {
     const metadata: ReceivedAssetMetadata = {
+      transferId: "video-transfer",
       hash: "hash",
       mimeType: "video/mp4",
       byteLength: 3,

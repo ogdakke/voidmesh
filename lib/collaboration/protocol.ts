@@ -5,9 +5,11 @@ import type {
   ShaderCanvasEntity,
   ShaderParams,
   ShaderType,
+  MediaPreview,
 } from "#types/canvas.ts";
+import { isMediaPreview } from "#lib/thumbhash.ts";
 
-export const COLLABORATION_PROTOCOL_VERSION = 1;
+export const COLLABORATION_PROTOCOL_VERSION = 2;
 export const COLLABORATION_INVITE_PREFIX = "collab";
 
 export interface CollaborationInvite {
@@ -17,10 +19,12 @@ export interface CollaborationInvite {
 }
 
 export interface CollaborativeAssetDescriptor {
-  hash: string;
+  transferId: string;
+  hash?: string;
   mimeType: string;
   byteLength: number;
   filename: string;
+  preview: MediaPreview;
 }
 
 export interface CollaborativeEntity {
@@ -49,7 +53,11 @@ export interface PreparedAssetPayload {
   transmittedByteLength: number;
 }
 
-export interface ReceivedAssetMetadata extends CollaborativeAssetDescriptor {
+export interface ReceivedAssetMetadata extends Omit<
+  CollaborativeAssetDescriptor,
+  "hash" | "preview"
+> {
+  hash: string;
   compression: AssetCompression;
   originalByteLength: number;
   protocolVersion: number;
@@ -182,6 +190,9 @@ export function isReceivedAssetMetadata(value: unknown): value is ReceivedAssetM
   const metadata = value as Partial<ReceivedAssetMetadata>;
   return (
     typeof metadata.hash === "string" &&
+    metadata.hash.length > 0 &&
+    typeof metadata.transferId === "string" &&
+    metadata.transferId.length > 0 &&
     typeof metadata.mimeType === "string" &&
     typeof metadata.byteLength === "number" &&
     Number.isSafeInteger(metadata.byteLength) &&
@@ -192,6 +203,25 @@ export function isReceivedAssetMetadata(value: unknown): value is ReceivedAssetM
     Number.isSafeInteger(metadata.originalByteLength) &&
     metadata.originalByteLength >= 0 &&
     metadata.protocolVersion === COLLABORATION_PROTOCOL_VERSION
+  );
+}
+
+export function isCollaborativeAssetDescriptor(
+  value: unknown,
+): value is CollaborativeAssetDescriptor {
+  if (!value || typeof value !== "object") return false;
+  const asset = value as Partial<CollaborativeAssetDescriptor>;
+  return (
+    typeof asset.transferId === "string" &&
+    asset.transferId.length > 0 &&
+    (asset.hash === undefined || (typeof asset.hash === "string" && asset.hash.length > 0)) &&
+    typeof asset.mimeType === "string" &&
+    asset.mimeType.length > 0 &&
+    typeof asset.byteLength === "number" &&
+    Number.isSafeInteger(asset.byteLength) &&
+    asset.byteLength >= 0 &&
+    typeof asset.filename === "string" &&
+    isMediaPreview(asset.preview)
   );
 }
 

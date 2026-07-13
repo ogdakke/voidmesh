@@ -27,6 +27,7 @@ import { CURRENT_VERSION } from "./version.ts";
 import { analytics } from "#lib/analytics.ts";
 import { createImageAsset, retainImageAsset } from "#lib/media-assets.ts";
 import { inferLegacyMediaMimeType } from "./mime.ts";
+import { thumbhashFromBase64 } from "#lib/thumbhash.ts";
 
 const LARGE_WORKSPACE_PROGRESS_THRESHOLD = 1_000;
 const DESERIALIZE_CHUNK_SIZE = 512;
@@ -614,6 +615,9 @@ function createDeserializedEntityBase(
     rotation: serialized.rotation,
     locked: serialized.locked,
     edited: serialized.edited,
+    ...(serialized.thumbhash && {
+      preview: thumbhashFromBase64(serialized.thumbhash) ?? undefined,
+    }),
     shaderType,
     shaderParams,
     textureDirty: true as const,
