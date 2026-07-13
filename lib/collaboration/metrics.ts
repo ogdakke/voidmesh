@@ -94,6 +94,21 @@ export class CollaborationMetricsStore extends Store<CollaborationMetricsState> 
     this.notify();
   }
 
+  beginReconnection(roomId: string, startedAt = performance.now()): void {
+    this.#clearRealtimePublishTimer();
+    Object.assign(this.state, {
+      status: "reconnecting" as const,
+      roomId,
+      peerCount: 0,
+      connectedAt: startedAt,
+      connectionDurationMs: null,
+      connectionPath: "unknown" as const,
+      relayProtocol: null,
+      version: this.state.version + 1,
+    });
+    this.notify();
+  }
+
   markReady(now = performance.now()): void {
     this.state.status = this.state.peerCount > 0 ? "connected" : "waiting";
     this.state.connectionDurationMs = Math.max(0, now - (this.state.connectedAt ?? now));

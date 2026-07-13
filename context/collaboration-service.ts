@@ -52,6 +52,10 @@ const PLAYBACK_DRIFT_INTERVAL_MS = 1_000;
 const PRESENCE_SYNC_INTERVAL_MS = 16;
 const ICE_CREDENTIAL_REFRESH_RATIO = 0.75;
 const ICE_CREDENTIAL_REFRESH_RETRY_MS = 60_000;
+const RECONNECT_RETRY_INITIAL_MS = 1_000;
+const RECONNECT_RETRY_MAX_MS = 30_000;
+const PEER_RECOVERY_GRACE_MS = 3_000;
+const RESUME_PING_TIMEOUT_MS = 3_000;
 const MAX_CONCURRENT_ASSET_REQUESTS = 4;
 const MAX_CONCURRENT_ASSET_SENDS_PER_PEER = 4;
 const MAX_CONCURRENT_ASSET_SEND_BYTES = 32 * 1024 * 1024;
@@ -92,7 +96,7 @@ interface CollaborationHydration {
 }
 
 interface CollaborationRoom {
-  leave(): void;
+  leave(): void | Promise<void>;
   getPeers(): Record<string, RTCPeerConnection>;
   ping(peerId: string): Promise<number>;
   onPeerJoin: ((peerId: string) => void) | null;
@@ -203,6 +207,12 @@ export class CollaborationService {
   #iceCredentialAbortController: AbortController | null = null;
   #iceCredentialRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   #peerConnectionListeners = new Map<string, () => void>();
+  #roomLeavePromise: Promise<void> = Promise.resolve();
+  #reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  #peerRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
+  #reconnectAttempt = 0;
+  #connectionAttemptRevision: number | null = null;
+  #lifecycleListenersActive = false;
 
   constructor(iceServerProvider: IceServerProvider = new HttpIceServerProvider()) {
     this.#iceServerProvider = iceServerProvider;
@@ -238,9 +248,19 @@ export class CollaborationService {
   async start(invite: CollaborationInvite): Promise<void> {
     if (!this.#adapter) throw new Error("Collaboration canvas adapter is not configured");
     this.stop();
+    this.#invite = invite;
+    this.#reconnectAttempt = 0;
+    this.#addLifecycleListeners();
+    await this.#startSession(invite, false);
+  }
+
+  async #startSession(invite: CollaborationInvite, reconnecting: boolean): Promise<void> {
     const sessionRevision = ++this.#sessionRevision;
     this.#invite = invite;
-    collaborationMetrics.beginConnection(invite.roomId);
+    this.#connectionAttemptRevision = sessionRevision;
+    const reusedDocument = this.#document !== null;
+    if (reconnecting) collaborationMetrics.beginReconnection(invite.roomId);
+    else collaborationMetrics.beginConnection(invite.roomId);
     const sessionAbortController = new AbortController();
     this.#sessionAbortController = sessionAbortController;
 
@@ -254,7 +274,7 @@ export class CollaborationService {
       );
     } catch (error) {
       if (this.#sessionRevision !== sessionRevision) return;
-      this.#handleFatalError(error, "relay-unavailable");
+      this.#handleReconnectableError(error, "relay-unavailable");
       throw error;
     }
     if (this.#sessionRevision !== sessionRevision) return;
@@ -268,20 +288,25 @@ export class CollaborationService {
     try {
       const { joinRoom, selfId } = await import("trystero");
       if (this.#sessionRevision !== sessionRevision) return;
+      await this.#roomLeavePromise;
+      if (this.#sessionRevision !== sessionRevision) return;
       this.#selfId = selfId;
-      const document = new CollaborationDocument({ sourceId: selfId });
-      this.#document = document;
-      this.#unsubscribeDocumentUpdate = document.onUpdate((update, isRemote) => {
-        if (isRemote || !this.#sendDocument) return;
-        void this.#sendDocument(update).catch((error) => this.#reportIssue(error));
-      });
-      this.#unsubscribeDocumentChange = document.onChange((change) =>
-        this.#handleDocumentChange(change),
-      );
-      this.#unsubscribeMutations = canvasStore.subscribeEntityMutations((mutation) => {
-        if (this.#projectionDepth > 0) return;
-        this.#handleCanvasMutation(mutation);
-      });
+      let document = this.#document;
+      if (!document) {
+        document = new CollaborationDocument({ sourceId: selfId });
+        this.#document = document;
+        this.#unsubscribeDocumentUpdate = document.onUpdate((update, isRemote) => {
+          if (isRemote || !this.#sendDocument) return;
+          void this.#sendDocument(update).catch((error) => this.#reportIssue(error));
+        });
+        this.#unsubscribeDocumentChange = document.onChange((change) =>
+          this.#handleDocumentChange(change),
+        );
+        this.#unsubscribeMutations = canvasStore.subscribeEntityMutations((mutation) => {
+          if (this.#projectionDepth > 0) return;
+          this.#handleCanvasMutation(mutation);
+        });
+      }
 
       const room = joinRoom(
         {
@@ -293,7 +318,7 @@ export class CollaborationService {
         {
           onJoinError: ({ error }) => {
             if (this.#sessionRevision === sessionRevision) {
-              this.#handleFatalError(error, "signaling-unavailable");
+              this.#handleReconnectableError(error, "signaling-unavailable");
             }
           },
         },
@@ -539,9 +564,12 @@ export class CollaborationService {
         this.#peerConnectionListeners.get(peerId)?.();
         this.#peerConnectionListeners.delete(peerId);
         this.#updatePeerCount();
+        this.#schedulePeerRecovery();
       };
 
       collaborationMetrics.markReady();
+      this.#reconnectAttempt = 0;
+      this.#clearReconnectTimer();
       this.#updatePeerCount();
       this.#scheduleIceCredentialRefresh(iceCredentials, sessionRevision);
       this.#pingTimer = setInterval(() => void this.#measureRoundTripTime(), PING_INTERVAL_MS);
@@ -549,44 +577,65 @@ export class CollaborationService {
         () => void this.#correctPlaybackDrift().catch((error) => this.#reportIssue(error)),
         PLAYBACK_DRIFT_INTERVAL_MS,
       );
-      this.#localIdentity = createPeerIdentity(selfId);
-      this.#queuePresence({ identity: this.#localIdentity });
-      this.#unsubscribeLocalPresence = canvasStore.subscribeLocalPresence(
-        (cursor, selectedEntityIds) => this.#handleLocalPresence(cursor, selectedEntityIds),
-      );
-      window.addEventListener("online", this.#handleOnline);
-      for (const entity of canvasStore.getState().entities.values()) {
-        this.#queueEntityRegistration(entity);
+      if (!this.#localIdentity) {
+        this.#localIdentity = createPeerIdentity(selfId);
+        this.#queuePresence({ identity: this.#localIdentity });
+      }
+      if (!this.#unsubscribeLocalPresence) {
+        this.#unsubscribeLocalPresence = canvasStore.subscribeLocalPresence(
+          (cursor, selectedEntityIds) => this.#handleLocalPresence(cursor, selectedEntityIds),
+        );
+      }
+      if (!reusedDocument) {
+        for (const entity of canvasStore.getState().entities.values()) {
+          this.#queueEntityRegistration(entity);
+        }
       }
     } catch (error) {
       if (this.#sessionRevision !== sessionRevision || sessionAbortController.signal.aborted)
         return;
-      this.#handleFatalError(error, "signaling-unavailable");
+      this.#handleReconnectableError(error, "signaling-unavailable");
       throw error;
+    } finally {
+      if (this.#connectionAttemptRevision === sessionRevision) {
+        this.#connectionAttemptRevision = null;
+      }
     }
   }
 
   stop(): void {
-    this.#teardownSession(true);
+    this.#teardownSession(true, false);
   }
 
-  #teardownSession(resetMetrics: boolean): void {
+  #teardownSession(resetMetrics: boolean, preserveIntent: boolean, preserveDocument = false): void {
     this.#sessionRevision++;
+    this.#connectionAttemptRevision = null;
     this.#sessionAbortController?.abort();
     this.#sessionAbortController = null;
-    this.#unsubscribeMutations?.();
-    this.#unsubscribeMutations = null;
-    this.#unsubscribeDocumentUpdate?.();
-    this.#unsubscribeDocumentUpdate = null;
-    this.#unsubscribeDocumentChange?.();
-    this.#unsubscribeDocumentChange = null;
-    this.#unsubscribeLocalPresence?.();
-    this.#unsubscribeLocalPresence = null;
-    this.#document?.destroy();
-    this.#document = null;
-    this.#room?.leave();
+    if (!preserveDocument) {
+      this.#unsubscribeMutations?.();
+      this.#unsubscribeMutations = null;
+      this.#unsubscribeDocumentUpdate?.();
+      this.#unsubscribeDocumentUpdate = null;
+      this.#unsubscribeDocumentChange?.();
+      this.#unsubscribeDocumentChange = null;
+      this.#unsubscribeLocalPresence?.();
+      this.#unsubscribeLocalPresence = null;
+      this.#document?.destroy();
+      this.#document = null;
+    }
+    const room = this.#room;
+    if (room) {
+      const previousLeave = this.#roomLeavePromise;
+      this.#roomLeavePromise = Promise.all([
+        previousLeave,
+        Promise.resolve(room.leave()).catch((error) => {
+          logger.warn("[collaboration] room leave failed", error);
+        }),
+      ]).then(() => undefined);
+    }
     this.#room = null;
-    this.#invite = null;
+    if (!preserveIntent) this.#invite = null;
     this.#sendDocument = null;
     this.#sendInventory = null;
     this.#sendAssetRequest = null;
@@ -595,7 +644,7 @@ export class CollaborationService {
     this.#sendAssetNack = null;
     this.#sendClock = null;
     this.#sendPresence = null;
-    this.#selfId = null;
+    if (!preserveDocument) this.#selfId = null;
     this.#iceServers = [];
     this.#iceCredentialAbortController?.abort();
     this.#iceCredentialAbortController = null;
@@ -619,13 +668,17 @@ export class CollaborationService {
       MAX_CONCURRENT_ASSET_SEND_BYTES_GLOBAL,
     );
     this.#rejectAllAssetAcks(new Error("Collaboration session stopped"));
-    this.#assets.clear();
-    this.#assetDescriptors.clear();
+    if (!preserveDocument) {
+      this.#assets.clear();
+      this.#assetDescriptors.clear();
+    }
     this.#assetSources.clear();
     this.#pendingMaterializations.clear();
-    this.#pendingLocalRegistrations.clear();
-    this.#materializedAssetHashes.clear();
-    this.#appliedPlaybackCommandIds.clear();
+    if (!preserveDocument) {
+      this.#pendingLocalRegistrations.clear();
+      this.#materializedAssetHashes.clear();
+      this.#appliedPlaybackCommandIds.clear();
+    }
     this.#remotePlaybackAnchors.clear();
     this.#remoteShaderPlaybackAnchors.clear();
     this.#pendingClockRequests.clear();
@@ -633,12 +686,14 @@ export class CollaborationService {
     this.#remotePresences.clear();
     this.#remotePresenceSequences.clear();
     this.#adapter?.clearRemotePresence();
-    this.#placeholderEntityIds.clear();
-    this.#placeholderStartedAt.clear();
-    this.#assetTransferIds = new WeakMap();
-    this.#assetPreviews = new WeakMap();
-    this.#assetHashes.clear();
-    this.#entityRevisions.clear();
+    if (!preserveDocument) {
+      this.#placeholderEntityIds.clear();
+      this.#placeholderStartedAt.clear();
+      this.#assetTransferIds = new WeakMap();
+      this.#assetPreviews = new WeakMap();
+      this.#assetHashes.clear();
+      this.#entityRevisions.clear();
+    }
     this.#pendingReconcileEntityIds.clear();
     this.#reconcileQueued = false;
     this.#reconcileAgain = false;
@@ -654,16 +709,24 @@ export class CollaborationService {
     if (this.#presenceTimer) clearTimeout(this.#presenceTimer);
     this.#presenceTimer = null;
     this.#presenceSending = false;
-    this.#presenceSequence = 0;
-    this.#presenceLastSentAt = 0;
-    this.#pendingPresence = null;
-    this.#localIdentity = null;
-    this.#localCursor = null;
-    this.#localSelectionReference = null;
-    this.#localSelectedEntityIds = [];
+    if (!preserveDocument) {
+      this.#presenceSequence = 0;
+      this.#presenceLastSentAt = 0;
+      this.#pendingPresence = null;
+      this.#localIdentity = null;
+      this.#localCursor = null;
+      this.#localSelectionReference = null;
+      this.#localSelectedEntityIds = [];
+    }
     for (const removeListener of this.#peerConnectionListeners.values()) removeListener();
     this.#peerConnectionListeners.clear();
-    window.removeEventListener("online", this.#handleOnline);
+    if (this.#peerRecoveryTimer) clearTimeout(this.#peerRecoveryTimer);
+    this.#peerRecoveryTimer = null;
+    if (!preserveIntent) {
+      this.#clearReconnectTimer();
+      this.#reconnectAttempt = 0;
+      this.#removeLifecycleListeners();
+    }
     if (resetMetrics) collaborationMetrics.reset();
   }
 
@@ -1653,8 +1716,11 @@ export class CollaborationService {
         connection.connectionState === "disconnected"
       ) {
         collaborationMetrics.markReconnecting();
-        if (connection.connectionState === "failed") connection.restartIce();
+        connection.restartIce();
+        this.#schedulePeerRecovery();
       } else if (connection.connectionState === "connected") {
+        if (this.#peerRecoveryTimer) clearTimeout(this.#peerRecoveryTimer);
+        this.#peerRecoveryTimer = null;
         collaborationMetrics.markReady();
         this.#updatePeerCount();
         void this.#measureConnectionPaths();
@@ -1667,12 +1733,115 @@ export class CollaborationService {
     handleConnectionState();
   }
 
-  #handleOnline = (): void => {
-    const peers = Object.values(this.#room?.getPeers() ?? {});
-    if (peers.length === 0) return;
-    collaborationMetrics.markReconnecting();
-    for (const peer of peers) peer.restartIce();
+  #handleOffline = (): void => {
+    if (this.#invite) collaborationMetrics.markReconnecting();
   };
+
+  #handleOnline = (): void => {
+    this.#scheduleReconnect(0);
+  };
+
+  #handleVisibilityChange = (): void => {
+    if (document.visibilityState === "visible") void this.#recoverAfterResume();
+  };
+
+  #handlePageShow = (event: PageTransitionEvent): void => {
+    if (event.persisted) void this.#recoverAfterResume();
+  };
+
+  async #recoverAfterResume(): Promise<void> {
+    if (!this.#invite) return;
+    if (!navigator.onLine) {
+      collaborationMetrics.markReconnecting();
+      return;
+    }
+    const room = this.#room;
+    const peerIds = Object.keys(room?.getPeers() ?? {});
+    if (!room || peerIds.length === 0) {
+      this.#scheduleReconnect(0);
+      return;
+    }
+    const sessionRevision = this.#sessionRevision;
+    try {
+      await withTimeout(room.ping(peerIds[0]!), RESUME_PING_TIMEOUT_MS);
+      if (this.#sessionRevision !== sessionRevision) return;
+      collaborationMetrics.markReady();
+      this.#updatePeerCount();
+    } catch {
+      if (this.#sessionRevision === sessionRevision) this.#scheduleReconnect(0);
+    }
+  }
+
+  #schedulePeerRecovery(): void {
+    if (this.#peerRecoveryTimer || !this.#invite) return;
+    collaborationMetrics.markReconnecting();
+    const sessionRevision = this.#sessionRevision;
+    this.#peerRecoveryTimer = setTimeout(() => {
+      this.#peerRecoveryTimer = null;
+      if (this.#sessionRevision !== sessionRevision) return;
+      const peers = Object.values(this.#room?.getPeers() ?? {});
+      if (peers.some((peer) => peer.connectionState === "connected")) return;
+      this.#scheduleReconnect(0);
+    }, PEER_RECOVERY_GRACE_MS);
+  }
+
+  #scheduleReconnect(delayMs = this.#nextReconnectDelay()): void {
+    if (!this.#invite) return;
+    collaborationMetrics.markReconnecting();
+    if (!navigator.onLine) return;
+    this.#clearReconnectTimer();
+    this.#reconnectTimer = setTimeout(() => {
+      this.#reconnectTimer = null;
+      void this.#reconnect();
+    }, delayMs);
+  }
+
+  async #reconnect(): Promise<void> {
+    const invite = this.#invite;
+    if (!invite || !navigator.onLine) return;
+    if (this.#connectionAttemptRevision !== null) {
+      this.#scheduleReconnect(250);
+      return;
+    }
+    this.#reconnectAttempt++;
+    this.#teardownSession(false, true, true);
+    this.#invite = invite;
+    try {
+      await this.#startSession(invite, true);
+    } catch {
+      // The failed attempt records diagnostics and schedules the next retry.
+    }
+  }
+
+  #nextReconnectDelay(): number {
+    return Math.min(
+      RECONNECT_RETRY_INITIAL_MS * 2 ** this.#reconnectAttempt,
+      RECONNECT_RETRY_MAX_MS,
+    );
+  }
+
+  #clearReconnectTimer(): void {
+    if (this.#reconnectTimer) clearTimeout(this.#reconnectTimer);
+    this.#reconnectTimer = null;
+  }
+
+  #addLifecycleListeners(): void {
+    if (this.#lifecycleListenersActive) return;
+    this.#lifecycleListenersActive = true;
+    window.addEventListener("online", this.#handleOnline);
+    window.addEventListener("offline", this.#handleOffline);
+    window.addEventListener("pageshow", this.#handlePageShow);
+    document.addEventListener("visibilitychange", this.#handleVisibilityChange);
+  }
+
+  #removeLifecycleListeners(): void {
+    if (!this.#lifecycleListenersActive) return;
+    this.#lifecycleListenersActive = false;
+    window.removeEventListener("online", this.#handleOnline);
+    window.removeEventListener("offline", this.#handleOffline);
+    window.removeEventListener("pageshow", this.#handlePageShow);
+    document.removeEventListener("visibilitychange", this.#handleVisibilityChange);
+  }
 
   #pruneUnreferencedAssets(): void {
     const referencedHashes = this.#document?.getAssetHashes() ?? new Set<string>();
@@ -1772,22 +1941,18 @@ export class CollaborationService {
     }
   }
 
-  #handleFatalError(error: unknown, code: CollaborationErrorCode): void {
+  #handleReconnectableError(error: unknown, code: CollaborationErrorCode): void {
     const failedInvite = this.#invite;
-    this.#teardownSession(false);
+    this.#teardownSession(false, true, true);
     this.#invite = failedInvite;
-    this.#fail(error, code);
+    this.#reportIssue(error, code);
+    this.#scheduleReconnect();
   }
 
   #reportIssue(error: unknown, code: CollaborationErrorCode = "session-failed"): void {
     if (isAbortError(error)) return;
     collaborationMetrics.recordIssue(error, code);
     logger.warn("[collaboration]", error);
-  }
-
-  #fail(error: unknown, code: CollaborationErrorCode = "unexpected"): void {
-    collaborationMetrics.fail(error, code);
-    logger.error("[collaboration]", error);
   }
 }
 
@@ -1822,6 +1987,25 @@ function estimateJsonBytes(value: unknown): number {
 
 function bytesPerSecond(byteLength: number, durationMs: number): number {
   return durationMs > 0 ? (byteLength / durationMs) * 1000 : 0;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error("Collaboration connection check timed out")),
+      timeoutMs,
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 function assetAckKey(peerId: string, hash: string): string {

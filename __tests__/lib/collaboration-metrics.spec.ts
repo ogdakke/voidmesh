@@ -89,4 +89,20 @@ describe("CollaborationMetricsStore", () => {
     store.setPeerCount(0);
     expect(store.getSnapshot().status).toBe("waiting");
   });
+
+  it("keeps session measurements while beginning a room reconnection", () => {
+    const store = new CollaborationMetricsStore();
+    store.beginConnection("room", 10);
+    store.recordMessage("send", 42);
+
+    store.beginReconnection("room", 30);
+
+    expect(store.getSnapshot()).toMatchObject({
+      status: "reconnecting",
+      roomId: "room",
+      peerCount: 0,
+      connectedAt: 30,
+      bytesSent: 42,
+    });
+  });
 });

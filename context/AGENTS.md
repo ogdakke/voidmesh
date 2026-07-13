@@ -48,6 +48,7 @@ Note: `KeybindProvider` wraps outside `App()` at the root render level.
 - Palette ownership remains local/persistent, while room-visible metadata and deletion are durable Yjs state. A delete command removes the palette from every referencing entity and the room; undo explicitly restores both ownership and room metadata.
 - Bound collaborative asset requests and payload workers by both count and combined encoded bytes per peer; let oversized assets run alone. Require restore/hash-verification acknowledgements, and reset a receiver watchdog on progress so incomplete sends, mobile page suspension, negative acknowledgements, and departed peers release or retry pending work rather than strand placeholders.
 - Acquire provider-neutral ICE credentials before `joinRoom()`, retain the ICE server array identity for Trystero, refresh before expiry, and apply refreshed configuration to live peer connections. Keep Cloudflare-specific API calls and secrets in `api/`, never in this client orchestrator.
+- Treat the active invite as connection intent until the user explicitly leaves. On online, visible-tab, and bfcache resume, validate or rebuild stale room transport with bounded backoff; await Trystero's asynchronous `leave()` before rejoining the same namespace, and preserve the Yjs document plus verified media registries across transport-only reconnects.
 
 ## Anti-Patterns
 

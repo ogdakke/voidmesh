@@ -27,7 +27,7 @@ interface FakeAction {
 
 interface FakeRoom {
   actions: Map<string, FakeAction>;
-  leave: ReturnType<typeof vi.fn<() => void>>;
+  leave: ReturnType<typeof vi.fn<() => void | Promise<void>>>;
   getPeers: () => Record<string, RTCPeerConnection>;
   ping: ReturnType<typeof vi.fn<(peerId: string) => Promise<number>>>;
   makeAction: (name: string) => FakeAction;
@@ -61,7 +61,7 @@ function createFakeRoom(): FakeRoom {
   const actions = new Map<string, FakeAction>();
   return {
     actions,
-    leave: vi.fn<() => void>(),
+    leave: vi.fn<() => void | Promise<void>>(),
     getPeers: () => ({}),
     ping: vi.fn<(peerId: string) => Promise<number>>(async () => 1),
     makeAction(name) {
@@ -148,7 +148,7 @@ afterEach(() => {
 });
 
 describe("CollaborationService", () => {
-  it("leaves a failed join retryable without reporting an active room", async () => {
+  it("automatically retries a failed room join", async () => {
     const service = new CollaborationService(iceServerProvider);
     service.configure(createAdapter());
     joinRoom.mockImplementationOnce(() => {
@@ -161,9 +161,77 @@ describe("CollaborationService", () => {
     expect(service.isActive).toBe(false);
     expect(service.invite).toEqual(failedInvite);
     expect(collaborationMetrics.getSnapshot()).toMatchObject({
-      status: "error",
+      status: "reconnecting",
       lastErrorCode: "signaling-unavailable",
     });
+
+    window.dispatchEvent(new Event("online"));
+    await vi.waitFor(() => expect(joinRoom).toHaveBeenCalledTimes(2));
+    expect(service.isActive).toBe(true);
+    expect(collaborationMetrics.getSnapshot().status).toBe("waiting");
+    service.stop();
+  });
+
+  it("rejoins an empty room when a backgrounded tab becomes visible", async () => {
+    let visibilityState: DocumentVisibilityState = "visible";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
+    const service = new CollaborationService(iceServerProvider);
+    service.configure(createAdapter());
+    await service.start(invite("resume-empty-room"));
+
+    visibilityState = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+    visibilityState = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    await vi.waitFor(() => expect(joinRoom).toHaveBeenCalledTimes(2));
+    expect(rooms[0]!.leave).toHaveBeenCalledOnce();
+    expect(service.isActive).toBe(true);
+    expect(collaborationMetrics.getSnapshot().status).toBe("waiting");
+    service.stop();
+  });
+
+  it("waits for the old Trystero room to leave before rejoining", async () => {
+    const service = new CollaborationService(iceServerProvider);
+    service.configure(createAdapter());
+    await service.start(invite("ordered-rejoin"));
+    let finishLeave = () => {};
+    rooms[0]!.leave.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishLeave = resolve;
+        }),
+    );
+
+    window.dispatchEvent(new Event("online"));
+    await vi.waitFor(() => expect(rooms[0]!.leave).toHaveBeenCalledOnce());
+    expect(joinRoom).toHaveBeenCalledTimes(1);
+
+    finishLeave();
+    await vi.waitFor(() => expect(joinRoom).toHaveBeenCalledTimes(2));
+    service.stop();
+  });
+
+  it("preserves the collaborative document while rebuilding room transport", async () => {
+    const service = new CollaborationService(iceServerProvider);
+    service.configure(createAdapter());
+    await service.start(invite("preserve-document"));
+    const remote = createRemoteDocument(1);
+    await deliverDocument(rooms[0]!, remote.encodeState());
+
+    window.dispatchEvent(new Event("online"));
+    await vi.waitFor(() => expect(joinRoom).toHaveBeenCalledTimes(2));
+    rooms[1]!.onPeerJoin?.("new-peer");
+    const documentAction = rooms[1]!.actions.get("document")!;
+    await vi.waitFor(() => expect(documentAction.send).toHaveBeenCalled());
+    const sentUpdate = documentAction.send.mock.calls.find(
+      ([, options]) => options?.target === "new-peer",
+    )?.[0];
+    expect(sentUpdate).toBeInstanceOf(Uint8Array);
+    const received = new CollaborationDocument({ sourceId: "receiver" });
+    received.applyUpdate(sentUpdate as Uint8Array);
+    expect(received.hasEntity("remote-0")).toBe(true);
+    received.destroy();
     service.stop();
   });
 

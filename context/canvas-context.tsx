@@ -943,7 +943,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
                 : metrics.status === "reconnecting"
                   ? {
                       title: "Reconnecting multiplayer…",
-                      description: "Trying the latest secure network route",
+                      description: "Trying to rejoin the room. Your canvas stays open.",
                       timeout: 0,
                     }
                   : metrics.status === "error"
@@ -966,14 +966,16 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           collaborationToastId = toastManager.add(toast);
         }
       }
-      if (metrics.status !== "error" && metrics.lastError && metrics.lastError !== lastIssue) {
+      if (metrics.lastError && metrics.lastError !== lastIssue) {
         lastIssue = metrics.lastError;
-        toastManager.add({
-          title: "Multiplayer needs attention",
-          description: collaborationErrorDescription(metrics.lastErrorCode),
-          type: "destructive",
-          timeout: 8_000,
-        });
+        if (metrics.status !== "error" && metrics.status !== "reconnecting") {
+          toastManager.add({
+            title: "Multiplayer needs attention",
+            description: collaborationErrorDescription(metrics.lastErrorCode),
+            type: "destructive",
+            timeout: 8_000,
+          });
+        }
       }
     };
     const unsubscribeMetrics = collaborationMetrics.subscribe(updateCollaborationToast);
