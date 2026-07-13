@@ -30,6 +30,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `collaboration/document.ts` — Yjs entity/layer document with grouped identity, geometry, appearance, asset, and playback fields. Playback anchors carry source IDs, monotonic timestamps, unique command IDs, and media duration.
 - `collaboration/clock.ts` — Monotonic epoch timestamps, NTP-style peer offset/RTT samples, and validated clock messages.
 - `collaboration/presence.ts` — Validated partial presence messages plus deterministic shader-word names and peer colors.
+- `collaboration/ice-server-provider.ts` — Provider-neutral same-origin TURN credential client, strict ICE response validation, and selected candidate-pair route inspection.
 - `collaboration/metrics.ts` — Reactive counters and bounded transfer diagnostics for collaboration sessions.
 - `collaboration/asset-hash-cache.ts` — Blob-identity promise cache that hashes a shared source once across duplicate registrations.
 - `collaboration/shared-image-asset-registry.ts` — Short-lived reference-counted lookup for sharing decoded preview/final image assets across one remote projection batch.
@@ -42,6 +43,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - Collaboration duplicates reuse work by immutable identity: one Blob preview/hash/transfer and one decoded static-image asset. Batch repeated Yjs asset-field completion in one transaction instead of publishing per entity.
 - Collaboration decode metrics time decoder work only; preview dwell measures visible placeholder latency, while reconcile measures end-to-end projection. Batch metric count/total updates so large duplicate documents do not publish once per entity.
 - High-frequency presence metrics accumulate every message but publish snapshots at a bounded cadence; do not notify React for every cursor packet.
+- Treat usable TURN credentials as a room-start prerequisite. Validate expiry, URL schemes, credential presence, and at least one relay URL before passing ICE configuration to Trystero; do not fall back silently to STUN-only operation.
 - Image assets record alpha capability from their encoded format; JPEG assets are known opaque so the renderer can omit alpha-mask intermediates.
 - Config is a frozen object. Do not mutate at runtime.
 - Hot-path bounds helpers accept caller-owned output objects; renderer culling must pass scratch `Bounds` instead of allocating one per entity.

@@ -23,6 +23,7 @@ Infinite canvas app with real-time WebGPU shader effects. Users drop images/vide
 
 ## Architecture
 
+- `api/` — Vercel Web API functions. Issues short-lived TURN credentials without exposing provider secrets to browsers.
 - `engine/` — Canvas state (`CanvasStore`) and input handling (`GameLoop`). GPU-agnostic, framework-independent.
 - `renderer/` — WebGPU rendering pipeline, shader registry, effect composition, export (MP4/MOV/GIF/PNG/JPEG). `renderer/shaders/` has per-effect `ShaderPass` subclasses.
 - `lib/` — Pure utilities. Math, config, media loading, serialization (`.vdmsh`), undo (command pattern), palette extraction, physics scroll. No React, no GPU.
@@ -67,7 +68,7 @@ The opt-in real Chrome/WebGPU many-entity suite lives in `bench/`. Run it with `
 5. **GPU resources**: Always clean up buffers/textures. Use `TexturePool` for intermediates. Key shareable source/processed textures by immutable asset and effect identity; entity IDs track ownership, not duplicate resources.
 6. **Undo pattern**: Wrap state mutations in `Command.create({ execute, undo, onEvict })`, push to `undo` singleton from `lib/undo.ts`.
 7. **Overview batching**: Large homogeneous static-image scenes keep one versioned composition instance buffer. Pan-only frames update viewport state and issue one draw; entity/geometry changes rebuild, and interactive/heterogeneous scenes use normal preparation.
-8. **Collaboration**: Keep peer transport/orchestration outside `CanvasStore`. Durable entity state uses Yjs and re-enters through the context/store mutation boundary; cursor/selection presence uses ephemeral coalesced actions and transient GPU-agnostic render state.
+8. **Collaboration**: Keep peer transport/orchestration outside `CanvasStore`. Durable entity state uses Yjs and re-enters through the context/store mutation boundary; cursor/selection presence uses ephemeral coalesced actions and transient GPU-agnostic render state. Fetch provider-neutral, short-lived ICE credentials from the same-origin server broker before joining a room; provider secrets never enter client bundles or replicated state.
 
 ## Anti-Patterns
 
