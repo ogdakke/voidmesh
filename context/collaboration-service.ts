@@ -39,6 +39,7 @@ import {
   type IceServerProvider,
 } from "#lib/collaboration/ice-server-provider.ts";
 import { AssetRequestPool } from "#lib/collaboration/asset-request-pool.ts";
+import { AssetTransferLimiter } from "#lib/collaboration/asset-transfer-limiter.ts";
 
 const APP_ID = "voidmesh-collaboration-v3";
 const GEOMETRY_SYNC_INTERVAL_MS = 16;
@@ -48,7 +49,8 @@ const PRESENCE_SYNC_INTERVAL_MS = 16;
 const ICE_CREDENTIAL_REFRESH_RATIO = 0.75;
 const ICE_CREDENTIAL_REFRESH_RETRY_MS = 60_000;
 const MAX_CONCURRENT_ASSET_REQUESTS = 4;
-const MAX_UNACKNOWLEDGED_ASSETS_PER_PEER = 4;
+const MAX_CONCURRENT_ASSET_SENDS_PER_PEER = 4;
+const MAX_CONCURRENT_ASSET_SEND_BYTES = 32 * 1024 * 1024;
 const MAX_ASSET_SEND_ATTEMPTS = 2;
 const ASSET_ACK_TIMEOUT_MS = 120_000;
 const ASSET_PROGRESS_TIMEOUT_MS = 20_000;
@@ -136,7 +138,8 @@ export class CollaborationService {
   #assetRequestTimers = new Map<string, ReturnType<typeof setTimeout>>();
   #assetSendQueues = new Map<string, QueuedAssetSend[]>();
   #queuedAssetSends = new Map<string, Set<string>>();
-  #assetSendDraining = new Set<string>();
+  #assetSendWorkers = new Map<string, number>();
+  #assetTransferLimiters = new Map<string, AssetTransferLimiter>();
   #assetAckWaiters = new Map<string, AssetAckWaiter>();
   #pendingMaterializations = new Set<string>();
   #pendingLocalRegistrations = new Set<string>();
@@ -466,6 +469,11 @@ export class CollaborationService {
       this.#pendingAssets.deletePeer(peerId);
       this.#assetSendQueues.delete(peerId);
       this.#queuedAssetSends.delete(peerId);
+      this.#assetSendWorkers.delete(peerId);
+      this.#assetTransferLimiters
+        .get(peerId)
+        ?.cancel(new Error(`Peer ${peerId} left during asset transfer`));
+      this.#assetTransferLimiters.delete(peerId);
       this.#rejectAssetAcksForPeer(peerId, new Error(`Peer ${peerId} left during asset transfer`));
       this.#updateAssetQueueMetrics();
       this.#requestMissingAssets();
@@ -530,7 +538,11 @@ export class CollaborationService {
     this.#assetRequestTimers.clear();
     this.#assetSendQueues.clear();
     this.#queuedAssetSends.clear();
-    this.#assetSendDraining.clear();
+    this.#assetSendWorkers.clear();
+    for (const limiter of this.#assetTransferLimiters.values()) {
+      limiter.cancel(new Error("Collaboration session stopped"));
+    }
+    this.#assetTransferLimiters.clear();
     this.#rejectAllAssetAcks(new Error("Collaboration session stopped"));
     this.#pendingMaterializations.clear();
     this.#pendingLocalRegistrations.clear();
@@ -951,54 +963,44 @@ export class CollaborationService {
     let queue = this.#assetSendQueues.get(peerId);
     if (!queue) this.#assetSendQueues.set(peerId, (queue = []));
     queue.push({ hash, attempt: 0 });
-    if (!this.#assetSendDraining.has(peerId)) void this.#drainAssetSendQueue(peerId);
+    this.#startAssetSendWorkers(peerId);
   }
 
-  async #drainAssetSendQueue(peerId: string): Promise<void> {
-    const sessionRevision = this.#sessionRevision;
-    const inFlight = new Set<Promise<void>>();
-    this.#assetSendDraining.add(peerId);
-    try {
-      while (this.#sessionRevision === sessionRevision && this.#room?.getPeers()[peerId]) {
-        const queue = this.#assetSendQueues.get(peerId);
-        while (inFlight.size < MAX_UNACKNOWLEDGED_ASSETS_PER_PEER) {
-          const next = queue?.shift();
-          if (!next) break;
-          try {
-            const acknowledgement = await this.#beginAssetSendToPeer(next.hash, peerId);
-            let completion!: Promise<void>;
-            completion = this.#settleAssetAcknowledgement(
-              next,
-              peerId,
-              acknowledgement.promise,
-            ).finally(() => inFlight.delete(completion));
-            inFlight.add(completion);
-          } catch (error) {
-            this.#handleAssetSendFailure(next, peerId, error);
-          }
-        }
-        if (inFlight.size === 0 && (queue?.length ?? 0) === 0) break;
-        if (inFlight.size > 0) await Promise.race(inFlight);
-      }
-    } finally {
-      this.#assetSendDraining.delete(peerId);
-      if ((this.#assetSendQueues.get(peerId)?.length ?? 0) === 0) {
-        this.#assetSendQueues.delete(peerId);
-        this.#queuedAssetSends.delete(peerId);
-      }
+  #startAssetSendWorkers(peerId: string): void {
+    const queue = this.#assetSendQueues.get(peerId);
+    let workerCount = this.#assetSendWorkers.get(peerId) ?? 0;
+    while (queue && queue.length > 0 && workerCount < MAX_CONCURRENT_ASSET_SENDS_PER_PEER) {
+      workerCount++;
+      this.#assetSendWorkers.set(peerId, workerCount);
+      void this.#drainAssetSendWorker(peerId);
     }
   }
 
-  async #settleAssetAcknowledgement(
-    next: QueuedAssetSend,
-    peerId: string,
-    acknowledgement: Promise<void>,
-  ): Promise<void> {
+  async #drainAssetSendWorker(peerId: string): Promise<void> {
+    const sessionRevision = this.#sessionRevision;
     try {
-      await acknowledgement;
-      this.#queuedAssetSends.get(peerId)?.delete(next.hash);
-    } catch (error) {
-      this.#handleAssetSendFailure(next, peerId, error);
+      while (this.#sessionRevision === sessionRevision && this.#room?.getPeers()[peerId]) {
+        const queue = this.#assetSendQueues.get(peerId);
+        const next = queue?.shift();
+        if (!next) break;
+        try {
+          await this.#sendAssetToPeer(next.hash, peerId);
+          this.#queuedAssetSends.get(peerId)?.delete(next.hash);
+        } catch (error) {
+          this.#handleAssetSendFailure(next, peerId, error);
+        }
+      }
+    } finally {
+      const workerCount = Math.max(0, (this.#assetSendWorkers.get(peerId) ?? 1) - 1);
+      if (workerCount > 0) this.#assetSendWorkers.set(peerId, workerCount);
+      else this.#assetSendWorkers.delete(peerId);
+      if ((this.#assetSendQueues.get(peerId)?.length ?? 0) > 0) {
+        this.#startAssetSendWorkers(peerId);
+      } else if (workerCount === 0) {
+        this.#assetSendQueues.delete(peerId);
+        this.#queuedAssetSends.delete(peerId);
+        this.#assetTransferLimiters.delete(peerId);
+      }
     }
   }
 
@@ -1018,20 +1020,28 @@ export class CollaborationService {
     );
   }
 
-  async #beginAssetSendToPeer(
-    hash: string,
-    peerId: string,
-  ): Promise<{ promise: Promise<void>; cancel: () => void }> {
+  async #sendAssetToPeer(hash: string, peerId: string): Promise<void> {
     const blob = this.#assets.get(hash);
     const descriptor = this.#assetDescriptors.get(hash);
     if (!blob || !descriptor || !this.#sendAsset) {
       throw new Error(`Cannot send unavailable asset ${hash}`);
     }
-    const compressionStartedAt = performance.now();
-    const prepared = await prepareAssetPayload(blob, descriptor.mimeType);
-    collaborationMetrics.recordCompressionDuration(performance.now() - compressionStartedAt);
-    const acknowledgement = this.#createAssetAckWaiter(peerId, hash);
+    let limiter = this.#assetTransferLimiters.get(peerId);
+    if (!limiter) {
+      limiter = new AssetTransferLimiter(
+        MAX_CONCURRENT_ASSET_SENDS_PER_PEER,
+        MAX_CONCURRENT_ASSET_SEND_BYTES,
+      );
+      this.#assetTransferLimiters.set(peerId, limiter);
+    }
+    const release = await limiter.acquire(blob.size);
+    let acknowledgement: { promise: Promise<void>; cancel: () => void } | null = null;
     try {
+      if (!this.#room?.getPeers()[peerId]) throw new Error(`Peer ${peerId} left before transfer`);
+      const compressionStartedAt = performance.now();
+      const prepared = await prepareAssetPayload(blob, descriptor.mimeType);
+      collaborationMetrics.recordCompressionDuration(performance.now() - compressionStartedAt);
+      acknowledgement = this.#createAssetAckWaiter(peerId, hash);
       await this.#sendAsset(
         prepared.bytes,
         {
@@ -1046,7 +1056,14 @@ export class CollaborationService {
         },
         peerId,
       );
-      return acknowledgement;
+    } catch (error) {
+      acknowledgement?.cancel();
+      throw error;
+    } finally {
+      release();
+    }
+    try {
+      await acknowledgement.promise;
     } catch (error) {
       acknowledgement.cancel();
       throw error;

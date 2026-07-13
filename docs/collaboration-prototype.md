@@ -5,7 +5,7 @@ The prototype uses a password-bearing invite fragment, Trystero's Nostr strategy
 ## Implemented
 
 - Entity identity, geometry, layer order, appearance, asset references, and playback state converge through Yjs.
-- Media uses SHA-256 content addresses, inventory exchange, explicit requests, integrity verification, and a 512 MB per-asset safety limit. Receivers bound their request window, senders serialize payload delivery per peer, and up to four sent assets may await restore/hash-verification acknowledgements concurrently. This bounded pipeline amortizes high TURN latency without returning to unbounded iOS allocation/reassembly. A progress watchdog plus peer-departure cleanup releases and retries work stranded by mobile page suspension or an incomplete send.
+- Media uses SHA-256 content addresses, inventory exchange, explicit requests, integrity verification, and a 512 MB per-asset safety limit. Receivers bound their request window and senders run at most four payload/verification workers per peer under a 32 MB combined encoded-byte budget; an asset larger than the budget runs alone. This bounded concurrency avoids both stop-and-wait latency and unbounded iOS allocation/reassembly. A progress watchdog plus peer-departure cleanup releases and retries work stranded by mobile page suspension or an incomplete send.
 - Images, SVGs, GIFs, and videos transfer as their encoded Blobs. Gzip is attempted only for SVG/JSON payloads and retained only when smaller; encoded image/video formats use identity transfer.
 - Entities publish a bounded ThumbHash first-frame preview before content hashing begins. Peers create a full-geometry placeholder immediately and hydrate its media in place after verified Blob transfer.
 - Workspace v7 manifests cache ThumbHashes, so an atomically restored heavy workspace can publish all previews without re-reading decoded pixels.
@@ -25,7 +25,7 @@ The prototype uses a password-bearing invite fragment, Trystero's Nostr strategy
 ## TODO
 
 - Add controlled ICE restarts after credential rotation or network migration so long-running rooms actively gather with the newest credentials.
-- Replace Trystero's whole-payload allocation/reassembly with application-owned streaming chunks, resumable offsets, incremental hashing, and multi-peer source selection for large videos. The current bounded, acknowledged pipeline limits whole assets in flight but cannot resume within one Blob.
+- Replace Trystero's whole-payload allocation/reassembly with application-owned streaming chunks, resumable offsets, incremental hashing, and multi-peer source selection for large videos. The current count/byte-bounded acknowledged workers limit whole assets in flight but cannot resume within one Blob.
 - Mark provisional entities explicitly in the UI and disable media-specific operations that cannot be valid until the source Blob is hydrated.
 - Extend ephemeral presence with drag previews and soft edit locks.
 - Merge shader parameters at leaf paths instead of treating the appearance group as one last-writer-wins value.
