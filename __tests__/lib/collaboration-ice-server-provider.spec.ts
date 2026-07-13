@@ -41,6 +41,18 @@ describe("collaboration ICE server provider", () => {
     ).toThrow(/missing credentials/);
   });
 
+  it("rejects credential responses without a TURN server", () => {
+    expect(() =>
+      parseIceServerCredentials(
+        {
+          iceServers: [{ urls: "stun:stun.example.com:3478" }],
+          expiresAt: 2_000,
+        },
+        1_000,
+      ),
+    ).toThrow(/no TURN server/);
+  });
+
   it("reports whether the selected candidate pair is direct or relayed", async () => {
     const directConnection = createStatsConnection([
       { id: "transport", type: "transport", selectedCandidatePairId: "pair" },

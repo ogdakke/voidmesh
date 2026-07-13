@@ -141,6 +141,19 @@ export function CollaborationMetrics() {
       <dl>
         <Metric label="Peers" value={String(metrics.peerCount)} />
         <Metric label="RTT" value={formatDuration(metrics.lastRoundTripTimeMs)} />
+        <Metric
+          label="Route"
+          value={formatConnectionPath(metrics.connectionPath, metrics.relayProtocol)}
+        />
+        <Metric
+          label="TURN credentials"
+          value={formatTurnCredentials(
+            metrics.iceCredentialFetchDurationMs,
+            metrics.iceCredentialExpiresAt,
+            metrics.iceCredentialRefreshes,
+            metrics.iceCredentialRefreshFailures,
+          )}
+        />
         <Metric label="Sent" value={formatBytes(metrics.bytesSent)} />
         <Metric label="Received" value={formatBytes(metrics.bytesReceived)} />
         <Metric label="Hashing" value={formatDuration(metrics.assetHashDurationMs)} />
@@ -192,6 +205,24 @@ function formatDuration(durationMs: number | null): string {
   if (durationMs === null) return "—";
   if (durationMs < 1000) return `${durationMs.toFixed(1)} ms`;
   return `${(durationMs / 1000).toFixed(2)} s`;
+}
+
+function formatConnectionPath(path: string, relayProtocol: string | null): string {
+  if (path === "unknown") return "—";
+  const label = path === "direct" ? "Direct" : path === "relay" ? "Relay" : "Mixed";
+  return relayProtocol ? `${label} · ${relayProtocol}` : label;
+}
+
+function formatTurnCredentials(
+  fetchDurationMs: number | null,
+  expiresAt: number | null,
+  refreshes: number,
+  refreshFailures: number,
+): string {
+  if (fetchDurationMs === null || expiresAt === null) return "—";
+  const expiresInMinutes = Math.max(0, Math.round((expiresAt - Date.now()) / 60_000));
+  const refreshSummary = refreshFailures > 0 ? `${refreshes}/${refreshFailures} failed` : refreshes;
+  return `${formatDuration(fetchDurationMs)} · ${expiresInMinutes}m · ${refreshSummary} refreshed`;
 }
 
 export function FeedbackLink({ className }: { className?: string }) {

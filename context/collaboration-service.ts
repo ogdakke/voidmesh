@@ -32,12 +32,20 @@ import {
   isCollaborationPresenceUpdate,
   type CollaborationPresenceUpdate,
 } from "#lib/collaboration/presence.ts";
+import {
+  HttpIceServerProvider,
+  measurePeerConnectionPath,
+  type IceServerCredentials,
+  type IceServerProvider,
+} from "#lib/collaboration/ice-server-provider.ts";
 
 const APP_ID = "voidmesh-collaboration-v3";
 const GEOMETRY_SYNC_INTERVAL_MS = 16;
 const PING_INTERVAL_MS = 5_000;
 const PLAYBACK_DRIFT_INTERVAL_MS = 1_000;
 const PRESENCE_SYNC_INTERVAL_MS = 16;
+const ICE_CREDENTIAL_REFRESH_RATIO = 0.75;
+const ICE_CREDENTIAL_REFRESH_RETRY_MS = 60_000;
 const MAX_ASSET_BYTES = 512 * 1024 * 1024;
 
 interface CollaborationCanvasAdapter {
@@ -80,6 +88,7 @@ interface RemotePlaybackAnchor {
 type PendingPresenceUpdate = Omit<CollaborationPresenceUpdate, "sequence">;
 
 export class CollaborationService {
+  readonly #iceServerProvider: IceServerProvider;
   #adapter: CollaborationCanvasAdapter | null = null;
   #document: CollaborationDocument | null = null;
   #room: CollaborationRoom | null = null;
@@ -136,6 +145,13 @@ export class CollaborationService {
   #localSelectionReference: ReadonlySet<string> | null = null;
   #localSelectedEntityIds: string[] = [];
   #selfId: string | null = null;
+  #iceServers: RTCIceServer[] = [];
+  #iceCredentialAbortController: AbortController | null = null;
+  #iceCredentialRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(iceServerProvider: IceServerProvider = new HttpIceServerProvider()) {
+    this.#iceServerProvider = iceServerProvider;
+  }
 
   configure(adapter: CollaborationCanvasAdapter): () => void {
     this.#adapter = adapter;
@@ -163,6 +179,27 @@ export class CollaborationService {
     this.#invite = invite;
     collaborationMetrics.beginConnection(invite.roomId);
 
+    const iceCredentialAbortController = new AbortController();
+    this.#iceCredentialAbortController = iceCredentialAbortController;
+    const credentialStartedAt = performance.now();
+    let iceCredentials: IceServerCredentials;
+    try {
+      iceCredentials = await this.#iceServerProvider.getCredentials(
+        iceCredentialAbortController.signal,
+      );
+    } catch (error) {
+      if (this.#sessionRevision !== sessionRevision) return;
+      this.#fail(error);
+      throw error;
+    }
+    if (this.#sessionRevision !== sessionRevision) return;
+    this.#replaceIceServers(iceCredentials.iceServers);
+    collaborationMetrics.recordIceCredentials(
+      performance.now() - credentialStartedAt,
+      iceCredentials.expiresAt,
+      false,
+    );
+
     const { joinRoom, selfId } = await import("trystero");
     if (this.#sessionRevision !== sessionRevision) return;
     this.#selfId = selfId;
@@ -178,9 +215,17 @@ export class CollaborationService {
       this.#handleCanvasMutation(mutation);
     });
 
-    const room = joinRoom({ appId: APP_ID, password: invite.password }, invite.roomId, {
-      onJoinError: ({ error }) => this.#fail(error),
-    });
+    const room = joinRoom(
+      {
+        appId: APP_ID,
+        password: invite.password,
+        rtcConfig: { iceServers: this.#iceServers },
+      },
+      invite.roomId,
+      {
+        onJoinError: ({ error }) => this.#fail(error),
+      },
+    );
     this.#room = room;
 
     const documentAction = room.makeAction<Uint8Array>("document");
@@ -317,6 +362,7 @@ export class CollaborationService {
 
     room.onPeerJoin = (peerId) => {
       this.#updatePeerCount();
+      void this.#measureConnectionPaths();
       void this.#sendDocument?.(document.encodeState(), peerId).catch((error) => this.#fail(error));
       void this.#sendInventory?.([...this.#assets.keys()], peerId).catch((error) =>
         this.#fail(error),
@@ -334,6 +380,7 @@ export class CollaborationService {
 
     collaborationMetrics.markConnected();
     this.#updatePeerCount();
+    this.#scheduleIceCredentialRefresh(iceCredentials, sessionRevision);
     this.#pingTimer = setInterval(() => void this.#measureRoundTripTime(), PING_INTERVAL_MS);
     this.#playbackDriftTimer = setInterval(
       () => void this.#correctPlaybackDrift().catch((error) => this.#fail(error)),
@@ -371,6 +418,11 @@ export class CollaborationService {
     this.#sendClock = null;
     this.#sendPresence = null;
     this.#selfId = null;
+    this.#iceServers = [];
+    this.#iceCredentialAbortController?.abort();
+    this.#iceCredentialAbortController = null;
+    if (this.#iceCredentialRefreshTimer) clearTimeout(this.#iceCredentialRefreshTimer);
+    this.#iceCredentialRefreshTimer = null;
     this.#pendingAssets.clear();
     this.#pendingMaterializations.clear();
     this.#pendingLocalRegistrations.clear();
@@ -849,9 +901,84 @@ export class CollaborationService {
     if (!peerId) return;
     try {
       collaborationMetrics.recordRoundTripTime(await room.ping(peerId));
+      await this.#measureConnectionPaths();
     } catch (error) {
       logger.warn("[collaboration] ping failed", error);
     }
+  }
+
+  #scheduleIceCredentialRefresh(credentials: IceServerCredentials, sessionRevision: number): void {
+    if (this.#iceCredentialRefreshTimer) clearTimeout(this.#iceCredentialRefreshTimer);
+    const remainingMs = Math.max(0, credentials.expiresAt - Date.now());
+    const refreshDelayMs = Math.max(1_000, remainingMs * ICE_CREDENTIAL_REFRESH_RATIO);
+    this.#iceCredentialRefreshTimer = setTimeout(
+      () => void this.#refreshIceCredentials(sessionRevision),
+      refreshDelayMs,
+    );
+  }
+
+  async #refreshIceCredentials(sessionRevision: number): Promise<void> {
+    const abortController = this.#iceCredentialAbortController;
+    if (!abortController || this.#sessionRevision !== sessionRevision) return;
+    const startedAt = performance.now();
+    try {
+      const credentials = await this.#iceServerProvider.getCredentials(abortController.signal);
+      if (this.#sessionRevision !== sessionRevision) return;
+      this.#replaceIceServers(credentials.iceServers);
+      for (const peer of Object.values(this.#room?.getPeers() ?? {})) {
+        peer.setConfiguration({
+          ...peer.getConfiguration(),
+          iceServers: this.#iceServers,
+        });
+      }
+      collaborationMetrics.recordIceCredentials(
+        performance.now() - startedAt,
+        credentials.expiresAt,
+        true,
+      );
+      this.#scheduleIceCredentialRefresh(credentials, sessionRevision);
+    } catch (error) {
+      if (this.#sessionRevision !== sessionRevision || abortController.signal.aborted) return;
+      collaborationMetrics.recordIceCredentialRefreshFailure();
+      logger.warn("[collaboration] TURN credential refresh failed; retrying", error);
+      this.#iceCredentialRefreshTimer = setTimeout(
+        () => void this.#refreshIceCredentials(sessionRevision),
+        ICE_CREDENTIAL_REFRESH_RETRY_MS,
+      );
+    }
+  }
+
+  #replaceIceServers(iceServers: readonly RTCIceServer[]): void {
+    this.#iceServers.splice(
+      0,
+      this.#iceServers.length,
+      ...iceServers.map((server) => ({
+        ...server,
+        urls: Array.isArray(server.urls) ? [...server.urls] : server.urls,
+      })),
+    );
+  }
+
+  async #measureConnectionPaths(): Promise<void> {
+    const peers = Object.values(this.#room?.getPeers() ?? {});
+    if (peers.length === 0) {
+      collaborationMetrics.setConnectionPath("unknown", null);
+      return;
+    }
+    const paths = await Promise.all(peers.map(measurePeerConnectionPath));
+    const knownPaths = paths.filter((path) => path.type !== "unknown");
+    if (knownPaths.length === 0) {
+      collaborationMetrics.setConnectionPath("unknown", null);
+      return;
+    }
+    const relayed = knownPaths.filter((path) => path.type === "relay");
+    const connectionPath =
+      relayed.length === 0 ? "direct" : relayed.length === knownPaths.length ? "relay" : "mixed";
+    const relayProtocols = [...new Set(relayed.map((path) => path.protocol).filter(Boolean))];
+    collaborationMetrics.setConnectionPath(
+      connectionPath,
+      relayProtocols.length > 0 ? relayProtocols.join("+") : null,
+    );
   }
 
   #requestClockSync(peerId: string): void {

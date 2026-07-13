@@ -3,7 +3,7 @@ import {
   createCloudflareTurnProvider,
   createIceServerHandler,
   type TurnCredentialProvider,
-} from "../../api/ice-servers.ts";
+} from "../../api/ice-servers.js";
 
 afterEach(() => vi.restoreAllMocks());
 

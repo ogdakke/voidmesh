@@ -2,6 +2,7 @@ import { Store } from "#lib/store.ts";
 
 export type CollaborationStatus = "idle" | "connecting" | "connected" | "error";
 export type CollaborationTransferDirection = "send" | "receive";
+export type CollaborationConnectionPath = "unknown" | "direct" | "relay" | "mixed";
 
 export interface CollaborationTransferMetric {
   assetHash: string;
@@ -40,6 +41,12 @@ export interface CollaborationMetricsState {
   documentApplyDurationMs: number;
   documentReconcileDurationMs: number;
   lastRoundTripTimeMs: number | null;
+  iceCredentialFetchDurationMs: number | null;
+  iceCredentialExpiresAt: number | null;
+  iceCredentialRefreshes: number;
+  iceCredentialRefreshFailures: number;
+  connectionPath: CollaborationConnectionPath;
+  relayProtocol: string | null;
   lastError: string | null;
   transfers: readonly CollaborationTransferMetric[];
   version: number;
@@ -167,6 +174,25 @@ export class CollaborationMetricsStore extends Store<CollaborationMetricsState> 
     this.publish();
   }
 
+  recordIceCredentials(durationMs: number, expiresAt: number, isRefresh: boolean): void {
+    this.state.iceCredentialFetchDurationMs = durationMs;
+    this.state.iceCredentialExpiresAt = expiresAt;
+    if (isRefresh) this.state.iceCredentialRefreshes++;
+    this.publish();
+  }
+
+  recordIceCredentialRefreshFailure(): void {
+    this.state.iceCredentialRefreshFailures++;
+    this.publish();
+  }
+
+  setConnectionPath(path: CollaborationConnectionPath, relayProtocol: string | null): void {
+    if (this.state.connectionPath === path && this.state.relayProtocol === relayProtocol) return;
+    this.state.connectionPath = path;
+    this.state.relayProtocol = relayProtocol;
+    this.publish();
+  }
+
   fail(error: unknown): void {
     this.state.status = "error";
     this.state.lastError = error instanceof Error ? error.message : String(error);
@@ -217,6 +243,12 @@ function createInitialState(): CollaborationMetricsState {
     documentApplyDurationMs: 0,
     documentReconcileDurationMs: 0,
     lastRoundTripTimeMs: null,
+    iceCredentialFetchDurationMs: null,
+    iceCredentialExpiresAt: null,
+    iceCredentialRefreshes: 0,
+    iceCredentialRefreshFailures: 0,
+    connectionPath: "unknown",
+    relayProtocol: null,
     lastError: null,
     transfers: [],
     version: 0,

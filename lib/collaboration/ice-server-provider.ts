@@ -52,10 +52,11 @@ export function parseIceServerCredentials(value: unknown, now = Date.now()): Ice
   if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt) || expiresAt <= now) {
     throw new Error("Relay credentials are already expired");
   }
-  return {
-    iceServers: record.iceServers.map(parseIceServer),
-    expiresAt,
-  };
+  const iceServers = record.iceServers.map(parseIceServer);
+  if (!iceServers.some(hasTurnUrl)) {
+    throw new Error("Relay credential response has no TURN server");
+  }
+  return { iceServers, expiresAt };
 }
 
 export async function measurePeerConnectionPath(
@@ -112,6 +113,11 @@ function parseIceServer(value: unknown): RTCIceServer {
     ...(username === undefined ? {} : { username }),
     ...(credential === undefined ? {} : { credential }),
   };
+}
+
+function hasTurnUrl(server: RTCIceServer): boolean {
+  const urls = typeof server.urls === "string" ? [server.urls] : server.urls;
+  return urls.some((url) => url.startsWith("turn:") || url.startsWith("turns:"));
 }
 
 function parseIceServerUrls(value: unknown): string[] {

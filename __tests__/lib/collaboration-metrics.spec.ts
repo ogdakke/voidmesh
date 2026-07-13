@@ -27,6 +27,10 @@ describe("CollaborationMetricsStore", () => {
     store.recordPreviewEncodeDuration(2);
     store.recordPreviewPlaceholder(3, 2_048);
     store.recordPreviewHydration(40, 2_048);
+    store.recordIceCredentials(12, 3_600_000, false);
+    store.recordIceCredentials(8, 7_200_000, true);
+    store.recordIceCredentialRefreshFailure();
+    store.setConnectionPath("relay", "udp");
 
     for (let index = 0; index < 55; index++) {
       store.recordTransfer({
@@ -56,6 +60,12 @@ describe("CollaborationMetricsStore", () => {
     expect(state.previewPlaceholdersCreated).toBe(2_048);
     expect(state.previewHydrations).toBe(2_048);
     expect(state.previewDwellDurationMs).toBe(40);
+    expect(state.iceCredentialFetchDurationMs).toBe(8);
+    expect(state.iceCredentialExpiresAt).toBe(7_200_000);
+    expect(state.iceCredentialRefreshes).toBe(1);
+    expect(state.iceCredentialRefreshFailures).toBe(1);
+    expect(state.connectionPath).toBe("relay");
+    expect(state.relayProtocol).toBe("udp");
     expect(state.transfers).toHaveLength(50);
     expect(state.transfers[0]?.assetHash).toBe("asset-5");
   });
