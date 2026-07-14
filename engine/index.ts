@@ -3,6 +3,8 @@ export type {
   CanvasState,
   RenderState,
   CanvasEntityUpdate,
+  CanvasEntityMutation,
+  CanvasEntityMutationListener,
   ActionLayerRenderState,
   DragVisualRenderState,
   DisintegrationRenderOverlay,
@@ -11,6 +13,7 @@ export type {
   DragSnapshot,
   ActionLayerSnapshot,
   PreferencesSnapshot,
+  LocalPresenceListener,
 } from "./canvas-store.ts";
 
 export { actionLayerController } from "./action-layer-controller.ts";

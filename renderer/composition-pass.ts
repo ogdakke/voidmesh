@@ -19,6 +19,10 @@ export interface CompositionDrawItem {
   visualScale: number;
 }
 
+function isSelectedDrawItem(item: CompositionDrawItem): boolean {
+  return item.isSelected;
+}
+
 export interface CompositionPassOptions {
   device: GPUDevice;
   format: GPUTextureFormat;
@@ -513,10 +517,11 @@ export class CompositionPass {
     pass: GPURenderPassEncoder,
     items: readonly CompositionDrawItem[],
     afterItem?: (item: CompositionDrawItem) => void,
+    shouldIsolateItem: (item: CompositionDrawItem) => boolean = isSelectedDrawItem,
   ): void {
     this.#fullSceneBatch = null;
     const firstWrittenInstance = this.#instanceWriteCursor;
-    const instanceCount = this.#prepareDrawCommands(items, !!afterItem);
+    const instanceCount = this.#prepareDrawCommands(items, afterItem ? shouldIsolateItem : null);
     if (instanceCount > 0) {
       const buffer = this.#ensureInstanceCapacity(this.#instanceWriteCursor);
       this.#device.queue.writeBuffer(
@@ -550,7 +555,7 @@ export class CompositionPass {
         pass.draw(6);
       }
 
-      if (command.item?.isSelected && afterItem) {
+      if (command.item && afterItem) {
         afterItem(command.item);
         // Overlay callbacks encode into the same render pass and may replace the
         // active pipeline/bind groups. Force composition state to be rebound for
@@ -631,7 +636,10 @@ export class CompositionPass {
     this.#fullSceneBatch = null;
   }
 
-  #prepareDrawCommands(items: readonly CompositionDrawItem[], isolateSelected: boolean): number {
+  #prepareDrawCommands(
+    items: readonly CompositionDrawItem[],
+    shouldIsolateItem: ((item: CompositionDrawItem) => boolean) | null,
+  ): number {
     let commandCount = 0;
     let instanceCount = 0;
     const firstInstance = this.#instanceWriteCursor;
@@ -644,10 +652,10 @@ export class CompositionPass {
         const instanceIndex = firstInstance + instanceCount;
         this.#writeInstance(instanceIndex, item);
 
-        const labelBoundary = isolateSelected && item.isSelected;
+        const overlayBoundary = shouldIsolateItem?.(item) ?? false;
         const previous = commandCount > 0 ? this.#drawCommands[commandCount - 1] : undefined;
         if (
-          !labelBoundary &&
+          !overlayBoundary &&
           previous?.kind === "texture" &&
           previous.texture === texture &&
           previous.item === null
@@ -659,7 +667,7 @@ export class CompositionPass {
           command.texture = texture;
           command.firstInstance = instanceIndex;
           command.instanceCount = 1;
-          command.item = labelBoundary ? item : null;
+          command.item = overlayBoundary ? item : null;
         }
         instanceCount++;
         continue;

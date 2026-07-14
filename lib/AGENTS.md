@@ -13,11 +13,12 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `media-assets.ts` — Creates shared image assets and manages decoded-bitmap lifetime with explicit retain/release ownership.
 - `media-resources.ts` — Central exception-safe disposal for entity/detached media and video elements.
 - `app-loader.ts` — Controls the HTML loading screen. `setText()` updates status text, `dismiss()` hides with min-display guarantee.
-- `serialization/` — `.vdmsh` zip format with versioning and migrations. Imports validate manifests/duplicate IDs, stage decoded ownership until adoption, yield in bounded chunks, and decode each repeated image path once.
+- `serialization/` — `.vdmsh` zip format with versioning and migrations. v7 caches per-entity ThumbHashes; v6 preserves original encoded media bytes with explicit MIME metadata. Imports validate manifests/duplicate IDs, stage decoded ownership until adoption, yield in bounded chunks, and decode each repeated image path once.
+- `thumbhash.ts` — Bounded first-frame ThumbHash encode/decode, runtime bitmap caching, preview validation, and workspace base64 conversion.
 - `files/file-handle.ts` — File System Access API handle storage for in-place workspace saving (Chromium only).
 - `files/random-filename.ts` + `files/filename-words.ts` — Random filename generation for workspace files.
 - `palette-extraction/` — K-means clustering for color palettes.
-- `palette-store.ts` — User palette CRUD (persisted via unstorage).
+- `palette-store.ts` — Persisted personal palette ownership plus transient room/workspace palette projection; room metadata wins ID collisions.
 - `animation-scheduler.ts` — `AnimationScheduler`. Tick-driven scheduler for tweens, 2D springs, and custom animations. Handles lifecycle (cancel, complete callbacks), tag-based cancellation. Singleton: `scheduler`.
 - `touch-scroll/` — Physics-based momentum scrolling with springs and velocity tracking.
 - `client.logger.ts` — Logger with levels. `console.log`/`debug` stripped in production via Vite/oxc config.
@@ -25,20 +26,38 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - `gif-encoder.ts` + `gif-encoder-worker.ts` — GIF encoding via gifenc in Web Worker.
 - `download.ts` — File downloads and file picker (with iOS compatibility).
 - `storage.ts` — Browser storage abstraction (unstorage) for persisted preferences.
+- `collaboration/protocol.ts` — Invite fragments, provisional preview descriptors, content-addressed final assets, hashing, validation, and selective gzip for compressible text payloads.
+- `collaboration/document.ts` — Yjs entity/layer document with grouped identity, geometry, appearance, asset, media playback, and shader playback fields. Clock anchors carry source IDs, monotonic timestamps, and unique command IDs; media anchors also carry duration.
+- `collaboration/clock.ts` — Monotonic epoch timestamps, NTP-style peer offset/RTT samples, and validated clock messages.
+- `collaboration/presence.ts` — Validated partial presence messages plus deterministic shader-word names and peer colors.
+- `collaboration/ice-server-provider.ts` — Provider-neutral same-origin TURN credential client, strict ICE response validation, and selected candidate-pair route inspection.
+- `collaboration/metrics.ts` — Reactive counters and bounded transfer diagnostics for collaboration sessions.
+- `collaboration/asset-hash-cache.ts` — Blob-identity promise cache that hashes a shared source once across duplicate registrations.
+- `collaboration/asset-request-pool.ts` — Bounded hash-to-source request ownership used to cap concurrent incoming asset reassembly and release requests when a peer leaves.
+- `collaboration/asset-transfer-limiter.ts` — Count/byte-bounded payload permit queue; permits oversized assets only when no other payload is active and rejects queued work when a peer/session ends.
+- `collaboration/shared-image-asset-registry.ts` — Short-lived reference-counted lookup for sharing decoded preview/final image assets across one remote projection batch.
 - Also: `config/action-layer.config.ts`, `entity-placement.ts`, `deep-merge.ts`, `shader-defaults.ts`, `gif-decoder.ts`.
 
 ## Patterns
 
 - Pure functions where possible. No side effects, no singletons (except `undo`, `logger`, `paletteStore`, `scheduler`).
 - Image duplication shares `MediaImageAsset` objects. Retain before attaching an asset to another entity and release only when that entity's undo-owned resources are evicted.
+- Collaboration duplicates reuse work by immutable identity: one Blob preview/hash/transfer and one decoded static-image asset. Batch repeated Yjs asset-field completion in one transaction instead of publishing per entity.
+- Collaboration palette deletion writes a Yjs tombstone as well as removing metadata. Automatic entity appearance publication must respect tombstones; only explicit undo restoration may clear one and republish that palette ID.
+- Collaboration decode metrics time decoder work only; preview dwell measures visible placeholder latency, while reconcile measures end-to-end projection. Batch metric count/total updates so large duplicate documents do not publish once per entity.
+- High-frequency presence metrics accumulate every message but publish snapshots at a bounded cadence; do not notify React for every cursor packet.
+- Treat usable TURN credentials as a room-start prerequisite. Validate expiry, URL schemes, credential presence, and at least one relay URL before passing ICE configuration to Trystero; do not fall back silently to STUN-only operation.
 - Image assets record alpha capability from their encoded format; JPEG assets are known opaque so the renderer can omit alpha-mask intermediates.
 - Config is a frozen object. Do not mutate at runtime.
 - Hot-path bounds helpers accept caller-owned output objects; renderer culling must pass scratch `Bounds` instead of allocating one per entity.
 - Spatial queries reuse caller-owned result arrays. Preserve z-order for rendering/hit testing; disable sorting for membership-only consumers. Update the index whenever entity position, size, rotation, z-index, insertion, or removal changes.
 - Current-version deserialization reuses the unique objects produced by `JSON.parse`; recursively merge cloned defaults only for schema-mismatched documents that require compatibility filling.
+- Serialized MIME describes the exact bytes at `mediaFile`, never the entity display-name extension. Reconstruct every media Blob with that MIME so downstream sharing retains a decodable type.
 - Resource-producing async batches must await every sibling before unwinding fulfilled results. Use `disposeMediaSource()`/`disposeEntityMedia()`; do not close a shared image bitmap directly.
 - `Undo.clear()` evicts committed stacks and any active transaction. Workspace replacement relies on this to prevent late transaction commits from targeting imported colliding IDs.
 - GIF/video decode paths close decoders, frames, snapshots, and blob-backed elements on every exception path.
+- Treat already-encoded image/video/GIF payloads as identity transfers; gzip only explicitly compressible formats and only when the result is smaller.
+- Persist validated ThumbHashes as manifest metadata and reuse them after import; do not re-read decoded pixels when an entity already carries a preview.
 
 ## Anti-Patterns
 

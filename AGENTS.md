@@ -9,7 +9,7 @@ Infinite canvas app with real-time WebGPU shader effects. Users drop images/vide
 - **Shader / Effect** — WebGPU rendering algorithm that stylizes an entity. 7 types: dithering, halftone, ascii, glass, blobs, melt, glitch. Each is a `ShaderPass` subclass in `renderer/shaders/`.
 - **Kind** — Sub-variant within a shader type. E.g. dithering has 12 kinds (bayer4x4, floydSteinberg…), glass has 3, glitch has 4, ascii has 4.
 - **Knobs** — UI panels for editing shader parameters. Each shader type has its own `*-knobs.tsx`. Read/write params via `useParamValue()` hook.
-- **Palette** — 2–16 colors for quantization. Types: preset (built-in), custom (`cstm_` prefix), extracted (`ext_` prefix), original (auto-extracted 6-color per entity).
+- **Palette** — 2–16 colors for quantization. Types: preset (built-in), custom (`cstm_` prefix), extracted (`ext_` prefix), original (auto-extracted 6-color per entity). Palettes discovered from a collaboration room are transient list entries: usable and named like local palettes, but not persisted to personal preferences.
 - **Preserve Colors** — Boolean. True: per-channel RGB processing. False: monochrome. All shaders except glass.
 - **Adjustments** — Pre-processing effects applied before shader: brightness, contrast, saturation, blur.
 - **Post-processing** — Effects applied after shader: grain, bloom, chromatic aberration.
@@ -19,9 +19,11 @@ Infinite canvas app with real-time WebGPU shader effects. Users drop images/vide
 - **Disintegration** — Particle break-apart animation on entity deletion. Toggled by "fancy delete" setting.
 - **Bulk deletion** — Selection deletion is one store mutation and one undo command. Fancy-delete snapshots are bounded to 32 entities so large selections cannot allocate thousands of GPU overlays.
 - **Workspace** — Full saved canvas state (entities, viewport, palettes). Persisted as `.vdmsh` zip files.
+- **Collaboration Room** — Invite-link-scoped peer mesh. Yjs replicates entity state; Trystero/WebRTC transfers CRDT updates and content-addressed media blobs directly between browsers.
 
 ## Architecture
 
+- `api/` — Vercel Web API functions. Issues short-lived TURN credentials without exposing provider secrets to browsers.
 - `engine/` — Canvas state (`CanvasStore`) and input handling (`GameLoop`). GPU-agnostic, framework-independent.
 - `renderer/` — WebGPU rendering pipeline, shader registry, effect composition, export (MP4/MOV/GIF/PNG/JPEG). `renderer/shaders/` has per-effect `ShaderPass` subclasses.
 - `lib/` — Pure utilities. Math, config, media loading, serialization (`.vdmsh`), undo (command pattern), palette extraction, physics scroll. No React, no GPU.
@@ -32,7 +34,7 @@ Infinite canvas app with real-time WebGPU shader effects. Users drop images/vide
 
 ## Stack
 
-React 19 + Compiler, rolldown-vite 8, WebGPU, TypeScript (strict), Bun, oxlint.
+React 19 + Compiler, rolldown-vite 8, WebGPU, TypeScript (strict), Bun, oxlint, Yjs, Trystero/WebRTC.
 
 ## Path Aliases (package.json `imports`)
 
@@ -64,8 +66,9 @@ The opt-in real Chrome/WebGPU many-entity suite lives in `bench/`. Run it with `
 3. **Private fields**: Use `#` private class fields, not `private` keyword.
 4. **No barrel exports**: Only `engine/index.ts` and `types/index.ts` have barrels. Import directly from files elsewhere.
 5. **GPU resources**: Always clean up buffers/textures. Use `TexturePool` for intermediates. Key shareable source/processed textures by immutable asset and effect identity; entity IDs track ownership, not duplicate resources.
-6. **Undo pattern**: Wrap state mutations in `Command.create({ execute, undo, onEvict })`, push to `undo` singleton from `lib/undo.ts`.
+6. **Undo pattern**: Wrap state mutations in `Command.create({ execute, undo, onEvict })`, push to `undo` singleton from `lib/undo.ts`. Entity update commands rebase only leaves changed by that command so undo/redo preserves unrelated remote collaboration edits; remote projections never clear local undo history.
 7. **Overview batching**: Large homogeneous static-image scenes keep one versioned composition instance buffer. Pan-only frames update viewport state and issue one draw; entity/geometry changes rebuild, and interactive/heterogeneous scenes use normal preparation.
+8. **Collaboration**: Keep peer transport/orchestration outside `CanvasStore`. Durable entity state uses validated, leaf-level Yjs fields and projects only transaction-changed entity IDs through the context/store mutation boundary; media and animated-shader playback use shared monotonic clock anchors instead of replicated frame progress. Cursor/selection presence uses ephemeral coalesced actions and transient GPU-agnostic render state. Room palettes replicate as transient metadata, and deletion is tombstoned so stale entity updates cannot resurrect an ID. Media inventories, sources, cancellation signals, and transfer budgets are scoped to one room session, with both per-peer and global send limits. Fetch provider-neutral, short-lived ICE credentials from the same-origin server broker before joining a room; provider secrets never enter client bundles or replicated state.
 
 ## Anti-Patterns
 
@@ -91,6 +94,7 @@ WebGPU compute-based 2x upscaling via Anime4K CNN models. `renderer/upscale/` co
 ## Vite Plugins (plugins/)
 
 - `vite-plugin-image.ts` — `?img` import suffix. Generates responsive `<picture>` data: multi-width srcsets in avif/webp, thumbhash blur-up placeholders. Uses `sharp` for resizing.
+- `vite-plugin-turn-credentials.ts` — Development-only `/api/ice-servers` middleware that reuses the production TURN credential handler without exposing server secrets to Vite client modules.
 - `vite-plugin-wgsl-minify.ts` — Minifies `.wgsl?raw` imports in production builds using `miniray`.
 
 ## Media Assets
@@ -101,7 +105,7 @@ Static media images live in `media/` (not `public/media/`). Import via `#media/*
 
 `.vdmsh` zip files (`application/vdmsh` MIME type) via fflate. Media encoding and compression runs in a Web Worker (`lib/serialization/serialize-worker.ts`). Supports file handle saving (File System Access API) for in-place overwrites. See `lib/serialization/` for format docs.
 
-Repeated image entities share one archive media path per asset revision. Deserialization validates IDs and geometry before decoding, stages all media ownership, restores duplicate entities in 512-entity cooperative chunks, and atomically swaps store/index state only after adoption. Abort, decode, and pre-adoption failures dispose staged media without changing the live workspace.
+Repeated image entities share one archive media path per asset revision. v7 archives cache per-entity ThumbHash previews; v6 introduced explicit MIME metadata while preserving original encoded media bytes, and v5 images migrate as PNG because older serializers always PNG-encoded them. Deserialization validates IDs and geometry before decoding, stages all media ownership, restores duplicate entities in 512-entity cooperative chunks, and atomically swaps store/index state only after adoption. Abort, decode, and pre-adoption failures dispose staged media without changing the live workspace.
 
 <!-- opensrc:start -->
 

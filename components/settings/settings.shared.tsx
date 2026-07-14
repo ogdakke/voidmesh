@@ -2,6 +2,7 @@ import { NavArrowRight } from "iconoir-react";
 import { Checkbox } from "#ui/checkbox/index.tsx";
 import { NativeSelect, NativeSelectOption } from "#ui/native-select/index.ts";
 import { useCanvasCommands, useCanvasPreferences } from "#context/use-canvas.ts";
+import { useCollaborationMetrics } from "#hooks/use-collaboration.ts";
 import { resetOnboardingProgress } from "#lib/onboarding-storage.ts";
 import { shareOrCopyUrl } from "./share.ts";
 import { CanvasLensing } from "#types/enums.ts";
@@ -84,6 +85,187 @@ export function ShareLink() {
       <span>Share</span>
     </button>
   );
+}
+
+export function CollaborationLink() {
+  const { startCollaboration } = useCanvasCommands();
+  const metrics = useCollaborationMetrics();
+
+  const startOrShare = async () => {
+    try {
+      if (metrics.status === "error") {
+        await startCollaboration();
+        return;
+      }
+      if (metrics.status === "idle") await startCollaboration();
+      await shareOrCopyUrl();
+    } catch {
+      // The collaboration status toast owns user-facing failure reporting.
+    }
+  };
+
+  const label =
+    metrics.status === "connecting"
+      ? "Multiplayer connecting…"
+      : metrics.status === "reconnecting"
+        ? "Multiplayer reconnecting…"
+        : metrics.status === "waiting"
+          ? "Share multiplayer invite"
+          : metrics.status === "connected"
+            ? `Multiplayer · ${metrics.peerCount + 1} here`
+            : metrics.status === "error"
+              ? "Retry multiplayer"
+              : "Start multiplayer";
+
+  return (
+    <button
+      type="button"
+      onClick={() => void startOrShare()}
+      disabled={metrics.status === "connecting" || metrics.status === "reconnecting"}
+    >
+      <span>{label}</span>
+    </button>
+  );
+}
+
+export function LeaveCollaborationLink() {
+  const { stopCollaboration } = useCanvasCommands();
+  const metrics = useCollaborationMetrics();
+  if (metrics.status === "idle") return null;
+  return (
+    <button type="button" onClick={stopCollaboration}>
+      <span>Leave multiplayer</span>
+    </button>
+  );
+}
+
+export function CollaborationMetrics() {
+  const metrics = useCollaborationMetrics();
+  if (metrics.status === "idle") return null;
+  const lastTransfer = metrics.transfers.at(-1);
+  const statusLabel =
+    metrics.status === "connecting"
+      ? "Joining multiplayer…"
+      : metrics.status === "waiting"
+        ? "Room ready · waiting for peers"
+        : metrics.status === "connected"
+          ? `${metrics.peerCount + 1} people connected`
+          : metrics.status === "reconnecting"
+            ? "Reconnecting multiplayer…"
+            : "Multiplayer connection failed";
+  return (
+    <div className="collaboration-metrics">
+      <p className="collaboration-status" aria-live="polite">
+        {statusLabel}
+      </p>
+      <details className="collaboration-diagnostics">
+        <summary>Connection diagnostics</summary>
+        {metrics.lastError && <p className="collaboration-metrics-error">{metrics.lastError}</p>}
+        <dl aria-label="Multiplayer diagnostics">
+          <Metric label="Peers" value={String(metrics.peerCount)} />
+          <Metric label="RTT" value={formatDuration(metrics.lastRoundTripTimeMs)} />
+          <Metric
+            label="Route"
+            value={formatConnectionPath(metrics.connectionPath, metrics.relayProtocol)}
+          />
+          <Metric
+            label="TURN credentials"
+            value={formatTurnCredentials(
+              metrics.iceCredentialFetchDurationMs,
+              metrics.iceCredentialExpiresAt,
+              metrics.iceCredentialRefreshes,
+              metrics.iceCredentialRefreshFailures,
+            )}
+          />
+          <Metric label="Sent" value={formatBytes(metrics.bytesSent)} />
+          <Metric label="Received" value={formatBytes(metrics.bytesReceived)} />
+          <Metric
+            label="Assets"
+            value={formatAssetQueue(
+              metrics.assetRequestsPending,
+              metrics.assetReceivesActive,
+              metrics.assetReceiveProgress,
+              metrics.assetTransferRetries,
+            )}
+          />
+          <Metric label="Hashing" value={formatDuration(metrics.assetHashDurationMs)} />
+          <Metric label="Compression" value={formatDuration(metrics.assetCompressionDurationMs)} />
+          <Metric label="Media decode" value={formatDuration(metrics.assetDecodeDurationMs)} />
+          <Metric label="Preview encode" value={formatDuration(metrics.previewEncodeDurationMs)} />
+          <Metric label="Preview decode" value={formatDuration(metrics.previewDecodeDurationMs)} />
+          <Metric
+            label="Placeholders"
+            value={`${metrics.previewPlaceholdersCreated} · ${metrics.previewHydrations} hydrated`}
+          />
+          <Metric
+            label="Preview dwell"
+            value={formatDuration(
+              metrics.previewHydrations > 0
+                ? metrics.previewDwellDurationMs / metrics.previewHydrations
+                : null,
+            )}
+          />
+          <Metric label="CRDT apply" value={formatDuration(metrics.documentApplyDurationMs)} />
+          <Metric label="Reconcile" value={formatDuration(metrics.documentReconcileDurationMs)} />
+          {lastTransfer && (
+            <Metric
+              label={`Last asset ${lastTransfer.direction === "receive" ? "↓" : "↑"}`}
+              value={`${formatBytes(lastTransfer.transmittedBytes)} · ${formatBytes(lastTransfer.throughputBytesPerSecond)}/s · ${formatDuration(lastTransfer.durationMs)} · ${lastTransfer.compression}`}
+            />
+          )}
+        </dl>
+      </details>
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>{value}</dd>
+    </div>
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatDuration(durationMs: number | null): string {
+  if (durationMs === null) return "—";
+  if (durationMs < 1000) return `${durationMs.toFixed(1)} ms`;
+  return `${(durationMs / 1000).toFixed(2)} s`;
+}
+
+function formatAssetQueue(
+  pending: number,
+  active: number,
+  progress: number | null,
+  retries: number,
+): string {
+  const progressLabel = progress === null ? "" : ` · ${Math.round(progress * 100)}%`;
+  return `${pending} pending · ${active} active${progressLabel} · ${retries} retries`;
+}
+
+function formatConnectionPath(path: string, relayProtocol: string | null): string {
+  if (path === "unknown") return "—";
+  const label = path === "direct" ? "Direct" : path === "relay" ? "Relay" : "Mixed";
+  return relayProtocol ? `${label} · ${relayProtocol}` : label;
+}
+
+function formatTurnCredentials(
+  fetchDurationMs: number | null,
+  expiresAt: number | null,
+  refreshes: number,
+  refreshFailures: number,
+): string {
+  if (fetchDurationMs === null || expiresAt === null) return "—";
+  const expiresInMinutes = Math.max(0, Math.round((expiresAt - Date.now()) / 60_000));
+  const refreshSummary = refreshFailures > 0 ? `${refreshes}/${refreshFailures} failed` : refreshes;
+  return `${formatDuration(fetchDurationMs)} · ${expiresInMinutes}m · ${refreshSummary} refreshed`;
 }
 
 export function FeedbackLink({ className }: { className?: string }) {

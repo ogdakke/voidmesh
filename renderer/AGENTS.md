@@ -20,6 +20,7 @@ WebGPU rendering and export pipelines. Turns engine state into pixels.
 - `frame-encoder.ts` — Shared core for encoding ImageBitmap sequences into video blobs via Web Worker. Used by both video export and upscale pipelines. Handles WebCodecs init, mediabunny muxing, progress async generator, cancel, audio passthrough.
 - `progress-channel.ts` — Push-to-pull async generator bridge for progress reporting. Used by frame-encoder and video-exporter.
 - `export-formats.ts` — Format/quality/resolution type definitions.
+- `collaboration-presence-pass.ts` + `collaboration-presence.wgsl` — WebGPU peer presence. Caches selection-outline geometry as per-entity draw ranges, separately from 60 Hz cursor uniforms and rasterized name labels.
 
 ### Upscale (`upscale/`)
 
@@ -51,10 +52,12 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 
 1. `GameLoop` calls `renderer.render(state)` each frame
 2. For each visible entity: resolve its shared source texture (uploading absent or changed sources), apply shader via `ShaderRegistry.applyShader()`, apply pre/post processing via `ProcessingPipeline`
-3. Composite all processed entities onto canvas with viewport transform
+3. Composite all processed entities onto canvas with viewport transform, interleaving remote selection outlines at their owning entities' z-index boundaries
 4. If action layer active: blur+dim canvas, re-render targeted entities sharp on top
 5. Render grid overlay, selection rectangles, drag visuals
 6. Render disintegration particle overlays for any active "fancy delete" animations
+7. Render collaboration cursor labels above the canvas scene
+8. Apply canvas lens distortion, then the WLUR progressive-blur overlay
 
 ## GPU Resource Management
 
@@ -63,6 +66,7 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 - Dimension-keyed blur mip, bloom mip, and blur blend textures share a 128 MiB budget; current-frame dimensions stay pinned and older dimensions are evicted LRU.
 - Source textures cached by media identity/revision; static image entities sharing one asset also share one GPU texture until the final entity owner is removed
 - Stable processed image outputs are keyed by asset revision, dimensions, shader type, and full shader parameters. Identical instances share one texture; animated effects and non-image media remain entity-scoped.
+- Animated shader time advances from a per-entity monotonic anchor rather than accumulated frame deltas. External time corrections reset that anchor, allowing collaboration to converge after background suspension without networked frame ticks.
 - Per-entity source/processed ownership maps point directly to their cached texture entries; retain the cache key on the shared entry for release/eviction instead of restoring a second map lookup to every visible-entity frame path.
 - Canvas media uses 64/128/256/... screen-space LOD tiers with overscan. Viewport changes leave an explicit settle-frame countdown reported as pending render work, so promotions converge after zoom animations without another interaction. Real texture work remains transition-budgeted; shared static-image demotions may run during camera motion, and an existing shared tier rebinds every identical instance immediately.
 - Pixel-space shader parameters are authored against native media resolution and multiplied by `EffectRenderEntity.pixelScale` only when an LOD texture is rendered. This covers common cell size, dithering pattern period, blur strength, grain size, and chromatic offset; dimensionless controls and UV-space bloom radius stay unchanged. Populate the reusable effect view after cached-texture early returns so this normalization adds no steady-state entity work or parameter clones.
@@ -83,6 +87,7 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 - `TexturePool` retains at most 64 MiB of idle transient textures across dimensions/usages. Release scratch after its final encoded use for ordered reuse, but apply destruction limits only in `commitSubmitted()` after `queue.submit()`.
 - Image source changes require a new asset revision. Entity removal releases its source-cache ownership without destroying textures still used by sibling instances.
 - Composition keeps the former hover uniform slot reserved for layout stability, but no hover state/effect is prepared. Do not add passive alpha hit testing to feed it.
+- Collaboration presence keeps colored selection outlines in one cached vertex buffer with per-entity ranges. Interleave each range immediately after its entity composition draw so higher-z entities occlude it; anchor a multi-selection group outline to the highest-z selected entity. Remote selections disable full-scene batching while present. Draw cursor labels last into the pre-lens scene target so lensing and WLUR affect all presence consistently. Cursor-only updates must not rebuild outlines, source textures, or processed effects.
 
 ## Shader Uniform Layout
 

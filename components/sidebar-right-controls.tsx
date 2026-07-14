@@ -38,7 +38,7 @@ import { DesktopTimeSlider } from "./desktop-time-slider/desktop-time-slider.tsx
 import { undo } from "#lib/undo.ts";
 import { config } from "#config";
 import { isUserPalette } from "#components/palette-preset/palette-presets.ts";
-import { usePaletteStore } from "#lib/palette-store.ts";
+import { paletteStore, usePaletteStore } from "#lib/palette-store.ts";
 import {
   Collapsible,
   CollapsibleCheckbox,
@@ -663,12 +663,12 @@ function PaletteEditorSection() {
               : undefined
           }
           onDelete={
-            palette.value?.id && isUserPalette(palette.value.id)
+            palette.value?.id && paletteStore.isPersonalPalette(palette.value.id)
               ? () => deletePalette(palette.value.id!)
               : undefined
           }
           canRename={!!palette.value?.id && isUserPalette(palette.value.id)}
-          canDelete={!!palette.value?.id && isUserPalette(palette.value.id)}
+          canDelete={!!palette.value?.id && paletteStore.isPersonalPalette(palette.value.id)}
         />
       )}
       <PaletteUpload onUpload={uploadPalette} />

@@ -1,9 +1,12 @@
 import { Modal } from "#ui/modal/modal.tsx";
 import {
   CanvasLensingSelect,
+  CollaborationLink,
+  CollaborationMetrics,
   FancyDeleteToggle,
   FeedbackLink,
   LinkItem,
+  LeaveCollaborationLink,
   RedoOnboardingLink,
   ShareLink,
   SnapToGridToggle,
@@ -30,6 +33,16 @@ export default function DesktopSettingsContent({
         <div className="desktop-settings-switch">
           <CanvasLensingSelect />
         </div>
+        <hr className="divider" />
+        <div className="desktop-settings-ext-item field-label">
+          <LinkItem>
+            <CollaborationLink />
+          </LinkItem>
+        </div>
+        <div className="desktop-settings-ext-item field-label">
+          <LeaveCollaborationLink />
+        </div>
+        <CollaborationMetrics />
         <hr className="divider" />
         <div className="desktop-settings-ext-item field-label">
           <LinkItem>

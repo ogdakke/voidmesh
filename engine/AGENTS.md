@@ -17,12 +17,14 @@ Canvas state management and input processing. This is the "model + controller" l
 
 ## State Architecture
 
-- `CanvasState` uses version counters (`version`, `entityVersion`, `geometryVersion`, `viewportVersion`, `selectionVersion`, `playbackVersion`, `dragVersion`) for selective cache invalidation and React subscriptions. Imperative moves increment `geometryVersion` without notifying React.
+- `CanvasState` uses version counters (`version`, `entityVersion`, `geometryVersion`, `viewportVersion`, `selectionVersion`, `playbackVersion`, `dragVersion`, `presenceVersion`, `presenceSelectionVersion`) for selective cache invalidation and React subscriptions. Imperative moves and ephemeral presence stay off React notifications.
 - Snapshot types (`ViewportSnapshot`, `SelectionSnapshot`, `PlaybackSnapshot`, `DragSnapshot`, `ActionLayerSnapshot`) isolate subscription scopes — sidebar components don't re-render on viewport pan.
-- Dirty flags (`viewportDirty`, `entitiesDirty`, `selectionDirty`) tell the renderer what needs redrawing.
+- Dirty flags (`viewportDirty`, `entitiesDirty`, `selectionDirty`, `presenceDirty`) tell the renderer what needs redrawing.
 - `RenderState` is a stable mutable frame view consumed synchronously by `InfiniteCanvasRenderer.render()`; it exposes `entityVersion`/`geometryVersion` for renderer caches, and its sorted entity array is rebuilt only when `entityVersion` changes.
 - `CanvasStore` owns the incremental `EntitySpatialIndex` shared by renderer visibility, point hit testing, and drag selection. Every geometry mutation must upsert or remove its entity from the index.
 - `CanvasStore.hasRenderChanges()` checks dirty state without materializing or mutating render state.
+- Entity mutations publish a typed change feed for non-React integrations such as collaboration; remote projections must suppress echo at their orchestrator boundary.
+- Shader-time mutations infer clock intent from `time`/`timeAutoPlay` changes. Live scrubs may opt in explicitly, while `commitShaderPlayback()` flushes an exact shared anchor without another store mutation.
 
 ## Patterns
 
@@ -44,14 +46,16 @@ Canvas state management and input processing. This is the "model + controller" l
 - Space+drag panning uses `SpacePanMode` enum (`idle` → `ready` → `panning` → `panned`).
 - Per-frame controllers (disintegration, drag visuals, action layer) are ticked each frame; return `true` while animations are active to keep the render loop running.
 - The frame loop rebuilds animated-media and continuous-shader active sets only when `entityVersion` changes; selection-only changes must not trigger all-entity scans.
-- Playing media advances playback time every RAF, but only visible animated entities mark textures dirty and force render; passive playback notifications are limited to the selected entity.
+- Playing media advances playback time every RAF, but only visible animated entities mark textures dirty and force render; passive playback notifications are limited to the selected entity and never publish entity-mutation intent. Play/pause/seek/settings mutations represent discrete control anchors; publish play intent before awaiting `HTMLMediaElement.play()` and publish a paused rollback if the promise rejects.
 - Renderer-reported pending work keeps RAF alive for settled, budgeted LOD transitions after viewport input stops; it must not be implemented by pausing video playback.
+- When a hidden page becomes visible or is restored from page cache, invalidate the presented frame: browsers may discard a WebGPU canvas backing surface while retaining GPU textures.
 - Action-layer, drag-visual, and disintegration controllers reuse their render-state wrappers; mutate stable scratch state instead of allocating objects, sets, or overlay arrays every frame.
 - The FPS overlay reads direct renderer timing. Do not add `performance.mark()`/`measure()` calls to debug-mode render loops; Performance Timeline entry churn materially distorts the frames being measured.
 - `notifyViewportChange()` increments only `viewportVersion`. `notifySelectionChange()` increments `selectionVersion` + `version` + `playbackVersion`.
 - Entity membership, reference, effect, or playback-classification changes must increment `entityVersion`; selection and UI-only changes must not.
 - Hot-path selection logs contain counts plus bounded first/last IDs. Never join or serialize an unbounded selection into a log message.
 - Passive pointer movement does not perform entity or alpha hit testing. Keep hit testing tied to explicit click/touch/drag interactions until a bounded hover effect exists.
+- Local cursor world coordinates publish from RAF-coalesced input; remote peer cursors/selections live in transient store state with independent cursor/selection versions. Never dirty entity textures or notify React for presence motion.
 
 ## Anti-Patterns
 

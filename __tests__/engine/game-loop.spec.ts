@@ -94,11 +94,33 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  gl.stop();
   cleanupCanvas();
   vi.restoreAllMocks();
 });
 
 describe("Render loop errors", () => {
+  test("redraws the canvas when a background tab becomes visible", () => {
+    let nextFrame: FrameRequestCallback | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      nextFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const renderer = createLoopRenderer();
+
+    gl.setRenderer(renderer);
+    gl.start();
+    expect(renderer.render).toHaveBeenCalledOnce();
+
+    document.dispatchEvent(new Event("visibilitychange"));
+    if (!nextFrame) throw new Error("Expected frame loop to schedule another frame");
+    (nextFrame as FrameRequestCallback)(performance.now());
+
+    expect(renderer.render).toHaveBeenCalledTimes(2);
+  });
+
   test("reports render errors and keeps the animation loop alive", () => {
     const error = new Error("render boom");
     const renderErrorHandler = vi.fn<(error: unknown) => void>();

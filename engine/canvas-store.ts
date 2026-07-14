@@ -11,7 +11,9 @@ import {
   type ParamPaths,
   type GetParamByPath,
   type SelectionState,
+  type PlaybackState,
   type ShaderType,
+  type CollaborationPeerPresence,
   MediaType,
 } from "#types/canvas.ts";
 import { getFrameAtTime } from "#lib/gif-decoder.ts";
@@ -80,12 +82,31 @@ export interface CanvasState {
 
   // Canvas-rendered instructional callouts (transient, not persisted)
   canvasCallouts: readonly CanvasCallout[];
+
+  // Ephemeral multiplayer presence (transient, not persisted or React-observed)
+  remotePeerPresences: Map<string, CollaborationPeerPresence>;
+  presenceDirty: boolean;
+  presenceVersion: number;
+  presenceSelectionVersion: number;
 }
 
 export interface CanvasEntityUpdate {
   id: string;
   updates: Partial<ShaderCanvasEntity>;
+  /** Override shader-clock publication; otherwise inferred from time/play-state changes. */
+  syncShaderPlayback?: boolean;
 }
+
+export type CanvasEntityMutation =
+  | { type: "add"; entities: readonly ShaderCanvasEntity[] }
+  | { type: "update"; batch: readonly CanvasEntityUpdate[] }
+  | { type: "move"; entityId: string; position: Point }
+  | { type: "remove"; entityIds: readonly string[] }
+  | { type: "replace"; entities: readonly ShaderCanvasEntity[] }
+  | { type: "playback"; entityId: string; playback: PlaybackState }
+  | { type: "shaderPlayback"; entityIds: readonly string[] };
+
+export type CanvasEntityMutationListener = (mutation: CanvasEntityMutation) => void;
 
 // Snapshot types for selective subscriptions
 export interface ViewportSnapshot {
@@ -196,7 +217,15 @@ export interface RenderState {
   actionLayer: ActionLayerRenderState;
   dragVisual: DragVisualRenderState;
   disintegration: DisintegrationRenderState;
+  remotePeerPresences: readonly CollaborationPeerPresence[];
+  presenceVersion: number;
+  presenceSelectionVersion: number;
 }
+
+export type LocalPresenceListener = (
+  cursor: Point | null,
+  selectedEntityIds: ReadonlySet<string>,
+) => void;
 
 export interface ParamResult<T> {
   value: T;
@@ -221,6 +250,9 @@ export interface ParamResult<T> {
 export class CanvasStore extends Store<CanvasState> {
   #logger: Logger;
   #viewportListeners = new Set<() => void>();
+  #entityMutationListeners = new Set<CanvasEntityMutationListener>();
+  #localPresenceListeners = new Set<LocalPresenceListener>();
+  #localCursor: Point | null = null;
   #selectedEntitiesCache: ShaderCanvasEntity[] = [];
   #selectedEntitiesVersion = -1;
   #selectionStateCache: { entities: ShaderCanvasEntity[]; value: SelectionState } | null = null;
@@ -245,6 +277,8 @@ export class CanvasStore extends Store<CanvasState> {
     scale: 1,
   };
   readonly #renderDisintegration: DisintegrationRenderState = { overlays: [] };
+  readonly #renderPeerPresences: CollaborationPeerPresence[] = [];
+  #renderPresenceVersion = -1;
   readonly #renderState: RenderState = {
     viewport: this.#renderViewport,
     entities: this.#renderEntities,
@@ -261,6 +295,9 @@ export class CanvasStore extends Store<CanvasState> {
     actionLayer: this.#renderActionLayer,
     dragVisual: this.#renderDragVisual,
     disintegration: this.#renderDisintegration,
+    remotePeerPresences: this.#renderPeerPresences,
+    presenceVersion: 0,
+    presenceSelectionVersion: 0,
   };
 
   /** Throttle interval for passive playback notifications (hard cap at 60fps) */
@@ -316,6 +353,10 @@ export class CanvasStore extends Store<CanvasState> {
       actionLayerTouchOrigin: { x: 0, y: 0 },
       actionLayerVersion: 0,
       canvasCallouts: [],
+      remotePeerPresences: new Map(),
+      presenceDirty: false,
+      presenceVersion: 0,
+      presenceSelectionVersion: 0,
     });
 
     this.#logger = logger;
@@ -448,6 +489,11 @@ export class CanvasStore extends Store<CanvasState> {
     return super.getState();
   }
 
+  subscribeEntityMutations(listener: CanvasEntityMutationListener): () => void {
+    this.#entityMutationListeners.add(listener);
+    return () => this.#entityMutationListeners.delete(listener);
+  }
+
   // Viewport mutations (only notify viewport subscribers)
   setViewport(viewport: Viewport): void {
     this.state.viewport = { ...viewport, offset: { ...viewport.offset } };
@@ -472,6 +518,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.#entitySpatialIndex.upsert(entity);
     this.state.entitiesDirty.add(entity.id);
     this.notifyEntityChange();
+    this.#emitEntityMutation({ type: "add", entities: [entity] });
   }
 
   addEntities(entities: readonly ShaderCanvasEntity[]): void {
@@ -486,6 +533,7 @@ export class CanvasStore extends Store<CanvasState> {
       this.state.entitiesDirty.add(entity.id);
     }
     this.notifyEntityChange();
+    this.#emitEntityMutation({ type: "add", entities });
   }
 
   /** Atomically replace canvas content after a workspace has decoded successfully. */
@@ -538,11 +586,17 @@ export class CanvasStore extends Store<CanvasState> {
     this.clearComputedCache();
     this.#resetSelectorCaches();
     this.notify();
+    this.#emitLocalPresence();
     for (const listener of this.#viewportListeners) listener();
+    this.#emitEntityMutation({ type: "replace", entities });
   }
 
   updateEntity(id: string, updates: Partial<ShaderCanvasEntity>): void {
     this.updateEntities([{ id, updates }]);
+  }
+
+  commitShaderPlayback(entityIds: readonly string[]): void {
+    if (entityIds.length > 0) this.#emitEntityMutation({ type: "shaderPlayback", entityIds });
   }
 
   /** Apply a large entity mutation set with one version bump and subscriber notification. */
@@ -550,9 +604,20 @@ export class CanvasStore extends Store<CanvasState> {
     if (batch.length === 0) return 0;
 
     let updatedCount = 0;
-    for (const { id, updates } of batch) {
+    let mutationBatch: CanvasEntityUpdate[] | null = null;
+    for (let index = 0; index < batch.length; index++) {
+      const update = batch[index]!;
+      const { id, updates } = update;
       const entity = this.state.entities.get(id);
       if (!entity) continue;
+      const syncShaderPlayback =
+        update.syncShaderPlayback ?? hasShaderPlaybackUpdate(entity, updates);
+      if (update.syncShaderPlayback === undefined && syncShaderPlayback) {
+        mutationBatch ??= batch.slice(0, index) as CanvasEntityUpdate[];
+        mutationBatch.push({ ...update, syncShaderPlayback });
+      } else if (mutationBatch) {
+        mutationBatch.push(update);
+      }
       const updatedEntity = { ...entity, ...updates } as ShaderCanvasEntity;
       this.state.entities.set(id, updatedEntity);
       if (hasSpatialEntityUpdates(updates)) {
@@ -567,6 +632,7 @@ export class CanvasStore extends Store<CanvasState> {
     if (updatedCount === 0) return 0;
     this.notifyEntityChange();
     this.#logger.debug("Updated entity batch", { entityCount: updatedCount });
+    this.#emitEntityMutation({ type: "update", batch: mutationBatch ?? batch });
     return updatedCount;
   }
 
@@ -580,6 +646,7 @@ export class CanvasStore extends Store<CanvasState> {
       // Position-only updates still change the composed scene and must invalidate
       // renderer caches such as the fullscreen wlur overlay during drag.
       this.state.entitiesDirty.add(id);
+      this.#emitEntityMutation({ type: "move", entityId: id, position: { ...entity.position } });
     }
   }
 
@@ -601,6 +668,7 @@ export class CanvasStore extends Store<CanvasState> {
       this.state.selectedEntityIds = newSelection;
     }
     this.notifyEntityChange();
+    this.#emitEntityMutation({ type: "remove", entityIds: [id] });
   }
 
   removeEntities(entityIds: ReadonlySet<string>): number {
@@ -631,6 +699,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.selectionDirty = true;
     this.notifyEntityChange();
     this.#logger.debug("Removed entity batch", { entityCount: removedCount });
+    this.#emitEntityMutation({ type: "remove", entityIds: [...entityIds] });
     return removedCount;
   }
 
@@ -833,6 +902,11 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.actionLayerEntityIds = new Set();
     this.state.actionLayerTouchOrigin = { x: 0, y: 0 };
     this.state.canvasCallouts = [];
+    this.state.remotePeerPresences.clear();
+    this.state.presenceDirty = true;
+    this.state.presenceVersion++;
+    this.state.presenceSelectionVersion++;
+    this.#localCursor = null;
     this.state.entitiesDirty.clear();
     this.state.selectionDirty = false;
     this.state.viewportDirty = false;
@@ -853,6 +927,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.#resetSelectorCaches();
     // Notify all subscribers
     this.notify();
+    this.#emitEntityMutation({ type: "replace", entities: [] });
   }
 
   // Debug mode toggle
@@ -938,6 +1013,52 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.canvasCalloutsDirty = true;
   }
 
+  setRemotePeerPresence(presence: CollaborationPeerPresence): void {
+    const previous = this.state.remotePeerPresences.get(presence.peerId);
+    const cursorChanged = !samePoint(previous?.cursor ?? null, presence.cursor);
+    const identityChanged =
+      !previous || previous.name !== presence.name || !sameRgba(previous.color, presence.color);
+    const selectionChanged =
+      !previous || !sameStringArray(previous.selectedEntityIds, presence.selectedEntityIds);
+    if (!cursorChanged && !identityChanged && !selectionChanged) return;
+    this.state.remotePeerPresences.set(presence.peerId, {
+      ...presence,
+      color: [...presence.color],
+      cursor: presence.cursor ? { ...presence.cursor } : null,
+      selectedEntityIds: [...presence.selectedEntityIds],
+    });
+    this.state.presenceVersion++;
+    if (identityChanged || selectionChanged) this.state.presenceSelectionVersion++;
+    this.state.presenceDirty = true;
+  }
+
+  removeRemotePeerPresence(peerId: string): void {
+    if (!this.state.remotePeerPresences.delete(peerId)) return;
+    this.state.presenceVersion++;
+    this.state.presenceSelectionVersion++;
+    this.state.presenceDirty = true;
+  }
+
+  clearRemotePeerPresences(): void {
+    if (this.state.remotePeerPresences.size === 0) return;
+    this.state.remotePeerPresences.clear();
+    this.state.presenceVersion++;
+    this.state.presenceSelectionVersion++;
+    this.state.presenceDirty = true;
+  }
+
+  setLocalCursor(cursor: Point | null): void {
+    if (samePoint(this.#localCursor, cursor)) return;
+    this.#localCursor = cursor ? { ...cursor } : null;
+    this.#emitLocalPresence();
+  }
+
+  subscribeLocalPresence(listener: LocalPresenceListener): () => void {
+    this.#localPresenceListeners.add(listener);
+    listener(this.#localCursor, this.state.selectedEntityIds);
+    return () => this.#localPresenceListeners.delete(listener);
+  }
+
   setMultiSelectMode(enabled: boolean): void {
     this.state.multiSelectMode = enabled;
     this.notifySelectionChange();
@@ -969,7 +1090,7 @@ export class CanvasStore extends Store<CanvasState> {
 
     const video = entity.mediaSource.videoElement;
     this.#syncVideoElementPlayback(entity);
-    await video.play();
+    const playPromise = video.play();
 
     if (entity.playback) {
       entity.playback.isPlaying = true;
@@ -977,6 +1098,20 @@ export class CanvasStore extends Store<CanvasState> {
     }
     this.state.entitiesDirty.add(entityId);
     this.notifyEntityChange();
+    this.#emitPlaybackMutation(entity);
+
+    try {
+      await playPromise;
+    } catch (error) {
+      if (this.state.entities.get(entityId) === entity && entity.playback?.isPlaying) {
+        entity.playback.isPlaying = false;
+        entity.playback.currentTime = video.currentTime;
+        this.state.entitiesDirty.add(entityId);
+        this.notifyEntityChange();
+        this.#emitPlaybackMutation(entity);
+      }
+      throw error;
+    }
   }
 
   setVideoMuted(entityId: string, muted: boolean): void {
@@ -991,6 +1126,7 @@ export class CanvasStore extends Store<CanvasState> {
     entity.mediaSource.videoElement.muted = muted;
     this.state.entitiesDirty.add(entityId);
     this.notifySelectionChange();
+    this.#emitPlaybackMutation(entity);
   }
 
   toggleVideoMuted(entityId: string): void {
@@ -1039,6 +1175,7 @@ export class CanvasStore extends Store<CanvasState> {
 
     this.state.entitiesDirty.add(entityId);
     this.notifyEntityChange();
+    this.#emitPlaybackMutation(entity);
   }
 
   /**
@@ -1062,6 +1199,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.entitiesDirty.add(entityId);
     this.state.playbackVersion++;
     this.notify();
+    this.#emitPlaybackMutation(entity);
   }
 
   /**
@@ -1103,6 +1241,7 @@ export class CanvasStore extends Store<CanvasState> {
     }
     this.state.entitiesDirty.add(entityId);
     this.notifyEntityChange();
+    this.#emitPlaybackMutation(entity);
   }
 
   pauseGif(entityId: string): void {
@@ -1117,6 +1256,7 @@ export class CanvasStore extends Store<CanvasState> {
     entity.textureDirty = true;
     this.state.entitiesDirty.add(entityId);
     this.notifyEntityChange();
+    this.#emitPlaybackMutation(entity);
   }
 
   /**
@@ -1141,6 +1281,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.entitiesDirty.add(entityId);
     this.state.playbackVersion++;
     this.notify();
+    this.#emitPlaybackMutation(entity);
   }
 
   /**
@@ -1176,6 +1317,19 @@ export class CanvasStore extends Store<CanvasState> {
     this.#lastPlaybackNotifyTime = performance.now();
     this.state.playbackVersion++;
     this.notify();
+  }
+
+  #emitPlaybackMutation(entity: ShaderCanvasEntity): void {
+    if (!entity.playback) return;
+    this.#emitEntityMutation({
+      type: "playback",
+      entityId: entity.id,
+      playback: { ...entity.playback },
+    });
+  }
+
+  #emitEntityMutation(mutation: CanvasEntityMutation): void {
+    for (const listener of this.#entityMutationListeners) listener(mutation);
   }
 
   #syncVideoElementPlayback(entity: ShaderCanvasEntity): void {
@@ -1240,7 +1394,8 @@ export class CanvasStore extends Store<CanvasState> {
       this.state.entitiesDirty.size > 0 ||
       this.state.selectionDirty ||
       this.state.containerSizeDirty ||
-      this.state.canvasCalloutsDirty
+      this.state.canvasCalloutsDirty ||
+      this.state.presenceDirty
     );
   }
 
@@ -1271,6 +1426,16 @@ export class CanvasStore extends Store<CanvasState> {
     renderState.actionLayer = this.#renderActionLayer;
     renderState.dragVisual = this.#renderDragVisual;
     renderState.disintegration = this.#renderDisintegration;
+    if (this.#renderPresenceVersion !== this.state.presenceVersion) {
+      this.#renderPeerPresences.length = 0;
+      for (const presence of this.state.remotePeerPresences.values()) {
+        this.#renderPeerPresences.push(presence);
+      }
+      this.#renderPresenceVersion = this.state.presenceVersion;
+    }
+    renderState.remotePeerPresences = this.#renderPeerPresences;
+    renderState.presenceVersion = this.state.presenceVersion;
+    renderState.presenceSelectionVersion = this.state.presenceSelectionVersion;
     return renderState;
   }
 
@@ -1292,6 +1457,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.selectionDirty = false;
     this.state.containerSizeDirty = false;
     this.state.canvasCalloutsDirty = false;
+    this.state.presenceDirty = false;
     this.state.frameCount++;
   }
 
@@ -1325,6 +1491,13 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.version++;
     this.state.playbackVersion++;
     this.notify();
+    this.#emitLocalPresence();
+  }
+
+  #emitLocalPresence(): void {
+    for (const listener of this.#localPresenceListeners) {
+      listener(this.#localCursor, this.state.selectedEntityIds);
+    }
   }
 
   private notifyEntityChange(): void {
@@ -1464,6 +1637,18 @@ function hasSpatialEntityUpdates(updates: Partial<ShaderCanvasEntity>): boolean 
   );
 }
 
+function hasShaderPlaybackUpdate(
+  entity: ShaderCanvasEntity,
+  updates: Partial<ShaderCanvasEntity>,
+): boolean {
+  const params = updates.shaderParams;
+  if (!params) return false;
+  return (
+    (params.time ?? 0) !== (entity.shaderParams.time ?? 0) ||
+    (params.timeAutoPlay !== false) !== (entity.shaderParams.timeAutoPlay !== false)
+  );
+}
+
 /**
  * Get a nested value from shader params using pre-split path parts
  */
@@ -1565,6 +1750,29 @@ function sameCanvasCallouts(a: readonly CanvasCallout[], b: readonly CanvasCallo
     }
   }
 
+  return true;
+}
+
+function samePoint(left: Point | null, right: Point | null): boolean {
+  if (!left || !right) return left === right;
+  return left.x === right.x && left.y === right.y;
+}
+
+function sameRgba(
+  left: CollaborationPeerPresence["color"],
+  right: CollaborationPeerPresence["color"],
+): boolean {
+  return (
+    left[0] === right[0] && left[1] === right[1] && left[2] === right[2] && left[3] === right[3]
+  );
+}
+
+function sameStringArray(left: readonly string[], right: readonly string[]): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index++) {
+    if (left[index] !== right[index]) return false;
+  }
   return true;
 }
 

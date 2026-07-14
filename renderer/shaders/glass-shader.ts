@@ -50,8 +50,11 @@ export class GlassShader extends ShaderPass {
   #flowingImmediateUniformBuffers = new Map<string, GPUBuffer>();
   #flowingImmediateUniformDataCache = new Map<string, Uint8Array>();
 
-  /** Per-entity last frame timestamps for delta-time calculation */
-  #lastFrameTimes = new Map<string, number>();
+  /** Per-entity monotonic anchors keep animation independent of rendered frame count. */
+  #flowingTimeAnchors = new Map<
+    string,
+    { baseTime: number; anchoredAt: number; lastAppliedTime: number }
+  >();
 
   override needsContinuousRender(entity: EffectShaderSettings): boolean {
     return (
@@ -404,23 +407,26 @@ export class GlassShader extends ShaderPass {
   }
 
   #advanceFlowingTime(entity: EffectRenderEntity): void {
-    // Auto-increment time per-entity (mutate in-place, no React/undo involvement)
     if (entity.shaderParams.timeAutoPlay !== false) {
       const now = performance.now();
-      const lastFrame = this.#lastFrameTimes.get(entity.id);
-      if (lastFrame !== undefined) {
-        const dt = Math.min((now - lastFrame) / 1000, 0.1);
-        entity.shaderParams.time = (entity.shaderParams.time ?? 0) + dt;
+      const currentTime = entity.shaderParams.time ?? 0;
+      let anchor = this.#flowingTimeAnchors.get(entity.id);
+      if (!anchor || currentTime !== anchor.lastAppliedTime) {
+        anchor = { baseTime: currentTime, anchoredAt: now, lastAppliedTime: currentTime };
+        this.#flowingTimeAnchors.set(entity.id, anchor);
+      } else {
+        const nextTime = anchor.baseTime + (now - anchor.anchoredAt) / 1000;
+        entity.shaderParams.time = nextTime;
+        anchor.lastAppliedTime = nextTime;
       }
-      this.#lastFrameTimes.set(entity.id, now);
     } else {
-      this.#lastFrameTimes.delete(entity.id);
+      this.#flowingTimeAnchors.delete(entity.id);
     }
   }
 
   /** Clean up tracking for a removed entity */
   override removeEntity(entityId: string): void {
-    this.#lastFrameTimes.delete(entityId);
+    this.#flowingTimeAnchors.delete(entityId);
     this.#flowingImmediateUniformBuffers.get(entityId)?.destroy();
     this.#flowingImmediateUniformBuffers.delete(entityId);
     this.#flowingImmediateUniformDataCache.delete(entityId);
@@ -439,7 +445,7 @@ export class GlassShader extends ShaderPass {
     }
     this.#flowingImmediateUniformBuffers.clear();
     this.#flowingImmediateUniformDataCache.clear();
-    this.#lastFrameTimes.clear();
+    this.#flowingTimeAnchors.clear();
     super.destroy();
   }
 }

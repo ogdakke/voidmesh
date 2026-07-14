@@ -3,7 +3,6 @@ import { config } from "#config";
 import { createPlaybackState } from "#lib/media-playback.ts";
 import type { ColorPalette, ShaderCanvasEntity } from "#types/canvas.ts";
 import { paletteStore } from "../palette-store.ts";
-import { detectVideoExtension, videoElementToBytes } from "./media.ts";
 import type {
   SerializeMediaEntry,
   SerializedEntity,
@@ -11,6 +10,8 @@ import type {
   StudioManifest,
 } from "./types.ts";
 import { CURRENT_VERSION } from "./version.ts";
+import { getMediaExtension, requireMediaBlobMimeType } from "./mime.ts";
+import { getEntityThumbhash, thumbhashToBase64 } from "#lib/thumbhash.ts";
 
 /** Synchronous flag — prevents overlapping saves even when React state hasn't flushed yet. */
 let isSaving = false;
@@ -109,13 +110,7 @@ function compressInWorker(manifest: string, mediaEntries: SerializeMediaEntry[])
 
     // Build transfer list for zero-copy posting
     const transferList: Transferable[] = [];
-    for (const entry of mediaEntries) {
-      if (entry.type === "imageBitmap") {
-        transferList.push(entry.bitmap!);
-      } else {
-        transferList.push(entry.bytes!.buffer);
-      }
-    }
+    for (const entry of mediaEntries) transferList.push(entry.bytes.buffer);
 
     worker.postMessage({ manifest, mediaEntries }, transferList);
   });
@@ -130,6 +125,7 @@ async function prepareEntity(
   entity: ShaderCanvasEntity,
   serializedImageAssets: Set<string>,
 ): Promise<PreparedEntity> {
+  const thumbhash = thumbhashToBase64(getEntityThumbhash(entity));
   const base = {
     id: entity.id,
     name: entity.name,
@@ -143,6 +139,7 @@ async function prepareEntity(
     rotation: entity.rotation,
     locked: entity.locked ?? false,
     edited: entity.edited,
+    thumbhash,
     shaderType: entity.shaderType,
     shaderParams: structuredClone(entity.shaderParams),
     ...(entity.originalPalette && {
@@ -153,39 +150,42 @@ async function prepareEntity(
   switch (entity.mediaSource.type) {
     case "image": {
       const asset = entity.mediaSource.asset;
-      const path = `media/assets/${encodeURIComponent(asset.id)}-${asset.revision}.png`;
+      const mimeType = requireMediaBlobMimeType(asset.blob, "image");
+      const extension = getMediaExtension(mimeType);
+      const path = `media/assets/${encodeURIComponent(asset.id)}-${asset.revision}.${extension}`;
       if (serializedImageAssets.has(path)) {
-        return { serialized: { ...base, mediaType: "image", mediaFile: path } };
+        return { serialized: { ...base, mediaType: "image", mediaFile: path, mimeType } };
       }
       serializedImageAssets.add(path);
-      // Clone bitmap — transfer destroys the source, entity still needs it for rendering
-      const cloned = await createImageBitmap(asset.imageBitmap);
+      const bytes = new Uint8Array(await asset.blob.arrayBuffer());
       return {
-        serialized: { ...base, mediaType: "image", mediaFile: path },
-        media: { path, type: "imageBitmap", bitmap: cloned },
+        serialized: { ...base, mediaType: "image", mediaFile: path, mimeType },
+        media: { path, bytes },
       };
     }
 
     case "video": {
-      // Fetch blob URL bytes on main thread (blob URLs don't work in workers)
-      const bytes = await videoElementToBytes(entity.mediaSource.videoElement);
-      const ext = detectVideoExtension(bytes);
+      const mimeType = requireMediaBlobMimeType(entity.mediaSource.blob, "video");
+      const bytes = new Uint8Array(await entity.mediaSource.blob.arrayBuffer());
+      const ext = getMediaExtension(mimeType);
       const path = `media/${entity.id}.${ext}`;
       return {
         serialized: {
           ...base,
           mediaType: "video",
           mediaFile: path,
+          mimeType,
           duration: entity.mediaSource.duration,
           fps: entity.mediaSource.fps,
           hasAudio: entity.mediaSource.hasAudio,
           playback: serializePlayback(entity.playback),
         },
-        media: { path, type: "bytes", bytes },
+        media: { path, bytes },
       };
     }
 
     case "gif": {
+      const mimeType = requireMediaBlobMimeType(entity.mediaSource.blob, "gif");
       const bytes = new Uint8Array(await entity.mediaSource.blob.arrayBuffer());
       const path = `media/${entity.id}.gif`;
       return {
@@ -193,20 +193,22 @@ async function prepareEntity(
           ...base,
           mediaType: "gif",
           mediaFile: path,
+          mimeType,
           duration: entity.mediaSource.duration,
           fps: entity.mediaSource.fps,
           playback: serializePlayback(entity.playback),
         },
-        media: { path, type: "bytes", bytes },
+        media: { path, bytes },
       };
     }
 
     case "svg": {
+      const mimeType = requireMediaBlobMimeType(entity.mediaSource.blob, "svg");
       const bytes = new Uint8Array(await entity.mediaSource.blob.arrayBuffer());
       const path = `media/${entity.id}.svg`;
       return {
-        serialized: { ...base, mediaType: "svg", mediaFile: path },
-        media: { path, type: "bytes", bytes },
+        serialized: { ...base, mediaType: "svg", mediaFile: path, mimeType },
+        media: { path, bytes },
       };
     }
   }

@@ -9,14 +9,14 @@ A `.vdmsh` file is a zip containing:
 ```
 manifest.json     # viewport + entity metadata (versioned)
 media/
-  assets/<asset-id>-<revision>.png # shared images (one PNG per asset)
+  assets/<asset-id>-<revision>.<ext> # shared images (original encoded bytes)
   <entity-id>.mp4   # videos (original bytes)
   <entity-id>.gif   # GIFs (original bytes)
 ```
 
-`manifest.json` schema: `StudioManifest` (see `types.ts`), currently **v5**.
+`manifest.json` schema: `StudioManifest` (see `types.ts`), currently **v6**. Each entity records the MIME type of the exact bytes at `mediaFile`.
 
-Multiple image entities may reference the same `mediaFile`. Serialization writes one PNG per shared image asset, and deserialization restores one reference-counted `MediaImageAsset` for every repeated path.
+Multiple image entities may reference the same `mediaFile`. Serialization writes the original encoded Blob once per shared image asset, and deserialization restores one reference-counted `MediaImageAsset` for every repeated path.
 
 Import validates and decodes into staged ownership first. The live workspace is replaced only when the caller adopts the complete decoded batch; aborts and pre-adoption failures dispose the staged media without changing live state.
 

@@ -5,6 +5,7 @@ React context providers wiring subsystems together. The "glue" layer between eng
 ## Key Files
 
 - `canvas-context.tsx` (~52KB) — `CanvasProvider`. Main orchestrator. Bridges URL query state (nuqs) to canvas state, entity CRUD with undo support, renderer registration, image export (copy/save). Largest, most complex file in the codebase.
+- `collaboration-service.ts` — Trystero room lifecycle, short-lived ICE credential acquisition/refresh, Yjs replication, asset inventory/request/transfer, peer clock synchronization, ephemeral presence, remote projection, throttling, and session measurements. WebRTC prefers direct paths and can relay through TURN.
 - `use-canvas.ts` — Commands/renderer contexts and selector hooks. `useCanvasCommands()` exposes stable mutations, `useCanvasRendererService()` exposes renderer/color-space services, and selector hooks like `useSelectedEntity()` / `useViewport()` provide fine-grained reads.
 - `export-queue-context.tsx` (~16KB) — Sequential video export queue with auto-download.
 - `video-export-context.tsx` — Export options state (format, quality, resolution).
@@ -39,6 +40,15 @@ Note: `KeybindProvider` wraps outside `App()` at the root render level.
 - Entity deletion triggers disintegration animation when `fancyDelete` is enabled, but per-entity snapshots/particle systems are capped by `config.canvas.fancyDeleteMaxBatchSize`; larger selections delete without animation. Undo cancels any created overlays.
 - `fancyDelete` preference defaults to `true` unless `prefers-reduced-motion: reduce` is active.
 - Export queue clones video elements to isolate export playback from preview playback.
+- Collaboration publishes a validated ThumbHash descriptor before SHA-256 completes, materializes it as a full-geometry placeholder, then hydrates verified media in place. Serialize asynchronous remote reconciliation, suppress projection echoes, preserve the entity ID/state across hydration, dispose replaced preview resources, and reassert renderer dirtiness on the next frame.
+- Duplicate collaborative entities sharing one Blob must share preview generation, hashing, inventory/transfer, and decoded image assets. Keep the decode registry projection-batch-scoped so it does not retain closed media after ordinary canvas deletion.
+- Remote reconciliation batches placeholder insertion, media hydration, removal, and scene invalidation. Never project a large document through per-entity store mutations or animation-frame callbacks.
+- Collaborative media playback writes immediate per-entity shared-clock commands only for discrete controls. Animated-shader playback uses the same measured monotonic clock: coalesce live scrub anchors to one transaction per 16 ms across the selection, flush the final value, and derive steady progress locally with periodic local-only drift correction. Never hold reconciliation open on a remote `play()` promise; surface blocked unmuted autoplay once and keep the room healthy.
+- Presence is an ephemeral Trystero action, not Yjs state. Coalesce cursor packets to 60 Hz with at most one reliable send in flight; send identity/selection only when changed, discard stale sequences, and remove transient peers immediately on disconnect.
+- Palette ownership remains local/persistent, while room-visible metadata and deletion are durable Yjs state. A delete command removes the palette from every referencing entity and the room; undo explicitly restores both ownership and room metadata.
+- Bound collaborative asset requests and payload workers by both count and combined encoded bytes per peer; let oversized assets run alone. Require restore/hash-verification acknowledgements, and reset a receiver watchdog on progress so incomplete sends, mobile page suspension, negative acknowledgements, and departed peers release or retry pending work rather than strand placeholders.
+- Acquire provider-neutral ICE credentials before `joinRoom()`, retain the ICE server array identity for Trystero, refresh before expiry, and apply refreshed configuration to live peer connections. Keep Cloudflare-specific API calls and secrets in `api/`, never in this client orchestrator.
+- Treat the active invite as connection intent until the user explicitly leaves. On online, visible-tab, and bfcache resume, validate or rebuild stale room transport with bounded backoff; await Trystero's asynchronous `leave()` before rejoining the same namespace, and preserve the Yjs document plus verified media registries across transport-only reconnects.
 
 ## Anti-Patterns
 

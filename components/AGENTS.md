@@ -21,6 +21,7 @@ React UI layer. Feature-specific panels, the canvas viewport, and layout shells.
 - `mobile-controls.tsx` — Mobile controls container.
 - `upscale-queue-panel.tsx` — Shows queued upscale jobs with progress bars, cancel buttons. Uses `Collapsible` UI primitive. Wired into `sidebar-right-controls.tsx`.
 - `keyboard-shortcuts/` — Keyboard shortcut display.
+- `settings/` — Shared desktop/mobile settings content, including collaboration room controls and live transfer diagnostics.
 - `icons/` — Custom SVG icon components.
 - `ui/` — Reusable primitives (see child `ui/AGENTS.md`).
 

@@ -8,6 +8,7 @@ import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "
 import { CanvasLensing } from "#types/enums.ts";
 import { ActionLayerBlurPass } from "./action-layer-blur-pass.ts";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
+import { CollaborationPresencePass } from "./collaboration-presence-pass.ts";
 import { CanvasDebugPass } from "./canvas-debug-pass.ts";
 import { CompositionPass, type CompositionDrawItem } from "./composition-pass.ts";
 import { DisintegrationPass } from "./disintegration-pass.ts";
@@ -71,6 +72,7 @@ export class InfiniteCanvasRenderer {
   #entityLabelPass: EntityLabelPass | null = null;
   #canvasCalloutPass: CanvasCalloutPass | null = null;
   #canvasDebugPass: CanvasDebugPass | null = null;
+  #collaborationPresencePass: CollaborationPresencePass | null = null;
 
   // Cached canvas dimensions (updated by ResizeObserver, avoids getBoundingClientRect in render loop)
   #cachedCanvasWidth = 0;
@@ -312,6 +314,12 @@ export class InfiniteCanvasRenderer {
     );
     this.#entityLabelPass.initialize();
 
+    this.#collaborationPresencePass = new CollaborationPresencePass(
+      this.#device,
+      this.#canvasFormat,
+      this.#viewportUniforms.buffer,
+    );
+
     this.#canvasCalloutPass = new CanvasCalloutPass(
       this.#device,
       this.#canvasFormat,
@@ -360,12 +368,24 @@ export class InfiniteCanvasRenderer {
     selectedEntityCount: number,
   ): void {
     const labelPass = selectedEntityCount === 1 ? this.#entityLabelPass : null;
+    const presencePass = this.#collaborationPresencePass;
+    const hasRemoteSelections = presencePass?.hasSelections ?? false;
+    if (!labelPass && !hasRemoteSelections) {
+      this.#compositionPass!.drawItems(pass, items);
+      return;
+    }
     this.#compositionPass!.drawItems(
       pass,
       items,
-      labelPass
-        ? (item) => labelPass.drawLabel(pass, item.entity, item.offsetX, item.offsetY)
-        : undefined,
+      (item) => {
+        if (item.isSelected) {
+          labelPass?.drawLabel(pass, item.entity, item.offsetX, item.offsetY);
+        }
+        presencePass?.drawSelection(pass, item.entity.id);
+      },
+      (item) =>
+        (item.isSelected && labelPass !== null) ||
+        (hasRemoteSelections && presencePass!.hasSelection(item.entity.id)),
     );
   }
 
@@ -447,6 +467,15 @@ export class InfiniteCanvasRenderer {
       label: "Canvas render encoder",
     });
 
+    this.#collaborationPresencePass?.prepareSelections({
+      presences: state.remotePeerPresences,
+      entities,
+      presenceSelectionVersion: state.presenceSelectionVersion,
+      entityVersion: state.entityVersion,
+      geometryVersion: state.geometryVersion,
+      viewport,
+    });
+
     // Pre-process entities: render to textures and prepare bind groups
     // Uses caching to avoid per-frame allocations
     const preparedEntityDrawItems = this.#entityDrawItemPreparer.prepare({
@@ -464,6 +493,7 @@ export class InfiniteCanvasRenderer {
       dragVisual: state.dragVisual,
       dragSelectActive: state.dragSelectBounds !== null,
       hasCanvasCallouts: state.canvasCallouts.length > 0,
+      hasCollaborationSelections: this.#collaborationPresencePass?.hasSelections ?? false,
       debugMode,
     });
     const { entityDrawItems, actionLayerDrawItems, fullSceneBatch } = preparedEntityDrawItems;
@@ -608,6 +638,15 @@ export class InfiniteCanvasRenderer {
         spatialIndex: state.entitySpatialIndex,
       });
     }
+
+    // Cursor labels stay above the scene, while remote selection outlines are
+    // interleaved with entity composition so later z-index entities occlude them.
+    this.#collaborationPresencePass?.encodeCursors({
+      encoder,
+      targetView: sceneTargetView,
+      presences: state.remotePeerPresences,
+      viewport,
+    });
 
     const lensApplied = viewportLensTarget
       ? this.#viewportLensPass!.encode(encoder, targetView, width, height)
@@ -941,6 +980,8 @@ export class InfiniteCanvasRenderer {
     this.#canvasCalloutPass = null;
     this.#canvasDebugPass?.destroy();
     this.#canvasDebugPass = null;
+    this.#collaborationPresencePass?.destroy();
+    this.#collaborationPresencePass = null;
 
     this.#wlurOverlayPass?.destroy();
     this.#wlurOverlayPass = null;

@@ -288,6 +288,7 @@ export function ParamsKnobs() {
           entityTime={timeControl.entityTime}
           onInteractionStart={timeControl.handleTimeInteractionStart}
           onValueChange={timeControl.handleTimeChange}
+          onValueCommit={timeControl.handleTimeCommit}
         />
       )}
 

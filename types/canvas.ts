@@ -453,6 +453,11 @@ export type MediaSourceSvg = {
 /** Media source for an entity - an image, video, animated GIF, or SVG */
 export type MediaSource = MediaSourceImage | MediaSourceVideo | MediaSourceGif | MediaSourceSvg;
 
+export interface MediaPreview {
+  codec: "thumbhash-v1";
+  bytes: Uint8Array;
+}
+
 /** Video playback state */
 export interface PlaybackState {
   isPlaying: boolean;
@@ -463,6 +468,17 @@ export interface PlaybackState {
   muted: boolean;
   /** Video audio volume for future volume controls */
   volume: number;
+}
+
+export interface CollaborationPeerIdentity {
+  name: string;
+  color: RGBA;
+}
+
+export interface CollaborationPeerPresence extends CollaborationPeerIdentity {
+  peerId: string;
+  cursor: Point | null;
+  selectedEntityIds: readonly string[];
 }
 
 type ShaderCanvasEntityBase = {
@@ -482,6 +498,8 @@ type ShaderCanvasEntityBase = {
   imageBitmap: ImageBitmap;
   /** Original media dimensions (for aspect ratio preservation) */
   originalSize: Size;
+  /** Compact first-frame preview retained across workspace saves and collaboration. */
+  preview?: MediaPreview;
   /** Video playback state (only for video entities) */
   playback?: PlaybackState;
 

@@ -26,6 +26,7 @@ describe("PaletteStore", () => {
   beforeEach(() => {
     // Reset to empty
     paletteStore.setPalettes([]);
+    paletteStore.setTransientPalettes([]);
   });
 
   test("starts empty", () => {
@@ -106,6 +107,41 @@ describe("PaletteStore", () => {
     const newPalettes = [makePalette("cstm_x"), makePalette("cstm_y")];
     paletteStore.setPalettes(newPalettes);
     expect(paletteStore.getPalettes()).toEqual(newPalettes);
+  });
+
+  test("transient room palettes are visible without being persisted as personal palettes", () => {
+    const personal = makePalette("cstm_personal", "Personal");
+    const room = makePalette("cstm_room", "Room");
+    paletteStore.addPalette(personal);
+
+    paletteStore.setTransientPalettes([room]);
+
+    expect(paletteStore.getPalettes()).toEqual([room, personal]);
+    expect(paletteStore.getPersonalPalettes()).toEqual([personal]);
+    expect(paletteStore.isPersonalPalette(room.id!)).toBe(false);
+  });
+
+  test("room palette metadata wins an ID collision without overwriting personal storage", () => {
+    const personal = makePalette("cstm_same", "Personal");
+    const room = makePalette("cstm_same", "Room");
+    paletteStore.addPalette(personal);
+
+    paletteStore.setTransientPalettes([room]);
+
+    expect(paletteStore.getPalettes()).toEqual([room]);
+    expect(paletteStore.getPersonalPalettes()).toEqual([personal]);
+  });
+
+  test("removing an owned room palette clears both local and transient copies", () => {
+    const personal = makePalette("cstm_same", "Personal");
+    const room = makePalette("cstm_same", "Room");
+    paletteStore.addPalette(personal);
+    paletteStore.setTransientPalettes([room]);
+
+    paletteStore.removePalette(personal.id!);
+
+    expect(paletteStore.getPalettes()).toEqual([]);
+    expect(paletteStore.getPersonalPalettes()).toEqual([]);
   });
 
   test("getSnapshot returns new reference after mutation", () => {

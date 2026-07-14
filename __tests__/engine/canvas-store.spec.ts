@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
-import { canvasStore } from "#engine";
+import { canvasStore, type CanvasEntityMutationListener } from "#engine";
 import { isVideoEntity, type ShaderCanvasEntity } from "#types/canvas.ts";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
 import { createTestEntity, resetEntityCounter } from "../helpers/test-entity.ts";
@@ -93,6 +93,37 @@ describe("canvasStore entity versioning", () => {
       entityVersion: initialEntityVersion + 1,
       geometryVersion: initialGeometryVersion + 1,
     });
+  });
+});
+
+describe("canvasStore entity mutation feed", () => {
+  test("publishes collaboration-facing add, update, move, playback, and remove mutations", () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 10 });
+    const listener = vi.fn<CanvasEntityMutationListener>();
+    const unsubscribe = canvasStore.subscribeEntityMutations(listener);
+
+    canvasStore.addEntity(entity);
+    canvasStore.updateEntity(entity.id, { rotation: 15 });
+    canvasStore.moveEntity(entity.id, { x: 4, y: 5 });
+    canvasStore.seekVideo(entity.id, 3);
+    canvasStore.removeEntity(entity.id);
+
+    expect(listener.mock.calls.map(([mutation]) => mutation.type)).toEqual([
+      "add",
+      "update",
+      "move",
+      "playback",
+      "remove",
+    ]);
+    expect(listener.mock.calls[2]?.[0]).toMatchObject({
+      entityId: entity.id,
+      position: { x: 4, y: 5 },
+    });
+    expect(listener.mock.calls[3]?.[0]).toMatchObject({
+      entityId: entity.id,
+      playback: { currentTime: 3 },
+    });
+    unsubscribe();
   });
 });
 
@@ -248,6 +279,30 @@ describe("canvasStore video audio controls", () => {
     expect(entity.playback?.isPlaying).toBe(true);
     expect(canvasStore.getSelectedEntity()?.id).toBe(selectedBefore);
   });
+
+  test("marks shader time changes for clock sync without marking unrelated params", () => {
+    const entity = createTestEntity();
+    const listener = vi.fn<CanvasEntityMutationListener>();
+    canvasStore.addEntity(entity);
+    const unsubscribe = canvasStore.subscribeEntityMutations(listener);
+
+    canvasStore.updateEntity(entity.id, {
+      shaderParams: { ...entity.shaderParams, intensity: 2 },
+    });
+    canvasStore.updateEntity(entity.id, {
+      shaderParams: { ...entity.shaderParams, time: (entity.shaderParams.time ?? 0) + 1 },
+    });
+
+    const unrelatedMutation = listener.mock.calls[0]?.[0];
+    expect(unrelatedMutation?.type).toBe("update");
+    if (unrelatedMutation?.type !== "update") throw new Error("Expected update mutation");
+    expect(unrelatedMutation.batch[0]?.syncShaderPlayback).toBeUndefined();
+    expect(listener.mock.calls[1]?.[0]).toMatchObject({
+      type: "update",
+      batch: [{ syncShaderPlayback: true }],
+    });
+    unsubscribe();
+  });
 });
 
 describe("canvasStore.updatePlaybackTime", () => {
@@ -259,6 +314,18 @@ describe("canvasStore.updatePlaybackTime", () => {
     canvasStore.updatePlaybackTime(entity.id, 50);
 
     expect(entity.playback?.currentTime).toBe(50);
+  });
+
+  test("does not publish passive frame progress as collaborative intent", () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
+    canvasStore.addEntity(entity);
+    const listener = vi.fn<CanvasEntityMutationListener>();
+    const unsubscribe = canvasStore.subscribeEntityMutations(listener);
+
+    canvasStore.updatePlaybackTime(entity.id, 50);
+
+    expect(listener).not.toHaveBeenCalled();
+    unsubscribe();
   });
 
   test("does not increment selectionVersion", () => {
@@ -309,6 +376,58 @@ describe("canvasStore.updatePlaybackTime", () => {
     const snapshot = canvasStore.getPlaybackSnapshot();
     expect(snapshot.currentTime).toBe(75);
     expect(snapshot.entityId).toBe(entity.id);
+  });
+});
+
+describe("canvasStore.playVideo", () => {
+  test("publishes playing intent before the media play promise settles", async () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
+    if (!isVideoEntity(entity)) throw new Error("Expected video entity");
+    canvasStore.addEntity(entity);
+    let resolvePlay: (() => void) | undefined;
+    entity.mediaSource.videoElement.play = vi.fn<() => Promise<void>>(
+      () =>
+        new Promise<void>((resolve) => {
+          resolvePlay = resolve;
+        }),
+    );
+    const listener = vi.fn<CanvasEntityMutationListener>();
+    const unsubscribe = canvasStore.subscribeEntityMutations(listener);
+
+    const pendingPlay = canvasStore.playVideo(entity.id);
+
+    expect(entity.playback?.isPlaying).toBe(true);
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "playback",
+        entityId: entity.id,
+        playback: expect.objectContaining({ isPlaying: true }),
+      }),
+    );
+    resolvePlay?.();
+    await pendingPlay;
+    unsubscribe();
+  });
+
+  test("publishes a paused rollback when the browser rejects playback", async () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
+    if (!isVideoEntity(entity)) throw new Error("Expected video entity");
+    canvasStore.addEntity(entity);
+    entity.mediaSource.videoElement.play = vi.fn<() => Promise<void>>(() =>
+      Promise.reject(new Error("Playback blocked")),
+    );
+    const listener = vi.fn<CanvasEntityMutationListener>();
+    const unsubscribe = canvasStore.subscribeEntityMutations(listener);
+
+    await expect(canvasStore.playVideo(entity.id)).rejects.toThrow("Playback blocked");
+
+    expect(entity.playback?.isPlaying).toBe(false);
+    expect(
+      listener.mock.calls.map(([mutation]) =>
+        mutation.type === "playback" ? mutation.playback.isPlaying : null,
+      ),
+    ).toEqual([true, false]);
+    unsubscribe();
   });
 });
 
@@ -383,6 +502,18 @@ describe("canvasStore.updateGifPlaybackTime", () => {
     canvasStore.updateGifPlaybackTime(entity.id, 1.0);
 
     expect(entity.playback?.currentTime).toBe(1.0);
+  });
+
+  test("does not publish passive frame progress as collaborative intent", () => {
+    const entity = createTestEntity({ mediaType: "gif", gifDuration: 2 });
+    canvasStore.addEntity(entity);
+    const listener = vi.fn<CanvasEntityMutationListener>();
+    const unsubscribe = canvasStore.subscribeEntityMutations(listener);
+
+    canvasStore.updateGifPlaybackTime(entity.id, 1);
+
+    expect(listener).not.toHaveBeenCalled();
+    unsubscribe();
   });
 
   test("does not increment selectionVersion", () => {

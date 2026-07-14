@@ -24,6 +24,7 @@ import {
   type ShaderParams,
   type ColorPalette,
   type PostProcessParams,
+  type MediaImageAsset,
   ShaderType,
   Shape,
   DitheringKind,
@@ -32,6 +33,7 @@ import {
   GlitchKind,
   MediaType,
   isGifEntity,
+  isVideoEntity,
 } from "#types/canvas.ts";
 import {
   getPalettePreset,
@@ -50,9 +52,9 @@ import type {
 import { type ImageExportOptions, getImageExtension } from "#renderer/export-formats.ts";
 import { canvasStore, disintegrationController, gameLoop, type CanvasEntityUpdate } from "#engine";
 
-import { toastManager } from "#components/ui/toast/toast-manager.ts";
+import { toastManager, ToastType } from "#components/ui/toast/toast-manager.ts";
 import { hints } from "#components/ui/hint/hint-manager.ts";
-import { extractOriginalPalette, cloneMediaSource } from "#lib/media-loader.ts";
+import { extractOriginalPalette, cloneMediaSource, loadMediaFromBlob } from "#lib/media-loader.ts";
 import { disposeEntityMedia, disposeMediaSource } from "#lib/media-resources.ts";
 import { Command, undo } from "#lib/undo.ts";
 import {
@@ -74,6 +76,19 @@ import {
   createDefaultWlurOverlayDebugConfig,
   type WlurOverlayDebugConfig,
 } from "#renderer/wlur-debug.ts";
+import { collaborationService } from "./collaboration-service.ts";
+import { createImageAsset } from "#lib/media-assets.ts";
+import { decodeThumbhashMedia } from "#lib/thumbhash.ts";
+import { SharedImageAssetRegistry } from "#lib/collaboration/shared-image-asset-registry.ts";
+import { collaborationMetrics } from "#lib/collaboration/metrics.ts";
+import { createRebasedEntityUpdate } from "#lib/rebased-entity-update.ts";
+import {
+  clearCollaborationInvite,
+  createCollaborationInvite,
+  createCollaborationInviteUrl,
+  parseCollaborationInvite,
+  type CollaborativeEntity,
+} from "#lib/collaboration/protocol.ts";
 
 // --- Resource ownership for undo/redo cleanup ---
 // Tracks which undo command "owns" cleanup rights for each entity's media resources.
@@ -82,6 +97,20 @@ import {
 let nextOwnerToken = 0;
 const resourceOwners = new Map<string, number>();
 const RENDER_ERROR_TOAST_ID = "canvas-render-error";
+const collaborativeAutoplayBlockedEntityIds = new Set<string>();
+
+function collaborationErrorDescription(code: string | null): string {
+  switch (code) {
+    case "invalid-invite":
+      return "Ask the room owner for a new invite link.";
+    case "relay-unavailable":
+      return "Check your connection, then retry.";
+    case "signaling-unavailable":
+      return "The room could not be reached. Retry in a moment.";
+    default:
+      return "The room is still safe to leave. Retry to reconnect.";
+  }
+}
 
 function formatErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
@@ -94,6 +123,41 @@ function captureEntityForDeletion(entity: ShaderCanvasEntity): ShaderCanvasEntit
   // until undo restores it. Any edit after undo clears the redo branch, so retaining
   // this object is both stable and dramatically cheaper than cloning shader params.
   return entity;
+}
+
+function applyRebasedEntityUpdate(
+  entityId: string,
+  before: Partial<ShaderCanvasEntity>,
+  after: Partial<ShaderCanvasEntity>,
+  target: Partial<ShaderCanvasEntity>,
+): void {
+  const current = canvasStore.getState().entities.get(entityId);
+  if (!current) return;
+  canvasStore.updateEntity(entityId, createRebasedEntityUpdate(current, before, after, target));
+}
+
+function applyRebasedEntityBatch(
+  before: readonly CanvasEntityUpdate[],
+  after: readonly CanvasEntityUpdate[],
+  target: readonly CanvasEntityUpdate[],
+): void {
+  const currentEntities = canvasStore.getState().entities;
+  const updates: CanvasEntityUpdate[] = [];
+  for (let index = 0; index < target.length; index++) {
+    const targetUpdate = target[index]!;
+    const current = currentEntities.get(targetUpdate.id);
+    if (!current) continue;
+    updates.push({
+      id: targetUpdate.id,
+      updates: createRebasedEntityUpdate(
+        current,
+        before[index]!.updates,
+        after[index]!.updates,
+        targetUpdate.updates,
+      ),
+    });
+  }
+  canvasStore.updateEntities(updates);
 }
 
 function pauseDeletedEntity(entity: ShaderCanvasEntity): boolean {
@@ -112,6 +176,89 @@ function resumeDeletedEntity(entity: ShaderCanvasEntity, wasPlaying: boolean): v
     entity.mediaSource.videoElement.play().catch((error) => logger.error(error));
   }
   if (entity.playback) entity.playback.isPlaying = true;
+}
+
+async function applyCollaborativePlayback(
+  entity: ShaderCanvasEntity,
+  playback: CollaborativeEntity["playback"],
+): Promise<void> {
+  if (!playback || !entity.playback) return;
+
+  if (isVideoEntity(entity)) {
+    const video = entity.mediaSource.videoElement;
+    video.loop = playback.loop;
+    video.playbackRate = playback.playbackRate;
+    video.muted = playback.muted;
+    video.volume = playback.volume;
+    if (
+      playbackDistance(video.currentTime, playback.currentTime, video.duration, playback.loop) >=
+      0.15
+    ) {
+      canvasStore.seekVideo(entity.id, playback.currentTime);
+    }
+    if (!playback.isPlaying) collaborativeAutoplayBlockedEntityIds.delete(entity.id);
+    if (playback.isPlaying && video.paused) {
+      if (collaborativeAutoplayBlockedEntityIds.has(entity.id) && !playback.muted) return;
+      void canvasStore
+        .playVideo(entity.id)
+        .then(() => collaborativeAutoplayBlockedEntityIds.delete(entity.id))
+        .catch((error) => {
+          if (!isAutoplayBlockedError(error)) {
+            logger.error("Unable to apply collaborative playback", error);
+            return;
+          }
+          if (collaborativeAutoplayBlockedEntityIds.has(entity.id)) return;
+          collaborativeAutoplayBlockedEntityIds.add(entity.id);
+          toastManager.add({
+            title: "Playback needs a click",
+            description: `${entity.name} was started by a peer, but the browser blocked unmuted autoplay.`,
+          });
+        });
+    } else if (!playback.isPlaying && !video.paused) {
+      collaborativeAutoplayBlockedEntityIds.delete(entity.id);
+      canvasStore.pauseVideo(entity.id);
+    }
+    return;
+  }
+
+  if (isGifEntity(entity)) {
+    if (
+      playbackDistance(
+        entity.playback.currentTime,
+        playback.currentTime,
+        entity.mediaSource.duration,
+        playback.loop,
+      ) >= 0.15
+    ) {
+      canvasStore.seekGif(entity.id, playback.currentTime);
+    }
+    if (playback.isPlaying && !entity.playback.isPlaying) canvasStore.playGif(entity.id);
+    else if (!playback.isPlaying && entity.playback.isPlaying) canvasStore.pauseGif(entity.id);
+  }
+}
+
+function playbackDistance(
+  current: number,
+  target: number,
+  duration: number,
+  loop: boolean,
+): number {
+  const direct = Math.abs(current - target);
+  return loop && duration > 0 ? Math.min(direct, Math.abs(duration - direct)) : direct;
+}
+
+function isAutoplayBlockedError(error: unknown): boolean {
+  return error instanceof Error && error.name === "NotAllowedError";
+}
+
+function scheduleCollaborativeRender(entityId?: string): void {
+  // Remote assets arrive asynchronously. If projection lands after the frame loop has
+  // sampled dirty state but before it clears that state, the first invalidation can be
+  // consumed without drawing the new texture. Reassert it on the next frame boundary.
+  requestAnimationFrame(() => {
+    if (entityId) canvasStore.markEntityTextureDirty(entityId);
+    else canvasStore.setContainerDirty();
+  });
 }
 
 function isFirefoxExternalTextureCorsError(error: unknown): boolean {
@@ -500,6 +647,375 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     colorSpaceRef.current = colorSpace;
   }, [colorSpace]);
 
+  useEffect(() => {
+    const sharedImageAssets = new SharedImageAssetRegistry();
+    let clearSharedImageAssetsTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const acquireSharedImageAsset = (
+      key: string,
+      create?: () => MediaImageAsset,
+    ): MediaImageAsset | null => {
+      const asset = sharedImageAssets.acquire(key, create);
+      if (asset && !clearSharedImageAssetsTimer) {
+        clearSharedImageAssetsTimer = setTimeout(() => {
+          clearSharedImageAssetsTimer = null;
+          sharedImageAssets.clear();
+        }, 0);
+      }
+      return asset;
+    };
+
+    const releaseSharedImageAsset = (entity: ShaderCanvasEntity): void => {
+      if (entity.mediaSource.type !== MediaType.image) return;
+      sharedImageAssets.forgetOwner(entity.mediaSource.asset);
+    };
+
+    const releaseCollaborativeMedia = (
+      media: Pick<ShaderCanvasEntity, "imageBitmap" | "mediaSource">,
+    ): void => {
+      if (media.mediaSource.type === MediaType.image) {
+        sharedImageAssets.forgetOwner(media.mediaSource.asset);
+      }
+      disposeMediaSource(media.mediaSource, media.imageBitmap);
+    };
+
+    const loadCollaborativeMedia = async (entity: CollaborativeEntity, blob: Blob) => {
+      const assetKey = entity.asset.hash ? `asset:${entity.asset.hash}` : null;
+      const cachedAsset = assetKey ? acquireSharedImageAsset(assetKey) : null;
+      if (cachedAsset) {
+        return {
+          imageBitmap: cachedAsset.imageBitmap,
+          mediaSource: { type: MediaType.image, asset: cachedAsset } as const,
+          decodeDurationMs: 0,
+        };
+      }
+
+      const decodeStartedAt = performance.now();
+      const loaded = await loadMediaFromBlob(
+        blob,
+        entity.asset.mimeType,
+        entity.position,
+        entity.name,
+      );
+      const decodeDurationMs = performance.now() - decodeStartedAt;
+      if (!loaded) throw new Error(`Unable to decode collaborative asset ${entity.name}`);
+      if (assetKey && loaded.mediaSource.type === MediaType.image) {
+        const loadedAsset = loaded.mediaSource.asset;
+        const sharedAsset = acquireSharedImageAsset(assetKey, () => loadedAsset);
+        if (sharedAsset && sharedAsset !== loadedAsset) {
+          disposeMediaSource(loaded.mediaSource, loaded.imageBitmap);
+          return {
+            imageBitmap: sharedAsset.imageBitmap,
+            mediaSource: { type: MediaType.image, asset: sharedAsset } as const,
+            decodeDurationMs,
+          };
+        }
+      }
+      return {
+        imageBitmap: loaded.imageBitmap,
+        mediaSource: loaded.mediaSource,
+        decodeDurationMs,
+      };
+    };
+
+    const unconfigure = collaborationService.configure({
+      async adoptRemotePlaceholders(entities, signal) {
+        const placeholders: ShaderCanvasEntity[] = [];
+        let decodeDurationMs = 0;
+        try {
+          signal.throwIfAborted();
+          for (const entity of entities) {
+            signal.throwIfAborted();
+            const previewKey = `preview:${entity.asset.transferId}`;
+            let asset = acquireSharedImageAsset(previewKey);
+            if (!asset) {
+              const decodeStartedAt = performance.now();
+              const decoded = await decodeThumbhashMedia(entity.asset.preview);
+              decodeDurationMs += performance.now() - decodeStartedAt;
+              asset = acquireSharedImageAsset(previewKey, () =>
+                createImageAsset({
+                  id: `collaboration-preview-${entity.asset.transferId}`,
+                  imageBitmap: decoded.imageBitmap,
+                  blob: decoded.blob,
+                }),
+              );
+            }
+            if (!asset) throw new Error(`Unable to create collaborative preview ${entity.name}`);
+            placeholders.push({
+              id: entity.id,
+              name: entity.name,
+              position: { ...entity.position },
+              size: { ...entity.size },
+              originalSize: { ...entity.originalSize },
+              zIndex: entity.zIndex,
+              rotation: entity.rotation,
+              locked: entity.locked,
+              edited: entity.edited,
+              shaderType: entity.shaderType,
+              shaderParams: structuredClone(entity.shaderParams),
+              ...(entity.originalPalette && {
+                originalPalette: structuredClone(entity.originalPalette),
+              }),
+              ...(entity.playback && { playback: { ...entity.playback } }),
+              preview: entity.asset.preview,
+              imageBitmap: asset.imageBitmap,
+              mediaSource: { type: MediaType.image, asset },
+              textureDirty: true,
+            } as ShaderCanvasEntity);
+          }
+          signal.throwIfAborted();
+          canvasStore.addEntities(placeholders);
+          scheduleCollaborativeRender();
+          return { decodeDurationMs };
+        } catch (error) {
+          for (const placeholder of placeholders) {
+            releaseSharedImageAsset(placeholder);
+            destroyEntityMediaResources(placeholder);
+          }
+          throw error;
+        }
+      },
+      async hydrateRemoteEntities(entries, signal) {
+        const updates: CanvasEntityUpdate[] = [];
+        const previousEntities: ShaderCanvasEntity[] = [];
+        const acquiredMedia: Pick<ShaderCanvasEntity, "imageBitmap" | "mediaSource">[] = [];
+        let decodeDurationMs = 0;
+        let committed = false;
+        try {
+          signal.throwIfAborted();
+          for (const { entity, blob } of entries) {
+            signal.throwIfAborted();
+            const current = canvasStore.getState().entities.get(entity.id);
+            if (!current) continue;
+            const loaded = await loadCollaborativeMedia(entity, blob);
+            const { decodeDurationMs: entityDecodeDurationMs, ...media } = loaded;
+            decodeDurationMs += entityDecodeDurationMs;
+            acquiredMedia.push(media);
+            previousEntities.push(current);
+            updates.push({
+              id: entity.id,
+              updates: {
+                ...media,
+                name: entity.name,
+                position: { ...entity.position },
+                size: { ...entity.size },
+                originalSize: { ...entity.originalSize },
+                zIndex: entity.zIndex,
+                rotation: entity.rotation,
+                locked: entity.locked,
+                edited: entity.edited,
+                shaderType: entity.shaderType,
+                shaderParams: structuredClone(entity.shaderParams),
+                originalPalette: entity.originalPalette
+                  ? structuredClone(entity.originalPalette)
+                  : undefined,
+                ...(entity.playback && { playback: { ...entity.playback } }),
+                preview: entity.asset.preview,
+                textureDirty: true,
+              } as Partial<ShaderCanvasEntity>,
+            });
+          }
+          signal.throwIfAborted();
+          for (const { id } of updates) rendererRef.current?.removeEntityTexture(id);
+          canvasStore.updateEntities(updates);
+          committed = true;
+          for (const previous of previousEntities) {
+            releaseSharedImageAsset(previous);
+            destroyEntityMediaResources(previous);
+          }
+          for (const { entity } of entries) {
+            const hydrated = canvasStore.getState().entities.get(entity.id);
+            if (hydrated) await applyCollaborativePlayback(hydrated, entity.playback);
+          }
+          scheduleCollaborativeRender();
+          return { decodeDurationMs };
+        } catch (error) {
+          if (!committed) {
+            for (const media of acquiredMedia) releaseCollaborativeMedia(media);
+          }
+          throw error;
+        }
+      },
+      async applyRemotePlayback(entity) {
+        const current = canvasStore.getState().entities.get(entity.id);
+        if (current) await applyCollaborativePlayback(current, entity.playback);
+      },
+      applyRemoteShaderPlayback(entityId, time, playing) {
+        const entity = canvasStore.getState().entities.get(entityId);
+        if (!entity) return;
+        rendererRef.current?.setEntityTime(entity, time);
+        rendererRef.current?.setEntityTimeAutoPlay(entity, playing);
+        entity.shaderParams.time = time;
+        entity.shaderParams.timeAutoPlay = playing;
+        entity.textureDirty = true;
+        scheduleCollaborativeRender(entityId);
+      },
+      updateRemotePresence(presence) {
+        canvasStore.setRemotePeerPresence(presence);
+      },
+      removeRemotePresence(peerId) {
+        canvasStore.removeRemotePeerPresence(peerId);
+      },
+      clearRemotePresence() {
+        canvasStore.clearRemotePeerPresences();
+      },
+      async updateRemoteEntity(entity, applyPlayback) {
+        const current = canvasStore.getState().entities.get(entity.id);
+        if (!current) return;
+        canvasStore.updateEntity(entity.id, {
+          name: entity.name,
+          position: { ...entity.position },
+          size: { ...entity.size },
+          originalSize: { ...entity.originalSize },
+          zIndex: entity.zIndex,
+          rotation: entity.rotation,
+          locked: entity.locked,
+          edited: entity.edited,
+          shaderType: entity.shaderType,
+          shaderParams: structuredClone(entity.shaderParams),
+          originalPalette: entity.originalPalette
+            ? structuredClone(entity.originalPalette)
+            : undefined,
+          ...(applyPlayback && entity.playback && { playback: { ...entity.playback } }),
+          textureDirty: true,
+        });
+        const updated = canvasStore.getState().entities.get(entity.id);
+        if (applyPlayback && updated) {
+          await applyCollaborativePlayback(updated, entity.playback);
+        }
+        scheduleCollaborativeRender(entity.id);
+      },
+      removeRemoteEntities(entityIds) {
+        const removedEntities: ShaderCanvasEntity[] = [];
+        const removedIds = new Set<string>();
+        for (const entityId of entityIds) {
+          const entity = canvasStore.getState().entities.get(entityId);
+          if (!entity) continue;
+          pauseDeletedEntity(entity);
+          rendererRef.current?.removeEntityTexture(entityId);
+          removedEntities.push(entity);
+          removedIds.add(entityId);
+        }
+        canvasStore.removeEntities(removedIds);
+        for (const entity of removedEntities) {
+          collaborativeAutoplayBlockedEntityIds.delete(entity.id);
+          releaseSharedImageAsset(entity);
+          destroyEntityMediaResources(entity);
+        }
+        scheduleCollaborativeRender();
+      },
+      updateRemotePalettes(palettes) {
+        paletteStore.setTransientPalettes(palettes);
+      },
+    });
+
+    let collaborationToastId: string | null = null;
+    let collaborationToastKey = "idle";
+    let lastIssue: string | null = null;
+    const updateCollaborationToast = () => {
+      const metrics = collaborationMetrics.getSnapshot();
+      const key = `${metrics.status}:${metrics.peerCount}`;
+      if (key !== collaborationToastKey) {
+        collaborationToastKey = key;
+        const retry = () => {
+          const retryInvite = collaborationService.invite;
+          if (retryInvite) void collaborationService.start(retryInvite).catch(() => {});
+        };
+        const toast =
+          metrics.status === "connecting"
+            ? {
+                title: "Joining multiplayer…",
+                description: "Preparing a secure connection",
+                timeout: 0,
+              }
+            : metrics.status === "waiting"
+              ? {
+                  title: "Multiplayer ready",
+                  description: "Waiting for someone to join",
+                  timeout: 8_000,
+                }
+              : metrics.status === "connected"
+                ? {
+                    title: "Multiplayer connected",
+                    description: `${metrics.peerCount + 1} people are here`,
+                    timeout: 4_000,
+                  }
+                : metrics.status === "reconnecting"
+                  ? {
+                      title: "Reconnecting multiplayer…",
+                      description: "Trying to rejoin the room. Your canvas stays open.",
+                      timeout: 0,
+                    }
+                  : metrics.status === "error"
+                    ? {
+                        title: "Couldn’t join multiplayer",
+                        description: collaborationErrorDescription(metrics.lastErrorCode),
+                        type: ToastType.destructive,
+                        timeout: 0,
+                        actionProps: collaborationService.invite
+                          ? { children: "Retry", onClick: retry }
+                          : { children: null },
+                      }
+                    : null;
+        if (!toast) {
+          if (collaborationToastId) toastManager.close(collaborationToastId);
+          collaborationToastId = null;
+        } else if (collaborationToastId) {
+          toastManager.update(collaborationToastId, toast);
+        } else {
+          collaborationToastId = toastManager.add(toast);
+        }
+      }
+      if (metrics.lastError && metrics.lastError !== lastIssue) {
+        lastIssue = metrics.lastError;
+        if (metrics.status !== "error" && metrics.status !== "reconnecting") {
+          toastManager.add({
+            title: "Multiplayer needs attention",
+            description: collaborationErrorDescription(metrics.lastErrorCode),
+            type: "destructive",
+            timeout: 8_000,
+          });
+        }
+      }
+    };
+    const unsubscribeMetrics = collaborationMetrics.subscribe(updateCollaborationToast);
+    updateCollaborationToast();
+
+    const invite = parseCollaborationInvite(window.location.href);
+    if (invite) {
+      void collaborationService.start(invite).catch((error) => logger.error(error));
+    } else if (window.location.hash.startsWith("#collab=")) {
+      collaborationMetrics.fail(
+        new Error("Invalid or outdated multiplayer invite"),
+        "invalid-invite",
+      );
+    }
+
+    return () => {
+      if (clearSharedImageAssetsTimer) clearTimeout(clearSharedImageAssetsTimer);
+      collaborativeAutoplayBlockedEntityIds.clear();
+      sharedImageAssets.clear();
+      collaborationService.stop();
+      unsubscribeMetrics();
+      if (collaborationToastId) toastManager.close(collaborationToastId);
+      unconfigure();
+    };
+  }, []);
+
+  const startCollaboration = async (): Promise<string> => {
+    const invite = collaborationService.invite ?? createCollaborationInvite();
+    await collaborationService.start(invite);
+    const url = createCollaborationInviteUrl(invite, window.location.href);
+    window.history.replaceState(window.history.state, "", url);
+    return url;
+  };
+
+  const stopCollaboration = () => {
+    collaborationService.stop();
+    const url = clearCollaborationInvite(window.location.href);
+    window.history.replaceState(window.history.state, "", url);
+  };
+
   // Viewport operations - delegate to store
   const setViewport = (newViewport: Viewport) => {
     canvasStore.setViewport(newViewport);
@@ -519,7 +1035,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     filename?: string,
     options?: AddEntityOptions,
   ): string => {
-    const id = `entity-${nextIdRef.current++}`;
+    const id = collaborationService.createEntityId(() => `entity-${nextIdRef.current++}`);
     const zIndex = nextZIndexRef.current++;
     const name = filename || `Image ${nextImageNumberRef.current++}`;
 
@@ -638,8 +1154,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
     undo.add(
       Command.create({
-        undo: () => canvasStore.updateEntity(id, previousValues),
-        execute: () => canvasStore.updateEntity(id, updates),
+        undo: () => applyRebasedEntityUpdate(id, previousValues, updates, previousValues),
+        execute: () => applyRebasedEntityUpdate(id, previousValues, updates, updates),
         description: `Update entity ${id}`,
       }),
     );
@@ -666,8 +1182,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     canvasStore.updateEntities(nextBatch);
     undo.add(
       Command.create({
-        undo: () => canvasStore.updateEntities(previousBatch),
-        execute: () => canvasStore.updateEntities(nextBatch),
+        undo: () => applyRebasedEntityBatch(previousBatch, nextBatch, previousBatch),
+        execute: () => applyRebasedEntityBatch(previousBatch, nextBatch, nextBatch),
         description,
       }),
     );
@@ -886,7 +1402,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     if (useTransaction) undo.beginTransaction();
 
     for (const { entity, mediaSource, imageBitmap } of clones) {
-      const id = `entity-${nextIdRef.current++}`;
+      const id = collaborationService.createEntityId(() => `entity-${nextIdRef.current++}`);
       const zIndex = nextZIndexRef.current++;
       const baseName = entity.name;
       let n = 1;
@@ -952,7 +1468,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   // Update shader params - DIRECT entity update (no URL race condition)
   const updateSelectedEntityParams = (
     params: PartialDeep<ShaderParams>,
-    options?: { skipUndo?: boolean },
+    options?: { skipUndo?: boolean; syncShaderPlayback?: boolean },
   ) => {
     const entities = canvasStore.getSelectedEntities();
     if (entities.length === 0) return;
@@ -968,24 +1484,37 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       // Deep merge params (handles nested objects at any depth)
       const newParams = deepMerge(entity.shaderParams, params);
 
-      canvasStore.updateEntity(entity.id, {
-        shaderParams: newParams,
-        textureDirty: true,
-      });
+      canvasStore.updateEntities([
+        {
+          id: entity.id,
+          updates: { shaderParams: newParams, textureDirty: true },
+          syncShaderPlayback: options?.syncShaderPlayback,
+        },
+      ]);
 
       if (!skipUndo) {
         undo.add(
           Command.create({
             undo: () =>
-              canvasStore.updateEntity(entity.id, {
-                shaderParams: previousParams!,
-                textureDirty: true,
-              }),
+              applyRebasedEntityUpdate(
+                entity.id,
+                { shaderParams: previousParams!, textureDirty: true },
+                { shaderParams: newParams, textureDirty: true },
+                {
+                  shaderParams: previousParams!,
+                  textureDirty: true,
+                },
+              ),
             execute: () =>
-              canvasStore.updateEntity(entity.id, {
-                shaderParams: newParams,
-                textureDirty: true,
-              }),
+              applyRebasedEntityUpdate(
+                entity.id,
+                { shaderParams: previousParams!, textureDirty: true },
+                { shaderParams: newParams, textureDirty: true },
+                {
+                  shaderParams: newParams,
+                  textureDirty: true,
+                },
+              ),
             description: "Update shader params",
           }),
         );
@@ -1006,6 +1535,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           shaderParams: deepMerge(entity.shaderParams, params) as ShaderParams,
           textureDirty: true,
         },
+        syncShaderPlayback: options?.syncShaderPlayback,
       }));
 
       canvasStore.updateEntities(nextBatch);
@@ -1013,8 +1543,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       if (previousBatch) {
         undo.add(
           Command.create({
-            undo: () => canvasStore.updateEntities(previousBatch),
-            execute: () => canvasStore.updateEntities(nextBatch),
+            undo: () => applyRebasedEntityBatch(previousBatch, nextBatch, previousBatch),
+            execute: () => applyRebasedEntityBatch(previousBatch, nextBatch, nextBatch),
             description: `Update params for ${entities.length} entities`,
           }),
         );
@@ -1065,6 +1595,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         textureDirty: true,
       });
     }
+    canvasStore.commitShaderPlayback(entities.map(({ id }) => id));
   };
 
   const syncSelectedEntityTimes = () => {
@@ -1090,6 +1621,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         textureDirty: true,
       });
     }
+    canvasStore.commitShaderPlayback(entities.map(({ id }) => id));
+  };
+
+  const commitSelectedEntityTimes = () => {
+    canvasStore.commitShaderPlayback([...canvasStore.getState().selectedEntityIds]);
   };
 
   const changeShaderType = (value: string | null) => {
@@ -1711,19 +2247,28 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   };
 
   const deletePalette = (paletteId: string) => {
-    const entities = canvasStore.getSelectedEntities();
-    if (entities.length === 0) return;
+    if (!paletteStore.isPersonalPalette(paletteId)) return;
 
     const oldPalette = paletteStore.getPalettes().find((palette) => palette.id === paletteId);
     if (!oldPalette) return;
+    const entities = [...canvasStore.getState().entities.values()].filter(
+      (entity) => entity.shaderParams.palette?.id === paletteId,
+    );
 
     const ownTransaction = !undo.isInTransaction();
     if (ownTransaction) undo.beginTransaction();
     paletteStore.removePalette(paletteId);
+    collaborationService.removePalette(paletteId);
     undo.add(
       Command.create({
-        execute: () => paletteStore.removePalette(paletteId),
-        undo: () => paletteStore.addPalette(oldPalette),
+        execute: () => {
+          paletteStore.removePalette(paletteId);
+          collaborationService.removePalette(paletteId);
+        },
+        undo: () => {
+          paletteStore.addPalette(oldPalette);
+          collaborationService.restorePalette(oldPalette);
+        },
         description: "Delete custom palette",
       }),
     );
@@ -2078,6 +2623,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setViewport,
     panBy,
     resetViewport,
+    startCollaboration,
+    stopCollaboration,
     addEntity,
     updateEntity,
     removeEntity,
@@ -2088,6 +2635,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     updateSelectedEntityParams,
     setSelectedEntityTimeAutoPlay,
     syncSelectedEntityTimes,
+    commitSelectedEntityTimes,
     changeShaderType,
     changeDitheringKind,
     changeAsciiKind,
@@ -2127,6 +2675,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       setViewport,
       panBy,
       resetViewport,
+      startCollaboration,
+      stopCollaboration,
       addEntity,
       updateEntity,
       removeEntity,
@@ -2137,6 +2687,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       updateSelectedEntityParams,
       setSelectedEntityTimeAutoPlay,
       syncSelectedEntityTimes,
+      commitSelectedEntityTimes,
       changeShaderType,
       changeDitheringKind,
       changeAsciiKind,
@@ -2176,6 +2727,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setViewport: (...args) => commandsImplRef.current.setViewport(...args),
     panBy: (...args) => commandsImplRef.current.panBy(...args),
     resetViewport: () => commandsImplRef.current.resetViewport(),
+    startCollaboration: () => commandsImplRef.current.startCollaboration(),
+    stopCollaboration: () => commandsImplRef.current.stopCollaboration(),
     addEntity: (...args) => commandsImplRef.current.addEntity(...args),
     updateEntity: (...args) => commandsImplRef.current.updateEntity(...args),
     removeEntity: (...args) => commandsImplRef.current.removeEntity(...args),
@@ -2188,6 +2741,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setSelectedEntityTimeAutoPlay: (...args) =>
       commandsImplRef.current.setSelectedEntityTimeAutoPlay(...args),
     syncSelectedEntityTimes: () => commandsImplRef.current.syncSelectedEntityTimes(),
+    commitSelectedEntityTimes: () => commandsImplRef.current.commitSelectedEntityTimes(),
     changeShaderType: (...args) => commandsImplRef.current.changeShaderType(...args),
     changeDitheringKind: (...args) => commandsImplRef.current.changeDitheringKind(...args),
     changeAsciiKind: (...args) => commandsImplRef.current.changeAsciiKind(...args),
