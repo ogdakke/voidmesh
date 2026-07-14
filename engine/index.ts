@@ -11,6 +11,7 @@ export type {
   DragSnapshot,
   ActionLayerSnapshot,
   PreferencesSnapshot,
+  DragSelectMode,
 } from "./canvas-store.ts";
 
 export { ActionLayerController, actionLayerController } from "./action-layer-controller.ts";

@@ -19,6 +19,8 @@ import { completeOnboardingStarterSelectionFromEvent } from "#lib/onboarding-run
 import { EntitySpatialIndex } from "#lib/entity-spatial-index.ts";
 import { CanvasLensing } from "#types/enums.ts";
 
+export type DragSelectMode = "replace" | "additive" | "subtractive";
+
 export interface CanvasState {
   // Core state
   viewport: Viewport;
@@ -197,6 +199,8 @@ export interface RenderState {
   canvasCallouts: readonly CanvasCallout[];
   /** Drag-select rectangle bounds in world coordinates (null if not active) */
   dragSelectBounds: Bounds | null;
+  /** GPU drag-selection operation, enabled after the gesture crosses the click threshold. */
+  dragSelectMode: DragSelectMode | null;
   /** Multi-select bounding box in world coordinates (null if < 2 entities selected) */
   multiSelectBounds: Bounds | null;
   actionLayer: ActionLayerRenderState;
@@ -267,6 +271,7 @@ export class CanvasStore extends Store<CanvasState> {
     dirty: false,
     canvasCallouts: [],
     dragSelectBounds: null,
+    dragSelectMode: null,
     multiSelectBounds: null,
     actionLayer: this.#renderActionLayer,
     dragVisual: this.#renderDragVisual,
@@ -1313,6 +1318,7 @@ export class CanvasStore extends Store<CanvasState> {
     renderState.dirty = this.hasRenderChanges();
     renderState.canvasCallouts = this.state.canvasCallouts;
     renderState.dragSelectBounds = null;
+    renderState.dragSelectMode = null;
     renderState.multiSelectBounds = null;
     renderState.actionLayer = this.#renderActionLayer;
     renderState.dragVisual = this.#renderDragVisual;

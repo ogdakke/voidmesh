@@ -222,6 +222,7 @@ interface BenchEntitySet {
   selectedEntityIds?: ReadonlySet<string>;
   debugMode?: boolean;
   dragSelectedEntities?: boolean;
+  dragSelectEntities?: boolean;
   beforeFrame?: (frameIndex: number) => void;
   getViewportOffset?: (frameIndex: number) => { x: number; y: number };
   getViewport?: (frameIndex: number, sampleFrameIndex: number) => Viewport;
@@ -1052,25 +1053,31 @@ async function createManyEntitySet(
   try {
     for (let index = 0; index < config.entityCount; index += 1) {
       const asset = assets[index % assets.length]!;
-      entities.push(
-        createEntity({
-          id: `${scenario.id}-${index}`,
-          name: `${scenario.label} ${index + 1}`,
-          asset,
-          size: scenario.sourceSize,
+      const mixedSegment = config.mixedStaticVariants
+        ? Math.min(3, Math.floor((index * 4) / config.entityCount))
+        : 0;
+      const entityParams =
+        config.mixedStaticVariants && mixedSegment % 2 === 1
+          ? { ...params, showOriginal: true }
+          : params;
+      const entity = createEntity({
+        id: `${scenario.id}-${index}`,
+        name: `${scenario.label} ${index + 1}`,
+        asset,
+        size: scenario.sourceSize,
+        displaySize: config.displaySize,
+        shaderType: mixedSegment >= 2 ? ShaderType.ascii : scenario.shaderType,
+        params: entityParams,
+        zIndex: index,
+        position: getManyEntityPosition({
+          index,
+          entityCount: config.entityCount,
           displaySize: config.displaySize,
-          shaderType: scenario.shaderType,
-          params,
-          zIndex: index,
-          position: getManyEntityPosition({
-            index,
-            entityCount: config.entityCount,
-            displaySize: config.displaySize,
-            layout: config.layout,
-            canvasSize: { width: CANVAS_WIDTH, height: CANVAS_HEIGHT },
-          }),
+          layout: config.layout,
+          canvasSize: { width: CANVAS_WIDTH, height: CANVAS_HEIGHT },
         }),
-      );
+      });
+      entities.push(entity);
     }
     releaseOwnedImageAssets(ownedAssets);
 
@@ -1079,21 +1086,38 @@ async function createManyEntitySet(
       selectedEntityIds: createManyEntitySelection(config, entities),
       debugMode: config.debugMode,
       dragSelectedEntities: config.dragSelectedEntities,
+      dragSelectEntities: config.dragSelectEntities,
       decodedAssetEstimateBytes: estimateDecodedAssetBytes(config),
       getViewportOffset: (frameIndex) =>
         getManyEntityViewportOffset(config, frameIndex, {
           width: CANVAS_WIDTH,
           height: CANVAS_HEIGHT,
         }),
-      getViewport: config.zoom
-        ? (frameIndex) => ({
-            offset: getManyEntityViewportOffset(config, frameIndex, {
-              width: CANVAS_WIDTH,
-              height: CANVAS_HEIGHT,
-            }),
-            zoom: config.zoom!,
-          })
-        : undefined,
+      getViewport: config.zoomRange
+        ? (frameIndex) => {
+            if (frameIndex < config.warmupFrames) {
+              return { offset: { x: 0, y: 0 }, zoom: config.zoomRange!.min };
+            }
+            const cycleLength = Math.max(2, config.frames - 1);
+            const gestureFrame = (frameIndex - config.warmupFrames) % config.frames;
+            const cycleProgress = gestureFrame / cycleLength;
+            const roundTripProgress = 1 - Math.abs(cycleProgress * 2 - 1);
+            return {
+              offset: { x: 0, y: 0 },
+              zoom:
+                config.zoomRange!.min +
+                (config.zoomRange!.max - config.zoomRange!.min) * roundTripProgress,
+            };
+          }
+        : config.zoom
+          ? (frameIndex) => ({
+              offset: getManyEntityViewportOffset(config, frameIndex, {
+                width: CANVAS_WIDTH,
+                height: CANVAS_HEIGHT,
+              }),
+              zoom: config.zoom!,
+            })
+          : undefined,
       cleanup: () => disposeBenchEntities(entities),
     };
   } catch (error) {
@@ -1279,6 +1303,7 @@ function createRenderState(
   selectedEntityIds: ReadonlySet<string> = new Set(),
   debugMode = false,
   dragSelectedEntities = false,
+  dragSelectEntities = false,
 ): RenderState {
   const entitySpatialIndex = new EntitySpatialIndex();
   for (const entity of entities) entitySpatialIndex.upsert(entity);
@@ -1294,7 +1319,8 @@ function createRenderState(
     debugView: "none",
     dirty,
     canvasCallouts: [],
-    dragSelectBounds: null,
+    dragSelectBounds: dragSelectEntities ? { x: 0, y: 0, width: 0, height: 0 } : null,
+    dragSelectMode: dragSelectEntities ? "replace" : null,
     multiSelectBounds: null,
     actionLayer: {
       active: false,
@@ -1329,6 +1355,7 @@ async function runFrames(params: {
   selectedEntityIds?: ReadonlySet<string>;
   debugMode?: boolean;
   dragSelectedEntities?: boolean;
+  dragSelectEntities?: boolean;
 }): Promise<{
   totalMs: number;
   cpuEncodeMs: number;
@@ -1367,6 +1394,7 @@ async function runFrames(params: {
     params.selectedEntityIds,
     params.debugMode,
     params.dragSelectedEntities,
+    params.dragSelectEntities,
   );
 
   for (let index = 0; index < params.frameCount; index += 1) {
@@ -1394,6 +1422,10 @@ async function runFrames(params: {
     if (params.dragSelectedEntities) {
       renderState.dragVisual.offset.x = index * 16;
       renderState.dragVisual.offset.y = index * -8;
+    }
+    if (params.dragSelectEntities && renderState.dragSelectBounds) {
+      renderState.dragSelectBounds.width = (index + 1) * 180;
+      renderState.dragSelectBounds.height = (index + 1) * 120;
     }
     params.renderer.render(renderState);
     const cpuEnd = performance.now();
@@ -1525,6 +1557,7 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
       selectedEntityIds: entitySet.selectedEntityIds,
       debugMode: entitySet.debugMode,
       dragSelectedEntities: entitySet.dragSelectedEntities,
+      dragSelectEntities: entitySet.dragSelectEntities,
     });
     frameIndex += scenario.warmupFrames;
 
@@ -1561,6 +1594,7 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
         selectedEntityIds: entitySet.selectedEntityIds,
         debugMode: entitySet.debugMode,
         dragSelectedEntities: entitySet.dragSelectedEntities,
+        dragSelectEntities: entitySet.dragSelectEntities,
       });
       frameIndex += scenario.frames;
       samples.push(result.totalMs);

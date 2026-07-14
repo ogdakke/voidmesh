@@ -6,11 +6,11 @@ import {
   type Point,
   type ShaderCanvasEntity,
 } from "#types/canvas.ts";
-import { canvasStore, type CanvasState } from "./canvas-store.ts";
+import { canvasStore, type CanvasState, type DragSelectMode } from "./canvas-store.ts";
 import type { EntityDragTarget } from "./entity-drag-controller.ts";
 import { findEntityAtPoint } from "./canvas-hit-testing.ts";
 
-export type DragSelectMode = "replace" | "additive" | "subtractive";
+export type { DragSelectMode } from "./canvas-store.ts";
 
 export interface DragSelectState {
   isActive: boolean;
@@ -18,6 +18,7 @@ export interface DragSelectState {
   currentPoint: Point;
   mode: DragSelectMode;
   previousSelection: Set<string>;
+  hasSelectionUpdate: boolean;
 }
 
 interface DragVisualBoundsPort {
@@ -73,10 +74,12 @@ export class CanvasSelectionController {
       currentPoint: worldPoint,
       mode,
       previousSelection: new Set(state.selectedEntityIds),
+      hasSelectionUpdate: false,
     };
   }
 
   updateDragSelection(dragSelect: DragSelectState): void {
+    dragSelect.hasSelectionUpdate = true;
     const selectionRect = this.computeDragSelectBounds(dragSelect);
     const entitiesInRect = this.#findEntitiesIntersectingBounds(selectionRect);
 

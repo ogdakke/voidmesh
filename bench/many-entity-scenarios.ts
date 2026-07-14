@@ -13,11 +13,14 @@ export interface ManyEntityScenarioConfig {
   layout: ManyEntityLayout;
   pan: boolean;
   zoom?: number;
+  zoomRange?: { min: number; max: number };
   processPixels: boolean;
   selectedEntityFraction?: number;
   selectedEntityCount?: number;
   debugMode?: boolean;
   dragSelectedEntities?: boolean;
+  dragSelectEntities?: boolean;
+  mixedStaticVariants?: boolean;
   paceWithAnimationFrame?: boolean;
   recordPerFrame?: boolean;
   frames: number;
@@ -184,6 +187,48 @@ export const MANY_ENTITY_SCENARIOS: readonly ManyEntityScenarioConfig[] = [
     samples: 3,
   },
   {
+    id: "many-262144-shared-mixed-static-overview-pan",
+    label: "262,144 shared instances, mixed static effects",
+    description:
+      "Pans contiguous dithering, ASCII, processed, and show-original regions while preserving one mixed full-scene composition plan.",
+    entityCount: 262_144,
+    uniqueAssetCount: 1,
+    sourceSize: { width: 1024, height: 1024 },
+    displaySize: { width: 6, height: 6 },
+    assetMode: "shared",
+    layout: "world-grid",
+    pan: true,
+    zoom: 0.18,
+    processPixels: true,
+    mixedStaticVariants: true,
+    paceWithAnimationFrame: true,
+    recordPerFrame: true,
+    frames: 18,
+    warmupFrames: 4,
+    samples: 3,
+  },
+  {
+    id: "many-131072-shared-mixed-static-zoom-round-trip",
+    label: "131,072 shared mixed instances, zoom round trip",
+    description:
+      "Zooms a mixed static 2^17-entity canvas from 1% to 30% and back, guarding against rebuilding the persistent composition plan on every zoom frame.",
+    entityCount: 131_072,
+    uniqueAssetCount: 1,
+    sourceSize: { width: 1024, height: 1024 },
+    displaySize: { width: 6, height: 6 },
+    assetMode: "shared",
+    layout: "world-grid",
+    pan: false,
+    zoomRange: { min: 0.01, max: 0.3 },
+    processPixels: true,
+    mixedStaticVariants: true,
+    paceWithAnimationFrame: true,
+    recordPerFrame: true,
+    frames: 24,
+    warmupFrames: 4,
+    samples: 3,
+  },
+  {
     id: "many-262144-shared-processed-overview-pan-single-selected",
     label: "262,144 shared instances, one selected",
     description:
@@ -284,6 +329,27 @@ export const MANY_ENTITY_SCENARIOS: readonly ManyEntityScenarioConfig[] = [
     processPixels: true,
     selectedEntityFraction: 0.5,
     dragSelectedEntities: true,
+    paceWithAnimationFrame: true,
+    recordPerFrame: true,
+    frames: 18,
+    warmupFrames: 4,
+    samples: 3,
+  },
+  {
+    id: "many-262144-shared-processed-overview-drag-select",
+    label: "262,144 shared instances, expanding drag selection",
+    description:
+      "Expands a replace-mode drag-selection rectangle through the overview using GPU AABB membership without rebuilding scene instances.",
+    entityCount: 262_144,
+    uniqueAssetCount: 1,
+    sourceSize: { width: 1024, height: 1024 },
+    displaySize: { width: 6, height: 6 },
+    assetMode: "shared",
+    layout: "world-grid",
+    pan: false,
+    zoom: 0.18,
+    processPixels: true,
+    dragSelectEntities: true,
     paceWithAnimationFrame: true,
     recordPerFrame: true,
     frames: 18,

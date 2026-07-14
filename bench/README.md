@@ -58,6 +58,12 @@ the canvas virtualization and texture-residency paths:
   single, half, and full selection, plus half-selection debug mode;
 - the same 262,144-instance overview with half the entities translated through
   the transient selected-group drag uniform;
+- the same overview with an expanding replace-mode drag selection evaluated by
+  the persistent instanced shader;
+- 262,144 shared-asset entities split into contiguous dithering, ASCII,
+  processed, and show-original regions to guard mixed static pan plans;
+- 131,072 shared-asset mixed entities zoomed from 1% to 30% and back to guard
+  against rebuilding the full persistent composition plan during zoom motion;
 - a 61-source mixed image/video canvas zoomed from one detailed entity out to
   the full overview and back, both original and default-effect variants.
 
@@ -75,6 +81,8 @@ bun run bench:render:record -- --scenario many-4096-unique-thumbnails-pan
 bun run bench:render:record -- --scenario many-262144-shared-processed-overview-pan-half-selected
 bun run bench:render:record -- --scenario many-262144-shared-processed-overview-pan-half-selected-debug
 bun run bench:render:record -- --scenario many-262144-shared-processed-overview-drag-half-selected
+bun run bench:render:record -- --scenario many-262144-shared-processed-overview-drag-select
+bun run bench:render:record -- --scenario many-262144-shared-mixed-static-overview-pan
 bun run bench:render:record -- --scenario zoom-61-unique-mixed-round-trip
 bun run bench:render:record -- --scenario zoom-61-unique-mixed-processed-round-trip
 ```

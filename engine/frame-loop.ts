@@ -5,6 +5,7 @@ import {
   type ActionLayerRenderState,
   type DisintegrationRenderState,
   type DragVisualRenderState,
+  type DragSelectMode,
   type RenderState,
 } from "./canvas-store.ts";
 import type { FrameStats } from "./perf-overlay.ts";
@@ -49,6 +50,7 @@ interface FrameLoopDeps {
 interface FrameLoopCallbacks {
   processInput(): void;
   getDragSelectBounds(): Bounds | null;
+  getDragSelectRenderMode(): DragSelectMode | null;
   getMultiSelectBounds(): Bounds | null;
   getActionLayerRenderState(): ActionLayerRenderState;
   getDragVisualRenderState(): DragVisualRenderState;
@@ -166,6 +168,7 @@ export class FrameLoop {
       // Snapshot the O(entity count) render array only after deciding that a frame is needed.
       const renderState = canvasStore.getRenderState();
       renderState.dragSelectBounds = this.#callbacks.getDragSelectBounds();
+      renderState.dragSelectMode = this.#callbacks.getDragSelectRenderMode();
       renderState.multiSelectBounds = this.#callbacks.getMultiSelectBounds();
       renderState.actionLayer = this.#callbacks.getActionLayerRenderState();
       renderState.dragVisual = this.#callbacks.getDragVisualRenderState();

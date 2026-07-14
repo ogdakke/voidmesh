@@ -1,5 +1,6 @@
 import { config } from "#config";
-import type { ShaderCanvasEntity } from "#types/canvas.ts";
+import type { DragSelectMode } from "#engine";
+import type { Bounds, ShaderCanvasEntity } from "#types/canvas.ts";
 import instancedCompositionShaderSource from "./composition-instanced.wgsl?raw";
 import compositionShaderSource from "./composition.wgsl?raw";
 
@@ -51,7 +52,8 @@ export interface FullSceneBatchKey {
   singleSelectedIndex: number;
   renderWidth: number;
   renderHeight: number;
-  texture: GPUTexture;
+  texture: GPUTexture | null;
+  textureCacheRevision: number;
   instanceCount: number;
 }
 
@@ -89,11 +91,31 @@ interface CompositionDrawCommand {
 
 interface FullSceneBatchCache extends FullSceneBatchKey {
   bufferGeneration: number;
+  drawRanges: Array<{ texture: GPUTexture; firstInstance: number; instanceCount: number }>;
 }
 
 const INSTANCE_STRIDE_BYTES = 32;
 const INSTANCE_STRIDE_VALUES = INSTANCE_STRIDE_BYTES / 4;
 const INITIAL_INSTANCE_CAPACITY = 256;
+const INSTANCE_FLAG_DEBUG = 1;
+const INSTANCE_FLAG_LOCKED = 2;
+
+function getDragSelectModeValue(mode: DragSelectMode | null): number {
+  switch (mode) {
+    case "replace":
+      return 1;
+    case "additive":
+      return 2;
+    case "subtractive":
+      return 3;
+    default:
+      return 0;
+  }
+}
+
+function getInstanceFlags(entity: ShaderCanvasEntity, debugMode: boolean): number {
+  return (debugMode ? INSTANCE_FLAG_DEBUG : 0) | (entity.locked ? INSTANCE_FLAG_LOCKED : 0);
+}
 
 function createExternalCompositionShaderSource(source: string): string {
   const rewritten = source
@@ -122,11 +144,18 @@ export class CompositionPass {
   readonly #instancedBindGroupLayout: GPUBindGroupLayout;
   readonly #externalBindGroupLayout: GPUBindGroupLayout;
   readonly #sampler: GPUSampler;
-  readonly #dragUniformBuffer: GPUBuffer;
-  readonly #dragUniformData = new Float32Array(4);
-  #dragUniformOffsetX = 0;
-  #dragUniformOffsetY = 0;
-  #dragUniformScale = 0;
+  readonly #interactionUniformBuffer: GPUBuffer;
+  readonly #interactionUniformData = new ArrayBuffer(32);
+  readonly #interactionUniformFloats = new Float32Array(this.#interactionUniformData);
+  readonly #interactionUniformUints = new Uint32Array(this.#interactionUniformData);
+  #interactionOffsetX = 0;
+  #interactionOffsetY = 0;
+  #interactionScale = 0;
+  #interactionSelectionMode = 0;
+  #interactionSelectionX = 0;
+  #interactionSelectionY = 0;
+  #interactionSelectionWidth = 0;
+  #interactionSelectionHeight = 0;
   readonly #entityUniformData = new ArrayBuffer(config.rendering.entityUniformSize);
   readonly #entityFloatView = new Float32Array(this.#entityUniformData);
   readonly #entityUintView = new Uint32Array(this.#entityUniformData);
@@ -263,9 +292,9 @@ export class CompositionPass {
       addressModeU: "clamp-to-edge",
       addressModeV: "clamp-to-edge",
     });
-    this.#dragUniformBuffer = this.#device.createBuffer({
-      label: "Composition selected drag transform",
-      size: 16,
+    this.#interactionUniformBuffer = this.#device.createBuffer({
+      label: "Composition interaction uniforms",
+      size: this.#interactionUniformData.byteLength,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
@@ -505,10 +534,10 @@ export class CompositionPass {
       cached.geometryVersion === key.geometryVersion &&
       cached.selectionVersion === key.selectionVersion &&
       cached.debugMode === key.debugMode &&
-      cached.singleSelectedIndex === key.singleSelectedIndex &&
       cached.renderWidth === key.renderWidth &&
       cached.renderHeight === key.renderHeight &&
       cached.texture === key.texture &&
+      cached.textureCacheRevision === key.textureCacheRevision &&
       cached.instanceCount === key.instanceCount
     );
   }
@@ -538,6 +567,40 @@ export class CompositionPass {
     this.#fullSceneBatch = {
       ...key,
       bufferGeneration: this.#instanceBufferGeneration,
+      drawRanges: [{ texture: options.texture!, firstInstance: 0, instanceCount: entities.length }],
+    };
+  }
+
+  prepareMixedFullSceneBatch(key: FullSceneBatchKey, items: readonly CompositionDrawItem[]): void {
+    if (items.length !== key.instanceCount) {
+      throw new Error("Mixed full-scene batch instance count does not match its draw items");
+    }
+    if (this.hasFullSceneBatch(key)) return;
+
+    const buffer = this.#ensureInstanceCapacity(items.length);
+    const drawRanges: FullSceneBatchCache["drawRanges"] = [];
+    for (let index = 0; index < items.length; index++) {
+      const item = items[index]!;
+      if (item.pipeline !== "texture" || !item.texture) {
+        throw new Error("Mixed full-scene batches require regular texture draw items");
+      }
+      this.#writeInstance(index, item);
+      const previous = drawRanges.at(-1);
+      if (previous?.texture === item.texture) {
+        previous.instanceCount++;
+      } else {
+        drawRanges.push({ texture: item.texture, firstInstance: index, instanceCount: 1 });
+      }
+      item.entity.textureDirty = false;
+    }
+    const uploadBytes = items.length * INSTANCE_STRIDE_BYTES;
+    this.#device.queue.writeBuffer(buffer, 0, this.#instanceData, 0, uploadBytes);
+    this.#fullSceneBatchRebuilds += 1;
+    this.#fullSceneBatchUploadBytes += uploadBytes;
+    this.#fullSceneBatch = {
+      ...key,
+      bufferGeneration: this.#instanceBufferGeneration,
+      drawRanges,
     };
   }
 
@@ -546,25 +609,32 @@ export class CompositionPass {
     key: FullSceneBatchKey,
     dragOffset?: { x: number; y: number },
     dragScale = 1,
+    dragSelectBounds: Bounds | null = null,
+    dragSelectMode: DragSelectMode | null = null,
   ): boolean {
     if (!this.hasFullSceneBatch(key)) return false;
+    const cached = this.#fullSceneBatch!;
     const dragOffsetX = dragOffset?.x ?? 0;
     const dragOffsetY = dragOffset?.y ?? 0;
     const hasDragTransform = dragOffsetX !== 0 || dragOffsetY !== 0 || dragScale !== 1;
-    this.#writeDragUniform(
+    this.#writeInteractionUniforms(
       hasDragTransform ? dragOffsetX : 0,
       hasDragTransform ? dragOffsetY : 0,
       hasDragTransform ? dragScale : 0,
+      dragSelectBounds,
+      dragSelectMode,
     );
     this.#instanceWriteCursor = Math.max(this.#instanceWriteCursor, key.instanceCount);
     pass.setPipeline(this.#instancedPipeline);
-    pass.setBindGroup(0, this.#getInstancedBindGroup(key.texture));
-    pass.draw(6, key.instanceCount, 0, 0);
+    for (const range of cached.drawRanges) {
+      pass.setBindGroup(0, this.#getInstancedBindGroup(range.texture));
+      pass.draw(6, range.instanceCount, 0, range.firstInstance);
+    }
     return true;
   }
 
   drawItems(pass: GPURenderPassEncoder, items: readonly CompositionDrawItem[]): void {
-    this.#writeDragUniform(0, 0, 0);
+    this.#writeInteractionUniforms(0, 0, 0, null, null);
     this.#fullSceneBatch = null;
     const firstWrittenInstance = this.#instanceWriteCursor;
     const instanceCount = this.#prepareDrawCommands(items);
@@ -663,7 +733,7 @@ export class CompositionPass {
       cached.uniformBuffer.destroy();
     }
     this.#entityExternalCompositionCache.clear();
-    this.#dragUniformBuffer.destroy();
+    this.#interactionUniformBuffer.destroy();
     this.#instanceBuffer?.destroy();
     this.#instanceBuffer = null;
     this.#instanceCapacity = 0;
@@ -778,7 +848,7 @@ export class CompositionPass {
     this.#instanceFloatView[offset + 3] = entity.size.height;
     this.#instanceFloatView[offset + 4] = (entity.rotation * Math.PI) / 180;
     this.#instanceUintView[offset + 5] = isSelected ? 1 : 0;
-    this.#instanceUintView[offset + 6] = debugMode ? 1 : 0;
+    this.#instanceUintView[offset + 6] = getInstanceFlags(entity, debugMode);
     this.#instanceFloatView[offset + 7] = 1;
   }
 
@@ -791,7 +861,7 @@ export class CompositionPass {
     this.#instanceFloatView[offset + 3] = entity.size.height;
     this.#instanceFloatView[offset + 4] = (entity.rotation * Math.PI) / 180;
     this.#instanceUintView[offset + 5] = item.isSelected ? 1 : 0;
-    this.#instanceUintView[offset + 6] = item.debugMode ? 1 : 0;
+    this.#instanceUintView[offset + 6] = getInstanceFlags(entity, item.debugMode);
     this.#instanceFloatView[offset + 7] = item.visualScale;
   }
 
@@ -808,29 +878,54 @@ export class CompositionPass {
         { binding: 1, resource: { buffer: this.#instanceBuffer } },
         { binding: 2, resource: this.#getTextureView(texture) },
         { binding: 3, resource: this.#sampler },
-        { binding: 4, resource: { buffer: this.#dragUniformBuffer } },
+        { binding: 4, resource: { buffer: this.#interactionUniformBuffer } },
       ],
     });
     this.#instanceBindGroupCache.set(texture, bindGroup);
     return bindGroup;
   }
 
-  #writeDragUniform(offsetX: number, offsetY: number, scale: number): void {
+  #writeInteractionUniforms(
+    offsetX: number,
+    offsetY: number,
+    scale: number,
+    selectionBounds: Bounds | null,
+    selectionMode: DragSelectMode | null,
+  ): void {
+    const selectionModeValue = getDragSelectModeValue(selectionMode);
+    const selectionX = selectionBounds?.x ?? 0;
+    const selectionY = selectionBounds?.y ?? 0;
+    const selectionWidth = selectionBounds?.width ?? 0;
+    const selectionHeight = selectionBounds?.height ?? 0;
     if (
-      offsetX === this.#dragUniformOffsetX &&
-      offsetY === this.#dragUniformOffsetY &&
-      scale === this.#dragUniformScale
+      offsetX === this.#interactionOffsetX &&
+      offsetY === this.#interactionOffsetY &&
+      scale === this.#interactionScale &&
+      selectionModeValue === this.#interactionSelectionMode &&
+      selectionX === this.#interactionSelectionX &&
+      selectionY === this.#interactionSelectionY &&
+      selectionWidth === this.#interactionSelectionWidth &&
+      selectionHeight === this.#interactionSelectionHeight
     ) {
       return;
     }
-    this.#dragUniformOffsetX = offsetX;
-    this.#dragUniformOffsetY = offsetY;
-    this.#dragUniformScale = scale;
-    this.#dragUniformData[0] = offsetX;
-    this.#dragUniformData[1] = offsetY;
-    this.#dragUniformData[2] = scale;
-    this.#dragUniformData[3] = 0;
-    this.#device.queue.writeBuffer(this.#dragUniformBuffer, 0, this.#dragUniformData);
+    this.#interactionOffsetX = offsetX;
+    this.#interactionOffsetY = offsetY;
+    this.#interactionScale = scale;
+    this.#interactionSelectionMode = selectionModeValue;
+    this.#interactionSelectionX = selectionX;
+    this.#interactionSelectionY = selectionY;
+    this.#interactionSelectionWidth = selectionWidth;
+    this.#interactionSelectionHeight = selectionHeight;
+    this.#interactionUniformFloats[0] = offsetX;
+    this.#interactionUniformFloats[1] = offsetY;
+    this.#interactionUniformFloats[2] = scale;
+    this.#interactionUniformUints[3] = selectionModeValue;
+    this.#interactionUniformFloats[4] = selectionX;
+    this.#interactionUniformFloats[5] = selectionY;
+    this.#interactionUniformFloats[6] = selectionWidth;
+    this.#interactionUniformFloats[7] = selectionHeight;
+    this.#device.queue.writeBuffer(this.#interactionUniformBuffer, 0, this.#interactionUniformData);
   }
 
   #writeLiveEntityUniforms(

@@ -141,6 +141,38 @@ describe("CompositionPass instancing", () => {
     releaseImageEntity(second);
   });
 
+  test("persists mixed-texture instance ranges across viewport-only frames", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const first = createTestEntity({ id: "mixed-first" });
+    const second = cloneImageEntity(first, "mixed-second", { x: 20, y: 0 });
+    const third = cloneImageEntity(first, "mixed-third", { x: 40, y: 0 });
+    const textureA = createTexture();
+    const textureB = createTexture();
+    const key = { ...createFullSceneKey(textureA, 3), texture: null };
+    const items = [
+      prepare(pass, first, textureA),
+      prepare(pass, second, textureA),
+      prepare(pass, third, textureB),
+    ];
+
+    pass.prepareMixedFullSceneBatch(key, items);
+    const renderPass = createRenderPass();
+    expect(pass.drawFullSceneBatch(renderPass, key)).toBe(true);
+    expect(renderPass.draw.mock.calls).toEqual([
+      [6, 2, 0, 0],
+      [6, 1, 0, 2],
+    ]);
+
+    pass.prepareMixedFullSceneBatch(key, items);
+    expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
+
+    pass.destroy();
+    releaseImageEntity(first);
+    releaseImageEntity(second);
+    releaseImageEntity(third);
+  });
+
   test("persists selection and debug flags without splitting the full-scene batch", () => {
     const { device } = createDevice();
     const pass = createPass(device);
@@ -186,10 +218,45 @@ describe("CompositionPass instancing", () => {
     expect(pass.drawFullSceneBatch(createRenderPass(), key, { x: 120, y: -45 }, 0.95)).toBe(true);
 
     expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
-    const dragUniform = device.queue.writeBuffer.mock.calls[0]![2] as Float32Array;
-    expect(Array.from(dragUniform.slice(0, 2))).toEqual([120, -45]);
-    expect(dragUniform[2]).toBeCloseTo(0.95);
-    expect(dragUniform[3]).toBe(0);
+    const interactionUniform = device.queue.writeBuffer.mock.calls[0]![2] as ArrayBuffer;
+    const interactionFloats = new Float32Array(interactionUniform);
+    expect(Array.from(interactionFloats.slice(0, 2))).toEqual([120, -45]);
+    expect(interactionFloats[2]).toBeCloseTo(0.95);
+    expect(interactionFloats[3]).toBe(0);
+    expect(pass.getStats().fullSceneBatchRebuilds).toBe(1);
+
+    pass.destroy();
+    releaseImageEntity(first);
+    releaseImageEntity(second);
+  });
+
+  test("updates drag-selection bounds without rebuilding full-scene instances", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const first = createTestEntity({ id: "drag-select-first" });
+    const second = cloneImageEntity(first, "drag-select-second", { x: 20, y: 0 });
+    const texture = createTexture();
+    const key = createFullSceneKey(texture, 2);
+    pass.prepareFullSceneBatch({ ...key, entities: [first, second], selectedEntityIds: new Set() });
+    device.queue.writeBuffer.mockClear();
+
+    expect(
+      pass.drawFullSceneBatch(
+        createRenderPass(),
+        key,
+        undefined,
+        1,
+        { x: 10, y: 20, width: 300, height: 200 },
+        "replace",
+      ),
+    ).toBe(true);
+
+    expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
+    const interactionUniform = device.queue.writeBuffer.mock.calls[0]![2] as ArrayBuffer;
+    const floats = new Float32Array(interactionUniform);
+    const uints = new Uint32Array(interactionUniform);
+    expect(uints[3]).toBe(1);
+    expect(Array.from(floats.slice(4, 8))).toEqual([10, 20, 300, 200]);
     expect(pass.getStats().fullSceneBatchRebuilds).toBe(1);
 
     pass.destroy();
@@ -236,6 +303,7 @@ function createFullSceneKey(texture: GPUTexture, instanceCount: number): FullSce
     renderWidth: 64,
     renderHeight: 64,
     texture,
+    textureCacheRevision: 1,
     instanceCount,
   };
 }

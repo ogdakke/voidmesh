@@ -78,6 +78,19 @@ describe("many entity benchmark scenarios", () => {
     expect(estimateDecodedAssetBytes(unique)).toBe(4096 * 128 * 128 * 4);
   });
 
+  test("defines the mixed static zoom regression scenario", () => {
+    expect(
+      MANY_ENTITY_SCENARIOS.find(
+        (scenario) => scenario.id === "many-131072-shared-mixed-static-zoom-round-trip",
+      ),
+    ).toMatchObject({
+      entityCount: 131_072,
+      mixedStaticVariants: true,
+      zoomRange: { min: 0.01, max: 0.3 },
+      pan: false,
+    });
+  });
+
   test("covers the 262k overview selection-density and debug matrix", () => {
     const overviewScenarios = MANY_ENTITY_SCENARIOS.filter(
       (scenario) => scenario.entityCount === 262_144,
@@ -90,14 +103,18 @@ describe("many entity benchmark scenarios", () => {
         selectedEntityFraction: scenario.selectedEntityFraction ?? 0,
         debugMode: scenario.debugMode ?? false,
         dragSelectedEntities: scenario.dragSelectedEntities ?? false,
+        dragSelectEntities: scenario.dragSelectEntities ?? false,
+        mixedStaticVariants: scenario.mixedStaticVariants ?? false,
       })),
     ).toEqual([
       expect.objectContaining({ selectedEntityCount: 0, selectedEntityFraction: 0 }),
+      expect.objectContaining({ mixedStaticVariants: true }),
       expect.objectContaining({ selectedEntityCount: 1 }),
       expect.objectContaining({ selectedEntityFraction: 0.5, debugMode: false }),
       expect.objectContaining({ selectedEntityFraction: 1 }),
       expect.objectContaining({ selectedEntityFraction: 0.5, debugMode: true }),
       expect.objectContaining({ selectedEntityFraction: 0.5, dragSelectedEntities: true }),
+      expect.objectContaining({ dragSelectEntities: true }),
     ]);
   });
 });

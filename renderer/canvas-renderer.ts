@@ -112,10 +112,10 @@ export class InfiniteCanvasRenderer {
     submitMs: 0,
   };
   #hasLastLodViewport = false;
-  #lastLodOffsetX = 0;
-  #lastLodOffsetY = 0;
   #lastLodZoom = 0;
   #lodSettleFramesRemaining = 0;
+  #mixedBatchLodRefreshPending = false;
+  #mixedBatchLodRefreshStarted = false;
   readonly #visibilityViewportBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
   readonly #visibilityEntityBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
 
@@ -200,6 +200,7 @@ export class InfiniteCanvasRenderer {
   hasPendingRenderWork(): boolean {
     return (
       this.#lodSettleFramesRemaining > 0 ||
+      this.#mixedBatchLodRefreshPending ||
       (this.#entityTexturePipeline?.hasPendingLodWork ?? false)
     );
   }
@@ -434,21 +435,37 @@ export class InfiniteCanvasRenderer {
     }
 
     this.#viewportUniforms.update(viewport, width, height);
-    const viewportChanged =
-      !this.#hasLastLodViewport ||
-      this.#lastLodZoom !== viewport.zoom ||
-      this.#lastLodOffsetX !== viewport.offset.x ||
-      this.#lastLodOffsetY !== viewport.offset.y;
-    if (viewportChanged) {
+    const zoomChanged = !this.#hasLastLodViewport || this.#lastLodZoom !== viewport.zoom;
+    if (zoomChanged) {
       this.#lodSettleFramesRemaining = config.rendering.lodSettleFrames;
+      this.#mixedBatchLodRefreshPending = true;
+      this.#mixedBatchLodRefreshStarted = false;
     } else if (this.#lodSettleFramesRemaining > 0) {
       this.#lodSettleFramesRemaining--;
     }
     this.#hasLastLodViewport = true;
-    this.#lastLodOffsetX = viewport.offset.x;
-    this.#lastLodOffsetY = viewport.offset.y;
     this.#lastLodZoom = viewport.zoom;
-    this.#entityTexturePipeline?.beginFrame(this.#lodSettleFramesRemaining === 0);
+    const lodPipelineHadPendingWork = this.#entityTexturePipeline?.hasPendingLodWork ?? false;
+    const allowLodTransitions = this.#lodSettleFramesRemaining === 0;
+    let mixedFullSceneBatchMode: "reuse" | "refresh" | "disabled" = "refresh";
+    if (this.#mixedBatchLodRefreshPending) {
+      if (!allowLodTransitions) {
+        // Texture LOD is intentionally frozen during zoom motion. The persistent
+        // plan remains valid because viewport projection is uniform-driven.
+        mixedFullSceneBatchMode = "reuse";
+      } else if (!this.#mixedBatchLodRefreshStarted) {
+        // One visible-preparation frame discovers the final desired tiers and
+        // starts the bounded transition queue after zoom motion stops.
+        this.#mixedBatchLodRefreshStarted = true;
+        mixedFullSceneBatchMode = "disabled";
+      } else if (lodPipelineHadPendingWork) {
+        mixedFullSceneBatchMode = "disabled";
+      } else {
+        this.#mixedBatchLodRefreshPending = false;
+        this.#mixedBatchLodRefreshStarted = false;
+      }
+    }
+    this.#entityTexturePipeline?.beginFrame(allowLodTransitions);
 
     // Entity preprocessing can encode shader passes into this same command buffer.
     // External video textures must be imported, bound, encoded, finished, and submitted
@@ -475,7 +492,8 @@ export class InfiniteCanvasRenderer {
       selectedEntityIds,
       actionLayer: state.actionLayer,
       dragVisual: state.dragVisual,
-      dragSelectActive: state.dragSelectBounds !== null,
+      dragSelectMode: state.dragSelectMode,
+      mixedFullSceneBatchMode,
       hasCanvasCallouts: state.canvasCallouts.length > 0,
       debugMode,
     });
@@ -535,6 +553,8 @@ export class InfiniteCanvasRenderer {
           fullSceneBatch,
           state.dragVisual.offset,
           state.dragVisual.scale,
+          state.dragSelectBounds,
+          state.dragSelectMode,
         )
       ) {
         throw new Error("Prepared full-scene composition batch was invalidated before drawing");

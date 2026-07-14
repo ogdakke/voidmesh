@@ -1,5 +1,5 @@
 import { config } from "#config";
-import type { ActionLayerRenderState, DragVisualRenderState } from "#engine";
+import type { ActionLayerRenderState, DragSelectMode, DragVisualRenderState } from "#engine";
 import { getViewportWorldBounds } from "#lib/canvas-math.ts";
 import type { EntitySpatialIndex } from "#lib/entity-spatial-index.ts";
 import { tracePerformancePhase } from "#lib/performance-tracing.ts";
@@ -12,6 +12,9 @@ import type {
 } from "./composition-pass.ts";
 import type { EntityTexturePipeline } from "./entity-texture-pipeline.ts";
 import { getEntityRenderSize } from "./entity-render-size.ts";
+
+const MAX_MIXED_FULL_SCENE_TEXTURE_RUNS = 256;
+type MixedFullSceneBatchMode = "reuse" | "refresh" | "disabled";
 
 interface EntityDrawItemPreparerOptions {
   texturePipeline: EntityTexturePipeline;
@@ -32,7 +35,8 @@ interface PrepareEntityDrawItemsOptions {
   selectedEntityIds: ReadonlySet<string>;
   actionLayer: ActionLayerRenderState;
   dragVisual: DragVisualRenderState;
-  dragSelectActive: boolean;
+  dragSelectMode: DragSelectMode | null;
+  mixedFullSceneBatchMode: MixedFullSceneBatchMode;
   hasCanvasCallouts: boolean;
   debugMode: boolean;
 }
@@ -66,6 +70,7 @@ export class EntityDrawItemPreparer {
   readonly #visibleEntities: ShaderCanvasEntity[] = [];
   readonly #entityDrawItems: CompositionDrawItem[] = [];
   readonly #actionLayerDrawItems: CompositionDrawItem[] = [];
+  readonly #fullSceneDrawItems: CompositionDrawItem[] = [];
   readonly #prepared: PreparedEntityDrawItems = {
     entityDrawItems: this.#entityDrawItems,
     actionLayerDrawItems: this.#actionLayerDrawItems,
@@ -74,6 +79,7 @@ export class EntityDrawItemPreparer {
     hasAnimatingContent: false,
   };
   #fullSceneBatchKey: FullSceneBatchKey | null = null;
+  #mixedFullSceneBatchKey: FullSceneBatchKey | null = null;
   #homogeneousEntityVersion = -1;
   #homogeneousEntities: readonly ShaderCanvasEntity[] | null = null;
   #homogeneousRepresentative: ShaderCanvasEntity | null = null;
@@ -86,6 +92,7 @@ export class EntityDrawItemPreparer {
   #singleSelectionVersion = -1;
   #singleSelectionEntityVersion = -1;
   #singleSelectionGeometryVersion = -1;
+  #singleSelectionIds: ReadonlySet<string> | null = null;
   #singleSelectedIndex = -1;
   readonly #phaseStats: EntityPreparationPhaseStats = {
     batchAdmissionMs: 0,
@@ -317,7 +324,6 @@ export class EntityDrawItemPreparer {
       selectedEntityIds,
       actionLayer,
       dragVisual,
-      dragSelectActive,
       hasCanvasCallouts,
       debugMode,
     } = options;
@@ -326,14 +332,20 @@ export class EntityDrawItemPreparer {
       actionLayer.active ||
       actionLayer.blurIntensity > 0.01 ||
       (dragVisual.active && !dragVisual.appliesToSelection) ||
-      dragSelectActive ||
       hasCanvasCallouts
     ) {
       return null;
     }
 
     const representative = this.#getHomogeneousRepresentative(entities, entityVersion);
-    if (!representative || this.#texturePipeline.needsContinuousRenderForEntity(representative)) {
+    if (!representative) {
+      if (options.mixedFullSceneBatchMode === "disabled") return null;
+      return this.#prepareMixedFullSceneBatch(
+        options,
+        options.mixedFullSceneBatchMode === "refresh",
+      );
+    }
+    if (this.#texturePipeline.needsContinuousRenderForEntity(representative)) {
       return null;
     }
 
@@ -377,6 +389,7 @@ export class EntityDrawItemPreparer {
       renderWidth,
       renderHeight,
       texture: compositionSource.texture,
+      textureCacheRevision: this.#texturePipeline.textureCacheRevision,
       instanceCount: entities.length,
     };
     this.#fullSceneBatchKey = key;
@@ -394,6 +407,7 @@ export class EntityDrawItemPreparer {
     key.renderWidth = renderWidth;
     key.renderHeight = renderHeight;
     key.texture = compositionSource.texture;
+    key.textureCacheRevision = this.#texturePipeline.textureCacheRevision;
     key.instanceCount = entities.length;
     if (this.#compositionPass.hasFullSceneBatch(key)) {
       this.#rememberSnapshotSource(representative, entityVersion, renderWidth, renderHeight);
@@ -429,6 +443,162 @@ export class EntityDrawItemPreparer {
 
     this.#compositionPass.prepareFullSceneBatch({ ...key, entities, selectedEntityIds });
     this.#rememberSnapshotSource(representative, entityVersion, renderWidth, renderHeight);
+    return key;
+  }
+
+  #prepareMixedFullSceneBatch(
+    options: PrepareEntityDrawItemsOptions,
+    allowBuild: boolean,
+  ): FullSceneBatchKey | null {
+    const {
+      entities,
+      entitySpatialIndex,
+      entityVersion,
+      geometryVersion,
+      selectionVersion,
+      viewport,
+      width,
+      height,
+      devicePixelRatio,
+      encoder,
+      selectedEntityIds,
+      debugMode,
+    } = options;
+    const key = this.#mixedFullSceneBatchKey ?? {
+      entityVersion,
+      geometryVersion,
+      selectionVersion,
+      debugMode,
+      singleSelectedIndex: -1,
+      renderWidth: 0,
+      renderHeight: 0,
+      texture: null,
+      textureCacheRevision: this.#texturePipeline.textureCacheRevision,
+      instanceCount: entities.length,
+    };
+    this.#mixedFullSceneBatchKey = key;
+    key.entityVersion = entityVersion;
+    key.geometryVersion = geometryVersion;
+    key.selectionVersion = selectionVersion;
+    key.debugMode = debugMode;
+    key.singleSelectedIndex = this.#getSingleSelectedIndex(
+      entities,
+      selectedEntityIds,
+      selectionVersion,
+      entityVersion,
+      geometryVersion,
+    );
+    key.textureCacheRevision = this.#texturePipeline.textureCacheRevision;
+    key.instanceCount = entities.length;
+    if (this.#compositionPass.hasFullSceneBatch(key)) return key;
+    if (!allowBuild) return null;
+
+    const viewportBounds = getViewportWorldBounds(
+      viewport,
+      width,
+      height,
+      config.canvas.cullingBufferFraction,
+      this.#viewportBounds,
+    );
+    const spatialQueryStart = performance.now();
+    const visibleEntities = entitySpatialIndex.queryBounds(
+      viewportBounds,
+      this.#visibleEntities,
+      entities,
+    );
+    const spatialQueryEnd = performance.now();
+    this.#phaseStats.spatialQueryMs = tracePerformancePhase(
+      "render.spatial-query",
+      spatialQueryStart,
+      spatialQueryEnd,
+    );
+    this.#fullSceneAdmissionQueried = true;
+    if (
+      visibleEntities.length / entities.length <
+      config.rendering.fullSceneBatchMinVisibleFraction
+    ) {
+      return null;
+    }
+
+    const items = this.#fullSceneDrawItems;
+    items.length = 0;
+    const representative = entities[0];
+    if (!representative || representative.mediaSource.type !== MediaType.image) return null;
+    const sharedAsset = representative.mediaSource.asset;
+    let previousTexture: GPUTexture | null = null;
+    let textureRunCount = 0;
+    let previousSizedEntity: ShaderCanvasEntity | null = null;
+    let previousDesiredWidth = 0;
+    let previousDesiredHeight = 0;
+    for (const entity of entities) {
+      if (
+        entity.mediaSource.type !== MediaType.image ||
+        entity.mediaSource.asset !== sharedAsset ||
+        this.#texturePipeline.needsContinuousRenderForEntity(entity)
+      ) {
+        items.length = 0;
+        return null;
+      }
+      const sameProjectedSize =
+        previousSizedEntity !== null &&
+        previousSizedEntity.size.width === entity.size.width &&
+        previousSizedEntity.size.height === entity.size.height &&
+        previousSizedEntity.originalSize.width === entity.originalSize.width &&
+        previousSizedEntity.originalSize.height === entity.originalSize.height;
+      const desiredRenderSize = this.#desiredRenderSize;
+      if (sameProjectedSize) {
+        desiredRenderSize.width = previousDesiredWidth;
+        desiredRenderSize.height = previousDesiredHeight;
+      } else {
+        getEntityRenderSize(entity, viewport, devicePixelRatio, desiredRenderSize);
+        previousSizedEntity = entity;
+        previousDesiredWidth = desiredRenderSize.width;
+        previousDesiredHeight = desiredRenderSize.height;
+      }
+      let source = this.#texturePipeline.getReusableStaticCompositionSource(
+        entity,
+        desiredRenderSize,
+        false,
+      );
+      if (!source) {
+        const renderSize = this.#texturePipeline.resolveRenderSize(
+          entity,
+          desiredRenderSize,
+          this.#resolvedRenderSize,
+        );
+        if (!renderSize) {
+          items.length = 0;
+          return null;
+        }
+        source = this.#texturePipeline.renderEntityToTexture(entity, encoder, renderSize);
+      }
+      if (source?.kind !== "texture") {
+        items.length = 0;
+        return null;
+      }
+      if (source.texture !== previousTexture) {
+        previousTexture = source.texture;
+        textureRunCount++;
+        if (textureRunCount > MAX_MIXED_FULL_SCENE_TEXTURE_RUNS) {
+          items.length = 0;
+          return null;
+        }
+      }
+      items.push(
+        this.#compositionPass.prepareDrawItem({
+          entity,
+          source,
+          isSelected: selectedEntityIds.has(entity.id),
+          debugMode,
+          positionOffsetX: 0,
+          positionOffsetY: 0,
+          visualScale: 1,
+        }),
+      );
+    }
+
+    key.textureCacheRevision = this.#texturePipeline.textureCacheRevision;
+    this.#compositionPass.prepareMixedFullSceneBatch(key, items);
     return key;
   }
 
@@ -482,7 +652,8 @@ export class EntityDrawItemPreparer {
     if (
       this.#singleSelectionVersion === selectionVersion &&
       this.#singleSelectionEntityVersion === entityVersion &&
-      this.#singleSelectionGeometryVersion === geometryVersion
+      this.#singleSelectionGeometryVersion === geometryVersion &&
+      this.#singleSelectionIds === selectedEntityIds
     ) {
       return this.#singleSelectedIndex;
     }
@@ -490,6 +661,7 @@ export class EntityDrawItemPreparer {
     this.#singleSelectionVersion = selectionVersion;
     this.#singleSelectionEntityVersion = entityVersion;
     this.#singleSelectionGeometryVersion = geometryVersion;
+    this.#singleSelectionIds = selectedEntityIds;
     this.#singleSelectedIndex = -1;
     if (selectedEntityIds.size !== 1) return -1;
 

@@ -530,6 +530,10 @@ export class EntityTexturePipeline {
     return this.#pendingLodWork;
   }
 
+  get textureCacheRevision(): number {
+    return this.#textureCacheRevision;
+  }
+
   endFrame(): void {
     this.#runtime.endFrame();
     this.#evictToBudget();
@@ -860,6 +864,7 @@ export class EntityTexturePipeline {
       candidate.cached.texture.destroy();
       residentBytes -= candidate.cached.byteSize;
       this.#evictions++;
+      this.#textureCacheRevision++;
 
       if (candidate.kind === "processed") {
         this.#processedTextures.delete(candidate.key);
