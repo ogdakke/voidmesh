@@ -1,8 +1,6 @@
 import type { Point, Size, ShaderCanvasEntity } from "#types/canvas.ts";
 import { calculateFitToView, easings, snapToGrid, SNAP_GRID_SIZE } from "./canvas-math.ts";
-import { canvasStore } from "../engine/canvas-store.ts";
-import { viewportAnimation } from "../engine/viewport-animation.ts";
-import { gameLoop } from "../engine/game-loop.ts";
+import { canvasStore, gameLoop, viewportAnimation } from "#engine";
 import { loadMediaFile, loadMediaFromBlob } from "./media-loader.ts";
 import { config } from "./config/index.ts";
 import { logger } from "./client.logger.ts";

@@ -1,11 +1,11 @@
 import { Image } from "#ui/image.tsx";
-import beanie from "../media/guy_with_beanie_and_glasses_ascii_winter.webp?img";
-import bustedBust from "../media/busted_bust_dithered.webp?img";
-import darkHand from "../media/dithered-dark-hand.webp?img";
-import footballPlayer from "../media/halftone-football-player.webp?img";
-import personSitting from "../media/halftone-person-sitting.webp?img";
-import halftoneDude from "../media/halftone-dude.webp?img";
-import halftoneHead from "../media/halftone-1jdnpq5qg.webp?img";
+import beanie from "#media/guy_with_beanie_and_glasses_ascii_winter.webp?img";
+import bustedBust from "#media/busted_bust_dithered.webp?img";
+import darkHand from "#media/dithered-dark-hand.webp?img";
+import footballPlayer from "#media/halftone-football-player.webp?img";
+import personSitting from "#media/halftone-person-sitting.webp?img";
+import halftoneDude from "#media/halftone-dude.webp?img";
+import halftoneHead from "#media/halftone-1jdnpq5qg.webp?img";
 import { Hint } from "#ui/hint/hint.tsx";
 
 export const SidebarLeft = () => {

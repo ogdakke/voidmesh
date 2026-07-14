@@ -6,7 +6,7 @@ import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import { screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React, { useRef } from "react";
-import CanvasContextMenu from "../../components/infinite-canvas/canvas-context-menu.tsx";
+import CanvasContextMenu from "#components/infinite-canvas/canvas-context-menu.tsx";
 import { canvasStore } from "#engine";
 import { createEntityInput } from "../helpers/test-entity.ts";
 import { renderWithProviders, renderWithCanvas } from "../helpers/render-with-providers.tsx";

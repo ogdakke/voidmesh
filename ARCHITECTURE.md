@@ -524,3 +524,25 @@ flowchart LR
 The key rule: **state changes flow through application actions into `CanvasStore`; pixels
 flow from a `RenderState` snapshot into the renderer.** Keeping those flows separate is
 the main architectural simplification.
+
+## Deep module boundaries
+
+Canvas capabilities follow the deep-module principle: public interfaces stay small while
+their implementations hide substantial coordination. `CanvasInteractionService` is the
+first application module in this shape. Its callers see points, surface metrics, and named
+actions; it hides the store, game loop, viewport animation, selection-bound calculation,
+and animation configuration.
+
+This provides four concrete benefits:
+
+- UI changes do not spread into engine orchestration code.
+- Engine internals can be replaced or dependency-injected without rewriting components.
+- Business behavior is testable without rendering React or constructing WebGPU resources.
+- The allowed dependency graph becomes enforceable because callers have a legitimate
+  public interface to use instead of reaching for a singleton.
+
+`plugins/oxlint-import-policy.js` enforces the graph. It reads `package.json#imports` to
+compile exact and wildcard aliases, requires `#...` imports across module boundaries, and
+rejects upward dependencies. Exact entrypoints such as `#engine` are treated as public
+module surfaces, so relative deep imports cannot bypass them. The configured `allowFiles`
+list records pre-existing violations only and should shrink as those modules migrate.

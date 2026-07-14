@@ -22,6 +22,7 @@ Infinite canvas app with real-time WebGPU shader effects. Users drop images/vide
 
 ## Architecture
 
+- `application/` — Plain TypeScript use cases and deep module interfaces. Coordinates engine behavior for React/DOM adapters without exposing engine singletons to UI code.
 - `engine/` — Canvas state (`CanvasStore`) and input handling (`GameLoop`). GPU-agnostic, framework-independent.
 - `renderer/` — WebGPU rendering pipeline, shader registry, effect composition, export (MP4/MOV/GIF/PNG/JPEG). `renderer/shaders/` has per-effect `ShaderPass` subclasses.
 - `lib/` — Pure utilities. Math, config, media loading, serialization (`.vdmsh`), undo (command pattern), palette extraction, physics scroll. No React, no GPU.
@@ -36,7 +37,9 @@ React 19 + Compiler, rolldown-vite 8, WebGPU, TypeScript (strict), Bun, oxlint.
 
 ## Path Aliases (package.json `imports`)
 
-`#engine` -> `engine/index.ts`, `#config` -> `lib/config/index.ts`, `#lib/*`, `#types/*`, `#renderer/*`, `#hooks/*`, `#components/*`, `#context/*`, `#ui/*` -> `components/ui/*`, `#media/*` -> `media/*`, `#weights/*` -> `weights/*`.
+`#engine` -> `engine/index.ts`, `#application/*`, `#config` -> `lib/config/index.ts`, `#lib/*`, `#types/*`, `#renderer/*`, `#hooks/*`, `#components/*`, `#context/*`, `#ui/*` -> `components/ui/*`, `#media/*` -> `media/*`, `#weights/*` -> `weights/*`.
+
+Cross-module imports must use these `#...` package imports. `plugins/oxlint-import-policy.js` reads `package.json#imports` and enforces both alias use and dependency direction. Its `allowFiles` list is an explicit legacy-debt baseline; do not add entries for new code.
 
 ## Lint & Typecheck
 
@@ -66,6 +69,7 @@ The opt-in real Chrome/WebGPU many-entity suite lives in `bench/`. Run it with `
 5. **GPU resources**: Always clean up buffers/textures. Use `TexturePool` for intermediates. Key shareable source/processed textures by immutable asset and effect identity; entity IDs track ownership, not duplicate resources.
 6. **Undo pattern**: Wrap state mutations in `Command.create({ execute, undo, onEvict })`, push to `undo` singleton from `lib/undo.ts`.
 7. **Overview batching**: Large homogeneous static-image scenes keep one versioned composition instance buffer. Pan-only frames update viewport state and issue one draw; entity/geometry changes rebuild, and interactive/heterogeneous scenes use normal preparation.
+8. **Deep modules**: UI depends on narrow selectors, commands, and application services. Concrete `CanvasStore`, `GameLoop`, `FrameLoop`, animation-controller, and renderer orchestration access stays behind context/application composition boundaries.
 
 ## Anti-Patterns
 
@@ -75,6 +79,7 @@ The opt-in real Chrome/WebGPU many-entity suite lives in `bench/`. Run it with `
 - Do not add `"use client"` / `"use server"` — this is a SPA, not Next.js.
 - Do not import from `node_modules` internals. Use opensrc cli for source reading.
 - Do not create new context providers without discussion.
+- Do not bypass public module surfaces with relative cross-module imports or direct engine singleton imports from components/hooks. Use `#...` package imports and narrow context/application interfaces.
 
 ## Export Pipeline
 

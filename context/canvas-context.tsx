@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   CanvasCommandsContext,
+  CanvasInteractionContext,
   CanvasRendererContext,
   DebugType,
   type CanvasCommands,
   type CanvasRendererService,
   type AddEntityOptions,
 } from "./use-canvas.ts";
+import { createCanvasInteractionService } from "#application/canvas/canvas-interaction.ts";
 import {
   useQueryState,
   parseAsBoolean,
@@ -48,7 +50,13 @@ import type {
   DeserializeResult,
 } from "#lib/serialization/types.ts";
 import { type ImageExportOptions, getImageExtension } from "#renderer/export-formats.ts";
-import { canvasStore, disintegrationController, gameLoop, type CanvasEntityUpdate } from "#engine";
+import {
+  canvasStore,
+  disintegrationController,
+  gameLoop,
+  viewportAnimation,
+  type CanvasEntityUpdate,
+} from "#engine";
 
 import { toastManager } from "#components/ui/toast/toast-manager.ts";
 import { hints } from "#components/ui/hint/hint-manager.ts";
@@ -250,6 +258,13 @@ function paletteToUrlParams(palette: ColorPalette | undefined): {
 }
 
 export function CanvasProvider({ children }: { children: ReactNode }) {
+  const [interaction] = useState(() =>
+    createCanvasInteractionService({
+      store: canvasStore,
+      gameLoop,
+      viewportAnimation,
+    }),
+  );
   // Debug mode URL param
   const [debugType, setDebugType] = useQueryState(
     "debug",
@@ -273,7 +288,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   // Initialize debug mode with test image when ?debug=true
   useEffect(() => {
     if (debugType === DebugType.load && import.meta.env.DEV) {
-      import("../engine/debug-script.ts")
+      import("#application/canvas/debug-canvas.ts")
         .then(({ debugCanvas }) => debugCanvas(canvasStore))
         .catch(console.error);
     }
@@ -2311,9 +2326,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
   return (
     <CanvasCommandsContext.Provider value={commands}>
-      <CanvasRendererContext.Provider value={rendererService}>
-        {children}
-      </CanvasRendererContext.Provider>
+      <CanvasInteractionContext.Provider value={interaction}>
+        <CanvasRendererContext.Provider value={rendererService}>
+          {children}
+        </CanvasRendererContext.Provider>
+      </CanvasInteractionContext.Provider>
     </CanvasCommandsContext.Provider>
   );
 }

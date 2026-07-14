@@ -5,7 +5,7 @@ React context providers wiring subsystems together. The "glue" layer between eng
 ## Key Files
 
 - `canvas-context.tsx` (~52KB) — `CanvasProvider`. Main orchestrator. Bridges URL query state (nuqs) to canvas state, entity CRUD with undo support, renderer registration, image export (copy/save). Largest, most complex file in the codebase.
-- `use-canvas.ts` — Commands/renderer contexts and selector hooks. `useCanvasCommands()` exposes stable mutations, `useCanvasRendererService()` exposes renderer/color-space services, and selector hooks like `useSelectedEntity()` / `useViewport()` provide fine-grained reads.
+- `use-canvas.ts` — Commands, interaction, and renderer contexts plus selector hooks. `useCanvasCommands()` exposes stable mutations, `useCanvasInteraction()` exposes the narrow application-owned canvas interaction service, and `useCanvasRendererService()` exposes renderer/color-space services.
 - `export-queue-context.tsx` (~16KB) — Sequential video export queue with auto-download.
 - `video-export-context.tsx` — Export options state (format, quality, resolution).
 - `use-video-export.ts`, `use-export-queue.ts` — Hooks for the export contexts.
@@ -39,10 +39,11 @@ Note: `KeybindProvider` wraps outside `App()` at the root render level.
 - Entity deletion triggers disintegration animation when `fancyDelete` is enabled, but per-entity snapshots/particle systems are capped by `config.canvas.fancyDeleteMaxBatchSize`; larger selections delete without animation. Undo cancels any created overlays.
 - `fancyDelete` preference defaults to `true` unless `prefers-reduced-motion: reduce` is active.
 - Export queue clones video elements to isolate export playback from preview playback.
+- `CanvasProvider` is the composition root for concrete engine singletons. It constructs application services once and exposes narrow context interfaces; consumers never receive the store or game loop objects.
 
 ## Anti-Patterns
 
-- Do not add new context providers without updating composition order in `app.tsx`.
+- Do not add a new top-level provider without updating composition order in `app.tsx`. Capability contexts nested inside `CanvasProvider` must remain narrow and stable.
 - Do not put rendering logic or GPU calls here. Context orchestrates; renderer executes.
 - Do not mutate `canvasStore` state outside of context callbacks. The context is the intended mutation boundary for React-facing code.
 - Do not reintroduce a broad `useCanvas()` state surface. Keep reads selector-based and mutations command-based.

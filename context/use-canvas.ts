@@ -17,6 +17,7 @@ import type { WlurOverlayDebugConfig } from "#renderer/wlur-debug.ts";
 import type { DeserializeOptions, DeserializeResult } from "#lib/serialization/types.ts";
 import type { Options } from "nuqs";
 import type { PartialDeep } from "type-fest";
+import type { CanvasInteractionService } from "#application/canvas/canvas-interaction.ts";
 
 export const DebugType = createEnum({
   /** load the debug image */
@@ -115,6 +116,7 @@ export interface CanvasRendererService {
 
 const CanvasCommandsContext = createContext<CanvasCommands | null>(null);
 const CanvasRendererContext = createContext<CanvasRendererService | null>(null);
+const CanvasInteractionContext = createContext<CanvasInteractionService | null>(null);
 
 export function useCanvasSelector<T>(
   selector: (state: ReturnType<typeof canvasStore.getState>) => T,
@@ -138,6 +140,14 @@ export function useCanvasRendererService(): CanvasRendererService {
   const context = use(CanvasRendererContext);
   if (!context) {
     throw new Error("useCanvasRendererService must be used within CanvasProvider");
+  }
+  return context;
+}
+
+export function useCanvasInteraction(): CanvasInteractionService {
+  const context = use(CanvasInteractionContext);
+  if (!context) {
+    throw new Error("useCanvasInteraction must be used within CanvasProvider");
   }
   return context;
 }
@@ -212,4 +222,4 @@ export function useSelectionState() {
   return useCanvasSelector(() => canvasStore.getSelectionState());
 }
 
-export { CanvasCommandsContext, CanvasRendererContext };
+export { CanvasCommandsContext, CanvasInteractionContext, CanvasRendererContext };

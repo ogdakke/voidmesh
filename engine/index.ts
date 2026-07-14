@@ -13,7 +13,7 @@ export type {
   PreferencesSnapshot,
 } from "./canvas-store.ts";
 
-export { actionLayerController } from "./action-layer-controller.ts";
+export { ActionLayerController, actionLayerController } from "./action-layer-controller.ts";
 
 export { GameLoop, gameLoop } from "./game-loop.ts";
 export type { CanvasRendererPort } from "./frame-loop.ts";
@@ -25,6 +25,8 @@ export { viewportAnimation, ViewportAnimationController } from "./viewport-anima
 export type { ViewportAnimationOptions, ViewportStore } from "./viewport-animation.ts";
 
 export { disintegrationController } from "./disintegration-controller.ts";
-export { perfOverlay } from "./perf-overlay.ts";
+export { PerfOverlayController, perfOverlay } from "./perf-overlay.ts";
 export type { FrameStats } from "./perf-overlay.ts";
+export { MomentumController } from "./momentum-controller.ts";
+export type { MomentumDeps } from "./momentum-controller.ts";
 export { entityDragVisual } from "./entity-drag-visual.ts";

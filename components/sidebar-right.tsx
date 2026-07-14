@@ -1,5 +1,5 @@
 import { SidebarRightControls } from "./sidebar-right-controls";
-import "../styles/sidebar.css";
+import "#styles/sidebar.css";
 
 export const SidebarRight = () => {
   return (

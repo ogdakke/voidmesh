@@ -4,7 +4,7 @@ React UI layer. Feature-specific panels, the canvas viewport, and layout shells.
 
 ## Key Files
 
-- `infinite-canvas/` — Main canvas viewport. `infinite-canvas.tsx` (~35KB) renders `<canvas>`, wires `GameLoop` + `InfiniteCanvasRenderer`, handles drop events, space+drag panning, keyboard shortcuts. `canvas-context-menu.tsx` (~25KB) is the right-click context menu.
+- `infinite-canvas/` — Main canvas viewport. `infinite-canvas.tsx` is the small composition shell; `canvas-overlay.tsx` owns explicit desktop/mobile chrome. DOM input, renderer lifecycle, keybinds, and viewport use cases live behind hooks/application services. `canvas-context-menu.tsx` (~25KB) is the right-click context menu.
 - `desktop-layout.tsx` — Desktop resizable panel layout (lazy-loaded from `app.tsx`).
 - `mobile-layout.tsx` — Mobile drawer-based layout (lazy-loaded from `app.tsx`).
 - `sidebar-right-controls.tsx` (~21KB) — Decides which knob panel to show based on selection state.

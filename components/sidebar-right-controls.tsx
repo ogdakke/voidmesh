@@ -8,7 +8,7 @@ import {
   useCanvasCommands,
   useSelectedEntity,
   useSelectedShaderType,
-} from "../context/use-canvas.ts";
+} from "#context/use-canvas.ts";
 import {
   SHADER_TYPE_OPTIONS,
   GlassKind,
@@ -16,7 +16,7 @@ import {
   GlitchKind,
   GLITCH_KIND_OPTIONS,
 } from "#types/canvas.ts";
-import { useParamValue } from "../hooks/use-param-value.ts";
+import { useParamValue } from "#hooks/use-param-value.ts";
 import { analytics } from "#lib/analytics.ts";
 import { canvasStore } from "#engine";
 import { Button } from "./ui/button/index.tsx";

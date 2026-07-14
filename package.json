@@ -6,6 +6,7 @@
     "#ui/*": "./components/ui/*",
     "#components/*": "./components/*",
     "#engine": "./engine/index.ts",
+    "#application/*": "./application/*",
     "#renderer/*": "./renderer/*",
     "#wlur": "./packages/wlur/index.ts",
     "#wlur/*": "./packages/wlur/*",

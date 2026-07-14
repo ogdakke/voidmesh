@@ -1,6 +1,6 @@
 import { type ReactNode } from "react";
 import { Image } from "#ui/image.tsx";
-import houseBurning from "../../media/house_burning_ascii.webp?img";
+import houseBurning from "#media/house_burning_ascii.webp?img";
 import "./about.css";
 
 export function AboutSection({ children, id }: { children?: ReactNode; id?: string }) {

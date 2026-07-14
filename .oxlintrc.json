@@ -10,6 +10,10 @@
     {
       "name": "voidmesh-react-compiler",
       "specifier": "./plugins/oxlint-react-compiler.js"
+    },
+    {
+      "name": "voidmesh-import-policy",
+      "specifier": "./plugins/oxlint-import-policy.js"
     }
   ],
   "rules": {
@@ -41,6 +45,42 @@
     "react-hooks-js/void-use-memo": "error",
     "react-hooks-js/incompatible-library": "error",
     "voidmesh-react-compiler/no-manual-memoization": "error",
+    "voidmesh-import-policy/enforce-layer-boundaries": [
+      "error",
+      {
+        "allowFiles": [
+          "components/action-layer/action-layer.tsx",
+          "components/action-layer/upscale-drawer.tsx",
+          "components/delete-drop-zone/delete-drop-zone.tsx",
+          "components/infinite-canvas/canvas-context-menu.tsx",
+          "components/infinite-canvas/viewport-lens-controls.tsx",
+          "components/knobs/style-knobs.tsx",
+          "components/mobile-bottom/mobile-bottom-bar.tsx",
+          "components/multi-selection-controls.tsx",
+          "components/sidebar-right-controls.tsx",
+          "components/upload-button-controls.tsx",
+          "components/upscale-queue-panel.tsx",
+          "context/canvas-context.tsx",
+          "context/upscale-queue-context.tsx",
+          "engine/perf-overlay.ts",
+          "hooks/use-action-layer.ts",
+          "hooks/use-canvas-container-resize.ts",
+          "hooks/use-entity-cycling.ts",
+          "hooks/use-entity-drag.ts",
+          "hooks/use-image-input.ts",
+          "hooks/use-media-control-source.ts",
+          "hooks/use-media-controls.ts",
+          "hooks/use-onboarding.ts",
+          "hooks/use-param-value.ts",
+          "hooks/use-studio-file.ts",
+          "lib/config/index.ts",
+          "lib/entity-placement.ts",
+          "lib/serialization/serialize.ts",
+          "types/canvas.ts"
+        ]
+      }
+    ],
+    "voidmesh-import-policy/prefer-package-imports": "error",
     "react/only-export-components": "warn",
     "jsx-a11y/no-noninteractive-tabindex": ["warn", { "roles": ["application"] }]
   },

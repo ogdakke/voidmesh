@@ -14,7 +14,7 @@ import {
   type Size,
   type Viewport,
 } from "#types/canvas.ts";
-import type { RenderState } from "../engine/canvas-store.ts";
+import type { RenderState } from "#engine";
 import { createImageAsset, releaseImageAsset } from "#lib/media-assets.ts";
 import { EntitySpatialIndex } from "#lib/entity-spatial-index.ts";
 import {
@@ -46,7 +46,7 @@ import {
   type ZoomStressScenarioConfig,
 } from "./zoom-stress-scenario.ts";
 
-import "../styles/reset.css";
+import "#styles/reset.css";
 
 import "./render-bench.css";
 

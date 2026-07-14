@@ -1,9 +1,9 @@
-import { canvasStore, type ParamResult } from "../engine/index.ts";
-import { useCanvasSelector } from "../context/use-canvas.ts";
+import { canvasStore, type ParamResult } from "#engine";
+import { useCanvasSelector } from "#context/use-canvas.ts";
 import type { ParamPaths, GetParamByPath } from "#types/canvas.ts";
 
 // Re-export ParamResult from canvas-store for convenience
-export type { ParamResult } from "../engine/canvas-store.ts";
+export type { ParamResult } from "#engine";
 
 /**
  * Hook for reading shader param values with multi-select support.

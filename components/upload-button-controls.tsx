@@ -5,8 +5,8 @@ import { addFilesToCanvas } from "#lib/entity-placement.ts";
 import { showMediaLoadFailureToasts } from "#components/media-load-errors.ts";
 import { MediaImagePlus } from "iconoir-react";
 import { useRef } from "react";
-import { config } from "../lib/config";
-import { canvasStore } from "../engine/canvas-store.ts";
+import { config } from "#config";
+import { canvasStore } from "#engine";
 import { Button } from "./ui/button";
 
 export function UploadControls() {
