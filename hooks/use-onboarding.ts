@@ -17,15 +17,9 @@ import {
   setOnboardingStarterEntityId,
   setOnboardingStepCompleteHandler,
 } from "#lib/onboarding-runtime.ts";
-import { getViewportLayoutCenter } from "#lib/canvas-math.ts";
 import { logger } from "#lib/client.logger.ts";
 import { loadMediaFromBlob } from "#lib/media-loader.ts";
-import {
-  useCanvasCommands,
-  useCanvasInteraction,
-  useCanvasSelector,
-  useViewport,
-} from "#context/use-canvas.ts";
+import { useCanvasCommands, useCanvasInteraction, useCanvasSelector } from "#context/use-canvas.ts";
 
 interface UseOnboardingOptions {
   containerRef: React.RefObject<HTMLElement | null>;
@@ -40,7 +34,6 @@ interface UseOnboardingResult {
 export function useOnboarding({ containerRef, ready }: UseOnboardingOptions): UseOnboardingResult {
   const { addEntity } = useCanvasCommands();
   const interaction = useCanvasInteraction();
-  const viewport = useViewport();
   const isMobile = useIsMobile();
   const actionLayer = useActionLayer();
   const entityCount = useCanvasSelector((state) => state.entities.size);
@@ -107,7 +100,11 @@ export function useOnboarding({ containerRef, ready }: UseOnboardingOptions): Us
       try {
         const response = await fetch("/favicon.webp");
         const blob = await response.blob();
-        const center = getViewportLayoutCenter(viewport, container, window.devicePixelRatio);
+        const center = interaction.getViewportLayoutCenter({
+          width: container.clientWidth,
+          height: container.clientHeight,
+          dpr: window.devicePixelRatio,
+        });
         const entity = await loadMediaFromBlob(
           blob,
           blob.type || "image/webp",
@@ -140,7 +137,7 @@ export function useOnboarding({ containerRef, ready }: UseOnboardingOptions): Us
     return () => {
       cancelled = true;
     };
-  }, [addEntity, containerRef, entityCount, isMobile, progress, ready, viewport]);
+  }, [addEntity, containerRef, entityCount, interaction, isMobile, progress, ready]);
 
   const active =
     !!progress &&

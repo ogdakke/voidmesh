@@ -10,6 +10,8 @@ import {
   calculateCenteredOffset,
   calculateFitToView,
   easings,
+  getViewportCenter,
+  getViewportLayoutCenter,
   screenToWorld,
   zoomToPoint,
 } from "#lib/canvas-math.ts";
@@ -66,6 +68,8 @@ export interface CanvasInteractionService {
     selectedEntities: ShaderCanvasEntity[];
   };
   getEntities(ids: readonly string[]): ShaderCanvasEntity[];
+  getViewportCenter(containerRect: DOMRect, dpr: number): Point;
+  getViewportLayoutCenter(metrics: CanvasSurfaceMetrics): Point;
   screenToWorld(point: Point, containerRect: DOMRect, dpr: number): Point;
 }
 
@@ -200,6 +204,14 @@ export function createCanvasInteractionService({
       }
       return entities;
     },
+    getViewportCenter: (containerRect, dpr) =>
+      getViewportCenter(store.getViewport(), containerRect, dpr),
+    getViewportLayoutCenter: (metrics) =>
+      getViewportLayoutCenter(
+        store.getViewport(),
+        { clientWidth: metrics.width, clientHeight: metrics.height },
+        metrics.dpr,
+      ),
     screenToWorld: (point, containerRect, dpr) =>
       screenToWorld(point, store.getViewport(), containerRect, dpr),
   };

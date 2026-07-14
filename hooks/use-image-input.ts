@@ -8,10 +8,9 @@ import {
   fitEntitiesToView,
 } from "#application/canvas/entity-placement.ts";
 import { fileHandleStore } from "#lib/files/file-handle.ts";
-import { getViewportCenter, screenToWorld } from "#lib/canvas-math.ts";
 import { wait } from "#lib/util.ts";
 import { useRef } from "react";
-import { useCanvasCommands, useCanvasInteraction, useViewport } from "#context/use-canvas.ts";
+import { useCanvasCommands, useCanvasInteraction } from "#context/use-canvas.ts";
 import { useClipboardPaste } from "./use-clipboard-paste.ts";
 import { useIsMobile } from "./use-is-mobile.ts";
 import { importStudioWithToasts } from "./use-studio-file.ts";
@@ -34,7 +33,6 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
   const { addEntity, applyUrlState, applyEffectsToSelection, deserializeCanvas } =
     useCanvasCommands();
   const interaction = useCanvasInteraction();
-  const viewport = useViewport();
   const isLoadingRef = useRef(false);
   const isMobile = useIsMobile();
   const bottomInset = isMobile ? config.canvas.mobile.bottomInset : 0;
@@ -46,8 +44,8 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
     const rect = container.getBoundingClientRect();
     const dpr = window.devicePixelRatio;
     return screenPoint
-      ? screenToWorld(screenPoint, viewport, rect, dpr)
-      : getViewportCenter(viewport, rect, dpr);
+      ? interaction.screenToWorld(screenPoint, rect, dpr)
+      : interaction.getViewportCenter(rect, dpr);
   };
 
   /**

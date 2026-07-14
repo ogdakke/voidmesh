@@ -101,4 +101,25 @@ describe("CanvasInteractionService", () => {
 
     expect(service.getEntities([second.id, "missing", first.id])).toEqual([second, first]);
   });
+
+  it("reads coordinate centers from the current viewport on demand", () => {
+    const { store, service } = createHarness();
+    store.setViewport({ offset: { x: 100, y: 200 }, zoom: 2 });
+
+    expect(
+      service.getViewportCenter(
+        {
+          left: 10,
+          top: 20,
+          width: 800,
+          height: 600,
+        } as DOMRect,
+        1,
+      ),
+    ).toEqual({ x: 300, y: 350 });
+    expect(service.getViewportLayoutCenter({ width: 800, height: 600, dpr: 1 })).toEqual({
+      x: 300,
+      y: 350,
+    });
+  });
 });
