@@ -222,13 +222,18 @@ export function InfiniteCanvas() {
   // Observe container size changes and trigger re-render
   useCanvasContainerResize(containerRef);
 
-  // doesn't capture pointer to keep base-ui native context menu behavior on macos (two-finger tap, hold and drag over menu item)
+  // Capture only primary-button rectangle selections so they continue across UI chrome.
+  // Other interactions remain uncaptured to preserve the native macOS context-menu gesture.
   const handlePointerDown = (e: React.PointerEvent) => {
     // Skip pointer events for touch - we handle touch separately
     if (e.pointerType === "touch") return;
 
     containerRef.current?.focus();
     gameLoop.handlePointerDown({ x: e.clientX, y: e.clientY }, e.shiftKey);
+
+    if (e.button === 0 && gameLoop.getDragSelectMode() !== null) {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    }
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -238,7 +243,6 @@ export function InfiniteCanvas() {
     gameLoop.handlePointerMove({ x: e.clientX, y: e.clientY });
   };
 
-  // doesn't release pointer capture to keep base-ui native context menu behavior on macos (two-finger tap, hold and drag over menu item)
   const handlePointerUp = (e: React.PointerEvent) => {
     // Skip pointer events for touch
     if (e.pointerType === "touch") return;
