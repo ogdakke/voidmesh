@@ -8,7 +8,7 @@ import { MAX_PALETTE_COLORS } from "#types/canvas.ts";
 import { cssColorToRGBAInColorSpace, rgbaToCss } from "#lib/color-utils.ts";
 import { ColorSpace } from "#types/enums.ts";
 import { config } from "#config";
-import { isUserPalette } from "#components/palette-preset/palette-presets.ts";
+import { isUserPalette } from "#application/canvas/palettes.ts";
 import { undo } from "#lib/undo.ts";
 import clsx from "clsx";
 import "./color-palette.css";

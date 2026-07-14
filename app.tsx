@@ -5,20 +5,20 @@ import ReactDOM from "react-dom/client";
 import { logger } from "#lib/client.logger.ts";
 import { ToastProvider } from "#ui/toast/toast.tsx";
 import { PwaUpdateManager } from "#components/pwa/pwa-update-manager.tsx";
-import { CanvasProvider } from "./context/canvas-context.tsx";
-import { ExportQueueProvider } from "./context/export-queue-context.tsx";
-import { UpscaleQueueProvider } from "./context/upscale-queue-context.tsx";
-import { KeybindProvider } from "./context/keybind-provider.tsx";
-import { LayoutProvider } from "./context/layout-context.tsx";
-import { VideoExportProvider } from "./context/video-export-context.tsx";
-import { useIsMobile, useIsTouch } from "./hooks/use-is-mobile.ts";
-import useMediaQuery from "./hooks/use-media-query";
+import { CanvasProvider } from "#context/canvas-context.tsx";
+import { ExportQueueProvider } from "#context/export-queue-context.tsx";
+import { UpscaleQueueProvider } from "#context/upscale-queue-context.tsx";
+import { KeybindProvider } from "#context/keybind-provider.tsx";
+import { LayoutProvider } from "#context/layout-context.tsx";
+import { VideoExportProvider } from "#context/video-export-context.tsx";
+import { useIsMobile, useIsTouch } from "#hooks/use-is-mobile.ts";
+import useMediaQuery from "#hooks/use-media-query.ts";
 import { PostHogProvider, usePostHog } from "@posthog/react";
 import type { PostHogConfig } from "posthog-js";
 import { analytics } from "#lib/analytics.ts";
 import { PostHogAnalyticsProvider } from "#lib/analytics-posthog.ts";
 
-import "./styles/app.css";
+import "#styles/app.css";
 
 const options: Partial<PostHogConfig> = {
   ui_host: import.meta.env.VITE_PUBLIC_POSTHOG_UI_HOST!,
@@ -27,8 +27,8 @@ const options: Partial<PostHogConfig> = {
   capture_exceptions: true,
 } as const;
 
-const DesktopLayout = lazy(() => import("./components/desktop-layout.tsx"));
-const MobileLayout = lazy(() => import("./components/mobile-layout.tsx"));
+const DesktopLayout = lazy(() => import("#components/desktop-layout.tsx"));
+const MobileLayout = lazy(() => import("#components/mobile-layout.tsx"));
 
 export default function App() {
   const isTouch = useIsTouch();

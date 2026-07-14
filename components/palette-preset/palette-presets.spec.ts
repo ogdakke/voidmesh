@@ -7,7 +7,7 @@ import {
   generatePaletteName,
   isExtractedPalette,
   isUserPalette,
-} from "./palette-presets.ts";
+} from "#application/canvas/palettes.ts";
 
 describe("palette-presets utilities", () => {
   describe("isUserPalette", () => {

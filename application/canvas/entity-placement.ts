@@ -1,11 +1,9 @@
 import type { Point, Size, ShaderCanvasEntity } from "#types/canvas.ts";
-import { calculateFitToView, easings, snapToGrid, SNAP_GRID_SIZE } from "./canvas-math.ts";
-import { canvasStore } from "../engine/canvas-store.ts";
-import { viewportAnimation } from "../engine/viewport-animation.ts";
-import { gameLoop } from "../engine/game-loop.ts";
-import { loadMediaFile, loadMediaFromBlob } from "./media-loader.ts";
-import { config } from "./config/index.ts";
-import { logger } from "./client.logger.ts";
+import { calculateFitToView, easings, snapToGrid, SNAP_GRID_SIZE } from "#lib/canvas-math.ts";
+import { canvasStore, gameLoop, viewportAnimation } from "#engine";
+import { loadMediaFile, loadMediaFromBlob } from "#lib/media-loader.ts";
+import { config } from "#config";
+import { logger } from "#lib/client.logger.ts";
 
 type EntityData = Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string };
 type AddEntityFn = (entity: EntityData, filename?: string) => string;

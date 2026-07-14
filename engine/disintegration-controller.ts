@@ -9,7 +9,7 @@ import {
   scheduler as defaultScheduler,
   type AnimationScheduler,
   type AnimationHandle,
-} from "../lib/animation-scheduler.ts";
+} from "#lib/animation-scheduler.ts";
 
 export interface DisintegrationOverlay {
   id: string;

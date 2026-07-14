@@ -13,7 +13,7 @@ import {
   isUserPalette,
   buildPaletteList,
   type PaletteListItem,
-} from "#components/palette-preset/palette-presets.ts";
+} from "#application/canvas/palettes.ts";
 import type { ColorPalette as ColorPaletteType } from "#types/canvas.ts";
 import { usePaletteStore } from "#lib/palette-store.ts";
 import {

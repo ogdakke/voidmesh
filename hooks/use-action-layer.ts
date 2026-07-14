@@ -1,6 +1,8 @@
-import { useSyncExternalStore } from "react";
-import { canvasStore, type ActionLayerSnapshot } from "#engine";
+import {
+  useCanvasActionLayerSnapshot,
+  type CanvasActionLayerSnapshot,
+} from "#context/use-canvas.ts";
 
-export function useActionLayer(): ActionLayerSnapshot {
-  return useSyncExternalStore(canvasStore.subscribe, canvasStore.getActionLayerSnapshot);
+export function useActionLayer(): CanvasActionLayerSnapshot {
+  return useCanvasActionLayerSnapshot();
 }

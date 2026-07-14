@@ -9,6 +9,8 @@ import {
   type Viewport,
   ShaderType,
   type RGBA,
+  type ColorMode,
+  type ViewportLensDistortionConfig,
   GlassKind,
   GlitchKind,
 } from "#types/canvas.ts";
@@ -17,7 +19,6 @@ import type { easings } from "../canvas-math";
 import { palettes } from "./palettes.config";
 import { DecelerationRate } from "../touch-scroll";
 import { type ActionLayerConfig, actionLayerDefaults } from "./action-layer.config";
-import type { ViewportLensDistortionConfig } from "#renderer/canvas-renderer.ts";
 import { CanvasLensing } from "#types/enums.ts";
 
 // ============================================================================
@@ -25,8 +26,6 @@ import { CanvasLensing } from "#types/enums.ts";
 // ============================================================================
 
 /** Color mode determines which color UI to show */
-export type ColorMode = "palette" | "bgFgColor";
-
 /** Defines which parameters a shader supports */
 export interface ShaderFeature {
   /** Parameters this shader uses (intersection computed for multi-select) */

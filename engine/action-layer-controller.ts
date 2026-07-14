@@ -6,7 +6,7 @@ import {
   scheduler as defaultScheduler,
   type AnimationScheduler,
   type AnimationHandle,
-} from "../lib/animation-scheduler.ts";
+} from "#lib/animation-scheduler.ts";
 
 const enum ActionLayerPhase {
   idle,

@@ -1,4 +1,3 @@
-export { serialize } from "./serialize.ts";
 export { deserialize, getMaxCounters } from "./deserialize.ts";
 export type {
   StudioManifest,

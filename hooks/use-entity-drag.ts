@@ -1,7 +1,5 @@
-import { useSyncExternalStore } from "react";
-import { canvasStore } from "#engine";
-import type { DragSnapshot } from "#engine";
+import { useCanvasDragSnapshot, type CanvasDragSnapshot } from "#context/use-canvas.ts";
 
-export function useEntityDrag(): DragSnapshot {
-  return useSyncExternalStore(canvasStore.subscribe, canvasStore.getDragSnapshot);
+export function useEntityDrag(): CanvasDragSnapshot {
+  return useCanvasDragSnapshot();
 }

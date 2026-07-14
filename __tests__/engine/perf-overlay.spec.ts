@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { PerfOverlayController } from "../../engine/perf-overlay.ts";
+import { PerfOverlayController } from "#engine";
 
 const FRAME_STATS = {
   renderTime: 4,

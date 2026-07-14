@@ -1,5 +1,5 @@
 import { type RefObject, useEffect, useRef } from "react";
-import { canvasStore } from "#engine";
+import { useCanvasInteraction } from "#context/use-canvas.ts";
 
 /**
  * Observes canvas container size changes, adjusts the viewport to keep the
@@ -7,6 +7,7 @@ import { canvasStore } from "#engine";
  */
 export function useCanvasContainerResize(containerRef: RefObject<HTMLDivElement | null>): void {
   const prevSizeRef = useRef<{ width: number; height: number } | null>(null);
+  const interaction = useCanvasInteraction();
 
   useEffect(() => {
     const element = containerRef.current;
@@ -19,19 +20,12 @@ export function useCanvasContainerResize(containerRef: RefObject<HTMLDivElement 
       const newHeight = element.clientHeight;
       const prevSize = prevSizeRef.current;
 
-      // Adjust viewport offset so the world-space center stays fixed.
-      // Without this, resizing shifts the visible center because offset
-      // anchors at the top-left of the viewport.
-      if (prevSize && (prevSize.width !== newWidth || prevSize.height !== newHeight)) {
-        const dpr = window.devicePixelRatio;
-        const { zoom } = canvasStore.getViewport();
-        const dx = ((prevSize.width - newWidth) * dpr) / (2 * zoom);
-        const dy = ((prevSize.height - newHeight) * dpr) / (2 * zoom);
-        canvasStore.panBy({ x: dx, y: dy });
-      }
-
+      interaction.resizeSurface(
+        prevSize,
+        { width: newWidth, height: newHeight },
+        window.devicePixelRatio,
+      );
       prevSizeRef.current = { width: newWidth, height: newHeight };
-      canvasStore.setContainerDirty();
     };
 
     if (typeof ResizeObserver !== "undefined") {
@@ -49,5 +43,5 @@ export function useCanvasContainerResize(containerRef: RefObject<HTMLDivElement 
     return () => {
       window.removeEventListener("resize", handleResize);
     };
-  }, [containerRef]);
+  }, [containerRef, interaction]);
 }

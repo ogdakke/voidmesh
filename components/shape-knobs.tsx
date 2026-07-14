@@ -1,6 +1,6 @@
 import { Shape, SHAPE_OPTIONS } from "#types/canvas.ts";
-import { useCanvasCommands, useSelectionState } from "../context/use-canvas.ts";
-import { useParamValue } from "../hooks/use-param-value.ts";
+import { useCanvasCommands, useSelectionState } from "#context/use-canvas.ts";
+import { useParamValue } from "#hooks/use-param-value.ts";
 import { Select, SelectItem } from "./ui/select/index.tsx";
 import { optionsWithNull } from "./ui/ui-util.ts";
 import { config } from "#config";

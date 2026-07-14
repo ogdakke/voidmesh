@@ -1,6 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
-import { ActionLayerController } from "../../engine/action-layer-controller.ts";
-import { canvasStore } from "../../engine/canvas-store.ts";
+import { ActionLayerController, canvasStore } from "#engine";
 import { config } from "#config";
 import { TestClock } from "../helpers/test-clock.ts";
 

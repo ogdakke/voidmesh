@@ -1,10 +1,10 @@
 import type { ChangeEvent } from "react";
-import { useCanvasCommands, useSelectionState } from "../context/use-canvas.ts";
-import { useParamValue } from "../hooks/use-param-value.ts";
+import { useCanvasCommands, useSelectionState } from "#context/use-canvas.ts";
+import { useParamValue } from "#hooks/use-param-value.ts";
 import { Slider } from "./ui/slider/index.tsx";
 import { undo } from "#lib/undo.ts";
 import { config } from "#config";
-import "../styles/sidebar.css";
+import "#styles/sidebar.css";
 import {
   Collapsible,
   CollapsibleCheckbox,

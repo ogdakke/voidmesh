@@ -1,8 +1,10 @@
 import { createContext, use, useSyncExternalStore } from "react";
 import { config } from "#config";
-import { canvasStore, type PreferencesSnapshot } from "#engine";
+import { canvasStore, type ParamResult, type PreferencesSnapshot } from "#engine";
 import type {
   ColorPalette,
+  GetParamByPath,
+  ParamPaths,
   Point,
   ShaderCanvasEntity,
   ShaderParams,
@@ -17,6 +19,8 @@ import type { WlurOverlayDebugConfig } from "#renderer/wlur-debug.ts";
 import type { DeserializeOptions, DeserializeResult } from "#lib/serialization/types.ts";
 import type { Options } from "nuqs";
 import type { PartialDeep } from "type-fest";
+import type { CanvasInteractionService } from "#application/canvas/canvas-interaction.ts";
+import type { CanvasMediaService } from "#application/canvas/canvas-media.ts";
 
 export const DebugType = createEnum({
   /** load the debug image */
@@ -115,6 +119,8 @@ export interface CanvasRendererService {
 
 const CanvasCommandsContext = createContext<CanvasCommands | null>(null);
 const CanvasRendererContext = createContext<CanvasRendererService | null>(null);
+const CanvasInteractionContext = createContext<CanvasInteractionService | null>(null);
+const CanvasMediaContext = createContext<CanvasMediaService | null>(null);
 
 export function useCanvasSelector<T>(
   selector: (state: ReturnType<typeof canvasStore.getState>) => T,
@@ -142,11 +148,69 @@ export function useCanvasRendererService(): CanvasRendererService {
   return context;
 }
 
+export function useCanvasInteraction(): CanvasInteractionService {
+  const context = use(CanvasInteractionContext);
+  if (!context) {
+    throw new Error("useCanvasInteraction must be used within CanvasProvider");
+  }
+  return context;
+}
+
+export function useCanvasMedia(): CanvasMediaService {
+  const context = use(CanvasMediaContext);
+  if (!context) {
+    throw new Error("useCanvasMedia must be used within CanvasProvider");
+  }
+  return context;
+}
+
 export function useViewport(): Viewport {
   return useSyncExternalStore(
     canvasStore.subscribeViewport,
     () => canvasStore.getViewportSnapshot().viewport,
   );
+}
+
+export type CanvasActionLayerSnapshot = ReturnType<typeof canvasStore.getActionLayerSnapshot>;
+export type CanvasDragSnapshot = ReturnType<typeof canvasStore.getDragSnapshot>;
+export type CanvasPlaybackSnapshot = ReturnType<typeof canvasStore.getPlaybackSnapshot>;
+export type CanvasVideoAudioSnapshot = ReturnType<typeof canvasStore.getSelectedVideoAudioSnapshot>;
+export type CanvasSelectionSnapshot = ReturnType<typeof canvasStore.getSelectionSnapshot>;
+export type CanvasParamResult<T> = ParamResult<T>;
+
+export function useCanvasActionLayerSnapshot(): CanvasActionLayerSnapshot {
+  return useSyncExternalStore(canvasStore.subscribe, canvasStore.getActionLayerSnapshot);
+}
+
+export function useCanvasDragSnapshot(): CanvasDragSnapshot {
+  return useSyncExternalStore(canvasStore.subscribe, canvasStore.getDragSnapshot);
+}
+
+export function useCanvasPlaybackSnapshot(): CanvasPlaybackSnapshot {
+  return useSyncExternalStore(canvasStore.subscribe, canvasStore.getPlaybackSnapshot);
+}
+
+export function useCanvasVideoAudioSnapshot(): CanvasVideoAudioSnapshot {
+  return useSyncExternalStore(canvasStore.subscribe, canvasStore.getSelectedVideoAudioSnapshot);
+}
+
+export function useCanvasSelectionSnapshot(): CanvasSelectionSnapshot {
+  return useSyncExternalStore(canvasStore.subscribe, canvasStore.getSelectionSnapshot);
+}
+
+export function useCanvasParamResult<P extends ParamPaths>(
+  path: P,
+  defaultValue: NonNullable<GetParamByPath<P>>,
+): CanvasParamResult<NonNullable<GetParamByPath<P>>>;
+export function useCanvasParamResult<P extends ParamPaths>(
+  path: P,
+  defaultValue: null,
+): CanvasParamResult<GetParamByPath<P> | null>;
+export function useCanvasParamResult<P extends ParamPaths>(
+  path: P,
+  defaultValue: GetParamByPath<P> | null,
+): CanvasParamResult<GetParamByPath<P> | null> {
+  return useCanvasSelector(() => canvasStore.getParamResult(path, defaultValue));
 }
 
 export function useSelectedEntityIds(): ReadonlySet<string> {
@@ -212,4 +276,9 @@ export function useSelectionState() {
   return useCanvasSelector(() => canvasStore.getSelectionState());
 }
 
-export { CanvasCommandsContext, CanvasRendererContext };
+export {
+  CanvasCommandsContext,
+  CanvasInteractionContext,
+  CanvasMediaContext,
+  CanvasRendererContext,
+};

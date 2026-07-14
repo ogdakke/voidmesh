@@ -1,5 +1,5 @@
-import { toastManager } from "#components/ui/toast/toast-manager.ts";
-import type { MediaLoadFailure } from "#lib/entity-placement.ts";
+import { toastManager } from "#application/notifications.ts";
+import type { MediaLoadFailure } from "#application/canvas/entity-placement.ts";
 
 const MEDIA_LOAD_ERROR_TOAST_TIMEOUT_MS = 20_000;
 

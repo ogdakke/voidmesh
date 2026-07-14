@@ -1,5 +1,5 @@
 import { useState, type PointerEvent } from "react";
-import { canvasStore } from "#engine";
+import { useCanvasInteraction } from "#context/use-canvas.ts";
 import type {
   InfiniteCanvasRenderer,
   ViewportLensDistortionConfig,
@@ -15,6 +15,7 @@ export default function ViewportLensControls({
   renderer: InfiniteCanvasRenderer;
   darkTheme: boolean;
 }) {
+  const interaction = useCanvasInteraction();
   const [lensConfig, setLensConfig] = useState<ViewportLensDistortionConfig>(
     renderer.viewPortLensConfig,
   );
@@ -31,7 +32,7 @@ export default function ViewportLensControls({
     const next: ViewportLensDistortionConfig = { ...lensConfig, ...updates };
     setLensConfig(next);
     renderer?.setViewportLensDistortion(next);
-    canvasStore.setContainerDirty();
+    interaction.markContainerDirty();
   };
 
   const handlePanelPointerDown = (event: PointerEvent) => {

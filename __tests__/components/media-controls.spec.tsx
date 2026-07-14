@@ -6,7 +6,7 @@
  */
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import { screen, act, fireEvent, waitFor } from "@testing-library/react";
-import { MediaControls } from "../../components/media-controls/media-controls.tsx";
+import { MediaControls } from "#components/media-controls/media-controls.tsx";
 import { renderWithCanvas } from "../helpers/render-with-providers.tsx";
 import { createEntityInput, resetEntityCounter } from "../helpers/test-entity.ts";
 import { setupCanvasTest } from "../helpers/test-setup.ts";

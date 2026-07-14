@@ -10,6 +10,10 @@
     {
       "name": "voidmesh-react-compiler",
       "specifier": "./plugins/oxlint-react-compiler.js"
+    },
+    {
+      "name": "voidmesh-import-policy",
+      "specifier": "./plugins/oxlint-import-policy.js"
     }
   ],
   "rules": {
@@ -41,6 +45,8 @@
     "react-hooks-js/void-use-memo": "error",
     "react-hooks-js/incompatible-library": "error",
     "voidmesh-react-compiler/no-manual-memoization": "error",
+    "voidmesh-import-policy/enforce-layer-boundaries": "error",
+    "voidmesh-import-policy/prefer-package-imports": "error",
     "react/only-export-components": "warn",
     "jsx-a11y/no-noninteractive-tabindex": ["warn", { "roles": ["application"] }]
   },

@@ -1,6 +1,6 @@
-import { canvasStore } from "#engine";
 import {
   useCanvasCommands,
+  useCanvasInteraction,
   useCanvasPreferences,
   useCanvasRendererService,
   useHasEntities,
@@ -35,13 +35,12 @@ import { Keybind } from "../keyboard-shortcuts/keybind.tsx";
 import { IonDuplicateOutline } from "../icons/duplicate.tsx";
 import { config } from "#config";
 import { logger } from "#lib/client.logger.ts";
-import { screenToWorld } from "#lib/canvas-math.ts";
 import { AsciiMenuKnobs } from "../ascii-knobs.tsx";
 import { DitheringMenuKnobs } from "../dithering-knobs.tsx";
 import { GlassMenuKnobs } from "../glass-knobs.tsx";
 import { GlitchMenuKnobs } from "../glitch-knobs.tsx";
 import { ShapeMenuKnobs } from "../shape-knobs.tsx";
-import { buildPaletteList } from "../palette-preset/palette-presets.ts";
+import { buildPaletteList } from "#application/canvas/palettes.ts";
 import { usePaletteStore } from "#lib/palette-store.ts";
 import { MaterialSymbolsResetImage } from "../icons/reset-image.tsx";
 import { useStudioFile } from "#hooks/use-studio-file.ts";
@@ -77,6 +76,7 @@ export default function CanvasContextMenu({
   containerRef,
 }: PropsWithChildren<CanvasContextMenuProps>) {
   const { uploadPalette } = useCanvasCommands();
+  const interaction = useCanvasInteraction();
   const paletteInputRef = useRef<HTMLInputElement>(null);
   const [frozenEntity, setFrozenEntity] = useState<ShaderCanvasEntity | undefined>(undefined);
   const [frozenSelection, setFrozenSelection] = useState<FrozenSelectionState | null>(null);
@@ -88,18 +88,8 @@ export default function CanvasContextMenu({
     if (open) {
       // Freeze entity value at open time - read from store synchronously
       // to prevent flickering
-      const state = canvasStore.getState();
-      const entityId = state.contextOpenEntityId;
-
-      if (!entityId) {
-        setFrozenEntity(undefined);
-      } else {
-        const entity = state.entities.get(entityId);
-        setFrozenEntity(entity);
-      }
-
-      // Freeze selection state for multi-select support
-      const selectedEntities = canvasStore.getSelectedEntities();
+      const { entity, selectedEntities } = interaction.captureContextMenuState();
+      setFrozenEntity(entity);
       setFrozenSelection({
         entities: selectedEntities,
         count: selectedEntities.length,
@@ -193,6 +183,7 @@ function CanvasContextMenuItems({
   paletteInputRef,
 }: CanvasContextMenuItemsProps) {
   const { handlePastedItems } = useImageInput({ containerRef });
+  const interaction = useCanvasInteraction();
   const {
     changeShaderType,
     changePalette,
@@ -302,9 +293,8 @@ function CanvasContextMenuItems({
     if (collected.length > 0) {
       const anchor =
         frozenContextMenuScreenPointRef.current && containerRef.current
-          ? screenToWorld(
+          ? interaction.screenToWorld(
               frozenContextMenuScreenPointRef.current,
-              canvasStore.getViewport(),
               containerRef.current.getBoundingClientRect(),
               window.devicePixelRatio,
             )

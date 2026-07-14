@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, vi, afterEach, type Mock } from "vitest";
-import { MomentumController, type MomentumDeps } from "../../engine/momentum-controller.ts";
+import { MomentumController, type MomentumDeps } from "#engine";
 import { config } from "#config";
 import { TestClock } from "../helpers/test-clock.ts";
 

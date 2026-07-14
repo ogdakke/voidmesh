@@ -7,8 +7,9 @@ import {
   useHasUniformSelectedShader,
   useCanvasCommands,
   useSelectedEntity,
+  useSelectedEntities,
   useSelectedShaderType,
-} from "../context/use-canvas.ts";
+} from "#context/use-canvas.ts";
 import {
   SHADER_TYPE_OPTIONS,
   GlassKind,
@@ -16,9 +17,8 @@ import {
   GlitchKind,
   GLITCH_KIND_OPTIONS,
 } from "#types/canvas.ts";
-import { useParamValue } from "../hooks/use-param-value.ts";
+import { useParamValue } from "#hooks/use-param-value.ts";
 import { analytics } from "#lib/analytics.ts";
-import { canvasStore } from "#engine";
 import { Button } from "./ui/button/index.tsx";
 import { Select, SelectItem } from "./ui/select/index.tsx";
 import { Toggle } from "./ui/toggle/index.tsx";
@@ -37,7 +37,7 @@ import { UpscaleQueuePanel } from "./upscale-queue-panel.tsx";
 import { DesktopTimeSlider } from "./desktop-time-slider/desktop-time-slider.tsx";
 import { undo } from "#lib/undo.ts";
 import { config } from "#config";
-import { isUserPalette } from "#components/palette-preset/palette-presets.ts";
+import { isUserPalette } from "#application/canvas/palettes.ts";
 import { usePaletteStore } from "#lib/palette-store.ts";
 import {
   Collapsible,
@@ -257,13 +257,13 @@ export function ShaderSelect({
   handleShaderTypeChange,
   isShaderMixed,
 }: ShaderSelectProps) {
+  const selectedEntities = useSelectedEntities();
   const handleChange = (value: string | null) => {
     if (!value || value === shaderType) return;
-    const entities = canvasStore.getSelectedEntities();
     analytics.track("shader.changed", {
       from: isShaderMixed ? "mixed" : shaderType,
       to: value,
-      entity_count: entities.length,
+      entity_count: selectedEntities.length,
     });
     handleShaderTypeChange(value);
   };

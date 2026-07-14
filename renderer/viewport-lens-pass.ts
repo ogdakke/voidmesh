@@ -1,18 +1,6 @@
 import viewportLensDistortionShaderSource from "./viewport-lens-distortion.wgsl?raw";
-
-export interface ViewportLensDistortionConfig {
-  enabled: boolean;
-  strength: number;
-  radius: number;
-  falloff: number;
-  dispersion: number;
-  scale: number;
-  reflectionIntensity: number;
-  reflectionFocus: number;
-  occlusion: number;
-  vignetteLight: number;
-  vignetteDark: number;
-}
+import type { ViewportLensDistortionConfig } from "#types/canvas.ts";
+export type { ViewportLensDistortionConfig } from "#types/canvas.ts";
 
 export interface ViewportLensTarget {
   texture: GPUTexture;

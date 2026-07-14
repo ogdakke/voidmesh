@@ -29,7 +29,7 @@ import { Slider } from "#ui/slider/slider.tsx";
 import "./export-knobs.css";
 import "../ui/toggle/toggle.css";
 import { Radio, RadioGroup } from "@base-ui/react";
-import { toastManager } from "#ui/toast/toast-manager.ts";
+import { toastManager } from "#application/notifications.ts";
 import { SnapPoints } from "#ui/drawer/snappoints.ts";
 
 const { ui: exportUiConfig } = config.videoExporting;

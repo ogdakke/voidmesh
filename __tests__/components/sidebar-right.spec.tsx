@@ -5,7 +5,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import { screen, waitFor, act } from "@testing-library/react";
 import React from "react";
-import { SidebarRight } from "../../components/sidebar-right.tsx";
+import { SidebarRight } from "#components/sidebar-right.tsx";
 import { createEntityInput } from "../helpers/test-entity.ts";
 import { renderWithProviders, renderWithCanvas } from "../helpers/render-with-providers.tsx";
 import { setupCanvasTest } from "../helpers/test-setup.ts";

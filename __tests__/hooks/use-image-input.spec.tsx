@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
   importStudioWithToasts: vi.fn<(...args: unknown[]) => Promise<void>>(),
 }));
 
-vi.mock("#lib/entity-placement.ts", () => ({
+vi.mock("#application/canvas/entity-placement.ts", () => ({
   addFilesToCanvas: mocks.addFilesToCanvas,
   addUrlToCanvas: mocks.addUrlToCanvas,
   addUrlsToCanvas: mocks.addUrlsToCanvas,

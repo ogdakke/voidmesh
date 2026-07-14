@@ -1,4 +1,4 @@
-import { useSelectedEntity } from "#context/use-canvas.ts";
+import { useCanvasMedia, useSelectedEntity } from "#context/use-canvas.ts";
 import { createEntityMediaControlSourceState } from "#hooks/use-media-control-source.ts";
 import { useMediaControlsActions } from "#hooks/use-media-controls.ts";
 import { MediaControlSurface } from "./media-control-surface.tsx";
@@ -9,8 +9,9 @@ import "./media-controls.css";
 
 export function MediaControls({ hidden = false }: { hidden?: boolean }) {
   const selectedEntity = useSelectedEntity();
+  const media = useCanvasMedia();
   const actions = useMediaControlsActions(selectedEntity);
-  const { source, isLive } = createEntityMediaControlSourceState(selectedEntity);
+  const { source, isLive } = createEntityMediaControlSourceState(selectedEntity, media);
 
   return (
     <MediaControlSurface hidden={hidden || !isLive}>

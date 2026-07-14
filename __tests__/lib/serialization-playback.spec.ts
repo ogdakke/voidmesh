@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { canvasStore } from "#engine";
-import { serializePlayback } from "#lib/serialization/serialize.ts";
+import { serializePlayback } from "#application/canvas/serialize-workspace.ts";
 import { toPlaybackState } from "#lib/serialization/types.ts";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
 import { createTestEntity, resetEntityCounter } from "../helpers/test-entity.ts";

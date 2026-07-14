@@ -1,18 +1,16 @@
-import { toastManager } from "#components/ui/toast/toast-manager.ts";
-import { showMediaLoadFailureToasts } from "#components/media-load-errors.ts";
+import { toastManager } from "#application/notifications.ts";
+import { showMediaLoadFailureToasts } from "#application/canvas/media-load-notifications.ts";
 import { config } from "#config";
 import {
   addFilesToCanvas,
   addUrlsToCanvas,
   addUrlToCanvas,
   fitEntitiesToView,
-} from "#lib/entity-placement.ts";
+} from "#application/canvas/entity-placement.ts";
 import { fileHandleStore } from "#lib/files/file-handle.ts";
-import { getViewportCenter, screenToWorld } from "#lib/canvas-math.ts";
 import { wait } from "#lib/util.ts";
 import { useRef } from "react";
-import { useCanvasCommands } from "../context/use-canvas.ts";
-import { canvasStore } from "#engine";
+import { useCanvasCommands, useCanvasInteraction } from "#context/use-canvas.ts";
 import { useClipboardPaste } from "./use-clipboard-paste.ts";
 import { useIsMobile } from "./use-is-mobile.ts";
 import { importStudioWithToasts } from "./use-studio-file.ts";
@@ -34,6 +32,7 @@ function isStudioFile(file: File): boolean {
 export function useImageInput({ containerRef, multipleFiles = true }: UseImageInputOptions) {
   const { addEntity, applyUrlState, applyEffectsToSelection, deserializeCanvas } =
     useCanvasCommands();
+  const interaction = useCanvasInteraction();
   const isLoadingRef = useRef(false);
   const isMobile = useIsMobile();
   const bottomInset = isMobile ? config.canvas.mobile.bottomInset : 0;
@@ -42,12 +41,11 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
     const container = containerRef.current;
     if (!container) return null;
 
-    const viewport = canvasStore.getViewport();
     const rect = container.getBoundingClientRect();
     const dpr = window.devicePixelRatio;
     return screenPoint
-      ? screenToWorld(screenPoint, viewport, rect, dpr)
-      : getViewportCenter(viewport, rect, dpr);
+      ? interaction.screenToWorld(screenPoint, rect, dpr)
+      : interaction.getViewportCenter(rect, dpr);
   };
 
   /**
@@ -144,7 +142,7 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
 
       // If multiple URLs were pasted, re-select all and fit-to-view together
       if (entityIds.length > 1 && shouldFitToView) {
-        canvasStore.replaceSelection(entityIds);
+        interaction.replaceSelection(entityIds);
         fitEntitiesToView(entityIds, container, bottomInset);
       }
     }

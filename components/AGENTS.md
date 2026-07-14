@@ -4,7 +4,7 @@ React UI layer. Feature-specific panels, the canvas viewport, and layout shells.
 
 ## Key Files
 
-- `infinite-canvas/` — Main canvas viewport. `infinite-canvas.tsx` (~35KB) renders `<canvas>`, wires `GameLoop` + `InfiniteCanvasRenderer`, handles drop events, space+drag panning, keyboard shortcuts. `canvas-context-menu.tsx` (~25KB) is the right-click context menu.
+- `infinite-canvas/` — Main canvas viewport. `infinite-canvas.tsx` is the small composition shell; `canvas-overlay.tsx` owns explicit desktop/mobile chrome. DOM input, renderer lifecycle, keybinds, and viewport use cases live behind hooks/application services. `canvas-context-menu.tsx` (~25KB) is the right-click context menu.
 - `desktop-layout.tsx` — Desktop resizable panel layout (lazy-loaded from `app.tsx`).
 - `mobile-layout.tsx` — Mobile drawer-based layout (lazy-loaded from `app.tsx`).
 - `sidebar-right-controls.tsx` (~21KB) — Decides which knob panel to show based on selection state.
@@ -16,7 +16,7 @@ React UI layer. Feature-specific panels, the canvas viewport, and layout shells.
 - `delete-drop-zone/` — Mobile drag-to-delete drop zone (appears during entity drag).
 - `about/` — About dialog with desktop/mobile variants and updates section.
 - `settings-drawer/` — Settings panel. `desktop-settings.tsx` for sidebar, `settings-drawer.tsx` for mobile. `share.ts` for URL sharing.
-- `palette-preset/` — Color palette presets and user palette management. `palette-presets.ts` defines built-ins.
+- `palette-preset/` — Color palette selection UI. Palette lookup, classification, and list construction live in `application/canvas/palettes.ts`.
 - `mobile-bottom/` — Mobile bottom bar layout. `bar-items.ts` defines the bottom bar items.
 - `mobile-controls.tsx` — Mobile controls container.
 - `upscale-queue-panel.tsx` — Shows queued upscale jobs with progress bars, cancel buttons. Uses `Collapsible` UI primitive. Wired into `sidebar-right-controls.tsx`.

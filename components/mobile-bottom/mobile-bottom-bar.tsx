@@ -10,8 +10,8 @@ import "./mobile-bottom-bar.css";
 import clsx from "clsx";
 import { Enlarge, Reduce } from "iconoir-react";
 import { useLayout } from "#context/use-layout.ts";
+import { useCanvasPreferences } from "#context/use-canvas.ts";
 import { haptic } from "#lib/haptic.ts";
-import { canvasStore } from "#engine";
 
 interface BottomBarContextValue<T extends string> {
   items: T[];
@@ -87,6 +87,7 @@ export function MobileBottomBar<T extends string>({
   hideItems?: boolean;
 }) {
   const { isFullscreen, toggleFullscreen } = useLayout();
+  const { haptics } = useCanvasPreferences();
   return (
     <div className="mobile-bottom-bar-container">
       <BottomBarRoot items={items} onChange={onChange} value={value}>
@@ -96,7 +97,7 @@ export function MobileBottomBar<T extends string>({
         className={"mobile-fullscreen-btn icon-crossfade"}
         data-active={isFullscreen ? true : undefined}
         onClick={() => {
-          haptic({ wantsHaptic: canvasStore.getState().haptics });
+          haptic({ wantsHaptic: haptics });
           toggleFullscreen();
         }}
         aria-label={`Toggle fullscreen ${isFullscreen ? "off" : "on"}`}

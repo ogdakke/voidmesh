@@ -3,7 +3,7 @@
  */
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import { screen, waitFor, act } from "@testing-library/react";
-import { AdjustmentsKnobs } from "../../components/adjustments-knobs.tsx";
+import { AdjustmentsKnobs } from "#components/adjustments-knobs.tsx";
 import { canvasStore } from "#engine";
 import { createEntityInput } from "../helpers/test-entity.ts";
 import { renderWithProviders, renderWithCanvas } from "../helpers/render-with-providers.tsx";

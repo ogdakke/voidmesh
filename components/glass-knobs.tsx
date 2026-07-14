@@ -1,6 +1,6 @@
 import { GlassKind, GLASS_KIND_OPTIONS } from "#types/canvas.ts";
-import { useCanvasCommands, useSelectionState } from "../context/use-canvas.ts";
-import { useParamValue } from "../hooks/use-param-value.ts";
+import { useCanvasCommands, useSelectionState } from "#context/use-canvas.ts";
+import { useParamValue } from "#hooks/use-param-value.ts";
 import { config } from "#config";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { NavArrowRight, Circle } from "iconoir-react";
