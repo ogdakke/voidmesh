@@ -53,6 +53,8 @@ export function createMockGameLoopDeps(scheduler: AnimationScheduler): GameLoopD
         isDragPhase: false,
         entityIds: new Set<string>(),
         scale: 1,
+        offset: { x: 0, y: 0 },
+        appliesToSelection: false,
       })),
     },
     disintegration: {

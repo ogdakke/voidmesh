@@ -547,6 +547,8 @@ export class InfiniteCanvasRenderer {
           labelPass && selectedEntity
             ? () => labelPass.drawLabel(entityPass, selectedEntity, 0, 0)
             : undefined,
+          state.dragVisual.offset,
+          state.dragVisual.scale,
         )
       ) {
         throw new Error("Prepared full-scene composition batch was invalidated before drawing");

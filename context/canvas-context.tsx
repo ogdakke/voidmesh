@@ -403,10 +403,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   // Clear URL state on multi-select - only sync when single entity selected
   useEffect(() => {
     const syncSelectionToUrl = () => {
-      const selectedEntities = canvasStore.getSelectedEntities();
+      const selectionCount = canvasStore.getSelectionCount();
 
-      if (selectedEntities.length !== 1) {
-        if (selectedEntities.length > 1) {
+      if (selectionCount !== 1) {
+        if (selectionCount > 1) {
           const clearedState = {
             shader: null,
             size: null,
@@ -451,7 +451,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      const entity = selectedEntities[0]!;
+      const entity = canvasStore.getSelectedEntity()!;
       let paletteParams = paletteToUrlParams(entity.shaderParams.palette);
       const currentRenderState = renderStateRef.current;
 

@@ -319,7 +319,7 @@ export class EntityDrawItemPreparer {
       entities.length < config.rendering.fullSceneBatchMinEntityCount ||
       actionLayer.active ||
       actionLayer.blurIntensity > 0.01 ||
-      dragVisual.active ||
+      (dragVisual.active && !dragVisual.appliesToSelection) ||
       dragSelectActive ||
       hasCanvasCallouts
     ) {

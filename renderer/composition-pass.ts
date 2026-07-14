@@ -122,6 +122,11 @@ export class CompositionPass {
   readonly #instancedBindGroupLayout: GPUBindGroupLayout;
   readonly #externalBindGroupLayout: GPUBindGroupLayout;
   readonly #sampler: GPUSampler;
+  readonly #dragUniformBuffer: GPUBuffer;
+  readonly #dragUniformData = new Float32Array(4);
+  #dragUniformOffsetX = 0;
+  #dragUniformOffsetY = 0;
+  #dragUniformScale = 0;
   readonly #entityUniformData = new ArrayBuffer(config.rendering.entityUniformSize);
   readonly #entityFloatView = new Float32Array(this.#entityUniformData);
   readonly #entityUintView = new Uint32Array(this.#entityUniformData);
@@ -217,6 +222,11 @@ export class CompositionPass {
           visibility: GPUShaderStage.FRAGMENT,
           sampler: { type: "filtering" },
         },
+        {
+          binding: 4,
+          visibility: GPUShaderStage.VERTEX,
+          buffer: { type: "uniform" },
+        },
       ],
     });
 
@@ -252,6 +262,11 @@ export class CompositionPass {
       minFilter: "linear",
       addressModeU: "clamp-to-edge",
       addressModeV: "clamp-to-edge",
+    });
+    this.#dragUniformBuffer = this.#device.createBuffer({
+      label: "Composition selected drag transform",
+      size: 16,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
     const pipelineLayout = this.#device.createPipelineLayout({
@@ -530,8 +545,18 @@ export class CompositionPass {
     pass: GPURenderPassEncoder,
     key: FullSceneBatchKey,
     afterSingleSelected?: () => void,
+    dragOffset?: { x: number; y: number },
+    dragScale = 1,
   ): boolean {
     if (!this.hasFullSceneBatch(key)) return false;
+    const dragOffsetX = dragOffset?.x ?? 0;
+    const dragOffsetY = dragOffset?.y ?? 0;
+    const hasDragTransform = dragOffsetX !== 0 || dragOffsetY !== 0 || dragScale !== 1;
+    this.#writeDragUniform(
+      hasDragTransform ? dragOffsetX : 0,
+      hasDragTransform ? dragOffsetY : 0,
+      hasDragTransform ? dragScale : 0,
+    );
     this.#instanceWriteCursor = Math.max(this.#instanceWriteCursor, key.instanceCount);
     pass.setPipeline(this.#instancedPipeline);
     const bindGroup = this.#getInstancedBindGroup(key.texture);
@@ -559,6 +584,7 @@ export class CompositionPass {
     items: readonly CompositionDrawItem[],
     afterItem?: (item: CompositionDrawItem) => void,
   ): void {
+    this.#writeDragUniform(0, 0, 0);
     this.#fullSceneBatch = null;
     const firstWrittenInstance = this.#instanceWriteCursor;
     const instanceCount = this.#prepareDrawCommands(items, !!afterItem);
@@ -665,6 +691,7 @@ export class CompositionPass {
       cached.uniformBuffer.destroy();
     }
     this.#entityExternalCompositionCache.clear();
+    this.#dragUniformBuffer.destroy();
     this.#instanceBuffer?.destroy();
     this.#instanceBuffer = null;
     this.#instanceCapacity = 0;
@@ -811,10 +838,29 @@ export class CompositionPass {
         { binding: 1, resource: { buffer: this.#instanceBuffer } },
         { binding: 2, resource: this.#getTextureView(texture) },
         { binding: 3, resource: this.#sampler },
+        { binding: 4, resource: { buffer: this.#dragUniformBuffer } },
       ],
     });
     this.#instanceBindGroupCache.set(texture, bindGroup);
     return bindGroup;
+  }
+
+  #writeDragUniform(offsetX: number, offsetY: number, scale: number): void {
+    if (
+      offsetX === this.#dragUniformOffsetX &&
+      offsetY === this.#dragUniformOffsetY &&
+      scale === this.#dragUniformScale
+    ) {
+      return;
+    }
+    this.#dragUniformOffsetX = offsetX;
+    this.#dragUniformOffsetY = offsetY;
+    this.#dragUniformScale = scale;
+    this.#dragUniformData[0] = offsetX;
+    this.#dragUniformData[1] = offsetY;
+    this.#dragUniformData[2] = scale;
+    this.#dragUniformData[3] = 0;
+    this.#device.queue.writeBuffer(this.#dragUniformBuffer, 0, this.#dragUniformData);
   }
 
   #writeLiveEntityUniforms(

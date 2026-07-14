@@ -19,10 +19,17 @@ struct EntityInstance {
   scale: f32,
 }
 
+struct DragUniforms {
+  offset: vec2f,
+  scale: f32,
+  _padding: f32,
+}
+
 @group(0) @binding(0) var<uniform> viewport: ViewportUniforms;
 @group(0) @binding(1) var<storage, read> entities: array<EntityInstance>;
 @group(0) @binding(2) var entityTexture: texture_2d<f32>;
 @group(0) @binding(3) var entitySampler: sampler;
+@group(0) @binding(4) var<uniform> drag: DragUniforms;
 
 const BORDER_PX: f32 = 2.0;
 
@@ -58,7 +65,11 @@ fn vs_main(
   let entity = entities[instanceIndex];
   let localPos = localPositions[vertexIndex];
   let uv = uvs[vertexIndex];
-  let scaledSize = entity.size * entity.scale;
+  let selected = entity.isSelected == 1u;
+  let hasDragTransform = drag.scale > 0.0;
+  let selectedScale = select(entity.scale, drag.scale, selected && hasDragTransform);
+  let selectedOffset = select(vec2f(0.0), drag.offset, selected && hasDragTransform);
+  let scaledSize = entity.size * selectedScale;
   let scaleOffset = (entity.size - scaledSize) * 0.5;
   let needsBorder = entity.isSelected == 1u;
   let borderExpand = select(
@@ -80,7 +91,7 @@ fn vs_main(
   worldPos = vec2f(
     centered.x * cosR - centered.y * sinR,
     centered.x * sinR + centered.y * cosR,
-  ) + center + entity.position + scaleOffset;
+  ) + center + entity.position + selectedOffset + scaleOffset;
 
   let m0 = viewport.matrix_row0;
   let m1 = viewport.matrix_row1;

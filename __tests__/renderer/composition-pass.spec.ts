@@ -30,7 +30,7 @@ describe("CompositionPass instancing", () => {
     pass.drawItems(renderPass, [first, second]);
 
     expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
-    expect(device.createBuffer).toHaveBeenCalledOnce();
+    expect(device.createBuffer).toHaveBeenCalledTimes(2);
     expect(device.createBindGroup).toHaveBeenCalledOnce();
     expect(renderPass.setPipeline).toHaveBeenCalledOnce();
     expect(renderPass.setBindGroup).toHaveBeenCalledOnce();
@@ -42,7 +42,7 @@ describe("CompositionPass instancing", () => {
     expect(Array.from(floats.slice(8, 13))).toEqual([30, 40, 200, 150, 0]);
 
     pass.destroy();
-    expect(instanceBuffer.destroy).toHaveBeenCalledOnce();
+    expect(instanceBuffer.destroy).toHaveBeenCalledTimes(2);
     releaseImageEntity(firstEntity);
     releaseImageEntity(secondEntity);
   });
@@ -184,6 +184,33 @@ describe("CompositionPass instancing", () => {
       [6, 1, 0, 1],
     ]);
     expect(afterSelected).toHaveBeenCalledOnce();
+
+    pass.destroy();
+    releaseImageEntity(first);
+    releaseImageEntity(second);
+  });
+
+  test("updates a selected-group drag transform without rebuilding instance data", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const first = createTestEntity({ id: "drag-transform-first" });
+    const second = cloneImageEntity(first, "drag-transform-second", { x: 20, y: 0 });
+    const texture = createTexture();
+    const key = createFullSceneKey(texture, 2);
+    const selectedEntityIds = new Set([first.id]);
+    pass.prepareFullSceneBatch({ ...key, entities: [first, second], selectedEntityIds });
+    device.queue.writeBuffer.mockClear();
+
+    expect(
+      pass.drawFullSceneBatch(createRenderPass(), key, undefined, { x: 120, y: -45 }, 0.95),
+    ).toBe(true);
+
+    expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
+    const dragUniform = device.queue.writeBuffer.mock.calls[0]![2] as Float32Array;
+    expect(Array.from(dragUniform.slice(0, 2))).toEqual([120, -45]);
+    expect(dragUniform[2]).toBeCloseTo(0.95);
+    expect(dragUniform[3]).toBe(0);
+    expect(pass.getStats().fullSceneBatchRebuilds).toBe(1);
 
     pass.destroy();
     releaseImageEntity(first);

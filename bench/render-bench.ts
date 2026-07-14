@@ -221,6 +221,7 @@ interface BenchEntitySet {
   entities: ShaderCanvasEntity[];
   selectedEntityIds?: ReadonlySet<string>;
   debugMode?: boolean;
+  dragSelectedEntities?: boolean;
   beforeFrame?: (frameIndex: number) => void;
   getViewportOffset?: (frameIndex: number) => { x: number; y: number };
   getViewport?: (frameIndex: number, sampleFrameIndex: number) => Viewport;
@@ -1077,6 +1078,7 @@ async function createManyEntitySet(
       entities,
       selectedEntityIds: createManyEntitySelection(config, entities),
       debugMode: config.debugMode,
+      dragSelectedEntities: config.dragSelectedEntities,
       decodedAssetEstimateBytes: estimateDecodedAssetBytes(config),
       getViewportOffset: (frameIndex) =>
         getManyEntityViewportOffset(config, frameIndex, {
@@ -1276,6 +1278,7 @@ function createRenderState(
   viewport: Viewport = { offset: { x: 0, y: 0 }, zoom: 1 },
   selectedEntityIds: ReadonlySet<string> = new Set(),
   debugMode = false,
+  dragSelectedEntities = false,
 ): RenderState {
   const entitySpatialIndex = new EntitySpatialIndex();
   for (const entity of entities) entitySpatialIndex.upsert(entity);
@@ -1300,10 +1303,12 @@ function createRenderState(
       blurIntensity: 0,
     },
     dragVisual: {
-      active: false,
-      isDragPhase: false,
-      entityIds: new Set(),
+      active: dragSelectedEntities,
+      isDragPhase: dragSelectedEntities,
+      entityIds: dragSelectedEntities ? selectedEntityIds : new Set(),
       scale: 1,
+      offset: { x: 0, y: 0 },
+      appliesToSelection: dragSelectedEntities,
     },
     disintegration: { overlays: [] },
   };
@@ -1323,6 +1328,7 @@ async function runFrames(params: {
   recordPerFrame?: boolean;
   selectedEntityIds?: ReadonlySet<string>;
   debugMode?: boolean;
+  dragSelectedEntities?: boolean;
 }): Promise<{
   totalMs: number;
   cpuEncodeMs: number;
@@ -1360,6 +1366,7 @@ async function runFrames(params: {
     { offset: { x: 0, y: 0 }, zoom: 1 },
     params.selectedEntityIds,
     params.debugMode,
+    params.dragSelectedEntities,
   );
 
   for (let index = 0; index < params.frameCount; index += 1) {
@@ -1384,6 +1391,10 @@ async function runFrames(params: {
     const frameStart = performance.now();
     const cpuStart = performance.now();
     renderState.viewport = viewport;
+    if (params.dragSelectedEntities) {
+      renderState.dragVisual.offset.x = index * 16;
+      renderState.dragVisual.offset.y = index * -8;
+    }
     params.renderer.render(renderState);
     const cpuEnd = performance.now();
     cpuEncodeMs += cpuEnd - cpuStart;
@@ -1513,6 +1524,7 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
       paceWithAnimationFrame: scenario.paceWithAnimationFrame,
       selectedEntityIds: entitySet.selectedEntityIds,
       debugMode: entitySet.debugMode,
+      dragSelectedEntities: entitySet.dragSelectedEntities,
     });
     frameIndex += scenario.warmupFrames;
 
@@ -1548,6 +1560,7 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
         recordPerFrame: scenario.recordPerFrame,
         selectedEntityIds: entitySet.selectedEntityIds,
         debugMode: entitySet.debugMode,
+        dragSelectedEntities: entitySet.dragSelectedEntities,
       });
       frameIndex += scenario.frames;
       samples.push(result.totalMs);

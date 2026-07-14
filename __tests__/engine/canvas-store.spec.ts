@@ -482,6 +482,22 @@ describe("canvasStore.moveEntity", () => {
     canvasStore.moveEntity(entity.id, { x: 2, y: 3 });
     expect(canvasStore.hasRenderChanges()).toBe(true);
   });
+
+  test("moves a batch with one geometry-version increment and no dirty-ID population", () => {
+    const first = createTestEntity({ id: "move-batch-first" });
+    const second = createTestEntity({ id: "move-batch-second", position: { x: 300, y: 0 } });
+    canvasStore.addEntities([first, second]);
+    canvasStore.clearDirtyFlags();
+    const initialGeometryVersion = canvasStore.getState().geometryVersion;
+
+    expect(canvasStore.moveEntities(new Set([first.id, second.id]), { x: 25, y: -10 })).toBe(2);
+
+    expect(first.position).toEqual({ x: 25, y: -10 });
+    expect(second.position).toEqual({ x: 325, y: -10 });
+    expect(canvasStore.getState().geometryVersion).toBe(initialGeometryVersion + 1);
+    expect(canvasStore.getState().entitiesDirty.size).toBe(0);
+    expect(canvasStore.hasRenderChanges()).toBe(true);
+  });
 });
 
 describe("canvasStore.addEntities", () => {

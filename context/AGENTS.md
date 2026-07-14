@@ -27,6 +27,7 @@ Note: `KeybindProvider` wraps outside `App()` at the root render level.
 ## Patterns
 
 - `canvas-context.tsx` uses nuqs for URL-synced state — entity params round-trip through URL query parameters. Color/background/palette URL params removed; colors always sourced from config defaults (only `presetId` remains for palette URL sync).
+- Selection-to-URL sync checks cardinality first and materializes an entity only for single selection; multi-select and Command-A must not build a selected-entity array merely to clear URL state.
 - Resource ownership for undo: `resourceOwners` Map tracks which undo command may cleanup media resources on stack eviction.
 - Static image cleanup releases the entity's shared media-asset reference; the final release closes the decoded bitmap. Never close an image entity's bitmap directly.
 - Large duplicate operations synchronously retain image assets, allocate names in one pass, and insert the completed batch through `CanvasStore.addEntities()`; avoid Promise fan-out, per-clone full-map name scans, and notifications.

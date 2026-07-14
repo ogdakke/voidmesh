@@ -1,3 +1,4 @@
+import { config } from "#config";
 import { SNAP_GRID_SIZE, snapToGrid } from "#lib/canvas-math.ts";
 import { DragTargetType, type Point } from "#types/canvas.ts";
 import type { AnimationHandle, AnimationScheduler } from "#lib/animation-scheduler.ts";
@@ -13,6 +14,8 @@ export class EntityDragController {
   #snapSettleHandle: AnimationHandle | null = null;
   #springEntityIds: ReadonlySet<string> | null = null;
   readonly #moveDelta: Point = { x: 0, y: 0 };
+  readonly #transientOffset: Point = { x: 0, y: 0 };
+  #transientEntityIds: ReadonlySet<string> | null = null;
 
   constructor(scheduler: AnimationScheduler) {
     this.#scheduler = scheduler;
@@ -23,10 +26,12 @@ export class EntityDragController {
   }
 
   setTarget(target: EntityDragTarget): void {
+    if (target !== this.#dragTarget) this.commitTransientTranslation();
     this.#dragTarget = target;
   }
 
   clear(): void {
+    this.commitTransientTranslation();
     this.#dragTarget = null;
     this.#snapAccumulator = null;
   }
@@ -77,15 +82,13 @@ export class EntityDragController {
     this.#moveDelta.x = dx;
     this.#moveDelta.y = dy;
     if (this.#dragTarget?.type === DragTargetType.multiSelection) {
-      for (const entityId of canvasStore.getSelectedEntityIds()) {
-        canvasStore.moveEntity(entityId, this.#moveDelta);
-      }
+      this.commitTransientTranslation();
+      canvasStore.moveEntities(canvasStore.getSelectedEntityIds(), this.#moveDelta);
     } else if (this.#dragTarget?.type === DragTargetType.entity && this.#dragTarget.entityId) {
       canvasStore.moveEntity(this.#dragTarget.entityId, this.#moveDelta);
     } else if (this.#springEntityIds) {
-      for (const entityId of this.#springEntityIds) {
-        canvasStore.moveEntity(entityId, this.#moveDelta);
-      }
+      this.commitTransientTranslation();
+      canvasStore.moveEntities(this.#springEntityIds, this.#moveDelta);
     }
   }
 
@@ -114,13 +117,39 @@ export class EntityDragController {
       this.#snapAccumulator.x += delta.x;
       this.#snapAccumulator.y += delta.y;
       const snapped = snapToGrid(this.#snapAccumulator, SNAP_GRID_SIZE);
-      const snappedDelta = { x: snapped.x - anchor.position.x, y: snapped.y - anchor.position.y };
+      const offset = canvasStore.getTransientEntityDragOffset();
+      const snappedDelta = {
+        x: snapped.x - (anchor.position.x + offset.x),
+        y: snapped.y - (anchor.position.y + offset.y),
+      };
       if (snappedDelta.x === 0 && snappedDelta.y === 0) return;
-      for (const entityId of selectedIds) canvasStore.moveEntity(entityId, snappedDelta);
+      this.#moveSelectedTransientOrCommitted(selectedIds, snappedDelta);
       return;
     }
 
-    for (const entityId of selectedIds) canvasStore.moveEntity(entityId, delta);
+    this.#moveSelectedTransientOrCommitted(selectedIds, delta);
+  }
+
+  commitTransientTranslation(): void {
+    const entityIds = this.#transientEntityIds;
+    if (!entityIds) return;
+    canvasStore.resetTransientEntityDragOffset();
+    canvasStore.moveEntities(entityIds, this.#transientOffset);
+    this.#transientOffset.x = 0;
+    this.#transientOffset.y = 0;
+    this.#transientEntityIds = null;
+  }
+
+  #moveSelectedTransientOrCommitted(selectedIds: ReadonlySet<string>, delta: Point): void {
+    if (selectedIds.size < config.rendering.fullSceneBatchMinEntityCount) {
+      this.commitTransientTranslation();
+      canvasStore.moveEntities(selectedIds, delta);
+      return;
+    }
+    this.#transientEntityIds ??= selectedIds;
+    this.#transientOffset.x += delta.x;
+    this.#transientOffset.y += delta.y;
+    canvasStore.setTransientEntityDragOffset(this.#transientOffset);
   }
 
   #moveEntitySnapped(entityId: string, delta: Point): void {

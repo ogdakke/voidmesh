@@ -32,6 +32,7 @@ class EntityDragVisualController {
   #targetScale = 1;
   #possibleDragTimerId: ReturnType<typeof setTimeout> | null = null;
   #handle: AnimationHandle | null = null;
+  #appliesToSelection = false;
   /** Entity IDs with active visual (single entity during possibleDrag, full selection during drag) */
   #entityIds = new Set<string>();
   readonly #renderState: DragVisualRenderState = {
@@ -39,6 +40,8 @@ class EntityDragVisualController {
     isDragPhase: false,
     entityIds: this.#entityIds,
     scale: 1,
+    offset: { x: 0, y: 0 },
+    appliesToSelection: false,
   };
 
   static readonly #SETTLE_THRESHOLD = 0.0001;
@@ -66,6 +69,10 @@ class EntityDragVisualController {
     this.#renderState.active = this.isActive();
     this.#renderState.isDragPhase = this.isDragPhase();
     this.#renderState.scale = this.#currentScale;
+    const offset = canvasStore.getTransientEntityDragOffset();
+    this.#renderState.offset.x = offset.x;
+    this.#renderState.offset.y = offset.y;
+    this.#renderState.appliesToSelection = this.#appliesToSelection;
     return this.#renderState;
   }
 
@@ -83,6 +90,7 @@ class EntityDragVisualController {
     this.#currentScale = 1;
     this.#targetScale = 1;
     this.#entityIds.clear();
+    this.#appliesToSelection = entityIds === canvasStore.getSelectedEntityIds();
     for (const id of entityIds) {
       this.#entityIds.add(id);
     }
@@ -112,6 +120,7 @@ class EntityDragVisualController {
 
     // Expand tracked entities to the full selection
     this.#entityIds.clear();
+    this.#appliesToSelection = selectedEntityIds === canvasStore.getSelectedEntityIds();
     for (const id of selectedEntityIds) {
       this.#entityIds.add(id);
     }
@@ -140,6 +149,7 @@ class EntityDragVisualController {
       this.#currentScale = 1;
       this.#targetScale = 1;
       this.#entityIds.clear();
+      this.#appliesToSelection = false;
       this.#cancelAnimation();
       // Force a render frame so the label can clean up its drag mode class
       canvasStore.setContainerDirty();
@@ -159,6 +169,7 @@ class EntityDragVisualController {
     this.#currentScale = 1;
     this.#targetScale = 1;
     this.#entityIds.clear();
+    this.#appliesToSelection = false;
     this.#cancelAnimation();
     // Force a render frame so entities return to normal scale and label cleans up
     if (wasActive) {
@@ -197,6 +208,7 @@ class EntityDragVisualController {
         if (this.#phase === DragVisualPhase.releasing) {
           this.#phase = DragVisualPhase.idle;
           this.#entityIds.clear();
+          this.#appliesToSelection = false;
           canvasStore.setContainerDirty();
         }
       },

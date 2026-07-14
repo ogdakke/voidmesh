@@ -17,6 +17,7 @@ export interface ManyEntityScenarioConfig {
   selectedEntityFraction?: number;
   selectedEntityCount?: number;
   debugMode?: boolean;
+  dragSelectedEntities?: boolean;
   paceWithAnimationFrame?: boolean;
   recordPerFrame?: boolean;
   frames: number;
@@ -261,6 +262,28 @@ export const MANY_ENTITY_SCENARIOS: readonly ManyEntityScenarioConfig[] = [
     processPixels: true,
     selectedEntityFraction: 0.5,
     debugMode: true,
+    paceWithAnimationFrame: true,
+    recordPerFrame: true,
+    frames: 18,
+    warmupFrames: 4,
+    samples: 3,
+  },
+  {
+    id: "many-262144-shared-processed-overview-drag-half-selected",
+    label: "262,144 shared instances, dragging half",
+    description:
+      "Moves half of the duplicated overview through the selected-group GPU transform without rebuilding instance data.",
+    entityCount: 262_144,
+    uniqueAssetCount: 1,
+    sourceSize: { width: 1024, height: 1024 },
+    displaySize: { width: 6, height: 6 },
+    assetMode: "shared",
+    layout: "world-grid",
+    pan: false,
+    zoom: 0.18,
+    processPixels: true,
+    selectedEntityFraction: 0.5,
+    dragSelectedEntities: true,
     paceWithAnimationFrame: true,
     recordPerFrame: true,
     frames: 18,

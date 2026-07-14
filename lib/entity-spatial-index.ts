@@ -68,20 +68,38 @@ export class EntitySpatialIndex {
       entry.cellY = cellY;
     }
 
-    let row = level.rows.get(cellY);
-    if (!row) {
-      row = new Map();
-      level.rows.set(cellY, row);
-    }
-    let ids = row.get(cellX);
-    if (!ids) {
-      ids = new Set();
-      row.set(cellX, ids);
-      level.cellCount++;
-    }
-    ids.add(entry);
+    this.#addToCell(entry);
     if (!this.#overallBoundsDirty)
       expandBounds(this.#overallBounds, bounds, this.#entries.size === 1);
+  }
+
+  /** Translate existing entries without recomputing their unchanged size and index level. */
+  translateEntities(entityIds: Iterable<string>, delta: { x: number; y: number }): number {
+    if (delta.x === 0 && delta.y === 0) return 0;
+    let translatedCount = 0;
+    for (const entityId of entityIds) {
+      const entry = this.#entries.get(entityId);
+      if (!entry) continue;
+      entry.bounds.x += delta.x;
+      entry.bounds.y += delta.y;
+      const nextCellX = this.#cellCoordinate(
+        entry.bounds.x + entry.bounds.width / 2,
+        entry.level.cellSize,
+      );
+      const nextCellY = this.#cellCoordinate(
+        entry.bounds.y + entry.bounds.height / 2,
+        entry.level.cellSize,
+      );
+      if (nextCellX !== entry.cellX || nextCellY !== entry.cellY) {
+        this.#removeFromCell(entry);
+        entry.cellX = nextCellX;
+        entry.cellY = nextCellY;
+        this.#addToCell(entry);
+      }
+      translatedCount++;
+    }
+    if (translatedCount > 0) this.#overallBoundsDirty = true;
+    return translatedCount;
   }
 
   remove(entityId: string): void {
@@ -261,6 +279,23 @@ export class EntitySpatialIndex {
     level.cellCount--;
     if (row.size === 0) level.rows.delete(entry.cellY);
     if (level.cellCount === 0) this.#levels.delete(level.cellSize);
+  }
+
+  #addToCell(entry: IndexedEntity): void {
+    const { level } = entry;
+    if (!this.#levels.has(level.cellSize)) this.#levels.set(level.cellSize, level);
+    let row = level.rows.get(entry.cellY);
+    if (!row) {
+      row = new Map();
+      level.rows.set(entry.cellY, row);
+    }
+    let entries = row.get(entry.cellX);
+    if (!entries) {
+      entries = new Set();
+      row.set(entry.cellX, entries);
+      level.cellCount++;
+    }
+    entries.add(entry);
   }
 }
 

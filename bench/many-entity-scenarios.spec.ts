@@ -89,6 +89,7 @@ describe("many entity benchmark scenarios", () => {
         selectedEntityCount: scenario.selectedEntityCount ?? 0,
         selectedEntityFraction: scenario.selectedEntityFraction ?? 0,
         debugMode: scenario.debugMode ?? false,
+        dragSelectedEntities: scenario.dragSelectedEntities ?? false,
       })),
     ).toEqual([
       expect.objectContaining({ selectedEntityCount: 0, selectedEntityFraction: 0 }),
@@ -96,6 +97,7 @@ describe("many entity benchmark scenarios", () => {
       expect.objectContaining({ selectedEntityFraction: 0.5, debugMode: false }),
       expect.objectContaining({ selectedEntityFraction: 1 }),
       expect.objectContaining({ selectedEntityFraction: 0.5, debugMode: true }),
+      expect.objectContaining({ selectedEntityFraction: 0.5, dragSelectedEntities: true }),
     ]);
   });
 });

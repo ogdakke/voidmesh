@@ -56,6 +56,8 @@ the canvas virtualization and texture-residency paths:
 - 2,048 identically processed instances sharing one source and processed result.
 - 262,144 identically processed instances panned at overview zoom with no,
   single, half, and full selection, plus half-selection debug mode;
+- the same 262,144-instance overview with half the entities translated through
+  the transient selected-group drag uniform;
 - a 61-source mixed image/video canvas zoomed from one detailed entity out to
   the full overview and back, both original and default-effect variants.
 
@@ -72,6 +74,7 @@ bun run bench:render:record -- --scenario many-10000-shared-original-all-visible
 bun run bench:render:record -- --scenario many-4096-unique-thumbnails-pan
 bun run bench:render:record -- --scenario many-262144-shared-processed-overview-pan-half-selected
 bun run bench:render:record -- --scenario many-262144-shared-processed-overview-pan-half-selected-debug
+bun run bench:render:record -- --scenario many-262144-shared-processed-overview-drag-half-selected
 bun run bench:render:record -- --scenario zoom-61-unique-mixed-round-trip
 bun run bench:render:record -- --scenario zoom-61-unique-mixed-processed-round-trip
 ```
@@ -95,6 +98,13 @@ The decoded-byte value is a deterministic RGBA estimate. GPU values come from
 the renderer's own resource accounting and therefore cover persistent entity
 textures and idle pooled textures, but not implementation-private browser/driver
 memory.
+
+Run the opt-in CPU benchmark for Command-A aggregation and the one-time drag
+commit separately:
+
+```bash
+bun run --bun vitest bench bench/large-selection-operations.bench.ts --run
+```
 
 ### Mixed-media zoom regression
 

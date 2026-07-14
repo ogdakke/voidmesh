@@ -160,7 +160,13 @@ export class CanvasSelectionController {
       maxY = Math.max(maxY, entity.position.y + offsetY + entity.size.height * scale);
     }
 
-    return this.#setMultiSelectionBounds(minX, minY, maxX, maxY);
+    const offset = canvasStore.getTransientEntityDragOffset();
+    return this.#setMultiSelectionBounds(
+      minX + offset.x,
+      minY + offset.y,
+      maxX + offset.x,
+      maxY + offset.y,
+    );
   }
 
   choosePointerDownEntityTarget(

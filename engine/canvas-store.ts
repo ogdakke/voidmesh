@@ -47,6 +47,7 @@ export interface CanvasState {
   // Dirty flags for optimization
   viewportDirty: boolean;
   entitiesDirty: Set<string>;
+  geometryDirty: boolean;
   selectionDirty: boolean;
   containerSizeDirty: boolean;
   canvasCalloutsDirty: boolean;
@@ -159,6 +160,10 @@ export interface DragVisualRenderState {
   entityIds: ReadonlySet<string>;
   /** Shared scale for active drag-visual entities. */
   scale: number;
+  /** Shared world-space translation applied to the selected drag group. */
+  offset: Point;
+  /** Whether every visual target is exactly the current selection. */
+  appliesToSelection: boolean;
 }
 
 export interface DisintegrationRenderOverlay {
@@ -244,7 +249,10 @@ export class CanvasStore extends Store<CanvasState> {
     isDragPhase: false,
     entityIds: new Set<string>(),
     scale: 1,
+    offset: { x: 0, y: 0 },
+    appliesToSelection: false,
   };
+  readonly #transientEntityDragOffset: Point = { x: 0, y: 0 };
   readonly #renderDisintegration: DisintegrationRenderState = { overlays: [] };
   readonly #renderState: RenderState = {
     viewport: this.#renderViewport,
@@ -300,6 +308,7 @@ export class CanvasStore extends Store<CanvasState> {
       canvasLensing: CanvasLensing.off,
       viewportDirty: false,
       entitiesDirty: new Set(),
+      geometryDirty: false,
       selectionDirty: false,
       containerSizeDirty: false,
       canvasCalloutsDirty: false,
@@ -581,8 +590,26 @@ export class CanvasStore extends Store<CanvasState> {
       this.state.geometryVersion++;
       // Position-only updates still change the composed scene and must invalidate
       // renderer caches such as the fullscreen wlur overlay during drag.
-      this.state.entitiesDirty.add(id);
+      this.state.geometryDirty = true;
     }
+  }
+
+  /** Translate a group with one spatial-index pass and one geometry invalidation. */
+  moveEntities(entityIds: ReadonlySet<string> | readonly string[], delta: Point): number {
+    if (delta.x === 0 && delta.y === 0) return 0;
+    let movedCount = 0;
+    for (const entityId of entityIds) {
+      const entity = this.state.entities.get(entityId);
+      if (!entity) continue;
+      entity.position.x += delta.x;
+      entity.position.y += delta.y;
+      movedCount++;
+    }
+    if (movedCount === 0) return 0;
+    this.#entitySpatialIndex.translateEntities(entityIds, delta);
+    this.state.geometryVersion++;
+    this.state.geometryDirty = true;
+    return movedCount;
   }
 
   removeEntity(id: string): void {
@@ -922,6 +949,21 @@ export class CanvasStore extends Store<CanvasState> {
     this.notify();
   }
 
+  setTransientEntityDragOffset(offset: Point): void {
+    this.#transientEntityDragOffset.x = offset.x;
+    this.#transientEntityDragOffset.y = offset.y;
+    this.state.geometryDirty = true;
+  }
+
+  getTransientEntityDragOffset(): Readonly<Point> {
+    return this.#transientEntityDragOffset;
+  }
+
+  resetTransientEntityDragOffset(): void {
+    this.#transientEntityDragOffset.x = 0;
+    this.#transientEntityDragOffset.y = 0;
+  }
+
   setActionLayerActive(
     active: boolean,
     entityIds?: ReadonlySet<string>,
@@ -1240,6 +1282,7 @@ export class CanvasStore extends Store<CanvasState> {
     return (
       this.state.viewportDirty ||
       this.state.entitiesDirty.size > 0 ||
+      this.state.geometryDirty ||
       this.state.selectionDirty ||
       this.state.containerSizeDirty ||
       this.state.canvasCalloutsDirty
@@ -1292,6 +1335,7 @@ export class CanvasStore extends Store<CanvasState> {
   clearDirtyFlags(): void {
     this.state.viewportDirty = false;
     this.state.entitiesDirty.clear();
+    this.state.geometryDirty = false;
     this.state.selectionDirty = false;
     this.state.containerSizeDirty = false;
     this.state.canvasCalloutsDirty = false;
@@ -1395,25 +1439,16 @@ export class CanvasStore extends Store<CanvasState> {
       return { value: defaultValue, isMixed: false, isSupported: true, values: new Set() };
     }
 
-    // Check if all selected shader types support this param,
-    // including conditional visibility rules (e.g. dithering scale, glass sub-params).
-    // Rules are evaluated per-entity to correctly handle multi-select with mixed shader types.
-    const isSupported = entities.every((e) => {
-      if (!shaderFeatures[e.shaderType].params.includes(rootParam)) return false;
-      const rules = paramVisibilityRules[e.shaderType];
-      if (rules) {
-        const rule = rules.find((r) => r.param === path);
-        if (rule && !rule.isVisible(e.shaderParams)) return false;
-      }
-      return true;
-    });
-
     const firstValue = getNestedValue<T>(entities[0]!.shaderParams, pathParts) ?? defaultValue;
+    const firstEntity = entities[0]!;
+    if (!entitySupportsParam(firstEntity, rootParam, path)) {
+      return createUnsupportedParamResult(firstValue);
+    }
 
     if (entities.length === 1) {
       const values = new Set<NonNullable<T>>();
       if (firstValue != null) values.add(firstValue as NonNullable<T>);
-      return { value: firstValue, isMixed: false, isSupported, values };
+      return { value: firstValue, isMixed: false, isSupported: true, values };
     }
 
     // Multi-select: check uniformity and collect distinct values
@@ -1424,6 +1459,9 @@ export class CanvasStore extends Store<CanvasState> {
 
     for (let index = 1; index < entities.length; index++) {
       const entity = entities[index]!;
+      if (!entitySupportsParam(entity, rootParam, path)) {
+        return createUnsupportedParamResult(firstValue);
+      }
       // Apply default to get effective value (matches how firstValue is computed)
       const val = getNestedValue<T>(entity.shaderParams, pathParts) ?? defaultValue;
       const matchesFirst = paramValueEqual(val, firstValue);
@@ -1447,7 +1485,7 @@ export class CanvasStore extends Store<CanvasState> {
       values.add(val as NonNullable<T>);
     }
 
-    return { value: firstValue, isMixed, isSupported, values };
+    return { value: firstValue, isMixed, isSupported: true, values };
   }
 
   #resetSelectorCaches(): void {
@@ -1477,6 +1515,24 @@ function getNestedValue<T>(params: ShaderParams, pathParts: string[]): T | undef
     current = (current as Record<string, unknown>)[part];
   }
   return current as T | undefined;
+}
+
+function entitySupportsParam(
+  entity: ShaderCanvasEntity,
+  rootParam: keyof ShaderParams,
+  path: ParamPaths,
+): boolean {
+  if (!shaderFeatures[entity.shaderType].params.includes(rootParam)) return false;
+  const rule = paramVisibilityRules[entity.shaderType]?.find(
+    (candidate) => candidate.param === path,
+  );
+  return !rule || rule.isVisible(entity.shaderParams);
+}
+
+function createUnsupportedParamResult<T>(value: T): ParamResult<T> {
+  const values = new Set<NonNullable<T>>();
+  if (value != null) values.add(value as NonNullable<T>);
+  return { value, isMixed: false, isSupported: false, values };
 }
 
 function paramValueEqual(a: unknown, b: unknown): boolean {

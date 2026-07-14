@@ -152,6 +152,23 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     scene.release();
   });
 
+  test("keeps the persistent batch for a drag transform covering the selection", () => {
+    const scene = createScene();
+    const harness = createHarness(scene.entities);
+    harness.options.selectedEntityIds.add(scene.entities[0]!.id);
+    harness.options.selectionVersion++;
+    harness.options.dragVisual.active = true;
+    harness.options.dragVisual.isDragPhase = true;
+    harness.options.dragVisual.appliesToSelection = true;
+    harness.options.dragVisual.entityIds = harness.options.selectedEntityIds;
+    harness.options.dragVisual.offset = { x: 100, y: -50 };
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+    expect(harness.compositionPass.prepareFullSceneBatch).toHaveBeenCalledOnce();
+
+    scene.release();
+  });
+
   test.each([
     ["action layer", (options: PrepareOptions) => (options.actionLayer.active = true)],
     ["action blur", (options: PrepareOptions) => (options.actionLayer.blurIntensity = 0.5)],
@@ -259,6 +276,8 @@ function createHarness(
       isDragPhase: false,
       entityIds: new Set(),
       scale: 1,
+      offset: { x: 0, y: 0 },
+      appliesToSelection: false,
     },
     dragSelectActive: false,
     hasCanvasCallouts: false,
