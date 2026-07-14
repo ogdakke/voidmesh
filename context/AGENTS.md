@@ -41,6 +41,7 @@ Note: `KeybindProvider` wraps outside `App()` at the root render level.
 - `fancyDelete` preference defaults to `true` unless `prefers-reduced-motion: reduce` is active.
 - Export queue clones video elements to isolate export playback from preview playback.
 - `CanvasProvider` is the composition root for concrete engine and renderer implementations. It constructs application services once, injects the performance-graph renderer port, and exposes narrow context interfaces; consumers never receive the store or game loop objects.
+- Keep renderer registration callbacks and the `CanvasRendererService` value stable across selection-to-URL rerenders. Registration is a renderer-runtime effect dependency; changing its identity stops/restarts the game loop and discards large-scene active-entity classification caches.
 
 ## Anti-Patterns
 

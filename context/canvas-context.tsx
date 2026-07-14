@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   CanvasCommandsContext,
   CanvasInteractionContext,
@@ -1960,7 +1960,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   };
 
   // Renderer registration
-  const registerRenderer = (renderer: InfiniteCanvasRenderer) => {
+  // This callback is an effect dependency in the renderer runtime: changing its identity stops
+  // and restarts the game loop, which rescans every entity. URL sync rerenders this provider.
+  // oxlint-disable-next-line voidmesh-react-compiler/no-manual-memoization
+  const registerRenderer = useCallback((renderer: InfiniteCanvasRenderer) => {
     rendererRef.current = renderer;
     setRendererState(renderer);
     setColorSpace(renderer.colorConfig.supportsP3 ? ColorSpace.displayP3 : ColorSpace.srgb);
@@ -1985,15 +1988,18 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       });
     });
     gameLoop.setRenderer(renderer);
-  };
+  }, []);
 
-  const setWlurDebugConfig = (updates: Partial<WlurOverlayDebugConfig>) => {
+  // Stable identities keep the memoized renderer-service boundary independent of URL rerenders.
+  // oxlint-disable-next-line voidmesh-react-compiler/no-manual-memoization
+  const setWlurDebugConfig = useCallback((updates: Partial<WlurOverlayDebugConfig>) => {
     setWlurDebugConfigState((prev) => ({ ...prev, ...updates }));
-  };
+  }, []);
 
-  const resetWlurDebugConfig = () => {
+  // oxlint-disable-next-line voidmesh-react-compiler/no-manual-memoization
+  const resetWlurDebugConfig = useCallback(() => {
     setWlurDebugConfigState(createDefaultWlurOverlayDebugConfig());
-  };
+  }, []);
 
   // Export functions
   // Copy to clipboard: single-selection only (clipboard API limitation)
@@ -2285,15 +2291,28 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setDebugType: (...args) => commandsImplRef.current.setDebugType(...args),
   }));
 
-  const rendererService: CanvasRendererService = {
-    registerRenderer,
-    renderer: rendererState,
-    colorSpace,
-    debugMode: debug,
-    wlurDebugConfig,
-    setWlurDebugConfig,
-    resetWlurDebugConfig,
-  };
+  // URL parameter updates are unrelated to renderer consumers and must not wake the runtime.
+  // oxlint-disable-next-line voidmesh-react-compiler/no-manual-memoization
+  const rendererService = useMemo<CanvasRendererService>(
+    () => ({
+      registerRenderer,
+      renderer: rendererState,
+      colorSpace,
+      debugMode: debug,
+      wlurDebugConfig,
+      setWlurDebugConfig,
+      resetWlurDebugConfig,
+    }),
+    [
+      colorSpace,
+      debug,
+      registerRenderer,
+      rendererState,
+      resetWlurDebugConfig,
+      setWlurDebugConfig,
+      wlurDebugConfig,
+    ],
+  );
 
   // Expose canvas context to window for dev console debugging
   useEffect(() => {
