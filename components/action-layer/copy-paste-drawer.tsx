@@ -4,7 +4,7 @@ import { Drawer } from "#ui/drawer/index.tsx";
 import { Button } from "#ui/button/button.tsx";
 import "./copy-paste-drawer.css";
 import { logger } from "#lib/client.logger.ts";
-import { toastManager } from "#ui/toast/toast-manager.ts";
+import { toastManager } from "#application/notifications.ts";
 
 interface CopyPasteDrawerProps {
   open: boolean;

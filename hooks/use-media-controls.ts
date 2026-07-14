@@ -7,8 +7,13 @@
  *
  * This prevents components that only need actions from re-rendering every frame during playback.
  */
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { canvasStore } from "#engine";
+import { useEffect, useRef, useState } from "react";
+import {
+  useCanvasPlaybackSnapshot,
+  useCanvasMedia,
+  useCanvasSelectionSnapshot,
+  useCanvasVideoAudioSnapshot,
+} from "#context/use-canvas.ts";
 import { logger } from "#lib/client.logger.ts";
 import { formatMediaTimeParts, type MediaTimeParts } from "#lib/time-format.ts";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
@@ -64,10 +69,7 @@ const defaultTimeParts: MediaTimeParts = { main: "0", ms: "00" };
  * Use sparingly - only in components that need to display current time.
  */
 export function usePlaybackTime(): PlaybackTimeState {
-  const playbackSnapshot = useSyncExternalStore(
-    canvasStore.subscribe.bind(canvasStore),
-    canvasStore.getPlaybackSnapshot.bind(canvasStore),
-  );
+  const playbackSnapshot = useCanvasPlaybackSnapshot();
 
   return {
     entityId: playbackSnapshot.entityId,
@@ -104,10 +106,7 @@ export function useFrozenPlaybackTime(): PlaybackTimeState {
 }
 
 export function useSelectedVideoAudioState(): SelectedVideoAudioState {
-  const audioSnapshot = useSyncExternalStore(
-    canvasStore.subscribe.bind(canvasStore),
-    canvasStore.getSelectedVideoAudioSnapshot.bind(canvasStore),
-  );
+  const audioSnapshot = useCanvasVideoAudioSnapshot();
 
   return {
     entityId: audioSnapshot.entityId,
@@ -130,14 +129,12 @@ export function useMediaControlsActions(
 ): MediaControlsActionsOnly {
   // Track seeking state locally (transient UI state, not in store)
   const seekingRef = useRef(false);
+  const media = useCanvasMedia();
   const wasPlayingBeforeSeekRef = useRef(false);
   const seekTimeRef = useRef(0);
 
   // Subscribe ONLY to selection changes, NOT playback time
-  const storeSnapshot = useSyncExternalStore(
-    canvasStore.subscribe.bind(canvasStore),
-    canvasStore.getSelectionSnapshot.bind(canvasStore),
-  );
+  const storeSnapshot = useCanvasSelectionSnapshot();
 
   // Get entity from store to ensure we have latest state
   const entity = selectedEntity?.id ? storeSnapshot.entities.get(selectedEntity.id) : undefined;
@@ -152,9 +149,9 @@ export function useMediaControlsActions(
       seekingRef: seekingRef.current,
     });
     if (isVideoEntity(entity)) {
-      await canvasStore.playVideo(entity.id);
+      await media.play(entity.id);
     } else if (isGifEntity(entity)) {
-      canvasStore.playGif(entity.id);
+      await media.play(entity.id);
     }
   };
 
@@ -165,9 +162,9 @@ export function useMediaControlsActions(
       seekingRef: seekingRef.current,
     });
     if (isVideoEntity(entity)) {
-      canvasStore.pauseVideo(entity.id);
+      media.pause(entity.id);
     } else if (isGifEntity(entity)) {
-      canvasStore.pauseGif(entity.id);
+      media.pause(entity.id);
     }
   };
 
@@ -177,7 +174,7 @@ export function useMediaControlsActions(
       seekingRef: seekingRef.current,
     });
     if (entity?.id) {
-      await canvasStore.togglePlayback(entity.id);
+      await media.togglePlayback(entity.id);
     }
   };
 
@@ -187,7 +184,7 @@ export function useMediaControlsActions(
       entityId: entity.id,
       muted: entity.playback?.muted,
     });
-    canvasStore.toggleVideoMuted(entity.id);
+    media.toggleMuted(entity.id);
   };
 
   const seek = (time: number) => {
@@ -199,9 +196,9 @@ export function useMediaControlsActions(
     });
     seekTimeRef.current = time;
     if (isVideoEntity(entity)) {
-      canvasStore.seekVideo(entity.id, time);
+      media.seek(entity.id, time);
     } else if (isGifEntity(entity)) {
-      canvasStore.seekGif(entity.id, time);
+      media.seek(entity.id, time);
     }
   };
 
@@ -249,9 +246,9 @@ export function useMediaControlsActions(
 
     seekTimeRef.current = newTime;
     if (isVideoEntity(entity)) {
-      canvasStore.seekVideo(entity.id, newTime);
+      media.seek(entity.id, newTime);
     } else if (isGifEntity(entity)) {
-      canvasStore.seekGif(entity.id, newTime);
+      media.seek(entity.id, newTime);
     }
   };
 
@@ -271,9 +268,9 @@ export function useMediaControlsActions(
     // Pause during seek
     if (wasPlayingBeforeSeekRef.current) {
       if (isVideoEntity(entity)) {
-        canvasStore.pauseVideo(entity.id);
+        media.pause(entity.id);
       } else if (isGifEntity(entity)) {
-        canvasStore.pauseGif(entity.id);
+        media.pause(entity.id);
       }
     }
   };
@@ -294,9 +291,9 @@ export function useMediaControlsActions(
     // Resume if was playing before seek
     if (wasPlayingBeforeSeekRef.current) {
       if (isVideoEntity(entity)) {
-        canvasStore.playVideo(entity.id);
+        void media.play(entity.id);
       } else if (isGifEntity(entity)) {
-        canvasStore.playGif(entity.id);
+        void media.play(entity.id);
       }
     }
   };
@@ -331,7 +328,7 @@ export function useMediaControlsActions(
           currentTime: video.currentTime,
         });
         if (!seekingRef.current) {
-          canvasStore.forcePlaybackNotify(entity.id, video.currentTime);
+          media.notifyPlayback(entity.id, video.currentTime);
         }
       };
 
@@ -341,7 +338,7 @@ export function useMediaControlsActions(
           entityId: entity.id,
           duration: video.duration,
         });
-        canvasStore.forcePlaybackNotify(entity.id, video.duration);
+        media.notifyPlayback(entity.id, video.duration);
       };
 
       // Force sync when playback starts (important for Firefox boundary cases)
@@ -352,7 +349,7 @@ export function useMediaControlsActions(
           currentTime: video.currentTime,
         });
         if (!seekingRef.current) {
-          canvasStore.forcePlaybackNotify(entity.id, video.currentTime);
+          media.notifyPlayback(entity.id, video.currentTime);
         }
       };
 
@@ -366,7 +363,7 @@ export function useMediaControlsActions(
         video.removeEventListener("play", handlePlay);
       };
     }
-  }, [isAnimatedSelected, entity]);
+  }, [isAnimatedSelected, entity, media]);
 
   return {
     play,

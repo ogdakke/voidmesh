@@ -1,4 +1,16 @@
-import { PerfGraphRenderer } from "#renderer/perf-graph-renderer.ts";
+export interface PerfGraphRendererPort {
+  writeSample(index: number, value: number): void;
+  uploadSeries(samples: Float32Array): void;
+  render(count: number, index: number, scaleMax: number): void;
+  destroy(): void;
+}
+
+export type PerfGraphRendererFactory = (
+  canvas: HTMLCanvasElement,
+  device: GPUDevice,
+  format: GPUTextureFormat,
+  colorSpace: PredefinedColorSpace,
+) => PerfGraphRendererPort;
 
 export interface FrameStats {
   renderTime: number;
@@ -73,7 +85,8 @@ export class PerfOverlayController {
   #cpuP95Element: HTMLSpanElement | null = null;
   #entitiesElement: HTMLSpanElement | null = null;
   #graphCanvas: HTMLCanvasElement | null = null;
-  #graphRenderer: PerfGraphRenderer | null = null;
+  #graphRenderer: PerfGraphRendererPort | null = null;
+  #graphRendererFactory: PerfGraphRendererFactory | null = null;
   #device: GPUDevice | null = null;
   #canvasFormat: GPUTextureFormat | null = null;
   #canvasColorSpace: PredefinedColorSpace = "srgb";
@@ -197,6 +210,14 @@ export class PerfOverlayController {
     this.#createGraphRenderer();
   }
 
+  setGraphRendererFactory(factory: PerfGraphRendererFactory): void {
+    if (this.#graphRendererFactory === factory) return;
+    this.#graphRenderer?.destroy();
+    this.#graphRenderer = null;
+    this.#graphRendererFactory = factory;
+    this.#createGraphRenderer();
+  }
+
   onFrame(debugMode: boolean, timestamp = performance.now()): void {
     if (!this.#element) return;
 
@@ -257,10 +278,12 @@ export class PerfOverlayController {
   }
 
   #createGraphRenderer(): void {
-    if (!this.#graphCanvas || !this.#device || !this.#canvasFormat) return;
+    if (!this.#graphCanvas || !this.#device || !this.#canvasFormat || !this.#graphRendererFactory) {
+      return;
+    }
 
     try {
-      this.#graphRenderer = new PerfGraphRenderer(
+      this.#graphRenderer = this.#graphRendererFactory(
         this.#graphCanvas,
         this.#device,
         this.#canvasFormat,

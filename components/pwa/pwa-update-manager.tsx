@@ -1,7 +1,7 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { useRegisterSW } from "virtual:pwa-register/react";
 import { logger } from "#lib/client.logger.ts";
-import { toastManager } from "#ui/toast/toast-manager.ts";
+import { toastManager } from "#application/notifications.ts";
 
 const UPDATE_TOAST_ID = "pwa-update-available";
 const UPDATE_CHECK_THROTTLE_MS = 60_000;

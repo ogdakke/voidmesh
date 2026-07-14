@@ -1,4 +1,4 @@
-import { canvasStore } from "#engine";
+import type { CanvasMediaService } from "#application/canvas/canvas-media.ts";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
 import { isAnimatedEntity, isGifEntity, isVideoEntity } from "#types/canvas.ts";
 
@@ -112,13 +112,14 @@ export function captureMediaControlSnapshot(source: MediaControlSource): void {
 
 export function createEntityMediaControlSourceState(
   entity: ShaderCanvasEntity | undefined,
+  media: CanvasMediaService,
 ): MediaControlSourceState {
   if (!entity || !isAnimatedEntity(entity)) {
     return { source: lastSnapshot ? createSnapshotSource(lastSnapshot) : null, isLive: false };
   }
   const entityId = entity.id;
   const getEntity = () => {
-    const current = canvasStore.getState().entities.get(entityId);
+    const current = media.getEntity(entityId);
     return current && isAnimatedEntity(current) ? current : null;
   };
 
@@ -180,7 +181,7 @@ export function createEntityMediaControlSourceState(
       return current.playback?.muted ?? current.mediaSource.videoElement.muted;
     },
     subscribe(listener) {
-      return canvasStore.subscribe(listener);
+      return media.subscribe(listener);
     },
   };
 

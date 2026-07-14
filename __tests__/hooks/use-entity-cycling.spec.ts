@@ -15,7 +15,7 @@ import {
   cycleToPreviousEntity,
   clearEntityCycleCache,
   isCyclingInProgress,
-} from "#hooks/use-entity-cycling.ts";
+} from "#application/canvas/entity-cycling.ts";
 
 let cleanup: () => void;
 

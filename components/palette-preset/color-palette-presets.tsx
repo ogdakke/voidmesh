@@ -6,7 +6,7 @@ import { Select } from "../ui/select/select.tsx";
 import { optionsWithNull } from "../ui/ui-util.ts";
 import { PaletteSwatches } from "./palette-preset.tsx";
 import "./palette-preset.css";
-import { buildPaletteList, findPaletteById } from "./palette-presets.ts";
+import { buildPaletteList, findPaletteById } from "#application/canvas/palettes.ts";
 
 interface ColorPalettePresetsProps {
   /** ID of the currently selected palette preset */

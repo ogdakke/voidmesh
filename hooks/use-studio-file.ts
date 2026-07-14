@@ -1,6 +1,6 @@
 import { useState, useSyncExternalStore } from "react";
 import { useCanvasCommands } from "#context/use-canvas.ts";
-import { toastManager, ToastType } from "#components/ui/toast/toast-manager.ts";
+import { toastManager, ToastType } from "#application/notifications.ts";
 import type {
   DeserializeOptions,
   DeserializeProgress,
@@ -15,7 +15,7 @@ import {
 } from "#lib/download.ts";
 import { fileHandleStore } from "#lib/files/file-handle.ts";
 import { generateFunFilename } from "#lib/files/random-filename.ts";
-import { getIsSaving } from "#lib/serialization/serialize.ts";
+import { getIsSaving } from "#application/canvas/serialize-workspace.ts";
 import { logger } from "#lib/client.logger.ts";
 import { createEnum } from "#types/index.ts";
 

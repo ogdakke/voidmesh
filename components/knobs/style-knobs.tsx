@@ -12,6 +12,7 @@ import {
 } from "#types/canvas.ts";
 import {
   useCanvasCommands,
+  useSelectedEntities,
   useSelectedShaderType,
   useSelectionState,
 } from "#context/use-canvas.ts";
@@ -27,7 +28,6 @@ import {
 } from "#components/ui/slider-picker/index.ts";
 import "./knobs.css";
 import { undo } from "#lib/undo.ts";
-import { canvasStore } from "#engine";
 import { QuestionMark } from "iconoir-react";
 
 // ============================================================================
@@ -733,6 +733,7 @@ function MobileShapeStyleKnobs() {
 // ============================================================================
 
 export function MobileStyleKnobs() {
+  const selectedEntities = useSelectedEntities();
   const selectedShaderType = useSelectedShaderType();
   const selectionState = useSelectionState();
   const { setShowOriginal, changeShaderType } = useCanvasCommands();
@@ -792,11 +793,10 @@ export function MobileStyleKnobs() {
     undo.commitTransaction();
     const from = shaderAtStartRef.current;
     if (from && from !== value) {
-      const entities = canvasStore.getSelectedEntities();
       analytics.track("shader.changed", {
         from,
         to: value,
-        entity_count: entities.length,
+        entity_count: selectedEntities.length,
       });
     }
   };

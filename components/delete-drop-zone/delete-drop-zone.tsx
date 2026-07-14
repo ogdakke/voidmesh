@@ -1,12 +1,11 @@
 import { useEffect, useRef } from "react";
 import { Xmark } from "iconoir-react";
-import { useCanvasCommands } from "#context/use-canvas.ts";
+import { useCanvasCommands, useCanvasPreferences } from "#context/use-canvas.ts";
 import { useEntityDrag } from "#hooks/use-entity-drag.ts";
 import { useActionLayer } from "#hooks/use-action-layer.ts";
 import { haptic } from "#lib/haptic.ts";
 import { completeOnboardingStepFromEvent } from "#lib/onboarding-runtime.ts";
 import { OnboardingStepId } from "#lib/onboarding.ts";
-import { canvasStore } from "#engine";
 import "./delete-drop-zone.css";
 
 /** Pixels around the drop zone that trigger proximity feedback */
@@ -17,6 +16,7 @@ export function DeleteDropZone() {
   const { active: actionLayerActive } = useActionLayer();
   const showZone = entityDragActive || actionLayerActive;
   const { deleteSelection } = useCanvasCommands();
+  const { haptics } = useCanvasPreferences();
   const zoneRef = useRef<HTMLDivElement>(null);
   const isOverRef = useRef(false);
 
@@ -51,7 +51,7 @@ export function DeleteDropZone() {
 
     const handleTouchEnd = () => {
       if (isOverRef.current) {
-        haptic({ wantsHaptic: canvasStore.getState().haptics });
+        haptic({ wantsHaptic: haptics });
         completeOnboardingStepFromEvent(OnboardingStepId.deleteFromActionLayer);
         deleteSelection(undefined, "drop_zone");
         isOverRef.current = false;
@@ -68,7 +68,7 @@ export function DeleteDropZone() {
       zone.removeAttribute("data-over");
       isOverRef.current = false;
     };
-  }, [showZone, deleteSelection]);
+  }, [showZone, deleteSelection, haptics]);
 
   return (
     <div

@@ -1,5 +1,10 @@
 import { createCanvasInteractionService } from "#application/canvas/canvas-interaction.ts";
-import { CanvasStore, type GameLoop, type ViewportAnimationController } from "#engine";
+import {
+  type ActionLayerController,
+  CanvasStore,
+  type GameLoop,
+  type ViewportAnimationController,
+} from "#engine";
 import { calculateFitToView } from "#lib/canvas-math.ts";
 import { createTestEntity } from "../helpers/test-entity.ts";
 import { describe, expect, it, vi } from "vitest";
@@ -13,7 +18,17 @@ function createHarness() {
   } as unknown as GameLoop;
   const animateTo = vi.fn<ViewportAnimationController["animateTo"]>();
   const viewportAnimation = { animateTo } as unknown as ViewportAnimationController;
-  const service = createCanvasInteractionService({ store, gameLoop, viewportAnimation });
+  const actionLayer = {
+    getEntityOffset: vi.fn<ActionLayerController["getEntityOffset"]>(() => ({ x: 0, y: 0 })),
+    updateSafeZoneProgress: vi.fn<ActionLayerController["updateSafeZoneProgress"]>(),
+    cancel: vi.fn<ActionLayerController["cancel"]>(),
+  } as unknown as ActionLayerController;
+  const service = createCanvasInteractionService({
+    store,
+    gameLoop,
+    viewportAnimation,
+    actionLayer,
+  });
   return { store, gameLoop, animateTo, service };
 }
 
@@ -65,5 +80,25 @@ describe("CanvasInteractionService", () => {
       service.fitSelection({ width: 1000, height: 800, dpr: 1 }, { padding: 0.1, bottomInset: 0 }),
     ).toBe(false);
     expect(animateTo).not.toHaveBeenCalled();
+  });
+
+  it("passes selection arrays through without copying", () => {
+    const { store, service } = createHarness();
+    const ids = ["first", "second"];
+    const replaceSelection = vi.spyOn(store, "replaceSelection");
+
+    service.replaceSelection(ids);
+
+    expect(replaceSelection).toHaveBeenCalledWith(ids);
+  });
+
+  it("collects requested entities into one result array", () => {
+    const { store, service } = createHarness();
+    const first = createTestEntity({ id: "first" });
+    const second = createTestEntity({ id: "second" });
+    store.addEntity(first);
+    store.addEntity(second);
+
+    expect(service.getEntities([second.id, "missing", first.id])).toEqual([second, first]);
   });
 });

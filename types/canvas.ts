@@ -1,6 +1,21 @@
-import type { ColorMode } from "#config";
 import type { Get, Paths } from "type-fest";
 import { createEnum } from ".";
+
+export type ColorMode = "palette" | "bgFgColor";
+
+export interface ViewportLensDistortionConfig {
+  enabled: boolean;
+  strength: number;
+  radius: number;
+  falloff: number;
+  dispersion: number;
+  scale: number;
+  reflectionIntensity: number;
+  reflectionFocus: number;
+  occlusion: number;
+  vignetteLight: number;
+  vignetteDark: number;
+}
 
 /** 2D point in world coordinates */
 export interface Point {

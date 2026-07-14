@@ -14,7 +14,7 @@ import { analytics } from "#lib/analytics.ts";
 import { getCssVarPx } from "#lib/css.ts";
 import { completeOnboardingStepFromEvent } from "#lib/onboarding-runtime.ts";
 import { OnboardingStepId } from "#lib/onboarding.ts";
-import { actionLayerController } from "#engine";
+import { useCanvasInteraction } from "#context/use-canvas.ts";
 import { useActionLayer } from "#hooks/use-action-layer.ts";
 import "./action-layer.css";
 
@@ -145,6 +145,7 @@ function computeArcAngle(cx: number, cy: number, count: number, radius: number):
 
 function Root({ children }: PropsWithChildren) {
   const { active, touchOrigin: storeTouchOrigin } = useActionLayer();
+  const interaction = useCanvasInteraction();
   const [items, setItems] = useState<RegisteredItem[]>([]);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const hoveredIndexRef = useRef<number | null>(null);
@@ -188,7 +189,7 @@ function Root({ children }: PropsWithChildren) {
     const hitRadius = buttonSize / 2 + buttonHitPadding;
 
     const getHoveredButton = (touchX: number, touchY: number): number | null => {
-      const entityOffset = actionLayerController.getEntityOffset();
+      const entityOffset = interaction.getActionLayerEntityOffset();
       const ringCenterX = center.x + entityOffset.x * ringFollowFactor;
       const ringCenterY = center.y + entityOffset.y * ringFollowFactor;
 
@@ -210,7 +211,7 @@ function Root({ children }: PropsWithChildren) {
       if (!touch) return;
 
       // Update ring container position to follow finger (via ring follow factor)
-      const entityOffset = actionLayerController.getEntityOffset();
+      const entityOffset = interaction.getActionLayerEntityOffset();
       const ringOffsetX = entityOffset.x * ringFollowFactor;
       const ringOffsetY = entityOffset.y * ringFollowFactor;
       const ring = ringRef.current;
@@ -237,7 +238,7 @@ function Root({ children }: PropsWithChildren) {
       const effectiveRadius = safeZoneRadius - deadzone;
       const progress = Math.min(1, effectiveDist / effectiveRadius);
 
-      actionLayerController.updateSafeZoneProgress(progress);
+      interaction.updateActionLayerSafeZone(progress);
     };
 
     const handleTouchEnd = () => {
@@ -255,7 +256,7 @@ function Root({ children }: PropsWithChildren) {
         }
         // Cancel immediately so entities return to normal render order on the next frame.
         // The game loop's dismiss() (bubble phase) becomes a no-op since phase is already idle.
-        actionLayerController.cancel();
+        interaction.cancelActionLayer();
       }
       // When no action was fired, dismiss + setActionLayerActive(false) is handled by
       // the game loop's handleTouchEnd (bubble phase), which animates blur fade-out
@@ -275,7 +276,7 @@ function Root({ children }: PropsWithChildren) {
     // `center` and `positions` are derived from `storeTouchOrigin` (stable ref via
     // useSyncExternalStore) and frozen config. React Compiler memoizes them.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, center, positions, storeTouchOrigin, items]);
+  }, [active, center, positions, storeTouchOrigin, items, interaction]);
 
   const contextValue: ActionLayerContextValue = { register };
 

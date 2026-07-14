@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
-import type { MediaLoadFailure } from "#lib/entity-placement.ts";
+import type { MediaLoadFailure } from "#application/canvas/entity-placement.ts";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
 import { createEntityInput } from "../helpers/test-entity.ts";
 
-const { addFilesToCanvas, addUrlsToCanvas } = await import("#lib/entity-placement.ts");
+const { addFilesToCanvas, addUrlsToCanvas } =
+  await import("#application/canvas/entity-placement.ts");
 const { canvasStore, gameLoop, viewportAnimation } = await import("#engine");
 const mediaLoader = await import("#lib/media-loader.ts");
 

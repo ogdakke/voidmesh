@@ -528,10 +528,10 @@ the main architectural simplification.
 ## Deep module boundaries
 
 Canvas capabilities follow the deep-module principle: public interfaces stay small while
-their implementations hide substantial coordination. `CanvasInteractionService` is the
-first application module in this shape. Its callers see points, surface metrics, and named
-actions; it hides the store, game loop, viewport animation, selection-bound calculation,
-and animation configuration.
+their implementations hide substantial coordination. `CanvasInteractionService` and
+`CanvasMediaService` are the primary application modules in this shape. Their callers see
+points, surface metrics, media actions, and named canvas operations; they hide the store,
+game loop, viewport animation, selection-bound calculation, and playback dispatch.
 
 This provides four concrete benefits:
 
@@ -544,5 +544,5 @@ This provides four concrete benefits:
 `plugins/oxlint-import-policy.js` enforces the graph. It reads `package.json#imports` to
 compile exact and wildcard aliases, requires `#...` imports across module boundaries, and
 rejects upward dependencies. Exact entrypoints such as `#engine` are treated as public
-module surfaces, so relative deep imports cannot bypass them. The configured `allowFiles`
-list records pre-existing violations only and should shrink as those modules migrate.
+module surfaces, so relative deep imports cannot bypass them. The policy applies to every
+source file without an exception list.

@@ -3,7 +3,7 @@ import { Drawer } from "#ui/drawer/index.tsx";
 import { Button } from "#ui/button/button.tsx";
 import { NativeSelect, NativeSelectOption } from "#ui/native-select/native-select.tsx";
 import { useUpscaleQueue } from "#context/use-upscale-queue.ts";
-import { canvasStore } from "#engine";
+import { useSelectedEntityIds } from "#context/use-canvas.ts";
 import type { ModelSize, ContentVariant } from "#renderer/upscale/upscale-types.ts";
 import type { ChangeEvent } from "react";
 import "./upscale-drawer.css";
@@ -27,9 +27,10 @@ interface UpscaleDrawerProps {
 
 export function UpscaleDrawer({ open, onOpenChange }: UpscaleDrawerProps) {
   const { addToUpscaleQueue, upscaleSettings, setUpscaleSettings } = useUpscaleQueue();
+  const selectedEntityIds = useSelectedEntityIds();
 
   const handleUpscale = () => {
-    const selectedIds = canvasStore.getSelectedEntities().map((e) => e.id);
+    const selectedIds = [...selectedEntityIds];
     if (selectedIds.length > 0) {
       addToUpscaleQueue(selectedIds);
     }

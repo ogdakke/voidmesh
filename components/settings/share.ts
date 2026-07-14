@@ -1,4 +1,4 @@
-import { toastManager } from "../ui/toast/toast-manager.ts";
+import { toastManager } from "#application/notifications.ts";
 
 export async function shareOrCopyUrl() {
   if (navigator.share) {

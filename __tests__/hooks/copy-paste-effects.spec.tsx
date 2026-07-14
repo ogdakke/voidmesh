@@ -17,7 +17,7 @@ import {
 } from "../helpers/assertions.ts";
 import { config } from "#config";
 import { paletteStore } from "#lib/palette-store.ts";
-import { isUserPalette } from "#components/palette-preset/palette-presets.ts";
+import { isUserPalette } from "#application/canvas/palettes.ts";
 
 let cleanup: () => void;
 

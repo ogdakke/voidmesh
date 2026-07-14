@@ -1,12 +1,11 @@
-import { useCanvasCommands, useHasEntities } from "#context/use-canvas.ts";
+import { useCanvasCommands, useHasEntities, useViewport } from "#context/use-canvas.ts";
 import { useIsMobile } from "#hooks/use-is-mobile.ts";
 import { getViewportCenter } from "#lib/canvas-math.ts";
-import { addFilesToCanvas } from "#lib/entity-placement.ts";
-import { showMediaLoadFailureToasts } from "#components/media-load-errors.ts";
+import { addFilesToCanvas } from "#application/canvas/entity-placement.ts";
+import { showMediaLoadFailureToasts } from "#application/canvas/media-load-notifications.ts";
 import { MediaImagePlus } from "iconoir-react";
 import { useRef } from "react";
 import { config } from "#config";
-import { canvasStore } from "#engine";
 import { Button } from "./ui/button";
 
 export function UploadControls() {
@@ -28,6 +27,7 @@ export function UploadControls() {
 export function FileUploadComponent() {
   const inputRef = useRef<HTMLInputElement>(null);
   const { addEntity } = useCanvasCommands();
+  const viewport = useViewport();
   const isMobile = useIsMobile();
   const bottomInset = isMobile ? config.canvas.mobile.bottomInset : 0;
 
@@ -38,7 +38,7 @@ export function FileUploadComponent() {
     if (!(container instanceof HTMLElement)) return;
 
     const anchor = getViewportCenter(
-      canvasStore.getViewport(),
+      viewport,
       container.getBoundingClientRect(),
       window.devicePixelRatio,
     );

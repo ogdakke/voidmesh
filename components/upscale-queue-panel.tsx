@@ -3,7 +3,7 @@
  */
 
 import { Xmark, WarningCircle, NavArrowRight, ScaleFrameEnlarge } from "iconoir-react";
-import { canvasStore } from "#engine";
+import { useSelectedEntityIds } from "#context/use-canvas.ts";
 import { useUpscaleQueue } from "#context/use-upscale-queue.ts";
 import type { UpscaleJob, UpscaleJobStatus } from "#context/upscale-queue-context.tsx";
 import type { ModelSize, ContentVariant } from "#renderer/upscale/upscale-types.ts";
@@ -108,6 +108,7 @@ function UpscaleJobItem({ job }: { job: UpscaleJob }) {
 }
 
 export function UpscaleQueuePanel() {
+  const selectedEntityIds = useSelectedEntityIds();
   const {
     state,
     addToUpscaleQueue,
@@ -123,7 +124,7 @@ export function UpscaleQueuePanel() {
   const hasFailedOrCancelled = stats.failed > 0;
 
   const handleUpscale = () => {
-    const selectedIds = [...canvasStore.getState().selectedEntityIds];
+    const selectedIds = [...selectedEntityIds];
     if (selectedIds.length > 0) {
       addToUpscaleQueue(selectedIds);
     }

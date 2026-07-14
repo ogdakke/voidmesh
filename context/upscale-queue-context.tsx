@@ -11,8 +11,7 @@
 import { useState, useRef, useEffect, useEffectEvent, type PropsWithChildren } from "react";
 import { flushSync } from "react-dom";
 import { UpscaleQueueContext } from "./use-upscale-queue.ts";
-import { useCanvasCommands, useCanvasRendererService } from "./use-canvas.ts";
-import { canvasStore } from "#engine";
+import { useCanvasCommands, useCanvasInteraction, useCanvasRendererService } from "./use-canvas.ts";
 import { MediaType, type ShaderCanvasEntity } from "#types/canvas.ts";
 import { UpscaleService } from "#renderer/upscale/upscale-service.ts";
 import type { ModelSize, ContentVariant } from "#renderer/upscale/upscale-types.ts";
@@ -24,7 +23,7 @@ import {
 } from "#lib/media-loader.ts";
 import { encodeGifFromFrames } from "#lib/gif-encoder.ts";
 import { logger } from "#lib/client.logger.ts";
-import { toastManager } from "#ui/toast/toast-manager.ts";
+import { toastManager } from "#application/notifications.ts";
 import type { FrameEncoderHandle } from "#renderer/frame-encoder.ts";
 
 // ============================================================================
@@ -129,6 +128,7 @@ async function bitmapToBlob(bitmap: ImageBitmap): Promise<Blob> {
 // ============================================================================
 
 export function UpscaleQueueProvider({ children }: PropsWithChildren) {
+  const interaction = useCanvasInteraction();
   const { addEntity } = useCanvasCommands();
   const { renderer } = useCanvasRendererService();
 
@@ -527,16 +527,13 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
   }, [state.jobs, state.currentJobId]);
 
   const addToUpscaleQueue = (entityIds: string[]) => {
-    const storeState = canvasStore.getState();
-    const entities = entityIds
-      .map((id) => storeState.entities.get(id))
-      .filter((e): e is ShaderCanvasEntity => e != null);
+    const entities = interaction.getEntities(entityIds);
 
     if (entities.length === 0) return;
 
     // Sort by padded dimensions to maximize GPU cache hits
     const WORKGROUP = 8;
-    const sorted = [...entities].sort((a, b) => {
+    entities.sort((a, b) => {
       const padA =
         Math.ceil(a.originalSize.width / WORKGROUP) * WORKGROUP * 1000 +
         Math.ceil(a.originalSize.height / WORKGROUP) * WORKGROUP;
@@ -548,7 +545,7 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
 
     const newJobs: UpscaleJob[] = [];
 
-    for (const entity of sorted) {
+    for (const entity of entities) {
       const jobId = generateJobId();
       const type = getJobType(entity);
 
@@ -586,7 +583,8 @@ export function UpscaleQueueProvider({ children }: PropsWithChildren) {
       jobs: [...prev.jobs, ...newJobs],
     }));
 
-    const label = sorted.length === 1 ? getMediaLabel(newJobs[0]!.type) : `${sorted.length} files`;
+    const label =
+      entities.length === 1 ? getMediaLabel(newJobs[0]!.type) : `${entities.length} files`;
     logger.info(`Upscale queued: ${label}`);
   };
 

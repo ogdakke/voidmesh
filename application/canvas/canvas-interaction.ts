@@ -2,6 +2,7 @@ import { config } from "#config";
 import {
   type CanvasStore,
   type GameLoop,
+  type ActionLayerController,
   SpacePanMode,
   type ViewportAnimationController,
 } from "#engine";
@@ -9,9 +10,10 @@ import {
   calculateCenteredOffset,
   calculateFitToView,
   easings,
+  screenToWorld,
   zoomToPoint,
 } from "#lib/canvas-math.ts";
-import type { Point } from "#types/canvas.ts";
+import type { CanvasCallout, Point, ShaderCanvasEntity } from "#types/canvas.ts";
 
 export interface CanvasSurfaceMetrics {
   width: number;
@@ -29,6 +31,14 @@ export interface CanvasInteractionService {
   start(): void;
   stop(): void;
   markContainerDirty(): void;
+  resizeSurface(
+    previous: { width: number; height: number } | null,
+    next: {
+      width: number;
+      height: number;
+    },
+    dpr: number,
+  ): void;
   pointerDown(point: Point, shiftKey: boolean): boolean;
   pointerMove(point: Point): void;
   pointerUp(point: Point): void;
@@ -46,18 +56,31 @@ export interface CanvasInteractionService {
   selectAll(): void;
   clearSelection(): void;
   setMultiSelectMode(enabled: boolean): void;
+  replaceSelection(ids: string[]): void;
+  setCanvasCallouts(callouts: readonly CanvasCallout[]): void;
+  getActionLayerEntityOffset(): Point;
+  updateActionLayerSafeZone(progress: number): void;
+  cancelActionLayer(): void;
+  captureContextMenuState(): {
+    entity: ShaderCanvasEntity | undefined;
+    selectedEntities: ShaderCanvasEntity[];
+  };
+  getEntities(ids: readonly string[]): ShaderCanvasEntity[];
+  screenToWorld(point: Point, containerRect: DOMRect, dpr: number): Point;
 }
 
 interface CanvasInteractionDependencies {
   store: CanvasStore;
   gameLoop: GameLoop;
   viewportAnimation: ViewportAnimationController;
+  actionLayer: ActionLayerController;
 }
 
 export function createCanvasInteractionService({
   store,
   gameLoop,
   viewportAnimation,
+  actionLayer,
 }: CanvasInteractionDependencies): CanvasInteractionService {
   const animateTo = (viewport: ReturnType<CanvasStore["getViewport"]>, duration: number) => {
     viewportAnimation.animateTo(viewport, {
@@ -74,6 +97,16 @@ export function createCanvasInteractionService({
     start: () => gameLoop.start(),
     stop: () => gameLoop.stop(),
     markContainerDirty: () => store.setContainerDirty(),
+    resizeSurface(previous, next, dpr) {
+      if (previous && (previous.width !== next.width || previous.height !== next.height)) {
+        const { zoom } = store.getViewport();
+        store.panBy({
+          x: ((previous.width - next.width) * dpr) / (2 * zoom),
+          y: ((previous.height - next.height) * dpr) / (2 * zoom),
+        });
+      }
+      store.setContainerDirty();
+    },
     pointerDown(point, shiftKey) {
       gameLoop.handlePointerDown(point, shiftKey);
       return gameLoop.getDragSelectMode() !== null;
@@ -146,5 +179,28 @@ export function createCanvasInteractionService({
     selectAll: () => store.selectAll(),
     clearSelection: () => store.clearSelection(),
     setMultiSelectMode: (enabled) => store.setMultiSelectMode(enabled),
+    replaceSelection: (ids) => store.replaceSelection(ids),
+    setCanvasCallouts: (callouts) => store.setCanvasCallouts(callouts),
+    getActionLayerEntityOffset: () => actionLayer.getEntityOffset(),
+    updateActionLayerSafeZone: (progress) => actionLayer.updateSafeZoneProgress(progress),
+    cancelActionLayer: () => actionLayer.cancel(),
+    captureContextMenuState() {
+      const state = store.getState();
+      const entity = state.contextOpenEntityId
+        ? state.entities.get(state.contextOpenEntityId)
+        : undefined;
+      return { entity, selectedEntities: store.getSelectedEntities() };
+    },
+    getEntities(ids) {
+      const entitiesById = store.getState().entities;
+      const entities: ShaderCanvasEntity[] = [];
+      for (const id of ids) {
+        const entity = entitiesById.get(id);
+        if (entity) entities.push(entity);
+      }
+      return entities;
+    },
+    screenToWorld: (point, containerRect, dpr) =>
+      screenToWorld(point, store.getViewport(), containerRect, dpr),
   };
 }

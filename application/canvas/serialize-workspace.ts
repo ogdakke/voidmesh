@@ -2,15 +2,15 @@ import { canvasStore } from "#engine";
 import { config } from "#config";
 import { createPlaybackState } from "#lib/media-playback.ts";
 import type { ColorPalette, ShaderCanvasEntity } from "#types/canvas.ts";
-import { paletteStore } from "../palette-store.ts";
-import { detectVideoExtension, videoElementToBytes } from "./media.ts";
+import { paletteStore } from "#lib/palette-store.ts";
+import { detectVideoExtension, videoElementToBytes } from "#lib/serialization/media.ts";
 import type {
   SerializeMediaEntry,
   SerializedEntity,
   SerializedPlaybackState,
   StudioManifest,
-} from "./types.ts";
-import { CURRENT_VERSION } from "./version.ts";
+} from "#lib/serialization/types.ts";
+import { CURRENT_VERSION } from "#lib/serialization/version.ts";
 
 /** Synchronous flag — prevents overlapping saves even when React state hasn't flushed yet. */
 let isSaving = false;
@@ -81,9 +81,12 @@ let serializeWorker: Worker | null = null;
 
 function getSerializeWorker(): Worker {
   if (!serializeWorker) {
-    serializeWorker = new Worker(new URL("./serialize-worker.ts", import.meta.url), {
-      type: "module",
-    });
+    serializeWorker = new Worker(
+      new URL("../../lib/serialization/serialize-worker.ts", import.meta.url),
+      {
+        type: "module",
+      },
+    );
   }
   return serializeWorker;
 }

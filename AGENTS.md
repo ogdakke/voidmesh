@@ -25,7 +25,7 @@ Infinite canvas app with real-time WebGPU shader effects. Users drop images/vide
 - `application/` — Plain TypeScript use cases and deep module interfaces. Coordinates engine behavior for React/DOM adapters without exposing engine singletons to UI code.
 - `engine/` — Canvas state (`CanvasStore`) and input handling (`GameLoop`). GPU-agnostic, framework-independent.
 - `renderer/` — WebGPU rendering pipeline, shader registry, effect composition, export (MP4/MOV/GIF/PNG/JPEG). `renderer/shaders/` has per-effect `ShaderPass` subclasses.
-- `lib/` — Pure utilities. Math, config, media loading, serialization (`.vdmsh`), undo (command pattern), palette extraction, physics scroll. No React, no GPU.
+- `lib/` — Pure utilities. Math, config, media loading, `.vdmsh` codecs, undo (command pattern), palette extraction, physics scroll. No React, no GPU.
 - `types/` — Domain types (`ShaderCanvasEntity`, `ShaderParams`, `Viewport`, all enums). Bottom of dependency graph.
 - `context/` — React context providers wiring engine + renderer + URL state. `canvas-context.tsx` is the main orchestrator.
 - `hooks/` — React hooks bridging engine state to components. `use-param-value.ts` is the standard param accessor.
@@ -39,7 +39,7 @@ React 19 + Compiler, rolldown-vite 8, WebGPU, TypeScript (strict), Bun, oxlint.
 
 `#engine` -> `engine/index.ts`, `#application/*`, `#config` -> `lib/config/index.ts`, `#lib/*`, `#types/*`, `#renderer/*`, `#hooks/*`, `#components/*`, `#context/*`, `#ui/*` -> `components/ui/*`, `#media/*` -> `media/*`, `#weights/*` -> `weights/*`.
 
-Cross-module imports must use these `#...` package imports. `plugins/oxlint-import-policy.js` reads `package.json#imports` and enforces both alias use and dependency direction. Its `allowFiles` list is an explicit legacy-debt baseline; do not add entries for new code.
+Cross-module imports must use these `#...` package imports. `plugins/oxlint-import-policy.js` reads `package.json#imports` and enforces both alias use and dependency direction across the full tree; there is no legacy exception list.
 
 ## Lint & Typecheck
 

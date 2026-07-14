@@ -2,7 +2,7 @@ import { Toast } from "@base-ui/react/toast";
 import { Xmark } from "iconoir-react";
 import "./toast.css";
 import type { PropsWithChildren } from "react";
-import { toastManager } from "./toast-manager.ts";
+import { toastManager } from "#application/notifications.ts";
 
 export function ToastProvider({ children }: PropsWithChildren) {
   return (

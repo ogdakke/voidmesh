@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   CanvasCommandsContext,
   CanvasInteractionContext,
+  CanvasMediaContext,
   CanvasRendererContext,
   DebugType,
   type CanvasCommands,
@@ -9,6 +10,7 @@ import {
   type AddEntityOptions,
 } from "./use-canvas.ts";
 import { createCanvasInteractionService } from "#application/canvas/canvas-interaction.ts";
+import { createCanvasMediaService } from "#application/canvas/canvas-media.ts";
 import {
   useQueryState,
   parseAsBoolean,
@@ -42,7 +44,7 @@ import {
   generatePaletteId,
   generatePaletteName,
   generatePaletteShortName,
-} from "#components/palette-preset/palette-presets.ts";
+} from "#application/canvas/palettes.ts";
 import type { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
 import type {
   DecodedWorkspace,
@@ -52,14 +54,17 @@ import type {
 import { type ImageExportOptions, getImageExtension } from "#renderer/export-formats.ts";
 import {
   canvasStore,
+  actionLayerController,
   disintegrationController,
   gameLoop,
   viewportAnimation,
+  perfOverlay,
   type CanvasEntityUpdate,
 } from "#engine";
+import { PerfGraphRenderer } from "#renderer/perf-graph-renderer.ts";
 
-import { toastManager } from "#components/ui/toast/toast-manager.ts";
-import { hints } from "#components/ui/hint/hint-manager.ts";
+import { toastManager } from "#application/notifications.ts";
+import { hints } from "#application/hints.ts";
 import { extractOriginalPalette, cloneMediaSource } from "#lib/media-loader.ts";
 import { disposeEntityMedia, disposeMediaSource } from "#lib/media-resources.ts";
 import { Command, undo } from "#lib/undo.ts";
@@ -90,6 +95,12 @@ import {
 let nextOwnerToken = 0;
 const resourceOwners = new Map<string, number>();
 const RENDER_ERROR_TOAST_ID = "canvas-render-error";
+const createPerfGraphRenderer = (
+  canvas: HTMLCanvasElement,
+  device: GPUDevice,
+  format: GPUTextureFormat,
+  colorSpace: PredefinedColorSpace,
+) => new PerfGraphRenderer(canvas, device, format, colorSpace);
 
 function formatErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
@@ -258,13 +269,16 @@ function paletteToUrlParams(palette: ColorPalette | undefined): {
 }
 
 export function CanvasProvider({ children }: { children: ReactNode }) {
+  useEffect(() => perfOverlay.setGraphRendererFactory(createPerfGraphRenderer), []);
   const [interaction] = useState(() =>
     createCanvasInteractionService({
       store: canvasStore,
       gameLoop,
       viewportAnimation,
+      actionLayer: actionLayerController,
     }),
   );
+  const [media] = useState(() => createCanvasMediaService(canvasStore));
   // Debug mode URL param
   const [debugType, setDebugType] = useQueryState(
     "debug",
@@ -2003,7 +2017,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
   // Serialization API — lazy-loads the serialization module
   const serializeCanvas = async (): Promise<Blob | null> => {
-    const { serialize } = await import("#lib/serialization/index.ts");
+    const { serialize } = await import("#application/canvas/serialize-workspace.ts");
     return serialize();
   };
 
@@ -2327,9 +2341,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   return (
     <CanvasCommandsContext.Provider value={commands}>
       <CanvasInteractionContext.Provider value={interaction}>
-        <CanvasRendererContext.Provider value={rendererService}>
-          {children}
-        </CanvasRendererContext.Provider>
+        <CanvasMediaContext.Provider value={media}>
+          <CanvasRendererContext.Provider value={rendererService}>
+            {children}
+          </CanvasRendererContext.Provider>
+        </CanvasMediaContext.Provider>
       </CanvasInteractionContext.Provider>
     </CanvasCommandsContext.Provider>
   );
