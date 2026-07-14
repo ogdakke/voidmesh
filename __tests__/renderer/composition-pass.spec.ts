@@ -47,7 +47,7 @@ describe("CompositionPass instancing", () => {
     releaseImageEntity(secondEntity);
   });
 
-  test("preserves texture and selected-label boundaries in z order", () => {
+  test("batches selected entities with adjacent entities sharing their texture", () => {
     const { device } = createDevice();
     const pass = createPass(device);
     const base = createTestEntity({ id: "batch-base" });
@@ -65,27 +65,14 @@ describe("CompositionPass instancing", () => {
       prepare(pass, final, textureB),
     ];
     const renderPass = createRenderPass();
-    const labelPipeline = { kind: "label" } as unknown as GPURenderPipeline;
-    const afterItem = vi.fn<(item: CompositionDrawItem) => void>(() => {
-      renderPass.setPipeline(labelPipeline);
-    });
-
-    pass.drawItems(renderPass, items, afterItem);
+    pass.drawItems(renderPass, items);
 
     expect(renderPass.draw.mock.calls).toEqual([
-      [6, 2, 0, 0],
-      [6, 1, 0, 2],
-      [6, 1, 0, 3],
+      [6, 4, 0, 0],
       [6, 1, 0, 4],
     ]);
-    expect(afterItem).toHaveBeenCalledOnce();
-    expect(afterItem).toHaveBeenCalledWith(items[2]);
     expect(device.createBindGroup).toHaveBeenCalledTimes(2);
-    expect(renderPass.setPipeline).toHaveBeenCalledTimes(3);
-    expect(renderPass.setPipeline.mock.calls[1]?.[0]).toBe(labelPipeline);
-    expect(renderPass.setPipeline.mock.calls[2]?.[0]).toBe(
-      renderPass.setPipeline.mock.calls[0]?.[0],
-    );
+    expect(renderPass.setPipeline).toHaveBeenCalledOnce();
 
     pass.destroy();
     releaseImageEntity(base);
@@ -154,7 +141,7 @@ describe("CompositionPass instancing", () => {
     releaseImageEntity(second);
   });
 
-  test("persists selection and debug flags and preserves a single label boundary", () => {
+  test("persists selection and debug flags without splitting the full-scene batch", () => {
     const { device } = createDevice();
     const pass = createPass(device);
     const first = createTestEntity({ id: "full-scene-selected" });
@@ -177,13 +164,8 @@ describe("CompositionPass instancing", () => {
     expect(uints[14]).toBe(1);
 
     const renderPass = createRenderPass();
-    const afterSelected = vi.fn<() => void>();
-    expect(pass.drawFullSceneBatch(renderPass, key, afterSelected)).toBe(true);
-    expect(renderPass.draw.mock.calls).toEqual([
-      [6, 1, 0, 0],
-      [6, 1, 0, 1],
-    ]);
-    expect(afterSelected).toHaveBeenCalledOnce();
+    expect(pass.drawFullSceneBatch(renderPass, key)).toBe(true);
+    expect(renderPass.draw).toHaveBeenCalledWith(6, 2, 0, 0);
 
     pass.destroy();
     releaseImageEntity(first);
@@ -201,9 +183,7 @@ describe("CompositionPass instancing", () => {
     pass.prepareFullSceneBatch({ ...key, entities: [first, second], selectedEntityIds });
     device.queue.writeBuffer.mockClear();
 
-    expect(
-      pass.drawFullSceneBatch(createRenderPass(), key, undefined, { x: 120, y: -45 }, 0.95),
-    ).toBe(true);
+    expect(pass.drawFullSceneBatch(createRenderPass(), key, { x: 120, y: -45 }, 0.95)).toBe(true);
 
     expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
     const dragUniform = device.queue.writeBuffer.mock.calls[0]![2] as Float32Array;

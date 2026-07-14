@@ -544,7 +544,6 @@ export class CompositionPass {
   drawFullSceneBatch(
     pass: GPURenderPassEncoder,
     key: FullSceneBatchKey,
-    afterSingleSelected?: () => void,
     dragOffset?: { x: number; y: number },
     dragScale = 1,
   ): boolean {
@@ -559,35 +558,16 @@ export class CompositionPass {
     );
     this.#instanceWriteCursor = Math.max(this.#instanceWriteCursor, key.instanceCount);
     pass.setPipeline(this.#instancedPipeline);
-    const bindGroup = this.#getInstancedBindGroup(key.texture);
-    pass.setBindGroup(0, bindGroup);
-    const selectedIndex = key.singleSelectedIndex;
-    if (!afterSingleSelected || selectedIndex < 0) {
-      pass.draw(6, key.instanceCount, 0, 0);
-      return true;
-    }
-
-    const firstCount = selectedIndex + 1;
-    pass.draw(6, firstCount, 0, 0);
-    afterSingleSelected();
-    const remainingCount = key.instanceCount - firstCount;
-    if (remainingCount > 0) {
-      pass.setPipeline(this.#instancedPipeline);
-      pass.setBindGroup(0, bindGroup);
-      pass.draw(6, remainingCount, 0, firstCount);
-    }
+    pass.setBindGroup(0, this.#getInstancedBindGroup(key.texture));
+    pass.draw(6, key.instanceCount, 0, 0);
     return true;
   }
 
-  drawItems(
-    pass: GPURenderPassEncoder,
-    items: readonly CompositionDrawItem[],
-    afterItem?: (item: CompositionDrawItem) => void,
-  ): void {
+  drawItems(pass: GPURenderPassEncoder, items: readonly CompositionDrawItem[]): void {
     this.#writeDragUniform(0, 0, 0);
     this.#fullSceneBatch = null;
     const firstWrittenInstance = this.#instanceWriteCursor;
-    const instanceCount = this.#prepareDrawCommands(items, !!afterItem);
+    const instanceCount = this.#prepareDrawCommands(items);
     if (instanceCount > 0) {
       const uploadBytes = instanceCount * INSTANCE_STRIDE_BYTES;
       const buffer = this.#ensureInstanceCapacity(this.#instanceWriteCursor);
@@ -621,14 +601,6 @@ export class CompositionPass {
         }
         pass.setBindGroup(0, item.bindGroup);
         pass.draw(6);
-      }
-
-      if (command.item?.isSelected && afterItem) {
-        afterItem(command.item);
-        // Overlay callbacks encode into the same render pass and may replace the
-        // active pipeline/bind groups. Force composition state to be rebound for
-        // the next command instead of relying on our now-stale local tracker.
-        currentPipeline = null;
       }
     }
   }
@@ -705,7 +677,7 @@ export class CompositionPass {
     this.#fullSceneBatch = null;
   }
 
-  #prepareDrawCommands(items: readonly CompositionDrawItem[], isolateSelected: boolean): number {
+  #prepareDrawCommands(items: readonly CompositionDrawItem[]): number {
     let commandCount = 0;
     let instanceCount = 0;
     const firstInstance = this.#instanceWriteCursor;
@@ -718,10 +690,8 @@ export class CompositionPass {
         const instanceIndex = firstInstance + instanceCount;
         this.#writeInstance(instanceIndex, item);
 
-        const labelBoundary = isolateSelected && item.isSelected;
         const previous = commandCount > 0 ? this.#drawCommands[commandCount - 1] : undefined;
         if (
-          !labelBoundary &&
           previous?.kind === "texture" &&
           previous.texture === texture &&
           previous.item === null
@@ -733,7 +703,7 @@ export class CompositionPass {
           command.texture = texture;
           command.firstInstance = instanceIndex;
           command.instanceCount = 1;
-          command.item = labelBoundary ? item : null;
+          command.item = null;
         }
         instanceCount++;
         continue;

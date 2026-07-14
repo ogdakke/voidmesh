@@ -206,10 +206,7 @@ export class EntityLabelPass {
     this.#isAnimating = this.#dragAnimHandle?.isActive ?? false;
   }
 
-  /**
-   * Draw a label for a single entity. Call within the entity composition loop
-   * (after the entity's own draw call) so labels respect z-ordering.
-   */
+  /** Draw a label in the dedicated scene-overlay pass after all entity draws. */
   drawLabel(
     pass: GPURenderPassEncoder,
     entity: ShaderCanvasEntity,

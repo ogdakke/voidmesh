@@ -375,19 +375,8 @@ export class InfiniteCanvasRenderer {
     this.#cachedCanvasHeight = initialRect.height;
   }
 
-  #drawCompositionItems(
-    pass: GPURenderPassEncoder,
-    items: readonly CompositionDrawItem[],
-    selectedEntityCount: number,
-  ): void {
-    const labelPass = selectedEntityCount === 1 ? this.#entityLabelPass : null;
-    this.#compositionPass!.drawItems(
-      pass,
-      items,
-      labelPass
-        ? (item) => labelPass.drawLabel(pass, item.entity, item.offsetX, item.offsetY)
-        : undefined,
-    );
+  #drawCompositionItems(pass: GPURenderPassEncoder, items: readonly CompositionDrawItem[]): void {
+    this.#compositionPass!.drawItems(pass, items);
   }
 
   /**
@@ -500,7 +489,8 @@ export class InfiniteCanvasRenderer {
     this.#lastPhaseStats.batchAdmissionMs = preparationPhases.batchAdmissionMs;
     this.#lastPhaseStats.spatialQueryMs = preparationPhases.spatialQueryMs;
     this.#lastPhaseStats.visibleEntityPreparationMs = preparationPhases.visibleEntityPreparationMs;
-    const { entityDrawItems, actionLayerDrawItems, fullSceneBatch } = preparedEntityDrawItems;
+    const { entityDrawItems, actionLayerDrawItems, fullSceneBatch, singleSelectedDrawItem } =
+      preparedEntityDrawItems;
     let hasAnimatingContent = preparedEntityDrawItems.hasAnimatingContent;
     this.#compositionPass.beginFrame(
       fullSceneBatch?.instanceCount ?? entityDrawItems.length + actionLayerDrawItems.length,
@@ -520,10 +510,14 @@ export class InfiniteCanvasRenderer {
     // Pass 1: Render dot grid background
     this.#gridPass.encode({ encoder, targetView: sceneTargetView, viewport, width, height });
 
-    // Pass 2: Render all entities with interleaved labels (z-ordered)
+    // Pass 2: Render all entities. The selected entity label is a later overlay,
+    // so entity z-order cannot cover it or split composition batches.
     // Update label animation state once per frame
     this.#entityLabelPass?.beginFrame(viewport, width, height, state.dragVisual.isDragPhase);
-    const selectedEntityCount = selectedEntityIds.size;
+    const fullSceneSelectedEntity =
+      fullSceneBatch && fullSceneBatch.singleSelectedIndex >= 0
+        ? entities[fullSceneBatch.singleSelectedIndex]
+        : undefined;
     const entityPass = encoder.beginRenderPass({
       label: "Entity composition pass",
       colorAttachments: [
@@ -535,18 +529,10 @@ export class InfiniteCanvasRenderer {
       ],
     });
     if (fullSceneBatch) {
-      const selectedEntity =
-        fullSceneBatch.singleSelectedIndex >= 0
-          ? entities[fullSceneBatch.singleSelectedIndex]
-          : undefined;
-      const labelPass = selectedEntity ? this.#entityLabelPass : null;
       if (
         !this.#compositionPass.drawFullSceneBatch(
           entityPass,
           fullSceneBatch,
-          labelPass && selectedEntity
-            ? () => labelPass.drawLabel(entityPass, selectedEntity, 0, 0)
-            : undefined,
           state.dragVisual.offset,
           state.dragVisual.scale,
         )
@@ -554,13 +540,9 @@ export class InfiniteCanvasRenderer {
         throw new Error("Prepared full-scene composition batch was invalidated before drawing");
       }
     } else {
-      this.#drawCompositionItems(entityPass, entityDrawItems, selectedEntityCount);
+      this.#drawCompositionItems(entityPass, entityDrawItems);
     }
     entityPass.end();
-
-    // Evict label caches for deselected entities
-    this.#entityLabelPass?.endFrame(selectedEntityIds);
-    if (this.#entityLabelPass?.isAnimating) hasAnimatingContent = true;
 
     // Pass 2a: Action layer blur overlay
     // Blur+dim everything, then re-render selected entities sharp on top
@@ -600,9 +582,36 @@ export class InfiniteCanvasRenderer {
           },
         ],
       });
-      this.#drawCompositionItems(sharpPass, actionLayerDrawItems, selectedEntityCount);
+      this.#drawCompositionItems(sharpPass, actionLayerDrawItems);
       sharpPass.end();
     }
+
+    // Labels are scene overlays: draw after every entity phase, but before canvas
+    // callouts, selection UI, viewport lensing, and the final progressive blur.
+    const labelEntity = fullSceneSelectedEntity ?? singleSelectedDrawItem?.entity;
+    if (labelEntity && this.#entityLabelPass) {
+      const labelPass = encoder.beginRenderPass({
+        label: "Entity label overlay pass",
+        colorAttachments: [
+          {
+            view: sceneTargetView,
+            loadOp: "load",
+            storeOp: "store",
+          },
+        ],
+      });
+      this.#entityLabelPass.drawLabel(
+        labelPass,
+        labelEntity,
+        singleSelectedDrawItem?.offsetX ?? 0,
+        singleSelectedDrawItem?.offsetY ?? 0,
+      );
+      labelPass.end();
+    }
+
+    // Evict label caches only after the overlay has consumed the selected entry.
+    this.#entityLabelPass?.endFrame(selectedEntityIds);
+    if (this.#entityLabelPass?.isAnimating) hasAnimatingContent = true;
 
     if (state.canvasCallouts.length > 0 && this.#canvasCalloutPass) {
       this.#canvasCalloutPass.beginFrame(viewport, width);

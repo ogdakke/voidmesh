@@ -41,6 +41,7 @@ export interface PreparedEntityDrawItems {
   entityDrawItems: CompositionDrawItem[];
   actionLayerDrawItems: CompositionDrawItem[];
   fullSceneBatch: FullSceneBatchKey | null;
+  singleSelectedDrawItem: CompositionDrawItem | null;
   hasAnimatingContent: boolean;
 }
 
@@ -69,6 +70,7 @@ export class EntityDrawItemPreparer {
     entityDrawItems: this.#entityDrawItems,
     actionLayerDrawItems: this.#actionLayerDrawItems,
     fullSceneBatch: null,
+    singleSelectedDrawItem: null,
     hasAnimatingContent: false,
   };
   #fullSceneBatchKey: FullSceneBatchKey | null = null;
@@ -120,6 +122,7 @@ export class EntityDrawItemPreparer {
       this.#snapshotEntityVersion = options.entityVersion;
     }
     this.#prepared.fullSceneBatch = null;
+    this.#prepared.singleSelectedDrawItem = null;
     this.#fullSceneAdmissionQueried = false;
     let hasAnimatingContent = false;
     this.#phaseStats.batchAdmissionMs = 0;
@@ -258,6 +261,9 @@ export class EntityDrawItemPreparer {
         compositionOptions.visualScale = visualScale;
       }
       const drawItem = this.#compositionPass.prepareDrawItem(compositionOptions);
+      if (selectedEntityIds.size === 1 && isSelected) {
+        this.#prepared.singleSelectedDrawItem = drawItem;
+      }
 
       if (isActionLayerEntity) {
         actionLayerDrawItems.push(drawItem);
