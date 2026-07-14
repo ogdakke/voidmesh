@@ -5,7 +5,7 @@ import {
   releaseImageAsset,
   retainImageAsset,
 } from "#lib/media-assets.ts";
-import { cloneMediaSource } from "#lib/media-loader.ts";
+import { cloneImageMediaSource, cloneMediaSource } from "#lib/media-loader.ts";
 
 function createBitmap(close = vi.fn<() => void>()): ImageBitmap {
   return { width: 640, height: 853, close } as unknown as ImageBitmap;
@@ -43,6 +43,25 @@ describe("shared image asset lifetime", () => {
 
     expect(duplicate.mediaSource).toEqual({ type: "image", asset });
     expect(duplicate.imageBitmap).toBe(asset.imageBitmap);
+    expect(getImageAssetReferenceCount(asset)).toBe(2);
+
+    releaseImageAsset(asset);
+    releaseImageAsset(asset);
+  });
+
+  test("duplicates shared images synchronously for bulk operations", () => {
+    const asset = createImageAsset({
+      id: "image-synchronous-duplicate",
+      imageBitmap: createBitmap(),
+      blob: new Blob(["image"], { type: "image/jpeg" }),
+    });
+
+    const duplicate = cloneImageMediaSource({ type: "image", asset });
+
+    expect(duplicate).toEqual({
+      mediaSource: { type: "image", asset },
+      imageBitmap: asset.imageBitmap,
+    });
     expect(getImageAssetReferenceCount(asset)).toBe(2);
 
     releaseImageAsset(asset);

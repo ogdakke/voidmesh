@@ -85,6 +85,9 @@ interface BenchActivityMetrics {
   processedTextureAllocations: number;
   sourceUploads: number;
   evictions: number;
+  fullSceneBatchRebuilds: number;
+  fullSceneBatchUploadBytes: number;
+  normalInstanceUploadBytes: number;
 }
 
 interface BenchFrameSample {
@@ -96,6 +99,7 @@ interface BenchFrameSample {
   sourceUpdateMs: number;
   cpuCallMs: number;
   cpuRenderMs: number;
+  renderPhases: ReturnType<InfiniteCanvasRenderer["getFrameStats"]>["phases"] | null;
   queueWaitMs: number | null;
   endToEndMs: number | null;
   renderedEntities: number;
@@ -215,6 +219,8 @@ interface BenchMetadata {
 
 interface BenchEntitySet {
   entities: ShaderCanvasEntity[];
+  selectedEntityIds?: ReadonlySet<string>;
+  debugMode?: boolean;
   beforeFrame?: (frameIndex: number) => void;
   getViewportOffset?: (frameIndex: number) => { x: number; y: number };
   getViewport?: (frameIndex: number, sampleFrameIndex: number) => Viewport;
@@ -448,6 +454,8 @@ const imageManyEntityScenarios: BenchScenario[] = MANY_ENTITY_SCENARIOS.map((sce
   frames: scenario.frames,
   warmupFrames: scenario.warmupFrames,
   samples: scenario.samples,
+  paceWithAnimationFrame: scenario.paceWithAnimationFrame,
+  recordPerFrame: scenario.recordPerFrame,
   manyEntity: scenario,
 }));
 
@@ -1067,6 +1075,8 @@ async function createManyEntitySet(
 
     return {
       entities,
+      selectedEntityIds: createManyEntitySelection(config, entities),
+      debugMode: config.debugMode,
       decodedAssetEstimateBytes: estimateDecodedAssetBytes(config),
       getViewportOffset: (frameIndex) =>
         getManyEntityViewportOffset(config, frameIndex, {
@@ -1091,6 +1101,19 @@ async function createManyEntitySet(
     );
     throw error;
   }
+}
+
+function createManyEntitySelection(
+  config: ManyEntityScenarioConfig,
+  entities: readonly ShaderCanvasEntity[],
+): ReadonlySet<string> | undefined {
+  const selectedCount =
+    config.selectedEntityCount ??
+    (config.selectedEntityFraction === undefined
+      ? undefined
+      : Math.floor(entities.length * config.selectedEntityFraction));
+  if (selectedCount === undefined) return undefined;
+  return new Set(entities.slice(0, selectedCount).map((entity) => entity.id));
 }
 
 async function createSyntheticImageAssets(options: {
@@ -1251,6 +1274,8 @@ function createRenderState(
   entities: ShaderCanvasEntity[],
   dirty: boolean,
   viewport: Viewport = { offset: { x: 0, y: 0 }, zoom: 1 },
+  selectedEntityIds: ReadonlySet<string> = new Set(),
+  debugMode = false,
 ): RenderState {
   const entitySpatialIndex = new EntitySpatialIndex();
   for (const entity of entities) entitySpatialIndex.upsert(entity);
@@ -1260,8 +1285,9 @@ function createRenderState(
     entitySpatialIndex,
     entityVersion: 0,
     geometryVersion: 0,
-    selectedEntityIds: new Set(),
-    debugMode: false,
+    selectionVersion: selectedEntityIds.size > 0 ? 1 : 0,
+    selectedEntityIds,
+    debugMode,
     debugView: "none",
     dirty,
     canvasCallouts: [],
@@ -1295,6 +1321,8 @@ async function runFrames(params: {
   synchronizeEachFrame?: boolean;
   paceWithAnimationFrame?: boolean;
   recordPerFrame?: boolean;
+  selectedEntityIds?: ReadonlySet<string>;
+  debugMode?: boolean;
 }): Promise<{
   totalMs: number;
   cpuEncodeMs: number;
@@ -1326,7 +1354,13 @@ async function runFrames(params: {
   const sourceUpdateSamples: number[] = [];
   const cpuRenderSamples: number[] = [];
   const endToEndSamples: number[] = [];
-  const renderState = createRenderState(params.entities, true);
+  const renderState = createRenderState(
+    params.entities,
+    true,
+    { offset: { x: 0, y: 0 }, zoom: 1 },
+    params.selectedEntityIds,
+    params.debugMode,
+  );
 
   for (let index = 0; index < params.frameCount; index += 1) {
     const frameIndex = params.startFrameIndex + index;
@@ -1376,6 +1410,7 @@ async function runFrames(params: {
         sourceUpdateMs,
         cpuCallMs: cpuEnd - cpuStart,
         cpuRenderMs: frameStats.renderTime,
+        renderPhases: frameStats.phases ? { ...frameStats.phases } : null,
         queueWaitMs: params.synchronizeEachFrame ? frameEnd - cpuEnd : null,
         endToEndMs,
         renderedEntities: frameRenderedCount,
@@ -1431,6 +1466,15 @@ async function runFrames(params: {
       sourceUploads:
         resources.entityTextures.sourceUploads - resourcesBefore.entityTextures.sourceUploads,
       evictions: resources.entityTextures.evictions - resourcesBefore.entityTextures.evictions,
+      fullSceneBatchRebuilds:
+        resources.composition.fullSceneBatchRebuilds -
+        resourcesBefore.composition.fullSceneBatchRebuilds,
+      fullSceneBatchUploadBytes:
+        resources.composition.fullSceneBatchUploadBytes -
+        resourcesBefore.composition.fullSceneBatchUploadBytes,
+      normalInstanceUploadBytes:
+        resources.composition.normalInstanceUploadBytes -
+        resourcesBefore.composition.normalInstanceUploadBytes,
     },
   };
 }
@@ -1467,6 +1511,8 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
       startFrameIndex: frameIndex,
       synchronizeEachFrame: scenario.synchronizeEachFrame,
       paceWithAnimationFrame: scenario.paceWithAnimationFrame,
+      selectedEntityIds: entitySet.selectedEntityIds,
+      debugMode: entitySet.debugMode,
     });
     frameIndex += scenario.warmupFrames;
 
@@ -1500,6 +1546,8 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
         synchronizeEachFrame: scenario.synchronizeEachFrame,
         paceWithAnimationFrame: scenario.paceWithAnimationFrame,
         recordPerFrame: scenario.recordPerFrame,
+        selectedEntityIds: entitySet.selectedEntityIds,
+        debugMode: entitySet.debugMode,
       });
       frameIndex += scenario.frames;
       samples.push(result.totalMs);
@@ -1608,7 +1656,13 @@ function getResourceCounterDelta(
   after: BenchResourceStats,
 ): Pick<
   BenchActivityMetrics,
-  "sourceTextureAllocations" | "processedTextureAllocations" | "sourceUploads" | "evictions"
+  | "sourceTextureAllocations"
+  | "processedTextureAllocations"
+  | "sourceUploads"
+  | "evictions"
+  | "fullSceneBatchRebuilds"
+  | "fullSceneBatchUploadBytes"
+  | "normalInstanceUploadBytes"
 > {
   return {
     sourceTextureAllocations:
@@ -1619,6 +1673,12 @@ function getResourceCounterDelta(
       before.entityTextures.processedTextureAllocations,
     sourceUploads: after.entityTextures.sourceUploads - before.entityTextures.sourceUploads,
     evictions: after.entityTextures.evictions - before.entityTextures.evictions,
+    fullSceneBatchRebuilds:
+      after.composition.fullSceneBatchRebuilds - before.composition.fullSceneBatchRebuilds,
+    fullSceneBatchUploadBytes:
+      after.composition.fullSceneBatchUploadBytes - before.composition.fullSceneBatchUploadBytes,
+    normalInstanceUploadBytes:
+      after.composition.normalInstanceUploadBytes - before.composition.normalInstanceUploadBytes,
   };
 }
 
@@ -1634,6 +1694,9 @@ function medianActivity(samples: readonly BenchActivityMetrics[]): BenchActivity
     processedTextureAllocations: medianField("processedTextureAllocations"),
     sourceUploads: medianField("sourceUploads"),
     evictions: medianField("evictions"),
+    fullSceneBatchRebuilds: medianField("fullSceneBatchRebuilds"),
+    fullSceneBatchUploadBytes: medianField("fullSceneBatchUploadBytes"),
+    normalInstanceUploadBytes: medianField("normalInstanceUploadBytes"),
   };
 }
 

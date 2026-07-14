@@ -16,6 +16,15 @@ export interface FrameStats {
   renderTime: number;
   entityCount: number;
   renderedCount: number;
+  phases?: {
+    setupMs: number;
+    prepareMs: number;
+    batchAdmissionMs: number;
+    spatialQueryMs: number;
+    visibleEntityPreparationMs: number;
+    encodeMs: number;
+    submitMs: number;
+  };
 }
 
 export type PerfOverlayMode = "raf" | "rendered";

@@ -130,19 +130,60 @@ describe("CompositionPass instancing", () => {
     const texture = createTexture();
     const key = createFullSceneKey(texture, 2);
 
-    pass.prepareFullSceneBatch({ ...key, entities: [first, second] });
+    pass.prepareFullSceneBatch({ ...key, entities: [first, second], selectedEntityIds: new Set() });
     pass.beginFrame(2);
     expect(pass.drawFullSceneBatch(createRenderPass(), key)).toBe(true);
 
-    pass.prepareFullSceneBatch({ ...key, entities: [first, second] });
+    pass.prepareFullSceneBatch({ ...key, entities: [first, second], selectedEntityIds: new Set() });
     pass.beginFrame(2);
     const secondFramePass = createRenderPass();
     expect(pass.drawFullSceneBatch(secondFramePass, key)).toBe(true);
 
     expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
+    expect(pass.getStats()).toEqual({
+      fullSceneBatchRebuilds: 1,
+      fullSceneBatchUploadBytes: 64,
+      normalInstanceUploadBytes: 0,
+    });
     expect(secondFramePass.draw).toHaveBeenCalledWith(6, 2, 0, 0);
     expect(first.textureDirty).toBe(false);
     expect(second.textureDirty).toBe(false);
+
+    pass.destroy();
+    releaseImageEntity(first);
+    releaseImageEntity(second);
+  });
+
+  test("persists selection and debug flags and preserves a single label boundary", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const first = createTestEntity({ id: "full-scene-selected" });
+    const second = cloneImageEntity(first, "full-scene-after-selected", { x: 20, y: 0 });
+    const texture = createTexture();
+    const key = {
+      ...createFullSceneKey(texture, 2),
+      selectionVersion: 2,
+      debugMode: true,
+      singleSelectedIndex: 0,
+    };
+    const selectedEntityIds = new Set([first.id]);
+
+    pass.prepareFullSceneBatch({ ...key, entities: [first, second], selectedEntityIds });
+    const upload = device.queue.writeBuffer.mock.calls[0]![2] as ArrayBuffer;
+    const uints = new Uint32Array(upload);
+    expect(uints[5]).toBe(1);
+    expect(uints[6]).toBe(1);
+    expect(uints[13]).toBe(0);
+    expect(uints[14]).toBe(1);
+
+    const renderPass = createRenderPass();
+    const afterSelected = vi.fn<() => void>();
+    expect(pass.drawFullSceneBatch(renderPass, key, afterSelected)).toBe(true);
+    expect(renderPass.draw.mock.calls).toEqual([
+      [6, 1, 0, 0],
+      [6, 1, 0, 1],
+    ]);
+    expect(afterSelected).toHaveBeenCalledOnce();
 
     pass.destroy();
     releaseImageEntity(first);
@@ -158,9 +199,13 @@ describe("CompositionPass instancing", () => {
     const key = createFullSceneKey(texture, 2);
     const movedKey = { ...key, geometryVersion: 2 };
 
-    pass.prepareFullSceneBatch({ ...key, entities: [first, second] });
+    pass.prepareFullSceneBatch({ ...key, entities: [first, second], selectedEntityIds: new Set() });
     first.position.x = 5;
-    pass.prepareFullSceneBatch({ ...movedKey, entities: [first, second] });
+    pass.prepareFullSceneBatch({
+      ...movedKey,
+      entities: [first, second],
+      selectedEntityIds: new Set(),
+    });
     expect(device.queue.writeBuffer).toHaveBeenCalledTimes(2);
 
     pass.beginFrame(3);
@@ -178,6 +223,9 @@ function createFullSceneKey(texture: GPUTexture, instanceCount: number): FullSce
   return {
     entityVersion: 1,
     geometryVersion: 1,
+    selectionVersion: 1,
+    debugMode: false,
+    singleSelectedIndex: -1,
     renderWidth: 64,
     renderHeight: 64,
     texture,

@@ -20,7 +20,7 @@ Canvas state management and input processing. This is the "model + controller" l
 - `CanvasState` uses version counters (`version`, `entityVersion`, `geometryVersion`, `viewportVersion`, `selectionVersion`, `playbackVersion`, `dragVersion`) for selective cache invalidation and React subscriptions. Imperative moves increment `geometryVersion` without notifying React.
 - Snapshot types (`ViewportSnapshot`, `SelectionSnapshot`, `PlaybackSnapshot`, `DragSnapshot`, `ActionLayerSnapshot`) isolate subscription scopes — sidebar components don't re-render on viewport pan.
 - Dirty flags (`viewportDirty`, `entitiesDirty`, `selectionDirty`) tell the renderer what needs redrawing.
-- `RenderState` is a stable mutable frame view consumed synchronously by `InfiniteCanvasRenderer.render()`; it exposes `entityVersion`/`geometryVersion` for renderer caches, and its sorted entity array is rebuilt only when `entityVersion` changes.
+- `RenderState` is a stable mutable frame view consumed synchronously by `InfiniteCanvasRenderer.render()`; it exposes entity, geometry, and selection versions for renderer caches, and its sorted entity array is rebuilt only when `entityVersion` changes.
 - `CanvasStore` owns the incremental `EntitySpatialIndex` shared by renderer visibility, point hit testing, and drag selection. Every geometry mutation must upsert or remove its entity from the index.
 - `CanvasStore.hasRenderChanges()` checks dirty state without materializing or mutating render state.
 
@@ -47,7 +47,7 @@ Canvas state management and input processing. This is the "model + controller" l
 - Playing media advances playback time every RAF, but only visible animated entities mark textures dirty and force render; passive playback notifications are limited to the selected entity.
 - Renderer-reported pending work keeps RAF alive for settled, budgeted LOD transitions after viewport input stops; it must not be implemented by pausing video playback.
 - Action-layer, drag-visual, and disintegration controllers reuse their render-state wrappers; mutate stable scratch state instead of allocating objects, sets, or overlay arrays every frame.
-- The FPS overlay reads direct renderer timing. Do not add `performance.mark()`/`measure()` calls to debug-mode render loops; Performance Timeline entry churn materially distorts the frames being measured.
+- The FPS overlay and render benchmarks read direct renderer phase timings (setup, preparation/admission/query, encode, submit). Do not add `performance.mark()`/`measure()` calls to render loops; Performance Timeline entry churn materially distorts the frames being measured.
 - `notifyViewportChange()` increments only `viewportVersion`. `notifySelectionChange()` increments `selectionVersion` + `version` + `playbackVersion`.
 - Entity membership, reference, effect, or playback-classification changes must increment `entityVersion`; selection and UI-only changes must not.
 - Hot-path selection logs contain counts plus bounded first/last IDs. Never join or serialize an unbounded selection into a log message.

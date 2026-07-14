@@ -184,6 +184,7 @@ export interface RenderState {
   entitySpatialIndex: EntitySpatialIndex;
   entityVersion: number;
   geometryVersion: number;
+  selectionVersion: number;
   selectedEntityIds: ReadonlySet<string>;
   debugMode: boolean;
   debugView: "none" | "alpha" | "spatial" | "all";
@@ -251,6 +252,7 @@ export class CanvasStore extends Store<CanvasState> {
     entitySpatialIndex: this.#entitySpatialIndex,
     entityVersion: 0,
     geometryVersion: 0,
+    selectionVersion: 0,
     selectedEntityIds: new Set<string>(),
     debugMode: false,
     debugView: "none",
@@ -1262,6 +1264,7 @@ export class CanvasStore extends Store<CanvasState> {
     const renderState = this.#renderState;
     renderState.entityVersion = this.state.entityVersion;
     renderState.geometryVersion = this.state.geometryVersion;
+    renderState.selectionVersion = this.state.selectionVersion;
     renderState.selectedEntityIds = this.state.selectedEntityIds;
     renderState.debugMode = this.state.debugMode;
     renderState.dirty = this.hasRenderChanges();

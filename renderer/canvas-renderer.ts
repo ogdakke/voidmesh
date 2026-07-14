@@ -1,5 +1,6 @@
 import { config, getViewportLensDistortionConfig, type GridConfig } from "#config";
 import { logger } from "#lib/client.logger.ts";
+import { tracePerformancePhase } from "#lib/performance-tracing.ts";
 import { boundsIntersect, getRotatedAABB, getViewportWorldBounds } from "#lib/canvas-math.ts";
 import { getFrameAtTime } from "#lib/gif-decoder.ts";
 import { setGpuContext } from "./gpu-color-space.ts";
@@ -9,7 +10,11 @@ import { CanvasLensing } from "#types/enums.ts";
 import { ActionLayerBlurPass } from "./action-layer-blur-pass.ts";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
 import { CanvasDebugPass } from "./canvas-debug-pass.ts";
-import { CompositionPass, type CompositionDrawItem } from "./composition-pass.ts";
+import {
+  CompositionPass,
+  type CompositionDrawItem,
+  type CompositionPassStats,
+} from "./composition-pass.ts";
 import { DisintegrationPass } from "./disintegration-pass.ts";
 import { EntityDrawItemPreparer } from "./entity-draw-item-preparer.ts";
 import { EntityLabelPass } from "./entity-label-pass.ts";
@@ -37,6 +42,7 @@ export interface RendererResourceStats {
   entityTextures: EntityTextureResidencyStats;
   processingTextures: ByteBudgetCacheStats;
   texturePool: TexturePoolStats;
+  composition: CompositionPassStats;
 }
 
 export class InfiniteCanvasRenderer {
@@ -96,6 +102,15 @@ export class InfiniteCanvasRenderer {
   #lastRenderTime = 0;
   #lastEntityCount = 0;
   #lastRenderedCount = 0;
+  readonly #lastPhaseStats = {
+    setupMs: 0,
+    prepareMs: 0,
+    batchAdmissionMs: 0,
+    spatialQueryMs: 0,
+    visibleEntityPreparationMs: 0,
+    encodeMs: 0,
+    submitMs: 0,
+  };
   #hasLastLodViewport = false;
   #lastLodOffsetX = 0;
   #lastLodOffsetY = 0;
@@ -143,6 +158,7 @@ export class InfiniteCanvasRenderer {
       renderTime: this.#lastRenderTime,
       entityCount: this.#lastEntityCount,
       renderedCount: this.#lastRenderedCount,
+      phases: this.#lastPhaseStats,
     };
   }
 
@@ -172,6 +188,11 @@ export class InfiniteCanvasRenderer {
         budgetBytes: config.rendering.texturePoolBudgetBytes,
         residentBytes: 0,
         textureCount: 0,
+      },
+      composition: this.#compositionPass?.getStats() ?? {
+        fullSceneBatchRebuilds: 0,
+        fullSceneBatchUploadBytes: 0,
+        normalInstanceUploadBytes: 0,
       },
     };
   }
@@ -446,6 +467,8 @@ export class InfiniteCanvasRenderer {
     const encoder = this.#device.createCommandEncoder({
       label: "Canvas render encoder",
     });
+    const prepareStart = performance.now();
+    this.#lastPhaseStats.setupMs = tracePerformancePhase("render.setup", renderStart, prepareStart);
 
     // Pre-process entities: render to textures and prepare bind groups
     // Uses caching to avoid per-frame allocations
@@ -454,6 +477,7 @@ export class InfiniteCanvasRenderer {
       entitySpatialIndex: state.entitySpatialIndex,
       entityVersion: state.entityVersion,
       geometryVersion: state.geometryVersion,
+      selectionVersion: state.selectionVersion,
       viewport,
       width,
       height,
@@ -466,6 +490,16 @@ export class InfiniteCanvasRenderer {
       hasCanvasCallouts: state.canvasCallouts.length > 0,
       debugMode,
     });
+    const prepareEnd = performance.now();
+    this.#lastPhaseStats.prepareMs = tracePerformancePhase(
+      "render.prepare",
+      prepareStart,
+      prepareEnd,
+    );
+    const preparationPhases = this.#entityDrawItemPreparer.getPhaseStats();
+    this.#lastPhaseStats.batchAdmissionMs = preparationPhases.batchAdmissionMs;
+    this.#lastPhaseStats.spatialQueryMs = preparationPhases.spatialQueryMs;
+    this.#lastPhaseStats.visibleEntityPreparationMs = preparationPhases.visibleEntityPreparationMs;
     const { entityDrawItems, actionLayerDrawItems, fullSceneBatch } = preparedEntityDrawItems;
     let hasAnimatingContent = preparedEntityDrawItems.hasAnimatingContent;
     this.#compositionPass.beginFrame(
@@ -501,7 +535,20 @@ export class InfiniteCanvasRenderer {
       ],
     });
     if (fullSceneBatch) {
-      if (!this.#compositionPass.drawFullSceneBatch(entityPass, fullSceneBatch)) {
+      const selectedEntity =
+        fullSceneBatch.singleSelectedIndex >= 0
+          ? entities[fullSceneBatch.singleSelectedIndex]
+          : undefined;
+      const labelPass = selectedEntity ? this.#entityLabelPass : null;
+      if (
+        !this.#compositionPass.drawFullSceneBatch(
+          entityPass,
+          fullSceneBatch,
+          labelPass && selectedEntity
+            ? () => labelPass.drawLabel(entityPass, selectedEntity, 0, 0)
+            : undefined,
+        )
+      ) {
         throw new Error("Prepared full-scene composition batch was invalidated before drawing");
       }
     } else {
@@ -633,13 +680,18 @@ export class InfiniteCanvasRenderer {
       });
     }
 
+    const submitStart = performance.now();
+    this.#lastPhaseStats.encodeMs = tracePerformancePhase("render.encode", prepareEnd, submitStart);
     // Single submission for all passes
     this.#device.queue.submit([encoder.finish()]);
+    const submitEnd = performance.now();
+    this.#lastPhaseStats.submitMs = tracePerformancePhase("render.submit", submitStart, submitEnd);
     this.#entityTexturePipeline?.flushTextureReleases();
     this.#entityTexturePipeline?.endFrame();
 
     // Record frame stats for performance overlay
-    this.#lastRenderTime = performance.now() - renderStart;
+    const renderEnd = performance.now();
+    this.#lastRenderTime = tracePerformancePhase("render.total", renderStart, renderEnd);
     this.#lastEntityCount = entities.length;
     this.#lastRenderedCount = fullSceneBatch?.instanceCount ?? entityDrawItems.length;
 
@@ -700,6 +752,11 @@ export class InfiniteCanvasRenderer {
 
     // Clear any errors for this entity
     this.#entityErrors.delete(entityId);
+  }
+
+  /** Remove renderer ownership for a batch without exposing per-entity orchestration to callers. */
+  removeEntityTextures(entityIds: Iterable<string>): void {
+    for (const entityId of entityIds) this.removeEntityTexture(entityId);
   }
 
   /**

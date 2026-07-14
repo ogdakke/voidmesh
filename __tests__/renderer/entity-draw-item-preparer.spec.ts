@@ -3,7 +3,11 @@ import { config } from "#config";
 import type { ActionLayerRenderState, DragVisualRenderState } from "#engine";
 import { releaseImageAsset, retainImageAsset } from "#lib/media-assets.ts";
 import { EntityDrawItemPreparer } from "#renderer/entity-draw-item-preparer.ts";
-import type { CompositionDrawItem, FullSceneBatchKey } from "#renderer/composition-pass.ts";
+import type {
+  CompositionDrawItem,
+  FullSceneBatchKey,
+  PrepareFullSceneBatchOptions,
+} from "#renderer/composition-pass.ts";
 import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
 import { createTestEntity } from "../helpers/test-entity.ts";
 
@@ -99,14 +103,61 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     scene.release();
   });
 
+  test("keeps the persistent batch for selection and rebuilds only when selection changes", () => {
+    const scene = createScene();
+    const harness = createHarness(scene.entities);
+    harness.options.selectedEntityIds.add(scene.entities[0]!.id);
+    harness.options.selectionVersion++;
+
+    const first = harness.preparer.prepare(harness.options);
+    expect(first.fullSceneBatch).toMatchObject({
+      selectionVersion: 2,
+      singleSelectedIndex: 0,
+    });
+    expect(harness.compositionPass.prepareFullSceneBatch).toHaveBeenCalledOnce();
+
+    harness.options.viewport = { offset: { x: 500, y: 200 }, zoom: 1 };
+    harness.preparer.prepare(harness.options);
+    expect(harness.compositionPass.prepareFullSceneBatch).toHaveBeenCalledOnce();
+
+    harness.options.selectedEntityIds.clear();
+    harness.options.selectedEntityIds.add(scene.entities[1]!.id);
+    harness.options.selectionVersion++;
+    const changed = harness.preparer.prepare(harness.options);
+    expect(changed.fullSceneBatch).toMatchObject({
+      selectionVersion: 3,
+      singleSelectedIndex: 1,
+    });
+    expect(harness.compositionPass.prepareFullSceneBatch).toHaveBeenCalledTimes(2);
+
+    scene.entities.reverse();
+    harness.options.geometryVersion++;
+    const reordered = harness.preparer.prepare(harness.options);
+    expect(reordered.fullSceneBatch).toMatchObject({ singleSelectedIndex: 0 });
+    expect(harness.compositionPass.prepareFullSceneBatch).toHaveBeenCalledTimes(3);
+
+    scene.release();
+  });
+
+  test("keeps the persistent batch in debug mode", () => {
+    const scene = createScene();
+    const harness = createHarness(scene.entities);
+    harness.options.debugMode = true;
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).toMatchObject({
+      debugMode: true,
+    });
+    expect(harness.compositionPass.prepareFullSceneBatch).toHaveBeenCalledOnce();
+
+    scene.release();
+  });
+
   test.each([
-    ["selection", (options: PrepareOptions) => options.selectedEntityIds.add("scene-first")],
     ["action layer", (options: PrepareOptions) => (options.actionLayer.active = true)],
     ["action blur", (options: PrepareOptions) => (options.actionLayer.blurIntensity = 0.5)],
     ["drag visual", (options: PrepareOptions) => (options.dragVisual.active = true)],
     ["drag selection", (options: PrepareOptions) => (options.dragSelectActive = true)],
     ["canvas callouts", (options: PrepareOptions) => (options.hasCanvasCallouts = true)],
-    ["debug mode", (options: PrepareOptions) => (options.debugMode = true)],
   ])("rejects batching during %s", (_label, configure) => {
     const scene = createScene();
     const harness = createHarness(scene.entities);
@@ -137,13 +188,16 @@ function createHarness(
         cachedKey !== null &&
         cachedKey.entityVersion === key.entityVersion &&
         cachedKey.geometryVersion === key.geometryVersion &&
+        cachedKey.selectionVersion === key.selectionVersion &&
+        cachedKey.debugMode === key.debugMode &&
+        cachedKey.singleSelectedIndex === key.singleSelectedIndex &&
         cachedKey.renderWidth === key.renderWidth &&
         cachedKey.renderHeight === key.renderHeight &&
         cachedKey.texture === key.texture &&
         cachedKey.instanceCount === key.instanceCount
       );
     }),
-    prepareFullSceneBatch: vi.fn<(options: FullSceneBatchKey) => void>((options) => {
+    prepareFullSceneBatch: vi.fn<(options: PrepareFullSceneBatchOptions) => void>((options) => {
       cachedKey = { ...options };
     }),
     prepareDrawItem: vi.fn<(options: { entity: ShaderCanvasEntity }) => CompositionDrawItem>(
@@ -187,6 +241,7 @@ function createHarness(
     entitySpatialIndex: spatialIndex as never,
     entityVersion: 1,
     geometryVersion: 1,
+    selectionVersion: 1,
     viewport: { offset: { x: 0, y: 0 }, zoom: 1 } satisfies Viewport,
     width: 1280,
     height: 720,

@@ -54,6 +54,8 @@ the canvas virtualization and texture-residency paths:
 - a viewport sweep across the 10,000-instance world;
 - 4,096 unique thumbnail assets, both all-visible and swept through the cache;
 - 2,048 identically processed instances sharing one source and processed result.
+- 262,144 identically processed instances panned at overview zoom with no,
+  single, half, and full selection, plus half-selection debug mode;
 - a 61-source mixed image/video canvas zoomed from one detailed entity out to
   the full overview and back, both original and default-effect variants.
 
@@ -68,6 +70,8 @@ Run one large scenario without running the rest:
 ```bash
 bun run bench:render:record -- --scenario many-10000-shared-original-all-visible
 bun run bench:render:record -- --scenario many-4096-unique-thumbnails-pan
+bun run bench:render:record -- --scenario many-262144-shared-processed-overview-pan-half-selected
+bun run bench:render:record -- --scenario many-262144-shared-processed-overview-pan-half-selected-debug
 bun run bench:render:record -- --scenario zoom-61-unique-mixed-round-trip
 bun run bench:render:record -- --scenario zoom-61-unique-mixed-processed-round-trip
 ```
@@ -85,6 +89,7 @@ Large-result records include more than timings. Each scenario reports:
 - source, processed-output, processing-cache, and pooled texture counts and bytes;
 - average/min/max rendered entities per frame;
 - source uploads, source/processed allocations, and cache evictions.
+- persistent full-scene batch rebuild count and full-scene/normal instance upload bytes.
 
 The decoded-byte value is a deterministic RGBA estimate. GPU values come from
 the renderer's own resource accounting and therefore cover persistent entity
@@ -110,6 +115,7 @@ defaults (dithering, grain, and bloom) and therefore also measures screen-space
 video processing without pausing playback or media timeline progression.
 
 Each recorded frame contains its phase, zoom, rAF interval, renderer CPU time,
+renderer setup/preparation/admission/query/encode/submit phase timings,
 rendered entity count, resident bytes, texture counts, and per-frame
 allocation/upload/eviction deltas. Synthetic video source drawing is excluded
 from renderer timing and reported separately as `sourceUpdateMs`.

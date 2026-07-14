@@ -21,6 +21,12 @@ describe("many entity benchmark scenarios", () => {
         expect.objectContaining({ assetMode: "unique", layout: "all-visible" }),
         expect.objectContaining({ assetMode: "unique", pan: true }),
         expect.objectContaining({ processPixels: true }),
+        expect.objectContaining({
+          entityCount: 262_144,
+          selectedEntityFraction: 0.5,
+          debugMode: true,
+          paceWithAnimationFrame: true,
+        }),
       ]),
     );
     expect(new Set(MANY_ENTITY_SCENARIOS.map((scenario) => scenario.id)).size).toBe(
@@ -70,5 +76,26 @@ describe("many entity benchmark scenarios", () => {
     )!;
     expect(estimateDecodedAssetBytes(shared)).toBe(1024 * 1024 * 4);
     expect(estimateDecodedAssetBytes(unique)).toBe(4096 * 128 * 128 * 4);
+  });
+
+  test("covers the 262k overview selection-density and debug matrix", () => {
+    const overviewScenarios = MANY_ENTITY_SCENARIOS.filter(
+      (scenario) => scenario.entityCount === 262_144,
+    );
+
+    expect(
+      overviewScenarios.map((scenario) => ({
+        id: scenario.id,
+        selectedEntityCount: scenario.selectedEntityCount ?? 0,
+        selectedEntityFraction: scenario.selectedEntityFraction ?? 0,
+        debugMode: scenario.debugMode ?? false,
+      })),
+    ).toEqual([
+      expect.objectContaining({ selectedEntityCount: 0, selectedEntityFraction: 0 }),
+      expect.objectContaining({ selectedEntityCount: 1 }),
+      expect.objectContaining({ selectedEntityFraction: 0.5, debugMode: false }),
+      expect.objectContaining({ selectedEntityFraction: 1 }),
+      expect.objectContaining({ selectedEntityFraction: 0.5, debugMode: true }),
+    ]);
   });
 });

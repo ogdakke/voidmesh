@@ -788,11 +788,7 @@ export async function cloneMediaSource(
 ): Promise<{ mediaSource: MediaSource; imageBitmap: ImageBitmap }> {
   switch (source.type) {
     case "image": {
-      retainImageAsset(source.asset);
-      return {
-        mediaSource: { type: "image", asset: source.asset },
-        imageBitmap: source.asset.imageBitmap,
-      };
+      return cloneImageMediaSource(source);
     }
 
     case "video": {
@@ -849,4 +845,16 @@ export async function cloneMediaSource(
       }
     }
   }
+}
+
+/** Retain a shared image payload without creating an async task. */
+export function cloneImageMediaSource(source: Extract<MediaSource, { type: "image" }>): {
+  mediaSource: Extract<MediaSource, { type: "image" }>;
+  imageBitmap: ImageBitmap;
+} {
+  retainImageAsset(source.asset);
+  return {
+    mediaSource: { type: "image", asset: source.asset },
+    imageBitmap: source.asset.imageBitmap,
+  };
 }

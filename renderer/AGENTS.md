@@ -59,7 +59,7 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 ## GPU Resource Management
 
 - Persistent source + processed entity textures have exact byte accounting and share a configurable LRU budget. Current-frame textures are pinned; offscreen entries are eviction candidates.
-- `InfiniteCanvasRenderer.getResourceStats()` exposes residency plus cumulative allocation, upload, and eviction counters for performance benchmarks.
+- `InfiniteCanvasRenderer.getResourceStats()` exposes residency plus cumulative texture allocation/upload/eviction and composition batch rebuild/upload counters for performance benchmarks.
 - Dimension-keyed blur mip, bloom mip, and blur blend textures share a 128 MiB budget; current-frame dimensions stay pinned and older dimensions are evicted LRU.
 - Source textures cached by media identity/revision; static image entities sharing one asset also share one GPU texture until the final entity owner is removed
 - Stable processed image outputs are keyed by asset revision, dimensions, shader type, and full shader parameters. Identical instances share one texture; animated effects and non-image media remain entity-scoped.
@@ -74,7 +74,7 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 - Entity image export renders from native media sources at `originalSize`; it must not read back the current preview LOD texture.
 - Regular-texture composition packs entity transforms and visual flags into one reusable storage buffer. Batch only adjacent entities with the exact same `GPUTexture` so draw order remains unchanged; shader params need not match independently because processing is already baked into that texture.
 - A full-scene batch is admitted only for 16k+ static image entities sharing asset, authored/display size, shader type, and structurally equal params with at least 25% visible. Cache hits skip spatial queries and instance uploads; entity/geometry versions, LOD texture identity, or any normal composition write invalidate it.
-- Selection, debug mode, action-layer fade/blur, drag/drag-select, callouts, continuous shaders, and heterogeneous media must use normal preparation. The batch may submit offscreen instances after admission; hardware clipping keeps the pan path CPU-constant.
+- Selection and debug flags are stored in the versioned full-scene instance payload, so selection/debug viewport frames remain CPU-constant. A single selected label splits the instanced draw at its z-order boundary; multi-selection rectangles remain shader-rendered. Action-layer fade/blur, drag/drag-select, callouts, continuous shaders, and heterogeneous media must use normal preparation. The batch may submit offscreen instances after admission; hardware clipping keeps the pan path CPU-constant.
 - Full-scene fancy-delete snapshots borrow the representative texture. Defer removal of that texture owner until the next render so bulk deletion can snapshot non-representative entities safely.
 - External video textures retain per-entity uniforms and bind groups so direct `GPUExternalTexture` playback never copies into regular textures. Disintegration also retains its non-instanced composition path.
 - Grow the composition instance buffer geometrically and append disjoint ranges for each render phase in a frame. Do not restore per-entity GPU uniform buffers, bind groups, or temporary instance objects for regular textures.

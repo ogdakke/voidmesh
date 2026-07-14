@@ -46,6 +46,9 @@ export interface DisintegrationCompositionUniforms {
 export interface FullSceneBatchKey {
   entityVersion: number;
   geometryVersion: number;
+  selectionVersion: number;
+  debugMode: boolean;
+  singleSelectedIndex: number;
   renderWidth: number;
   renderHeight: number;
   texture: GPUTexture;
@@ -54,6 +57,13 @@ export interface FullSceneBatchKey {
 
 export interface PrepareFullSceneBatchOptions extends FullSceneBatchKey {
   entities: readonly ShaderCanvasEntity[];
+  selectedEntityIds: ReadonlySet<string>;
+}
+
+export interface CompositionPassStats {
+  fullSceneBatchRebuilds: number;
+  fullSceneBatchUploadBytes: number;
+  normalInstanceUploadBytes: number;
 }
 
 interface CompositionUniformState {
@@ -126,6 +136,9 @@ export class CompositionPass {
   #instanceBindGroupCache = new WeakMap<GPUTexture, GPUBindGroup>();
   readonly #drawCommands: CompositionDrawCommand[] = [];
   #fullSceneBatch: FullSceneBatchCache | null = null;
+  #fullSceneBatchRebuilds = 0;
+  #fullSceneBatchUploadBytes = 0;
+  #normalInstanceUploadBytes = 0;
 
   // Entity composition cache (uniform buffers, bind groups, texture views).
   // Invalidated when entity composition texture or visual state changes.
@@ -460,6 +473,14 @@ export class CompositionPass {
     if (maximumInstanceCount > 0) this.#ensureInstanceCapacity(maximumInstanceCount);
   }
 
+  getStats(): CompositionPassStats {
+    return {
+      fullSceneBatchRebuilds: this.#fullSceneBatchRebuilds,
+      fullSceneBatchUploadBytes: this.#fullSceneBatchUploadBytes,
+      normalInstanceUploadBytes: this.#normalInstanceUploadBytes,
+    };
+  }
+
   hasFullSceneBatch(key: FullSceneBatchKey): boolean {
     const cached = this.#fullSceneBatch;
     return (
@@ -467,6 +488,9 @@ export class CompositionPass {
       cached.bufferGeneration === this.#instanceBufferGeneration &&
       cached.entityVersion === key.entityVersion &&
       cached.geometryVersion === key.geometryVersion &&
+      cached.selectionVersion === key.selectionVersion &&
+      cached.debugMode === key.debugMode &&
+      cached.singleSelectedIndex === key.singleSelectedIndex &&
       cached.renderWidth === key.renderWidth &&
       cached.renderHeight === key.renderHeight &&
       cached.texture === key.texture &&
@@ -475,7 +499,7 @@ export class CompositionPass {
   }
 
   prepareFullSceneBatch(options: PrepareFullSceneBatchOptions): void {
-    const { entities, ...key } = options;
+    const { entities, selectedEntityIds, ...key } = options;
     if (entities.length !== key.instanceCount) {
       throw new Error("Full-scene batch instance count does not match its entity payload");
     }
@@ -484,28 +508,49 @@ export class CompositionPass {
     const buffer = this.#ensureInstanceCapacity(entities.length);
     for (let index = 0; index < entities.length; index++) {
       const entity = entities[index]!;
-      this.#writeFullSceneInstance(index, entity);
+      this.#writeFullSceneInstance(
+        index,
+        entity,
+        selectedEntityIds.has(entity.id),
+        options.debugMode,
+      );
       entity.textureDirty = false;
     }
-    this.#device.queue.writeBuffer(
-      buffer,
-      0,
-      this.#instanceData,
-      0,
-      entities.length * INSTANCE_STRIDE_BYTES,
-    );
+    const uploadBytes = entities.length * INSTANCE_STRIDE_BYTES;
+    this.#device.queue.writeBuffer(buffer, 0, this.#instanceData, 0, uploadBytes);
+    this.#fullSceneBatchRebuilds += 1;
+    this.#fullSceneBatchUploadBytes += uploadBytes;
     this.#fullSceneBatch = {
       ...key,
       bufferGeneration: this.#instanceBufferGeneration,
     };
   }
 
-  drawFullSceneBatch(pass: GPURenderPassEncoder, key: FullSceneBatchKey): boolean {
+  drawFullSceneBatch(
+    pass: GPURenderPassEncoder,
+    key: FullSceneBatchKey,
+    afterSingleSelected?: () => void,
+  ): boolean {
     if (!this.hasFullSceneBatch(key)) return false;
     this.#instanceWriteCursor = Math.max(this.#instanceWriteCursor, key.instanceCount);
     pass.setPipeline(this.#instancedPipeline);
-    pass.setBindGroup(0, this.#getInstancedBindGroup(key.texture));
-    pass.draw(6, key.instanceCount, 0, 0);
+    const bindGroup = this.#getInstancedBindGroup(key.texture);
+    pass.setBindGroup(0, bindGroup);
+    const selectedIndex = key.singleSelectedIndex;
+    if (!afterSingleSelected || selectedIndex < 0) {
+      pass.draw(6, key.instanceCount, 0, 0);
+      return true;
+    }
+
+    const firstCount = selectedIndex + 1;
+    pass.draw(6, firstCount, 0, 0);
+    afterSingleSelected();
+    const remainingCount = key.instanceCount - firstCount;
+    if (remainingCount > 0) {
+      pass.setPipeline(this.#instancedPipeline);
+      pass.setBindGroup(0, bindGroup);
+      pass.draw(6, remainingCount, 0, firstCount);
+    }
     return true;
   }
 
@@ -518,14 +563,16 @@ export class CompositionPass {
     const firstWrittenInstance = this.#instanceWriteCursor;
     const instanceCount = this.#prepareDrawCommands(items, !!afterItem);
     if (instanceCount > 0) {
+      const uploadBytes = instanceCount * INSTANCE_STRIDE_BYTES;
       const buffer = this.#ensureInstanceCapacity(this.#instanceWriteCursor);
       this.#device.queue.writeBuffer(
         buffer,
         firstWrittenInstance * INSTANCE_STRIDE_BYTES,
         this.#instanceData,
         firstWrittenInstance * INSTANCE_STRIDE_BYTES,
-        instanceCount * INSTANCE_STRIDE_BYTES,
+        uploadBytes,
       );
+      this.#normalInstanceUploadBytes += uploadBytes;
     }
 
     let currentPipeline: "texture" | "external" | null = null;
@@ -721,15 +768,20 @@ export class CompositionPass {
     return nextBuffer;
   }
 
-  #writeFullSceneInstance(index: number, entity: ShaderCanvasEntity): void {
+  #writeFullSceneInstance(
+    index: number,
+    entity: ShaderCanvasEntity,
+    isSelected: boolean,
+    debugMode: boolean,
+  ): void {
     const offset = index * INSTANCE_STRIDE_VALUES;
     this.#instanceFloatView[offset] = entity.position.x;
     this.#instanceFloatView[offset + 1] = entity.position.y;
     this.#instanceFloatView[offset + 2] = entity.size.width;
     this.#instanceFloatView[offset + 3] = entity.size.height;
     this.#instanceFloatView[offset + 4] = (entity.rotation * Math.PI) / 180;
-    this.#instanceUintView[offset + 5] = 0;
-    this.#instanceUintView[offset + 6] = 0;
+    this.#instanceUintView[offset + 5] = isSelected ? 1 : 0;
+    this.#instanceUintView[offset + 6] = debugMode ? 1 : 0;
     this.#instanceFloatView[offset + 7] = 1;
   }
 

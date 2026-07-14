@@ -65,13 +65,19 @@ import { PerfGraphRenderer } from "#renderer/perf-graph-renderer.ts";
 
 import { toastManager } from "#application/notifications.ts";
 import { hints } from "#application/hints.ts";
-import { extractOriginalPalette, cloneMediaSource } from "#lib/media-loader.ts";
+import {
+  extractOriginalPalette,
+  cloneImageMediaSource,
+  cloneMediaSource,
+} from "#lib/media-loader.ts";
 import { disposeEntityMedia, disposeMediaSource } from "#lib/media-resources.ts";
 import { Command, undo } from "#lib/undo.ts";
 import {
   createDuplicatePlaybackState,
+  createUniqueEntityNameAllocator,
   resetDuplicatedMediaPlayback,
 } from "#lib/media-duplication.ts";
+import { tracePerformancePhase } from "#lib/performance-tracing.ts";
 import { config, glassKindResets, glitchKindResets } from "#config";
 import { preferences } from "#lib/preferences.ts";
 import { paletteStore } from "#lib/palette-store.ts";
@@ -869,112 +875,138 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   };
 
   const duplicateEntities = async (): Promise<string[]> => {
+    const duplicateStart = performance.now();
     const selected = canvasStore.getSelectedEntities();
     if (selected.length === 0) return [];
 
     analytics.track("entity.duplicated", { entity_count: selected.length });
 
-    // Wait for every clone so a sibling failure cannot strand already-created media.
-    const cloneResults = await Promise.allSettled(
-      selected.map(async (entity) => {
-        const { mediaSource, imageBitmap } = await cloneMediaSource(
-          entity.mediaSource,
-          entity.imageBitmap,
-        );
-        return { entity, mediaSource, imageBitmap };
-      }),
-    );
-    const clones: Array<{
+    type StagedClone = {
       entity: ShaderCanvasEntity;
       mediaSource: ShaderCanvasEntity["mediaSource"];
       imageBitmap: ImageBitmap;
-    }> = [];
-    let cloneFailed = false;
-    let cloneFailure: unknown;
-    for (const result of cloneResults) {
-      if (result.status === "fulfilled") {
-        clones.push(result.value);
-      } else if (!cloneFailed) {
-        cloneFailed = true;
-        cloneFailure = result.reason;
+    };
+    const clones = new Array<StagedClone | undefined>(selected.length);
+    const pendingClones: Array<Promise<{ index: number; clone: StagedClone }>> = [];
+    try {
+      for (let index = 0; index < selected.length; index++) {
+        const entity = selected[index]!;
+        if (entity.mediaSource.type === MediaType.image) {
+          const { mediaSource, imageBitmap } = cloneImageMediaSource(entity.mediaSource);
+          clones[index] = { entity, mediaSource, imageBitmap };
+          continue;
+        }
+        pendingClones.push(
+          cloneMediaSource(entity.mediaSource, entity.imageBitmap).then(
+            ({ mediaSource, imageBitmap }) => ({
+              index,
+              clone: { entity, mediaSource, imageBitmap },
+            }),
+          ),
+        );
       }
-    }
-    if (cloneFailed) {
+
+      const settledClones = await Promise.allSettled(pendingClones);
+      let cloneFailed = false;
+      let cloneFailure: unknown;
+      for (const result of settledClones) {
+        if (result.status === "fulfilled") {
+          clones[result.value.index] = result.value.clone;
+        } else if (!cloneFailed) {
+          cloneFailed = true;
+          cloneFailure = result.reason;
+        }
+      }
+      if (cloneFailed) throw cloneFailure;
+    } catch (error) {
       for (const clone of clones) {
+        if (!clone) continue;
         disposeMediaSource(clone.mediaSource, clone.imageBitmap);
       }
-      throw cloneFailure;
+      throw error;
     }
+    const cloneEnd = performance.now();
+    tracePerformancePhase("duplicate.clone-media", duplicateStart, cloneEnd, true);
 
     const newIds: string[] = [];
     const duplicateBatch: ShaderCanvasEntity[] = [];
     const existingNames = new Set(
       Array.from(canvasStore.getState().entities.values(), (entity) => entity.name),
     );
-    const useTransaction = clones.length > 1;
-    if (useTransaction) undo.beginTransaction();
+    const nameAllocator = createUniqueEntityNameAllocator(existingNames);
 
-    for (const { entity, mediaSource, imageBitmap } of clones) {
-      const id = `entity-${nextIdRef.current++}`;
-      const zIndex = nextZIndexRef.current++;
-      const baseName = entity.name;
-      let n = 1;
-      while (existingNames.has(`${baseName} (${n})`)) n++;
-      const name = `${baseName} (${n})`;
-      existingNames.add(name);
-      const playback = createDuplicatePlaybackState(entity);
-      resetDuplicatedMediaPlayback(mediaSource, playback);
+    try {
+      for (const stagedClone of clones) {
+        if (!stagedClone) throw new Error("Duplicate media staging completed without a clone");
+        const { entity, mediaSource, imageBitmap } = stagedClone;
+        const id = `entity-${nextIdRef.current++}`;
+        const zIndex = nextZIndexRef.current++;
+        const name = nameAllocator.allocate(entity.name);
+        const playback = createDuplicatePlaybackState(entity);
+        resetDuplicatedMediaPlayback(mediaSource, playback);
 
-      const clone: ShaderCanvasEntity = {
-        ...entity,
-        id,
-        zIndex,
-        name,
-        position: { x: entity.position.x + 30, y: entity.position.y + 30 },
-        size: { ...entity.size },
-        originalSize: { ...entity.originalSize },
-        mediaSource: mediaSource as any,
-        imageBitmap,
-        // Nested shader state is replaced immutably and can stay shared. Keep the
-        // top level independent because renderer time controls mutate it in place.
-        shaderParams: { ...entity.shaderParams },
-        originalPalette: entity.originalPalette,
-        playback,
-        texture: undefined,
-        textureDirty: true,
-        selected: false,
-        edited: false,
-      };
+        const clone: ShaderCanvasEntity = {
+          ...entity,
+          id,
+          zIndex,
+          name,
+          position: { x: entity.position.x + 30, y: entity.position.y + 30 },
+          size: { ...entity.size },
+          originalSize: { ...entity.originalSize },
+          mediaSource: mediaSource as any,
+          imageBitmap,
+          // Nested shader state is replaced immutably and can stay shared. Keep the
+          // top level independent because renderer time controls mutate it in place.
+          shaderParams: { ...entity.shaderParams },
+          originalPalette: entity.originalPalette,
+          playback,
+          texture: undefined,
+          textureDirty: true,
+          selected: false,
+          edited: false,
+        };
 
-      duplicateBatch.push(clone);
-      newIds.push(id);
-
-      const ownerToken = claimResourceOwnership(clone.id);
-      undo.add(
-        Command.create({
-          undo: () => {
-            if (clone.mediaSource.type === MediaType.video) {
-              clone.mediaSource.videoElement.pause();
-            } else if (isGifEntity(clone) && clone.playback) {
-              clone.playback.isPlaying = false;
-            }
-            rendererRef.current?.removeEntityTexture(clone.id);
-            canvasStore.removeEntity(clone.id);
-          },
-          execute: () => {
-            canvasStore.addEntity(clone);
-          },
-          onEvict: () => tryCleanupEntityResources(clone, ownerToken),
-          description: `Duplicate entity ${entity.name}`,
-        }),
-      );
+        duplicateBatch.push(clone);
+        newIds.push(id);
+      }
+    } catch (error) {
+      for (const stagedClone of clones) {
+        if (stagedClone) disposeMediaSource(stagedClone.mediaSource, stagedClone.imageBitmap);
+      }
+      throw error;
     }
+    const allocateEnd = performance.now();
+    tracePerformancePhase("duplicate.allocate-entities", cloneEnd, allocateEnd, true);
 
     canvasStore.addEntities(duplicateBatch);
-
-    if (useTransaction) undo.commitTransaction(`Duplicate ${selected.length} entities`);
-
     canvasStore.replaceSelection(newIds);
+    const duplicateIds = new Set(newIds);
+    const ownerTokens = duplicateBatch.map((clone) => claimResourceOwnership(clone.id));
+    undo.add(
+      Command.create({
+        undo: () => {
+          const undoStart = performance.now();
+          for (const clone of duplicateBatch) pauseDeletedEntity(clone);
+          rendererRef.current?.removeEntityTextures(duplicateIds);
+          canvasStore.removeEntities(duplicateIds);
+          tracePerformancePhase("duplicate.undo", undoStart, performance.now(), true);
+        },
+        execute: () => {
+          const redoStart = performance.now();
+          canvasStore.addEntities(duplicateBatch);
+          tracePerformancePhase("duplicate.redo", redoStart, performance.now(), true);
+        },
+        onEvict: () => {
+          for (let index = 0; index < duplicateBatch.length; index++) {
+            tryCleanupEntityResources(duplicateBatch[index]!, ownerTokens[index]!);
+          }
+        },
+        description: `Duplicate ${selected.length} entities`,
+      }),
+    );
+    const commitEnd = performance.now();
+    tracePerformancePhase("duplicate.store-commit", allocateEnd, commitEnd, true);
+    tracePerformancePhase("duplicate.total", duplicateStart, commitEnd, true);
     return newIds;
   };
 
