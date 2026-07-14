@@ -484,6 +484,7 @@ export class InfiniteCanvasRenderer {
       entityVersion: state.entityVersion,
       geometryVersion: state.geometryVersion,
       selectionVersion: state.selectionVersion,
+      dirtyEntityIds: state.dirtyEntityIds,
       viewport,
       width,
       height,

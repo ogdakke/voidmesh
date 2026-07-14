@@ -62,6 +62,11 @@ export interface PrepareFullSceneBatchOptions extends FullSceneBatchKey {
   selectedEntityIds: ReadonlySet<string>;
 }
 
+export interface FullSceneBatchPatch {
+  index: number;
+  item: CompositionDrawItem;
+}
+
 export interface CompositionPassStats {
   fullSceneBatchRebuilds: number;
   fullSceneBatchUploadBytes: number;
@@ -602,6 +607,92 @@ export class CompositionPass {
       bufferGeneration: this.#instanceBufferGeneration,
       drawRanges,
     };
+  }
+
+  patchMixedFullSceneBatch(
+    key: FullSceneBatchKey,
+    patches: readonly FullSceneBatchPatch[],
+    maximumDrawRanges: number,
+  ): boolean {
+    const cached = this.#fullSceneBatch;
+    const buffer = this.#instanceBuffer;
+    if (
+      !cached ||
+      !buffer ||
+      cached.bufferGeneration !== this.#instanceBufferGeneration ||
+      cached.geometryVersion !== key.geometryVersion ||
+      cached.debugMode !== key.debugMode ||
+      cached.instanceCount !== key.instanceCount
+    ) {
+      return false;
+    }
+
+    const drawRanges = cached.drawRanges.map((range) => ({ ...range }));
+    for (const { index, item } of patches) {
+      if (index < 0 || index >= key.instanceCount || item.pipeline !== "texture" || !item.texture) {
+        return false;
+      }
+      const rangeIndex = drawRanges.findIndex(
+        (range) =>
+          index >= range.firstInstance && index < range.firstInstance + range.instanceCount,
+      );
+      if (rangeIndex < 0) return false;
+      const range = drawRanges[rangeIndex]!;
+      if (range.texture === item.texture) continue;
+
+      const replacement: FullSceneBatchCache["drawRanges"] = [];
+      const beforeCount = index - range.firstInstance;
+      if (beforeCount > 0) {
+        replacement.push({
+          texture: range.texture,
+          firstInstance: range.firstInstance,
+          instanceCount: beforeCount,
+        });
+      }
+      replacement.push({ texture: item.texture, firstInstance: index, instanceCount: 1 });
+      const afterCount = range.firstInstance + range.instanceCount - index - 1;
+      if (afterCount > 0) {
+        replacement.push({
+          texture: range.texture,
+          firstInstance: index + 1,
+          instanceCount: afterCount,
+        });
+      }
+      drawRanges.splice(rangeIndex, 1, ...replacement);
+    }
+
+    for (let index = drawRanges.length - 1; index > 0; index--) {
+      const previous = drawRanges[index - 1]!;
+      const current = drawRanges[index]!;
+      if (
+        previous.texture === current.texture &&
+        previous.firstInstance + previous.instanceCount === current.firstInstance
+      ) {
+        previous.instanceCount += current.instanceCount;
+        drawRanges.splice(index, 1);
+      }
+    }
+    if (drawRanges.length > maximumDrawRanges) return false;
+
+    for (const { index, item } of patches) {
+      this.#writeInstance(index, item);
+      const byteOffset = index * INSTANCE_STRIDE_BYTES;
+      this.#device.queue.writeBuffer(
+        buffer,
+        byteOffset,
+        this.#instanceData,
+        byteOffset,
+        INSTANCE_STRIDE_BYTES,
+      );
+      item.entity.textureDirty = false;
+    }
+    this.#fullSceneBatchUploadBytes += patches.length * INSTANCE_STRIDE_BYTES;
+    this.#fullSceneBatch = {
+      ...key,
+      bufferGeneration: this.#instanceBufferGeneration,
+      drawRanges,
+    };
+    return true;
   }
 
   drawFullSceneBatch(

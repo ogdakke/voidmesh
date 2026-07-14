@@ -91,6 +91,19 @@ describe("many entity benchmark scenarios", () => {
     });
   });
 
+  test("defines the single-entity parameter-tweak regression scenario", () => {
+    expect(
+      MANY_ENTITY_SCENARIOS.find(
+        (scenario) => scenario.id === "many-131072-shared-single-param-tweak",
+      ),
+    ).toMatchObject({
+      entityCount: 131_072,
+      selectedEntityCount: 1,
+      tweakSingleEntityParams: true,
+      zoom: 0.01,
+    });
+  });
+
   test("covers the 262k overview selection-density and debug matrix", () => {
     const overviewScenarios = MANY_ENTITY_SCENARIOS.filter(
       (scenario) => scenario.entityCount === 262_144,

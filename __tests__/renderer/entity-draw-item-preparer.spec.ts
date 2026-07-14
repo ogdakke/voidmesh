@@ -98,6 +98,31 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     scene.release();
   });
 
+  test("patches a small dirty subset without rescanning or rebuilding the full scene", () => {
+    const scene = createScene();
+    const harness = createHarness(scene.entities);
+    harness.preparer.prepare(harness.options);
+
+    const changed = {
+      ...scene.entities[1]!,
+      shaderParams: structuredClone(scene.entities[1]!.shaderParams),
+      textureDirty: true,
+    };
+    changed.shaderParams.size += 1;
+    scene.entities[1] = changed;
+    harness.options.entityVersion++;
+    harness.options.selectionVersion++;
+    harness.options.dirtyEntityIds = new Set([changed.id]);
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+    expect(harness.compositionPass.patchMixedFullSceneBatch).toHaveBeenCalledOnce();
+    expect(harness.compositionPass.prepareFullSceneBatch).toHaveBeenCalledOnce();
+    expect(harness.compositionPass.prepareMixedFullSceneBatch).not.toHaveBeenCalled();
+    expect(harness.spatialIndex.queryBounds).toHaveBeenCalledOnce();
+
+    scene.release();
+  });
+
   test("uses visible preparation for a mixed scene until zoom LOD work settles", () => {
     const scene = createScene();
     scene.entities[1]!.shaderParams = structuredClone(scene.entities[1]!.shaderParams);
@@ -256,6 +281,10 @@ function createHarness(
     >((key) => {
       cachedKey = { ...key };
     }),
+    patchMixedFullSceneBatch: vi.fn<(key: FullSceneBatchKey) => boolean>((key) => {
+      cachedKey = { ...key };
+      return true;
+    }),
     prepareDrawItem: vi.fn<(options: { entity: ShaderCanvasEntity }) => CompositionDrawItem>(
       (options) =>
         ({
@@ -299,6 +328,7 @@ function createHarness(
     entityVersion: 1,
     geometryVersion: 1,
     selectionVersion: 1,
+    dirtyEntityIds: new Set(),
     viewport: { offset: { x: 0, y: 0 }, zoom: 1 } satisfies Viewport,
     width: 1280,
     height: 720,

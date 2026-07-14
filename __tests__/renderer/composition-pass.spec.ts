@@ -173,6 +173,64 @@ describe("CompositionPass instancing", () => {
     releaseImageEntity(third);
   });
 
+  test("patches one full-scene texture run without rebuilding the instance payload", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const first = createTestEntity({ id: "patch-first" });
+    const second = cloneImageEntity(first, "patch-second", { x: 20, y: 0 });
+    const third = cloneImageEntity(first, "patch-third", { x: 40, y: 0 });
+    const textureA = createTexture();
+    const textureB = createTexture();
+    const initialKey = createFullSceneKey(textureA, 3);
+    pass.prepareFullSceneBatch({
+      ...initialKey,
+      entities: [first, second, third],
+      selectedEntityIds: new Set(),
+    });
+
+    const patchedKey = {
+      ...initialKey,
+      entityVersion: 2,
+      selectionVersion: 2,
+      texture: null,
+    };
+    expect(
+      pass.patchMixedFullSceneBatch(
+        patchedKey,
+        [{ index: 1, item: prepare(pass, second, textureB) }],
+        256,
+      ),
+    ).toBe(true);
+    const patchedPass = createRenderPass();
+    expect(pass.drawFullSceneBatch(patchedPass, patchedKey)).toBe(true);
+    expect(patchedPass.draw.mock.calls).toEqual([
+      [6, 1, 0, 0],
+      [6, 1, 0, 1],
+      [6, 1, 0, 2],
+    ]);
+    expect(pass.getStats()).toMatchObject({
+      fullSceneBatchRebuilds: 1,
+      fullSceneBatchUploadBytes: 4 * 32,
+    });
+
+    const restoredKey = { ...patchedKey, entityVersion: 3, selectionVersion: 3 };
+    expect(
+      pass.patchMixedFullSceneBatch(
+        restoredKey,
+        [{ index: 1, item: prepare(pass, second, textureA) }],
+        256,
+      ),
+    ).toBe(true);
+    const restoredPass = createRenderPass();
+    expect(pass.drawFullSceneBatch(restoredPass, restoredKey)).toBe(true);
+    expect(restoredPass.draw).toHaveBeenCalledWith(6, 3, 0, 0);
+
+    pass.destroy();
+    releaseImageEntity(first);
+    releaseImageEntity(second);
+    releaseImageEntity(third);
+  });
+
   test("persists selection and debug flags without splitting the full-scene batch", () => {
     const { device } = createDevice();
     const pass = createPass(device);

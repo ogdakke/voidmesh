@@ -3,10 +3,17 @@ import type { ActionLayerRenderState, DragSelectMode, DragVisualRenderState } fr
 import { getViewportWorldBounds } from "#lib/canvas-math.ts";
 import type { EntitySpatialIndex } from "#lib/entity-spatial-index.ts";
 import { tracePerformancePhase } from "#lib/performance-tracing.ts";
-import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
+import {
+  MediaType,
+  type Bounds,
+  type MediaImageAsset,
+  type ShaderCanvasEntity,
+  type Viewport,
+} from "#types/canvas.ts";
 import type {
   CompositionDrawItem,
   CompositionPass,
+  FullSceneBatchPatch,
   FullSceneBatchKey,
   PrepareCompositionItemOptions,
 } from "./composition-pass.ts";
@@ -14,6 +21,7 @@ import type { EntityTexturePipeline } from "./entity-texture-pipeline.ts";
 import { getEntityRenderSize } from "./entity-render-size.ts";
 
 const MAX_MIXED_FULL_SCENE_TEXTURE_RUNS = 256;
+const MAX_INCREMENTAL_FULL_SCENE_PATCHES = 32;
 type MixedFullSceneBatchMode = "reuse" | "refresh" | "disabled";
 
 interface EntityDrawItemPreparerOptions {
@@ -27,6 +35,7 @@ interface PrepareEntityDrawItemsOptions {
   entityVersion: number;
   geometryVersion: number;
   selectionVersion: number;
+  dirtyEntityIds: ReadonlySet<string>;
   viewport: Viewport;
   width: number;
   height: number;
@@ -71,6 +80,8 @@ export class EntityDrawItemPreparer {
   readonly #entityDrawItems: CompositionDrawItem[] = [];
   readonly #actionLayerDrawItems: CompositionDrawItem[] = [];
   readonly #fullSceneDrawItems: CompositionDrawItem[] = [];
+  readonly #fullScenePatches: FullSceneBatchPatch[] = [];
+  readonly #fullSceneEntityIndices = new Map<string, number>();
   readonly #prepared: PreparedEntityDrawItems = {
     entityDrawItems: this.#entityDrawItems,
     actionLayerDrawItems: this.#actionLayerDrawItems,
@@ -80,6 +91,8 @@ export class EntityDrawItemPreparer {
   };
   #fullSceneBatchKey: FullSceneBatchKey | null = null;
   #mixedFullSceneBatchKey: FullSceneBatchKey | null = null;
+  #activeFullSceneBatchKey: FullSceneBatchKey | null = null;
+  #fullSceneAsset: MediaImageAsset | null = null;
   #homogeneousEntityVersion = -1;
   #homogeneousEntities: readonly ShaderCanvasEntity[] | null = null;
   #homogeneousRepresentative: ShaderCanvasEntity | null = null;
@@ -337,6 +350,9 @@ export class EntityDrawItemPreparer {
       return null;
     }
 
+    const incrementallyPatchedBatch = this.#tryPatchFullSceneBatch(options);
+    if (incrementallyPatchedBatch) return incrementallyPatchedBatch;
+
     const representative = this.#getHomogeneousRepresentative(entities, entityVersion);
     if (!representative) {
       if (options.mixedFullSceneBatchMode === "disabled") return null;
@@ -345,6 +361,7 @@ export class EntityDrawItemPreparer {
         options.mixedFullSceneBatchMode === "refresh",
       );
     }
+    if (representative.mediaSource.type !== MediaType.image) return null;
     if (this.#texturePipeline.needsContinuousRenderForEntity(representative)) {
       return null;
     }
@@ -410,6 +427,7 @@ export class EntityDrawItemPreparer {
     key.textureCacheRevision = this.#texturePipeline.textureCacheRevision;
     key.instanceCount = entities.length;
     if (this.#compositionPass.hasFullSceneBatch(key)) {
+      this.#activeFullSceneBatchKey = key;
       this.#rememberSnapshotSource(representative, entityVersion, renderWidth, renderHeight);
       return key;
     }
@@ -442,6 +460,7 @@ export class EntityDrawItemPreparer {
     }
 
     this.#compositionPass.prepareFullSceneBatch({ ...key, entities, selectedEntityIds });
+    this.#rememberFullSceneLayout(entities, representative.mediaSource.asset, key);
     this.#rememberSnapshotSource(representative, entityVersion, renderWidth, renderHeight);
     return key;
   }
@@ -490,7 +509,10 @@ export class EntityDrawItemPreparer {
     );
     key.textureCacheRevision = this.#texturePipeline.textureCacheRevision;
     key.instanceCount = entities.length;
-    if (this.#compositionPass.hasFullSceneBatch(key)) return key;
+    if (this.#compositionPass.hasFullSceneBatch(key)) {
+      this.#activeFullSceneBatchKey = key;
+      return key;
+    }
     if (!allowBuild) return null;
 
     const viewportBounds = getViewportWorldBounds(
@@ -599,7 +621,146 @@ export class EntityDrawItemPreparer {
 
     key.textureCacheRevision = this.#texturePipeline.textureCacheRevision;
     this.#compositionPass.prepareMixedFullSceneBatch(key, items);
+    this.#rememberFullSceneLayout(entities, sharedAsset, key);
     return key;
+  }
+
+  #tryPatchFullSceneBatch(options: PrepareEntityDrawItemsOptions): FullSceneBatchKey | null {
+    const previousKey = this.#activeFullSceneBatchKey;
+    const dirtyEntityIds = options.dirtyEntityIds;
+    const sharedAsset = this.#fullSceneAsset;
+    if (
+      !previousKey ||
+      !sharedAsset ||
+      options.mixedFullSceneBatchMode === "disabled" ||
+      dirtyEntityIds.size === 0 ||
+      dirtyEntityIds.size > MAX_INCREMENTAL_FULL_SCENE_PATCHES ||
+      previousKey.entityVersion === options.entityVersion ||
+      previousKey.geometryVersion !== options.geometryVersion ||
+      previousKey.textureCacheRevision !== this.#texturePipeline.textureCacheRevision ||
+      previousKey.instanceCount !== options.entities.length ||
+      this.#fullSceneEntityIndices.size !== options.entities.length
+    ) {
+      return null;
+    }
+
+    const patches = this.#fullScenePatches;
+    patches.length = 0;
+    for (const entityId of dirtyEntityIds) {
+      const index = this.#fullSceneEntityIndices.get(entityId);
+      const entity = index === undefined ? undefined : options.entities[index];
+      if (
+        index === undefined ||
+        !entity ||
+        entity.id !== entityId ||
+        entity.mediaSource.type !== MediaType.image ||
+        entity.mediaSource.asset !== sharedAsset ||
+        this.#texturePipeline.needsContinuousRenderForEntity(entity)
+      ) {
+        patches.length = 0;
+        return null;
+      }
+
+      const desiredRenderSize = getEntityRenderSize(
+        entity,
+        options.viewport,
+        options.devicePixelRatio,
+        this.#desiredRenderSize,
+      );
+      let source = this.#texturePipeline.getReusableStaticCompositionSource(
+        entity,
+        desiredRenderSize,
+        false,
+      );
+      if (!source) {
+        const renderSize = this.#texturePipeline.resolveRenderSize(
+          entity,
+          desiredRenderSize,
+          this.#resolvedRenderSize,
+        );
+        if (!renderSize) {
+          patches.length = 0;
+          return null;
+        }
+        source = this.#texturePipeline.renderEntityToTexture(entity, options.encoder, renderSize);
+      }
+      if (source?.kind !== "texture") {
+        patches.length = 0;
+        return null;
+      }
+      patches.push({
+        index,
+        item: this.#compositionPass.prepareDrawItem({
+          entity,
+          source,
+          isSelected: options.selectedEntityIds.has(entity.id),
+          debugMode: options.debugMode,
+          positionOffsetX: 0,
+          positionOffsetY: 0,
+          visualScale: 1,
+        }),
+      });
+    }
+
+    const key = this.#mixedFullSceneBatchKey ?? {
+      entityVersion: options.entityVersion,
+      geometryVersion: options.geometryVersion,
+      selectionVersion: options.selectionVersion,
+      debugMode: options.debugMode,
+      singleSelectedIndex: -1,
+      renderWidth: 0,
+      renderHeight: 0,
+      texture: null,
+      textureCacheRevision: this.#texturePipeline.textureCacheRevision,
+      instanceCount: options.entities.length,
+    };
+    this.#mixedFullSceneBatchKey = key;
+    key.entityVersion = options.entityVersion;
+    key.geometryVersion = options.geometryVersion;
+    key.selectionVersion = options.selectionVersion;
+    key.debugMode = options.debugMode;
+    key.singleSelectedIndex = this.#getSingleSelectedIndex(
+      options.entities,
+      options.selectedEntityIds,
+      options.selectionVersion,
+      options.entityVersion,
+      options.geometryVersion,
+    );
+    key.renderWidth = 0;
+    key.renderHeight = 0;
+    key.texture = null;
+    key.textureCacheRevision = this.#texturePipeline.textureCacheRevision;
+    key.instanceCount = options.entities.length;
+    if (
+      !this.#compositionPass.patchMixedFullSceneBatch(
+        key,
+        patches,
+        MAX_MIXED_FULL_SCENE_TEXTURE_RUNS,
+      )
+    ) {
+      patches.length = 0;
+      return null;
+    }
+
+    this.#activeFullSceneBatchKey = key;
+    this.#homogeneousEntityVersion = options.entityVersion;
+    this.#homogeneousEntities = options.entities;
+    this.#homogeneousRepresentative = null;
+    patches.length = 0;
+    return key;
+  }
+
+  #rememberFullSceneLayout(
+    entities: readonly ShaderCanvasEntity[],
+    asset: MediaImageAsset,
+    key: FullSceneBatchKey,
+  ): void {
+    this.#fullSceneEntityIndices.clear();
+    for (let index = 0; index < entities.length; index++) {
+      this.#fullSceneEntityIndices.set(entities[index]!.id, index);
+    }
+    this.#fullSceneAsset = asset;
+    this.#activeFullSceneBatchKey = key;
   }
 
   #rememberSnapshotSource(
@@ -666,6 +827,11 @@ export class EntityDrawItemPreparer {
     if (selectedEntityIds.size !== 1) return -1;
 
     const selectedId = selectedEntityIds.values().next().value;
+    const cachedIndex = selectedId ? this.#fullSceneEntityIndices.get(selectedId) : undefined;
+    if (cachedIndex !== undefined && entities[cachedIndex]?.id === selectedId) {
+      this.#singleSelectedIndex = cachedIndex;
+      return cachedIndex;
+    }
     for (let index = 0; index < entities.length; index++) {
       if (entities[index]!.id === selectedId) {
         this.#singleSelectedIndex = index;

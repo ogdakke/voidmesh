@@ -444,6 +444,25 @@ describe("canvasStore.moveEntity", () => {
     });
   });
 
+  test("patches changed entity references in the stable render array", () => {
+    const firstEntity = createTestEntity({ id: "render-patch-first", zIndex: 1 });
+    const secondEntity = createTestEntity({ id: "render-patch-second", zIndex: 2 });
+    canvasStore.addEntities([firstEntity, secondEntity]);
+    const initial = canvasStore.getRenderState();
+    const entities = initial.entities;
+    canvasStore.clearDirtyFlags();
+
+    const shaderParams = { ...secondEntity.shaderParams, size: secondEntity.shaderParams.size + 1 };
+    canvasStore.updateEntity(secondEntity.id, { shaderParams, textureDirty: true });
+    const updated = canvasStore.getRenderState();
+
+    expect(updated.entities).toBe(entities);
+    expect(updated.entities[0]).toBe(firstEntity);
+    expect(updated.entities[1]).not.toBe(secondEntity);
+    expect(updated.entities[1]?.shaderParams).toBe(shaderParams);
+    expect(updated.dirtyEntityIds).toEqual(new Set([secondEntity.id]));
+  });
+
   test("marks render state dirty for position-only updates", () => {
     const entity = createTestEntity();
     canvasStore.addEntity(entity);

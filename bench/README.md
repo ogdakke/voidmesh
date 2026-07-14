@@ -64,6 +64,8 @@ the canvas virtualization and texture-residency paths:
   processed, and show-original regions to guard mixed static pan plans;
 - 131,072 shared-asset mixed entities zoomed from 1% to 30% and back to guard
   against rebuilding the full persistent composition plan during zoom motion;
+- 131,072 shared instances with one selected entity changing shader parameters
+  every frame to guard incremental texture-run and instance-buffer patches;
 - a 61-source mixed image/video canvas zoomed from one detailed entity out to
   the full overview and back, both original and default-effect variants.
 

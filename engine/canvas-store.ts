@@ -192,6 +192,8 @@ export interface RenderState {
   entityVersion: number;
   geometryVersion: number;
   selectionVersion: number;
+  /** Entity references changed since the previous render; valid until dirty flags clear. */
+  dirtyEntityIds: ReadonlySet<string>;
   selectedEntityIds: ReadonlySet<string>;
   debugMode: boolean;
   debugView: "none" | "alpha" | "spatial" | "all";
@@ -239,6 +241,7 @@ export class CanvasStore extends Store<CanvasState> {
     { entities: ShaderCanvasEntity[]; value: ParamResult<unknown> }
   >();
   readonly #renderEntities: ShaderCanvasEntity[] = [];
+  readonly #renderEntityIndices = new Map<string, number>();
   #entitySpatialIndex = new EntitySpatialIndex();
   #renderEntitiesVersion = -1;
   readonly #renderViewport: Viewport = { offset: { x: 0, y: 0 }, zoom: 1 };
@@ -265,6 +268,7 @@ export class CanvasStore extends Store<CanvasState> {
     entityVersion: 0,
     geometryVersion: 0,
     selectionVersion: 0,
+    dirtyEntityIds: new Set<string>(),
     selectedEntityIds: new Set<string>(),
     debugMode: false,
     debugView: "none",
@@ -1296,9 +1300,34 @@ export class CanvasStore extends Store<CanvasState> {
 
   getRenderState(): RenderState {
     if (this.#renderEntitiesVersion !== this.state.entityVersion) {
-      this.#renderEntities.length = 0;
-      for (const entity of this.state.entities.values()) this.#renderEntities.push(entity);
-      this.#renderEntities.sort((a, b) => a.zIndex - b.zIndex);
+      let canPatchReferences =
+        this.#renderEntitiesVersion >= 0 &&
+        this.state.entitiesDirty.size > 0 &&
+        this.#renderEntities.length === this.state.entities.size;
+      if (canPatchReferences) {
+        for (const id of this.state.entitiesDirty) {
+          const index = this.#renderEntityIndices.get(id);
+          const next = this.state.entities.get(id);
+          const previous = index === undefined ? undefined : this.#renderEntities[index];
+          if (index === undefined || !next || !previous || previous.zIndex !== next.zIndex) {
+            canPatchReferences = false;
+            break;
+          }
+        }
+      }
+      if (canPatchReferences) {
+        for (const id of this.state.entitiesDirty) {
+          this.#renderEntities[this.#renderEntityIndices.get(id)!] = this.state.entities.get(id)!;
+        }
+      } else {
+        this.#renderEntities.length = 0;
+        for (const entity of this.state.entities.values()) this.#renderEntities.push(entity);
+        this.#renderEntities.sort((a, b) => a.zIndex - b.zIndex);
+        this.#renderEntityIndices.clear();
+        for (let index = 0; index < this.#renderEntities.length; index++) {
+          this.#renderEntityIndices.set(this.#renderEntities[index]!.id, index);
+        }
+      }
       this.#renderEntitiesVersion = this.state.entityVersion;
     }
 
@@ -1313,6 +1342,7 @@ export class CanvasStore extends Store<CanvasState> {
     renderState.entityVersion = this.state.entityVersion;
     renderState.geometryVersion = this.state.geometryVersion;
     renderState.selectionVersion = this.state.selectionVersion;
+    renderState.dirtyEntityIds = this.state.entitiesDirty;
     renderState.selectedEntityIds = this.state.selectedEntityIds;
     renderState.debugMode = this.state.debugMode;
     renderState.dirty = this.hasRenderChanges();

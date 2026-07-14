@@ -21,6 +21,7 @@ export interface ManyEntityScenarioConfig {
   dragSelectedEntities?: boolean;
   dragSelectEntities?: boolean;
   mixedStaticVariants?: boolean;
+  tweakSingleEntityParams?: boolean;
   paceWithAnimationFrame?: boolean;
   recordPerFrame?: boolean;
   frames: number;
@@ -222,6 +223,28 @@ export const MANY_ENTITY_SCENARIOS: readonly ManyEntityScenarioConfig[] = [
     zoomRange: { min: 0.01, max: 0.3 },
     processPixels: true,
     mixedStaticVariants: true,
+    paceWithAnimationFrame: true,
+    recordPerFrame: true,
+    frames: 24,
+    warmupFrames: 4,
+    samples: 3,
+  },
+  {
+    id: "many-131072-shared-single-param-tweak",
+    label: "131,072 shared instances, one entity parameter changing",
+    description:
+      "Changes one selected entity's shader parameters every frame while preserving the persistent scene and patching only its texture run.",
+    entityCount: 131_072,
+    uniqueAssetCount: 1,
+    sourceSize: { width: 1024, height: 1024 },
+    displaySize: { width: 6, height: 6 },
+    assetMode: "shared",
+    layout: "world-grid",
+    pan: false,
+    zoom: 0.01,
+    processPixels: true,
+    selectedEntityCount: 1,
+    tweakSingleEntityParams: true,
     paceWithAnimationFrame: true,
     recordPerFrame: true,
     frames: 24,

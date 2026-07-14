@@ -223,6 +223,7 @@ interface BenchEntitySet {
   debugMode?: boolean;
   dragSelectedEntities?: boolean;
   dragSelectEntities?: boolean;
+  tweakSingleEntityParams?: boolean;
   beforeFrame?: (frameIndex: number) => void;
   getViewportOffset?: (frameIndex: number) => { x: number; y: number };
   getViewport?: (frameIndex: number, sampleFrameIndex: number) => Viewport;
@@ -1087,6 +1088,7 @@ async function createManyEntitySet(
       debugMode: config.debugMode,
       dragSelectedEntities: config.dragSelectedEntities,
       dragSelectEntities: config.dragSelectEntities,
+      tweakSingleEntityParams: config.tweakSingleEntityParams,
       decodedAssetEstimateBytes: estimateDecodedAssetBytes(config),
       getViewportOffset: (frameIndex) =>
         getManyEntityViewportOffset(config, frameIndex, {
@@ -1133,6 +1135,10 @@ function createManyEntitySelection(
   config: ManyEntityScenarioConfig,
   entities: readonly ShaderCanvasEntity[],
 ): ReadonlySet<string> | undefined {
+  if (config.tweakSingleEntityParams) {
+    const target = entities[Math.floor(entities.length / 2)];
+    return target ? new Set([target.id]) : undefined;
+  }
   const selectedCount =
     config.selectedEntityCount ??
     (config.selectedEntityFraction === undefined
@@ -1314,6 +1320,7 @@ function createRenderState(
     entityVersion: 0,
     geometryVersion: 0,
     selectionVersion: selectedEntityIds.size > 0 ? 1 : 0,
+    dirtyEntityIds: new Set(),
     selectedEntityIds,
     debugMode,
     debugView: "none",
@@ -1356,6 +1363,7 @@ async function runFrames(params: {
   debugMode?: boolean;
   dragSelectedEntities?: boolean;
   dragSelectEntities?: boolean;
+  tweakSingleEntityParams?: boolean;
 }): Promise<{
   totalMs: number;
   cpuEncodeMs: number;
@@ -1396,6 +1404,10 @@ async function runFrames(params: {
     params.dragSelectedEntities,
     params.dragSelectEntities,
   );
+  const parameterTargetIndex = params.tweakSingleEntityParams
+    ? Math.floor(params.entities.length / 2)
+    : -1;
+  const dirtyEntityIds = new Set<string>();
 
   for (let index = 0; index < params.frameCount; index += 1) {
     const frameIndex = params.startFrameIndex + index;
@@ -1408,6 +1420,17 @@ async function runFrames(params: {
     previousRafTimestamp = rafTimestamp;
     const sourceUpdateStart = performance.now();
     params.beforeFrame?.(frameIndex);
+    if (parameterTargetIndex >= 0) {
+      const previous = params.entities[parameterTargetIndex]!;
+      const shaderParams = { ...previous.shaderParams, size: frameIndex % 2 === 0 ? 1 : 2 };
+      const next = { ...previous, shaderParams, textureDirty: true };
+      params.entities[parameterTargetIndex] = next;
+      dirtyEntityIds.clear();
+      dirtyEntityIds.add(next.id);
+      renderState.entityVersion++;
+      renderState.selectionVersion++;
+      renderState.dirtyEntityIds = dirtyEntityIds;
+    }
     const sourceUpdateMs = performance.now() - sourceUpdateStart;
     sourceUpdateSamples.push(sourceUpdateMs);
     const viewport =
@@ -1595,6 +1618,7 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
         debugMode: entitySet.debugMode,
         dragSelectedEntities: entitySet.dragSelectedEntities,
         dragSelectEntities: entitySet.dragSelectEntities,
+        tweakSingleEntityParams: entitySet.tweakSingleEntityParams,
       });
       frameIndex += scenario.frames;
       samples.push(result.totalMs);

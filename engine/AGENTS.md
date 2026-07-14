@@ -20,7 +20,7 @@ Canvas state management and input processing. This is the "model + controller" l
 - `CanvasState` uses version counters (`version`, `entityVersion`, `geometryVersion`, `viewportVersion`, `selectionVersion`, `playbackVersion`, `dragVersion`) for selective cache invalidation and React subscriptions. Imperative moves increment `geometryVersion` without notifying React.
 - Snapshot types (`ViewportSnapshot`, `SelectionSnapshot`, `PlaybackSnapshot`, `DragSnapshot`, `ActionLayerSnapshot`) isolate subscription scopes — sidebar components don't re-render on viewport pan.
 - Dirty flags (`viewportDirty`, `entitiesDirty`, `geometryDirty`, `selectionDirty`) tell the renderer what needs redrawing. Geometry-only motion does not populate the texture-dirty ID set.
-- `RenderState` is a stable mutable frame view consumed synchronously by `InfiniteCanvasRenderer.render()`; it exposes entity, geometry, and selection versions for renderer caches, and its sorted entity array is rebuilt only when `entityVersion` changes.
+- `RenderState` is a stable mutable frame view consumed synchronously by `InfiniteCanvasRenderer.render()`; it exposes entity, geometry, and selection versions plus the current dirty-entity ID set for renderer caches. Non-ordering reference changes patch the stable sorted entity array by cached ID index; membership or z-index changes rebuild it.
 - `CanvasStore` owns the incremental `EntitySpatialIndex` shared by renderer visibility, point hit testing, and drag selection. Every geometry mutation must upsert or remove its entity from the index.
 - `CanvasStore.hasRenderChanges()` checks dirty state without materializing or mutating render state.
 
