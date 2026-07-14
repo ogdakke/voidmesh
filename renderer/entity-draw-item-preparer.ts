@@ -94,6 +94,7 @@ export class EntityDrawItemPreparer {
   #activeFullSceneBatchKey: FullSceneBatchKey | null = null;
   #fullSceneAsset: MediaImageAsset | null = null;
   #homogeneousEntityVersion = -1;
+  #homogeneousEntityCount = 0;
   #homogeneousEntities: readonly ShaderCanvasEntity[] | null = null;
   #homogeneousRepresentative: ShaderCanvasEntity | null = null;
   #snapshotRepresentative: ShaderCanvasEntity | null = null;
@@ -353,7 +354,11 @@ export class EntityDrawItemPreparer {
     const incrementallyPatchedBatch = this.#tryPatchFullSceneBatch(options);
     if (incrementallyPatchedBatch) return incrementallyPatchedBatch;
 
-    const representative = this.#getHomogeneousRepresentative(entities, entityVersion);
+    const representative = this.#getHomogeneousRepresentative(
+      entities,
+      entityVersion,
+      options.dirtyEntityIds,
+    );
     if (!representative) {
       if (options.mixedFullSceneBatchMode === "disabled") return null;
       return this.#prepareMixedFullSceneBatch(
@@ -426,7 +431,7 @@ export class EntityDrawItemPreparer {
     key.texture = compositionSource.texture;
     key.textureCacheRevision = this.#texturePipeline.textureCacheRevision;
     key.instanceCount = entities.length;
-    if (this.#compositionPass.hasFullSceneBatch(key)) {
+    if (this.#hasResidentFullSceneBatch(key)) {
       this.#activeFullSceneBatchKey = key;
       this.#rememberSnapshotSource(representative, entityVersion, renderWidth, renderHeight);
       return key;
@@ -509,7 +514,7 @@ export class EntityDrawItemPreparer {
     );
     key.textureCacheRevision = this.#texturePipeline.textureCacheRevision;
     key.instanceCount = entities.length;
-    if (this.#compositionPass.hasFullSceneBatch(key)) {
+    if (this.#hasResidentFullSceneBatch(key)) {
       this.#activeFullSceneBatchKey = key;
       return key;
     }
@@ -637,9 +642,9 @@ export class EntityDrawItemPreparer {
       dirtyEntityIds.size > MAX_INCREMENTAL_FULL_SCENE_PATCHES ||
       previousKey.entityVersion === options.entityVersion ||
       previousKey.geometryVersion !== options.geometryVersion ||
-      previousKey.textureCacheRevision !== this.#texturePipeline.textureCacheRevision ||
       previousKey.instanceCount !== options.entities.length ||
-      this.#fullSceneEntityIndices.size !== options.entities.length
+      this.#fullSceneEntityIndices.size !== options.entities.length ||
+      !this.#pinCachedFullSceneTextures()
     ) {
       return null;
     }
@@ -763,6 +768,18 @@ export class EntityDrawItemPreparer {
     this.#activeFullSceneBatchKey = key;
   }
 
+  #hasResidentFullSceneBatch(key: FullSceneBatchKey): boolean {
+    return this.#compositionPass.hasFullSceneBatch(key) && this.#pinCachedFullSceneTextures();
+  }
+
+  #pinCachedFullSceneTextures(): boolean {
+    let resident = true;
+    const hasBatch = this.#compositionPass.visitCachedFullSceneTextures((texture) => {
+      if (!this.#texturePipeline.pinCachedTexture(texture)) resident = false;
+    });
+    return hasBatch && resident;
+  }
+
   #rememberSnapshotSource(
     representative: ShaderCanvasEntity,
     entityVersion: number,
@@ -778,6 +795,7 @@ export class EntityDrawItemPreparer {
   #getHomogeneousRepresentative(
     entities: readonly ShaderCanvasEntity[],
     entityVersion: number,
+    dirtyEntityIds: ReadonlySet<string>,
   ): ShaderCanvasEntity | null {
     if (
       this.#homogeneousEntityVersion === entityVersion &&
@@ -785,9 +803,53 @@ export class EntityDrawItemPreparer {
     ) {
       return this.#homogeneousRepresentative;
     }
+
+    if (
+      this.#homogeneousEntityVersion >= 0 &&
+      this.#homogeneousEntities === entities &&
+      this.#homogeneousEntityCount === entities.length &&
+      dirtyEntityIds.size > 0 &&
+      dirtyEntityIds.size <= MAX_INCREMENTAL_FULL_SCENE_PATCHES
+    ) {
+      const previousRepresentative = this.#homogeneousRepresentative;
+      this.#homogeneousEntityVersion = entityVersion;
+      if (!previousRepresentative) return null;
+
+      let baseline = previousRepresentative;
+      if (dirtyEntityIds.has(baseline.id)) {
+        const unchanged = entities.find((entity) => !dirtyEntityIds.has(entity.id));
+        if (!unchanged) return this.#scanHomogeneousRepresentative(entities, entityVersion);
+        baseline = unchanged;
+      }
+      const asset =
+        baseline.mediaSource.type === MediaType.image ? baseline.mediaSource.asset : null;
+      for (const entityId of dirtyEntityIds) {
+        const index = this.#fullSceneEntityIndices.get(entityId);
+        const entity = index === undefined ? undefined : entities[index];
+        if (!entity || entity.id !== entityId || !isFullSceneEquivalent(entity, baseline, asset)) {
+          this.#homogeneousRepresentative = null;
+          return null;
+        }
+      }
+      this.#homogeneousRepresentative = baseline;
+      return baseline;
+    }
+
+    return this.#scanHomogeneousRepresentative(entities, entityVersion);
+  }
+
+  #scanHomogeneousRepresentative(
+    entities: readonly ShaderCanvasEntity[],
+    entityVersion: number,
+  ): ShaderCanvasEntity | null {
     this.#homogeneousEntityVersion = entityVersion;
+    this.#homogeneousEntityCount = entities.length;
     this.#homogeneousEntities = entities;
     this.#homogeneousRepresentative = null;
+    this.#fullSceneEntityIndices.clear();
+    for (let index = 0; index < entities.length; index++) {
+      this.#fullSceneEntityIndices.set(entities[index]!.id, index);
+    }
 
     const representative = entities[0];
     if (!representative || representative.mediaSource.type !== MediaType.image) return null;

@@ -72,9 +72,11 @@ export class FrameLoop {
   #firstFrameRendered = false;
   #lastFrameTime: number | null = null;
   #activeEntityVersion = -1;
-  #playingGifs: ShaderCanvasEntity[] = [];
-  #playingVideos: ShaderCanvasEntity[] = [];
-  #continuousShaderEntities: ShaderCanvasEntity[] = [];
+  #activeEntityCount = 0;
+  readonly #classifiedEntityIds = new Set<string>();
+  #playingGifs = new Map<string, ShaderCanvasEntity>();
+  #playingVideos = new Map<string, ShaderCanvasEntity>();
+  #continuousShaderEntities = new Map<string, ShaderCanvasEntity>();
 
   constructor(deps: FrameLoopDeps, callbacks: FrameLoopCallbacks) {
     this.#deps = deps;
@@ -124,14 +126,14 @@ export class FrameLoop {
     // Uses entity refs directly — getRenderState() is deferred until after all ticks
     // so the viewport snapshot reflects this frame's updates, not the previous frame's.
     const viewport = canvasStore.getState().viewport;
-    for (const entity of this.#playingGifs) {
+    for (const entity of this.#playingGifs.values()) {
       if (entity.mediaSource.type !== MediaType.gif || !entity.playback?.isPlaying) continue;
       const updateFrame = this.#renderer?.isEntityVisible(entity, viewport) ?? true;
       const frameChanged = canvasStore.advanceGifPlayback(entity.id, deltaSeconds, updateFrame);
       canvasStore.updateGifPlaybackTime(entity.id, entity.playback.currentTime);
       if (frameChanged) hasAnimatedFrameUpdate = true;
     }
-    for (const entity of this.#playingVideos) {
+    for (const entity of this.#playingVideos.values()) {
       if (entity.mediaSource.type !== MediaType.video || !entity.playback?.isPlaying) continue;
       const video = entity.mediaSource.videoElement;
       const isVisible = this.#renderer?.isEntityVisible(entity, viewport) ?? true;
@@ -157,7 +159,7 @@ export class FrameLoop {
       !this.#firstFrameRendered ||
       canvasStore.hasRenderChanges() ||
       hasAnimatedFrameUpdate ||
-      this.#continuousShaderEntities.length > 0 ||
+      this.#continuousShaderEntities.size > 0 ||
       this.#deps.scheduler.hasActive ||
       this.#callbacks.isPointerDragging() ||
       this.#callbacks.isDragSelectActive() ||
@@ -198,19 +200,51 @@ export class FrameLoop {
     const state = canvasStore.getState();
     if (state.entityVersion === this.#activeEntityVersion) return;
 
+    const hasActiveSnapshot = this.#activeEntityVersion >= 0;
     this.#activeEntityVersion = state.entityVersion;
-    this.#playingGifs = [];
-    this.#playingVideos = [];
-    this.#continuousShaderEntities = [];
+    let canPatch =
+      hasActiveSnapshot &&
+      this.#activeEntityCount === state.entities.size &&
+      state.entitiesDirty.size > 0 &&
+      state.entitiesDirty.size <= 32;
+    if (canPatch) {
+      for (const entityId of state.entitiesDirty) {
+        if (!this.#classifiedEntityIds.has(entityId)) {
+          canPatch = false;
+          break;
+        }
+      }
+    }
+    this.#activeEntityCount = state.entities.size;
+    if (canPatch) {
+      for (const entityId of state.entitiesDirty) {
+        this.#playingGifs.delete(entityId);
+        this.#playingVideos.delete(entityId);
+        this.#continuousShaderEntities.delete(entityId);
+        const entity = state.entities.get(entityId);
+        if (entity) this.#classifyActiveEntity(entity);
+      }
+      return;
+    }
+
+    this.#playingGifs.clear();
+    this.#playingVideos.clear();
+    this.#continuousShaderEntities.clear();
+    this.#classifiedEntityIds.clear();
     for (const entity of state.entities.values()) {
-      if (entity.mediaSource.type === MediaType.gif && entity.playback?.isPlaying) {
-        this.#playingGifs.push(entity);
-      } else if (entity.mediaSource.type === MediaType.video && entity.playback?.isPlaying) {
-        this.#playingVideos.push(entity);
-      }
-      if (this.#renderer?.needsContinuousRenderForEntity(entity)) {
-        this.#continuousShaderEntities.push(entity);
-      }
+      this.#classifiedEntityIds.add(entity.id);
+      this.#classifyActiveEntity(entity);
+    }
+  }
+
+  #classifyActiveEntity(entity: ShaderCanvasEntity): void {
+    if (entity.mediaSource.type === MediaType.gif && entity.playback?.isPlaying) {
+      this.#playingGifs.set(entity.id, entity);
+    } else if (entity.mediaSource.type === MediaType.video && entity.playback?.isPlaying) {
+      this.#playingVideos.set(entity.id, entity);
+    }
+    if (this.#renderer?.needsContinuousRenderForEntity(entity)) {
+      this.#continuousShaderEntities.set(entity.id, entity);
     }
   }
 

@@ -542,7 +542,6 @@ export class CompositionPass {
       cached.renderWidth === key.renderWidth &&
       cached.renderHeight === key.renderHeight &&
       cached.texture === key.texture &&
-      cached.textureCacheRevision === key.textureCacheRevision &&
       cached.instanceCount === key.instanceCount
     );
   }
@@ -692,6 +691,13 @@ export class CompositionPass {
       bufferGeneration: this.#instanceBufferGeneration,
       drawRanges,
     };
+    return true;
+  }
+
+  visitCachedFullSceneTextures(visitor: (texture: GPUTexture) => void): boolean {
+    const cached = this.#fullSceneBatch;
+    if (!cached || cached.bufferGeneration !== this.#instanceBufferGeneration) return false;
+    for (const range of cached.drawRanges) visitor(range.texture);
     return true;
   }
 

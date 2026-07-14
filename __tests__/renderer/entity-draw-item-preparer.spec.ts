@@ -285,6 +285,13 @@ function createHarness(
       cachedKey = { ...key };
       return true;
     }),
+    visitCachedFullSceneTextures: vi.fn<(visitor: (texture: GPUTexture) => void) => boolean>(
+      (visitor) => {
+        if (!cachedKey) return false;
+        visitor(texture);
+        return true;
+      },
+    ),
     prepareDrawItem: vi.fn<(options: { entity: ShaderCanvasEntity }) => CompositionDrawItem>(
       (options) =>
         ({
@@ -302,6 +309,7 @@ function createHarness(
   };
   const texturePipeline = {
     textureCacheRevision: 1,
+    pinCachedTexture: vi.fn<(texture: GPUTexture) => boolean>(() => true),
     needsContinuousRenderForEntity: vi.fn<(entity: ShaderCanvasEntity) => boolean>(() => false),
     getReusableStaticCompositionSource: vi.fn<() => { kind: "texture"; texture: GPUTexture }>(
       () => ({ kind: "texture", texture }),

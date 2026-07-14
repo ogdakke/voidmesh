@@ -120,6 +120,7 @@ describe("CompositionPass instancing", () => {
     pass.prepareFullSceneBatch({ ...key, entities: [first, second], selectedEntityIds: new Set() });
     pass.beginFrame(2);
     expect(pass.drawFullSceneBatch(createRenderPass(), key)).toBe(true);
+    expect(pass.hasFullSceneBatch({ ...key, textureCacheRevision: 2 })).toBe(true);
 
     pass.prepareFullSceneBatch({ ...key, entities: [first, second], selectedEntityIds: new Set() });
     pass.beginFrame(2);

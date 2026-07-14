@@ -1422,7 +1422,7 @@ async function runFrames(params: {
     params.beforeFrame?.(frameIndex);
     if (parameterTargetIndex >= 0) {
       const previous = params.entities[parameterTargetIndex]!;
-      const shaderParams = { ...previous.shaderParams, size: frameIndex % 2 === 0 ? 1 : 2 };
+      const shaderParams = { ...previous.shaderParams, size: 1 + (frameIndex % 24) * 0.125 };
       const next = { ...previous, shaderParams, textureDirty: true };
       params.entities[parameterTargetIndex] = next;
       dirtyEntityIds.clear();
