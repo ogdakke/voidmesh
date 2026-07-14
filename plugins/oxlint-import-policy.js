@@ -36,6 +36,10 @@ function stripImportSuffix(value) {
   return value.split("?")[0];
 }
 
+function getImportSuffix(value) {
+  return value.slice(stripImportSuffix(value).length);
+}
+
 function normalizePackageTarget(target) {
   return normalizePath(target).replace(/^\.[/]/, "");
 }
@@ -113,6 +117,14 @@ export function isTypeOnlyImport(node) {
   );
 }
 
+export function isTypeOnlyExport(node) {
+  if (node.exportKind === "type") return true;
+  return (
+    node.specifiers?.length > 0 &&
+    node.specifiers.every((specifier) => specifier.exportKind === "type")
+  );
+}
+
 export function getImportPolicyViolation({
   filename,
   source,
@@ -139,7 +151,9 @@ export function getImportPolicyViolation({
 export function getPreferredPackageImport(source, importerFilename, rootDirectory = process.cwd()) {
   if (!source.startsWith(".")) return null;
 
-  const resolved = path.resolve(path.dirname(importerFilename), stripImportSuffix(source));
+  const cleanSource = stripImportSuffix(source);
+  const suffix = getImportSuffix(source);
+  const resolved = path.resolve(path.dirname(importerFilename), cleanSource);
   const relativeTarget = normalizePath(path.relative(rootDirectory, resolved));
   if (relativeTarget.startsWith("../")) return null;
 
@@ -158,7 +172,7 @@ export function getPreferredPackageImport(source, importerFilename, rootDirector
         targetPrefix.length,
         targetSuffix ? -targetSuffix.length : undefined,
       );
-      return mapping.alias.replace("*", wildcardValue);
+      return `${mapping.alias.replace("*", wildcardValue)}${suffix}`;
     }
 
     const publicTarget = mapping.target;
@@ -168,7 +182,7 @@ export function getPreferredPackageImport(source, importerFilename, rootDirector
       relativeTarget === publicDirectory ||
       relativeTarget.startsWith(`${publicDirectory}/`)
     ) {
-      return mapping.alias;
+      return `${mapping.alias}${suffix}`;
     }
   }
 
@@ -176,16 +190,10 @@ export function getPreferredPackageImport(source, importerFilename, rootDirector
 }
 
 function createVisitors(context) {
-  const checkSource = (node, sourceNode, typeOnly) => {
-    const options = context.options?.[0] ?? {};
-    const rootDirectory = path.resolve(options.rootDirectory ?? process.cwd());
-    const allowedFiles = new Set(
-      (options.allowFiles ?? []).map((filename) => normalizePath(filename)),
-    );
-    const filename = context.filename ?? context.getFilename();
-    const relativeFilename = normalizePath(path.relative(rootDirectory, filename));
-    if (allowedFiles.has(relativeFilename)) return;
+  let filename;
+  let rootDirectory;
 
+  const checkSource = (node, sourceNode, typeOnly) => {
     const source = sourceNode?.value;
     if (typeof source !== "string") return;
 
@@ -195,10 +203,24 @@ function createVisitors(context) {
       typeOnly,
       rootDirectory,
     });
-    if (violation) context.report({ node: sourceNode ?? node, message: violation.message });
+    if (violation) {
+      context.report({
+        node: sourceNode ?? node,
+        messageId: "layerViolation",
+        data: {
+          importerLayer: violation.importerLayer,
+          importedLayer: violation.importedLayer,
+        },
+      });
+    }
   };
 
   return {
+    before() {
+      const options = context.options?.[0] ?? {};
+      rootDirectory = path.resolve(options.rootDirectory ?? context.cwd);
+      filename = context.filename;
+    },
     ImportDeclaration(node) {
       checkSource(node, node.source, isTypeOnlyImport(node));
     },
@@ -206,7 +228,7 @@ function createVisitors(context) {
       checkSource(node, node.source, false);
     },
     ExportNamedDeclaration(node) {
-      if (node.source) checkSource(node, node.source, node.exportKind === "type");
+      if (node.source) checkSource(node, node.source, isTypeOnlyExport(node));
     },
     ExportAllDeclaration(node) {
       checkSource(node, node.source, node.exportKind === "type");
@@ -220,32 +242,28 @@ const enforceLayerBoundaries = {
     docs: {
       description: "Enforce Voidmesh dependency direction and hide deep-module internals.",
     },
+    messages: {
+      layerViolation:
+        "{{importerLayer}}/ cannot import {{importedLayer}}/. Depend on a public, narrow interface in an allowed lower layer instead.",
+    },
     schema: [
       {
         type: "object",
         properties: {
           rootDirectory: { type: "string" },
-          allowFiles: { type: "array", items: { type: "string" }, uniqueItems: true },
         },
         additionalProperties: false,
       },
     ],
   },
   createOnce: createVisitors,
-  create: createVisitors,
 };
 
 function createPackageImportVisitors(context) {
-  const checkSource = (node, sourceNode) => {
-    const options = context.options?.[0] ?? {};
-    const rootDirectory = path.resolve(options.rootDirectory ?? process.cwd());
-    const allowedFiles = new Set(
-      (options.allowFiles ?? []).map((filename) => normalizePath(filename)),
-    );
-    const filename = context.filename ?? context.getFilename();
-    const relativeFilename = normalizePath(path.relative(rootDirectory, filename));
-    if (allowedFiles.has(relativeFilename)) return;
+  let filename;
+  let rootDirectory;
 
+  const checkSource = (node, sourceNode) => {
     const source = sourceNode?.value;
     if (typeof source !== "string") return;
 
@@ -254,11 +272,17 @@ function createPackageImportVisitors(context) {
 
     context.report({
       node: sourceNode ?? node,
-      message: `Use the package import '${preferredImport}' instead of crossing module boundaries with a relative path.`,
+      messageId: "preferPackageImport",
+      data: { preferredImport },
     });
   };
 
   return {
+    before() {
+      const options = context.options?.[0] ?? {};
+      rootDirectory = path.resolve(options.rootDirectory ?? context.cwd);
+      filename = context.filename;
+    },
     ImportDeclaration(node) {
       checkSource(node, node.source);
     },
@@ -280,10 +304,13 @@ const preferPackageImports = {
     docs: {
       description: "Require package.json import aliases for cross-module imports.",
     },
+    messages: {
+      preferPackageImport:
+        "Use the package import '{{preferredImport}}' instead of crossing module boundaries with a relative path.",
+    },
     schema: enforceLayerBoundaries.meta.schema,
   },
   createOnce: createPackageImportVisitors,
-  create: createPackageImportVisitors,
 };
 
 export default {
