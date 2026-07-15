@@ -3,13 +3,7 @@ import type { ActionLayerRenderState, DragSelectMode, DragVisualRenderState } fr
 import { getViewportWorldBounds } from "#lib/canvas-math.ts";
 import type { EntitySpatialIndex } from "#lib/entity-spatial-index.ts";
 import { tracePerformancePhase } from "#lib/performance-tracing.ts";
-import {
-  MediaType,
-  type Bounds,
-  type MediaImageAsset,
-  type ShaderCanvasEntity,
-  type Viewport,
-} from "#types/canvas.ts";
+import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import type {
   CompositionDrawItem,
   CompositionPass,
@@ -92,7 +86,6 @@ export class EntityDrawItemPreparer {
   #fullSceneBatchKey: FullSceneBatchKey | null = null;
   #mixedFullSceneBatchKey: FullSceneBatchKey | null = null;
   #activeFullSceneBatchKey: FullSceneBatchKey | null = null;
-  #fullSceneAsset: MediaImageAsset | null = null;
   #homogeneousEntityVersion = -1;
   #homogeneousEntityCount = 0;
   #homogeneousEntities: readonly ShaderCanvasEntity[] | null = null;
@@ -256,10 +249,14 @@ export class EntityDrawItemPreparer {
 
       // Action layer entities are drawn AFTER blur (not in main pass) to avoid halo
       const isActionLayerEntity = actionLayerActive && actionLayer.entityIds.has(entity.id);
-      const positionOffsetX = isActionLayerEntity ? actionLayerOffsetX : 0;
-      const positionOffsetY = isActionLayerEntity ? actionLayerOffsetY : 0;
-      const visualScale =
-        dragVisual.active && dragVisual.entityIds.has(entity.id) ? dragVisual.scale : 1;
+      const isDragVisualEntity = dragVisual.active && dragVisual.entityIds.has(entity.id);
+      const dragOffsetX =
+        isDragVisualEntity && dragVisual.appliesToSelection ? dragVisual.offset.x : 0;
+      const dragOffsetY =
+        isDragVisualEntity && dragVisual.appliesToSelection ? dragVisual.offset.y : 0;
+      const positionOffsetX = (isActionLayerEntity ? actionLayerOffsetX : 0) + dragOffsetX;
+      const positionOffsetY = (isActionLayerEntity ? actionLayerOffsetY : 0) + dragOffsetY;
+      const visualScale = isDragVisualEntity ? dragVisual.scale : 1;
       let compositionOptions = this.#compositionOptions;
       if (!compositionOptions) {
         compositionOptions = {
@@ -342,7 +339,6 @@ export class EntityDrawItemPreparer {
       debugMode,
     } = options;
     if (
-      entities.length < config.rendering.fullSceneBatchMinEntityCount ||
       actionLayer.active ||
       actionLayer.blurIntensity > 0.01 ||
       (dragVisual.active && !dragVisual.appliesToSelection) ||
@@ -465,7 +461,7 @@ export class EntityDrawItemPreparer {
     }
 
     this.#compositionPass.prepareFullSceneBatch({ ...key, entities, selectedEntityIds });
-    this.#rememberFullSceneLayout(entities, representative.mediaSource.asset, key);
+    this.#rememberFullSceneLayout(entities, key);
     this.#rememberSnapshotSource(representative, entityVersion, renderWidth, renderHeight);
     return key;
   }
@@ -551,7 +547,6 @@ export class EntityDrawItemPreparer {
     items.length = 0;
     const representative = entities[0];
     if (!representative || representative.mediaSource.type !== MediaType.image) return null;
-    const sharedAsset = representative.mediaSource.asset;
     let previousTexture: GPUTexture | null = null;
     let textureRunCount = 0;
     let previousSizedEntity: ShaderCanvasEntity | null = null;
@@ -560,7 +555,6 @@ export class EntityDrawItemPreparer {
     for (const entity of entities) {
       if (
         entity.mediaSource.type !== MediaType.image ||
-        entity.mediaSource.asset !== sharedAsset ||
         this.#texturePipeline.needsContinuousRenderForEntity(entity)
       ) {
         items.length = 0;
@@ -626,17 +620,15 @@ export class EntityDrawItemPreparer {
 
     key.textureCacheRevision = this.#texturePipeline.textureCacheRevision;
     this.#compositionPass.prepareMixedFullSceneBatch(key, items);
-    this.#rememberFullSceneLayout(entities, sharedAsset, key);
+    this.#rememberFullSceneLayout(entities, key);
     return key;
   }
 
   #tryPatchFullSceneBatch(options: PrepareEntityDrawItemsOptions): FullSceneBatchKey | null {
     const previousKey = this.#activeFullSceneBatchKey;
     const dirtyEntityIds = options.dirtyEntityIds;
-    const sharedAsset = this.#fullSceneAsset;
     if (
       !previousKey ||
-      !sharedAsset ||
       options.mixedFullSceneBatchMode === "disabled" ||
       dirtyEntityIds.size === 0 ||
       dirtyEntityIds.size > MAX_INCREMENTAL_FULL_SCENE_PATCHES ||
@@ -659,7 +651,6 @@ export class EntityDrawItemPreparer {
         !entity ||
         entity.id !== entityId ||
         entity.mediaSource.type !== MediaType.image ||
-        entity.mediaSource.asset !== sharedAsset ||
         this.#texturePipeline.needsContinuousRenderForEntity(entity)
       ) {
         patches.length = 0;
@@ -755,16 +746,11 @@ export class EntityDrawItemPreparer {
     return key;
   }
 
-  #rememberFullSceneLayout(
-    entities: readonly ShaderCanvasEntity[],
-    asset: MediaImageAsset,
-    key: FullSceneBatchKey,
-  ): void {
+  #rememberFullSceneLayout(entities: readonly ShaderCanvasEntity[], key: FullSceneBatchKey): void {
     this.#fullSceneEntityIndices.clear();
     for (let index = 0; index < entities.length; index++) {
       this.#fullSceneEntityIndices.set(entities[index]!.id, index);
     }
-    this.#fullSceneAsset = asset;
     this.#activeFullSceneBatchKey = key;
   }
 

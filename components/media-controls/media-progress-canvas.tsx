@@ -246,9 +246,12 @@ export function MediaProgressCanvas({
     updateAriaEffect(true);
     startLoopEffect();
     const unsubscribe = source.subscribe(() => {
+      if (source.getIsPlaying()) {
+        startLoopEffect();
+        return;
+      }
       drawEffect();
       updateAriaEffect(true);
-      if (source.getIsPlaying()) startLoopEffect();
     });
     return () => {
       unsubscribe();

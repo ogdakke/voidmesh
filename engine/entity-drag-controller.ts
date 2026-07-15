@@ -1,4 +1,3 @@
-import { config } from "#config";
 import { SNAP_GRID_SIZE, snapToGrid } from "#lib/canvas-math.ts";
 import { DragTargetType, type Point } from "#types/canvas.ts";
 import type { AnimationHandle, AnimationScheduler } from "#lib/animation-scheduler.ts";
@@ -82,8 +81,7 @@ export class EntityDragController {
     this.#moveDelta.x = dx;
     this.#moveDelta.y = dy;
     if (this.#dragTarget?.type === DragTargetType.multiSelection) {
-      this.commitTransientTranslation();
-      canvasStore.moveEntities(canvasStore.getSelectedEntityIds(), this.#moveDelta);
+      this.#moveSelectedTransientOrCommitted(canvasStore.getSelectedEntityIds(), this.#moveDelta);
     } else if (this.#dragTarget?.type === DragTargetType.entity && this.#dragTarget.entityId) {
       canvasStore.moveEntity(this.#dragTarget.entityId, this.#moveDelta);
     } else if (this.#springEntityIds) {
@@ -141,11 +139,7 @@ export class EntityDragController {
   }
 
   #moveSelectedTransientOrCommitted(selectedIds: ReadonlySet<string>, delta: Point): void {
-    if (selectedIds.size < config.rendering.fullSceneBatchMinEntityCount) {
-      this.commitTransientTranslation();
-      canvasStore.moveEntities(selectedIds, delta);
-      return;
-    }
+    if (selectedIds.size === 0) return;
     this.#transientEntityIds ??= selectedIds;
     this.#transientOffset.x += delta.x;
     this.#transientOffset.y += delta.y;

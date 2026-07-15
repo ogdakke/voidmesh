@@ -12,20 +12,16 @@ import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
 import { createTestEntity } from "../helpers/test-entity.ts";
 
 const renderingConfig = config.rendering as unknown as {
-  fullSceneBatchMinEntityCount: number;
   fullSceneBatchMinVisibleFraction: number;
 };
-const originalMinimumCount = renderingConfig.fullSceneBatchMinEntityCount;
 const originalMinimumVisibleFraction = renderingConfig.fullSceneBatchMinVisibleFraction;
 
 describe("EntityDrawItemPreparer full-scene batching", () => {
   beforeAll(() => {
-    renderingConfig.fullSceneBatchMinEntityCount = 2;
     renderingConfig.fullSceneBatchMinVisibleFraction = 0.25;
   });
 
   afterAll(() => {
-    renderingConfig.fullSceneBatchMinEntityCount = originalMinimumCount;
     renderingConfig.fullSceneBatchMinVisibleFraction = originalMinimumVisibleFraction;
   });
 
@@ -96,6 +92,22 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     expect(harness.compositionPass.prepareMixedFullSceneBatch).toHaveBeenCalledOnce();
 
     scene.release();
+  });
+
+  test("persists small static scenes containing distinct image assets", () => {
+    const entities = [
+      createTestEntity({ id: "distinct-first" }),
+      createTestEntity({ id: "distinct-second" }),
+    ];
+    const harness = createHarness(entities);
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+    expect(harness.compositionPass.prepareFullSceneBatch).not.toHaveBeenCalled();
+    expect(harness.compositionPass.prepareMixedFullSceneBatch).toHaveBeenCalledOnce();
+
+    for (const entity of entities) {
+      if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
+    }
   });
 
   test("patches a small dirty subset without rescanning or rebuilding the full scene", () => {
@@ -218,6 +230,28 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     scene.release();
   });
 
+  test("applies the transient selection offset during normal visible preparation", () => {
+    const scene = createScene();
+    const harness = createHarness(scene.entities);
+    harness.options.hasCanvasCallouts = true;
+    harness.options.selectedEntityIds.add(scene.entities[0]!.id);
+    harness.options.dragVisual.active = true;
+    harness.options.dragVisual.isDragPhase = true;
+    harness.options.dragVisual.appliesToSelection = true;
+    harness.options.dragVisual.entityIds = harness.options.selectedEntityIds;
+    harness.options.dragVisual.offset = { x: 40, y: -25 };
+
+    const prepared = harness.preparer.prepare(harness.options);
+    expect(prepared.fullSceneBatch).toBeNull();
+    expect(prepared.entityDrawItems[0]).toMatchObject({
+      entity: scene.entities[0],
+      offsetX: 40,
+      offsetY: -25,
+    });
+
+    scene.release();
+  });
+
   test("keeps the persistent batch while drag-selection membership changes on the GPU", () => {
     const scene = createScene();
     const harness = createHarness(scene.entities);
@@ -292,7 +326,14 @@ function createHarness(
         return true;
       },
     ),
-    prepareDrawItem: vi.fn<(options: { entity: ShaderCanvasEntity }) => CompositionDrawItem>(
+    prepareDrawItem: vi.fn<
+      (options: {
+        entity: ShaderCanvasEntity;
+        positionOffsetX: number;
+        positionOffsetY: number;
+        visualScale: number;
+      }) => CompositionDrawItem
+    >(
       (options) =>
         ({
           entity: options.entity,
@@ -301,9 +342,9 @@ function createHarness(
           pipeline: "texture",
           isSelected: false,
           debugMode: false,
-          offsetX: 0,
-          offsetY: 0,
-          visualScale: 1,
+          offsetX: options.positionOffsetX,
+          offsetY: options.positionOffsetY,
+          visualScale: options.visualScale,
         }) satisfies CompositionDrawItem,
     ),
   };

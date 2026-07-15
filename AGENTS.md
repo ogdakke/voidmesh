@@ -68,7 +68,7 @@ The opt-in real Chrome/WebGPU many-entity suite lives in `bench/`. Run it with `
 4. **No barrel exports**: Only `engine/index.ts` and `types/index.ts` have barrels. Import directly from files elsewhere.
 5. **GPU resources**: Always clean up buffers/textures. Use `TexturePool` for intermediates. Key shareable source/processed textures by immutable asset and effect identity; entity IDs track ownership, not duplicate resources.
 6. **Undo pattern**: Wrap state mutations in `Command.create({ execute, undo, onEvict })`, push to `undo` singleton from `lib/undo.ts`.
-7. **Overview batching**: Large shared-asset static-image scenes keep one versioned composition instance buffer. Homogeneous scenes issue one draw; bounded mixed-effect scenes retain z-ordered texture runs. Pan and drag-selection frames update uniforms only, while entity/geometry/committed-selection changes rebuild.
+7. **Static composition plans**: Any sufficiently visible static-image scene may keep one versioned composition instance buffer. Homogeneous scenes issue one draw; bounded mixed-asset/effect scenes retain exact z-ordered texture runs. Pan and drag-selection frames update uniforms only, while entity/geometry/committed-selection changes rebuild.
 8. **Deep modules**: UI depends on narrow selectors, commands, and application services. Concrete `CanvasStore`, `GameLoop`, `FrameLoop`, animation-controller, and renderer orchestration access stays behind context/application composition boundaries.
 
 ## Anti-Patterns

@@ -374,6 +374,29 @@ describe("Desktop pointer interactions", () => {
       gl.handlePointerUp({ x: 150, y: 150 });
       expect(deps.dragVisual.release).toHaveBeenCalled();
     });
+
+    test("keeps a small multi-selection drag transient until pointer up", () => {
+      const firstId = addEntity(100, 100);
+      const secondId = addEntity(400, 100);
+      click(gl, { x: 150, y: 150 });
+      click(gl, { x: 450, y: 150 }, true);
+      const first = canvasStore.getState().entities.get(firstId)!;
+      const second = canvasStore.getState().entities.get(secondId)!;
+
+      gl.handlePointerDown({ x: 150, y: 150 });
+      gl.handlePointerMove({ x: 170, y: 140 });
+      gl.processInput();
+
+      expect(first.position).toEqual({ x: 100, y: 100 });
+      expect(second.position).toEqual({ x: 400, y: 100 });
+      expect(canvasStore.getTransientEntityDragOffset()).toEqual({ x: 20, y: -10 });
+
+      gl.handlePointerUp({ x: 170, y: 140 });
+
+      expect(first.position).toEqual({ x: 120, y: 90 });
+      expect(second.position).toEqual({ x: 420, y: 90 });
+      expect(canvasStore.getTransientEntityDragOffset()).toEqual({ x: 0, y: 0 });
+    });
   });
 
   describe("Drag-select rectangle", () => {

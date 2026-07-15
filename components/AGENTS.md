@@ -40,6 +40,7 @@ const param = useParamValue("path.to.param", defaultValue);
 - Components consume canvas state via narrow hooks from `context/use-canvas.ts`, NOT by importing `canvasStore` directly. Use selector hooks for reads, `useCanvasCommands()` for writes, and `useCanvasRendererService()` for renderer/color-space access.
 - Mobile vs desktop: use `useIsMobile()` hook. Desktop uses `react-resizable-panels`; mobile uses bottom drawer. Separate mobile and desktop to `.mobile.tsx` and `.desktop.tsx` respectively, with a `.shared.tsx` for shared components, `.lib.ts` for shared non-tsx code (to preserve HMR)
 - Prefer composition. Use `React Composition Patterns` skill.
+- Playing media progress owns one RAF draw loop. Store playback notifications may start that loop but must not draw a second time while playback is active; group Canvas2D text measurement/drawing by font size to avoid repeated font resolution.
 
 ## React Compiler Constraints
 

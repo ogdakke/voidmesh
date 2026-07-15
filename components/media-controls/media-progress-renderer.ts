@@ -46,41 +46,36 @@ function drawRoundRect(
 }
 
 function setFont(ctx: CanvasRenderingContext2D, cfg: MediaProgressRenderConfig, scale = 1): void {
-  ctx.font = `${cfg.fontWeight} ${cfg.fontSize * scale}px ${cfg.fontFamily}`;
+  const font = `${cfg.fontWeight} ${cfg.fontSize * scale}px ${cfg.fontFamily}`;
+  if (ctx.font !== font) ctx.font = font;
 }
 
-function measureTimeParts(
+function drawTimeLabels(
   ctx: CanvasRenderingContext2D,
   cfg: MediaProgressRenderConfig,
-  parts: MediaTimeParts,
-): { mainWidth: number; msWidth: number; totalWidth: number } {
-  setFont(ctx, cfg);
-  const mainWidth = ctx.measureText(parts.main).width;
-  setFont(ctx, cfg, MS_SCALE);
-  const msWidth = ctx.measureText(`:${parts.ms}`).width;
-  setFont(ctx, cfg);
-  return { mainWidth, msWidth, totalWidth: mainWidth + msWidth };
-}
-
-function drawTimeParts(
-  ctx: CanvasRenderingContext2D,
-  cfg: MediaProgressRenderConfig,
-  parts: MediaTimeParts,
-  x: number,
+  current: MediaTimeParts,
+  duration: MediaTimeParts,
+  width: number,
   y: number,
-  align: "left" | "right",
 ): void {
-  const metrics = measureTimeParts(ctx, cfg, parts);
-  const startX = align === "right" ? x - metrics.totalWidth : x;
+  setFont(ctx, cfg);
+  const currentMainWidth = ctx.measureText(current.main).width;
+  const durationMainWidth = ctx.measureText(duration.main).width;
+  setFont(ctx, cfg, MS_SCALE);
+  const currentMs = `:${current.ms}`;
+  const durationMs = `:${duration.ms}`;
+  const durationMsWidth = ctx.measureText(durationMs).width;
+  const durationStart = width - EDGE_INSET - durationMainWidth - durationMsWidth;
 
   setFont(ctx, cfg);
-  ctx.fillText(parts.main, startX, y);
+  ctx.fillText(current.main, EDGE_INSET, y);
+  ctx.fillText(duration.main, durationStart, y);
 
   setFont(ctx, cfg, MS_SCALE);
   ctx.globalAlpha *= 0.7;
-  ctx.fillText(`:${parts.ms}`, startX + metrics.mainWidth, y);
+  ctx.fillText(currentMs, EDGE_INSET + currentMainWidth, y);
+  ctx.fillText(durationMs, durationStart + durationMainWidth, y);
   ctx.globalAlpha /= 0.7;
-  setFont(ctx, cfg);
 }
 
 export function renderMediaProgress(
@@ -106,8 +101,7 @@ export function renderMediaProgress(
   ctx.textBaseline = "alphabetic";
   ctx.fillStyle = cfg.textColor;
   ctx.globalAlpha = textAlpha;
-  drawTimeParts(ctx, cfg, frame.currentParts, EDGE_INSET, textY, "left");
-  drawTimeParts(ctx, cfg, frame.durationParts, width - EDGE_INSET, textY, "right");
+  drawTimeLabels(ctx, cfg, frame.currentParts, frame.durationParts, width, textY);
   ctx.restore();
 
   ctx.save();
