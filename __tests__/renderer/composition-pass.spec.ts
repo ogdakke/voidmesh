@@ -254,6 +254,44 @@ describe("CompositionPass instancing", () => {
     releaseImageEntity(third);
   });
 
+  test("patches committed drag transforms without rebuilding instance data", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const first = createTestEntity({ id: "drag-commit-first" });
+    const second = cloneImageEntity(first, "drag-commit-second", { x: 20, y: 0 });
+    const texture = createTexture();
+    const key = createFullSceneKey(texture, 2);
+    pass.prepareFullSceneBatch({
+      ...key,
+      entities: [first, second],
+      selectedEntityIds: new Set([first.id]),
+    });
+    device.queue.writeBuffer.mockClear();
+
+    first.position.x = 120;
+    first.position.y = -45;
+    const committedKey = { ...key, geometryVersion: 2 };
+    expect(
+      pass.patchFullSceneInstances(committedKey, [{ index: 0, entity: first, isSelected: true }]),
+    ).toBe(true);
+    expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
+    expect(device.queue.writeBuffer.mock.calls[0]![1]).toBe(0);
+    expect(device.queue.writeBuffer.mock.calls[0]![4]).toBe(32);
+    expect(pass.getStats().fullSceneBatchRebuilds).toBe(1);
+    expect(pass.drawFullSceneBatch(createRenderPass(), committedKey)).toBe(true);
+
+    pass.beginFrame(1);
+    pass.drawItems(createRenderPass(), [prepare(pass, first, texture)]);
+    expect(pass.hasFullSceneBatch(committedKey)).toBe(false);
+    expect(
+      pass.restoreFullSceneBatch(committedKey, [{ texture, firstInstance: 0, instanceCount: 2 }]),
+    ).toBe(true);
+
+    pass.destroy();
+    releaseImageEntity(first);
+    releaseImageEntity(second);
+  });
+
   test("visits each cached mixed texture once regardless of z-order fragmentation", () => {
     const { device } = createDevice();
     const pass = createPass(device);

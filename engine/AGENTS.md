@@ -11,6 +11,7 @@ Canvas state management and input processing. This is the "model + controller" l
 - `momentum-controller.ts` — Pan/zoom fling physics (exponential deceleration, elastic spring-back at zoom bounds). Injected deps for testability.
 - `disintegration-controller.ts` — Timing + spatial data for entity delete animations. GPU resources live in renderer. Singleton.
 - `viewport-animation.ts` — Eased viewport transitions (zoom-to-fit, pan-to-entity).
+- `entity-drag-controller.ts` — Accumulates selection drag offsets without mutating entity geometry per pointer frame, then commits one translation on release.
 - `entity-drag-visual.ts` — Canvas2D overlays for entity drag feedback.
 - `perf-overlay.ts` — FPS/frame-time metrics overlay.
 - `index.ts` — Barrel export. This is the ONLY barrel file consumers should use (`#engine`).
@@ -32,7 +33,7 @@ Canvas state management and input processing. This is the "model + controller" l
 - Use `CanvasStore.updateEntities()` for multi-selection mutations. It applies every replacement/dirty ID before one version bump, subscriber notification, and aggregate debug log.
 - Use `CanvasStore.removeEntities()` for bulk deletion. It deletes maps/index entries, compacts the ordered ID array once, rebuilds selection once, and emits one notification; never loop over `removeEntity()` for a selection.
 - Use `CanvasStore.selectAll()` for whole-canvas selection; it builds the selected-ID set directly from the ordered IDs without an intermediate array or redundant membership checks.
-- Use `CanvasStore.moveEntities()` for group translation; it mutates positions, translates spatial entries, and increments geometry once. Multi-selection drags of every size accumulate one transient world offset for rendering/hit testing and commit through this path on release instead of moving/reindexing entities per pointer frame.
+- Use `CanvasStore.moveEntities()` for selection translation; it mutates positions, translates spatial entries, and increments geometry once. Selection drags of every size, including a singleton, accumulate one transient world offset for rendering/hit testing and commit through this path on release instead of moving/reindexing entities per pointer frame.
 - Non-spatial entity replacements update the spatial index's entity reference without removing/reinserting its cell; only position, size, rotation, and z-index changes reindex geometry.
 - Use `CanvasStore.queryEntitiesInBounds()` for broad-phase canvas queries; results are exact, duplicate-free, and z-ordered. Do not restore full-map viewport or hit-test scans.
 - Use `CanvasStore.queryEntitiesInBoundsUnordered()` for membership-only work such as drag selection; do not pay to sort results that are consumed as a set.

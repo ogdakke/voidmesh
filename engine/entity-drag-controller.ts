@@ -83,7 +83,7 @@ export class EntityDragController {
     if (this.#dragTarget?.type === DragTargetType.multiSelection) {
       this.#moveSelectedTransientOrCommitted(canvasStore.getSelectedEntityIds(), this.#moveDelta);
     } else if (this.#dragTarget?.type === DragTargetType.entity && this.#dragTarget.entityId) {
-      canvasStore.moveEntity(this.#dragTarget.entityId, this.#moveDelta);
+      this.#moveEntityTransientOrCommitted(this.#dragTarget.entityId, this.#moveDelta);
     } else if (this.#springEntityIds) {
       this.commitTransientTranslation();
       canvasStore.moveEntities(this.#springEntityIds, this.#moveDelta);
@@ -94,7 +94,10 @@ export class EntityDragController {
     if (this.#dragTarget?.type === DragTargetType.multiSelection) {
       this.moveSelected(delta);
     } else if (this.#dragTarget?.type === DragTargetType.entity && this.#dragTarget.entityId) {
-      if (canvasStore.getState().snapToGrid) {
+      const selectedIds = canvasStore.getSelectedEntityIds();
+      if (selectedIds.size === 1 && selectedIds.has(this.#dragTarget.entityId)) {
+        this.moveSelected(delta);
+      } else if (canvasStore.getState().snapToGrid) {
         this.#moveEntitySnapped(this.#dragTarget.entityId, delta);
       } else {
         canvasStore.moveEntity(this.#dragTarget.entityId, delta);
@@ -144,6 +147,15 @@ export class EntityDragController {
     this.#transientOffset.x += delta.x;
     this.#transientOffset.y += delta.y;
     canvasStore.setTransientEntityDragOffset(this.#transientOffset);
+  }
+
+  #moveEntityTransientOrCommitted(entityId: string, delta: Point): void {
+    const selectedIds = canvasStore.getSelectedEntityIds();
+    if (selectedIds.size === 1 && selectedIds.has(entityId)) {
+      this.#moveSelectedTransientOrCommitted(selectedIds, delta);
+      return;
+    }
+    canvasStore.moveEntity(entityId, delta);
   }
 
   #moveEntitySnapped(entityId: string, delta: Point): void {

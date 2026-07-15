@@ -192,9 +192,7 @@ export class CanvasSelectionController {
 
   getDragEntityIds(entityId: string): ReadonlySet<string> {
     const state = canvasStore.getState();
-    return state.selectedEntityIds.has(entityId) && state.selectedEntityIds.size > 1
-      ? state.selectedEntityIds
-      : new Set([entityId]);
+    return state.selectedEntityIds.has(entityId) ? state.selectedEntityIds : new Set([entityId]);
   }
 
   handlePointerEntityClick(

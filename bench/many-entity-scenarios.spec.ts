@@ -104,6 +104,20 @@ describe("many entity benchmark scenarios", () => {
     });
   });
 
+  test("defines the single-entity mixed drag regression scenario", () => {
+    expect(
+      MANY_ENTITY_SCENARIOS.find(
+        (scenario) => scenario.id === "many-131072-shared-mixed-static-drag-single-selected",
+      ),
+    ).toMatchObject({
+      entityCount: 131_072,
+      mixedStaticVariants: true,
+      selectedEntityCount: 1,
+      dragSelectedEntities: true,
+      zoom: 0.01,
+    });
+  });
+
   test("covers the 262k overview selection-density and debug matrix", () => {
     const overviewScenarios = MANY_ENTITY_SCENARIOS.filter(
       (scenario) => scenario.entityCount === 262_144,

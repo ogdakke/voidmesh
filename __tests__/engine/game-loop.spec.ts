@@ -915,14 +915,20 @@ describe("Multi-touch gesture transitions", () => {
     // Phase 3: lift second finger — remaining finger should continue entity drag
     gl.handleTouchEnd([{ x: 100, y: 150 }]);
 
-    // Move remaining finger — entity should move
+    // Move remaining finger — the effective transient position should move without
+    // committing geometry until the gesture ends.
     const entityBefore = canvasStore.getState().entities.get(id);
-    const posBefore = { x: entityBefore?.position.x, y: entityBefore?.position.y };
+    const offsetBefore = canvasStore.getTransientEntityDragOffset();
+    const effectiveXBefore = (entityBefore?.position.x ?? 0) + offsetBefore.x;
     gl.handleTouchMove([{ x: 50, y: 150 }]);
     const entityAfter = canvasStore.getState().entities.get(id);
-    expect(entityAfter?.position.x).not.toBe(posBefore.x);
+    const offsetAfter = canvasStore.getTransientEntityDragOffset();
+    const effectiveXAfter = (entityAfter?.position.x ?? 0) + offsetAfter.x;
+    expect(entityAfter?.position.x).toBe(entityBefore?.position.x);
+    expect(effectiveXAfter).not.toBe(effectiveXBefore);
 
     gl.handleTouchEnd([], false);
+    expect(canvasStore.getState().entities.get(id)?.position.x).toBe(effectiveXAfter);
     vi.useRealTimers();
   });
 });

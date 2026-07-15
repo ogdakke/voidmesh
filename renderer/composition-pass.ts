@@ -67,6 +67,12 @@ export interface FullSceneBatchPatch {
   item: CompositionDrawItem;
 }
 
+export interface FullSceneInstancePatch {
+  index: number;
+  entity: ShaderCanvasEntity;
+  isSelected: boolean;
+}
+
 export interface FullSceneTextureRange {
   texture: GPUTexture;
   firstInstance: number;
@@ -738,6 +744,80 @@ export class CompositionPass {
     return true;
   }
 
+  patchFullSceneInstances(
+    key: FullSceneBatchKey,
+    patches: readonly FullSceneInstancePatch[],
+  ): boolean {
+    if (patches.length === 0) return false;
+    const cached = this.#fullSceneBatch;
+    const buffer = this.#instanceBuffer;
+    if (
+      !cached ||
+      !buffer ||
+      cached.bufferGeneration !== this.#instanceBufferGeneration ||
+      cached.entityVersion !== key.entityVersion ||
+      cached.selectionVersion !== key.selectionVersion ||
+      cached.debugMode !== key.debugMode ||
+      cached.renderWidth !== key.renderWidth ||
+      cached.renderHeight !== key.renderHeight ||
+      cached.texture !== key.texture ||
+      cached.instanceCount !== key.instanceCount
+    ) {
+      return false;
+    }
+
+    let sortedPatches = patches;
+    for (let index = 1; index < patches.length; index++) {
+      if (patches[index - 1]!.index <= patches[index]!.index) continue;
+      sortedPatches = [...patches].sort((left, right) => left.index - right.index);
+      break;
+    }
+    let previousPatchIndex = -1;
+    for (const patch of sortedPatches) {
+      if (
+        patch.index < 0 ||
+        patch.index >= key.instanceCount ||
+        patch.index === previousPatchIndex
+      ) {
+        return false;
+      }
+      previousPatchIndex = patch.index;
+    }
+    for (const patch of sortedPatches) {
+      this.#writeFullSceneInstance(patch.index, patch.entity, patch.isSelected, key.debugMode);
+    }
+
+    for (let start = 0; start < sortedPatches.length;) {
+      let end = start + 1;
+      while (
+        end < sortedPatches.length &&
+        sortedPatches[end]!.index === sortedPatches[end - 1]!.index + 1
+      ) {
+        end++;
+      }
+      const firstIndex = sortedPatches[start]!.index;
+      const byteOffset = firstIndex * INSTANCE_STRIDE_BYTES;
+      const byteLength = (end - start) * INSTANCE_STRIDE_BYTES;
+      this.#device.queue.writeBuffer(
+        buffer,
+        byteOffset,
+        this.#instanceData,
+        byteOffset,
+        byteLength,
+      );
+      start = end;
+    }
+    this.#fullSceneBatchUploadBytes += patches.length * INSTANCE_STRIDE_BYTES;
+    this.#fullSceneBatch = {
+      ...key,
+      bufferGeneration: this.#instanceBufferGeneration,
+      drawRanges: cached.drawRanges,
+      textures: cached.textures,
+    };
+    this.#updateRetainedFullSceneInstancePayload(cached, key, sortedPatches);
+    return true;
+  }
+
   patchMixedFullSceneBatch(
     key: FullSceneBatchKey,
     patches: readonly FullSceneBatchPatch[],
@@ -828,29 +908,7 @@ export class CompositionPass {
       drawRanges,
       textures: collectUniqueTextures(drawRanges),
     };
-    const retained = this.#retainedFullSceneInstancePayload;
-    if (
-      retained &&
-      retained.entityVersion === cached.entityVersion &&
-      retained.geometryVersion === cached.geometryVersion &&
-      retained.selectionVersion === cached.selectionVersion &&
-      retained.debugMode === cached.debugMode &&
-      retained.instanceCount === cached.instanceCount
-    ) {
-      const retainedBytes = new Uint8Array(retained.data);
-      const instanceBytes = new Uint8Array(this.#instanceData);
-      for (const { index } of sortedPatches) {
-        const byteOffset = index * INSTANCE_STRIDE_BYTES;
-        retainedBytes.set(
-          instanceBytes.subarray(byteOffset, byteOffset + INSTANCE_STRIDE_BYTES),
-          byteOffset,
-        );
-      }
-      retained.entityVersion = key.entityVersion;
-      retained.geometryVersion = key.geometryVersion;
-      retained.selectionVersion = key.selectionVersion;
-      retained.debugMode = key.debugMode;
-    }
+    this.#updateRetainedFullSceneInstancePayload(cached, key, sortedPatches);
     return true;
   }
 
@@ -1018,6 +1076,37 @@ export class CompositionPass {
       instanceCount: key.instanceCount,
       data: this.#instanceData.slice(0, byteLength),
     };
+  }
+
+  #updateRetainedFullSceneInstancePayload(
+    cached: FullSceneBatchCache,
+    key: FullSceneBatchKey,
+    patches: readonly { index: number }[],
+  ): void {
+    const retained = this.#retainedFullSceneInstancePayload;
+    if (
+      !retained ||
+      retained.entityVersion !== cached.entityVersion ||
+      retained.geometryVersion !== cached.geometryVersion ||
+      retained.selectionVersion !== cached.selectionVersion ||
+      retained.debugMode !== cached.debugMode ||
+      retained.instanceCount !== cached.instanceCount
+    ) {
+      return;
+    }
+    const retainedBytes = new Uint8Array(retained.data);
+    const instanceBytes = new Uint8Array(this.#instanceData);
+    for (const { index } of patches) {
+      const byteOffset = index * INSTANCE_STRIDE_BYTES;
+      retainedBytes.set(
+        instanceBytes.subarray(byteOffset, byteOffset + INSTANCE_STRIDE_BYTES),
+        byteOffset,
+      );
+    }
+    retained.entityVersion = key.entityVersion;
+    retained.geometryVersion = key.geometryVersion;
+    retained.selectionVersion = key.selectionVersion;
+    retained.debugMode = key.debugMode;
   }
 
   #prepareDrawCommands(items: readonly CompositionDrawItem[]): number {

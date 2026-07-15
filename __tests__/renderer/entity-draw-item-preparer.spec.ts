@@ -6,6 +6,7 @@ import { EntityDrawItemPreparer } from "#renderer/entity-draw-item-preparer.ts";
 import type {
   CompositionDrawItem,
   FullSceneBatchKey,
+  FullSceneInstancePatch,
   FullSceneTextureRange,
   PrepareFullSceneBatchOptions,
 } from "#renderer/composition-pass.ts";
@@ -438,6 +439,35 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     scene.release();
   });
 
+  test("patches committed drag transforms without rebuilding the full scene", () => {
+    const scene = createScene();
+    const harness = createHarness(scene.entities);
+    harness.options.selectedEntityIds.add(scene.entities[0]!.id);
+    harness.options.selectionVersion++;
+    harness.options.dragVisual.active = true;
+    harness.options.dragVisual.isDragPhase = true;
+    harness.options.dragVisual.appliesToSelection = true;
+    harness.options.dragVisual.entityIds = harness.options.selectedEntityIds;
+    harness.options.dragVisual.offset = { x: 100, y: -50 };
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+
+    scene.entities[0]!.position.x += 100;
+    scene.entities[0]!.position.y -= 50;
+    harness.options.geometryVersion++;
+    harness.options.dragVisual.active = false;
+    harness.options.dragVisual.isDragPhase = false;
+    harness.options.dragVisual.appliesToSelection = false;
+    harness.options.dragVisual.offset = { x: 0, y: 0 };
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+    expect(harness.compositionPass.patchFullSceneInstances).toHaveBeenCalledOnce();
+    expect(harness.compositionPass.prepareFullSceneBatch).toHaveBeenCalledOnce();
+    expect(harness.spatialIndex.queryBounds).toHaveBeenCalledOnce();
+
+    scene.release();
+  });
+
   test("applies the transient selection offset during normal visible preparation", () => {
     const scene = createScene();
     const harness = createHarness(scene.entities);
@@ -540,6 +570,14 @@ function createHarness(
         return false;
       }
       cachedKey = { ...key };
+      return true;
+    }),
+    patchFullSceneInstances: vi.fn<
+      (key: FullSceneBatchKey, patches: readonly FullSceneInstancePatch[]) => boolean
+    >((key) => {
+      if (!cachedKey) return false;
+      cachedKey = { ...key };
+      retainedKey = { ...key };
       return true;
     }),
     patchMixedFullSceneBatch: vi.fn<(key: FullSceneBatchKey) => boolean>((key) => {

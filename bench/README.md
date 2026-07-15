@@ -76,6 +76,8 @@ the canvas virtualization and texture-residency paths:
   against rebuilding the full persistent composition plan during zoom motion;
 - 131,072 shared instances with one selected entity changing shader parameters
   every frame to guard incremental texture-run and instance-buffer patches;
+- 131,072 shared mixed instances with one selected entity translated through
+  the transient drag uniform to guard singleton-drag batch persistence;
 - a 61-source mixed image/video canvas zoomed from one detailed entity out to
   the full overview and back, both original and default-effect variants.
 

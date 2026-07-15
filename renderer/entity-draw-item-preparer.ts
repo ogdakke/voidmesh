@@ -9,6 +9,7 @@ import type {
   CompositionPass,
   FullSceneBatchPatch,
   FullSceneBatchKey,
+  FullSceneInstancePatch,
   FullSceneTextureRange,
   PrepareCompositionItemOptions,
 } from "./composition-pass.ts";
@@ -95,6 +96,7 @@ export class EntityDrawItemPreparer {
   readonly #actionLayerDrawItems: CompositionDrawItem[] = [];
   readonly #fullSceneDrawItems: CompositionDrawItem[] = [];
   readonly #fullScenePatches: FullSceneBatchPatch[] = [];
+  readonly #fullSceneInstancePatches: FullSceneInstancePatch[] = [];
   readonly #fullSceneEntityIndices = new Map<string, number>();
   readonly #prepared: PreparedEntityDrawItems = {
     entityDrawItems: this.#entityDrawItems,
@@ -108,6 +110,12 @@ export class EntityDrawItemPreparer {
   #mixedFullScenePlan: MixedFullScenePlan | null = null;
   #mixedIneligibleEntityVersion = -1;
   #mixedIneligibleEntities: readonly ShaderCanvasEntity[] | null = null;
+  #dragBatchEntities: readonly ShaderCanvasEntity[] | null = null;
+  #dragBatchSelectedEntityIds: ReadonlySet<string> | null = null;
+  #dragBatchEntityVersion = -1;
+  #dragBatchGeometryVersion = -1;
+  #dragBatchSelectionVersion = -1;
+  #dragBatchDebugMode = false;
   #activeFullSceneBatchKey: FullSceneBatchKey | null = null;
   #activeFullSceneSelectedEntityIds: ReadonlySet<string> | null = null;
   #homogeneousEntityVersion = -1;
@@ -177,6 +185,7 @@ export class EntityDrawItemPreparer {
       batchAdmissionEnd,
     );
     if (fullSceneBatch) {
+      this.#trackPreparedFullSceneDrag(options);
       this.#prepared.fullSceneBatch = fullSceneBatch;
       this.#prepared.hasAnimatingContent = false;
       return this.#prepared;
@@ -363,6 +372,8 @@ export class EntityDrawItemPreparer {
       hasCanvasCallouts,
       debugMode,
     } = options;
+    const committedDragBatch = this.#tryPatchCommittedFullSceneDrag(options);
+    if (committedDragBatch) return committedDragBatch;
     if (
       actionLayer.active ||
       actionLayer.blurIntensity > 0.01 ||
@@ -503,6 +514,100 @@ export class EntityDrawItemPreparer {
     this.#rememberFullSceneLayout(entities, selectedEntityIds, key);
     this.#rememberSnapshotSource(representative, entityVersion, renderWidth, renderHeight);
     return key;
+  }
+
+  #trackPreparedFullSceneDrag(options: PrepareEntityDrawItemsOptions): void {
+    const { dragVisual } = options;
+    if (
+      dragVisual.active &&
+      dragVisual.isDragPhase &&
+      dragVisual.appliesToSelection &&
+      options.selectedEntityIds.size > 0 &&
+      (dragVisual.offset.x !== 0 || dragVisual.offset.y !== 0)
+    ) {
+      this.#dragBatchEntities = options.entities;
+      this.#dragBatchSelectedEntityIds = options.selectedEntityIds;
+      this.#dragBatchEntityVersion = options.entityVersion;
+      this.#dragBatchGeometryVersion = options.geometryVersion;
+      this.#dragBatchSelectionVersion = options.selectionVersion;
+      this.#dragBatchDebugMode = options.debugMode;
+      return;
+    }
+    if (options.geometryVersion === this.#dragBatchGeometryVersion) {
+      this.#clearPreparedFullSceneDrag();
+    }
+  }
+
+  #tryPatchCommittedFullSceneDrag(
+    options: PrepareEntityDrawItemsOptions,
+  ): FullSceneBatchKey | null {
+    const selectedEntityIds = this.#dragBatchSelectedEntityIds;
+    if (!selectedEntityIds || options.geometryVersion === this.#dragBatchGeometryVersion) {
+      return null;
+    }
+
+    const previousKey = this.#activeFullSceneBatchKey;
+    const canPatch =
+      previousKey !== null &&
+      this.#dragBatchEntities === options.entities &&
+      this.#activeFullSceneSelectedEntityIds === selectedEntityIds &&
+      selectedEntityIds === options.selectedEntityIds &&
+      this.#dragBatchEntityVersion === options.entityVersion &&
+      this.#dragBatchGeometryVersion + 1 === options.geometryVersion &&
+      this.#dragBatchSelectionVersion === options.selectionVersion &&
+      this.#dragBatchDebugMode === options.debugMode &&
+      !options.dragVisual.isDragPhase &&
+      options.dragVisual.offset.x === 0 &&
+      options.dragVisual.offset.y === 0 &&
+      !options.actionLayer.active &&
+      options.actionLayer.blurIntensity <= 0.01 &&
+      !options.hasCanvasCallouts;
+    this.#clearPreparedFullSceneDrag();
+    if (!canPatch) return null;
+
+    const patches = this.#fullSceneInstancePatches;
+    patches.length = 0;
+    for (const entityId of selectedEntityIds) {
+      const index = this.#fullSceneEntityIndices.get(entityId);
+      const entity = index === undefined ? undefined : options.entities[index];
+      if (index === undefined || !entity || entity.id !== entityId) {
+        patches.length = 0;
+        return null;
+      }
+      patches.push({ index, entity, isSelected: true });
+    }
+
+    const key: FullSceneBatchKey = {
+      ...previousKey,
+      geometryVersion: options.geometryVersion,
+      textureCacheRevision: this.#texturePipeline.textureCacheRevision,
+    };
+    if (!this.#compositionPass.patchFullSceneInstances(key, patches)) {
+      patches.length = 0;
+      return null;
+    }
+
+    if (key.texture) this.#fullSceneBatchKey = key;
+    else this.#mixedFullSceneBatchKey = key;
+    const plan = this.#mixedFullScenePlan;
+    if (
+      plan &&
+      plan.entities === options.entities &&
+      plan.geometryVersion + 1 === options.geometryVersion
+    ) {
+      plan.geometryVersion = options.geometryVersion;
+    }
+    this.#activeFullSceneBatchKey = key;
+    patches.length = 0;
+    return key;
+  }
+
+  #clearPreparedFullSceneDrag(): void {
+    this.#dragBatchEntities = null;
+    this.#dragBatchSelectedEntityIds = null;
+    this.#dragBatchEntityVersion = -1;
+    this.#dragBatchGeometryVersion = -1;
+    this.#dragBatchSelectionVersion = -1;
   }
 
   #prepareMixedFullSceneBatch(
