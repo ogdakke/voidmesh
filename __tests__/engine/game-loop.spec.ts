@@ -539,6 +539,46 @@ describe("Wheel zoom/pan", () => {
     expect(after.zoom).toBe(before.zoom);
   });
 
+  test("resamples wheel panning across display frames and preserves the exact delta", () => {
+    const before = getViewportValues();
+    gl.handleWheel(50, 30, { x: 400, y: 300 }, false);
+    const immediate = getViewportValues();
+
+    expect(immediate.offset.x).toBeGreaterThan(before.offset.x);
+    expect(immediate.offset.x).toBeLessThan(before.offset.x + 50);
+    expect(deps.scheduler.hasActive).toBe(true);
+
+    for (let now = 8.333; now < 200; now += 8.333) deps.scheduler.tick(now);
+
+    const settled = getViewportValues();
+    expect(settled.offset.x).toBeCloseTo(before.offset.x + 50, 5);
+    expect(settled.offset.y).toBeCloseTo(before.offset.y + 30, 5);
+    expect(deps.scheduler.hasActive).toBe(false);
+  });
+
+  test("coalesces new wheel deltas into the active display-rate pan", () => {
+    gl.handleWheel(40, 0, { x: 400, y: 300 }, false);
+    deps.scheduler.tick(8.333);
+    const firstFrame = canvasStore.getViewport().offset.x;
+    gl.handleWheel(20, 0, { x: 400, y: 300 }, false);
+    deps.scheduler.tick(16.666);
+    const secondFrame = canvasStore.getViewport().offset.x;
+
+    expect(secondFrame).toBeGreaterThan(firstFrame);
+    for (let now = 24.999; now < 250; now += 8.333) deps.scheduler.tick(now);
+    expect(canvasStore.getViewport().offset.x).toBeCloseTo(60, 5);
+  });
+
+  test("finishes pending wheel pan before switching to wheel zoom", () => {
+    gl.handleWheel(40, 20, { x: 400, y: 300 }, false);
+    expect(deps.scheduler.hasActive).toBe(true);
+
+    gl.handleWheel(0, -10, { x: 400, y: 300 }, true);
+
+    expect(deps.scheduler.hasActive).toBe(false);
+    expect(canvasStore.getViewport().zoom).toBeGreaterThan(1);
+  });
+
   test("wheel with ctrlKey zooms viewport", () => {
     const before = getViewportValues();
     gl.handleWheel(0, -10, { x: 400, y: 300 }, true);
