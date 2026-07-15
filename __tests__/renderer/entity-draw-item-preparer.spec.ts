@@ -6,6 +6,7 @@ import { EntityDrawItemPreparer } from "#renderer/entity-draw-item-preparer.ts";
 import type {
   CompositionDrawItem,
   FullSceneBatchKey,
+  FullSceneTextureRange,
   PrepareFullSceneBatchOptions,
 } from "#renderer/composition-pass.ts";
 import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
@@ -40,6 +41,22 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     expect(harness.spatialIndex.queryBounds).toHaveBeenCalledOnce();
     expect(harness.texturePipeline.getReusableStaticCompositionSource).toHaveBeenCalledTimes(2);
     expect(harness.compositionPass.prepareFullSceneBatch).toHaveBeenCalledOnce();
+
+    scene.release();
+  });
+
+  test("restores homogeneous instance data after a normal composition frame", () => {
+    const scene = createScene();
+    const harness = createHarness(scene.entities);
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+    harness.invalidateFullSceneBatch();
+    harness.options.viewport = { offset: { x: 0, y: 0 }, zoom: 2 };
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+    expect(harness.compositionPass.prepareFullSceneBatch).toHaveBeenCalledOnce();
+    expect(harness.compositionPass.restoreFullSceneBatch).toHaveBeenCalledTimes(2);
+    expect(harness.spatialIndex.queryBounds).toHaveBeenCalledOnce();
 
     scene.release();
   });
@@ -92,6 +109,51 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     expect(harness.compositionPass.prepareMixedFullSceneBatch).toHaveBeenCalledOnce();
 
     scene.release();
+  });
+
+  test("refreshes stable texture runs and restores instance data after zoom LOD work", () => {
+    const entities = Array.from({ length: 20 }, (_, index) =>
+      createTestEntity({ id: `zoom-run-${index}` }),
+    );
+    const harness = createHarness(entities);
+    const initialTextureA = { width: 64, height: 64 } as GPUTexture;
+    const initialTextureB = { width: 64, height: 64 } as GPUTexture;
+    const zoomedTextureA = { width: 128, height: 128 } as GPUTexture;
+    const zoomedTextureB = { width: 128, height: 128 } as GPUTexture;
+    harness.texturePipeline.getReusableStaticCompositionSource.mockImplementation((entity) => {
+      const isFirstRun = entities.indexOf(entity) < 10;
+      const zoomed = harness.texturePipeline.textureCacheRevision === 2;
+      return {
+        kind: "texture",
+        texture: zoomed
+          ? isFirstRun
+            ? zoomedTextureA
+            : zoomedTextureB
+          : isFirstRun
+            ? initialTextureA
+            : initialTextureB,
+      };
+    });
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+    const initialLookupCount =
+      harness.texturePipeline.getReusableStaticCompositionSource.mock.calls.length;
+    expect(initialLookupCount).toBe(20);
+
+    harness.invalidateFullSceneBatch();
+    harness.texturePipeline.textureCacheRevision = 2;
+    harness.options.viewport = { offset: { x: 0, y: 0 }, zoom: 2 };
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+    expect(harness.texturePipeline.getReusableStaticCompositionSource).toHaveBeenCalledTimes(
+      initialLookupCount + 2,
+    );
+    expect(harness.compositionPass.restoreFullSceneBatch).toHaveBeenCalledTimes(2);
+    expect(harness.compositionPass.prepareMixedFullSceneBatch).toHaveBeenCalledOnce();
+
+    for (const entity of entities) {
+      if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
+    }
   });
 
   test("persists small static scenes containing distinct image assets", () => {
@@ -438,6 +500,7 @@ function createHarness(
 ) {
   const texture = { width: 64, height: 64 } as GPUTexture;
   let cachedKey: FullSceneBatchKey | null = null;
+  let retainedKey: FullSceneBatchKey | null = null;
   const compositionPass = {
     hasFullSceneBatch: vi.fn<(key: FullSceneBatchKey) => boolean>((key) => {
       return (
@@ -455,11 +518,29 @@ function createHarness(
     }),
     prepareFullSceneBatch: vi.fn<(options: PrepareFullSceneBatchOptions) => void>((options) => {
       cachedKey = { ...options };
+      retainedKey = { ...options };
     }),
     prepareMixedFullSceneBatch: vi.fn<
       (key: FullSceneBatchKey, items: readonly CompositionDrawItem[]) => void
     >((key) => {
       cachedKey = { ...key };
+      retainedKey = { ...key };
+    }),
+    restoreFullSceneBatch: vi.fn<
+      (key: FullSceneBatchKey, ranges: readonly FullSceneTextureRange[]) => boolean
+    >((key) => {
+      if (
+        !retainedKey ||
+        retainedKey.entityVersion !== key.entityVersion ||
+        retainedKey.geometryVersion !== key.geometryVersion ||
+        retainedKey.selectionVersion !== key.selectionVersion ||
+        retainedKey.debugMode !== key.debugMode ||
+        retainedKey.instanceCount !== key.instanceCount
+      ) {
+        return false;
+      }
+      cachedKey = { ...key };
+      return true;
     }),
     patchMixedFullSceneBatch: vi.fn<(key: FullSceneBatchKey) => boolean>((key) => {
       cachedKey = { ...key };
@@ -550,7 +631,17 @@ function createHarness(
     hasCanvasCallouts: false,
     debugMode: false,
   };
-  return { preparer, options, spatialIndex, compositionPass, texturePipeline, texture };
+  return {
+    preparer,
+    options,
+    spatialIndex,
+    compositionPass,
+    texturePipeline,
+    texture,
+    invalidateFullSceneBatch: () => {
+      cachedKey = null;
+    },
+  };
 }
 
 function createScene(): { entities: ShaderCanvasEntity[]; release: () => void } {

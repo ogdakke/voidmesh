@@ -67,6 +67,12 @@ export interface FullSceneBatchPatch {
   item: CompositionDrawItem;
 }
 
+export interface FullSceneTextureRange {
+  texture: GPUTexture;
+  firstInstance: number;
+  instanceCount: number;
+}
+
 export interface CompositionPassStats {
   fullSceneBatchRebuilds: number;
   fullSceneBatchUploadBytes: number;
@@ -96,8 +102,17 @@ interface CompositionDrawCommand {
 
 interface FullSceneBatchCache extends FullSceneBatchKey {
   bufferGeneration: number;
-  drawRanges: Array<{ texture: GPUTexture; firstInstance: number; instanceCount: number }>;
+  drawRanges: FullSceneTextureRange[];
   textures: GPUTexture[];
+}
+
+interface RetainedFullSceneInstancePayload {
+  entityVersion: number;
+  geometryVersion: number;
+  selectionVersion: number;
+  debugMode: boolean;
+  instanceCount: number;
+  data: ArrayBuffer;
 }
 
 function appendTextureRange(
@@ -206,6 +221,9 @@ export class CompositionPass {
   #instanceBindGroupCache = new WeakMap<GPUTexture, GPUBindGroup>();
   readonly #drawCommands: CompositionDrawCommand[] = [];
   #fullSceneBatch: FullSceneBatchCache | null = null;
+  // Visible draws reuse the same CPU/GPU instance buffer and invalidate the active
+  // batch. Preserve its immutable payload so a texture-only refresh can restore it.
+  #retainedFullSceneInstancePayload: RetainedFullSceneInstancePayload | null = null;
   #fullSceneBatchRebuilds = 0;
   #fullSceneBatchUploadBytes = 0;
   #normalInstanceUploadBytes = 0;
@@ -637,6 +655,7 @@ export class CompositionPass {
       drawRanges: [{ texture: options.texture!, firstInstance: 0, instanceCount: entities.length }],
       textures: [options.texture!],
     };
+    this.#retainFullSceneInstancePayload(key, uploadBytes);
   }
 
   prepareMixedFullSceneBatch(key: FullSceneBatchKey, items: readonly CompositionDrawItem[]): void {
@@ -677,6 +696,46 @@ export class CompositionPass {
       drawRanges,
       textures,
     };
+    this.#retainFullSceneInstancePayload(key, uploadBytes);
+  }
+
+  restoreFullSceneBatch(
+    key: FullSceneBatchKey,
+    textureRanges: readonly FullSceneTextureRange[],
+  ): boolean {
+    const retained = this.#retainedFullSceneInstancePayload;
+    if (
+      !retained ||
+      retained.entityVersion !== key.entityVersion ||
+      retained.geometryVersion !== key.geometryVersion ||
+      retained.selectionVersion !== key.selectionVersion ||
+      retained.debugMode !== key.debugMode ||
+      retained.instanceCount !== key.instanceCount
+    ) {
+      return false;
+    }
+
+    const drawRanges: FullSceneTextureRange[] = [];
+    let nextInstance = 0;
+    for (const range of textureRanges) {
+      if (range.firstInstance !== nextInstance || range.instanceCount <= 0) return false;
+      appendTextureRange(drawRanges, range.texture, range.firstInstance, range.instanceCount);
+      nextInstance += range.instanceCount;
+    }
+    if (nextInstance !== key.instanceCount) return false;
+
+    const buffer = this.#ensureInstanceCapacity(key.instanceCount);
+    const uploadBytes = retained.data.byteLength;
+    new Uint8Array(this.#instanceData, 0, uploadBytes).set(new Uint8Array(retained.data));
+    this.#device.queue.writeBuffer(buffer, 0, retained.data, 0, uploadBytes);
+    this.#fullSceneBatchUploadBytes += uploadBytes;
+    this.#fullSceneBatch = {
+      ...key,
+      bufferGeneration: this.#instanceBufferGeneration,
+      drawRanges,
+      textures: collectUniqueTextures(drawRanges),
+    };
+    return true;
   }
 
   patchMixedFullSceneBatch(
@@ -769,6 +828,29 @@ export class CompositionPass {
       drawRanges,
       textures: collectUniqueTextures(drawRanges),
     };
+    const retained = this.#retainedFullSceneInstancePayload;
+    if (
+      retained &&
+      retained.entityVersion === cached.entityVersion &&
+      retained.geometryVersion === cached.geometryVersion &&
+      retained.selectionVersion === cached.selectionVersion &&
+      retained.debugMode === cached.debugMode &&
+      retained.instanceCount === cached.instanceCount
+    ) {
+      const retainedBytes = new Uint8Array(retained.data);
+      const instanceBytes = new Uint8Array(this.#instanceData);
+      for (const { index } of sortedPatches) {
+        const byteOffset = index * INSTANCE_STRIDE_BYTES;
+        retainedBytes.set(
+          instanceBytes.subarray(byteOffset, byteOffset + INSTANCE_STRIDE_BYTES),
+          byteOffset,
+        );
+      }
+      retained.entityVersion = key.entityVersion;
+      retained.geometryVersion = key.geometryVersion;
+      retained.selectionVersion = key.selectionVersion;
+      retained.debugMode = key.debugMode;
+    }
     return true;
   }
 
@@ -924,6 +1006,18 @@ export class CompositionPass {
     this.#instanceBindGroupCache = new WeakMap();
     this.#drawCommands.length = 0;
     this.#fullSceneBatch = null;
+    this.#retainedFullSceneInstancePayload = null;
+  }
+
+  #retainFullSceneInstancePayload(key: FullSceneBatchKey, byteLength: number): void {
+    this.#retainedFullSceneInstancePayload = {
+      entityVersion: key.entityVersion,
+      geometryVersion: key.geometryVersion,
+      selectionVersion: key.selectionVersion,
+      debugMode: key.debugMode,
+      instanceCount: key.instanceCount,
+      data: this.#instanceData.slice(0, byteLength),
+    };
   }
 
   #prepareDrawCommands(items: readonly CompositionDrawItem[]): number {

@@ -210,6 +210,50 @@ describe("CompositionPass instancing", () => {
     releaseImageEntity(third);
   });
 
+  test("restores a mixed batch from retained instance data after normal draws", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const first = createTestEntity({ id: "restore-first" });
+    const second = cloneImageEntity(first, "restore-second", { x: 20, y: 0 });
+    const third = cloneImageEntity(first, "restore-third", { x: 40, y: 0 });
+    const textureA = createTexture();
+    const textureB = createTexture();
+    const textureC = createTexture();
+    const key = { ...createFullSceneKey(textureA, 3), texture: null };
+
+    pass.prepareMixedFullSceneBatch(key, [
+      prepare(pass, first, textureA),
+      prepare(pass, second, textureA),
+      prepare(pass, third, textureB),
+    ]);
+    pass.beginFrame(1);
+    pass.drawItems(createRenderPass(), [prepare(pass, first, textureA)]);
+    expect(pass.hasFullSceneBatch(key)).toBe(false);
+    device.queue.writeBuffer.mockClear();
+
+    expect(
+      pass.restoreFullSceneBatch(key, [
+        { texture: textureC, firstInstance: 0, instanceCount: 2 },
+        { texture: textureB, firstInstance: 2, instanceCount: 1 },
+      ]),
+    ).toBe(true);
+    expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
+    expect(device.queue.writeBuffer.mock.calls[0]![4]).toBe(3 * 32);
+    expect(pass.getStats().fullSceneBatchRebuilds).toBe(1);
+
+    const renderPass = createRenderPass();
+    expect(pass.drawFullSceneBatch(renderPass, key)).toBe(true);
+    expect(renderPass.draw.mock.calls).toEqual([
+      [6, 2, 0, 0],
+      [6, 1, 0, 2],
+    ]);
+
+    pass.destroy();
+    releaseImageEntity(first);
+    releaseImageEntity(second);
+    releaseImageEntity(third);
+  });
+
   test("visits each cached mixed texture once regardless of z-order fragmentation", () => {
     const { device } = createDevice();
     const pass = createPass(device);

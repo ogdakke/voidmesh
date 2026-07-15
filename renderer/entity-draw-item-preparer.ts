@@ -9,6 +9,7 @@ import type {
   CompositionPass,
   FullSceneBatchPatch,
   FullSceneBatchKey,
+  FullSceneTextureRange,
   PrepareCompositionItemOptions,
 } from "./composition-pass.ts";
 import type { EntityTexturePipeline } from "./entity-texture-pipeline.ts";
@@ -42,6 +43,10 @@ interface PrepareEntityDrawItemsOptions {
   debugMode: boolean;
 }
 
+interface MixedFullSceneTextureRun extends FullSceneTextureRange {
+  representative: ShaderCanvasEntity;
+}
+
 interface MixedFullScenePlan {
   entities: readonly ShaderCanvasEntity[];
   entityVersion: number;
@@ -53,8 +58,9 @@ interface MixedFullScenePlan {
   textureCacheRevision: number;
   fullTextureRunCount: number;
   items: readonly CompositionDrawItem[];
-  itemsByEntity: WeakMap<ShaderCanvasEntity, CompositionDrawItem>;
-  textures: readonly GPUTexture[];
+  runs: MixedFullSceneTextureRun[];
+  runByEntity: WeakMap<ShaderCanvasEntity, MixedFullSceneTextureRun>;
+  textures: GPUTexture[];
 }
 
 export interface PreparedEntityDrawItems {
@@ -451,6 +457,19 @@ export class EntityDrawItemPreparer {
       this.#rememberSnapshotSource(representative, entityVersion, renderWidth, renderHeight);
       return key;
     }
+    if (
+      this.#compositionPass.restoreFullSceneBatch(key, [
+        {
+          texture: compositionSource.texture,
+          firstInstance: 0,
+          instanceCount: entities.length,
+        },
+      ])
+    ) {
+      this.#activeFullSceneBatchKey = key;
+      this.#rememberSnapshotSource(representative, entityVersion, renderWidth, renderHeight);
+      return key;
+    }
 
     const viewportBounds = getViewportWorldBounds(
       viewport,
@@ -570,12 +589,14 @@ export class EntityDrawItemPreparer {
     }
 
     let plan = this.#mixedFullScenePlan;
-    if (!this.#isMixedFullScenePlanCurrent(plan, options)) {
+    if (!this.#isMixedFullScenePlanStructurallyCurrent(plan, options)) {
       plan = this.#buildMixedFullScenePlan(options);
       if (!plan) return null;
+    } else if (!this.#areMixedFullScenePlanTexturesCurrent(plan, options)) {
+      if (!this.#refreshMixedFullScenePlanTextures(plan, options)) return null;
     }
 
-    const visibleTextureRunCount = countVisibleTextureRuns(visibleEntities, plan.itemsByEntity);
+    const visibleTextureRunCount = countVisibleTextureRuns(visibleEntities, plan.runByEntity);
     if (visibleTextureRunCount < 0) {
       this.#mixedFullScenePlan = null;
       return null;
@@ -600,12 +621,15 @@ export class EntityDrawItemPreparer {
     }
 
     key.textureCacheRevision = this.#texturePipeline.textureCacheRevision;
-    this.#compositionPass.prepareMixedFullSceneBatch(key, plan.items);
+    if (!this.#compositionPass.restoreFullSceneBatch(key, plan.runs)) {
+      applyMixedFullScenePlanTextures(plan);
+      this.#compositionPass.prepareMixedFullSceneBatch(key, plan.items);
+    }
     this.#rememberFullSceneLayout(entities, selectedEntityIds, key);
     return key;
   }
 
-  #isMixedFullScenePlanCurrent(
+  #isMixedFullScenePlanStructurallyCurrent(
     plan: MixedFullScenePlan | null,
     options: PrepareEntityDrawItemsOptions,
   ): plan is MixedFullScenePlan {
@@ -615,11 +639,75 @@ export class EntityDrawItemPreparer {
       plan.entityVersion === options.entityVersion &&
       plan.geometryVersion === options.geometryVersion &&
       plan.selectionVersion === options.selectionVersion &&
-      plan.debugMode === options.debugMode &&
+      plan.debugMode === options.debugMode
+    );
+  }
+
+  #areMixedFullScenePlanTexturesCurrent(
+    plan: MixedFullScenePlan,
+    options: PrepareEntityDrawItemsOptions,
+  ): boolean {
+    return (
       plan.viewportZoom === options.viewport.zoom &&
       plan.devicePixelRatio === options.devicePixelRatio &&
       plan.textureCacheRevision === this.#texturePipeline.textureCacheRevision
     );
+  }
+
+  #refreshMixedFullScenePlanTextures(
+    plan: MixedFullScenePlan,
+    options: PrepareEntityDrawItemsOptions,
+  ): boolean {
+    const textures = plan.textures;
+    textures.length = 0;
+    const seenTextures = new Set<GPUTexture>();
+    let previousTexture: GPUTexture | null = null;
+    let fullTextureRunCount = 0;
+
+    for (const run of plan.runs) {
+      const desiredRenderSize = getEntityRenderSize(
+        run.representative,
+        options.viewport,
+        options.devicePixelRatio,
+        this.#desiredRenderSize,
+      );
+      let source = this.#texturePipeline.getReusableStaticCompositionSource(
+        run.representative,
+        desiredRenderSize,
+        false,
+      );
+      if (!source) {
+        const renderSize = this.#texturePipeline.resolveRenderSize(
+          run.representative,
+          desiredRenderSize,
+          this.#resolvedRenderSize,
+        );
+        if (!renderSize) return false;
+        source = this.#texturePipeline.renderEntityToTexture(
+          run.representative,
+          options.encoder,
+          renderSize,
+        );
+      }
+      if (source?.kind !== "texture") return false;
+
+      run.representative.textureDirty = false;
+      run.texture = source.texture;
+      if (source.texture !== previousTexture) {
+        previousTexture = source.texture;
+        fullTextureRunCount++;
+      }
+      if (!seenTextures.has(source.texture)) {
+        seenTextures.add(source.texture);
+        textures.push(source.texture);
+      }
+    }
+
+    plan.viewportZoom = options.viewport.zoom;
+    plan.devicePixelRatio = options.devicePixelRatio;
+    plan.textureCacheRevision = this.#texturePipeline.textureCacheRevision;
+    plan.fullTextureRunCount = fullTextureRunCount;
+    return true;
   }
 
   #buildMixedFullScenePlan(options: PrepareEntityDrawItemsOptions): MixedFullScenePlan | null {
@@ -636,7 +724,8 @@ export class EntityDrawItemPreparer {
     } = options;
     const items = this.#fullSceneDrawItems;
     items.length = 0;
-    const itemsByEntity = new WeakMap<ShaderCanvasEntity, CompositionDrawItem>();
+    const runs: MixedFullSceneTextureRun[] = [];
+    const runByEntity = new WeakMap<ShaderCanvasEntity, MixedFullSceneTextureRun>();
     const textures: GPUTexture[] = [];
     const seenTextures = new Set<GPUTexture>();
     let fullTextureRunCount = 0;
@@ -645,7 +734,8 @@ export class EntityDrawItemPreparer {
     let previousDesiredWidth = 0;
     let previousDesiredHeight = 0;
 
-    for (const entity of entities) {
+    for (let index = 0; index < entities.length; index++) {
+      const entity = entities[index]!;
       if (
         entity.mediaSource.type !== MediaType.image ||
         this.#texturePipeline.needsContinuousRenderForEntity(entity)
@@ -701,6 +791,19 @@ export class EntityDrawItemPreparer {
         previousTexture = source.texture;
         fullTextureRunCount++;
       }
+      let run = runs.at(-1);
+      if (!run || run.texture !== source.texture || !sameProjectedSize) {
+        run = {
+          representative: entity,
+          texture: source.texture,
+          firstInstance: index,
+          instanceCount: 1,
+        };
+        runs.push(run);
+      } else {
+        run.instanceCount++;
+      }
+      runByEntity.set(entity, run);
       if (!seenTextures.has(source.texture)) {
         seenTextures.add(source.texture);
         textures.push(source.texture);
@@ -715,7 +818,6 @@ export class EntityDrawItemPreparer {
         visualScale: 1,
       });
       items.push(item);
-      itemsByEntity.set(entity, item);
     }
 
     const plan: MixedFullScenePlan = {
@@ -729,7 +831,8 @@ export class EntityDrawItemPreparer {
       textureCacheRevision: this.#texturePipeline.textureCacheRevision,
       fullTextureRunCount,
       items,
-      itemsByEntity,
+      runs,
+      runByEntity,
       textures,
     };
     this.#mixedFullScenePlan = plan;
@@ -1059,16 +1162,25 @@ function structurallyEqual(a: unknown, b: unknown): boolean {
 
 function countVisibleTextureRuns(
   visibleEntities: readonly ShaderCanvasEntity[],
-  itemsByEntity: WeakMap<ShaderCanvasEntity, CompositionDrawItem>,
+  runByEntity: WeakMap<ShaderCanvasEntity, MixedFullSceneTextureRun>,
 ): number {
   let runCount = 0;
   let previousTexture: GPUTexture | null = null;
   for (const entity of visibleEntities) {
-    const texture = itemsByEntity.get(entity)?.texture;
+    const texture = runByEntity.get(entity)?.texture;
     if (!texture) return -1;
     if (texture === previousTexture) continue;
     previousTexture = texture;
     runCount++;
   }
   return runCount;
+}
+
+function applyMixedFullScenePlanTextures(plan: MixedFullScenePlan): void {
+  for (const run of plan.runs) {
+    const end = run.firstInstance + run.instanceCount;
+    for (let index = run.firstInstance; index < end; index++) {
+      plan.items[index]!.texture = run.texture;
+    }
+  }
 }
