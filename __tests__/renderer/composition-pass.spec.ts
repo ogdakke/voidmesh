@@ -174,6 +174,35 @@ describe("CompositionPass instancing", () => {
     releaseImageEntity(third);
   });
 
+  test("visits each cached mixed texture once regardless of z-order fragmentation", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const first = createTestEntity({ id: "resident-first" });
+    const second = cloneImageEntity(first, "resident-second", { x: 20, y: 0 });
+    const third = cloneImageEntity(first, "resident-third", { x: 40, y: 0 });
+    const fourth = cloneImageEntity(first, "resident-fourth", { x: 60, y: 0 });
+    const textureA = createTexture();
+    const textureB = createTexture();
+    const key = { ...createFullSceneKey(textureA, 4), texture: null };
+
+    pass.prepareMixedFullSceneBatch(key, [
+      prepare(pass, first, textureA),
+      prepare(pass, second, textureB),
+      prepare(pass, third, textureA),
+      prepare(pass, fourth, textureB),
+    ]);
+    const visitor = vi.fn<(texture: GPUTexture) => void>();
+
+    expect(pass.visitCachedFullSceneTextures(visitor)).toBe(true);
+    expect(visitor.mock.calls).toEqual([[textureA], [textureB]]);
+
+    pass.destroy();
+    releaseImageEntity(first);
+    releaseImageEntity(second);
+    releaseImageEntity(third);
+    releaseImageEntity(fourth);
+  });
+
   test("patches one full-scene texture run without rebuilding the instance payload", () => {
     const { device } = createDevice();
     const pass = createPass(device);

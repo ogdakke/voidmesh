@@ -177,6 +177,30 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     scene.release();
   });
 
+  test("rebuilds instead of patching when selection changes with entity content", () => {
+    const scene = createScene();
+    const harness = createHarness(scene.entities);
+    harness.preparer.prepare(harness.options);
+
+    const changed = {
+      ...scene.entities[1]!,
+      shaderParams: structuredClone(scene.entities[1]!.shaderParams),
+      textureDirty: true,
+    };
+    changed.shaderParams.size += 1;
+    scene.entities[1] = changed;
+    harness.options.entityVersion++;
+    harness.options.selectionVersion++;
+    harness.options.selectedEntityIds = new Set([scene.entities[0]!.id]);
+    harness.options.dirtyEntityIds = new Set([changed.id]);
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+    expect(harness.compositionPass.patchMixedFullSceneBatch).not.toHaveBeenCalled();
+    expect(harness.compositionPass.prepareMixedFullSceneBatch).toHaveBeenCalledOnce();
+
+    scene.release();
+  });
+
   test("patches realistic bulk edits without an arbitrary dirty-entity cutoff", () => {
     const entities = Array.from({ length: 40 }, (_, index) =>
       createTestEntity({ id: `bulk-patch-${index}` }),

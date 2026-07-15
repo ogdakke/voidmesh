@@ -97,6 +97,7 @@ interface CompositionDrawCommand {
 interface FullSceneBatchCache extends FullSceneBatchKey {
   bufferGeneration: number;
   drawRanges: Array<{ texture: GPUTexture; firstInstance: number; instanceCount: number }>;
+  textures: GPUTexture[];
 }
 
 function appendTextureRange(
@@ -115,6 +116,17 @@ function appendTextureRange(
     return;
   }
   ranges.push({ texture, firstInstance, instanceCount });
+}
+
+function collectUniqueTextures(ranges: FullSceneBatchCache["drawRanges"]): GPUTexture[] {
+  const textures: GPUTexture[] = [];
+  const seen = new Set<GPUTexture>();
+  for (const range of ranges) {
+    if (seen.has(range.texture)) continue;
+    seen.add(range.texture);
+    textures.push(range.texture);
+  }
+  return textures;
 }
 
 const INSTANCE_STRIDE_BYTES = 32;
@@ -590,6 +602,7 @@ export class CompositionPass {
       ...key,
       bufferGeneration: this.#instanceBufferGeneration,
       drawRanges: [{ texture: options.texture!, firstInstance: 0, instanceCount: entities.length }],
+      textures: [options.texture!],
     };
   }
 
@@ -601,6 +614,8 @@ export class CompositionPass {
 
     const buffer = this.#ensureInstanceCapacity(items.length);
     const drawRanges: FullSceneBatchCache["drawRanges"] = [];
+    const textures: GPUTexture[] = [];
+    const seenTextures = new Set<GPUTexture>();
     for (let index = 0; index < items.length; index++) {
       const item = items[index]!;
       if (item.pipeline !== "texture" || !item.texture) {
@@ -613,6 +628,10 @@ export class CompositionPass {
       } else {
         drawRanges.push({ texture: item.texture, firstInstance: index, instanceCount: 1 });
       }
+      if (!seenTextures.has(item.texture)) {
+        seenTextures.add(item.texture);
+        textures.push(item.texture);
+      }
       item.entity.textureDirty = false;
     }
     const uploadBytes = items.length * INSTANCE_STRIDE_BYTES;
@@ -623,6 +642,7 @@ export class CompositionPass {
       ...key,
       bufferGeneration: this.#instanceBufferGeneration,
       drawRanges,
+      textures,
     };
   }
 
@@ -643,8 +663,12 @@ export class CompositionPass {
       return false;
     }
 
-    const sortedPatches =
-      patches.length > 1 ? [...patches].sort((a, b) => a.index - b.index) : patches;
+    let sortedPatches = patches;
+    for (let index = 1; index < patches.length; index++) {
+      if (patches[index - 1]!.index <= patches[index]!.index) continue;
+      sortedPatches = [...patches].sort((a, b) => a.index - b.index);
+      break;
+    }
     let previousPatchIndex = -1;
     for (const { index, item } of sortedPatches) {
       if (index < 0 || index >= key.instanceCount || item.pipeline !== "texture" || !item.texture) {
@@ -710,6 +734,7 @@ export class CompositionPass {
       ...key,
       bufferGeneration: this.#instanceBufferGeneration,
       drawRanges,
+      textures: collectUniqueTextures(drawRanges),
     };
     return true;
   }
@@ -717,7 +742,7 @@ export class CompositionPass {
   visitCachedFullSceneTextures(visitor: (texture: GPUTexture) => void): boolean {
     const cached = this.#fullSceneBatch;
     if (!cached || cached.bufferGeneration !== this.#instanceBufferGeneration) return false;
-    for (const range of cached.drawRanges) visitor(range.texture);
+    for (const texture of cached.textures) visitor(texture);
     return true;
   }
 
