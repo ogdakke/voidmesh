@@ -143,6 +143,34 @@ describe("Render loop errors", () => {
 });
 
 describe("Animated media render scheduling", () => {
+  test("incrementally reclassifies bulk entity edits without a fixed count cutoff", () => {
+    const renderer = createLoopRenderer();
+    let nextFrame: FrameRequestCallback | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      nextFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const entities = Array.from({ length: 40 }, (_, index) =>
+      createTestEntity({ id: `classification-${index}` }),
+    );
+    canvasStore.addEntities(entities);
+
+    gl.setRenderer(renderer);
+    gl.start();
+    vi.mocked(renderer.needsContinuousRenderForEntity).mockClear();
+    canvasStore.updateEntities(
+      entities.slice(0, 33).map((entity) => ({
+        id: entity.id,
+        updates: { name: `${entity.name} changed` },
+      })),
+    );
+    if (!nextFrame) throw new Error("Expected frame loop to schedule another frame");
+    (nextFrame as FrameRequestCallback)(performance.now());
+
+    expect(renderer.needsContinuousRenderForEntity).toHaveBeenCalledTimes(33);
+  });
+
   test("does not keep rendering for an offscreen playing GIF", () => {
     const renderer = createLoopRenderer(false);
     let nextFrame: FrameRequestCallback | null = null;

@@ -110,6 +110,27 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     }
   });
 
+  test("admits high-entropy static scenes without a fixed texture-run cutoff", () => {
+    const entities = Array.from({ length: 300 }, (_, index) =>
+      createTestEntity({ id: `high-entropy-${index}` }),
+    );
+    const harness = createHarness(entities);
+    const textures = new Map(
+      entities.map((entity) => [entity.id, { width: 64, height: 64 } as GPUTexture]),
+    );
+    harness.texturePipeline.getReusableStaticCompositionSource.mockImplementation((entity) => ({
+      kind: "texture",
+      texture: textures.get(entity.id)!,
+    }));
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+    expect(harness.compositionPass.prepareMixedFullSceneBatch).toHaveBeenCalledOnce();
+
+    for (const entity of entities) {
+      if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
+    }
+  });
+
   test("retains the spatial query fast-path result when mixed batch admission fails", () => {
     const entities = [
       createTestEntity({ id: "whole-scene-image" }),
@@ -154,6 +175,33 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     expect(harness.spatialIndex.queryBounds).toHaveBeenCalledOnce();
 
     scene.release();
+  });
+
+  test("patches realistic bulk edits without an arbitrary dirty-entity cutoff", () => {
+    const entities = Array.from({ length: 40 }, (_, index) =>
+      createTestEntity({ id: `bulk-patch-${index}` }),
+    );
+    const harness = createHarness(entities);
+    harness.preparer.prepare(harness.options);
+
+    const dirtyEntityIds = new Set<string>();
+    for (let index = 0; index < 33; index++) {
+      const entity = entities[index]!;
+      entity.shaderParams = structuredClone(entity.shaderParams);
+      entity.shaderParams.size += 1;
+      entity.textureDirty = true;
+      dirtyEntityIds.add(entity.id);
+    }
+    harness.options.entityVersion++;
+    harness.options.dirtyEntityIds = dirtyEntityIds;
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+    expect(harness.compositionPass.patchMixedFullSceneBatch).toHaveBeenCalledOnce();
+    expect(harness.spatialIndex.queryBounds).toHaveBeenCalledOnce();
+
+    for (const entity of entities) {
+      if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
+    }
   });
 
   test("uses visible preparation for a mixed scene until zoom LOD work settles", () => {
@@ -373,9 +421,9 @@ function createHarness(
     textureCacheRevision: 1,
     pinCachedTexture: vi.fn<(texture: GPUTexture) => boolean>(() => true),
     needsContinuousRenderForEntity: vi.fn<(entity: ShaderCanvasEntity) => boolean>(() => false),
-    getReusableStaticCompositionSource: vi.fn<() => { kind: "texture"; texture: GPUTexture }>(
-      () => ({ kind: "texture", texture }),
-    ),
+    getReusableStaticCompositionSource: vi.fn<
+      (_entity: ShaderCanvasEntity) => { kind: "texture"; texture: GPUTexture }
+    >(() => ({ kind: "texture", texture })),
     resolveRenderSize: vi.fn<() => null>(() => null),
     renderEntityToTexture: vi.fn<() => null>(() => null),
   };

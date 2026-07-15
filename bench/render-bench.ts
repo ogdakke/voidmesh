@@ -434,6 +434,25 @@ const scenarios: BenchScenario[] = [
     warmupFrames: 20,
     samples: 5,
   },
+  {
+    id: "multi-72-unique-cached-composition",
+    label: "72 unique cached images, composition",
+    description:
+      "Realistic heterogeneous canvas scale with one distinct resident texture per static image.",
+    kind: "multi",
+    entityCount: 72,
+    sourceSize: { width: 512, height: 512 },
+    shaderType: ShaderType.dithering,
+    params: {
+      showOriginal: true,
+      postProcess: { enabled: false },
+      adjustments: { brightness: 0.5, contrast: 0.5, saturation: 0.5, blur: 0 },
+    },
+    dirtyMode: "none",
+    frames: 180,
+    warmupFrames: 20,
+    samples: 5,
+  },
 ];
 
 const imageManyEntityScenarios: BenchScenario[] = MANY_ENTITY_SCENARIOS.map((scenario) => ({

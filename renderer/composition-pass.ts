@@ -99,6 +99,24 @@ interface FullSceneBatchCache extends FullSceneBatchKey {
   drawRanges: Array<{ texture: GPUTexture; firstInstance: number; instanceCount: number }>;
 }
 
+function appendTextureRange(
+  ranges: FullSceneBatchCache["drawRanges"],
+  texture: GPUTexture,
+  firstInstance: number,
+  instanceCount: number,
+): void {
+  if (instanceCount <= 0) return;
+  const previous = ranges.at(-1);
+  if (
+    previous?.texture === texture &&
+    previous.firstInstance + previous.instanceCount === firstInstance
+  ) {
+    previous.instanceCount += instanceCount;
+    return;
+  }
+  ranges.push({ texture, firstInstance, instanceCount });
+}
+
 const INSTANCE_STRIDE_BYTES = 32;
 const INSTANCE_STRIDE_VALUES = INSTANCE_STRIDE_BYTES / 4;
 const INITIAL_INSTANCE_CAPACITY = 256;
@@ -611,7 +629,6 @@ export class CompositionPass {
   patchMixedFullSceneBatch(
     key: FullSceneBatchKey,
     patches: readonly FullSceneBatchPatch[],
-    maximumDrawRanges: number,
   ): boolean {
     const cached = this.#fullSceneBatch;
     const buffer = this.#instanceBuffer;
@@ -626,64 +643,67 @@ export class CompositionPass {
       return false;
     }
 
-    const drawRanges = cached.drawRanges.map((range) => ({ ...range }));
-    for (const { index, item } of patches) {
+    const sortedPatches =
+      patches.length > 1 ? [...patches].sort((a, b) => a.index - b.index) : patches;
+    let previousPatchIndex = -1;
+    for (const { index, item } of sortedPatches) {
       if (index < 0 || index >= key.instanceCount || item.pipeline !== "texture" || !item.texture) {
         return false;
       }
-      const rangeIndex = drawRanges.findIndex(
-        (range) =>
-          index >= range.firstInstance && index < range.firstInstance + range.instanceCount,
-      );
-      if (rangeIndex < 0) return false;
-      const range = drawRanges[rangeIndex]!;
-      if (range.texture === item.texture) continue;
-
-      const replacement: FullSceneBatchCache["drawRanges"] = [];
-      const beforeCount = index - range.firstInstance;
-      if (beforeCount > 0) {
-        replacement.push({
-          texture: range.texture,
-          firstInstance: range.firstInstance,
-          instanceCount: beforeCount,
-        });
-      }
-      replacement.push({ texture: item.texture, firstInstance: index, instanceCount: 1 });
-      const afterCount = range.firstInstance + range.instanceCount - index - 1;
-      if (afterCount > 0) {
-        replacement.push({
-          texture: range.texture,
-          firstInstance: index + 1,
-          instanceCount: afterCount,
-        });
-      }
-      drawRanges.splice(rangeIndex, 1, ...replacement);
+      if (index === previousPatchIndex) return false;
+      previousPatchIndex = index;
     }
 
-    for (let index = drawRanges.length - 1; index > 0; index--) {
-      const previous = drawRanges[index - 1]!;
-      const current = drawRanges[index]!;
-      if (
-        previous.texture === current.texture &&
-        previous.firstInstance + previous.instanceCount === current.firstInstance
-      ) {
-        previous.instanceCount += current.instanceCount;
-        drawRanges.splice(index, 1);
+    const drawRanges: FullSceneBatchCache["drawRanges"] = [];
+    let patchCursor = 0;
+    for (const cachedRange of cached.drawRanges) {
+      let rangeCursor = cachedRange.firstInstance;
+      const rangeEnd = cachedRange.firstInstance + cachedRange.instanceCount;
+      while (patchCursor < sortedPatches.length) {
+        const patch = sortedPatches[patchCursor]!;
+        if (patch.index >= rangeEnd) break;
+        if (patch.index < rangeCursor) return false;
+        if (patch.index > rangeCursor) {
+          appendTextureRange(
+            drawRanges,
+            cachedRange.texture,
+            rangeCursor,
+            patch.index - rangeCursor,
+          );
+        }
+        appendTextureRange(drawRanges, patch.item.texture!, patch.index, 1);
+        rangeCursor = patch.index + 1;
+        patchCursor++;
+      }
+      if (rangeCursor < rangeEnd) {
+        appendTextureRange(drawRanges, cachedRange.texture, rangeCursor, rangeEnd - rangeCursor);
       }
     }
-    if (drawRanges.length > maximumDrawRanges) return false;
+    if (patchCursor !== sortedPatches.length) return false;
 
-    for (const { index, item } of patches) {
+    for (const { index, item } of sortedPatches) {
       this.#writeInstance(index, item);
-      const byteOffset = index * INSTANCE_STRIDE_BYTES;
+      item.entity.textureDirty = false;
+    }
+    for (let start = 0; start < sortedPatches.length;) {
+      let end = start + 1;
+      while (
+        end < sortedPatches.length &&
+        sortedPatches[end]!.index === sortedPatches[end - 1]!.index + 1
+      ) {
+        end++;
+      }
+      const firstIndex = sortedPatches[start]!.index;
+      const byteOffset = firstIndex * INSTANCE_STRIDE_BYTES;
+      const byteLength = (end - start) * INSTANCE_STRIDE_BYTES;
       this.#device.queue.writeBuffer(
         buffer,
         byteOffset,
         this.#instanceData,
         byteOffset,
-        INSTANCE_STRIDE_BYTES,
+        byteLength,
       );
-      item.entity.textureDirty = false;
+      start = end;
     }
     this.#fullSceneBatchUploadBytes += patches.length * INSTANCE_STRIDE_BYTES;
     this.#fullSceneBatch = {

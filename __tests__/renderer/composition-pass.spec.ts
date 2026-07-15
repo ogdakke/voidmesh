@@ -196,11 +196,9 @@ describe("CompositionPass instancing", () => {
       texture: null,
     };
     expect(
-      pass.patchMixedFullSceneBatch(
-        patchedKey,
-        [{ index: 1, item: prepare(pass, second, textureB) }],
-        256,
-      ),
+      pass.patchMixedFullSceneBatch(patchedKey, [
+        { index: 1, item: prepare(pass, second, textureB) },
+      ]),
     ).toBe(true);
     const patchedPass = createRenderPass();
     expect(pass.drawFullSceneBatch(patchedPass, patchedKey)).toBe(true);
@@ -216,11 +214,9 @@ describe("CompositionPass instancing", () => {
 
     const restoredKey = { ...patchedKey, entityVersion: 3, selectionVersion: 3 };
     expect(
-      pass.patchMixedFullSceneBatch(
-        restoredKey,
-        [{ index: 1, item: prepare(pass, second, textureA) }],
-        256,
-      ),
+      pass.patchMixedFullSceneBatch(restoredKey, [
+        { index: 1, item: prepare(pass, second, textureA) },
+      ]),
     ).toBe(true);
     const restoredPass = createRenderPass();
     expect(pass.drawFullSceneBatch(restoredPass, restoredKey)).toBe(true);
@@ -230,6 +226,51 @@ describe("CompositionPass instancing", () => {
     releaseImageEntity(first);
     releaseImageEntity(second);
     releaseImageEntity(third);
+  });
+
+  test("coalesces unsorted adjacent full-scene patches into one buffer upload", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const first = createTestEntity({ id: "bulk-patch-first" });
+    const second = cloneImageEntity(first, "bulk-patch-second", { x: 20, y: 0 });
+    const third = cloneImageEntity(first, "bulk-patch-third", { x: 40, y: 0 });
+    const fourth = cloneImageEntity(first, "bulk-patch-fourth", { x: 60, y: 0 });
+    const textureA = createTexture();
+    const textureB = createTexture();
+    const textureC = createTexture();
+    const initialKey = createFullSceneKey(textureA, 4);
+    pass.prepareFullSceneBatch({
+      ...initialKey,
+      entities: [first, second, third, fourth],
+      selectedEntityIds: new Set(),
+    });
+    device.queue.writeBuffer.mockClear();
+
+    const patchedKey = { ...initialKey, entityVersion: 2, texture: null };
+    expect(
+      pass.patchMixedFullSceneBatch(patchedKey, [
+        { index: 2, item: prepare(pass, third, textureB) },
+        { index: 0, item: prepare(pass, first, textureC) },
+        { index: 1, item: prepare(pass, second, textureB) },
+      ]),
+    ).toBe(true);
+
+    expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
+    expect(device.queue.writeBuffer.mock.calls[0]![1]).toBe(0);
+    expect(device.queue.writeBuffer.mock.calls[0]![4]).toBe(3 * 32);
+    const renderPass = createRenderPass();
+    expect(pass.drawFullSceneBatch(renderPass, patchedKey)).toBe(true);
+    expect(renderPass.draw.mock.calls).toEqual([
+      [6, 1, 0, 0],
+      [6, 2, 0, 1],
+      [6, 1, 0, 3],
+    ]);
+
+    pass.destroy();
+    releaseImageEntity(first);
+    releaseImageEntity(second);
+    releaseImageEntity(third);
+    releaseImageEntity(fourth);
   });
 
   test("persists selection and debug flags without splitting the full-scene batch", () => {

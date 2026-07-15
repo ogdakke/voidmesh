@@ -14,8 +14,6 @@ import type {
 import type { EntityTexturePipeline } from "./entity-texture-pipeline.ts";
 import { getEntityRenderSize } from "./entity-render-size.ts";
 
-const MAX_MIXED_FULL_SCENE_TEXTURE_RUNS = 256;
-const MAX_INCREMENTAL_FULL_SCENE_PATCHES = 32;
 type MixedFullSceneBatchMode = "reuse" | "refresh" | "disabled";
 
 interface EntityDrawItemPreparerOptions {
@@ -551,8 +549,6 @@ export class EntityDrawItemPreparer {
     items.length = 0;
     const representative = entities[0];
     if (!representative || representative.mediaSource.type !== MediaType.image) return null;
-    let previousTexture: GPUTexture | null = null;
-    let textureRunCount = 0;
     let previousSizedEntity: ShaderCanvasEntity | null = null;
     let previousDesiredWidth = 0;
     let previousDesiredHeight = 0;
@@ -601,14 +597,6 @@ export class EntityDrawItemPreparer {
         items.length = 0;
         return null;
       }
-      if (source.texture !== previousTexture) {
-        previousTexture = source.texture;
-        textureRunCount++;
-        if (textureRunCount > MAX_MIXED_FULL_SCENE_TEXTURE_RUNS) {
-          items.length = 0;
-          return null;
-        }
-      }
       items.push(
         this.#compositionPass.prepareDrawItem({
           entity,
@@ -635,7 +623,6 @@ export class EntityDrawItemPreparer {
       !previousKey ||
       options.mixedFullSceneBatchMode === "disabled" ||
       dirtyEntityIds.size === 0 ||
-      dirtyEntityIds.size > MAX_INCREMENTAL_FULL_SCENE_PATCHES ||
       previousKey.entityVersion === options.entityVersion ||
       previousKey.geometryVersion !== options.geometryVersion ||
       previousKey.instanceCount !== options.entities.length ||
@@ -731,13 +718,7 @@ export class EntityDrawItemPreparer {
     key.texture = null;
     key.textureCacheRevision = this.#texturePipeline.textureCacheRevision;
     key.instanceCount = options.entities.length;
-    if (
-      !this.#compositionPass.patchMixedFullSceneBatch(
-        key,
-        patches,
-        MAX_MIXED_FULL_SCENE_TEXTURE_RUNS,
-      )
-    ) {
+    if (!this.#compositionPass.patchMixedFullSceneBatch(key, patches)) {
       patches.length = 0;
       return null;
     }
@@ -798,12 +779,14 @@ export class EntityDrawItemPreparer {
       this.#homogeneousEntityVersion >= 0 &&
       this.#homogeneousEntities === entities &&
       this.#homogeneousEntityCount === entities.length &&
-      dirtyEntityIds.size > 0 &&
-      dirtyEntityIds.size <= MAX_INCREMENTAL_FULL_SCENE_PATCHES
+      dirtyEntityIds.size > 0
     ) {
       const previousRepresentative = this.#homogeneousRepresentative;
       this.#homogeneousEntityVersion = entityVersion;
       if (!previousRepresentative) return null;
+      if (dirtyEntityIds.size === entities.length) {
+        return this.#scanHomogeneousRepresentative(entities, entityVersion);
+      }
 
       let baseline = previousRepresentative;
       if (dirtyEntityIds.has(baseline.id)) {

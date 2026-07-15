@@ -43,7 +43,12 @@ Run one scenario:
 
 ```bash
 bun run bench:render:record -- --scenario image-flowing-glass-4k-continuous
+bun run bench:render:record -- --scenario multi-72-unique-cached-composition
 ```
+
+The 72-image scenario guards realistic high-entropy composition: every static
+image owns a distinct resident texture, so it exercises many z-ordered texture
+runs without relying on duplicated-source synthetic scale.
 
 ## Many-entity suite
 

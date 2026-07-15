@@ -205,8 +205,7 @@ export class FrameLoop {
     let canPatch =
       hasActiveSnapshot &&
       this.#activeEntityCount === state.entities.size &&
-      state.entitiesDirty.size > 0 &&
-      state.entitiesDirty.size <= 32;
+      state.entitiesDirty.size > 0;
     if (canPatch) {
       for (const entityId of state.entitiesDirty) {
         if (!this.#classifiedEntityIds.has(entityId)) {
