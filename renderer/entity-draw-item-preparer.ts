@@ -42,6 +42,21 @@ interface PrepareEntityDrawItemsOptions {
   debugMode: boolean;
 }
 
+interface MixedFullScenePlan {
+  entities: readonly ShaderCanvasEntity[];
+  entityVersion: number;
+  geometryVersion: number;
+  selectionVersion: number;
+  debugMode: boolean;
+  viewportZoom: number;
+  devicePixelRatio: number;
+  textureCacheRevision: number;
+  fullTextureRunCount: number;
+  items: readonly CompositionDrawItem[];
+  itemsByEntity: WeakMap<ShaderCanvasEntity, CompositionDrawItem>;
+  textures: readonly GPUTexture[];
+}
+
 export interface PreparedEntityDrawItems {
   entityDrawItems: CompositionDrawItem[];
   actionLayerDrawItems: CompositionDrawItem[];
@@ -73,7 +88,6 @@ export class EntityDrawItemPreparer {
   readonly #entityDrawItems: CompositionDrawItem[] = [];
   readonly #actionLayerDrawItems: CompositionDrawItem[] = [];
   readonly #fullSceneDrawItems: CompositionDrawItem[] = [];
-  readonly #fullSceneVisibleEntityIds = new Set<string>();
   readonly #fullScenePatches: FullSceneBatchPatch[] = [];
   readonly #fullSceneEntityIndices = new Map<string, number>();
   readonly #prepared: PreparedEntityDrawItems = {
@@ -85,6 +99,9 @@ export class EntityDrawItemPreparer {
   };
   #fullSceneBatchKey: FullSceneBatchKey | null = null;
   #mixedFullSceneBatchKey: FullSceneBatchKey | null = null;
+  #mixedFullScenePlan: MixedFullScenePlan | null = null;
+  #mixedIneligibleEntityVersion = -1;
+  #mixedIneligibleEntities: readonly ShaderCanvasEntity[] | null = null;
   #activeFullSceneBatchKey: FullSceneBatchKey | null = null;
   #activeFullSceneSelectedEntityIds: ReadonlySet<string> | null = null;
   #homogeneousEntityVersion = -1;
@@ -482,8 +499,6 @@ export class EntityDrawItemPreparer {
       viewport,
       width,
       height,
-      devicePixelRatio,
-      encoder,
       selectedEntityIds,
       debugMode,
     } = options;
@@ -519,6 +534,13 @@ export class EntityDrawItemPreparer {
     }
     if (!allowBuild) return null;
 
+    if (
+      this.#mixedIneligibleEntityVersion === entityVersion &&
+      this.#mixedIneligibleEntities === entities
+    ) {
+      return null;
+    }
+
     const viewportBounds = getViewportWorldBounds(
       viewport,
       width,
@@ -547,26 +569,91 @@ export class EntityDrawItemPreparer {
       return null;
     }
 
+    let plan = this.#mixedFullScenePlan;
+    if (!this.#isMixedFullScenePlanCurrent(plan, options)) {
+      plan = this.#buildMixedFullScenePlan(options);
+      if (!plan) return null;
+    }
+
+    const visibleTextureRunCount = countVisibleTextureRuns(visibleEntities, plan.itemsByEntity);
+    if (visibleTextureRunCount < 0) {
+      this.#mixedFullScenePlan = null;
+      return null;
+    }
+
+    // Compare run density rather than absolute run counts so a low-entropy full
+    // plan is not rejected merely because some of its runs are outside the
+    // viewport. Equal or higher offscreen entropy keeps spatial culling. Retain
+    // rejected plans because viewport motion changes only the visible run count;
+    // rebuilding the same full plan on every admission attempt would remain O(N).
+    if (
+      plan.fullTextureRunCount > visibleTextureRunCount &&
+      plan.fullTextureRunCount * visibleEntities.length >= visibleTextureRunCount * entities.length
+    ) {
+      return null;
+    }
+
+    for (const texture of plan.textures) {
+      if (this.#texturePipeline.pinCachedTexture(texture)) continue;
+      this.#mixedFullScenePlan = null;
+      return null;
+    }
+
+    key.textureCacheRevision = this.#texturePipeline.textureCacheRevision;
+    this.#compositionPass.prepareMixedFullSceneBatch(key, plan.items);
+    this.#rememberFullSceneLayout(entities, selectedEntityIds, key);
+    return key;
+  }
+
+  #isMixedFullScenePlanCurrent(
+    plan: MixedFullScenePlan | null,
+    options: PrepareEntityDrawItemsOptions,
+  ): plan is MixedFullScenePlan {
+    return (
+      plan !== null &&
+      plan.entities === options.entities &&
+      plan.entityVersion === options.entityVersion &&
+      plan.geometryVersion === options.geometryVersion &&
+      plan.selectionVersion === options.selectionVersion &&
+      plan.debugMode === options.debugMode &&
+      plan.viewportZoom === options.viewport.zoom &&
+      plan.devicePixelRatio === options.devicePixelRatio &&
+      plan.textureCacheRevision === this.#texturePipeline.textureCacheRevision
+    );
+  }
+
+  #buildMixedFullScenePlan(options: PrepareEntityDrawItemsOptions): MixedFullScenePlan | null {
+    const {
+      entities,
+      entityVersion,
+      geometryVersion,
+      selectionVersion,
+      viewport,
+      devicePixelRatio,
+      encoder,
+      selectedEntityIds,
+      debugMode,
+    } = options;
     const items = this.#fullSceneDrawItems;
     items.length = 0;
-    const visibleEntityIds = this.#fullSceneVisibleEntityIds;
-    visibleEntityIds.clear();
-    for (const entity of visibleEntities) visibleEntityIds.add(entity.id);
-    const representative = entities[0];
-    if (!representative || representative.mediaSource.type !== MediaType.image) return null;
+    const itemsByEntity = new WeakMap<ShaderCanvasEntity, CompositionDrawItem>();
+    const textures: GPUTexture[] = [];
+    const seenTextures = new Set<GPUTexture>();
     let fullTextureRunCount = 0;
-    let visibleTextureRunCount = 0;
-    let previousFullTexture: GPUTexture | null = null;
-    let previousVisibleTexture: GPUTexture | null = null;
+    let previousTexture: GPUTexture | null = null;
     let previousSizedEntity: ShaderCanvasEntity | null = null;
     let previousDesiredWidth = 0;
     let previousDesiredHeight = 0;
+
     for (const entity of entities) {
       if (
         entity.mediaSource.type !== MediaType.image ||
         this.#texturePipeline.needsContinuousRenderForEntity(entity)
       ) {
         items.length = 0;
+        this.#mixedFullScenePlan = null;
+        this.#mixedIneligibleEntityVersion = entityVersion;
+        this.#mixedIneligibleEntities = entities;
         return null;
       }
       const sameProjectedSize =
@@ -598,48 +685,57 @@ export class EntityDrawItemPreparer {
         );
         if (!renderSize) {
           items.length = 0;
+          this.#mixedFullScenePlan = null;
           return null;
         }
         source = this.#texturePipeline.renderEntityToTexture(entity, encoder, renderSize);
       }
       if (source?.kind !== "texture") {
         items.length = 0;
+        this.#mixedFullScenePlan = null;
         return null;
       }
-      if (source.texture !== previousFullTexture) {
-        previousFullTexture = source.texture;
+
+      entity.textureDirty = false;
+      if (source.texture !== previousTexture) {
+        previousTexture = source.texture;
         fullTextureRunCount++;
       }
-      if (visibleEntityIds.has(entity.id) && source.texture !== previousVisibleTexture) {
-        previousVisibleTexture = source.texture;
-        visibleTextureRunCount++;
+      if (!seenTextures.has(source.texture)) {
+        seenTextures.add(source.texture);
+        textures.push(source.texture);
       }
-      items.push(
-        this.#compositionPass.prepareDrawItem({
-          entity,
-          source,
-          isSelected: selectedEntityIds.has(entity.id),
-          debugMode,
-          positionOffsetX: 0,
-          positionOffsetY: 0,
-          visualScale: 1,
-        }),
-      );
+      const item = this.#compositionPass.prepareDrawItem({
+        entity,
+        source,
+        isSelected: selectedEntityIds.has(entity.id),
+        debugMode,
+        positionOffsetX: 0,
+        positionOffsetY: 0,
+        visualScale: 1,
+      });
+      items.push(item);
+      itemsByEntity.set(entity, item);
     }
 
-    // Persistence is a CPU optimization, not permission to increase draw-call
-    // pressure. A high-entropy plan is useful when its full z-ordered texture
-    // runs are already represented by the visible scene; otherwise retain
-    // spatial culling and submit the smaller visible run sequence.
-    if (fullTextureRunCount > visibleTextureRunCount) {
-      items.length = 0;
-      return null;
-    }
-
-    key.textureCacheRevision = this.#texturePipeline.textureCacheRevision;
-    this.#compositionPass.prepareMixedFullSceneBatch(key, items);
-    this.#rememberFullSceneLayout(entities, selectedEntityIds, key);
-    return key;
+    const plan: MixedFullScenePlan = {
+      entities,
+      entityVersion,
+      geometryVersion,
+      selectionVersion,
+      debugMode,
+      viewportZoom: viewport.zoom,
+      devicePixelRatio,
+      textureCacheRevision: this.#texturePipeline.textureCacheRevision,
+      fullTextureRunCount,
+      items,
+      itemsByEntity,
+      textures,
+    };
+    this.#mixedFullScenePlan = plan;
+    this.#mixedIneligibleEntityVersion = -1;
+    this.#mixedIneligibleEntities = null;
+    return plan;
   }
 
   #tryPatchFullSceneBatch(options: PrepareEntityDrawItemsOptions): FullSceneBatchKey | null {
@@ -959,4 +1055,20 @@ function structurallyEqual(a: unknown, b: unknown): boolean {
     if (Object.hasOwn(bRecord, key)) bKeyCount++;
   }
   return aKeyCount === bKeyCount;
+}
+
+function countVisibleTextureRuns(
+  visibleEntities: readonly ShaderCanvasEntity[],
+  itemsByEntity: WeakMap<ShaderCanvasEntity, CompositionDrawItem>,
+): number {
+  let runCount = 0;
+  let previousTexture: GPUTexture | null = null;
+  for (const entity of visibleEntities) {
+    const texture = itemsByEntity.get(entity)?.texture;
+    if (!texture) return -1;
+    if (texture === previousTexture) continue;
+    previousTexture = texture;
+    runCount++;
+  }
+  return runCount;
 }

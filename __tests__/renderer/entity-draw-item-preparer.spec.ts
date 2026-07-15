@@ -149,6 +149,35 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     expect(prepared.fullSceneBatch).toBeNull();
     expect(prepared.entityDrawItems.map((item) => item.entity)).toEqual(entities.slice(2, 6));
     expect(harness.compositionPass.prepareMixedFullSceneBatch).not.toHaveBeenCalled();
+    expect(harness.texturePipeline.getReusableStaticCompositionSource).toHaveBeenCalledTimes(12);
+
+    harness.options.viewport = { offset: { x: 100, y: 0 }, zoom: 1 };
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).toBeNull();
+    expect(harness.texturePipeline.getReusableStaticCompositionSource).toHaveBeenCalledTimes(16);
+
+    for (const entity of entities) {
+      if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
+    }
+  });
+
+  test("admits extra full-scene runs when their density is lower than the visible slice", () => {
+    const entities = Array.from({ length: 8 }, (_, index) =>
+      createTestEntity({ id: `sparse-run-${index}` }),
+    );
+    const harness = createHarness(entities, entities.slice(0, 4));
+    const firstTexture = { width: 64, height: 64 } as GPUTexture;
+    const secondTexture = { width: 64, height: 64 } as GPUTexture;
+    const thirdTexture = { width: 64, height: 64 } as GPUTexture;
+    harness.texturePipeline.getReusableStaticCompositionSource.mockImplementation((_entity) => {
+      const index = entities.indexOf(_entity);
+      return {
+        kind: "texture",
+        texture: index < 2 ? firstTexture : index < 4 ? secondTexture : thirdTexture,
+      };
+    });
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+    expect(harness.compositionPass.prepareMixedFullSceneBatch).toHaveBeenCalledOnce();
 
     for (const entity of entities) {
       if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
@@ -446,6 +475,7 @@ function createHarness(
     prepareDrawItem: vi.fn<
       (options: {
         entity: ShaderCanvasEntity;
+        source: { kind: "texture"; texture: GPUTexture };
         positionOffsetX: number;
         positionOffsetY: number;
         visualScale: number;
@@ -454,7 +484,7 @@ function createHarness(
       (options) =>
         ({
           entity: options.entity,
-          texture,
+          texture: options.source.texture,
           bindGroup: null,
           pipeline: "texture",
           isSelected: false,
