@@ -171,6 +171,21 @@ export function useViewport(): Viewport {
   );
 }
 
+const subscribeViewportZoom = (listener: () => void): (() => void) => {
+  let currentZoom = canvasStore.getViewport().zoom;
+  return canvasStore.subscribeViewport(() => {
+    const nextZoom = canvasStore.getViewport().zoom;
+    if (Object.is(currentZoom, nextZoom)) return;
+    currentZoom = nextZoom;
+    listener();
+  });
+};
+
+/** Subscribe to zoom without rerendering for offset-only canvas pans. */
+export function useViewportZoom(): number {
+  return useSyncExternalStore(subscribeViewportZoom, () => canvasStore.getViewport().zoom);
+}
+
 export type CanvasActionLayerSnapshot = ReturnType<typeof canvasStore.getActionLayerSnapshot>;
 export type CanvasDragSnapshot = ReturnType<typeof canvasStore.getDragSnapshot>;
 export type CanvasPlaybackSnapshot = ReturnType<typeof canvasStore.getPlaybackSnapshot>;
