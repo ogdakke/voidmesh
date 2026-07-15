@@ -45,7 +45,7 @@ Canvas state management and input processing. This is the "model + controller" l
 - Touch handling uses a state machine: `TouchGestureState` tracks active touches, pinch distance, long-press timers.
 - Space+drag panning uses `SpacePanMode` enum (`idle` → `ready` → `panning` → `panned`).
 - Per-frame controllers (disintegration, drag visuals, action layer) are ticked each frame; return `true` while animations are active to keep the render loop running.
-- The frame loop rebuilds animated-media and continuous-shader active maps only for initial state or membership-sized changes. Small reference/parameter updates reclassify at most the dirty IDs; selection-only changes must not trigger entity classification.
+- The frame loop rebuilds animated-media and continuous-shader active maps only for initial state or membership changes. Reference/parameter updates reclassify exactly the dirty IDs with no fixed count cutoff; selection-only changes must not trigger entity classification.
 - Playing media advances playback time every RAF, but only visible animated entities mark textures dirty and force render; passive playback notifications are limited to the selected entity.
 - Renderer-reported pending work keeps RAF alive for settled, budgeted LOD transitions after viewport input stops; it must not be implemented by pausing video playback.
 - Action-layer, drag-visual, and disintegration controllers reuse their render-state wrappers; mutate stable scratch state instead of allocating objects, sets, or overlay arrays every frame.
