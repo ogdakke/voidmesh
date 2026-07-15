@@ -69,6 +69,8 @@ export interface PreparedEntityDrawItems {
   actionLayerDrawItems: CompositionDrawItem[];
   fullSceneBatch: FullSceneBatchKey | null;
   singleSelectedDrawItem: CompositionDrawItem | null;
+  singleSelectedOffsetX: number;
+  singleSelectedOffsetY: number;
   hasAnimatingContent: boolean;
 }
 
@@ -103,6 +105,8 @@ export class EntityDrawItemPreparer {
     actionLayerDrawItems: this.#actionLayerDrawItems,
     fullSceneBatch: null,
     singleSelectedDrawItem: null,
+    singleSelectedOffsetX: 0,
+    singleSelectedOffsetY: 0,
     hasAnimatingContent: false,
   };
   #fullSceneBatchKey: FullSceneBatchKey | null = null;
@@ -169,6 +173,8 @@ export class EntityDrawItemPreparer {
     }
     this.#prepared.fullSceneBatch = null;
     this.#prepared.singleSelectedDrawItem = null;
+    this.#prepared.singleSelectedOffsetX = 0;
+    this.#prepared.singleSelectedOffsetY = 0;
     this.#fullSceneAdmissionQueried = false;
     this.#admissionVisibleEntities = this.#visibleEntities;
     let hasAnimatingContent = false;
@@ -186,6 +192,19 @@ export class EntityDrawItemPreparer {
     );
     if (fullSceneBatch) {
       this.#trackPreparedFullSceneDrag(options);
+      const singleSelectedEntity =
+        fullSceneBatch.singleSelectedIndex >= 0
+          ? entities[fullSceneBatch.singleSelectedIndex]
+          : undefined;
+      if (
+        singleSelectedEntity &&
+        dragVisual.active &&
+        dragVisual.appliesToSelection &&
+        dragVisual.entityIds.has(singleSelectedEntity.id)
+      ) {
+        this.#prepared.singleSelectedOffsetX = dragVisual.offset.x;
+        this.#prepared.singleSelectedOffsetY = dragVisual.offset.y;
+      }
       this.#prepared.fullSceneBatch = fullSceneBatch;
       this.#prepared.hasAnimatingContent = false;
       return this.#prepared;
@@ -315,6 +334,8 @@ export class EntityDrawItemPreparer {
       const drawItem = this.#compositionPass.prepareDrawItem(compositionOptions);
       if (selectedEntityIds.size === 1 && isSelected) {
         this.#prepared.singleSelectedDrawItem = drawItem;
+        this.#prepared.singleSelectedOffsetX = drawItem.offsetX;
+        this.#prepared.singleSelectedOffsetY = drawItem.offsetY;
       }
 
       if (isActionLayerEntity) {

@@ -508,8 +508,14 @@ export class InfiniteCanvasRenderer {
     this.#lastPhaseStats.batchAdmissionMs = preparationPhases.batchAdmissionMs;
     this.#lastPhaseStats.spatialQueryMs = preparationPhases.spatialQueryMs;
     this.#lastPhaseStats.visibleEntityPreparationMs = preparationPhases.visibleEntityPreparationMs;
-    const { entityDrawItems, actionLayerDrawItems, fullSceneBatch, singleSelectedDrawItem } =
-      preparedEntityDrawItems;
+    const {
+      entityDrawItems,
+      actionLayerDrawItems,
+      fullSceneBatch,
+      singleSelectedDrawItem,
+      singleSelectedOffsetX,
+      singleSelectedOffsetY,
+    } = preparedEntityDrawItems;
     let hasAnimatingContent = preparedEntityDrawItems.hasAnimatingContent;
     this.#compositionPass.beginFrame(
       fullSceneBatch?.instanceCount ?? entityDrawItems.length + actionLayerDrawItems.length,
@@ -624,8 +630,8 @@ export class InfiniteCanvasRenderer {
       this.#entityLabelPass.drawLabel(
         labelPass,
         labelEntity,
-        singleSelectedDrawItem?.offsetX ?? 0,
-        singleSelectedDrawItem?.offsetY ?? 0,
+        singleSelectedOffsetX,
+        singleSelectedOffsetY,
       );
       labelPass.end();
     }

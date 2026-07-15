@@ -433,7 +433,12 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     harness.options.dragVisual.entityIds = harness.options.selectedEntityIds;
     harness.options.dragVisual.offset = { x: 100, y: -50 };
 
-    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+    const prepared = harness.preparer.prepare(harness.options);
+    expect(prepared.fullSceneBatch).not.toBeNull();
+    expect(prepared).toMatchObject({
+      singleSelectedOffsetX: 100,
+      singleSelectedOffsetY: -50,
+    });
     expect(harness.compositionPass.prepareFullSceneBatch).toHaveBeenCalledOnce();
 
     scene.release();
