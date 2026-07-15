@@ -110,6 +110,27 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     }
   });
 
+  test("retains the spatial query fast-path result when mixed batch admission fails", () => {
+    const entities = [
+      createTestEntity({ id: "whole-scene-image" }),
+      createTestEntity({ id: "whole-scene-video", mediaType: "video" }),
+    ];
+    const harness = createHarness(entities);
+    harness.spatialIndex.queryBounds.mockImplementation((_bounds, output) => {
+      output.length = 0;
+      return entities;
+    });
+
+    const prepared = harness.preparer.prepare(harness.options);
+
+    expect(prepared.fullSceneBatch).toBeNull();
+    expect(prepared.entityDrawItems).toHaveLength(entities.length);
+    expect(prepared.entityDrawItems.map((item) => item.entity)).toEqual(entities);
+
+    const image = entities[0]!;
+    if (image.mediaSource.type === "image") releaseImageAsset(image.mediaSource.asset);
+  });
+
   test("patches a small dirty subset without rescanning or rebuilding the full scene", () => {
     const scene = createScene();
     const harness = createHarness(scene.entities);

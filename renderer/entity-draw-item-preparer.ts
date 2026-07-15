@@ -71,6 +71,7 @@ export class EntityDrawItemPreparer {
   readonly #resolvedRenderSize = { width: 0, height: 0 };
   readonly #viewportBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
   readonly #visibleEntities: ShaderCanvasEntity[] = [];
+  #admissionVisibleEntities: readonly ShaderCanvasEntity[] = this.#visibleEntities;
   readonly #entityDrawItems: CompositionDrawItem[] = [];
   readonly #actionLayerDrawItems: CompositionDrawItem[] = [];
   readonly #fullSceneDrawItems: CompositionDrawItem[] = [];
@@ -138,6 +139,7 @@ export class EntityDrawItemPreparer {
     this.#prepared.fullSceneBatch = null;
     this.#prepared.singleSelectedDrawItem = null;
     this.#fullSceneAdmissionQueried = false;
+    this.#admissionVisibleEntities = this.#visibleEntities;
     let hasAnimatingContent = false;
     this.#phaseStats.batchAdmissionMs = 0;
     this.#phaseStats.spatialQueryMs = 0;
@@ -176,7 +178,7 @@ export class EntityDrawItemPreparer {
 
     let visibleEntities: readonly ShaderCanvasEntity[];
     if (this.#fullSceneAdmissionQueried) {
-      visibleEntities = this.#visibleEntities;
+      visibleEntities = this.#admissionVisibleEntities;
     } else {
       const spatialQueryStart = performance.now();
       visibleEntities = entitySpatialIndex.queryBounds(
@@ -446,6 +448,7 @@ export class EntityDrawItemPreparer {
       this.#visibleEntities,
       entities,
     );
+    this.#admissionVisibleEntities = visibleEntities;
     const spatialQueryEnd = performance.now();
     this.#phaseStats.spatialQueryMs = tracePerformancePhase(
       "render.spatial-query",
@@ -529,6 +532,7 @@ export class EntityDrawItemPreparer {
       this.#visibleEntities,
       entities,
     );
+    this.#admissionVisibleEntities = visibleEntities;
     const spatialQueryEnd = performance.now();
     this.#phaseStats.spatialQueryMs = tracePerformancePhase(
       "render.spatial-query",
