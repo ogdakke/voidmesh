@@ -174,6 +174,7 @@ export class CompositionPass {
   readonly #viewportUniformBuffer: GPUBuffer;
   readonly #pipeline: GPURenderPipeline;
   readonly #instancedPipeline: GPURenderPipeline;
+  readonly #interactiveInstancedPipeline: GPURenderPipeline;
   readonly #externalPipeline: GPURenderPipeline;
   readonly #bindGroupLayout: GPUBindGroupLayout;
   readonly #instancedBindGroupLayout: GPUBindGroupLayout;
@@ -385,6 +386,38 @@ export class CompositionPass {
       vertex: {
         module: instancedShaderModule,
         entryPoint: "vs_main",
+      },
+      fragment: {
+        module: instancedShaderModule,
+        entryPoint: "fs_main",
+        targets: [
+          {
+            format: options.format,
+            blend: {
+              color: {
+                srcFactor: "src-alpha",
+                dstFactor: "one-minus-src-alpha",
+                operation: "add",
+              },
+              alpha: {
+                srcFactor: "one",
+                dstFactor: "one-minus-src-alpha",
+                operation: "add",
+              },
+            },
+          },
+        ],
+      },
+      primitive: {
+        topology: "triangle-list",
+      },
+    });
+    this.#interactiveInstancedPipeline = this.#device.createRenderPipeline({
+      label: "Interactive instanced composition pipeline",
+      layout: instancedPipelineLayout,
+      vertex: {
+        module: instancedShaderModule,
+        entryPoint: "vs_interactive",
       },
       fragment: {
         module: instancedShaderModule,
@@ -767,7 +800,11 @@ export class CompositionPass {
       dragSelectMode,
     );
     this.#instanceWriteCursor = Math.max(this.#instanceWriteCursor, key.instanceCount);
-    pass.setPipeline(this.#instancedPipeline);
+    pass.setPipeline(
+      hasDragTransform || dragSelectMode !== null
+        ? this.#interactiveInstancedPipeline
+        : this.#instancedPipeline,
+    );
     for (const range of cached.drawRanges) {
       pass.setBindGroup(0, this.#getInstancedBindGroup(range.texture));
       pass.draw(6, range.instanceCount, 0, range.firstInstance);

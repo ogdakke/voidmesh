@@ -36,12 +36,10 @@ import {
 import {
   ZOOM_STRESS_SCENARIO,
   estimateZoomStressDecodedBytes,
-  getZoomStressDisplaySize,
   getZoomStressFrame,
   getZoomStressFrameCount,
   getZoomStressMediaKind,
   getZoomStressPosition,
-  getZoomStressSourceSize,
   type ZoomStressPhase,
   type ZoomStressScenarioConfig,
 } from "./zoom-stress-scenario.ts";
@@ -68,6 +66,7 @@ interface BenchScenario {
   samples: number;
   manyEntity?: ManyEntityScenarioConfig;
   zoomStress?: ZoomStressScenarioConfig;
+  pausedVideoPan?: boolean;
   synchronizeEachFrame?: boolean;
   paceWithAnimationFrame?: boolean;
   recordPerFrame?: boolean;
@@ -514,10 +513,30 @@ const zoomStressProcessedScenario: BenchScenario = {
   params: {},
 };
 
+const pausedMixedMediaPanScenario: BenchScenario = {
+  ...zoomStressOriginalScenario,
+  id: "pan-61-unique-mixed-paused-videos",
+  label: "61 unique mixed media with paused videos, sustained pan",
+  description:
+    "Pans continuously across 57 unique images and four paused external videos at a fixed zoom.",
+  dirtyMode: "none",
+  frames: 240,
+  warmupFrames: 30,
+  samples: 5,
+  pausedVideoPan: true,
+  resetTexturesBeforeSample: false,
+  zoomStress: {
+    ...ZOOM_STRESS_SCENARIO,
+    imageCount: 57,
+    videoCount: 4,
+  },
+};
+
 const manyEntityScenarios = [
   ...imageManyEntityScenarios,
   zoomStressOriginalScenario,
   zoomStressProcessedScenario,
+  pausedMixedMediaPanScenario,
 ];
 
 const allScenarios = [...scenarios, ...manyEntityScenarios];
@@ -917,6 +936,7 @@ async function createZoomStressEntitySet(
   config: ZoomStressScenarioConfig,
   params: ResolvedBenchShaderParams,
 ): Promise<BenchEntitySet> {
+  const videosPlaying = !scenario.pausedVideoPan;
   const imageAssets = await createSyntheticImageAssets({
     count: config.imageCount,
     blobType: "image/jpeg",
@@ -935,10 +955,15 @@ async function createZoomStressEntitySet(
     let imageIndex = 0;
     let videoIndex = 0;
     for (let index = 0; index < config.entityCount; index += 1) {
-      const sourceSize = getZoomStressSourceSize(config, index);
-      const displaySize = getZoomStressDisplaySize(config, index);
+      const mediaKind = scenario.pausedVideoPan
+        ? index % 15 === 0 && videoIndex < config.videoCount
+          ? "video"
+          : "image"
+        : getZoomStressMediaKind(config, index);
+      const sourceSize = mediaKind === "video" ? config.videoSourceSize : config.imageSourceSize;
+      const displaySize = mediaKind === "video" ? config.videoDisplaySize : config.imageDisplaySize;
       const position = getZoomStressPosition(config, index);
-      if (getZoomStressMediaKind(config, index) === "video") {
+      if (mediaKind === "video") {
         const synthetic = syntheticVideos[videoIndex]!;
         const bitmap = videoBitmaps[videoIndex]!;
         const entity = createEntity({
@@ -959,7 +984,7 @@ async function createZoomStressEntitySet(
             alphaMode: "none",
           },
           playback: {
-            isPlaying: true,
+            isPlaying: videosPlaying,
             currentTime: 0,
             loop: true,
             playbackRate: 1,
@@ -999,25 +1024,43 @@ async function createZoomStressEntitySet(
     }
     releaseOwnedImageAssets(ownedImageAssets);
 
+    if (!videosPlaying) {
+      for (const synthetic of syntheticVideos) synthetic.video.pause();
+    }
+
     let lastSyntheticVideoFrameIndex = -1;
     return {
       entities,
-      beforeFrame: () => {
-        const videoFrameIndex = Math.floor((performance.now() * 30) / 1000);
-        if (videoFrameIndex === lastSyntheticVideoFrameIndex) return;
-        lastSyntheticVideoFrameIndex = videoFrameIndex;
-        for (let index = 0; index < syntheticVideos.length; index += 1) {
-          syntheticVideos[index]!.drawFrame(videoFrameIndex + index * 3);
-        }
-        for (const entity of entities) {
-          if (entity.mediaSource.type === MediaType.video) entity.textureDirty = true;
-        }
-      },
-      getViewport: (_frameIndex, sampleFrameIndex) =>
-        getZoomStressFrame(config, sampleFrameIndex, {
-          width: CANVAS_WIDTH,
-          height: CANVAS_HEIGHT,
-        }).viewport,
+      beforeFrame: videosPlaying
+        ? () => {
+            const videoFrameIndex = Math.floor((performance.now() * 30) / 1000);
+            if (videoFrameIndex === lastSyntheticVideoFrameIndex) return;
+            lastSyntheticVideoFrameIndex = videoFrameIndex;
+            for (let index = 0; index < syntheticVideos.length; index += 1) {
+              syntheticVideos[index]!.drawFrame(videoFrameIndex + index * 3);
+            }
+            for (const entity of entities) {
+              if (entity.mediaSource.type === MediaType.video) entity.textureDirty = true;
+            }
+          }
+        : undefined,
+      getViewport: scenario.pausedVideoPan
+        ? (_frameIndex, sampleFrameIndex) => {
+            const zoom = 0.32;
+            const progress = (sampleFrameIndex % scenario.frames) / scenario.frames;
+            return {
+              offset: {
+                x: 1_650 + Math.sin(progress * Math.PI * 4) * 900,
+                y: 1_500 + Math.cos(progress * Math.PI * 3) * 600,
+              },
+              zoom,
+            };
+          }
+        : (_frameIndex, sampleFrameIndex) =>
+            getZoomStressFrame(config, sampleFrameIndex, {
+              width: CANVAS_WIDTH,
+              height: CANVAS_HEIGHT,
+            }).viewport,
       getFramePhase: (_frameIndex, sampleFrameIndex) =>
         getZoomStressFrame(config, sampleFrameIndex, {
           width: CANVAS_WIDTH,

@@ -131,6 +131,30 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     }
   });
 
+  test("keeps spatial culling when persistence would submit more texture runs", () => {
+    const entities = Array.from({ length: 8 }, (_, index) =>
+      createTestEntity({ id: `culled-run-${index}` }),
+    );
+    const harness = createHarness(entities, entities.slice(2, 6));
+    const textures = new Map(
+      entities.map((entity) => [entity.id, { width: 64, height: 64 } as GPUTexture]),
+    );
+    harness.texturePipeline.getReusableStaticCompositionSource.mockImplementation((entity) => ({
+      kind: "texture",
+      texture: textures.get(entity.id)!,
+    }));
+
+    const prepared = harness.preparer.prepare(harness.options);
+
+    expect(prepared.fullSceneBatch).toBeNull();
+    expect(prepared.entityDrawItems.map((item) => item.entity)).toEqual(entities.slice(2, 6));
+    expect(harness.compositionPass.prepareMixedFullSceneBatch).not.toHaveBeenCalled();
+
+    for (const entity of entities) {
+      if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
+    }
+  });
+
   test("retains the spatial query fast-path result when mixed batch admission fails", () => {
     const entities = [
       createTestEntity({ id: "whole-scene-image" }),

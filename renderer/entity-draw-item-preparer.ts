@@ -73,6 +73,7 @@ export class EntityDrawItemPreparer {
   readonly #entityDrawItems: CompositionDrawItem[] = [];
   readonly #actionLayerDrawItems: CompositionDrawItem[] = [];
   readonly #fullSceneDrawItems: CompositionDrawItem[] = [];
+  readonly #fullSceneVisibleEntityIds = new Set<string>();
   readonly #fullScenePatches: FullSceneBatchPatch[] = [];
   readonly #fullSceneEntityIndices = new Map<string, number>();
   readonly #prepared: PreparedEntityDrawItems = {
@@ -548,8 +549,15 @@ export class EntityDrawItemPreparer {
 
     const items = this.#fullSceneDrawItems;
     items.length = 0;
+    const visibleEntityIds = this.#fullSceneVisibleEntityIds;
+    visibleEntityIds.clear();
+    for (const entity of visibleEntities) visibleEntityIds.add(entity.id);
     const representative = entities[0];
     if (!representative || representative.mediaSource.type !== MediaType.image) return null;
+    let fullTextureRunCount = 0;
+    let visibleTextureRunCount = 0;
+    let previousFullTexture: GPUTexture | null = null;
+    let previousVisibleTexture: GPUTexture | null = null;
     let previousSizedEntity: ShaderCanvasEntity | null = null;
     let previousDesiredWidth = 0;
     let previousDesiredHeight = 0;
@@ -598,6 +606,14 @@ export class EntityDrawItemPreparer {
         items.length = 0;
         return null;
       }
+      if (source.texture !== previousFullTexture) {
+        previousFullTexture = source.texture;
+        fullTextureRunCount++;
+      }
+      if (visibleEntityIds.has(entity.id) && source.texture !== previousVisibleTexture) {
+        previousVisibleTexture = source.texture;
+        visibleTextureRunCount++;
+      }
       items.push(
         this.#compositionPass.prepareDrawItem({
           entity,
@@ -609,6 +625,15 @@ export class EntityDrawItemPreparer {
           visualScale: 1,
         }),
       );
+    }
+
+    // Persistence is a CPU optimization, not permission to increase draw-call
+    // pressure. A high-entropy plan is useful when its full z-ordered texture
+    // runs are already represented by the visible scene; otherwise retain
+    // spatial culling and submit the smaller visible run sequence.
+    if (fullTextureRunCount > visibleTextureRunCount) {
+      items.length = 0;
+      return null;
     }
 
     key.textureCacheRevision = this.#texturePipeline.textureCacheRevision;

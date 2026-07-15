@@ -85,6 +85,71 @@ fn vs_main(
   let entity = entities[instanceIndex];
   let localPos = localPositions[vertexIndex];
   let uv = uvs[vertexIndex];
+  let scaledSize = entity.size * entity.scale;
+  let scaleOffset = (entity.size - scaledSize) * 0.5;
+  let selected = entity.isSelected == 1u;
+  let borderExpand = select(
+    vec2f(0.0),
+    vec2f(
+      BORDER_PX / (scaledSize.x * viewport.zoom),
+      BORDER_PX / (scaledSize.y * viewport.zoom),
+    ),
+    selected,
+  );
+  let expandedLocalPos = localPos * (vec2f(1.0) + 2.0 * borderExpand) - borderExpand;
+  let expandedUV = uv * (vec2f(1.0) + 2.0 * borderExpand) - borderExpand;
+
+  var worldPos = expandedLocalPos * scaledSize;
+  let center = scaledSize * 0.5;
+  let centered = worldPos - center;
+  let cosR = cos(entity.rotation);
+  let sinR = sin(entity.rotation);
+  worldPos = vec2f(
+    centered.x * cosR - centered.y * sinR,
+    centered.x * sinR + centered.y * cosR,
+  ) + center + entity.position + scaleOffset;
+
+  let m0 = viewport.matrix_row0;
+  let m1 = viewport.matrix_row1;
+  let m2 = viewport.matrix_row2;
+  let clipPos = vec2f(
+    m0.x * worldPos.x + m1.x * worldPos.y + m2.x,
+    m0.y * worldPos.x + m1.y * worldPos.y + m2.y,
+  );
+
+  var output: VertexOutput;
+  output.position = vec4f(clipPos, 0.0, 1.0);
+  output.uv = expandedUV;
+  output.isSelected = entity.isSelected;
+  output.debugMode = entity.flags & 1u;
+  return output;
+}
+
+@vertex
+fn vs_interactive(
+  @builtin(vertex_index) vertexIndex: u32,
+  @builtin(instance_index) instanceIndex: u32,
+) -> VertexOutput {
+  var localPositions = array<vec2f, 6>(
+    vec2f(0.0, 0.0),
+    vec2f(1.0, 0.0),
+    vec2f(0.0, 1.0),
+    vec2f(1.0, 0.0),
+    vec2f(1.0, 1.0),
+    vec2f(0.0, 1.0)
+  );
+  var uvs = array<vec2f, 6>(
+    vec2f(0.0, 0.0),
+    vec2f(1.0, 0.0),
+    vec2f(0.0, 1.0),
+    vec2f(1.0, 0.0),
+    vec2f(1.0, 1.0),
+    vec2f(0.0, 1.0)
+  );
+
+  let entity = entities[instanceIndex];
+  let localPos = localPositions[vertexIndex];
+  let uv = uvs[vertexIndex];
   let cosR = cos(entity.rotation);
   let sinR = sin(entity.rotation);
   let baseSelected = entity.isSelected == 1u;

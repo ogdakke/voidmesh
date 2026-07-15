@@ -142,6 +142,42 @@ describe("CompositionPass instancing", () => {
     releaseImageEntity(second);
   });
 
+  test("uses the lightweight vertex pipeline unless GPU interaction state is active", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const entity = createTestEntity({ id: "pipeline-selection" });
+    const texture = createTexture();
+    const key = createFullSceneKey(texture, 1);
+    pass.prepareFullSceneBatch({ ...key, entities: [entity], selectedEntityIds: new Set() });
+    const lightweightPipeline = device.createRenderPipeline.mock.results.find(
+      (result) => (result.value as { label?: string }).label === "Instanced composition pipeline",
+    )?.value;
+    const interactivePipeline = device.createRenderPipeline.mock.results.find(
+      (result) =>
+        (result.value as { label?: string }).label === "Interactive instanced composition pipeline",
+    )?.value;
+
+    const panPass = createRenderPass();
+    expect(pass.drawFullSceneBatch(panPass, key)).toBe(true);
+    expect(panPass.setPipeline).toHaveBeenCalledWith(lightweightPipeline);
+
+    const dragSelectionPass = createRenderPass();
+    expect(
+      pass.drawFullSceneBatch(
+        dragSelectionPass,
+        key,
+        undefined,
+        1,
+        { x: 0, y: 0, width: 100, height: 100 },
+        "replace",
+      ),
+    ).toBe(true);
+    expect(dragSelectionPass.setPipeline).toHaveBeenCalledWith(interactivePipeline);
+
+    pass.destroy();
+    releaseImageEntity(entity);
+  });
+
   test("persists mixed-texture instance ranges across viewport-only frames", () => {
     const { device } = createDevice();
     const pass = createPass(device);
@@ -510,6 +546,7 @@ function createDevice(): {
     queue: { writeBuffer: ReturnType<typeof vi.fn<GPUQueue["writeBuffer"]>> };
     createBuffer: ReturnType<typeof vi.fn<GPUDevice["createBuffer"]>>;
     createBindGroup: ReturnType<typeof vi.fn<GPUDevice["createBindGroup"]>>;
+    createRenderPipeline: ReturnType<typeof vi.fn<GPUDevice["createRenderPipeline"]>>;
   };
   instanceBuffer: GPUBuffer & { destroy: ReturnType<typeof vi.fn<GPUBuffer["destroy"]>> };
 } {
@@ -525,13 +562,16 @@ function createDevice(): {
     ),
     createSampler: vi.fn<GPUDevice["createSampler"]>(() => ({}) as GPUSampler),
     createPipelineLayout: vi.fn<GPUDevice["createPipelineLayout"]>(() => ({}) as GPUPipelineLayout),
-    createRenderPipeline: vi.fn<GPUDevice["createRenderPipeline"]>(() => ({}) as GPURenderPipeline),
+    createRenderPipeline: vi.fn<GPUDevice["createRenderPipeline"]>(
+      (descriptor) => ({ label: descriptor.label }) as GPURenderPipeline,
+    ),
     createBuffer: vi.fn<GPUDevice["createBuffer"]>(() => instanceBuffer),
     createBindGroup: vi.fn<GPUDevice["createBindGroup"]>(() => ({}) as GPUBindGroup),
   } as unknown as GPUDevice & {
     queue: { writeBuffer: ReturnType<typeof vi.fn<GPUQueue["writeBuffer"]>> };
     createBuffer: ReturnType<typeof vi.fn<GPUDevice["createBuffer"]>>;
     createBindGroup: ReturnType<typeof vi.fn<GPUDevice["createBindGroup"]>>;
+    createRenderPipeline: ReturnType<typeof vi.fn<GPUDevice["createRenderPipeline"]>>;
   };
   return { device, instanceBuffer };
 }

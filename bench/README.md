@@ -44,11 +44,16 @@ Run one scenario:
 ```bash
 bun run bench:render:record -- --scenario image-flowing-glass-4k-continuous
 bun run bench:render:record -- --scenario multi-72-unique-cached-composition
+bun run bench:render:record -- --scenario pan-61-unique-mixed-paused-videos --suite many-entity
 ```
 
 The 72-image scenario guards realistic high-entropy composition: every static
 image owns a distinct resident texture, so it exercises many z-ordered texture
 runs without relying on duplicated-source synthetic scale.
+
+The paused mixed-media pan scenario guards the everyday external-video path:
+57 unique large images and four paused videos pan continuously at fixed zoom,
+with RAF cadence recorded so compositor regressions are visible.
 
 ## Many-entity suite
 
