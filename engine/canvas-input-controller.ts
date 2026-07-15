@@ -224,7 +224,6 @@ export class CanvasInputController {
   }
 
   stop(): void {
-    this.#viewport.finishWheelPan();
     this.#cancelPendingScrollMomentum();
     this.#cancelLongPressTimer();
     this.#cancelDoubleTapTimer();
@@ -312,7 +311,6 @@ export class CanvasInputController {
   handlePointerDown(screenPoint: Point, shiftKey: boolean = false): void {
     // Cancel any viewport animation when user starts interacting
     this.#viewport.cancelInteraction();
-    this.#viewport.finishWheelPan();
 
     if (!this.#container) return;
 
@@ -664,7 +662,6 @@ export class CanvasInputController {
   handleTouchStart(touches: Point[], eventTime?: number): void {
     // Cancel any viewport animation when user starts interacting
     this.#viewport.cancelTouchInteraction();
-    this.#viewport.finishWheelPan();
     // Cancel any momentum scrolling
     this.#cancelPendingScrollMomentum();
 
