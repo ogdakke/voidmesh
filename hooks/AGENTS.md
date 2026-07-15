@@ -22,6 +22,7 @@ Custom React hooks bridging engine/renderer state to components.
 - Hooks needing mutations use `useCanvasCommands()`. Hooks needing renderer/color-space services use `useCanvasRendererService()`.
 - Hooks translating canvas DOM behavior use `useCanvasInteraction()`; do not import `gameLoop`, viewport animation, or `canvasStore` for new behavior.
 - Hooks needing high-frequency engine state (viewport, playback, drag, action layer) use the focused external-store adapters exported by `context/use-canvas.ts`; hooks do not import `canvasStore` directly.
+- The native canvas wheel listener owns pan/zoom navigation: prevent default browser scrolling and stop propagation before React's delegated root so every trackpad delta does not allocate a synthetic event or schedule unrelated UI work.
 - `useParamValue()` is the standard way for knob components to access entity parameters. Handles multi-select uniformity.
 
 ## Anti-Patterns
