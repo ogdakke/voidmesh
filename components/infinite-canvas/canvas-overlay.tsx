@@ -5,7 +5,7 @@ import {
   useCanvasInteraction,
   useMultiSelectMode,
   useSelectedEntityIds,
-  useViewport,
+  useViewportZoom,
 } from "#context/use-canvas.ts";
 import { useLayout } from "#context/use-layout.ts";
 import { useIsMobile } from "#hooks/use-is-mobile.ts";
@@ -100,7 +100,7 @@ function DesktopCanvasActions({
   resetZoom,
 }: Pick<CanvasOverlayProps, "centerSelection" | "resetZoom">) {
   const selectedEntityIds = useSelectedEntityIds();
-  const viewport = useViewport();
+  const zoom = useViewportZoom();
   return (
     <div className="infinite-canvas__controls">
       <Button
@@ -122,7 +122,7 @@ function DesktopCanvasActions({
         size="sm"
         variant="secondary"
       >
-        {Math.round(viewport.zoom * 100)}%
+        {Math.round(zoom * 100)}%
       </Button>
     </div>
   );

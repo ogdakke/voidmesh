@@ -25,6 +25,7 @@ export class GameLoop {
       {
         processInput: () => this.#input.processInput(),
         getDragSelectBounds: () => this.#input.getDragSelectBounds(),
+        getDragSelectRenderMode: () => this.#input.getDragSelectRenderMode(),
         getMultiSelectBounds: () => this.#input.getMultiSelectBounds(),
         getActionLayerRenderState: () => this.#deps.actionLayer.getRenderState(),
         getDragVisualRenderState: () => this.#deps.dragVisual.getRenderState(),

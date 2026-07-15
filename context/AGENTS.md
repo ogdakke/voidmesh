@@ -27,10 +27,11 @@ Note: `KeybindProvider` wraps outside `App()` at the root render level.
 ## Patterns
 
 - `canvas-context.tsx` uses nuqs for URL-synced state — entity params round-trip through URL query parameters. Color/background/palette URL params removed; colors always sourced from config defaults (only `presetId` remains for palette URL sync).
+- Selection-to-URL sync checks cardinality first and materializes an entity only for single selection; multi-select and Command-A must not build a selected-entity array merely to clear URL state.
 - Resource ownership for undo: `resourceOwners` Map tracks which undo command may cleanup media resources on stack eviction.
 - Static image cleanup releases the entity's shared media-asset reference; the final release closes the decoded bitmap. Never close an image entity's bitmap directly.
-- Large duplicate operations precompute names with a `Set` and insert the completed batch through `CanvasStore.addEntities()`; avoid per-clone full-map name scans and notifications.
-- Duplicate shader params shallow-copy the mutable top level (`time`/`timeAutoPlay`) while sharing immutable nested state. Media clones use all-settled cleanup so one rejection cannot strand sibling retains or decoded resources.
+- Large duplicate operations synchronously retain image assets, allocate names in one pass, and insert the completed batch through `CanvasStore.addEntities()`; avoid Promise fan-out, per-clone full-map name scans, and notifications.
+- Duplicate and undo each use one bulk store mutation and one undo `Command`; undo removes renderer ownership in a loop but publishes canvas state once. Duplicate shader params shallow-copy the mutable top level (`time`/`timeAutoPlay`) while sharing immutable nested state. Non-image media clones use all-settled cleanup so one rejection cannot strand sibling resources.
 - Legacy workspace palette recovery groups missing palettes by shared `ImageBitmap`, extracts once per bitmap, and applies one `CanvasStore.updateEntities()` batch per result. Never launch extraction per duplicate entity.
 - Async palette extraction validates stable `mediaSource` identity, not whole entity identity or ID alone; ordinary immutable updates replace entity objects, while imported colliding IDs must reject stale results.
 - Workspace import clears active/committed undo ownership while old IDs are live, adopts one decoded batch through `restoreWorkspace()`, then releases old media and merges palettes. If decoding commits nothing, preserve live counters and workspace state.
@@ -40,6 +41,7 @@ Note: `KeybindProvider` wraps outside `App()` at the root render level.
 - `fancyDelete` preference defaults to `true` unless `prefers-reduced-motion: reduce` is active.
 - Export queue clones video elements to isolate export playback from preview playback.
 - `CanvasProvider` is the composition root for concrete engine and renderer implementations. It constructs application services once, injects the performance-graph renderer port, and exposes narrow context interfaces; consumers never receive the store or game loop objects.
+- Keep renderer registration callbacks and the `CanvasRendererService` value stable across selection-to-URL rerenders. Registration is a renderer-runtime effect dependency; changing its identity stops/restarts the game loop and discards large-scene active-entity classification caches.
 
 ## Anti-Patterns
 

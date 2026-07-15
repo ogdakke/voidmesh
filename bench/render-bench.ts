@@ -36,12 +36,10 @@ import {
 import {
   ZOOM_STRESS_SCENARIO,
   estimateZoomStressDecodedBytes,
-  getZoomStressDisplaySize,
   getZoomStressFrame,
   getZoomStressFrameCount,
   getZoomStressMediaKind,
   getZoomStressPosition,
-  getZoomStressSourceSize,
   type ZoomStressPhase,
   type ZoomStressScenarioConfig,
 } from "./zoom-stress-scenario.ts";
@@ -68,6 +66,7 @@ interface BenchScenario {
   samples: number;
   manyEntity?: ManyEntityScenarioConfig;
   zoomStress?: ZoomStressScenarioConfig;
+  pausedVideoPan?: boolean;
   synchronizeEachFrame?: boolean;
   paceWithAnimationFrame?: boolean;
   recordPerFrame?: boolean;
@@ -85,6 +84,9 @@ interface BenchActivityMetrics {
   processedTextureAllocations: number;
   sourceUploads: number;
   evictions: number;
+  fullSceneBatchRebuilds: number;
+  fullSceneBatchUploadBytes: number;
+  normalInstanceUploadBytes: number;
 }
 
 interface BenchFrameSample {
@@ -96,6 +98,7 @@ interface BenchFrameSample {
   sourceUpdateMs: number;
   cpuCallMs: number;
   cpuRenderMs: number;
+  renderPhases: ReturnType<InfiniteCanvasRenderer["getFrameStats"]>["phases"] | null;
   queueWaitMs: number | null;
   endToEndMs: number | null;
   renderedEntities: number;
@@ -215,6 +218,11 @@ interface BenchMetadata {
 
 interface BenchEntitySet {
   entities: ShaderCanvasEntity[];
+  selectedEntityIds?: ReadonlySet<string>;
+  debugMode?: boolean;
+  dragSelectedEntities?: boolean;
+  dragSelectEntities?: boolean;
+  tweakSingleEntityParams?: boolean;
   beforeFrame?: (frameIndex: number) => void;
   getViewportOffset?: (frameIndex: number) => { x: number; y: number };
   getViewport?: (frameIndex: number, sampleFrameIndex: number) => Viewport;
@@ -425,6 +433,25 @@ const scenarios: BenchScenario[] = [
     warmupFrames: 20,
     samples: 5,
   },
+  {
+    id: "multi-72-unique-cached-composition",
+    label: "72 unique cached images, composition",
+    description:
+      "Realistic heterogeneous canvas scale with one distinct resident texture per static image.",
+    kind: "multi",
+    entityCount: 72,
+    sourceSize: { width: 512, height: 512 },
+    shaderType: ShaderType.dithering,
+    params: {
+      showOriginal: true,
+      postProcess: { enabled: false },
+      adjustments: { brightness: 0.5, contrast: 0.5, saturation: 0.5, blur: 0 },
+    },
+    dirtyMode: "none",
+    frames: 180,
+    warmupFrames: 20,
+    samples: 5,
+  },
 ];
 
 const imageManyEntityScenarios: BenchScenario[] = MANY_ENTITY_SCENARIOS.map((scenario) => ({
@@ -448,6 +475,8 @@ const imageManyEntityScenarios: BenchScenario[] = MANY_ENTITY_SCENARIOS.map((sce
   frames: scenario.frames,
   warmupFrames: scenario.warmupFrames,
   samples: scenario.samples,
+  paceWithAnimationFrame: scenario.paceWithAnimationFrame,
+  recordPerFrame: scenario.recordPerFrame,
   manyEntity: scenario,
 }));
 
@@ -484,10 +513,30 @@ const zoomStressProcessedScenario: BenchScenario = {
   params: {},
 };
 
+const pausedMixedMediaPanScenario: BenchScenario = {
+  ...zoomStressOriginalScenario,
+  id: "pan-61-unique-mixed-paused-videos",
+  label: "61 unique mixed media with paused videos, sustained pan",
+  description:
+    "Pans continuously across 57 unique images and four paused external videos at a fixed zoom.",
+  dirtyMode: "none",
+  frames: 240,
+  warmupFrames: 30,
+  samples: 5,
+  pausedVideoPan: true,
+  resetTexturesBeforeSample: false,
+  zoomStress: {
+    ...ZOOM_STRESS_SCENARIO,
+    imageCount: 57,
+    videoCount: 4,
+  },
+};
+
 const manyEntityScenarios = [
   ...imageManyEntityScenarios,
   zoomStressOriginalScenario,
   zoomStressProcessedScenario,
+  pausedMixedMediaPanScenario,
 ];
 
 const allScenarios = [...scenarios, ...manyEntityScenarios];
@@ -887,6 +936,7 @@ async function createZoomStressEntitySet(
   config: ZoomStressScenarioConfig,
   params: ResolvedBenchShaderParams,
 ): Promise<BenchEntitySet> {
+  const videosPlaying = !scenario.pausedVideoPan;
   const imageAssets = await createSyntheticImageAssets({
     count: config.imageCount,
     blobType: "image/jpeg",
@@ -905,10 +955,15 @@ async function createZoomStressEntitySet(
     let imageIndex = 0;
     let videoIndex = 0;
     for (let index = 0; index < config.entityCount; index += 1) {
-      const sourceSize = getZoomStressSourceSize(config, index);
-      const displaySize = getZoomStressDisplaySize(config, index);
+      const mediaKind = scenario.pausedVideoPan
+        ? index % 15 === 0 && videoIndex < config.videoCount
+          ? "video"
+          : "image"
+        : getZoomStressMediaKind(config, index);
+      const sourceSize = mediaKind === "video" ? config.videoSourceSize : config.imageSourceSize;
+      const displaySize = mediaKind === "video" ? config.videoDisplaySize : config.imageDisplaySize;
       const position = getZoomStressPosition(config, index);
-      if (getZoomStressMediaKind(config, index) === "video") {
+      if (mediaKind === "video") {
         const synthetic = syntheticVideos[videoIndex]!;
         const bitmap = videoBitmaps[videoIndex]!;
         const entity = createEntity({
@@ -929,7 +984,7 @@ async function createZoomStressEntitySet(
             alphaMode: "none",
           },
           playback: {
-            isPlaying: true,
+            isPlaying: videosPlaying,
             currentTime: 0,
             loop: true,
             playbackRate: 1,
@@ -969,25 +1024,43 @@ async function createZoomStressEntitySet(
     }
     releaseOwnedImageAssets(ownedImageAssets);
 
+    if (!videosPlaying) {
+      for (const synthetic of syntheticVideos) synthetic.video.pause();
+    }
+
     let lastSyntheticVideoFrameIndex = -1;
     return {
       entities,
-      beforeFrame: () => {
-        const videoFrameIndex = Math.floor((performance.now() * 30) / 1000);
-        if (videoFrameIndex === lastSyntheticVideoFrameIndex) return;
-        lastSyntheticVideoFrameIndex = videoFrameIndex;
-        for (let index = 0; index < syntheticVideos.length; index += 1) {
-          syntheticVideos[index]!.drawFrame(videoFrameIndex + index * 3);
-        }
-        for (const entity of entities) {
-          if (entity.mediaSource.type === MediaType.video) entity.textureDirty = true;
-        }
-      },
-      getViewport: (_frameIndex, sampleFrameIndex) =>
-        getZoomStressFrame(config, sampleFrameIndex, {
-          width: CANVAS_WIDTH,
-          height: CANVAS_HEIGHT,
-        }).viewport,
+      beforeFrame: videosPlaying
+        ? () => {
+            const videoFrameIndex = Math.floor((performance.now() * 30) / 1000);
+            if (videoFrameIndex === lastSyntheticVideoFrameIndex) return;
+            lastSyntheticVideoFrameIndex = videoFrameIndex;
+            for (let index = 0; index < syntheticVideos.length; index += 1) {
+              syntheticVideos[index]!.drawFrame(videoFrameIndex + index * 3);
+            }
+            for (const entity of entities) {
+              if (entity.mediaSource.type === MediaType.video) entity.textureDirty = true;
+            }
+          }
+        : undefined,
+      getViewport: scenario.pausedVideoPan
+        ? (_frameIndex, sampleFrameIndex) => {
+            const zoom = 0.32;
+            const progress = (sampleFrameIndex % scenario.frames) / scenario.frames;
+            return {
+              offset: {
+                x: 1_650 + Math.sin(progress * Math.PI * 4) * 900,
+                y: 1_500 + Math.cos(progress * Math.PI * 3) * 600,
+              },
+              zoom,
+            };
+          }
+        : (_frameIndex, sampleFrameIndex) =>
+            getZoomStressFrame(config, sampleFrameIndex, {
+              width: CANVAS_WIDTH,
+              height: CANVAS_HEIGHT,
+            }).viewport,
       getFramePhase: (_frameIndex, sampleFrameIndex) =>
         getZoomStressFrame(config, sampleFrameIndex, {
           width: CANVAS_WIDTH,
@@ -1043,45 +1116,72 @@ async function createManyEntitySet(
   try {
     for (let index = 0; index < config.entityCount; index += 1) {
       const asset = assets[index % assets.length]!;
-      entities.push(
-        createEntity({
-          id: `${scenario.id}-${index}`,
-          name: `${scenario.label} ${index + 1}`,
-          asset,
-          size: scenario.sourceSize,
+      const mixedSegment = config.mixedStaticVariants
+        ? Math.min(3, Math.floor((index * 4) / config.entityCount))
+        : 0;
+      const entityParams =
+        config.mixedStaticVariants && mixedSegment % 2 === 1
+          ? { ...params, showOriginal: true }
+          : params;
+      const entity = createEntity({
+        id: `${scenario.id}-${index}`,
+        name: `${scenario.label} ${index + 1}`,
+        asset,
+        size: scenario.sourceSize,
+        displaySize: config.displaySize,
+        shaderType: mixedSegment >= 2 ? ShaderType.ascii : scenario.shaderType,
+        params: entityParams,
+        zIndex: index,
+        position: getManyEntityPosition({
+          index,
+          entityCount: config.entityCount,
           displaySize: config.displaySize,
-          shaderType: scenario.shaderType,
-          params,
-          zIndex: index,
-          position: getManyEntityPosition({
-            index,
-            entityCount: config.entityCount,
-            displaySize: config.displaySize,
-            layout: config.layout,
-            canvasSize: { width: CANVAS_WIDTH, height: CANVAS_HEIGHT },
-          }),
+          layout: config.layout,
+          canvasSize: { width: CANVAS_WIDTH, height: CANVAS_HEIGHT },
         }),
-      );
+      });
+      entities.push(entity);
     }
     releaseOwnedImageAssets(ownedAssets);
 
     return {
       entities,
+      selectedEntityIds: createManyEntitySelection(config, entities),
+      debugMode: config.debugMode,
+      dragSelectedEntities: config.dragSelectedEntities,
+      dragSelectEntities: config.dragSelectEntities,
+      tweakSingleEntityParams: config.tweakSingleEntityParams,
       decodedAssetEstimateBytes: estimateDecodedAssetBytes(config),
       getViewportOffset: (frameIndex) =>
         getManyEntityViewportOffset(config, frameIndex, {
           width: CANVAS_WIDTH,
           height: CANVAS_HEIGHT,
         }),
-      getViewport: config.zoom
-        ? (frameIndex) => ({
-            offset: getManyEntityViewportOffset(config, frameIndex, {
-              width: CANVAS_WIDTH,
-              height: CANVAS_HEIGHT,
-            }),
-            zoom: config.zoom!,
-          })
-        : undefined,
+      getViewport: config.zoomRange
+        ? (frameIndex) => {
+            if (frameIndex < config.warmupFrames) {
+              return { offset: { x: 0, y: 0 }, zoom: config.zoomRange!.min };
+            }
+            const cycleLength = Math.max(2, config.frames - 1);
+            const gestureFrame = (frameIndex - config.warmupFrames) % config.frames;
+            const cycleProgress = gestureFrame / cycleLength;
+            const roundTripProgress = 1 - Math.abs(cycleProgress * 2 - 1);
+            return {
+              offset: { x: 0, y: 0 },
+              zoom:
+                config.zoomRange!.min +
+                (config.zoomRange!.max - config.zoomRange!.min) * roundTripProgress,
+            };
+          }
+        : config.zoom
+          ? (frameIndex) => ({
+              offset: getManyEntityViewportOffset(config, frameIndex, {
+                width: CANVAS_WIDTH,
+                height: CANVAS_HEIGHT,
+              }),
+              zoom: config.zoom!,
+            })
+          : undefined,
       cleanup: () => disposeBenchEntities(entities),
     };
   } catch (error) {
@@ -1091,6 +1191,23 @@ async function createManyEntitySet(
     );
     throw error;
   }
+}
+
+function createManyEntitySelection(
+  config: ManyEntityScenarioConfig,
+  entities: readonly ShaderCanvasEntity[],
+): ReadonlySet<string> | undefined {
+  if (config.tweakSingleEntityParams) {
+    const target = entities[Math.floor(entities.length / 2)];
+    return target ? new Set([target.id]) : undefined;
+  }
+  const selectedCount =
+    config.selectedEntityCount ??
+    (config.selectedEntityFraction === undefined
+      ? undefined
+      : Math.floor(entities.length * config.selectedEntityFraction));
+  if (selectedCount === undefined) return undefined;
+  return new Set(entities.slice(0, selectedCount).map((entity) => entity.id));
 }
 
 async function createSyntheticImageAssets(options: {
@@ -1251,6 +1368,10 @@ function createRenderState(
   entities: ShaderCanvasEntity[],
   dirty: boolean,
   viewport: Viewport = { offset: { x: 0, y: 0 }, zoom: 1 },
+  selectedEntityIds: ReadonlySet<string> = new Set(),
+  debugMode = false,
+  dragSelectedEntities = false,
+  dragSelectEntities = false,
 ): RenderState {
   const entitySpatialIndex = new EntitySpatialIndex();
   for (const entity of entities) entitySpatialIndex.upsert(entity);
@@ -1260,12 +1381,15 @@ function createRenderState(
     entitySpatialIndex,
     entityVersion: 0,
     geometryVersion: 0,
-    selectedEntityIds: new Set(),
-    debugMode: false,
+    selectionVersion: selectedEntityIds.size > 0 ? 1 : 0,
+    dirtyEntityIds: new Set(),
+    selectedEntityIds,
+    debugMode,
     debugView: "none",
     dirty,
     canvasCallouts: [],
-    dragSelectBounds: null,
+    dragSelectBounds: dragSelectEntities ? { x: 0, y: 0, width: 0, height: 0 } : null,
+    dragSelectMode: dragSelectEntities ? "replace" : null,
     multiSelectBounds: null,
     actionLayer: {
       active: false,
@@ -1274,10 +1398,12 @@ function createRenderState(
       blurIntensity: 0,
     },
     dragVisual: {
-      active: false,
-      isDragPhase: false,
-      entityIds: new Set(),
+      active: dragSelectedEntities,
+      isDragPhase: dragSelectedEntities,
+      entityIds: dragSelectedEntities ? selectedEntityIds : new Set(),
       scale: 1,
+      offset: { x: 0, y: 0 },
+      appliesToSelection: dragSelectedEntities,
     },
     disintegration: { overlays: [] },
   };
@@ -1295,6 +1421,11 @@ async function runFrames(params: {
   synchronizeEachFrame?: boolean;
   paceWithAnimationFrame?: boolean;
   recordPerFrame?: boolean;
+  selectedEntityIds?: ReadonlySet<string>;
+  debugMode?: boolean;
+  dragSelectedEntities?: boolean;
+  dragSelectEntities?: boolean;
+  tweakSingleEntityParams?: boolean;
 }): Promise<{
   totalMs: number;
   cpuEncodeMs: number;
@@ -1326,7 +1457,19 @@ async function runFrames(params: {
   const sourceUpdateSamples: number[] = [];
   const cpuRenderSamples: number[] = [];
   const endToEndSamples: number[] = [];
-  const renderState = createRenderState(params.entities, true);
+  const renderState = createRenderState(
+    params.entities,
+    true,
+    { offset: { x: 0, y: 0 }, zoom: 1 },
+    params.selectedEntityIds,
+    params.debugMode,
+    params.dragSelectedEntities,
+    params.dragSelectEntities,
+  );
+  const parameterTargetIndex = params.tweakSingleEntityParams
+    ? Math.floor(params.entities.length / 2)
+    : -1;
+  const dirtyEntityIds = new Set<string>();
 
   for (let index = 0; index < params.frameCount; index += 1) {
     const frameIndex = params.startFrameIndex + index;
@@ -1339,6 +1482,17 @@ async function runFrames(params: {
     previousRafTimestamp = rafTimestamp;
     const sourceUpdateStart = performance.now();
     params.beforeFrame?.(frameIndex);
+    if (parameterTargetIndex >= 0) {
+      const previous = params.entities[parameterTargetIndex]!;
+      const shaderParams = { ...previous.shaderParams, size: 1 + (frameIndex % 24) * 0.125 };
+      const next = { ...previous, shaderParams, textureDirty: true };
+      params.entities[parameterTargetIndex] = next;
+      dirtyEntityIds.clear();
+      dirtyEntityIds.add(next.id);
+      renderState.entityVersion++;
+      renderState.selectionVersion++;
+      renderState.dirtyEntityIds = dirtyEntityIds;
+    }
     const sourceUpdateMs = performance.now() - sourceUpdateStart;
     sourceUpdateSamples.push(sourceUpdateMs);
     const viewport =
@@ -1350,6 +1504,14 @@ async function runFrames(params: {
     const frameStart = performance.now();
     const cpuStart = performance.now();
     renderState.viewport = viewport;
+    if (params.dragSelectedEntities) {
+      renderState.dragVisual.offset.x = index * 16;
+      renderState.dragVisual.offset.y = index * -8;
+    }
+    if (params.dragSelectEntities && renderState.dragSelectBounds) {
+      renderState.dragSelectBounds.width = (index + 1) * 180;
+      renderState.dragSelectBounds.height = (index + 1) * 120;
+    }
     params.renderer.render(renderState);
     const cpuEnd = performance.now();
     cpuEncodeMs += cpuEnd - cpuStart;
@@ -1376,6 +1538,7 @@ async function runFrames(params: {
         sourceUpdateMs,
         cpuCallMs: cpuEnd - cpuStart,
         cpuRenderMs: frameStats.renderTime,
+        renderPhases: frameStats.phases ? { ...frameStats.phases } : null,
         queueWaitMs: params.synchronizeEachFrame ? frameEnd - cpuEnd : null,
         endToEndMs,
         renderedEntities: frameRenderedCount,
@@ -1431,6 +1594,15 @@ async function runFrames(params: {
       sourceUploads:
         resources.entityTextures.sourceUploads - resourcesBefore.entityTextures.sourceUploads,
       evictions: resources.entityTextures.evictions - resourcesBefore.entityTextures.evictions,
+      fullSceneBatchRebuilds:
+        resources.composition.fullSceneBatchRebuilds -
+        resourcesBefore.composition.fullSceneBatchRebuilds,
+      fullSceneBatchUploadBytes:
+        resources.composition.fullSceneBatchUploadBytes -
+        resourcesBefore.composition.fullSceneBatchUploadBytes,
+      normalInstanceUploadBytes:
+        resources.composition.normalInstanceUploadBytes -
+        resourcesBefore.composition.normalInstanceUploadBytes,
     },
   };
 }
@@ -1467,6 +1639,10 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
       startFrameIndex: frameIndex,
       synchronizeEachFrame: scenario.synchronizeEachFrame,
       paceWithAnimationFrame: scenario.paceWithAnimationFrame,
+      selectedEntityIds: entitySet.selectedEntityIds,
+      debugMode: entitySet.debugMode,
+      dragSelectedEntities: entitySet.dragSelectedEntities,
+      dragSelectEntities: entitySet.dragSelectEntities,
     });
     frameIndex += scenario.warmupFrames;
 
@@ -1500,6 +1676,11 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
         synchronizeEachFrame: scenario.synchronizeEachFrame,
         paceWithAnimationFrame: scenario.paceWithAnimationFrame,
         recordPerFrame: scenario.recordPerFrame,
+        selectedEntityIds: entitySet.selectedEntityIds,
+        debugMode: entitySet.debugMode,
+        dragSelectedEntities: entitySet.dragSelectedEntities,
+        dragSelectEntities: entitySet.dragSelectEntities,
+        tweakSingleEntityParams: entitySet.tweakSingleEntityParams,
       });
       frameIndex += scenario.frames;
       samples.push(result.totalMs);
@@ -1608,7 +1789,13 @@ function getResourceCounterDelta(
   after: BenchResourceStats,
 ): Pick<
   BenchActivityMetrics,
-  "sourceTextureAllocations" | "processedTextureAllocations" | "sourceUploads" | "evictions"
+  | "sourceTextureAllocations"
+  | "processedTextureAllocations"
+  | "sourceUploads"
+  | "evictions"
+  | "fullSceneBatchRebuilds"
+  | "fullSceneBatchUploadBytes"
+  | "normalInstanceUploadBytes"
 > {
   return {
     sourceTextureAllocations:
@@ -1619,6 +1806,12 @@ function getResourceCounterDelta(
       before.entityTextures.processedTextureAllocations,
     sourceUploads: after.entityTextures.sourceUploads - before.entityTextures.sourceUploads,
     evictions: after.entityTextures.evictions - before.entityTextures.evictions,
+    fullSceneBatchRebuilds:
+      after.composition.fullSceneBatchRebuilds - before.composition.fullSceneBatchRebuilds,
+    fullSceneBatchUploadBytes:
+      after.composition.fullSceneBatchUploadBytes - before.composition.fullSceneBatchUploadBytes,
+    normalInstanceUploadBytes:
+      after.composition.normalInstanceUploadBytes - before.composition.normalInstanceUploadBytes,
   };
 }
 
@@ -1634,6 +1827,9 @@ function medianActivity(samples: readonly BenchActivityMetrics[]): BenchActivity
     processedTextureAllocations: medianField("processedTextureAllocations"),
     sourceUploads: medianField("sourceUploads"),
     evictions: medianField("evictions"),
+    fullSceneBatchRebuilds: medianField("fullSceneBatchRebuilds"),
+    fullSceneBatchUploadBytes: medianField("fullSceneBatchUploadBytes"),
+    normalInstanceUploadBytes: medianField("normalInstanceUploadBytes"),
   };
 }
 

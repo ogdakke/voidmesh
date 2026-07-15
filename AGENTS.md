@@ -58,7 +58,7 @@ bun run test -- __tests__/engine/action-layer-controller.spec.ts
 # Add `-t "test name"` to target a single test, or use `bun run test:watch -- <path>` while iterating.
 ```
 
-The opt-in real Chrome/WebGPU many-entity suite lives in `bench/`. Run it with `bun run bench:render:record -- --suite many-entity`; results include frame timings, rendered counts, decoded estimates, texture residency, allocations, uploads, and evictions. `many-131072-shared-processed-overview-pan` guards the 50k+ visible low-zoom path. The `zoom-61-unique-mixed-round-trip` and processed variant reproduce the detailed-target → full-overview → target mixed image/video gesture with true RAF pacing.
+The opt-in real Chrome/WebGPU many-entity suite lives in `bench/`. Run it with `bun run bench:render:record -- --suite many-entity`; results include phase timings, rendered counts, decoded estimates, texture residency, allocations, uploads, evictions, and persistent-batch rebuild/upload counters. The 262,144-entity overview matrix covers selection density, debug mode, selected-group dragging, GPU drag selection, and mixed ASCII/show-original pan plans; 131,072-entity scenarios guard the 1%–30% mixed zoom round trip and single-entity parameter edits. `bench/large-selection-operations.bench.ts` measures Command-A parameter aggregation and drag-commit translation. The `zoom-61-unique-mixed-round-trip` and processed variant reproduce the detailed-target → full-overview → target mixed image/video gesture with true RAF pacing.
 
 ## Key Patterns
 
@@ -68,7 +68,7 @@ The opt-in real Chrome/WebGPU many-entity suite lives in `bench/`. Run it with `
 4. **No barrel exports**: Only `engine/index.ts` and `types/index.ts` have barrels. Import directly from files elsewhere.
 5. **GPU resources**: Always clean up buffers/textures. Use `TexturePool` for intermediates. Key shareable source/processed textures by immutable asset and effect identity; entity IDs track ownership, not duplicate resources.
 6. **Undo pattern**: Wrap state mutations in `Command.create({ execute, undo, onEvict })`, push to `undo` singleton from `lib/undo.ts`.
-7. **Overview batching**: Large homogeneous static-image scenes keep one versioned composition instance buffer. Pan-only frames update viewport state and issue one draw; entity/geometry changes rebuild, and interactive/heterogeneous scenes use normal preparation.
+7. **Static composition plans**: Any sufficiently visible static-image scene may keep one versioned composition instance buffer. Homogeneous scenes issue one draw; bounded mixed-asset/effect scenes retain exact z-ordered texture runs. Pan and drag-selection frames update uniforms only, while entity/geometry/committed-selection changes rebuild.
 8. **Deep modules**: UI depends on narrow selectors, commands, and application services. Concrete `CanvasStore`, `GameLoop`, `FrameLoop`, animation-controller, and renderer orchestration access stays behind context/application composition boundaries.
 
 ## Anti-Patterns

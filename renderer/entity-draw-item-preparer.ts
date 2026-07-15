@@ -1,16 +1,20 @@
 import { config } from "#config";
-import type { ActionLayerRenderState, DragVisualRenderState } from "#engine";
+import type { ActionLayerRenderState, DragSelectMode, DragVisualRenderState } from "#engine";
 import { getViewportWorldBounds } from "#lib/canvas-math.ts";
 import type { EntitySpatialIndex } from "#lib/entity-spatial-index.ts";
+import { tracePerformancePhase } from "#lib/performance-tracing.ts";
 import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import type {
   CompositionDrawItem,
   CompositionPass,
+  FullSceneBatchPatch,
   FullSceneBatchKey,
   PrepareCompositionItemOptions,
 } from "./composition-pass.ts";
 import type { EntityTexturePipeline } from "./entity-texture-pipeline.ts";
 import { getEntityRenderSize } from "./entity-render-size.ts";
+
+type MixedFullSceneBatchMode = "reuse" | "refresh" | "disabled";
 
 interface EntityDrawItemPreparerOptions {
   texturePipeline: EntityTexturePipeline;
@@ -22,6 +26,8 @@ interface PrepareEntityDrawItemsOptions {
   entitySpatialIndex: EntitySpatialIndex;
   entityVersion: number;
   geometryVersion: number;
+  selectionVersion: number;
+  dirtyEntityIds: ReadonlySet<string>;
   viewport: Viewport;
   width: number;
   height: number;
@@ -30,7 +36,8 @@ interface PrepareEntityDrawItemsOptions {
   selectedEntityIds: ReadonlySet<string>;
   actionLayer: ActionLayerRenderState;
   dragVisual: DragVisualRenderState;
-  dragSelectActive: boolean;
+  dragSelectMode: DragSelectMode | null;
+  mixedFullSceneBatchMode: MixedFullSceneBatchMode;
   hasCanvasCallouts: boolean;
   debugMode: boolean;
 }
@@ -39,7 +46,14 @@ export interface PreparedEntityDrawItems {
   entityDrawItems: CompositionDrawItem[];
   actionLayerDrawItems: CompositionDrawItem[];
   fullSceneBatch: FullSceneBatchKey | null;
+  singleSelectedDrawItem: CompositionDrawItem | null;
   hasAnimatingContent: boolean;
+}
+
+export interface EntityPreparationPhaseStats {
+  batchAdmissionMs: number;
+  spatialQueryMs: number;
+  visibleEntityPreparationMs: number;
 }
 
 export interface FullSceneSnapshotSource {
@@ -55,16 +69,26 @@ export class EntityDrawItemPreparer {
   readonly #resolvedRenderSize = { width: 0, height: 0 };
   readonly #viewportBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
   readonly #visibleEntities: ShaderCanvasEntity[] = [];
+  #admissionVisibleEntities: readonly ShaderCanvasEntity[] = this.#visibleEntities;
   readonly #entityDrawItems: CompositionDrawItem[] = [];
   readonly #actionLayerDrawItems: CompositionDrawItem[] = [];
+  readonly #fullSceneDrawItems: CompositionDrawItem[] = [];
+  readonly #fullSceneVisibleEntityIds = new Set<string>();
+  readonly #fullScenePatches: FullSceneBatchPatch[] = [];
+  readonly #fullSceneEntityIndices = new Map<string, number>();
   readonly #prepared: PreparedEntityDrawItems = {
     entityDrawItems: this.#entityDrawItems,
     actionLayerDrawItems: this.#actionLayerDrawItems,
     fullSceneBatch: null,
+    singleSelectedDrawItem: null,
     hasAnimatingContent: false,
   };
   #fullSceneBatchKey: FullSceneBatchKey | null = null;
+  #mixedFullSceneBatchKey: FullSceneBatchKey | null = null;
+  #activeFullSceneBatchKey: FullSceneBatchKey | null = null;
+  #activeFullSceneSelectedEntityIds: ReadonlySet<string> | null = null;
   #homogeneousEntityVersion = -1;
+  #homogeneousEntityCount = 0;
   #homogeneousEntities: readonly ShaderCanvasEntity[] | null = null;
   #homogeneousRepresentative: ShaderCanvasEntity | null = null;
   #snapshotRepresentative: ShaderCanvasEntity | null = null;
@@ -73,6 +97,16 @@ export class EntityDrawItemPreparer {
   #snapshotRenderHeight = 0;
   #fullSceneAdmissionQueried = false;
   #compositionOptions: PrepareCompositionItemOptions | null = null;
+  #singleSelectionVersion = -1;
+  #singleSelectionEntityVersion = -1;
+  #singleSelectionGeometryVersion = -1;
+  #singleSelectionIds: ReadonlySet<string> | null = null;
+  #singleSelectedIndex = -1;
+  readonly #phaseStats: EntityPreparationPhaseStats = {
+    batchAdmissionMs: 0,
+    spatialQueryMs: 0,
+    visibleEntityPreparationMs: 0,
+  };
 
   constructor(options: EntityDrawItemPreparerOptions) {
     this.#texturePipeline = options.texturePipeline;
@@ -103,10 +137,22 @@ export class EntityDrawItemPreparer {
       this.#snapshotEntityVersion = options.entityVersion;
     }
     this.#prepared.fullSceneBatch = null;
+    this.#prepared.singleSelectedDrawItem = null;
     this.#fullSceneAdmissionQueried = false;
+    this.#admissionVisibleEntities = this.#visibleEntities;
     let hasAnimatingContent = false;
+    this.#phaseStats.batchAdmissionMs = 0;
+    this.#phaseStats.spatialQueryMs = 0;
+    this.#phaseStats.visibleEntityPreparationMs = 0;
 
+    const batchAdmissionStart = performance.now();
     const fullSceneBatch = this.#prepareFullSceneBatch(options);
+    const batchAdmissionEnd = performance.now();
+    this.#phaseStats.batchAdmissionMs = tracePerformancePhase(
+      "render.batch-admission",
+      batchAdmissionStart,
+      batchAdmissionEnd,
+    );
     if (fullSceneBatch) {
       this.#prepared.fullSceneBatch = fullSceneBatch;
       this.#prepared.hasAnimatingContent = false;
@@ -130,13 +176,28 @@ export class EntityDrawItemPreparer {
       this.#viewportBounds,
     );
 
-    const visibleEntities = this.#fullSceneAdmissionQueried
-      ? this.#visibleEntities
-      : entitySpatialIndex.queryBounds(viewportBounds, this.#visibleEntities, entities);
+    let visibleEntities: readonly ShaderCanvasEntity[];
+    if (this.#fullSceneAdmissionQueried) {
+      visibleEntities = this.#admissionVisibleEntities;
+    } else {
+      const spatialQueryStart = performance.now();
+      visibleEntities = entitySpatialIndex.queryBounds(
+        viewportBounds,
+        this.#visibleEntities,
+        entities,
+      );
+      const spatialQueryEnd = performance.now();
+      this.#phaseStats.spatialQueryMs = tracePerformancePhase(
+        "render.spatial-query",
+        spatialQueryStart,
+        spatialQueryEnd,
+      );
+    }
     const allEntitiesSelected = entities.length > 0 && selectedEntityIds.size === entities.length;
     let previousSizedEntity: ShaderCanvasEntity | null = null;
     let previousDesiredWidth = 0;
     let previousDesiredHeight = 0;
+    const visiblePreparationStart = performance.now();
     for (const entity of visibleEntities) {
       // Check if texture needs regeneration. Animated media is marked dirty by the
       // game loop only when the decoded frame changes.
@@ -190,10 +251,14 @@ export class EntityDrawItemPreparer {
 
       // Action layer entities are drawn AFTER blur (not in main pass) to avoid halo
       const isActionLayerEntity = actionLayerActive && actionLayer.entityIds.has(entity.id);
-      const positionOffsetX = isActionLayerEntity ? actionLayerOffsetX : 0;
-      const positionOffsetY = isActionLayerEntity ? actionLayerOffsetY : 0;
-      const visualScale =
-        dragVisual.active && dragVisual.entityIds.has(entity.id) ? dragVisual.scale : 1;
+      const isDragVisualEntity = dragVisual.active && dragVisual.entityIds.has(entity.id);
+      const dragOffsetX =
+        isDragVisualEntity && dragVisual.appliesToSelection ? dragVisual.offset.x : 0;
+      const dragOffsetY =
+        isDragVisualEntity && dragVisual.appliesToSelection ? dragVisual.offset.y : 0;
+      const positionOffsetX = (isActionLayerEntity ? actionLayerOffsetX : 0) + dragOffsetX;
+      const positionOffsetY = (isActionLayerEntity ? actionLayerOffsetY : 0) + dragOffsetY;
+      const visualScale = isDragVisualEntity ? dragVisual.scale : 1;
       let compositionOptions = this.#compositionOptions;
       if (!compositionOptions) {
         compositionOptions = {
@@ -216,6 +281,9 @@ export class EntityDrawItemPreparer {
         compositionOptions.visualScale = visualScale;
       }
       const drawItem = this.#compositionPass.prepareDrawItem(compositionOptions);
+      if (selectedEntityIds.size === 1 && isSelected) {
+        this.#prepared.singleSelectedDrawItem = drawItem;
+      }
 
       if (isActionLayerEntity) {
         actionLayerDrawItems.push(drawItem);
@@ -223,9 +291,19 @@ export class EntityDrawItemPreparer {
         entityDrawItems.push(drawItem);
       }
     }
+    const visiblePreparationEnd = performance.now();
+    this.#phaseStats.visibleEntityPreparationMs = tracePerformancePhase(
+      "render.visible-entity-preparation",
+      visiblePreparationStart,
+      visiblePreparationEnd,
+    );
 
     this.#prepared.hasAnimatingContent = hasAnimatingContent;
     return this.#prepared;
+  }
+
+  getPhaseStats(): Readonly<EntityPreparationPhaseStats> {
+    return this.#phaseStats;
   }
 
   getFullSceneSnapshotSource(entity: ShaderCanvasEntity): FullSceneSnapshotSource | null {
@@ -250,6 +328,7 @@ export class EntityDrawItemPreparer {
       entitySpatialIndex,
       entityVersion,
       geometryVersion,
+      selectionVersion,
       viewport,
       width,
       height,
@@ -258,25 +337,35 @@ export class EntityDrawItemPreparer {
       selectedEntityIds,
       actionLayer,
       dragVisual,
-      dragSelectActive,
       hasCanvasCallouts,
       debugMode,
     } = options;
     if (
-      entities.length < config.rendering.fullSceneBatchMinEntityCount ||
-      selectedEntityIds.size > 0 ||
       actionLayer.active ||
       actionLayer.blurIntensity > 0.01 ||
-      dragVisual.active ||
-      dragSelectActive ||
-      hasCanvasCallouts ||
-      debugMode
+      (dragVisual.active && !dragVisual.appliesToSelection) ||
+      hasCanvasCallouts
     ) {
       return null;
     }
 
-    const representative = this.#getHomogeneousRepresentative(entities, entityVersion);
-    if (!representative || this.#texturePipeline.needsContinuousRenderForEntity(representative)) {
+    const incrementallyPatchedBatch = this.#tryPatchFullSceneBatch(options);
+    if (incrementallyPatchedBatch) return incrementallyPatchedBatch;
+
+    const representative = this.#getHomogeneousRepresentative(
+      entities,
+      entityVersion,
+      options.dirtyEntityIds,
+    );
+    if (!representative) {
+      if (options.mixedFullSceneBatchMode === "disabled") return null;
+      return this.#prepareMixedFullSceneBatch(
+        options,
+        options.mixedFullSceneBatchMode === "refresh",
+      );
+    }
+    if (representative.mediaSource.type !== MediaType.image) return null;
+    if (this.#texturePipeline.needsContinuousRenderForEntity(representative)) {
       return null;
     }
 
@@ -314,19 +403,34 @@ export class EntityDrawItemPreparer {
     const key = this.#fullSceneBatchKey ?? {
       entityVersion,
       geometryVersion,
+      selectionVersion,
+      debugMode,
+      singleSelectedIndex: -1,
       renderWidth,
       renderHeight,
       texture: compositionSource.texture,
+      textureCacheRevision: this.#texturePipeline.textureCacheRevision,
       instanceCount: entities.length,
     };
     this.#fullSceneBatchKey = key;
     key.entityVersion = entityVersion;
     key.geometryVersion = geometryVersion;
+    key.selectionVersion = selectionVersion;
+    key.debugMode = debugMode;
+    key.singleSelectedIndex = this.#getSingleSelectedIndex(
+      entities,
+      selectedEntityIds,
+      selectionVersion,
+      entityVersion,
+      geometryVersion,
+    );
     key.renderWidth = renderWidth;
     key.renderHeight = renderHeight;
     key.texture = compositionSource.texture;
+    key.textureCacheRevision = this.#texturePipeline.textureCacheRevision;
     key.instanceCount = entities.length;
-    if (this.#compositionPass.hasFullSceneBatch(key)) {
+    if (this.#hasResidentFullSceneBatch(key)) {
+      this.#activeFullSceneBatchKey = key;
       this.#rememberSnapshotSource(representative, entityVersion, renderWidth, renderHeight);
       return key;
     }
@@ -338,10 +442,18 @@ export class EntityDrawItemPreparer {
       config.canvas.cullingBufferFraction,
       this.#viewportBounds,
     );
+    const spatialQueryStart = performance.now();
     const visibleEntities = entitySpatialIndex.queryBounds(
       viewportBounds,
       this.#visibleEntities,
       entities,
+    );
+    this.#admissionVisibleEntities = visibleEntities;
+    const spatialQueryEnd = performance.now();
+    this.#phaseStats.spatialQueryMs = tracePerformancePhase(
+      "render.spatial-query",
+      spatialQueryStart,
+      spatialQueryEnd,
     );
     this.#fullSceneAdmissionQueried = true;
     if (
@@ -351,9 +463,326 @@ export class EntityDrawItemPreparer {
       return null;
     }
 
-    this.#compositionPass.prepareFullSceneBatch({ ...key, entities });
+    this.#compositionPass.prepareFullSceneBatch({ ...key, entities, selectedEntityIds });
+    this.#rememberFullSceneLayout(entities, selectedEntityIds, key);
     this.#rememberSnapshotSource(representative, entityVersion, renderWidth, renderHeight);
     return key;
+  }
+
+  #prepareMixedFullSceneBatch(
+    options: PrepareEntityDrawItemsOptions,
+    allowBuild: boolean,
+  ): FullSceneBatchKey | null {
+    const {
+      entities,
+      entitySpatialIndex,
+      entityVersion,
+      geometryVersion,
+      selectionVersion,
+      viewport,
+      width,
+      height,
+      devicePixelRatio,
+      encoder,
+      selectedEntityIds,
+      debugMode,
+    } = options;
+    const key = this.#mixedFullSceneBatchKey ?? {
+      entityVersion,
+      geometryVersion,
+      selectionVersion,
+      debugMode,
+      singleSelectedIndex: -1,
+      renderWidth: 0,
+      renderHeight: 0,
+      texture: null,
+      textureCacheRevision: this.#texturePipeline.textureCacheRevision,
+      instanceCount: entities.length,
+    };
+    this.#mixedFullSceneBatchKey = key;
+    key.entityVersion = entityVersion;
+    key.geometryVersion = geometryVersion;
+    key.selectionVersion = selectionVersion;
+    key.debugMode = debugMode;
+    key.singleSelectedIndex = this.#getSingleSelectedIndex(
+      entities,
+      selectedEntityIds,
+      selectionVersion,
+      entityVersion,
+      geometryVersion,
+    );
+    key.textureCacheRevision = this.#texturePipeline.textureCacheRevision;
+    key.instanceCount = entities.length;
+    if (this.#hasResidentFullSceneBatch(key)) {
+      this.#activeFullSceneBatchKey = key;
+      return key;
+    }
+    if (!allowBuild) return null;
+
+    const viewportBounds = getViewportWorldBounds(
+      viewport,
+      width,
+      height,
+      config.canvas.cullingBufferFraction,
+      this.#viewportBounds,
+    );
+    const spatialQueryStart = performance.now();
+    const visibleEntities = entitySpatialIndex.queryBounds(
+      viewportBounds,
+      this.#visibleEntities,
+      entities,
+    );
+    this.#admissionVisibleEntities = visibleEntities;
+    const spatialQueryEnd = performance.now();
+    this.#phaseStats.spatialQueryMs = tracePerformancePhase(
+      "render.spatial-query",
+      spatialQueryStart,
+      spatialQueryEnd,
+    );
+    this.#fullSceneAdmissionQueried = true;
+    if (
+      visibleEntities.length / entities.length <
+      config.rendering.fullSceneBatchMinVisibleFraction
+    ) {
+      return null;
+    }
+
+    const items = this.#fullSceneDrawItems;
+    items.length = 0;
+    const visibleEntityIds = this.#fullSceneVisibleEntityIds;
+    visibleEntityIds.clear();
+    for (const entity of visibleEntities) visibleEntityIds.add(entity.id);
+    const representative = entities[0];
+    if (!representative || representative.mediaSource.type !== MediaType.image) return null;
+    let fullTextureRunCount = 0;
+    let visibleTextureRunCount = 0;
+    let previousFullTexture: GPUTexture | null = null;
+    let previousVisibleTexture: GPUTexture | null = null;
+    let previousSizedEntity: ShaderCanvasEntity | null = null;
+    let previousDesiredWidth = 0;
+    let previousDesiredHeight = 0;
+    for (const entity of entities) {
+      if (
+        entity.mediaSource.type !== MediaType.image ||
+        this.#texturePipeline.needsContinuousRenderForEntity(entity)
+      ) {
+        items.length = 0;
+        return null;
+      }
+      const sameProjectedSize =
+        previousSizedEntity !== null &&
+        previousSizedEntity.size.width === entity.size.width &&
+        previousSizedEntity.size.height === entity.size.height &&
+        previousSizedEntity.originalSize.width === entity.originalSize.width &&
+        previousSizedEntity.originalSize.height === entity.originalSize.height;
+      const desiredRenderSize = this.#desiredRenderSize;
+      if (sameProjectedSize) {
+        desiredRenderSize.width = previousDesiredWidth;
+        desiredRenderSize.height = previousDesiredHeight;
+      } else {
+        getEntityRenderSize(entity, viewport, devicePixelRatio, desiredRenderSize);
+        previousSizedEntity = entity;
+        previousDesiredWidth = desiredRenderSize.width;
+        previousDesiredHeight = desiredRenderSize.height;
+      }
+      let source = this.#texturePipeline.getReusableStaticCompositionSource(
+        entity,
+        desiredRenderSize,
+        false,
+      );
+      if (!source) {
+        const renderSize = this.#texturePipeline.resolveRenderSize(
+          entity,
+          desiredRenderSize,
+          this.#resolvedRenderSize,
+        );
+        if (!renderSize) {
+          items.length = 0;
+          return null;
+        }
+        source = this.#texturePipeline.renderEntityToTexture(entity, encoder, renderSize);
+      }
+      if (source?.kind !== "texture") {
+        items.length = 0;
+        return null;
+      }
+      if (source.texture !== previousFullTexture) {
+        previousFullTexture = source.texture;
+        fullTextureRunCount++;
+      }
+      if (visibleEntityIds.has(entity.id) && source.texture !== previousVisibleTexture) {
+        previousVisibleTexture = source.texture;
+        visibleTextureRunCount++;
+      }
+      items.push(
+        this.#compositionPass.prepareDrawItem({
+          entity,
+          source,
+          isSelected: selectedEntityIds.has(entity.id),
+          debugMode,
+          positionOffsetX: 0,
+          positionOffsetY: 0,
+          visualScale: 1,
+        }),
+      );
+    }
+
+    // Persistence is a CPU optimization, not permission to increase draw-call
+    // pressure. A high-entropy plan is useful when its full z-ordered texture
+    // runs are already represented by the visible scene; otherwise retain
+    // spatial culling and submit the smaller visible run sequence.
+    if (fullTextureRunCount > visibleTextureRunCount) {
+      items.length = 0;
+      return null;
+    }
+
+    key.textureCacheRevision = this.#texturePipeline.textureCacheRevision;
+    this.#compositionPass.prepareMixedFullSceneBatch(key, items);
+    this.#rememberFullSceneLayout(entities, selectedEntityIds, key);
+    return key;
+  }
+
+  #tryPatchFullSceneBatch(options: PrepareEntityDrawItemsOptions): FullSceneBatchKey | null {
+    const previousKey = this.#activeFullSceneBatchKey;
+    const dirtyEntityIds = options.dirtyEntityIds;
+    if (
+      !previousKey ||
+      options.mixedFullSceneBatchMode === "disabled" ||
+      dirtyEntityIds.size === 0 ||
+      previousKey.entityVersion === options.entityVersion ||
+      previousKey.geometryVersion !== options.geometryVersion ||
+      this.#activeFullSceneSelectedEntityIds !== options.selectedEntityIds ||
+      previousKey.instanceCount !== options.entities.length ||
+      this.#fullSceneEntityIndices.size !== options.entities.length ||
+      !this.#pinCachedFullSceneTextures()
+    ) {
+      return null;
+    }
+
+    const patches = this.#fullScenePatches;
+    patches.length = 0;
+    for (const entityId of dirtyEntityIds) {
+      const index = this.#fullSceneEntityIndices.get(entityId);
+      const entity = index === undefined ? undefined : options.entities[index];
+      if (
+        index === undefined ||
+        !entity ||
+        entity.id !== entityId ||
+        entity.mediaSource.type !== MediaType.image ||
+        this.#texturePipeline.needsContinuousRenderForEntity(entity)
+      ) {
+        patches.length = 0;
+        return null;
+      }
+
+      const desiredRenderSize = getEntityRenderSize(
+        entity,
+        options.viewport,
+        options.devicePixelRatio,
+        this.#desiredRenderSize,
+      );
+      let source = this.#texturePipeline.getReusableStaticCompositionSource(
+        entity,
+        desiredRenderSize,
+        false,
+      );
+      if (!source) {
+        const renderSize = this.#texturePipeline.resolveRenderSize(
+          entity,
+          desiredRenderSize,
+          this.#resolvedRenderSize,
+        );
+        if (!renderSize) {
+          patches.length = 0;
+          return null;
+        }
+        source = this.#texturePipeline.renderEntityToTexture(entity, options.encoder, renderSize);
+      }
+      if (source?.kind !== "texture") {
+        patches.length = 0;
+        return null;
+      }
+      patches.push({
+        index,
+        item: this.#compositionPass.prepareDrawItem({
+          entity,
+          source,
+          isSelected: options.selectedEntityIds.has(entity.id),
+          debugMode: options.debugMode,
+          positionOffsetX: 0,
+          positionOffsetY: 0,
+          visualScale: 1,
+        }),
+      });
+    }
+    patches.sort((left, right) => left.index - right.index);
+
+    const key = this.#mixedFullSceneBatchKey ?? {
+      entityVersion: options.entityVersion,
+      geometryVersion: options.geometryVersion,
+      selectionVersion: options.selectionVersion,
+      debugMode: options.debugMode,
+      singleSelectedIndex: -1,
+      renderWidth: 0,
+      renderHeight: 0,
+      texture: null,
+      textureCacheRevision: this.#texturePipeline.textureCacheRevision,
+      instanceCount: options.entities.length,
+    };
+    this.#mixedFullSceneBatchKey = key;
+    key.entityVersion = options.entityVersion;
+    key.geometryVersion = options.geometryVersion;
+    key.selectionVersion = options.selectionVersion;
+    key.debugMode = options.debugMode;
+    key.singleSelectedIndex = this.#getSingleSelectedIndex(
+      options.entities,
+      options.selectedEntityIds,
+      options.selectionVersion,
+      options.entityVersion,
+      options.geometryVersion,
+    );
+    key.renderWidth = 0;
+    key.renderHeight = 0;
+    key.texture = null;
+    key.textureCacheRevision = this.#texturePipeline.textureCacheRevision;
+    key.instanceCount = options.entities.length;
+    if (!this.#compositionPass.patchMixedFullSceneBatch(key, patches)) {
+      patches.length = 0;
+      return null;
+    }
+
+    this.#activeFullSceneBatchKey = key;
+    this.#activeFullSceneSelectedEntityIds = options.selectedEntityIds;
+    this.#homogeneousEntityVersion = options.entityVersion;
+    this.#homogeneousEntities = options.entities;
+    this.#homogeneousRepresentative = null;
+    patches.length = 0;
+    return key;
+  }
+
+  #rememberFullSceneLayout(
+    entities: readonly ShaderCanvasEntity[],
+    selectedEntityIds: ReadonlySet<string>,
+    key: FullSceneBatchKey,
+  ): void {
+    this.#fullSceneEntityIndices.clear();
+    for (let index = 0; index < entities.length; index++) {
+      this.#fullSceneEntityIndices.set(entities[index]!.id, index);
+    }
+    this.#activeFullSceneBatchKey = key;
+    this.#activeFullSceneSelectedEntityIds = selectedEntityIds;
+  }
+
+  #hasResidentFullSceneBatch(key: FullSceneBatchKey): boolean {
+    return this.#compositionPass.hasFullSceneBatch(key) && this.#pinCachedFullSceneTextures();
+  }
+
+  #pinCachedFullSceneTextures(): boolean {
+    let resident = true;
+    const hasBatch = this.#compositionPass.visitCachedFullSceneTextures((texture) => {
+      if (!this.#texturePipeline.pinCachedTexture(texture)) resident = false;
+    });
+    return hasBatch && resident;
   }
 
   #rememberSnapshotSource(
@@ -371,6 +800,7 @@ export class EntityDrawItemPreparer {
   #getHomogeneousRepresentative(
     entities: readonly ShaderCanvasEntity[],
     entityVersion: number,
+    dirtyEntityIds: ReadonlySet<string>,
   ): ShaderCanvasEntity | null {
     if (
       this.#homogeneousEntityVersion === entityVersion &&
@@ -378,9 +808,55 @@ export class EntityDrawItemPreparer {
     ) {
       return this.#homogeneousRepresentative;
     }
+
+    if (
+      this.#homogeneousEntityVersion >= 0 &&
+      this.#homogeneousEntities === entities &&
+      this.#homogeneousEntityCount === entities.length &&
+      dirtyEntityIds.size > 0
+    ) {
+      const previousRepresentative = this.#homogeneousRepresentative;
+      this.#homogeneousEntityVersion = entityVersion;
+      if (!previousRepresentative) return null;
+      if (dirtyEntityIds.size === entities.length) {
+        return this.#scanHomogeneousRepresentative(entities, entityVersion);
+      }
+
+      let baseline = previousRepresentative;
+      if (dirtyEntityIds.has(baseline.id)) {
+        const unchanged = entities.find((entity) => !dirtyEntityIds.has(entity.id));
+        if (!unchanged) return this.#scanHomogeneousRepresentative(entities, entityVersion);
+        baseline = unchanged;
+      }
+      const asset =
+        baseline.mediaSource.type === MediaType.image ? baseline.mediaSource.asset : null;
+      for (const entityId of dirtyEntityIds) {
+        const index = this.#fullSceneEntityIndices.get(entityId);
+        const entity = index === undefined ? undefined : entities[index];
+        if (!entity || entity.id !== entityId || !isFullSceneEquivalent(entity, baseline, asset)) {
+          this.#homogeneousRepresentative = null;
+          return null;
+        }
+      }
+      this.#homogeneousRepresentative = baseline;
+      return baseline;
+    }
+
+    return this.#scanHomogeneousRepresentative(entities, entityVersion);
+  }
+
+  #scanHomogeneousRepresentative(
+    entities: readonly ShaderCanvasEntity[],
+    entityVersion: number,
+  ): ShaderCanvasEntity | null {
     this.#homogeneousEntityVersion = entityVersion;
+    this.#homogeneousEntityCount = entities.length;
     this.#homogeneousEntities = entities;
     this.#homogeneousRepresentative = null;
+    this.#fullSceneEntityIndices.clear();
+    for (let index = 0; index < entities.length; index++) {
+      this.#fullSceneEntityIndices.set(entities[index]!.id, index);
+    }
 
     const representative = entities[0];
     if (!representative || representative.mediaSource.type !== MediaType.image) return null;
@@ -394,6 +870,44 @@ export class EntityDrawItemPreparer {
 
     this.#homogeneousRepresentative = representative;
     return representative;
+  }
+
+  #getSingleSelectedIndex(
+    entities: readonly ShaderCanvasEntity[],
+    selectedEntityIds: ReadonlySet<string>,
+    selectionVersion: number,
+    entityVersion: number,
+    geometryVersion: number,
+  ): number {
+    if (
+      this.#singleSelectionVersion === selectionVersion &&
+      this.#singleSelectionEntityVersion === entityVersion &&
+      this.#singleSelectionGeometryVersion === geometryVersion &&
+      this.#singleSelectionIds === selectedEntityIds
+    ) {
+      return this.#singleSelectedIndex;
+    }
+
+    this.#singleSelectionVersion = selectionVersion;
+    this.#singleSelectionEntityVersion = entityVersion;
+    this.#singleSelectionGeometryVersion = geometryVersion;
+    this.#singleSelectionIds = selectedEntityIds;
+    this.#singleSelectedIndex = -1;
+    if (selectedEntityIds.size !== 1) return -1;
+
+    const selectedId = selectedEntityIds.values().next().value;
+    const cachedIndex = selectedId ? this.#fullSceneEntityIndices.get(selectedId) : undefined;
+    if (cachedIndex !== undefined && entities[cachedIndex]?.id === selectedId) {
+      this.#singleSelectedIndex = cachedIndex;
+      return cachedIndex;
+    }
+    for (let index = 0; index < entities.length; index++) {
+      if (entities[index]!.id === selectedId) {
+        this.#singleSelectedIndex = index;
+        break;
+      }
+    }
+    return this.#singleSelectedIndex;
   }
 }
 

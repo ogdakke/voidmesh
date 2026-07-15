@@ -6,7 +6,7 @@ import { undo } from "#lib/undo.ts";
 import { createEntityInput, createTestEntity } from "../helpers/test-entity.ts";
 import { renderWithCanvas } from "../helpers/render-with-providers.tsx";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
-import { clearUndoHistory, performUndo } from "../helpers/undo-helpers.ts";
+import { clearUndoHistory, performRedo, performUndo } from "../helpers/undo-helpers.ts";
 
 let cleanup: () => void;
 
@@ -95,6 +95,39 @@ describe("CanvasCommands.duplicateEntities", () => {
     if (source.mediaSource.type !== "image") throw new Error("Expected image source");
     expect(duplicate?.mediaSource).toEqual({ type: "image", asset: source.mediaSource.asset });
     expect(getImageAssetReferenceCount(source.mediaSource.asset)).toBe(2);
+
+    act(() => canvas.clearWorkspace());
+  });
+
+  test("undoes and redoes a duplicate set with one store mutation", async () => {
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
+    const first = createTestEntity({ id: "duplicate-batch-first", name: "Repeated" });
+    const second = createTestEntity({ id: "duplicate-batch-second", name: "Repeated" });
+    canvasStore.addEntities([first, second]);
+    canvasStore.replaceSelection([first.id, second.id]);
+
+    let duplicateIds: string[] = [];
+    await act(async () => {
+      duplicateIds = await canvas.duplicateEntities();
+    });
+    expect(duplicateIds).toHaveLength(2);
+    expect(Array.from(canvasStore.getState().entities.values(), (entity) => entity.name)).toEqual([
+      "Repeated",
+      "Repeated",
+      "Repeated (1)",
+      "Repeated (2)",
+    ]);
+
+    let notifications = 0;
+    const unsubscribe = canvasStore.subscribe(() => notifications++);
+    performUndo();
+    expect(canvasStore.getState().entities.size).toBe(2);
+    expect(notifications).toBe(1);
+
+    performRedo();
+    expect(canvasStore.getState().entities.size).toBe(4);
+    expect(notifications).toBe(2);
+    unsubscribe();
 
     act(() => canvas.clearWorkspace());
   });

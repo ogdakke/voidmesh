@@ -179,6 +179,26 @@ describe("useParamValue", () => {
     expect(result!.isSupported).toBe(false);
   });
 
+  test("stops aggregating values as soon as a parameter is unsupported", () => {
+    const first = createTestEntity({
+      id: "unsupported-fast-first",
+      shaderType: ShaderType.dithering,
+    });
+    const second = createTestEntity({
+      id: "unsupported-fast-second",
+      shaderType: ShaderType.dithering,
+    });
+    Object.defineProperty(second, "shaderParams", {
+      get: () => {
+        throw new Error("unsupported selections must not inspect later parameter values");
+      },
+    });
+    canvasStore.addEntities([first, second]);
+    canvasStore.replaceSelection([first.id, second.id]);
+
+    expect(canvasStore.getParamResult("blobs.eagerness", 0.5).isSupported).toBe(false);
+  });
+
   test("returns isSupported=true for supported params", async () => {
     let result: ParamResult<number> | null = null;
 

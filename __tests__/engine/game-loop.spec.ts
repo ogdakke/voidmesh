@@ -143,6 +143,34 @@ describe("Render loop errors", () => {
 });
 
 describe("Animated media render scheduling", () => {
+  test("incrementally reclassifies bulk entity edits without a fixed count cutoff", () => {
+    const renderer = createLoopRenderer();
+    let nextFrame: FrameRequestCallback | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      nextFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const entities = Array.from({ length: 40 }, (_, index) =>
+      createTestEntity({ id: `classification-${index}` }),
+    );
+    canvasStore.addEntities(entities);
+
+    gl.setRenderer(renderer);
+    gl.start();
+    vi.mocked(renderer.needsContinuousRenderForEntity).mockClear();
+    canvasStore.updateEntities(
+      entities.slice(0, 33).map((entity) => ({
+        id: entity.id,
+        updates: { name: `${entity.name} changed` },
+      })),
+    );
+    if (!nextFrame) throw new Error("Expected frame loop to schedule another frame");
+    (nextFrame as FrameRequestCallback)(performance.now());
+
+    expect(renderer.needsContinuousRenderForEntity).toHaveBeenCalledTimes(33);
+  });
+
   test("does not keep rendering for an offscreen playing GIF", () => {
     const renderer = createLoopRenderer(false);
     let nextFrame: FrameRequestCallback | null = null;
@@ -373,6 +401,29 @@ describe("Desktop pointer interactions", () => {
       gl.handlePointerDown({ x: 150, y: 150 });
       gl.handlePointerUp({ x: 150, y: 150 });
       expect(deps.dragVisual.release).toHaveBeenCalled();
+    });
+
+    test("keeps a small multi-selection drag transient until pointer up", () => {
+      const firstId = addEntity(100, 100);
+      const secondId = addEntity(400, 100);
+      click(gl, { x: 150, y: 150 });
+      click(gl, { x: 450, y: 150 }, true);
+      const first = canvasStore.getState().entities.get(firstId)!;
+      const second = canvasStore.getState().entities.get(secondId)!;
+
+      gl.handlePointerDown({ x: 150, y: 150 });
+      gl.handlePointerMove({ x: 170, y: 140 });
+      gl.processInput();
+
+      expect(first.position).toEqual({ x: 100, y: 100 });
+      expect(second.position).toEqual({ x: 400, y: 100 });
+      expect(canvasStore.getTransientEntityDragOffset()).toEqual({ x: 20, y: -10 });
+
+      gl.handlePointerUp({ x: 170, y: 140 });
+
+      expect(first.position).toEqual({ x: 120, y: 90 });
+      expect(second.position).toEqual({ x: 420, y: 90 });
+      expect(canvasStore.getTransientEntityDragOffset()).toEqual({ x: 0, y: 0 });
     });
   });
 

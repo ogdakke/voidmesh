@@ -560,6 +560,11 @@ export class CanvasInputController {
     return this.#dragSelect?.mode ?? null;
   }
 
+  /** GPU selection feedback starts only after drag selection has processed a real move. */
+  getDragSelectRenderMode(): DragSelectMode | null {
+    return this.#dragSelect?.hasSelectionUpdate ? this.#dragSelect.mode : null;
+  }
+
   /** Get bounding box of all selected entities (for multi-select visual) */
   getMultiSelectBounds(): Bounds | null {
     return this.#selection.getMultiSelectBounds(

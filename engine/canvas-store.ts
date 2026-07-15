@@ -19,6 +19,8 @@ import { completeOnboardingStarterSelectionFromEvent } from "#lib/onboarding-run
 import { EntitySpatialIndex } from "#lib/entity-spatial-index.ts";
 import { CanvasLensing } from "#types/enums.ts";
 
+export type DragSelectMode = "replace" | "additive" | "subtractive";
+
 export interface CanvasState {
   // Core state
   viewport: Viewport;
@@ -47,6 +49,7 @@ export interface CanvasState {
   // Dirty flags for optimization
   viewportDirty: boolean;
   entitiesDirty: Set<string>;
+  geometryDirty: boolean;
   selectionDirty: boolean;
   containerSizeDirty: boolean;
   canvasCalloutsDirty: boolean;
@@ -159,6 +162,10 @@ export interface DragVisualRenderState {
   entityIds: ReadonlySet<string>;
   /** Shared scale for active drag-visual entities. */
   scale: number;
+  /** Shared world-space translation applied to the selected drag group. */
+  offset: Point;
+  /** Whether every visual target is exactly the current selection. */
+  appliesToSelection: boolean;
 }
 
 export interface DisintegrationRenderOverlay {
@@ -184,6 +191,9 @@ export interface RenderState {
   entitySpatialIndex: EntitySpatialIndex;
   entityVersion: number;
   geometryVersion: number;
+  selectionVersion: number;
+  /** Entity references changed since the previous render; valid until dirty flags clear. */
+  dirtyEntityIds: ReadonlySet<string>;
   selectedEntityIds: ReadonlySet<string>;
   debugMode: boolean;
   debugView: "none" | "alpha" | "spatial" | "all";
@@ -191,6 +201,8 @@ export interface RenderState {
   canvasCallouts: readonly CanvasCallout[];
   /** Drag-select rectangle bounds in world coordinates (null if not active) */
   dragSelectBounds: Bounds | null;
+  /** GPU drag-selection operation, enabled after the gesture crosses the click threshold. */
+  dragSelectMode: DragSelectMode | null;
   /** Multi-select bounding box in world coordinates (null if < 2 entities selected) */
   multiSelectBounds: Bounds | null;
   actionLayer: ActionLayerRenderState;
@@ -229,6 +241,7 @@ export class CanvasStore extends Store<CanvasState> {
     { entities: ShaderCanvasEntity[]; value: ParamResult<unknown> }
   >();
   readonly #renderEntities: ShaderCanvasEntity[] = [];
+  readonly #renderEntityIndices = new Map<string, number>();
   #entitySpatialIndex = new EntitySpatialIndex();
   #renderEntitiesVersion = -1;
   readonly #renderViewport: Viewport = { offset: { x: 0, y: 0 }, zoom: 1 };
@@ -243,7 +256,10 @@ export class CanvasStore extends Store<CanvasState> {
     isDragPhase: false,
     entityIds: new Set<string>(),
     scale: 1,
+    offset: { x: 0, y: 0 },
+    appliesToSelection: false,
   };
+  readonly #transientEntityDragOffset: Point = { x: 0, y: 0 };
   readonly #renderDisintegration: DisintegrationRenderState = { overlays: [] };
   readonly #renderState: RenderState = {
     viewport: this.#renderViewport,
@@ -251,12 +267,15 @@ export class CanvasStore extends Store<CanvasState> {
     entitySpatialIndex: this.#entitySpatialIndex,
     entityVersion: 0,
     geometryVersion: 0,
+    selectionVersion: 0,
+    dirtyEntityIds: new Set<string>(),
     selectedEntityIds: new Set<string>(),
     debugMode: false,
     debugView: "none",
     dirty: false,
     canvasCallouts: [],
     dragSelectBounds: null,
+    dragSelectMode: null,
     multiSelectBounds: null,
     actionLayer: this.#renderActionLayer,
     dragVisual: this.#renderDragVisual,
@@ -298,6 +317,7 @@ export class CanvasStore extends Store<CanvasState> {
       canvasLensing: CanvasLensing.off,
       viewportDirty: false,
       entitiesDirty: new Set(),
+      geometryDirty: false,
       selectionDirty: false,
       containerSizeDirty: false,
       canvasCalloutsDirty: false,
@@ -579,8 +599,26 @@ export class CanvasStore extends Store<CanvasState> {
       this.state.geometryVersion++;
       // Position-only updates still change the composed scene and must invalidate
       // renderer caches such as the fullscreen wlur overlay during drag.
-      this.state.entitiesDirty.add(id);
+      this.state.geometryDirty = true;
     }
+  }
+
+  /** Translate a group with one spatial-index pass and one geometry invalidation. */
+  moveEntities(entityIds: ReadonlySet<string> | readonly string[], delta: Point): number {
+    if (delta.x === 0 && delta.y === 0) return 0;
+    let movedCount = 0;
+    for (const entityId of entityIds) {
+      const entity = this.state.entities.get(entityId);
+      if (!entity) continue;
+      entity.position.x += delta.x;
+      entity.position.y += delta.y;
+      movedCount++;
+    }
+    if (movedCount === 0) return 0;
+    this.#entitySpatialIndex.translateEntities(entityIds, delta);
+    this.state.geometryVersion++;
+    this.state.geometryDirty = true;
+    return movedCount;
   }
 
   removeEntity(id: string): void {
@@ -920,6 +958,21 @@ export class CanvasStore extends Store<CanvasState> {
     this.notify();
   }
 
+  setTransientEntityDragOffset(offset: Point): void {
+    this.#transientEntityDragOffset.x = offset.x;
+    this.#transientEntityDragOffset.y = offset.y;
+    this.state.geometryDirty = true;
+  }
+
+  getTransientEntityDragOffset(): Readonly<Point> {
+    return this.#transientEntityDragOffset;
+  }
+
+  resetTransientEntityDragOffset(): void {
+    this.#transientEntityDragOffset.x = 0;
+    this.#transientEntityDragOffset.y = 0;
+  }
+
   setActionLayerActive(
     active: boolean,
     entityIds?: ReadonlySet<string>,
@@ -1238,6 +1291,7 @@ export class CanvasStore extends Store<CanvasState> {
     return (
       this.state.viewportDirty ||
       this.state.entitiesDirty.size > 0 ||
+      this.state.geometryDirty ||
       this.state.selectionDirty ||
       this.state.containerSizeDirty ||
       this.state.canvasCalloutsDirty
@@ -1246,9 +1300,34 @@ export class CanvasStore extends Store<CanvasState> {
 
   getRenderState(): RenderState {
     if (this.#renderEntitiesVersion !== this.state.entityVersion) {
-      this.#renderEntities.length = 0;
-      for (const entity of this.state.entities.values()) this.#renderEntities.push(entity);
-      this.#renderEntities.sort((a, b) => a.zIndex - b.zIndex);
+      let canPatchReferences =
+        this.#renderEntitiesVersion >= 0 &&
+        this.state.entitiesDirty.size > 0 &&
+        this.#renderEntities.length === this.state.entities.size;
+      if (canPatchReferences) {
+        for (const id of this.state.entitiesDirty) {
+          const index = this.#renderEntityIndices.get(id);
+          const next = this.state.entities.get(id);
+          const previous = index === undefined ? undefined : this.#renderEntities[index];
+          if (index === undefined || !next || !previous || previous.zIndex !== next.zIndex) {
+            canPatchReferences = false;
+            break;
+          }
+        }
+      }
+      if (canPatchReferences) {
+        for (const id of this.state.entitiesDirty) {
+          this.#renderEntities[this.#renderEntityIndices.get(id)!] = this.state.entities.get(id)!;
+        }
+      } else {
+        this.#renderEntities.length = 0;
+        for (const entity of this.state.entities.values()) this.#renderEntities.push(entity);
+        this.#renderEntities.sort((a, b) => a.zIndex - b.zIndex);
+        this.#renderEntityIndices.clear();
+        for (let index = 0; index < this.#renderEntities.length; index++) {
+          this.#renderEntityIndices.set(this.#renderEntities[index]!.id, index);
+        }
+      }
       this.#renderEntitiesVersion = this.state.entityVersion;
     }
 
@@ -1262,11 +1341,14 @@ export class CanvasStore extends Store<CanvasState> {
     const renderState = this.#renderState;
     renderState.entityVersion = this.state.entityVersion;
     renderState.geometryVersion = this.state.geometryVersion;
+    renderState.selectionVersion = this.state.selectionVersion;
+    renderState.dirtyEntityIds = this.state.entitiesDirty;
     renderState.selectedEntityIds = this.state.selectedEntityIds;
     renderState.debugMode = this.state.debugMode;
     renderState.dirty = this.hasRenderChanges();
     renderState.canvasCallouts = this.state.canvasCallouts;
     renderState.dragSelectBounds = null;
+    renderState.dragSelectMode = null;
     renderState.multiSelectBounds = null;
     renderState.actionLayer = this.#renderActionLayer;
     renderState.dragVisual = this.#renderDragVisual;
@@ -1289,6 +1371,7 @@ export class CanvasStore extends Store<CanvasState> {
   clearDirtyFlags(): void {
     this.state.viewportDirty = false;
     this.state.entitiesDirty.clear();
+    this.state.geometryDirty = false;
     this.state.selectionDirty = false;
     this.state.containerSizeDirty = false;
     this.state.canvasCalloutsDirty = false;
@@ -1392,25 +1475,16 @@ export class CanvasStore extends Store<CanvasState> {
       return { value: defaultValue, isMixed: false, isSupported: true, values: new Set() };
     }
 
-    // Check if all selected shader types support this param,
-    // including conditional visibility rules (e.g. dithering scale, glass sub-params).
-    // Rules are evaluated per-entity to correctly handle multi-select with mixed shader types.
-    const isSupported = entities.every((e) => {
-      if (!shaderFeatures[e.shaderType].params.includes(rootParam)) return false;
-      const rules = paramVisibilityRules[e.shaderType];
-      if (rules) {
-        const rule = rules.find((r) => r.param === path);
-        if (rule && !rule.isVisible(e.shaderParams)) return false;
-      }
-      return true;
-    });
-
     const firstValue = getNestedValue<T>(entities[0]!.shaderParams, pathParts) ?? defaultValue;
+    const firstEntity = entities[0]!;
+    if (!entitySupportsParam(firstEntity, rootParam, path)) {
+      return createUnsupportedParamResult(firstValue);
+    }
 
     if (entities.length === 1) {
       const values = new Set<NonNullable<T>>();
       if (firstValue != null) values.add(firstValue as NonNullable<T>);
-      return { value: firstValue, isMixed: false, isSupported, values };
+      return { value: firstValue, isMixed: false, isSupported: true, values };
     }
 
     // Multi-select: check uniformity and collect distinct values
@@ -1421,6 +1495,9 @@ export class CanvasStore extends Store<CanvasState> {
 
     for (let index = 1; index < entities.length; index++) {
       const entity = entities[index]!;
+      if (!entitySupportsParam(entity, rootParam, path)) {
+        return createUnsupportedParamResult(firstValue);
+      }
       // Apply default to get effective value (matches how firstValue is computed)
       const val = getNestedValue<T>(entity.shaderParams, pathParts) ?? defaultValue;
       const matchesFirst = paramValueEqual(val, firstValue);
@@ -1444,7 +1521,7 @@ export class CanvasStore extends Store<CanvasState> {
       values.add(val as NonNullable<T>);
     }
 
-    return { value: firstValue, isMixed, isSupported, values };
+    return { value: firstValue, isMixed, isSupported: true, values };
   }
 
   #resetSelectorCaches(): void {
@@ -1474,6 +1551,24 @@ function getNestedValue<T>(params: ShaderParams, pathParts: string[]): T | undef
     current = (current as Record<string, unknown>)[part];
   }
   return current as T | undefined;
+}
+
+function entitySupportsParam(
+  entity: ShaderCanvasEntity,
+  rootParam: keyof ShaderParams,
+  path: ParamPaths,
+): boolean {
+  if (!shaderFeatures[entity.shaderType].params.includes(rootParam)) return false;
+  const rule = paramVisibilityRules[entity.shaderType]?.find(
+    (candidate) => candidate.param === path,
+  );
+  return !rule || rule.isVisible(entity.shaderParams);
+}
+
+function createUnsupportedParamResult<T>(value: T): ParamResult<T> {
+  const values = new Set<NonNullable<T>>();
+  if (value != null) values.add(value as NonNullable<T>);
+  return { value, isMixed: false, isSupported: false, values };
 }
 
 function paramValueEqual(a: unknown, b: unknown): boolean {

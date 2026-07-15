@@ -1,4 +1,3 @@
-import { logger } from "#lib/client.logger.ts";
 import { Store } from "#lib/store.ts";
 import { isMacOS, isWindows } from "#lib/util.ts";
 import { createContext, use, useEffect, useEffectEvent, useSyncExternalStore } from "react";
@@ -474,7 +473,6 @@ export class KeybindStore extends Store<KeybindStoreState> {
 
   setActiveContext(name: ContextName) {
     this.#activeContext = name;
-    logger.debug(`Active keybind context set to: ${name}`);
   }
 
   getActiveContext(): ContextName {

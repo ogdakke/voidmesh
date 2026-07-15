@@ -59,6 +59,28 @@ describe("EntitySpatialIndex", () => {
     expect(index.queryBounds({ x: 105, y: 90, width: 10, height: 25 }, [])).toEqual([entity]);
   });
 
+  test("translates a batch across cells without recomputing entity geometry", () => {
+    const index = new EntitySpatialIndex(10);
+    const first = createTestEntity({
+      id: "translated-first",
+      position: { x: 0, y: 0 },
+      size: { width: 5, height: 5 },
+    });
+    const second = createTestEntity({
+      id: "translated-second",
+      position: { x: 12, y: 0 },
+      size: { width: 5, height: 5 },
+    });
+    index.upsert(first);
+    index.upsert(second);
+    first.position.x += 100;
+    second.position.x += 100;
+
+    expect(index.translateEntities([first.id, second.id], { x: 100, y: 0 })).toBe(2);
+    expect(index.queryBounds({ x: -1, y: -1, width: 30, height: 10 }, [])).toEqual([]);
+    expect(index.queryBounds({ x: 99, y: -1, width: 30, height: 10 }, [])).toEqual([first, second]);
+  });
+
   test("removes entities and includes very large entities without indexing every cell", () => {
     const index = new EntitySpatialIndex(1);
     const large = createTestEntity({

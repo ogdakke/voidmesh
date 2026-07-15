@@ -134,6 +134,34 @@ describe("EntityTexturePipeline shared image sources", () => {
     releaseImageAsset(second.mediaSource.asset);
   });
 
+  test("pins a persistent composition texture against offscreen eviction", () => {
+    const first = createTestEntity({ id: "pinned-first", shaderParams: { showOriginal: true } });
+    const second = createTestEntity({ id: "pinned-second", shaderParams: { showOriginal: true } });
+    const firstTexture = createTexture(200, 150);
+    const secondTexture = createTexture(200, 150);
+    const pipeline = new EntityTexturePipeline({
+      device: createDevice([firstTexture, secondTexture]),
+      colorConfig,
+      texturePool: null,
+      textureBudgetBytes: 200 * 150 * 4,
+    });
+    const encoder = {} as GPUCommandEncoder;
+
+    pipeline.renderEntityToTexture(first, encoder);
+    pipeline.renderEntityToTexture(second, encoder);
+    pipeline.endFrame();
+    expect(pipeline.pinCachedTexture(firstTexture)).toBe(true);
+    pipeline.endFrame();
+
+    expect(firstTexture.destroy).not.toHaveBeenCalled();
+    expect(secondTexture.destroy).toHaveBeenCalledOnce();
+    expect(pipeline.pinCachedTexture(secondTexture)).toBe(false);
+
+    pipeline.destroy();
+    if (first.mediaSource.type === "image") releaseImageAsset(first.mediaSource.asset);
+    if (second.mediaSource.type === "image") releaseImageAsset(second.mediaSource.asset);
+  });
+
   test("freezes LOD during viewport motion and bounds settled transitions per frame", () => {
     const entities = Array.from({ length: 5 }, (_, index) =>
       createTestEntity({

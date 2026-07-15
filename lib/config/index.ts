@@ -501,8 +501,6 @@ export const config = {
     lodTransitionsPerFrame: 4,
     /** Maximum target pixels admitted per settled frame (one oversized item may progress). */
     lodTransitionPixelBudget: 2 * 1024 * 1024,
-    /** Minimum homogeneous static-image scene size worth caching as one persistent draw. */
-    fullSceneBatchMinEntityCount: 16_384,
     /** Minimum visible fraction required when admitting or rebuilding a full-scene batch. */
     fullSceneBatchMinVisibleFraction: 0.25,
     grid: {

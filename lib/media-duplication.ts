@@ -6,6 +6,32 @@ import {
 } from "#types/canvas.ts";
 import { createPlaybackState } from "./media-playback.ts";
 
+export interface UniqueEntityNameAllocator {
+  allocate(baseName: string): string;
+}
+
+/** Allocate duplicate suffixes with one monotonic cursor per base name. */
+export function createUniqueEntityNameAllocator(
+  existingNames: ReadonlySet<string>,
+): UniqueEntityNameAllocator {
+  const nextSuffixByBase = new Map<string, number>();
+  const allocatedNames = new Set(existingNames);
+
+  return {
+    allocate(baseName: string): string {
+      let suffix = nextSuffixByBase.get(baseName) ?? 1;
+      let candidate = `${baseName} (${suffix})`;
+      while (allocatedNames.has(candidate)) {
+        suffix++;
+        candidate = `${baseName} (${suffix})`;
+      }
+      nextSuffixByBase.set(baseName, suffix + 1);
+      allocatedNames.add(candidate);
+      return candidate;
+    },
+  };
+}
+
 export function createDuplicatePlaybackState(
   entity: ShaderCanvasEntity,
 ): PlaybackState | undefined {

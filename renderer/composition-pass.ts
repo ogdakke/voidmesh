@@ -1,5 +1,6 @@
 import { config } from "#config";
-import type { ShaderCanvasEntity } from "#types/canvas.ts";
+import type { DragSelectMode } from "#engine";
+import type { Bounds, ShaderCanvasEntity } from "#types/canvas.ts";
 import instancedCompositionShaderSource from "./composition-instanced.wgsl?raw";
 import compositionShaderSource from "./composition.wgsl?raw";
 
@@ -46,14 +47,30 @@ export interface DisintegrationCompositionUniforms {
 export interface FullSceneBatchKey {
   entityVersion: number;
   geometryVersion: number;
+  selectionVersion: number;
+  debugMode: boolean;
+  singleSelectedIndex: number;
   renderWidth: number;
   renderHeight: number;
-  texture: GPUTexture;
+  texture: GPUTexture | null;
+  textureCacheRevision: number;
   instanceCount: number;
 }
 
 export interface PrepareFullSceneBatchOptions extends FullSceneBatchKey {
   entities: readonly ShaderCanvasEntity[];
+  selectedEntityIds: ReadonlySet<string>;
+}
+
+export interface FullSceneBatchPatch {
+  index: number;
+  item: CompositionDrawItem;
+}
+
+export interface CompositionPassStats {
+  fullSceneBatchRebuilds: number;
+  fullSceneBatchUploadBytes: number;
+  normalInstanceUploadBytes: number;
 }
 
 interface CompositionUniformState {
@@ -79,11 +96,61 @@ interface CompositionDrawCommand {
 
 interface FullSceneBatchCache extends FullSceneBatchKey {
   bufferGeneration: number;
+  drawRanges: Array<{ texture: GPUTexture; firstInstance: number; instanceCount: number }>;
+  textures: GPUTexture[];
+}
+
+function appendTextureRange(
+  ranges: FullSceneBatchCache["drawRanges"],
+  texture: GPUTexture,
+  firstInstance: number,
+  instanceCount: number,
+): void {
+  if (instanceCount <= 0) return;
+  const previous = ranges.at(-1);
+  if (
+    previous?.texture === texture &&
+    previous.firstInstance + previous.instanceCount === firstInstance
+  ) {
+    previous.instanceCount += instanceCount;
+    return;
+  }
+  ranges.push({ texture, firstInstance, instanceCount });
+}
+
+function collectUniqueTextures(ranges: FullSceneBatchCache["drawRanges"]): GPUTexture[] {
+  const textures: GPUTexture[] = [];
+  const seen = new Set<GPUTexture>();
+  for (const range of ranges) {
+    if (seen.has(range.texture)) continue;
+    seen.add(range.texture);
+    textures.push(range.texture);
+  }
+  return textures;
 }
 
 const INSTANCE_STRIDE_BYTES = 32;
 const INSTANCE_STRIDE_VALUES = INSTANCE_STRIDE_BYTES / 4;
 const INITIAL_INSTANCE_CAPACITY = 256;
+const INSTANCE_FLAG_DEBUG = 1;
+const INSTANCE_FLAG_LOCKED = 2;
+
+function getDragSelectModeValue(mode: DragSelectMode | null): number {
+  switch (mode) {
+    case "replace":
+      return 1;
+    case "additive":
+      return 2;
+    case "subtractive":
+      return 3;
+    default:
+      return 0;
+  }
+}
+
+function getInstanceFlags(entity: ShaderCanvasEntity, debugMode: boolean): number {
+  return (debugMode ? INSTANCE_FLAG_DEBUG : 0) | (entity.locked ? INSTANCE_FLAG_LOCKED : 0);
+}
 
 function createExternalCompositionShaderSource(source: string): string {
   const rewritten = source
@@ -107,11 +174,24 @@ export class CompositionPass {
   readonly #viewportUniformBuffer: GPUBuffer;
   readonly #pipeline: GPURenderPipeline;
   readonly #instancedPipeline: GPURenderPipeline;
+  readonly #interactiveInstancedPipeline: GPURenderPipeline;
   readonly #externalPipeline: GPURenderPipeline;
   readonly #bindGroupLayout: GPUBindGroupLayout;
   readonly #instancedBindGroupLayout: GPUBindGroupLayout;
   readonly #externalBindGroupLayout: GPUBindGroupLayout;
   readonly #sampler: GPUSampler;
+  readonly #interactionUniformBuffer: GPUBuffer;
+  readonly #interactionUniformData = new ArrayBuffer(32);
+  readonly #interactionUniformFloats = new Float32Array(this.#interactionUniformData);
+  readonly #interactionUniformUints = new Uint32Array(this.#interactionUniformData);
+  #interactionOffsetX = 0;
+  #interactionOffsetY = 0;
+  #interactionScale = 0;
+  #interactionSelectionMode = 0;
+  #interactionSelectionX = 0;
+  #interactionSelectionY = 0;
+  #interactionSelectionWidth = 0;
+  #interactionSelectionHeight = 0;
   readonly #entityUniformData = new ArrayBuffer(config.rendering.entityUniformSize);
   readonly #entityFloatView = new Float32Array(this.#entityUniformData);
   readonly #entityUintView = new Uint32Array(this.#entityUniformData);
@@ -126,6 +206,9 @@ export class CompositionPass {
   #instanceBindGroupCache = new WeakMap<GPUTexture, GPUBindGroup>();
   readonly #drawCommands: CompositionDrawCommand[] = [];
   #fullSceneBatch: FullSceneBatchCache | null = null;
+  #fullSceneBatchRebuilds = 0;
+  #fullSceneBatchUploadBytes = 0;
+  #normalInstanceUploadBytes = 0;
 
   // Entity composition cache (uniform buffers, bind groups, texture views).
   // Invalidated when entity composition texture or visual state changes.
@@ -204,6 +287,11 @@ export class CompositionPass {
           visibility: GPUShaderStage.FRAGMENT,
           sampler: { type: "filtering" },
         },
+        {
+          binding: 4,
+          visibility: GPUShaderStage.VERTEX,
+          buffer: { type: "uniform" },
+        },
       ],
     });
 
@@ -239,6 +327,11 @@ export class CompositionPass {
       minFilter: "linear",
       addressModeU: "clamp-to-edge",
       addressModeV: "clamp-to-edge",
+    });
+    this.#interactionUniformBuffer = this.#device.createBuffer({
+      label: "Composition interaction uniforms",
+      size: this.#interactionUniformData.byteLength,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
     const pipelineLayout = this.#device.createPipelineLayout({
@@ -293,6 +386,38 @@ export class CompositionPass {
       vertex: {
         module: instancedShaderModule,
         entryPoint: "vs_main",
+      },
+      fragment: {
+        module: instancedShaderModule,
+        entryPoint: "fs_main",
+        targets: [
+          {
+            format: options.format,
+            blend: {
+              color: {
+                srcFactor: "src-alpha",
+                dstFactor: "one-minus-src-alpha",
+                operation: "add",
+              },
+              alpha: {
+                srcFactor: "one",
+                dstFactor: "one-minus-src-alpha",
+                operation: "add",
+              },
+            },
+          },
+        ],
+      },
+      primitive: {
+        topology: "triangle-list",
+      },
+    });
+    this.#interactiveInstancedPipeline = this.#device.createRenderPipeline({
+      label: "Interactive instanced composition pipeline",
+      layout: instancedPipelineLayout,
+      vertex: {
+        module: instancedShaderModule,
+        entryPoint: "vs_interactive",
       },
       fragment: {
         module: instancedShaderModule,
@@ -460,6 +585,14 @@ export class CompositionPass {
     if (maximumInstanceCount > 0) this.#ensureInstanceCapacity(maximumInstanceCount);
   }
 
+  getStats(): CompositionPassStats {
+    return {
+      fullSceneBatchRebuilds: this.#fullSceneBatchRebuilds,
+      fullSceneBatchUploadBytes: this.#fullSceneBatchUploadBytes,
+      normalInstanceUploadBytes: this.#normalInstanceUploadBytes,
+    };
+  }
+
   hasFullSceneBatch(key: FullSceneBatchKey): boolean {
     const cached = this.#fullSceneBatch;
     return (
@@ -467,6 +600,8 @@ export class CompositionPass {
       cached.bufferGeneration === this.#instanceBufferGeneration &&
       cached.entityVersion === key.entityVersion &&
       cached.geometryVersion === key.geometryVersion &&
+      cached.selectionVersion === key.selectionVersion &&
+      cached.debugMode === key.debugMode &&
       cached.renderWidth === key.renderWidth &&
       cached.renderHeight === key.renderHeight &&
       cached.texture === key.texture &&
@@ -475,7 +610,7 @@ export class CompositionPass {
   }
 
   prepareFullSceneBatch(options: PrepareFullSceneBatchOptions): void {
-    const { entities, ...key } = options;
+    const { entities, selectedEntityIds, ...key } = options;
     if (entities.length !== key.instanceCount) {
       throw new Error("Full-scene batch instance count does not match its entity payload");
     }
@@ -484,48 +619,215 @@ export class CompositionPass {
     const buffer = this.#ensureInstanceCapacity(entities.length);
     for (let index = 0; index < entities.length; index++) {
       const entity = entities[index]!;
-      this.#writeFullSceneInstance(index, entity);
+      this.#writeFullSceneInstance(
+        index,
+        entity,
+        selectedEntityIds.has(entity.id),
+        options.debugMode,
+      );
       entity.textureDirty = false;
     }
-    this.#device.queue.writeBuffer(
-      buffer,
-      0,
-      this.#instanceData,
-      0,
-      entities.length * INSTANCE_STRIDE_BYTES,
-    );
+    const uploadBytes = entities.length * INSTANCE_STRIDE_BYTES;
+    this.#device.queue.writeBuffer(buffer, 0, this.#instanceData, 0, uploadBytes);
+    this.#fullSceneBatchRebuilds += 1;
+    this.#fullSceneBatchUploadBytes += uploadBytes;
     this.#fullSceneBatch = {
       ...key,
       bufferGeneration: this.#instanceBufferGeneration,
+      drawRanges: [{ texture: options.texture!, firstInstance: 0, instanceCount: entities.length }],
+      textures: [options.texture!],
     };
   }
 
-  drawFullSceneBatch(pass: GPURenderPassEncoder, key: FullSceneBatchKey): boolean {
-    if (!this.hasFullSceneBatch(key)) return false;
-    this.#instanceWriteCursor = Math.max(this.#instanceWriteCursor, key.instanceCount);
-    pass.setPipeline(this.#instancedPipeline);
-    pass.setBindGroup(0, this.#getInstancedBindGroup(key.texture));
-    pass.draw(6, key.instanceCount, 0, 0);
+  prepareMixedFullSceneBatch(key: FullSceneBatchKey, items: readonly CompositionDrawItem[]): void {
+    if (items.length !== key.instanceCount) {
+      throw new Error("Mixed full-scene batch instance count does not match its draw items");
+    }
+    if (this.hasFullSceneBatch(key)) return;
+
+    const buffer = this.#ensureInstanceCapacity(items.length);
+    const drawRanges: FullSceneBatchCache["drawRanges"] = [];
+    const textures: GPUTexture[] = [];
+    const seenTextures = new Set<GPUTexture>();
+    for (let index = 0; index < items.length; index++) {
+      const item = items[index]!;
+      if (item.pipeline !== "texture" || !item.texture) {
+        throw new Error("Mixed full-scene batches require regular texture draw items");
+      }
+      this.#writeInstance(index, item);
+      const previous = drawRanges.at(-1);
+      if (previous?.texture === item.texture) {
+        previous.instanceCount++;
+      } else {
+        drawRanges.push({ texture: item.texture, firstInstance: index, instanceCount: 1 });
+      }
+      if (!seenTextures.has(item.texture)) {
+        seenTextures.add(item.texture);
+        textures.push(item.texture);
+      }
+      item.entity.textureDirty = false;
+    }
+    const uploadBytes = items.length * INSTANCE_STRIDE_BYTES;
+    this.#device.queue.writeBuffer(buffer, 0, this.#instanceData, 0, uploadBytes);
+    this.#fullSceneBatchRebuilds += 1;
+    this.#fullSceneBatchUploadBytes += uploadBytes;
+    this.#fullSceneBatch = {
+      ...key,
+      bufferGeneration: this.#instanceBufferGeneration,
+      drawRanges,
+      textures,
+    };
+  }
+
+  patchMixedFullSceneBatch(
+    key: FullSceneBatchKey,
+    patches: readonly FullSceneBatchPatch[],
+  ): boolean {
+    const cached = this.#fullSceneBatch;
+    const buffer = this.#instanceBuffer;
+    if (
+      !cached ||
+      !buffer ||
+      cached.bufferGeneration !== this.#instanceBufferGeneration ||
+      cached.geometryVersion !== key.geometryVersion ||
+      cached.debugMode !== key.debugMode ||
+      cached.instanceCount !== key.instanceCount
+    ) {
+      return false;
+    }
+
+    let sortedPatches = patches;
+    for (let index = 1; index < patches.length; index++) {
+      if (patches[index - 1]!.index <= patches[index]!.index) continue;
+      sortedPatches = [...patches].sort((a, b) => a.index - b.index);
+      break;
+    }
+    let previousPatchIndex = -1;
+    for (const { index, item } of sortedPatches) {
+      if (index < 0 || index >= key.instanceCount || item.pipeline !== "texture" || !item.texture) {
+        return false;
+      }
+      if (index === previousPatchIndex) return false;
+      previousPatchIndex = index;
+    }
+
+    const drawRanges: FullSceneBatchCache["drawRanges"] = [];
+    let patchCursor = 0;
+    for (const cachedRange of cached.drawRanges) {
+      let rangeCursor = cachedRange.firstInstance;
+      const rangeEnd = cachedRange.firstInstance + cachedRange.instanceCount;
+      while (patchCursor < sortedPatches.length) {
+        const patch = sortedPatches[patchCursor]!;
+        if (patch.index >= rangeEnd) break;
+        if (patch.index < rangeCursor) return false;
+        if (patch.index > rangeCursor) {
+          appendTextureRange(
+            drawRanges,
+            cachedRange.texture,
+            rangeCursor,
+            patch.index - rangeCursor,
+          );
+        }
+        appendTextureRange(drawRanges, patch.item.texture!, patch.index, 1);
+        rangeCursor = patch.index + 1;
+        patchCursor++;
+      }
+      if (rangeCursor < rangeEnd) {
+        appendTextureRange(drawRanges, cachedRange.texture, rangeCursor, rangeEnd - rangeCursor);
+      }
+    }
+    if (patchCursor !== sortedPatches.length) return false;
+
+    for (const { index, item } of sortedPatches) {
+      this.#writeInstance(index, item);
+      item.entity.textureDirty = false;
+    }
+    for (let start = 0; start < sortedPatches.length;) {
+      let end = start + 1;
+      while (
+        end < sortedPatches.length &&
+        sortedPatches[end]!.index === sortedPatches[end - 1]!.index + 1
+      ) {
+        end++;
+      }
+      const firstIndex = sortedPatches[start]!.index;
+      const byteOffset = firstIndex * INSTANCE_STRIDE_BYTES;
+      const byteLength = (end - start) * INSTANCE_STRIDE_BYTES;
+      this.#device.queue.writeBuffer(
+        buffer,
+        byteOffset,
+        this.#instanceData,
+        byteOffset,
+        byteLength,
+      );
+      start = end;
+    }
+    this.#fullSceneBatchUploadBytes += patches.length * INSTANCE_STRIDE_BYTES;
+    this.#fullSceneBatch = {
+      ...key,
+      bufferGeneration: this.#instanceBufferGeneration,
+      drawRanges,
+      textures: collectUniqueTextures(drawRanges),
+    };
     return true;
   }
 
-  drawItems(
+  visitCachedFullSceneTextures(visitor: (texture: GPUTexture) => void): boolean {
+    const cached = this.#fullSceneBatch;
+    if (!cached || cached.bufferGeneration !== this.#instanceBufferGeneration) return false;
+    for (const texture of cached.textures) visitor(texture);
+    return true;
+  }
+
+  drawFullSceneBatch(
     pass: GPURenderPassEncoder,
-    items: readonly CompositionDrawItem[],
-    afterItem?: (item: CompositionDrawItem) => void,
-  ): void {
+    key: FullSceneBatchKey,
+    dragOffset?: { x: number; y: number },
+    dragScale = 1,
+    dragSelectBounds: Bounds | null = null,
+    dragSelectMode: DragSelectMode | null = null,
+  ): boolean {
+    if (!this.hasFullSceneBatch(key)) return false;
+    const cached = this.#fullSceneBatch!;
+    const dragOffsetX = dragOffset?.x ?? 0;
+    const dragOffsetY = dragOffset?.y ?? 0;
+    const hasDragTransform = dragOffsetX !== 0 || dragOffsetY !== 0 || dragScale !== 1;
+    this.#writeInteractionUniforms(
+      hasDragTransform ? dragOffsetX : 0,
+      hasDragTransform ? dragOffsetY : 0,
+      hasDragTransform ? dragScale : 0,
+      dragSelectBounds,
+      dragSelectMode,
+    );
+    this.#instanceWriteCursor = Math.max(this.#instanceWriteCursor, key.instanceCount);
+    pass.setPipeline(
+      hasDragTransform || dragSelectMode !== null
+        ? this.#interactiveInstancedPipeline
+        : this.#instancedPipeline,
+    );
+    for (const range of cached.drawRanges) {
+      pass.setBindGroup(0, this.#getInstancedBindGroup(range.texture));
+      pass.draw(6, range.instanceCount, 0, range.firstInstance);
+    }
+    return true;
+  }
+
+  drawItems(pass: GPURenderPassEncoder, items: readonly CompositionDrawItem[]): void {
+    this.#writeInteractionUniforms(0, 0, 0, null, null);
     this.#fullSceneBatch = null;
     const firstWrittenInstance = this.#instanceWriteCursor;
-    const instanceCount = this.#prepareDrawCommands(items, !!afterItem);
+    const instanceCount = this.#prepareDrawCommands(items);
     if (instanceCount > 0) {
+      const uploadBytes = instanceCount * INSTANCE_STRIDE_BYTES;
       const buffer = this.#ensureInstanceCapacity(this.#instanceWriteCursor);
       this.#device.queue.writeBuffer(
         buffer,
         firstWrittenInstance * INSTANCE_STRIDE_BYTES,
         this.#instanceData,
         firstWrittenInstance * INSTANCE_STRIDE_BYTES,
-        instanceCount * INSTANCE_STRIDE_BYTES,
+        uploadBytes,
       );
+      this.#normalInstanceUploadBytes += uploadBytes;
     }
 
     let currentPipeline: "texture" | "external" | null = null;
@@ -548,14 +850,6 @@ export class CompositionPass {
         }
         pass.setBindGroup(0, item.bindGroup);
         pass.draw(6);
-      }
-
-      if (command.item?.isSelected && afterItem) {
-        afterItem(command.item);
-        // Overlay callbacks encode into the same render pass and may replace the
-        // active pipeline/bind groups. Force composition state to be rebound for
-        // the next command instead of relying on our now-stale local tracker.
-        currentPipeline = null;
       }
     }
   }
@@ -618,6 +912,7 @@ export class CompositionPass {
       cached.uniformBuffer.destroy();
     }
     this.#entityExternalCompositionCache.clear();
+    this.#interactionUniformBuffer.destroy();
     this.#instanceBuffer?.destroy();
     this.#instanceBuffer = null;
     this.#instanceCapacity = 0;
@@ -631,7 +926,7 @@ export class CompositionPass {
     this.#fullSceneBatch = null;
   }
 
-  #prepareDrawCommands(items: readonly CompositionDrawItem[], isolateSelected: boolean): number {
+  #prepareDrawCommands(items: readonly CompositionDrawItem[]): number {
     let commandCount = 0;
     let instanceCount = 0;
     const firstInstance = this.#instanceWriteCursor;
@@ -644,10 +939,8 @@ export class CompositionPass {
         const instanceIndex = firstInstance + instanceCount;
         this.#writeInstance(instanceIndex, item);
 
-        const labelBoundary = isolateSelected && item.isSelected;
         const previous = commandCount > 0 ? this.#drawCommands[commandCount - 1] : undefined;
         if (
-          !labelBoundary &&
           previous?.kind === "texture" &&
           previous.texture === texture &&
           previous.item === null
@@ -659,7 +952,7 @@ export class CompositionPass {
           command.texture = texture;
           command.firstInstance = instanceIndex;
           command.instanceCount = 1;
-          command.item = labelBoundary ? item : null;
+          command.item = null;
         }
         instanceCount++;
         continue;
@@ -721,15 +1014,20 @@ export class CompositionPass {
     return nextBuffer;
   }
 
-  #writeFullSceneInstance(index: number, entity: ShaderCanvasEntity): void {
+  #writeFullSceneInstance(
+    index: number,
+    entity: ShaderCanvasEntity,
+    isSelected: boolean,
+    debugMode: boolean,
+  ): void {
     const offset = index * INSTANCE_STRIDE_VALUES;
     this.#instanceFloatView[offset] = entity.position.x;
     this.#instanceFloatView[offset + 1] = entity.position.y;
     this.#instanceFloatView[offset + 2] = entity.size.width;
     this.#instanceFloatView[offset + 3] = entity.size.height;
     this.#instanceFloatView[offset + 4] = (entity.rotation * Math.PI) / 180;
-    this.#instanceUintView[offset + 5] = 0;
-    this.#instanceUintView[offset + 6] = 0;
+    this.#instanceUintView[offset + 5] = isSelected ? 1 : 0;
+    this.#instanceUintView[offset + 6] = getInstanceFlags(entity, debugMode);
     this.#instanceFloatView[offset + 7] = 1;
   }
 
@@ -742,7 +1040,7 @@ export class CompositionPass {
     this.#instanceFloatView[offset + 3] = entity.size.height;
     this.#instanceFloatView[offset + 4] = (entity.rotation * Math.PI) / 180;
     this.#instanceUintView[offset + 5] = item.isSelected ? 1 : 0;
-    this.#instanceUintView[offset + 6] = item.debugMode ? 1 : 0;
+    this.#instanceUintView[offset + 6] = getInstanceFlags(entity, item.debugMode);
     this.#instanceFloatView[offset + 7] = item.visualScale;
   }
 
@@ -759,10 +1057,54 @@ export class CompositionPass {
         { binding: 1, resource: { buffer: this.#instanceBuffer } },
         { binding: 2, resource: this.#getTextureView(texture) },
         { binding: 3, resource: this.#sampler },
+        { binding: 4, resource: { buffer: this.#interactionUniformBuffer } },
       ],
     });
     this.#instanceBindGroupCache.set(texture, bindGroup);
     return bindGroup;
+  }
+
+  #writeInteractionUniforms(
+    offsetX: number,
+    offsetY: number,
+    scale: number,
+    selectionBounds: Bounds | null,
+    selectionMode: DragSelectMode | null,
+  ): void {
+    const selectionModeValue = getDragSelectModeValue(selectionMode);
+    const selectionX = selectionBounds?.x ?? 0;
+    const selectionY = selectionBounds?.y ?? 0;
+    const selectionWidth = selectionBounds?.width ?? 0;
+    const selectionHeight = selectionBounds?.height ?? 0;
+    if (
+      offsetX === this.#interactionOffsetX &&
+      offsetY === this.#interactionOffsetY &&
+      scale === this.#interactionScale &&
+      selectionModeValue === this.#interactionSelectionMode &&
+      selectionX === this.#interactionSelectionX &&
+      selectionY === this.#interactionSelectionY &&
+      selectionWidth === this.#interactionSelectionWidth &&
+      selectionHeight === this.#interactionSelectionHeight
+    ) {
+      return;
+    }
+    this.#interactionOffsetX = offsetX;
+    this.#interactionOffsetY = offsetY;
+    this.#interactionScale = scale;
+    this.#interactionSelectionMode = selectionModeValue;
+    this.#interactionSelectionX = selectionX;
+    this.#interactionSelectionY = selectionY;
+    this.#interactionSelectionWidth = selectionWidth;
+    this.#interactionSelectionHeight = selectionHeight;
+    this.#interactionUniformFloats[0] = offsetX;
+    this.#interactionUniformFloats[1] = offsetY;
+    this.#interactionUniformFloats[2] = scale;
+    this.#interactionUniformUints[3] = selectionModeValue;
+    this.#interactionUniformFloats[4] = selectionX;
+    this.#interactionUniformFloats[5] = selectionY;
+    this.#interactionUniformFloats[6] = selectionWidth;
+    this.#interactionUniformFloats[7] = selectionHeight;
+    this.#device.queue.writeBuffer(this.#interactionUniformBuffer, 0, this.#interactionUniformData);
   }
 
   #writeLiveEntityUniforms(

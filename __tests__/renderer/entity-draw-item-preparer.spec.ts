@@ -3,25 +3,25 @@ import { config } from "#config";
 import type { ActionLayerRenderState, DragVisualRenderState } from "#engine";
 import { releaseImageAsset, retainImageAsset } from "#lib/media-assets.ts";
 import { EntityDrawItemPreparer } from "#renderer/entity-draw-item-preparer.ts";
-import type { CompositionDrawItem, FullSceneBatchKey } from "#renderer/composition-pass.ts";
+import type {
+  CompositionDrawItem,
+  FullSceneBatchKey,
+  PrepareFullSceneBatchOptions,
+} from "#renderer/composition-pass.ts";
 import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
 import { createTestEntity } from "../helpers/test-entity.ts";
 
 const renderingConfig = config.rendering as unknown as {
-  fullSceneBatchMinEntityCount: number;
   fullSceneBatchMinVisibleFraction: number;
 };
-const originalMinimumCount = renderingConfig.fullSceneBatchMinEntityCount;
 const originalMinimumVisibleFraction = renderingConfig.fullSceneBatchMinVisibleFraction;
 
 describe("EntityDrawItemPreparer full-scene batching", () => {
   beforeAll(() => {
-    renderingConfig.fullSceneBatchMinEntityCount = 2;
     renderingConfig.fullSceneBatchMinVisibleFraction = 0.25;
   });
 
   afterAll(() => {
-    renderingConfig.fullSceneBatchMinEntityCount = originalMinimumCount;
     renderingConfig.fullSceneBatchMinVisibleFraction = originalMinimumVisibleFraction;
   });
 
@@ -76,14 +76,196 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     scene.release();
   });
 
-  test("rejects heterogeneous shader parameters before batch preparation", () => {
+  test("persists heterogeneous static-image scenes as a mixed texture plan", () => {
     const scene = createScene();
     scene.entities[1]!.shaderParams = structuredClone(scene.entities[1]!.shaderParams);
     scene.entities[1]!.shaderParams.size += 1;
     const harness = createHarness(scene.entities);
 
-    expect(harness.preparer.prepare(harness.options).fullSceneBatch).toBeNull();
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
     expect(harness.compositionPass.prepareFullSceneBatch).not.toHaveBeenCalled();
+    expect(harness.compositionPass.prepareMixedFullSceneBatch).toHaveBeenCalledOnce();
+
+    harness.options.viewport = { offset: { x: 0, y: 0 }, zoom: 0.1 };
+    harness.options.mixedFullSceneBatchMode = "reuse";
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+    expect(harness.compositionPass.prepareMixedFullSceneBatch).toHaveBeenCalledOnce();
+
+    scene.release();
+  });
+
+  test("persists small static scenes containing distinct image assets", () => {
+    const entities = [
+      createTestEntity({ id: "distinct-first" }),
+      createTestEntity({ id: "distinct-second" }),
+    ];
+    const harness = createHarness(entities);
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+    expect(harness.compositionPass.prepareFullSceneBatch).not.toHaveBeenCalled();
+    expect(harness.compositionPass.prepareMixedFullSceneBatch).toHaveBeenCalledOnce();
+
+    for (const entity of entities) {
+      if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
+    }
+  });
+
+  test("admits high-entropy static scenes without a fixed texture-run cutoff", () => {
+    const entities = Array.from({ length: 300 }, (_, index) =>
+      createTestEntity({ id: `high-entropy-${index}` }),
+    );
+    const harness = createHarness(entities);
+    const textures = new Map(
+      entities.map((entity) => [entity.id, { width: 64, height: 64 } as GPUTexture]),
+    );
+    harness.texturePipeline.getReusableStaticCompositionSource.mockImplementation((entity) => ({
+      kind: "texture",
+      texture: textures.get(entity.id)!,
+    }));
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+    expect(harness.compositionPass.prepareMixedFullSceneBatch).toHaveBeenCalledOnce();
+
+    for (const entity of entities) {
+      if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
+    }
+  });
+
+  test("keeps spatial culling when persistence would submit more texture runs", () => {
+    const entities = Array.from({ length: 8 }, (_, index) =>
+      createTestEntity({ id: `culled-run-${index}` }),
+    );
+    const harness = createHarness(entities, entities.slice(2, 6));
+    const textures = new Map(
+      entities.map((entity) => [entity.id, { width: 64, height: 64 } as GPUTexture]),
+    );
+    harness.texturePipeline.getReusableStaticCompositionSource.mockImplementation((entity) => ({
+      kind: "texture",
+      texture: textures.get(entity.id)!,
+    }));
+
+    const prepared = harness.preparer.prepare(harness.options);
+
+    expect(prepared.fullSceneBatch).toBeNull();
+    expect(prepared.entityDrawItems.map((item) => item.entity)).toEqual(entities.slice(2, 6));
+    expect(harness.compositionPass.prepareMixedFullSceneBatch).not.toHaveBeenCalled();
+
+    for (const entity of entities) {
+      if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
+    }
+  });
+
+  test("retains the spatial query fast-path result when mixed batch admission fails", () => {
+    const entities = [
+      createTestEntity({ id: "whole-scene-image" }),
+      createTestEntity({ id: "whole-scene-video", mediaType: "video" }),
+    ];
+    const harness = createHarness(entities);
+    harness.spatialIndex.queryBounds.mockImplementation((_bounds, output) => {
+      output.length = 0;
+      return entities;
+    });
+
+    const prepared = harness.preparer.prepare(harness.options);
+
+    expect(prepared.fullSceneBatch).toBeNull();
+    expect(prepared.entityDrawItems).toHaveLength(entities.length);
+    expect(prepared.entityDrawItems.map((item) => item.entity)).toEqual(entities);
+
+    const image = entities[0]!;
+    if (image.mediaSource.type === "image") releaseImageAsset(image.mediaSource.asset);
+  });
+
+  test("patches a small dirty subset without rescanning or rebuilding the full scene", () => {
+    const scene = createScene();
+    const harness = createHarness(scene.entities);
+    harness.preparer.prepare(harness.options);
+
+    const changed = {
+      ...scene.entities[1]!,
+      shaderParams: structuredClone(scene.entities[1]!.shaderParams),
+      textureDirty: true,
+    };
+    changed.shaderParams.size += 1;
+    scene.entities[1] = changed;
+    harness.options.entityVersion++;
+    harness.options.selectionVersion++;
+    harness.options.dirtyEntityIds = new Set([changed.id]);
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+    expect(harness.compositionPass.patchMixedFullSceneBatch).toHaveBeenCalledOnce();
+    expect(harness.compositionPass.prepareFullSceneBatch).toHaveBeenCalledOnce();
+    expect(harness.compositionPass.prepareMixedFullSceneBatch).not.toHaveBeenCalled();
+    expect(harness.spatialIndex.queryBounds).toHaveBeenCalledOnce();
+
+    scene.release();
+  });
+
+  test("rebuilds instead of patching when selection changes with entity content", () => {
+    const scene = createScene();
+    const harness = createHarness(scene.entities);
+    harness.preparer.prepare(harness.options);
+
+    const changed = {
+      ...scene.entities[1]!,
+      shaderParams: structuredClone(scene.entities[1]!.shaderParams),
+      textureDirty: true,
+    };
+    changed.shaderParams.size += 1;
+    scene.entities[1] = changed;
+    harness.options.entityVersion++;
+    harness.options.selectionVersion++;
+    harness.options.selectedEntityIds = new Set([scene.entities[0]!.id]);
+    harness.options.dirtyEntityIds = new Set([changed.id]);
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+    expect(harness.compositionPass.patchMixedFullSceneBatch).not.toHaveBeenCalled();
+    expect(harness.compositionPass.prepareMixedFullSceneBatch).toHaveBeenCalledOnce();
+
+    scene.release();
+  });
+
+  test("patches realistic bulk edits without an arbitrary dirty-entity cutoff", () => {
+    const entities = Array.from({ length: 40 }, (_, index) =>
+      createTestEntity({ id: `bulk-patch-${index}` }),
+    );
+    const harness = createHarness(entities);
+    harness.preparer.prepare(harness.options);
+
+    const dirtyEntityIds = new Set<string>();
+    for (let index = 0; index < 33; index++) {
+      const entity = entities[index]!;
+      entity.shaderParams = structuredClone(entity.shaderParams);
+      entity.shaderParams.size += 1;
+      entity.textureDirty = true;
+      dirtyEntityIds.add(entity.id);
+    }
+    harness.options.entityVersion++;
+    harness.options.dirtyEntityIds = dirtyEntityIds;
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+    expect(harness.compositionPass.patchMixedFullSceneBatch).toHaveBeenCalledOnce();
+    expect(harness.spatialIndex.queryBounds).toHaveBeenCalledOnce();
+
+    for (const entity of entities) {
+      if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
+    }
+  });
+
+  test("uses visible preparation for a mixed scene until zoom LOD work settles", () => {
+    const scene = createScene();
+    scene.entities[1]!.shaderParams = structuredClone(scene.entities[1]!.shaderParams);
+    scene.entities[1]!.shaderParams.size += 1;
+    const harness = createHarness(scene.entities);
+    harness.options.mixedFullSceneBatchMode = "disabled";
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).toBeNull();
+    expect(harness.compositionPass.prepareMixedFullSceneBatch).not.toHaveBeenCalled();
+    expect(harness.compositionPass.prepareDrawItem).toHaveBeenCalledTimes(scene.entities.length);
+
+    harness.options.mixedFullSceneBatchMode = "refresh";
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+    expect(harness.compositionPass.prepareMixedFullSceneBatch).toHaveBeenCalledOnce();
 
     scene.release();
   });
@@ -99,14 +281,110 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     scene.release();
   });
 
+  test("keeps the persistent batch for selection and rebuilds only when selection changes", () => {
+    const scene = createScene();
+    const harness = createHarness(scene.entities);
+    harness.options.selectedEntityIds.add(scene.entities[0]!.id);
+    harness.options.selectionVersion++;
+
+    const first = harness.preparer.prepare(harness.options);
+    expect(first.fullSceneBatch).toMatchObject({
+      selectionVersion: 2,
+      singleSelectedIndex: 0,
+    });
+    expect(harness.compositionPass.prepareFullSceneBatch).toHaveBeenCalledOnce();
+
+    harness.options.viewport = { offset: { x: 500, y: 200 }, zoom: 1 };
+    harness.preparer.prepare(harness.options);
+    expect(harness.compositionPass.prepareFullSceneBatch).toHaveBeenCalledOnce();
+
+    harness.options.selectedEntityIds.clear();
+    harness.options.selectedEntityIds.add(scene.entities[1]!.id);
+    harness.options.selectionVersion++;
+    const changed = harness.preparer.prepare(harness.options);
+    expect(changed.fullSceneBatch).toMatchObject({
+      selectionVersion: 3,
+      singleSelectedIndex: 1,
+    });
+    expect(harness.compositionPass.prepareFullSceneBatch).toHaveBeenCalledTimes(2);
+
+    scene.entities.reverse();
+    harness.options.geometryVersion++;
+    const reordered = harness.preparer.prepare(harness.options);
+    expect(reordered.fullSceneBatch).toMatchObject({ singleSelectedIndex: 0 });
+    expect(harness.compositionPass.prepareFullSceneBatch).toHaveBeenCalledTimes(3);
+
+    scene.release();
+  });
+
+  test("keeps the persistent batch in debug mode", () => {
+    const scene = createScene();
+    const harness = createHarness(scene.entities);
+    harness.options.debugMode = true;
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).toMatchObject({
+      debugMode: true,
+    });
+    expect(harness.compositionPass.prepareFullSceneBatch).toHaveBeenCalledOnce();
+
+    scene.release();
+  });
+
+  test("keeps the persistent batch for a drag transform covering the selection", () => {
+    const scene = createScene();
+    const harness = createHarness(scene.entities);
+    harness.options.selectedEntityIds.add(scene.entities[0]!.id);
+    harness.options.selectionVersion++;
+    harness.options.dragVisual.active = true;
+    harness.options.dragVisual.isDragPhase = true;
+    harness.options.dragVisual.appliesToSelection = true;
+    harness.options.dragVisual.entityIds = harness.options.selectedEntityIds;
+    harness.options.dragVisual.offset = { x: 100, y: -50 };
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+    expect(harness.compositionPass.prepareFullSceneBatch).toHaveBeenCalledOnce();
+
+    scene.release();
+  });
+
+  test("applies the transient selection offset during normal visible preparation", () => {
+    const scene = createScene();
+    const harness = createHarness(scene.entities);
+    harness.options.hasCanvasCallouts = true;
+    harness.options.selectedEntityIds.add(scene.entities[0]!.id);
+    harness.options.dragVisual.active = true;
+    harness.options.dragVisual.isDragPhase = true;
+    harness.options.dragVisual.appliesToSelection = true;
+    harness.options.dragVisual.entityIds = harness.options.selectedEntityIds;
+    harness.options.dragVisual.offset = { x: 40, y: -25 };
+
+    const prepared = harness.preparer.prepare(harness.options);
+    expect(prepared.fullSceneBatch).toBeNull();
+    expect(prepared.entityDrawItems[0]).toMatchObject({
+      entity: scene.entities[0],
+      offsetX: 40,
+      offsetY: -25,
+    });
+
+    scene.release();
+  });
+
+  test("keeps the persistent batch while drag-selection membership changes on the GPU", () => {
+    const scene = createScene();
+    const harness = createHarness(scene.entities);
+    harness.options.dragSelectMode = "replace";
+
+    expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
+    expect(harness.compositionPass.prepareFullSceneBatch).toHaveBeenCalledOnce();
+
+    scene.release();
+  });
+
   test.each([
-    ["selection", (options: PrepareOptions) => options.selectedEntityIds.add("scene-first")],
     ["action layer", (options: PrepareOptions) => (options.actionLayer.active = true)],
     ["action blur", (options: PrepareOptions) => (options.actionLayer.blurIntensity = 0.5)],
     ["drag visual", (options: PrepareOptions) => (options.dragVisual.active = true)],
-    ["drag selection", (options: PrepareOptions) => (options.dragSelectActive = true)],
     ["canvas callouts", (options: PrepareOptions) => (options.hasCanvasCallouts = true)],
-    ["debug mode", (options: PrepareOptions) => (options.debugMode = true)],
   ])("rejects batching during %s", (_label, configure) => {
     const scene = createScene();
     const harness = createHarness(scene.entities);
@@ -137,16 +415,42 @@ function createHarness(
         cachedKey !== null &&
         cachedKey.entityVersion === key.entityVersion &&
         cachedKey.geometryVersion === key.geometryVersion &&
+        cachedKey.selectionVersion === key.selectionVersion &&
+        cachedKey.debugMode === key.debugMode &&
         cachedKey.renderWidth === key.renderWidth &&
         cachedKey.renderHeight === key.renderHeight &&
         cachedKey.texture === key.texture &&
+        cachedKey.textureCacheRevision === key.textureCacheRevision &&
         cachedKey.instanceCount === key.instanceCount
       );
     }),
-    prepareFullSceneBatch: vi.fn<(options: FullSceneBatchKey) => void>((options) => {
+    prepareFullSceneBatch: vi.fn<(options: PrepareFullSceneBatchOptions) => void>((options) => {
       cachedKey = { ...options };
     }),
-    prepareDrawItem: vi.fn<(options: { entity: ShaderCanvasEntity }) => CompositionDrawItem>(
+    prepareMixedFullSceneBatch: vi.fn<
+      (key: FullSceneBatchKey, items: readonly CompositionDrawItem[]) => void
+    >((key) => {
+      cachedKey = { ...key };
+    }),
+    patchMixedFullSceneBatch: vi.fn<(key: FullSceneBatchKey) => boolean>((key) => {
+      cachedKey = { ...key };
+      return true;
+    }),
+    visitCachedFullSceneTextures: vi.fn<(visitor: (texture: GPUTexture) => void) => boolean>(
+      (visitor) => {
+        if (!cachedKey) return false;
+        visitor(texture);
+        return true;
+      },
+    ),
+    prepareDrawItem: vi.fn<
+      (options: {
+        entity: ShaderCanvasEntity;
+        positionOffsetX: number;
+        positionOffsetY: number;
+        visualScale: number;
+      }) => CompositionDrawItem
+    >(
       (options) =>
         ({
           entity: options.entity,
@@ -155,17 +459,19 @@ function createHarness(
           pipeline: "texture",
           isSelected: false,
           debugMode: false,
-          offsetX: 0,
-          offsetY: 0,
-          visualScale: 1,
+          offsetX: options.positionOffsetX,
+          offsetY: options.positionOffsetY,
+          visualScale: options.visualScale,
         }) satisfies CompositionDrawItem,
     ),
   };
   const texturePipeline = {
+    textureCacheRevision: 1,
+    pinCachedTexture: vi.fn<(texture: GPUTexture) => boolean>(() => true),
     needsContinuousRenderForEntity: vi.fn<(entity: ShaderCanvasEntity) => boolean>(() => false),
-    getReusableStaticCompositionSource: vi.fn<() => { kind: "texture"; texture: GPUTexture }>(
-      () => ({ kind: "texture", texture }),
-    ),
+    getReusableStaticCompositionSource: vi.fn<
+      (_entity: ShaderCanvasEntity) => { kind: "texture"; texture: GPUTexture }
+    >(() => ({ kind: "texture", texture })),
     resolveRenderSize: vi.fn<() => null>(() => null),
     renderEntityToTexture: vi.fn<() => null>(() => null),
   };
@@ -187,6 +493,8 @@ function createHarness(
     entitySpatialIndex: spatialIndex as never,
     entityVersion: 1,
     geometryVersion: 1,
+    selectionVersion: 1,
+    dirtyEntityIds: new Set(),
     viewport: { offset: { x: 0, y: 0 }, zoom: 1 } satisfies Viewport,
     width: 1280,
     height: 720,
@@ -204,8 +512,11 @@ function createHarness(
       isDragPhase: false,
       entityIds: new Set(),
       scale: 1,
+      offset: { x: 0, y: 0 },
+      appliesToSelection: false,
     },
-    dragSelectActive: false,
+    dragSelectMode: null,
+    mixedFullSceneBatchMode: "refresh",
     hasCanvasCallouts: false,
     debugMode: false,
   };

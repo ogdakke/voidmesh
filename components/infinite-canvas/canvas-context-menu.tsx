@@ -116,7 +116,6 @@ export default function CanvasContextMenu({
   return (
     <>
       {/* Hidden file input - persists outside context menu to survive menu close */}
-      {/* oxlint-disable-next-line jsx-a11y/control-has-associated-label */}
       <input
         ref={paletteInputRef}
         type="file"

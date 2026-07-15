@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   createDuplicatePlaybackState,
+  createUniqueEntityNameAllocator,
   resetDuplicatedMediaPlayback,
 } from "#lib/media-duplication.ts";
 import { createTestEntity } from "../helpers/test-entity.ts";
@@ -47,5 +48,17 @@ describe("media duplication playback", () => {
     expect(entity.mediaSource.videoElement.volume).toBe(1);
     expect(entity.mediaSource.videoElement.loop).toBe(true);
     expect(entity.mediaSource.videoElement.playbackRate).toBe(1);
+  });
+});
+
+describe("duplicate name allocation", () => {
+  test("advances repeated base names without rescanning prior suffixes", () => {
+    const allocator = createUniqueEntityNameAllocator(
+      new Set(["Vincent", "Vincent (1)", "Vincent (2)", "Other"]),
+    );
+
+    expect(allocator.allocate("Vincent")).toBe("Vincent (3)");
+    expect(allocator.allocate("Vincent")).toBe("Vincent (4)");
+    expect(allocator.allocate("Other")).toBe("Other (1)");
   });
 });

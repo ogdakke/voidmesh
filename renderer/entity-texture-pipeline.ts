@@ -90,6 +90,7 @@ export class EntityTexturePipeline {
   #lodTransitionsUsed = 0;
   #pendingLodWork = false;
   #textureCacheRevision = 0;
+  readonly #residentTextureEntries = new WeakMap<GPUTexture, CachedEntityTexture>();
   readonly #lodCacheLookups = new Map<object, LodCacheLookup>();
   #entityContentRevisions = new Map<string, number>();
   #gifResizeSurfaces = new Map<string, GifResizeSurface>();
@@ -287,6 +288,7 @@ export class EntityTexturePipeline {
         };
         this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
         this.#sourceTextures.set(sourceKey, cachedSource);
+        this.#residentTextureEntries.set(sourceTexture, cachedSource);
         this.#sourceBytes += cachedSource.byteSize;
         this.#textureCacheRevision++;
       } else {
@@ -354,6 +356,7 @@ export class EntityTexturePipeline {
     } else {
       // Dimensions changed or first render — destroy old, create new
       cachedTexture?.texture.destroy();
+      if (cachedTexture) this.#residentTextureEntries.delete(cachedTexture.texture);
       if (cachedTexture) this.#processedBytes -= cachedTexture.byteSize;
       outputTexture = this.#device.createTexture({
         label: `Entity ${entity.id} processed texture`,
@@ -390,6 +393,7 @@ export class EntityTexturePipeline {
       entityIds: cachedTexture?.entityIds ?? recycledTexture?.entityIds ?? new Set(),
     };
     this.#processedTextures.set(processedKey, processedEntry);
+    this.#residentTextureEntries.set(outputTexture, processedEntry);
     if (!processedKeyWasCached) this.#textureCacheRevision++;
     if (createdOutputTexture) this.#processedBytes += processedEntry.byteSize;
     this.#bindEntityToProcessed(entity.id, processedKey, processedEntry);
@@ -528,6 +532,17 @@ export class EntityTexturePipeline {
 
   get hasPendingLodWork(): boolean {
     return this.#pendingLodWork;
+  }
+
+  get textureCacheRevision(): number {
+    return this.#textureCacheRevision;
+  }
+
+  pinCachedTexture(texture: GPUTexture): boolean {
+    const entry = this.#residentTextureEntries.get(texture);
+    if (!entry) return false;
+    entry.lastUsedFrame = this.#currentFrame;
+    return true;
   }
 
   endFrame(): void {
@@ -801,6 +816,7 @@ export class EntityTexturePipeline {
     cachedProcessed.entityIds.delete(entityId);
     if (destroyOrphan && cachedProcessed.entityIds.size === 0) {
       cachedProcessed.texture.destroy();
+      this.#residentTextureEntries.delete(cachedProcessed.texture);
       this.#processedTextures.delete(cachedProcessed.key);
       this.#processedBytes -= cachedProcessed.byteSize;
     }
@@ -829,6 +845,7 @@ export class EntityTexturePipeline {
     cachedSource.entityIds.delete(entityId);
     if (destroyOrphan && cachedSource.entityIds.size === 0) {
       cachedSource.texture.destroy();
+      this.#residentTextureEntries.delete(cachedSource.texture);
       this.#sourceTextures.delete(cachedSource.key);
       this.#sourceBytes -= cachedSource.byteSize;
     }
@@ -858,8 +875,10 @@ export class EntityTexturePipeline {
     for (const candidate of candidates) {
       if (residentBytes <= this.#textureBudgetBytes) break;
       candidate.cached.texture.destroy();
+      this.#residentTextureEntries.delete(candidate.cached.texture);
       residentBytes -= candidate.cached.byteSize;
       this.#evictions++;
+      this.#textureCacheRevision++;
 
       if (candidate.kind === "processed") {
         this.#processedTextures.delete(candidate.key);

@@ -43,7 +43,17 @@ Run one scenario:
 
 ```bash
 bun run bench:render:record -- --scenario image-flowing-glass-4k-continuous
+bun run bench:render:record -- --scenario multi-72-unique-cached-composition
+bun run bench:render:record -- --scenario pan-61-unique-mixed-paused-videos --suite many-entity
 ```
+
+The 72-image scenario guards realistic high-entropy composition: every static
+image owns a distinct resident texture, so it exercises many z-ordered texture
+runs without relying on duplicated-source synthetic scale.
+
+The paused mixed-media pan scenario guards the everyday external-video path:
+57 unique large images and four paused videos pan continuously at fixed zoom,
+with RAF cadence recorded so compositor regressions are visible.
 
 ## Many-entity suite
 
@@ -54,6 +64,18 @@ the canvas virtualization and texture-residency paths:
 - a viewport sweep across the 10,000-instance world;
 - 4,096 unique thumbnail assets, both all-visible and swept through the cache;
 - 2,048 identically processed instances sharing one source and processed result.
+- 262,144 identically processed instances panned at overview zoom with no,
+  single, half, and full selection, plus half-selection debug mode;
+- the same 262,144-instance overview with half the entities translated through
+  the transient selected-group drag uniform;
+- the same overview with an expanding replace-mode drag selection evaluated by
+  the persistent instanced shader;
+- 262,144 shared-asset entities split into contiguous dithering, ASCII,
+  processed, and show-original regions to guard mixed static pan plans;
+- 131,072 shared-asset mixed entities zoomed from 1% to 30% and back to guard
+  against rebuilding the full persistent composition plan during zoom motion;
+- 131,072 shared instances with one selected entity changing shader parameters
+  every frame to guard incremental texture-run and instance-buffer patches;
 - a 61-source mixed image/video canvas zoomed from one detailed entity out to
   the full overview and back, both original and default-effect variants.
 
@@ -68,6 +90,11 @@ Run one large scenario without running the rest:
 ```bash
 bun run bench:render:record -- --scenario many-10000-shared-original-all-visible
 bun run bench:render:record -- --scenario many-4096-unique-thumbnails-pan
+bun run bench:render:record -- --scenario many-262144-shared-processed-overview-pan-half-selected
+bun run bench:render:record -- --scenario many-262144-shared-processed-overview-pan-half-selected-debug
+bun run bench:render:record -- --scenario many-262144-shared-processed-overview-drag-half-selected
+bun run bench:render:record -- --scenario many-262144-shared-processed-overview-drag-select
+bun run bench:render:record -- --scenario many-262144-shared-mixed-static-overview-pan
 bun run bench:render:record -- --scenario zoom-61-unique-mixed-round-trip
 bun run bench:render:record -- --scenario zoom-61-unique-mixed-processed-round-trip
 ```
@@ -85,11 +112,19 @@ Large-result records include more than timings. Each scenario reports:
 - source, processed-output, processing-cache, and pooled texture counts and bytes;
 - average/min/max rendered entities per frame;
 - source uploads, source/processed allocations, and cache evictions.
+- persistent full-scene batch rebuild count and full-scene/normal instance upload bytes.
 
 The decoded-byte value is a deterministic RGBA estimate. GPU values come from
 the renderer's own resource accounting and therefore cover persistent entity
 textures and idle pooled textures, but not implementation-private browser/driver
 memory.
+
+Run the opt-in CPU benchmark for Command-A aggregation and the one-time drag
+commit separately:
+
+```bash
+bun run --bun vitest bench bench/large-selection-operations.bench.ts --run
+```
 
 ### Mixed-media zoom regression
 
@@ -110,6 +145,7 @@ defaults (dithering, grain, and bloom) and therefore also measures screen-space
 video processing without pausing playback or media timeline progression.
 
 Each recorded frame contains its phase, zoom, rAF interval, renderer CPU time,
+renderer setup/preparation/admission/query/encode/submit phase timings,
 rendered entity count, resident bytes, texture counts, and per-frame
 allocation/upload/eviction deltas. Synthetic video source drawing is excluded
 from renderer timing and reported separately as `sourceUpdateMs`.

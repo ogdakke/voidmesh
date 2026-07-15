@@ -90,6 +90,9 @@ export function useCanvasSurfaceEvents({
 
     const handleWheel = (event: WheelEvent) => {
       event.preventDefault();
+      // The canvas owns wheel navigation. Do not bubble into React's delegated
+      // event root, which otherwise creates a synthetic event for every pan delta.
+      event.stopPropagation();
       interaction.wheel(
         event.deltaX,
         event.deltaY,
