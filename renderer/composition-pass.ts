@@ -158,11 +158,20 @@ function collectUniqueTextures(ranges: FullSceneBatchCache["drawRanges"]): GPUTe
   return textures;
 }
 
-const INSTANCE_STRIDE_BYTES = 32;
+const INSTANCE_STRIDE_BYTES = 24;
 const INSTANCE_STRIDE_VALUES = INSTANCE_STRIDE_BYTES / 4;
 const INITIAL_INSTANCE_CAPACITY = 256;
-const INSTANCE_FLAG_DEBUG = 1;
-const INSTANCE_FLAG_LOCKED = 2;
+const INSTANCE_ROTATION_BITS = 16;
+const INSTANCE_ROTATION_MAX = (1 << INSTANCE_ROTATION_BITS) - 1;
+const INSTANCE_SCALE_BITS = 10;
+const INSTANCE_SCALE_MAX = (1 << INSTANCE_SCALE_BITS) - 1;
+const INSTANCE_SCALE_QUANTIZED_MAX = INSTANCE_SCALE_MAX - 1;
+const INSTANCE_SCALE_MIN = 0.8;
+const INSTANCE_SCALE_RANGE = 0.25;
+const INSTANCE_SCALE_SHIFT = INSTANCE_ROTATION_BITS;
+const INSTANCE_FLAG_SELECTED = 1 << 26;
+const INSTANCE_FLAG_DEBUG = 1 << 27;
+const INSTANCE_FLAG_LOCKED = 1 << 28;
 
 function getDragSelectModeValue(mode: DragSelectMode | null): number {
   switch (mode) {
@@ -177,8 +186,33 @@ function getDragSelectModeValue(mode: DragSelectMode | null): number {
   }
 }
 
-function getInstanceFlags(entity: ShaderCanvasEntity, debugMode: boolean): number {
-  return (debugMode ? INSTANCE_FLAG_DEBUG : 0) | (entity.locked ? INSTANCE_FLAG_LOCKED : 0);
+function packInstanceState(
+  entity: ShaderCanvasEntity,
+  isSelected: boolean,
+  debugMode: boolean,
+  visualScale: number,
+): number {
+  const normalizedRotation = (((entity.rotation % 360) + 360) % 360) / 360;
+  const rotation = Math.round(normalizedRotation * INSTANCE_ROTATION_MAX);
+  const clampedScale = Math.max(
+    INSTANCE_SCALE_MIN,
+    Math.min(visualScale, INSTANCE_SCALE_MIN + INSTANCE_SCALE_RANGE),
+  );
+  const scale =
+    visualScale === 1
+      ? INSTANCE_SCALE_MAX
+      : Math.round(
+          ((clampedScale - INSTANCE_SCALE_MIN) / INSTANCE_SCALE_RANGE) *
+            INSTANCE_SCALE_QUANTIZED_MAX,
+        );
+  return (
+    (rotation |
+      (scale << INSTANCE_SCALE_SHIFT) |
+      (isSelected ? INSTANCE_FLAG_SELECTED : 0) |
+      (debugMode ? INSTANCE_FLAG_DEBUG : 0) |
+      (entity.locked ? INSTANCE_FLAG_LOCKED : 0)) >>>
+    0
+  );
 }
 
 function createExternalCompositionShaderSource(source: string): string {
@@ -1217,10 +1251,8 @@ export class CompositionPass {
     this.#instanceFloatView[offset + 1] = entity.position.y;
     this.#instanceFloatView[offset + 2] = entity.size.width;
     this.#instanceFloatView[offset + 3] = entity.size.height;
-    this.#instanceFloatView[offset + 4] = (entity.rotation * Math.PI) / 180;
-    this.#instanceUintView[offset + 5] = isSelected ? 1 : 0;
-    this.#instanceUintView[offset + 6] = getInstanceFlags(entity, debugMode);
-    this.#instanceFloatView[offset + 7] = 1;
+    this.#instanceUintView[offset + 4] = packInstanceState(entity, isSelected, debugMode, 1);
+    this.#instanceUintView[offset + 5] = 0;
   }
 
   #writeInstance(index: number, item: CompositionDrawItem): void {
@@ -1230,10 +1262,13 @@ export class CompositionPass {
     this.#instanceFloatView[offset + 1] = entity.position.y + item.offsetY;
     this.#instanceFloatView[offset + 2] = entity.size.width;
     this.#instanceFloatView[offset + 3] = entity.size.height;
-    this.#instanceFloatView[offset + 4] = (entity.rotation * Math.PI) / 180;
-    this.#instanceUintView[offset + 5] = item.isSelected ? 1 : 0;
-    this.#instanceUintView[offset + 6] = getInstanceFlags(entity, item.debugMode);
-    this.#instanceFloatView[offset + 7] = item.visualScale;
+    this.#instanceUintView[offset + 4] = packInstanceState(
+      entity,
+      item.isSelected,
+      item.debugMode,
+      item.visualScale,
+    );
+    this.#instanceUintView[offset + 5] = 0;
   }
 
   #getInstancedBindGroup(texture: GPUTexture): GPUBindGroup {

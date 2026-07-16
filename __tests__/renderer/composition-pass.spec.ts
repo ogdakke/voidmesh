@@ -39,8 +39,8 @@ describe("CompositionPass instancing", () => {
 
     const upload = device.queue.writeBuffer.mock.calls[0]![2] as ArrayBuffer;
     const floats = new Float32Array(upload);
-    expect(Array.from(floats.slice(0, 5))).toEqual([10, 20, 200, 150, 0]);
-    expect(Array.from(floats.slice(8, 13))).toEqual([30, 40, 200, 150, 0]);
+    expect(Array.from(floats.slice(0, 4))).toEqual([10, 20, 200, 150]);
+    expect(Array.from(floats.slice(6, 10))).toEqual([30, 40, 200, 150]);
 
     pass.destroy();
     expect(instanceBuffer.destroy).toHaveBeenCalledTimes(2);
@@ -83,6 +83,39 @@ describe("CompositionPass instancing", () => {
     releaseImageEntity(final);
   });
 
+  test("packs rotation, visual scale, and flags into a 24-byte instance", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const entity = createTestEntity({ id: "packed-instance", rotation: 90, locked: true });
+    const texture = createTexture();
+    const item = pass.prepareDrawItem({
+      entity,
+      source: { kind: "texture", texture },
+      isSelected: true,
+      debugMode: true,
+      positionOffsetX: 0,
+      positionOffsetY: 0,
+      visualScale: 0.95,
+    });
+
+    pass.drawItems(createRenderPass(), [item]);
+
+    expect(device.queue.writeBuffer.mock.calls[0]![4]).toBe(24);
+    const upload = device.queue.writeBuffer.mock.calls[0]![2] as ArrayBuffer;
+    const packedState = new Uint32Array(upload)[4]!;
+    const rotationDegrees = ((packedState & 0xffff) / 0xffff) * 360;
+    const scaleCode = (packedState >>> 16) & 0x3ff;
+    const visualScale = 0.8 + scaleCode * (0.25 / 1022);
+    expect(rotationDegrees).toBeCloseTo(90, 2);
+    expect(visualScale).toBeCloseTo(0.95, 3);
+    expect(packedState & (1 << 26)).not.toBe(0);
+    expect(packedState & (1 << 27)).not.toBe(0);
+    expect(packedState & (1 << 28)).not.toBe(0);
+
+    pass.destroy();
+    releaseImageEntity(entity);
+  });
+
   test("appends multiple render phases into disjoint instance-buffer ranges", () => {
     const { device } = createDevice();
     const pass = createPass(device);
@@ -100,7 +133,7 @@ describe("CompositionPass instancing", () => {
     pass.drawItems(actionPass, actionItems);
 
     expect(device.queue.writeBuffer.mock.calls[0]![1]).toBe(0);
-    expect(device.queue.writeBuffer.mock.calls[1]![1]).toBe(2 * 32);
+    expect(device.queue.writeBuffer.mock.calls[1]![1]).toBe(2 * 24);
     expect(scenePass.draw).toHaveBeenCalledWith(6, 2, 0, 0);
     expect(actionPass.draw).toHaveBeenCalledWith(6, 1, 0, 2);
 
@@ -131,7 +164,7 @@ describe("CompositionPass instancing", () => {
     expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
     expect(pass.getStats()).toEqual({
       fullSceneBatchRebuilds: 1,
-      fullSceneBatchUploadBytes: 64,
+      fullSceneBatchUploadBytes: 48,
       normalInstanceUploadBytes: 0,
     });
     expect(secondFramePass.draw).toHaveBeenCalledWith(6, 2, 0, 0);
@@ -243,7 +276,7 @@ describe("CompositionPass instancing", () => {
       ]),
     ).toBe(true);
     expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
-    expect(device.queue.writeBuffer.mock.calls[0]![4]).toBe(3 * 32);
+    expect(device.queue.writeBuffer.mock.calls[0]![4]).toBe(3 * 24);
     expect(pass.getStats().fullSceneBatchRebuilds).toBe(1);
 
     const renderPass = createRenderPass();
@@ -281,7 +314,7 @@ describe("CompositionPass instancing", () => {
     ).toBe(true);
     expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
     expect(device.queue.writeBuffer.mock.calls[0]![1]).toBe(0);
-    expect(device.queue.writeBuffer.mock.calls[0]![4]).toBe(32);
+    expect(device.queue.writeBuffer.mock.calls[0]![4]).toBe(24);
     expect(pass.getStats().fullSceneBatchRebuilds).toBe(1);
     expect(pass.drawFullSceneBatch(createRenderPass(), committedKey)).toBe(true);
 
@@ -366,7 +399,7 @@ describe("CompositionPass instancing", () => {
     ]);
     expect(pass.getStats()).toMatchObject({
       fullSceneBatchRebuilds: 1,
-      fullSceneBatchUploadBytes: 4 * 32,
+      fullSceneBatchUploadBytes: 4 * 24,
     });
 
     const restoredKey = { ...patchedKey, entityVersion: 3, selectionVersion: 3 };
@@ -414,7 +447,7 @@ describe("CompositionPass instancing", () => {
 
     expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
     expect(device.queue.writeBuffer.mock.calls[0]![1]).toBe(0);
-    expect(device.queue.writeBuffer.mock.calls[0]![4]).toBe(3 * 32);
+    expect(device.queue.writeBuffer.mock.calls[0]![4]).toBe(3 * 24);
     const renderPass = createRenderPass();
     expect(pass.drawFullSceneBatch(renderPass, patchedKey)).toBe(true);
     expect(renderPass.draw.mock.calls).toEqual([
@@ -447,10 +480,10 @@ describe("CompositionPass instancing", () => {
     pass.prepareFullSceneBatch({ ...key, entities: [first, second], selectedEntityIds });
     const upload = device.queue.writeBuffer.mock.calls[0]![2] as ArrayBuffer;
     const uints = new Uint32Array(upload);
-    expect(uints[5]).toBe(1);
-    expect(uints[6]).toBe(1);
-    expect(uints[13]).toBe(0);
-    expect(uints[14]).toBe(1);
+    expect(uints[4]! & (1 << 26)).not.toBe(0);
+    expect(uints[4]! & (1 << 27)).not.toBe(0);
+    expect(uints[10]! & (1 << 26)).toBe(0);
+    expect(uints[10]! & (1 << 27)).not.toBe(0);
 
     const renderPass = createRenderPass();
     expect(pass.drawFullSceneBatch(renderPass, key)).toBe(true);
