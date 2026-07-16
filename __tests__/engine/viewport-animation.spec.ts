@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach } from "vitest";
 import { AnimationScheduler } from "#lib/animation-scheduler.ts";
+import { easings } from "#lib/canvas-math.ts";
 import { ViewportAnimationController, type ViewportStore } from "#engine";
 import type { Viewport } from "#types/canvas.ts";
 
@@ -35,7 +36,83 @@ describe("ViewportAnimationController", () => {
     scheduler.tick(0);
     scheduler.tick(300);
 
+    expect(viewport.offset.x).toBeCloseTo(target.offset.x);
+    expect(viewport.offset.y).toBeCloseTo(target.offset.y);
     expect(viewport.zoom).toBeCloseTo(2, 1);
+  });
+
+  test("destination center follows a straight screen-space path across a large zoom change", () => {
+    viewport = { offset: { x: -20_000, y: 8_000 }, zoom: 0.01 };
+    const target: Viewport = { offset: { x: 1_200, y: -600 }, zoom: 1.35 };
+    const dpr = window.devicePixelRatio;
+    const screenCenter = {
+      x: (mockContainer.clientWidth * dpr) / 2,
+      y: (mockContainer.clientHeight * dpr) / 2,
+    };
+    const destinationWorldCenter = {
+      x: target.offset.x + screenCenter.x / target.zoom,
+      y: target.offset.y + screenCenter.y / target.zoom,
+    };
+    const destinationStartScreenPosition = {
+      x: (destinationWorldCenter.x - viewport.offset.x) * viewport.zoom,
+      y: (destinationWorldCenter.y - viewport.offset.y) * viewport.zoom,
+    };
+
+    controller.animateTo(target, { duration: 300, easing: (t) => t });
+    scheduler.tick(0);
+    scheduler.tick(150);
+
+    const destinationMidScreenPosition = {
+      x: (destinationWorldCenter.x - viewport.offset.x) * viewport.zoom,
+      y: (destinationWorldCenter.y - viewport.offset.y) * viewport.zoom,
+    };
+
+    expect(destinationMidScreenPosition.x).toBeCloseTo(
+      (destinationStartScreenPosition.x + screenCenter.x) / 2,
+    );
+    expect(destinationMidScreenPosition.y).toBeCloseTo(
+      (destinationStartScreenPosition.y + screenCenter.y) / 2,
+    );
+  });
+
+  test("destination center uses balanced pacing instead of arriving early with zoom", () => {
+    viewport = { offset: { x: -20_000, y: 8_000 }, zoom: 0.01 };
+    const target: Viewport = { offset: { x: 1_200, y: -600 }, zoom: 1.35 };
+    const dpr = window.devicePixelRatio;
+    const screenCenter = {
+      x: (mockContainer.clientWidth * dpr) / 2,
+      y: (mockContainer.clientHeight * dpr) / 2,
+    };
+    const destinationWorldCenter = {
+      x: target.offset.x + screenCenter.x / target.zoom,
+      y: target.offset.y + screenCenter.y / target.zoom,
+    };
+    const destinationStartScreenPosition = {
+      x: (destinationWorldCenter.x - viewport.offset.x) * viewport.zoom,
+      y: (destinationWorldCenter.y - viewport.offset.y) * viewport.zoom,
+    };
+
+    controller.animateTo(target, {
+      duration: 400,
+      easing: easings.easeOutCubic,
+    });
+    scheduler.tick(0);
+    scheduler.tick(100);
+
+    const destinationScreenPosition = {
+      x: (destinationWorldCenter.x - viewport.offset.x) * viewport.zoom,
+      y: (destinationWorldCenter.y - viewport.offset.y) * viewport.zoom,
+    };
+    const expectedPositionProgress = easings.easeInOut(0.25);
+
+    expect(destinationScreenPosition.x).toBeCloseTo(
+      destinationStartScreenPosition.x +
+        (screenCenter.x - destinationStartScreenPosition.x) * expectedPositionProgress,
+    );
+    expect(destinationScreenPosition.y).toBeCloseTo(
+      destinationStartScreenPosition.y +
+        (screenCenter.y - destinationStartScreenPosition.y) * expectedPositionProgress,
+    );
   });
 
   test("animateTo without container sets viewport instantly", () => {
