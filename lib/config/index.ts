@@ -536,7 +536,7 @@ export const config = {
       /** Duration for centering canvas (ms) */
       centerCanvasDuration: 300,
       /** Duration for fit-to-view (ms) */
-      fitToViewDuration: 300,
+      fitToViewDuration: 400,
     },
     lens: {
       subtle: {

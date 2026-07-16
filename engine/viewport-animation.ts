@@ -11,8 +11,10 @@ import {
 export interface ViewportAnimationOptions {
   /** Animation duration in milliseconds (default: 300) */
   duration?: number;
-  /** Easing function (default: easeOutCubic) */
+  /** Zoom easing function (default: easeOutCubic) */
   easing?: EasingFunction;
+  /** Screen-space translation easing function (default: easeInOut) */
+  positionEasing?: EasingFunction;
   /** Callback when animation completes */
   onComplete?: () => void;
 }
@@ -33,13 +35,11 @@ function getWorldCenter(viewport: Viewport, screenCenter: Point): Point {
   };
 }
 
-/**
- * Calculate viewport offset to place a world point at screen center.
- */
-function getOffsetForWorldCenter(worldCenter: Point, zoom: number, screenCenter: Point): Point {
+/** Calculate viewport offset to place a world point at a screen point. */
+function getOffsetForWorldPoint(worldPoint: Point, screenPoint: Point, zoom: number): Point {
   return {
-    x: worldCenter.x - screenCenter.x / zoom,
-    y: worldCenter.y - screenCenter.y / zoom,
+    x: worldPoint.x - screenPoint.x / zoom,
+    y: worldPoint.y - screenPoint.y / zoom,
   };
 }
 
@@ -47,9 +47,10 @@ function getOffsetForWorldCenter(worldCenter: Point, zoom: number, screenCenter:
  * Viewport animation controller.
  * Manages smooth transitions between viewport states.
  *
- * Uses screen-space interpolation: interpolates the world center point
- * and zoom separately, then derives offset. This ensures the viewport
- * follows a straight visual path regardless of zoom changes.
+ * Uses screen-space interpolation: the destination viewport's world center
+ * moves from its current screen position to the screen center while zoom is
+ * interpolated separately. Deriving offset from that anchor prevents large
+ * zoom changes from bending or reversing the visual flight path.
  *
  * Delegates timing to AnimationScheduler (no tick() method).
  */
@@ -80,6 +81,7 @@ export class ViewportAnimationController {
     const {
       duration = config.canvas.animation.centerCanvasDuration,
       easing = easings[config.canvas.animation.easing],
+      positionEasing = easings.easeInOut,
       onComplete,
     } = options;
 
@@ -107,8 +109,11 @@ export class ViewportAnimationController {
       y: (this.#container.clientHeight * dpr) / 2,
     };
 
-    const startWorldCenter = getWorldCenter(currentViewport, screenCenter);
     const endWorldCenter = getWorldCenter(target, screenCenter);
+    const startEndCenterScreenPosition: Point = {
+      x: (endWorldCenter.x - currentViewport.offset.x) * currentViewport.zoom,
+      y: (endWorldCenter.y - currentViewport.offset.y) * currentViewport.zoom,
+    };
     const startZoom = currentViewport.zoom;
     const endZoom = target.zoom;
 
@@ -116,15 +121,18 @@ export class ViewportAnimationController {
       from: 0,
       to: 1,
       duration,
-      easing,
       tag: "viewport",
-      onUpdate: (t) => {
-        const currentZoom = lerpExp(startZoom, endZoom, t);
-        const currentWorldCenter = lerpPoint(startWorldCenter, endWorldCenter, t);
-        const currentOffset = getOffsetForWorldCenter(
-          currentWorldCenter,
-          currentZoom,
+      onUpdate: (rawProgress) => {
+        const currentZoom = lerpExp(startZoom, endZoom, easing(rawProgress));
+        const currentEndCenterScreenPosition = lerpPoint(
+          startEndCenterScreenPosition,
           screenCenter,
+          positionEasing(rawProgress),
+        );
+        const currentOffset = getOffsetForWorldPoint(
+          endWorldCenter,
+          currentEndCenterScreenPosition,
+          currentZoom,
         );
         this.#store.setViewport({ offset: currentOffset, zoom: currentZoom });
       },
