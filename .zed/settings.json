@@ -3,12 +3,18 @@
   "language_servers": [
     "!tailwindcss-language-server",
     "!typescript-language-server",
-    "!vtsls",
+    "!tsgo",
     "!eslint",
-    "tsgo",
+    "vtsls",
     "..."
   ],
   "lsp": {
+    "vtsls": {
+      "binary": {
+        "path": "node_modules/.bin/tsc",
+        "arguments": ["--lsp", "--stdio"]
+      }
+    },
     "oxlint": {
       "initialization_options": {
         "settings": {
