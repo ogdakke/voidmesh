@@ -237,6 +237,53 @@ describe("deserialize workspace", () => {
     expect(commit).not.toHaveBeenCalled();
   });
 
+  test("migrates v5 storage without expanding already-compatible shader parameters", async () => {
+    const entity = {
+      ...createSerializedImageEntity("entity-1", "media/shared.png"),
+      shaderParams: { size: 37 },
+    };
+    const archive = createManifestArchive(
+      {
+        type: "studio-canvas",
+        version: 5,
+        createdAt: new Date("2026-07-16T10:00:00.000Z").toISOString(),
+        viewport: { offset: { x: 0, y: 0 }, zoom: 1 },
+        entities: [entity],
+      },
+      { "media/shared.png": new Uint8Array([1, 2, 3]) },
+    );
+
+    const result = await deserializeIntoCanvas(archive);
+    const restored = canvasStore.getState().entities.get(entity.id)!;
+
+    expect(result.warnings).toContain(`Migrated from v5 to v${CURRENT_VERSION}`);
+    expect(restored.shaderParams.size).toBe(37);
+    expect(restored.shaderParams.scale).toBeUndefined();
+  });
+
+  test("fills compatibility defaults for shader schemas older than v5", async () => {
+    const entity = {
+      ...createSerializedImageEntity("entity-1", "media/shared.png"),
+      shaderParams: { size: 37 },
+    };
+    const archive = createManifestArchive(
+      {
+        type: "studio-canvas",
+        version: 4,
+        createdAt: new Date("2026-07-16T10:00:00.000Z").toISOString(),
+        viewport: { offset: { x: 0, y: 0 }, zoom: 1 },
+        entities: [entity],
+      },
+      { "media/shared.png": new Uint8Array([1, 2, 3]) },
+    );
+
+    await deserializeIntoCanvas(archive);
+    const restored = canvasStore.getState().entities.get(entity.id)!;
+
+    expect(restored.shaderParams.size).toBe(37);
+    expect(restored.shaderParams.scale).toBe(config.defaults.shaderParams.scale);
+  });
+
   test("restores repeated image paths as one shared media asset", async () => {
     const result = await deserializeIntoCanvas(createImageWorkspace(2, true));
     const entities = [...canvasStore.getState().entities.values()];
@@ -300,6 +347,63 @@ describe("deserialize workspace", () => {
     expect(secondEntity.shaderParams.time).toBe(2);
   });
 
+  test("restores compact manifest tables without expanding shared static records", async () => {
+    const {
+      time: _time,
+      timeAutoPlay: _timeAutoPlay,
+      ...staticParams
+    } = structuredClone(config.defaults.shaderParams);
+    const originalPalette: ColorPalette = {
+      id: "compact-original",
+      name: "Compact original",
+      shortName: "Compact",
+      colors: [
+        [0, 0, 0, 1],
+        [1, 1, 1, 1],
+      ],
+    };
+    const compactEntity = (id: string, time: number) => ({
+      id,
+      name: id,
+      mediaType: "image" as const,
+      mediaFileRef: 0,
+      position: { x: 0, y: 0 },
+      size: { width: 100, height: 100 },
+      originalSize: { width: 100, height: 100 },
+      zIndex: time,
+      rotation: 0,
+      locked: false,
+      edited: false,
+      shaderType: config.defaults.shader,
+      shaderParamsRef: 0,
+      shaderTime: time,
+      originalPaletteRef: 0,
+    });
+    const archive = createManifestArchive(
+      {
+        type: "studio-canvas",
+        version: CURRENT_VERSION,
+        createdAt: new Date("2026-07-16T12:00:00.000Z").toISOString(),
+        viewport: { offset: { x: 0, y: 0 }, zoom: 1 },
+        entities: [compactEntity("entity-1", 1), compactEntity("entity-2", 2)],
+        shaderParamsTable: [staticParams],
+        mediaFiles: ["media/shared.png"],
+        originalPalettes: [originalPalette],
+      },
+      { "media/shared.png": new Uint8Array([1, 2, 3]) },
+    );
+
+    const result = await deserializeIntoCanvas(archive);
+    const entities = [...canvasStore.getState().entities.values()];
+
+    expect(result).toMatchObject({ success: true, entityCount: 2 });
+    expect(entities[0]!.shaderParams).not.toBe(entities[1]!.shaderParams);
+    expect(entities[0]!.shaderParams.postProcess).toBe(entities[1]!.shaderParams.postProcess);
+    expect(entities[0]!.shaderParams.time).toBe(1);
+    expect(entities[1]!.shaderParams.time).toBe(2);
+    expect(entities[0]!.originalPalette).toBe(entities[1]!.originalPalette);
+  });
+
   test("chunks large shared-image workspaces and restores them atomically", async () => {
     const decodingIndexes: number[] = [];
     let notifications = 0;
@@ -314,7 +418,9 @@ describe("deserialize workspace", () => {
     });
 
     expect(result).toMatchObject({ success: true, entityCount: 1_500 });
-    expect(decodingIndexes).toEqual([1, 512, 1024, 1500]);
+    expect(decodingIndexes[0]).toBe(1);
+    expect(decodingIndexes.at(-1)).toBe(1_500);
+    expect(decodingIndexes).toEqual([...decodingIndexes].sort((left, right) => left - right));
     expect(notifications).toBe(1);
     expect(canvasStore.getState().entitiesDirty.size).toBe(0);
     expect(canvasStore.getState().entities.size).toBe(1_500);

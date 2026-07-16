@@ -1,51 +1,28 @@
 # Context
 
-React context providers wiring subsystems together. The "glue" layer between engine, renderer, and UI.
+React composition and orchestration connecting application services, engine state, renderer lifecycle, queues, URL state, and UI consumers.
 
-## Key Files
+## Authoritative Areas
 
-- `canvas-context.tsx` (~52KB) — `CanvasProvider`. Main orchestrator. Bridges URL query state (nuqs) to canvas state, entity CRUD with undo support, renderer registration, image export (copy/save). Largest, most complex file in the codebase.
-- `use-canvas.ts` — Commands, interaction, media, and renderer contexts plus selector/snapshot hooks. `useCanvasCommands()` exposes stable mutations, `useCanvasInteraction()` and `useCanvasMedia()` expose narrow application-owned services, and `useCanvasRendererService()` exposes renderer/color-space services.
-- `export-queue-context.tsx` (~16KB) — Sequential video export queue with auto-download.
-- `video-export-context.tsx` — Export options state (format, quality, resolution).
-- `use-video-export.ts`, `use-export-queue.ts` — Hooks for the export contexts.
-- `keybind-context.ts` (~17KB) — `KeybindStore extends Store`. Keyboard shortcut registration with hierarchical contexts (global > canvas > selection). Builder pattern for binds.
-- `keybind-provider.tsx` — `KeybindProvider` wraps the keybind context.
-- `upscale-queue-context.tsx` (~20KB) — `UpscaleQueueProvider`. Manages background upscaling jobs. Queues requests, processes sequentially (GPU single-threaded), creates new entities from results. Supports image, GIF, and video. Sorts by padded dimensions for GPU cache hits. Progress toasts with cancel support.
-- `use-upscale-queue.ts` — `UpscaleQueueContext` definition and `useUpscaleQueue()` hook.
-- `layout-context.tsx` — Layout state (fullscreen mode).
-- `use-layout.ts` — Hook for layout context.
+- `canvas-context.tsx` — Canvas composition root, commands, undo ownership, import/export, and renderer registration.
+- `use-canvas.ts` — Narrow selectors, commands, and capability contexts.
+- `keybind-context.ts`, `keybind-provider.tsx` — Hierarchical keyboard shortcuts.
+- `export-queue-context.tsx`, `video-export-context.tsx` — Export state and sequential jobs.
+- `upscale-queue-context.tsx` — Sequential upscale jobs and ownership.
 
-## Provider Composition (app.tsx)
+## Invariants
 
-```
-NuqsAdapter > KeybindProvider > IconoirProvider > ToastProvider > CanvasProvider > VideoExportProvider > ExportQueueProvider > UpscaleQueueProvider > LayoutProvider
-```
+- `CanvasProvider` is the composition root for concrete engine and renderer implementations.
+- Expose narrow, stable selector and command surfaces; do not expose stores, loops, or a broad `useCanvas()` object.
+- Keep provider values and renderer registration callbacks stable across unrelated React renders.
+- React-facing multi-entity operations use one bulk store mutation and one undo command in each direction.
+- Undo snapshots retain media ownership until eviction; image cleanup releases the shared asset reference.
+- Imports stage decoded resources, atomically restore the workspace, then release the old state.
+- Async work validates stable media identity before applying results to entities.
+- Queue providers serialize GPU-heavy work and isolate export/upscale media from live preview playback.
 
-Note: `KeybindProvider` wraps outside `App()` at the root render level.
+## Boundaries
 
-## Patterns
-
-- `canvas-context.tsx` uses nuqs for URL-synced state — entity params round-trip through URL query parameters. Color/background/palette URL params removed; colors always sourced from config defaults (only `presetId` remains for palette URL sync).
-- Selection-to-URL sync checks cardinality first and materializes an entity only for single selection; multi-select and Command-A must not build a selected-entity array merely to clear URL state.
-- Resource ownership for undo: `resourceOwners` Map tracks which undo command may cleanup media resources on stack eviction.
-- Static image cleanup releases the entity's shared media-asset reference; the final release closes the decoded bitmap. Never close an image entity's bitmap directly.
-- Large duplicate operations synchronously retain image assets, allocate names in one pass, and insert the completed batch through `CanvasStore.addEntities()`; avoid Promise fan-out, per-clone full-map name scans, and notifications.
-- Duplicate and undo each use one bulk store mutation and one undo `Command`; undo removes renderer ownership in a loop but publishes canvas state once. Duplicate shader params shallow-copy the mutable top level (`time`/`timeAutoPlay`) while sharing immutable nested state. Non-image media clones use all-settled cleanup so one rejection cannot strand sibling resources.
-- Legacy workspace palette recovery groups missing palettes by shared `ImageBitmap`, extracts once per bitmap, and applies one `CanvasStore.updateEntities()` batch per result. Never launch extraction per duplicate entity.
-- Async palette extraction validates stable `mediaSource` identity, not whole entity identity or ID alone; ordinary immutable updates replace entity objects, while imported colliding IDs must reject stale results.
-- Workspace import clears active/committed undo ownership while old IDs are live, adopts one decoded batch through `restoreWorkspace()`, then releases old media and merges palettes. If decoding commits nothing, preserve live counters and workspace state.
-- Multi-selection shader, parameter, and palette changes build forward/inverse arrays, use one `CanvasStore.updateEntities()` call per direction, and register one bulk `Command`. An undo transaction groups history only—it does not batch store execution—so never loop over `updateEntity()` inside one. Prior immutable shader-param references are valid inverse snapshots; do not clone every tree. Custom, generated, extracted, and preset palette application all use this path.
-- Multi-entity deletion uses one `CanvasStore.removeEntities()` mutation and one bulk undo `Command`. Retain removed entity objects as undo snapshots; do not deep-clone every shader-param tree or construct one command per entity.
-- Entity deletion triggers disintegration animation when `fancyDelete` is enabled, but per-entity snapshots/particle systems are capped by `config.canvas.fancyDeleteMaxBatchSize`; larger selections delete without animation. Undo cancels any created overlays.
-- `fancyDelete` preference defaults to `true` unless `prefers-reduced-motion: reduce` is active.
-- Export queue clones video elements to isolate export playback from preview playback.
-- `CanvasProvider` is the composition root for concrete engine and renderer implementations. It constructs application services once, injects the performance-graph renderer port, and exposes narrow context interfaces; consumers never receive the store or game loop objects.
-- Keep renderer registration callbacks and the `CanvasRendererService` value stable across selection-to-URL rerenders. Registration is a renderer-runtime effect dependency; changing its identity stops/restarts the game loop and discards large-scene active-entity classification caches.
-
-## Anti-Patterns
-
-- Do not add a new top-level provider without updating composition order in `app.tsx`. Capability contexts nested inside `CanvasProvider` must remain narrow and stable.
-- Do not put rendering logic or GPU calls here. Context orchestrates; renderer executes.
-- Do not mutate `canvasStore` state outside of context callbacks. The context is the intended mutation boundary for React-facing code.
-- Do not reintroduce a broad `useCanvas()` state surface. Keep reads selector-based and mutations command-based.
+- Context coordinates; it does not implement rendering or GPU work.
+- Canvas state mutations exposed to React originate here or in application services.
+- Discuss new top-level providers before adding them; prefer a narrow capability inside the existing composition.

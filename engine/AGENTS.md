@@ -1,67 +1,35 @@
 # Engine
 
-Canvas state management and input processing. This is the "model + controller" layer — no rendering, no React.
+GPU-agnostic canvas state, input, animation, spatial queries, and RAF scheduling. No React or rendering code.
 
-## Key Files
+## Authoritative Areas
 
-- `canvas-store.ts` — Central canvas state: viewport, entities, selection, version counters. Singleton.
-- `frame-loop.ts` — RAF orchestration. Tracks small active sets for playing media/continuous shaders and defers render-state allocation until a frame is required.
-- `game-loop.ts` (~86KB) — Main input/animation loop. Handles pointer, touch, pinch, drag, pan. Ticks per-frame controllers.
-- `action-layer-controller.ts` — Mobile action layer physics and phase state machine. Singleton.
-- `momentum-controller.ts` — Pan/zoom fling physics (exponential deceleration, elastic spring-back at zoom bounds). Injected deps for testability.
-- `disintegration-controller.ts` — Timing + spatial data for entity delete animations. GPU resources live in renderer. Singleton.
-- `viewport-animation.ts` — Eased viewport transitions (zoom-to-fit, pan-to-entity).
-- `entity-drag-controller.ts` — Accumulates selection drag offsets without mutating entity geometry per pointer frame, then commits one translation on release.
-- `entity-drag-visual.ts` — Canvas2D overlays for entity drag feedback.
-- `perf-overlay.ts` — FPS/frame-time metrics overlay.
-- `index.ts` — Barrel export. This is the ONLY barrel file consumers should use (`#engine`).
+- `canvas-store.ts` — Entities, viewport, selection, spatial index, versions, and dirty state.
+- `game-loop.ts` — Pointer, touch, pinch, drag, and pan processing.
+- `frame-loop.ts` — RAF lifecycle and active animated-work tracking.
+- `entity-drag-controller.ts`, `momentum-controller.ts`, `action-layer-controller.ts` — Interaction state machines.
+- `index.ts` — The public `#engine` surface.
 
-## State Architecture
+## State Invariants
 
-- `CanvasState` uses version counters (`version`, `entityVersion`, `geometryVersion`, `viewportVersion`, `selectionVersion`, `playbackVersion`, `dragVersion`) for selective cache invalidation and React subscriptions. Imperative moves increment `geometryVersion` without notifying React.
-- Snapshot types (`ViewportSnapshot`, `SelectionSnapshot`, `PlaybackSnapshot`, `DragSnapshot`, `ActionLayerSnapshot`) isolate subscription scopes — sidebar components don't re-render on viewport pan.
-- Dirty flags (`viewportDirty`, `entitiesDirty`, `geometryDirty`, `selectionDirty`) tell the renderer what needs redrawing. Geometry-only motion does not populate the texture-dirty ID set.
-- `RenderState` is a stable mutable frame view consumed synchronously by `InfiniteCanvasRenderer.render()`; it exposes entity, geometry, and selection versions plus the current dirty-entity ID set for renderer caches. Non-ordering reference changes patch the stable sorted entity array by cached ID index; membership or z-index changes rebuild it.
-- `CanvasStore` owns the incremental `EntitySpatialIndex` shared by renderer visibility, point hit testing, and drag selection. Every geometry mutation must upsert or remove its entity from the index.
-- `CanvasStore.hasRenderChanges()` checks dirty state without materializing or mutating render state.
+- Version counters and focused snapshots isolate subscribers. Viewport-only work must not notify unrelated React consumers.
+- `RenderState` is a stable synchronous view for the renderer. Dirty flags describe the smallest changed domain.
+- `CanvasStore` owns the spatial index. Every insertion, removal, and geometry change must keep it synchronized.
+- Use bulk APIs for multi-entity work: `addEntities`, `updateEntities`, `removeEntities`, `moveEntities`, `selectAll`, and `restoreWorkspace`.
+- Membership or z-order changes may rebuild ordered state; non-ordering replacements should patch it.
+- Use ordered spatial queries for rendering/hit testing and unordered queries for membership-only operations.
+- Selection dragging uses transient offsets during the gesture and commits geometry once on release.
+- Cache selection-derived arrays, bounds, and parameter aggregation by the narrow version that invalidates them.
 
-## Patterns
+## Runtime Invariants
 
-- State mutated imperatively through `CanvasStore` methods, then `notify()` triggers React re-renders via the appropriate version counter.
-- Use `CanvasStore.addEntities()` for bulk insertion so large imports/duplicates produce one version update and subscriber notification.
-- Use `CanvasStore.restoreWorkspace()` after a complete workspace decode. It builds and validates the next entity map/spatial index before swapping them, rejects duplicate IDs, then publishes one notification and one scene-level dirty flag; do not populate `entitiesDirty` with every restored ID.
-- Use `CanvasStore.updateEntities()` for multi-selection mutations. It applies every replacement/dirty ID before one version bump, subscriber notification, and aggregate debug log.
-- Use `CanvasStore.removeEntities()` for bulk deletion. It deletes maps/index entries, compacts the ordered ID array once, rebuilds selection once, and emits one notification; never loop over `removeEntity()` for a selection.
-- Use `CanvasStore.selectAll()` for whole-canvas selection; it builds the selected-ID set directly from the ordered IDs without an intermediate array or redundant membership checks.
-- Use `CanvasStore.moveEntities()` for selection translation; it mutates positions, translates spatial entries, and increments geometry once. Selection drags of every size, including a singleton, accumulate one transient world offset for rendering/hit testing and commit through this path on release instead of moving/reindexing entities per pointer frame.
-- Non-spatial entity replacements update the spatial index's entity reference without removing/reinserting its cell; only position, size, rotation, and z-index changes reindex geometry.
-- Use `CanvasStore.queryEntitiesInBounds()` for broad-phase canvas queries; results are exact, duplicate-free, and z-ordered. Do not restore full-map viewport or hit-test scans.
-- Use `CanvasStore.queryEntitiesInBoundsUnordered()` for membership-only work such as drag selection; do not pay to sort results that are consumed as a set.
-- Drag selection coalesces pointer moves in `processInput()`, swaps reusable selection sets into the store without notifying React mid-gesture, and publishes one final notification on pointer-up or cancellation. Render state carries the active replace/add/subtract mode after the click threshold so persistent overview batches can compute rotated-AABB membership on the GPU while the CPU set remains authoritative.
-- Selection-derived entity arrays are materialized at most once per `selectionVersion`. Multi-selection world bounds are cached across viewport-only frames and invalidated by selected-set identity, `entityVersion`, or `geometryVersion`.
-- Object-valued multi-selection params deduplicate structurally equal clones; do not retain one object per selected entity in `ParamResult.values` or stringify equal objects on every comparison.
-- Parameter aggregation combines support and value checks in one pass and returns immediately when any entity does not support the path; unsupported controls must not scan irrelevant values across the remaining selection.
-- `GameLoop` uses dependency injection (`GameLoopDeps`) for testability. Default deps created via `createDefaultDeps()`. Receives renderer via `setRenderer()`.
-- `MomentumController` also uses DI (`MomentumDeps`) — inject viewport/pan callbacks for unit testing without a real canvas.
-- Touch handling uses a state machine: `TouchGestureState` tracks active touches, pinch distance, long-press timers.
-- Space+drag panning uses `SpacePanMode` enum (`idle` → `ready` → `panning` → `panned`).
-- Per-frame controllers (disintegration, drag visuals, action layer) are ticked each frame; return `true` while animations are active to keep the render loop running.
-- The frame loop rebuilds animated-media and continuous-shader active maps only for initial state or membership changes. Reference/parameter updates reclassify exactly the dirty IDs with no fixed count cutoff; selection-only changes must not trigger entity classification.
-- Playing media advances playback time every RAF, but only visible animated entities mark textures dirty and force render; passive playback notifications are limited to the selected entity.
-- Renderer-reported pending work keeps RAF alive for settled, budgeted LOD transitions after viewport input stops; it must not be implemented by pausing video playback.
-- Action-layer, drag-visual, and disintegration controllers reuse their render-state wrappers; mutate stable scratch state instead of allocating objects, sets, or overlay arrays every frame.
-- The FPS overlay and render benchmarks read direct renderer phase timings (setup, preparation/admission/query, encode, submit). Do not add `performance.mark()`/`measure()` calls to render loops; Performance Timeline entry churn materially distorts the frames being measured.
-- `notifyViewportChange()` increments only `viewportVersion`. `notifySelectionChange()` increments `selectionVersion` + `version` + `playbackVersion`.
-- Entity membership, reference, effect, or playback-classification changes must increment `entityVersion`; selection and UI-only changes must not.
-- Hot-path selection logs contain counts plus bounded first/last IDs. Never join or serialize an unbounded selection into a log message.
-- Passive pointer movement does not perform entity or alpha hit testing. Keep hit testing tied to explicit click/touch/drag interactions until a bounded hover effect exists.
+- Frame scheduling tracks active media, continuous shaders, controllers, and renderer-reported pending work without scanning the whole scene every RAF.
+- Per-frame controllers and render-state wrappers reuse storage; avoid hot-path object, array, set, and log allocation.
+- Passive pointer movement does not perform unbounded entity or alpha hit testing.
+- `GameLoop` and physics controllers use dependency injection for tests.
 
-## Anti-Patterns
+## Boundaries
 
-- Do not put rendering logic here. Engine is GPU-agnostic.
-- Do not add React imports. Engine is framework-independent.
-- Do not mutate entities directly — go through `CanvasStore` methods to maintain dirty flags and version counters.
-
-## Dependencies
-
-Imports from `#lib/canvas-math.ts`, `#config`, `#types/canvas.ts`, `#lib/touch-scroll/`, `#lib/gif-decoder.ts`, `#lib/animation-scheduler.ts`. Does NOT import from `renderer/` except for the `InfiniteCanvasRenderer` type (game-loop needs the reference).
+- Mutate canvas state only through `CanvasStore` methods.
+- Do not add GPU concepts or React imports.
+- External consumers import from `#engine`, not engine implementation files.

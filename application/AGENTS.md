@@ -1,26 +1,24 @@
 # Application
 
-Plain TypeScript use cases forming deep module interfaces between React/DOM adapters and the engine.
+Framework-free use cases and narrow interfaces between React/DOM adapters and engine behavior.
 
-## Key Files
+## Authoritative Areas
 
-- `canvas/canvas-interaction.ts` — `CanvasInteractionService`. Hides `CanvasStore`, `GameLoop`, viewport animation, selection bounds, and viewport calculations behind input and viewport actions.
-- `canvas/canvas-media.ts` — `CanvasMediaService`. Hides entity lookup, playback dispatch, seeking, mute, and playback notifications behind an injected store port.
-- `canvas/entity-placement.ts` and `canvas/entity-cycling.ts` — Canvas workflows that coordinate media loading, selection, layout, and viewport animation.
-- `canvas/serialize-workspace.ts` — Captures live canvas state and delegates archive encoding to the serialization worker.
-- `canvas/palettes.ts` — Palette lookup, classification, naming, and list construction shared by context and UI.
-- `notifications.ts` and `hints.ts` — Shared presentation services used by hooks, contexts, and components without importing component internals upward.
-- `canvas/debug-canvas.ts` — Development-only debug entity use case, dynamically loaded for `?debug=load`.
+- `canvas/canvas-interaction.ts` — Input and viewport actions hiding store and loop implementations.
+- `canvas/canvas-media.ts` — Playback, seeking, mute, and media notifications.
+- `canvas/entity-placement.ts`, `canvas/entity-cycling.ts` — Multi-step canvas workflows.
+- `canvas/serialize-workspace.ts` — Live-state capture and archive encoding.
+- `canvas/palettes.ts` — Palette classification and lookup shared by UI surfaces.
 
-## Patterns
+## Invariants
 
-- Export narrow capability interfaces plus dependency-injected factories.
-- Accept data such as surface metrics and points instead of React refs or events.
-- Coordinate engine objects here when a use case spans store, input, animation, or selection behavior.
-- Keep application actions synchronous unless the underlying use case is inherently asynchronous.
+- Export cohesive capability interfaces and dependency-injected factories.
+- Accept data such as points and surface metrics, not React refs or DOM events.
+- Coordinate workflows here when they span store, input, animation, media, or selection behavior.
+- Keep synchronous actions synchronous unless the underlying operation is inherently asynchronous.
 
-## Anti-Patterns
+## Boundaries
 
-- Canvas use-case modules do not import React, JSX, components, hooks, context, or concrete renderer implementations. Shared presentation services may adapt a UI library, but must not import component implementations.
-- Do not export engine stores, loops, controllers, or generic service-locator accessors.
-- Do not turn one service into a catch-all API; split it when consumers no longer share one cohesive capability.
+- Canvas use cases do not import React, JSX, components, hooks, context, or concrete renderer implementations.
+- Do not expose engine stores, loops, controllers, or generic service locators.
+- Split a service when its consumers no longer share one cohesive capability.

@@ -24,6 +24,7 @@
     "bench:render": "vite dev --host 127.0.0.1 --port 5175",
     "bench:render:record": "bun run scripts/render-bench-record.ts",
     "bench:render:compare": "bun run scripts/render-bench-compare.ts",
+    "bench:render:ab": "bun run scripts/render-bench-ab.ts",
     "build": "vite build",
     "sourcemap": "posthog-cli sourcemap inject -d ./dist/assets && posthog-cli sourcemap upload -d ./dist/assets --release-name voidmesh --delete-after",
     "preview": "vite preview",

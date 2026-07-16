@@ -23,6 +23,12 @@ export interface StudioManifest {
   viewport: SerializedViewport;
   /** All entities on the canvas, sorted by zIndex */
   entities: SerializedEntity[];
+  /** Deduplicated static shader parameter records (v6+) */
+  shaderParamsTable?: ShaderParams[];
+  /** Deduplicated archive media paths (v6+) */
+  mediaFiles?: string[];
+  /** Deduplicated original palettes referenced by entities (v6+) */
+  originalPalettes?: ColorPalette[];
   /** Custom/extracted palettes referenced by entities (v4+) */
   palettes?: ColorPalette[];
 }
@@ -57,21 +63,29 @@ interface SerializedEntityBase {
   locked: boolean;
   edited: boolean;
   shaderType: string;
-  shaderParams: ShaderParams;
+  /** Inline shader parameters used by legacy manifests. */
+  shaderParams?: ShaderParams;
+  /** Index into StudioManifest.shaderParamsTable (v6+). */
+  shaderParamsRef?: number;
+  /** Per-entity animated fields excluded from the static parameter table. */
+  shaderTime?: number;
+  shaderTimeAutoPlay?: boolean;
   /** Palette extracted from source image (v4+) */
   originalPalette?: ColorPalette;
+  /** Index into StudioManifest.originalPalettes (v6+). */
+  originalPaletteRef?: number;
+  /** Inline archive path used by legacy manifests. */
+  mediaFile?: string;
+  /** Index into StudioManifest.mediaFiles (v6+). */
+  mediaFileRef?: number;
 }
 
 export interface SerializedImageEntity extends SerializedEntityBase {
   mediaType: "image";
-  /** Path to the image file inside the zip archive */
-  mediaFile: string;
 }
 
 export interface SerializedVideoEntity extends SerializedEntityBase {
   mediaType: "video";
-  /** Path to the video file inside the zip archive */
-  mediaFile: string;
   /** Original video duration in seconds */
   duration: number;
   /** Detected frame rate (null if unknown) */
@@ -84,8 +98,6 @@ export interface SerializedVideoEntity extends SerializedEntityBase {
 
 export interface SerializedGifEntity extends SerializedEntityBase {
   mediaType: "gif";
-  /** Path to the GIF file inside the zip archive */
-  mediaFile: string;
   /** Total duration in seconds */
   duration: number;
   /** Average frames per second */
@@ -96,8 +108,6 @@ export interface SerializedGifEntity extends SerializedEntityBase {
 
 export interface SerializedSvgEntity extends SerializedEntityBase {
   mediaType: "svg";
-  /** Path to the SVG file inside the zip archive */
-  mediaFile: string;
 }
 
 /** Playback state for serialization */
@@ -172,9 +182,21 @@ export interface SerializeMediaEntry {
 
 /** Validate the top-level manifest envelope */
 export function isStudioManifest(data: unknown): data is StudioManifest {
-  if (!isRecord(data)) return false;
+  return validateStudioManifest(data) !== null;
+}
+
+export interface StudioManifestValidation {
+  manifest: StudioManifest;
+  duplicateEntityId: string | null;
+  videoEntityCount: number;
+  mediaFileUseCounts: Map<string, number>;
+}
+
+/** Validate entity records while collecting import metadata in the same pass. */
+export function validateStudioManifest(data: unknown): StudioManifestValidation | null {
+  if (!isRecord(data)) return null;
   const obj = data;
-  return (
+  const validEnvelope =
     obj.type === "studio-canvas" &&
     isFiniteNumber(obj.version) &&
     Number.isInteger(obj.version) &&
@@ -182,14 +204,62 @@ export function isStudioManifest(data: unknown): data is StudioManifest {
     typeof obj.createdAt === "string" &&
     isSerializedViewport(obj.viewport) &&
     Array.isArray(obj.entities) &&
-    obj.entities.every(isSerializedEntity) &&
+    (obj.shaderParamsTable === undefined ||
+      (Array.isArray(obj.shaderParamsTable) && obj.shaderParamsTable.every(isRecord))) &&
+    (obj.mediaFiles === undefined ||
+      (Array.isArray(obj.mediaFiles) &&
+        obj.mediaFiles.every((value) => typeof value === "string" && value.length > 0))) &&
+    (obj.originalPalettes === undefined ||
+      (Array.isArray(obj.originalPalettes) && obj.originalPalettes.every(isColorPalette))) &&
     (obj.palettes === undefined ||
-      (Array.isArray(obj.palettes) && obj.palettes.every(isColorPalette)))
-  );
+      (Array.isArray(obj.palettes) && obj.palettes.every(isColorPalette)));
+  if (!validEnvelope) return null;
+
+  const shaderParamsCount = Array.isArray(obj.shaderParamsTable)
+    ? obj.shaderParamsTable.length
+    : undefined;
+  const mediaFileCount = Array.isArray(obj.mediaFiles) ? obj.mediaFiles.length : undefined;
+  const originalPaletteCount = Array.isArray(obj.originalPalettes)
+    ? obj.originalPalettes.length
+    : undefined;
+  const seenEntityIds = new Set<string>();
+  let duplicateEntityId: string | null = null;
+  let videoEntityCount = 0;
+  const mediaFileUseCounts = new Map<string, number>();
+  for (const entity of obj.entities as unknown[]) {
+    if (!isSerializedEntity(entity, shaderParamsCount, mediaFileCount, originalPaletteCount)) {
+      return null;
+    }
+    if (duplicateEntityId === null && seenEntityIds.has(entity.id)) {
+      duplicateEntityId = entity.id;
+    }
+    seenEntityIds.add(entity.id);
+    if (entity.mediaType === "video") videoEntityCount++;
+    const mediaFile =
+      entity.mediaFile ??
+      (entity.mediaFileRef === undefined
+        ? undefined
+        : (obj.mediaFiles as string[] | undefined)?.[entity.mediaFileRef]);
+    if (mediaFile) {
+      mediaFileUseCounts.set(mediaFile, (mediaFileUseCounts.get(mediaFile) ?? 0) + 1);
+    }
+  }
+
+  return {
+    manifest: obj as unknown as StudioManifest,
+    duplicateEntityId,
+    videoEntityCount,
+    mediaFileUseCounts,
+  };
 }
 
 /** Validate fields consumed synchronously while an entity is decoded and indexed. */
-export function isSerializedEntity(data: unknown): data is SerializedEntity {
+export function isSerializedEntity(
+  data: unknown,
+  shaderParamsCount?: number,
+  mediaFileCount?: number,
+  originalPaletteCount?: number,
+): data is SerializedEntity {
   if (!isRecord(data)) return false;
   const e = data;
   const validBase =
@@ -204,9 +274,18 @@ export function isSerializedEntity(data: unknown): data is SerializedEntity {
     isFiniteNumber(e.rotation) &&
     typeof e.locked === "boolean" &&
     typeof e.edited === "boolean" &&
-    isRecord(e.shaderParams) &&
-    (e.originalPalette === undefined || isColorPalette(e.originalPalette));
-  if (!validBase || typeof e.mediaFile !== "string" || e.mediaFile.length === 0) return false;
+    ((isRecord(e.shaderParams) && e.shaderParamsRef === undefined) ||
+      (e.shaderParams === undefined &&
+        isValidTableIndex(e.shaderParamsRef, shaderParamsCount) &&
+        (e.shaderTime === undefined || isFiniteNumber(e.shaderTime)) &&
+        (e.shaderTimeAutoPlay === undefined || typeof e.shaderTimeAutoPlay === "boolean"))) &&
+    ((e.originalPalette === undefined && e.originalPaletteRef === undefined) ||
+      (isColorPalette(e.originalPalette) && e.originalPaletteRef === undefined) ||
+      (e.originalPalette === undefined &&
+        isValidTableIndex(e.originalPaletteRef, originalPaletteCount))) &&
+    ((typeof e.mediaFile === "string" && e.mediaFile.length > 0 && e.mediaFileRef === undefined) ||
+      (e.mediaFile === undefined && isValidTableIndex(e.mediaFileRef, mediaFileCount)));
+  if (!validBase) return false;
 
   switch (e.mediaType) {
     case "image":
@@ -229,6 +308,16 @@ export function isSerializedEntity(data: unknown): data is SerializedEntity {
     default:
       return false;
   }
+}
+
+function isValidTableIndex(value: unknown, length: number | undefined): value is number {
+  return (
+    length !== undefined &&
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value < length
+  );
 }
 
 function isSerializedViewport(value: unknown): value is SerializedViewport {

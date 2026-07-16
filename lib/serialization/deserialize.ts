@@ -23,10 +23,11 @@ import type {
   SerializedEntity,
   StudioManifest,
 } from "./types.ts";
-import { isStudioManifest, toPlaybackState } from "./types.ts";
+import { toPlaybackState, validateStudioManifest } from "./types.ts";
 import { CURRENT_VERSION } from "./version.ts";
 import { analytics } from "#lib/analytics.ts";
 import { createImageAsset, retainImageAsset } from "#lib/media-assets.ts";
+import { registerShaderParamsIdentity } from "#lib/shader-params-identity.ts";
 
 const MIME_BY_EXT: Record<string, string> = {
   mp4: "video/mp4",
@@ -37,13 +38,22 @@ const MIME_BY_EXT: Record<string, string> = {
 };
 
 const LARGE_WORKSPACE_PROGRESS_THRESHOLD = 1_000;
-const DESERIALIZE_CHUNK_SIZE = 512;
+const DESERIALIZE_TIME_BUDGET_MS = 8;
+const SHADER_PARAMS_SCHEMA_VERSION = 5;
 const VALID_SHADER_TYPES = new Set<string>(Object.values(ShaderType));
 
 interface DeserializationInternPool {
-  shaderParams: Map<string, ShaderParams>;
+  shaderParams: Map<string, { identity: number; params: ShaderParams }>;
   palettes: Map<string, ColorPalette>;
+  nextShaderParamsIdentity: number;
 }
+
+type ResolvedSerializedEntity = SerializedEntity & {
+  mediaFile: string;
+  shaderParams: ShaderParams;
+  originalPalette?: ColorPalette;
+  compactShaderParamsIdentity?: number;
+};
 
 /**
  * Deserialize a .vdmsh archive (Blob or ArrayBuffer) and restore the canvas.
@@ -89,34 +99,39 @@ export async function deserialize(
   reportProgress({ stage: "reading", fileSizeBytes });
 
   // 1. Unzip the archive
-  const buffer = source instanceof Blob ? await source.arrayBuffer() : source;
+  let buffer: ArrayBuffer | null = source instanceof Blob ? await source.arrayBuffer() : source;
   throwIfAborted(signal);
-  reportProgress({ stage: "unzipping", fileSizeBytes: buffer.byteLength });
+  reportProgress({ stage: "unzipping", fileSizeBytes });
   const zipEntries = await unzipArchive(buffer, signal);
+  buffer = null;
   throwIfAborted(signal);
 
   // 2. Read and parse manifest
-  reportProgress({ stage: "parsing", fileSizeBytes: buffer.byteLength });
+  reportProgress({ stage: "parsing", fileSizeBytes });
   const manifestBytes = zipEntries["manifest.json"];
   if (!manifestBytes) {
     throw new Error("Invalid .vdmsh file: missing manifest.json");
   }
 
-  const manifestJson = new TextDecoder().decode(manifestBytes);
+  let manifestJson: string | null = new TextDecoder().decode(manifestBytes);
+  delete zipEntries["manifest.json"];
   let manifest: unknown;
   try {
     manifest = JSON.parse(manifestJson);
   } catch {
     throw new Error("Invalid .vdmsh file: manifest.json is not valid JSON");
+  } finally {
+    manifestJson = null;
   }
 
-  if (!isStudioManifest(manifest)) {
+  const validation = validateStudioManifest(manifest);
+  if (!validation) {
     throw new Error("Invalid .vdmsh file: manifest contains missing or invalid workspace fields");
   }
-  const duplicateEntityId = findDuplicateEntityId(manifest.entities);
-  if (duplicateEntityId) {
-    throw new Error(`Invalid .vdmsh file: duplicate entity ID "${duplicateEntityId}"`);
+  if (validation.duplicateEntityId) {
+    throw new Error(`Invalid .vdmsh file: duplicate entity ID "${validation.duplicateEntityId}"`);
   }
+  manifest = validation.manifest;
   throwIfAborted(signal);
   logger.debug("[workspace-import] manifest parsed", {
     version: (manifest as StudioManifest).version,
@@ -126,16 +141,14 @@ export async function deserialize(
 
   // 3. Run migrations if needed
   let doc = manifest as StudioManifest;
-  const mergeShaderParamDefaults = doc.version !== CURRENT_VERSION;
+  const importedVersion = doc.version;
+  const mergeShaderParamDefaults = importedVersion < SHADER_PARAMS_SCHEMA_VERSION;
   const workspaceEntityCount = doc.entities.length;
-  let videoEntityCount = 0;
-  for (const entity of doc.entities) {
-    if (entity.mediaType === "video") videoEntityCount++;
-  }
+  const videoEntityCount = validation.videoEntityCount;
   let videoSeekTimeoutCount = 0;
   if (doc.version < CURRENT_VERSION) {
     doc = runMigrations(doc);
-    warnings.push(`Migrated from v${manifest.version} to v${CURRENT_VERSION}`);
+    warnings.push(`Migrated from v${importedVersion} to v${CURRENT_VERSION}`);
   }
   if (doc.version > CURRENT_VERSION) {
     warnings.push(
@@ -156,27 +169,41 @@ export async function deserialize(
   const internPool: DeserializationInternPool = {
     shaderParams: new Map(),
     palettes: new Map(),
+    nextShaderParamsIdentity: (doc.shaderParamsTable?.length ?? 0) + 1,
   };
+  for (let index = 0; index < (doc.shaderParamsTable?.length ?? 0); index++) {
+    registerShaderParamsIdentity(doc.shaderParamsTable![index]!, index + 1);
+  }
   let maxEntityId = 0;
   let maxZIndex = 0;
   let ownershipTransferred = false;
 
   try {
-    for (let index = 0; index < doc.entities.length; index++) {
-      const serialized = doc.entities[index]!;
-      if (shouldReportEntityProgress(index, doc.entities.length)) {
+    let lastYieldAt = performance.now();
+    for (let index = 0; index < workspaceEntityCount; index++) {
+      const rawSerialized = doc.entities[index]!;
+      const serialized = resolveSerializedEntity(rawSerialized, doc);
+      const shouldYield =
+        index > 0 && performance.now() - lastYieldAt >= DESERIALIZE_TIME_BUDGET_MS;
+      if (
+        workspaceEntityCount < LARGE_WORKSPACE_PROGRESS_THRESHOLD ||
+        index === 0 ||
+        index === workspaceEntityCount - 1 ||
+        shouldYield
+      ) {
         reportProgress({
           stage: "decoding",
           entityIndex: index + 1,
-          entityCount: doc.entities.length,
+          entityCount: workspaceEntityCount,
           entityName: serialized.name,
-          fileSizeBytes: buffer.byteLength,
+          fileSizeBytes,
         });
       }
       throwIfAborted(signal);
 
-      if (index > 0 && index % DESERIALIZE_CHUNK_SIZE === 0) {
+      if (shouldYield) {
         await yieldToMainThread();
+        lastYieldAt = performance.now();
         throwIfAborted(signal);
       }
 
@@ -223,6 +250,23 @@ export async function deserialize(
           error: message,
         });
         logger.warn(`[deserialize] Failed to restore "${serialized.name}": ${message}`);
+      } finally {
+        const remainingMediaUses =
+          (validation.mediaFileUseCounts.get(serialized.mediaFile) ?? 1) - 1;
+        if (
+          (serialized.mediaType === "image" && imageAssets.has(serialized.mediaFile)) ||
+          remainingMediaUses <= 0
+        ) {
+          delete zipEntries[serialized.mediaFile];
+        }
+        if (remainingMediaUses <= 0) {
+          validation.mediaFileUseCounts.delete(serialized.mediaFile);
+        } else {
+          validation.mediaFileUseCounts.set(serialized.mediaFile, remainingMediaUses);
+        }
+        // Drop parsed records as their runtime replacements are materialized so
+        // both object graphs do not remain live at full size.
+        (doc.entities as Array<SerializedEntity | undefined>)[index] = undefined;
       }
     }
 
@@ -248,8 +292,8 @@ export async function deserialize(
 
     reportProgress({
       stage: "restoring",
-      entityCount: doc.entities.length,
-      fileSizeBytes: buffer.byteLength,
+      entityCount: workspaceEntityCount,
+      fileSizeBytes,
     });
 
     commitWorkspace({
@@ -270,7 +314,7 @@ export async function deserialize(
     reportProgress({
       stage: "done",
       entityCount: validEntities.length,
-      fileSizeBytes: buffer.byteLength,
+      fileSizeBytes,
     });
     logger.debug("[workspace-import] deserialize complete", {
       durationMs: Math.round(performance.now() - startedAt),
@@ -320,18 +364,28 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 async function yieldToMainThread(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  });
+  await mainThreadYieldScheduler.yield();
 }
 
-function shouldReportEntityProgress(index: number, entityCount: number): boolean {
-  return (
-    entityCount < LARGE_WORKSPACE_PROGRESS_THRESHOLD ||
-    index === 0 ||
-    index === entityCount - 1 ||
-    (index + 1) % DESERIALIZE_CHUNK_SIZE === 0
-  );
+const mainThreadYieldScheduler = createMainThreadYieldScheduler();
+
+function createMainThreadYieldScheduler(): { yield: () => Promise<void> } {
+  if (typeof MessageChannel === "undefined") {
+    return {
+      yield: () => new Promise<void>((resolve) => setTimeout(resolve, 0)),
+    };
+  }
+
+  const channel = new MessageChannel();
+  const pending: Array<() => void> = [];
+  channel.port1.onmessage = () => pending.shift()?.();
+  return {
+    yield: () =>
+      new Promise<void>((resolve) => {
+        pending.push(resolve);
+        channel.port2.postMessage(undefined);
+      }),
+  };
 }
 
 function unzipArchive(
@@ -402,13 +456,45 @@ function parseEntityIdNumber(entityId: string): number {
   return value;
 }
 
-function findDuplicateEntityId(entities: readonly SerializedEntity[]): string | null {
-  const seen = new Set<string>();
-  for (const entity of entities) {
-    if (seen.has(entity.id)) return entity.id;
-    seen.add(entity.id);
+function resolveSerializedEntity(
+  serialized: SerializedEntity,
+  doc: StudioManifest,
+): ResolvedSerializedEntity {
+  const mediaFile =
+    serialized.mediaFile ??
+    (serialized.mediaFileRef === undefined ? undefined : doc.mediaFiles?.[serialized.mediaFileRef]);
+  const staticShaderParams =
+    serialized.shaderParams ??
+    (serialized.shaderParamsRef === undefined
+      ? undefined
+      : doc.shaderParamsTable?.[serialized.shaderParamsRef]);
+  if (!mediaFile || !staticShaderParams) {
+    throw new Error(`Invalid compact entity references for "${serialized.name}"`);
   }
-  return null;
+
+  if (serialized.shaderParamsRef === undefined) {
+    return serialized as ResolvedSerializedEntity;
+  }
+
+  const identity = serialized.shaderParamsRef + 1;
+  const shaderParams: ShaderParams = {
+    ...staticShaderParams,
+    ...(serialized.shaderTime !== undefined && { time: serialized.shaderTime }),
+    ...(serialized.shaderTimeAutoPlay !== undefined && {
+      timeAutoPlay: serialized.shaderTimeAutoPlay,
+    }),
+  };
+  registerShaderParamsIdentity(shaderParams, identity);
+  const resolved = serialized as ResolvedSerializedEntity;
+  resolved.mediaFile = mediaFile;
+  resolved.shaderParams = shaderParams;
+  resolved.originalPalette =
+    serialized.originalPalette ??
+    (serialized.originalPaletteRef === undefined
+      ? undefined
+      : doc.originalPalettes?.[serialized.originalPaletteRef]);
+  resolved.compactShaderParamsIdentity = identity;
+  return resolved;
 }
 
 // ============================================================================
@@ -421,7 +507,7 @@ function validateShaderType(raw: string): ShaderType {
 }
 
 async function deserializeEntity(
-  serialized: SerializedEntity,
+  serialized: ResolvedSerializedEntity,
   zipEntries: Record<string, Uint8Array>,
   warnings: string[],
   analyticsContext: {
@@ -600,7 +686,7 @@ async function deserializeEntity(
 }
 
 function createDeserializedEntityBase(
-  serialized: SerializedEntity,
+  serialized: ResolvedSerializedEntity,
   warnings: string[],
   mergeShaderParamDefaults: boolean,
   internPool: DeserializationInternPool,
@@ -620,9 +706,14 @@ function createDeserializedEntityBase(
         serialized.shaderParams,
       )
     : serialized.shaderParams;
-  const shaderParams = internShaderParams(decodedShaderParams, internPool);
+  const shaderParams =
+    serialized.compactShaderParamsIdentity === undefined
+      ? internShaderParams(decodedShaderParams, internPool)
+      : decodedShaderParams;
   const originalPalette = serialized.originalPalette
-    ? internPalette(serialized.originalPalette, internPool)
+    ? serialized.originalPaletteRef === undefined
+      ? internPalette(serialized.originalPalette, internPool)
+      : serialized.originalPalette
     : undefined;
 
   return {
@@ -654,19 +745,26 @@ function internShaderParams(
     palette && palette !== params.palette ? { ...params, palette } : params;
   const { time, timeAutoPlay, ...staticParams } = paramsWithInternedPalette;
   const signature = JSON.stringify(staticParams);
-  let canonical = internPool.shaderParams.get(signature);
-  if (!canonical) {
-    canonical = staticParams as ShaderParams;
-    internPool.shaderParams.set(signature, canonical);
+  let entry = internPool.shaderParams.get(signature);
+  if (!entry) {
+    const canonical = staticParams as ShaderParams;
+    entry = {
+      identity: internPool.nextShaderParamsIdentity++,
+      params: canonical,
+    };
+    internPool.shaderParams.set(signature, entry);
+    registerShaderParamsIdentity(canonical, entry.identity);
   }
 
   // Renderer animation controls mutate these two top-level fields in place. Keep
   // one shallow wrapper per entity while sharing the immutable nested parameter tree.
-  return {
-    ...canonical,
+  const result = {
+    ...entry.params,
     ...(time !== undefined && { time }),
     ...(timeAutoPlay !== undefined && { timeAutoPlay }),
   };
+  registerShaderParamsIdentity(result, entry.identity);
+  return result;
 }
 
 function internPalette(palette: ColorPalette, internPool: DeserializationInternPool): ColorPalette {

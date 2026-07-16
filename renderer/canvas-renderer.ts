@@ -480,6 +480,7 @@ export class InfiniteCanvasRenderer {
     // Uses caching to avoid per-frame allocations
     const preparedEntityDrawItems = this.#entityDrawItemPreparer.prepare({
       entities,
+      entityIndices: state.entityIndices,
       entitySpatialIndex: state.entitySpatialIndex,
       entityVersion: state.entityVersion,
       geometryVersion: state.geometryVersion,

@@ -1,43 +1,35 @@
 # Update Intent Nodes
 
-Review the git diff and update affected AGENTS.md intent nodes to reflect the current state of the code.
+Update AGENTS files only when a diff changes durable project intent.
+
+## Eligibility
+
+Edit an AGENTS file only when at least one changes:
+
+- public module contract or dependency boundary;
+- resource ownership or lifecycle responsibility;
+- authoritative entry point or subsystem purpose;
+- project-wide invariant;
+- file addition, removal, or rename that makes routing materially inaccurate.
+
+Ordinary commits, bug fixes, performance tuning, numeric thresholds, benchmark results, temporary workarounds, and implementation details do not qualify.
 
 ## Process
 
-1. **Get the diff**: Run `git diff $ARGUMENTS` (default: `HEAD~1` if no arguments provided). Arguments can be a range like `main..HEAD` or `HEAD~5`.
+1. Read `git diff $ARGUMENTS` (`HEAD~1` by default).
+2. Apply the eligibility test before reading every AGENTS file.
+3. Open only the nearest affected intent node:
+   - `engine/`, `renderer/`, `renderer/shaders/`, `lib/`, `types/`
+   - `application/`, `context/`, `hooks/`, `components/`, `components/ui/`
+   - root for project-wide configuration or changes spanning multiple subsystems
+4. Replace stale guidance; do not append incident history.
+5. Move shared rules to the lowest common parent and remove duplicates from children.
+6. If the file would exceed roughly 600 words, consolidate or move details to dedicated documentation.
+7. Report updated nodes, or state that no durable intent changed.
 
-2. **Identify affected nodes**: Map changed files to their intent nodes:
-   - `engine/*` -> `engine/AGENTS.md`
-   - `renderer/shaders/*` -> `renderer/shaders/AGENTS.md` AND `renderer/AGENTS.md`
-   - `renderer/*` -> `renderer/AGENTS.md`
-   - `lib/*` -> `lib/AGENTS.md`
-   - `types/*` -> `types/AGENTS.md`
-   - `components/ui/*` -> `components/ui/AGENTS.md`
-   - `components/*` -> `components/AGENTS.md`
-   - `context/*` -> `context/AGENTS.md`
-   - `hooks/*` -> `hooks/AGENTS.md`
-   - `package.json`, `tsconfig.json`, `vite.config.ts`, `app.tsx` -> `AGENTS.md` (root)
-   - Changes spanning 3+ subsystems -> also check root `AGENTS.md`
+## Style
 
-3. **For each affected node**, read the current AGENTS.md and the changed files, then check if any of these sections need updating:
-   - **Key files list** (new files added, files removed or renamed, size changes)
-   - **Patterns** (new patterns introduced by the changes)
-   - **Anti-patterns** (new pitfalls discovered)
-   - **Dependencies** (new cross-subsystem imports)
-   - **Architecture descriptions** (significant refactors)
-
-4. **LCA check**: Before writing, verify you are not duplicating information that belongs at a parent node. If the same knowledge applies to multiple siblings, move it to the parent.
-
-5. **Check opensrc section**: If changes added, removed, or updated dependencies (check `package.json` diff), verify the `opensrc/` directory still reflects the project's dependencies. If a new dependency was added and its source would be useful, note it in the summary. If a dependency was removed and its `opensrc/` source is now stale, note that too.
-
-6. **Apply updates**: Edit only the affected AGENTS.md files. Keep the existing style consistent (sections: Purpose, Key files, Patterns, Anti-patterns, Dependencies).
-
-7. **Summary**: For each updated node, briefly state what changed and why. Include any opensrc staleness notes.
-
-## Style Rules
-
-- Be concise and dense. Favor bullet points over prose.
-- Include file sizes only for large files (>10KB).
-- List concrete file names, not vague descriptions.
-- Patterns and anti-patterns should be actionable ("Do X", "Do not Y").
-- Do not duplicate information that exists in a parent AGENTS.md.
+- Prefer short, actionable bullets.
+- List only authoritative files and non-obvious invariants.
+- Do not record file sizes, current counts, benchmark data, hypotheses, or one-off fixes.
+- Do not run this skill merely because a commit was created.

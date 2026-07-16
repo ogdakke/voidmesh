@@ -34,7 +34,14 @@ export async function importStudioWithToasts(
   ) => Promise<DeserializeResult>,
 ): Promise<DeserializeResult> {
   const controller = new AbortController();
+  const cancelAction = {
+    children: "Cancel",
+    onClick: () => controller.abort(),
+  };
+  const hiddenAction = { children: null };
   let lastProgress: DeserializeProgress | null = null;
+  let lastRenderedProgressStage: DeserializeProgress["stage"] | null = null;
+  let lastToastUpdateAt = -Infinity;
   const startedAt = performance.now();
   logger.debug("[workspace-import] ui import requested", {
     fileSizeBytes: source instanceof Blob ? source.size : source.byteLength,
@@ -45,10 +52,7 @@ export async function importStudioWithToasts(
     title: "Importing voidmesh workspace",
     description: "Preparing",
     timeout: 0,
-    actionProps: {
-      children: "Cancel",
-      onClick: () => controller.abort(),
-    },
+    actionProps: cancelAction,
   });
 
   const updateToast = (updates: {
@@ -60,14 +64,7 @@ export async function importStudioWithToasts(
   }) => {
     toastManager.update(toastId, {
       ...updates,
-      actionProps: updates.showAction
-        ? {
-            children: "Cancel",
-            onClick: () => controller.abort(),
-          }
-        : {
-            children: null,
-          },
+      actionProps: updates.showAction ? cancelAction : hiddenAction,
     });
   };
 
@@ -77,6 +74,11 @@ export async function importStudioWithToasts(
       onProgress: (progress) => {
         lastProgress = progress;
         logger.debug("[workspace-import] ui progress", progress);
+        const now = performance.now();
+        const stageChanged = progress.stage !== lastRenderedProgressStage;
+        if (!stageChanged && now - lastToastUpdateAt < 100) return;
+        lastRenderedProgressStage = progress.stage;
+        lastToastUpdateAt = now;
         updateToast({
           description: formatImportProgress(progress),
           showAction: progress.stage !== "done",
