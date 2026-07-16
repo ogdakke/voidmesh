@@ -80,6 +80,26 @@ describe("ShaderPass", () => {
       expect(context.floatView[16 + index]).toBeCloseTo(entity.shaderParams.color[index]!);
     }
   });
+
+  test("supports shader-specific uniform buffer and upload sizes", () => {
+    const buffer = createBuffer();
+    const createBufferMock = vi.fn<GPUDevice["createBuffer"]>(() => buffer);
+    const context = createContext(createBufferMock);
+    const pass = new CompactTestShaderPass(context);
+    const entity = createRenderEntity("compact-shader", 1);
+
+    expect(pass.allocateUniforms(entity)).toBe(buffer);
+    expect(createBufferMock.mock.calls[0]![0].size).toBe(48);
+    expect(context.device.queue.writeBuffer).toHaveBeenCalledWith(
+      buffer,
+      0,
+      context.uniformData,
+      0,
+      48,
+    );
+
+    pass.destroy();
+  });
 });
 
 class TestShaderPass extends ShaderPass {
@@ -95,6 +115,12 @@ class TestShaderPass extends ShaderPass {
 
   write(entity: EffectRenderEntity): void {
     this.writeUniforms(entity);
+  }
+}
+
+class CompactTestShaderPass extends TestShaderPass {
+  protected override get uniformBufferSize(): number {
+    return 48;
   }
 }
 

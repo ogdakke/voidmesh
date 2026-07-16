@@ -4,7 +4,7 @@ Per-effect shader passes. Each shader type gets a class extending `ShaderPass`.
 
 ## Key Files
 
-- `shader-pass.ts` — Abstract base class. Defines `ShaderContext` (device, uniform buffer, sampler, palette cache, texture pool, `intermediateFormat`, `supportsP3`). Provides `writeUniforms()` (common 304-byte layout including `is_p3` at u[10]), `createPipeline()`, `execute()` (render pass submission). Subclasses implement `getShaderSource()` and `writeVariantUniforms()`.
+- `shader-pass.ts` — Abstract base class. Defines `ShaderContext` (device, uniform scratch, sampler, palette cache, texture pool, `intermediateFormat`, `supportsP3`). Provides `writeUniforms()` (304-byte palette layout including `is_p3` at u[10]), shader-specific buffer/upload sizing, `createPipeline()`, and `execute()`. Subclasses implement `getShaderSource()` and `writeVariantUniforms()`.
 - `shader-registry.ts` — `ShaderRegistry`. Maps `ShaderType` -> `ShaderPass` instances. `applyShader()` dispatches. `applyShaderChain()` runs multiple passes with ping-pong textures.
 - `dithering-shader.ts` — Most complex. Fragment pipeline (ordered) and compute pipeline (error diffusion). Error buffers are cached per entity/dimension under an LRU byte budget.
 - `ascii-shader.ts` — Uses MSDF font atlas. Async atlas init.
@@ -24,7 +24,7 @@ Per-effect shader passes. Each shader type gets a class extending `ShaderPass`.
 
 - Simple shaders: ~20 lines. Extend `ShaderPass`, import WGSL, write variant uniform at `uintView[7]` / `floatView[7]`.
 - Complex shaders (dithering, ascii) override `initialize()`, `createBindGroupLayout()`, `createBindGroup()`, and/or `execute()`.
-- All shaders share the same 304-byte uniform layout. The 32-byte base ends with the variant field at offset 7; palette metadata occupies offsets 8–11 and 16 `vec4f` colors start at offset 12. Pixel-space `size` is multiplied by `EffectRenderEntity.pixelScale`; keep dimensionless `scale` unchanged except for dithering, where it is a pixel-period control and scales with LOD too.
+- Palette effects use the 304-byte shared layout: the 32-byte base ends with the variant field at offset 7, palette metadata occupies offsets 8–11, and 16 `vec4f` colors start at offset 12. Glass overrides the base buffer/upload size with its palette-free 48-byte layout. Pixel-space `size` is multiplied by `EffectRenderEntity.pixelScale`; keep dimensionless `scale` unchanged except for dithering, where it is a pixel-period control and scales with LOD too.
 - `ShaderPass.removeEntity()` owns base uniform-buffer cleanup. Overrides must release their specialized state and call `super.removeEntity()`.
 - Scratch textures may return to `TexturePool` after their final encoded read/copy; command-buffer ordering permits reuse by later passes. They remain protected from destruction until the post-submit `commitSubmitted()` boundary.
 - Error-diffusion buffers are persistent GPU resources; keep them byte-budgeted and release specialized shader state from `removeEntity()` before calling `super.removeEntity()`.

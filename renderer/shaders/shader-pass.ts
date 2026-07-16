@@ -74,6 +74,10 @@ export abstract class ShaderPass {
 
   constructor(protected readonly ctx: ShaderContext) {}
 
+  protected get uniformBufferSize(): number {
+    return this.ctx.uniformData.byteLength;
+  }
+
   /** Whether this shader needs re-rendering every frame for the given entity (e.g., time-based animation). */
   needsContinuousRender(_entity: EffectShaderSettings): boolean {
     return false;
@@ -278,7 +282,7 @@ export abstract class ShaderPass {
 
     const buffer = this.ctx.device.createBuffer({
       label: `${this.constructor.name} uniforms ${entityId}`,
-      size: this.ctx.uniformData.byteLength,
+      size: this.uniformBufferSize,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     this.#uniformBufferCache.set(entityId, buffer);
@@ -288,7 +292,13 @@ export abstract class ShaderPass {
   protected writeEntityUniformBuffer(entity: EffectRenderEntity): GPUBuffer {
     this.writeUniforms(entity);
     const uniformBuffer = this.#getUniformBuffer(entity.id);
-    this.ctx.device.queue.writeBuffer(uniformBuffer, 0, this.ctx.uniformData);
+    this.ctx.device.queue.writeBuffer(
+      uniformBuffer,
+      0,
+      this.ctx.uniformData,
+      0,
+      this.uniformBufferSize,
+    );
     return uniformBuffer;
   }
 
