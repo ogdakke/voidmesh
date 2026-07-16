@@ -4,6 +4,7 @@ import {
   CompositionPass,
   type CompositionDrawItem,
   type FullSceneBatchKey,
+  type FullSceneTextureRange,
   type PrepareCompositionItemOptions,
 } from "#renderer/composition-pass.ts";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
@@ -187,13 +188,13 @@ describe("CompositionPass instancing", () => {
     const textureA = createTexture();
     const textureB = createTexture();
     const key = { ...createFullSceneKey(textureA, 3), texture: null };
-    const items = [
-      prepare(pass, first, textureA),
-      prepare(pass, second, textureA),
-      prepare(pass, third, textureB),
+    const entities = [first, second, third];
+    const textureRanges = [
+      { texture: textureA, firstInstance: 0, instanceCount: 2 },
+      { texture: textureB, firstInstance: 2, instanceCount: 1 },
     ];
 
-    pass.prepareMixedFullSceneBatch(key, items);
+    prepareMixed(pass, key, entities, textureRanges);
     const renderPass = createRenderPass();
     expect(pass.drawFullSceneBatch(renderPass, key)).toBe(true);
     expect(renderPass.draw.mock.calls).toEqual([
@@ -201,7 +202,7 @@ describe("CompositionPass instancing", () => {
       [6, 1, 0, 2],
     ]);
 
-    pass.prepareMixedFullSceneBatch(key, items);
+    prepareMixed(pass, key, entities, textureRanges);
     expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
 
     pass.destroy();
@@ -221,11 +222,15 @@ describe("CompositionPass instancing", () => {
     const textureC = createTexture();
     const key = { ...createFullSceneKey(textureA, 3), texture: null };
 
-    pass.prepareMixedFullSceneBatch(key, [
-      prepare(pass, first, textureA),
-      prepare(pass, second, textureA),
-      prepare(pass, third, textureB),
-    ]);
+    prepareMixed(
+      pass,
+      key,
+      [first, second, third],
+      [
+        { texture: textureA, firstInstance: 0, instanceCount: 2 },
+        { texture: textureB, firstInstance: 2, instanceCount: 1 },
+      ],
+    );
     pass.beginFrame(1);
     pass.drawItems(createRenderPass(), [prepare(pass, first, textureA)]);
     expect(pass.hasFullSceneBatch(key)).toBe(false);
@@ -303,12 +308,17 @@ describe("CompositionPass instancing", () => {
     const textureB = createTexture();
     const key = { ...createFullSceneKey(textureA, 4), texture: null };
 
-    pass.prepareMixedFullSceneBatch(key, [
-      prepare(pass, first, textureA),
-      prepare(pass, second, textureB),
-      prepare(pass, third, textureA),
-      prepare(pass, fourth, textureB),
-    ]);
+    prepareMixed(
+      pass,
+      key,
+      [first, second, third, fourth],
+      [
+        { texture: textureA, firstInstance: 0, instanceCount: 1 },
+        { texture: textureB, firstInstance: 1, instanceCount: 1 },
+        { texture: textureA, firstInstance: 2, instanceCount: 1 },
+        { texture: textureB, firstInstance: 3, instanceCount: 1 },
+      ],
+    );
     const visitor = vi.fn<(texture: GPUTexture) => void>();
 
     expect(pass.visitCachedFullSceneTextures(visitor)).toBe(true);
@@ -344,7 +354,7 @@ describe("CompositionPass instancing", () => {
     };
     expect(
       pass.patchMixedFullSceneBatch(patchedKey, [
-        { index: 1, item: prepare(pass, second, textureB) },
+        { index: 1, entity: second, texture: textureB, isSelected: false },
       ]),
     ).toBe(true);
     const patchedPass = createRenderPass();
@@ -362,7 +372,7 @@ describe("CompositionPass instancing", () => {
     const restoredKey = { ...patchedKey, entityVersion: 3, selectionVersion: 3 };
     expect(
       pass.patchMixedFullSceneBatch(restoredKey, [
-        { index: 1, item: prepare(pass, second, textureA) },
+        { index: 1, entity: second, texture: textureA, isSelected: false },
       ]),
     ).toBe(true);
     const restoredPass = createRenderPass();
@@ -396,9 +406,9 @@ describe("CompositionPass instancing", () => {
     const patchedKey = { ...initialKey, entityVersion: 2, texture: null };
     expect(
       pass.patchMixedFullSceneBatch(patchedKey, [
-        { index: 2, item: prepare(pass, third, textureB) },
-        { index: 0, item: prepare(pass, first, textureC) },
-        { index: 1, item: prepare(pass, second, textureB) },
+        { index: 2, entity: third, texture: textureB, isSelected: false },
+        { index: 0, entity: first, texture: textureC, isSelected: false },
+        { index: 1, entity: second, texture: textureB, isSelected: false },
       ]),
     ).toBe(true);
 
@@ -579,6 +589,20 @@ function prepare(
     visualScale: 1,
   };
   return pass.prepareDrawItem(options);
+}
+
+function prepareMixed(
+  pass: CompositionPass,
+  key: FullSceneBatchKey,
+  entities: readonly ShaderCanvasEntity[],
+  textureRanges: readonly FullSceneTextureRange[],
+): void {
+  pass.prepareMixedFullSceneBatch({
+    ...key,
+    entities,
+    selectedEntityIds: new Set(),
+    textureRanges,
+  });
 }
 
 function cloneImageEntity(

@@ -62,9 +62,17 @@ export interface PrepareFullSceneBatchOptions extends FullSceneBatchKey {
   selectedEntityIds: ReadonlySet<string>;
 }
 
+export interface PrepareMixedFullSceneBatchOptions extends FullSceneBatchKey {
+  entities: readonly ShaderCanvasEntity[];
+  selectedEntityIds: ReadonlySet<string>;
+  textureRanges: readonly FullSceneTextureRange[];
+}
+
 export interface FullSceneBatchPatch {
   index: number;
-  item: CompositionDrawItem;
+  entity: ShaderCanvasEntity;
+  texture: GPUTexture;
+  isSelected: boolean;
 }
 
 export interface FullSceneInstancePatch {
@@ -664,35 +672,38 @@ export class CompositionPass {
     this.#retainFullSceneInstancePayload(key, uploadBytes);
   }
 
-  prepareMixedFullSceneBatch(key: FullSceneBatchKey, items: readonly CompositionDrawItem[]): void {
-    if (items.length !== key.instanceCount) {
-      throw new Error("Mixed full-scene batch instance count does not match its draw items");
+  prepareMixedFullSceneBatch(options: PrepareMixedFullSceneBatchOptions): void {
+    const { entities, selectedEntityIds, textureRanges, ...key } = options;
+    if (entities.length !== key.instanceCount) {
+      throw new Error("Mixed full-scene batch instance count does not match its entity payload");
     }
     if (this.hasFullSceneBatch(key)) return;
 
-    const buffer = this.#ensureInstanceCapacity(items.length);
     const drawRanges: FullSceneBatchCache["drawRanges"] = [];
-    const textures: GPUTexture[] = [];
-    const seenTextures = new Set<GPUTexture>();
-    for (let index = 0; index < items.length; index++) {
-      const item = items[index]!;
-      if (item.pipeline !== "texture" || !item.texture) {
-        throw new Error("Mixed full-scene batches require regular texture draw items");
+    let nextInstance = 0;
+    for (const range of textureRanges) {
+      if (range.firstInstance !== nextInstance || range.instanceCount <= 0) {
+        throw new Error("Mixed full-scene texture ranges must cover entities in order");
       }
-      this.#writeInstance(index, item);
-      const previous = drawRanges.at(-1);
-      if (previous?.texture === item.texture) {
-        previous.instanceCount++;
-      } else {
-        drawRanges.push({ texture: item.texture, firstInstance: index, instanceCount: 1 });
-      }
-      if (!seenTextures.has(item.texture)) {
-        seenTextures.add(item.texture);
-        textures.push(item.texture);
-      }
-      item.entity.textureDirty = false;
+      appendTextureRange(drawRanges, range.texture, range.firstInstance, range.instanceCount);
+      nextInstance += range.instanceCount;
     }
-    const uploadBytes = items.length * INSTANCE_STRIDE_BYTES;
+    if (nextInstance !== entities.length) {
+      throw new Error("Mixed full-scene texture ranges do not cover the entity payload");
+    }
+
+    const buffer = this.#ensureInstanceCapacity(entities.length);
+    for (let index = 0; index < entities.length; index++) {
+      const entity = entities[index]!;
+      this.#writeFullSceneInstance(
+        index,
+        entity,
+        selectedEntityIds.has(entity.id),
+        options.debugMode,
+      );
+      entity.textureDirty = false;
+    }
+    const uploadBytes = entities.length * INSTANCE_STRIDE_BYTES;
     this.#device.queue.writeBuffer(buffer, 0, this.#instanceData, 0, uploadBytes);
     this.#fullSceneBatchRebuilds += 1;
     this.#fullSceneBatchUploadBytes += uploadBytes;
@@ -700,7 +711,7 @@ export class CompositionPass {
       ...key,
       bufferGeneration: this.#instanceBufferGeneration,
       drawRanges,
-      textures,
+      textures: collectUniqueTextures(drawRanges),
     };
     this.#retainFullSceneInstancePayload(key, uploadBytes);
   }
@@ -842,10 +853,8 @@ export class CompositionPass {
       break;
     }
     let previousPatchIndex = -1;
-    for (const { index, item } of sortedPatches) {
-      if (index < 0 || index >= key.instanceCount || item.pipeline !== "texture" || !item.texture) {
-        return false;
-      }
+    for (const { index } of sortedPatches) {
+      if (index < 0 || index >= key.instanceCount) return false;
       if (index === previousPatchIndex) return false;
       previousPatchIndex = index;
     }
@@ -867,7 +876,7 @@ export class CompositionPass {
             patch.index - rangeCursor,
           );
         }
-        appendTextureRange(drawRanges, patch.item.texture!, patch.index, 1);
+        appendTextureRange(drawRanges, patch.texture, patch.index, 1);
         rangeCursor = patch.index + 1;
         patchCursor++;
       }
@@ -877,9 +886,9 @@ export class CompositionPass {
     }
     if (patchCursor !== sortedPatches.length) return false;
 
-    for (const { index, item } of sortedPatches) {
-      this.#writeInstance(index, item);
-      item.entity.textureDirty = false;
+    for (const { index, entity, isSelected } of sortedPatches) {
+      this.#writeFullSceneInstance(index, entity, isSelected, key.debugMode);
+      entity.textureDirty = false;
     }
     for (let start = 0; start < sortedPatches.length;) {
       let end = start + 1;
