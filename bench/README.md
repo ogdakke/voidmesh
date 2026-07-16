@@ -26,6 +26,19 @@ Recorded run:
 bun run bench:render:record
 ```
 
+For a bounded base-ref/current-tree comparison, use the A/B runner. It creates
+a temporary detached worktree, reuses the current dependency install, records
+both sides, prints the compact comparison, and removes the worktree:
+
+```bash
+bun run bench:render:ab -- --base main --scenario zoom-61-unique-mixed-round-trip --metric rafIntervalP95Ms
+```
+
+The scenario is required so an investigation cannot accidentally run every
+benchmark. Both JSON records are retained by default in a temporary result
+directory and their paths are printed for targeted `jq` analysis. Pass
+`--out-dir bench/results/my-investigation` to choose a stable location.
+
 This starts Vite, launches Chrome through the DevTools protocol, runs the full
 suite, and writes:
 
@@ -217,6 +230,10 @@ BENCH_OUT_DIR=bench/results/baseline bun run bench:render:record -- --rounds 3
 BENCH_OUT_DIR=bench/results/candidate bun run bench:render:record -- --rounds 3
 bun run bench:render:compare -- bench/results/baseline/latest.json bench/results/candidate/latest.json
 ```
+
+Use the manual loop when baseline and candidate records already exist or need
+different environments. Prefer `bench:render:ab` for same-machine Git-ref
+comparisons because it standardizes worktree setup and cleanup.
 
 Most scenarios use queue-drain batch timings through
 `GPUQueue.onSubmittedWorkDone()`. The mixed-media zoom scenarios instead use

@@ -396,11 +396,22 @@ async function runBenchInPage(
       return { metadata, rounds };
     })()
   `;
-  const response = (await client.send("Runtime.evaluate", {
-    expression,
-    awaitPromise: true,
-    returnByValue: true,
-  })) as RuntimeEvaluateResult;
+  let response: RuntimeEvaluateResult | null = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      response = (await client.send("Runtime.evaluate", {
+        expression,
+        awaitPromise: true,
+        returnByValue: true,
+      })) as RuntimeEvaluateResult;
+      break;
+    } catch (error) {
+      if (attempt === 2 || !isTransientExecutionContextError(error)) throw error;
+      await sleep(500);
+    }
+  }
+
+  if (!response) throw new Error("Bench page did not produce an evaluation response");
 
   if (response.exceptionDetails) {
     const description =
@@ -415,6 +426,11 @@ async function runBenchInPage(
     metadata: unknown;
     rounds: Array<{ index: number; results: unknown }>;
   };
+}
+
+function isTransientExecutionContextError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /Execution context was destroyed|Cannot find context with specified id/i.test(message);
 }
 
 function extractRounds(payload: {
@@ -572,7 +588,7 @@ async function collectRepoState(): Promise<BenchRecord["repo"]> {
   const [branch, commit, status] = await Promise.all([
     runText(["git", "rev-parse", "--abbrev-ref", "HEAD"]),
     runText(["git", "rev-parse", "HEAD"]),
-    runText(["git", "status", "--short"]),
+    runText(["git", "status", "--short", "--", ".", ":(exclude)node_modules"]),
   ]);
   return {
     branch: branch || null,

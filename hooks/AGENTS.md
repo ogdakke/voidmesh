@@ -1,31 +1,26 @@
 # Hooks
 
-Custom React hooks bridging engine/renderer state to components.
+React adapters between components, context/application capabilities, DOM events, and renderer lifecycle.
 
-## Key Files
+## Authoritative Areas
 
-- `use-canvas-renderer.ts` — `InfiniteCanvasRenderer` lifecycle (init, cleanup, error handling). Polls for canvas element changes.
-- `use-canvas-renderer-runtime.ts` — Binds renderer appearance/lifecycle to the application interaction service and existing renderer context.
-- `use-canvas-surface-events.ts` — DOM pointer/touch/wheel/space adapter. Translates browser events into `CanvasInteractionService` calls.
-- `use-infinite-canvas-keybinds.ts` — Registers global/canvas/selection shortcuts against commands and application actions.
-- `use-entity-cycling.ts` — Keyboard adapter for the application-owned entity cycling workflow.
-- `use-media-controls.ts` (~11KB) — Video/GIF playback controls.
-- `use-image-input.ts` — File input for image/video/GIF upload. Validates types, loads media, creates entities.
-- `use-param-value.ts` — `useParamValue<T>(path, default)`. Reads shader param for selected entities. Returns `{ value, isSupported, isMixed, update }`. Used by all knob components.
-- `use-clipboard-paste.ts` — Ctrl+V paste handling.
-- Also: `use-canvas-container-resize.ts`, `use-action-layer.ts`, `use-is-mobile.ts`, `use-media-query.ts`, `use-carousel-dots.ts`.
-- `use-studio-file.ts` — `.vdmsh` file open/save via serialization module. Supports file handle saving (save to same file without re-picking on Chromium).
+- `use-canvas-renderer.ts`, `use-canvas-renderer-runtime.ts` — Renderer initialization and runtime binding.
+- `use-canvas-surface-events.ts` — DOM input translation.
+- `use-infinite-canvas-keybinds.ts` — Canvas shortcut registration.
+- `use-media-controls.ts` — Video/GIF control behavior.
+- `use-param-value.ts` — Standard selected-entity parameter access.
+- `use-studio-file.ts` — Workspace open/save.
 
-## Patterns
+## Invariants
 
-- Hooks needing canvas state use narrow selector hooks from `context/use-canvas.ts` such as `useSelectedEntity()`, `useSelectedEntities()`, `useSelectionState()`, `useCanvasPreferences()`, and `useViewport()`.
-- Hooks needing mutations use `useCanvasCommands()`. Hooks needing renderer/color-space services use `useCanvasRendererService()`.
-- Hooks translating canvas DOM behavior use `useCanvasInteraction()`; do not import `gameLoop`, viewport animation, or `canvasStore` for new behavior.
-- Hooks needing high-frequency engine state (viewport, playback, drag, action layer) use the focused external-store adapters exported by `context/use-canvas.ts`; hooks do not import `canvasStore` directly.
-- `useParamValue()` is the standard way for knob components to access entity parameters. Handles multi-select uniformity.
+- Read canvas state through focused selectors from `context/use-canvas.ts`.
+- Write through `useCanvasCommands()` or application-owned capabilities.
+- Translate DOM events into data before crossing the application boundary.
+- High-frequency viewport, playback, drag, and action-layer state uses focused external-store snapshots.
+- `useParamValue()` is the standard knob interface and owns multi-selection support/mixed-value semantics.
 
-## Anti-Patterns
+## Boundaries
 
-- Do not put component JSX in hooks. Hooks return data and callbacks, not elements.
-- Do not recreate a broad `useCanvas()`-style state hook. Keep reads fine-grained.
-- Do not subscribe to `canvasStore.subscribe` at full `version` granularity from sidebar components. Use selective snapshots (`viewportVersion`, `selectionVersion`, `playbackVersion`).
+- Do not import engine singletons or subscribe to the full canvas version.
+- Hooks return state and callbacks, not component JSX.
+- Do not recreate a broad `useCanvas()` surface.
