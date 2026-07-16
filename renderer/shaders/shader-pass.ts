@@ -70,12 +70,17 @@ export abstract class ShaderPass {
   protected externalPipeline: GPURenderPipeline | null = null;
   protected externalBindGroupLayout: GPUBindGroupLayout | null = null;
   #textureViewCache = new WeakMap<GPUTexture, GPUTextureView>();
-  #uniformBufferCache = new Map<string, GPUBuffer>();
+  #uniformBuffers: GPUBuffer[] = [];
+  #uniformBufferCursor = 0;
 
   constructor(protected readonly ctx: ShaderContext) {}
 
   protected get uniformBufferSize(): number {
     return this.ctx.uniformData.byteLength;
+  }
+
+  beginFrame(): void {
+    this.#uniformBufferCursor = 0;
   }
 
   /** Whether this shader needs re-rendering every frame for the given entity (e.g., time-based animation). */
@@ -276,22 +281,23 @@ export abstract class ShaderPass {
     });
   }
 
-  #getUniformBuffer(entityId: string): GPUBuffer {
-    const cached = this.#uniformBufferCache.get(entityId);
+  #getUniformBuffer(): GPUBuffer {
+    const slot = this.#uniformBufferCursor++;
+    const cached = this.#uniformBuffers[slot];
     if (cached) return cached;
 
     const buffer = this.ctx.device.createBuffer({
-      label: `${this.constructor.name} uniforms ${entityId}`,
+      label: `${this.constructor.name} uniforms slot ${slot}`,
       size: this.uniformBufferSize,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    this.#uniformBufferCache.set(entityId, buffer);
+    this.#uniformBuffers.push(buffer);
     return buffer;
   }
 
   protected writeEntityUniformBuffer(entity: EffectRenderEntity): GPUBuffer {
     this.writeUniforms(entity);
-    const uniformBuffer = this.#getUniformBuffer(entity.id);
+    const uniformBuffer = this.#getUniformBuffer();
     this.ctx.device.queue.writeBuffer(
       uniformBuffer,
       0,
@@ -404,18 +410,14 @@ export abstract class ShaderPass {
     pass.end();
   }
 
-  /** Release per-entity resources when an entity no longer uses this pass. */
-  removeEntity(entityId: string): void {
-    this.#uniformBufferCache.get(entityId)?.destroy();
-    this.#uniformBufferCache.delete(entityId);
-  }
+  /** Release specialized per-entity resources in subclasses. */
+  removeEntity(_entityId: string): void {}
 
   /** Cleanup GPU resources. Override to clean up additional resources. */
   destroy(): void {
-    for (const buffer of this.#uniformBufferCache.values()) {
-      buffer.destroy();
-    }
-    this.#uniformBufferCache.clear();
+    for (const buffer of this.#uniformBuffers) buffer.destroy();
+    this.#uniformBuffers.length = 0;
+    this.#uniformBufferCursor = 0;
     // Pipeline and bind group layout don't need explicit destruction
     this.pipeline = null;
     this.bindGroupLayout = null;

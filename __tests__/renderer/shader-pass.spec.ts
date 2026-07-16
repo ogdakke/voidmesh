@@ -14,7 +14,7 @@ describe("ShaderPass", () => {
     vi.unstubAllGlobals();
   });
 
-  test("destroys a removed entity's cached uniform buffer", () => {
+  test("reuses peak per-frame uniform buffer slots across entity identities", () => {
     const firstBuffer = createBuffer();
     const secondBuffer = createBuffer();
     const createBufferMock = vi
@@ -22,19 +22,25 @@ describe("ShaderPass", () => {
       .mockReturnValueOnce(firstBuffer)
       .mockReturnValueOnce(secondBuffer);
     const pass = new TestShaderPass(createContext(createBufferMock));
-    const entity = createRenderEntity("shader-entity", 1);
+    const firstEntity = createRenderEntity("shader-entity-first", 1);
+    const secondEntity = createRenderEntity("shader-entity-second", 1);
+    const laterEntity = createRenderEntity("shader-entity-later", 1);
 
-    expect(pass.allocateUniforms(entity)).toBe(firstBuffer);
-    expect(pass.allocateUniforms(entity)).toBe(firstBuffer);
-    expect(createBufferMock).toHaveBeenCalledOnce();
+    pass.beginFrame();
+    expect(pass.allocateUniforms(firstEntity)).toBe(firstBuffer);
+    expect(pass.allocateUniforms(secondEntity)).toBe(secondBuffer);
+    expect(createBufferMock).toHaveBeenCalledTimes(2);
     expect(createBufferMock.mock.calls[0]![0].size).toBe(304);
 
-    pass.removeEntity(entity.id);
-    expect(firstBuffer.destroy).toHaveBeenCalledOnce();
-
-    expect(pass.allocateUniforms(entity)).toBe(secondBuffer);
+    pass.beginFrame();
+    expect(pass.allocateUniforms(laterEntity)).toBe(firstBuffer);
     expect(createBufferMock).toHaveBeenCalledTimes(2);
+    pass.removeEntity(firstEntity.id);
+    expect(firstBuffer.destroy).not.toHaveBeenCalled();
+
     pass.destroy();
+    expect(firstBuffer.destroy).toHaveBeenCalledOnce();
+    expect(secondBuffer.destroy).toHaveBeenCalledOnce();
   });
 
   test("scales pixel-space uniforms without changing dimensionless shader scale", () => {

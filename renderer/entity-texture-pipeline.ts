@@ -144,6 +144,7 @@ export class EntityTexturePipeline {
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
   ): void {
+    this.#runtime.beginFrame();
     // Single encoder for the entire entity pipeline: blur -> adjustments -> shader -> post-process
     const encoder = this.#device.createCommandEncoder({
       label: `Entity ${entity.id} pipeline`,
@@ -449,6 +450,7 @@ export class EntityTexturePipeline {
   }
 
   beginFrame(allowLodTransitions: boolean): void {
+    this.#runtime.beginFrame();
     this.#allowLodTransitions = allowLodTransitions;
     this.#lodTransitionsRemaining = config.rendering.lodTransitionsPerFrame;
     this.#lodTransitionPixelsRemaining = config.rendering.lodTransitionPixelBudget;

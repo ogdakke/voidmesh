@@ -13,6 +13,7 @@ vi.mock("#renderer/entity-shader-runtime.ts", () => ({
     processingPipeline = {};
     passthroughCopyPass = {};
     initialize = vi.fn<() => Promise<void>>(async () => {});
+    beginFrame = vi.fn<() => void>();
     encode = runtimeEncode;
     needsContinuousRender = vi.fn<() => boolean>(() => false);
     removeEntity = vi.fn<() => void>();
