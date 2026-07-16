@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { config } from "#config";
 import { DitheringShader } from "#renderer/shaders/dithering-shader.ts";
 import { ShaderPass, type ShaderContext } from "#renderer/shaders/shader-pass.ts";
 import type { EffectRenderEntity } from "#renderer/effect-render-entity.ts";
@@ -26,6 +27,7 @@ describe("ShaderPass", () => {
     expect(pass.allocateUniforms(entity)).toBe(firstBuffer);
     expect(pass.allocateUniforms(entity)).toBe(firstBuffer);
     expect(createBufferMock).toHaveBeenCalledOnce();
+    expect(createBufferMock.mock.calls[0]![0].size).toBe(304);
 
     pass.removeEntity(entity.id);
     expect(firstBuffer.destroy).toHaveBeenCalledOnce();
@@ -59,6 +61,24 @@ describe("ShaderPass", () => {
 
     expect(context.floatView[2]).toBe(0.5);
     expect(context.floatView[4]).toBe(10);
+  });
+
+  test("writes fallback palette metadata immediately after the base uniforms", () => {
+    const context = createContext(vi.fn<GPUDevice["createBuffer"]>());
+    const pass = new TestShaderPass(context);
+    const entity = createRenderEntity("compact-palette", 1);
+    entity.shaderParams.palette = undefined;
+
+    pass.write(entity);
+
+    expect(context.uniformData.byteLength).toBe(304);
+    expect(context.uintView[8]).toBe(2);
+    expect(context.uintView[9]).toBe(entity.shaderParams.ascii?.invert ? 1 : 0);
+    expect(context.uintView[10]).toBe(0);
+    for (let index = 0; index < 4; index++) {
+      expect(context.floatView[12 + index]).toBeCloseTo(entity.shaderParams.background[index]!);
+      expect(context.floatView[16 + index]).toBeCloseTo(entity.shaderParams.color[index]!);
+    }
   });
 });
 
@@ -94,7 +114,7 @@ function createBuffer(): GPUBuffer {
 }
 
 function createContext(createBuffer: GPUDevice["createBuffer"]): ShaderContext {
-  const uniformData = new ArrayBuffer(336);
+  const uniformData = new ArrayBuffer(config.rendering.ditheringUniformSize);
   return {
     device: {
       createBuffer,

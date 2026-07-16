@@ -6,7 +6,7 @@ import type { EffectRenderEntity, EffectShaderSettings } from "../effect-render-
 
 export interface ShaderContext {
   device: GPUDevice;
-  /** Pre-allocated ArrayBuffer for the 336-byte uniform layout */
+  /** Pre-allocated ArrayBuffer for the 304-byte uniform layout */
   uniformData: ArrayBuffer;
   floatView: Float32Array;
   uintView: Uint32Array;
@@ -97,7 +97,7 @@ export abstract class ShaderPass {
   }
 
   /**
-   * Write the common portion of the 336-byte uniform buffer, then call writeVariantUniforms().
+   * Write the common portion of the 304-byte uniform buffer, then call writeVariantUniforms().
    *
    * Replicates the exact logic from canvas-renderer.ts #updateShaderUniforms (lines 2159-2247).
    */
@@ -108,7 +108,7 @@ export abstract class ShaderPass {
     const f = this.ctx.floatView;
     const u = this.ctx.uintView;
 
-    // Base uniforms (first 64 bytes / 16 floats)
+    // Base uniforms (first 32 bytes / 8 values)
     f[0] = width;
     f[1] = height;
     f[2] = params.scale;
@@ -120,20 +120,10 @@ export abstract class ShaderPass {
     // Offset 7 is handled by subclass
     this.writeVariantUniforms(entity);
 
-    // Legacy color/background fields
-    f[8] = params.color[0];
-    f[9] = params.color[1];
-    f[10] = params.color[2];
-    f[11] = params.color[3];
-    f[12] = params.background[0];
-    f[13] = params.background[1];
-    f[14] = params.background[2];
-    f[15] = params.background[3];
+    // Color space flag (offset 40 / u[10])
+    u[10] = this.ctx.supportsP3 ? 1 : 0;
 
-    // Color space flag (offset 72 / u[18])
-    u[18] = this.ctx.supportsP3 ? 1 : 0;
-
-    // Palette data (offset 64 bytes / 16 floats)
+    // Palette metadata starts at byte 32; vec4 colors start at byte 48.
     const palette = params.palette;
     if (palette && palette.colors.length >= 2) {
       let sortedColors: RGBA[];
@@ -158,10 +148,10 @@ export abstract class ShaderPass {
         };
       }
 
-      u[16] = sortedColors.length;
-      u[17] = params.ascii?.invert ? 1 : 0;
+      u[8] = sortedColors.length;
+      u[9] = params.ascii?.invert ? 1 : 0;
 
-      const paletteStart = 20;
+      const paletteStart = 12;
       for (let i = 0; i < sortedColors.length && i < 16; i++) {
         const color = sortedColors[i]!;
         const offset = paletteStart + i * 4;
@@ -171,10 +161,10 @@ export abstract class ShaderPass {
         f[offset + 3] = color[3];
       }
     } else {
-      u[16] = 2;
-      u[17] = params.ascii?.invert ? 1 : 0;
+      u[8] = 2;
+      u[9] = params.ascii?.invert ? 1 : 0;
 
-      const paletteStart = 20;
+      const paletteStart = 12;
       f[paletteStart] = params.background[0];
       f[paletteStart + 1] = params.background[1];
       f[paletteStart + 2] = params.background[2];

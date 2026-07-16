@@ -1,6 +1,6 @@
 // Frosted glass shader - simulates textured/hammered privacy glass
 // Voronoi cells with per-cell convex dome lens distortion, frost scatter, and edge highlights
-// Uniform buffer layout (336 bytes, 16-byte aligned) - shared with other shaders
+// Uniform buffer layout (304 bytes, 16-byte aligned) - shared with other shaders
 struct Uniforms {
   resolution: vec2f,       // Canvas dimensions (offset 0)
   scale: f32,              // Lens dome curvature depth 0.1-3.0 (offset 8)
@@ -9,9 +9,7 @@ struct Uniforms {
   highlight: f32,          // Edge highlight strength 0-1 (offset 20)
   dispersion: f32,         // Chromatic channel separation 0-1 (offset 24)
   frostiness: f32,         // Frost scatter radius 0-1 (offset 28)
-  color: vec4f,            // Unused (offset 32)
-  background: vec4f,       // Unused (offset 48)
-  paletteCount: u32,       // Unused (offset 64)
+  paletteCount: u32,       // Unused (offset 32)
   _pad0: u32,
   is_p3: u32,
   _pad2: u32,

@@ -91,7 +91,7 @@ At init, `detectGpuColorConfig()` probes Display P3 support. The result configur
 
 ## Shader Uniform Layout
 
-All shaders share a 336-byte uniform buffer. First 64 bytes are common (size, intensity, scale, shape, palette flag). Offset 7 (byte 28) is the shader-variant field. Palette data at offset 64 (float index 16+). See `shaders/shader-pass.ts` for exact layout.
+Effect shaders share a 304-byte uniform buffer. The first 32 bytes contain common and variant fields, palette metadata occupies bytes 32–47, and 16 `vec4f` colors start at byte 48. See `shaders/shader-pass.ts` for exact layout.
 
 ## Anti-Patterns
 

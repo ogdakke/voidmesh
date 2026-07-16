@@ -28,14 +28,11 @@ struct Uniforms {
   shape: u32,              // Unused (offset 20)
   preserveColors: u32,     // 0 = mono, 1 = per-channel RGB (offset 24)
   ditheringKind: u32,      // Algorithm index: 5-11 for error diffusion (offset 28)
-  color: vec4f,            // Foreground color for mono mode (offset 32)
-  background: vec4f,       // Background color for mono mode (offset 48)
-  // Extended palette data (offset 64+)
-  paletteCount: u32,       // Number of colors in palette (2-16) (offset 64)
-  _pad0: u32,              // Padding for alignment (offset 68)
-  is_p3: u32,              // 1 = Display P3, 0 = sRGB (offset 72)
-  _pad2: u32,              // Padding for alignment (offset 76)
-  palette: array<vec4f, 16>, // Color palette (offset 80, 256 bytes)
+  paletteCount: u32,       // Number of colors in palette (2-16) (offset 32)
+  _pad0: u32,              // Padding for alignment (offset 36)
+  is_p3: u32,              // 1 = Display P3, 0 = sRGB (offset 40)
+  _pad2: u32,              // Padding for alignment (offset 44)
+  palette: array<vec4f, 16>, // Color palette (offset 48, 256 bytes)
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;

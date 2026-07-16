@@ -2,7 +2,7 @@
 // Renders crisp, scalable characters at any cell size using distance field anti-aliasing
 
 // ============================================================================
-// Uniform Buffer Layout (336 bytes, 16-byte aligned)
+// Uniform Buffer Layout (304 bytes, 16-byte aligned)
 // ============================================================================
 
 struct Uniforms {
@@ -13,14 +13,11 @@ struct Uniforms {
   shape: u32,              // Unused for ASCII (offset 20)
   preserveColors: u32,     // 0 = false, 1 = true (offset 24)
   asciiKind: u32,          // Character set: 0=standard, 1=extended, 2=binary, 3=minimal (offset 28)
-  color: vec4f,            // Foreground color RGBA (offset 32) - legacy, use palette instead
-  background: vec4f,       // Background color RGBA (offset 48) - legacy, use palette instead
-  // Extended palette data (offset 64+)
-  paletteCount: u32,       // Number of colors in palette (offset 64)
-  asciiInvert: u32,        // Invert brightness mapping (offset 68)
-  is_p3: u32,              // 1 = Display P3, 0 = sRGB (offset 72)
-  _pad2: u32,              // Padding for alignment (offset 76)
-  palette: array<vec4f, 16>, // Color palette (offset 80, 256 bytes)
+  paletteCount: u32,       // Number of colors in palette (offset 32)
+  asciiInvert: u32,        // Invert brightness mapping (offset 36)
+  is_p3: u32,              // 1 = Display P3, 0 = sRGB (offset 40)
+  _pad2: u32,              // Padding for alignment (offset 44)
+  palette: array<vec4f, 16>, // Color palette (offset 48, 256 bytes)
 }
 
 // ============================================================================

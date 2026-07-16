@@ -1,6 +1,6 @@
 // Fluted glass shader - simulates light refracting through ridged glass
 // Creates periodic cylindrical lens distortion with highlight/shadow depth cues
-// Uniform buffer layout (336 bytes, 16-byte aligned) - shared with other shaders
+// Uniform buffer layout (304 bytes, 16-byte aligned) - shared with other shaders
 struct Uniforms {
   resolution: vec2f,       // Canvas dimensions (offset 0)
   scale: f32,              // Lens curvature depth 0.1-3.0 (offset 8)
@@ -9,9 +9,7 @@ struct Uniforms {
   caustic: f32,            // Caustic brightness strength 0-2 (offset 20)
   dispersion: f32,         // Chromatic channel separation 0-1 (offset 24)
   angle: f32,              // Ridge angle in degrees (offset 28)
-  color: vec4f,            // Unused (offset 32)
-  background: vec4f,       // Unused (offset 48)
-  paletteCount: u32,       // Unused (offset 64)
+  paletteCount: u32,       // Unused (offset 32)
   _pad0: u32,
   _pad1: u32,
   _pad2: u32,

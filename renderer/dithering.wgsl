@@ -1,5 +1,5 @@
 // Dithering shader - ordered dithering with various patterns and multi-color palette support
-// Uniform buffer layout (336 bytes, 16-byte aligned)
+// Uniform buffer layout (304 bytes, 16-byte aligned)
 struct Uniforms {
   resolution: vec2f,       // Canvas dimensions (offset 0)
   scale: f32,              // Pattern scale factor 0.1-3.0 (offset 8)
@@ -8,14 +8,11 @@ struct Uniforms {
   shape: u32,              // Unused for dithering (offset 20)
   preserveColors: u32,     // 0 = mono (2-color), 1 = per-channel RGB (offset 24)
   ditheringKind: u32,      // Algorithm: 0=bayer2x2, 1=bayer4x4, 2=bayer8x8, 3=whiteNoise, 4=blueNoise (offset 28)
-  color: vec4f,            // Foreground color for mono mode (offset 32)
-  background: vec4f,       // Background color for mono mode (offset 48)
-  // Extended palette data (offset 64+)
-  paletteCount: u32,       // Number of colors in palette (2-16) (offset 64)
-  _pad0: u32,              // Padding for alignment (offset 68)
-  is_p3: u32,              // 1 = Display P3, 0 = sRGB (offset 72)
-  _pad2: u32,              // Padding for alignment (offset 76)
-  palette: array<vec4f, 16>, // Color palette (offset 80, 256 bytes)
+  paletteCount: u32,       // Number of colors in palette (2-16) (offset 32)
+  _pad0: u32,              // Padding for alignment (offset 36)
+  is_p3: u32,              // 1 = Display P3, 0 = sRGB (offset 40)
+  _pad2: u32,              // Padding for alignment (offset 44)
+  palette: array<vec4f, 16>, // Color palette (offset 48, 256 bytes)
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
