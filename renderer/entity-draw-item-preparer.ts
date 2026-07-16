@@ -533,7 +533,7 @@ export class EntityDrawItemPreparer {
     }
 
     this.#compositionPass.prepareFullSceneBatch({ ...key, entities, selectedEntityIds });
-    this.#rememberFullSceneLayout(entities, selectedEntityIds, key);
+    this.#rememberFullSceneBatch(key, selectedEntityIds);
     this.#rememberSnapshotSource(representative, entityVersion, renderWidth, renderHeight);
     return key;
   }
@@ -756,7 +756,7 @@ export class EntityDrawItemPreparer {
         textureRanges: plan.runs,
       });
     }
-    this.#rememberFullSceneLayout(entities, selectedEntityIds, key);
+    this.#rememberFullSceneBatch(key, selectedEntityIds);
     return key;
   }
 
@@ -1067,11 +1067,7 @@ export class EntityDrawItemPreparer {
     return key;
   }
 
-  #rememberFullSceneLayout(
-    _entities: readonly ShaderCanvasEntity[],
-    selectedEntityIds: ReadonlySet<string>,
-    key: FullSceneBatchKey,
-  ): void {
+  #rememberFullSceneBatch(key: FullSceneBatchKey, selectedEntityIds: ReadonlySet<string>): void {
     this.#activeFullSceneBatchKey = key;
     this.#activeFullSceneSelectedEntityIds = selectedEntityIds;
   }
