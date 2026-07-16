@@ -1,4 +1,5 @@
 import { config } from "#config";
+import { getStaticShaderParamsIdentity } from "#lib/shader-params-identity.ts";
 import { getTextureByteSize } from "#lib/textures.ts";
 import {
   isAnimatedEntity,
@@ -780,12 +781,11 @@ export class EntityTexturePipeline {
       return `entity:${entity.id}:${width}x${height}`;
     }
 
-    // Do not retain one serialized signature per entity. Deserialized workspaces can
-    // contain hundreds of thousands of distinct parameter objects with only a few
-    // structural values; caching by object identity retained every duplicate string.
-    const signature = JSON.stringify(entity.shaderParams);
+    const staticParamsIdentity = getStaticShaderParamsIdentity(entity.shaderParams);
+    const time = entity.shaderParams.time ?? "";
+    const timeAutoPlay = entity.shaderParams.timeAutoPlay ?? "";
     const asset = entity.mediaSource.asset;
-    return `image:${asset.id}:${asset.revision}:${width}x${height}:${entity.shaderType}:${signature}`;
+    return `image:${asset.id}:${asset.revision}:${width}x${height}:${entity.shaderType}:${staticParamsIdentity}:${time}:${timeAutoPlay}`;
   }
 
   #bindEntityToProcessed(

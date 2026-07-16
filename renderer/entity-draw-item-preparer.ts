@@ -3,6 +3,7 @@ import type { ActionLayerRenderState, DragSelectMode, DragVisualRenderState } fr
 import { getViewportWorldBounds } from "#lib/canvas-math.ts";
 import type { EntitySpatialIndex } from "#lib/entity-spatial-index.ts";
 import { tracePerformancePhase } from "#lib/performance-tracing.ts";
+import { haveEquivalentShaderParams } from "#lib/shader-params-identity.ts";
 import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import type {
   CompositionDrawItem,
@@ -25,6 +26,7 @@ interface EntityDrawItemPreparerOptions {
 
 interface PrepareEntityDrawItemsOptions {
   entities: ShaderCanvasEntity[];
+  entityIndices: ReadonlyMap<string, number>;
   entitySpatialIndex: EntitySpatialIndex;
   entityVersion: number;
   geometryVersion: number;
@@ -97,7 +99,7 @@ export class EntityDrawItemPreparer {
   readonly #actionLayerDrawItems: CompositionDrawItem[] = [];
   readonly #fullScenePatches: FullSceneBatchPatch[] = [];
   readonly #fullSceneInstancePatches: FullSceneInstancePatch[] = [];
-  readonly #fullSceneEntityIndices = new Map<string, number>();
+  #fullSceneEntityIndices: ReadonlyMap<string, number> = new Map();
   readonly #prepared: PreparedEntityDrawItems = {
     entityDrawItems: this.#entityDrawItems,
     actionLayerDrawItems: this.#actionLayerDrawItems,
@@ -160,6 +162,7 @@ export class EntityDrawItemPreparer {
       dragVisual,
       debugMode,
     } = options;
+    this.#fullSceneEntityIndices = options.entityIndices;
 
     const entityDrawItems = this.#entityDrawItems;
     const actionLayerDrawItems = this.#actionLayerDrawItems;
@@ -1065,14 +1068,10 @@ export class EntityDrawItemPreparer {
   }
 
   #rememberFullSceneLayout(
-    entities: readonly ShaderCanvasEntity[],
+    _entities: readonly ShaderCanvasEntity[],
     selectedEntityIds: ReadonlySet<string>,
     key: FullSceneBatchKey,
   ): void {
-    this.#fullSceneEntityIndices.clear();
-    for (let index = 0; index < entities.length; index++) {
-      this.#fullSceneEntityIndices.set(entities[index]!.id, index);
-    }
     this.#activeFullSceneBatchKey = key;
     this.#activeFullSceneSelectedEntityIds = selectedEntityIds;
   }
@@ -1157,10 +1156,6 @@ export class EntityDrawItemPreparer {
     this.#homogeneousEntityCount = entities.length;
     this.#homogeneousEntities = entities;
     this.#homogeneousRepresentative = null;
-    this.#fullSceneEntityIndices.clear();
-    for (let index = 0; index < entities.length; index++) {
-      this.#fullSceneEntityIndices.set(entities[index]!.id, index);
-    }
 
     const representative = entities[0];
     if (!representative || representative.mediaSource.type !== MediaType.image) return null;
@@ -1231,38 +1226,8 @@ function isFullSceneEquivalent(
     entity.originalSize.height === representative.originalSize.height &&
     entity.size.width === representative.size.width &&
     entity.size.height === representative.size.height &&
-    structurallyEqual(entity.shaderParams, representative.shaderParams)
+    haveEquivalentShaderParams(entity.shaderParams, representative.shaderParams)
   );
-}
-
-function structurallyEqual(a: unknown, b: unknown): boolean {
-  if (Object.is(a, b)) return true;
-  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
-
-  if (Array.isArray(a)) {
-    if (!Array.isArray(b) || a.length !== b.length) return false;
-    for (let index = 0; index < a.length; index++) {
-      if (!structurallyEqual(a[index], b[index])) return false;
-    }
-    return true;
-  }
-  if (Array.isArray(b)) return false;
-
-  const aRecord = a as Record<string, unknown>;
-  const bRecord = b as Record<string, unknown>;
-  let aKeyCount = 0;
-  let bKeyCount = 0;
-  for (const key in aRecord) {
-    if (!Object.hasOwn(aRecord, key)) continue;
-    aKeyCount++;
-    if (!Object.hasOwn(bRecord, key) || !structurallyEqual(aRecord[key], bRecord[key])) {
-      return false;
-    }
-  }
-  for (const key in bRecord) {
-    if (Object.hasOwn(bRecord, key)) bKeyCount++;
-  }
-  return aKeyCount === bKeyCount;
 }
 
 function countVisibleTextureRuns(

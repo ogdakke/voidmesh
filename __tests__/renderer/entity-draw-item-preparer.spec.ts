@@ -646,6 +646,7 @@ function createHarness(
   });
   const options: PrepareOptions = {
     entities,
+    entityIndices: new Map(entities.map((entity, index) => [entity.id, index])),
     entitySpatialIndex: spatialIndex as never,
     entityVersion: 1,
     geometryVersion: 1,

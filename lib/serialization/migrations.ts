@@ -42,14 +42,21 @@ const migrations: Record<number, Migration> = {
     doc.version = 5;
     return doc;
   },
+
+  // Version 5 -> 6: New saves use deduplicated manifest tables. Inline v5
+  // entities remain valid so imports do not need to expand or rewrite the graph.
+  5: (doc) => {
+    doc.version = 6;
+    return doc;
+  },
 };
 
 /**
  * Run all necessary migrations to bring a document to CURRENT_VERSION.
- * Returns a new object (does not mutate the input).
+ * Mutates the freshly parsed manifest in place to avoid duplicating large workspaces.
  */
 export function runMigrations(doc: StudioManifest): StudioManifest {
-  let current = structuredClone(doc) as unknown as Record<string, unknown>;
+  let current = doc as unknown as Record<string, unknown>;
 
   while ((current.version as number) < CURRENT_VERSION) {
     const version = current.version as number;

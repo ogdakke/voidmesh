@@ -188,6 +188,8 @@ export interface DisintegrationRenderState {
 export interface RenderState {
   viewport: Viewport;
   entities: ShaderCanvasEntity[];
+  /** Stable entity ID to sorted render-array index lookup for the current entity version. */
+  entityIndices: ReadonlyMap<string, number>;
   entitySpatialIndex: EntitySpatialIndex;
   entityVersion: number;
   geometryVersion: number;
@@ -264,6 +266,7 @@ export class CanvasStore extends Store<CanvasState> {
   readonly #renderState: RenderState = {
     viewport: this.#renderViewport,
     entities: this.#renderEntities,
+    entityIndices: this.#renderEntityIndices,
     entitySpatialIndex: this.#entitySpatialIndex,
     entityVersion: 0,
     geometryVersion: 0,

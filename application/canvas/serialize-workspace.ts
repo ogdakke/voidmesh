@@ -1,7 +1,7 @@
 import { canvasStore } from "#engine";
 import { config } from "#config";
 import { createPlaybackState } from "#lib/media-playback.ts";
-import type { ColorPalette, ShaderCanvasEntity } from "#types/canvas.ts";
+import type { ColorPalette, ShaderCanvasEntity, ShaderParams } from "#types/canvas.ts";
 import { paletteStore } from "#lib/palette-store.ts";
 import { detectVideoExtension, videoElementToBytes } from "#lib/serialization/media.ts";
 import type {
@@ -11,6 +11,7 @@ import type {
   StudioManifest,
 } from "#lib/serialization/types.ts";
 import { CURRENT_VERSION } from "#lib/serialization/version.ts";
+import { getStaticShaderParamsIdentity } from "#lib/shader-params-identity.ts";
 
 /** Synchronous flag — prevents overlapping saves even when React state hasn't flushed yet. */
 let isSaving = false;
@@ -41,10 +42,15 @@ export async function serialize(): Promise<Blob | null> {
     const serializedEntities: SerializedEntity[] = [];
     const mediaEntries: SerializeMediaEntry[] = [];
     const serializedImageAssets = new Set<string>();
+    const compactTables = createCompactTables();
 
     await Promise.all(
       entities.map(async (entity) => {
-        const { serialized, media } = await prepareEntity(entity, serializedImageAssets);
+        const { serialized, media } = await prepareEntity(
+          entity,
+          serializedImageAssets,
+          compactTables,
+        );
         serializedEntities.push(serialized);
         if (media) mediaEntries.push(media);
       }),
@@ -65,6 +71,11 @@ export async function serialize(): Promise<Blob | null> {
         zoom: state.viewport.zoom,
       },
       entities: serializedEntities,
+      shaderParamsTable: compactTables.shaderParams,
+      mediaFiles: compactTables.mediaFiles,
+      ...(compactTables.originalPalettes.length > 0 && {
+        originalPalettes: compactTables.originalPalettes,
+      }),
       ...(referencedPalettes.length > 0 && { palettes: referencedPalettes }),
     };
 
@@ -129,10 +140,32 @@ interface PreparedEntity {
   media?: SerializeMediaEntry;
 }
 
+interface CompactTables {
+  shaderParams: ShaderParams[];
+  shaderParamRefs: Map<number | string, number>;
+  mediaFiles: string[];
+  mediaFileRefs: Map<string, number>;
+  originalPalettes: ColorPalette[];
+  originalPaletteRefs: Map<string, number>;
+}
+
+function createCompactTables(): CompactTables {
+  return {
+    shaderParams: [],
+    shaderParamRefs: new Map(),
+    mediaFiles: [],
+    mediaFileRefs: new Map(),
+    originalPalettes: [],
+    originalPaletteRefs: new Map(),
+  };
+}
+
 async function prepareEntity(
   entity: ShaderCanvasEntity,
   serializedImageAssets: Set<string>,
+  tables: CompactTables,
 ): Promise<PreparedEntity> {
+  const { time, timeAutoPlay, ...staticShaderParams } = entity.shaderParams;
   const base = {
     id: entity.id,
     name: entity.name,
@@ -147,9 +180,15 @@ async function prepareEntity(
     locked: entity.locked ?? false,
     edited: entity.edited,
     shaderType: entity.shaderType,
-    shaderParams: structuredClone(entity.shaderParams),
+    shaderParamsRef: internShaderParams(
+      entity.shaderParams,
+      staticShaderParams as ShaderParams,
+      tables,
+    ),
+    ...(time !== undefined && { shaderTime: time }),
+    ...(timeAutoPlay !== undefined && { shaderTimeAutoPlay: timeAutoPlay }),
     ...(entity.originalPalette && {
-      originalPalette: structuredClone(entity.originalPalette),
+      originalPaletteRef: internOriginalPalette(entity.originalPalette, tables),
     }),
   };
 
@@ -157,14 +196,15 @@ async function prepareEntity(
     case "image": {
       const asset = entity.mediaSource.asset;
       const path = `media/assets/${encodeURIComponent(asset.id)}-${asset.revision}.png`;
+      const mediaFileRef = internMediaFile(path, tables);
       if (serializedImageAssets.has(path)) {
-        return { serialized: { ...base, mediaType: "image", mediaFile: path } };
+        return { serialized: { ...base, mediaType: "image", mediaFileRef } };
       }
       serializedImageAssets.add(path);
       // Clone bitmap — transfer destroys the source, entity still needs it for rendering
       const cloned = await createImageBitmap(asset.imageBitmap);
       return {
-        serialized: { ...base, mediaType: "image", mediaFile: path },
+        serialized: { ...base, mediaType: "image", mediaFileRef },
         media: { path, type: "imageBitmap", bitmap: cloned },
       };
     }
@@ -178,7 +218,7 @@ async function prepareEntity(
         serialized: {
           ...base,
           mediaType: "video",
-          mediaFile: path,
+          mediaFileRef: internMediaFile(path, tables),
           duration: entity.mediaSource.duration,
           fps: entity.mediaSource.fps,
           hasAudio: entity.mediaSource.hasAudio,
@@ -195,7 +235,7 @@ async function prepareEntity(
         serialized: {
           ...base,
           mediaType: "gif",
-          mediaFile: path,
+          mediaFileRef: internMediaFile(path, tables),
           duration: entity.mediaSource.duration,
           fps: entity.mediaSource.fps,
           playback: serializePlayback(entity.playback),
@@ -208,11 +248,48 @@ async function prepareEntity(
       const bytes = new Uint8Array(await entity.mediaSource.blob.arrayBuffer());
       const path = `media/${entity.id}.svg`;
       return {
-        serialized: { ...base, mediaType: "svg", mediaFile: path },
+        serialized: {
+          ...base,
+          mediaType: "svg",
+          mediaFileRef: internMediaFile(path, tables),
+        },
         media: { path, type: "bytes", bytes },
       };
     }
   }
+}
+
+function internShaderParams(
+  params: ShaderParams,
+  staticParams: ShaderParams,
+  tables: CompactTables,
+): number {
+  const identity = getStaticShaderParamsIdentity(params);
+  const existing = tables.shaderParamRefs.get(identity);
+  if (existing !== undefined) return existing;
+  const index = tables.shaderParams.length;
+  tables.shaderParams.push(structuredClone(staticParams));
+  tables.shaderParamRefs.set(identity, index);
+  return index;
+}
+
+function internMediaFile(path: string, tables: CompactTables): number {
+  const existing = tables.mediaFileRefs.get(path);
+  if (existing !== undefined) return existing;
+  const index = tables.mediaFiles.length;
+  tables.mediaFiles.push(path);
+  tables.mediaFileRefs.set(path, index);
+  return index;
+}
+
+function internOriginalPalette(palette: ColorPalette, tables: CompactTables): number {
+  const signature = JSON.stringify(palette);
+  const existing = tables.originalPaletteRefs.get(signature);
+  if (existing !== undefined) return existing;
+  const index = tables.originalPalettes.length;
+  tables.originalPalettes.push(structuredClone(palette));
+  tables.originalPaletteRefs.set(signature, index);
+  return index;
 }
 
 export function serializePlayback(

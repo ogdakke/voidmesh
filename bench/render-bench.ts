@@ -1378,6 +1378,7 @@ function createRenderState(
   return {
     viewport,
     entities,
+    entityIndices: new Map(entities.map((entity, index) => [entity.id, index])),
     entitySpatialIndex,
     entityVersion: 0,
     geometryVersion: 0,
