@@ -7,7 +7,6 @@ import { ToastProvider } from "#ui/toast/toast.tsx";
 import { PwaUpdateManager } from "#components/pwa/pwa-update-manager.tsx";
 import { CanvasProvider } from "#context/canvas-context.tsx";
 import { ExportQueueProvider } from "#context/export-queue-context.tsx";
-import { UpscaleQueueProvider } from "#context/upscale-queue-context.tsx";
 import { KeybindProvider } from "#context/keybind-provider.tsx";
 import { LayoutProvider } from "#context/layout-context.tsx";
 import { VideoExportProvider } from "#context/video-export-context.tsx";
@@ -70,15 +69,13 @@ export default function App() {
         <CanvasProvider>
           <VideoExportProvider>
             <ExportQueueProvider>
-              <UpscaleQueueProvider>
-                <LayoutProvider
-                  value={{ isFullscreen, toggleFullscreen, setFullscreen, registerPanelToggle }}
-                >
-                  <Suspense fallback={null}>
-                    {showMobileLayout ? <MobileLayout /> : <DesktopLayout />}
-                  </Suspense>
-                </LayoutProvider>
-              </UpscaleQueueProvider>
+              <LayoutProvider
+                value={{ isFullscreen, toggleFullscreen, setFullscreen, registerPanelToggle }}
+              >
+                <Suspense fallback={null}>
+                  {showMobileLayout ? <MobileLayout /> : <DesktopLayout />}
+                </Suspense>
+              </LayoutProvider>
             </ExportQueueProvider>
           </VideoExportProvider>
         </CanvasProvider>

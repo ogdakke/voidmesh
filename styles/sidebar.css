@@ -192,11 +192,6 @@
   font-size: var(--text-xs);
 }
 
-.upscale-empty {
-  gap: 0.5rem;
-  display: grid;
-}
-
 .no-selection-message {
   color: var(--text-accent);
   font-size: var(--text-sm);
@@ -368,10 +363,6 @@ progress.export-progress__bar::-moz-progress-bar {
 
 .exports-content {
   padding-top: var(--spacing);
-}
-
-.upscale-jobs {
-  display: block;
 }
 
 /* Export queue */

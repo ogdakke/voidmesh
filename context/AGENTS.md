@@ -8,7 +8,6 @@ React composition and orchestration connecting application services, engine stat
 - `use-canvas.ts` — Narrow selectors, commands, and capability contexts.
 - `keybind-context.ts`, `keybind-provider.tsx` — Hierarchical keyboard shortcuts.
 - `export-queue-context.tsx`, `video-export-context.tsx` — Export state and sequential jobs.
-- `upscale-queue-context.tsx` — Sequential upscale jobs and ownership.
 
 ## Invariants
 
@@ -19,7 +18,7 @@ React composition and orchestration connecting application services, engine stat
 - Undo snapshots retain media ownership until eviction; image cleanup releases the shared asset reference.
 - Imports stage decoded resources, atomically restore the workspace, then release the old state.
 - Async work validates stable media identity before applying results to entities.
-- Queue providers serialize GPU-heavy work and isolate export/upscale media from live preview playback.
+- Queue providers serialize GPU-heavy export work and isolate export media from live preview playback.
 
 ## Boundaries
 

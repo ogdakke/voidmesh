@@ -926,7 +926,7 @@ export class InfiniteCanvasRenderer {
 
   /**
    * Render a decoded frame through shaders.
-   * Used by export and upscale pipelines with WebCodecs-decoded frames.
+   * Used by export pipelines with WebCodecs-decoded frames.
    */
   async renderFrameWithShader(
     entity: ShaderCanvasEntity,

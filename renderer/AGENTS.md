@@ -1,6 +1,6 @@
 # Renderer
 
-WebGPU rendering, shader execution, composition, resource caching, export, and upscale.
+WebGPU rendering, shader execution, composition, resource caching, and export.
 
 ## Authoritative Areas
 
