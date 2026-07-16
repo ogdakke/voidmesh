@@ -115,6 +115,47 @@ describe("ViewportAnimationController", () => {
     );
   });
 
+  test("zoom-out keeps the zoomed-in center on a straight restore path", () => {
+    const restoredViewport: Viewport = {
+      offset: { x: -20_000, y: 8_000 },
+      zoom: 0.01,
+    };
+    viewport = { offset: { x: 1_200, y: -600 }, zoom: 1.35 };
+    const dpr = window.devicePixelRatio;
+    const screenCenter = {
+      x: (mockContainer.clientWidth * dpr) / 2,
+      y: (mockContainer.clientHeight * dpr) / 2,
+    };
+    const zoomedInWorldCenter = {
+      x: viewport.offset.x + screenCenter.x / viewport.zoom,
+      y: viewport.offset.y + screenCenter.y / viewport.zoom,
+    };
+    const restoredScreenPosition = {
+      x: (zoomedInWorldCenter.x - restoredViewport.offset.x) * restoredViewport.zoom,
+      y: (zoomedInWorldCenter.y - restoredViewport.offset.y) * restoredViewport.zoom,
+    };
+
+    controller.animateTo(restoredViewport, {
+      duration: 400,
+      easing: easings.easeOutCubic,
+    });
+    scheduler.tick(0);
+    scheduler.tick(100);
+
+    const zoomedInCenterScreenPosition = {
+      x: (zoomedInWorldCenter.x - viewport.offset.x) * viewport.zoom,
+      y: (zoomedInWorldCenter.y - viewport.offset.y) * viewport.zoom,
+    };
+    const expectedPositionProgress = easings.easeInOut(0.25);
+
+    expect(zoomedInCenterScreenPosition.x).toBeCloseTo(
+      screenCenter.x + (restoredScreenPosition.x - screenCenter.x) * expectedPositionProgress,
+    );
+    expect(zoomedInCenterScreenPosition.y).toBeCloseTo(
+      screenCenter.y + (restoredScreenPosition.y - screenCenter.y) * expectedPositionProgress,
+    );
+  });
+
   test("animateTo without container sets viewport instantly", () => {
     const noContainerCtrl = new ViewportAnimationController(scheduler, store);
     // No setContainer call

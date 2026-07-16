@@ -35,6 +35,14 @@ function getWorldCenter(viewport: Viewport, screenCenter: Point): Point {
   };
 }
 
+/** Calculate the screen position of a world point in device pixels. */
+function getScreenPositionForWorldPoint(worldPoint: Point, viewport: Viewport): Point {
+  return {
+    x: (worldPoint.x - viewport.offset.x) * viewport.zoom,
+    y: (worldPoint.y - viewport.offset.y) * viewport.zoom,
+  };
+}
+
 /** Calculate viewport offset to place a world point at a screen point. */
 function getOffsetForWorldPoint(worldPoint: Point, screenPoint: Point, zoom: number): Point {
   return {
@@ -47,10 +55,11 @@ function getOffsetForWorldPoint(worldPoint: Point, screenPoint: Point, zoom: num
  * Viewport animation controller.
  * Manages smooth transitions between viewport states.
  *
- * Uses screen-space interpolation: the destination viewport's world center
- * moves from its current screen position to the screen center while zoom is
- * interpolated separately. Deriving offset from that anchor prevents large
- * zoom changes from bending or reversing the visual flight path.
+ * Uses screen-space interpolation anchored to the more zoomed-in viewport's
+ * world center. That anchor moves directly between its endpoint screen
+ * positions while zoom is interpolated separately. Keeping the same visual
+ * subject anchored in both directions prevents fit-to-view restore animations
+ * from bending or reversing the subject's flight path.
  *
  * Delegates timing to AnimationScheduler (no tick() method).
  */
@@ -109,13 +118,17 @@ export class ViewportAnimationController {
       y: (this.#container.clientHeight * dpr) / 2,
     };
 
-    const endWorldCenter = getWorldCenter(target, screenCenter);
-    const startEndCenterScreenPosition: Point = {
-      x: (endWorldCenter.x - currentViewport.offset.x) * currentViewport.zoom,
-      y: (endWorldCenter.y - currentViewport.offset.y) * currentViewport.zoom,
-    };
     const startZoom = currentViewport.zoom;
     const endZoom = target.zoom;
+    const anchorWorldPoint =
+      endZoom >= startZoom
+        ? getWorldCenter(target, screenCenter)
+        : getWorldCenter(currentViewport, screenCenter);
+    const startAnchorScreenPosition = getScreenPositionForWorldPoint(
+      anchorWorldPoint,
+      currentViewport,
+    );
+    const endAnchorScreenPosition = getScreenPositionForWorldPoint(anchorWorldPoint, target);
 
     this.#handle = this.#scheduler.tween({
       from: 0,
@@ -124,14 +137,14 @@ export class ViewportAnimationController {
       tag: "viewport",
       onUpdate: (rawProgress) => {
         const currentZoom = lerpExp(startZoom, endZoom, easing(rawProgress));
-        const currentEndCenterScreenPosition = lerpPoint(
-          startEndCenterScreenPosition,
-          screenCenter,
+        const currentAnchorScreenPosition = lerpPoint(
+          startAnchorScreenPosition,
+          endAnchorScreenPosition,
           positionEasing(rawProgress),
         );
         const currentOffset = getOffsetForWorldPoint(
-          endWorldCenter,
-          currentEndCenterScreenPosition,
+          anchorWorldPoint,
+          currentAnchorScreenPosition,
           currentZoom,
         );
         this.#store.setViewport({ offset: currentOffset, zoom: currentZoom });
