@@ -1,5 +1,24 @@
 // Error diffusion dithering compute shader with multi-color palette support
 // Processes image row-by-row with error propagation
+//
+// PERFORMANCE NOTE: Error-diffusion kinds are currently disabled in the UI. Before
+// re-enabling them, reduce the error-buffer and output-copy bandwidth:
+//
+// - The current array<vec4f> stores 16 bytes per pixel even though alpha error is
+//   always zero. Use separate pipelines/layouts for the uniform modes:
+//   - monochrome two-color diffusion: array<f32> (4 bytes/pixel, 75% smaller)
+//   - RGB/palette diffusion: pack RGB error into two u32 values with
+//     pack2x16float/unpack2x16float (8 bytes/pixel, 50% smaller)
+// - Let the persistent processed output texture include STORAGE_BINDING usage and
+//   bind it directly as outputTexture. The current implementation writes an
+//   rgba16float intermediate and then copyTextureToTexture() copies it to the
+//   processed output, adding one full-texture read and write.
+//
+// At 3840x2160 the current error buffer is 126.56 MiB. The packed RGB layout
+// would use 63.28 MiB and the monochrome layout 31.64 MiB. Removing the
+// rgba16float output copy also avoids about 126.56 MiB of texture traffic per
+// execution. Keep the current implementation unchanged while the feature is
+// disabled; validate visual parity and GPU timestamps when implementing this.
 
 struct Uniforms {
   resolution: vec2f,       // Image dimensions (offset 0)
