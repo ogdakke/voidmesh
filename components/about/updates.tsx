@@ -91,13 +91,6 @@ export function Updates({ id }: { id?: string }) {
         )}
       </Update>
       <Update>
-        <UpdatesTitle date="2026-03-08">Upscaling</UpdatesTitle>
-        <p>
-          Upscale images and videos, fully locally. Find the upscale button in the context menu, and
-          give it a go!
-        </p>
-      </Update>
-      <Update>
         <UpdatesTitle date="2026-03-07">Mobile context menu</UpdatesTitle>
         <p>Now you can do more actions that were already available on desktop on mobile as well!</p>
         <figure>

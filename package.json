@@ -16,8 +16,7 @@
     "#context/*": "./context/*",
     "#config": "./lib/config/index.ts",
     "#media/*": "./media/*",
-    "#styles/*": "./styles/*",
-    "#weights/*": "./weights/*"
+    "#styles/*": "./styles/*"
   },
   "scripts": {
     "dev": "vite dev",

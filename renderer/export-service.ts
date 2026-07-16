@@ -126,7 +126,7 @@ export class ExportService {
 
   /**
    * Render a decoded video frame through shaders.
-   * Used by the export and upscale pipelines with WebCodecs-decoded frames.
+   * Used by the export pipeline with WebCodecs-decoded frames.
    */
   async renderFrameWithShader(
     entity: ShaderCanvasEntity,

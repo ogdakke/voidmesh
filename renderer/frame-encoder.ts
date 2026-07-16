@@ -4,8 +4,7 @@
  * Encapsulates: Web Worker lifecycle, WebCodecs init, mediabunny muxing,
  * progress async generator, cancel handling, audio passthrough.
  *
- * Used by both the video export pipeline (for seek-based export) and
- * the upscale pipeline (for re-encoding upscaled frames).
+ * Used by the video export pipeline for seek-based export.
  *
  * The worker (`video-export.worker.ts`) is shared and unchanged.
  */

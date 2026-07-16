@@ -6,7 +6,6 @@ import {
   Copy,
   Download,
   Palette,
-  ScaleFrameEnlarge,
   Settings,
 } from "iconoir-react";
 import { Canvas } from "./canvas";
@@ -17,7 +16,6 @@ import { debugBarItem, items, type BarItem, type DebugBarItem } from "./mobile-b
 import { DeleteDropZone } from "./delete-drop-zone/delete-drop-zone.tsx";
 import { ActionLayer } from "./action-layer/action-layer.tsx";
 import { CopyPasteDrawer } from "./action-layer/copy-paste-drawer.tsx";
-import { UpscaleDrawer } from "./action-layer/upscale-drawer.tsx";
 import { IonDuplicateOutline } from "./icons/duplicate.tsx";
 import { MobileExportDrawer } from "./export-knobs/export-knobs.mobile.tsx";
 import { Drawer } from "#ui/drawer/index.tsx";
@@ -35,7 +33,6 @@ import { useEntityDrag } from "#hooks/use-entity-drag.ts";
 function MobileActionLayer() {
   const { duplicateEntities } = useCanvasCommands();
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [upscaleDrawerOpen, setUpscaleDrawerOpen] = useState(false);
   const [exportDrawerOpen, setExportDrawerOpen] = useState(false);
 
   return (
@@ -47,15 +44,11 @@ function MobileActionLayer() {
         <ActionLayer.Item order={1} onAction={duplicateEntities} label="Duplicate">
           <IonDuplicateOutline />
         </ActionLayer.Item>
-        <ActionLayer.Item order={2} onAction={() => setUpscaleDrawerOpen(true)} label="Upscale 2×">
-          <ScaleFrameEnlarge />
-        </ActionLayer.Item>
-        <ActionLayer.Item order={3} onAction={() => setExportDrawerOpen(true)} label="Export">
+        <ActionLayer.Item order={2} onAction={() => setExportDrawerOpen(true)} label="Export">
           <Download />
         </ActionLayer.Item>
       </ActionLayer.Root>
       <CopyPasteDrawer open={drawerOpen} onOpenChange={setDrawerOpen} />
-      <UpscaleDrawer open={upscaleDrawerOpen} onOpenChange={setUpscaleDrawerOpen} />
       <MobileExportDrawer
         open={exportDrawerOpen}
         onOpenChange={setExportDrawerOpen}

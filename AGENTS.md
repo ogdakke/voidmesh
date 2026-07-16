@@ -7,7 +7,7 @@ Infinite-canvas React application with real-time WebGPU effects for images, vide
 - `types/` — Domain types and enums; bottom of the dependency graph.
 - `lib/` — Pure utilities, media ownership, serialization, undo, math, and stores.
 - `engine/` — GPU-agnostic canvas state, input, animation, and frame scheduling.
-- `renderer/` — WebGPU rendering, shaders, resource caches, export, and upscale.
+- `renderer/` — WebGPU rendering, shaders, resource caches, and export.
 - `application/` — Framework-free use cases and narrow subsystem interfaces.
 - `context/` — React composition root connecting application, engine, and renderer.
 - `hooks/` — React adapters for context/application capabilities and DOM events.

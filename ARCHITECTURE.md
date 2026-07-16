@@ -55,7 +55,6 @@ flowchart LR
     screen(("Visible canvas"))
     imageExport["Image export<br/>PNG/JPEG readback"]
     videoExport["Video/GIF export<br/>main-thread render<br/>worker encode/mux"]
-    upscale["Upscale queue<br/>Anime4K WebGPU compute<br/>new entities"]
   end
 
   user --> infinite
@@ -110,8 +109,6 @@ flowchart LR
   commands --> imageExport
   canvasRenderer --> imageExport
   canvasRenderer --> videoExport
-  commands --> upscale
-  upscale -->|processed media| commands
 
   math -. used by .-> inputController
   math -. used by .-> canvasRenderer
@@ -130,7 +127,7 @@ flowchart LR
   class store,gameLoop,inputController,frameLoop,controllers,renderState,renderRuntime engine
   class mediaLoader,math,serialization,palette lib
   class canvasRenderer,color,viewportUniforms,textures,shaderRuntime,shaders,processing,composite,overlays,lensAndWlur,gpu renderer
-  class screen,imageExport,videoExport,upscale output
+  class screen,imageExport,videoExport output
 ```
 
 ## Core loop
@@ -326,7 +323,7 @@ flowchart TD
   subgraph Application["Application use cases: product actions"]
     actions["CanvasActions<br/>add media<br/>update params<br/>select/duplicate/delete<br/>viewport commands"]
     undo["Undo + resource lifecycle<br/>Command pattern<br/>media ownership/revocation"]
-    jobs["Long-running jobs<br/>image/video/GIF export<br/>upscale queue"]
+    jobs["Long-running jobs<br/>image/video/GIF export"]
   end
 
   subgraph Runtime["Runtime controllers: event/frame orchestration"]

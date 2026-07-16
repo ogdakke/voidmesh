@@ -10,7 +10,6 @@ import { CanvasProvider } from "#context/canvas-context.tsx";
 import { useCanvasCommands, type CanvasCommands } from "#context/use-canvas.ts";
 import { VideoExportProvider } from "#context/video-export-context.tsx";
 import { ExportQueueProvider } from "#context/export-queue-context.tsx";
-import { UpscaleQueueProvider } from "#context/upscale-queue-context.tsx";
 import { KeybindProvider } from "#context/keybind-provider.tsx";
 
 export interface NuqsTestingOptions {
@@ -60,8 +59,6 @@ function createAllProvidersWrapper(options: RenderWithProvidersOptions = {}) {
     let wrapped = children;
 
     // Wrap from innermost to outermost (reverse order of App)
-    wrapped = <UpscaleQueueProvider>{wrapped}</UpscaleQueueProvider>;
-
     if (!skip.exportQueue) {
       wrapped = <ExportQueueProvider>{wrapped}</ExportQueueProvider>;
     }
