@@ -318,6 +318,7 @@ export class EntityShaderRuntime {
 
   beginFrame(): void {
     this.#shaderRegistry.beginFrame();
+    this.#processingPipeline.beginFrame();
   }
 
   removeEntity(entityId: string): void {

@@ -48,6 +48,7 @@ interface PostProcessBindGroupCacheEntry {
 }
 
 interface BloomBindGroupCacheEntry {
+  uniformSet: BloomUniformSet;
   dimensionsKey: string;
   sourceTexture: GPUTexture;
   downsample: GPUBindGroup[];
@@ -88,7 +89,8 @@ export class ProcessingPipeline {
   #adjustmentsExternalPipeline: GPURenderPipeline | null = null;
   #adjustmentsBindGroupLayout: GPUBindGroupLayout | null = null;
   #adjustmentsExternalBindGroupLayout: GPUBindGroupLayout | null = null;
-  #adjustmentsUniformBuffers = new Map<string, GPUBuffer>();
+  #adjustmentsUniformBuffers: GPUBuffer[] = [];
+  #adjustmentsUniformCursor = 0;
   #adjustmentsSampler: GPUSampler | null = null;
   #adjustmentsUniformData = new ArrayBuffer(config.rendering.adjustmentsUniformSize);
   #adjustmentsFloatView = new Float32Array(this.#adjustmentsUniformData);
@@ -133,13 +135,14 @@ export class ProcessingPipeline {
   // Post-processing pipeline
   #postProcessPipeline: GPURenderPipeline | null = null;
   #postProcessBindGroupLayout: GPUBindGroupLayout | null = null;
-  #postProcessUniformBuffers = new Map<string, GPUBuffer>();
+  #postProcessUniformBuffers: GPUBuffer[] = [];
+  #postProcessUniformCursor = 0;
   #postProcessSampler: GPUSampler | null = null;
   #postProcessUniformData = new ArrayBuffer(config.rendering.postProcessUniformSize);
   #postProcessFloatView = new Float32Array(this.#postProcessUniformData);
   #postProcessUintView = new Uint32Array(this.#postProcessUniformData);
   #postProcessTime = 0; // Animated time for grain effect
-  #postProcessBindGroupCache = new Map<string, PostProcessBindGroupCacheEntry>();
+  #postProcessBindGroupCache = new Map<GPUBuffer, PostProcessBindGroupCacheEntry>();
   #dummyBloomTexture: GPUTexture | null = null;
   #dummyBloomTextureView: GPUTextureView | null = null;
   #textureViewCache = new WeakMap<GPUTexture, GPUTextureView>();
@@ -153,7 +156,7 @@ export class ProcessingPipeline {
   #bloomDownsampleUniformBuffers: GPUBuffer[] = [];
   #bloomUpsampleUniformBuffers: GPUBuffer[] = [];
   #bloomSampler: GPUSampler | null = null;
-  #bloomBindGroupCache = new Map<string, BloomBindGroupCacheEntry>();
+  #bloomBindGroupCache = new Map<BloomUniformSet, BloomBindGroupCacheEntry>();
   // Bloom mip chain textures (cached per entity dimensions)
   #bloomMipChainCache: Map<
     string,
@@ -165,8 +168,10 @@ export class ProcessingPipeline {
       byteSize: number;
     }
   > = new Map();
-  #entityBlurUniforms = new Map<string, BlurUniformSet>();
-  #entityBloomUniforms = new Map<string, BloomUniformSet>();
+  #blurUniformSets: BlurUniformSet[] = [];
+  #blurUniformCursor = 0;
+  #bloomUniformSets: BloomUniformSet[] = [];
+  #bloomUniformCursor = 0;
   #textureCacheBudget: ByteBudgetCache;
 
   constructor(
@@ -185,25 +190,32 @@ export class ProcessingPipeline {
     return this.#textureCacheBudget.getStats();
   }
 
+  beginFrame(): void {
+    this.#adjustmentsUniformCursor = 0;
+    this.#postProcessUniformCursor = 0;
+    this.#blurUniformCursor = 0;
+    this.#bloomUniformCursor = 0;
+  }
+
   endFrame(): void {
     this.#textureCacheBudget.endFrame();
   }
 
   #getOrCreateUniformBuffer(
-    cache: Map<string, GPUBuffer>,
-    entityId: string,
+    pool: GPUBuffer[],
+    slot: number,
     label: string,
     size: number,
   ): GPUBuffer {
-    const cached = cache.get(entityId);
+    const cached = pool[slot];
     if (cached) return cached;
 
     const buffer = this.#device.createBuffer({
-      label: `${label} ${entityId}`,
+      label: `${label} slot ${slot}`,
       size,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    cache.set(entityId, buffer);
+    pool.push(buffer);
     return buffer;
   }
 
@@ -216,15 +228,16 @@ export class ProcessingPipeline {
     return view;
   }
 
-  #getOrCreateBlurUniformSet(entityId: string): BlurUniformSet {
-    const cached = this.#entityBlurUniforms.get(entityId);
+  #getOrCreateBlurUniformSet(): BlurUniformSet {
+    const slot = this.#blurUniformCursor++;
+    const cached = this.#blurUniformSets[slot];
     if (cached) return cached;
 
     const downsample: GPUBuffer[] = [];
     for (let i = 0; i < MAX_BLUR_MIP_LEVELS * 2; i++) {
       downsample.push(
         this.#device.createBuffer({
-          label: `Blur downsample uniforms ${entityId} level ${i}`,
+          label: `Blur downsample uniforms slot ${slot} level ${i}`,
           size: config.rendering.blurUniformSize,
           usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         }),
@@ -235,7 +248,7 @@ export class ProcessingPipeline {
     for (let i = 0; i < MAX_BLUR_MIP_LEVELS * 2; i++) {
       upsample.push(
         this.#device.createBuffer({
-          label: `Blur upsample uniforms ${entityId} level ${i}`,
+          label: `Blur upsample uniforms slot ${slot} level ${i}`,
           size: config.rendering.blurUniformSize,
           usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         }),
@@ -243,25 +256,26 @@ export class ProcessingPipeline {
     }
 
     const mix = this.#device.createBuffer({
-      label: `Blur mix uniforms ${entityId}`,
+      label: `Blur mix uniforms slot ${slot}`,
       size: config.rendering.blurUniformSize,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
     const uniformSet = { downsample, upsample, mix };
-    this.#entityBlurUniforms.set(entityId, uniformSet);
+    this.#blurUniformSets.push(uniformSet);
     return uniformSet;
   }
 
-  #getOrCreateBloomUniformSet(entityId: string): BloomUniformSet {
-    const cached = this.#entityBloomUniforms.get(entityId);
+  #getOrCreateBloomUniformSet(): BloomUniformSet {
+    const slot = this.#bloomUniformCursor++;
+    const cached = this.#bloomUniformSets[slot];
     if (cached) return cached;
 
     const downsample: GPUBuffer[] = [];
     for (let i = 0; i < BLOOM_MIP_LEVELS; i++) {
       downsample.push(
         this.#device.createBuffer({
-          label: `Bloom downsample uniforms ${entityId} mip ${i}`,
+          label: `Bloom downsample uniforms slot ${slot} mip ${i}`,
           size: 32,
           usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         }),
@@ -272,7 +286,7 @@ export class ProcessingPipeline {
     for (let i = 0; i < BLOOM_MIP_LEVELS - 1; i++) {
       upsample.push(
         this.#device.createBuffer({
-          label: `Bloom upsample uniforms ${entityId} mip ${i}`,
+          label: `Bloom upsample uniforms slot ${slot} mip ${i}`,
           size: 16,
           usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         }),
@@ -280,7 +294,7 @@ export class ProcessingPipeline {
     }
 
     const uniformSet = { downsample, upsample };
-    this.#entityBloomUniforms.set(entityId, uniformSet);
+    this.#bloomUniformSets.push(uniformSet);
     return uniformSet;
   }
 
@@ -896,12 +910,12 @@ export class ProcessingPipeline {
       this.#bloomMipChainCache.delete(key);
       for (const texture of textures) texture.destroy();
       const textureSet = new Set(textures);
-      for (const [entityId, entry] of this.#bloomBindGroupCache) {
-        if (entry.dimensionsKey === key) this.#bloomBindGroupCache.delete(entityId);
+      for (const [uniformSet, entry] of this.#bloomBindGroupCache) {
+        if (entry.dimensionsKey === key) this.#bloomBindGroupCache.delete(uniformSet);
       }
-      for (const [entityId, entry] of this.#postProcessBindGroupCache) {
+      for (const [uniformBuffer, entry] of this.#postProcessBindGroupCache) {
         if (entry.bloomTexture && textureSet.has(entry.bloomTexture)) {
-          this.#postProcessBindGroupCache.delete(entityId);
+          this.#postProcessBindGroupCache.delete(uniformBuffer);
         }
       }
     });
@@ -913,7 +927,6 @@ export class ProcessingPipeline {
    * Returns the final bloom texture (first mip level) to be composited.
    */
   #renderBloom(
-    entityId: string,
     sourceTexture: GPUTexture,
     width: number,
     height: number,
@@ -932,7 +945,7 @@ export class ProcessingPipeline {
       return null;
     }
 
-    const uniformSet = this.#getOrCreateBloomUniformSet(entityId);
+    const uniformSet = this.#getOrCreateBloomUniformSet();
     const dimensionsKey = `${width}x${height}`;
     const mipChain = this.#getOrCreateBloomMipChain(width, height);
     if (mipChain.length === 0) return null;
@@ -977,7 +990,6 @@ export class ProcessingPipeline {
     }
 
     const bindGroups = this.#getOrCreateBloomBindGroups(
-      entityId,
       dimensionsKey,
       sourceTexture,
       uniformSet,
@@ -1040,15 +1052,15 @@ export class ProcessingPipeline {
   }
 
   #getOrCreateBloomBindGroups(
-    entityId: string,
     dimensionsKey: string,
     sourceTexture: GPUTexture,
     uniformSet: BloomUniformSet,
     mipViews: GPUTextureView[],
   ): BloomBindGroupCacheEntry {
-    const cached = this.#bloomBindGroupCache.get(entityId);
+    const cached = this.#bloomBindGroupCache.get(uniformSet);
     if (
       cached &&
+      cached.uniformSet === uniformSet &&
       cached.dimensionsKey === dimensionsKey &&
       cached.sourceTexture === sourceTexture
     ) {
@@ -1095,8 +1107,8 @@ export class ProcessingPipeline {
       );
     }
 
-    const entry = { dimensionsKey, sourceTexture, downsample, upsample };
-    this.#bloomBindGroupCache.set(entityId, entry);
+    const entry = { uniformSet, dimensionsKey, sourceTexture, downsample, upsample };
+    this.#bloomBindGroupCache.set(uniformSet, entry);
     return entry;
   }
 
@@ -1547,7 +1559,7 @@ export class ProcessingPipeline {
 
     const mipChain = this.#getOrCreateBlurMipChain(width, height);
     if (mipChain.length === 0) return;
-    const uniformSet = this.#getOrCreateBlurUniformSet(entity.id);
+    const uniformSet = this.#getOrCreateBlurUniformSet();
 
     if (!needsBlend) {
       this.#encodeBlurPasses(
@@ -1640,7 +1652,7 @@ export class ProcessingPipeline {
 
     const mipChain = this.#getOrCreateBlurMipChain(width, height);
     if (mipChain.length === 0) return;
-    const uniformSet = this.#getOrCreateBlurUniformSet(entity.id);
+    const uniformSet = this.#getOrCreateBlurUniformSet();
     const blurSource: BlurInputSource = { kind: "external", texture: inputSource.texture };
 
     if (!needsBlend) {
@@ -1768,7 +1780,7 @@ export class ProcessingPipeline {
     this.#updateAdjustmentsUniforms(entity);
     const uniformBuffer = this.#getOrCreateUniformBuffer(
       this.#adjustmentsUniformBuffers,
-      entity.id,
+      this.#adjustmentsUniformCursor++,
       "Adjustments uniforms",
       config.rendering.adjustmentsUniformSize,
     );
@@ -1819,7 +1831,7 @@ export class ProcessingPipeline {
     this.#updateAdjustmentsUniforms(entity);
     const uniformBuffer = this.#getOrCreateUniformBuffer(
       this.#adjustmentsUniformBuffers,
-      entity.id,
+      this.#adjustmentsUniformCursor++,
       "Adjustments uniforms",
       config.rendering.adjustmentsUniformSize,
     );
@@ -1921,7 +1933,6 @@ export class ProcessingPipeline {
     if (postProcess?.bloom?.enabled && bloom.intensity > 0) {
       const softness = bloom.softness ?? 0.1;
       bloomTexture = this.#renderBloom(
-        entity.id,
         inputTexture,
         width,
         height,
@@ -1935,20 +1946,20 @@ export class ProcessingPipeline {
     this.#updatePostProcessUniforms(entity);
     const uniformBuffer = this.#getOrCreateUniformBuffer(
       this.#postProcessUniformBuffers,
-      entity.id,
+      this.#postProcessUniformCursor++,
       "Post-process uniforms",
       config.rendering.postProcessUniformSize,
     );
     this.#device.queue.writeBuffer(uniformBuffer, 0, this.#postProcessUniformData);
 
-    const cached = this.#postProcessBindGroupCache.get(entity.id);
+    const cached = this.#postProcessBindGroupCache.get(uniformBuffer);
     const bindGroup =
       cached &&
       cached.uniformBuffer === uniformBuffer &&
       cached.inputTexture === inputTexture &&
       cached.bloomTexture === bloomTexture
         ? cached.bindGroup
-        : this.#createPostProcessBindGroup(entity.id, uniformBuffer, inputTexture, bloomTexture);
+        : this.#createPostProcessBindGroup(uniformBuffer, inputTexture, bloomTexture);
 
     const pass = encoder.beginRenderPass({
       label: "Post-process render pass",
@@ -1972,7 +1983,6 @@ export class ProcessingPipeline {
   }
 
   #createPostProcessBindGroup(
-    entityId: string,
     uniformBuffer: GPUBuffer,
     inputTexture: GPUTexture,
     bloomTexture: GPUTexture | null,
@@ -1990,7 +2000,7 @@ export class ProcessingPipeline {
         { binding: 3, resource: bloomTextureView },
       ],
     });
-    this.#postProcessBindGroupCache.set(entityId, {
+    this.#postProcessBindGroupCache.set(uniformBuffer, {
       uniformBuffer,
       inputTexture,
       bloomTexture,
@@ -2013,47 +2023,26 @@ export class ProcessingPipeline {
   }
 
   removeEntity(entityId: string): void {
-    this.#adjustmentsUniformBuffers.get(entityId)?.destroy();
-    this.#adjustmentsUniformBuffers.delete(entityId);
-
-    this.#postProcessUniformBuffers.get(entityId)?.destroy();
-    this.#postProcessUniformBuffers.delete(entityId);
-    this.#postProcessBindGroupCache.delete(entityId);
-
-    const blurUniforms = this.#entityBlurUniforms.get(entityId);
-    if (blurUniforms) {
-      for (const buffer of blurUniforms.downsample) buffer.destroy();
-      for (const buffer of blurUniforms.upsample) buffer.destroy();
-      blurUniforms.mix.destroy();
-      this.#entityBlurUniforms.delete(entityId);
-    }
-
-    const bloomUniforms = this.#entityBloomUniforms.get(entityId);
-    if (bloomUniforms) {
-      for (const buffer of bloomUniforms.downsample) buffer.destroy();
-      for (const buffer of bloomUniforms.upsample) buffer.destroy();
-      this.#entityBloomUniforms.delete(entityId);
-    }
-    this.#bloomBindGroupCache.delete(entityId);
+    void entityId;
   }
 
   destroy(): void {
     // Destroy uniform buffers
-    for (const buffer of this.#adjustmentsUniformBuffers.values()) buffer.destroy();
-    this.#adjustmentsUniformBuffers.clear();
-    for (const buffer of this.#postProcessUniformBuffers.values()) buffer.destroy();
-    this.#postProcessUniformBuffers.clear();
-    for (const uniforms of this.#entityBlurUniforms.values()) {
+    for (const buffer of this.#adjustmentsUniformBuffers) buffer.destroy();
+    this.#adjustmentsUniformBuffers.length = 0;
+    for (const buffer of this.#postProcessUniformBuffers) buffer.destroy();
+    this.#postProcessUniformBuffers.length = 0;
+    for (const uniforms of this.#blurUniformSets) {
       for (const buffer of uniforms.downsample) buffer.destroy();
       for (const buffer of uniforms.upsample) buffer.destroy();
       uniforms.mix.destroy();
     }
-    this.#entityBlurUniforms.clear();
-    for (const uniforms of this.#entityBloomUniforms.values()) {
+    this.#blurUniformSets.length = 0;
+    for (const uniforms of this.#bloomUniformSets) {
       for (const buffer of uniforms.downsample) buffer.destroy();
       for (const buffer of uniforms.upsample) buffer.destroy();
     }
-    this.#entityBloomUniforms.clear();
+    this.#bloomUniformSets.length = 0;
     this.#postProcessBindGroupCache.clear();
     this.#bloomBindGroupCache.clear();
     for (const buf of this.#blurDownsampleUniformBuffers) buf.destroy();
