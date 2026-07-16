@@ -29,12 +29,14 @@ describe("EntityDragController", () => {
 
     expect(entity.position).toEqual({ x: 0, y: 0 });
     expect(canvasStore.getTransientEntityDragOffset()).toEqual({ x: 20, y: 6 });
+    expect(canvasStore.getEntityPositionWithTransientDrag(entity.id)).toEqual({ x: 20, y: 6 });
     expect(canvasStore.getState().geometryVersion).toBe(initialGeometryVersion);
 
     controller.clear();
 
     expect(entity.position).toEqual({ x: 20, y: 6 });
     expect(canvasStore.getTransientEntityDragOffset()).toEqual({ x: 0, y: 0 });
+    expect(canvasStore.getEntityPositionWithTransientDrag(entity.id)).toEqual({ x: 20, y: 6 });
     expect(canvasStore.getState().geometryVersion).toBe(initialGeometryVersion + 1);
   });
 });

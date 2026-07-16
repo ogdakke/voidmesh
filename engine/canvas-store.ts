@@ -971,6 +971,16 @@ export class CanvasStore extends Store<CanvasState> {
     return this.#transientEntityDragOffset;
   }
 
+  getEntityPositionWithTransientDrag(entityId: string): Point | null {
+    const entity = this.state.entities.get(entityId);
+    if (!entity) return null;
+    if (!this.state.selectedEntityIds.has(entityId)) return { ...entity.position };
+    return {
+      x: entity.position.x + this.#transientEntityDragOffset.x,
+      y: entity.position.y + this.#transientEntityDragOffset.y,
+    };
+  }
+
   resetTransientEntityDragOffset(): void {
     this.#transientEntityDragOffset.x = 0;
     this.#transientEntityDragOffset.y = 0;

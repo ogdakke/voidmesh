@@ -722,9 +722,12 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     // Snapshot the entity's rendered texture and start dust animation overlay.
     // This copies the GPU texture so the entity can be removed immediately.
     if (canvasStore.getState().fancyDelete) {
+      // Selected drags stay transient until touch release. The delete-zone listener
+      // runs before that release, so place the overlay at the rendered drag position.
+      const position = canvasStore.getEntityPositionWithTransientDrag(entity.id) ?? entity.position;
       const overlay = disintegrationController.addOverlay(
         entity.id,
-        entity.position,
+        position,
         entity.size,
         entity.rotation,
       );
@@ -779,9 +782,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       entityIds.add(entity.id);
 
       if (animate) {
+        const position =
+          canvasStore.getEntityPositionWithTransientDrag(entity.id) ?? entity.position;
         const overlay = disintegrationController.addOverlay(
           entity.id,
-          entity.position,
+          position,
           entity.size,
           entity.rotation,
         );
