@@ -35,7 +35,7 @@ export class WlurOverlayPass {
   #textures: {
     width: number;
     height: number;
-    input: GPUTexture;
+    input: GPUTexture | null;
     output: GPUTexture;
   } | null = null;
   #cacheValid = false;
@@ -101,19 +101,20 @@ export class WlurOverlayPass {
     }
 
     if (needsUpdate) {
-      if (this.#canvasFormat === this.#intermediateFormat) {
-        options.encoder.copyTextureToTexture(
-          { texture: options.sourceTexture },
-          { texture: textures.input },
-          { width: options.width, height: options.height },
-        );
-      } else {
+      let wlurSource = options.sourceTexture;
+      if (this.#canvasFormat !== this.#intermediateFormat) {
+        if (!textures.input) {
+          throw new Error("Wlur format conversion texture is unavailable");
+        }
         this.#sourceCopyPass.encode(options.encoder, options.sourceTexture, textures.input);
+        wlurSource = textures.input;
       }
 
+      // Matching formats sample the texture-bindable canvas directly before
+      // the later present copy writes back to that canvas texture.
       this.#wlurPass.encode(
         options.encoder,
-        textures.input,
+        wlurSource,
         textures.output,
         options.width,
         options.height,
@@ -152,12 +153,15 @@ export class WlurOverlayPass {
   #destroyTextures(): void {
     if (!this.#textures) return;
 
-    this.#textures.input.destroy();
+    this.#textures.input?.destroy();
     this.#textures.output.destroy();
     this.#textures = null;
   }
 
-  #getOrCreateTextures(width: number, height: number): { input: GPUTexture; output: GPUTexture } {
+  #getOrCreateTextures(
+    width: number,
+    height: number,
+  ): { input: GPUTexture | null; output: GPUTexture } {
     const cached = this.#textures;
     if (cached && cached.width === width && cached.height === height) {
       return cached;
@@ -166,24 +170,24 @@ export class WlurOverlayPass {
     this.#destroyTextures();
     this.invalidateCache();
 
-    const usage =
-      GPUTextureUsage.TEXTURE_BINDING |
-      GPUTextureUsage.RENDER_ATTACHMENT |
-      GPUTextureUsage.COPY_DST |
-      GPUTextureUsage.COPY_SRC;
-
-    const input = this.#device.createTexture({
-      label: `Wlur input (${width}x${height})`,
-      size: [width, height],
-      format: this.#intermediateFormat,
-      usage,
-    });
+    const input =
+      this.#canvasFormat === this.#intermediateFormat
+        ? null
+        : this.#device.createTexture({
+            label: `Wlur format conversion (${width}x${height})`,
+            size: [width, height],
+            format: this.#intermediateFormat,
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+          });
 
     const output = this.#device.createTexture({
       label: `Wlur output (${width}x${height})`,
       size: [width, height],
       format: this.#intermediateFormat,
-      usage,
+      usage:
+        GPUTextureUsage.TEXTURE_BINDING |
+        GPUTextureUsage.RENDER_ATTACHMENT |
+        GPUTextureUsage.COPY_SRC,
     });
 
     this.#textures = { width, height, input, output };
