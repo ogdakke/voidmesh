@@ -13,7 +13,51 @@ struct MinimapUniforms {
 @group(0) @binding(0) var inputTexture: texture_2d<f32>;
 @group(0) @binding(1) var inputSampler: sampler;
 @group(0) @binding(2) var<uniform> minimap: MinimapUniforms;
-@group(0) @binding(3) var<storage, read> entityData: array<vec4f>;
+@group(0) @binding(3) var entityMap: texture_2d<f32>;
+
+struct EntityMapUniforms {
+    worldMinSize: vec4f,
+}
+
+struct EntityMapVertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) selected: f32,
+}
+
+@group(0) @binding(4) var<uniform> entityMapUniforms: EntityMapUniforms;
+
+@vertex
+fn vs_entity_map(
+    @builtin(vertex_index) vertexIndex: u32,
+    @location(0) rect: vec4f,
+    @location(1) selected: f32,
+) -> EntityMapVertexOutput {
+    var corners = array<vec2f, 6>(
+        vec2f(-1.0, -1.0),
+        vec2f(1.0, -1.0),
+        vec2f(-1.0, 1.0),
+        vec2f(-1.0, 1.0),
+        vec2f(1.0, -1.0),
+        vec2f(1.0, 1.0)
+    );
+    let a = (rect.xy - entityMapUniforms.worldMinSize.xy) /
+        max(entityMapUniforms.worldMinSize.zw, vec2f(1.0)) * 2.0 - vec2f(1.0);
+    let b = (rect.xy + rect.zw - entityMapUniforms.worldMinSize.xy) /
+        max(entityMapUniforms.worldMinSize.zw, vec2f(1.0)) * 2.0 - vec2f(1.0);
+    let center = (a + b) * 0.5;
+    let halfSize = max(abs(b - a) * 0.5, vec2f(0.006));
+    let orbPosition = center + corners[vertexIndex] * halfSize;
+
+    var output: EntityMapVertexOutput;
+    output.position = vec4f(orbPosition.x, -orbPosition.y, 0.0, 1.0);
+    output.selected = selected;
+    return output;
+}
+
+@fragment
+fn fs_entity_map(input: EntityMapVertexOutput) -> @location(0) vec4f {
+    return vec4f(1.0, input.selected, 0.0, 1.0);
+}
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> @builtin(position) vec4f {
@@ -146,27 +190,16 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
     let mapPane = minimap.colors0.rgb;
     color = mix(color, mapPane, minimap.colors0.a * inside);
 
-    let entityCount = min(u32(minimap.shape.y), arrayLength(&entityData) / 2u);
+    let entityUv = clamp((sampleOrb + vec2f(1.0)) * 0.5, vec2f(0.0), vec2f(1.0));
+    let entitySample = textureSampleLevel(entityMap, inputSampler, entityUv, 0.0);
+    let entityAlpha = clamp(entitySample.r, 0.0, 1.0);
+    color = mix(color, minimap.colors1.rgb, entityAlpha * minimap.colors1.a);
+
+    let selectedFill = clamp(entitySample.g, 0.0, 1.0);
+    let selectedColor = vec3f(0.98, 0.98, 0.92);
+    color = mix(color, selectedColor, selectedFill * 0.72);
+
     let feather = 1.25 / max(minHalfSize, 1.0);
-    for (var i = 0u; i < entityCount; i++) {
-        let rect = entityData[i * 2u];
-        let a = rectAlpha(rect, sampleOrb, feather);
-        let entityColor = minimap.colors1.rgb;
-        color = mix(color, entityColor, a * minimap.colors1.a);
-    }
-
-    for (var i = 0u; i < entityCount; i++) {
-        let rect = entityData[i * 2u];
-        let selected = entityData[i * 2u + 1u].x;
-        if selected > 0.5 {
-            let selectedFill = rectAlpha(rect, sampleOrb, feather);
-            let selectedOuter = rectAlpha(rect, sampleOrb, feather * 1.8);
-            let selectedBorder = max(selectedOuter - selectedFill, 0.0);
-            let selectedColor = vec3f(0.98, 0.98, 0.92);
-            color = mix(color, selectedColor, selectedFill * 0.44 + selectedBorder * 0.95);
-        }
-    }
-
     let viewportFill = rectAlpha(minimap.viewportRect, sampleOrb, feather);
     let viewportOuter = rectAlpha(minimap.viewportRect, sampleOrb, feather * 1.6);
     let viewportBorder = max(viewportOuter - viewportFill, 0.0);

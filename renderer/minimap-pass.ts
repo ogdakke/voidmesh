@@ -9,6 +9,9 @@ interface EncodeMinimapOptions {
   targetView: GPUTextureView;
   entities: readonly ShaderCanvasEntity[];
   selectedEntityIds: ReadonlySet<string>;
+  entityVersion: number;
+  geometryVersion: number;
+  selectionVersion: number;
   viewport: Viewport;
   width: number;
   height: number;
@@ -16,10 +19,11 @@ interface EncodeMinimapOptions {
 }
 
 const DESKTOP_MINIMAP_MIN_WIDTH_CSS = 768;
-const MINIMAP_MAX_ENTITIES = 512;
 const MINIMAP_UNIFORM_FLOATS = 36;
 const MINIMAP_ENTITY_FLOATS = 8;
 const MINIMAP_CIRCLE_FIT_PADDING = 1.04;
+const MINIMAP_ENTITY_MAP_UNIFORM_FLOATS = 4;
+const MINIMAP_ENTITY_MAP_FORMAT: GPUTextureFormat = "rgba8unorm";
 
 export class MinimapPass {
   readonly #device: GPUDevice;
@@ -27,16 +31,32 @@ export class MinimapPass {
   readonly #pipeline: GPURenderPipeline;
   readonly #bindGroupLayout: GPUBindGroupLayout;
   readonly #uniformBuffer: GPUBuffer;
-  readonly #entityBuffer: GPUBuffer;
+  readonly #entityMapPipeline: GPURenderPipeline;
+  readonly #entityMapUniformBuffer: GPUBuffer;
+  readonly #entityMapBindGroup: GPUBindGroup;
   readonly #sampler: GPUSampler;
   readonly #copyPass: CopyPass;
   readonly #uniformData = new ArrayBuffer(MINIMAP_UNIFORM_FLOATS * Float32Array.BYTES_PER_ELEMENT);
   readonly #uniformFloats = new Float32Array(this.#uniformData);
-  readonly #entityData = new Float32Array(MINIMAP_MAX_ENTITIES * MINIMAP_ENTITY_FLOATS);
+  readonly #entityMapUniformData = new Float32Array(MINIMAP_ENTITY_MAP_UNIFORM_FLOATS);
 
   #config: MinimapConfig;
   #bindGroup: GPUBindGroup | null = null;
+  #entityBuffer: GPUBuffer | null = null;
+  #entityCapacity = 0;
+  #entityData = new Float32Array(0);
+  #cachedEntityVersion = -1;
+  #cachedGeometryVersion = -1;
+  #cachedSelectionVersion = -1;
+  #cachedEntityBounds: Bounds | null = null;
+  #entityMapWorldMinSize = new Float32Array(4);
   #texture: {
+    width: number;
+    height: number;
+    texture: GPUTexture;
+    view: GPUTextureView;
+  } | null = null;
+  #entityMapTexture: {
     width: number;
     height: number;
     texture: GPUTexture;
@@ -62,7 +82,7 @@ export class MinimapPass {
         {
           binding: 3,
           visibility: GPUShaderStage.FRAGMENT,
-          buffer: { type: "read-only-storage" },
+          texture: { sampleType: "float" },
         },
       ],
     });
@@ -71,10 +91,25 @@ export class MinimapPass {
       size: this.#uniformData.byteLength,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    this.#entityBuffer = device.createBuffer({
-      label: "Minimap entity rects",
-      size: this.#entityData.byteLength,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    this.#entityMapUniformBuffer = device.createBuffer({
+      label: "Minimap entity map uniforms",
+      size: this.#entityMapUniformData.byteLength,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    const entityMapBindGroupLayout = device.createBindGroupLayout({
+      label: "Minimap entity map bind group layout",
+      entries: [
+        {
+          binding: 4,
+          visibility: GPUShaderStage.VERTEX,
+          buffer: { type: "uniform" },
+        },
+      ],
+    });
+    this.#entityMapBindGroup = device.createBindGroup({
+      label: "Minimap entity map bind group",
+      layout: entityMapBindGroupLayout,
+      entries: [{ binding: 4, resource: { buffer: this.#entityMapUniformBuffer } }],
     });
     this.#sampler = device.createSampler({
       label: "Minimap backdrop sampler",
@@ -113,6 +148,45 @@ export class MinimapPass {
       },
       primitive: { topology: "triangle-list" },
     });
+    this.#entityMapPipeline = device.createRenderPipeline({
+      label: "Minimap entity map pipeline",
+      layout: device.createPipelineLayout({
+        label: "Minimap entity map pipeline layout",
+        bindGroupLayouts: [entityMapBindGroupLayout],
+      }),
+      vertex: {
+        module: shaderModule,
+        entryPoint: "vs_entity_map",
+        buffers: [
+          {
+            arrayStride: MINIMAP_ENTITY_FLOATS * Float32Array.BYTES_PER_ELEMENT,
+            stepMode: "instance",
+            attributes: [
+              { shaderLocation: 0, offset: 0, format: "float32x4" },
+              {
+                shaderLocation: 1,
+                offset: 4 * Float32Array.BYTES_PER_ELEMENT,
+                format: "float32",
+              },
+            ],
+          },
+        ],
+      },
+      fragment: {
+        module: shaderModule,
+        entryPoint: "fs_entity_map",
+        targets: [
+          {
+            format: MINIMAP_ENTITY_MAP_FORMAT,
+            blend: {
+              color: { srcFactor: "one", dstFactor: "one", operation: "add" },
+              alpha: { srcFactor: "one", dstFactor: "one", operation: "add" },
+            },
+          },
+        ],
+      },
+      primitive: { topology: "triangle-list" },
+    });
   }
 
   setConfig(config: MinimapConfig): void {
@@ -139,17 +213,68 @@ export class MinimapPass {
       width: width / viewport.zoom,
       height: height / viewport.zoom,
     };
-    let minX = viewportRect.x;
-    let minY = viewportRect.y;
-    let maxX = viewportRect.x + viewportRect.width;
-    let maxY = viewportRect.y + viewportRect.height;
-    for (const entity of entities) {
-      const bounds = getRotatedAABB(entity.position, entity.size, entity.rotation);
-      minX = Math.min(minX, bounds.x);
-      minY = Math.min(minY, bounds.y);
-      maxX = Math.max(maxX, bounds.x + bounds.width);
-      maxY = Math.max(maxY, bounds.y + bounds.height);
+    const geometryChanged =
+      options.entityVersion !== this.#cachedEntityVersion ||
+      options.geometryVersion !== this.#cachedGeometryVersion;
+    const selectionChanged = options.selectionVersion !== this.#cachedSelectionVersion;
+    const entityCount = entities.length;
+    this.#ensureEntityCapacity(entityCount);
+
+    if (geometryChanged) {
+      let entityMinX = Infinity;
+      let entityMinY = Infinity;
+      let entityMaxX = -Infinity;
+      let entityMaxY = -Infinity;
+      for (let i = 0; i < entityCount; i++) {
+        const entity = entities[i]!;
+        const bounds = getRotatedAABB(entity.position, entity.size, entity.rotation);
+        entityMinX = Math.min(entityMinX, bounds.x);
+        entityMinY = Math.min(entityMinY, bounds.y);
+        entityMaxX = Math.max(entityMaxX, bounds.x + bounds.width);
+        entityMaxY = Math.max(entityMaxY, bounds.y + bounds.height);
+        const base = i * MINIMAP_ENTITY_FLOATS;
+        this.#entityData[base] = bounds.x;
+        this.#entityData[base + 1] = bounds.y;
+        this.#entityData[base + 2] = bounds.width;
+        this.#entityData[base + 3] = bounds.height;
+        this.#entityData[base + 4] = options.selectedEntityIds.has(entity.id) ? 1 : 0;
+        this.#entityData[base + 5] = 0;
+        this.#entityData[base + 6] = 0;
+        this.#entityData[base + 7] = 0;
+      }
+      this.#cachedEntityBounds =
+        entityCount > 0
+          ? {
+              x: entityMinX,
+              y: entityMinY,
+              width: entityMaxX - entityMinX,
+              height: entityMaxY - entityMinY,
+            }
+          : null;
+    } else if (selectionChanged) {
+      for (let i = 0; i < entityCount; i++) {
+        this.#entityData[i * MINIMAP_ENTITY_FLOATS + 4] = options.selectedEntityIds.has(
+          entities[i]!.id,
+        )
+          ? 1
+          : 0;
+      }
     }
+    this.#cachedEntityVersion = options.entityVersion;
+    this.#cachedGeometryVersion = options.geometryVersion;
+    this.#cachedSelectionVersion = options.selectionVersion;
+
+    const entityBounds = this.#cachedEntityBounds;
+    const minX = Math.min(viewportRect.x, entityBounds?.x ?? viewportRect.x);
+    const minY = Math.min(viewportRect.y, entityBounds?.y ?? viewportRect.y);
+    const maxX = Math.max(
+      viewportRect.x + viewportRect.width,
+      entityBounds ? entityBounds.x + entityBounds.width : viewportRect.x + viewportRect.width,
+    );
+    const maxY = Math.max(
+      viewportRect.y + viewportRect.height,
+      entityBounds ? entityBounds.y + entityBounds.height : viewportRect.y + viewportRect.height,
+    );
 
     const worldWidth = Math.max(maxX - minX, 1);
     const worldHeight = Math.max(maxY - minY, 1);
@@ -215,26 +340,33 @@ export class MinimapPass {
     v[30] = minimap.vignette;
     v[31] = minimap.backdropBlur;
     v[32] = minimap.borderRadius * dpr;
-    v[33] = Math.min(entities.length, MINIMAP_MAX_ENTITIES);
+    v[33] = 0;
     v[34] = 0;
     v[35] = 0;
 
-    const entityCount = Math.min(entities.length, MINIMAP_MAX_ENTITIES);
-    for (let i = 0; i < entityCount; i++) {
-      const entity = entities[i]!;
-      const bounds = getRotatedAABB(entity.position, entity.size, entity.rotation);
-      const base = i * MINIMAP_ENTITY_FLOATS;
-      this.#entityData[base] = bounds.x;
-      this.#entityData[base + 1] = bounds.y;
-      this.#entityData[base + 2] = bounds.width;
-      this.#entityData[base + 3] = bounds.height;
-      this.#entityData[base + 4] = options.selectedEntityIds.has(entity.id) ? 1 : 0;
-      this.#entityData[base + 5] = 0;
-      this.#entityData[base + 6] = 0;
-      this.#entityData[base + 7] = 0;
-    }
     this.#device.queue.writeBuffer(this.#uniformBuffer, 0, this.#uniformData);
-    if (entityCount > 0) {
+    const entityMapWidth = Math.max(1, Math.ceil(minimapWidth));
+    const entityMapHeight = Math.max(1, Math.ceil(minimapHeight));
+    const entityMapTextureChanged =
+      this.#entityMapTexture?.width !== entityMapWidth ||
+      this.#entityMapTexture.height !== entityMapHeight;
+    const entityMapTexture = this.#getOrCreateEntityMapTexture(entityMapWidth, entityMapHeight);
+    const entityMapWorldChanged =
+      this.#entityMapWorldMinSize[0] !== v[4] ||
+      this.#entityMapWorldMinSize[1] !== v[5] ||
+      this.#entityMapWorldMinSize[2] !== v[6] ||
+      this.#entityMapWorldMinSize[3] !== v[7];
+    this.#entityMapUniformData[0] = v[4]!;
+    this.#entityMapUniformData[1] = v[5]!;
+    this.#entityMapUniformData[2] = v[6]!;
+    this.#entityMapUniformData[3] = v[7]!;
+    this.#entityMapWorldMinSize.set(this.#entityMapUniformData);
+    const entityMapDirty =
+      geometryChanged || selectionChanged || entityMapTextureChanged || entityMapWorldChanged;
+    if (entityMapDirty) {
+      this.#device.queue.writeBuffer(this.#entityMapUniformBuffer, 0, this.#entityMapUniformData);
+    }
+    if ((geometryChanged || selectionChanged) && entityCount > 0 && this.#entityBuffer) {
       this.#device.queue.writeBuffer(
         this.#entityBuffer,
         0,
@@ -242,6 +374,26 @@ export class MinimapPass {
         0,
         entityCount * MINIMAP_ENTITY_FLOATS,
       );
+    }
+    if (entityMapDirty) {
+      const entityMapPass = options.encoder.beginRenderPass({
+        label: "Minimap entity map pass",
+        colorAttachments: [
+          {
+            view: entityMapTexture.view,
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            loadOp: "clear",
+            storeOp: "store",
+          },
+        ],
+      });
+      entityMapPass.setPipeline(this.#entityMapPipeline);
+      entityMapPass.setBindGroup(0, this.#entityMapBindGroup);
+      if (entityCount > 0 && this.#entityBuffer) {
+        entityMapPass.setVertexBuffer(0, this.#entityBuffer);
+        entityMapPass.draw(6, entityCount);
+      }
+      entityMapPass.end();
     }
 
     if (!this.#bindGroup) {
@@ -252,7 +404,7 @@ export class MinimapPass {
           { binding: 0, resource: inputTexture.view },
           { binding: 1, resource: this.#sampler },
           { binding: 2, resource: { buffer: this.#uniformBuffer } },
-          { binding: 3, resource: { buffer: this.#entityBuffer } },
+          { binding: 3, resource: entityMapTexture.view },
         ],
       });
     }
@@ -281,14 +433,61 @@ export class MinimapPass {
 
   destroy(): void {
     this.#destroyTexture();
+    this.#destroyEntityMapTexture();
     this.#uniformBuffer.destroy();
-    this.#entityBuffer.destroy();
+    this.#entityMapUniformBuffer.destroy();
+    this.#entityBuffer?.destroy();
   }
 
   #destroyTexture(): void {
     this.#texture?.texture.destroy();
     this.#texture = null;
     this.#bindGroup = null;
+  }
+
+  #destroyEntityMapTexture(): void {
+    this.#entityMapTexture?.texture.destroy();
+    this.#entityMapTexture = null;
+    this.#bindGroup = null;
+  }
+
+  #ensureEntityCapacity(entityCount: number): void {
+    if (entityCount <= this.#entityCapacity) return;
+    let nextCapacity = Math.max(this.#entityCapacity, 1);
+    while (nextCapacity < entityCount) nextCapacity *= 2;
+
+    this.#entityBuffer?.destroy();
+    this.#entityCapacity = nextCapacity;
+    this.#entityData = new Float32Array(nextCapacity * MINIMAP_ENTITY_FLOATS);
+    this.#entityBuffer = this.#device.createBuffer({
+      label: `Minimap entity rects (${nextCapacity})`,
+      size: this.#entityData.byteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    });
+  }
+
+  #getOrCreateEntityMapTexture(
+    width: number,
+    height: number,
+  ): { texture: GPUTexture; view: GPUTextureView } {
+    if (this.#entityMapTexture?.width === width && this.#entityMapTexture.height === height) {
+      return this.#entityMapTexture;
+    }
+
+    this.#destroyEntityMapTexture();
+    const texture = this.#device.createTexture({
+      label: `Minimap entity map (${width}x${height})`,
+      size: [width, height],
+      format: MINIMAP_ENTITY_MAP_FORMAT,
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    this.#entityMapTexture = {
+      width,
+      height,
+      texture,
+      view: texture.createView(),
+    };
+    return this.#entityMapTexture;
   }
 
   #getOrCreateTexture(

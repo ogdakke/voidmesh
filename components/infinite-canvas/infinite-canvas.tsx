@@ -89,7 +89,6 @@ export function InfiniteCanvas() {
           containerRef={containerRef}
           perfRef={perfRef}
           onboarding={onboarding}
-          centerSelection={keybinds.centerSelection}
           resetZoom={keybinds.resetZoom}
         />
       </div>
