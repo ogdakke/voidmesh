@@ -11,6 +11,13 @@ export class GridPass {
   #uniformData = new ArrayBuffer(config.rendering.gridUniformSize);
   #floatView = new Float32Array(this.#uniformData);
   #config: GridConfig = config.rendering.grid.default;
+  #uniformsDirty = true;
+  #offsetX = Number.NaN;
+  #offsetY = Number.NaN;
+  #zoom = Number.NaN;
+  #width = Number.NaN;
+  #height = Number.NaN;
+  #devicePixelRatio = Number.NaN;
 
   constructor(device: GPUDevice, canvasFormat: GPUTextureFormat) {
     this.#device = device;
@@ -19,6 +26,7 @@ export class GridPass {
 
   setConfig(configUpdate: Partial<GridConfig>): void {
     this.#config = { ...this.#config, ...configUpdate };
+    this.#uniformsDirty = true;
   }
 
   encode({
@@ -34,8 +42,7 @@ export class GridPass {
     width: number;
     height: number;
   }): void {
-    this.#updateUniforms(viewport, width, height);
-    this.#device.queue.writeBuffer(this.#uniformBuffer!, 0, this.#uniformData);
+    this.#writeUniformsIfChanged(viewport, width, height);
 
     const gridPass = encoder.beginRenderPass({
       label: "Grid render pass",
@@ -53,6 +60,31 @@ export class GridPass {
     gridPass.setBindGroup(0, this.#bindGroup!);
     gridPass.draw(3);
     gridPass.end();
+  }
+
+  #writeUniformsIfChanged(viewport: Viewport, width: number, height: number): void {
+    const devicePixelRatio = window.devicePixelRatio || 1;
+    if (
+      !this.#uniformsDirty &&
+      viewport.offset.x === this.#offsetX &&
+      viewport.offset.y === this.#offsetY &&
+      viewport.zoom === this.#zoom &&
+      width === this.#width &&
+      height === this.#height &&
+      devicePixelRatio === this.#devicePixelRatio
+    ) {
+      return;
+    }
+
+    this.#updateUniforms(viewport, width, height, devicePixelRatio);
+    this.#device.queue.writeBuffer(this.#uniformBuffer!, 0, this.#uniformData);
+    this.#uniformsDirty = false;
+    this.#offsetX = viewport.offset.x;
+    this.#offsetY = viewport.offset.y;
+    this.#zoom = viewport.zoom;
+    this.#width = width;
+    this.#height = height;
+    this.#devicePixelRatio = devicePixelRatio;
   }
 
   destroy(): void {
@@ -114,15 +146,19 @@ export class GridPass {
     });
   }
 
-  #updateUniforms(viewport: Viewport, width: number, height: number): void {
+  #updateUniforms(
+    viewport: Viewport,
+    width: number,
+    height: number,
+    devicePixelRatio: number,
+  ): void {
     const gridConfig = this.#config;
 
     // Multi-level grid: compute fine grid size and crossfade factor
     const { fineGridSize, fadeFactor } = calculateGridLevel(gridConfig.gridSize, viewport.zoom);
 
     // Scale dot size by DPR so it's in physical pixels (matching fragCoord space)
-    const dpr = window.devicePixelRatio || 1;
-    const effectiveDotSize = Math.max(1.0, gridConfig.dotSize) * dpr;
+    const effectiveDotSize = Math.max(1.0, gridConfig.dotSize) * devicePixelRatio;
 
     // Layout: resolution(8) + offset(8) + zoom(4) + fineGridSize(4) + dotSize(4) + fadeFactor(4) + bgColor(16) + dotColor(16)
     this.#floatView[0] = width;
