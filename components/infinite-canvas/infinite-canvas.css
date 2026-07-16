@@ -198,8 +198,7 @@
 }
 
 .infinite-canvas__select,
-.infinite-canvas__confirm,
-.infinite-canvas__reset {
+.infinite-canvas__confirm {
   font-size: var(--text-sm);
   height: calc(8 * var(--spacing));
 }
@@ -355,7 +354,6 @@
 .infinite-canvas__keyboard-shortcuts,
 .undo-redo,
 .infinite-canvas__confirm,
-.infinite-canvas__reset,
 .infinite-canvas__select {
   filter: drop-shadow(var(--floaty-shadow));
   will-change: transform;

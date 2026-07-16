@@ -1,7 +1,6 @@
 import About from "#components/about/index.tsx";
 import DesktopSettings from "#components/settings/settings.desktop.tsx";
 import {
-  useCanvasCommands,
   useCanvasInteraction,
   useMultiSelectMode,
   useSelectedEntityIds,
@@ -130,8 +129,6 @@ function DesktopCanvasActions({
 
 function MobileCanvasActions() {
   const interaction = useCanvasInteraction();
-  const { resetSelectionToDefaults } = useCanvasCommands();
-  const selectedEntityIds = useSelectedEntityIds();
   const multiSelectMode = useMultiSelectMode();
 
   return (
@@ -146,17 +143,6 @@ function MobileCanvasActions() {
           size="sm"
         >
           <Check />
-        </Button>
-      ) : selectedEntityIds.size > 0 ? (
-        <Button
-          className="infinite-canvas__reset"
-          onClick={resetSelectionToDefaults}
-          type="button"
-          aria-label="Reset to defaults"
-          variant="secondary"
-          size="sm"
-        >
-          Reset
         </Button>
       ) : (
         <Button

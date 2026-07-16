@@ -17,6 +17,7 @@ import { DeleteDropZone } from "./delete-drop-zone/delete-drop-zone.tsx";
 import { ActionLayer } from "./action-layer/action-layer.tsx";
 import { CopyPasteDrawer } from "./action-layer/copy-paste-drawer.tsx";
 import { IonDuplicateOutline } from "./icons/duplicate.tsx";
+import { MaterialSymbolsResetImage } from "./icons/reset-image.tsx";
 import { MobileExportDrawer } from "./export-knobs/export-knobs.mobile.tsx";
 import { Drawer } from "#ui/drawer/index.tsx";
 import {
@@ -31,7 +32,7 @@ import { useParamValue } from "#hooks/use-param-value.ts";
 import { useEntityDrag } from "#hooks/use-entity-drag.ts";
 
 function MobileActionLayer() {
-  const { duplicateEntities } = useCanvasCommands();
+  const { duplicateEntities, resetSelectionToDefaults } = useCanvasCommands();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [exportDrawerOpen, setExportDrawerOpen] = useState(false);
 
@@ -44,7 +45,10 @@ function MobileActionLayer() {
         <ActionLayer.Item order={1} onAction={duplicateEntities} label="Duplicate">
           <IonDuplicateOutline />
         </ActionLayer.Item>
-        <ActionLayer.Item order={2} onAction={() => setExportDrawerOpen(true)} label="Export">
+        <ActionLayer.Item order={2} onAction={resetSelectionToDefaults} label="Reset">
+          <MaterialSymbolsResetImage />
+        </ActionLayer.Item>
+        <ActionLayer.Item order={3} onAction={() => setExportDrawerOpen(true)} label="Export">
           <Download />
         </ActionLayer.Item>
       </ActionLayer.Root>
