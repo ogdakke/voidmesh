@@ -37,7 +37,7 @@ Pure utility layer. No React, no GPU, no engine state. Sits at the bottom of the
 - Hot-path bounds helpers accept caller-owned output objects; renderer culling must pass scratch `Bounds` instead of allocating one per entity.
 - Spatial queries reuse caller-owned result arrays. Preserve z-order for rendering/hit testing; disable sorting for membership-only consumers. Update the index whenever entity position, size, rotation, z-index, insertion, or removal changes.
 - Translate groups with `EntitySpatialIndex.translateEntities()` after applying the same delta to entity positions; it adjusts cached bounds and only changes cell membership when a center crosses a bucket boundary.
-- Current-version deserialization reuses the unique objects produced by `JSON.parse`; recursively merge cloned defaults only for schema-mismatched documents that require compatibility filling.
+- Deserialization interns structurally equal immutable shader subtrees and palettes within one import. Keep a shallow top-level params wrapper per entity because renderer animation controls mutate `time`/`timeAutoPlay`; recursively merge cloned defaults only for schema-mismatched documents that require compatibility filling.
 - Resource-producing async batches must await every sibling before unwinding fulfilled results. Use `disposeMediaSource()`/`disposeEntityMedia()`; do not close a shared image bitmap directly.
 - `Undo.clear()` evicts committed stacks and any active transaction. Workspace replacement relies on this to prevent late transaction commits from targeting imported colliding IDs.
 - GIF/video decode paths close decoders, frames, snapshots, and blob-backed elements on every exception path.

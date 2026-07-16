@@ -32,7 +32,6 @@ export class ActionLayerBlurPass {
   #textures: {
     width: number;
     height: number;
-    input: GPUTexture;
     output: GPUTexture;
   } | null = null;
   #cacheValid = false;
@@ -124,17 +123,11 @@ export class ActionLayerBlurPass {
     const blurNeedsUpdate = !this.#cacheValid || options.contentDirty;
 
     if (blurNeedsUpdate) {
-      // Copy the pre-lens scene → input texture.
-      encoder.copyTextureToTexture(
-        { texture: sourceTexture },
-        { texture: blurTextures.input },
-        { width, height },
-      );
-
-      // Kawase blur: input → output.
+      // The canvas texture is configured with TEXTURE_BINDING usage. Sample it
+      // directly before the later blit writes back to the canvas.
       processingPipeline.encodeFullScreenBlur(
         encoder,
-        blurTextures.input,
+        sourceTexture,
         blurTextures.output,
         width,
         height,
@@ -180,7 +173,6 @@ export class ActionLayerBlurPass {
 
   destroy(): void {
     if (this.#textures) {
-      this.#textures.input.destroy();
       this.#textures.output.destroy();
       this.#textures = null;
     }
@@ -189,40 +181,26 @@ export class ActionLayerBlurPass {
     this.#uniformBuffer.destroy();
   }
 
-  #getOrCreateTextures(width: number, height: number): { input: GPUTexture; output: GPUTexture } {
+  #getOrCreateTextures(width: number, height: number): { output: GPUTexture } {
     const cached = this.#textures;
     if (cached && cached.width === width && cached.height === height) {
       return cached;
     }
 
     if (cached) {
-      cached.input.destroy();
       cached.output.destroy();
     }
     this.#cacheValid = false;
     this.#bindGroupCached = null;
 
-    const usage =
-      GPUTextureUsage.TEXTURE_BINDING |
-      GPUTextureUsage.RENDER_ATTACHMENT |
-      GPUTextureUsage.COPY_DST |
-      GPUTextureUsage.COPY_SRC;
-
-    const input = this.#device.createTexture({
-      label: `Action layer blur input (${width}x${height})`,
-      size: [width, height],
-      format: this.#intermediateFormat,
-      usage,
-    });
-
     const output = this.#device.createTexture({
       label: `Action layer blur output (${width}x${height})`,
       size: [width, height],
       format: this.#intermediateFormat,
-      usage,
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
     });
 
-    this.#textures = { width, height, input, output };
+    this.#textures = { width, height, output };
     return this.#textures;
   }
 }

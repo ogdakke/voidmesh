@@ -166,21 +166,26 @@ export class HeadlessExportRenderer {
     consume: (encoder: GPUCommandEncoder, outputTexture: GPUTexture) => Promise<T>,
   ): Promise<T> {
     this.resize(width, height);
-    const entity = this.#createEntity(snapshot, width, height);
-    const { encoder, sourceTexture, outputTexture, outputUsage } = this.#encodeSourceToOutput(
-      entity,
-      source,
-      width,
-      height,
-    );
-
+    this.#entityShaderRuntime.beginFrame();
     try {
-      return await consume(encoder, outputTexture);
+      const entity = this.#createEntity(snapshot, width, height);
+      const { encoder, sourceTexture, outputTexture, outputUsage } = this.#encodeSourceToOutput(
+        entity,
+        source,
+        width,
+        height,
+      );
+
+      try {
+        return await consume(encoder, outputTexture);
+      } finally {
+        this.#entityShaderRuntime.flushTextureReleases();
+        sourceTexture.destroy();
+        this.#texturePool.release(outputTexture, width, height, outputUsage);
+        this.#texturePool.nextFrame();
+      }
     } finally {
-      this.#entityShaderRuntime.flushTextureReleases();
-      sourceTexture.destroy();
-      this.#texturePool.release(outputTexture, width, height, outputUsage);
-      this.#texturePool.nextFrame();
+      this.#entityShaderRuntime.endFrame();
     }
   }
 

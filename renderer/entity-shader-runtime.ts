@@ -316,6 +316,11 @@ export class EntityShaderRuntime {
     return this.#shaderRegistry.get(entity.shaderType)?.needsContinuousRender(entity) ?? false;
   }
 
+  beginFrame(): void {
+    this.#shaderRegistry.beginFrame();
+    this.#processingPipeline.beginFrame();
+  }
+
   removeEntity(entityId: string): void {
     this.#shaderRegistry.removeEntity(entityId);
     this.#processingPipeline.removeEntity(entityId);

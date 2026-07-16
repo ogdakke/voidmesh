@@ -5,7 +5,6 @@ import {
   MediaType,
   type MediaAlphaMode,
   type ShaderCanvasEntity,
-  type ShaderParams,
 } from "#types/canvas.ts";
 import type { CopyPass } from "./copy-pass.ts";
 import type { EffectRenderEntity } from "./effect-render-entity.ts";
@@ -100,7 +99,6 @@ export class EntityTexturePipeline {
   // Processed textures keyed by immutable source + effect identity when shareable.
   #processedTextures: Map<string, CachedProcessedTexture> = new Map();
   #entityProcessedBindings: Map<string, CachedProcessedTexture> = new Map();
-  #shaderSignatureCache = new WeakMap<ShaderParams, string>();
 
   // Cached source textures per asset/frame identity. Static image instances share entries.
   #sourceTextures: Map<string, CachedSourceTexture> = new Map();
@@ -146,6 +144,7 @@ export class EntityTexturePipeline {
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
   ): void {
+    this.#runtime.beginFrame();
     // Single encoder for the entire entity pipeline: blur -> adjustments -> shader -> post-process
     const encoder = this.#device.createCommandEncoder({
       label: `Entity ${entity.id} pipeline`,
@@ -451,6 +450,7 @@ export class EntityTexturePipeline {
   }
 
   beginFrame(allowLodTransitions: boolean): void {
+    this.#runtime.beginFrame();
     this.#allowLodTransitions = allowLodTransitions;
     this.#lodTransitionsRemaining = config.rendering.lodTransitionsPerFrame;
     this.#lodTransitionPixelsRemaining = config.rendering.lodTransitionPixelBudget;
@@ -780,11 +780,10 @@ export class EntityTexturePipeline {
       return `entity:${entity.id}:${width}x${height}`;
     }
 
-    let signature = this.#shaderSignatureCache.get(entity.shaderParams);
-    if (!signature) {
-      signature = JSON.stringify(entity.shaderParams);
-      this.#shaderSignatureCache.set(entity.shaderParams, signature);
-    }
+    // Do not retain one serialized signature per entity. Deserialized workspaces can
+    // contain hundreds of thousands of distinct parameter objects with only a few
+    // structural values; caching by object identity retained every duplicate string.
+    const signature = JSON.stringify(entity.shaderParams);
     const asset = entity.mediaSource.asset;
     return `image:${asset.id}:${asset.revision}:${width}x${height}:${entity.shaderType}:${signature}`;
   }

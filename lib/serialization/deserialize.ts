@@ -1,4 +1,5 @@
 import {
+  type ColorPalette,
   ShaderType,
   type MediaImageAsset,
   type ShaderCanvasEntity,
@@ -38,6 +39,11 @@ const MIME_BY_EXT: Record<string, string> = {
 const LARGE_WORKSPACE_PROGRESS_THRESHOLD = 1_000;
 const DESERIALIZE_CHUNK_SIZE = 512;
 const VALID_SHADER_TYPES = new Set<string>(Object.values(ShaderType));
+
+interface DeserializationInternPool {
+  shaderParams: Map<string, ShaderParams>;
+  palettes: Map<string, ColorPalette>;
+}
 
 /**
  * Deserialize a .vdmsh archive (Blob or ArrayBuffer) and restore the canvas.
@@ -147,6 +153,10 @@ export async function deserialize(
   //    cancellation/progress updates time to run.
   const validEntities: ShaderCanvasEntity[] = [];
   const imageAssets = new Map<string, MediaImageAsset>();
+  const internPool: DeserializationInternPool = {
+    shaderParams: new Map(),
+    palettes: new Map(),
+  };
   let maxEntityId = 0;
   let maxZIndex = 0;
   let ownershipTransferred = false;
@@ -178,6 +188,7 @@ export async function deserialize(
               serialized,
               warnings,
               mergeShaderParamDefaults,
+              internPool,
             );
             retainImageAsset(cachedAsset);
             const entity: ShaderCanvasEntity = {
@@ -195,6 +206,7 @@ export async function deserialize(
           workspaceEntityCount,
           videoEntityCount,
           imageAssets,
+          internPool,
           mergeShaderParamDefaults,
           onVideoSeekTimeout: () => {
             videoSeekTimeoutCount++;
@@ -416,6 +428,7 @@ async function deserializeEntity(
     workspaceEntityCount: number;
     videoEntityCount: number;
     imageAssets: Map<string, MediaImageAsset>;
+    internPool: DeserializationInternPool;
     mergeShaderParamDefaults: boolean;
     onVideoSeekTimeout: () => void;
   },
@@ -424,6 +437,7 @@ async function deserializeEntity(
     serialized,
     warnings,
     analyticsContext.mergeShaderParamDefaults,
+    analyticsContext.internPool,
   );
 
   switch (serialized.mediaType) {
@@ -589,6 +603,7 @@ function createDeserializedEntityBase(
   serialized: SerializedEntity,
   warnings: string[],
   mergeShaderParamDefaults: boolean,
+  internPool: DeserializationInternPool,
 ) {
   const shaderType = validateShaderType(serialized.shaderType);
   if (shaderType !== serialized.shaderType) {
@@ -599,12 +614,16 @@ function createDeserializedEntityBase(
 
   // JSON.parse already created a unique params object for every current-version entity.
   // Only schema-mismatched documents need compatibility defaults filled recursively.
-  const shaderParams = mergeShaderParamDefaults
+  const decodedShaderParams = mergeShaderParamDefaults
     ? deepMerge(
         structuredClone(config.defaults.shaderParams) as ShaderParams,
         serialized.shaderParams,
       )
     : serialized.shaderParams;
+  const shaderParams = internShaderParams(decodedShaderParams, internPool);
+  const originalPalette = serialized.originalPalette
+    ? internPalette(serialized.originalPalette, internPool)
+    : undefined;
 
   return {
     id: serialized.id,
@@ -620,10 +639,42 @@ function createDeserializedEntityBase(
     shaderParams,
     textureDirty: true as const,
     selected: false as const,
-    ...(serialized.originalPalette && {
-      originalPalette: serialized.originalPalette,
+    ...(originalPalette && {
+      originalPalette,
     }),
   };
+}
+
+function internShaderParams(
+  params: ShaderParams,
+  internPool: DeserializationInternPool,
+): ShaderParams {
+  const palette = params.palette ? internPalette(params.palette, internPool) : undefined;
+  const paramsWithInternedPalette =
+    palette && palette !== params.palette ? { ...params, palette } : params;
+  const { time, timeAutoPlay, ...staticParams } = paramsWithInternedPalette;
+  const signature = JSON.stringify(staticParams);
+  let canonical = internPool.shaderParams.get(signature);
+  if (!canonical) {
+    canonical = staticParams as ShaderParams;
+    internPool.shaderParams.set(signature, canonical);
+  }
+
+  // Renderer animation controls mutate these two top-level fields in place. Keep
+  // one shallow wrapper per entity while sharing the immutable nested parameter tree.
+  return {
+    ...canonical,
+    ...(time !== undefined && { time }),
+    ...(timeAutoPlay !== undefined && { timeAutoPlay }),
+  };
+}
+
+function internPalette(palette: ColorPalette, internPool: DeserializationInternPool): ColorPalette {
+  const signature = JSON.stringify(palette);
+  const canonical = internPool.palettes.get(signature);
+  if (canonical) return canonical;
+  internPool.palettes.set(signature, palette);
+  return palette;
 }
 
 async function probeTimedOutVideoSeekMetadata(videoBlob: Blob): Promise<{

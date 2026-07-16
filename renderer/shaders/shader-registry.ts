@@ -21,6 +21,10 @@ export class ShaderRegistry {
     return this.#passes.has(shaderType);
   }
 
+  beginFrame(): void {
+    for (const pass of this.#passes.values()) pass.beginFrame();
+  }
+
   /** Execute a single shader pass: source -> output */
   applyShader(
     entity: EffectRenderEntity,

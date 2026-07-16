@@ -1,5 +1,5 @@
 // Glitch shader — 4 variants: channelShift, scanline, blockCorrupt, pixelSmear
-// Uniform buffer layout (336 bytes, 16-byte aligned)
+// Uniform buffer layout (304 bytes, 16-byte aligned)
 struct Uniforms {
   resolution: vec2f,       // Canvas dimensions (offset 0)
   scale: f32,              // Scale factor 0.1-3.0 (offset 8)
@@ -8,11 +8,9 @@ struct Uniforms {
   time: f32,               // Animation time (offset 20, overwritten by variant)
   angle: f32,              // Direction angle in degrees (offset 24, overwritten by variant)
   kind: u32,               // 0=channelShift, 1=scanline, 2=blockCorrupt, 3=pixelSmear (offset 28)
-  color: vec4f,            // Legacy color (offset 32)
-  background: vec4f,       // Legacy background (offset 48)
-  paletteCount: u32,       // Number of palette colors (offset 64)
+  paletteCount: u32,       // Number of palette colors (offset 32)
   _pad0: u32,
-  is_p3: u32,              // 1 = Display P3, 0 = sRGB (offset 72)
+  is_p3: u32,              // 1 = Display P3, 0 = sRGB (offset 40)
   _pad2: u32,
   palette: array<vec4f, 16>,
 }

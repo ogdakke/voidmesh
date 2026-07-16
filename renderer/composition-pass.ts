@@ -62,9 +62,17 @@ export interface PrepareFullSceneBatchOptions extends FullSceneBatchKey {
   selectedEntityIds: ReadonlySet<string>;
 }
 
+export interface PrepareMixedFullSceneBatchOptions extends FullSceneBatchKey {
+  entities: readonly ShaderCanvasEntity[];
+  selectedEntityIds: ReadonlySet<string>;
+  textureRanges: readonly FullSceneTextureRange[];
+}
+
 export interface FullSceneBatchPatch {
   index: number;
-  item: CompositionDrawItem;
+  entity: ShaderCanvasEntity;
+  texture: GPUTexture;
+  isSelected: boolean;
 }
 
 export interface FullSceneInstancePatch {
@@ -150,11 +158,20 @@ function collectUniqueTextures(ranges: FullSceneBatchCache["drawRanges"]): GPUTe
   return textures;
 }
 
-const INSTANCE_STRIDE_BYTES = 32;
+const INSTANCE_STRIDE_BYTES = 24;
 const INSTANCE_STRIDE_VALUES = INSTANCE_STRIDE_BYTES / 4;
 const INITIAL_INSTANCE_CAPACITY = 256;
-const INSTANCE_FLAG_DEBUG = 1;
-const INSTANCE_FLAG_LOCKED = 2;
+const INSTANCE_ROTATION_BITS = 16;
+const INSTANCE_ROTATION_MAX = (1 << INSTANCE_ROTATION_BITS) - 1;
+const INSTANCE_SCALE_BITS = 10;
+const INSTANCE_SCALE_MAX = (1 << INSTANCE_SCALE_BITS) - 1;
+const INSTANCE_SCALE_QUANTIZED_MAX = INSTANCE_SCALE_MAX - 1;
+const INSTANCE_SCALE_MIN = 0.8;
+const INSTANCE_SCALE_RANGE = 0.25;
+const INSTANCE_SCALE_SHIFT = INSTANCE_ROTATION_BITS;
+const INSTANCE_FLAG_SELECTED = 1 << 26;
+const INSTANCE_FLAG_DEBUG = 1 << 27;
+const INSTANCE_FLAG_LOCKED = 1 << 28;
 
 function getDragSelectModeValue(mode: DragSelectMode | null): number {
   switch (mode) {
@@ -169,8 +186,33 @@ function getDragSelectModeValue(mode: DragSelectMode | null): number {
   }
 }
 
-function getInstanceFlags(entity: ShaderCanvasEntity, debugMode: boolean): number {
-  return (debugMode ? INSTANCE_FLAG_DEBUG : 0) | (entity.locked ? INSTANCE_FLAG_LOCKED : 0);
+function packInstanceState(
+  entity: ShaderCanvasEntity,
+  isSelected: boolean,
+  debugMode: boolean,
+  visualScale: number,
+): number {
+  const normalizedRotation = (((entity.rotation % 360) + 360) % 360) / 360;
+  const rotation = Math.round(normalizedRotation * INSTANCE_ROTATION_MAX);
+  const clampedScale = Math.max(
+    INSTANCE_SCALE_MIN,
+    Math.min(visualScale, INSTANCE_SCALE_MIN + INSTANCE_SCALE_RANGE),
+  );
+  const scale =
+    visualScale === 1
+      ? INSTANCE_SCALE_MAX
+      : Math.round(
+          ((clampedScale - INSTANCE_SCALE_MIN) / INSTANCE_SCALE_RANGE) *
+            INSTANCE_SCALE_QUANTIZED_MAX,
+        );
+  return (
+    (rotation |
+      (scale << INSTANCE_SCALE_SHIFT) |
+      (isSelected ? INSTANCE_FLAG_SELECTED : 0) |
+      (debugMode ? INSTANCE_FLAG_DEBUG : 0) |
+      (entity.locked ? INSTANCE_FLAG_LOCKED : 0)) >>>
+    0
+  );
 }
 
 function createExternalCompositionShaderSource(source: string): string {
@@ -664,35 +706,38 @@ export class CompositionPass {
     this.#retainFullSceneInstancePayload(key, uploadBytes);
   }
 
-  prepareMixedFullSceneBatch(key: FullSceneBatchKey, items: readonly CompositionDrawItem[]): void {
-    if (items.length !== key.instanceCount) {
-      throw new Error("Mixed full-scene batch instance count does not match its draw items");
+  prepareMixedFullSceneBatch(options: PrepareMixedFullSceneBatchOptions): void {
+    const { entities, selectedEntityIds, textureRanges, ...key } = options;
+    if (entities.length !== key.instanceCount) {
+      throw new Error("Mixed full-scene batch instance count does not match its entity payload");
     }
     if (this.hasFullSceneBatch(key)) return;
 
-    const buffer = this.#ensureInstanceCapacity(items.length);
     const drawRanges: FullSceneBatchCache["drawRanges"] = [];
-    const textures: GPUTexture[] = [];
-    const seenTextures = new Set<GPUTexture>();
-    for (let index = 0; index < items.length; index++) {
-      const item = items[index]!;
-      if (item.pipeline !== "texture" || !item.texture) {
-        throw new Error("Mixed full-scene batches require regular texture draw items");
+    let nextInstance = 0;
+    for (const range of textureRanges) {
+      if (range.firstInstance !== nextInstance || range.instanceCount <= 0) {
+        throw new Error("Mixed full-scene texture ranges must cover entities in order");
       }
-      this.#writeInstance(index, item);
-      const previous = drawRanges.at(-1);
-      if (previous?.texture === item.texture) {
-        previous.instanceCount++;
-      } else {
-        drawRanges.push({ texture: item.texture, firstInstance: index, instanceCount: 1 });
-      }
-      if (!seenTextures.has(item.texture)) {
-        seenTextures.add(item.texture);
-        textures.push(item.texture);
-      }
-      item.entity.textureDirty = false;
+      appendTextureRange(drawRanges, range.texture, range.firstInstance, range.instanceCount);
+      nextInstance += range.instanceCount;
     }
-    const uploadBytes = items.length * INSTANCE_STRIDE_BYTES;
+    if (nextInstance !== entities.length) {
+      throw new Error("Mixed full-scene texture ranges do not cover the entity payload");
+    }
+
+    const buffer = this.#ensureInstanceCapacity(entities.length);
+    for (let index = 0; index < entities.length; index++) {
+      const entity = entities[index]!;
+      this.#writeFullSceneInstance(
+        index,
+        entity,
+        selectedEntityIds.has(entity.id),
+        options.debugMode,
+      );
+      entity.textureDirty = false;
+    }
+    const uploadBytes = entities.length * INSTANCE_STRIDE_BYTES;
     this.#device.queue.writeBuffer(buffer, 0, this.#instanceData, 0, uploadBytes);
     this.#fullSceneBatchRebuilds += 1;
     this.#fullSceneBatchUploadBytes += uploadBytes;
@@ -700,7 +745,7 @@ export class CompositionPass {
       ...key,
       bufferGeneration: this.#instanceBufferGeneration,
       drawRanges,
-      textures,
+      textures: collectUniqueTextures(drawRanges),
     };
     this.#retainFullSceneInstancePayload(key, uploadBytes);
   }
@@ -842,10 +887,8 @@ export class CompositionPass {
       break;
     }
     let previousPatchIndex = -1;
-    for (const { index, item } of sortedPatches) {
-      if (index < 0 || index >= key.instanceCount || item.pipeline !== "texture" || !item.texture) {
-        return false;
-      }
+    for (const { index } of sortedPatches) {
+      if (index < 0 || index >= key.instanceCount) return false;
       if (index === previousPatchIndex) return false;
       previousPatchIndex = index;
     }
@@ -867,7 +910,7 @@ export class CompositionPass {
             patch.index - rangeCursor,
           );
         }
-        appendTextureRange(drawRanges, patch.item.texture!, patch.index, 1);
+        appendTextureRange(drawRanges, patch.texture, patch.index, 1);
         rangeCursor = patch.index + 1;
         patchCursor++;
       }
@@ -877,9 +920,9 @@ export class CompositionPass {
     }
     if (patchCursor !== sortedPatches.length) return false;
 
-    for (const { index, item } of sortedPatches) {
-      this.#writeInstance(index, item);
-      item.entity.textureDirty = false;
+    for (const { index, entity, isSelected } of sortedPatches) {
+      this.#writeFullSceneInstance(index, entity, isSelected, key.debugMode);
+      entity.textureDirty = false;
     }
     for (let start = 0; start < sortedPatches.length;) {
       let end = start + 1;
@@ -1208,10 +1251,8 @@ export class CompositionPass {
     this.#instanceFloatView[offset + 1] = entity.position.y;
     this.#instanceFloatView[offset + 2] = entity.size.width;
     this.#instanceFloatView[offset + 3] = entity.size.height;
-    this.#instanceFloatView[offset + 4] = (entity.rotation * Math.PI) / 180;
-    this.#instanceUintView[offset + 5] = isSelected ? 1 : 0;
-    this.#instanceUintView[offset + 6] = getInstanceFlags(entity, debugMode);
-    this.#instanceFloatView[offset + 7] = 1;
+    this.#instanceUintView[offset + 4] = packInstanceState(entity, isSelected, debugMode, 1);
+    this.#instanceUintView[offset + 5] = 0;
   }
 
   #writeInstance(index: number, item: CompositionDrawItem): void {
@@ -1221,10 +1262,13 @@ export class CompositionPass {
     this.#instanceFloatView[offset + 1] = entity.position.y + item.offsetY;
     this.#instanceFloatView[offset + 2] = entity.size.width;
     this.#instanceFloatView[offset + 3] = entity.size.height;
-    this.#instanceFloatView[offset + 4] = (entity.rotation * Math.PI) / 180;
-    this.#instanceUintView[offset + 5] = item.isSelected ? 1 : 0;
-    this.#instanceUintView[offset + 6] = getInstanceFlags(entity, item.debugMode);
-    this.#instanceFloatView[offset + 7] = item.visualScale;
+    this.#instanceUintView[offset + 4] = packInstanceState(
+      entity,
+      item.isSelected,
+      item.debugMode,
+      item.visualScale,
+    );
+    this.#instanceUintView[offset + 5] = 0;
   }
 
   #getInstancedBindGroup(texture: GPUTexture): GPUBindGroup {

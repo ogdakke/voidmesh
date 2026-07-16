@@ -328,10 +328,10 @@ export const paramVisibilityRules: Partial<
 const GRID_UNIFORM_SIZE = 64; // resolution(8) + offset(8) + zoom(4) + gridSize(4) + dotSize(4) + padding(4) + bgColor(16) + dotColor(16)
 const VIEWPORT_UNIFORM_SIZE = 64; // matrix(48) + resolution(8) + padding(8)
 const ENTITY_UNIFORM_SIZE = 48; // position(8) + size(8) + rotation(4) + reserved(4) + isSelected(4) + padding(8)
-const HALFTONE_UNIFORM_SIZE = 336; // Extended to match dithering for palette support
+const HALFTONE_UNIFORM_SIZE = 304; // Matches the shared palette layout
 // Dithering uniform buffer (extended for palette support):
-// Base (64 bytes) + paletteCount(4) + padding(12) + palette[16](256) = 336 bytes
-const DITHERING_UNIFORM_SIZE = 336;
+// Base (32 bytes) + palette metadata(16) + palette[16](256) = 304 bytes
+const DITHERING_UNIFORM_SIZE = 304;
 // Adjustments (pre-processing) uniform buffer:
 // resolution(8) + brightness(4) + contrast(4) + saturation(4) + padding(12) = 32 bytes
 const ADJUSTMENTS_UNIFORM_SIZE = 32;

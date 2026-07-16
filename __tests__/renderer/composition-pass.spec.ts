@@ -4,6 +4,7 @@ import {
   CompositionPass,
   type CompositionDrawItem,
   type FullSceneBatchKey,
+  type FullSceneTextureRange,
   type PrepareCompositionItemOptions,
 } from "#renderer/composition-pass.ts";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
@@ -38,8 +39,8 @@ describe("CompositionPass instancing", () => {
 
     const upload = device.queue.writeBuffer.mock.calls[0]![2] as ArrayBuffer;
     const floats = new Float32Array(upload);
-    expect(Array.from(floats.slice(0, 5))).toEqual([10, 20, 200, 150, 0]);
-    expect(Array.from(floats.slice(8, 13))).toEqual([30, 40, 200, 150, 0]);
+    expect(Array.from(floats.slice(0, 4))).toEqual([10, 20, 200, 150]);
+    expect(Array.from(floats.slice(6, 10))).toEqual([30, 40, 200, 150]);
 
     pass.destroy();
     expect(instanceBuffer.destroy).toHaveBeenCalledTimes(2);
@@ -82,6 +83,39 @@ describe("CompositionPass instancing", () => {
     releaseImageEntity(final);
   });
 
+  test("packs rotation, visual scale, and flags into a 24-byte instance", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const entity = createTestEntity({ id: "packed-instance", rotation: 90, locked: true });
+    const texture = createTexture();
+    const item = pass.prepareDrawItem({
+      entity,
+      source: { kind: "texture", texture },
+      isSelected: true,
+      debugMode: true,
+      positionOffsetX: 0,
+      positionOffsetY: 0,
+      visualScale: 0.95,
+    });
+
+    pass.drawItems(createRenderPass(), [item]);
+
+    expect(device.queue.writeBuffer.mock.calls[0]![4]).toBe(24);
+    const upload = device.queue.writeBuffer.mock.calls[0]![2] as ArrayBuffer;
+    const packedState = new Uint32Array(upload)[4]!;
+    const rotationDegrees = ((packedState & 0xffff) / 0xffff) * 360;
+    const scaleCode = (packedState >>> 16) & 0x3ff;
+    const visualScale = 0.8 + scaleCode * (0.25 / 1022);
+    expect(rotationDegrees).toBeCloseTo(90, 2);
+    expect(visualScale).toBeCloseTo(0.95, 3);
+    expect(packedState & (1 << 26)).not.toBe(0);
+    expect(packedState & (1 << 27)).not.toBe(0);
+    expect(packedState & (1 << 28)).not.toBe(0);
+
+    pass.destroy();
+    releaseImageEntity(entity);
+  });
+
   test("appends multiple render phases into disjoint instance-buffer ranges", () => {
     const { device } = createDevice();
     const pass = createPass(device);
@@ -99,7 +133,7 @@ describe("CompositionPass instancing", () => {
     pass.drawItems(actionPass, actionItems);
 
     expect(device.queue.writeBuffer.mock.calls[0]![1]).toBe(0);
-    expect(device.queue.writeBuffer.mock.calls[1]![1]).toBe(2 * 32);
+    expect(device.queue.writeBuffer.mock.calls[1]![1]).toBe(2 * 24);
     expect(scenePass.draw).toHaveBeenCalledWith(6, 2, 0, 0);
     expect(actionPass.draw).toHaveBeenCalledWith(6, 1, 0, 2);
 
@@ -130,7 +164,7 @@ describe("CompositionPass instancing", () => {
     expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
     expect(pass.getStats()).toEqual({
       fullSceneBatchRebuilds: 1,
-      fullSceneBatchUploadBytes: 64,
+      fullSceneBatchUploadBytes: 48,
       normalInstanceUploadBytes: 0,
     });
     expect(secondFramePass.draw).toHaveBeenCalledWith(6, 2, 0, 0);
@@ -187,13 +221,13 @@ describe("CompositionPass instancing", () => {
     const textureA = createTexture();
     const textureB = createTexture();
     const key = { ...createFullSceneKey(textureA, 3), texture: null };
-    const items = [
-      prepare(pass, first, textureA),
-      prepare(pass, second, textureA),
-      prepare(pass, third, textureB),
+    const entities = [first, second, third];
+    const textureRanges = [
+      { texture: textureA, firstInstance: 0, instanceCount: 2 },
+      { texture: textureB, firstInstance: 2, instanceCount: 1 },
     ];
 
-    pass.prepareMixedFullSceneBatch(key, items);
+    prepareMixed(pass, key, entities, textureRanges);
     const renderPass = createRenderPass();
     expect(pass.drawFullSceneBatch(renderPass, key)).toBe(true);
     expect(renderPass.draw.mock.calls).toEqual([
@@ -201,7 +235,7 @@ describe("CompositionPass instancing", () => {
       [6, 1, 0, 2],
     ]);
 
-    pass.prepareMixedFullSceneBatch(key, items);
+    prepareMixed(pass, key, entities, textureRanges);
     expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
 
     pass.destroy();
@@ -221,11 +255,15 @@ describe("CompositionPass instancing", () => {
     const textureC = createTexture();
     const key = { ...createFullSceneKey(textureA, 3), texture: null };
 
-    pass.prepareMixedFullSceneBatch(key, [
-      prepare(pass, first, textureA),
-      prepare(pass, second, textureA),
-      prepare(pass, third, textureB),
-    ]);
+    prepareMixed(
+      pass,
+      key,
+      [first, second, third],
+      [
+        { texture: textureA, firstInstance: 0, instanceCount: 2 },
+        { texture: textureB, firstInstance: 2, instanceCount: 1 },
+      ],
+    );
     pass.beginFrame(1);
     pass.drawItems(createRenderPass(), [prepare(pass, first, textureA)]);
     expect(pass.hasFullSceneBatch(key)).toBe(false);
@@ -238,7 +276,7 @@ describe("CompositionPass instancing", () => {
       ]),
     ).toBe(true);
     expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
-    expect(device.queue.writeBuffer.mock.calls[0]![4]).toBe(3 * 32);
+    expect(device.queue.writeBuffer.mock.calls[0]![4]).toBe(3 * 24);
     expect(pass.getStats().fullSceneBatchRebuilds).toBe(1);
 
     const renderPass = createRenderPass();
@@ -276,7 +314,7 @@ describe("CompositionPass instancing", () => {
     ).toBe(true);
     expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
     expect(device.queue.writeBuffer.mock.calls[0]![1]).toBe(0);
-    expect(device.queue.writeBuffer.mock.calls[0]![4]).toBe(32);
+    expect(device.queue.writeBuffer.mock.calls[0]![4]).toBe(24);
     expect(pass.getStats().fullSceneBatchRebuilds).toBe(1);
     expect(pass.drawFullSceneBatch(createRenderPass(), committedKey)).toBe(true);
 
@@ -303,12 +341,17 @@ describe("CompositionPass instancing", () => {
     const textureB = createTexture();
     const key = { ...createFullSceneKey(textureA, 4), texture: null };
 
-    pass.prepareMixedFullSceneBatch(key, [
-      prepare(pass, first, textureA),
-      prepare(pass, second, textureB),
-      prepare(pass, third, textureA),
-      prepare(pass, fourth, textureB),
-    ]);
+    prepareMixed(
+      pass,
+      key,
+      [first, second, third, fourth],
+      [
+        { texture: textureA, firstInstance: 0, instanceCount: 1 },
+        { texture: textureB, firstInstance: 1, instanceCount: 1 },
+        { texture: textureA, firstInstance: 2, instanceCount: 1 },
+        { texture: textureB, firstInstance: 3, instanceCount: 1 },
+      ],
+    );
     const visitor = vi.fn<(texture: GPUTexture) => void>();
 
     expect(pass.visitCachedFullSceneTextures(visitor)).toBe(true);
@@ -344,7 +387,7 @@ describe("CompositionPass instancing", () => {
     };
     expect(
       pass.patchMixedFullSceneBatch(patchedKey, [
-        { index: 1, item: prepare(pass, second, textureB) },
+        { index: 1, entity: second, texture: textureB, isSelected: false },
       ]),
     ).toBe(true);
     const patchedPass = createRenderPass();
@@ -356,13 +399,13 @@ describe("CompositionPass instancing", () => {
     ]);
     expect(pass.getStats()).toMatchObject({
       fullSceneBatchRebuilds: 1,
-      fullSceneBatchUploadBytes: 4 * 32,
+      fullSceneBatchUploadBytes: 4 * 24,
     });
 
     const restoredKey = { ...patchedKey, entityVersion: 3, selectionVersion: 3 };
     expect(
       pass.patchMixedFullSceneBatch(restoredKey, [
-        { index: 1, item: prepare(pass, second, textureA) },
+        { index: 1, entity: second, texture: textureA, isSelected: false },
       ]),
     ).toBe(true);
     const restoredPass = createRenderPass();
@@ -396,15 +439,15 @@ describe("CompositionPass instancing", () => {
     const patchedKey = { ...initialKey, entityVersion: 2, texture: null };
     expect(
       pass.patchMixedFullSceneBatch(patchedKey, [
-        { index: 2, item: prepare(pass, third, textureB) },
-        { index: 0, item: prepare(pass, first, textureC) },
-        { index: 1, item: prepare(pass, second, textureB) },
+        { index: 2, entity: third, texture: textureB, isSelected: false },
+        { index: 0, entity: first, texture: textureC, isSelected: false },
+        { index: 1, entity: second, texture: textureB, isSelected: false },
       ]),
     ).toBe(true);
 
     expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
     expect(device.queue.writeBuffer.mock.calls[0]![1]).toBe(0);
-    expect(device.queue.writeBuffer.mock.calls[0]![4]).toBe(3 * 32);
+    expect(device.queue.writeBuffer.mock.calls[0]![4]).toBe(3 * 24);
     const renderPass = createRenderPass();
     expect(pass.drawFullSceneBatch(renderPass, patchedKey)).toBe(true);
     expect(renderPass.draw.mock.calls).toEqual([
@@ -437,10 +480,10 @@ describe("CompositionPass instancing", () => {
     pass.prepareFullSceneBatch({ ...key, entities: [first, second], selectedEntityIds });
     const upload = device.queue.writeBuffer.mock.calls[0]![2] as ArrayBuffer;
     const uints = new Uint32Array(upload);
-    expect(uints[5]).toBe(1);
-    expect(uints[6]).toBe(1);
-    expect(uints[13]).toBe(0);
-    expect(uints[14]).toBe(1);
+    expect(uints[4]! & (1 << 26)).not.toBe(0);
+    expect(uints[4]! & (1 << 27)).not.toBe(0);
+    expect(uints[10]! & (1 << 26)).toBe(0);
+    expect(uints[10]! & (1 << 27)).not.toBe(0);
 
     const renderPass = createRenderPass();
     expect(pass.drawFullSceneBatch(renderPass, key)).toBe(true);
@@ -579,6 +622,20 @@ function prepare(
     visualScale: 1,
   };
   return pass.prepareDrawItem(options);
+}
+
+function prepareMixed(
+  pass: CompositionPass,
+  key: FullSceneBatchKey,
+  entities: readonly ShaderCanvasEntity[],
+  textureRanges: readonly FullSceneTextureRange[],
+): void {
+  pass.prepareMixedFullSceneBatch({
+    ...key,
+    entities,
+    selectedEntityIds: new Set(),
+    textureRanges,
+  });
 }
 
 function cloneImageEntity(

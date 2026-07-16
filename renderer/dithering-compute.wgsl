@@ -1,5 +1,24 @@
 // Error diffusion dithering compute shader with multi-color palette support
 // Processes image row-by-row with error propagation
+//
+// PERFORMANCE NOTE: Error-diffusion kinds are currently disabled in the UI. Before
+// re-enabling them, reduce the error-buffer and output-copy bandwidth:
+//
+// - The current array<vec4f> stores 16 bytes per pixel even though alpha error is
+//   always zero. Use separate pipelines/layouts for the uniform modes:
+//   - monochrome two-color diffusion: array<f32> (4 bytes/pixel, 75% smaller)
+//   - RGB/palette diffusion: pack RGB error into two u32 values with
+//     pack2x16float/unpack2x16float (8 bytes/pixel, 50% smaller)
+// - Let the persistent processed output texture include STORAGE_BINDING usage and
+//   bind it directly as outputTexture. The current implementation writes an
+//   rgba16float intermediate and then copyTextureToTexture() copies it to the
+//   processed output, adding one full-texture read and write.
+//
+// At 3840x2160 the current error buffer is 126.56 MiB. The packed RGB layout
+// would use 63.28 MiB and the monochrome layout 31.64 MiB. Removing the
+// rgba16float output copy also avoids about 126.56 MiB of texture traffic per
+// execution. Keep the current implementation unchanged while the feature is
+// disabled; validate visual parity and GPU timestamps when implementing this.
 
 struct Uniforms {
   resolution: vec2f,       // Image dimensions (offset 0)
@@ -9,14 +28,11 @@ struct Uniforms {
   shape: u32,              // Unused (offset 20)
   preserveColors: u32,     // 0 = mono, 1 = per-channel RGB (offset 24)
   ditheringKind: u32,      // Algorithm index: 5-11 for error diffusion (offset 28)
-  color: vec4f,            // Foreground color for mono mode (offset 32)
-  background: vec4f,       // Background color for mono mode (offset 48)
-  // Extended palette data (offset 64+)
-  paletteCount: u32,       // Number of colors in palette (2-16) (offset 64)
-  _pad0: u32,              // Padding for alignment (offset 68)
-  is_p3: u32,              // 1 = Display P3, 0 = sRGB (offset 72)
-  _pad2: u32,              // Padding for alignment (offset 76)
-  palette: array<vec4f, 16>, // Color palette (offset 80, 256 bytes)
+  paletteCount: u32,       // Number of colors in palette (2-16) (offset 32)
+  _pad0: u32,              // Padding for alignment (offset 36)
+  is_p3: u32,              // 1 = Display P3, 0 = sRGB (offset 40)
+  _pad2: u32,              // Padding for alignment (offset 44)
+  palette: array<vec4f, 16>, // Color palette (offset 48, 256 bytes)
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;

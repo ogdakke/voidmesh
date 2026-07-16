@@ -40,6 +40,10 @@ function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
 }
 
 export class GlassShader extends ShaderPass {
+  protected override get uniformBufferSize(): number {
+    return 48;
+  }
+
   #flutedPipeline: GPURenderPipeline | null = null;
   #flowingPipeline: GPURenderPipeline | null = null;
   #flowingImmediatePipeline: GPURenderPipeline | null = null;
@@ -377,7 +381,7 @@ export class GlassShader extends ShaderPass {
 
     const buffer = this.ctx.device.createBuffer({
       label: `GlassShader flowing immediate uniforms ${entityId}`,
-      size: this.ctx.uniformData.byteLength,
+      size: this.uniformBufferSize,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     this.#flowingImmediateUniformBuffers.set(entityId, buffer);
@@ -388,11 +392,11 @@ export class GlassShader extends ShaderPass {
     this.writeUniforms(entity);
     this.ctx.floatView[6] = 0;
 
-    const bytes = new Uint8Array(this.ctx.uniformData);
+    const bytes = new Uint8Array(this.ctx.uniformData, 0, this.uniformBufferSize);
     const cached = this.#flowingImmediateUniformDataCache.get(entity.id);
     const buffer = this.#getFlowingImmediateUniformBuffer(entity.id);
     if (!cached || !equalBytes(cached, bytes)) {
-      this.ctx.device.queue.writeBuffer(buffer, 0, this.ctx.uniformData);
+      this.ctx.device.queue.writeBuffer(buffer, 0, this.ctx.uniformData, 0, this.uniformBufferSize);
       this.#flowingImmediateUniformDataCache.set(entity.id, new Uint8Array(bytes));
     }
     return buffer;

@@ -250,6 +250,56 @@ describe("deserialize workspace", () => {
     expect(entities[0].imageBitmap).toBe(entities[1].imageBitmap);
   });
 
+  test("shares immutable shader trees and palettes while isolating animation state", async () => {
+    const originalPalette: ColorPalette = {
+      id: "original",
+      name: "Original",
+      shortName: "Original",
+      colors: [
+        [0.1, 0.2, 0.3, 1],
+        [0.8, 0.9, 1, 1],
+      ],
+    };
+    const first = {
+      ...createSerializedImageEntity("entity-1", "media/shared.png"),
+      originalPalette: structuredClone(originalPalette),
+    };
+    first.shaderParams.time = 1;
+    const second = {
+      ...createSerializedImageEntity("entity-2", "media/shared.png"),
+      originalPalette: structuredClone(originalPalette),
+    };
+    second.shaderParams.time = 2;
+    const archive = createManifestArchive(
+      {
+        type: "studio-canvas",
+        version: CURRENT_VERSION,
+        createdAt: new Date("2026-07-16T10:00:00.000Z").toISOString(),
+        viewport: { offset: { x: 0, y: 0 }, zoom: 1 },
+        entities: [first, second],
+        palettes: [],
+      },
+      { "media/shared.png": new Uint8Array([1, 2, 3]) },
+    );
+
+    const result = await deserializeIntoCanvas(archive);
+    const entities = [...canvasStore.getState().entities.values()];
+    const firstEntity = entities[0]!;
+    const secondEntity = entities[1]!;
+
+    expect(result.success).toBe(true);
+    expect(firstEntity.shaderParams).not.toBe(secondEntity.shaderParams);
+    expect(firstEntity.shaderParams.postProcess).toBe(secondEntity.shaderParams.postProcess);
+    expect(firstEntity.shaderParams.adjustments).toBe(secondEntity.shaderParams.adjustments);
+    expect(firstEntity.shaderParams.palette).toBe(secondEntity.shaderParams.palette);
+    expect(firstEntity.originalPalette).toBe(secondEntity.originalPalette);
+    expect(firstEntity.shaderParams.time).toBe(1);
+    expect(secondEntity.shaderParams.time).toBe(2);
+
+    firstEntity.shaderParams.time = 9;
+    expect(secondEntity.shaderParams.time).toBe(2);
+  });
+
   test("chunks large shared-image workspaces and restores them atomically", async () => {
     const decodingIndexes: number[] = [];
     let notifications = 0;

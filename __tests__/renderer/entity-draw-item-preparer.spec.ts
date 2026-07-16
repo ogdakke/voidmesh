@@ -9,6 +9,7 @@ import type {
   FullSceneInstancePatch,
   FullSceneTextureRange,
   PrepareFullSceneBatchOptions,
+  PrepareMixedFullSceneBatchOptions,
 } from "#renderer/composition-pass.ts";
 import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
 import { createTestEntity } from "../helpers/test-entity.ts";
@@ -103,6 +104,7 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     expect(harness.preparer.prepare(harness.options).fullSceneBatch).not.toBeNull();
     expect(harness.compositionPass.prepareFullSceneBatch).not.toHaveBeenCalled();
     expect(harness.compositionPass.prepareMixedFullSceneBatch).toHaveBeenCalledOnce();
+    expect(harness.compositionPass.prepareDrawItem).not.toHaveBeenCalled();
 
     harness.options.viewport = { offset: { x: 0, y: 0 }, zoom: 0.1 };
     harness.options.mixedFullSceneBatchMode = "reuse";
@@ -555,12 +557,12 @@ function createHarness(
       cachedKey = { ...options };
       retainedKey = { ...options };
     }),
-    prepareMixedFullSceneBatch: vi.fn<
-      (key: FullSceneBatchKey, items: readonly CompositionDrawItem[]) => void
-    >((key) => {
-      cachedKey = { ...key };
-      retainedKey = { ...key };
-    }),
+    prepareMixedFullSceneBatch: vi.fn<(options: PrepareMixedFullSceneBatchOptions) => void>(
+      (options) => {
+        cachedKey = { ...options };
+        retainedKey = { ...options };
+      },
+    ),
     restoreFullSceneBatch: vi.fn<
       (key: FullSceneBatchKey, ranges: readonly FullSceneTextureRange[]) => boolean
     >((key) => {

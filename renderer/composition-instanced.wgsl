@@ -9,14 +9,12 @@ struct ViewportUniforms {
   _padding: f32,
 }
 
-// Eight 32-bit values, 32-byte storage-buffer stride.
+// Four geometry floats plus packed rotation/scale/flags, 24-byte storage-buffer stride.
 struct EntityInstance {
   position: vec2f,
   size: vec2f,
-  rotation: f32,
-  isSelected: u32,
-  flags: u32,
-  scale: f32,
+  packedState: u32,
+  _padding: u32,
 }
 
 struct InteractionUniforms {
@@ -33,6 +31,31 @@ struct InteractionUniforms {
 @group(0) @binding(4) var<uniform> interaction: InteractionUniforms;
 
 const BORDER_PX: f32 = 2.0;
+const TAU: f32 = 6.283185307179586;
+const ROTATION_MASK: u32 = 0xffffu;
+const ROTATION_TO_RADIANS: f32 = TAU / 65535.0;
+const SCALE_MASK: u32 = 0x3ffu;
+const SCALE_MIN: f32 = 0.8;
+const SCALE_RANGE: f32 = 0.25;
+const SCALE_EXACT_ONE: u32 = 1023u;
+const SCALE_DIVISOR: f32 = 1022.0;
+const FLAG_SELECTED: u32 = 1u << 26u;
+const FLAG_DEBUG: u32 = 1u << 27u;
+const FLAG_LOCKED: u32 = 1u << 28u;
+
+fn instanceRotation(entity: EntityInstance) -> f32 {
+  return f32(entity.packedState & ROTATION_MASK) * ROTATION_TO_RADIANS;
+}
+
+fn instanceScale(entity: EntityInstance) -> f32 {
+  let packedScale = (entity.packedState >> 16u) & SCALE_MASK;
+  let quantized = SCALE_MIN + f32(packedScale) * (SCALE_RANGE / SCALE_DIVISOR);
+  return select(quantized, 1.0, packedScale == SCALE_EXACT_ONE);
+}
+
+fn hasInstanceFlag(entity: EntityInstance, flag: u32) -> bool {
+  return (entity.packedState & flag) != 0u;
+}
 
 struct VertexOutput {
   @builtin(position) position: vec4f,
@@ -85,9 +108,10 @@ fn vs_main(
   let entity = entities[instanceIndex];
   let localPos = localPositions[vertexIndex];
   let uv = uvs[vertexIndex];
-  let scaledSize = entity.size * entity.scale;
+  let scale = instanceScale(entity);
+  let scaledSize = entity.size * scale;
   let scaleOffset = (entity.size - scaledSize) * 0.5;
-  let selected = entity.isSelected == 1u;
+  let selected = hasInstanceFlag(entity, FLAG_SELECTED);
   let borderExpand = select(
     vec2f(0.0),
     vec2f(
@@ -102,8 +126,9 @@ fn vs_main(
   var worldPos = expandedLocalPos * scaledSize;
   let center = scaledSize * 0.5;
   let centered = worldPos - center;
-  let cosR = cos(entity.rotation);
-  let sinR = sin(entity.rotation);
+  let rotation = instanceRotation(entity);
+  let cosR = cos(rotation);
+  let sinR = sin(rotation);
   worldPos = vec2f(
     centered.x * cosR - centered.y * sinR,
     centered.x * sinR + centered.y * cosR,
@@ -120,8 +145,8 @@ fn vs_main(
   var output: VertexOutput;
   output.position = vec4f(clipPos, 0.0, 1.0);
   output.uv = expandedUV;
-  output.isSelected = entity.isSelected;
-  output.debugMode = entity.flags & 1u;
+  output.isSelected = select(0u, 1u, selected);
+  output.debugMode = select(0u, 1u, hasInstanceFlag(entity, FLAG_DEBUG));
   return output;
 }
 
@@ -150,10 +175,12 @@ fn vs_interactive(
   let entity = entities[instanceIndex];
   let localPos = localPositions[vertexIndex];
   let uv = uvs[vertexIndex];
-  let cosR = cos(entity.rotation);
-  let sinR = sin(entity.rotation);
-  let baseSelected = entity.isSelected == 1u;
-  let locked = (entity.flags & 2u) != 0u;
+  let rotation = instanceRotation(entity);
+  let scale = instanceScale(entity);
+  let cosR = cos(rotation);
+  let sinR = sin(rotation);
+  let baseSelected = hasInstanceFlag(entity, FLAG_SELECTED);
+  let locked = hasInstanceFlag(entity, FLAG_LOCKED);
   var selected = baseSelected;
   if (interaction.dragSelectMode != 0u) {
     let inDragSelection = !locked && intersectsDragSelection(entity, cosR, sinR);
@@ -165,7 +192,7 @@ fn vs_interactive(
     }
   }
   let hasDragTransform = interaction.dragScale > 0.0;
-  let selectedScale = select(entity.scale, interaction.dragScale, selected && hasDragTransform);
+  let selectedScale = select(scale, interaction.dragScale, selected && hasDragTransform);
   let selectedOffset = select(vec2f(0.0), interaction.dragOffset, selected && hasDragTransform);
   let scaledSize = entity.size * selectedScale;
   let scaleOffset = (entity.size - scaledSize) * 0.5;
@@ -201,7 +228,7 @@ fn vs_interactive(
   output.position = vec4f(clipPos, 0.0, 1.0);
   output.uv = expandedUV;
   output.isSelected = select(0u, 1u, selected);
-  output.debugMode = entity.flags & 1u;
+  output.debugMode = select(0u, 1u, hasInstanceFlag(entity, FLAG_DEBUG));
   return output;
 }
 

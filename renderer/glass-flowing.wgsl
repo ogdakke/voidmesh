@@ -1,7 +1,7 @@
 // Flowing glass shader - simulates thick organic glass with flowing wave distortion
 // Multi-frequency wave interference, chromatic dispersion (prism RGB splitting),
 // physically-based caustics, and Fresnel edge highlights
-// Uniform buffer layout (336 bytes, 16-byte aligned) - shared with other shaders
+// Uniform buffer layout (48 bytes, 16-byte aligned)
 struct Uniforms {
   resolution: vec2f,       // Canvas dimensions (offset 0)
   scale: f32,              // Wave amplitude / curvature depth 0.1-3.0 (offset 8)
@@ -10,13 +10,10 @@ struct Uniforms {
   dispersion: f32,         // Chromatic channel separation 0-1 (offset 20)
   time: f32,               // Animation time in seconds (offset 24)
   flow: f32,               // Ridge undulation 0=straight, 1=very wavy (offset 28)
-  color: vec4f,            // Unused (offset 32)
-  background: vec4f,       // Unused (offset 48)
-  paletteCount: u32,       // Unused (offset 64)
+  _unused: u32,
   _pad0: u32,
   _pad1: u32,
   _pad2: u32,
-  palette: array<vec4f, 16>,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;

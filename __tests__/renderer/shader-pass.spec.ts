@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { config } from "#config";
 import { DitheringShader } from "#renderer/shaders/dithering-shader.ts";
 import { ShaderPass, type ShaderContext } from "#renderer/shaders/shader-pass.ts";
 import type { EffectRenderEntity } from "#renderer/effect-render-entity.ts";
@@ -13,7 +14,7 @@ describe("ShaderPass", () => {
     vi.unstubAllGlobals();
   });
 
-  test("destroys a removed entity's cached uniform buffer", () => {
+  test("reuses peak per-frame uniform buffer slots across entity identities", () => {
     const firstBuffer = createBuffer();
     const secondBuffer = createBuffer();
     const createBufferMock = vi
@@ -21,18 +22,25 @@ describe("ShaderPass", () => {
       .mockReturnValueOnce(firstBuffer)
       .mockReturnValueOnce(secondBuffer);
     const pass = new TestShaderPass(createContext(createBufferMock));
-    const entity = createRenderEntity("shader-entity", 1);
+    const firstEntity = createRenderEntity("shader-entity-first", 1);
+    const secondEntity = createRenderEntity("shader-entity-second", 1);
+    const laterEntity = createRenderEntity("shader-entity-later", 1);
 
-    expect(pass.allocateUniforms(entity)).toBe(firstBuffer);
-    expect(pass.allocateUniforms(entity)).toBe(firstBuffer);
-    expect(createBufferMock).toHaveBeenCalledOnce();
-
-    pass.removeEntity(entity.id);
-    expect(firstBuffer.destroy).toHaveBeenCalledOnce();
-
-    expect(pass.allocateUniforms(entity)).toBe(secondBuffer);
+    pass.beginFrame();
+    expect(pass.allocateUniforms(firstEntity)).toBe(firstBuffer);
+    expect(pass.allocateUniforms(secondEntity)).toBe(secondBuffer);
     expect(createBufferMock).toHaveBeenCalledTimes(2);
+    expect(createBufferMock.mock.calls[0]![0].size).toBe(304);
+
+    pass.beginFrame();
+    expect(pass.allocateUniforms(laterEntity)).toBe(firstBuffer);
+    expect(createBufferMock).toHaveBeenCalledTimes(2);
+    pass.removeEntity(firstEntity.id);
+    expect(firstBuffer.destroy).not.toHaveBeenCalled();
+
     pass.destroy();
+    expect(firstBuffer.destroy).toHaveBeenCalledOnce();
+    expect(secondBuffer.destroy).toHaveBeenCalledOnce();
   });
 
   test("scales pixel-space uniforms without changing dimensionless shader scale", () => {
@@ -60,6 +68,44 @@ describe("ShaderPass", () => {
     expect(context.floatView[2]).toBe(0.5);
     expect(context.floatView[4]).toBe(10);
   });
+
+  test("writes fallback palette metadata immediately after the base uniforms", () => {
+    const context = createContext(vi.fn<GPUDevice["createBuffer"]>());
+    const pass = new TestShaderPass(context);
+    const entity = createRenderEntity("compact-palette", 1);
+    entity.shaderParams.palette = undefined;
+
+    pass.write(entity);
+
+    expect(context.uniformData.byteLength).toBe(304);
+    expect(context.uintView[8]).toBe(2);
+    expect(context.uintView[9]).toBe(entity.shaderParams.ascii?.invert ? 1 : 0);
+    expect(context.uintView[10]).toBe(0);
+    for (let index = 0; index < 4; index++) {
+      expect(context.floatView[12 + index]).toBeCloseTo(entity.shaderParams.background[index]!);
+      expect(context.floatView[16 + index]).toBeCloseTo(entity.shaderParams.color[index]!);
+    }
+  });
+
+  test("supports shader-specific uniform buffer and upload sizes", () => {
+    const buffer = createBuffer();
+    const createBufferMock = vi.fn<GPUDevice["createBuffer"]>(() => buffer);
+    const context = createContext(createBufferMock);
+    const pass = new CompactTestShaderPass(context);
+    const entity = createRenderEntity("compact-shader", 1);
+
+    expect(pass.allocateUniforms(entity)).toBe(buffer);
+    expect(createBufferMock.mock.calls[0]![0].size).toBe(48);
+    expect(context.device.queue.writeBuffer).toHaveBeenCalledWith(
+      buffer,
+      0,
+      context.uniformData,
+      0,
+      48,
+    );
+
+    pass.destroy();
+  });
 });
 
 class TestShaderPass extends ShaderPass {
@@ -75,6 +121,12 @@ class TestShaderPass extends ShaderPass {
 
   write(entity: EffectRenderEntity): void {
     this.writeUniforms(entity);
+  }
+}
+
+class CompactTestShaderPass extends TestShaderPass {
+  protected override get uniformBufferSize(): number {
+    return 48;
   }
 }
 
@@ -94,7 +146,7 @@ function createBuffer(): GPUBuffer {
 }
 
 function createContext(createBuffer: GPUDevice["createBuffer"]): ShaderContext {
-  const uniformData = new ArrayBuffer(336);
+  const uniformData = new ArrayBuffer(config.rendering.ditheringUniformSize);
   return {
     device: {
       createBuffer,
