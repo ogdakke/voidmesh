@@ -5,7 +5,13 @@ import { boundsIntersect, getRotatedAABB, getViewportWorldBounds } from "#lib/ca
 import { getFrameAtTime } from "#lib/gif-decoder.ts";
 import { setGpuContext } from "./gpu-color-space.ts";
 import type { DisintegrationRenderOverlay, RenderState } from "#engine";
-import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
+import {
+  MediaType,
+  type Bounds,
+  type MinimapConfig,
+  type ShaderCanvasEntity,
+  type Viewport,
+} from "#types/canvas.ts";
 import { CanvasLensing } from "#types/enums.ts";
 import { ActionLayerBlurPass } from "./action-layer-blur-pass.ts";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
@@ -28,7 +34,7 @@ import { ExternalTextureCopyPass } from "./external-texture-copy-pass.ts";
 import type { ImageExportOptions } from "./export-formats.ts";
 import { detectGpuColorConfig, type GpuColorConfig } from "./gpu-color-space.ts";
 import { GridPass } from "./grid-pass.ts";
-import { MinimapPass, type MinimapConfig } from "./minimap-pass.ts";
+import { MinimapPass } from "./minimap-pass.ts";
 import type { ByteBudgetCacheStats } from "./byte-budget-cache.ts";
 import { SelectionRectPass } from "./selection-rect-pass.ts";
 import { TexturePool, type TexturePoolStats } from "./texture-pool.ts";
@@ -38,7 +44,7 @@ import type { WlurOverlayConfig } from "./wlur-overlay.ts";
 import { WlurOverlayPass } from "./wlur-overlay-pass.ts";
 
 export type { ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
-export type { MinimapConfig } from "./minimap-pass.ts";
+export type { MinimapConfig } from "#types/canvas.ts";
 
 export interface RendererResourceStats {
   entityTextures: EntityTextureResidencyStats;

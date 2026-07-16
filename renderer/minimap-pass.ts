@@ -1,32 +1,7 @@
 import { getRotatedAABB } from "#lib/canvas-math.ts";
-import type { Bounds, ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
+import type { Bounds, MinimapConfig, ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
 import { CopyPass } from "./copy-pass.ts";
 import minimapShaderSource from "./minimap.wgsl?raw";
-
-export interface MinimapConfig {
-  enabled: boolean;
-  width: number;
-  height: number;
-  borderRadius: number;
-  margin: number;
-  worldPaddingScale: number;
-  dragSensitivity: number;
-  backdropScale: number;
-  backdropBlur: number;
-  mapOpacity: number;
-  mapTint: [number, number, number];
-  entityOpacity: number;
-  entityColor: [number, number, number];
-  strength: number;
-  edgeWidth: number;
-  falloff: number;
-  dispersion: number;
-  scale: number;
-  reflectionIntensity: number;
-  reflectionFocus: number;
-  occlusion: number;
-  vignette: number;
-}
 
 interface EncodeMinimapOptions {
   encoder: GPUCommandEncoder;
@@ -316,7 +291,10 @@ export class MinimapPass {
     this.#bindGroup = null;
   }
 
-  #getOrCreateTexture(width: number, height: number): { texture: GPUTexture; view: GPUTextureView } {
+  #getOrCreateTexture(
+    width: number,
+    height: number,
+  ): { texture: GPUTexture; view: GPUTextureView } {
     const scale = Math.max(0.05, Math.min(this.#config.backdropScale, 1));
     const textureWidth = Math.max(1, Math.floor(width * scale));
     const textureHeight = Math.max(1, Math.floor(height * scale));
@@ -335,7 +313,12 @@ export class MinimapPass {
         GPUTextureUsage.COPY_DST |
         GPUTextureUsage.COPY_SRC,
     });
-    this.#texture = { width: textureWidth, height: textureHeight, texture, view: texture.createView() };
+    this.#texture = {
+      width: textureWidth,
+      height: textureHeight,
+      texture,
+      view: texture.createView(),
+    };
     return this.#texture;
   }
 }

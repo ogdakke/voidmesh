@@ -17,6 +17,31 @@ export interface ViewportLensDistortionConfig {
   vignetteDark: number;
 }
 
+export interface MinimapConfig {
+  enabled: boolean;
+  width: number;
+  height: number;
+  borderRadius: number;
+  margin: number;
+  worldPaddingScale: number;
+  dragSensitivity: number;
+  backdropScale: number;
+  backdropBlur: number;
+  mapOpacity: number;
+  mapTint: [number, number, number];
+  entityOpacity: number;
+  entityColor: [number, number, number];
+  strength: number;
+  edgeWidth: number;
+  falloff: number;
+  dispersion: number;
+  scale: number;
+  reflectionIntensity: number;
+  reflectionFocus: number;
+  occlusion: number;
+  vignette: number;
+}
+
 /** 2D point in world coordinates */
 export interface Point {
   x: number;

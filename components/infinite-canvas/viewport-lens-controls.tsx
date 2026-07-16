@@ -44,7 +44,7 @@ export default function ViewportLensControls({
     const next: MinimapConfig = { ...minimapConfig, ...updates };
     setMinimapConfig(next);
     renderer.setMinimapConfig(next);
-    canvasStore.setContainerDirty();
+    interaction.markContainerDirty();
   };
 
   const handlePanelPointerDown = (event: PointerEvent) => {

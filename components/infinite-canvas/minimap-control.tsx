@@ -1,5 +1,9 @@
-import { useCanvasCommands, useViewport } from "#context/use-canvas.ts";
-import { canvasStore, gameLoop, viewportAnimation } from "#engine";
+import {
+  useCanvasCommands,
+  useCanvasInteraction,
+  useCanvasSelector,
+  useViewport,
+} from "#context/use-canvas.ts";
 import { getRotatedAABB } from "#lib/canvas-math.ts";
 import { config } from "#lib/config/index.ts";
 import { useRef } from "react";
@@ -39,11 +43,13 @@ export function MinimapControl({
 }) {
   const viewport = useViewport();
   const { setViewport } = useCanvasCommands();
+  const interaction = useCanvasInteraction();
+  const entities = useCanvasSelector((state) => state.entities);
   const dragStateRef = useRef<{
     pointerId: number;
     startX: number;
     startY: number;
-    startViewport: ReturnType<typeof canvasStore.getViewport>;
+    startViewport: typeof viewport;
     startCenter: { x: number; y: number };
     worldSize: { width: number; height: number };
     dragging: boolean;
@@ -53,7 +59,7 @@ export function MinimapControl({
   const borderRadius = config.canvas.minimap.borderRadius;
   const margin = config.canvas.minimap.margin;
 
-  const getMinimapWorldSize = (currentViewport: ReturnType<typeof canvasStore.getViewport>) => {
+  const getMinimapWorldSize = (currentViewport: typeof viewport) => {
     const container = containerRef.current;
     if (!container) return null;
 
@@ -70,7 +76,7 @@ export function MinimapControl({
     let maxX = viewportRect.x + viewportRect.width;
     let maxY = viewportRect.y + viewportRect.height;
 
-    for (const entity of canvasStore.getState().entities.values()) {
+    for (const entity of entities.values()) {
       const bounds = getRotatedAABB(entity.position, entity.size, entity.rotation);
       minX = Math.min(minX, bounds.x);
       minY = Math.min(minY, bounds.y);
@@ -148,14 +154,13 @@ export function MinimapControl({
     const container = containerRef.current;
     if (!container) return;
 
-    const startViewport = canvasStore.getViewport();
+    const startViewport = viewport;
     const worldSize = getMinimapWorldSize(startViewport);
     if (!worldSize) return;
 
     e.preventDefault();
     containerRef.current?.focus();
-    gameLoop.stopMomentum();
-    viewportAnimation.cancel();
+    interaction.stopViewportMotion();
     e.currentTarget.setPointerCapture(e.pointerId);
     dragStateRef.current = {
       pointerId: e.pointerId,

@@ -10,6 +10,7 @@ import {
   ShaderType,
   type RGBA,
   type ColorMode,
+  type MinimapConfig,
   type ViewportLensDistortionConfig,
   GlassKind,
   GlitchKind,
@@ -19,7 +20,6 @@ import type { easings } from "../canvas-math";
 import { palettes } from "./palettes.config";
 import { DecelerationRate } from "../touch-scroll";
 import { type ActionLayerConfig, actionLayerDefaults } from "./action-layer.config";
-import type { MinimapConfig } from "#renderer/canvas-renderer.ts";
 import { CanvasLensing } from "#types/enums.ts";
 
 // ============================================================================
