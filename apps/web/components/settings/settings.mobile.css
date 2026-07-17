@@ -3,6 +3,8 @@
 }
 
 .settings-drawer-popup {
+  --settings-page-inline-space: calc(4 * var(--spacing));
+  --settings-carousel-bottom-space: calc(20 * var(--spacing));
   overflow: hidden;
 }
 
@@ -43,7 +45,9 @@
 .settings-drawer-inner {
   display: flex;
   flex-direction: column;
-  padding-bottom: calc(var(--spacing-12) + env(safe-area-inset-bottom, 0px));
+  padding: 0 max(var(--settings-page-inline-space), env(safe-area-inset-right, 0px))
+    calc(var(--settings-carousel-bottom-space) + env(safe-area-inset-bottom, 0px))
+    max(var(--settings-page-inline-space), env(safe-area-inset-left, 0px));
 }
 
 .settings-drawer-account {
@@ -86,8 +90,9 @@
   display: flex;
   flex-direction: column;
   gap: var(--spacing-5);
-  padding: var(--spacing-4) var(--spacing-5)
-    calc(var(--spacing-12) + env(safe-area-inset-bottom, 0px));
+  padding: var(--spacing-4) max(var(--settings-page-inline-space), env(safe-area-inset-right, 0px))
+    calc(var(--settings-carousel-bottom-space) + env(safe-area-inset-bottom, 0px))
+    max(var(--settings-page-inline-space), env(safe-area-inset-left, 0px));
 }
 
 .settings-page-heading {
