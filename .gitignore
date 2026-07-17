@@ -69,6 +69,8 @@ web_modules/
 .env
 .env.*
 !.env.example
+.dev.vars
+.wrangler/
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
@@ -144,8 +146,8 @@ vite.config.ts.timestamp-*
 # data
 data/
 traces/
-bench/results/*
-!bench/results/.gitkeep
+apps/web/bench/results/*
+!apps/web/bench/results/.gitkeep
 
 # msdf-atlas-gen build tool (cloned and built locally)
 msdf-atlas-gen/

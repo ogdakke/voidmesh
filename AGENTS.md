@@ -1,37 +1,33 @@
-# Voidmesh
+# Voidmesh Monorepo
 
-Infinite-canvas React application with real-time WebGPU effects for images, videos, GIFs, and SVGs.
+Voidmesh combines a permanently free local canvas with optional authenticated hosted workspaces.
 
 ## Architecture
 
-- `types/` — Domain types and enums; bottom of the dependency graph.
-- `lib/` — Pure utilities, media ownership, serialization, undo, math, and stores.
-- `engine/` — GPU-agnostic canvas state, input, animation, and frame scheduling.
-- `renderer/` — WebGPU rendering, shaders, resource caches, and export.
-- `application/` — Framework-free use cases and narrow subsystem interfaces.
-- `context/` — React composition root connecting application, engine, and renderer.
-- `hooks/` — React adapters for context/application capabilities and DOM events.
-- `components/` — Feature UI; `components/ui/` contains domain-free primitives.
+- `apps/web/` — React/Vite/WebGPU client; see its `AGENTS.md`.
+- `apps/api/` — Cloudflare Workers API and Durable Objects; see its `AGENTS.md`.
+- `packages/domain/` — platform-neutral product policy and identifiers.
+- `packages/api-contract/` — versioned HTTP/WebSocket transport contracts.
+- `packages/wlur/` — local rendering package consumed by the web app.
+- `docs/hosted-workspaces-specification.md` — authoritative hosted-product behavior.
 
 Read the nearest subsystem `AGENTS.md` before editing that area.
 
 ## Stack and Imports
 
-React 19 with Compiler, Vite 8, WebGPU, strict TypeScript, Bun, oxlint.
+React 19 with Compiler, Vite 8, WebGPU, Cloudflare Workers/D1/R2/Durable Objects, strict TypeScript, Bun, oxlint.
 
-Cross-module imports use the `#...` aliases in `package.json#imports`. Do not bypass module boundaries with relative cross-subsystem imports. Only `engine/index.ts` and `types/index.ts` are barrel exports.
+Workspace packages depend on public package exports; never import another package's internals by filesystem path. Package-local rules govern imports within each workspace.
 
 ## Required Conventions
 
-- Use `createEnum()` from `types/index.ts`; never use TypeScript `enum`.
+- Use `createEnum()` from `@voidmesh/domain/enum`; never use TypeScript `enum`.
 - Use native `#` private fields, not the `private` keyword.
 - Never use `typeof import("...").Type`; write a normal type import or local type alias.
-- Do not add `"use client"` or `"use server"`; this is a SPA.
 - Do not import package internals. Use the public API and `opensrc path <package>` when source inspection is needed.
 - Do not add fallback behavior unless it is necessary and the reason is documented.
-- UI reads canvas state through narrow selectors and writes through commands/application services. Components and hooks do not import engine singletons.
-- GPU resources require explicit cleanup. Share immutable media/GPU work by asset/effect identity; entity IDs represent ownership, not resource identity.
-- Multi-entity actions use bulk store mutations and one undo command.
+- D1 is authoritative for accounts, access, entitlements, metadata, quotas, and lifecycle. R2 stores opaque bytes. One workspace Durable Object serializes live Yjs updates and ephemeral presence.
+- Every hosted workspace route and asset transfer requires authenticated membership authorization. Never authorize from an object key, client claim, or invitation token alone.
 
 ## Validation
 

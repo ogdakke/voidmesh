@@ -1,6 +1,14 @@
 # Voidmesh
 
-[voidmesh](https://voidmesh.xyz) is an infinite-canvas image/video filter tool built using WebGPU and React. It's a private, local application. Your data does not leave the browser, all computation is done locally on your device.
+[voidmesh](https://voidmesh.xyz) is an infinite-canvas image/video filter tool built using WebGPU and React. The local product remains usable without an account; optional hosted workspaces add authenticated storage and collaboration on Cloudflare.
+
+This is a Bun monorepo:
+
+- `apps/web` — the React/Vite/WebGPU client
+- `apps/api` — the Cloudflare Workers API and workspace Durable Object
+- `packages/domain` — shared hosted-product policies and types
+- `packages/api-contract` — transport contracts shared by the client and API
+- `packages/wlur` — the local rendering package
 
 ## Development
 
@@ -8,8 +16,12 @@
 # install deps
 bun i
 
-# run development server
+# run the web app and Workers API
 bun dev
+
+# or run one side
+bun run dev:web
+bun run dev:api
 ```
 
 ## Production build
@@ -17,3 +29,5 @@ bun dev
 ```sh
 bun run build
 ```
+
+The hosted product specification lives in [`docs/hosted-workspaces-specification.md`](docs/hosted-workspaces-specification.md).

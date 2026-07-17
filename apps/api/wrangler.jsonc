@@ -1,0 +1,78 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "voidmesh-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-17",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "ENVIRONMENT": "development",
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ASSETS",
+    },
+    {
+      "binding": "SECURITY_AUDIT",
+    },
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "WORKSPACE_EXPORTS",
+        "queue": "voidmesh-workspace-exports",
+      },
+      {
+        "binding": "SECURITY_AUDIT_EVENTS",
+        "queue": "voidmesh-security-audit",
+      },
+    ],
+    "consumers": [
+      {
+        "queue": "voidmesh-workspace-exports",
+        "max_batch_size": 1,
+        "max_retries": 3,
+      },
+      {
+        "queue": "voidmesh-security-audit",
+        "max_batch_size": 100,
+        "max_batch_timeout": 5,
+        "max_retries": 10,
+        "dead_letter_queue": "voidmesh-security-audit-dlq",
+      },
+    ],
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "WORKSPACE_ROOMS",
+        "class_name": "WorkspaceRoom",
+      },
+    ],
+  },
+  "exports": {
+    "WorkspaceRoom": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.01,
+    },
+  },
+  "triggers": {
+    "crons": ["0 * * * *"],
+  },
+}

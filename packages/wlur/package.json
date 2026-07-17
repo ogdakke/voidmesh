@@ -1,0 +1,15 @@
+{
+  "name": "@voidmesh/wlur",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./*": "./*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@webgpu/types": "^0.1.71"
+  }
+}
