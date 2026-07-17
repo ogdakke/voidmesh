@@ -206,6 +206,110 @@
   min-width: min(100%, 320px);
 }
 
+.hosted-confirmation-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+}
+
+.hosted-confirmation-actions .ui-button {
+  max-width: 100%;
+  white-space: normal;
+}
+
+.hosted-confirmation-drawer {
+  height: auto;
+  max-height: min(76dvh, 560px);
+}
+
+.hosted-confirmation-drawer__content {
+  display: grid;
+  align-content: start;
+  gap: var(--spacing-5);
+  overflow-y: auto;
+  padding: var(--spacing-3) var(--spacing-5) max(var(--spacing-6), env(safe-area-inset-bottom, 0px));
+}
+
+.hosted-confirmation-drawer__content .hosted-account-delete__form {
+  min-width: 0;
+}
+
+.hosted-confirmation-drawer__content .hosted-confirmation-actions,
+.hosted-confirmation-drawer__content .hosted-confirmation-actions .ui-button {
+  width: 100%;
+}
+
+.hosted-invitation-drawer {
+  width: min(100%, 560px);
+  height: auto;
+  max-height: min(82dvh, 640px);
+}
+
+.hosted-invitation-drawer__content {
+  display: grid;
+  align-content: start;
+  gap: var(--spacing-5);
+  overflow-y: auto;
+  padding: var(--spacing-3) var(--spacing-5) max(var(--spacing-6), env(safe-area-inset-bottom, 0px));
+}
+
+.hosted-invitation-drawer__content .hosted-confirmation-actions,
+.hosted-invitation-drawer__content .hosted-confirmation-actions .ui-button {
+  width: 100%;
+}
+
+.hosted-link-permissions {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.hosted-link-permissions legend {
+  margin-bottom: var(--spacing-3);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.hosted-link-permissions label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--spacing-3);
+  min-height: 64px;
+  border-bottom: 1px solid var(--border-75);
+  cursor: pointer;
+}
+
+.hosted-link-permissions label:first-of-type {
+  border-top: 1px solid var(--border-75);
+}
+
+.hosted-link-permissions input {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.hosted-link-permissions span {
+  display: grid;
+  gap: 2px;
+}
+
+.hosted-link-permissions strong {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.hosted-link-permissions small {
+  color: var(--text-accent);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
 .hosted-account-delete__form label {
   display: grid;
   gap: var(--spacing-2);
@@ -328,13 +432,6 @@
   border-bottom: 1px solid var(--border-75);
   color: inherit;
   background: transparent;
-  transition: background 120ms ease-out;
-}
-
-.hosted-workspace:focus-within,
-.hosted-workspace:hover {
-  outline: none;
-  background: var(--accent);
 }
 
 .hosted-workspace > a:first-child {
@@ -347,6 +444,7 @@
   padding: 0 var(--spacing-4);
   color: inherit;
   text-decoration: none;
+  transition: background-color 120ms ease-out;
 }
 
 .hosted-workspace__manage {
@@ -355,12 +453,33 @@
   color: var(--text-accent);
   font-size: var(--text-xs);
   text-decoration: none;
+  transition:
+    color 120ms ease-out,
+    background-color 120ms ease-out;
 }
 
-.hosted-workspace__manage:hover,
+.hosted-workspace a:focus-visible {
+  z-index: 1;
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
 .hosted-workspace__manage:focus-visible {
   color: var(--color);
-  outline: none;
+}
+
+@media (hover: hover) {
+  .hosted-workspace > a:hover {
+    background: color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+
+  .hosted-workspace__manage:hover {
+    color: var(--color);
+  }
+}
+
+.hosted-workspace > a:active {
+  background: color-mix(in srgb, var(--accent) 70%, transparent);
 }
 
 .hosted-workspace small {
@@ -460,7 +579,15 @@
 .hosted-member__role {
   color: var(--color-light);
   font-size: var(--text-xs);
+}
+
+.hosted-member__role {
   text-transform: capitalize;
+}
+
+.hosted-member__identity small,
+.mobile-account-identity p {
+  text-transform: none;
 }
 
 .hosted-sharing select {
@@ -608,6 +735,10 @@
     flex-direction: column;
   }
 
+  .hosted-account-delete > .ui-button {
+    width: 100%;
+  }
+
   .hosted-plan__header {
     gap: var(--spacing-2);
   }
@@ -622,14 +753,22 @@
   }
 
   .hosted-sharing__actions {
+    align-items: flex-start;
+    flex-direction: column;
     width: 100%;
   }
 
-  .hosted-sharing__actions > * {
-    flex: 1;
+  .hosted-sharing__actions > *,
+  .hosted-confirmation-actions,
+  .hosted-confirmation-actions .ui-button {
+    width: 100%;
   }
 
   .hosted-sharing__heading > .ui-button {
+    width: 100%;
+  }
+
+  .hosted-sharing > .hosted-dashboard__header > .ui-button {
     width: 100%;
   }
 

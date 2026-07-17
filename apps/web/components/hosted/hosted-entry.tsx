@@ -2,6 +2,8 @@ import type { AccountResponse, WorkspaceSummary } from "@voidmesh/api-contract";
 import type { WorkspaceId } from "@voidmesh/domain";
 import { useEffect, useRef, useState, type FormEvent, type PropsWithChildren } from "react";
 import { Button } from "#ui/button/index.tsx";
+import { Drawer } from "#ui/drawer/index.tsx";
+import { useIsMobile } from "#hooks/use-is-mobile.ts";
 import { authClient } from "#lib/auth-client.ts";
 import { appLoader } from "#lib/app-loader.ts";
 import { HostedApiClient, HostedApiError } from "#lib/hosted-api-client.ts";
@@ -643,6 +645,7 @@ function WorkspaceDashboard() {
 }
 
 function AccountDeletion() {
+  const isMobile = useIsMobile();
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -661,6 +664,33 @@ function AccountDeletion() {
     location.assign("/");
   };
 
+  const close = () => {
+    if (deleting) return;
+    setConfirming(false);
+    setError(null);
+  };
+  const confirmationForm = (
+    <form className="hosted-account-delete__form" onSubmit={deleteAccount}>
+      <label>
+        Confirm your password
+        <input name="password" type="password" autoComplete="current-password" required />
+      </label>
+      {error && (
+        <p className="hosted-error" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="hosted-confirmation-actions">
+        <Button variant="destructive" type="submit" disabled={deleting} isPending={deleting}>
+          {deleting ? "Deleting…" : "Permanently delete account"}
+        </Button>
+        <Button variant="secondary" type="button" disabled={deleting} onClick={close}>
+          Cancel
+        </Button>
+      </div>
+    </form>
+  );
+
   return (
     <section className="hosted-account-delete" aria-labelledby="delete-account-heading">
       <div>
@@ -670,43 +700,35 @@ function AccountDeletion() {
           deletion after 30 days.
         </p>
       </div>
-      {confirming ? (
-        <form className="hosted-account-delete__form" onSubmit={deleteAccount}>
-          <label>
-            Confirm your password
-            <input name="password" type="password" autoComplete="current-password" required />
-          </label>
-          {error && (
-            <p className="hosted-error" role="alert">
-              {error}
-            </p>
-          )}
-          <div className="hosted-sharing__actions">
-            <Button
-              variant="quiet"
-              size="sm"
-              type="button"
-              disabled={deleting}
-              onClick={() => {
-                setConfirming(false);
-                setError(null);
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              type="submit"
-              disabled={deleting}
-              isPending={deleting}
-            >
-              {deleting ? "Deleting…" : "Permanently delete account"}
-            </Button>
-          </div>
-        </form>
+      {isMobile ? (
+        <Drawer.Root
+          open={confirming}
+          onOpenChange={(open) => {
+            if (!deleting) setConfirming(open);
+          }}
+        >
+          <Drawer.Trigger
+            render={(props) => (
+              <Button {...props} variant="destructive" type="button">
+                Delete account…
+              </Button>
+            )}
+          />
+          <Drawer.Popup className="hosted-confirmation-drawer">
+            <Drawer.Title>Delete account?</Drawer.Title>
+            <Drawer.Content className="hosted-confirmation-drawer__content">
+              <p className="hosted-muted">
+                Enter your password to permanently delete the account after its 30-day recovery
+                window.
+              </p>
+              {confirmationForm}
+            </Drawer.Content>
+          </Drawer.Popup>
+        </Drawer.Root>
+      ) : confirming ? (
+        confirmationForm
       ) : (
-        <Button variant="quiet" size="sm" type="button" onClick={() => setConfirming(true)}>
+        <Button variant="destructive" type="button" onClick={() => setConfirming(true)}>
           Delete account…
         </Button>
       )}

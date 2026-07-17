@@ -81,7 +81,7 @@ describe("MobileAccountDrawer", () => {
   it("shows plan, security, and password-gated account deletion controls", async () => {
     mocks.session.data = {
       user: {
-        email: "viewer@example.com",
+        email: "Viewer@Example.com",
         emailVerified: true,
         id: "user_viewer",
         name: "Voidmesh Viewer",
@@ -117,7 +117,8 @@ describe("MobileAccountDrawer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Delete account…" }));
     expect(screen.getByLabelText("Confirm your password")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Delete account" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Delete account?" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Permanently delete account" })).toBeInTheDocument();
     expect(mocks.deleteUser).not.toHaveBeenCalled();
   });
 

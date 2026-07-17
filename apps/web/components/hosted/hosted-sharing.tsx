@@ -7,6 +7,8 @@ import type {
 import { WorkspaceRole, type InvitationId, type UserId } from "@voidmesh/domain";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Button } from "#ui/button/index.tsx";
+import { Drawer } from "#ui/drawer/index.tsx";
+import { useIsMobile } from "#hooks/use-is-mobile.ts";
 import { HostedApiClient, HostedApiError } from "#lib/hosted-api-client.ts";
 
 interface HostedSharingProps {
@@ -15,6 +17,7 @@ interface HostedSharingProps {
 }
 
 export function HostedSharing({ api, workspace }: HostedSharingProps) {
+  const isMobile = useIsMobile();
   const exportKeyRef = useRef<string | null>(null);
   const invitationKeysRef = useRef<Map<"viewer" | "editor", string> | null>(null);
   const isOwner = workspace.role === WorkspaceRole.owner;
@@ -25,6 +28,8 @@ export function HostedSharing({ api, workspace }: HostedSharingProps) {
   const [error, setError] = useState<string | null>(null);
   const [currentTitle, setCurrentTitle] = useState(workspace.title);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [invitationOpen, setInvitationOpen] = useState(false);
+  const [linkPermission, setLinkPermission] = useState<"viewer" | "editor">("viewer");
   const [workspaceExport, setWorkspaceExport] = useState<WorkspaceExportSummary | null>(null);
 
   const refresh = async () => {
@@ -71,6 +76,7 @@ export function HostedSharing({ api, workspace }: HostedSharingProps) {
     try {
       const { invitation } = await api.createInvitation(workspace.id, { role }, idempotencyKey);
       setCreatedLink(`${location.origin}/invite/${invitation.token}`);
+      setInvitationOpen(false);
       await refresh();
     } catch (reason) {
       setError(errorMessage(reason));
@@ -147,6 +153,33 @@ export function HostedSharing({ api, workspace }: HostedSharingProps) {
     }
   };
 
+  const closeDeleteConfirmation = () => {
+    if (pendingAction === "delete") return;
+    setConfirmingDelete(false);
+  };
+
+  const deleteActions = (
+    <div className="hosted-confirmation-actions">
+      <Button
+        variant="destructive"
+        type="button"
+        disabled={pendingAction !== null}
+        isPending={pendingAction === "delete"}
+        onClick={() => void deleteWorkspace()}
+      >
+        {pendingAction === "delete" ? "Deleting…" : "Move to recently deleted"}
+      </Button>
+      <Button
+        variant="secondary"
+        type="button"
+        disabled={pendingAction !== null}
+        onClick={closeDeleteConfirmation}
+      >
+        Cancel
+      </Button>
+    </div>
+  );
+
   const exportWorkspace = async () => {
     setPendingAction("export");
     setError(null);
@@ -188,7 +221,6 @@ export function HostedSharing({ api, workspace }: HostedSharingProps) {
           </div>
           <Button
             variant="secondary"
-            size="sm"
             type="button"
             onClick={() => location.assign(`/w/${workspace.id}`)}
           >
@@ -213,7 +245,6 @@ export function HostedSharing({ api, workspace }: HostedSharingProps) {
               </div>
               <Button
                 variant="secondary"
-                size="sm"
                 type="button"
                 disabled={pendingAction !== null}
                 isPending={pendingAction === "export"}
@@ -244,7 +275,6 @@ export function HostedSharing({ api, workspace }: HostedSharingProps) {
               </label>
               <Button
                 variant="secondary"
-                size="sm"
                 type="submit"
                 disabled={pendingAction !== null}
                 isPending={pendingAction === "rename"}
@@ -259,32 +289,35 @@ export function HostedSharing({ api, workspace }: HostedSharingProps) {
                   Access stops immediately. You can restore it for 30 days.
                 </p>
               </div>
-              {confirmingDelete ? (
-                <div className="hosted-sharing__actions">
-                  <Button
-                    variant="quiet"
-                    size="sm"
-                    type="button"
-                    disabled={pendingAction !== null}
-                    onClick={() => setConfirmingDelete(false)}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    type="button"
-                    disabled={pendingAction !== null}
-                    isPending={pendingAction === "delete"}
-                    onClick={() => void deleteWorkspace()}
-                  >
-                    {pendingAction === "delete" ? "Deleting…" : "Move to recently deleted"}
-                  </Button>
-                </div>
+              {isMobile ? (
+                <Drawer.Root
+                  open={confirmingDelete}
+                  onOpenChange={(open) => {
+                    if (pendingAction !== "delete") setConfirmingDelete(open);
+                  }}
+                >
+                  <Drawer.Trigger
+                    render={(props) => (
+                      <Button {...props} variant="destructive" type="button">
+                        Delete workspace…
+                      </Button>
+                    )}
+                  />
+                  <Drawer.Popup className="hosted-confirmation-drawer">
+                    <Drawer.Title>Delete workspace?</Drawer.Title>
+                    <Drawer.Content className="hosted-confirmation-drawer__content">
+                      <p className="hosted-muted">
+                        Access stops immediately. You can restore this workspace for 30 days.
+                      </p>
+                      {deleteActions}
+                    </Drawer.Content>
+                  </Drawer.Popup>
+                </Drawer.Root>
+              ) : confirmingDelete ? (
+                deleteActions
               ) : (
                 <Button
-                  variant="quiet"
-                  size="sm"
+                  variant="destructive"
                   type="button"
                   disabled={pendingAction !== null}
                   onClick={() => setConfirmingDelete(true)}
@@ -303,28 +336,75 @@ export function HostedSharing({ api, workspace }: HostedSharingProps) {
                 <h2 id="invite-heading">Invitation links</h2>
                 <p className="hosted-muted">Links remain active until you revoke them.</p>
               </div>
-              <div className="hosted-sharing__actions">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  type="button"
-                  isPending={pendingAction === "create-viewer"}
-                  disabled={pendingAction !== null}
-                  onClick={() => void createInvitation(WorkspaceRole.viewer)}
-                >
-                  New view link
-                </Button>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  type="button"
-                  isPending={pendingAction === "create-editor"}
-                  disabled={pendingAction !== null}
-                  onClick={() => void createInvitation(WorkspaceRole.editor)}
-                >
-                  New edit link
-                </Button>
-              </div>
+              <Drawer.Root
+                open={invitationOpen}
+                onOpenChange={(open) => {
+                  if (!pendingAction?.startsWith("create-")) setInvitationOpen(open);
+                }}
+              >
+                <Drawer.Trigger
+                  render={(props) => (
+                    <Button {...props} variant="primary" type="button">
+                      Create invitation link
+                    </Button>
+                  )}
+                />
+                <Drawer.Popup className="hosted-invitation-drawer">
+                  <Drawer.Title>Create invitation link</Drawer.Title>
+                  <Drawer.Content className="hosted-invitation-drawer__content">
+                    <fieldset className="hosted-link-permissions">
+                      <legend>Link permissions</legend>
+                      <label>
+                        <input
+                          type="radio"
+                          name="link-permission"
+                          aria-label="Can view"
+                          value={WorkspaceRole.viewer}
+                          checked={linkPermission === WorkspaceRole.viewer}
+                          onChange={() => setLinkPermission(WorkspaceRole.viewer)}
+                        />
+                        <span>
+                          <strong>Can view</strong>
+                          <small>Open the canvas and see live cursors and selections.</small>
+                        </span>
+                      </label>
+                      <label>
+                        <input
+                          type="radio"
+                          name="link-permission"
+                          aria-label="Can edit"
+                          value={WorkspaceRole.editor}
+                          checked={linkPermission === WorkspaceRole.editor}
+                          onChange={() => setLinkPermission(WorkspaceRole.editor)}
+                        />
+                        <span>
+                          <strong>Can edit</strong>
+                          <small>Change the canvas and its workspace assets.</small>
+                        </span>
+                      </label>
+                    </fieldset>
+                    <div className="hosted-confirmation-actions">
+                      <Button
+                        variant="primary"
+                        type="button"
+                        isPending={pendingAction === `create-${linkPermission}`}
+                        disabled={pendingAction !== null}
+                        onClick={() => void createInvitation(linkPermission)}
+                      >
+                        {pendingAction === `create-${linkPermission}` ? "Creating…" : "Create link"}
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        type="button"
+                        disabled={pendingAction !== null}
+                        onClick={() => setInvitationOpen(false)}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </Drawer.Content>
+                </Drawer.Popup>
+              </Drawer.Root>
             </div>
 
             {createdLink && (
@@ -336,7 +416,6 @@ export function HostedSharing({ api, workspace }: HostedSharingProps) {
                 <code>{createdLink}</code>
                 <Button
                   variant="secondary"
-                  size="sm"
                   type="button"
                   onClick={() => void navigator.clipboard.writeText(createdLink)}
                 >
@@ -358,7 +437,6 @@ export function HostedSharing({ api, workspace }: HostedSharingProps) {
                   {!invitation.revokedAt && (
                     <Button
                       variant="quiet"
-                      size="sm"
                       type="button"
                       isPending={pendingAction === `revoke-${invitation.id}`}
                       disabled={pendingAction !== null}
@@ -388,7 +466,7 @@ export function HostedSharing({ api, workspace }: HostedSharingProps) {
               <div className="hosted-sharing__row hosted-member" key={member.userId}>
                 <div className="hosted-member__identity">
                   <strong>{member.name}</strong>
-                  <small>{member.email}</small>
+                  <small>{member.email.toLocaleLowerCase()}</small>
                 </div>
                 {isOwner && member.role !== WorkspaceRole.owner ? (
                   <div className="hosted-sharing__actions">
@@ -408,7 +486,6 @@ export function HostedSharing({ api, workspace }: HostedSharingProps) {
                     </select>
                     <Button
                       variant="quiet"
-                      size="sm"
                       type="button"
                       isPending={pendingAction === `member-${member.userId}`}
                       disabled={pendingAction !== null}

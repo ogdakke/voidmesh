@@ -21,6 +21,7 @@ import { toastManager } from "#application/notifications.ts";
 import { useCanvasRendererService } from "./use-canvas.ts";
 
 interface HostedWorkspaceRuntimeValue {
+  api: HostedApiClient;
   connectionStatus: CollaborationConnectionStatus;
   downloadOriginal(entityId: string): Promise<void>;
   peers: readonly ServerPresenceMessage[];
@@ -221,6 +222,7 @@ export function HostedWorkspaceRuntime({
   return (
     <HostedWorkspaceRuntimeContext
       value={{
+        api,
         connectionStatus,
         downloadOriginal,
         peers,

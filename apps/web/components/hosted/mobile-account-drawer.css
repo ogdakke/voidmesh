@@ -200,8 +200,39 @@
 
 .mobile-account-danger form > div {
   display: flex;
-  justify-content: flex-end;
+  align-items: flex-start;
+  flex-direction: column;
   gap: var(--spacing-2);
+}
+
+.mobile-account-danger form > div,
+.mobile-account-danger form > div .ui-button {
+  width: 100%;
+}
+
+.mobile-account-confirmation {
+  height: auto;
+  max-height: min(76dvh, 560px);
+}
+
+.mobile-account-confirmation__content {
+  display: grid;
+  align-content: start;
+  gap: var(--spacing-5);
+  overflow-y: auto;
+  padding: var(--spacing-3) var(--spacing-5) max(var(--spacing-6), env(safe-area-inset-bottom, 0px));
+}
+
+.mobile-account-confirmation__content > p {
+  margin: 0;
+  color: var(--text-accent);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.mobile-account-confirmation__content form {
+  display: grid;
+  gap: var(--spacing-4);
 }
 
 .mobile-account-error {

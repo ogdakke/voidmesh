@@ -154,7 +154,7 @@ export function MobileAccountDrawer() {
                 <span aria-hidden="true">{initials(session.data.user.name)}</span>
                 <div>
                   <h3>{session.data.user.name}</h3>
-                  <p>{session.data.user.email}</p>
+                  <p>{session.data.user.email.toLocaleLowerCase()}</p>
                 </div>
                 {!editingProfile && (
                   <button className="mobile-account-edit" type="button" onClick={editProfile}>
@@ -274,45 +274,58 @@ export function MobileAccountDrawer() {
                     recovery window.
                   </p>
                 </div>
-                {confirmingDeletion ? (
-                  <form onSubmit={deleteAccount}>
-                    <label>
-                      Confirm your password
-                      <input
-                        name="password"
-                        type="password"
-                        autoComplete="current-password"
-                        required
-                      />
-                    </label>
-                    <div>
-                      <Button
-                        variant="quiet"
-                        type="button"
-                        disabled={deleting}
-                        onClick={() => setConfirmingDeletion(false)}
-                      >
-                        Cancel
+                <Drawer.Root
+                  open={confirmingDeletion}
+                  onOpenChange={(open) => {
+                    if (!deleting) setConfirmingDeletion(open);
+                  }}
+                >
+                  <Drawer.Trigger
+                    render={(props) => (
+                      <Button {...props} variant="destructive" type="button">
+                        Delete account…
                       </Button>
-                      <Button
-                        variant="destructive"
-                        type="submit"
-                        disabled={deleting}
-                        isPending={deleting}
-                      >
-                        {deleting ? "Deleting…" : "Delete account"}
-                      </Button>
-                    </div>
-                  </form>
-                ) : (
-                  <Button
-                    variant="destructive"
-                    type="button"
-                    onClick={() => setConfirmingDeletion(true)}
-                  >
-                    Delete account…
-                  </Button>
-                )}
+                    )}
+                  />
+                  <Drawer.Popup className="mobile-account-confirmation">
+                    <Drawer.Title>Delete account?</Drawer.Title>
+                    <Drawer.Content className="mobile-account-confirmation__content">
+                      <p>
+                        Enter your password to permanently delete the account after its 30-day
+                        recovery window.
+                      </p>
+                      <form onSubmit={deleteAccount}>
+                        <label>
+                          Confirm your password
+                          <input
+                            name="password"
+                            type="password"
+                            autoComplete="current-password"
+                            required
+                          />
+                        </label>
+                        <div>
+                          <Button
+                            variant="destructive"
+                            type="submit"
+                            disabled={deleting}
+                            isPending={deleting}
+                          >
+                            {deleting ? "Deleting…" : "Permanently delete account"}
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            type="button"
+                            disabled={deleting}
+                            onClick={() => setConfirmingDeletion(false)}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      </form>
+                    </Drawer.Content>
+                  </Drawer.Popup>
+                </Drawer.Root>
               </section>
             </div>
           )}
