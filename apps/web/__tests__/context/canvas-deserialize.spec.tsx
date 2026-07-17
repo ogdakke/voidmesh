@@ -116,7 +116,7 @@ describe("CanvasCommands.deserializeCanvas", () => {
     act(() => {
       oldId = canvas.addEntity(oldInput, "Old entity");
     });
-    expect(oldId).toBe("entity-1");
+    expect(oldId).toMatch(/^entity-[0-9a-f-]{36}$/);
     expect(undo.canUndo()).toBe(true);
 
     await act(async () => {
@@ -135,7 +135,7 @@ describe("CanvasCommands.deserializeCanvas", () => {
     act(() => canvas.clearWorkspace());
   });
 
-  test("preserves live ID counters when every imported entity fails decoding", async () => {
+  test("preserves live entities when every imported entity fails decoding", async () => {
     const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
     let firstId = "";
     act(() => {
@@ -153,8 +153,9 @@ describe("CanvasCommands.deserializeCanvas", () => {
     });
 
     expect(result).toMatchObject({ success: false, entityCount: 0 });
-    expect(firstId).toBe("entity-1");
-    expect(secondId).toBe("entity-2");
+    expect(firstId).toMatch(/^entity-[0-9a-f-]{36}$/);
+    expect(secondId).toMatch(/^entity-[0-9a-f-]{36}$/);
+    expect(secondId).not.toBe(firstId);
     expect(canvasStore.getState().entities.get(firstId)?.name).toBe("Existing entity");
 
     act(() => canvas.clearWorkspace());

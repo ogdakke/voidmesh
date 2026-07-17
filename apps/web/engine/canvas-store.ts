@@ -522,6 +522,9 @@ export class CanvasStore extends Store<CanvasState> {
 
   // Entity mutations (only notify selection subscribers)
   addEntity(entity: ShaderCanvasEntity): void {
+    if (this.state.entities.has(entity.id)) {
+      throw new Error(`Cannot add duplicate entity ID "${entity.id}"`);
+    }
     if (entity.mediaSource.type === MediaType.video) {
       this.#syncVideoElementPlayback(entity);
     }
@@ -535,6 +538,13 @@ export class CanvasStore extends Store<CanvasState> {
 
   addEntities(entities: readonly ShaderCanvasEntity[]): void {
     if (entities.length === 0) return;
+    const incomingIds = new Set<string>();
+    for (const entity of entities) {
+      if (this.state.entities.has(entity.id) || incomingIds.has(entity.id)) {
+        throw new Error(`Cannot add duplicate entity ID "${entity.id}"`);
+      }
+      incomingIds.add(entity.id);
+    }
     for (const entity of entities) {
       if (entity.mediaSource.type === MediaType.video) {
         this.#syncVideoElementPlayback(entity);

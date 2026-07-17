@@ -31,6 +31,21 @@ afterEach(() => {
 });
 
 describe("CanvasCommands.addEntity", () => {
+  test("does not reuse a hydrated entity ID or z-index", () => {
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
+    const hydrated = createTestEntity({ id: "entity-1", zIndex: 27 });
+    canvasStore.addEntity(hydrated);
+
+    let id = "";
+    act(() => {
+      id = canvas.addEntity(createEntityInput());
+    });
+
+    expect(id).not.toBe(hydrated.id);
+    expect(canvasStore.getState().entities.get(hydrated.id)).toBe(hydrated);
+    expect(canvasStore.getState().entities.get(id)?.zIndex).toBe(28);
+  });
+
   test("adds user entities to undo history", () => {
     const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
 

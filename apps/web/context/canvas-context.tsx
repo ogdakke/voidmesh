@@ -550,9 +550,11 @@ export function CanvasProvider({
   /** has the user been shown the hint yet */
   const hintShownRef = useRef(false);
 
-  // Counters for generating unique IDs, z-indices, and image names
-  const nextIdRef = useRef(1);
+  // Counters for generating z-indices and image names. Entity IDs must be
+  // globally unique because hosted workspaces preserve them across sessions
+  // and can accept additions from multiple clients.
   const nextZIndexRef = useRef(1);
+  const zIndexEntityVersionRef = useRef(-1);
   const nextImageNumberRef = useRef(1);
 
   // Renderer reference for cleanup
@@ -578,13 +580,26 @@ export function CanvasProvider({
   };
 
   // Entity operations - delegate to store
+  const allocateZIndex = (): number => {
+    const state = canvasStore.getState();
+    if (zIndexEntityVersionRef.current !== state.entityVersion) {
+      let maxZIndex = 0;
+      for (const entity of state.entities.values()) {
+        maxZIndex = Math.max(maxZIndex, entity.zIndex);
+      }
+      nextZIndexRef.current = Math.max(nextZIndexRef.current, maxZIndex + 1);
+      zIndexEntityVersionRef.current = state.entityVersion;
+    }
+    return nextZIndexRef.current++;
+  };
+
   const addEntity = (
     entity: Omit<ShaderCanvasEntity, "id" | "zIndex" | "name">,
     filename?: string,
     options?: AddEntityOptions,
   ): string => {
-    const id = `entity-${nextIdRef.current++}`;
-    const zIndex = nextZIndexRef.current++;
+    const id = `entity-${crypto.randomUUID()}`;
+    const zIndex = allocateZIndex();
     const name = filename || `Image ${nextImageNumberRef.current++}`;
 
     // Apply URL params to new entity (for sharing feature)
@@ -613,6 +628,7 @@ export function CanvasProvider({
     };
 
     canvasStore.addEntity(newEntity);
+    zIndexEntityVersionRef.current = canvasStore.getState().entityVersion;
     analytics.track("entity.added", {
       media_type: newEntity.mediaSource.type as string,
     });
@@ -878,8 +894,8 @@ export function CanvasProvider({
 
     canvasStore.reset();
     canvasStore.setViewport(config.defaults.viewport);
-    nextIdRef.current = 1;
     nextZIndexRef.current = 1;
+    zIndexEntityVersionRef.current = canvasStore.getState().entityVersion;
     nextImageNumberRef.current = 1;
 
     analytics.track("workspace.cleared", {
@@ -973,8 +989,8 @@ export function CanvasProvider({
       for (const stagedClone of clones) {
         if (!stagedClone) throw new Error("Duplicate media staging completed without a clone");
         const { entity, mediaSource, imageBitmap } = stagedClone;
-        const id = `entity-${nextIdRef.current++}`;
-        const zIndex = nextZIndexRef.current++;
+        const id = `entity-${crypto.randomUUID()}`;
+        const zIndex = allocateZIndex();
         const name = nameAllocator.allocate(entity.name);
         const playback = createDuplicatePlaybackState(entity);
         resetDuplicatedMediaPlayback(mediaSource, playback);
@@ -1013,6 +1029,7 @@ export function CanvasProvider({
     tracePerformancePhase("duplicate.allocate-entities", cloneEnd, allocateEnd, true);
 
     canvasStore.addEntities(duplicateBatch);
+    zIndexEntityVersionRef.current = canvasStore.getState().entityVersion;
     canvasStore.replaceSelection(newIds);
     const duplicateIds = new Set(newIds);
     const ownerTokens = duplicateBatch.map((clone) => claimResourceOwnership(clone.id));
@@ -2138,10 +2155,10 @@ export function CanvasProvider({
     // commit callback, so the existing workspace and its counters stay authoritative.
     if (!result.success && result.entityCount === 0) return result;
 
-    // Update ID counters to avoid collisions with future entities
-    const { maxId, maxZIndex } = getMaxCounters(result);
-    nextIdRef.current = maxId + 1;
+    // Continue stacking new entities above the imported workspace.
+    const { maxZIndex } = getMaxCounters(result);
     nextZIndexRef.current = maxZIndex + 1;
+    zIndexEntityVersionRef.current = canvasStore.getState().entityVersion;
     nextImageNumberRef.current = result.entityCount + 1;
 
     // Re-extract original palettes for entities that don't have them (legacy v3 files).

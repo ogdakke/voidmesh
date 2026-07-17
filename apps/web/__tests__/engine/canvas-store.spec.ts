@@ -46,6 +46,30 @@ describe("canvasStore viewport subscriptions", () => {
 });
 
 describe("canvasStore entity versioning", () => {
+  test("rejects a duplicate entity ID without replacing the existing entity", () => {
+    const existing = createTestEntity({ id: "duplicate-id" });
+    const replacement = createTestEntity({ id: existing.id, name: "Replacement" });
+    canvasStore.addEntity(existing);
+
+    expect(() => canvasStore.addEntity(replacement)).toThrow(
+      'Cannot add duplicate entity ID "duplicate-id"',
+    );
+    expect(canvasStore.getState().entities.get(existing.id)).toBe(existing);
+    expect(canvasStore.getState().entityIds).toEqual([existing.id]);
+  });
+
+  test("rejects duplicate IDs in a batch atomically", () => {
+    const duplicateId = "duplicate-batch-id";
+    const first = createTestEntity({ id: duplicateId });
+    const second = createTestEntity({ id: duplicateId });
+
+    expect(() => canvasStore.addEntities([first, second])).toThrow(
+      'Cannot add duplicate entity ID "duplicate-batch-id"',
+    );
+    expect(canvasStore.getState().entities.size).toBe(0);
+    expect(canvasStore.getState().entityIds).toEqual([]);
+  });
+
   test("selection changes do not invalidate entity-derived caches", () => {
     const entity = createTestEntity();
     canvasStore.addEntity(entity);
