@@ -82,6 +82,8 @@
     <link rel="stylesheet" href="./styles/reset.css" />
     <link rel="stylesheet" href="./styles/globals.css" />
     <style>
+      @layer reset, primitives, global, components, about, utilities;
+
       :root {
         --safe-area-top: env(safe-area-inset-top, 0);
         --safe-area-bottom: env(safe-area-inset-bottom, 0);

@@ -13,6 +13,7 @@
     "build": "bun run --workspaces --sequential --if-present build",
     "build:web": "bun run --cwd apps/web build",
     "build:api": "bun run --cwd apps/api build",
+    "preview": "bun run --cwd apps/web preview",
     "test": "bun run --workspaces --sequential --if-present test",
     "test:watch": "bun run --cwd apps/web test:watch",
     "lint:all": "oxlint . --type-aware --type-check && bun run lint:typecheck",
