@@ -24,6 +24,7 @@ export interface HostedCanvasProjection {
 export interface HostedAssetRegistry {
   getReference(entityId: string): HostedAssetReference | undefined;
   register(entity: ShaderCanvasEntity, signal: AbortSignal): Promise<HostedAssetReference>;
+  release(entityId: string): void;
 }
 
 export interface HostedCanvasSyncOptions {
@@ -124,7 +125,10 @@ export class HostedCanvasSync {
         for (const id of mutation.entityIds) this.#scheduleGeometry(id);
         break;
       case "remove":
-        for (const id of mutation.entityIds) this.#bumpRevision(id);
+        for (const id of mutation.entityIds) {
+          this.#bumpRevision(id);
+          this.#assets.release(id);
+        }
         this.#document.removeEntities(mutation.entityIds);
         break;
       case "replace":
@@ -164,6 +168,10 @@ export class HostedCanvasSync {
   }
 
   async #replace(entities: readonly ShaderCanvasEntity[]): Promise<void> {
+    const replacementIds = new Set(entities.map((entity) => entity.id));
+    const removedIds = this.#document
+      .getEntityIds()
+      .filter((entityId) => !replacementIds.has(entityId));
     const revision = new Map(entities.map((entity) => [entity.id, this.#bumpRevision(entity.id)]));
     const registered = await Promise.all(
       entities.map(async (entity) => ({
@@ -179,6 +187,7 @@ export class HostedCanvasSync {
       const converted = latest && this.#toHostedEntity(latest, entry.asset);
       if (converted) collaborative.push(converted);
     }
+    for (const entityId of removedIds) this.#assets.release(entityId);
     this.#document.replaceEntities(collaborative);
   }
 

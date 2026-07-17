@@ -17,6 +17,7 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
   readonly #onPendingUpload: () => void;
   readonly #workspaceId: WorkspaceId;
   readonly #references = new Map<string, HostedAssetReference>();
+  readonly #entityBlobs = new Map<string, Blob>();
   readonly #hashes = new WeakMap<Blob, Promise<string>>();
   readonly #uploadKeys = new WeakMap<Blob, string>();
   readonly #uploads = new WeakMap<Blob, Promise<HostedAssetReference>>();
@@ -39,10 +40,17 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
     return this.#references.get(entityId);
   }
 
+  release(entityId: string): void {
+    this.#entityBlobs.delete(entityId);
+    this.#references.delete(entityId);
+  }
+
   async register(entity: ShaderCanvasEntity, signal: AbortSignal): Promise<HostedAssetReference> {
-    const existing = this.#references.get(entity.id);
-    if (existing) return existing;
     const blob = getEntityBlob(entity);
+    const existing = this.#references.get(entity.id);
+    if (existing && this.#entityBlobs.get(entity.id) === blob) return existing;
+    this.#entityBlobs.set(entity.id, blob);
+    this.#references.delete(entity.id);
     let upload = this.#uploads.get(blob);
     if (!upload) {
       upload = this.#uploadOrQueue(blob, entity.name, entity.mediaSource.type, signal);
@@ -56,11 +64,12 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
       throw error;
     }
     signal.throwIfAborted();
-    this.#references.set(entity.id, reference);
+    if (this.#entityBlobs.get(entity.id) === blob) this.#references.set(entity.id, reference);
     return reference;
   }
 
-  adopt(entityId: string, reference: HostedAssetReference): void {
+  adopt(entityId: string, reference: HostedAssetReference, blob: Blob): void {
+    this.#entityBlobs.set(entityId, blob);
     this.#references.set(entityId, reference);
   }
 

@@ -556,6 +556,7 @@ export function CanvasProvider({
   const nextZIndexRef = useRef(1);
   const zIndexEntityVersionRef = useRef(-1);
   const nextImageNumberRef = useRef(1);
+  const imageNameEntityVersionRef = useRef(-1);
 
   // Renderer reference for cleanup
   const rendererRef = useRef<InfiniteCanvasRenderer | null>(null);
@@ -593,6 +594,16 @@ export function CanvasProvider({
     return nextZIndexRef.current++;
   };
 
+  const allocateImageName = (): string => {
+    const state = canvasStore.getState();
+    if (imageNameEntityVersionRef.current !== state.entityVersion) {
+      const names = new Set(Array.from(state.entities.values(), (entity) => entity.name));
+      while (names.has(`Image ${nextImageNumberRef.current}`)) nextImageNumberRef.current++;
+      imageNameEntityVersionRef.current = state.entityVersion;
+    }
+    return `Image ${nextImageNumberRef.current++}`;
+  };
+
   const addEntity = (
     entity: Omit<ShaderCanvasEntity, "id" | "zIndex" | "name">,
     filename?: string,
@@ -600,7 +611,8 @@ export function CanvasProvider({
   ): string => {
     const id = `entity-${crypto.randomUUID()}`;
     const zIndex = allocateZIndex();
-    const name = filename || `Image ${nextImageNumberRef.current++}`;
+    const usesDefaultName = !filename;
+    const name = filename || allocateImageName();
 
     // Apply URL params to new entity (for sharing feature)
     let shaderParams = buildShaderParamsFromUrl();
@@ -629,6 +641,7 @@ export function CanvasProvider({
 
     canvasStore.addEntity(newEntity);
     zIndexEntityVersionRef.current = canvasStore.getState().entityVersion;
+    if (usesDefaultName) imageNameEntityVersionRef.current = canvasStore.getState().entityVersion;
     analytics.track("entity.added", {
       media_type: newEntity.mediaSource.type as string,
     });
@@ -897,6 +910,7 @@ export function CanvasProvider({
     nextZIndexRef.current = 1;
     zIndexEntityVersionRef.current = canvasStore.getState().entityVersion;
     nextImageNumberRef.current = 1;
+    imageNameEntityVersionRef.current = canvasStore.getState().entityVersion;
 
     analytics.track("workspace.cleared", {
       entity_count: entities.length,
@@ -2160,6 +2174,7 @@ export function CanvasProvider({
     nextZIndexRef.current = maxZIndex + 1;
     zIndexEntityVersionRef.current = canvasStore.getState().entityVersion;
     nextImageNumberRef.current = result.entityCount + 1;
+    imageNameEntityVersionRef.current = -1;
 
     // Re-extract original palettes for entities that don't have them (legacy v3 files).
     // Repeated image instances share one bitmap, so extract once and apply one store batch.

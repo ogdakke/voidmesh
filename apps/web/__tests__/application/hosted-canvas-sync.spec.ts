@@ -79,7 +79,7 @@ describe("HostedCanvasSync", () => {
     source.entities.set(entity.id, entity);
     const document = new HostedWorkspaceDocument({ document: new Y.Doc(), now: () => 1_000 });
     const register = vi.fn<HostedAssetRegistry["register"]>(async () => asset);
-    const assets: HostedAssetRegistry = { getReference: () => asset, register };
+    const assets: HostedAssetRegistry = { getReference: () => asset, register, release: () => {} };
     const sync = new HostedCanvasSync({
       assets,
       document,
@@ -95,6 +95,46 @@ describe("HostedCanvasSync", () => {
 
     await vi.waitFor(() => expect(document.getEntity(entity.id)?.asset).toEqual(asset));
     expect(register).toHaveBeenCalledOnce();
+    sync.destroy();
+  });
+
+  it("releases the hosted asset binding when a local entity is removed", async () => {
+    const source = new FakeSource();
+    const entity = runtimeEntity();
+    source.entities.set(entity.id, entity);
+    const document = new HostedWorkspaceDocument({ document: new Y.Doc(), now: () => 1_000 });
+    document.addEntity({
+      asset,
+      edited: entity.edited,
+      id: entity.id,
+      locked: entity.locked ?? false,
+      name: entity.name,
+      originalSize: entity.originalSize,
+      position: entity.position,
+      rotation: entity.rotation,
+      shaderParams: entity.shaderParams,
+      shaderType: entity.shaderType,
+      size: entity.size,
+      zIndex: entity.zIndex,
+    });
+    const release = vi.fn<(entityId: string) => void>();
+    const sync = new HostedCanvasSync({
+      assets: { getReference: () => asset, register: async () => asset, release },
+      document,
+      onError: (error) => {
+        throw error;
+      },
+      projection: { applyRemoteEntity: async () => {}, removeRemoteEntities: () => {} },
+      source,
+      writable: true,
+    });
+    sync.start();
+
+    source.entities.delete(entity.id);
+    source.emit({ entityIds: [entity.id], type: "remove" });
+
+    expect(release).toHaveBeenCalledWith(entity.id);
+    expect(document.getEntity(entity.id)).toBeNull();
     sync.destroy();
   });
 
@@ -117,7 +157,7 @@ describe("HostedCanvasSync", () => {
       });
     });
     const sync = new HostedCanvasSync({
-      assets: { getReference: () => asset, register },
+      assets: { getReference: () => asset, register, release: () => {} },
       document: local,
       onError: (error) => {
         throw error;
@@ -160,7 +200,7 @@ describe("HostedCanvasSync", () => {
       (entity: HostedWorkspaceEntity, applyPlayback: boolean) => Promise<void>
     >(async (_entity: HostedWorkspaceEntity, _applyPlayback: boolean) => {});
     const sync = new HostedCanvasSync({
-      assets: { getReference: () => asset, register: async () => asset },
+      assets: { getReference: () => asset, register: async () => asset, release: () => {} },
       document: local,
       onError: (error) => {
         throw error;

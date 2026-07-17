@@ -43,6 +43,7 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
   readonly #assetBlobs = new Map<string, Promise<Blob>>();
   readonly #sharedImages = new Map<string, MediaImageAsset>();
   readonly #entityAssets = new Map<string, string>();
+  readonly #assetEntityCounts = new Map<string, number>();
   readonly #entityRevisions = new Map<string, number>();
   readonly #autoplayBlocked = new Set<string>();
 
@@ -86,7 +87,7 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     this.#store.removeEntities(removed);
     for (const entity of resources) this.#releaseEntity(entity);
     for (const id of removed) {
-      this.#entityAssets.delete(id);
+      this.#assets.release(id);
       this.#autoplayBlocked.delete(id);
     }
     if (removed.size > 0) this.#requestRender();
@@ -115,9 +116,9 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     this.#beforeRemoveEntity(entity.id);
     if (previous) this.#store.updateEntity(entity.id, next);
     else this.#store.addEntity(next);
-    this.#entityAssets.set(entity.id, entity.asset.id);
-    this.#assets.adopt(entity.id, entity.asset);
     if (previous) this.#releaseEntity(previous);
+    this.#bindEntityAsset(entity.id, entity.asset.id);
+    this.#assets.adopt(entity.id, entity.asset, getEntityBlob(next));
     if (applyPlayback) await this.#applyPlayback(next, entity);
     this.#requestRender(entity.id);
   }
@@ -228,13 +229,30 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
   }
 
   #releaseEntity(entity: ShaderCanvasEntity): void {
+    const assetId = this.#entityAssets.get(entity.id);
     if (entity.mediaSource.type === MediaType.image) {
-      const assetId = this.#entityAssets.get(entity.id);
       if (assetId && getImageAssetReferenceCount(entity.mediaSource.asset) === 1) {
         this.#sharedImages.delete(assetId);
       }
     }
     disposeEntityMedia(entity);
+    if (assetId) this.#unbindEntityAsset(entity.id, assetId);
+  }
+
+  #bindEntityAsset(entityId: string, assetId: string): void {
+    this.#entityAssets.set(entityId, assetId);
+    this.#assetEntityCounts.set(assetId, (this.#assetEntityCounts.get(assetId) ?? 0) + 1);
+  }
+
+  #unbindEntityAsset(entityId: string, assetId: string): void {
+    this.#entityAssets.delete(entityId);
+    const nextCount = (this.#assetEntityCounts.get(assetId) ?? 1) - 1;
+    if (nextCount > 0) {
+      this.#assetEntityCounts.set(assetId, nextCount);
+      return;
+    }
+    this.#assetEntityCounts.delete(assetId);
+    this.#assetBlobs.delete(assetId);
   }
 
   #bumpRevision(entityId: string): number {
@@ -242,6 +260,12 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     this.#entityRevisions.set(entityId, revision);
     return revision;
   }
+}
+
+function getEntityBlob(entity: ShaderCanvasEntity): Blob {
+  return entity.mediaSource.type === MediaType.image
+    ? entity.mediaSource.asset.blob
+    : entity.mediaSource.blob;
 }
 
 function toCanvasFields(
