@@ -4,6 +4,9 @@
 
 .settings-drawer-popup {
   --settings-page-inline-space: calc(4 * var(--spacing));
+  --settings-carousel-bottom-space: calc(
+    var(--bleed, 3rem) + var(--spacing-4) + 24px + var(--spacing-5)
+  );
   overflow: hidden;
 }
 
@@ -45,7 +48,8 @@
   display: flex;
   flex-direction: column;
   padding: 0 max(var(--settings-page-inline-space), env(safe-area-inset-right, 0px))
-    var(--spacing-4) max(var(--settings-page-inline-space), env(safe-area-inset-left, 0px));
+    calc(var(--settings-carousel-bottom-space) + env(safe-area-inset-bottom, 0px))
+    max(var(--settings-page-inline-space), env(safe-area-inset-left, 0px));
 }
 
 .settings-drawer-inner > *,
@@ -86,15 +90,8 @@
 }
 
 .settings-drawer-popup .nav-carousel-container {
-  position: static;
-  left: auto;
-  bottom: auto;
+  bottom: calc(var(--spacing-4) + env(safe-area-inset-bottom, 0px) + var(--bleed, 3rem));
   z-index: 2;
-  flex: 0 0 auto;
-  align-self: center;
-  margin: var(--spacing-2) auto
-    calc(var(--bleed, 3rem) + var(--spacing-4) + env(safe-area-inset-bottom, 0px));
-  transform: none;
 }
 
 .settings-drawer-popup .carousel-dot[aria-current="true"]::after {
@@ -107,7 +104,8 @@
   flex-direction: column;
   gap: var(--spacing-5);
   padding: var(--spacing-4) max(var(--settings-page-inline-space), env(safe-area-inset-right, 0px))
-    var(--spacing-4) max(var(--settings-page-inline-space), env(safe-area-inset-left, 0px));
+    calc(var(--settings-carousel-bottom-space) + env(safe-area-inset-bottom, 0px))
+    max(var(--settings-page-inline-space), env(safe-area-inset-left, 0px));
 }
 
 .settings-page-heading {
