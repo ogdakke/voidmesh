@@ -344,7 +344,7 @@ export function HostedSharing({ api, workspace }: HostedSharingProps) {
               >
                 <Drawer.Trigger
                   render={(props) => (
-                    <Button {...props} variant="primary" type="button">
+                    <Button {...props} variant="primary" size="md" type="button">
                       Create invitation link
                     </Button>
                   )}

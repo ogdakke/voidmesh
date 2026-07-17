@@ -212,6 +212,7 @@ export default function HostedWorkspaceSettings({
             </label>
             <Button
               variant="secondary"
+              size="md"
               type="submit"
               disabled={pendingAction !== null}
               isPending={pendingAction === "rename"}
@@ -222,6 +223,7 @@ export default function HostedWorkspaceSettings({
         )}
         <Button
           variant="secondary"
+          size="md"
           type="button"
           onClick={() => location.assign(`/w/${workspace.id}/settings`)}
         >
@@ -249,7 +251,7 @@ export default function HostedWorkspaceSettings({
             >
               <Drawer.Trigger
                 render={(props) => (
-                  <Button {...props} variant="primary" type="button">
+                  <Button {...props} variant="primary" size="md" type="button">
                     Create invitation link
                   </Button>
                 )}
@@ -261,6 +263,7 @@ export default function HostedWorkspaceSettings({
                   <div className="settings-action-buttons">
                     <Button
                       variant="primary"
+                      size="md"
                       type="button"
                       disabled={pendingAction !== null}
                       isPending={pendingAction === `create-${linkPermission}`}
@@ -270,6 +273,7 @@ export default function HostedWorkspaceSettings({
                     </Button>
                     <Button
                       variant="secondary"
+                      size="md"
                       type="button"
                       disabled={pendingAction !== null}
                       onClick={() => setInvitationOpen(false)}
@@ -286,6 +290,7 @@ export default function HostedWorkspaceSettings({
                 <code>{createdLink}</code>
                 <Button
                   variant="secondary"
+                  size="md"
                   type="button"
                   onClick={() => void navigator.clipboard.writeText(createdLink)}
                 >
@@ -380,6 +385,7 @@ export default function HostedWorkspaceSettings({
             </p>
             <Button
               variant="secondary"
+              size="md"
               type="button"
               disabled={pendingAction !== null}
               isPending={pendingAction === "export"}
@@ -406,7 +412,7 @@ export default function HostedWorkspaceSettings({
               >
                 <Drawer.Trigger
                   render={(props) => (
-                    <Button {...props} variant="destructive" type="button">
+                    <Button {...props} variant="destructive" size="md" type="button">
                       Delete workspace…
                     </Button>
                   )}
@@ -420,6 +426,7 @@ export default function HostedWorkspaceSettings({
                     <div className="settings-action-buttons">
                       <Button
                         variant="destructive"
+                        size="md"
                         type="button"
                         disabled={pendingAction !== null}
                         isPending={pendingAction === "delete"}
@@ -429,6 +436,7 @@ export default function HostedWorkspaceSettings({
                       </Button>
                       <Button
                         variant="secondary"
+                        size="md"
                         type="button"
                         disabled={pendingAction !== null}
                         onClick={() => setDeleteOpen(false)}

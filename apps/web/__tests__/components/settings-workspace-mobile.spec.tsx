@@ -58,13 +58,21 @@ describe("Hosted mobile workspace settings", () => {
       </Drawer.Provider>,
     );
 
-    expect(screen.getByRole("button", { name: "Save name" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save name" })).toHaveAttribute("data-size", "md");
+    expect(screen.getByRole("button", { name: "Open full workspace settings" })).toHaveAttribute(
+      "data-size",
+      "md",
+    );
     expect(screen.getByRole("button", { name: "Download .vdmsh" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete workspace…" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("heading", { name: "Members" })).toBeVisible());
     expect(screen.getByText("owner@example.com")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create invitation link" }));
+    const createInvitationButton = screen.getByRole("button", {
+      name: "Create invitation link",
+    });
+    expect(createInvitationButton).toHaveAttribute("data-size", "md");
+    fireEvent.click(createInvitationButton);
     expect(screen.getByRole("group", { name: "Link permissions" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Can view" })).toBeChecked();
     expect(screen.getByRole("radio", { name: "Can edit" })).not.toBeChecked();

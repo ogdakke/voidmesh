@@ -4,7 +4,6 @@
 
 .settings-drawer-popup {
   --settings-page-inline-space: calc(4 * var(--spacing));
-  --settings-carousel-bottom-space: calc(20 * var(--spacing));
   overflow: hidden;
 }
 
@@ -46,8 +45,12 @@
   display: flex;
   flex-direction: column;
   padding: 0 max(var(--settings-page-inline-space), env(safe-area-inset-right, 0px))
-    calc(var(--settings-carousel-bottom-space) + env(safe-area-inset-bottom, 0px))
-    max(var(--settings-page-inline-space), env(safe-area-inset-left, 0px));
+    var(--spacing-4) max(var(--settings-page-inline-space), env(safe-area-inset-left, 0px));
+}
+
+.settings-drawer-inner > *,
+.settings-workspace-page > * {
+  flex-shrink: 0;
 }
 
 .settings-drawer-account {
@@ -83,7 +86,20 @@
 }
 
 .settings-drawer-popup .nav-carousel-container {
-  bottom: calc(var(--spacing-4) + env(safe-area-inset-bottom, 0px) + var(--bleed, 3rem));
+  position: static;
+  left: auto;
+  bottom: auto;
+  z-index: 2;
+  flex: 0 0 auto;
+  align-self: center;
+  margin: var(--spacing-2) auto
+    calc(var(--bleed, 3rem) + var(--spacing-4) + env(safe-area-inset-bottom, 0px));
+  transform: none;
+}
+
+.settings-drawer-popup .carousel-dot[aria-current="true"]::after {
+  width: calc(var(--dot-size) * 2);
+  background: var(--gray-1100);
 }
 
 .settings-workspace-page {
@@ -91,8 +107,7 @@
   flex-direction: column;
   gap: var(--spacing-5);
   padding: var(--spacing-4) max(var(--settings-page-inline-space), env(safe-area-inset-right, 0px))
-    calc(var(--settings-carousel-bottom-space) + env(safe-area-inset-bottom, 0px))
-    max(var(--settings-page-inline-space), env(safe-area-inset-left, 0px));
+    var(--spacing-4) max(var(--settings-page-inline-space), env(safe-area-inset-left, 0px));
 }
 
 .settings-page-heading {
@@ -210,6 +225,9 @@
 .settings-workspace-form > .ui-button,
 .settings-action-section > .ui-button {
   width: 100%;
+  min-height: calc(10 * var(--spacing));
+  flex-shrink: 0;
+  font-size: 1rem;
 }
 
 .settings-list,
@@ -331,6 +349,8 @@
 
 .settings-action-buttons .ui-button {
   width: 100%;
+  min-height: calc(10 * var(--spacing));
+  font-size: 1rem;
 }
 
 .settings-permissions {
