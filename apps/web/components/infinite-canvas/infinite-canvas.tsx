@@ -1,6 +1,6 @@
 import { useKeybinds } from "#context/keybind-context.ts";
 import { useCanvasAccess, useCanvasPreferences } from "#context/use-canvas.ts";
-import { useHostedWorkspaceRuntime } from "#context/hosted-workspace-runtime.tsx";
+import { useHostedWorkspaceRuntime } from "#context/use-hosted-workspace-runtime.ts";
 import { useLayout } from "#context/use-layout.ts";
 import { useCanvasContainerResize } from "#hooks/use-canvas-container-resize.ts";
 import { useCanvasRendererRuntime } from "#hooks/use-canvas-renderer-runtime.ts";

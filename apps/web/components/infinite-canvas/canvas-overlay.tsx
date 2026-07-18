@@ -14,7 +14,7 @@ import SettingsDrawer from "../settings/settings.mobile.tsx";
 import { Button } from "../ui/button/index.tsx";
 import { UndoRedoButtons } from "./undo-redo.tsx";
 import { HostedPresenceOverlay } from "./hosted-presence-overlay.tsx";
-import { useHostedWorkspaceRuntime } from "#context/hosted-workspace-runtime.tsx";
+import { useHostedWorkspaceRuntime } from "#context/use-hosted-workspace-runtime.ts";
 
 interface CanvasOverlayProps {
   perfRef: RefObject<HTMLDivElement | null>;

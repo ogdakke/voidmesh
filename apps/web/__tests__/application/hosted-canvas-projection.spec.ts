@@ -72,6 +72,8 @@ describe("HostedCanvasProjectionService", () => {
       vi.fn<() => void>(),
     );
     const store = new CanvasStore();
+    const mutations = vi.fn<Parameters<CanvasStore["subscribeEntityMutations"]>[0]>();
+    store.subscribeEntityMutations(mutations);
     const projection = new HostedCanvasProjectionService({
       api,
       assets,
@@ -85,6 +87,7 @@ describe("HostedCanvasProjectionService", () => {
     });
 
     await projection.applyRemoteEntity(hostedEntity("entity-1", firstAsset), false);
+    expect(mutations).toHaveBeenLastCalledWith(expect.objectContaining({ projected: true }));
     const firstEntity = store.getState().entities.get("entity-1");
     if (firstEntity?.mediaSource.type !== "image") throw new Error("Expected first image");
     const closeFirst = vi.spyOn(firstEntity.mediaSource.asset.imageBitmap, "close");
@@ -98,6 +101,7 @@ describe("HostedCanvasProjectionService", () => {
     expect(get.mock.calls.filter(([assetId]) => assetId === firstAsset.id)).toHaveLength(2);
 
     projection.removeRemoteEntities(["entity-1", "entity-2"]);
+    expect(mutations).toHaveBeenLastCalledWith(expect.objectContaining({ projected: true }));
     await projection.applyRemoteEntity(hostedEntity("entity-3", firstAsset), false);
     expect(get.mock.calls.filter(([assetId]) => assetId === firstAsset.id)).toHaveLength(3);
 

@@ -1,4 +1,4 @@
-import { useHostedWorkspaceRuntime } from "#context/hosted-workspace-runtime.tsx";
+import { useHostedWorkspaceRuntime } from "#context/use-hosted-workspace-runtime.ts";
 import { useCanvasSelector, useViewport } from "#context/use-canvas.ts";
 import "./hosted-presence-overlay.css";
 

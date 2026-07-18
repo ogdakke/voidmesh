@@ -67,6 +67,7 @@ const MAX_PRESENCE_BACKPRESSURE_BYTES = 64 * 1024;
 
 export class WorkspaceRoom extends DurableObject<Env> {
   #document = new Y.Doc();
+  #documentMessageTail: Promise<void> = Promise.resolve();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -210,8 +211,11 @@ export class WorkspaceRoom extends DurableObject<Env> {
     server.send(JSON.stringify(hello));
     const snapshot = this.#readLocalSnapshot();
     if (snapshot) {
+      const encodeSnapshot = hasDocumentGeneration(this.#document)
+        ? encodeServerYjsRebase
+        : encodeServerYjsUpdate;
       server.send(
-        encodeServerYjsUpdate(
+        encodeSnapshot(
           snapshot.room_sequence,
           snapshot.update_id,
           new Uint8Array(snapshot.update_bytes),
@@ -293,177 +297,193 @@ export class WorkspaceRoom extends DurableObject<Env> {
       return;
     }
 
-    if (attachment.role === "viewer") {
-      socket.send(JSON.stringify({ type: "error", code: "read-only" }));
-      return;
-    }
-    const rebase = decodeClientYjsRebase(message);
-    const decoded = rebase ?? decodeClientYjsUpdate(message);
-    if (!decoded) {
-      socket.send(JSON.stringify({ type: "error", code: "invalid-update" }));
-      return;
-    }
+    const predecessor = this.#documentMessageTail;
+    let releaseDocumentMessage = (): void => {};
+    this.#documentMessageTail = new Promise((resolve) => {
+      releaseDocumentMessage = resolve;
+    });
+    await predecessor;
     try {
-      Y.decodeUpdate(decoded.update);
-    } catch {
-      socket.send(JSON.stringify({ type: "error", code: "invalid-yjs-update" }));
-      return;
-    }
-    const current = this.ctx.storage.sql
-      .exec<{
-        room_sequence: number;
-      }>("SELECT room_sequence FROM applied_update_ids WHERE update_id = ?", decoded.updateId)
-      .toArray()[0];
-    if (current) {
-      const status = this.#readStatus()!;
-      const referencedAssetIds = validateDocument(this.#document);
-      if (referencedAssetIds) {
-        await this.#reconcileAssetReferences(
-          status.workspaceId,
-          referencedAssetIds,
-          attachment.userId,
-          decoded.updateId,
-        );
-      }
-      socket.send(
-        JSON.stringify({
-          roomSequence: current.room_sequence,
-          type: "ack",
-          updateId: decoded.updateId,
-        } satisfies ServerAckMessage),
-      );
-      if (rebase) {
-        socket.send(
-          encodeServerYjsRebase(
-            status.roomSequence,
-            decoded.updateId,
-            Y.encodeStateAsUpdate(this.#document),
-          ),
-        );
-      }
-      return;
-    }
-    if (rebase) {
-      await this.#applyDocumentRebase(socket, attachment, rebase.updateId, rebase.update);
-      return;
-    }
-    const candidate = new Y.Doc();
-    let referencedAssetIds: Set<string> | null = null;
-    try {
-      Y.applyUpdate(candidate, Y.encodeStateAsUpdate(this.#document));
-      Y.applyUpdate(candidate, decoded.update);
-      if (hasPendingYjsData(candidate)) {
-        candidate.destroy();
-        socket.send(
-          JSON.stringify({
-            code: "missing-yjs-dependencies",
-            type: "error",
-            updateId: decoded.updateId,
-          }),
-        );
+      const documentAttachment = socket.deserializeAttachment() as ConnectionAttachment | null;
+      if (!documentAttachment) {
+        socket.close(4002, "Missing connection identity");
         return;
       }
-      referencedAssetIds = validateDocument(candidate);
-    } catch {
-      referencedAssetIds = null;
-    }
-    if (!referencedAssetIds) {
-      candidate.destroy();
-      socket.send(JSON.stringify({ type: "error", code: "invalid-document" }));
-      return;
-    }
-    const status = this.#readStatus()!;
-    const workspaceId = status.workspaceId;
-    const recoverableAssets = await this.env.DB.prepare(
-      `SELECT id FROM assets
-       WHERE workspace_id = ? AND lifecycle IN ('verified', 'active', 'unreferenced')`,
-    )
-      .bind(workspaceId)
-      .all<{ id: string }>();
-    const recoverableAssetIds = new Set(recoverableAssets.results.map(({ id }) => id));
-    if ([...referencedAssetIds].some((assetId) => !recoverableAssetIds.has(assetId))) {
-      candidate.destroy();
-      socket.send(JSON.stringify({ type: "error", code: "unknown-asset" }));
-      return;
-    }
-    const nextRoomSequence = status.roomSequence + 1;
-    const playbackStamped = stampPlaybackAnchors(
-      this.#document,
-      candidate,
-      nextRoomSequence,
-      Date.now(),
-    );
-    const acceptedUpdate = playbackStamped
-      ? Y.encodeStateAsUpdate(candidate, Y.encodeStateVector(this.#document))
-      : decoded.update;
-    candidate.destroy();
-    if (acceptedUpdate.byteLength > MAX_YJS_UPDATE_BYTES) {
-      socket.send(JSON.stringify({ type: "error", code: "invalid-document" }));
-      return;
-    }
-    const result = this.ctx.storage.transactionSync(() => {
-      const existing = this.ctx.storage.sql
+      if (documentAttachment.role === "viewer") {
+        socket.send(JSON.stringify({ type: "error", code: "read-only" }));
+        return;
+      }
+      const rebase = decodeClientYjsRebase(message);
+      const decoded = rebase ?? decodeClientYjsUpdate(message);
+      if (!decoded) {
+        socket.send(JSON.stringify({ type: "error", code: "invalid-update" }));
+        return;
+      }
+      try {
+        Y.decodeUpdate(decoded.update);
+      } catch {
+        socket.send(JSON.stringify({ type: "error", code: "invalid-yjs-update" }));
+        return;
+      }
+      const current = this.ctx.storage.sql
         .exec<{
           room_sequence: number;
         }>("SELECT room_sequence FROM applied_update_ids WHERE update_id = ?", decoded.updateId)
         .toArray()[0];
-      if (existing) return { isNew: false, roomSequence: existing.room_sequence };
-      const roomSequence = this.#readStatus()!.roomSequence + 1;
-      this.ctx.storage.sql.exec(
-        `INSERT INTO yjs_updates (
+      if (current) {
+        const status = this.#readStatus()!;
+        const referencedAssetIds = validateDocument(this.#document);
+        if (referencedAssetIds) {
+          await this.#reconcileAssetReferences(
+            status.workspaceId,
+            referencedAssetIds,
+            documentAttachment.userId,
+            decoded.updateId,
+          );
+        }
+        socket.send(
+          JSON.stringify({
+            roomSequence: current.room_sequence,
+            type: "ack",
+            updateId: decoded.updateId,
+          } satisfies ServerAckMessage),
+        );
+        if (rebase) {
+          socket.send(
+            encodeServerYjsRebase(
+              status.roomSequence,
+              decoded.updateId,
+              Y.encodeStateAsUpdate(this.#document),
+            ),
+          );
+        }
+        return;
+      }
+      if (rebase) {
+        await this.#applyDocumentRebase(socket, documentAttachment, rebase.updateId, rebase.update);
+        return;
+      }
+      const candidate = new Y.Doc();
+      let referencedAssetIds: Set<string> | null = null;
+      try {
+        Y.applyUpdate(candidate, Y.encodeStateAsUpdate(this.#document));
+        Y.applyUpdate(candidate, decoded.update);
+        if (hasPendingYjsData(candidate)) {
+          candidate.destroy();
+          socket.send(
+            JSON.stringify({
+              code: "missing-yjs-dependencies",
+              type: "error",
+              updateId: decoded.updateId,
+            }),
+          );
+          return;
+        }
+        referencedAssetIds = validateDocument(candidate);
+      } catch {
+        referencedAssetIds = null;
+      }
+      if (!referencedAssetIds) {
+        candidate.destroy();
+        socket.send(JSON.stringify({ type: "error", code: "invalid-document" }));
+        return;
+      }
+
+      const status = this.#readStatus()!;
+      const workspaceId = status.workspaceId;
+      const recoverableAssets = await this.env.DB.prepare(
+        `SELECT id FROM assets
+       WHERE workspace_id = ? AND lifecycle IN ('verified', 'active', 'unreferenced')`,
+      )
+        .bind(workspaceId)
+        .all<{ id: string }>();
+      const recoverableAssetIds = new Set(recoverableAssets.results.map(({ id }) => id));
+      if ([...referencedAssetIds].some((assetId) => !recoverableAssetIds.has(assetId))) {
+        candidate.destroy();
+        socket.send(JSON.stringify({ type: "error", code: "unknown-asset" }));
+        return;
+      }
+      const nextRoomSequence = status.roomSequence + 1;
+      const playbackStamped = stampPlaybackAnchors(
+        this.#document,
+        candidate,
+        nextRoomSequence,
+        Date.now(),
+      );
+      const acceptedUpdate = playbackStamped
+        ? Y.encodeStateAsUpdate(candidate, Y.encodeStateVector(this.#document))
+        : decoded.update;
+      candidate.destroy();
+      if (acceptedUpdate.byteLength > MAX_YJS_UPDATE_BYTES) {
+        socket.send(JSON.stringify({ type: "error", code: "invalid-document" }));
+        return;
+      }
+      const result = this.ctx.storage.transactionSync(() => {
+        const existing = this.ctx.storage.sql
+          .exec<{
+            room_sequence: number;
+          }>("SELECT room_sequence FROM applied_update_ids WHERE update_id = ?", decoded.updateId)
+          .toArray()[0];
+        if (existing) return { isNew: false, roomSequence: existing.room_sequence };
+        const roomSequence = this.#readStatus()!.roomSequence + 1;
+        this.ctx.storage.sql.exec(
+          `INSERT INTO yjs_updates (
           room_sequence, update_id, actor_id, update_bytes, created_at
         ) VALUES (?, ?, ?, ?, ?)`,
-        roomSequence,
-        decoded.updateId,
-        attachment.userId,
-        acceptedUpdate.buffer as ArrayBuffer,
-        Date.now(),
-      );
-      this.ctx.storage.sql.exec(
-        `INSERT INTO applied_update_ids (update_id, room_sequence, created_at)
+          roomSequence,
+          decoded.updateId,
+          documentAttachment.userId,
+          acceptedUpdate.buffer as ArrayBuffer,
+          Date.now(),
+        );
+        this.ctx.storage.sql.exec(
+          `INSERT INTO applied_update_ids (update_id, room_sequence, created_at)
          VALUES (?, ?, ?)`,
-        decoded.updateId,
-        roomSequence,
-        Date.now(),
-      );
-      this.ctx.storage.sql.exec(
-        "UPDATE room_metadata SET room_sequence = ? WHERE singleton = 1",
-        roomSequence,
-      );
-      return { isNew: true, roomSequence };
-    });
-    let serverFrame: ArrayBuffer | null = null;
-    if (result.isNew) {
-      Y.applyUpdate(this.#document, acceptedUpdate);
-      await this.#reconcileAssetReferences(
-        workspaceId,
-        referencedAssetIds,
-        attachment.userId,
-        decoded.updateId,
-      );
-      await this.env.DB.prepare(
-        `UPDATE workspaces
+          decoded.updateId,
+          roomSequence,
+          Date.now(),
+        );
+        this.ctx.storage.sql.exec(
+          "UPDATE room_metadata SET room_sequence = ? WHERE singleton = 1",
+          roomSequence,
+        );
+        return { isNew: true, roomSequence };
+      });
+      let serverFrame: ArrayBuffer | null = null;
+      if (result.isNew) {
+        Y.applyUpdate(this.#document, acceptedUpdate);
+        await this.#reconcileAssetReferences(
+          workspaceId,
+          referencedAssetIds,
+          documentAttachment.userId,
+          decoded.updateId,
+        );
+        await this.env.DB.prepare(
+          `UPDATE workspaces
          SET current_room_sequence = ?, updated_at = ?
          WHERE id = ? AND current_room_sequence < ?`,
-      )
-        .bind(result.roomSequence, Date.now(), workspaceId, result.roomSequence)
-        .run();
-      serverFrame = encodeServerYjsUpdate(result.roomSequence, decoded.updateId, acceptedUpdate);
-    }
-    const ack: ServerAckMessage = {
-      roomSequence: result.roomSequence,
-      type: "ack",
-      updateId: decoded.updateId,
-    };
-    socket.send(JSON.stringify(ack));
-    if (serverFrame) {
-      this.#broadcast(serverFrame, socket);
-      // A transformed playback anchor contains the room's authoritative time
-      // and sequence, so the originating client must receive that correction too.
-      if (playbackStamped) socket.send(serverFrame);
-      if (result.roomSequence % this.#snapshotInterval() === 0) {
-        await this.#checkpoint(result.roomSequence);
+        )
+          .bind(result.roomSequence, Date.now(), workspaceId, result.roomSequence)
+          .run();
+        serverFrame = encodeServerYjsUpdate(result.roomSequence, decoded.updateId, acceptedUpdate);
       }
+      const ack: ServerAckMessage = {
+        roomSequence: result.roomSequence,
+        type: "ack",
+        updateId: decoded.updateId,
+      };
+      socket.send(JSON.stringify(ack));
+      if (serverFrame) {
+        this.#broadcast(serverFrame, socket);
+        // A transformed playback anchor contains the room's authoritative time
+        // and sequence, so the originating client must receive that correction too.
+        if (playbackStamped) socket.send(serverFrame);
+        if (result.roomSequence % this.#snapshotInterval() === 0) {
+          await this.#checkpoint(result.roomSequence);
+        }
+      }
+    } finally {
+      releaseDocumentMessage();
     }
   }
 
@@ -497,6 +517,24 @@ export class WorkspaceRoom extends DurableObject<Env> {
         status,
         "invalid-document",
         rejectionReason,
+        entityCount,
+        update.byteLength,
+      );
+      socket.send(JSON.stringify({ type: "error", code: "invalid-document", updateId }));
+      return;
+    }
+
+    const candidateEntities = candidate.getMap("entities");
+    const droppedEntityCount = [...this.#document.getMap("entities").keys()].filter(
+      (entityId) => !candidateEntities.has(entityId),
+    ).length;
+    if (droppedEntityCount > 0) {
+      const entityCount = candidateEntities.size;
+      candidate.destroy();
+      this.#logRejectedDocumentRebase(
+        status,
+        "invalid-document",
+        "destructive-document-rebase",
         entityCount,
         update.byteLength,
       );
@@ -1060,6 +1098,11 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
 
 function hasPendingYjsData(document: Y.Doc): boolean {
   return document.store.pendingStructs !== null || document.store.pendingDs !== null;
+}
+
+function hasDocumentGeneration(document: Y.Doc): boolean {
+  const generation = document.getMap("recovery").get("generation");
+  return typeof generation === "string" && generation.length > 0;
 }
 
 function createRebasedDocument(source: Y.Doc): Y.Doc {

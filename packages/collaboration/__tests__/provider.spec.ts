@@ -176,6 +176,84 @@ describe("HostedCollaborationProvider", () => {
     provider.destroy();
   });
 
+  it("replaces a stale persisted generation from room authority without echoing stale history", async () => {
+    const local = new Y.Doc();
+    local.getMap("recovery").set("generation", "stale-generation");
+    local.getMap("entities").set("stale-entity", { name: "Stale" });
+    const server = new Y.Doc();
+    server.getMap("recovery").set("generation", "room-generation");
+    server.getMap("entities").set("room-entity", { name: "From room" });
+    const socket = new FakeSocket();
+    const provider = new HostedCollaborationProvider({
+      document: local,
+      socketFactory: () => socket as unknown as WebSocket,
+    });
+    provider.connect();
+    await Promise.resolve();
+    socket.open();
+    socket.receive(
+      encodeServerYjsRebase(
+        8,
+        "550e8400-e29b-41d4-a716-446655440080",
+        Y.encodeStateAsUpdate(server),
+      ),
+    );
+    socket.receive(
+      JSON.stringify({
+        roomSequence: 8,
+        stateVector: bytesToBase64Url(Y.encodeStateVector(server)),
+        type: "sync-complete",
+      }),
+    );
+
+    await vi.waitFor(() => expect(provider.status).toBe("connected"));
+    expect(local.getMap("entities").has("stale-entity")).toBe(false);
+    expect(local.getMap("entities").get("room-entity")).toEqual({ name: "From room" });
+    expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(0);
+    provider.destroy();
+  });
+
+  it("merges same-generation offline changes after an authoritative snapshot", async () => {
+    const server = new Y.Doc();
+    server.getMap("recovery").set("generation", "shared-generation");
+    server.getMap("entities").set("room-entity", { name: "From room" });
+    const local = new Y.Doc();
+    Y.applyUpdate(local, Y.encodeStateAsUpdate(server));
+    local.getMap("entities").set("offline-entity", { name: "Offline" });
+    const socket = new FakeSocket();
+    const provider = new HostedCollaborationProvider({
+      document: local,
+      socketFactory: () => socket as unknown as WebSocket,
+    });
+    provider.connect();
+    await Promise.resolve();
+    socket.open();
+    socket.receive(
+      encodeServerYjsRebase(
+        9,
+        "550e8400-e29b-41d4-a716-446655440090",
+        Y.encodeStateAsUpdate(server),
+      ),
+    );
+    socket.receive(
+      JSON.stringify({
+        roomSequence: 9,
+        stateVector: bytesToBase64Url(Y.encodeStateVector(server)),
+        type: "sync-complete",
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(1),
+    );
+    const offline = decodeClientYjsUpdate(
+      socket.sent.find((value): value is ArrayBuffer => value instanceof ArrayBuffer)!,
+    )!;
+    Y.applyUpdate(server, offline.update);
+    expect(server.getMap("entities").get("offline-entity")).toEqual({ name: "Offline" });
+    provider.destroy();
+  });
+
   it("rebases logical state when the server reports missing Yjs dependencies", async () => {
     const local = new Y.Doc();
     const entity = new Y.Map<unknown>();
@@ -251,6 +329,120 @@ describe("HostedCollaborationProvider", () => {
     Y.applyUpdate(server, followup.update);
     expect(server.getMap<Y.Map<unknown>>("entities").get("entity-1")?.get("name")).toBe(
       "Still synced",
+    );
+    provider.destroy();
+  });
+
+  it("does not send obsolete delete sets after an unchanged recovery", async () => {
+    const local = new Y.Doc();
+    const staleEntity = new Y.Map<unknown>();
+    staleEntity.set("name", "Stale");
+    local.getMap<Y.Map<unknown>>("entities").set("stale-entity", staleEntity);
+    local.getMap("entities").delete("stale-entity");
+    const server = new Y.Doc();
+    const socket = new FakeSocket();
+    const provider = new HostedCollaborationProvider({
+      document: local,
+      socketFactory: () => socket as unknown as WebSocket,
+    });
+    provider.connect();
+    await Promise.resolve();
+    socket.open();
+    socket.receive(
+      JSON.stringify({
+        roomSequence: 0,
+        stateVector: bytesToBase64Url(Y.encodeStateVector(server)),
+        type: "sync-complete",
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(1),
+    );
+    const rejected = decodeClientYjsUpdate(
+      socket.sent.find((value): value is ArrayBuffer => value instanceof ArrayBuffer)!,
+    )!;
+
+    socket.receive(
+      JSON.stringify({
+        code: "missing-yjs-dependencies",
+        type: "error",
+        updateId: rejected.updateId,
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(2),
+    );
+    const recovery = decodeClientYjsRebase(
+      socket.sent.filter((value): value is ArrayBuffer => value instanceof ArrayBuffer)[1]!,
+    )!;
+
+    socket.receive(JSON.stringify({ roomSequence: 1, type: "ack", updateId: recovery.updateId }));
+    socket.receive(encodeServerYjsRebase(1, recovery.updateId, recovery.update));
+    await Promise.resolve();
+
+    expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(2);
+    provider.destroy();
+  });
+
+  it("preserves an unacknowledged local entity when another client rebases the room", async () => {
+    const local = new Y.Doc();
+    const server = new Y.Doc();
+    const socket = new FakeSocket();
+    const provider = new HostedCollaborationProvider({
+      document: local,
+      socketFactory: () => socket as unknown as WebSocket,
+    });
+    provider.connect();
+    await Promise.resolve();
+    socket.open();
+    socket.receive(
+      JSON.stringify({
+        roomSequence: 0,
+        stateVector: bytesToBase64Url(Y.encodeStateVector(server)),
+        type: "sync-complete",
+      }),
+    );
+    await vi.waitFor(() => expect(provider.status).toBe("connected"));
+
+    const entity = new Y.Map<unknown>();
+    entity.set("name", "Pending local entity");
+    local.getMap<Y.Map<unknown>>("entities").set("entity-local", entity);
+    await vi.waitFor(() =>
+      expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(1),
+    );
+    const pending = decodeClientYjsUpdate(
+      socket.sent.find((value): value is ArrayBuffer => value instanceof ArrayBuffer)!,
+    )!;
+
+    const competing = new Y.Doc();
+    competing.getMap<string>("recovery").set("generation", crypto.randomUUID());
+    socket.receive(
+      encodeServerYjsRebase(
+        1,
+        "550e8400-e29b-41d4-a716-446655440099",
+        Y.encodeStateAsUpdate(competing),
+      ),
+    );
+
+    expect(local.getMap("entities").has("entity-local")).toBe(true);
+
+    socket.receive(
+      JSON.stringify({
+        code: "missing-yjs-dependencies",
+        type: "error",
+        updateId: pending.updateId,
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(2),
+    );
+    const recovery = decodeClientYjsRebase(
+      socket.sent.filter((value): value is ArrayBuffer => value instanceof ArrayBuffer)[1]!,
+    )!;
+    const recovered = new Y.Doc();
+    Y.applyUpdate(recovered, recovery.update);
+    expect(recovered.getMap<Y.Map<unknown>>("entities").get("entity-local")?.get("name")).toBe(
+      "Pending local entity",
     );
     provider.destroy();
   });

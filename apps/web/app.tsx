@@ -3,6 +3,7 @@ import { NuqsAdapter } from "nuqs/adapters/react";
 import React, { lazy, Suspense, useEffect, useRef, useState, type PropsWithChildren } from "react";
 import ReactDOM from "react-dom/client";
 import { logger } from "#lib/client.logger.ts";
+import { getOrCreateReactRoot } from "#lib/react-root.ts";
 import { ToastProvider } from "#ui/toast/toast.tsx";
 import { PwaUpdateManager } from "#components/pwa/pwa-update-manager.tsx";
 import { CanvasProvider } from "#context/canvas-context.tsx";
@@ -148,14 +149,18 @@ function CanvasApplication({
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")!, {
-  onCaughtError(error, errorInfo) {
-    logger.error("[ErrorBoundary]", error, errorInfo.componentStack);
-  },
-  onUncaughtError(error, errorInfo) {
-    logger.error("[Uncaught]", error, errorInfo.componentStack);
-  },
-}).render(
+const reactRoot = getOrCreateReactRoot(import.meta.hot?.data, () =>
+  ReactDOM.createRoot(document.getElementById("root")!, {
+    onCaughtError(error, errorInfo) {
+      logger.error("[ErrorBoundary]", error, errorInfo.componentStack);
+    },
+    onUncaughtError(error, errorInfo) {
+      logger.error("[Uncaught]", error, errorInfo.componentStack);
+    },
+  }),
+);
+
+reactRoot.render(
   <React.StrictMode>
     <AnalyticsProvider>
       <NuqsAdapter>

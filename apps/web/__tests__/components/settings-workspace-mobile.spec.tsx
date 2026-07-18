@@ -3,7 +3,7 @@ import { WorkspaceLifecycle, WorkspaceRole } from "@voidmesh/domain";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import HostedWorkspaceSettings from "#components/settings/settings.workspace.mobile.tsx";
-import type { useHostedWorkspaceRuntime } from "#context/hosted-workspace-runtime.tsx";
+import type { useHostedWorkspaceRuntime } from "#context/use-hosted-workspace-runtime.ts";
 import type { HostedApiClient } from "#lib/hosted-api-client.ts";
 import { Drawer } from "#ui/drawer/index.tsx";
 

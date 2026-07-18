@@ -48,7 +48,7 @@ import {
   imageExportOptionsForFormat,
 } from "#renderer/export-formats.ts";
 import type { Point } from "#types/canvas.ts";
-import { useHostedWorkspaceRuntime } from "#context/hosted-workspace-runtime.tsx";
+import { useHostedWorkspaceRuntime } from "#context/use-hosted-workspace-runtime.ts";
 
 const IMAGE_FORMAT_ICONS: Record<ImageExportFormat, typeof PngFormat> = {
   png: PngFormat,

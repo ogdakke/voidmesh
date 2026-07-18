@@ -19,7 +19,7 @@ import {
 } from "./settings.shared.tsx";
 import { MobileAccountDrawer } from "#components/hosted/mobile-account-drawer.tsx";
 import { CarouselDots } from "#components/about/carousel-dots.tsx";
-import { useHostedWorkspaceRuntime } from "#context/hosted-workspace-runtime.tsx";
+import { useHostedWorkspaceRuntime } from "#context/use-hosted-workspace-runtime.ts";
 import { useCarouselDots } from "#hooks/use-carousel-dots.ts";
 
 const loadHostedWorkspaceSettings = () => import("./settings.workspace.mobile.tsx");

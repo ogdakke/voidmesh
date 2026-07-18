@@ -28,6 +28,7 @@ const CLOCK_SAMPLE_WINDOW = 8;
 const CLIENT_CLOSE_ASSET_SYNC_FAILED = 4100;
 const CLIENT_CLOSE_RESYNCHRONIZE = 4101;
 const CLIENT_CLOSE_RECOVERY_FAILED = 4102;
+const HOSTED_DOCUMENT_STORAGE_VERSION = 2;
 
 export type CollaborationConnectionStatus =
   | "offline"
@@ -73,7 +74,8 @@ export class HostedCollaborationProvider {
   #lastSynchronizationError = "";
   #recoveryUpdateId: string | null = null;
   #acceptedRecoveryUpdateId: string | null = null;
-  #recoveryStateVector: Uint8Array | null = null;
+  #recoveryFollowups: Uint8Array[] = [];
+  #receivedAuthoritativeReplacement = false;
   #messageQueue: Promise<void> | null = null;
   #clockTimer: ReturnType<typeof setInterval> | null = null;
   #clockSamples: { offsetMs: number; roundTripMs: number }[] = [];
@@ -153,10 +155,12 @@ export class HostedCollaborationProvider {
   }
 
   readonly #handleDocumentUpdate = (update: Uint8Array, origin: unknown): void => {
-    if (origin === REMOTE_ORIGIN || this.#status !== "connected" || this.#recoveryUpdateId) {
+    if (origin === REMOTE_ORIGIN) return;
+    if (this.#recoveryUpdateId) {
+      this.#recoveryFollowups.push(update);
       return;
     }
-    this.#sendUpdate(update);
+    if (this.#status === "connected") this.#sendUpdate(update);
   };
 
   async #open(): Promise<void> {
@@ -224,8 +228,17 @@ export class HostedCollaborationProvider {
           if (rebase.updateId === this.#acceptedRecoveryUpdateId) {
             this.#acceptedRecoveryUpdateId = null;
           }
-        } else if (!this.#recoveryUpdateId && !this.#acceptedRecoveryUpdateId) {
-          replaceDocumentWithUpdate(this.#document, rebase.update);
+        } else if (
+          !this.#recoveryUpdateId &&
+          !this.#acceptedRecoveryUpdateId &&
+          this.#pending.size === 0
+        ) {
+          if (hasSameDocumentGeneration(this.#document, rebase.update)) {
+            Y.applyUpdate(this.#document, rebase.update, REMOTE_ORIGIN);
+          } else {
+            replaceDocumentWithUpdate(this.#document, rebase.update);
+            this.#receivedAuthoritativeReplacement = true;
+          }
         }
         return;
       }
@@ -264,13 +277,13 @@ export class HostedCollaborationProvider {
     if (type === "ack") {
       const updateId = (parsed as ServerAckMessage).updateId;
       if (updateId === this.#recoveryUpdateId) {
-        const recoveryStateVector = this.#recoveryStateVector;
+        const recoveryFollowups = this.#recoveryFollowups;
         this.#pending.clear();
         this.#recoveryUpdateId = null;
-        this.#recoveryStateVector = null;
+        this.#recoveryFollowups = [];
         this.#acceptedRecoveryUpdateId = updateId;
-        if (recoveryStateVector) {
-          const followup = Y.encodeStateAsUpdate(this.#document, recoveryStateVector);
+        if (recoveryFollowups.length > 0) {
+          const followup = Y.mergeUpdates(recoveryFollowups);
           if (followup.byteLength > EMPTY_YJS_UPDATE_BYTES) this.#sendUpdate(followup);
         }
       } else {
@@ -328,6 +341,10 @@ export class HostedCollaborationProvider {
     this.#setStatus("connected");
     this.#reconnectAttempt = 0;
     if (recovering) return;
+    if (this.#receivedAuthoritativeReplacement) {
+      this.#receivedAuthoritativeReplacement = false;
+      return;
+    }
     const offlineDiff = Y.encodeStateAsUpdate(this.#document, stateVector);
     if (offlineDiff.byteLength > EMPTY_YJS_UPDATE_BYTES) this.#sendUpdate(offlineDiff);
   }
@@ -368,7 +385,7 @@ export class HostedCollaborationProvider {
     const frame = encodeClientYjsRebase(updateId, update);
     this.#recoveryUpdateId = updateId;
     this.#acceptedRecoveryUpdateId = null;
-    this.#recoveryStateVector = Y.encodeStateVector(this.#document);
+    this.#recoveryFollowups = [];
     this.#pending.set(updateId, frame);
     this.#socket?.send(frame);
   }
@@ -389,7 +406,7 @@ export class HostedCollaborationProvider {
     this.#pending.clear();
     this.#recoveryUpdateId = null;
     this.#acceptedRecoveryUpdateId = null;
-    this.#recoveryStateVector = null;
+    this.#recoveryFollowups = [];
     this.#reportSynchronizationError(
       new Error("The shared workspace could not recover its document history"),
     );
@@ -527,7 +544,10 @@ function isPromiseLike(value: Promise<WebSocket> | WebSocket): value is Promise<
 
 export function createPersistedHostedDocument(workspaceId: WorkspaceId): PersistedHostedDocument {
   const document = new Y.Doc({ guid: workspaceId });
-  const persistence = new IndexeddbPersistence(`voidmesh:hosted:${workspaceId}`, document);
+  const persistence = new IndexeddbPersistence(
+    `voidmesh:hosted:v${HOSTED_DOCUMENT_STORAGE_VERSION}:${workspaceId}`,
+    document,
+  );
   return {
     async destroy() {
       await persistence.destroy();
@@ -536,6 +556,22 @@ export function createPersistedHostedDocument(workspaceId: WorkspaceId): Persist
     document,
     whenSynced: persistence.whenSynced,
   };
+}
+
+function hasSameDocumentGeneration(document: Y.Doc, update: Uint8Array): boolean {
+  const incoming = new Y.Doc();
+  try {
+    Y.applyUpdate(incoming, update);
+    const incomingGeneration = incoming.getMap("recovery").get("generation");
+    const localGeneration = document.getMap("recovery").get("generation");
+    return (
+      typeof incomingGeneration === "string" &&
+      incomingGeneration.length > 0 &&
+      incomingGeneration === localGeneration
+    );
+  } finally {
+    incoming.destroy();
+  }
 }
 
 export function createWorkspaceSocket(

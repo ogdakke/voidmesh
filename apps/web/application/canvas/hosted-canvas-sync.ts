@@ -98,7 +98,7 @@ export class HostedCanvasSync {
   }
 
   #handleMutation(mutation: CanvasEntityMutation): void {
-    if (this.#projectionDepth > 0) return;
+    if (mutation.projected || this.#projectionDepth > 0) return;
     switch (mutation.type) {
       case "add":
         for (const entity of mutation.entities) this.#register(entity.id);

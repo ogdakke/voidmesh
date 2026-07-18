@@ -10,7 +10,7 @@ import {
   type WorkspaceRole as WorkspaceRoleValue,
 } from "@voidmesh/domain";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import type { useHostedWorkspaceRuntime } from "#context/hosted-workspace-runtime.tsx";
+import type { useHostedWorkspaceRuntime } from "#context/use-hosted-workspace-runtime.ts";
 import { Button } from "#ui/button/index.tsx";
 import { Drawer } from "#ui/drawer/index.tsx";
 import { HostedApiError } from "#lib/hosted-api-client.ts";

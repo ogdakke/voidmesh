@@ -91,7 +91,7 @@ describe("HostedCanvasSync", () => {
       writable: true,
     });
     sync.start();
-    source.emit({ entities: [entity], type: "add" });
+    source.emit({ entities: [entity], projected: false, type: "add" });
 
     await vi.waitFor(() => expect(document.getEntity(entity.id)?.asset).toEqual(asset));
     expect(register).toHaveBeenCalledOnce();
@@ -131,7 +131,7 @@ describe("HostedCanvasSync", () => {
     sync.start();
 
     source.entities.delete(entity.id);
-    source.emit({ entityIds: [entity.id], type: "remove" });
+    source.emit({ entityIds: [entity.id], projected: false, type: "remove" });
 
     expect(release).toHaveBeenCalledWith(entity.id);
     expect(document.getEntity(entity.id)).toBeNull();
@@ -153,6 +153,7 @@ describe("HostedCanvasSync", () => {
       source.entities.set(runtime.id, runtime);
       source.emit({
         batch: [{ id: runtime.id, updates: { position: runtime.position } }],
+        projected: false,
         type: "update",
       });
     });
@@ -186,6 +187,32 @@ describe("HostedCanvasSync", () => {
 
     await vi.waitFor(() => expect(applyRemoteEntity).toHaveBeenCalledOnce());
     expect(register).not.toHaveBeenCalled();
+    sync.destroy();
+  });
+
+  it("does not republish a projection emitted by another canvas synchronizer", async () => {
+    const source = new FakeSource();
+    const entity = runtimeEntity();
+    source.entities.set(entity.id, entity);
+    const document = new HostedWorkspaceDocument({ document: new Y.Doc(), now: () => 1_000 });
+    const register = vi.fn<HostedAssetRegistry["register"]>(async () => asset);
+    const sync = new HostedCanvasSync({
+      assets: { getReference: () => asset, register, release: () => {} },
+      document,
+      onError: (error) => {
+        throw error;
+      },
+      projection: { applyRemoteEntity: async () => {}, removeRemoteEntities: () => {} },
+      source,
+      writable: true,
+    });
+    sync.start();
+
+    source.emit({ entities: [entity], projected: true, type: "add" });
+    await Promise.resolve();
+
+    expect(register).not.toHaveBeenCalled();
+    expect(document.getEntity(entity.id)).toBeNull();
     sync.destroy();
   });
 

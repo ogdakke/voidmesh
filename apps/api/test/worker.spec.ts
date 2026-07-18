@@ -1714,6 +1714,83 @@ describe("Voidmesh API", () => {
     reconnectSocket.close(1000, "test complete");
   });
 
+  it("serializes dependent Yjs updates that arrive while asset validation is pending", async () => {
+    const cookie = await signUp("ordered-updates@example.com", "Ordered Updates");
+    const workspace = await createWorkspace(cookie, "Ordered updates workspace");
+    const owner = await env.DB.prepare('SELECT id FROM "user" WHERE email = ?')
+      .bind("ordered-updates@example.com")
+      .first<{ id: string }>();
+    const assetId = "asset-ordered-updates";
+    const now = Date.now();
+    await env.DB.prepare(
+      `INSERT INTO assets (
+        id, workspace_id, uploaded_by_user_id, object_key, media_type, content_type,
+        original_filename, byte_length, lifecycle, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, 'image', 'image/png', 'ordered.png', 1, 'active', ?, ?)`,
+    )
+      .bind(assetId, workspace.id, owner!.id, `assets/${workspace.id}/${assetId}/object`, now, now)
+      .run();
+
+    const response = await apiFetch(`/v1/workspaces/${workspace.id}/connect`, {
+      headers: { cookie, upgrade: "websocket" },
+    });
+    const socket = response.webSocket!;
+    socket.accept();
+    await nextWebSocketMessage(socket);
+    await nextWebSocketMessage(socket);
+
+    const document = new Y.Doc();
+    document
+      .getMap<Y.Map<unknown>>("entities")
+      .set("entity-ordered", testWorkspaceEntity(assetId, "First state"));
+    const firstUpdateId = "550e8400-e29b-41d4-a716-446655440030";
+    const firstUpdate = Y.encodeStateAsUpdate(document);
+    const firstStateVector = Y.encodeStateVector(document);
+    document
+      .getMap<Y.Map<unknown>>("entities")
+      .get("entity-ordered")!
+      .set("identity.name", "Second state");
+    const secondUpdateId = "550e8400-e29b-41d4-a716-446655440031";
+    const secondUpdate = Y.encodeStateAsUpdate(document, firstStateVector);
+
+    const responses = nextWebSocketMessages(socket, 2);
+    socket.send(encodeClientYjsUpdate(firstUpdateId, firstUpdate));
+    socket.send(encodeClientYjsUpdate(secondUpdateId, secondUpdate));
+    await expect(responses).resolves.toEqual([
+      JSON.stringify({ roomSequence: 1, type: "ack", updateId: firstUpdateId }),
+      JSON.stringify({ roomSequence: 2, type: "ack", updateId: secondUpdateId }),
+    ]);
+    expect(await env.WORKSPACE_ROOMS.getByName(workspace.id).getStatus()).toEqual({
+      roomSequence: 2,
+      workspaceId: workspace.id,
+    });
+
+    const reconnect = await apiFetch(`/v1/workspaces/${workspace.id}/connect`, {
+      headers: { cookie, upgrade: "websocket" },
+    });
+    const reconnectSocket = reconnect.webSocket!;
+    reconnectSocket.binaryType = "arraybuffer";
+    reconnectSocket.accept();
+    await nextWebSocketMessage(reconnectSocket);
+    const restored = new Y.Doc();
+    while (true) {
+      const message = await nextWebSocketMessage(reconnectSocket);
+      if (message instanceof ArrayBuffer) {
+        const frame = decodeServerYjsUpdate(message);
+        if (!frame) throw new Error("Expected an ordered Yjs update while restoring the room");
+        Y.applyUpdate(restored, frame.update);
+        continue;
+      }
+      expect(JSON.parse(message)).toMatchObject({ roomSequence: 2, type: "sync-complete" });
+      break;
+    }
+    expect(
+      restored.getMap<Y.Map<unknown>>("entities").get("entity-ordered")?.get("identity.name"),
+    ).toBe("Second state");
+    socket.close();
+    reconnectSocket.close();
+  });
+
   it("rejects dangling Yjs history and rebases it for a second installation", async () => {
     const cookie = await signUp("rebase-owner@example.com", "Rebase Owner");
     const workspace = await createWorkspace(cookie, "Rebased workspace");
@@ -1807,7 +1884,7 @@ describe("Voidmesh API", () => {
       type: "hello",
     });
     const secondDocument = new Y.Doc();
-    const snapshotFrame = decodeServerYjsUpdate(
+    const snapshotFrame = decodeServerYjsRebase(
       (await nextWebSocketMessage(secondSocket)) as ArrayBuffer,
     );
     Y.applyUpdate(secondDocument, snapshotFrame!.update);
@@ -1836,6 +1913,21 @@ describe("Voidmesh API", () => {
     expect(
       await env.DB.prepare("SELECT lifecycle FROM assets WHERE id = ?").bind(assetId).first(),
     ).toEqual({ lifecycle: "active" });
+
+    const destructive = new Y.Doc();
+    destructive.getMap<string>("recovery").set("generation", crypto.randomUUID());
+    const destructiveUpdateId = "550e8400-e29b-41d4-a716-446655440024";
+    secondSocket.send(
+      encodeClientYjsRebase(destructiveUpdateId, Y.encodeStateAsUpdate(destructive)),
+    );
+    expect(JSON.parse(String(await nextWebSocketMessage(secondSocket)))).toEqual({
+      code: "invalid-document",
+      type: "error",
+      updateId: destructiveUpdateId,
+    });
+    expect(await env.WORKSPACE_ROOMS.getByName(workspace.id).getStatus()).toMatchObject({
+      roomSequence: 2,
+    });
     socket.close();
     secondSocket.close();
 
@@ -1855,8 +1947,8 @@ describe("Voidmesh API", () => {
     while (true) {
       const message = await nextWebSocketMessage(restoredSocket);
       if (message instanceof ArrayBuffer) {
-        const frame = decodeServerYjsUpdate(message);
-        if (!frame) throw new Error("Expected a Yjs update while restoring the room");
+        const frame = decodeServerYjsRebase(message) ?? decodeServerYjsUpdate(message);
+        if (!frame) throw new Error("Expected a Yjs document frame while restoring the room");
         Y.applyUpdate(restoredDocument, frame.update);
         continue;
       }
@@ -1938,7 +2030,7 @@ describe("Voidmesh API", () => {
       roomSequence: 1,
       type: "hello",
     });
-    const recoveredFrame = decodeServerYjsUpdate(
+    const recoveredFrame = decodeServerYjsRebase(
       (await nextWebSocketMessage(socket)) as ArrayBuffer,
     );
     expect(recoveredFrame).not.toBeNull();
@@ -2382,6 +2474,28 @@ function nextWebSocketMessage(socket: WebSocket): Promise<string | ArrayBuffer> 
       once: true,
     });
     socket.addEventListener("error", () => reject(new Error("WebSocket failed")), { once: true });
+  });
+}
+
+function nextWebSocketMessages(
+  socket: WebSocket,
+  count: number,
+): Promise<Array<string | ArrayBuffer>> {
+  return new Promise((resolve, reject) => {
+    const messages: Array<string | ArrayBuffer> = [];
+    const onMessage = (event: MessageEvent): void => {
+      messages.push(event.data);
+      if (messages.length !== count) return;
+      socket.removeEventListener("message", onMessage);
+      socket.removeEventListener("error", onError);
+      resolve(messages);
+    };
+    const onError = (): void => {
+      socket.removeEventListener("message", onMessage);
+      reject(new Error("WebSocket failed"));
+    };
+    socket.addEventListener("message", onMessage);
+    socket.addEventListener("error", onError, { once: true });
   });
 }
 

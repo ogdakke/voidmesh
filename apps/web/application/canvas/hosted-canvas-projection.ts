@@ -65,7 +65,7 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
       await this.#materialize(entity, applyPlayback);
       return;
     }
-    this.#store.updateEntity(entity.id, toCanvasUpdates(entity, applyPlayback));
+    this.#store.updateEntity(entity.id, toCanvasUpdates(entity, applyPlayback), true);
     const updated = this.#store.getState().entities.get(entity.id);
     if (applyPlayback && updated) await this.#applyPlayback(updated, entity);
     this.#requestRender(entity.id);
@@ -84,7 +84,7 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
       removed.add(id);
       resources.push(entity);
     }
-    this.#store.removeEntities(removed);
+    this.#store.removeEntities(removed, true);
     for (const entity of resources) this.#releaseEntity(entity);
     for (const id of removed) {
       this.#assets.release(id);
@@ -114,8 +114,8 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
       textureDirty: true,
     } as ShaderCanvasEntity;
     this.#beforeRemoveEntity(entity.id);
-    if (previous) this.#store.updateEntity(entity.id, next);
-    else this.#store.addEntity(next);
+    if (previous) this.#store.updateEntity(entity.id, next, true);
+    else this.#store.addEntity(next, true);
     if (previous) this.#releaseEntity(previous);
     this.#bindEntityAsset(entity.id, entity.asset.id);
     this.#assets.adopt(entity.id, entity.asset, getEntityBlob(next));
@@ -193,13 +193,13 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
         playbackDistance(video.currentTime, playback.currentTime, video.duration, playback.loop) >=
         PLAYBACK_DRIFT_TOLERANCE_SECONDS
       ) {
-        this.#store.seekVideo(current.id, playback.currentTime);
+        this.#store.seekVideo(current.id, playback.currentTime, true);
       }
       if (!playback.isPlaying) this.#autoplayBlocked.delete(current.id);
       if (playback.isPlaying && video.paused) {
         if (this.#autoplayBlocked.has(current.id) && !playback.muted) return;
         try {
-          await this.#store.playVideo(current.id);
+          await this.#store.playVideo(current.id, true);
           this.#autoplayBlocked.delete(current.id);
         } catch (error) {
           if (!(error instanceof Error) || error.name !== "NotAllowedError") {
@@ -209,7 +209,7 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
             this.#onAutoplayBlocked(collaborative);
           }
         }
-      } else if (!playback.isPlaying && !video.paused) this.#store.pauseVideo(current.id);
+      } else if (!playback.isPlaying && !video.paused) this.#store.pauseVideo(current.id, true);
       return;
     }
     if (isGifEntity(current)) {
@@ -221,10 +221,11 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
           playback.loop,
         ) >= PLAYBACK_DRIFT_TOLERANCE_SECONDS
       ) {
-        this.#store.seekGif(current.id, playback.currentTime);
+        this.#store.seekGif(current.id, playback.currentTime, true);
       }
-      if (playback.isPlaying && !current.playback.isPlaying) this.#store.playGif(current.id);
-      else if (!playback.isPlaying && current.playback.isPlaying) this.#store.pauseGif(current.id);
+      if (playback.isPlaying && !current.playback.isPlaying) this.#store.playGif(current.id, true);
+      else if (!playback.isPlaying && current.playback.isPlaying)
+        this.#store.pauseGif(current.id, true);
     }
   }
 

@@ -7,7 +7,7 @@ import personSitting from "#media/halftone-person-sitting.webp?img";
 import halftoneDude from "#media/halftone-dude.webp?img";
 import halftoneHead from "#media/halftone-1jdnpq5qg.webp?img";
 import { Hint } from "#ui/hint/hint.tsx";
-import { useHostedWorkspaceRuntime } from "#context/hosted-workspace-runtime.tsx";
+import { useHostedWorkspaceRuntime } from "#context/use-hosted-workspace-runtime.ts";
 
 export const SidebarLeft = () => {
   const hosted = useHostedWorkspaceRuntime();

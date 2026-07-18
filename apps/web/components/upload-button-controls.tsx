@@ -12,7 +12,7 @@ import { useEffect, useRef, useState } from "react";
 import { config } from "#config";
 import { Button } from "./ui/button";
 import { Drawer } from "#ui/drawer/index.tsx";
-import { useHostedWorkspaceRuntime } from "#context/hosted-workspace-runtime.tsx";
+import { useHostedWorkspaceRuntime } from "#context/use-hosted-workspace-runtime.ts";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { WorkspaceAssetSummary, WorkspaceAssetUsage } from "@voidmesh/api-contract";
 import { WorkspaceRole } from "@voidmesh/domain";

@@ -91,13 +91,18 @@ export interface CanvasEntityUpdate {
   updates: Partial<ShaderCanvasEntity>;
 }
 
-export type CanvasEntityMutation =
+type CanvasEntityMutationPayload =
   | { entities: readonly ShaderCanvasEntity[]; type: "add" }
   | { batch: readonly CanvasEntityUpdate[]; type: "update" }
   | { entityIds: readonly string[]; type: "move" }
   | { entityIds: readonly string[]; type: "remove" }
   | { entities: readonly ShaderCanvasEntity[]; type: "replace" }
   | { entityId: string; playback: PlaybackState; type: "playback" };
+
+export type CanvasEntityMutation = CanvasEntityMutationPayload & {
+  /** True when the mutation projects authoritative external state into the canvas. */
+  projected: boolean;
+};
 
 export type CanvasEntityMutationListener = (mutation: CanvasEntityMutation) => void;
 
@@ -521,7 +526,7 @@ export class CanvasStore extends Store<CanvasState> {
   }
 
   // Entity mutations (only notify selection subscribers)
-  addEntity(entity: ShaderCanvasEntity): void {
+  addEntity(entity: ShaderCanvasEntity, projected = false): void {
     if (this.state.entities.has(entity.id)) {
       throw new Error(`Cannot add duplicate entity ID "${entity.id}"`);
     }
@@ -533,10 +538,10 @@ export class CanvasStore extends Store<CanvasState> {
     this.#entitySpatialIndex.upsert(entity);
     this.state.entitiesDirty.add(entity.id);
     this.notifyEntityChange();
-    this.#emitEntityMutation({ entities: [entity], type: "add" });
+    this.#emitEntityMutation({ entities: [entity], projected, type: "add" });
   }
 
-  addEntities(entities: readonly ShaderCanvasEntity[]): void {
+  addEntities(entities: readonly ShaderCanvasEntity[], projected = false): void {
     if (entities.length === 0) return;
     const incomingIds = new Set<string>();
     for (const entity of entities) {
@@ -555,7 +560,7 @@ export class CanvasStore extends Store<CanvasState> {
       this.state.entitiesDirty.add(entity.id);
     }
     this.notifyEntityChange();
-    this.#emitEntityMutation({ entities, type: "add" });
+    this.#emitEntityMutation({ entities, projected, type: "add" });
   }
 
   /** Atomically replace canvas content after a workspace has decoded successfully. */
@@ -609,15 +614,15 @@ export class CanvasStore extends Store<CanvasState> {
     this.#resetSelectorCaches();
     this.notify();
     for (const listener of this.#viewportListeners) listener();
-    this.#emitEntityMutation({ entities, type: "replace" });
+    this.#emitEntityMutation({ entities, projected: false, type: "replace" });
   }
 
-  updateEntity(id: string, updates: Partial<ShaderCanvasEntity>): void {
-    this.updateEntities([{ id, updates }]);
+  updateEntity(id: string, updates: Partial<ShaderCanvasEntity>, projected = false): void {
+    this.updateEntities([{ id, updates }], projected);
   }
 
   /** Apply a large entity mutation set with one version bump and subscriber notification. */
-  updateEntities(batch: readonly CanvasEntityUpdate[]): number {
+  updateEntities(batch: readonly CanvasEntityUpdate[], projected = false): number {
     if (batch.length === 0) return 0;
 
     let updatedCount = 0;
@@ -638,7 +643,7 @@ export class CanvasStore extends Store<CanvasState> {
     if (updatedCount === 0) return 0;
     this.notifyEntityChange();
     this.#logger.debug("Updated entity batch", { entityCount: updatedCount });
-    this.#emitEntityMutation({ batch, type: "update" });
+    this.#emitEntityMutation({ batch, projected, type: "update" });
     return updatedCount;
   }
 
@@ -652,7 +657,7 @@ export class CanvasStore extends Store<CanvasState> {
       // Position-only updates still change the composed scene and must invalidate
       // renderer caches such as the fullscreen wlur overlay during drag.
       this.state.geometryDirty = true;
-      this.#emitEntityMutation({ entityIds: [id], type: "move" });
+      this.#emitEntityMutation({ entityIds: [id], projected: false, type: "move" });
     }
   }
 
@@ -671,11 +676,11 @@ export class CanvasStore extends Store<CanvasState> {
     this.#entitySpatialIndex.translateEntities(entityIds, delta);
     this.state.geometryVersion++;
     this.state.geometryDirty = true;
-    this.#emitEntityMutation({ entityIds: [...entityIds], type: "move" });
+    this.#emitEntityMutation({ entityIds: [...entityIds], projected: false, type: "move" });
     return movedCount;
   }
 
-  removeEntity(id: string): void {
+  removeEntity(id: string, projected = false): void {
     this.state.entities.delete(id);
     this.#entitySpatialIndex.remove(id);
     const index = this.state.entityIds.indexOf(id);
@@ -693,10 +698,10 @@ export class CanvasStore extends Store<CanvasState> {
       this.state.selectedEntityIds = newSelection;
     }
     this.notifyEntityChange();
-    this.#emitEntityMutation({ entityIds: [id], type: "remove" });
+    this.#emitEntityMutation({ entityIds: [id], projected, type: "remove" });
   }
 
-  removeEntities(entityIds: ReadonlySet<string>): number {
+  removeEntities(entityIds: ReadonlySet<string>, projected = false): number {
     if (entityIds.size === 0) return 0;
 
     let removedCount = 0;
@@ -724,7 +729,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.selectionDirty = true;
     this.notifyEntityChange();
     this.#logger.debug("Removed entity batch", { entityCount: removedCount });
-    this.#emitEntityMutation({ entityIds: [...entityIds], type: "remove" });
+    this.#emitEntityMutation({ entityIds: [...entityIds], projected, type: "remove" });
     return removedCount;
   }
 
@@ -1084,7 +1089,7 @@ export class CanvasStore extends Store<CanvasState> {
     }
   }
 
-  async playVideo(entityId: string): Promise<void> {
+  async playVideo(entityId: string, projected = false): Promise<void> {
     const entity = this.state.entities.get(entityId);
     if (!entity || entity.mediaSource.type !== MediaType.video) return;
 
@@ -1098,7 +1103,7 @@ export class CanvasStore extends Store<CanvasState> {
     }
     this.state.entitiesDirty.add(entityId);
     this.notifyEntityChange();
-    this.#emitPlayback(entityId);
+    this.#emitPlayback(entityId, projected);
   }
 
   setVideoMuted(entityId: string, muted: boolean): void {
@@ -1126,7 +1131,7 @@ export class CanvasStore extends Store<CanvasState> {
     );
   }
 
-  pauseVideo(entityId: string): void {
+  pauseVideo(entityId: string, projected = false): void {
     const entity = this.state.entities.get(entityId);
     if (!entity || entity.mediaSource.type !== MediaType.video) return;
 
@@ -1162,14 +1167,14 @@ export class CanvasStore extends Store<CanvasState> {
 
     this.state.entitiesDirty.add(entityId);
     this.notifyEntityChange();
-    this.#emitPlayback(entityId);
+    this.#emitPlayback(entityId, projected);
   }
 
   /**
    * Seek video to a specific time.
    * Updates video.currentTime, playback state, and marks texture dirty.
    */
-  seekVideo(entityId: string, time: number): void {
+  seekVideo(entityId: string, time: number, projected = false): void {
     const entity = this.state.entities.get(entityId);
     if (!entity || entity.mediaSource.type !== MediaType.video) return;
 
@@ -1186,7 +1191,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.entitiesDirty.add(entityId);
     this.state.playbackVersion++;
     this.notify();
-    this.#emitPlayback(entityId);
+    this.#emitPlayback(entityId, projected);
   }
 
   /**
@@ -1219,7 +1224,7 @@ export class CanvasStore extends Store<CanvasState> {
   }
 
   // GIF playback controls
-  playGif(entityId: string): void {
+  playGif(entityId: string, projected = false): void {
     const entity = this.state.entities.get(entityId);
     if (!entity || entity.mediaSource.type !== MediaType.gif) return;
 
@@ -1228,10 +1233,10 @@ export class CanvasStore extends Store<CanvasState> {
     }
     this.state.entitiesDirty.add(entityId);
     this.notifyEntityChange();
-    this.#emitPlayback(entityId);
+    this.#emitPlayback(entityId, projected);
   }
 
-  pauseGif(entityId: string): void {
+  pauseGif(entityId: string, projected = false): void {
     const entity = this.state.entities.get(entityId);
     if (!entity || entity.mediaSource.type !== MediaType.gif) return;
 
@@ -1243,14 +1248,14 @@ export class CanvasStore extends Store<CanvasState> {
     entity.textureDirty = true;
     this.state.entitiesDirty.add(entityId);
     this.notifyEntityChange();
-    this.#emitPlayback(entityId);
+    this.#emitPlayback(entityId, projected);
   }
 
   /**
    * Seek GIF to a specific time.
    * Updates playback state, imageBitmap to correct frame, and marks texture dirty.
    */
-  seekGif(entityId: string, time: number): void {
+  seekGif(entityId: string, time: number, projected = false): void {
     const entity = this.state.entities.get(entityId);
     if (!entity || entity.mediaSource.type !== MediaType.gif) return;
 
@@ -1268,7 +1273,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.entitiesDirty.add(entityId);
     this.state.playbackVersion++;
     this.notify();
-    this.#emitPlayback(entityId);
+    this.#emitPlayback(entityId, projected);
   }
 
   /**
@@ -1306,12 +1311,13 @@ export class CanvasStore extends Store<CanvasState> {
     this.notify();
   }
 
-  #emitPlayback(entityId: string): void {
+  #emitPlayback(entityId: string, projected = false): void {
     const playback = this.state.entities.get(entityId)?.playback;
     if (playback) {
       this.#emitEntityMutation({
         entityId,
         playback: { ...playback },
+        projected,
         type: "playback",
       });
     }

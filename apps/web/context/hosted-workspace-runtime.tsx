@@ -7,7 +7,7 @@ import {
   type CollaborationConnectionStatus,
 } from "@voidmesh/collaboration/provider";
 import type { PresencePoint, ServerPresenceMessage } from "@voidmesh/collaboration";
-import { createContext, use, useEffect, useRef, useState, type PropsWithChildren } from "react";
+import { useEffect, useRef, useState, type PropsWithChildren } from "react";
 import { R2HostedAssetRegistry } from "#application/canvas/hosted-asset-registry.ts";
 import { createHostedAssetThumbnail } from "#application/canvas/hosted-asset-thumbnail.ts";
 import { HostedCanvasProjectionService } from "#application/canvas/hosted-canvas-projection.ts";
@@ -21,20 +21,7 @@ import { logger } from "#lib/client.logger.ts";
 import { undo } from "#lib/undo.ts";
 import { toastManager } from "#application/notifications.ts";
 import { useCanvasRendererService } from "./use-canvas.ts";
-
-interface HostedWorkspaceRuntimeValue {
-  api: HostedApiClient;
-  connectionStatus: CollaborationConnectionStatus;
-  downloadOriginal(entityId: string): Promise<void>;
-  getCanvasAssetIds(): ReadonlySet<string>;
-  getCanvasVideoPreviews(): Promise<ReadonlyMap<string, Blob>>;
-  loadAsset(asset: WorkspaceAssetSummary): Promise<File>;
-  peers: readonly ServerPresenceMessage[];
-  publishCursor(cursor: PresencePoint | null): void;
-  workspace: WorkspaceSummary;
-}
-
-const HostedWorkspaceRuntimeContext = createContext<HostedWorkspaceRuntimeValue | null>(null);
+import { HostedWorkspaceRuntimeContext } from "./use-hosted-workspace-runtime.ts";
 
 export interface HostedWorkspaceRuntimeProps extends PropsWithChildren {
   api: HostedApiClient;
@@ -287,10 +274,6 @@ export function HostedWorkspaceRuntime({
       {children}
     </HostedWorkspaceRuntimeContext>
   );
-}
-
-export function useHostedWorkspaceRuntime(): HostedWorkspaceRuntimeValue | null {
-  return use(HostedWorkspaceRuntimeContext);
 }
 
 function reportError(error: unknown): void {

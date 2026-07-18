@@ -2,7 +2,7 @@ import { type ReactNode } from "react";
 import { Image } from "#ui/image.tsx";
 import houseBurning from "#media/house_burning_ascii.webp?img";
 import "./about.css";
-import { useHostedWorkspaceRuntime } from "#context/hosted-workspace-runtime.tsx";
+import { useHostedWorkspaceRuntime } from "#context/use-hosted-workspace-runtime.ts";
 
 export function AboutSection({ children, id }: { children?: ReactNode; id?: string }) {
   const hosted = useHostedWorkspaceRuntime();
