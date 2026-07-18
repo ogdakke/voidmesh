@@ -144,6 +144,12 @@ function HostedFileUploadComponent({ hosted }: { hosted: HostedRuntime }) {
     let disposed = false;
     const urls: string[] = [];
     const loadPreviews = async () => {
+      const missingThumbnailIds = new Set(
+        assetQuery.data?.pages.flatMap((page) =>
+          page.assets.filter((asset) => asset.thumbnailUrl === null).map((asset) => asset.id),
+        ) ?? [],
+      );
+      await hosted.backfillCanvasAssetThumbnails(missingThumbnailIds);
       const previews = await hosted.getCanvasVideoPreviews();
       if (disposed) return;
       const next = new Map<string, string>();
@@ -160,7 +166,7 @@ function HostedFileUploadComponent({ hosted }: { hosted: HostedRuntime }) {
       for (const url of urls) URL.revokeObjectURL(url);
       setCanvasPreviewUrls(new Map());
     };
-  }, [hosted, libraryOpen]);
+  }, [assetQuery.data, hosted, libraryOpen]);
 
   const handleFileSelect = async (files: FileList | readonly File[] | null) => {
     if (!files || files.length === 0) return;

@@ -3,6 +3,7 @@ import {
   ApiErrorCode,
   type AssetDownloadGrantResponse,
   type AssetResponse,
+  type AssetThumbnailUploadRequest,
   type AssetUploadGrantResponse,
   type ReserveAssetUploadRequest,
   type WorkspaceAssetListResponse,
@@ -329,8 +330,13 @@ export async function handleAssetRequest(
     new RegExp(`^/v1/workspaces/(${IDENTIFIER})/assets/(${IDENTIFIER})/thumbnail$`),
   );
   if (thumbnail) {
-    if (request.method !== "GET") return methodNotAllowed(requestId);
-    return readThumbnail(env, userId, thumbnail[1]!, thumbnail[2]!, requestId);
+    if (request.method === "GET") {
+      return readThumbnail(env, userId, thumbnail[1]!, thumbnail[2]!, requestId);
+    }
+    if (request.method === "PUT") {
+      return backfillThumbnail(request, env, userId, thumbnail[1]!, thumbnail[2]!, requestId);
+    }
+    return methodNotAllowed(requestId);
   }
   return errorResponse(ApiErrorCode.notFound, "Route not found", requestId, 404);
 }
@@ -912,6 +918,123 @@ async function readThumbnail(
   });
 }
 
+async function backfillThumbnail(
+  request: Request,
+  env: Env,
+  userId: UserId,
+  workspaceId: WorkspaceId,
+  assetId: string,
+  requestId: string,
+): Promise<Response> {
+  const role = await readActiveRole(env.DB, userId, workspaceId);
+  if (!role) return errorResponse(ApiErrorCode.notFound, "Workspace not found", requestId, 404);
+  if (!canEditWorkspace(role)) {
+    return errorResponse(ApiErrorCode.forbidden, "Edit access required", requestId, 403);
+  }
+  const asset = await env.DB.prepare(
+    `SELECT thumbnail_object_key
+     FROM assets
+     WHERE id = ? AND workspace_id = ?
+       AND lifecycle IN ('verified', 'active', 'unreferenced')`,
+  )
+    .bind(assetId, workspaceId)
+    .first<{ thumbnail_object_key: string | null }>();
+  if (!asset) return errorResponse(ApiErrorCode.notFound, "Asset not found", requestId, 404);
+  if (asset.thumbnail_object_key) return new Response(null, { status: 204 });
+
+  const input = await readThumbnailRequest(request);
+  if (!input) {
+    return errorResponse(ApiErrorCode.invalidRequest, "Invalid asset thumbnail", requestId, 400);
+  }
+  const bytes = decodeBase64(input.data);
+  const objectKey = `assets/${workspaceId}/${assetId}/thumbnail-${crypto.randomUUID()}.webp`;
+  await env.ASSETS.put(objectKey, bytes, {
+    sha256: input.contentHash,
+    httpMetadata: { contentType: input.contentType },
+  });
+
+  const now = Date.now();
+  let results: D1Result[];
+  try {
+    results = await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE assets
+         SET thumbnail_object_key = ?, thumbnail_content_hash = ?,
+             thumbnail_content_type = ?, thumbnail_byte_length = ?, updated_at = ?
+         WHERE id = ? AND workspace_id = ? AND thumbnail_object_key IS NULL
+           AND lifecycle IN ('verified', 'active', 'unreferenced')
+           AND (
+             SELECT used_bytes + reserved_bytes FROM workspaces WHERE id = ?
+           ) <= (
+             SELECT workspace_storage_limit_bytes
+             FROM account_entitlements
+             INNER JOIN workspaces ON workspaces.owner_account_id = account_entitlements.account_id
+             WHERE workspaces.id = ?
+           )
+           AND (
+             SELECT COALESCE(SUM(used_bytes + reserved_bytes), 0)
+             FROM workspaces
+             WHERE owner_account_id = (
+               SELECT owner_account_id FROM workspaces WHERE id = ?
+             )
+           ) <= (
+             SELECT account_storage_limit_bytes
+             FROM account_entitlements
+             INNER JOIN workspaces ON workspaces.owner_account_id = account_entitlements.account_id
+             WHERE workspaces.id = ?
+           )`,
+      ).bind(
+        objectKey,
+        input.contentHash,
+        input.contentType,
+        input.byteLength,
+        now,
+        assetId,
+        workspaceId,
+        workspaceId,
+        workspaceId,
+        workspaceId,
+        workspaceId,
+      ),
+      env.DB.prepare(
+        `UPDATE workspaces
+         SET used_bytes = used_bytes + ?, updated_at = ?
+         WHERE id = ? AND changes() = 1`,
+      ).bind(input.byteLength, now, workspaceId),
+      env.DB.prepare(
+        `INSERT INTO audit_events (
+          id, actor_user_id, account_id, workspace_id, action, target_type,
+          target_id, outcome, request_id, metadata_json, created_at
+        )
+        SELECT ?, ?, ?, ?, 'asset.thumbnail-backfilled', 'asset', ?, 'success', ?, ?, ?
+        WHERE changes() = 1`,
+      ).bind(
+        crypto.randomUUID(),
+        userId,
+        userId,
+        workspaceId,
+        assetId,
+        requestId,
+        JSON.stringify({ bytes: input.byteLength }),
+        now,
+      ),
+    ]);
+  } catch (error) {
+    await env.ASSETS.delete(objectKey);
+    throw error;
+  }
+  if ((results[0]?.meta.changes ?? 0) === 1) return new Response(null, { status: 204 });
+
+  await env.ASSETS.delete(objectKey);
+  const current = await env.DB.prepare(
+    "SELECT thumbnail_object_key FROM assets WHERE id = ? AND workspace_id = ?",
+  )
+    .bind(assetId, workspaceId)
+    .first<{ thumbnail_object_key: string | null }>();
+  if (current?.thumbnail_object_key) return new Response(null, { status: 204 });
+  return errorResponse(ApiErrorCode.quotaExceeded, "Hosted storage limit reached", requestId, 403);
+}
+
 async function deleteAsset(
   env: Env,
   userId: UserId,
@@ -1163,33 +1286,9 @@ async function readReserveRequest(request: Request): Promise<ReserveAssetUploadR
       return null;
     let thumbnail: ReserveAssetUploadRequest["thumbnail"];
     if (thumbnailValue !== undefined) {
-      if (!thumbnailValue || typeof thumbnailValue !== "object") return null;
-      const thumbnailByteLength = Reflect.get(thumbnailValue, "byteLength");
-      const thumbnailContentHash = Reflect.get(thumbnailValue, "contentHash");
-      const thumbnailContentType = Reflect.get(thumbnailValue, "contentType");
-      const thumbnailData = Reflect.get(thumbnailValue, "data");
-      if (
-        !Number.isSafeInteger(thumbnailByteLength) ||
-        (thumbnailByteLength as number) <= 0 ||
-        (thumbnailByteLength as number) > MAX_THUMBNAIL_BYTES ||
-        thumbnailContentType !== "image/webp" ||
-        typeof thumbnailContentHash !== "string" ||
-        !/^[a-f0-9]{64}$/.test(thumbnailContentHash) ||
-        typeof thumbnailData !== "string"
-      )
-        return null;
-      const bytes = decodeBase64(thumbnailData);
-      if (
-        bytes.byteLength !== thumbnailByteLength ||
-        (await sha256Hex(bytes)) !== thumbnailContentHash
-      )
-        return null;
-      thumbnail = {
-        byteLength: thumbnailByteLength as number,
-        contentHash: thumbnailContentHash,
-        contentType: "image/webp",
-        data: thumbnailData,
-      };
+      const parsedThumbnail = await readThumbnailValue(thumbnailValue);
+      if (!parsedThumbnail) return null;
+      thumbnail = parsedThumbnail;
     }
     return {
       byteLength: byteLength as number,
@@ -1202,6 +1301,41 @@ async function readReserveRequest(request: Request): Promise<ReserveAssetUploadR
   } catch {
     return null;
   }
+}
+
+async function readThumbnailRequest(request: Request): Promise<AssetThumbnailUploadRequest | null> {
+  try {
+    return readThumbnailValue(await request.json());
+  } catch {
+    return null;
+  }
+}
+
+async function readThumbnailValue(value: unknown): Promise<AssetThumbnailUploadRequest | null> {
+  if (!value || typeof value !== "object") return null;
+  const byteLength = Reflect.get(value, "byteLength");
+  const contentHash = Reflect.get(value, "contentHash");
+  const contentType = Reflect.get(value, "contentType");
+  const data = Reflect.get(value, "data");
+  if (
+    !Number.isSafeInteger(byteLength) ||
+    (byteLength as number) <= 0 ||
+    (byteLength as number) > MAX_THUMBNAIL_BYTES ||
+    contentType !== "image/webp" ||
+    typeof contentHash !== "string" ||
+    !/^[a-f0-9]{64}$/.test(contentHash) ||
+    typeof data !== "string"
+  ) {
+    return null;
+  }
+  const bytes = decodeBase64(data);
+  if (bytes.byteLength !== byteLength || (await sha256Hex(bytes)) !== contentHash) return null;
+  return {
+    byteLength: byteLength as number,
+    contentHash,
+    contentType: "image/webp",
+    data,
+  };
 }
 
 function decodeBase64(value: string): Uint8Array {

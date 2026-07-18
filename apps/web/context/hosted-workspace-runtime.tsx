@@ -232,8 +232,25 @@ export function HostedWorkspaceRuntime({
     const file = new File([await response.blob()], asset.originalFilename, {
       type: asset.contentType,
     });
-    registry.adoptBlob(asset, file);
+    registry.adoptBlob(asset, file, asset.thumbnailUrl === null);
     return file;
+  };
+
+  const backfillCanvasAssetThumbnails = async (assetIds: ReadonlySet<string>): Promise<void> => {
+    const registry = assetsRef.current;
+    if (!registry || assetIds.size === 0) return;
+    const pending: Promise<void>[] = [];
+    const scheduled = new Set<string>();
+    for (const entity of canvasStore.getState().entities.values()) {
+      const reference = registry.getReference(entity.id);
+      if (!reference || !assetIds.has(reference.id) || scheduled.has(reference.id)) continue;
+      scheduled.add(reference.id);
+      pending.push(registry.backfillThumbnail(entity, reference));
+    }
+    const results = await Promise.allSettled(pending);
+    for (const result of results) {
+      if (result.status === "rejected") reportError(result.reason);
+    }
   };
 
   const getCanvasAssetIds = (): ReadonlySet<string> => {
@@ -261,6 +278,7 @@ export function HostedWorkspaceRuntime({
     <HostedWorkspaceRuntimeContext
       value={{
         api,
+        backfillCanvasAssetThumbnails,
         connectionStatus,
         downloadOriginal,
         getCanvasAssetIds,

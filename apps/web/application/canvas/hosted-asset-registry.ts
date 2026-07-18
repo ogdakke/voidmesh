@@ -7,7 +7,11 @@ import { HostedApiClient } from "#lib/hosted-api-client.ts";
 import { HostedApiError } from "#lib/hosted-api-client.ts";
 import type { HostedAssetCache } from "#lib/hosted-asset-cache.ts";
 import type { HostedWorkspaceDocument } from "#lib/hosted-workspace-document.ts";
-import { blobToBase64, createHostedAssetThumbnail } from "./hosted-asset-thumbnail.ts";
+import {
+  blobToBase64,
+  createHostedAssetThumbnail,
+  createHostedAssetThumbnailFromBlob,
+} from "./hosted-asset-thumbnail.ts";
 
 const LOCAL_ASSET_PREFIX = "local_";
 
@@ -23,7 +27,11 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
   readonly #hashes = new WeakMap<Blob, Promise<string>>();
   readonly #uploadKeys = new WeakMap<Blob, string>();
   readonly #uploads = new WeakMap<Blob, Promise<HostedAssetReference>>();
-  readonly #adoptedBlobs = new WeakMap<Blob, HostedAssetReference>();
+  readonly #adoptedBlobs = new WeakMap<
+    Blob,
+    { needsThumbnail: boolean; reference: HostedAssetReference }
+  >();
+  readonly #thumbnailBackfills = new Map<string, Promise<void>>();
 
   constructor(
     api: HostedApiClient,
@@ -55,8 +63,11 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
     const adopted = this.#adoptedBlobs.get(blob);
     if (adopted) {
       this.#entityBlobs.set(entity.id, blob);
-      this.#references.set(entity.id, adopted);
-      return adopted;
+      this.#references.set(entity.id, adopted.reference);
+      if (adopted.needsThumbnail) {
+        void this.backfillThumbnail(entity, adopted.reference).catch(this.#onCacheError);
+      }
+      return adopted.reference;
     }
     const existing = this.#references.get(entity.id);
     if (existing && this.#entityBlobs.get(entity.id) === blob) return existing;
@@ -86,8 +97,28 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
     this.#references.set(entityId, reference);
   }
 
-  adoptBlob(reference: HostedAssetReference, blob: Blob): void {
-    this.#adoptedBlobs.set(blob, reference);
+  adoptBlob(reference: HostedAssetReference, blob: Blob, needsThumbnail: boolean): void {
+    this.#adoptedBlobs.set(blob, { needsThumbnail, reference });
+  }
+
+  backfillThumbnail(entity: ShaderCanvasEntity, reference: HostedAssetReference): Promise<void> {
+    if (reference.id.startsWith(LOCAL_ASSET_PREFIX)) return Promise.resolve();
+    const existing = this.#thumbnailBackfills.get(reference.id);
+    if (existing) return existing;
+    const pending = createHostedAssetThumbnail(entity)
+      .then(async (thumbnail) => {
+        if (!thumbnail)
+          throw new Error(`Unable to create a thumbnail for ${reference.originalFilename}`);
+        await this.#api.uploadAssetThumbnail(
+          this.#workspaceId,
+          reference.id,
+          await thumbnailRequest(thumbnail),
+        );
+        this.#onUploadComplete();
+      })
+      .finally(() => this.#thumbnailBackfills.delete(reference.id));
+    this.#thumbnailBackfills.set(reference.id, pending);
+    return pending;
   }
 
   async flushPending(document: HostedWorkspaceDocument): Promise<void> {
@@ -103,11 +134,18 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
           `The offline original for ${reference.originalFilename} is unavailable. Its local workspace copy was preserved and was not synchronized.`,
         );
       }
+      let thumbnail: Blob | undefined;
+      try {
+        thumbnail = await createHostedAssetThumbnailFromBlob(blob, reference.mediaType);
+      } catch (error) {
+        // A derived preview must not strand an otherwise recoverable original.
+        this.#onCacheError(error);
+      }
       const uploaded = await this.#upload(
         blob,
         reference.originalFilename,
         reference.mediaType,
-        undefined,
+        thumbnail,
         new AbortController().signal,
       );
       document.replaceAssetReference(reference.id, uploaded);
@@ -212,6 +250,15 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
     this.#onPendingUpload();
     return reference;
   }
+}
+
+async function thumbnailRequest(thumbnail: Blob) {
+  return {
+    byteLength: thumbnail.size,
+    contentHash: await sha256Blob(thumbnail, new AbortController().signal),
+    contentType: "image/webp" as const,
+    data: await blobToBase64(thumbnail),
+  };
 }
 
 async function sha256Blob(blob: Blob, signal: AbortSignal): Promise<string> {

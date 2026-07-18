@@ -180,6 +180,13 @@ export interface ReserveAssetUploadRequest {
   };
 }
 
+export interface AssetThumbnailUploadRequest {
+  byteLength: number;
+  contentHash: string;
+  contentType: "image/webp";
+  data: string;
+}
+
 export interface AssetUploadGrantResponse {
   assetId: string;
   expiresAt: number;

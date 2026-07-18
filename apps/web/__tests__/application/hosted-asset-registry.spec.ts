@@ -82,9 +82,30 @@ function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
 }
 
 describe("R2HostedAssetRegistry", () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
 
   it("uploads cached offline originals before replacing provisional document references", async () => {
+    const recoveredBitmap = {
+      close: vi.fn(),
+      height: 10,
+      width: 10,
+    } as unknown as ImageBitmap;
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn(async () => recoveredBitmap),
+    );
+    const canvas = {
+      getContext: () => ({ drawImage: vi.fn() }),
+      height: 0,
+      toBlob(callback: BlobCallback) {
+        callback(new Blob(["preview"], { type: "image/webp" }));
+      },
+      width: 0,
+    } as unknown as HTMLCanvasElement;
+    vi.spyOn(globalThis.document, "createElement").mockReturnValue(canvas);
     const provisional: HostedAssetReference = {
       byteLength: 3,
       contentType: "image/png",
@@ -138,6 +159,10 @@ describe("R2HostedAssetRegistry", () => {
       "workspace-1",
       expect.objectContaining({
         contentHash: "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+        thumbnail: expect.objectContaining({
+          byteLength: 7,
+          contentType: "image/webp",
+        }),
       }),
       expect.any(String),
     );
@@ -195,6 +220,57 @@ describe("R2HostedAssetRegistry", () => {
 
     expect(document.getEntity("entity-1")?.asset).toEqual(uploaded);
     expect(onCacheError).toHaveBeenCalledWith(cacheError);
+  });
+
+  it("backfills a missing thumbnail when a stored original is adopted", async () => {
+    const blob = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
+    const reference: HostedAssetReference = {
+      byteLength: blob.size,
+      contentType: blob.type,
+      id: "asset-without-thumbnail",
+      mediaType: "image",
+      originalFilename: "legacy.png",
+    };
+    const canvas = {
+      getContext: () => ({ drawImage: vi.fn() }),
+      height: 0,
+      toBlob(callback: BlobCallback) {
+        callback(new Blob(["preview"], { type: "image/webp" }));
+      },
+      width: 0,
+    } as unknown as HTMLCanvasElement;
+    vi.spyOn(globalThis.document, "createElement").mockReturnValue(canvas);
+    const api = {
+      uploadAssetThumbnail: vi.fn<HostedApiClient["uploadAssetThumbnail"]>(async () => {}),
+    } as unknown as HostedApiClient;
+    const onUploadComplete = vi.fn<() => void>();
+    const registry = new R2HostedAssetRegistry(
+      api,
+      "workspace-1",
+      new MemoryAssetCache(),
+      vi.fn<(error: unknown) => void>(),
+      vi.fn<() => void>(),
+      onUploadComplete,
+    );
+    registry.adoptBlob(reference, blob, true);
+
+    await expect(
+      registry.register(
+        runtimeEntity(blob, reference.originalFilename),
+        new AbortController().signal,
+      ),
+    ).resolves.toBe(reference);
+    await vi.waitFor(() => expect(api.uploadAssetThumbnail).toHaveBeenCalledOnce());
+
+    expect(api.uploadAssetThumbnail).toHaveBeenCalledWith(
+      "workspace-1",
+      reference.id,
+      expect.objectContaining({
+        byteLength: 7,
+        contentType: "image/webp",
+      }),
+    );
+    expect(onUploadComplete).toHaveBeenCalledOnce();
   });
 
   it("binds references to media identity and ignores stale upload completion", async () => {

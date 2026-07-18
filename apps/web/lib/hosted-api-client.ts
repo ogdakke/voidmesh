@@ -1,6 +1,7 @@
 import type {
   ApiErrorResponse,
   AccountResponse,
+  AssetThumbnailUploadRequest,
   AssetDownloadGrantResponse,
   AssetResponse,
   AssetUploadGrantResponse,
@@ -220,6 +221,17 @@ export class HostedApiClient {
     return this.#request(
       `/v1/workspaces/${encodeURIComponent(workspaceId)}/assets/uploads/${encodeURIComponent(reservationId)}/finalize`,
       { method: "POST" },
+    );
+  }
+
+  uploadAssetThumbnail(
+    workspaceId: WorkspaceId,
+    assetId: string,
+    input: AssetThumbnailUploadRequest,
+  ): Promise<void> {
+    return this.#request(
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/assets/${encodeURIComponent(assetId)}/thumbnail`,
+      { body: JSON.stringify(input), method: "PUT" },
     );
   }
 

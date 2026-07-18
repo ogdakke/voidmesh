@@ -1234,6 +1234,87 @@ describe("Voidmesh API", () => {
     ).toEqual({ used_bytes: 0 });
   });
 
+  it("backfills a missing thumbnail once and accounts for its stored bytes", async () => {
+    const cookie = await signUp("thumbnail-backfill@example.com", "Thumbnail Backfill");
+    const workspace = await createWorkspace(cookie, "Thumbnail backfill");
+    const reserved = await apiFetch(`/v1/workspaces/${workspace.id}/assets/uploads`, {
+      body: JSON.stringify({
+        byteLength: 2,
+        contentType: "image/png",
+        mediaType: "image",
+        originalFilename: "legacy.png",
+      }),
+      headers: { ...jsonHeaders(cookie), "idempotency-key": crypto.randomUUID() },
+      method: "POST",
+    });
+    expect(reserved.status).toBe(201);
+    const grant = await reserved.json<{
+      assetId: string;
+      headers: Record<string, string>;
+      reservationId: string;
+      uploadUrl: string;
+    }>();
+    const grantId = new URL(grant.uploadUrl).searchParams.get("voidmesh-grant")!;
+    expect(
+      (
+        await apiFetch(`/v1/object-grants/${grantId}`, {
+          body: new Uint8Array([9, 10]),
+          headers: { ...grant.headers, cookie },
+          method: "PUT",
+        })
+      ).status,
+    ).toBe(204);
+    expect(
+      (
+        await apiFetch(
+          `/v1/workspaces/${workspace.id}/assets/uploads/${grant.reservationId}/finalize`,
+          { headers: { cookie, origin: WEB_ORIGIN }, method: "POST" },
+        )
+      ).status,
+    ).toBe(200);
+
+    const thumbnailBytes = new Uint8Array([82, 73, 70, 70, 9, 8, 7, 6]);
+    const thumbnailHash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", thumbnailBytes))]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    const input = {
+      byteLength: thumbnailBytes.byteLength,
+      contentHash: thumbnailHash,
+      contentType: "image/webp",
+      data: btoa(String.fromCharCode(...thumbnailBytes)),
+    };
+    const thumbnailPath = `/v1/workspaces/${workspace.id}/assets/${grant.assetId}/thumbnail`;
+    const backfilled = await apiFetch(thumbnailPath, {
+      body: JSON.stringify(input),
+      headers: jsonHeaders(cookie),
+      method: "PUT",
+    });
+    expect(backfilled.status).toBe(204);
+    const replay = await apiFetch(thumbnailPath, {
+      body: JSON.stringify(input),
+      headers: jsonHeaders(cookie),
+      method: "PUT",
+    });
+    expect(replay.status).toBe(204);
+
+    expect(
+      await env.DB.prepare("SELECT used_bytes FROM workspaces WHERE id = ?")
+        .bind(workspace.id)
+        .first(),
+    ).toEqual({ used_bytes: 2 + thumbnailBytes.byteLength });
+    expect(
+      await env.DB.prepare(
+        `SELECT COUNT(*) AS count FROM audit_events
+         WHERE target_id = ? AND action = 'asset.thumbnail-backfilled'`,
+      )
+        .bind(grant.assetId)
+        .first(),
+    ).toEqual({ count: 1 });
+    const thumbnail = await apiFetch(thumbnailPath, { headers: { cookie } });
+    expect(thumbnail.status).toBe(200);
+    expect(new Uint8Array(await thumbnail.arrayBuffer())).toEqual(thumbnailBytes);
+  });
+
   it("applies signed Stripe subscription events idempotently and ignores stale events", async () => {
     const cookie = await signUp("billing-owner@example.com", "Billing Owner");
     const user = await env.DB.prepare('SELECT id FROM "user" WHERE email = ?')

@@ -505,6 +505,10 @@ Representative routes, not a frozen URL design:
 /v1/billing/webhooks/:provider
 ```
 
+`GET` reads the private thumbnail. An authorized editor may `PUT` a bounded, client-derived
+thumbnail when an older or recovered asset has no thumbnail yet; the operation is create-once and
+updates authoritative storage accounting with the stored bytes.
+
 All mutating HTTP requests use idempotency keys where client retry could otherwise duplicate state. Billing webhooks are authenticated, idempotent, order-tolerant, and retain the provider event ID.
 
 ## 15. Workspace lifecycle and retention

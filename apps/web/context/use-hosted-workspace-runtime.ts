@@ -6,6 +6,7 @@ import type { HostedApiClient } from "#lib/hosted-api-client.ts";
 
 export interface HostedWorkspaceRuntimeValue {
   api: HostedApiClient;
+  backfillCanvasAssetThumbnails(assetIds: ReadonlySet<string>): Promise<void>;
   connectionStatus: CollaborationConnectionStatus;
   downloadOriginal(entityId: string): Promise<void>;
   getCanvasAssetIds(): ReadonlySet<string>;

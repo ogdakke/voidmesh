@@ -42,6 +42,7 @@ function runtime(role: WorkspaceSummary["role"]): Runtime {
   } as unknown as HostedApiClient;
   return {
     api,
+    backfillCanvasAssetThumbnails: async () => {},
     connectionStatus: "connected",
     downloadOriginal: vi.fn<Runtime["downloadOriginal"]>(),
     getCanvasAssetIds: () => new Set(),
