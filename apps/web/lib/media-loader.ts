@@ -71,6 +71,10 @@ interface VideoLoadFailureDetails {
   demuxError: string | null;
 }
 
+const VIDEO_READY_TIMEOUT_MS = 15_000;
+const HAVE_METADATA_READY_STATE = 1;
+const HAVE_CURRENT_DATA_READY_STATE = 2;
+
 /** Common frame rates to round to */
 const COMMON_FRAME_RATES = [23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60, 120] as const;
 
@@ -202,12 +206,7 @@ export async function loadVideo(blob: Blob): Promise<VideoLoadResult> {
   let initialFrame: ImageBitmap | null = null;
   try {
     try {
-      await new Promise<void>((resolve, reject) => {
-        video.onloadedmetadata = () => resolve();
-        video.onerror = () => {
-          void createVideoLoadError(video, blob).then(reject);
-        };
-      });
+      await waitForVideoReady(video, blob, HAVE_METADATA_READY_STATE, "loadedmetadata");
     } catch (error) {
       trackUnsupportedVideoLoad(blob, error);
       throw error;
@@ -216,10 +215,7 @@ export async function loadVideo(blob: Blob): Promise<VideoLoadResult> {
     const width = video.videoWidth;
     const height = video.videoHeight;
 
-    video.currentTime = 0;
-    await new Promise<void>((resolve) => {
-      video.onseeked = () => resolve();
-    });
+    await waitForVideoReady(video, blob, HAVE_CURRENT_DATA_READY_STATE, "loadeddata");
 
     const canvas = new OffscreenCanvas(width, height);
     const ctx = canvas.getContext("2d")!;
@@ -251,6 +247,42 @@ export async function loadVideo(blob: Blob): Promise<VideoLoadResult> {
     disposeVideoElement(video);
     throw error;
   }
+}
+
+async function waitForVideoReady(
+  video: HTMLVideoElement,
+  blob: Blob,
+  readyState: number,
+  eventName: "loadedmetadata" | "loadeddata",
+): Promise<void> {
+  if (video.readyState >= readyState) return;
+
+  await new Promise<void>((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Timed out waiting for video ${eventName}`));
+    }, VIDEO_READY_TIMEOUT_MS);
+
+    const cleanup = (): void => {
+      clearTimeout(timeoutId);
+      video.removeEventListener(eventName, onReady);
+      video.removeEventListener("error", onError);
+    };
+    const onReady = (): void => {
+      cleanup();
+      resolve();
+    };
+    const onError = (): void => {
+      cleanup();
+      void createVideoLoadError(video, blob).then(reject, reject);
+    };
+
+    video.addEventListener(eventName, onReady, { once: true });
+    video.addEventListener("error", onError, { once: true });
+
+    // Avoid missing an event that fired between the initial check and listener registration.
+    if (video.readyState >= readyState) onReady();
+  });
 }
 
 export async function probeVideoAlphaMode(blob: Blob): Promise<MediaAlphaMode> {
