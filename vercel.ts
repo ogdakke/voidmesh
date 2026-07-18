@@ -1,0 +1,53 @@
+import type { VercelConfig } from "@vercel/config/v1";
+
+declare const process: { env: Record<string, string | undefined> };
+
+const apiOrigin =
+  process.env.VERCEL_ENV === "production"
+    ? "https://voidmesh-api-production.dwe.workers.dev"
+    : "https://voidmesh-api-preview.dwe.workers.dev";
+
+export const config: VercelConfig = {
+  buildCommand: "bun run build:web",
+  outputDirectory: "apps/web/dist",
+  headers: [
+    {
+      source: "/",
+      headers: [{ key: "Cache-Control", value: "public, max-age=0, must-revalidate" }],
+    },
+    {
+      source: "/index.html",
+      headers: [{ key: "Cache-Control", value: "public, max-age=0, must-revalidate" }],
+    },
+    {
+      source: "/sw.js",
+      headers: [{ key: "Cache-Control", value: "public, max-age=0, must-revalidate" }],
+    },
+    {
+      source: "/manifest.webmanifest",
+      headers: [{ key: "Content-Type", value: "application/manifest+json" }],
+    },
+    {
+      source: "/assets/(.*)",
+      headers: [{ key: "Cache-Control", value: "max-age=31536000, immutable" }],
+    },
+  ],
+  rewrites: [
+    {
+      source: "/v1/:path*",
+      destination: `${apiOrigin}/v1/:path*`,
+    },
+    {
+      source: "/m/:path(.*)",
+      destination: "https://2qb6b1mvwcbadvhf.public.blob.vercel-storage.com/media/:path",
+    },
+    {
+      source: "/ph/static/:path(.*)",
+      destination: "https://eu-assets.i.posthog.com/static/:path",
+    },
+    {
+      source: "/ph/:path(.*)",
+      destination: "https://eu.i.posthog.com/:path",
+    },
+  ],
+};

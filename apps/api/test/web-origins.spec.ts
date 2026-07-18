@@ -6,7 +6,8 @@ import {
 } from "../src/web-origins.ts";
 
 const env = {
-  TRUSTED_WEB_ORIGINS: "https://voidmesh.localhost, https://dws-computer-2.tailf9b0ae.ts.net",
+  TRUSTED_WEB_ORIGINS:
+    "https://voidmesh.localhost, https://dws-computer-2.tailf9b0ae.ts.net, https://voidmesh-*-ogdakkes-projects.vercel.app",
   WEB_ORIGIN: "https://voidmesh.localhost",
 } as unknown as Env;
 
@@ -15,6 +16,7 @@ describe("trusted web origins", () => {
     expect(readTrustedWebOrigins(env)).toEqual([
       "https://voidmesh.localhost",
       "https://dws-computer-2.tailf9b0ae.ts.net",
+      "https://voidmesh-*-ogdakkes-projects.vercel.app",
     ]);
     expect(
       trustedRequestOrigin(
@@ -24,6 +26,21 @@ describe("trusted web origins", () => {
         }),
       ),
     ).toBe("https://dws-computer-2.tailf9b0ae.ts.net");
+  });
+
+  it("allows HTTPS Vercel previews without trusting the apex or lookalike hosts", () => {
+    const request = (origin: string) =>
+      trustedRequestOrigin(
+        env,
+        new Request("https://api.internal.test/v1/assets", { headers: { origin } }),
+      );
+    expect(request("https://voidmesh-git-cloud-ogdakkes-projects.vercel.app")).toBe(
+      "https://voidmesh-git-cloud-ogdakkes-projects.vercel.app",
+    );
+    expect(request("https://attacker-project.vercel.app")).toBe("https://voidmesh.localhost");
+    expect(request("https://vercel.app")).toBe("https://voidmesh.localhost");
+    expect(request("https://voidmesh.vercel.app.evil.test")).toBe("https://voidmesh.localhost");
+    expect(request("http://voidmesh.vercel.app")).toBe("https://voidmesh.localhost");
   });
 
   it("uses a trusted absolute auth callback and rejects arbitrary callback origins", () => {

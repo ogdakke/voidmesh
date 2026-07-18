@@ -116,12 +116,9 @@ export default {
     batch: MessageBatch<SecurityAuditQueueMessage | WorkspaceExportQueueMessage>,
     env,
   ): Promise<void> {
-    if (batch.queue === "voidmesh-security-audit") {
-      for (const message of batch.messages) {
+    for (const message of batch.messages) {
+      if (message.body.kind === "security-audit") {
         try {
-          if (message.body.kind !== "security-audit") {
-            throw new Error("Invalid message on the security audit queue");
-          }
           await processSecurityAuditEvent(env, message.body.eventId);
           message.ack();
         } catch (error) {
@@ -134,14 +131,9 @@ export default {
           );
           message.retry();
         }
+        continue;
       }
-      return;
-    }
-    for (const message of batch.messages) {
       try {
-        if (message.body.kind !== "workspace-export") {
-          throw new Error("Invalid message on the workspace export queue");
-        }
         await processWorkspaceExport(env, message.body.exportId);
         message.ack();
       } catch (error) {

@@ -233,14 +233,24 @@ async function readResponseUserId(response: Response): Promise<string | null> {
 }
 
 function readAuthConfiguration(env: Env): {
-  baseURL: string;
+  baseURL: {
+    allowedHosts: string[];
+    fallback: string;
+    protocol: "auto";
+  };
   secret: string;
   trustedOrigins: string[];
 } {
+  const fallback = readBinding(env, "BETTER_AUTH_URL");
+  const trustedOrigins = readTrustedWebOrigins(env);
   return {
-    baseURL: readBinding(env, "BETTER_AUTH_URL"),
+    baseURL: {
+      allowedHosts: trustedOrigins.map((origin) => origin.replace(/^https?:\/\//, "")),
+      fallback,
+      protocol: "auto",
+    },
     secret: readBinding(env, "BETTER_AUTH_SECRET"),
-    trustedOrigins: readTrustedWebOrigins(env),
+    trustedOrigins,
   };
 }
 

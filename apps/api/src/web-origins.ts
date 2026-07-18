@@ -11,7 +11,7 @@ export function readTrustedWebOrigins(env: Env): string[] {
       [primary, ...(additional?.split(",") ?? [])]
         .map((value) => value.trim())
         .filter(Boolean)
-        .map(normalizeWebOrigin),
+        .map(normalizeTrustedWebOrigin),
     ),
   ];
 }
@@ -27,7 +27,7 @@ export function trustedRequestOrigin(env: Env, request: Request): string {
     if (!candidate) continue;
     try {
       const origin = normalizeWebOrigin(candidate);
-      if (trustedOrigins.includes(origin)) return origin;
+      if (trustedOrigins.some((trusted) => matchesTrustedOrigin(trusted, origin))) return origin;
     } catch {
       // An untrusted request origin must not affect generated application URLs.
     }
@@ -41,12 +41,46 @@ export function trustedCallbackOrigin(env: Env, internalUrl: string): string {
   if (callbackURL) {
     try {
       const origin = normalizeWebOrigin(new URL(callbackURL).origin);
-      if (trustedOrigins.includes(origin)) return origin;
+      if (trustedOrigins.some((trusted) => matchesTrustedOrigin(trusted, origin))) return origin;
     } catch {
       // Relative or malformed callback URLs use the primary public origin.
     }
   }
   return trustedOrigins[0]!;
+}
+
+function normalizeTrustedWebOrigin(value: string): string {
+  if (!value.includes("*")) return normalizeWebOrigin(value);
+  const match = /^(https?):\/\/([*A-Za-z0-9.-]+)(?::([0-9]+))?$/.exec(value);
+  const hostname = match?.[2];
+  if (
+    !match ||
+    !hostname ||
+    hostname.split("*").length !== 2 ||
+    hostname.startsWith(".") ||
+    hostname.endsWith(".")
+  ) {
+    throw new Error(`Invalid trusted web origin pattern: ${value}`);
+  }
+  return `${match[1]}://${hostname}${match[3] ? `:${match[3]}` : ""}`;
+}
+
+function matchesTrustedOrigin(pattern: string, origin: string): boolean {
+  if (!pattern.includes("*")) return pattern === origin;
+  const patternURL = new URL(pattern.replace("*", "wildcard"));
+  const originURL = new URL(origin);
+  const hostnamePattern = patternURL.hostname.replace("wildcard", "*");
+  const hostnameExpression = new RegExp(
+    `^${hostnamePattern
+      .split("*")
+      .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .join(".+")}$`,
+  );
+  return (
+    originURL.protocol === patternURL.protocol &&
+    originURL.port === patternURL.port &&
+    hostnameExpression.test(originURL.hostname)
+  );
 }
 
 function normalizeWebOrigin(value: string): string {
