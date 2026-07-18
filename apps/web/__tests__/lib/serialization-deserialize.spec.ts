@@ -297,6 +297,14 @@ describe("deserialize workspace", () => {
     expect(entities[0].imageBitmap).toBe(entities[1].imageBitmap);
   });
 
+  test("restores archived images with their PNG media type", async () => {
+    await deserializeIntoCanvas(createImageWorkspace());
+    const entity = canvasStore.getState().entities.get("entity-1");
+
+    if (entity?.mediaSource.type !== "image") throw new Error("Expected an image entity");
+    expect(entity.mediaSource.asset.blob.type).toBe("image/png");
+  });
+
   test("shares immutable shader trees and palettes while isolating animation state", async () => {
     const originalPalette: ColorPalette = {
       id: "original",

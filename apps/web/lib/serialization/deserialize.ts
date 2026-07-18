@@ -530,7 +530,7 @@ async function deserializeEntity(
     case "image": {
       const bytes = zipEntries[serialized.mediaFile];
       if (!bytes) throw new Error(`Missing media file: ${serialized.mediaFile}`);
-      const imageBlob = new Blob([bytes.slice()]);
+      const imageBlob = new Blob([bytes.slice()], { type: "image/png" });
       const bitmap = await bytesToImageBitmap(bytes);
       let asset: MediaImageAsset;
       try {
