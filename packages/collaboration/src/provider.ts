@@ -25,6 +25,9 @@ const EMPTY_YJS_UPDATE_BYTES = 2;
 const WEB_SOCKET_OPEN = 1;
 const CLOCK_SAMPLE_INTERVAL_MS = 15_000;
 const CLOCK_SAMPLE_WINDOW = 8;
+const CLIENT_CLOSE_ASSET_SYNC_FAILED = 4100;
+const CLIENT_CLOSE_RESYNCHRONIZE = 4101;
+const CLIENT_CLOSE_RECOVERY_FAILED = 4102;
 
 export type CollaborationConnectionStatus =
   | "offline"
@@ -219,7 +222,10 @@ export class HostedCollaborationProvider {
     if (type === "ack") {
       const updateId = (parsed as ServerAckMessage).updateId;
       this.#pending.delete(updateId);
-      if (updateId === this.#recoveryUpdateId) this.#recoveryUpdateId = null;
+      if (updateId === this.#recoveryUpdateId) {
+        this.#recoveryUpdateId = null;
+        this.#sendPendingFrames();
+      }
       return;
     }
     if (type === "error") {
@@ -262,19 +268,17 @@ export class HostedCollaborationProvider {
       await this.#beforeSync();
       this.#lastSynchronizationError = "";
     } catch (error) {
-      const fingerprint = error instanceof Error ? `${error.name}:${error.message}` : String(error);
-      if (fingerprint !== this.#lastSynchronizationError) {
-        this.#lastSynchronizationError = fingerprint;
-        this.#onSynchronizationError(error);
-      }
-      socket.close(1013, "Offline assets are not ready");
+      this.#reportSynchronizationError(error);
+      socket.close(CLIENT_CLOSE_ASSET_SYNC_FAILED, "Offline assets are not ready");
       return;
     }
     if (this.#socket !== socket || socket.readyState !== WEB_SOCKET_OPEN) return;
-    for (const frame of this.#pending.values()) socket.send(frame);
-    const offlineDiff = Y.encodeStateAsUpdate(this.#document, stateVector);
+    const recovering = this.#recoveryUpdateId !== null;
+    this.#sendPendingFrames();
     this.#setStatus("connected");
     this.#reconnectAttempt = 0;
+    if (recovering) return;
+    const offlineDiff = Y.encodeStateAsUpdate(this.#document, stateVector);
     if (offlineDiff.byteLength > EMPTY_YJS_UPDATE_BYTES) this.#sendUpdate(offlineDiff);
   }
 
@@ -284,10 +288,19 @@ export class HostedCollaborationProvider {
     const updateId = crypto.randomUUID();
     const frame = encodeClientYjsUpdate(updateId, update);
     this.#pending.set(updateId, frame);
+    if (this.#recoveryUpdateId) return;
     socket.send(frame);
   }
 
   #handleServerError(message: Partial<ServerErrorMessage>): void {
+    if (
+      typeof message.updateId === "string" &&
+      message.updateId === this.#recoveryUpdateId &&
+      (message.code === "invalid-document" || message.code === "unknown-asset")
+    ) {
+      this.#failDocumentRecovery();
+      return;
+    }
     if (
       message.code !== "missing-yjs-dependencies" ||
       typeof message.updateId !== "string" ||
@@ -296,10 +309,7 @@ export class HostedCollaborationProvider {
       return;
     }
     if (this.#recoveryUpdateId) {
-      this.#onSynchronizationError(
-        new Error("The shared workspace could not recover its document history"),
-      );
-      this.#socket?.close(1011, "Document history recovery failed");
+      this.#failDocumentRecovery();
       return;
     }
     this.#pending.clear();
@@ -309,6 +319,34 @@ export class HostedCollaborationProvider {
     this.#recoveryUpdateId = updateId;
     this.#pending.set(updateId, frame);
     this.#socket?.send(frame);
+  }
+
+  #sendPendingFrames(): void {
+    const socket = this.#socket;
+    if (!socket || socket.readyState !== WEB_SOCKET_OPEN) return;
+    if (this.#recoveryUpdateId) {
+      const recovery = this.#pending.get(this.#recoveryUpdateId);
+      if (recovery) socket.send(recovery);
+      return;
+    }
+    for (const frame of this.#pending.values()) socket.send(frame);
+  }
+
+  #failDocumentRecovery(): void {
+    this.#stopped = true;
+    this.#pending.clear();
+    this.#recoveryUpdateId = null;
+    this.#reportSynchronizationError(
+      new Error("The shared workspace could not recover its document history"),
+    );
+    this.#socket?.close(CLIENT_CLOSE_RECOVERY_FAILED, "Document history recovery failed");
+  }
+
+  #reportSynchronizationError(error: unknown): void {
+    const fingerprint = error instanceof Error ? `${error.name}:${error.message}` : String(error);
+    if (fingerprint === this.#lastSynchronizationError) return;
+    this.#lastSynchronizationError = fingerprint;
+    this.#onSynchronizationError(error);
   }
 
   #sendClockPing(): void {
@@ -358,7 +396,7 @@ export class HostedCollaborationProvider {
 
   resynchronize(): void {
     if (this.#stopped) return;
-    this.#socket?.close(1012, "Document reconciliation requested");
+    this.#socket?.close(CLIENT_CLOSE_RESYNCHRONIZE, "Document reconciliation requested");
   }
 
   #handleClose(socket: WebSocket, code: number): void {

@@ -464,21 +464,32 @@ export class WorkspaceRoom extends DurableObject<Env> {
     updateId: string,
     update: Uint8Array,
   ): Promise<void> {
+    const status = this.#readStatus()!;
     const candidate = new Y.Doc();
     let referencedAssetIds: Set<string> | null = null;
+    let rejectionReason = "schema-validation";
     try {
       Y.applyUpdate(candidate, update);
-      if (!hasPendingYjsData(candidate)) referencedAssetIds = validateDocument(candidate);
+      if (hasPendingYjsData(candidate)) rejectionReason = "missing-yjs-dependencies";
+      else referencedAssetIds = validateDocument(candidate);
     } catch {
+      rejectionReason = "invalid-yjs-update";
       referencedAssetIds = null;
     }
     if (!referencedAssetIds) {
+      const entityCount = candidate.getMap("entities").size;
       candidate.destroy();
+      this.#logRejectedDocumentRebase(
+        status,
+        "invalid-document",
+        rejectionReason,
+        entityCount,
+        update.byteLength,
+      );
       socket.send(JSON.stringify({ type: "error", code: "invalid-document", updateId }));
       return;
     }
 
-    const status = this.#readStatus()!;
     const recoverableAssets = await this.env.DB.prepare(
       `SELECT id FROM assets
        WHERE workspace_id = ? AND lifecycle IN ('verified', 'active', 'unreferenced')`,
@@ -487,7 +498,15 @@ export class WorkspaceRoom extends DurableObject<Env> {
       .all<{ id: string }>();
     const recoverableAssetIds = new Set(recoverableAssets.results.map(({ id }) => id));
     if ([...referencedAssetIds].some((assetId) => !recoverableAssetIds.has(assetId))) {
+      const entityCount = candidate.getMap("entities").size;
       candidate.destroy();
+      this.#logRejectedDocumentRebase(
+        status,
+        "unknown-asset",
+        "unknown-asset-reference",
+        entityCount,
+        update.byteLength,
+      );
       socket.send(JSON.stringify({ type: "error", code: "unknown-asset", updateId }));
       return;
     }
@@ -498,7 +517,15 @@ export class WorkspaceRoom extends DurableObject<Env> {
     empty.destroy();
     const acceptedUpdate = Y.encodeStateAsUpdate(candidate);
     if (acceptedUpdate.byteLength > MAX_YJS_UPDATE_BYTES) {
+      const entityCount = candidate.getMap("entities").size;
       candidate.destroy();
+      this.#logRejectedDocumentRebase(
+        status,
+        "invalid-document",
+        "update-too-large",
+        entityCount,
+        acceptedUpdate.byteLength,
+      );
       socket.send(JSON.stringify({ type: "error", code: "invalid-document", updateId }));
       return;
     }
@@ -571,6 +598,26 @@ export class WorkspaceRoom extends DurableObject<Env> {
       socket.send(serverFrame);
       this.#broadcast(serverFrame, socket);
     }
+  }
+
+  #logRejectedDocumentRebase(
+    status: WorkspaceRoomStatus,
+    code: "invalid-document" | "unknown-asset",
+    reason: string,
+    entityCount: number,
+    updateBytes: number,
+  ): void {
+    console.warn(
+      JSON.stringify({
+        code,
+        entityCount,
+        event: "workspace-room-document-rebase-rejected",
+        reason,
+        roomSequence: status.roomSequence,
+        updateBytes,
+        workspaceId: status.workspaceId,
+      }),
+    );
   }
 
   override webSocketClose(socket: WebSocket): void {
