@@ -41,7 +41,7 @@
       },
       {
         "queue": "voidmesh-security-audit",
-        "max_batch_size": 100,
+        "max_batch_size": 1,
         "max_batch_timeout": 5,
         "max_retries": 10,
         "dead_letter_queue": "voidmesh-security-audit-dlq",
@@ -74,7 +74,7 @@
     },
   },
   "triggers": {
-    "crons": ["0 * * * *"],
+    "crons": ["* * * * *", "0 * * * *"],
   },
   "env": {
     "production": {
@@ -125,7 +125,7 @@
           },
           {
             "queue": "voidmesh-security-audit",
-            "max_batch_size": 100,
+            "max_batch_size": 1,
             "max_batch_timeout": 5,
             "max_retries": 10,
             "dead_letter_queue": "voidmesh-security-audit-dlq",
@@ -189,7 +189,7 @@
           },
           {
             "queue": "voidmesh-security-audit-preview",
-            "max_batch_size": 100,
+            "max_batch_size": 1,
             "max_batch_timeout": 5,
             "max_retries": 10,
             "dead_letter_queue": "voidmesh-security-audit-dlq-preview",

@@ -217,7 +217,11 @@ describe("Voidmesh API", () => {
       workspaceId: workspace.id,
     });
 
-    await flushSecurityAuditOutbox(env);
+    const flushes = await Promise.all([
+      flushSecurityAuditOutbox(env),
+      flushSecurityAuditOutbox(env),
+    ]);
+    expect(flushes.filter((flush) => flush.enqueuedEventCount > 0)).toHaveLength(1);
     expect(
       await env.DB.prepare("SELECT enqueued_at FROM security_audit_outbox WHERE event_id = ?")
         .bind(event!.id)

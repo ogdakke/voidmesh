@@ -44,7 +44,7 @@ import {
 export { WorkspaceRoom } from "./workspace-room.ts";
 
 export default {
-  async fetch(request, env, ctx): Promise<Response> {
+  async fetch(request, env): Promise<Response> {
     const requestId = crypto.randomUUID();
     const url = new URL(request.url);
     const startedAt = performance.now();
@@ -83,30 +83,26 @@ export default {
           status,
         }),
       );
-      ctx.waitUntil(
-        flushSecurityAuditOutbox(env).catch((error: unknown) => {
-          console.error(
-            JSON.stringify({
-              error: error instanceof Error ? error.message : String(error),
-              event: "security-audit-enqueue-failed",
-            }),
-          );
-        }),
-      );
     }
   },
   scheduled(controller, env, ctx): void {
+    if (controller.cron === "* * * * *") {
+      ctx.waitUntil(
+        flushSecurityAuditOutbox(env, controller.scheduledTime).then((auditFlush) => {
+          console.log(JSON.stringify({ auditFlush, event: "security-audit-flush" }));
+        }),
+      );
+      return;
+    }
     ctx.waitUntil(
       Promise.all([
         purgeExpiredWorkspaces(env, controller.scheduledTime),
         cleanupExpiredUploads(env, controller.scheduledTime),
         cleanupExpiredExports(env, controller.scheduledTime),
-        flushSecurityAuditOutbox(env, controller.scheduledTime),
         cleanupDeliveredSecurityAuditOutbox(env.DB, controller.scheduledTime),
-      ]).then(([workspacePurge, uploadCleanup, exportCleanup, auditFlush, auditOutboxCleanup]) => {
+      ]).then(([workspacePurge, uploadCleanup, exportCleanup, auditOutboxCleanup]) => {
         console.log(
           JSON.stringify({
-            auditFlush,
             auditOutboxCleanup,
             event: "scheduled-maintenance",
             exportCleanup,
@@ -124,14 +120,17 @@ export default {
     for (const message of batch.messages) {
       if (message.body.kind === "security-audit") {
         try {
-          await processSecurityAuditEvent(env, message.body.eventId);
+          for (const eventId of message.body.eventIds) {
+            await processSecurityAuditEvent(env, eventId);
+          }
           message.ack();
         } catch (error) {
           console.error(
             JSON.stringify({
               error: error instanceof Error ? error.message : String(error),
               event: "security-audit-delivery-failed",
-              eventId: message.body.kind === "security-audit" ? message.body.eventId : undefined,
+              eventCount:
+                message.body.kind === "security-audit" ? message.body.eventIds.length : undefined,
             }),
           );
           message.retry();

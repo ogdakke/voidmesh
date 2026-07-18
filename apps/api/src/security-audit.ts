@@ -5,14 +5,12 @@ const REQUEUE_AFTER_MS = 15 * 60 * 1000;
 const DELIVERED_OUTBOX_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface SecurityAuditQueueMessage {
-  eventId: string;
+  eventIds: string[];
   kind: "security-audit";
 }
 
-interface SecurityAuditOutboxRow {
-  created_at: number;
+interface SecurityAuditClaimRow {
   event_id: string;
-  payload_json: string;
 }
 
 export interface SecurityAuditFlushResult {
@@ -24,30 +22,28 @@ export async function flushSecurityAuditOutbox(
   now = Date.now(),
 ): Promise<SecurityAuditFlushResult> {
   const rows = await env.DB.prepare(
-    `SELECT event_id, payload_json, created_at
-     FROM security_audit_outbox
-     WHERE delivered_at IS NULL
+    `UPDATE security_audit_outbox
+     SET enqueued_at = ?
+     WHERE event_id IN (
+       SELECT event_id
+       FROM security_audit_outbox
+       WHERE delivered_at IS NULL
+         AND (enqueued_at IS NULL OR enqueued_at <= ?)
+       ORDER BY created_at ASC, event_id ASC
+       LIMIT ?
+     )
+       AND delivered_at IS NULL
        AND (enqueued_at IS NULL OR enqueued_at <= ?)
-     ORDER BY created_at ASC, event_id ASC
-     LIMIT ?`,
+     RETURNING event_id`,
   )
-    .bind(now - REQUEUE_AFTER_MS, OUTBOX_BATCH_SIZE)
-    .all<SecurityAuditOutboxRow>();
+    .bind(now, now - REQUEUE_AFTER_MS, OUTBOX_BATCH_SIZE, now - REQUEUE_AFTER_MS)
+    .all<SecurityAuditClaimRow>();
   if (rows.results.length === 0) return { enqueuedEventCount: 0 };
 
-  await env.SECURITY_AUDIT_EVENTS.sendBatch(
-    rows.results.map((row) => ({
-      body: { eventId: row.event_id, kind: "security-audit" } satisfies SecurityAuditQueueMessage,
-    })),
-  );
-  await env.DB.batch(
-    rows.results.map((row) =>
-      env.DB.prepare(
-        `UPDATE security_audit_outbox SET enqueued_at = ?
-         WHERE event_id = ? AND delivered_at IS NULL`,
-      ).bind(now, row.event_id),
-    ),
-  );
+  await env.SECURITY_AUDIT_EVENTS.send({
+    eventIds: rows.results.map((row) => row.event_id),
+    kind: "security-audit",
+  } satisfies SecurityAuditQueueMessage);
   return { enqueuedEventCount: rows.results.length };
 }
 
@@ -58,7 +54,7 @@ export async function processSecurityAuditEvent(env: Env, eventId: string): Prom
      FROM security_audit_outbox WHERE event_id = ?`,
   )
     .bind(eventId)
-    .first<SecurityAuditOutboxRow>();
+    .first<{ created_at: number; event_id: string; payload_json: string }>();
   if (!row) return;
 
   const objectKey = securityAuditObjectKey(row.event_id, row.created_at);
