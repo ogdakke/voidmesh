@@ -1757,12 +1757,18 @@ describe("Voidmesh API", () => {
     });
 
     const recovery = new Y.Doc();
-    recovery
-      .getMap<Y.Map<unknown>>("entities")
-      .set("entity-rebase", testWorkspaceEntity(assetId, "Recovered"));
+    const recoveredEntity = testWorkspaceEntity(assetId, "Recovered");
+    recoveredEntity.set("appearance.shaderPlayback", {
+      commandId: "550e8400-e29b-41d4-a716-446655440023",
+      isPlaying: true,
+      time: 0,
+      updatedAt: 1_784_394_275_791,
+    });
+    recovery.getMap<Y.Map<unknown>>("entities").set("entity-rebase", recoveredEntity);
     recovery.getMap<string>("recovery").set("generation", crypto.randomUUID());
     const recoveryUpdateId = "550e8400-e29b-41d4-a716-446655440021";
-    socket.send(encodeClientYjsRebase(recoveryUpdateId, Y.encodeStateAsUpdate(recovery)));
+    const recoveryFrame = encodeClientYjsRebase(recoveryUpdateId, Y.encodeStateAsUpdate(recovery));
+    socket.send(recoveryFrame);
     expect(JSON.parse(String(await nextWebSocketMessage(socket)))).toEqual({
       roomSequence: 1,
       type: "ack",
@@ -1770,6 +1776,25 @@ describe("Voidmesh API", () => {
     });
     const replacement = decodeServerYjsRebase((await nextWebSocketMessage(socket)) as ArrayBuffer);
     expect(replacement).toMatchObject({ roomSequence: 1, updateId: recoveryUpdateId });
+    const replacementDocument = new Y.Doc();
+    Y.applyUpdate(replacementDocument, replacement!.update);
+    expect(
+      replacementDocument
+        .getMap<Y.Map<unknown>>("entities")
+        .get("entity-rebase")
+        ?.get("appearance.shaderPlayback"),
+    ).toMatchObject({ sequence: 1 });
+
+    socket.send(recoveryFrame);
+    expect(JSON.parse(String(await nextWebSocketMessage(socket)))).toEqual({
+      roomSequence: 1,
+      type: "ack",
+      updateId: recoveryUpdateId,
+    });
+    const retriedReplacement = decodeServerYjsRebase(
+      (await nextWebSocketMessage(socket)) as ArrayBuffer,
+    );
+    expect(retriedReplacement).toMatchObject({ roomSequence: 1, updateId: recoveryUpdateId });
 
     const secondResponse = await apiFetch(`/v1/workspaces/${workspace.id}/connect`, {
       headers: { cookie, upgrade: "websocket" },

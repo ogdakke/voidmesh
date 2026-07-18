@@ -332,6 +332,15 @@ export class WorkspaceRoom extends DurableObject<Env> {
           updateId: decoded.updateId,
         } satisfies ServerAckMessage),
       );
+      if (rebase) {
+        socket.send(
+          encodeServerYjsRebase(
+            status.roomSequence,
+            decoded.updateId,
+            Y.encodeStateAsUpdate(this.#document),
+          ),
+        );
+      }
       return;
     }
     if (rebase) {
@@ -471,7 +480,12 @@ export class WorkspaceRoom extends DurableObject<Env> {
     try {
       Y.applyUpdate(candidate, update);
       if (hasPendingYjsData(candidate)) rejectionReason = "missing-yjs-dependencies";
-      else referencedAssetIds = validateDocument(candidate);
+      else {
+        referencedAssetIds = validateDocument(candidate);
+        if (!referencedAssetIds) {
+          rejectionReason = documentValidationIssue(candidate) ?? rejectionReason;
+        }
+      }
     } catch {
       rejectionReason = "invalid-yjs-update";
       referencedAssetIds = null;
@@ -564,7 +578,7 @@ export class WorkspaceRoom extends DurableObject<Env> {
       return { isNew: true, roomSequence };
     });
 
-    let serverFrame: ArrayBuffer | null = null;
+    let serverFrame: ArrayBuffer;
     if (result.isNew) {
       this.#document.destroy();
       this.#document = candidate;
@@ -585,6 +599,12 @@ export class WorkspaceRoom extends DurableObject<Env> {
       serverFrame = encodeServerYjsRebase(result.roomSequence, updateId, acceptedUpdate);
     } else {
       candidate.destroy();
+      const currentStatus = this.#readStatus()!;
+      serverFrame = encodeServerYjsRebase(
+        currentStatus.roomSequence,
+        updateId,
+        Y.encodeStateAsUpdate(this.#document),
+      );
     }
 
     socket.send(
@@ -594,10 +614,8 @@ export class WorkspaceRoom extends DurableObject<Env> {
         updateId,
       } satisfies ServerAckMessage),
     );
-    if (serverFrame) {
-      socket.send(serverFrame);
-      this.#broadcast(serverFrame, socket);
-    }
+    socket.send(serverFrame);
+    if (result.isNew) this.#broadcast(serverFrame, socket);
   }
 
   #logRejectedDocumentRebase(
@@ -1064,22 +1082,34 @@ function createRebasedDocument(source: Y.Doc): Y.Doc {
 }
 
 function validateDocument(document: Y.Doc): Set<string> | null {
-  if (Y.encodeStateAsUpdate(document).byteLength > MAX_DOCUMENT_BYTES) return null;
-  const entities = document.getMap<Y.Map<unknown>>("entities");
-  if (entities.size > MAX_DOCUMENT_ENTITIES) return null;
+  if (documentValidationIssue(document)) return null;
   const assetIds = new Set<string>();
-  for (const [entityId, entity] of entities) {
-    if (!isIdentifier(entityId) || !(entity instanceof Y.Map) || entity.size > MAX_ENTITY_FIELDS) {
-      return null;
-    }
-    const asset = entity.get("asset");
-    if (!isValidEntityMap(entity) || !isRecord(asset) || !isIdentifierValue(asset.id)) return null;
-    assetIds.add(asset.id);
-    for (const [key, value] of entity) {
-      if (key.length === 0 || key.length > 256 || !isBoundedSharedValue(value)) return null;
-    }
+  for (const entity of document.getMap<Y.Map<unknown>>("entities").values()) {
+    const asset = entity.get("asset") as Record<string, unknown>;
+    assetIds.add(asset.id as string);
   }
   return assetIds;
+}
+
+function documentValidationIssue(document: Y.Doc): string | null {
+  if (Y.encodeStateAsUpdate(document).byteLength > MAX_DOCUMENT_BYTES) return "document-too-large";
+  const entities = document.getMap<Y.Map<unknown>>("entities");
+  if (entities.size > MAX_DOCUMENT_ENTITIES) return "too-many-entities";
+  for (const [entityId, entity] of entities) {
+    if (!isIdentifier(entityId)) return "entity-id";
+    if (!(entity instanceof Y.Map)) return "entity-map";
+    if (entity.size > MAX_ENTITY_FIELDS) return "too-many-entity-fields";
+    const asset = entity.get("asset");
+    const invalidField = invalidEntityField(entity);
+    if (invalidField) return invalidField;
+    if (!isRecord(asset)) return "asset";
+    if (!isIdentifierValue(asset.id)) return "asset.id";
+    for (const [key, value] of entity) {
+      if (key.length === 0 || key.length > 256) return "entity-field-key";
+      if (!isBoundedSharedValue(value)) return `shared-value:${key}`;
+    }
+  }
+  return null;
 }
 
 function stampPlaybackAnchors(
@@ -1110,35 +1140,48 @@ function stampPlaybackAnchors(
   return stamped;
 }
 
-function isValidEntityMap(entity: Y.Map<unknown>): boolean {
+function invalidEntityField(entity: Y.Map<unknown>): string | null {
   const playback = entity.get("playback");
   const shaderPlayback = entity.get("appearance.shaderPlayback");
-  return (
-    isBoundedString(entity.get("identity.name"), 1_024) &&
-    typeof entity.get("identity.locked") === "boolean" &&
-    typeof entity.get("identity.edited") === "boolean" &&
-    isCoordinate(entity.get("geometry.position.x")) &&
-    isCoordinate(entity.get("geometry.position.y")) &&
-    isDimension(entity.get("geometry.size.width")) &&
-    isDimension(entity.get("geometry.size.height")) &&
-    isDimension(entity.get("geometry.originalSize.width")) &&
-    isDimension(entity.get("geometry.originalSize.height")) &&
-    isCoordinate(entity.get("geometry.rotation")) &&
-    isCoordinate(entity.get("geometry.zIndex")) &&
-    isBoundedString(entity.get("appearance.shaderType"), 128) &&
-    isDimension(entity.get("appearance.params.size")) &&
-    isBoundedString(entity.get("appearance.params.shape"), 128) &&
-    isColor(entity.get("appearance.params.color")) &&
-    isColor(entity.get("appearance.params.background")) &&
-    typeof entity.get("appearance.params.preserveColors") === "boolean" &&
-    typeof entity.get("appearance.params.reversePalette") === "boolean" &&
-    typeof entity.get("appearance.params.showOriginal") === "boolean" &&
-    isDimension(entity.get("appearance.params.scale")) &&
-    isCoordinate(entity.get("appearance.params.intensity")) &&
-    isValidAssetReference(entity.get("asset")) &&
-    (playback === undefined || isValidPlaybackAnchor(playback)) &&
-    (shaderPlayback === undefined || isValidShaderPlaybackAnchor(shaderPlayback))
-  );
+  const checks: readonly [string, boolean][] = [
+    ["identity.name", isBoundedString(entity.get("identity.name"), 1_024)],
+    ["identity.locked", typeof entity.get("identity.locked") === "boolean"],
+    ["identity.edited", typeof entity.get("identity.edited") === "boolean"],
+    ["geometry.position.x", isCoordinate(entity.get("geometry.position.x"))],
+    ["geometry.position.y", isCoordinate(entity.get("geometry.position.y"))],
+    ["geometry.size.width", isDimension(entity.get("geometry.size.width"))],
+    ["geometry.size.height", isDimension(entity.get("geometry.size.height"))],
+    ["geometry.originalSize.width", isDimension(entity.get("geometry.originalSize.width"))],
+    ["geometry.originalSize.height", isDimension(entity.get("geometry.originalSize.height"))],
+    ["geometry.rotation", isCoordinate(entity.get("geometry.rotation"))],
+    ["geometry.zIndex", isCoordinate(entity.get("geometry.zIndex"))],
+    ["appearance.shaderType", isBoundedString(entity.get("appearance.shaderType"), 128)],
+    ["appearance.params.size", isDimension(entity.get("appearance.params.size"))],
+    ["appearance.params.shape", isBoundedString(entity.get("appearance.params.shape"), 128)],
+    ["appearance.params.color", isColor(entity.get("appearance.params.color"))],
+    ["appearance.params.background", isColor(entity.get("appearance.params.background"))],
+    [
+      "appearance.params.preserveColors",
+      typeof entity.get("appearance.params.preserveColors") === "boolean",
+    ],
+    [
+      "appearance.params.reversePalette",
+      typeof entity.get("appearance.params.reversePalette") === "boolean",
+    ],
+    [
+      "appearance.params.showOriginal",
+      typeof entity.get("appearance.params.showOriginal") === "boolean",
+    ],
+    ["appearance.params.scale", isDimension(entity.get("appearance.params.scale"))],
+    ["appearance.params.intensity", isCoordinate(entity.get("appearance.params.intensity"))],
+    ["asset", isValidAssetReference(entity.get("asset"))],
+    ["playback", playback === undefined || isValidPlaybackAnchor(playback)],
+    [
+      "appearance.shaderPlayback",
+      shaderPlayback === undefined || isValidShaderPlaybackAnchor(shaderPlayback),
+    ],
+  ];
+  return checks.find(([, valid]) => !valid)?.[0] ?? null;
 }
 
 function isValidPlaybackAnchor(value: unknown): boolean {
@@ -1235,7 +1278,7 @@ function sameSharedValue(left: unknown, right: unknown): boolean {
 function isBoundedSharedValue(value: unknown, depth = 0): boolean {
   if (depth > MAX_SHARED_VALUE_DEPTH) return false;
   if (value === null || typeof value === "boolean") return true;
-  if (typeof value === "number") return Number.isFinite(value) && Math.abs(value) <= 1e9;
+  if (typeof value === "number") return Number.isFinite(value) && Math.abs(value) <= 1e15;
   if (typeof value === "string") return value.length <= 4_096;
   if (Array.isArray(value)) {
     return value.length <= 128 && value.every((entry) => isBoundedSharedValue(entry, depth + 1));

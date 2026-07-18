@@ -72,6 +72,9 @@ export class HostedCollaborationProvider {
   #serverClockOffsetMs = 0;
   #lastSynchronizationError = "";
   #recoveryUpdateId: string | null = null;
+  #acceptedRecoveryUpdateId: string | null = null;
+  #recoveryStateVector: Uint8Array | null = null;
+  #messageQueue: Promise<void> | null = null;
   #clockTimer: ReturnType<typeof setInterval> | null = null;
   #clockSamples: { offsetMs: number; roundTripMs: number }[] = [];
   readonly #clockRequests = new Map<string, number>();
@@ -150,7 +153,9 @@ export class HostedCollaborationProvider {
   }
 
   readonly #handleDocumentUpdate = (update: Uint8Array, origin: unknown): void => {
-    if (origin === REMOTE_ORIGIN || this.#status !== "connected") return;
+    if (origin === REMOTE_ORIGIN || this.#status !== "connected" || this.#recoveryUpdateId) {
+      return;
+    }
     this.#sendUpdate(update);
   };
 
@@ -172,25 +177,62 @@ export class HostedCollaborationProvider {
     }
     socket.binaryType = "arraybuffer";
     this.#socket = socket;
+    this.#messageQueue = null;
     socket.addEventListener("open", () => {
+      this.#acceptedRecoveryUpdateId = null;
       this.#setStatus("synchronizing");
       this.#sendClockPing();
       this.#clockTimer = setInterval(() => this.#sendClockPing(), CLOCK_SAMPLE_INTERVAL_MS);
     });
-    socket.addEventListener("message", (event) => this.#handleMessage(event.data));
+    socket.addEventListener("message", (event) => this.#receiveMessage(socket, event.data));
     socket.addEventListener("close", (event) => this.#handleClose(socket, event.code));
     socket.addEventListener("error", () => socket.close());
+  }
+
+  #receiveMessage(socket: WebSocket, data: unknown): void {
+    if (!this.#messageQueue && !(data instanceof Blob)) {
+      if (this.#socket === socket) this.#handleMessage(data);
+      return;
+    }
+    const previous = this.#messageQueue ?? Promise.resolve();
+    const next = previous
+      .then(async () => {
+        if (this.#socket !== socket) return;
+        const message = data instanceof Blob ? await data.arrayBuffer() : data;
+        if (this.#socket === socket) this.#handleMessage(message);
+      })
+      .catch((error: unknown) => {
+        if (this.#socket !== socket) return;
+        this.#reportSynchronizationError(error);
+        socket.close(CLIENT_CLOSE_RESYNCHRONIZE, "Binary message decoding failed");
+      });
+    this.#messageQueue = next;
+    void next.finally(() => {
+      if (this.#messageQueue === next) this.#messageQueue = null;
+    });
   }
 
   #handleMessage(data: unknown): void {
     if (data instanceof ArrayBuffer) {
       const rebase = decodeServerYjsRebase(data);
       if (rebase) {
-        replaceDocumentWithUpdate(this.#document, rebase.update);
+        if (
+          rebase.updateId === this.#recoveryUpdateId ||
+          rebase.updateId === this.#acceptedRecoveryUpdateId
+        ) {
+          Y.applyUpdate(this.#document, rebase.update, REMOTE_ORIGIN);
+          if (rebase.updateId === this.#acceptedRecoveryUpdateId) {
+            this.#acceptedRecoveryUpdateId = null;
+          }
+        } else if (!this.#recoveryUpdateId && !this.#acceptedRecoveryUpdateId) {
+          replaceDocumentWithUpdate(this.#document, rebase.update);
+        }
         return;
       }
       const frame = decodeServerYjsUpdate(data);
-      if (frame) Y.applyUpdate(this.#document, frame.update, REMOTE_ORIGIN);
+      if (frame && !this.#recoveryUpdateId && !this.#acceptedRecoveryUpdateId) {
+        Y.applyUpdate(this.#document, frame.update, REMOTE_ORIGIN);
+      }
       return;
     }
     if (typeof data !== "string") return;
@@ -221,10 +263,18 @@ export class HostedCollaborationProvider {
     }
     if (type === "ack") {
       const updateId = (parsed as ServerAckMessage).updateId;
-      this.#pending.delete(updateId);
       if (updateId === this.#recoveryUpdateId) {
+        const recoveryStateVector = this.#recoveryStateVector;
+        this.#pending.clear();
         this.#recoveryUpdateId = null;
-        this.#sendPendingFrames();
+        this.#recoveryStateVector = null;
+        this.#acceptedRecoveryUpdateId = updateId;
+        if (recoveryStateVector) {
+          const followup = Y.encodeStateAsUpdate(this.#document, recoveryStateVector);
+          if (followup.byteLength > EMPTY_YJS_UPDATE_BYTES) this.#sendUpdate(followup);
+        }
+      } else {
+        this.#pending.delete(updateId);
       }
       return;
     }
@@ -317,6 +367,8 @@ export class HostedCollaborationProvider {
     const updateId = crypto.randomUUID();
     const frame = encodeClientYjsRebase(updateId, update);
     this.#recoveryUpdateId = updateId;
+    this.#acceptedRecoveryUpdateId = null;
+    this.#recoveryStateVector = Y.encodeStateVector(this.#document);
     this.#pending.set(updateId, frame);
     this.#socket?.send(frame);
   }
@@ -336,6 +388,8 @@ export class HostedCollaborationProvider {
     this.#stopped = true;
     this.#pending.clear();
     this.#recoveryUpdateId = null;
+    this.#acceptedRecoveryUpdateId = null;
+    this.#recoveryStateVector = null;
     this.#reportSynchronizationError(
       new Error("The shared workspace could not recover its document history"),
     );

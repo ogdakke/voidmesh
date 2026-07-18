@@ -6,6 +6,8 @@ import {
   bytesToBase64Url,
   decodeClientYjsRebase,
   decodeClientYjsUpdate,
+  encodeServerYjsRebase,
+  encodeServerYjsUpdate,
 } from "../src/index.ts";
 import { HostedCollaborationProvider } from "../src/provider.ts";
 
@@ -24,7 +26,7 @@ class FakeSocket extends EventTarget {
     this.sent.push(value);
   }
 
-  receive(value: string | ArrayBuffer): void {
+  receive(value: string | ArrayBuffer | Blob): void {
     this.dispatchEvent(new MessageEvent("message", { data: value }));
   }
 
@@ -138,6 +140,42 @@ describe("HostedCollaborationProvider", () => {
     provider.destroy();
   });
 
+  it("applies Blob snapshot frames before completing synchronization", async () => {
+    const local = new Y.Doc();
+    const server = new Y.Doc();
+    server.getMap("entities").set("cloud-entity", { name: "From cloud" });
+    const socket = new FakeSocket();
+    const provider = new HostedCollaborationProvider({
+      document: local,
+      socketFactory: () => socket as unknown as WebSocket,
+    });
+    provider.connect();
+    await Promise.resolve();
+    socket.open();
+    socket.receive(
+      new Blob([
+        encodeServerYjsUpdate(
+          1,
+          "550e8400-e29b-41d4-a716-446655440010",
+          Y.encodeStateAsUpdate(server),
+        ),
+      ]),
+    );
+    socket.receive(
+      JSON.stringify({
+        roomSequence: 1,
+        stateVector: bytesToBase64Url(Y.encodeStateVector(server)),
+        type: "sync-complete",
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(local.getMap("entities").get("cloud-entity")).toEqual({ name: "From cloud" }),
+    );
+    expect(provider.status).toBe("connected");
+    provider.destroy();
+  });
+
   it("rebases logical state when the server reports missing Yjs dependencies", async () => {
     const local = new Y.Doc();
     const entity = new Y.Map<unknown>();
@@ -185,12 +223,27 @@ describe("HostedCollaborationProvider", () => {
       "Recovered",
     );
 
+    const competingRebase = new Y.Doc();
+    competingRebase.getMap<string>("recovery").set("generation", crypto.randomUUID());
+    socket.receive(
+      encodeServerYjsRebase(
+        1,
+        "550e8400-e29b-41d4-a716-446655440099",
+        Y.encodeStateAsUpdate(competingRebase),
+      ),
+    );
+    expect(local.getMap<Y.Map<unknown>>("entities").has("entity-1")).toBe(true);
+
     local.getMap<Y.Map<unknown>>("entities").get("entity-1")!.set("name", "Still synced");
     expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(2);
 
     socket.receive(JSON.stringify({ roomSequence: 1, type: "ack", updateId: recovery.updateId }));
+    socket.receive(encodeServerYjsRebase(1, recovery.updateId, Y.encodeStateAsUpdate(server)));
     await vi.waitFor(() =>
       expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(3),
+    );
+    expect(local.getMap<Y.Map<unknown>>("entities").get("entity-1")?.get("name")).toBe(
+      "Still synced",
     );
     const followup = decodeClientYjsUpdate(
       socket.sent.filter((value): value is ArrayBuffer => value instanceof ArrayBuffer)[2]!,
