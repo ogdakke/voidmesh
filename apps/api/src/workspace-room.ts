@@ -823,16 +823,24 @@ export class WorkspaceRoom extends DurableObject<Env> {
     )) {
       Y.applyUpdate(this.#document, new Uint8Array(row.update_bytes));
     }
-    if (!hasPendingYjsData(this.#document)) return;
+    const repaired = hasPendingYjsData(this.#document);
+    if (repaired) {
+      const corrupted = this.#document;
+      this.#document = createRebasedDocument(corrupted);
+      corrupted.destroy();
+    }
+    if (!validateDocument(this.#document)) {
+      throw new Error("Workspace room document is invalid");
+    }
+    if (!repaired) return;
 
-    const corrupted = this.#document;
-    this.#document = createRebasedDocument(corrupted);
-    corrupted.destroy();
     const status = this.#readStatus();
     if (!status || status.roomSequence === 0) return;
     console.warn(
       JSON.stringify({
+        entityCount: this.#document.getMap("entities").size,
         event: "workspace-room-history-repaired",
+        recoverySource: "durable-object-storage",
         roomSequence: status.roomSequence,
         workspaceId: status.workspaceId,
       }),
@@ -930,6 +938,17 @@ export class WorkspaceRoom extends DurableObject<Env> {
     const updateId = crypto.randomUUID();
     const now = Date.now();
     Y.applyUpdate(this.#document, update);
+    let recoveredUpdate: Uint8Array<ArrayBufferLike> = update;
+    const repaired = hasPendingYjsData(this.#document);
+    if (repaired) {
+      const corrupted = this.#document;
+      this.#document = createRebasedDocument(corrupted);
+      corrupted.destroy();
+      recoveredUpdate = Y.encodeStateAsUpdate(this.#document);
+    }
+    if (!validateDocument(this.#document)) {
+      throw new Error("Workspace recovery snapshot document is invalid");
+    }
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec(
         "INSERT INTO room_metadata (singleton, workspace_id, room_sequence) VALUES (1, ?, ?)",
@@ -943,11 +962,23 @@ export class WorkspaceRoom extends DurableObject<Env> {
           ) VALUES (1, ?, ?, ?, ?)`,
           snapshot.room_sequence,
           updateId,
-          update.buffer as ArrayBuffer,
+          recoveredUpdate.buffer as ArrayBuffer,
           now,
         );
       }
     });
+    if (repaired) {
+      console.warn(
+        JSON.stringify({
+          entityCount: this.#document.getMap("entities").size,
+          event: "workspace-room-history-repaired",
+          recoverySource: "remote-snapshot",
+          roomSequence: snapshot.room_sequence,
+          workspaceId,
+        }),
+      );
+      await this.#checkpoint(snapshot.room_sequence, true);
+    }
     return { roomSequence: snapshot.room_sequence, workspaceId };
   }
 

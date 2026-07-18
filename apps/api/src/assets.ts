@@ -723,7 +723,17 @@ async function finalizeUpload(
       `UPDATE upload_reservations
        SET state = 'finalized', actual_bytes = ?, updated_at = ?
        WHERE id = ?`,
-    ).bind(object.size + (thumbnail?.size ?? 0), now, reservationId),
+    ).bind(object.size, now, reservationId),
+    env.DB.prepare(
+      `UPDATE assets
+       SET thumbnail_byte_length = ?, updated_at = ?
+       WHERE id = ?`,
+    ).bind(thumbnail?.size ?? 0, now, reservation.id),
+    env.DB.prepare(
+      `UPDATE workspaces
+       SET used_bytes = used_bytes + ?, updated_at = ?
+       WHERE id = ?`,
+    ).bind(thumbnail?.size ?? 0, now, workspaceId),
     env.DB.prepare(
       `UPDATE asset_transfer_grants
        SET completed_at = ?, actual_bytes = ?

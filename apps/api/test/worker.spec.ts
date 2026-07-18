@@ -1,3 +1,4 @@
+import { evictDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import {
   COLLABORATION_PROTOCOL_VERSION,
@@ -1186,6 +1187,14 @@ describe("Voidmesh API", () => {
       { headers: { cookie, origin: WEB_ORIGIN }, method: "POST" },
     );
     expect(finalized.status).toBe(200);
+    expect(
+      await env.DB.prepare("SELECT used_bytes, reserved_bytes FROM workspaces WHERE id = ?")
+        .bind(workspace.id)
+        .first(),
+    ).toEqual({
+      reserved_bytes: 0,
+      used_bytes: 2 + thumbnailBytes.byteLength,
+    });
 
     const listed = await apiFetch(`/v1/workspaces/${workspace.id}/assets`, {
       headers: { cookie },
@@ -1784,11 +1793,161 @@ describe("Voidmesh API", () => {
     expect(
       secondDocument.getMap<Y.Map<unknown>>("entities").get("entity-rebase")?.get("identity.name"),
     ).toBe("Recovered");
+
+    const secondVector = Y.encodeStateVector(secondDocument);
+    secondDocument
+      .getMap<Y.Map<unknown>>("entities")
+      .get("entity-rebase")!
+      .set("identity.name", "Still synchronized");
+    const followupUpdateId = "550e8400-e29b-41d4-a716-446655440022";
+    secondSocket.send(
+      encodeClientYjsUpdate(followupUpdateId, Y.encodeStateAsUpdate(secondDocument, secondVector)),
+    );
+    expect(JSON.parse(String(await nextWebSocketMessage(secondSocket)))).toEqual({
+      roomSequence: 2,
+      type: "ack",
+      updateId: followupUpdateId,
+    });
     expect(
       await env.DB.prepare("SELECT lifecycle FROM assets WHERE id = ?").bind(assetId).first(),
     ).toEqual({ lifecycle: "active" });
     socket.close();
     secondSocket.close();
+
+    const room = env.WORKSPACE_ROOMS.getByName(workspace.id);
+    await evictDurableObject(room, { webSockets: "close" });
+    const restoredResponse = await apiFetch(`/v1/workspaces/${workspace.id}/connect`, {
+      headers: { cookie, upgrade: "websocket" },
+    });
+    const restoredSocket = restoredResponse.webSocket!;
+    restoredSocket.binaryType = "arraybuffer";
+    restoredSocket.accept();
+    expect(JSON.parse(String(await nextWebSocketMessage(restoredSocket)))).toMatchObject({
+      roomSequence: 2,
+      type: "hello",
+    });
+    const restoredDocument = new Y.Doc();
+    while (true) {
+      const message = await nextWebSocketMessage(restoredSocket);
+      if (message instanceof ArrayBuffer) {
+        const frame = decodeServerYjsUpdate(message);
+        if (!frame) throw new Error("Expected a Yjs update while restoring the room");
+        Y.applyUpdate(restoredDocument, frame.update);
+        continue;
+      }
+
+      expect(JSON.parse(String(message))).toMatchObject({
+        roomSequence: 2,
+        type: "sync-complete",
+      });
+      break;
+    }
+    expect(
+      restoredDocument
+        .getMap<Y.Map<unknown>>("entities")
+        .get("entity-rebase")
+        ?.get("identity.name"),
+    ).toBe("Still synchronized");
+    restoredDocument.destroy();
+    restoredSocket.close();
+  });
+
+  it("repairs a dangling remote checkpoint before a fresh room serves it", async () => {
+    const cookie = await signUp("checkpoint-recovery@example.com", "Checkpoint Recovery");
+    const workspace = await createWorkspace(cookie, "Checkpoint recovery");
+    const room = env.WORKSPACE_ROOMS.getByName(workspace.id);
+    await room.purge();
+    await evictDurableObject(room, { webSockets: "close" });
+
+    const initialSnapshot = await env.DB.prepare(
+      "SELECT object_key FROM workspace_snapshots WHERE workspace_id = ?",
+    )
+      .bind(workspace.id)
+      .first<{ object_key: string }>();
+    await env.DB.prepare("DELETE FROM workspace_snapshots WHERE workspace_id = ?")
+      .bind(workspace.id)
+      .run();
+    if (initialSnapshot) await env.ASSETS.delete(initialSnapshot.object_key);
+
+    const source = new Y.Doc();
+    const staleEntity = new Y.Map<unknown>();
+    staleEntity.set("identity.name", "Missing base");
+    source.getMap<Y.Map<unknown>>("entities").set("entity-missing-base", staleEntity);
+    const sourceVector = Y.encodeStateVector(source);
+    staleEntity.set("identity.name", "Dangling change");
+    const poisonedUpdate = Y.encodeStateAsUpdate(source, sourceVector);
+    const poisonedDocument = new Y.Doc();
+    Y.applyUpdate(poisonedDocument, poisonedUpdate);
+    expect(poisonedDocument.store.pendingStructs).not.toBeNull();
+    const poisonedSnapshot = Y.encodeStateAsUpdate(poisonedDocument);
+    poisonedDocument.destroy();
+    source.destroy();
+
+    const poisonedKey = `snapshots/${workspace.id}/1/poisoned`;
+    const poisonedChecksum = [
+      ...new Uint8Array(await crypto.subtle.digest("SHA-256", poisonedSnapshot)),
+    ]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    await env.ASSETS.put(poisonedKey, poisonedSnapshot);
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO workspace_snapshots (
+          workspace_id, room_sequence, object_key, checksum, byte_length, created_at
+        ) VALUES (?, 1, ?, ?, ?, ?)`,
+      ).bind(workspace.id, poisonedKey, poisonedChecksum, poisonedSnapshot.byteLength, Date.now()),
+      env.DB.prepare(
+        `UPDATE workspaces
+         SET current_room_sequence = 1, snapshot_sequence = 1
+         WHERE id = ?`,
+      ).bind(workspace.id),
+    ]);
+
+    const response = await apiFetch(`/v1/workspaces/${workspace.id}/connect`, {
+      headers: { cookie, upgrade: "websocket" },
+    });
+    const socket = response.webSocket!;
+    socket.binaryType = "arraybuffer";
+    socket.accept();
+    expect(JSON.parse(String(await nextWebSocketMessage(socket)))).toMatchObject({
+      roomSequence: 1,
+      type: "hello",
+    });
+    const recoveredFrame = decodeServerYjsUpdate(
+      (await nextWebSocketMessage(socket)) as ArrayBuffer,
+    );
+    expect(recoveredFrame).not.toBeNull();
+    const recoveredDocument = new Y.Doc();
+    Y.applyUpdate(recoveredDocument, recoveredFrame!.update);
+    expect(recoveredDocument.store.pendingStructs).toBeNull();
+    expect(recoveredDocument.getMap("entities").size).toBe(0);
+    expect(JSON.parse(String(await nextWebSocketMessage(socket)))).toMatchObject({
+      roomSequence: 1,
+      type: "sync-complete",
+    });
+
+    const repairedSnapshot = await env.DB.prepare(
+      `SELECT object_key, checksum FROM workspace_snapshots
+       WHERE workspace_id = ? AND room_sequence = 1`,
+    )
+      .bind(workspace.id)
+      .first<{ checksum: string; object_key: string }>();
+    expect(repairedSnapshot?.object_key).not.toBe(poisonedKey);
+    expect(await env.ASSETS.head(poisonedKey)).toBeNull();
+    const repairedObject = await env.ASSETS.get(repairedSnapshot!.object_key);
+    const repairedBytes = new Uint8Array(await repairedObject!.arrayBuffer());
+    expect(
+      [...new Uint8Array(await crypto.subtle.digest("SHA-256", repairedBytes))]
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join(""),
+    ).toBe(repairedSnapshot!.checksum);
+    const durableDocument = new Y.Doc();
+    Y.applyUpdate(durableDocument, repairedBytes);
+    expect(durableDocument.store.pendingStructs).toBeNull();
+    expect(durableDocument.getMap("entities").size).toBe(0);
+    recoveredDocument.destroy();
+    durableDocument.destroy();
+    socket.close();
   });
 
   it("exchanges an authenticated session for a short-lived direct WebSocket ticket", async () => {
