@@ -20,6 +20,15 @@ export function primaryWebOrigin(env: Env): string {
   return readTrustedWebOrigins(env)[0]!;
 }
 
+export function isTrustedWebOrigin(env: Env, value: string): boolean {
+  try {
+    const origin = normalizeWebOrigin(value);
+    return readTrustedWebOrigins(env).some((trusted) => matchesTrustedOrigin(trusted, origin));
+  } catch {
+    return false;
+  }
+}
+
 export function trustedRequestOrigin(env: Env, request: Request): string {
   const trustedOrigins = readTrustedWebOrigins(env);
   const candidates = [request.headers.get("origin"), new URL(request.url).origin];

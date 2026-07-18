@@ -13,6 +13,7 @@ Cloudflare Worker providing the authoritative hosted-workspace control plane and
 
 - Authenticate before loading hosted resources, including view links and asset bytes.
 - Authorize every workspace and asset operation from active D1 membership; re-check access when opening a socket and on permission-sensitive actions.
+- Exchange the account session for a short-lived, workspace-scoped ticket before opening a direct Worker WebSocket; never forward the account cookie to a room or encode the ticket in the URL.
 - Treat invitation tokens and download grants as secrets: store hashes, make grants short-lived and scoped, and never log raw values.
 - Reserve quota transactionally before issuing an upload grant. One asset may cross a soft quota; after that, block further reservations.
 - Write audit events for authentication, invitation, membership, upload, download, deletion, restoration, billing, and authorization outcomes.

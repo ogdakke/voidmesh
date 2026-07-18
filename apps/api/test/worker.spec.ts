@@ -1588,6 +1588,45 @@ describe("Voidmesh API", () => {
     reconnectSocket.close(1000, "test complete");
   });
 
+  it("exchanges an authenticated session for a short-lived direct WebSocket ticket", async () => {
+    const cookie = await signUp("ticket-owner@example.com", "Ticket Owner");
+    const workspace = await createWorkspace(cookie, "Ticket workspace");
+    const ticketResponse = await apiFetch(`/v1/workspaces/${workspace.id}/connect-ticket`, {
+      headers: { cookie, origin: WEB_ORIGIN },
+      method: "POST",
+    });
+    expect(ticketResponse.status).toBe(201);
+    const ticket = await ticketResponse.json<{ protocol: string; socketUrl: string }>();
+    expect(ticket).toMatchObject({
+      socketUrl: `/v1/workspaces/${workspace.id}/connect`,
+    });
+    expect(ticket.protocol).toMatch(/^voidmesh\.ticket\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+
+    const rejected = await apiFetch(ticket.socketUrl, {
+      headers: {
+        origin: "https://attacker.example",
+        "sec-websocket-protocol": ticket.protocol,
+        upgrade: "websocket",
+      },
+    });
+    expect(rejected.status).toBe(403);
+
+    const connected = await apiFetch(ticket.socketUrl, {
+      headers: {
+        origin: WEB_ORIGIN,
+        "sec-websocket-protocol": ticket.protocol,
+        upgrade: "websocket",
+      },
+    });
+    expect(connected.status).toBe(101);
+    expect(connected.headers.get("sec-websocket-protocol")).toBe(ticket.protocol);
+    const socket = connected.webSocket!;
+    socket.accept();
+    await expect(bounded(nextWebSocketMessage(socket), "ticket hello")).resolves.toBeTruthy();
+    await expect(bounded(nextWebSocketMessage(socket), "ticket sync")).resolves.toBeTruthy();
+    socket.close();
+  });
+
   it("routes current cursor and selection presence to new and existing connections", async () => {
     const cookie = await signUp("presence-owner@example.com", "Presence Owner");
     const workspace = await createWorkspace(cookie, "Presence workspace");

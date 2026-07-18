@@ -35,6 +35,11 @@ export interface HealthResponse {
   service: "voidmesh-api";
 }
 
+export interface WorkspaceSocketTicketResponse {
+  protocol: string;
+  socketUrl: string;
+}
+
 export interface CreateWorkspaceRequest {
   title: string;
 }

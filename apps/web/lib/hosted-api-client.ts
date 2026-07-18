@@ -18,6 +18,7 @@ import type {
   WorkspaceListResponse,
   WorkspaceResponse,
   WorkspaceViewStateResponse,
+  WorkspaceSocketTicketResponse,
 } from "@voidmesh/api-contract";
 import type { ExportId, InvitationId, UserId, WorkspaceId } from "@voidmesh/domain";
 
@@ -241,10 +242,14 @@ export class HostedApiClient {
     );
   }
 
-  createWorkspaceSocket(workspaceId: WorkspaceId): WebSocket {
-    const url = new URL(`/v1/workspaces/${encodeURIComponent(workspaceId)}/connect`, this.#baseURL);
+  async createWorkspaceSocket(workspaceId: WorkspaceId): Promise<WebSocket> {
+    const ticket = await this.#request<WorkspaceSocketTicketResponse>(
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/connect-ticket`,
+      { method: "POST" },
+    );
+    const url = new URL(ticket.socketUrl, this.#baseURL);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-    return new WebSocket(url);
+    return new WebSocket(url, ticket.protocol);
   }
 
   async #request<T>(path: string, init: RequestInit = {}): Promise<T> {

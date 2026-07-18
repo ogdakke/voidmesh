@@ -7,7 +7,12 @@ import {
 } from "./assets.ts";
 import { createAuth, handleAuthRequest, isAuthPath } from "./auth.ts";
 import { errorResponse, json } from "./http.ts";
-import { handleRealtimeRequest, isRealtimePath } from "./realtime.ts";
+import {
+  handleAuthenticatedRealtimeRequest,
+  handleTicketRealtimeRequest,
+  isRealtimePath,
+  isTicketRealtimeRequest,
+} from "./realtime.ts";
 import { handleSharingRequest, isSharingPath } from "./sharing.ts";
 import { handleWorkspaceRequest } from "./workspaces.ts";
 import { handleAccountRequest } from "./account.ts";
@@ -174,6 +179,10 @@ async function routeRequest(
     return handleBillingWebhook(request, env, requestId);
   }
 
+  if (isTicketRealtimeRequest(request)) {
+    return handleTicketRealtimeRequest(request, env, requestId);
+  }
+
   if (
     isAssetPath(url.pathname) ||
     isObjectGrantPath(url.pathname) ||
@@ -192,7 +201,13 @@ async function routeRequest(
     const rateLimited = await guardAuthenticatedRequest(request, env, session.user.id, requestId);
     if (rateLimited) return rateLimited;
     if (isRealtimePath(url.pathname)) {
-      return handleRealtimeRequest(request, env, session.user.id, session.session.id, requestId);
+      return handleAuthenticatedRealtimeRequest(
+        request,
+        env,
+        session.user.id,
+        session.session.id,
+        requestId,
+      );
     }
     if (isAssetPath(url.pathname)) {
       return handleAssetRequest(request, env, session.user.id, requestId);

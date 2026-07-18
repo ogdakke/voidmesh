@@ -6,6 +6,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
     "ENVIRONMENT": "development",
+    "REALTIME_ORIGIN": "",
   },
   "d1_databases": [
     {
@@ -82,6 +83,7 @@
         "ENVIRONMENT": "production",
         "BETTER_AUTH_URL": "https://voidmesh.xyz",
         "WEB_ORIGIN": "https://voidmesh.xyz",
+        "REALTIME_ORIGIN": "https://voidmesh-api-production.dwe.workers.dev",
         "TRUSTED_WEB_ORIGINS": "https://www.voidmesh.xyz,https://voidmesh-*-ogdakkes-projects.vercel.app",
         "R2_ACCOUNT_ID": "21d89c6498aeb4c017e2d89fbb6ba4cd",
         "R2_BUCKET_NAME": "voidmesh-assets-production",
@@ -145,6 +147,7 @@
         "ENVIRONMENT": "preview",
         "BETTER_AUTH_URL": "https://voidmesh.xyz",
         "WEB_ORIGIN": "https://voidmesh.xyz",
+        "REALTIME_ORIGIN": "https://voidmesh-api-preview.dwe.workers.dev",
         "TRUSTED_WEB_ORIGINS": "https://www.voidmesh.xyz,https://voidmesh-*-ogdakkes-projects.vercel.app",
         "R2_ACCOUNT_ID": "21d89c6498aeb4c017e2d89fbb6ba4cd",
         "R2_BUCKET_NAME": "voidmesh-assets-preview",

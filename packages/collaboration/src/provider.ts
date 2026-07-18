@@ -43,7 +43,7 @@ export interface HostedCollaborationProviderOptions {
   onSynchronizationError?: (error: unknown) => void;
   onClockSample?: () => void;
   persistenceReady?: Promise<unknown>;
-  socketFactory: () => WebSocket;
+  socketFactory: () => Promise<WebSocket> | WebSocket;
 }
 
 export class HostedCollaborationProvider {
@@ -52,7 +52,7 @@ export class HostedCollaborationProvider {
   readonly #onSynchronizationError: (error: unknown) => void;
   readonly #onClockSample: () => void;
   readonly #persistenceReady: Promise<unknown>;
-  readonly #socketFactory: () => WebSocket;
+  readonly #socketFactory: () => Promise<WebSocket> | WebSocket;
   readonly #pending = new Map<string, ArrayBuffer>();
   readonly #presenceListeners = new Set<(presence: ServerPresenceMessage) => void>();
   readonly #roleListeners = new Set<(role: WorkspaceRole) => void>();
@@ -151,7 +151,18 @@ export class HostedCollaborationProvider {
     await this.#persistenceReady;
     if (this.#stopped) return;
     this.#setStatus("connecting");
-    const socket = this.#socketFactory();
+    let socket: WebSocket;
+    try {
+      const created = this.#socketFactory();
+      socket = isPromiseLike(created) ? await created : created;
+    } catch {
+      if (!this.#stopped) this.#scheduleReconnect();
+      return;
+    }
+    if (this.#stopped) {
+      socket.close(1000, "Client disconnected");
+      return;
+    }
     socket.binaryType = "arraybuffer";
     this.#socket = socket;
     socket.addEventListener("open", () => {
@@ -323,8 +334,17 @@ export class HostedCollaborationProvider {
     }
     this.#setStatus("offline");
     if (this.#stopped) return;
+    this.#scheduleReconnect();
+  }
+
+  #scheduleReconnect(): void {
+    this.#setStatus("offline");
+    if (this.#stopped || this.#reconnectTimer) return;
     const delay = Math.min(30_000, 500 * 2 ** this.#reconnectAttempt++);
-    this.#reconnectTimer = setTimeout(() => void this.#open(), delay);
+    this.#reconnectTimer = setTimeout(() => {
+      this.#reconnectTimer = null;
+      void this.#open();
+    }, delay);
   }
 
   #setStatus(status: CollaborationConnectionStatus): void {
@@ -332,6 +352,10 @@ export class HostedCollaborationProvider {
     this.#status = status;
     for (const listener of this.#statusListeners) listener(status);
   }
+}
+
+function isPromiseLike(value: Promise<WebSocket> | WebSocket): value is Promise<WebSocket> {
+  return typeof Reflect.get(value, "then") === "function";
 }
 
 export function createPersistedHostedDocument(workspaceId: WorkspaceId): PersistedHostedDocument {
