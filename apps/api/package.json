@@ -9,7 +9,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "types": "wrangler types",
     "types:check": "wrangler types --check",
-    "db:migrate:local": "wrangler d1 migrations apply DB --local"
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "r2:cors:preview": "wrangler r2 bucket cors set voidmesh-assets-preview --file r2-cors.preview.json --force",
+    "r2:cors:production": "wrangler r2 bucket cors set voidmesh-assets-production --file r2-cors.production.json --force"
   },
   "dependencies": {
     "@voidmesh/api-contract": "workspace:*",
