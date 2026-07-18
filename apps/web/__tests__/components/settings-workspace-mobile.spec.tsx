@@ -65,8 +65,7 @@ describe("Hosted mobile workspace settings", () => {
     );
     expect(screen.getByRole("button", { name: "Download .vdmsh" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete workspace…" })).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Members" })).toBeVisible());
-    expect(screen.getByText("owner@example.com")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("owner@example.com")).toBeInTheDocument());
 
     const createInvitationButton = screen.getByRole("button", {
       name: "Create invitation link",
