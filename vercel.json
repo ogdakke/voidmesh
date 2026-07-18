@@ -1,0 +1,80 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "bun run build:web",
+  "outputDirectory": "apps/web/dist",
+  "headers": [
+    {
+      "source": "/",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=0, must-revalidate"
+        }
+      ]
+    },
+    {
+      "source": "/index.html",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=0, must-revalidate"
+        }
+      ]
+    },
+    {
+      "source": "/sw.js",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=0, must-revalidate"
+        }
+      ]
+    },
+    {
+      "source": "/manifest.webmanifest",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/manifest+json"
+        }
+      ]
+    },
+    {
+      "source": "/assets/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "max-age=31536000, immutable"
+        }
+      ]
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/v1/:path*",
+      "has": [
+        {
+          "type": "host",
+          "value": "voidmesh-.*-ogdakkes-projects\\.vercel\\.app"
+        }
+      ],
+      "destination": "https://voidmesh-api-preview.dwe.workers.dev/v1/:path*"
+    },
+    {
+      "source": "/v1/:path*",
+      "destination": "https://voidmesh-api-production.dwe.workers.dev/v1/:path*"
+    },
+    {
+      "source": "/m/:path(.*)",
+      "destination": "https://2qb6b1mvwcbadvhf.public.blob.vercel-storage.com/media/:path"
+    },
+    {
+      "source": "/ph/static/:path(.*)",
+      "destination": "https://eu-assets.i.posthog.com/static/:path"
+    },
+    {
+      "source": "/ph/:path(.*)",
+      "destination": "https://eu.i.posthog.com/:path"
+    }
+  ]
+}
