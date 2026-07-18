@@ -172,6 +172,12 @@ export interface ReserveAssetUploadRequest {
   contentType: string;
   mediaType: string;
   originalFilename: string;
+  thumbnail?: {
+    byteLength: number;
+    contentHash: string;
+    contentType: "image/webp";
+    data: string;
+  };
 }
 
 export interface AssetUploadGrantResponse {
@@ -197,6 +203,33 @@ export interface AssetResponse {
     mediaType: string;
     originalFilename: string;
     workspaceId: WorkspaceId;
+  };
+}
+
+export type WorkspaceAssetUsage = "active" | "unused";
+
+export interface WorkspaceAssetSummary {
+  byteLength: number;
+  contentHash: string | null;
+  contentType: string;
+  createdAt: number;
+  id: string;
+  mediaType: string;
+  originalFilename: string;
+  thumbnailUrl: string | null;
+  unreferencedAt: number | null;
+  usage: WorkspaceAssetUsage;
+  workspaceId: WorkspaceId;
+}
+
+export interface WorkspaceAssetListResponse {
+  assets: WorkspaceAssetSummary[];
+  nextCursor: string | null;
+  storage: {
+    activeBytes: number;
+    reservedBytes: number;
+    totalUsedBytes: number;
+    unusedBytes: number;
   };
 }
 

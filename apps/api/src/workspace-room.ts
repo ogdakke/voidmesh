@@ -5,7 +5,9 @@ import {
   COLLABORATION_PROTOCOL_VERSION,
   MAX_YJS_UPDATE_BYTES,
   bytesToBase64Url,
+  decodeClientYjsRebase,
   decodeClientYjsUpdate,
+  encodeServerYjsRebase,
   encodeServerYjsUpdate,
   parseClientClockPingMessage,
   parseClientPresenceMessage,
@@ -64,7 +66,7 @@ const MAX_SHARED_VALUE_DEPTH = 8;
 const MAX_PRESENCE_BACKPRESSURE_BYTES = 64 * 1024;
 
 export class WorkspaceRoom extends DurableObject<Env> {
-  readonly #document = new Y.Doc();
+  #document = new Y.Doc();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -295,7 +297,8 @@ export class WorkspaceRoom extends DurableObject<Env> {
       socket.send(JSON.stringify({ type: "error", code: "read-only" }));
       return;
     }
-    const decoded = decodeClientYjsUpdate(message);
+    const rebase = decodeClientYjsRebase(message);
+    const decoded = rebase ?? decodeClientYjsUpdate(message);
     if (!decoded) {
       socket.send(JSON.stringify({ type: "error", code: "invalid-update" }));
       return;
@@ -331,11 +334,26 @@ export class WorkspaceRoom extends DurableObject<Env> {
       );
       return;
     }
+    if (rebase) {
+      await this.#applyDocumentRebase(socket, attachment, rebase.updateId, rebase.update);
+      return;
+    }
     const candidate = new Y.Doc();
     let referencedAssetIds: Set<string> | null = null;
     try {
       Y.applyUpdate(candidate, Y.encodeStateAsUpdate(this.#document));
       Y.applyUpdate(candidate, decoded.update);
+      if (hasPendingYjsData(candidate)) {
+        candidate.destroy();
+        socket.send(
+          JSON.stringify({
+            code: "missing-yjs-dependencies",
+            type: "error",
+            updateId: decoded.updateId,
+          }),
+        );
+        return;
+      }
       referencedAssetIds = validateDocument(candidate);
     } catch {
       referencedAssetIds = null;
@@ -437,6 +455,121 @@ export class WorkspaceRoom extends DurableObject<Env> {
       if (result.roomSequence % this.#snapshotInterval() === 0) {
         await this.#checkpoint(result.roomSequence);
       }
+    }
+  }
+
+  async #applyDocumentRebase(
+    socket: WebSocket,
+    attachment: ConnectionAttachment,
+    updateId: string,
+    update: Uint8Array,
+  ): Promise<void> {
+    const candidate = new Y.Doc();
+    let referencedAssetIds: Set<string> | null = null;
+    try {
+      Y.applyUpdate(candidate, update);
+      if (!hasPendingYjsData(candidate)) referencedAssetIds = validateDocument(candidate);
+    } catch {
+      referencedAssetIds = null;
+    }
+    if (!referencedAssetIds) {
+      candidate.destroy();
+      socket.send(JSON.stringify({ type: "error", code: "invalid-document", updateId }));
+      return;
+    }
+
+    const status = this.#readStatus()!;
+    const recoverableAssets = await this.env.DB.prepare(
+      `SELECT id FROM assets
+       WHERE workspace_id = ? AND lifecycle IN ('verified', 'active', 'unreferenced')`,
+    )
+      .bind(status.workspaceId)
+      .all<{ id: string }>();
+    const recoverableAssetIds = new Set(recoverableAssets.results.map(({ id }) => id));
+    if ([...referencedAssetIds].some((assetId) => !recoverableAssetIds.has(assetId))) {
+      candidate.destroy();
+      socket.send(JSON.stringify({ type: "error", code: "unknown-asset", updateId }));
+      return;
+    }
+
+    const nextRoomSequence = status.roomSequence + 1;
+    const empty = new Y.Doc();
+    stampPlaybackAnchors(empty, candidate, nextRoomSequence, Date.now());
+    empty.destroy();
+    const acceptedUpdate = Y.encodeStateAsUpdate(candidate);
+    if (acceptedUpdate.byteLength > MAX_YJS_UPDATE_BYTES) {
+      candidate.destroy();
+      socket.send(JSON.stringify({ type: "error", code: "invalid-document", updateId }));
+      return;
+    }
+
+    const result = this.ctx.storage.transactionSync(() => {
+      const existing = this.ctx.storage.sql
+        .exec<{ room_sequence: number }>(
+          "SELECT room_sequence FROM applied_update_ids WHERE update_id = ?",
+          updateId,
+        )
+        .toArray()[0];
+      if (existing) return { isNew: false, roomSequence: existing.room_sequence };
+      const roomSequence = this.#readStatus()!.roomSequence + 1;
+      const now = Date.now();
+      this.ctx.storage.sql.exec(
+        `INSERT INTO applied_update_ids (update_id, room_sequence, created_at)
+         VALUES (?, ?, ?)`,
+        updateId,
+        roomSequence,
+        now,
+      );
+      this.ctx.storage.sql.exec(
+        `INSERT OR REPLACE INTO room_snapshot (
+          singleton, room_sequence, update_id, update_bytes, created_at
+        ) VALUES (1, ?, ?, ?, ?)`,
+        roomSequence,
+        updateId,
+        acceptedUpdate.buffer as ArrayBuffer,
+        now,
+      );
+      this.ctx.storage.sql.exec("DELETE FROM yjs_updates");
+      this.ctx.storage.sql.exec(
+        "UPDATE room_metadata SET room_sequence = ? WHERE singleton = 1",
+        roomSequence,
+      );
+      return { isNew: true, roomSequence };
+    });
+
+    let serverFrame: ArrayBuffer | null = null;
+    if (result.isNew) {
+      this.#document.destroy();
+      this.#document = candidate;
+      await this.#reconcileAssetReferences(
+        status.workspaceId,
+        referencedAssetIds,
+        attachment.userId,
+        updateId,
+      );
+      await this.env.DB.prepare(
+        `UPDATE workspaces
+         SET current_room_sequence = ?, updated_at = ?
+         WHERE id = ? AND current_room_sequence < ?`,
+      )
+        .bind(result.roomSequence, Date.now(), status.workspaceId, result.roomSequence)
+        .run();
+      await this.#checkpoint(result.roomSequence);
+      serverFrame = encodeServerYjsRebase(result.roomSequence, updateId, acceptedUpdate);
+    } else {
+      candidate.destroy();
+    }
+
+    socket.send(
+      JSON.stringify({
+        roomSequence: result.roomSequence,
+        type: "ack",
+        updateId,
+      } satisfies ServerAckMessage),
+    );
+    if (serverFrame) {
+      socket.send(serverFrame);
+      this.#broadcast(serverFrame, socket);
     }
   }
 
@@ -690,6 +823,21 @@ export class WorkspaceRoom extends DurableObject<Env> {
     )) {
       Y.applyUpdate(this.#document, new Uint8Array(row.update_bytes));
     }
+    if (!hasPendingYjsData(this.#document)) return;
+
+    const corrupted = this.#document;
+    this.#document = createRebasedDocument(corrupted);
+    corrupted.destroy();
+    const status = this.#readStatus();
+    if (!status || status.roomSequence === 0) return;
+    console.warn(
+      JSON.stringify({
+        event: "workspace-room-history-repaired",
+        roomSequence: status.roomSequence,
+        workspaceId: status.workspaceId,
+      }),
+    );
+    await this.#checkpoint(status.roomSequence, true);
   }
 
   #readLocalSnapshot(): LocalSnapshotRow | null {
@@ -702,7 +850,7 @@ export class WorkspaceRoom extends DurableObject<Env> {
     );
   }
 
-  async #checkpoint(roomSequence: number): Promise<void> {
+  async #checkpoint(roomSequence: number, replaceExisting = false): Promise<void> {
     const workspaceId = this.#readStatus()!.workspaceId;
     const update = Y.encodeStateAsUpdate(this.#document);
     const updateId = crypto.randomUUID();
@@ -712,12 +860,29 @@ export class WorkspaceRoom extends DurableObject<Env> {
     await this.env.ASSETS.put(objectKey, update, {
       httpMetadata: { contentType: "application/octet-stream" },
     });
+    const replacedObject = replaceExisting
+      ? await this.env.DB.prepare(
+          `SELECT object_key FROM workspace_snapshots
+           WHERE workspace_id = ? AND room_sequence = ?`,
+        )
+          .bind(workspaceId, roomSequence)
+          .first<{ object_key: string }>()
+      : null;
     try {
       await this.env.DB.batch([
         this.env.DB.prepare(
           `INSERT INTO workspace_snapshots (
             workspace_id, room_sequence, object_key, checksum, byte_length, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?)
+          ${
+            replaceExisting
+              ? `ON CONFLICT (workspace_id, room_sequence) DO UPDATE SET
+                   object_key = excluded.object_key,
+                   checksum = excluded.checksum,
+                   byte_length = excluded.byte_length,
+                   created_at = excluded.created_at`
+              : ""
+          }`,
         ).bind(workspaceId, roomSequence, objectKey, checksum, update.byteLength, now),
         this.env.DB.prepare(
           `UPDATE workspaces SET snapshot_sequence = ?
@@ -727,6 +892,9 @@ export class WorkspaceRoom extends DurableObject<Env> {
     } catch (error) {
       await this.env.ASSETS.delete(objectKey);
       throw error;
+    }
+    if (replacedObject && replacedObject.object_key !== objectKey) {
+      await this.env.ASSETS.delete(replacedObject.object_key);
     }
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec(
@@ -792,6 +960,29 @@ export class WorkspaceRoom extends DurableObject<Env> {
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function hasPendingYjsData(document: Y.Doc): boolean {
+  return document.store.pendingStructs !== null || document.store.pendingDs !== null;
+}
+
+function createRebasedDocument(source: Y.Doc): Y.Doc {
+  const replacement = new Y.Doc();
+  const knownClientIds = Y.decodeStateVector(Y.encodeStateVector(source));
+  let replacementClientId = 0xffff_ffff;
+  while (knownClientIds.has(replacementClientId)) replacementClientId--;
+  replacement.clientID = replacementClientId;
+  const sourceEntities = source.getMap<Y.Map<unknown>>("entities");
+  const entities = replacement.getMap<Y.Map<unknown>>("entities");
+  replacement.transact(() => {
+    for (const [entityId, entity] of sourceEntities) {
+      const next = new Y.Map<unknown>();
+      for (const [key, value] of entity) next.set(key, structuredClone(value));
+      entities.set(entityId, next);
+    }
+    replacement.getMap<string>("recovery").set("generation", crypto.randomUUID());
+  });
+  return replacement;
 }
 
 function validateDocument(document: Y.Doc): Set<string> | null {

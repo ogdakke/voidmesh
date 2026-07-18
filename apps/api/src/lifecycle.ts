@@ -19,6 +19,7 @@ interface CleanupAssetRow {
   actor_user_id: string;
   asset_id: string;
   object_key: string;
+  thumbnail_object_key: string | null;
   owner_account_id: string;
   reservation_id: string;
   workspace_id: string;
@@ -100,6 +101,7 @@ export async function cleanupExpiredUploads(
        assets.id AS asset_id,
        assets.workspace_id,
        assets.object_key,
+       assets.thumbnail_object_key,
        upload_reservations.id AS reservation_id,
        upload_reservations.actor_user_id,
        workspaces.owner_account_id
@@ -116,7 +118,9 @@ export async function cleanupExpiredUploads(
 
   let cleanedAssetCount = 0;
   for (const asset of deleting.results) {
-    await env.ASSETS.delete(asset.object_key);
+    await env.ASSETS.delete(
+      [asset.object_key, asset.thumbnail_object_key].filter((key): key is string => key !== null),
+    );
     const requestId = crypto.randomUUID();
     await env.DB.batch([
       env.DB.prepare("DELETE FROM asset_transfer_grants WHERE asset_id = ?").bind(asset.asset_id),
@@ -186,8 +190,13 @@ async function purgeWorkspace(
   now: number,
 ): Promise<number> {
   const [assets, snapshots, exports] = await Promise.all([
-    env.DB.prepare("SELECT object_key FROM assets WHERE workspace_id = ?")
-      .bind(workspace.id)
+    env.DB.prepare(
+      `SELECT object_key FROM assets WHERE workspace_id = ?
+       UNION ALL
+       SELECT thumbnail_object_key AS object_key FROM assets
+       WHERE workspace_id = ? AND thumbnail_object_key IS NOT NULL`,
+    )
+      .bind(workspace.id, workspace.id)
       .all<ObjectKeyRow>(),
     env.DB.prepare("SELECT object_key FROM workspace_snapshots WHERE workspace_id = ?")
       .bind(workspace.id)

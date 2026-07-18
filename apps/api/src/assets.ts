@@ -5,6 +5,8 @@ import {
   type AssetResponse,
   type AssetUploadGrantResponse,
   type ReserveAssetUploadRequest,
+  type WorkspaceAssetListResponse,
+  type WorkspaceAssetSummary,
 } from "@voidmesh/api-contract";
 import {
   WorkspaceRole,
@@ -19,6 +21,8 @@ import { trustedRequestOrigin } from "./web-origins.ts";
 
 const IDENTIFIER = "[A-Za-z0-9_-]{1,128}";
 const GRANT_TTL_SECONDS = 5 * 60;
+const ASSET_PAGE_SIZE = 30;
+const MAX_THUMBNAIL_BYTES = 128 * 1024;
 const VIDEO_CONTENT_TYPES = new Set([
   "video/matroska",
   "video/mp4",
@@ -48,6 +52,11 @@ interface ReservationRow extends AssetAccessRow {
   grant_id?: string;
   reservation_id: string;
   state: string;
+  thumbnail_byte_length: number;
+  thumbnail_content_hash: string | null;
+  thumbnail_content_type: string | null;
+  thumbnail_expected_bytes: number;
+  thumbnail_object_key: string | null;
 }
 
 type AssetReadPurpose = "download" | "render";
@@ -279,6 +288,10 @@ export async function handleAssetRequest(
   requestId: string,
 ): Promise<Response> {
   const pathname = new URL(request.url).pathname;
+  const list = pathname.match(new RegExp(`^/v1/workspaces/(${IDENTIFIER})/assets$`));
+  if (list && request.method === "GET") {
+    return listAssets(request, env, userId, list[1]!, requestId);
+  }
   const reserve = pathname.match(new RegExp(`^/v1/workspaces/(${IDENTIFIER})/assets/uploads$`));
   if (reserve) {
     if (request.method !== "POST") return methodNotAllowed(requestId);
@@ -290,6 +303,13 @@ export async function handleAssetRequest(
   if (finalize) {
     if (request.method !== "POST") return methodNotAllowed(requestId);
     return finalizeUpload(env, userId, finalize[1]!, finalize[2]!, requestId);
+  }
+  const asset = pathname.match(
+    new RegExp(`^/v1/workspaces/(${IDENTIFIER})/assets/(${IDENTIFIER})$`),
+  );
+  if (asset) {
+    if (request.method !== "DELETE") return methodNotAllowed(requestId);
+    return deleteAsset(env, userId, asset[1]!, asset[2]!, requestId);
   }
   const download = pathname.match(
     new RegExp(`^/v1/workspaces/(${IDENTIFIER})/assets/(${IDENTIFIER})/download$`),
@@ -304,6 +324,13 @@ export async function handleAssetRequest(
   if (content) {
     if (request.method !== "POST") return methodNotAllowed(requestId);
     return createReadGrant(request, env, userId, content[1]!, content[2]!, "render", requestId);
+  }
+  const thumbnail = pathname.match(
+    new RegExp(`^/v1/workspaces/(${IDENTIFIER})/assets/(${IDENTIFIER})/thumbnail$`),
+  );
+  if (thumbnail) {
+    if (request.method !== "GET") return methodNotAllowed(requestId);
+    return readThumbnail(env, userId, thumbnail[1]!, thumbnail[2]!, requestId);
   }
   return errorResponse(ApiErrorCode.notFound, "Route not found", requestId, 404);
 }
@@ -353,6 +380,9 @@ async function reserveUpload(
   const reservationId = crypto.randomUUID();
   const grantId = crypto.randomUUID();
   const objectKey = `assets/${workspaceId}/${assetId}/${crypto.randomUUID()}`;
+  const thumbnailObjectKey = input.thumbnail
+    ? `assets/${workspaceId}/${assetId}/thumbnail-${crypto.randomUUID()}.webp`
+    : null;
   const now = Date.now();
   const expiresAt = now + GRANT_TTL_SECONDS * 1000;
   const uploadUrl = await signObjectUrl(
@@ -370,8 +400,9 @@ async function reserveUpload(
       env.DB.prepare(
         `INSERT INTO assets (
           id, workspace_id, uploaded_by_user_id, object_key, content_hash, media_type, content_type,
-          original_filename, byte_length, lifecycle, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'reserved', ?, ?)`,
+          original_filename, byte_length, lifecycle, created_at, updated_at,
+          thumbnail_object_key, thumbnail_content_hash, thumbnail_content_type
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'reserved', ?, ?, ?, ?, ?)`,
       ).bind(
         assetId,
         workspaceId,
@@ -383,19 +414,23 @@ async function reserveUpload(
         input.originalFilename,
         now,
         now,
+        thumbnailObjectKey,
+        input.thumbnail?.contentHash ?? null,
+        input.thumbnail?.contentType ?? null,
       ),
       env.DB.prepare(
         `INSERT INTO upload_reservations (
           id, workspace_id, asset_id, actor_user_id, expected_bytes, reserved_bytes,
-          state, idempotency_key, expires_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+          thumbnail_expected_bytes, state, idempotency_key, expires_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
       ).bind(
         reservationId,
         workspaceId,
         assetId,
         userId,
         input.byteLength,
-        input.byteLength,
+        input.byteLength + (input.thumbnail?.byteLength ?? 0),
+        input.thumbnail?.byteLength ?? 0,
         idempotencyKey,
         expiresAt,
         now,
@@ -410,6 +445,7 @@ async function reserveUpload(
       auditStatement(env.DB, userId, workspaceId, assetId, "asset.upload-reserve", requestId, {
         byteLength: input.byteLength,
         grantId,
+        thumbnailByteLength: input.thumbnail?.byteLength ?? 0,
       }),
     ]);
   } catch (error) {
@@ -427,6 +463,23 @@ async function reserveUpload(
     );
     if (concurrentReplay) return concurrentReplay;
     throw error;
+  }
+
+  if (input.thumbnail && thumbnailObjectKey) {
+    try {
+      const bytes = decodeBase64(input.thumbnail.data);
+      await env.ASSETS.put(thumbnailObjectKey, bytes, {
+        sha256: input.thumbnail.contentHash,
+        httpMetadata: { contentType: input.thumbnail.contentType },
+      });
+    } catch (error) {
+      await env.DB.prepare(
+        "UPDATE upload_reservations SET state = 'failed', updated_at = ? WHERE id = ?",
+      )
+        .bind(Date.now(), reservationId)
+        .run();
+      throw error;
+    }
   }
 
   const body: AssetUploadGrantResponse = {
@@ -452,6 +505,7 @@ async function replayUploadReservation(
     `SELECT
       upload_reservations.id AS reservation_id,
       upload_reservations.expected_bytes,
+      upload_reservations.thumbnail_expected_bytes,
       upload_reservations.state,
       upload_reservations.expires_at,
       assets.id,
@@ -463,6 +517,10 @@ async function replayUploadReservation(
       assets.original_filename,
       assets.byte_length,
       assets.lifecycle,
+      assets.thumbnail_object_key,
+      assets.thumbnail_content_hash,
+      assets.thumbnail_content_type,
+      assets.thumbnail_byte_length,
       asset_transfer_grants.id AS grant_id,
       1 AS can_edit_collaborate,
       'owner' AS role
@@ -483,7 +541,10 @@ async function replayUploadReservation(
     reservation.content_hash !== (input.contentHash ?? null) ||
     reservation.content_type !== input.contentType ||
     reservation.media_type !== input.mediaType ||
-    reservation.original_filename !== input.originalFilename
+    reservation.original_filename !== input.originalFilename ||
+    reservation.thumbnail_expected_bytes !== (input.thumbnail?.byteLength ?? 0) ||
+    reservation.thumbnail_content_hash !== (input.thumbnail?.contentHash ?? null) ||
+    reservation.thumbnail_content_type !== (input.thumbnail?.contentType ?? null)
   ) {
     return errorResponse(
       ApiErrorCode.invalidRequest,
@@ -530,6 +591,7 @@ async function finalizeUpload(
     `SELECT
       upload_reservations.id AS reservation_id,
       upload_reservations.expected_bytes,
+      upload_reservations.thumbnail_expected_bytes,
       upload_reservations.state,
       upload_reservations.expires_at,
       assets.id,
@@ -541,6 +603,10 @@ async function finalizeUpload(
       assets.original_filename,
       assets.byte_length,
       assets.lifecycle,
+      assets.thumbnail_object_key,
+      assets.thumbnail_content_hash,
+      assets.thumbnail_content_type,
+      assets.thumbnail_byte_length,
       workspace_members.role,
       account_entitlements.can_edit_collaborate
     FROM upload_reservations
@@ -585,6 +651,26 @@ async function finalizeUpload(
     return errorResponse(ApiErrorCode.invalidRequest, "Uploaded object not found", requestId, 409);
   }
   const now = Date.now();
+  const thumbnail = reservation.thumbnail_object_key
+    ? await env.ASSETS.head(reservation.thumbnail_object_key)
+    : null;
+  if (
+    reservation.thumbnail_object_key &&
+    (!thumbnail || thumbnail.size !== reservation.thumbnail_expected_bytes)
+  ) {
+    await env.ASSETS.delete([reservation.object_key, reservation.thumbnail_object_key]);
+    await env.DB.prepare(
+      "UPDATE upload_reservations SET state = 'failed', updated_at = ? WHERE id = ?",
+    )
+      .bind(now, reservationId)
+      .run();
+    return errorResponse(
+      ApiErrorCode.invalidRequest,
+      "Uploaded thumbnail is missing or invalid",
+      requestId,
+      409,
+    );
+  }
   const objectContentType = object.httpMetadata?.contentType?.toLowerCase();
   if (objectContentType && objectContentType !== reservation.content_type) {
     await env.ASSETS.delete(reservation.object_key);
@@ -637,7 +723,7 @@ async function finalizeUpload(
       `UPDATE upload_reservations
        SET state = 'finalized', actual_bytes = ?, updated_at = ?
        WHERE id = ?`,
-    ).bind(object.size, now, reservationId),
+    ).bind(object.size + (thumbnail?.size ?? 0), now, reservationId),
     env.DB.prepare(
       `UPDATE asset_transfer_grants
        SET completed_at = ?, actual_bytes = ?
@@ -652,6 +738,7 @@ async function finalizeUpload(
       requestId,
       {
         actualBytes: object.size,
+        thumbnailBytes: thumbnail?.size ?? 0,
       },
     ),
   ]);
@@ -672,6 +759,218 @@ function assetResponse(reservation: ReservationRow, workspaceId: WorkspaceId): R
     },
   };
   return json(body);
+}
+
+async function listAssets(
+  request: Request,
+  env: Env,
+  userId: UserId,
+  workspaceId: WorkspaceId,
+  requestId: string,
+): Promise<Response> {
+  const role = await readActiveRole(env.DB, userId, workspaceId);
+  if (!role) return errorResponse(ApiErrorCode.notFound, "Workspace not found", requestId, 404);
+  const url = new URL(request.url);
+  const usage = url.searchParams.get("usage") ?? "all";
+  if (usage !== "all" && usage !== "active" && usage !== "unused") {
+    return errorResponse(ApiErrorCode.invalidRequest, "Invalid asset usage filter", requestId, 400);
+  }
+  const cursor = readAssetCursor(url.searchParams.get("cursor"));
+  if (url.searchParams.has("cursor") && !cursor) {
+    return errorResponse(ApiErrorCode.invalidRequest, "Invalid asset cursor", requestId, 400);
+  }
+  const lifecycleClause =
+    usage === "active"
+      ? "assets.lifecycle = 'active'"
+      : usage === "unused"
+        ? "assets.lifecycle IN ('verified', 'unreferenced')"
+        : "assets.lifecycle IN ('verified', 'active', 'unreferenced')";
+  const rows = await env.DB.prepare(
+    `SELECT
+       assets.id, assets.workspace_id, assets.content_hash, assets.media_type,
+       assets.content_type, assets.original_filename, assets.byte_length,
+       assets.lifecycle, assets.created_at, assets.unreferenced_at,
+       assets.thumbnail_object_key
+     FROM assets
+     WHERE assets.workspace_id = ? AND ${lifecycleClause}
+       AND (? IS NULL OR assets.created_at < ? OR (assets.created_at = ? AND assets.id < ?))
+     ORDER BY assets.created_at DESC, assets.id DESC
+     LIMIT ?`,
+  )
+    .bind(
+      workspaceId,
+      cursor?.createdAt ?? null,
+      cursor?.createdAt ?? null,
+      cursor?.createdAt ?? null,
+      cursor?.id ?? null,
+      ASSET_PAGE_SIZE + 1,
+    )
+    .all<{
+      byte_length: number;
+      content_hash: string | null;
+      content_type: string;
+      created_at: number;
+      id: string;
+      lifecycle: string;
+      media_type: string;
+      original_filename: string;
+      thumbnail_object_key: string | null;
+      unreferenced_at: number | null;
+      workspace_id: WorkspaceId;
+    }>();
+  const page = rows.results.slice(0, ASSET_PAGE_SIZE);
+  const assets: WorkspaceAssetSummary[] = page.map((asset) => ({
+    byteLength: asset.byte_length,
+    contentHash: asset.content_hash,
+    contentType: asset.content_type,
+    createdAt: asset.created_at,
+    id: asset.id,
+    mediaType: asset.media_type,
+    originalFilename: asset.original_filename,
+    thumbnailUrl: asset.thumbnail_object_key
+      ? `/v1/workspaces/${encodeURIComponent(workspaceId)}/assets/${encodeURIComponent(asset.id)}/thumbnail`
+      : null,
+    unreferencedAt: asset.unreferenced_at,
+    usage: asset.lifecycle === "active" ? "active" : "unused",
+    workspaceId: asset.workspace_id,
+  }));
+  const totals = await env.DB.prepare(
+    `SELECT
+       workspaces.used_bytes,
+       workspaces.reserved_bytes,
+       COALESCE(SUM(CASE WHEN assets.lifecycle = 'active'
+         THEN assets.byte_length + assets.thumbnail_byte_length ELSE 0 END), 0) AS active_bytes,
+       COALESCE(SUM(CASE WHEN assets.lifecycle IN ('verified', 'unreferenced')
+         THEN assets.byte_length + assets.thumbnail_byte_length ELSE 0 END), 0) AS unused_bytes
+     FROM workspaces
+     LEFT JOIN assets ON assets.workspace_id = workspaces.id
+     WHERE workspaces.id = ?
+     GROUP BY workspaces.id`,
+  )
+    .bind(workspaceId)
+    .first<{
+      active_bytes: number;
+      reserved_bytes: number;
+      unused_bytes: number;
+      used_bytes: number;
+    }>();
+  const last = page.at(-1);
+  const body: WorkspaceAssetListResponse = {
+    assets,
+    nextCursor:
+      rows.results.length > ASSET_PAGE_SIZE && last ? `${last.created_at}:${last.id}` : null,
+    storage: {
+      activeBytes: totals?.active_bytes ?? 0,
+      reservedBytes: totals?.reserved_bytes ?? 0,
+      totalUsedBytes: totals?.used_bytes ?? 0,
+      unusedBytes: totals?.unused_bytes ?? 0,
+    },
+  };
+  return json(body);
+}
+
+async function readThumbnail(
+  env: Env,
+  userId: UserId,
+  workspaceId: WorkspaceId,
+  assetId: string,
+  requestId: string,
+): Promise<Response> {
+  const asset = await env.DB.prepare(
+    `SELECT assets.thumbnail_object_key, assets.thumbnail_content_type
+     FROM assets
+     INNER JOIN workspace_members ON workspace_members.workspace_id = assets.workspace_id
+     INNER JOIN workspaces ON workspaces.id = assets.workspace_id
+     WHERE assets.id = ? AND assets.workspace_id = ?
+       AND assets.lifecycle IN ('verified', 'active', 'unreferenced')
+       AND assets.thumbnail_object_key IS NOT NULL
+       AND workspace_members.user_id = ? AND workspace_members.removed_at IS NULL
+       AND workspaces.lifecycle = 'active'`,
+  )
+    .bind(assetId, workspaceId, userId)
+    .first<{ thumbnail_content_type: string; thumbnail_object_key: string }>();
+  if (!asset) return errorResponse(ApiErrorCode.notFound, "Thumbnail not found", requestId, 404);
+  const object = await env.ASSETS.get(asset.thumbnail_object_key);
+  if (!object) return errorResponse(ApiErrorCode.notFound, "Thumbnail not found", requestId, 404);
+  return new Response(object.body, {
+    headers: {
+      "cache-control": "private, max-age=3600",
+      "content-length": String(object.size),
+      "content-type": asset.thumbnail_content_type,
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+async function deleteAsset(
+  env: Env,
+  userId: UserId,
+  workspaceId: WorkspaceId,
+  assetId: string,
+  requestId: string,
+): Promise<Response> {
+  const asset = await env.DB.prepare(
+    `SELECT
+       assets.object_key, assets.thumbnail_object_key, assets.byte_length,
+       assets.thumbnail_byte_length, assets.lifecycle, workspace_members.role
+     FROM assets
+     INNER JOIN workspace_members ON workspace_members.workspace_id = assets.workspace_id
+     INNER JOIN workspaces ON workspaces.id = assets.workspace_id
+     WHERE assets.id = ? AND assets.workspace_id = ?
+       AND workspace_members.user_id = ? AND workspace_members.removed_at IS NULL
+       AND workspaces.lifecycle = 'active'`,
+  )
+    .bind(assetId, workspaceId, userId)
+    .first<{
+      byte_length: number;
+      lifecycle: string;
+      object_key: string;
+      role: string;
+      thumbnail_byte_length: number;
+      thumbnail_object_key: string | null;
+    }>();
+  if (!asset) return errorResponse(ApiErrorCode.notFound, "Asset not found", requestId, 404);
+  if (asset.role !== WorkspaceRole.owner) {
+    return errorResponse(ApiErrorCode.forbidden, "Owner access required", requestId, 403);
+  }
+  if (asset.lifecycle !== "verified" && asset.lifecycle !== "unreferenced") {
+    return errorResponse(
+      ApiErrorCode.invalidRequest,
+      "Only unused media can be deleted",
+      requestId,
+      409,
+    );
+  }
+  const keys = [asset.object_key, asset.thumbnail_object_key].filter(
+    (key): key is string => key !== null,
+  );
+  await env.ASSETS.delete(keys);
+  const bytes = asset.byte_length + asset.thumbnail_byte_length;
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM asset_transfer_grants WHERE asset_id = ?").bind(assetId),
+    env.DB.prepare("DELETE FROM upload_reservations WHERE asset_id = ?").bind(assetId),
+    env.DB.prepare("DELETE FROM assets WHERE id = ? AND workspace_id = ?").bind(
+      assetId,
+      workspaceId,
+    ),
+    env.DB.prepare(
+      `UPDATE workspaces
+       SET used_bytes = MAX(0, used_bytes - ?), updated_at = ?
+       WHERE id = ?`,
+    ).bind(bytes, Date.now(), workspaceId),
+    auditStatement(env.DB, userId, workspaceId, assetId, "asset.deleted", requestId, { bytes }),
+  ]);
+  return new Response(null, { status: 204 });
+}
+
+function readAssetCursor(value: string | null): { createdAt: number; id: string } | null {
+  if (!value) return null;
+  const separator = value.indexOf(":");
+  const createdAt = Number(value.slice(0, separator));
+  const id = value.slice(separator + 1);
+  return separator > 0 && Number.isSafeInteger(createdAt) && createdAt >= 0 && isIdentifierValue(id)
+    ? { createdAt, id }
+    : null;
 }
 
 async function createReadGrant(
@@ -695,15 +994,14 @@ async function createReadGrant(
       AND (
         assets.lifecycle = 'active'
         OR (
-          assets.lifecycle = 'verified'
-          AND assets.uploaded_by_user_id = ?
+          assets.lifecycle IN ('verified', 'unreferenced')
           AND ? = 'render'
         )
       )
       AND workspace_members.user_id = ? AND workspace_members.removed_at IS NULL
       AND workspaces.lifecycle = 'active'`,
   )
-    .bind(assetId, workspaceId, userId, purpose, userId)
+    .bind(assetId, workspaceId, purpose, userId)
     .first<AssetAccessRow>();
   if (!asset) {
     await auditStatement(
@@ -830,6 +1128,7 @@ async function readReserveRequest(request: Request): Promise<ReserveAssetUploadR
     const contentType = Reflect.get(value, "contentType");
     const mediaType = Reflect.get(value, "mediaType");
     const originalFilename = Reflect.get(value, "originalFilename");
+    const thumbnailValue = Reflect.get(value, "thumbnail");
     if (!Number.isSafeInteger(byteLength) || (byteLength as number) <= 0) return null;
     if (
       typeof contentType !== "string" ||
@@ -852,20 +1151,65 @@ async function readReserveRequest(request: Request): Promise<ReserveAssetUploadR
       originalFilename.length > 255
     )
       return null;
+    let thumbnail: ReserveAssetUploadRequest["thumbnail"];
+    if (thumbnailValue !== undefined) {
+      if (!thumbnailValue || typeof thumbnailValue !== "object") return null;
+      const thumbnailByteLength = Reflect.get(thumbnailValue, "byteLength");
+      const thumbnailContentHash = Reflect.get(thumbnailValue, "contentHash");
+      const thumbnailContentType = Reflect.get(thumbnailValue, "contentType");
+      const thumbnailData = Reflect.get(thumbnailValue, "data");
+      if (
+        !Number.isSafeInteger(thumbnailByteLength) ||
+        (thumbnailByteLength as number) <= 0 ||
+        (thumbnailByteLength as number) > MAX_THUMBNAIL_BYTES ||
+        thumbnailContentType !== "image/webp" ||
+        typeof thumbnailContentHash !== "string" ||
+        !/^[a-f0-9]{64}$/.test(thumbnailContentHash) ||
+        typeof thumbnailData !== "string"
+      )
+        return null;
+      const bytes = decodeBase64(thumbnailData);
+      if (
+        bytes.byteLength !== thumbnailByteLength ||
+        (await sha256Hex(bytes)) !== thumbnailContentHash
+      )
+        return null;
+      thumbnail = {
+        byteLength: thumbnailByteLength as number,
+        contentHash: thumbnailContentHash,
+        contentType: "image/webp",
+        data: thumbnailData,
+      };
+    }
     return {
       byteLength: byteLength as number,
       ...(typeof contentHash === "string" ? { contentHash } : {}),
       contentType,
       mediaType,
       originalFilename,
+      ...(thumbnail ? { thumbnail } : {}),
     };
   } catch {
     return null;
   }
 }
 
+function decodeBase64(value: string): Uint8Array {
+  const decoded = atob(value);
+  return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return bytesToHex(new Uint8Array(digest));
+}
+
 function isMediaType(value: unknown): value is string {
   return value === "image" || value === "video" || value === "gif" || value === "svg";
+}
+
+function isIdentifierValue(value: string): boolean {
+  return /^[A-Za-z0-9_-]{1,128}$/.test(value);
 }
 
 function isMediaContentType(mediaType: string, contentType: string): boolean {

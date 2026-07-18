@@ -4,7 +4,9 @@ import type { WorkspaceId, WorkspaceRole } from "@voidmesh/domain";
 import {
   COLLABORATION_PROTOCOL_VERSION,
   base64UrlToBytes,
+  decodeServerYjsRebase,
   decodeServerYjsUpdate,
+  encodeClientYjsRebase,
   encodeClientYjsUpdate,
   type ClientPresenceMessage,
   type ClientClockPingMessage,
@@ -14,6 +16,7 @@ import {
   type ServerPresenceMessage,
   type ServerRoleChangedMessage,
   type ServerClockPongMessage,
+  type ServerErrorMessage,
   type ServerSyncCompleteMessage,
 } from "./index.ts";
 
@@ -65,6 +68,7 @@ export class HostedCollaborationProvider {
   #presenceSequence = 0;
   #serverClockOffsetMs = 0;
   #lastSynchronizationError = "";
+  #recoveryUpdateId: string | null = null;
   #clockTimer: ReturnType<typeof setInterval> | null = null;
   #clockSamples: { offsetMs: number; roundTripMs: number }[] = [];
   readonly #clockRequests = new Map<string, number>();
@@ -177,6 +181,11 @@ export class HostedCollaborationProvider {
 
   #handleMessage(data: unknown): void {
     if (data instanceof ArrayBuffer) {
+      const rebase = decodeServerYjsRebase(data);
+      if (rebase) {
+        replaceDocumentWithUpdate(this.#document, rebase.update);
+        return;
+      }
       const frame = decodeServerYjsUpdate(data);
       if (frame) Y.applyUpdate(this.#document, frame.update, REMOTE_ORIGIN);
       return;
@@ -208,7 +217,13 @@ export class HostedCollaborationProvider {
       return;
     }
     if (type === "ack") {
-      this.#pending.delete((parsed as ServerAckMessage).updateId);
+      const updateId = (parsed as ServerAckMessage).updateId;
+      this.#pending.delete(updateId);
+      if (updateId === this.#recoveryUpdateId) this.#recoveryUpdateId = null;
+      return;
+    }
+    if (type === "error") {
+      this.#handleServerError(parsed as Partial<ServerErrorMessage>);
       return;
     }
     if (type === "presence") {
@@ -270,6 +285,30 @@ export class HostedCollaborationProvider {
     const frame = encodeClientYjsUpdate(updateId, update);
     this.#pending.set(updateId, frame);
     socket.send(frame);
+  }
+
+  #handleServerError(message: Partial<ServerErrorMessage>): void {
+    if (
+      message.code !== "missing-yjs-dependencies" ||
+      typeof message.updateId !== "string" ||
+      !this.#pending.has(message.updateId)
+    ) {
+      return;
+    }
+    if (this.#recoveryUpdateId) {
+      this.#onSynchronizationError(
+        new Error("The shared workspace could not recover its document history"),
+      );
+      this.#socket?.close(1011, "Document history recovery failed");
+      return;
+    }
+    this.#pending.clear();
+    const update = createDocumentRebase(this.#document);
+    const updateId = crypto.randomUUID();
+    const frame = encodeClientYjsRebase(updateId, update);
+    this.#recoveryUpdateId = updateId;
+    this.#pending.set(updateId, frame);
+    this.#socket?.send(frame);
   }
 
   #sendClockPing(): void {
@@ -352,6 +391,42 @@ export class HostedCollaborationProvider {
     this.#status = status;
     for (const listener of this.#statusListeners) listener(status);
   }
+}
+
+function createDocumentRebase(document: Y.Doc): Uint8Array {
+  const replacement = new Y.Doc();
+  const knownClientIds = Y.decodeStateVector(Y.encodeStateVector(document));
+  let replacementClientId = 0xffff_ffff;
+  while (knownClientIds.has(replacementClientId)) replacementClientId--;
+  replacement.clientID = replacementClientId;
+  const source = document.getMap<Y.Map<unknown>>("entities");
+  const entities = replacement.getMap<Y.Map<unknown>>("entities");
+  replacement.transact(() => {
+    for (const [entityId, entity] of source) {
+      const next = new Y.Map<unknown>();
+      for (const [key, value] of entity) next.set(key, structuredClone(value));
+      entities.set(entityId, next);
+    }
+    replacement.getMap<string>("recovery").set("generation", crypto.randomUUID());
+  });
+  const update = Y.encodeStateAsUpdate(replacement);
+  replaceDocumentWithUpdate(document, update);
+  replacement.destroy();
+  return update;
+}
+
+function replaceDocumentWithUpdate(document: Y.Doc, update: Uint8Array): void {
+  document.transact(() => {
+    document.getMap("entities").clear();
+    document.getMap("recovery").clear();
+  }, REMOTE_ORIGIN);
+  Y.applyUpdate(document, update, REMOTE_ORIGIN);
+  const knownClientIds = Y.decodeStateVector(Y.encodeStateVector(document));
+  let clientId: number;
+  do {
+    clientId = crypto.getRandomValues(new Uint32Array(1))[0]!;
+  } while (knownClientIds.has(clientId));
+  document.clientID = clientId;
 }
 
 function isPromiseLike(value: Promise<WebSocket> | WebSocket): value is Promise<WebSocket> {

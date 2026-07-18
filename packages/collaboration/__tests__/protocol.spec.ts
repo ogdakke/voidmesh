@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   COLLABORATION_PROTOCOL_VERSION,
+  decodeClientYjsRebase,
   decodeClientYjsUpdate,
+  decodeServerYjsRebase,
   decodeServerYjsUpdate,
+  encodeClientYjsRebase,
   encodeClientYjsUpdate,
+  encodeServerYjsRebase,
   encodeServerYjsUpdate,
   parseClientPresenceMessage,
   parseClientClockPingMessage,
@@ -12,8 +16,8 @@ import {
 const updateId = "550e8400-e29b-41d4-a716-446655440000";
 
 describe("hosted collaboration protocol", () => {
-  it("uses protocol version 3 for room-clock sampling messages", () => {
-    expect(COLLABORATION_PROTOCOL_VERSION).toBe(3);
+  it("uses protocol version 4 for recoverable document synchronization", () => {
+    expect(COLLABORATION_PROTOCOL_VERSION).toBe(4);
   });
 
   it("accepts bounded room-clock pings", () => {
@@ -43,6 +47,15 @@ describe("hosted collaboration protocol", () => {
       updateId,
     });
     expect(decodeServerYjsUpdate(encodeServerYjsUpdate(42, updateId, update))).toEqual({
+      roomSequence: 42,
+      update,
+      updateId,
+    });
+    expect(decodeClientYjsRebase(encodeClientYjsRebase(updateId, update))).toEqual({
+      update,
+      updateId,
+    });
+    expect(decodeServerYjsRebase(encodeServerYjsRebase(42, updateId, update))).toEqual({
       roomSequence: 42,
       update,
       updateId,

@@ -4,6 +4,7 @@ import {
   COLLABORATION_PROTOCOL_VERSION,
   base64UrlToBytes,
   bytesToBase64Url,
+  decodeClientYjsRebase,
   decodeClientYjsUpdate,
 } from "../src/index.ts";
 import { HostedCollaborationProvider } from "../src/provider.ts";
@@ -129,6 +130,68 @@ describe("HostedCollaborationProvider", () => {
     expect(server.getMap("metadata").get("assetsReady")).toBe(true);
     expect(statuses).toContain("connected");
     expect(base64UrlToBytes("not base64 !")).toBeNull();
+    provider.destroy();
+  });
+
+  it("rebases logical state when the server reports missing Yjs dependencies", async () => {
+    const local = new Y.Doc();
+    const entity = new Y.Map<unknown>();
+    entity.set("name", "Recovered");
+    local.getMap<Y.Map<unknown>>("entities").set("entity-1", entity);
+    const server = new Y.Doc();
+    const socket = new FakeSocket();
+    const provider = new HostedCollaborationProvider({
+      document: local,
+      socketFactory: () => socket as unknown as WebSocket,
+    });
+    provider.connect();
+    await Promise.resolve();
+    socket.open();
+    socket.receive(
+      JSON.stringify({
+        roomSequence: 0,
+        stateVector: bytesToBase64Url(Y.encodeStateVector(server)),
+        type: "sync-complete",
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(1),
+    );
+    const rejected = decodeClientYjsUpdate(
+      socket.sent.find((value): value is ArrayBuffer => value instanceof ArrayBuffer)!,
+    )!;
+
+    socket.receive(
+      JSON.stringify({
+        code: "missing-yjs-dependencies",
+        type: "error",
+        updateId: rejected.updateId,
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(2),
+    );
+    const recoveryFrame = socket.sent.filter(
+      (value): value is ArrayBuffer => value instanceof ArrayBuffer,
+    )[1]!;
+    const recovery = decodeClientYjsRebase(recoveryFrame)!;
+    Y.applyUpdate(server, recovery.update);
+    expect(server.getMap<Y.Map<unknown>>("entities").get("entity-1")?.get("name")).toBe(
+      "Recovered",
+    );
+
+    socket.receive(JSON.stringify({ roomSequence: 1, type: "ack", updateId: recovery.updateId }));
+    local.getMap<Y.Map<unknown>>("entities").get("entity-1")!.set("name", "Still synced");
+    await vi.waitFor(() =>
+      expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(3),
+    );
+    const followup = decodeClientYjsUpdate(
+      socket.sent.filter((value): value is ArrayBuffer => value instanceof ArrayBuffer)[2]!,
+    )!;
+    Y.applyUpdate(server, followup.update);
+    expect(server.getMap<Y.Map<unknown>>("entities").get("entity-1")?.get("name")).toBe(
+      "Still synced",
+    );
     provider.destroy();
   });
 

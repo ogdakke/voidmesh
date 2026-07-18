@@ -1,12 +1,14 @@
 import type { UserId, WorkspaceRole } from "@voidmesh/domain";
 
-export const COLLABORATION_PROTOCOL_VERSION = 3;
+export const COLLABORATION_PROTOCOL_VERSION = 4;
 export const MAX_YJS_UPDATE_BYTES = 16 * 1024 * 1024;
 export const MAX_PRESENCE_MESSAGE_BYTES = 256 * 1024;
 export const MAX_SELECTED_ENTITY_IDS = 2_048;
 
 const CLIENT_YJS_FRAME = 1;
 const SERVER_YJS_FRAME = 2;
+const CLIENT_YJS_REBASE_FRAME = 3;
+const SERVER_YJS_REBASE_FRAME = 4;
 const UPDATE_ID_BYTES = 36;
 const SERVER_SEQUENCE_BYTES = 8;
 const textEncoder = new TextEncoder();
@@ -72,6 +74,12 @@ export interface ServerAckMessage {
   updateId: string;
 }
 
+export interface ServerErrorMessage {
+  code: string;
+  type: "error";
+  updateId?: string;
+}
+
 export interface ServerSyncCompleteMessage {
   roomSequence: number;
   stateVector: string;
@@ -100,12 +108,11 @@ export interface DecodedServerYjsUpdate extends DecodedYjsUpdate {
 }
 
 export function encodeClientYjsUpdate(updateId: string, update: Uint8Array): ArrayBuffer {
-  assertUpdate(updateId, update);
-  const frame = new Uint8Array(1 + UPDATE_ID_BYTES + update.byteLength);
-  frame[0] = CLIENT_YJS_FRAME;
-  frame.set(textEncoder.encode(updateId), 1);
-  frame.set(update, 1 + UPDATE_ID_BYTES);
-  return frame.buffer;
+  return encodeClientFrame(CLIENT_YJS_FRAME, updateId, update);
+}
+
+export function encodeClientYjsRebase(updateId: string, update: Uint8Array): ArrayBuffer {
+  return encodeClientFrame(CLIENT_YJS_REBASE_FRAME, updateId, update);
 }
 
 export function decodeClientYjsUpdate(frame: ArrayBuffer): DecodedYjsUpdate | null {
@@ -114,7 +121,30 @@ export function decodeClientYjsUpdate(frame: ArrayBuffer): DecodedYjsUpdate | nu
   return decodeUpdate(bytes, 1, 1 + UPDATE_ID_BYTES);
 }
 
+export function decodeClientYjsRebase(frame: ArrayBuffer): DecodedYjsUpdate | null {
+  const bytes = new Uint8Array(frame);
+  if (bytes.byteLength <= 1 + UPDATE_ID_BYTES || bytes[0] !== CLIENT_YJS_REBASE_FRAME) return null;
+  return decodeUpdate(bytes, 1, 1 + UPDATE_ID_BYTES);
+}
+
 export function encodeServerYjsUpdate(
+  roomSequence: number,
+  updateId: string,
+  update: Uint8Array,
+): ArrayBuffer {
+  return encodeServerFrame(SERVER_YJS_FRAME, roomSequence, updateId, update);
+}
+
+export function encodeServerYjsRebase(
+  roomSequence: number,
+  updateId: string,
+  update: Uint8Array,
+): ArrayBuffer {
+  return encodeServerFrame(SERVER_YJS_REBASE_FRAME, roomSequence, updateId, update);
+}
+
+function encodeServerFrame(
+  kind: typeof SERVER_YJS_FRAME | typeof SERVER_YJS_REBASE_FRAME,
   roomSequence: number,
   updateId: string,
   update: Uint8Array,
@@ -124,7 +154,7 @@ export function encodeServerYjsUpdate(
     throw new Error("Room sequence must be a positive safe integer");
   }
   const frame = new Uint8Array(1 + SERVER_SEQUENCE_BYTES + UPDATE_ID_BYTES + update.byteLength);
-  frame[0] = SERVER_YJS_FRAME;
+  frame[0] = kind;
   new DataView(frame.buffer).setBigUint64(1, BigInt(roomSequence), false);
   frame.set(textEncoder.encode(updateId), 1 + SERVER_SEQUENCE_BYTES);
   frame.set(update, 1 + SERVER_SEQUENCE_BYTES + UPDATE_ID_BYTES);
@@ -132,9 +162,20 @@ export function encodeServerYjsUpdate(
 }
 
 export function decodeServerYjsUpdate(frame: ArrayBuffer): DecodedServerYjsUpdate | null {
+  return decodeServerFrame(frame, SERVER_YJS_FRAME);
+}
+
+export function decodeServerYjsRebase(frame: ArrayBuffer): DecodedServerYjsUpdate | null {
+  return decodeServerFrame(frame, SERVER_YJS_REBASE_FRAME);
+}
+
+function decodeServerFrame(
+  frame: ArrayBuffer,
+  kind: typeof SERVER_YJS_FRAME | typeof SERVER_YJS_REBASE_FRAME,
+): DecodedServerYjsUpdate | null {
   const bytes = new Uint8Array(frame);
   const updateOffset = 1 + SERVER_SEQUENCE_BYTES + UPDATE_ID_BYTES;
-  if (bytes.byteLength <= updateOffset || bytes[0] !== SERVER_YJS_FRAME) return null;
+  if (bytes.byteLength <= updateOffset || bytes[0] !== kind) return null;
   const roomSequence = Number(new DataView(frame).getBigUint64(1, false));
   if (!Number.isSafeInteger(roomSequence) || roomSequence <= 0) return null;
   const decoded = decodeUpdate(
@@ -143,6 +184,19 @@ export function decodeServerYjsUpdate(frame: ArrayBuffer): DecodedServerYjsUpdat
     1 + SERVER_SEQUENCE_BYTES + UPDATE_ID_BYTES,
   );
   return decoded ? { ...decoded, roomSequence } : null;
+}
+
+function encodeClientFrame(
+  kind: typeof CLIENT_YJS_FRAME | typeof CLIENT_YJS_REBASE_FRAME,
+  updateId: string,
+  update: Uint8Array,
+): ArrayBuffer {
+  assertUpdate(updateId, update);
+  const frame = new Uint8Array(1 + UPDATE_ID_BYTES + update.byteLength);
+  frame[0] = kind;
+  frame.set(textEncoder.encode(updateId), 1);
+  frame.set(update, 1 + UPDATE_ID_BYTES);
+  return frame.buffer;
 }
 
 export function parseClientPresenceMessage(value: string): ClientPresenceMessage | null {

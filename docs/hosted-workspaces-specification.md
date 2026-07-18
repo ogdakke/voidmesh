@@ -167,6 +167,9 @@ The prototype's content-addressing, preview-first placeholders, shared decoded i
 
 - Import validates and migrates a `.vdmsh` archive locally before any hosted mutation.
 - Assets are uploaded independently and verified before the workspace document references them.
+- The client derives a bounded first-frame WebP thumbnail while the media is already decoded. The
+  thumbnail is reserved, verified, authorized, and deleted with its original; library grids never
+  fetch originals for previews.
 - The final document replacement is one Yjs transaction and one undo boundary.
 - Export reads a consistent Yjs state at a known room sequence and assembles a `.vdmsh` archive asynchronously.
 - Export must remain available while an account is over quota or pending deletion during its recovery window.
@@ -300,7 +303,7 @@ The shared document contains independently mergeable structures for:
 
 Multi-entity actions execute in one Yjs transaction and one local undo boundary. Continuous geometry changes are coalesced to approximately one update per animation frame, followed by an exact final update on gesture completion.
 
-Every incoming update includes a workspace ID, actor connection ID, client protocol version, stable update or operation ID, and bounded Yjs bytes. The room validates the actor's current editor role, protocol, update size, resulting document bounds, and referenced asset IDs. Unknown or unauthorized asset IDs never become readable merely because they appear in the document. Accepted update batches receive a monotonically increasing room sequence for acknowledgement, persistence, diagnostics, and reconnect gap detection.
+Every incoming update includes a workspace ID, actor connection ID, client protocol version, stable update or operation ID, and bounded Yjs bytes. The room validates the actor's current editor role, protocol, update size, resulting document bounds, referenced asset IDs, and that every Yjs dependency integrated into the candidate document. Unknown or unauthorized asset IDs never become readable merely because they appear in the document. An update with missing history is rejected without advancing the room sequence or changing asset lifecycles. Accepted update batches receive a monotonically increasing room sequence for acknowledgement, persistence, diagnostics, and reconnect gap detection.
 
 ### 10.2 Offline synchronization and collaborative undo
 
@@ -311,6 +314,7 @@ Every incoming update includes a workspace ID, actor connection ID, client proto
 - Pending asset uploads finish before synchronization publishes document references to those assets.
 - Yjs resolves concurrent field and collection changes; entity and field granularity must avoid treating the entire appearance object as one last-writer-wins value.
 - A schema or asset failure preserves the unsynchronized local state as a recoverable local copy rather than discarding it.
+- If the room no longer has history required by a local update, the client republishes its validated logical document as a fresh Yjs generation. The room checkpoints that replacement before acknowledgement and broadcasts replacement semantics so connected clients discard stale structures and rotate their client clocks before making further edits.
 
 Collaborative undo uses an origin-scoped `Y.UndoManager`. A user's undo targets that user's tracked local transactions, not remote collaborators' operations, and the resulting undo/redo update is synchronized normally. Bulk operations remain one undo item.
 
@@ -489,10 +493,12 @@ Representative routes, not a frozen URL design:
 /v1/workspaces/:workspaceId/export
 /v1/workspaces/:workspaceId/members
 /v1/workspaces/:workspaceId/invitations
-/v1/workspaces/:workspaceId/uploads
-/v1/workspaces/:workspaceId/uploads/:uploadId/finalize
+/v1/workspaces/:workspaceId/assets/uploads
+/v1/workspaces/:workspaceId/assets/uploads/:uploadId/finalize
+/v1/workspaces/:workspaceId/assets
 /v1/workspaces/:workspaceId/assets/:assetId/content
 /v1/workspaces/:workspaceId/assets/:assetId/download
+/v1/workspaces/:workspaceId/assets/:assetId/thumbnail
 /v1/workspaces/:workspaceId/socket
 /v1/billing/checkout
 /v1/billing/portal

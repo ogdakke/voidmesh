@@ -1,7 +1,9 @@
 import { env, exports } from "cloudflare:workers";
 import {
   COLLABORATION_PROTOCOL_VERSION,
+  decodeServerYjsRebase,
   decodeServerYjsUpdate,
+  encodeClientYjsRebase,
   encodeClientYjsUpdate,
 } from "@voidmesh/collaboration";
 import * as Y from "yjs";
@@ -1139,6 +1141,86 @@ describe("Voidmesh API", () => {
     socket.close();
   });
 
+  it("lists private thumbnails and lets owners permanently delete unused media", async () => {
+    const cookie = await signUp("library-owner@example.com", "Library Owner");
+    const workspace = await createWorkspace(cookie, "Media library");
+    const thumbnailBytes = new Uint8Array([82, 73, 70, 70, 1, 2, 3, 4]);
+    const thumbnailHash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", thumbnailBytes))]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    const reserved = await apiFetch(`/v1/workspaces/${workspace.id}/assets/uploads`, {
+      body: JSON.stringify({
+        byteLength: 2,
+        contentType: "image/png",
+        mediaType: "image",
+        originalFilename: "library.png",
+        thumbnail: {
+          byteLength: thumbnailBytes.byteLength,
+          contentHash: thumbnailHash,
+          contentType: "image/webp",
+          data: btoa(String.fromCharCode(...thumbnailBytes)),
+        },
+      }),
+      headers: {
+        ...jsonHeaders(cookie),
+        "idempotency-key": "550e8400-e29b-41d4-a716-446655440199",
+      },
+      method: "POST",
+    });
+    expect(reserved.status).toBe(201);
+    const grant = await reserved.json<{
+      assetId: string;
+      headers: Record<string, string>;
+      reservationId: string;
+      uploadUrl: string;
+    }>();
+    const grantId = new URL(grant.uploadUrl).searchParams.get("voidmesh-grant")!;
+    const uploaded = await apiFetch(`/v1/object-grants/${grantId}`, {
+      body: new Uint8Array([9, 10]),
+      headers: { ...grant.headers, cookie },
+      method: "PUT",
+    });
+    expect(uploaded.status).toBe(204);
+    const finalized = await apiFetch(
+      `/v1/workspaces/${workspace.id}/assets/uploads/${grant.reservationId}/finalize`,
+      { headers: { cookie, origin: WEB_ORIGIN }, method: "POST" },
+    );
+    expect(finalized.status).toBe(200);
+
+    const listed = await apiFetch(`/v1/workspaces/${workspace.id}/assets`, {
+      headers: { cookie },
+    });
+    expect(listed.status).toBe(200);
+    const library = await listed.json<{
+      assets: Array<{ id: string; thumbnailUrl: string; usage: string }>;
+      storage: { totalUsedBytes: number; unusedBytes: number };
+    }>();
+    expect(library.assets).toEqual([
+      expect.objectContaining({ id: grant.assetId, usage: "unused" }),
+    ]);
+    expect(library.storage).toMatchObject({
+      totalUsedBytes: 2 + thumbnailBytes.byteLength,
+      unusedBytes: 2 + thumbnailBytes.byteLength,
+    });
+    const thumbnail = await apiFetch(library.assets[0]!.thumbnailUrl, {
+      headers: { cookie },
+    });
+    expect(thumbnail.status).toBe(200);
+    expect(thumbnail.headers.get("content-type")).toBe("image/webp");
+    expect(new Uint8Array(await thumbnail.arrayBuffer())).toEqual(thumbnailBytes);
+
+    const deleted = await apiFetch(`/v1/workspaces/${workspace.id}/assets/${grant.assetId}`, {
+      headers: { cookie, origin: WEB_ORIGIN },
+      method: "DELETE",
+    });
+    expect(deleted.status).toBe(204);
+    expect(
+      await env.DB.prepare("SELECT used_bytes FROM workspaces WHERE id = ?")
+        .bind(workspace.id)
+        .first(),
+    ).toEqual({ used_bytes: 0 });
+  });
+
   it("applies signed Stripe subscription events idempotently and ignores stale events", async () => {
     const cookie = await signUp("billing-owner@example.com", "Billing Owner");
     const user = await env.DB.prepare('SELECT id FROM "user" WHERE email = ?')
@@ -1621,6 +1703,92 @@ describe("Voidmesh API", () => {
     });
     socket!.close(1000, "test complete");
     reconnectSocket.close(1000, "test complete");
+  });
+
+  it("rejects dangling Yjs history and rebases it for a second installation", async () => {
+    const cookie = await signUp("rebase-owner@example.com", "Rebase Owner");
+    const workspace = await createWorkspace(cookie, "Rebased workspace");
+    const owner = await env.DB.prepare('SELECT id FROM "user" WHERE email = ?')
+      .bind("rebase-owner@example.com")
+      .first<{ id: string }>();
+    const assetId = "asset-rebase";
+    const now = Date.now();
+    await env.DB.prepare(
+      `INSERT INTO assets (
+        id, workspace_id, uploaded_by_user_id, object_key, media_type, content_type,
+        original_filename, byte_length, lifecycle, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, 'image', 'image/png', 'rebase.png', 1, 'verified', ?, ?)`,
+    )
+      .bind(assetId, workspace.id, owner!.id, `assets/${workspace.id}/${assetId}/object`, now, now)
+      .run();
+
+    const response = await apiFetch(`/v1/workspaces/${workspace.id}/connect`, {
+      headers: { cookie, upgrade: "websocket" },
+    });
+    const socket = response.webSocket!;
+    socket.binaryType = "arraybuffer";
+    socket.accept();
+    await nextWebSocketMessage(socket);
+    await nextWebSocketMessage(socket);
+
+    const stale = new Y.Doc();
+    const staleEntity = testWorkspaceEntity(assetId, "Before");
+    stale.getMap<Y.Map<unknown>>("entities").set("entity-rebase", staleEntity);
+    const staleVector = Y.encodeStateVector(stale);
+    staleEntity.set("identity.name", "Recovered");
+    const rejectedUpdateId = "550e8400-e29b-41d4-a716-446655440020";
+    socket.send(encodeClientYjsUpdate(rejectedUpdateId, Y.encodeStateAsUpdate(stale, staleVector)));
+    expect(JSON.parse(String(await nextWebSocketMessage(socket)))).toEqual({
+      code: "missing-yjs-dependencies",
+      type: "error",
+      updateId: rejectedUpdateId,
+    });
+    expect(await env.WORKSPACE_ROOMS.getByName(workspace.id).getStatus()).toMatchObject({
+      roomSequence: 0,
+    });
+
+    const recovery = new Y.Doc();
+    recovery
+      .getMap<Y.Map<unknown>>("entities")
+      .set("entity-rebase", testWorkspaceEntity(assetId, "Recovered"));
+    recovery.getMap<string>("recovery").set("generation", crypto.randomUUID());
+    const recoveryUpdateId = "550e8400-e29b-41d4-a716-446655440021";
+    socket.send(encodeClientYjsRebase(recoveryUpdateId, Y.encodeStateAsUpdate(recovery)));
+    expect(JSON.parse(String(await nextWebSocketMessage(socket)))).toEqual({
+      roomSequence: 1,
+      type: "ack",
+      updateId: recoveryUpdateId,
+    });
+    const replacement = decodeServerYjsRebase((await nextWebSocketMessage(socket)) as ArrayBuffer);
+    expect(replacement).toMatchObject({ roomSequence: 1, updateId: recoveryUpdateId });
+
+    const secondResponse = await apiFetch(`/v1/workspaces/${workspace.id}/connect`, {
+      headers: { cookie, upgrade: "websocket" },
+    });
+    const secondSocket = secondResponse.webSocket!;
+    secondSocket.binaryType = "arraybuffer";
+    secondSocket.accept();
+    expect(JSON.parse(String(await nextWebSocketMessage(secondSocket)))).toMatchObject({
+      roomSequence: 1,
+      type: "hello",
+    });
+    const secondDocument = new Y.Doc();
+    const snapshotFrame = decodeServerYjsUpdate(
+      (await nextWebSocketMessage(secondSocket)) as ArrayBuffer,
+    );
+    Y.applyUpdate(secondDocument, snapshotFrame!.update);
+    expect(JSON.parse(String(await nextWebSocketMessage(secondSocket)))).toMatchObject({
+      roomSequence: 1,
+      type: "sync-complete",
+    });
+    expect(
+      secondDocument.getMap<Y.Map<unknown>>("entities").get("entity-rebase")?.get("identity.name"),
+    ).toBe("Recovered");
+    expect(
+      await env.DB.prepare("SELECT lifecycle FROM assets WHERE id = ?").bind(assetId).first(),
+    ).toEqual({ lifecycle: "active" });
+    socket.close();
+    secondSocket.close();
   });
 
   it("exchanges an authenticated session for a short-lived direct WebSocket ticket", async () => {

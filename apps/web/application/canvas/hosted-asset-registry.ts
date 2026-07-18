@@ -7,6 +7,7 @@ import { HostedApiClient } from "#lib/hosted-api-client.ts";
 import { HostedApiError } from "#lib/hosted-api-client.ts";
 import type { HostedAssetCache } from "#lib/hosted-asset-cache.ts";
 import type { HostedWorkspaceDocument } from "#lib/hosted-workspace-document.ts";
+import { blobToBase64, createHostedAssetThumbnail } from "./hosted-asset-thumbnail.ts";
 
 const LOCAL_ASSET_PREFIX = "local_";
 
@@ -15,12 +16,14 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
   readonly #cache: HostedAssetCache;
   readonly #onCacheError: (error: unknown) => void;
   readonly #onPendingUpload: () => void;
+  readonly #onUploadComplete: () => void;
   readonly #workspaceId: WorkspaceId;
   readonly #references = new Map<string, HostedAssetReference>();
   readonly #entityBlobs = new Map<string, Blob>();
   readonly #hashes = new WeakMap<Blob, Promise<string>>();
   readonly #uploadKeys = new WeakMap<Blob, string>();
   readonly #uploads = new WeakMap<Blob, Promise<HostedAssetReference>>();
+  readonly #adoptedBlobs = new WeakMap<Blob, HostedAssetReference>();
 
   constructor(
     api: HostedApiClient,
@@ -28,12 +31,14 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
     cache: HostedAssetCache,
     onCacheError: (error: unknown) => void,
     onPendingUpload: () => void,
+    onUploadComplete: () => void = () => {},
   ) {
     this.#api = api;
     this.#workspaceId = workspaceId;
     this.#cache = cache;
     this.#onCacheError = onCacheError;
     this.#onPendingUpload = onPendingUpload;
+    this.#onUploadComplete = onUploadComplete;
   }
 
   getReference(entityId: string): HostedAssetReference | undefined {
@@ -47,13 +52,21 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
 
   async register(entity: ShaderCanvasEntity, signal: AbortSignal): Promise<HostedAssetReference> {
     const blob = getEntityBlob(entity);
+    const adopted = this.#adoptedBlobs.get(blob);
+    if (adopted) {
+      this.#entityBlobs.set(entity.id, blob);
+      this.#references.set(entity.id, adopted);
+      return adopted;
+    }
     const existing = this.#references.get(entity.id);
     if (existing && this.#entityBlobs.get(entity.id) === blob) return existing;
     this.#entityBlobs.set(entity.id, blob);
     this.#references.delete(entity.id);
     let upload = this.#uploads.get(blob);
     if (!upload) {
-      upload = this.#uploadOrQueue(blob, entity.name, entity.mediaSource.type, signal);
+      upload = createHostedAssetThumbnail(entity).then((thumbnail) =>
+        this.#uploadOrQueue(blob, entity.name, entity.mediaSource.type, thumbnail, signal),
+      );
       this.#uploads.set(blob, upload);
     }
     let reference: HostedAssetReference;
@@ -73,6 +86,10 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
     this.#references.set(entityId, reference);
   }
 
+  adoptBlob(reference: HostedAssetReference, blob: Blob): void {
+    this.#adoptedBlobs.set(blob, reference);
+  }
+
   async flushPending(document: HostedWorkspaceDocument): Promise<void> {
     const pending = new Map<string, HostedAssetReference>();
     for (const entity of document.getEntities()) {
@@ -90,6 +107,7 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
         blob,
         reference.originalFilename,
         reference.mediaType,
+        undefined,
         new AbortController().signal,
       );
       document.replaceAssetReference(reference.id, uploaded);
@@ -116,6 +134,7 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
     blob: Blob,
     filename: string,
     mediaType: string,
+    thumbnail: Blob | undefined,
     signal: AbortSignal,
   ): Promise<HostedAssetReference> {
     if (!blob.type) throw new Error(`Cannot host ${filename}: its media type is missing`);
@@ -137,6 +156,16 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
         contentType: blob.type,
         mediaType,
         originalFilename: filename,
+        ...(thumbnail
+          ? {
+              thumbnail: {
+                byteLength: thumbnail.size,
+                contentHash: await sha256Blob(thumbnail, signal),
+                contentType: "image/webp" as const,
+                data: await blobToBase64(thumbnail),
+              },
+            }
+          : {}),
       },
       idempotencyKey,
     );
@@ -152,6 +181,7 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
       this.#api.finalizeAssetUpload(this.#workspaceId, grant.reservationId),
     );
     void this.#cache.put(finalized.asset.id, blob).catch(this.#onCacheError);
+    this.#onUploadComplete();
     return finalized.asset;
   }
 
@@ -159,11 +189,12 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
     blob: Blob,
     filename: string,
     mediaType: string,
+    thumbnail: Blob | undefined,
     signal: AbortSignal,
   ): Promise<HostedAssetReference> {
     if (navigator.onLine !== false) {
       try {
-        return await this.#upload(blob, filename, mediaType, signal);
+        return await this.#upload(blob, filename, mediaType, thumbnail, signal);
       } catch (error) {
         if (!isRetryableUploadError(error)) throw error;
       }

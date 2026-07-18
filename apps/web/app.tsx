@@ -22,6 +22,7 @@ import type { WorkspaceSummary } from "@voidmesh/api-contract";
 import type { HostedApiClient } from "#lib/hosted-api-client.ts";
 import { WorkspaceRole, type WorkspaceRole as WorkspaceRoleValue } from "@voidmesh/domain";
 import type { CanvasAccessPolicy } from "#context/use-canvas.ts";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import "#styles/app.css";
 
@@ -40,6 +41,10 @@ const HOSTED_CANVAS_ACCESS: Record<WorkspaceRoleValue, CanvasAccessPolicy> = {
   [WorkspaceRole.editor]: { canEdit: true, canExportWorkspace: true, hosted: true },
   [WorkspaceRole.viewer]: { canEdit: false, canExportWorkspace: false, hosted: true },
 };
+
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
+});
 
 export default function App() {
   if (
@@ -154,9 +159,11 @@ ReactDOM.createRoot(document.getElementById("root")!, {
   <React.StrictMode>
     <AnalyticsProvider>
       <NuqsAdapter>
-        <KeybindProvider>
-          <App />
-        </KeybindProvider>
+        <QueryClientProvider client={queryClient}>
+          <KeybindProvider>
+            <App />
+          </KeybindProvider>
+        </QueryClientProvider>
       </NuqsAdapter>
     </AnalyticsProvider>
     {/*{import.meta.env.DEV && <Agentation />}*/}

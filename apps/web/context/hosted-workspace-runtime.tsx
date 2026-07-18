@@ -1,4 +1,5 @@
-import type { WorkspaceSummary } from "@voidmesh/api-contract";
+import type { WorkspaceAssetSummary, WorkspaceSummary } from "@voidmesh/api-contract";
+import { useQueryClient } from "@tanstack/react-query";
 import { canEditWorkspace } from "@voidmesh/domain";
 import {
   HostedCollaborationProvider,
@@ -8,6 +9,7 @@ import {
 import type { PresencePoint, ServerPresenceMessage } from "@voidmesh/collaboration";
 import { createContext, use, useEffect, useRef, useState, type PropsWithChildren } from "react";
 import { R2HostedAssetRegistry } from "#application/canvas/hosted-asset-registry.ts";
+import { createHostedAssetThumbnail } from "#application/canvas/hosted-asset-thumbnail.ts";
 import { HostedCanvasProjectionService } from "#application/canvas/hosted-canvas-projection.ts";
 import { HostedCanvasSync } from "#application/canvas/hosted-canvas-sync.ts";
 import { HostedViewportSync } from "#application/canvas/hosted-viewport-sync.ts";
@@ -24,6 +26,9 @@ interface HostedWorkspaceRuntimeValue {
   api: HostedApiClient;
   connectionStatus: CollaborationConnectionStatus;
   downloadOriginal(entityId: string): Promise<void>;
+  getCanvasAssetIds(): ReadonlySet<string>;
+  getCanvasVideoPreviews(): Promise<ReadonlyMap<string, Blob>>;
+  loadAsset(asset: WorkspaceAssetSummary): Promise<File>;
   peers: readonly ServerPresenceMessage[];
   publishCursor(cursor: PresencePoint | null): void;
   workspace: WorkspaceSummary;
@@ -44,6 +49,7 @@ export function HostedWorkspaceRuntime({
   workspace,
 }: HostedWorkspaceRuntimeProps) {
   const renderer = useCanvasRendererService();
+  const queryClient = useQueryClient();
   const activeRendererRef = useRef(renderer.renderer);
   const [connectionStatus, setConnectionStatus] =
     useState<CollaborationConnectionStatus>("offline");
@@ -66,9 +72,20 @@ export function HostedWorkspaceRuntime({
     });
     const releaseUndoDelegate = undo.setDelegate(document.undo);
     const cache = new BrowserHostedAssetCache(workspace.id);
-    const assets = new R2HostedAssetRegistry(api, workspace.id, cache, reportCacheError, () => {
-      setTimeout(() => providerRef.current?.resynchronize(), 0);
-    });
+    const assets = new R2HostedAssetRegistry(
+      api,
+      workspace.id,
+      cache,
+      reportCacheError,
+      () => {
+        setTimeout(() => providerRef.current?.resynchronize(), 0);
+      },
+      () => {
+        void queryClient.invalidateQueries({ queryKey: ["workspace-assets", workspace.id] });
+        void queryClient.invalidateQueries({ queryKey: ["workspace", workspace.id] });
+        void queryClient.invalidateQueries({ queryKey: ["account"] });
+      },
+    );
     let sync: HostedCanvasSync | null = null;
     const viewportSync = new HostedViewportSync({
       onError: reportError,
@@ -180,7 +197,7 @@ export function HostedWorkspaceRuntime({
       document.destroy();
       void persisted.destroy();
     };
-  }, [api, onRoleChange, workspace.id, workspace.role]);
+  }, [api, onRoleChange, queryClient, workspace.id, workspace.role]);
 
   const publishCursor = (cursor: PresencePoint | null) => {
     pendingCursorRef.current = cursor;
@@ -219,12 +236,49 @@ export function HostedWorkspaceRuntime({
     link.click();
   };
 
+  const loadAsset = async (asset: WorkspaceAssetSummary): Promise<File> => {
+    const registry = assetsRef.current;
+    if (!registry) throw new Error("Hosted assets are not ready");
+    const grant = await api.createAssetContent(workspace.id, asset.id);
+    const response = await fetch(grant.downloadUrl, { credentials: "include" });
+    if (!response.ok) throw new Error(`Stored media could not be loaded (${response.status})`);
+    const file = new File([await response.blob()], asset.originalFilename, {
+      type: asset.contentType,
+    });
+    registry.adoptBlob(asset, file);
+    return file;
+  };
+
+  const getCanvasAssetIds = (): ReadonlySet<string> => {
+    const ids = new Set<string>();
+    for (const entity of canvasStore.getState().entities.values()) {
+      const reference = assetsRef.current?.getReference(entity.id);
+      if (reference) ids.add(reference.id);
+    }
+    return ids;
+  };
+
+  const getCanvasVideoPreviews = async (): Promise<ReadonlyMap<string, Blob>> => {
+    const previews = new Map<string, Blob>();
+    for (const entity of canvasStore.getState().entities.values()) {
+      if (entity.mediaSource.type !== "video") continue;
+      const reference = assetsRef.current?.getReference(entity.id);
+      if (!reference) continue;
+      const preview = await createHostedAssetThumbnail(entity);
+      if (preview) previews.set(reference.id, preview);
+    }
+    return previews;
+  };
+
   return (
     <HostedWorkspaceRuntimeContext
       value={{
         api,
         connectionStatus,
         downloadOriginal,
+        getCanvasAssetIds,
+        getCanvasVideoPreviews,
+        loadAsset,
         peers,
         publishCursor,
         workspace,

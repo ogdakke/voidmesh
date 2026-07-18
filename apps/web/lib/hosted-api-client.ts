@@ -19,6 +19,7 @@ import type {
   WorkspaceResponse,
   WorkspaceViewStateResponse,
   WorkspaceSocketTicketResponse,
+  WorkspaceAssetListResponse,
 } from "@voidmesh/api-contract";
 import type { ExportId, InvitationId, UserId, WorkspaceId } from "@voidmesh/domain";
 
@@ -219,6 +220,24 @@ export class HostedApiClient {
     return this.#request(
       `/v1/workspaces/${encodeURIComponent(workspaceId)}/assets/uploads/${encodeURIComponent(reservationId)}/finalize`,
       { method: "POST" },
+    );
+  }
+
+  listAssets(
+    workspaceId: WorkspaceId,
+    options: { cursor?: string; usage?: "active" | "all" | "unused" } = {},
+  ): Promise<WorkspaceAssetListResponse> {
+    const query = new URLSearchParams();
+    if (options.cursor) query.set("cursor", options.cursor);
+    if (options.usage && options.usage !== "all") query.set("usage", options.usage);
+    const suffix = query.size > 0 ? `?${query}` : "";
+    return this.#request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/assets${suffix}`);
+  }
+
+  deleteAsset(workspaceId: WorkspaceId, assetId: string): Promise<void> {
+    return this.#request(
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/assets/${encodeURIComponent(assetId)}`,
+      { method: "DELETE" },
     );
   }
 
