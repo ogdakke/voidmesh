@@ -1,6 +1,9 @@
 import type { WorkspaceId } from "@voidmesh/domain";
-import type { CanvasStore } from "#engine";
-import type { HostedCanvasProjection } from "#application/canvas/hosted-canvas-sync.ts";
+import type { CanvasEntityUpdate, CanvasStore } from "#engine";
+import type {
+  HostedCanvasProjection,
+  HostedRemoteEntityProjection,
+} from "#application/canvas/hosted-canvas-sync.ts";
 import { R2HostedAssetRegistry } from "#application/canvas/hosted-asset-registry.ts";
 import { HostedApiClient } from "#lib/hosted-api-client.ts";
 import { loadMediaFromBlob } from "#lib/media-loader.ts";
@@ -17,6 +20,12 @@ import {
 } from "#types/canvas.ts";
 
 const PLAYBACK_DRIFT_TOLERANCE_SECONDS = 0.15;
+const MAX_CONCURRENT_REMOTE_ASSET_LOADS = 4;
+
+interface StagedRemoteEntity extends HostedRemoteEntityProjection {
+  media: Pick<ShaderCanvasEntity, "imageBitmap" | "mediaSource">;
+  revision: number;
+}
 
 export interface HostedCanvasProjectionOptions {
   api: HostedApiClient;
@@ -71,6 +80,94 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     this.#requestRender(entity.id);
   }
 
+  async applyRemoteEntities(entries: readonly HostedRemoteEntityProjection[]): Promise<void> {
+    if (entries.length === 0) return;
+
+    const staged = new Array<StagedRemoteEntity | null>(entries.length).fill(null);
+    const errors: unknown[] = [];
+    const groups = groupProjectionIndicesByAsset(entries);
+    let nextGroupIndex = 0;
+    const loadNextGroup = async (): Promise<void> => {
+      while (nextGroupIndex < groups.length) {
+        const group = groups[nextGroupIndex++]!;
+        for (const index of group) {
+          const entry = entries[index]!;
+          const current = this.#store.getState().entities.get(entry.entity.id);
+          if (current && this.#entityAssets.get(entry.entity.id) === entry.entity.asset.id) {
+            continue;
+          }
+          try {
+            staged[index] = await this.#stageRemoteEntity(entry);
+          } catch (error) {
+            errors.push(error);
+          }
+        }
+      }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.min(MAX_CONCURRENT_REMOTE_ASSET_LOADS, groups.length) },
+        loadNextGroup,
+      ),
+    );
+
+    const additions: ShaderCanvasEntity[] = [];
+    const updates: CanvasEntityUpdate[] = [];
+    const replacements: Array<{
+      collaborative: HostedWorkspaceEntity;
+      next: ShaderCanvasEntity;
+      previous: ShaderCanvasEntity | undefined;
+    }> = [];
+    const playback: HostedRemoteEntityProjection[] = [];
+
+    for (let index = 0; index < entries.length; index++) {
+      const entry = entries[index]!;
+      const prepared = staged[index];
+      if (!prepared) {
+        const current = this.#store.getState().entities.get(entry.entity.id);
+        if (current && this.#entityAssets.get(entry.entity.id) === entry.entity.asset.id) {
+          updates.push({
+            id: entry.entity.id,
+            updates: toCanvasUpdates(entry.entity, entry.applyPlayback),
+          });
+          playback.push(entry);
+        }
+        continue;
+      }
+      if (this.#entityRevisions.get(entry.entity.id) !== prepared.revision) {
+        this.#disposeStagedRemoteEntity(prepared);
+        continue;
+      }
+      const previous = this.#store.getState().entities.get(entry.entity.id);
+      const next = {
+        ...prepared.media,
+        ...toCanvasFields(entry.entity),
+        textureDirty: true,
+      } as ShaderCanvasEntity;
+      if (previous) {
+        this.#beforeRemoveEntity(entry.entity.id);
+        updates.push({ id: entry.entity.id, updates: next });
+      } else additions.push(next);
+      replacements.push({ collaborative: entry.entity, next, previous });
+      playback.push(entry);
+    }
+
+    this.#store.updateEntities(updates, true);
+    this.#store.addEntities(additions, true);
+    for (const { collaborative, next, previous } of replacements) {
+      if (previous) this.#releaseEntity(previous);
+      this.#bindEntityAsset(collaborative.id, collaborative.asset.id);
+      this.#assets.adopt(collaborative.id, collaborative.asset, getEntityBlob(next));
+    }
+    for (const entry of playback) {
+      if (!entry.applyPlayback) continue;
+      const current = this.#store.getState().entities.get(entry.entity.id);
+      if (current) await this.#applyPlayback(current, entry.entity);
+    }
+    if (updates.length > 0 || additions.length > 0) this.#requestRender();
+    for (const error of errors) this.#onError(error);
+  }
+
   removeRemoteEntities(entityIds: readonly string[]): void {
     const removed = new Set<string>();
     const resources: ShaderCanvasEntity[] = [];
@@ -121,6 +218,26 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     this.#assets.adopt(entity.id, entity.asset, getEntityBlob(next));
     if (applyPlayback) await this.#applyPlayback(next, entity);
     this.#requestRender(entity.id);
+  }
+
+  async #stageRemoteEntity(entry: HostedRemoteEntityProjection): Promise<StagedRemoteEntity> {
+    const revision = this.#bumpRevision(entry.entity.id);
+    return {
+      ...entry,
+      media: await this.#loadMedia(entry.entity),
+      revision,
+    };
+  }
+
+  #disposeStagedRemoteEntity(entry: StagedRemoteEntity): void {
+    if (
+      entry.media.mediaSource.type === MediaType.image &&
+      this.#sharedImages.get(entry.entity.asset.id) === entry.media.mediaSource.asset &&
+      getImageAssetReferenceCount(entry.media.mediaSource.asset) === 1
+    ) {
+      this.#sharedImages.delete(entry.entity.asset.id);
+    }
+    disposeMediaSource(entry.media.mediaSource, entry.media.imageBitmap);
   }
 
   async #loadMedia(
@@ -261,6 +378,19 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     this.#entityRevisions.set(entityId, revision);
     return revision;
   }
+}
+
+function groupProjectionIndicesByAsset(
+  entries: readonly HostedRemoteEntityProjection[],
+): number[][] {
+  const groupsByAsset = new Map<string, number[]>();
+  for (let index = 0; index < entries.length; index++) {
+    const assetId = entries[index]!.entity.asset.id;
+    const group = groupsByAsset.get(assetId);
+    if (group) group.push(index);
+    else groupsByAsset.set(assetId, [index]);
+  }
+  return [...groupsByAsset.values()];
 }
 
 function getEntityBlob(entity: ShaderCanvasEntity): Blob {

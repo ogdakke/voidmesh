@@ -107,4 +107,80 @@ describe("HostedCanvasProjectionService", () => {
 
     projection.removeRemoteEntities(["entity-3"]);
   });
+
+  it("stages a remote workspace with bounded loading and one canvas insertion", async () => {
+    const pendingLoads = new Map<string, () => void>();
+    let activeLoads = 0;
+    let peakActiveLoads = 0;
+    const get = vi.fn<HostedAssetCache["get"]>(async (assetId, contentType) => {
+      activeLoads++;
+      peakActiveLoads = Math.max(peakActiveLoads, activeLoads);
+      await new Promise<void>((resolve) => pendingLoads.set(assetId, resolve));
+      activeLoads--;
+      return new Blob([new Uint8Array([1])], { type: contentType });
+    });
+    const cache: HostedAssetCache = {
+      delete: async () => {},
+      get,
+      put: async () => {},
+    };
+    const api = {} as HostedApiClient;
+    const assets = new R2HostedAssetRegistry(
+      api,
+      "workspace-1",
+      cache,
+      vi.fn<(error: unknown) => void>(),
+      vi.fn<() => void>(),
+    );
+    const store = new CanvasStore();
+    const mutations = vi.fn<Parameters<CanvasStore["subscribeEntityMutations"]>[0]>();
+    store.subscribeEntityMutations(mutations);
+    const requestRender = vi.fn<() => void>();
+    const projection = new HostedCanvasProjectionService({
+      api,
+      assets,
+      cache,
+      onError: (error) => {
+        throw error;
+      },
+      requestRender,
+      store,
+      workspaceId: "workspace-1",
+    });
+    const entities = Array.from({ length: 6 }, (_, index) => {
+      const remoteAsset: HostedAssetReference = {
+        byteLength: 1,
+        contentType: "image/png",
+        id: `asset-${index}`,
+        mediaType: "image",
+        originalFilename: `${index}.png`,
+      };
+      return hostedEntity(`entity-${index}`, remoteAsset);
+    });
+
+    const loading = projection.applyRemoteEntities(
+      entities.map((entity) => ({ applyPlayback: false, entity })),
+    );
+    await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(4));
+    expect(store.getState().entities).toHaveLength(0);
+    for (let index = 0; index < 4; index++) pendingLoads.get(`asset-${index}`)!();
+    await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(6));
+    expect(store.getState().entities).toHaveLength(0);
+    for (let index = 4; index < 6; index++) pendingLoads.get(`asset-${index}`)!();
+    await loading;
+
+    expect(peakActiveLoads).toBe(4);
+    expect(store.getState().entities).toHaveLength(6);
+    expect(mutations).toHaveBeenCalledOnce();
+    expect(mutations).toHaveBeenCalledWith({
+      entities: expect.arrayContaining(
+        entities.map((entity) => expect.objectContaining({ id: entity.id })),
+      ),
+      projected: true,
+      type: "add",
+    });
+    expect(requestRender).toHaveBeenCalledOnce();
+
+    projection.removeRemoteEntities(entities.map((entity) => entity.id));
+  });
 });

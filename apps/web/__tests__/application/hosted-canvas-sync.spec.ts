@@ -4,6 +4,7 @@ import {
   HostedCanvasSync,
   type HostedAssetRegistry,
   type HostedCanvasSource,
+  type HostedRemoteEntityProjection,
 } from "#application/canvas/hosted-canvas-sync.ts";
 import type { CanvasEntityMutation } from "#engine";
 import {
@@ -86,7 +87,11 @@ describe("HostedCanvasSync", () => {
       onError: (error) => {
         throw error;
       },
-      projection: { applyRemoteEntity: async () => {}, removeRemoteEntities: () => {} },
+      projection: {
+        applyRemoteEntities: async () => {},
+        applyRemoteEntity: async () => {},
+        removeRemoteEntities: () => {},
+      },
       source,
       writable: true,
     });
@@ -124,7 +129,11 @@ describe("HostedCanvasSync", () => {
       onError: (error) => {
         throw error;
       },
-      projection: { applyRemoteEntity: async () => {}, removeRemoteEntities: () => {} },
+      projection: {
+        applyRemoteEntities: async () => {},
+        applyRemoteEntity: async () => {},
+        removeRemoteEntities: () => {},
+      },
       source,
       writable: true,
     });
@@ -145,9 +154,10 @@ describe("HostedCanvasSync", () => {
     const local = new HostedWorkspaceDocument({ document: localY, now: () => 1_000 });
     const source = new FakeSource();
     const register = vi.fn<HostedAssetRegistry["register"]>(async () => asset);
-    const applyRemoteEntity = vi.fn<
-      (entity: HostedWorkspaceEntity, applyPlayback: boolean) => Promise<void>
-    >(async (entity: HostedWorkspaceEntity, _applyPlayback: boolean) => {
+    const applyRemoteEntities = vi.fn<
+      (entries: readonly HostedRemoteEntityProjection[]) => Promise<void>
+    >(async (entries) => {
+      const entity = entries[0]!.entity;
       const runtime = runtimeEntity();
       runtime.position = { ...entity.position };
       source.entities.set(runtime.id, runtime);
@@ -163,7 +173,11 @@ describe("HostedCanvasSync", () => {
       onError: (error) => {
         throw error;
       },
-      projection: { applyRemoteEntity, removeRemoteEntities: () => {} },
+      projection: {
+        applyRemoteEntities,
+        applyRemoteEntity: async () => {},
+        removeRemoteEntities: () => {},
+      },
       source,
       writable: true,
     });
@@ -185,7 +199,7 @@ describe("HostedCanvasSync", () => {
     remote.addEntity(hosted);
     Y.applyUpdate(localY, Y.encodeStateAsUpdate(remoteY));
 
-    await vi.waitFor(() => expect(applyRemoteEntity).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(applyRemoteEntities).toHaveBeenCalledOnce());
     expect(register).not.toHaveBeenCalled();
     sync.destroy();
   });
@@ -202,7 +216,11 @@ describe("HostedCanvasSync", () => {
       onError: (error) => {
         throw error;
       },
-      projection: { applyRemoteEntity: async () => {}, removeRemoteEntities: () => {} },
+      projection: {
+        applyRemoteEntities: async () => {},
+        applyRemoteEntity: async () => {},
+        removeRemoteEntities: () => {},
+      },
       source,
       writable: true,
     });
@@ -226,13 +244,16 @@ describe("HostedCanvasSync", () => {
     const applyRemoteEntity = vi.fn<
       (entity: HostedWorkspaceEntity, applyPlayback: boolean) => Promise<void>
     >(async (_entity: HostedWorkspaceEntity, _applyPlayback: boolean) => {});
+    const applyRemoteEntities = vi.fn<
+      (entries: readonly HostedRemoteEntityProjection[]) => Promise<void>
+    >(async () => {});
     const sync = new HostedCanvasSync({
       assets: { getReference: () => asset, register: async () => asset, release: () => {} },
       document: local,
       onError: (error) => {
         throw error;
       },
-      projection: { applyRemoteEntity, removeRemoteEntities: () => {} },
+      projection: { applyRemoteEntities, applyRemoteEntity, removeRemoteEntities: () => {} },
       source,
       writable: true,
     });
@@ -255,12 +276,12 @@ describe("HostedCanvasSync", () => {
       zIndex: entity.zIndex,
     });
     Y.applyUpdate(localY, Y.encodeStateAsUpdate(remoteY));
-    await vi.waitFor(() => expect(applyRemoteEntity).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(applyRemoteEntities).toHaveBeenCalledOnce());
 
     now = 3_000;
     sync.refreshPlayback();
-    await vi.waitFor(() => expect(applyRemoteEntity).toHaveBeenCalledTimes(2));
-    expect(applyRemoteEntity.mock.calls[1]![0].shaderParams.time).toBe(4);
+    await vi.waitFor(() => expect(applyRemoteEntity).toHaveBeenCalledOnce());
+    expect(applyRemoteEntity.mock.calls[0]![0].shaderParams.time).toBe(4);
     sync.destroy();
   });
 });

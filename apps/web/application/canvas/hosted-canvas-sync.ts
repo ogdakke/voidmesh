@@ -18,7 +18,13 @@ export interface HostedCanvasSource {
 
 export interface HostedCanvasProjection {
   applyRemoteEntity(entity: HostedWorkspaceEntity, applyPlayback: boolean): Promise<void>;
+  applyRemoteEntities(entries: readonly HostedRemoteEntityProjection[]): Promise<void>;
   removeRemoteEntities(entityIds: readonly string[]): void;
+}
+
+export interface HostedRemoteEntityProjection {
+  applyPlayback: boolean;
+  entity: HostedWorkspaceEntity;
 }
 
 export interface HostedAssetRegistry {
@@ -243,11 +249,14 @@ export class HostedCanvasSync {
             this.#appliedPlaybackCommands.delete(entityId);
             this.#appliedShaderPlaybackCommands.delete(entityId);
           }
-          for (const entity of changed) {
-            const applyPlayback =
+          const projections = changed.map((entity) => ({
+            applyPlayback:
               entity.playbackCommandId !== undefined &&
-              this.#appliedPlaybackCommands.get(entity.id) !== entity.playbackCommandId;
-            await this.#projection.applyRemoteEntity(entity, applyPlayback);
+              this.#appliedPlaybackCommands.get(entity.id) !== entity.playbackCommandId,
+            entity,
+          }));
+          await this.#projection.applyRemoteEntities(projections);
+          for (const { entity } of projections) {
             if (entity.playbackCommandId) {
               this.#appliedPlaybackCommands.set(entity.id, entity.playbackCommandId);
             } else this.#appliedPlaybackCommands.delete(entity.id);
