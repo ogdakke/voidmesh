@@ -1,0 +1,13 @@
+{
+  "rules": [
+    {
+      "allowed": {
+        "origins": ["https://voidmesh.xyz", "https://www.voidmesh.xyz"],
+        "methods": ["PUT"],
+        "headers": ["Content-Type", "X-Amz-Checksum-Sha256"]
+      },
+      "exposeHeaders": ["ETag"],
+      "maxAgeSeconds": 3600
+    }
+  ]
+}
