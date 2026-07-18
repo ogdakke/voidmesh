@@ -38,15 +38,20 @@ export class BrowserHostedAssetCache implements HostedAssetCache {
     if (directory) {
       try {
         await directory.removeEntry(assetId);
+        return;
       } catch (error) {
         if (!isMissingFileError(error)) throw error;
       }
     }
     const database = await openFallbackDatabase();
     if (!database) return;
-    const transaction = database.transaction(STORE_NAME, "readwrite");
-    transaction.objectStore(STORE_NAME).delete(this.#key(assetId));
-    await transactionDone(transaction);
+    try {
+      const transaction = database.transaction(STORE_NAME, "readwrite");
+      transaction.objectStore(STORE_NAME).delete(this.#key(assetId));
+      await transactionDone(transaction);
+    } catch (error) {
+      if (!isMissingFileError(error)) throw error;
+    }
   }
 
   async get(assetId: string, contentType: string): Promise<Blob | null> {

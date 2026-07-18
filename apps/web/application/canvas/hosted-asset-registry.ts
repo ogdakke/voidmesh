@@ -97,7 +97,11 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
         if (current.id === reference.id) this.#references.set(entityId, uploaded);
       }
       this.#uploads.set(blob, Promise.resolve(uploaded));
-      await this.#cache.delete(reference.id);
+      try {
+        await this.#cache.delete(reference.id);
+      } catch (error) {
+        this.#onCacheError(error);
+      }
     }
   }
 

@@ -691,11 +691,19 @@ async function createReadGrant(
     FROM assets
     INNER JOIN workspace_members ON workspace_members.workspace_id = assets.workspace_id
     INNER JOIN workspaces ON workspaces.id = assets.workspace_id
-    WHERE assets.id = ? AND assets.workspace_id = ? AND assets.lifecycle = 'active'
+    WHERE assets.id = ? AND assets.workspace_id = ?
+      AND (
+        assets.lifecycle = 'active'
+        OR (
+          assets.lifecycle = 'verified'
+          AND assets.uploaded_by_user_id = ?
+          AND ? = 'render'
+        )
+      )
       AND workspace_members.user_id = ? AND workspace_members.removed_at IS NULL
       AND workspaces.lifecycle = 'active'`,
   )
-    .bind(assetId, workspaceId, userId)
+    .bind(assetId, workspaceId, userId, purpose, userId)
     .first<AssetAccessRow>();
   if (!asset) {
     await auditStatement(

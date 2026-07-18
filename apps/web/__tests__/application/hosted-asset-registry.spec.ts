@@ -144,6 +144,59 @@ describe("R2HostedAssetRegistry", () => {
     expect(api.finalizeAssetUpload).toHaveBeenCalledOnce();
   });
 
+  it("does not fail synchronization when an uploaded offline original cannot be evicted", async () => {
+    const provisional: HostedAssetReference = {
+      byteLength: 3,
+      contentType: "image/png",
+      id: "local_123",
+      mediaType: "image",
+      originalFilename: "offline.png",
+    };
+    const cache = new MemoryAssetCache();
+    await cache.put(provisional.id, new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" }));
+    const cacheError = new DOMException("The object can not be found here.", "NotFoundError");
+    vi.spyOn(cache, "delete").mockRejectedValue(cacheError);
+    const uploaded = {
+      ...provisional,
+      contentHash: null,
+      id: "asset-remote",
+      workspaceId: "workspace-1",
+    };
+    const api = {
+      finalizeAssetUpload: vi.fn<HostedApiClient["finalizeAssetUpload"]>(async () => ({
+        asset: uploaded,
+      })),
+      reserveAssetUpload: vi.fn<HostedApiClient["reserveAssetUpload"]>(async () => ({
+        assetId: uploaded.id,
+        expiresAt: Date.now() + 1_000,
+        headers: { "content-type": "image/png" },
+        reservationId: "reservation-1",
+        uploadUrl: "https://uploads.example.test/object",
+      })),
+    } as unknown as HostedApiClient;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () =>
+        Promise.resolve(new Response(null, { status: 204 })),
+      ),
+    );
+    const onCacheError = vi.fn<(error: unknown) => void>();
+    const registry = new R2HostedAssetRegistry(
+      api,
+      "workspace-1",
+      cache,
+      onCacheError,
+      vi.fn<() => void>(),
+    );
+    const document = new HostedWorkspaceDocument({ document: new Y.Doc() });
+    document.addEntity(hostedEntity(provisional));
+
+    await expect(registry.flushPending(document)).resolves.toBeUndefined();
+
+    expect(document.getEntity("entity-1")?.asset).toEqual(uploaded);
+    expect(onCacheError).toHaveBeenCalledWith(cacheError);
+  });
+
   it("binds references to media identity and ignores stale upload completion", async () => {
     const cache = new MemoryAssetCache();
     const firstBlob = new Blob([new Uint8Array([1])], { type: "image/png" });

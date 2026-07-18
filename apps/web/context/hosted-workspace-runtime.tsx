@@ -66,7 +66,7 @@ export function HostedWorkspaceRuntime({
     });
     const releaseUndoDelegate = undo.setDelegate(document.undo);
     const cache = new BrowserHostedAssetCache(workspace.id);
-    const assets = new R2HostedAssetRegistry(api, workspace.id, cache, reportError, () => {
+    const assets = new R2HostedAssetRegistry(api, workspace.id, cache, reportCacheError, () => {
       setTimeout(() => providerRef.current?.resynchronize(), 0);
     });
     let sync: HostedCanvasSync | null = null;
@@ -246,4 +246,8 @@ function reportError(error: unknown): void {
     title: "Cloud sync failed",
     type: "destructive",
   });
+}
+
+function reportCacheError(error: unknown): void {
+  logger.warn("Hosted workspace cache error", error);
 }

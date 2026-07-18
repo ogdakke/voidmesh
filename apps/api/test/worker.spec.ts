@@ -937,6 +937,30 @@ describe("Voidmesh API", () => {
       await env.DB.prepare("SELECT lifecycle FROM assets WHERE id = ?").bind(grant.assetId).first(),
     ).toEqual({ lifecycle: "verified" });
 
+    const verifiedContent = await apiFetch(
+      `/v1/workspaces/${workspace.id}/assets/${grant.assetId}/content`,
+      { headers: { cookie, origin: WEB_ORIGIN }, method: "POST" },
+    );
+    expect(verifiedContent.status).toBe(201);
+    const verifiedContentGrant = await verifiedContent.json<{
+      downloadUrl: string;
+      grantId: string;
+    }>();
+    const renderedVerifiedAsset = await apiFetch(
+      new URL(verifiedContentGrant.downloadUrl).pathname,
+      { headers: { cookie } },
+    );
+    expect(renderedVerifiedAsset.status).toBe(200);
+    expect([...new Uint8Array(await renderedVerifiedAsset.arrayBuffer())]).toEqual([
+      1, 2, 3, 4, 5, 6,
+    ]);
+
+    const verifiedDownload = await apiFetch(
+      `/v1/workspaces/${workspace.id}/assets/${grant.assetId}/download`,
+      { headers: { cookie, origin: WEB_ORIGIN }, method: "POST" },
+    );
+    expect(verifiedDownload.status).toBe(404);
+
     const blocked = await apiFetch(`/v1/workspaces/${workspace.id}/assets/uploads`, {
       body: JSON.stringify({
         byteLength: 1,
@@ -1050,6 +1074,12 @@ describe("Voidmesh API", () => {
         user_id: user!.id,
       },
       {
+        actual_bytes: 6,
+        operation: "download",
+        purpose: "render",
+        user_id: user!.id,
+      },
+      {
         actual_bytes: 3,
         operation: "download",
         purpose: "render",
@@ -1074,8 +1104,12 @@ describe("Voidmesh API", () => {
       "asset.bytes-served",
       "asset.read-authorized",
       "asset.bytes-served",
+      "asset.read-authorized",
+      "asset.bytes-served",
     ]);
     expect(audit.results.map((event) => JSON.parse(event.metadata_json).purpose)).toEqual([
+      "render",
+      "render",
       "render",
       "render",
       "download",
@@ -1084,7 +1118,8 @@ describe("Voidmesh API", () => {
     expect(
       await env.DB.prepare(
         `SELECT action, outcome, metadata_json FROM audit_events
-         WHERE workspace_id = ? AND target_id = ? AND action = 'asset.read-denied'`,
+         WHERE workspace_id = ? AND target_id = ? AND action = 'asset.read-denied'
+           AND json_extract(metadata_json, '$.purpose') = 'render'`,
       )
         .bind(workspace.id, grant.assetId)
         .first(),
