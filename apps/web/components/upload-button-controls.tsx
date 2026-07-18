@@ -16,7 +16,16 @@ import { useHostedWorkspaceRuntime } from "#context/use-hosted-workspace-runtime
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { WorkspaceAssetSummary, WorkspaceAssetUsage } from "@voidmesh/api-contract";
 import { WorkspaceRole } from "@voidmesh/domain";
+import { mapSettledWithConcurrency } from "#lib/async-concurrency.ts";
 import "./media-library.css";
+
+const MAX_CONCURRENT_ASSET_DOWNLOADS = 4;
+
+interface AddingProgress {
+  completed: number;
+  phase: "loading" | "preparing";
+  total: number;
+}
 
 export function UploadControls() {
   const access = useCanvasAccess();
@@ -105,6 +114,7 @@ function HostedFileUploadComponent({ hosted }: { hosted: HostedRuntime }) {
   const [usage, setUsage] = useState<WorkspaceAssetUsage | "all">("all");
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [adding, setAdding] = useState(false);
+  const [addingProgress, setAddingProgress] = useState<AddingProgress | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [canvasPreviewUrls, setCanvasPreviewUrls] = useState<ReadonlyMap<string, string>>(
@@ -168,7 +178,10 @@ function HostedFileUploadComponent({ hosted }: { hosted: HostedRuntime }) {
     };
   }, [assetQuery.data, hosted, libraryOpen]);
 
-  const handleFileSelect = async (files: FileList | readonly File[] | null) => {
+  const handleFileSelect = async (
+    files: FileList | readonly File[] | null,
+    onLoadProgress?: (completed: number, total: number) => void,
+  ) => {
     if (!files || files.length === 0) return;
 
     const container = document.querySelector(".infinite-canvas");
@@ -185,6 +198,7 @@ function HostedFileUploadComponent({ hosted }: { hosted: HostedRuntime }) {
       fitToView: true,
       bottomInset,
       onLoadFailure: showMediaLoadFailureToasts,
+      onLoadProgress,
     });
     setLibraryOpen(false);
   };
@@ -225,13 +239,41 @@ function HostedFileUploadComponent({ hosted }: { hosted: HostedRuntime }) {
     setAdding(true);
     setActionError(null);
     try {
-      const files = await Promise.all(selectedAssets.map((asset) => hosted.loadAsset(asset)));
-      await handleFileSelect(files);
+      let completed = 0;
+      setAddingProgress({ completed, phase: "loading", total: selectedAssets.length });
+      const results = await mapSettledWithConcurrency(
+        selectedAssets,
+        MAX_CONCURRENT_ASSET_DOWNLOADS,
+        async (asset) => {
+          try {
+            return await hosted.loadAsset(asset);
+          } finally {
+            completed++;
+            setAddingProgress({ completed, phase: "loading", total: selectedAssets.length });
+          }
+        },
+      );
+      const failed = results.filter((result) => result.status === "rejected");
+      if (failed.length > 0) {
+        const firstReason = failed[0]!.reason;
+        throw firstReason instanceof Error
+          ? firstReason
+          : new Error(`${failed.length} stored media items could not be loaded`);
+      }
+      const files = results.map((result) => {
+        if (result.status !== "fulfilled") throw new Error("Stored media could not be loaded");
+        return result.value;
+      });
+      setAddingProgress({ completed: 0, phase: "preparing", total: files.length });
+      await handleFileSelect(files, (prepared, total) => {
+        setAddingProgress({ completed: prepared, phase: "preparing", total });
+      });
       setSelectedIds(new Set());
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Stored media could not be added");
     } finally {
       setAdding(false);
+      setAddingProgress(null);
     }
   };
 
@@ -400,7 +442,11 @@ function HostedFileUploadComponent({ hosted }: { hosted: HostedRuntime }) {
                   onClick={() => void addSelectedAssets()}
                   isPending={adding}
                 >
-                  {adding ? "Adding…" : `Add ${selectedAssets.length} to canvas`}
+                  {adding && addingProgress
+                    ? `${addingProgress.phase === "loading" ? "Loading" : "Preparing"} ${addingProgress.completed}/${addingProgress.total}…`
+                    : adding
+                      ? "Adding…"
+                      : `Add ${selectedAssets.length} to canvas`}
                 </Button>
               </div>
             </footer>

@@ -176,6 +176,35 @@ describe("entity placement", () => {
     ]);
   });
 
+  test("bounds concurrent media decoding for large batches", async () => {
+    let activeLoads = 0;
+    let peakActiveLoads = 0;
+    vi.spyOn(mediaLoader, "loadMediaFile").mockImplementation(async () => {
+      activeLoads++;
+      peakActiveLoads = Math.max(peakActiveLoads, activeLoads);
+      await Promise.resolve();
+      activeLoads--;
+      return makeEntityInput({ width: 100, height: 80 });
+    });
+
+    const { addEntity } = createAddEntityRecorder();
+    const onLoadProgress = vi.fn<(completed: number, total: number) => void>();
+    const files = Array.from({ length: 12 }, (_, index) => makeFile(`${index}.png`));
+
+    const ids = await addFilesToCanvas(files, addEntity, makeContainer(), {
+      anchor: { x: 100, y: 100 },
+      select: true,
+      fitToView: false,
+      bottomInset: 0,
+      onLoadProgress,
+    });
+
+    expect(ids).toHaveLength(12);
+    expect(peakActiveLoads).toBe(4);
+    expect(onLoadProgress).toHaveBeenCalledTimes(12);
+    expect(onLoadProgress).toHaveBeenLastCalledWith(12, 12);
+  });
+
   test("multiple dropped URLs are laid out as a group around the drop point", async () => {
     const animateTo = vi.spyOn(viewportAnimation, "animateTo");
     vi.stubGlobal(

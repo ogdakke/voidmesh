@@ -4,6 +4,9 @@ import { canvasStore, gameLoop, viewportAnimation } from "#engine";
 import { loadMediaFile, loadMediaFromBlob } from "#lib/media-loader.ts";
 import { config } from "#config";
 import { logger } from "#lib/client.logger.ts";
+import { mapSettledWithConcurrency } from "#lib/async-concurrency.ts";
+
+const MAX_CONCURRENT_MEDIA_LOADS = 4;
 
 type EntityData = Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string };
 type AddEntityFn = (entity: EntityData, filename?: string) => string;
@@ -22,6 +25,7 @@ export interface ImportPlacementOptions {
   fitToView: boolean;
   bottomInset: number;
   onLoadFailure?: (failures: MediaLoadFailure[]) => void;
+  onLoadProgress?: (completed: number, total: number) => void;
 }
 
 export interface MediaLoadFailure {
@@ -217,8 +221,21 @@ function getMediaKind(file: File): MediaLoadFailure["mediaKind"] {
 
 async function loadFilesForCanvas(
   files: File[],
+  onProgress?: (completed: number, total: number) => void,
 ): Promise<{ loaded: LoadedEntity[]; failures: MediaLoadFailure[] }> {
-  const results = await Promise.allSettled(files.map((file) => loadMediaFile(file)));
+  let completed = 0;
+  const results = await mapSettledWithConcurrency(
+    files,
+    MAX_CONCURRENT_MEDIA_LOADS,
+    async (file) => {
+      try {
+        return await loadMediaFile(file);
+      } finally {
+        completed++;
+        onProgress?.(completed, files.length);
+      }
+    },
+  );
 
   const loaded: LoadedEntity[] = [];
   const failures: MediaLoadFailure[] = [];
@@ -274,7 +291,7 @@ export async function addFilesToCanvas(
 ): Promise<string[]> {
   if (files.length === 0) return [];
 
-  const { loaded, failures } = await loadFilesForCanvas(files);
+  const { loaded, failures } = await loadFilesForCanvas(files, options.onLoadProgress);
   if (failures.length > 0) {
     options.onLoadFailure?.(failures);
   }
