@@ -143,6 +143,42 @@ describe("Render loop errors", () => {
 });
 
 describe("Animated media render scheduling", () => {
+  test("limits physical video playback while preserving the logical mobile workload", async () => {
+    const mobileLoop = new GameLoop(deps, {
+      maxActiveVideoElements: 4,
+      minActiveVideoScreenEdge: 0,
+    });
+    mobileLoop.setContainer(createMockContainer());
+    const renderer = createLoopRenderer(true);
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const entities = Array.from({ length: 43 }, (_, index) => {
+      const entity = createTestEntity({ id: `mobile-video-${index}`, mediaType: "video" });
+      if (entity.mediaSource.type !== "video" || !entity.playback) {
+        throw new Error("Expected a video test entity");
+      }
+      entity.playback.isPlaying = true;
+      entity.playback.loop = true;
+      return entity;
+    });
+    await Promise.all(
+      entities.map((entity) =>
+        entity.mediaSource.type === "video" ? entity.mediaSource.videoElement.play() : undefined,
+      ),
+    );
+    canvasStore.addEntities(entities);
+
+    mobileLoop.setRenderer(renderer);
+    mobileLoop.start();
+
+    const activeVideoCount = entities.filter(
+      (entity) => entity.mediaSource.type === "video" && !entity.mediaSource.videoElement.paused,
+    ).length;
+    expect(activeVideoCount).toBe(4);
+    expect(entities.every((entity) => entity.playback?.isPlaying === true)).toBe(true);
+    mobileLoop.stop();
+  });
+
   test("incrementally reclassifies bulk entity edits without a fixed count cutoff", () => {
     const renderer = createLoopRenderer();
     let nextFrame: FrameRequestCallback | null = null;

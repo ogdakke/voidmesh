@@ -87,6 +87,67 @@ describe("R2HostedAssetRegistry", () => {
     vi.unstubAllGlobals();
   });
 
+  it("reuses one upload for distinct blobs with identical content", async () => {
+    const firstBlob = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
+    const secondBlob = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
+    const canvas = {
+      getContext: () => ({ drawImage: vi.fn<() => void>() }),
+      height: 0,
+      toBlob(callback: BlobCallback) {
+        callback(new Blob(["preview"], { type: "image/webp" }));
+      },
+      width: 0,
+    } as unknown as HTMLCanvasElement;
+    vi.spyOn(globalThis.document, "createElement").mockReturnValue(canvas);
+    const uploaded = {
+      byteLength: firstBlob.size,
+      contentHash: "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+      contentType: firstBlob.type,
+      id: "asset-shared",
+      mediaType: "image",
+      originalFilename: "first.png",
+      workspaceId: "workspace-1",
+    };
+    const api = {
+      finalizeAssetUpload: vi.fn<HostedApiClient["finalizeAssetUpload"]>(async () => ({
+        asset: uploaded,
+      })),
+      reserveAssetUpload: vi.fn<HostedApiClient["reserveAssetUpload"]>(async () => ({
+        assetId: uploaded.id,
+        expiresAt: Date.now() + 1_000,
+        headers: { "content-type": firstBlob.type },
+        reservationId: "reservation-shared",
+        uploadUrl: "https://uploads.example.test/shared",
+      })),
+    } as unknown as HostedApiClient;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () =>
+        Promise.resolve(new Response(null, { status: 204 })),
+      ),
+    );
+    const registry = new R2HostedAssetRegistry(
+      api,
+      "workspace-1",
+      new MemoryAssetCache(),
+      vi.fn<(error: unknown) => void>(),
+      vi.fn<() => void>(),
+    );
+    const first = runtimeEntity(firstBlob, "first.png");
+    const second = { ...runtimeEntity(secondBlob, "second.png"), id: "entity-2" };
+
+    const [firstReference, secondReference] = await Promise.all([
+      registry.register(first, new AbortController().signal),
+      registry.register(second, new AbortController().signal),
+    ]);
+
+    expect(firstReference).toEqual(uploaded);
+    expect(secondReference).toEqual(uploaded);
+    expect(api.reserveAssetUpload).toHaveBeenCalledOnce();
+    expect(api.finalizeAssetUpload).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it("uploads cached offline originals before replacing provisional document references", async () => {
     const recoveredBitmap = {
       close: vi.fn(),

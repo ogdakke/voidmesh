@@ -1,4 +1,5 @@
 import { logger } from "#lib/client.logger.ts";
+import { isMobileWebKit } from "#lib/util.ts";
 import type { TouchConfig } from "#config";
 import type { Bounds, Point } from "#types/canvas.ts";
 import { CanvasInputController, createDefaultGameLoopDeps } from "./canvas-input-controller.ts";
@@ -7,6 +8,11 @@ import { FrameLoop, type CanvasRendererPort } from "./frame-loop.ts";
 
 export type RenderErrorHandler = (error: unknown) => boolean | void;
 
+export interface GameLoopOptions {
+  maxActiveVideoElements?: number;
+  minActiveVideoScreenEdge?: number;
+}
+
 export class GameLoop {
   readonly #deps: GameLoopDeps;
   #logger = logger;
@@ -14,13 +20,17 @@ export class GameLoop {
   readonly #frameLoop: FrameLoop;
   #onRenderError: RenderErrorHandler | null = null;
 
-  constructor(deps?: Partial<GameLoopDeps>) {
+  constructor(deps?: Partial<GameLoopDeps>, options: GameLoopOptions = {}) {
     this.#deps = { ...createDefaultGameLoopDeps(), ...deps };
     this.#input = new CanvasInputController(this.#deps);
     this.#frameLoop = new FrameLoop(
       {
         scheduler: this.#deps.scheduler,
         perf: this.#deps.perf,
+        videoPlayback: {
+          maxActiveElements: options.maxActiveVideoElements ?? Number.POSITIVE_INFINITY,
+          minScreenEdge: options.minActiveVideoScreenEdge ?? 0,
+        },
       },
       {
         processInput: () => this.#input.processInput(),
@@ -34,6 +44,8 @@ export class GameLoop {
         isDragSelectActive: () => this.#input.isDragSelectActive(),
         onAfterFrame: () => this.#input.flushPendingScrollMomentum(),
         onRenderError: (error) => this.#handleFrameRenderError(error),
+        onVideoPlaybackError: (error) =>
+          this.#logger.error("[GameLoop] Video resume failed", error),
       },
     );
   }
@@ -155,4 +167,15 @@ export class GameLoop {
   }
 }
 
-export const gameLoop = new GameLoop();
+const mobileVideoPlayback = typeof window !== "undefined" && isMobileWebKit();
+export const gameLoop = new GameLoop(
+  undefined,
+  mobileVideoPlayback
+    ? {
+        // Mobile WebKit exhausts its media pipeline when a zoomed-out workspace starts dozens of
+        // physical decoders. Logical playback keeps advancing while tiny/overflow videos are paused.
+        maxActiveVideoElements: 4,
+        minActiveVideoScreenEdge: 48,
+      }
+    : undefined,
+);

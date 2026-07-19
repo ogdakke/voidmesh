@@ -33,6 +33,7 @@ export interface HostedCanvasProjectionOptions {
   cache: HostedAssetCache;
   beforeRemoveEntity?(entityId: string): void;
   onAutoplayBlocked?(entity: HostedWorkspaceEntity): void;
+  onCacheError?(error: unknown): void;
   onError(error: unknown): void;
   requestRender(entityId?: string): void;
   store: CanvasStore;
@@ -45,6 +46,7 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
   readonly #cache: HostedAssetCache;
   readonly #beforeRemoveEntity: (entityId: string) => void;
   readonly #onAutoplayBlocked: (entity: HostedWorkspaceEntity) => void;
+  readonly #onCacheError: (error: unknown) => void;
   readonly #onError: (error: unknown) => void;
   readonly #requestRender: (entityId?: string) => void;
   readonly #store: CanvasStore;
@@ -52,7 +54,8 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
   readonly #assetBlobs = new Map<string, Promise<Blob>>();
   readonly #sharedImages = new Map<string, MediaImageAsset>();
   readonly #entityAssets = new Map<string, string>();
-  readonly #assetEntityCounts = new Map<string, number>();
+  readonly #entityBlobKeys = new Map<string, string>();
+  readonly #blobEntityCounts = new Map<string, number>();
   readonly #entityRevisions = new Map<string, number>();
   readonly #autoplayBlocked = new Set<string>();
 
@@ -62,6 +65,7 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     this.#cache = options.cache;
     this.#beforeRemoveEntity = options.beforeRemoveEntity ?? (() => {});
     this.#onAutoplayBlocked = options.onAutoplayBlocked ?? (() => {});
+    this.#onCacheError = options.onCacheError ?? options.onError;
     this.#onError = options.onError;
     this.#requestRender = options.requestRender;
     this.#store = options.store;
@@ -156,7 +160,7 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     this.#store.addEntities(additions, true);
     for (const { collaborative, next, previous } of replacements) {
       if (previous) this.#releaseEntity(previous);
-      this.#bindEntityAsset(collaborative.id, collaborative.asset.id);
+      this.#bindEntityAsset(collaborative.id, collaborative.asset);
       this.#assets.adopt(collaborative.id, collaborative.asset, getEntityBlob(next));
     }
     for (const entry of playback) {
@@ -165,7 +169,12 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
       if (current) await this.#applyPlayback(current, entry.entity);
     }
     if (updates.length > 0 || additions.length > 0) this.#requestRender();
-    for (const error of errors) this.#onError(error);
+    if (errors.length === 1) this.#onError(errors[0]);
+    else if (errors.length > 1) {
+      this.#onError(
+        new AggregateError(errors, `${errors.length} hosted media items could not be loaded`),
+      );
+    }
   }
 
   removeRemoteEntities(entityIds: readonly string[]): void {
@@ -214,7 +223,7 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     if (previous) this.#store.updateEntity(entity.id, next, true);
     else this.#store.addEntity(next, true);
     if (previous) this.#releaseEntity(previous);
-    this.#bindEntityAsset(entity.id, entity.asset.id);
+    this.#bindEntityAsset(entity.id, entity.asset);
     this.#assets.adopt(entity.id, entity.asset, getEntityBlob(next));
     if (applyPlayback) await this.#applyPlayback(next, entity);
     this.#requestRender(entity.id);
@@ -257,6 +266,14 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
       entity.asset.contentType,
       entity.position,
       entity.name,
+      entity.asset.mediaType === MediaType.video
+        ? {
+            alphaMode: "unknown",
+            fps: entity.fps,
+            hasAudio: entity.hasAudio,
+            startPlayback: false,
+          }
+        : undefined,
     );
     if (!loaded) throw new Error(`Unable to decode hosted asset ${entity.name}`);
     const media = { imageBitmap: loaded.imageBitmap, mediaSource: loaded.mediaSource };
@@ -267,11 +284,12 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
   }
 
   #getAssetBlob(entity: HostedWorkspaceEntity): Promise<Blob> {
-    let pending = this.#assetBlobs.get(entity.asset.id);
+    const blobKey = entity.asset.contentHash ?? entity.asset.id;
+    let pending = this.#assetBlobs.get(blobKey);
     if (pending) return pending;
     pending = this.#downloadAsset(entity);
-    this.#assetBlobs.set(entity.asset.id, pending);
-    pending.catch(() => this.#assetBlobs.delete(entity.asset.id));
+    this.#assetBlobs.set(blobKey, pending);
+    pending.catch(() => this.#assetBlobs.delete(blobKey));
     return pending;
   }
 
@@ -280,7 +298,7 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
       const cached = await this.#cache.get(entity.asset.id, entity.asset.contentType);
       if (cached?.size === entity.asset.byteLength) return cached;
     } catch (error) {
-      this.#onError(error);
+      this.#onCacheError(error);
     }
     const grant = await this.#api.createAssetContent(this.#workspaceId, entity.asset.id);
     const response = await fetch(grant.downloadUrl);
@@ -290,7 +308,7 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
       throw new Error(`Hosted asset ${entity.asset.id} has an unexpected byte length`);
     }
     const blob = new Blob([bytes], { type: entity.asset.contentType });
-    void this.#cache.put(entity.asset.id, blob).catch(this.#onError);
+    void this.#cache.put(entity.asset.id, blob).catch(this.#onCacheError);
     return blob;
   }
 
@@ -357,20 +375,24 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     if (assetId) this.#unbindEntityAsset(entity.id, assetId);
   }
 
-  #bindEntityAsset(entityId: string, assetId: string): void {
-    this.#entityAssets.set(entityId, assetId);
-    this.#assetEntityCounts.set(assetId, (this.#assetEntityCounts.get(assetId) ?? 0) + 1);
+  #bindEntityAsset(entityId: string, asset: HostedWorkspaceEntity["asset"]): void {
+    const blobKey = asset.contentHash ?? asset.id;
+    this.#entityAssets.set(entityId, asset.id);
+    this.#entityBlobKeys.set(entityId, blobKey);
+    this.#blobEntityCounts.set(blobKey, (this.#blobEntityCounts.get(blobKey) ?? 0) + 1);
   }
 
   #unbindEntityAsset(entityId: string, assetId: string): void {
     this.#entityAssets.delete(entityId);
-    const nextCount = (this.#assetEntityCounts.get(assetId) ?? 1) - 1;
+    const blobKey = this.#entityBlobKeys.get(entityId) ?? assetId;
+    this.#entityBlobKeys.delete(entityId);
+    const nextCount = (this.#blobEntityCounts.get(blobKey) ?? 1) - 1;
     if (nextCount > 0) {
-      this.#assetEntityCounts.set(assetId, nextCount);
+      this.#blobEntityCounts.set(blobKey, nextCount);
       return;
     }
-    this.#assetEntityCounts.delete(assetId);
-    this.#assetBlobs.delete(assetId);
+    this.#blobEntityCounts.delete(blobKey);
+    this.#assetBlobs.delete(blobKey);
   }
 
   #bumpRevision(entityId: string): number {

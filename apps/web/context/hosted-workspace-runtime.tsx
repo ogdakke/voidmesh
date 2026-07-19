@@ -17,11 +17,14 @@ import { canvasStore } from "#engine";
 import { HostedApiClient } from "#lib/hosted-api-client.ts";
 import { HostedWorkspaceDocument } from "#lib/hosted-workspace-document.ts";
 import { BrowserHostedAssetCache } from "#lib/hosted-asset-cache.ts";
+import { mapSettledWithConcurrency } from "#lib/async-concurrency.ts";
 import { logger } from "#lib/client.logger.ts";
 import { undo } from "#lib/undo.ts";
 import { toastManager } from "#application/notifications.ts";
 import { useCanvasRendererService } from "./use-canvas.ts";
 import { HostedWorkspaceRuntimeContext } from "./use-hosted-workspace-runtime.ts";
+
+const MAX_CONCURRENT_THUMBNAIL_BACKFILLS = 4;
 
 export interface HostedWorkspaceRuntimeProps extends PropsWithChildren {
   api: HostedApiClient;
@@ -104,6 +107,7 @@ export function HostedWorkspaceRuntime({
           description: `${entity.name} was started by a collaborator, but the browser blocked unmuted autoplay.`,
           title: "Playback needs a click",
         }),
+      onCacheError: reportCacheError,
       onError: reportError,
       requestRender: (entityId) => {
         requestAnimationFrame(() => {
@@ -239,18 +243,20 @@ export function HostedWorkspaceRuntime({
   const backfillCanvasAssetThumbnails = async (assetIds: ReadonlySet<string>): Promise<void> => {
     const registry = assetsRef.current;
     if (!registry || assetIds.size === 0) return;
-    const pending: Promise<void>[] = [];
+    const pending: Array<() => Promise<void>> = [];
     const scheduled = new Set<string>();
     for (const entity of canvasStore.getState().entities.values()) {
       const reference = registry.getReference(entity.id);
       if (!reference || !assetIds.has(reference.id) || scheduled.has(reference.id)) continue;
       scheduled.add(reference.id);
-      pending.push(registry.backfillThumbnail(entity, reference));
+      pending.push(() => registry.backfillThumbnail(entity, reference));
     }
-    const results = await Promise.allSettled(pending);
-    for (const result of results) {
-      if (result.status === "rejected") reportError(result.reason);
-    }
+    const results = await mapSettledWithConcurrency(
+      pending,
+      MAX_CONCURRENT_THUMBNAIL_BACKFILLS,
+      (backfill) => backfill(),
+    );
+    reportBatchErrors(results, "asset thumbnails could not be prepared");
   };
 
   const getCanvasAssetIds = (): ReadonlySet<string> => {
@@ -305,4 +311,17 @@ function reportError(error: unknown): void {
 
 function reportCacheError(error: unknown): void {
   logger.warn("Hosted workspace cache error", error);
+}
+
+function reportBatchErrors(
+  results: readonly PromiseSettledResult<unknown>[],
+  description: string,
+): void {
+  const errors = results
+    .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+    .map((result) => result.reason);
+  if (errors.length === 1) reportError(errors[0]);
+  else if (errors.length > 1) {
+    reportError(new AggregateError(errors, `${errors.length} ${description}`));
+  }
 }

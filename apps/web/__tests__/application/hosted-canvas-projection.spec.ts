@@ -183,4 +183,110 @@ describe("HostedCanvasProjectionService", () => {
 
     projection.removeRemoteEntities(entities.map((entity) => entity.id));
   });
+
+  it("downloads identical hosted content once across distinct asset IDs", async () => {
+    const contentHash = "a".repeat(64);
+    const firstAsset: HostedAssetReference = {
+      byteLength: 1,
+      contentHash,
+      contentType: "image/png",
+      id: "asset-copy-1",
+      mediaType: "image",
+      originalFilename: "copy-1.png",
+    };
+    const secondAsset: HostedAssetReference = {
+      ...firstAsset,
+      id: "asset-copy-2",
+      originalFilename: "copy-2.png",
+    };
+    const get = vi.fn<HostedAssetCache["get"]>(async (_assetId, contentType) =>
+      Promise.resolve(new Blob([new Uint8Array([1])], { type: contentType })),
+    );
+    const cache: HostedAssetCache = {
+      delete: async () => {},
+      get,
+      put: async () => {},
+    };
+    const api = {} as HostedApiClient;
+    const assets = new R2HostedAssetRegistry(
+      api,
+      "workspace-1",
+      cache,
+      vi.fn<(error: unknown) => void>(),
+      vi.fn<() => void>(),
+    );
+    const store = new CanvasStore();
+    const projection = new HostedCanvasProjectionService({
+      api,
+      assets,
+      cache,
+      onError: (error) => {
+        throw error;
+      },
+      requestRender: () => {},
+      store,
+      workspaceId: "workspace-1",
+    });
+
+    await projection.applyRemoteEntities([
+      { applyPlayback: false, entity: hostedEntity("entity-copy-1", firstAsset) },
+      { applyPlayback: false, entity: hostedEntity("entity-copy-2", secondAsset) },
+    ]);
+
+    expect(get).toHaveBeenCalledOnce();
+    projection.removeRemoteEntities(["entity-copy-1", "entity-copy-2"]);
+  });
+
+  it("reports one aggregate error for a failed workspace batch", async () => {
+    const cache: HostedAssetCache = {
+      delete: async () => {},
+      get: async (assetId) => {
+        throw new Error(`failed ${assetId}`);
+      },
+      put: async () => {},
+    };
+    const api = {
+      createAssetContent: vi.fn<HostedApiClient["createAssetContent"]>(async () => {
+        throw new Error("download unavailable");
+      }),
+    } as unknown as HostedApiClient;
+    const assets = new R2HostedAssetRegistry(
+      api,
+      "workspace-1",
+      cache,
+      vi.fn<(error: unknown) => void>(),
+      vi.fn<() => void>(),
+    );
+    const onError = vi.fn<(error: unknown) => void>();
+    const projection = new HostedCanvasProjectionService({
+      api,
+      assets,
+      cache,
+      onCacheError: () => {},
+      onError,
+      requestRender: () => {},
+      store: new CanvasStore(),
+      workspaceId: "workspace-1",
+    });
+    const entries = ["first", "second"].map((id) => ({
+      applyPlayback: false,
+      entity: hostedEntity(`entity-${id}`, {
+        byteLength: 1,
+        contentType: "image/png",
+        id: `asset-${id}`,
+        mediaType: "image",
+        originalFilename: `${id}.png`,
+      }),
+    }));
+
+    await projection.applyRemoteEntities(entries);
+
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        errors: expect.arrayContaining([expect.any(Error), expect.any(Error)]),
+        message: "2 hosted media items could not be loaded",
+      }),
+    );
+  });
 });

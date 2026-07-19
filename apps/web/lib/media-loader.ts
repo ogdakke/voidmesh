@@ -54,6 +54,15 @@ export interface VideoLoadResult {
   alphaMode: MediaAlphaMode;
 }
 
+export interface VideoLoadOptions {
+  /** Start the decoder after the first frame is available. Defaults to true for local imports. */
+  startPlayback?: boolean;
+  /** Reuse media metadata already persisted by a hosted workspace. */
+  fps?: number | null;
+  hasAudio?: boolean;
+  alphaMode?: MediaAlphaMode;
+}
+
 interface VideoLoadFailureDetails {
   errorCode: number | null;
   errorType: string;
@@ -194,7 +203,10 @@ async function detectVideoFps(
 /**
  * Load a video blob and extract metadata + initial frame
  */
-export async function loadVideo(blob: Blob): Promise<VideoLoadResult> {
+export async function loadVideo(
+  blob: Blob,
+  options: VideoLoadOptions = {},
+): Promise<VideoLoadResult> {
   const video = document.createElement("video");
   video.muted = true;
   video.defaultMuted = true;
@@ -222,14 +234,19 @@ export async function loadVideo(blob: Blob): Promise<VideoLoadResult> {
     ctx.drawImage(video, 0, 0);
     initialFrame = await createImageBitmap(canvas);
 
-    await video.play().catch((e) => {
-      logger.error("Failed to autoplay video", e);
-    });
+    const startPlayback = options.startPlayback ?? true;
+    if (startPlayback) {
+      await video.play().catch((e) => {
+        logger.error("Failed to autoplay video", e);
+      });
+    }
 
     const [fps, hasAudio, alphaMode] = await Promise.all([
-      detectVideoFps(video),
-      import("#lib/audio-demux.ts").then(({ hasAudioTrack }) => hasAudioTrack(blob)),
-      probeVideoAlphaMode(blob),
+      options.fps !== undefined ? options.fps : startPlayback ? detectVideoFps(video) : null,
+      options.hasAudio !== undefined
+        ? options.hasAudio
+        : import("#lib/audio-demux.ts").then(({ hasAudioTrack }) => hasAudioTrack(blob)),
+      options.alphaMode !== undefined ? options.alphaMode : probeVideoAlphaMode(blob),
     ]);
 
     return {
@@ -746,9 +763,10 @@ export async function loadMediaFromBlob(
   mimeType: string,
   position: Point = { x: 0, y: 0 },
   filename?: string,
+  videoOptions?: VideoLoadOptions,
 ): Promise<(Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string }) | null> {
   if (isVideoMimeType(mimeType)) {
-    const videoResult = await loadVideo(blob);
+    const videoResult = await loadVideo(blob, videoOptions);
     return createVideoEntityData(videoResult, blob, position, filename);
   }
 

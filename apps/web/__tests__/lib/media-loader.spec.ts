@@ -77,4 +77,43 @@ describe("loadVideo", () => {
     expect(result.height).toBe(180);
     expect(result.initialFrame).toMatchObject({ width: 320, height: 180 });
   });
+
+  test("hydrates a hosted video paused and reuses persisted metadata", async () => {
+    const video = new EventTarget() as HTMLVideoElement;
+    let readyState = 0;
+    const play = vi.fn<() => Promise<void>>(async () => undefined);
+    Object.defineProperties(video, {
+      duration: { configurable: true, value: 12 },
+      readyState: { configurable: true, get: () => readyState },
+      src: {
+        configurable: true,
+        set: () => {
+          queueMicrotask(() => {
+            readyState = 2;
+            video.dispatchEvent(new Event("loadedmetadata"));
+            video.dispatchEvent(new Event("loadeddata"));
+          });
+        },
+      },
+      videoHeight: { configurable: true, value: 720 },
+      videoWidth: { configurable: true, value: 1280 },
+    });
+    video.play = play;
+
+    const createElement = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation(((tagName: string) => {
+      if (tagName.toLowerCase() === "video") return video;
+      return createElement(tagName);
+    }) as typeof document.createElement);
+
+    const result = await loadVideo(new Blob(["video"], { type: "video/mp4" }), {
+      alphaMode: "unknown",
+      fps: 30,
+      hasAudio: true,
+      startPlayback: false,
+    });
+
+    expect(play).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ alphaMode: "unknown", fps: 30, hasAudio: true });
+  });
 });

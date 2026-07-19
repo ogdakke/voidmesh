@@ -27,6 +27,7 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
   readonly #hashes = new WeakMap<Blob, Promise<string>>();
   readonly #uploadKeys = new WeakMap<Blob, string>();
   readonly #uploads = new WeakMap<Blob, Promise<HostedAssetReference>>();
+  readonly #uploadsByContentHash = new Map<string, Promise<HostedAssetReference>>();
   readonly #adoptedBlobs = new WeakMap<
     Blob,
     { needsThumbnail: boolean; reference: HostedAssetReference }
@@ -75,9 +76,20 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
     this.#references.delete(entity.id);
     let upload = this.#uploads.get(blob);
     if (!upload) {
-      upload = createHostedAssetThumbnail(entity).then((thumbnail) =>
-        this.#uploadOrQueue(blob, entity.name, entity.mediaSource.type, thumbnail, signal),
-      );
+      const contentHash = await this.#getContentHash(blob, signal);
+      signal.throwIfAborted();
+      upload = this.#uploadsByContentHash.get(contentHash);
+      if (!upload) {
+        upload = createHostedAssetThumbnail(entity).then((thumbnail) =>
+          this.#uploadOrQueue(blob, entity.name, entity.mediaSource.type, thumbnail, signal),
+        );
+        this.#uploadsByContentHash.set(contentHash, upload);
+        void upload.catch(() => {
+          if (this.#uploadsByContentHash.get(contentHash) === upload) {
+            this.#uploadsByContentHash.delete(contentHash);
+          }
+        });
+      }
       this.#uploads.set(blob, upload);
     }
     let reference: HostedAssetReference;
@@ -181,11 +193,7 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
       idempotencyKey = crypto.randomUUID();
       this.#uploadKeys.set(blob, idempotencyKey);
     }
-    let contentHash = this.#hashes.get(blob);
-    if (!contentHash) {
-      contentHash = sha256Blob(blob, signal);
-      this.#hashes.set(blob, contentHash);
-    }
+    const contentHash = this.#getContentHash(blob, signal);
     const grant = await this.#api.reserveAssetUpload(
       this.#workspaceId,
       {
@@ -221,6 +229,15 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
     void this.#cache.put(finalized.asset.id, blob).catch(this.#onCacheError);
     this.#onUploadComplete();
     return finalized.asset;
+  }
+
+  #getContentHash(blob: Blob, signal: AbortSignal): Promise<string> {
+    let contentHash = this.#hashes.get(blob);
+    if (!contentHash) {
+      contentHash = sha256Blob(blob, signal);
+      this.#hashes.set(blob, contentHash);
+    }
+    return contentHash;
   }
 
   async #uploadOrQueue(
