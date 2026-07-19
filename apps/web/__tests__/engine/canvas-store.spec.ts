@@ -219,6 +219,36 @@ describe("canvasStore.seekVideo", () => {
 
     expect(entity.textureDirty).toBe(true);
   });
+
+  test("updates logical time without opening a dormant decoder", () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
+    if (entity.mediaSource.type !== "video") throw new Error("Expected video entity");
+    entity.mediaSource.videoElement.removeAttribute("src");
+    canvasStore.addEntity(entity);
+
+    canvasStore.seekVideo(entity.id, 50);
+
+    expect(entity.mediaSource.videoElement.currentTime).toBe(0);
+    expect(entity.playback?.currentTime).toBe(50);
+  });
+});
+
+describe("canvasStore.playVideo", () => {
+  test("activates a dormant decoder at its logical playback time", async () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
+    if (entity.mediaSource.type !== "video" || !entity.playback) {
+      throw new Error("Expected video entity with playback");
+    }
+    entity.mediaSource.videoElement.removeAttribute("src");
+    entity.playback.currentTime = 24;
+    canvasStore.addEntity(entity);
+
+    await canvasStore.playVideo(entity.id);
+
+    expect(entity.mediaSource.videoElement.src).toMatch(/^blob:mock-/);
+    expect(entity.mediaSource.videoElement.currentTime).toBe(24);
+    expect(entity.playback.isPlaying).toBe(true);
+  });
 });
 
 describe("canvasStore video audio controls", () => {
@@ -348,6 +378,24 @@ describe("canvasStore.pauseVideo", () => {
 
     expect(previousClose).toHaveBeenCalledOnce();
     expect(entity.textureDirty).toBe(true);
+  });
+
+  test("preserves logical time and the poster while the decoder is dormant", () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
+    if (entity.mediaSource.type !== "video" || !entity.playback) {
+      throw new Error("Expected video entity with playback");
+    }
+    entity.mediaSource.videoElement.removeAttribute("src");
+    entity.playback.currentTime = 24;
+    entity.playback.isPlaying = true;
+    const poster = entity.imageBitmap;
+    canvasStore.addEntity(entity);
+
+    canvasStore.pauseVideo(entity.id);
+
+    expect(entity.playback.currentTime).toBe(24);
+    expect(entity.playback.isPlaying).toBe(false);
+    expect(entity.imageBitmap).toBe(poster);
   });
 });
 

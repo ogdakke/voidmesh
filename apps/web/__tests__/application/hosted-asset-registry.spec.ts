@@ -87,6 +87,37 @@ describe("R2HostedAssetRegistry", () => {
     vi.unstubAllGlobals();
   });
 
+  it("reuses the same stored asset when the media library adds another canvas entity", async () => {
+    const blob = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
+    const reference: HostedAssetReference = {
+      byteLength: blob.size,
+      contentHash: "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+      contentType: blob.type,
+      id: "asset-existing",
+      mediaType: "image",
+      originalFilename: "existing.png",
+    };
+    const api = {
+      reserveAssetUpload: vi.fn<HostedApiClient["reserveAssetUpload"]>(),
+    } as unknown as HostedApiClient;
+    const registry = new R2HostedAssetRegistry(
+      api,
+      "workspace-1",
+      new MemoryAssetCache(),
+      vi.fn<(error: unknown) => void>(),
+      vi.fn<() => void>(),
+    );
+    registry.adoptBlob(reference, blob, false);
+
+    const registered = await registry.register(
+      { ...runtimeEntity(blob, "existing.png"), id: "entity-copy" },
+      new AbortController().signal,
+    );
+
+    expect(registered).toBe(reference);
+    expect(api.reserveAssetUpload).not.toHaveBeenCalled();
+  });
+
   it("reuses one upload for distinct blobs with identical content", async () => {
     const firstBlob = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
     const secondBlob = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });

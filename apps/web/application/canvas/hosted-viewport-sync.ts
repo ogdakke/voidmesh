@@ -3,8 +3,10 @@ import type {
   WorkspaceViewStateResponse,
 } from "@voidmesh/api-contract";
 import type { Viewport } from "#types/canvas.ts";
+import { clampZoom } from "#lib/canvas-math.ts";
 
 const SAVE_DELAY_MS = 600;
+const MAX_PERSISTED_OFFSET = 100_000_000;
 
 export interface HostedViewportStore {
   getViewport(): Viewport;
@@ -47,10 +49,12 @@ export class HostedViewportSync {
       ]);
       if (this.#destroyed) return;
       if (viewState) {
-        this.#store.setViewport({
-          offset: { ...viewState.offset },
-          zoom: viewState.zoom,
-        });
+        this.#store.setViewport(
+          normalizeViewport({
+            offset: { ...viewState.offset },
+            zoom: viewState.zoom,
+          }),
+        );
       }
     } catch (error) {
       this.#onError(error);
@@ -62,7 +66,7 @@ export class HostedViewportSync {
   flush(keepalive = false): void {
     if (this.#saveTimer) clearTimeout(this.#saveTimer);
     this.#saveTimer = null;
-    const viewport = this.#store.getViewport();
+    const viewport = normalizeViewport(this.#store.getViewport());
     void this.#remote
       .save({ offset: { ...viewport.offset }, zoom: viewport.zoom }, keepalive)
       .catch(this.#onError);
@@ -80,4 +84,14 @@ export class HostedViewportSync {
     if (this.#saveTimer) clearTimeout(this.#saveTimer);
     this.#saveTimer = setTimeout(() => this.flush(), SAVE_DELAY_MS);
   }
+}
+
+function normalizeViewport(viewport: Viewport): Viewport {
+  return {
+    offset: {
+      x: Math.max(-MAX_PERSISTED_OFFSET, Math.min(MAX_PERSISTED_OFFSET, viewport.offset.x)),
+      y: Math.max(-MAX_PERSISTED_OFFSET, Math.min(MAX_PERSISTED_OFFSET, viewport.offset.y)),
+    },
+    zoom: clampZoom(viewport.zoom),
+  };
 }

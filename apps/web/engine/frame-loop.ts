@@ -1,4 +1,9 @@
 import type { AnimationScheduler } from "#lib/animation-scheduler.ts";
+import {
+  activateVideoElement,
+  hasActiveVideoSource,
+  suspendVideoElement,
+} from "#lib/media-resources.ts";
 import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import {
   canvasStore,
@@ -84,6 +89,8 @@ export class FrameLoop {
   readonly #videoPlaybackCandidates: ShaderCanvasEntity[] = [];
   readonly #admittedVideoIds = new Set<string>();
   readonly #budgetSuspendedVideoIds = new Set<string>();
+  readonly #resumingVideoIds = new Set<string>();
+  readonly #resumeFailedVideoIds = new Set<string>();
   #continuousShaderEntities = new Map<string, ShaderCanvasEntity>();
 
   constructor(deps: FrameLoopDeps, callbacks: FrameLoopCallbacks) {
@@ -169,7 +176,7 @@ export class FrameLoop {
       !this.#firstFrameRendered ||
       canvasStore.hasRenderChanges() ||
       hasAnimatedFrameUpdate ||
-      this.#continuousShaderEntities.size > 0 ||
+      this.#hasVisibleContinuousShader(canvasStore.getState().viewport) ||
       this.#deps.scheduler.hasActive ||
       this.#callbacks.isPointerDragging() ||
       this.#callbacks.isDragSelectActive() ||
@@ -296,14 +303,20 @@ export class FrameLoop {
     for (const entityId of this.#budgetSuspendedVideoIds) {
       if (!this.#playingVideos.has(entityId)) this.#budgetSuspendedVideoIds.delete(entityId);
     }
+    for (const entityId of this.#resumeFailedVideoIds) {
+      if (!this.#playingVideos.has(entityId)) this.#resumeFailedVideoIds.delete(entityId);
+    }
   }
 
   #suspendOrAdvanceVideo(entity: ShaderCanvasEntity, deltaSeconds: number): void {
     if (entity.mediaSource.type !== MediaType.video || !entity.playback) return;
     const video = entity.mediaSource.videoElement;
     if (!this.#budgetSuspendedVideoIds.has(entity.id)) {
-      entity.playback.currentTime = video.currentTime;
-      video.pause();
+      if (hasActiveVideoSource(video)) {
+        entity.playback.currentTime = video.currentTime;
+        suspendVideoElement(video);
+        canvasStore.markEntityTextureDirty(entity.id);
+      }
       this.#budgetSuspendedVideoIds.add(entity.id);
       return;
     }
@@ -318,16 +331,46 @@ export class FrameLoop {
   }
 
   #resumeBudgetSuspendedVideo(entity: ShaderCanvasEntity): void {
-    if (
-      entity.mediaSource.type !== MediaType.video ||
-      !entity.playback ||
-      !this.#budgetSuspendedVideoIds.delete(entity.id)
-    ) {
+    if (entity.mediaSource.type !== MediaType.video || !entity.playback) return;
+    const video = entity.mediaSource.videoElement;
+    if (hasActiveVideoSource(video) && !video.paused) {
+      this.#budgetSuspendedVideoIds.delete(entity.id);
       return;
     }
-    const video = entity.mediaSource.videoElement;
-    video.currentTime = entity.playback.currentTime;
-    void video.play().catch(this.#callbacks.onVideoPlaybackError);
+    if (this.#resumingVideoIds.has(entity.id) || this.#resumeFailedVideoIds.has(entity.id)) return;
+    this.#resumingVideoIds.add(entity.id);
+    const expectedEntity = entity;
+    void activateVideoElement(video, entity.mediaSource.blob)
+      .then(async () => {
+        if (
+          canvasStore.getState().entities.get(entity.id) !== expectedEntity ||
+          !this.#admittedVideoIds.has(entity.id)
+        ) {
+          suspendVideoElement(video);
+          return;
+        }
+        video.currentTime = entity.playback!.currentTime;
+        video.loop = entity.playback!.loop;
+        video.muted = entity.playback!.muted;
+        video.playbackRate = entity.playback!.playbackRate;
+        video.volume = entity.playback!.volume;
+        await video.play();
+        this.#budgetSuspendedVideoIds.delete(entity.id);
+        this.#resumeFailedVideoIds.delete(entity.id);
+        canvasStore.markEntityTextureDirty(entity.id);
+      })
+      .catch((error) => {
+        this.#resumeFailedVideoIds.add(entity.id);
+        this.#callbacks.onVideoPlaybackError(error);
+      })
+      .finally(() => this.#resumingVideoIds.delete(entity.id));
+  }
+
+  #hasVisibleContinuousShader(viewport: Viewport): boolean {
+    for (const entity of this.#continuousShaderEntities.values()) {
+      if (this.#renderer?.isEntityVisible(entity, viewport) ?? true) return true;
+    }
+    return false;
   }
 
   #consumeVideoFrameUpdate(

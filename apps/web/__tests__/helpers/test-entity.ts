@@ -253,6 +253,14 @@ function createMockVideoElement(options: {
 
     load: function () {},
 
+    getAttribute: function (name: string) {
+      return name === "src" ? this.src : null;
+    },
+
+    removeAttribute: function (name: string) {
+      if (name === "src") this.src = "";
+    },
+
     addEventListener: function (
       type: string,
       listener: EventListener,

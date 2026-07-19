@@ -19,6 +19,8 @@ import { getFrameAtTime } from "#lib/gif-decoder.ts";
 import { completeOnboardingStarterSelectionFromEvent } from "#lib/onboarding-runtime.ts";
 import { EntitySpatialIndex } from "#lib/entity-spatial-index.ts";
 import { CanvasLensing } from "#types/enums.ts";
+import { releaseImageAsset } from "#lib/media-assets.ts";
+import { activateVideoElement, hasActiveVideoSource } from "#lib/media-resources.ts";
 
 export type DragSelectMode = "replace" | "additive" | "subtractive";
 
@@ -1093,8 +1095,13 @@ export class CanvasStore extends Store<CanvasState> {
     const entity = this.state.entities.get(entityId);
     if (!entity || entity.mediaSource.type !== MediaType.video) return;
 
-    const video = entity.mediaSource.videoElement;
+    const mediaSource = entity.mediaSource;
+    const video = mediaSource.videoElement;
+    await activateVideoElement(video, mediaSource.blob);
     this.#syncVideoElementPlayback(entity);
+    if (entity.playback) {
+      video.currentTime = Math.max(0, Math.min(entity.playback.currentTime, mediaSource.duration));
+    }
     await video.play();
 
     if (entity.playback) {
@@ -1135,34 +1142,41 @@ export class CanvasStore extends Store<CanvasState> {
     const entity = this.state.entities.get(entityId);
     if (!entity || entity.mediaSource.type !== MediaType.video) return;
 
-    const video = entity.mediaSource.videoElement;
+    const mediaSource = entity.mediaSource;
+    const video = mediaSource.videoElement;
+    const hasDecoder = hasActiveVideoSource(video);
     video.pause();
 
     if (entity.playback) {
       entity.playback.isPlaying = false;
-      entity.playback.currentTime = video.currentTime;
+      if (hasDecoder) entity.playback.currentTime = video.currentTime;
     }
 
     // Snapshot current frame for static display
-    const width = video.videoWidth || entity.originalSize.width;
-    const height = video.videoHeight || entity.originalSize.height;
-    const canvas = new OffscreenCanvas(width, height);
-    const ctx = canvas.getContext("2d");
-    if (ctx) {
-      ctx.drawImage(video, 0, 0, width, height);
-      const previousBitmap = entity.imageBitmap;
-      createImageBitmap(canvas)
-        .then((bitmap) => {
-          if (this.state.entities.get(entityId) !== entity) {
-            bitmap.close();
-            return;
-          }
-          entity.imageBitmap = bitmap;
-          previousBitmap.close();
-          entity.textureDirty = true;
-          this.state.entitiesDirty.add(entityId);
-        })
-        .catch((e) => logger.error(e));
+    if (hasDecoder) {
+      const width = video.videoWidth || entity.originalSize.width;
+      const height = video.videoHeight || entity.originalSize.height;
+      const canvas = new OffscreenCanvas(width, height);
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.drawImage(video, 0, 0, width, height);
+        const previousBitmap = entity.imageBitmap;
+        createImageBitmap(canvas)
+          .then((bitmap) => {
+            if (this.state.entities.get(entityId) !== entity) {
+              bitmap.close();
+              return;
+            }
+            entity.imageBitmap = bitmap;
+            if (mediaSource.posterAsset) {
+              releaseImageAsset(mediaSource.posterAsset);
+              mediaSource.posterAsset = undefined;
+            } else previousBitmap.close();
+            entity.textureDirty = true;
+            this.state.entitiesDirty.add(entityId);
+          })
+          .catch((e) => logger.error(e));
+      }
     }
 
     this.state.entitiesDirty.add(entityId);
@@ -1178,10 +1192,11 @@ export class CanvasStore extends Store<CanvasState> {
     const entity = this.state.entities.get(entityId);
     if (!entity || entity.mediaSource.type !== MediaType.video) return;
 
-    const video = entity.mediaSource.videoElement;
+    const mediaSource = entity.mediaSource;
+    const video = mediaSource.videoElement;
     // Clamp to valid range
-    const clampedTime = Math.max(0, Math.min(time, video.duration || 0));
-    video.currentTime = clampedTime;
+    const clampedTime = Math.max(0, Math.min(time, mediaSource.duration));
+    if (hasActiveVideoSource(video)) video.currentTime = clampedTime;
 
     if (entity.playback) {
       entity.playback.currentTime = clampedTime;

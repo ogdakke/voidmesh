@@ -10,7 +10,7 @@ import type {
   HostedWorkspaceEntity,
 } from "#lib/hosted-workspace-document.ts";
 import { ShaderType } from "#types/canvas.ts";
-import { mockAllMediaAPIs } from "../mocks/media.mock.ts";
+import { createMockVideoElement, mockAllMediaAPIs } from "../mocks/media.mock.ts";
 
 function hostedEntity(id: string, asset: HostedAssetReference): HostedWorkspaceEntity {
   return {
@@ -235,6 +235,85 @@ describe("HostedCanvasProjectionService", () => {
 
     expect(get).toHaveBeenCalledOnce();
     projection.removeRemoteEntities(["entity-copy-1", "entity-copy-2"]);
+  });
+
+  it("restores 31 video entities from seven stored files without eagerly opening 31 decoders", async () => {
+    const remoteVideos = Array.from({ length: 31 }, (_, index) => {
+      const storedFileIndex = index % 7;
+      const asset: HostedAssetReference = {
+        byteLength: 1,
+        contentHash: storedFileIndex.toString(16).repeat(64),
+        contentType: "video/mp4",
+        id: `video-copy-${index}`,
+        mediaType: "video",
+        originalFilename: `copy-${index}.mp4`,
+      };
+      return {
+        applyPlayback: false,
+        entity: {
+          ...hostedEntity(`video-entity-${index}`, asset),
+          fps: 30,
+          hasAudio: false,
+        },
+      };
+    });
+    const cache: HostedAssetCache = {
+      delete: async () => {},
+      get: vi.fn<HostedAssetCache["get"]>(async (_assetId, contentType) =>
+        Promise.resolve(new Blob([new Uint8Array([1])], { type: contentType })),
+      ),
+      put: async () => {},
+    };
+    const originalCreateElement = document.createElement.bind(document);
+    const videoElements: HTMLVideoElement[] = [];
+    vi.spyOn(document, "createElement").mockImplementation(((tagName: string) => {
+      if (tagName !== "video") return originalCreateElement(tagName);
+      const video = createMockVideoElement({ videoHeight: 180, videoWidth: 320 });
+      videoElements.push(video);
+      return video;
+    }) as typeof document.createElement);
+    const api = {} as HostedApiClient;
+    const assets = new R2HostedAssetRegistry(
+      api,
+      "workspace-1",
+      cache,
+      vi.fn<(error: unknown) => void>(),
+      vi.fn<() => void>(),
+    );
+    const store = new CanvasStore();
+    const projection = new HostedCanvasProjectionService({
+      api,
+      assets,
+      cache,
+      onError: (error) => {
+        throw error;
+      },
+      requestRender: () => {},
+      store,
+      workspaceId: "workspace-1",
+    });
+
+    await projection.applyRemoteEntities(remoteVideos);
+
+    const projectedVideos = [...store.getState().entities.values()].map(({ id, mediaSource }) => {
+      if (mediaSource.type !== "video") throw new Error("Expected projected video");
+      return { id, mediaSource };
+    });
+    expect(cache.get).toHaveBeenCalledTimes(7);
+    expect(projectedVideos).toHaveLength(31);
+    expect(videoElements).toHaveLength(38);
+    expect(
+      new Set(projectedVideos.map(({ mediaSource }) => mediaSource.videoElement)),
+    ).toHaveLength(31);
+    expect(new Set(projectedVideos.map(({ mediaSource }) => mediaSource.posterAsset))).toHaveLength(
+      7,
+    );
+    expect(projectedVideos.every(({ mediaSource }) => mediaSource.videoElement.src === "")).toBe(
+      true,
+    );
+
+    projection.removeRemoteEntities(projectedVideos.map(({ id }) => id));
+    projection.destroy();
   });
 
   it("reports one aggregate error for a failed workspace batch", async () => {

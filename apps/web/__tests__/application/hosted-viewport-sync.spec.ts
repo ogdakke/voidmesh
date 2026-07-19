@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { HostedViewportSync } from "#application/canvas/hosted-viewport-sync.ts";
+import {
+  HostedViewportSync,
+  type HostedViewportRemote,
+} from "#application/canvas/hosted-viewport-sync.ts";
 import type { Viewport } from "#types/canvas.ts";
 
 afterEach(() => vi.useRealTimers());
@@ -9,11 +12,11 @@ describe("HostedViewportSync", () => {
     vi.useFakeTimers();
     let viewport: Viewport = { offset: { x: 0, y: 0 }, zoom: 1 };
     const listeners = new Set<() => void>();
-    const save = vi.fn().mockResolvedValue(undefined);
+    const save = vi.fn<HostedViewportRemote["save"]>().mockResolvedValue(undefined);
     const sync = new HostedViewportSync({
-      onError: vi.fn(),
+      onError: vi.fn<(error: unknown) => void>(),
       remote: {
-        load: vi.fn().mockResolvedValue({
+        load: vi.fn<HostedViewportRemote["load"]>().mockResolvedValue({
           viewState: { offset: { x: 12, y: -8 }, updatedAt: 1_000, zoom: 2.5 },
         }),
         save,
@@ -46,10 +49,13 @@ describe("HostedViewportSync", () => {
     vi.useFakeTimers();
     let viewport: Viewport = { offset: { x: 1, y: 2 }, zoom: 1.25 };
     let listener = () => {};
-    const save = vi.fn().mockResolvedValue(undefined);
+    const save = vi.fn<HostedViewportRemote["save"]>().mockResolvedValue(undefined);
     const sync = new HostedViewportSync({
-      onError: vi.fn(),
-      remote: { load: vi.fn().mockResolvedValue({ viewState: null }), save },
+      onError: vi.fn<(error: unknown) => void>(),
+      remote: {
+        load: vi.fn<HostedViewportRemote["load"]>().mockResolvedValue({ viewState: null }),
+        save,
+      },
       store: {
         getViewport: () => viewport,
         setViewport: (next) => {
@@ -67,6 +73,38 @@ describe("HostedViewportSync", () => {
     listener();
     sync.flush(true);
     expect(save).toHaveBeenCalledWith({ offset: { x: 1, y: 2 }, zoom: 1.25 }, true);
+    sync.destroy();
+  });
+
+  it("persists the legal camera bounds instead of transient rubber-band values", async () => {
+    let viewport: Viewport = {
+      offset: { x: 150_000_000, y: -150_000_000 },
+      zoom: 0.005,
+    };
+    const save = vi.fn<HostedViewportRemote["save"]>().mockResolvedValue(undefined);
+    const sync = new HostedViewportSync({
+      onError: vi.fn<(error: unknown) => void>(),
+      remote: {
+        load: vi.fn<HostedViewportRemote["load"]>().mockResolvedValue({ viewState: null }),
+        save,
+      },
+      store: {
+        getViewport: () => viewport,
+        setViewport: (next) => {
+          viewport = next;
+        },
+        subscribeViewport: () => () => {},
+        whenViewportInitialized: () => Promise.resolve(),
+      },
+    });
+
+    await sync.start();
+    sync.flush();
+
+    expect(save).toHaveBeenCalledWith(
+      { offset: { x: 100_000_000, y: -100_000_000 }, zoom: 0.01 },
+      false,
+    );
     sync.destroy();
   });
 });

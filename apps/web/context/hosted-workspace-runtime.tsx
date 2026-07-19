@@ -108,7 +108,7 @@ export function HostedWorkspaceRuntime({
           title: "Playback needs a click",
         }),
       onCacheError: reportCacheError,
-      onError: reportError,
+      onError: reportMediaError,
       requestRender: (entityId) => {
         requestAnimationFrame(() => {
           if (entityId) canvasStore.markEntityTextureDirty(entityId);
@@ -183,6 +183,7 @@ export function HostedWorkspaceRuntime({
       window.removeEventListener("pagehide", flushViewport);
       viewportSync.destroy();
       sync?.destroy();
+      projection.destroy();
       provider.destroy();
       releaseUndoDelegate();
       document.destroy();
@@ -311,6 +312,15 @@ function reportError(error: unknown): void {
 
 function reportCacheError(error: unknown): void {
   logger.warn("Hosted workspace cache error", error);
+}
+
+function reportMediaError(error: unknown): void {
+  logger.error("Hosted workspace media error", error);
+  toastManager.add({
+    description: error instanceof Error ? error.message : "Unexpected hosted media error",
+    title: "Media could not be loaded",
+    type: "destructive",
+  });
 }
 
 function reportBatchErrors(

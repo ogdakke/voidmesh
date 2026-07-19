@@ -440,6 +440,8 @@ export interface AlphaHitGrid {
 export type MediaSourceVideo = {
   type: typeof MediaType.video;
   videoElement: HTMLVideoElement;
+  /** Shared fallback frame used while an off-screen decoder is dormant. */
+  posterAsset?: MediaImageAsset;
   /** Original source data for lossless duplication */
   blob: Blob;
   duration: number;

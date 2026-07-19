@@ -77,6 +77,7 @@ export function clampZoom(
  * @returns Damped offset that asymptotically approaches `range`
  */
 const RUBBER_BAND_COEFFICIENT = 0.55;
+const ZOOM_RUBBER_BAND_RANGE = Math.log(2);
 
 function rubberBandOffset(offset: number, range: number): number {
   if (offset <= 0 || range <= 0) return 0;
@@ -95,17 +96,15 @@ export function rubberBandZoom(
 ): number {
   if (zoom >= min && zoom <= max) return zoom;
 
-  const logRange = Math.log(max) - Math.log(min);
-
   if (zoom > max) {
     const overshoot = Math.log(zoom) - Math.log(max);
-    const damped = rubberBandOffset(overshoot, logRange);
+    const damped = rubberBandOffset(overshoot, ZOOM_RUBBER_BAND_RANGE);
     return Math.exp(Math.log(max) + damped);
   }
 
   // zoom < min
   const overshoot = Math.log(min) - Math.log(zoom);
-  const damped = rubberBandOffset(overshoot, logRange);
+  const damped = rubberBandOffset(overshoot, ZOOM_RUBBER_BAND_RANGE);
   return Math.exp(Math.log(min) - damped);
 }
 

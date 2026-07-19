@@ -173,8 +173,8 @@ export const gameLoop = new GameLoop(
   mobileVideoPlayback
     ? {
         // Mobile WebKit exhausts its media pipeline when a zoomed-out workspace starts dozens of
-        // physical decoders. Logical playback keeps advancing while tiny/overflow videos are paused.
-        maxActiveVideoElements: 4,
+        // tiny physical decoders. Visible videos retain normal independent playback semantics.
+        maxActiveVideoElements: Number.POSITIVE_INFINITY,
         minActiveVideoScreenEdge: 48,
       }
     : undefined,

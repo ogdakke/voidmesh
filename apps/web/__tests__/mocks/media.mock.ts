@@ -167,9 +167,13 @@ export function createMockVideoElement(options?: {
     duration,
     videoWidth,
     videoHeight,
+    readyState: 4,
     paused: true,
+    defaultMuted: true,
+    muted: true,
     loop: false,
     playbackRate: 1,
+    volume: 1,
     play: async function (this: Record<string, unknown>) {
       this.paused = false;
     },
@@ -177,6 +181,12 @@ export function createMockVideoElement(options?: {
       this.paused = true;
     },
     load: function () {},
+    getAttribute: function (this: Record<string, unknown>, name: string) {
+      return name === "src" ? this.src : null;
+    },
+    removeAttribute: function (this: Record<string, unknown>, name: string) {
+      if (name === "src") this.src = "";
+    },
     addEventListener: () => {},
     removeEventListener: () => {},
   };

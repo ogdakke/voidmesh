@@ -143,6 +143,54 @@ describe("Render loop errors", () => {
 });
 
 describe("Animated media render scheduling", () => {
+  test("activates a dormant video when its entity becomes visible", async () => {
+    const loop = new GameLoop(deps, {
+      maxActiveVideoElements: Number.POSITIVE_INFINITY,
+      minActiveVideoScreenEdge: 0,
+    });
+    loop.setContainer(createMockContainer());
+    const renderer = createLoopRenderer(true);
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:activated");
+    const entity = createTestEntity({ id: "dormant-video", mediaType: "video" });
+    if (entity.mediaSource.type !== "video" || !entity.playback) {
+      throw new Error("Expected a video test entity");
+    }
+    const { blob, videoElement } = entity.mediaSource;
+    videoElement.removeAttribute("src");
+    entity.playback.isPlaying = true;
+    canvasStore.addEntity(entity);
+
+    loop.setRenderer(renderer);
+    loop.start();
+    await vi.waitFor(() => expect(videoElement.paused).toBe(false));
+
+    expect(createObjectURL).toHaveBeenCalledWith(blob);
+    expect(videoElement.src).toBe("blob:activated");
+    loop.stop();
+  });
+
+  test("does not render continuously for off-screen time shaders", () => {
+    let nextFrame: FrameRequestCallback | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      nextFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const renderer = createLoopRenderer(false);
+    vi.mocked(renderer.needsContinuousRenderForEntity).mockReturnValue(true);
+    canvasStore.addEntity(createTestEntity({ id: "offscreen-time-shader" }));
+
+    gl.setRenderer(renderer);
+    gl.start();
+    expect(renderer.render).toHaveBeenCalledOnce();
+    if (!nextFrame) throw new Error("Expected another animation frame");
+    (nextFrame as FrameRequestCallback)(performance.now());
+
+    expect(renderer.render).toHaveBeenCalledOnce();
+  });
+
   test("limits physical video playback while preserving the logical mobile workload", async () => {
     const mobileLoop = new GameLoop(deps, {
       maxActiveVideoElements: 4,

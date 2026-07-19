@@ -6,9 +6,20 @@ import type {
 } from "#application/canvas/hosted-canvas-sync.ts";
 import { R2HostedAssetRegistry } from "#application/canvas/hosted-asset-registry.ts";
 import { HostedApiClient } from "#lib/hosted-api-client.ts";
-import { loadMediaFromBlob } from "#lib/media-loader.ts";
-import { getImageAssetReferenceCount, retainImageAsset } from "#lib/media-assets.ts";
-import { disposeEntityMedia, disposeMediaSource } from "#lib/media-resources.ts";
+import { loadMediaFromBlob, loadVideo } from "#lib/media-loader.ts";
+import {
+  createImageAsset,
+  getImageAssetReferenceCount,
+  releaseImageAsset,
+  retainImageAsset,
+} from "#lib/media-assets.ts";
+import {
+  createDormantVideoElement,
+  disposeEntityMedia,
+  disposeMediaSource,
+  disposeVideoElement,
+  hasActiveVideoSource,
+} from "#lib/media-resources.ts";
 import type { HostedWorkspaceEntity } from "#lib/hosted-workspace-document.ts";
 import type { HostedAssetCache } from "#lib/hosted-asset-cache.ts";
 import {
@@ -25,6 +36,19 @@ const MAX_CONCURRENT_REMOTE_ASSET_LOADS = 4;
 interface StagedRemoteEntity extends HostedRemoteEntityProjection {
   media: Pick<ShaderCanvasEntity, "imageBitmap" | "mediaSource">;
   revision: number;
+}
+
+interface HostedVideoTemplate {
+  alphaMode: Extract<
+    ShaderCanvasEntity,
+    { mediaSource: { type: "video" } }
+  >["mediaSource"]["alphaMode"];
+  blob: Blob;
+  duration: number;
+  fps: number | null;
+  hasAudio: boolean;
+  posterAsset: MediaImageAsset;
+  released: boolean;
 }
 
 export interface HostedCanvasProjectionOptions {
@@ -53,6 +77,7 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
   readonly #workspaceId: WorkspaceId;
   readonly #assetBlobs = new Map<string, Promise<Blob>>();
   readonly #sharedImages = new Map<string, MediaImageAsset>();
+  readonly #videoTemplates = new Map<string, Promise<HostedVideoTemplate>>();
   readonly #entityAssets = new Map<string, string>();
   readonly #entityBlobKeys = new Map<string, string>();
   readonly #blobEntityCounts = new Map<string, number>();
@@ -70,6 +95,11 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     this.#requestRender = options.requestRender;
     this.#store = options.store;
     this.#workspaceId = options.workspaceId;
+  }
+
+  destroy(): void {
+    for (const pending of this.#videoTemplates.values()) this.#releaseVideoTemplate(pending);
+    this.#videoTemplates.clear();
   }
 
   async applyRemoteEntity(entity: HostedWorkspaceEntity, applyPlayback: boolean): Promise<void> {
@@ -252,6 +282,23 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
   async #loadMedia(
     entity: HostedWorkspaceEntity,
   ): Promise<Pick<ShaderCanvasEntity, "imageBitmap" | "mediaSource">> {
+    if (entity.asset.mediaType === MediaType.video) {
+      const template = await this.#getVideoTemplate(entity);
+      retainImageAsset(template.posterAsset);
+      return {
+        imageBitmap: template.posterAsset.imageBitmap,
+        mediaSource: {
+          alphaMode: template.alphaMode,
+          blob: template.blob,
+          duration: template.duration,
+          fps: template.fps,
+          hasAudio: template.hasAudio,
+          posterAsset: template.posterAsset,
+          type: MediaType.video,
+          videoElement: createDormantVideoElement(),
+        },
+      };
+    }
     const shared = this.#sharedImages.get(entity.asset.id);
     if (shared) {
       retainImageAsset(shared);
@@ -266,14 +313,6 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
       entity.asset.contentType,
       entity.position,
       entity.name,
-      entity.asset.mediaType === MediaType.video
-        ? {
-            alphaMode: "unknown",
-            fps: entity.fps,
-            hasAudio: entity.hasAudio,
-            startPlayback: false,
-          }
-        : undefined,
     );
     if (!loaded) throw new Error(`Unable to decode hosted asset ${entity.name}`);
     const media = { imageBitmap: loaded.imageBitmap, mediaSource: loaded.mediaSource };
@@ -281,6 +320,43 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
       this.#sharedImages.set(entity.asset.id, media.mediaSource.asset);
     }
     return media;
+  }
+
+  #getVideoTemplate(entity: HostedWorkspaceEntity): Promise<HostedVideoTemplate> {
+    const blobKey = entity.asset.contentHash ?? entity.asset.id;
+    let pending = this.#videoTemplates.get(blobKey);
+    if (pending) return pending;
+    pending = this.#createVideoTemplate(entity);
+    this.#videoTemplates.set(blobKey, pending);
+    void pending.catch(() => {
+      if (this.#videoTemplates.get(blobKey) === pending) this.#videoTemplates.delete(blobKey);
+    });
+    return pending;
+  }
+
+  async #createVideoTemplate(entity: HostedWorkspaceEntity): Promise<HostedVideoTemplate> {
+    const blob = await this.#getAssetBlob(entity);
+    const loaded = await loadVideo(blob, {
+      alphaMode: "unknown",
+      fps: entity.fps,
+      hasAudio: entity.hasAudio,
+      startPlayback: false,
+    });
+    const posterAsset = createImageAsset({
+      alphaMode: loaded.alphaMode,
+      blob,
+      imageBitmap: loaded.initialFrame,
+    });
+    disposeVideoElement(loaded.videoElement);
+    return {
+      alphaMode: loaded.alphaMode,
+      blob,
+      duration: loaded.duration,
+      fps: loaded.fps,
+      hasAudio: loaded.hasAudio,
+      posterAsset,
+      released: false,
+    };
   }
 
   #getAssetBlob(entity: HostedWorkspaceEntity): Promise<Blob> {
@@ -324,6 +400,10 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
       video.playbackRate = playback.playbackRate;
       video.muted = playback.muted;
       video.volume = playback.volume;
+      if (!hasActiveVideoSource(video)) {
+        if (!playback.isPlaying) this.#autoplayBlocked.delete(current.id);
+        return;
+      }
       if (
         playbackDistance(video.currentTime, playback.currentTime, video.duration, playback.loop) >=
         PLAYBACK_DRIFT_TOLERANCE_SECONDS
@@ -393,6 +473,22 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     }
     this.#blobEntityCounts.delete(blobKey);
     this.#assetBlobs.delete(blobKey);
+    const template = this.#videoTemplates.get(blobKey);
+    if (template) {
+      this.#videoTemplates.delete(blobKey);
+      this.#releaseVideoTemplate(template);
+    }
+  }
+
+  #releaseVideoTemplate(pending: Promise<HostedVideoTemplate>): void {
+    void pending.then(
+      (template) => {
+        if (template.released) return;
+        template.released = true;
+        releaseImageAsset(template.posterAsset);
+      },
+      () => {},
+    );
   }
 
   #bumpRevision(entityId: string): number {
@@ -407,10 +503,11 @@ function groupProjectionIndicesByAsset(
 ): number[][] {
   const groupsByAsset = new Map<string, number[]>();
   for (let index = 0; index < entries.length; index++) {
-    const assetId = entries[index]!.entity.asset.id;
-    const group = groupsByAsset.get(assetId);
+    const assetId = entries[index]!.entity.asset;
+    const key = assetId.contentHash ?? assetId.id;
+    const group = groupsByAsset.get(key);
     if (group) group.push(index);
-    else groupsByAsset.set(assetId, [index]);
+    else groupsByAsset.set(key, [index]);
   }
   return [...groupsByAsset.values()];
 }
