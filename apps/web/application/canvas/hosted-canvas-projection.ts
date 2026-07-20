@@ -1,12 +1,17 @@
-import type { WorkspaceId } from "@voidmesh/domain";
-import type { CanvasEntityUpdate, CanvasStore } from "#engine";
 import type {
-  HostedCanvasProjection,
-  HostedRemoteEntityProjection,
-} from "#application/canvas/hosted-canvas-sync.ts";
+  HostedAssetReference,
+  HostedEntityPatch,
+  HostedPlaybackAnchor,
+  HostedSceneChange,
+  HostedSceneEntity,
+} from "@voidmesh/collaboration";
+import type { WorkspaceId } from "@voidmesh/domain";
+import type { CanvasStore } from "#engine";
+import type { HostedCanvasProjection } from "#application/canvas/hosted-canvas-sync.ts";
 import { R2HostedAssetRegistry } from "#application/canvas/hosted-asset-registry.ts";
 import { HostedApiClient } from "#lib/hosted-api-client.ts";
 import { loadMediaFromBlob, loadVideo } from "#lib/media-loader.ts";
+import { createPlaybackState } from "#lib/media-playback.ts";
 import {
   createImageAsset,
   getImageAssetReferenceCount,
@@ -14,29 +19,28 @@ import {
   retainImageAsset,
 } from "#lib/media-assets.ts";
 import {
+  activateVideoElement,
   createDormantVideoElement,
   disposeEntityMedia,
   disposeMediaSource,
   disposeVideoElement,
   hasActiveVideoSource,
+  isMediaPlaybackInterruption,
 } from "#lib/media-resources.ts";
-import type { HostedWorkspaceEntity } from "#lib/hosted-workspace-document.ts";
 import type { HostedAssetCache } from "#lib/hosted-asset-cache.ts";
 import {
   MediaType,
+  ShaderType,
   isGifEntity,
   isVideoEntity,
   type MediaImageAsset,
+  type ColorPalette,
   type ShaderCanvasEntity,
+  type ShaderParams,
 } from "#types/canvas.ts";
 
 const PLAYBACK_DRIFT_TOLERANCE_SECONDS = 0.15;
 const MAX_CONCURRENT_REMOTE_ASSET_LOADS = 4;
-
-interface StagedRemoteEntity extends HostedRemoteEntityProjection {
-  media: Pick<ShaderCanvasEntity, "imageBitmap" | "mediaSource">;
-  revision: number;
-}
 
 interface HostedVideoTemplate {
   alphaMode: Extract<
@@ -56,7 +60,7 @@ export interface HostedCanvasProjectionOptions {
   assets: R2HostedAssetRegistry;
   cache: HostedAssetCache;
   beforeRemoveEntity?(entityId: string): void;
-  onAutoplayBlocked?(entity: HostedWorkspaceEntity): void;
+  onAutoplayBlocked?(entity: HostedSceneEntity): void;
   onCacheError?(error: unknown): void;
   onError(error: unknown): void;
   requestRender(entityId?: string): void;
@@ -64,12 +68,13 @@ export interface HostedCanvasProjectionOptions {
   workspaceId: WorkspaceId;
 }
 
+/** Projects authoritative scene records into the one local, resource-owning canvas scene. */
 export class HostedCanvasProjectionService implements HostedCanvasProjection {
   readonly #api: HostedApiClient;
   readonly #assets: R2HostedAssetRegistry;
   readonly #cache: HostedAssetCache;
   readonly #beforeRemoveEntity: (entityId: string) => void;
-  readonly #onAutoplayBlocked: (entity: HostedWorkspaceEntity) => void;
+  readonly #onAutoplayBlocked: (entity: HostedSceneEntity) => void;
   readonly #onCacheError: (error: unknown) => void;
   readonly #onError: (error: unknown) => void;
   readonly #requestRender: (entityId?: string) => void;
@@ -82,7 +87,9 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
   readonly #entityBlobKeys = new Map<string, string>();
   readonly #blobEntityCounts = new Map<string, number>();
   readonly #entityRevisions = new Map<string, number>();
+  readonly #remoteEntities = new Map<string, HostedSceneEntity>();
   readonly #autoplayBlocked = new Set<string>();
+  readonly #previewActivations = new Map<string, Promise<void>>();
 
   constructor(options: HostedCanvasProjectionOptions) {
     this.#api = options.api;
@@ -100,105 +107,36 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
   destroy(): void {
     for (const pending of this.#videoTemplates.values()) this.#releaseVideoTemplate(pending);
     this.#videoTemplates.clear();
+    this.#remoteEntities.clear();
+    this.#previewActivations.clear();
   }
 
-  async applyRemoteEntity(entity: HostedWorkspaceEntity, applyPlayback: boolean): Promise<void> {
-    const current = this.#store.getState().entities.get(entity.id);
-    if (!current || this.#entityAssets.get(entity.id) !== entity.asset.id) {
-      await this.#materialize(entity, applyPlayback);
-      return;
-    }
-    this.#store.updateEntity(entity.id, toCanvasUpdates(entity, applyPlayback), true);
-    const updated = this.#store.getState().entities.get(entity.id);
-    if (applyPlayback && updated) await this.#applyPlayback(updated, entity);
-    this.#requestRender(entity.id);
-  }
+  async applySnapshot(entities: readonly HostedSceneEntity[]): Promise<void> {
+    const nextIds = new Set(entities.map((entity) => entity.id));
+    this.#remoteEntities.clear();
+    for (const entity of entities) this.#remoteEntities.set(entity.id, entity);
+    this.#removeRemoteEntities(
+      [...this.#store.getState().entities.keys()].filter((id) => !nextIds.has(id)),
+    );
 
-  async applyRemoteEntities(entries: readonly HostedRemoteEntityProjection[]): Promise<void> {
-    if (entries.length === 0) return;
-
-    const staged = new Array<StagedRemoteEntity | null>(entries.length).fill(null);
+    let nextIndex = 0;
     const errors: unknown[] = [];
-    const groups = groupProjectionIndicesByAsset(entries);
-    let nextGroupIndex = 0;
-    const loadNextGroup = async (): Promise<void> => {
-      while (nextGroupIndex < groups.length) {
-        const group = groups[nextGroupIndex++]!;
-        for (const index of group) {
-          const entry = entries[index]!;
-          const current = this.#store.getState().entities.get(entry.entity.id);
-          if (current && this.#entityAssets.get(entry.entity.id) === entry.entity.asset.id) {
-            continue;
-          }
-          try {
-            staged[index] = await this.#stageRemoteEntity(entry);
-          } catch (error) {
-            errors.push(error);
-          }
+    const projectNext = async (): Promise<void> => {
+      while (nextIndex < entities.length) {
+        const entity = entities[nextIndex++]!;
+        try {
+          await this.#projectEntity(entity);
+        } catch (error) {
+          errors.push(error);
         }
       }
     };
     await Promise.all(
       Array.from(
-        { length: Math.min(MAX_CONCURRENT_REMOTE_ASSET_LOADS, groups.length) },
-        loadNextGroup,
+        { length: Math.min(MAX_CONCURRENT_REMOTE_ASSET_LOADS, entities.length) },
+        projectNext,
       ),
     );
-
-    const additions: ShaderCanvasEntity[] = [];
-    const updates: CanvasEntityUpdate[] = [];
-    const replacements: Array<{
-      collaborative: HostedWorkspaceEntity;
-      next: ShaderCanvasEntity;
-      previous: ShaderCanvasEntity | undefined;
-    }> = [];
-    const playback: HostedRemoteEntityProjection[] = [];
-
-    for (let index = 0; index < entries.length; index++) {
-      const entry = entries[index]!;
-      const prepared = staged[index];
-      if (!prepared) {
-        const current = this.#store.getState().entities.get(entry.entity.id);
-        if (current && this.#entityAssets.get(entry.entity.id) === entry.entity.asset.id) {
-          updates.push({
-            id: entry.entity.id,
-            updates: toCanvasUpdates(entry.entity, entry.applyPlayback),
-          });
-          playback.push(entry);
-        }
-        continue;
-      }
-      if (this.#entityRevisions.get(entry.entity.id) !== prepared.revision) {
-        this.#disposeStagedRemoteEntity(prepared);
-        continue;
-      }
-      const previous = this.#store.getState().entities.get(entry.entity.id);
-      const next = {
-        ...prepared.media,
-        ...toCanvasFields(entry.entity),
-        textureDirty: true,
-      } as ShaderCanvasEntity;
-      if (previous) {
-        this.#beforeRemoveEntity(entry.entity.id);
-        updates.push({ id: entry.entity.id, updates: next });
-      } else additions.push(next);
-      replacements.push({ collaborative: entry.entity, next, previous });
-      playback.push(entry);
-    }
-
-    this.#store.updateEntities(updates, true);
-    this.#store.addEntities(additions, true);
-    for (const { collaborative, next, previous } of replacements) {
-      if (previous) this.#releaseEntity(previous);
-      this.#bindEntityAsset(collaborative.id, collaborative.asset);
-      this.#assets.adopt(collaborative.id, collaborative.asset, getEntityBlob(next));
-    }
-    for (const entry of playback) {
-      if (!entry.applyPlayback) continue;
-      const current = this.#store.getState().entities.get(entry.entity.id);
-      if (current) await this.#applyPlayback(current, entry.entity);
-    }
-    if (updates.length > 0 || additions.length > 0) this.#requestRender();
     if (errors.length === 1) this.#onError(errors[0]);
     else if (errors.length > 1) {
       this.#onError(
@@ -207,7 +145,145 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     }
   }
 
-  removeRemoteEntities(entityIds: readonly string[]): void {
+  async applyChange(change: HostedSceneChange): Promise<void> {
+    switch (change.type) {
+      case "entity.created":
+        this.#remoteEntities.set(change.entity.id, change.entity);
+        await this.#projectEntity(change.entity);
+        return;
+      case "entity.patched": {
+        const current = this.#remoteEntities.get(change.entityId);
+        if (!current) return;
+        const entity = applyHostedPatch(current, change.patch, change.revisions);
+        this.#remoteEntities.set(entity.id, entity);
+        if (change.patch.asset && this.#entityAssets.get(entity.id) !== entity.asset.id) {
+          await this.#materialize(entity);
+          return;
+        }
+        this.#applyNarrowPatch(entity, change.patch);
+        return;
+      }
+      case "entity.removed":
+        this.#remoteEntities.delete(change.entityId);
+        this.#removeRemoteEntities([change.entityId]);
+        return;
+      case "scene.replaced":
+        await this.applySnapshot(change.entities);
+    }
+  }
+
+  async applyPlayback(
+    anchor: HostedPlaybackAnchor,
+    roomNow: number,
+    activateDormantPreview = false,
+  ): Promise<void> {
+    const current = this.#store.getState().entities.get(anchor.entityId);
+    const collaborative = this.#remoteEntities.get(anchor.entityId);
+    if (!current || !collaborative) return;
+    if (anchor.type === "shader") {
+      if (anchor.appearanceRevision !== collaborative.revisions.appearance) return;
+      current.shaderParams.time = shaderTimeAt(anchor, roomNow);
+      current.shaderParams.timeAutoPlay = anchor.state === "playing";
+      // The flowing shader consumes time directly during rendering. This is deliberately
+      // not a CanvasStore entity update and does not invalidate a processed texture.
+      this.#requestRender();
+      return;
+    }
+    if (anchor.mediaRevision !== collaborative.revisions.asset) return;
+    await this.#applyMediaPlayback(
+      current,
+      collaborative,
+      anchor,
+      roomNow,
+      activateDormantPreview,
+    );
+  }
+
+  async #projectEntity(entity: HostedSceneEntity): Promise<void> {
+    const current = this.#store.getState().entities.get(entity.id);
+    if (!current || this.#entityAssets.get(entity.id) !== entity.asset.id) {
+      await this.#materialize(entity);
+      return;
+    }
+    const appearanceChanged =
+      current.shaderType !== entity.shaderType ||
+      JSON.stringify(staticShaderParams(current.shaderParams)) !==
+        JSON.stringify(entity.shaderParams);
+    this.#store.updateEntity(
+      entity.id,
+      {
+        ...toCanvasFields(entity, current.shaderParams),
+        ...(appearanceChanged && { textureDirty: true }),
+      },
+      true,
+    );
+    this.#requestRender(appearanceChanged ? entity.id : undefined);
+  }
+
+  #applyNarrowPatch(entity: HostedSceneEntity, patch: HostedEntityPatch): void {
+    const current = this.#store.getState().entities.get(entity.id);
+    if (!current) return;
+    const updates: Partial<ShaderCanvasEntity> = {};
+    if (patch.identity) {
+      Object.assign(updates, {
+        edited: entity.edited,
+        locked: entity.locked,
+        name: entity.name,
+        originalPalette: entity.originalPalette
+          ? structuredClone(entity.originalPalette)
+          : undefined,
+      });
+    }
+    if (patch.geometry) {
+      Object.assign(updates, {
+        originalSize: { ...entity.originalSize },
+        position: { ...entity.position },
+        rotation: entity.rotation,
+        size: { ...entity.size },
+      });
+    }
+    if (patch.layering) updates.zIndex = entity.zIndex;
+    if (patch.appearance) {
+      updates.shaderType = parseShaderType(entity.shaderType);
+      updates.shaderParams = toShaderParams(entity.shaderParams, current.shaderParams);
+      updates.textureDirty = true;
+    }
+    if (patch.asset) {
+      // Asset metadata can change without changing the underlying object identity.
+      this.#assets.adopt(entity.id, entity.asset, getEntityBlob(current));
+    }
+    if (Object.keys(updates).length === 0) return;
+    this.#store.updateEntity(entity.id, updates, true);
+    this.#requestRender(patch.appearance ? entity.id : undefined);
+  }
+
+  async #materialize(entity: HostedSceneEntity): Promise<void> {
+    const revision = this.#bumpRevision(entity.id);
+    const media = await this.#loadMedia(entity);
+    if (
+      this.#entityRevisions.get(entity.id) !== revision ||
+      this.#remoteEntities.get(entity.id)?.asset.id !== entity.asset.id
+    ) {
+      this.#disposeLoadedMedia(entity.asset.id, media);
+      return;
+    }
+    const previous = this.#store.getState().entities.get(entity.id);
+    const next = {
+      ...media,
+      ...toCanvasFields(entity, previous?.shaderParams),
+      textureDirty: true,
+    } as ShaderCanvasEntity;
+    this.#beforeRemoveEntity(entity.id);
+    if (previous) this.#store.updateEntity(entity.id, next, true);
+    else this.#store.addEntity(next, true);
+    if (previous) this.#releaseEntity(previous);
+    this.#bindEntityAsset(entity.id, entity.asset);
+    this.#assets.adopt(entity.id, entity.asset, getEntityBlob(next));
+    // Commit each decoded entity immediately; no whole-scene staging array retains media.
+    this.#requestRender(entity.id);
+  }
+
+  #removeRemoteEntities(entityIds: readonly string[]): void {
     const removed = new Set<string>();
     const resources: ShaderCanvasEntity[] = [];
     for (const id of entityIds) {
@@ -229,59 +305,9 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     if (removed.size > 0) this.#requestRender();
   }
 
-  async #materialize(entity: HostedWorkspaceEntity, applyPlayback: boolean): Promise<void> {
-    const revision = this.#bumpRevision(entity.id);
-    const media = await this.#loadMedia(entity);
-    if (this.#entityRevisions.get(entity.id) !== revision) {
-      if (
-        media.mediaSource.type === MediaType.image &&
-        this.#sharedImages.get(entity.asset.id) === media.mediaSource.asset &&
-        getImageAssetReferenceCount(media.mediaSource.asset) === 1
-      ) {
-        this.#sharedImages.delete(entity.asset.id);
-      }
-      disposeMediaSource(media.mediaSource, media.imageBitmap);
-      return;
-    }
-    const previous = this.#store.getState().entities.get(entity.id);
-    const next = {
-      ...media,
-      ...toCanvasFields(entity),
-      textureDirty: true,
-    } as ShaderCanvasEntity;
-    this.#beforeRemoveEntity(entity.id);
-    if (previous) this.#store.updateEntity(entity.id, next, true);
-    else this.#store.addEntity(next, true);
-    if (previous) this.#releaseEntity(previous);
-    this.#bindEntityAsset(entity.id, entity.asset);
-    this.#assets.adopt(entity.id, entity.asset, getEntityBlob(next));
-    if (applyPlayback) await this.#applyPlayback(next, entity);
-    this.#requestRender(entity.id);
-  }
-
-  async #stageRemoteEntity(entry: HostedRemoteEntityProjection): Promise<StagedRemoteEntity> {
-    const revision = this.#bumpRevision(entry.entity.id);
-    return {
-      ...entry,
-      media: await this.#loadMedia(entry.entity),
-      revision,
-    };
-  }
-
-  #disposeStagedRemoteEntity(entry: StagedRemoteEntity): void {
-    if (
-      entry.media.mediaSource.type === MediaType.image &&
-      this.#sharedImages.get(entry.entity.asset.id) === entry.media.mediaSource.asset &&
-      getImageAssetReferenceCount(entry.media.mediaSource.asset) === 1
-    ) {
-      this.#sharedImages.delete(entry.entity.asset.id);
-    }
-    disposeMediaSource(entry.media.mediaSource, entry.media.imageBitmap);
-  }
-
   async #loadMedia(
-    entity: HostedWorkspaceEntity,
-  ): Promise<Pick<ShaderCanvasEntity, "imageBitmap" | "mediaSource">> {
+    entity: HostedSceneEntity,
+  ): Promise<Pick<ShaderCanvasEntity, "imageBitmap" | "mediaSource" | "playback">> {
     if (entity.asset.mediaType === MediaType.video) {
       const template = await this.#getVideoTemplate(entity);
       retainImageAsset(template.posterAsset);
@@ -297,6 +323,7 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
           type: MediaType.video,
           videoElement: createDormantVideoElement(),
         },
+        playback: createPlaybackState({ isPlaying: false }),
       };
     }
     const shared = this.#sharedImages.get(entity.asset.id);
@@ -305,6 +332,7 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
       return {
         imageBitmap: shared.imageBitmap,
         mediaSource: { asset: shared, type: MediaType.image },
+        playback: undefined,
       };
     }
     const blob = await this.#getAssetBlob(entity);
@@ -315,14 +343,31 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
       entity.name,
     );
     if (!loaded) throw new Error(`Unable to decode hosted asset ${entity.name}`);
-    const media = { imageBitmap: loaded.imageBitmap, mediaSource: loaded.mediaSource };
-    if (media.mediaSource.type === MediaType.image) {
-      this.#sharedImages.set(entity.asset.id, media.mediaSource.asset);
+    if (loaded.mediaSource.type === MediaType.image) {
+      this.#sharedImages.set(entity.asset.id, loaded.mediaSource.asset);
     }
-    return media;
+    return {
+      imageBitmap: loaded.imageBitmap,
+      mediaSource: loaded.mediaSource,
+      playback: loaded.playback ? { ...loaded.playback, isPlaying: false } : undefined,
+    };
   }
 
-  #getVideoTemplate(entity: HostedWorkspaceEntity): Promise<HostedVideoTemplate> {
+  #disposeLoadedMedia(
+    assetId: string,
+    media: Pick<ShaderCanvasEntity, "imageBitmap" | "mediaSource">,
+  ): void {
+    if (
+      media.mediaSource.type === MediaType.image &&
+      this.#sharedImages.get(assetId) === media.mediaSource.asset &&
+      getImageAssetReferenceCount(media.mediaSource.asset) === 1
+    ) {
+      this.#sharedImages.delete(assetId);
+    }
+    disposeMediaSource(media.mediaSource, media.imageBitmap);
+  }
+
+  #getVideoTemplate(entity: HostedSceneEntity): Promise<HostedVideoTemplate> {
     const blobKey = entity.asset.contentHash ?? entity.asset.id;
     let pending = this.#videoTemplates.get(blobKey);
     if (pending) return pending;
@@ -334,7 +379,7 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     return pending;
   }
 
-  async #createVideoTemplate(entity: HostedWorkspaceEntity): Promise<HostedVideoTemplate> {
+  async #createVideoTemplate(entity: HostedSceneEntity): Promise<HostedVideoTemplate> {
     const blob = await this.#getAssetBlob(entity);
     const loaded = await loadVideo(blob, {
       alphaMode: "unknown",
@@ -359,17 +404,17 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     };
   }
 
-  #getAssetBlob(entity: HostedWorkspaceEntity): Promise<Blob> {
+  #getAssetBlob(entity: HostedSceneEntity): Promise<Blob> {
     const blobKey = entity.asset.contentHash ?? entity.asset.id;
     let pending = this.#assetBlobs.get(blobKey);
     if (pending) return pending;
     pending = this.#downloadAsset(entity);
     this.#assetBlobs.set(blobKey, pending);
-    pending.catch(() => this.#assetBlobs.delete(blobKey));
+    void pending.catch(() => this.#assetBlobs.delete(blobKey));
     return pending;
   }
 
-  async #downloadAsset(entity: HostedWorkspaceEntity): Promise<Blob> {
+  async #downloadAsset(entity: HostedSceneEntity): Promise<Blob> {
     try {
       const cached = await this.#cache.get(entity.asset.id, entity.asset.contentType);
       if (cached?.size === entity.asset.byteLength) return cached;
@@ -388,74 +433,132 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     return blob;
   }
 
-  async #applyPlayback(
+  async #applyMediaPlayback(
     current: ShaderCanvasEntity,
-    collaborative: HostedWorkspaceEntity,
+    collaborative: HostedSceneEntity,
+    anchor: Extract<HostedPlaybackAnchor, { type: "media" }>,
+    roomNow: number,
+    activateDormantPreview: boolean,
   ): Promise<void> {
-    const playback = collaborative.playback;
-    if (!playback || !current.playback) return;
+    if (!current.playback) return;
+    const target = mediaTimeAt(anchor, roomNow);
     if (isVideoEntity(current)) {
       const video = current.mediaSource.videoElement;
-      video.loop = playback.loop;
-      video.playbackRate = playback.playbackRate;
-      video.muted = playback.muted;
-      video.volume = playback.volume;
-      if (!hasActiveVideoSource(video)) {
-        if (!playback.isPlaying) this.#autoplayBlocked.delete(current.id);
+      // Audio preference is local. Collaboration never overwrites mute or volume.
+      video.muted = current.playback.muted;
+      video.volume = current.playback.volume;
+      const hasDecoder = hasActiveVideoSource(video);
+      const playbackTime = hasDecoder ? video.currentTime : current.playback.currentTime;
+      const currentTime =
+        playbackDistance(playbackTime, target, current.mediaSource.duration, anchor.loop) >=
+        PLAYBACK_DRIFT_TOLERANCE_SECONDS
+          ? target
+          : current.playback.currentTime;
+      const remainsActive = this.#store.setVideoPlaybackIntent(
+        current.id,
+        {
+          currentTime,
+          isPlaying: anchor.state === "playing",
+          loop: anchor.loop,
+          playbackRate: anchor.playbackRate,
+        },
+        true,
+      );
+      if (!remainsActive) {
+        if (anchor.state === "paused") this.#autoplayBlocked.delete(current.id);
+        if (anchor.state === "paused" && activateDormantPreview) {
+          this.#activatePausedVideoPreview(current);
+        }
         return;
       }
-      if (
-        playbackDistance(video.currentTime, playback.currentTime, video.duration, playback.loop) >=
-        PLAYBACK_DRIFT_TOLERANCE_SECONDS
-      ) {
-        this.#store.seekVideo(current.id, playback.currentTime, true);
-      }
-      if (!playback.isPlaying) this.#autoplayBlocked.delete(current.id);
-      if (playback.isPlaying && video.paused) {
-        if (this.#autoplayBlocked.has(current.id) && !playback.muted) return;
+      if (anchor.state === "paused") this.#autoplayBlocked.delete(current.id);
+      if (anchor.state === "playing" && video.paused) {
+        if (this.#autoplayBlocked.has(current.id) && !current.playback.muted) return;
         try {
           await this.#store.playVideo(current.id, true);
           this.#autoplayBlocked.delete(current.id);
         } catch (error) {
-          if (!(error instanceof Error) || error.name !== "NotAllowedError") {
-            this.#onError(error);
-          } else if (!this.#autoplayBlocked.has(current.id)) {
+          if (isMediaPlaybackInterruption(error)) return;
+          if (error instanceof Error && error.name === "NotAllowedError") {
+            if (this.#autoplayBlocked.has(current.id)) return;
             this.#autoplayBlocked.add(current.id);
             this.#onAutoplayBlocked(collaborative);
+          } else {
+            this.#onError(error);
           }
         }
-      } else if (!playback.isPlaying && !video.paused) this.#store.pauseVideo(current.id, true);
+      } else if (anchor.state === "paused" && !video.paused) {
+        this.#store.pauseVideo(current.id, true);
+      }
       return;
     }
     if (isGifEntity(current)) {
+      current.playback.loop = anchor.loop;
+      current.playback.playbackRate = anchor.playbackRate;
       if (
         playbackDistance(
           current.playback.currentTime,
-          playback.currentTime,
+          target,
           current.mediaSource.duration,
-          playback.loop,
+          anchor.loop,
         ) >= PLAYBACK_DRIFT_TOLERANCE_SECONDS
       ) {
-        this.#store.seekGif(current.id, playback.currentTime, true);
+        this.#store.seekGif(current.id, target, true);
       }
-      if (playback.isPlaying && !current.playback.isPlaying) this.#store.playGif(current.id, true);
-      else if (!playback.isPlaying && current.playback.isPlaying)
+      if (anchor.state === "playing" && !current.playback.isPlaying)
+        this.#store.playGif(current.id, true);
+      else if (anchor.state === "paused" && current.playback.isPlaying)
         this.#store.pauseGif(current.id, true);
     }
   }
 
+  #activatePausedVideoPreview(entity: ShaderCanvasEntity): void {
+    if (!isVideoEntity(entity) || this.#previewActivations.has(entity.id)) return;
+    const expectedVideo = entity.mediaSource.videoElement;
+    const pending = activateVideoElement(expectedVideo, entity.mediaSource.blob)
+      .then(() => {
+        const current = this.#store.getState().entities.get(entity.id);
+        if (
+          !current ||
+          !isVideoEntity(current) ||
+          current.mediaSource.videoElement !== expectedVideo
+        )
+          return;
+        if (!current.playback || current.playback.isPlaying) return;
+        expectedVideo.muted = current.playback.muted;
+        expectedVideo.volume = current.playback.volume;
+        this.#store.setVideoPlaybackIntent(
+          current.id,
+          {
+            currentTime: current.playback.currentTime,
+            isPlaying: false,
+            loop: current.playback.loop,
+            playbackRate: current.playback.playbackRate,
+          },
+          true,
+        );
+      })
+      .catch(this.#onError)
+      .finally(() => this.#previewActivations.delete(entity.id));
+    this.#previewActivations.set(entity.id, pending);
+  }
+
   #releaseEntity(entity: ShaderCanvasEntity): void {
     const assetId = this.#entityAssets.get(entity.id);
-    if (entity.mediaSource.type === MediaType.image) {
-      if (assetId && getImageAssetReferenceCount(entity.mediaSource.asset) === 1) {
-        this.#sharedImages.delete(assetId);
-      }
+    if (
+      entity.mediaSource.type === MediaType.image &&
+      assetId &&
+      getImageAssetReferenceCount(entity.mediaSource.asset) === 1
+    ) {
+      this.#sharedImages.delete(assetId);
     }
     disposeEntityMedia(entity);
     if (assetId) this.#unbindEntityAsset(entity.id, assetId);
   }
 
-  #bindEntityAsset(entityId: string, asset: HostedWorkspaceEntity["asset"]): void {
+  #bindEntityAsset(entityId: string, asset: HostedAssetReference): void {
+    const previous = this.#entityAssets.get(entityId);
+    if (previous) this.#unbindEntityAsset(entityId, previous);
     const blobKey = asset.contentHash ?? asset.id;
     this.#entityAssets.set(entityId, asset.id);
     this.#entityBlobKeys.set(entityId, blobKey);
@@ -498,18 +601,20 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
   }
 }
 
-function groupProjectionIndicesByAsset(
-  entries: readonly HostedRemoteEntityProjection[],
-): number[][] {
-  const groupsByAsset = new Map<string, number[]>();
-  for (let index = 0; index < entries.length; index++) {
-    const assetId = entries[index]!.entity.asset;
-    const key = assetId.contentHash ?? assetId.id;
-    const group = groupsByAsset.get(key);
-    if (group) group.push(index);
-    else groupsByAsset.set(key, [index]);
-  }
-  return [...groupsByAsset.values()];
+function applyHostedPatch(
+  current: HostedSceneEntity,
+  patch: HostedEntityPatch,
+  revisions: HostedSceneEntity["revisions"],
+): HostedSceneEntity {
+  return {
+    ...current,
+    ...(patch.identity && patch.identity),
+    ...(patch.geometry && patch.geometry),
+    ...(patch.appearance && patch.appearance),
+    ...(patch.layering && patch.layering),
+    ...(patch.asset && patch.asset),
+    revisions,
+  };
 }
 
 function getEntityBlob(entity: ShaderCanvasEntity): Blob {
@@ -519,35 +624,119 @@ function getEntityBlob(entity: ShaderCanvasEntity): Blob {
 }
 
 function toCanvasFields(
-  entity: HostedWorkspaceEntity,
-): Omit<ShaderCanvasEntity, "imageBitmap" | "mediaSource"> {
+  entity: HostedSceneEntity,
+  currentShaderParams?: ShaderParams,
+): Pick<
+  ShaderCanvasEntity,
+  | "edited"
+  | "id"
+  | "locked"
+  | "name"
+  | "originalPalette"
+  | "originalSize"
+  | "position"
+  | "rotation"
+  | "shaderParams"
+  | "shaderType"
+  | "size"
+  | "zIndex"
+> {
   return {
     edited: entity.edited,
     id: entity.id,
     locked: entity.locked,
     name: entity.name,
-    ...(entity.originalPalette && { originalPalette: structuredClone(entity.originalPalette) }),
+    originalPalette: parseColorPalette(entity.originalPalette),
     originalSize: { ...entity.originalSize },
-    ...(entity.playback && { playback: { ...entity.playback } }),
     position: { ...entity.position },
     rotation: entity.rotation,
-    shaderParams: structuredClone(entity.shaderParams),
-    shaderType: entity.shaderType,
+    shaderParams: toShaderParams(entity.shaderParams, currentShaderParams),
+    shaderType: parseShaderType(entity.shaderType),
     size: { ...entity.size },
     zIndex: entity.zIndex,
   };
 }
 
-function toCanvasUpdates(
-  entity: HostedWorkspaceEntity,
-  applyPlayback: boolean,
-): Partial<ShaderCanvasEntity> {
-  const updates: Partial<ShaderCanvasEntity> = {
-    ...toCanvasFields(entity),
-    textureDirty: true,
-  } as Partial<ShaderCanvasEntity>;
-  if (!applyPlayback) Reflect.deleteProperty(updates, "playback");
-  return updates;
+function toShaderParams(
+  staticParams: HostedSceneEntity["shaderParams"],
+  current?: ShaderParams,
+): ShaderParams {
+  return Object.assign(structuredClone(current ?? defaultShaderParams()), staticParams, {
+    ...(current?.time !== undefined && { time: current.time }),
+    ...(current?.timeAutoPlay !== undefined && { timeAutoPlay: current.timeAutoPlay }),
+  });
+}
+
+function staticShaderParams(params: ShaderParams): Omit<ShaderParams, "time" | "timeAutoPlay"> {
+  const { time: _time, timeAutoPlay: _timeAutoPlay, ...rest } = params;
+  return rest;
+}
+
+function parseShaderType(value: string): ShaderCanvasEntity["shaderType"] {
+  if (Object.values(ShaderType).some((entry) => entry === value)) {
+    return value as ShaderCanvasEntity["shaderType"];
+  }
+  throw new Error(`Unsupported hosted shader type: ${value}`);
+}
+
+function parseColorPalette(value: HostedSceneEntity["originalPalette"]): ColorPalette | undefined {
+  if (!value) return undefined;
+  if (
+    typeof value.name !== "string" ||
+    typeof value.shortName !== "string" ||
+    !Array.isArray(value.colors) ||
+    !value.colors.every(isRgba)
+  ) {
+    throw new Error("Hosted entity has an invalid original palette");
+  }
+  return {
+    colors: value.colors.map((color) => [...color]),
+    ...(typeof value.id === "string" && { id: value.id }),
+    name: value.name,
+    shortName: value.shortName,
+  };
+}
+
+function isRgba(value: unknown): value is [number, number, number, number] {
+  return (
+    Array.isArray(value) &&
+    value.length === 4 &&
+    value.every((channel) => typeof channel === "number" && Number.isFinite(channel))
+  );
+}
+
+function defaultShaderParams(): ShaderParams {
+  return {
+    background: [1, 1, 1, 1],
+    color: [0, 0, 0, 1],
+    intensity: 1,
+    preserveColors: false,
+    reversePalette: false,
+    scale: 1,
+    shape: "circle",
+    showOriginal: false,
+    size: 8,
+  };
+}
+
+function mediaTimeAt(
+  anchor: Extract<HostedPlaybackAnchor, { type: "media" }>,
+  roomNow: number,
+): number {
+  if (anchor.state === "paused") return anchor.positionSeconds;
+  const elapsed = Math.max(0, roomNow - anchor.effectiveAtRoomMs) / 1_000;
+  const advanced = anchor.positionSeconds + elapsed * anchor.playbackRate;
+  if (anchor.loop && anchor.duration > 0) return advanced % anchor.duration;
+  return Math.min(advanced, anchor.duration);
+}
+
+function shaderTimeAt(
+  anchor: Extract<HostedPlaybackAnchor, { type: "shader" }>,
+  roomNow: number,
+): number {
+  return anchor.state === "playing"
+    ? anchor.shaderTime + Math.max(0, roomNow - anchor.effectiveAtRoomMs) / 1_000
+    : anchor.shaderTime;
 }
 
 function playbackDistance(

@@ -1,13 +1,5 @@
-import { evictDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
-import {
-  COLLABORATION_PROTOCOL_VERSION,
-  decodeServerYjsRebase,
-  decodeServerYjsUpdate,
-  encodeClientYjsRebase,
-  encodeClientYjsUpdate,
-} from "@voidmesh/collaboration";
-import * as Y from "yjs";
+import { COLLABORATION_PROTOCOL_VERSION } from "@voidmesh/collaboration";
 import { unzipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 import { processWorkspaceExport } from "../src/exports.ts";
@@ -705,17 +697,18 @@ describe("Voidmesh API", () => {
       role: "viewer",
       type: "role-changed",
     });
-    const forbiddenDocument = new Y.Doc();
-    forbiddenDocument.getMap("entities").set("forbidden", true);
     const readOnlyMessage = nextWebSocketMessage(viewerSocket);
     viewerSocket.send(
-      encodeClientYjsUpdate(
+      sceneCreateMessage(
         "550e8400-e29b-41d4-a716-446655440001",
-        Y.encodeStateAsUpdate(forbiddenDocument),
+        "forbidden",
+        "asset-forbidden",
+        "Forbidden",
       ),
     );
     expect(JSON.parse(String(await bounded(readOnlyMessage, "read-only rejection")))).toEqual({
       code: "read-only",
+      operationId: "550e8400-e29b-41d4-a716-446655440001",
       type: "error",
     });
 
@@ -992,16 +985,14 @@ describe("Voidmesh API", () => {
     socket.accept();
     await nextWebSocketMessage(socket);
     await nextWebSocketMessage(socket);
-    const document = new Y.Doc();
-    document
-      .getMap<Y.Map<unknown>>("entities")
-      .set("uploaded-entity", testWorkspaceEntity(grant.assetId, "Uploaded"));
-    const updateId = crypto.randomUUID();
-    socket.send(encodeClientYjsUpdate(updateId, Y.encodeStateAsUpdate(document)));
-    expect(JSON.parse(String(await nextWebSocketMessage(socket)))).toEqual({
+    const operationId = crypto.randomUUID();
+    const messages = nextWebSocketMessages(socket, 2);
+    socket.send(sceneCreateMessage(operationId, "uploaded-entity", grant.assetId, "Uploaded"));
+    const [, acknowledgment] = await messages;
+    expect(JSON.parse(String(acknowledgment))).toEqual({
+      operationId,
       roomSequence: 1,
       type: "ack",
-      updateId,
     });
     expect(
       await env.DB.prepare("SELECT lifecycle FROM assets WHERE id = ?").bind(grant.assetId).first(),
@@ -1606,7 +1597,133 @@ describe("Voidmesh API", () => {
     ).toBe(401);
   });
 
-  it("authenticates WebSockets and deduplicates retried offline Yjs updates", async () => {
+  it("serializes typed scene commands, deduplicates retries, and rejects stale revisions", async () => {
+    const cookie = await signUp("scene-owner@example.com", "Scene Owner");
+    const workspace = await createWorkspace(cookie, "Typed scene workspace");
+    const owner = await env.DB.prepare('SELECT id FROM "user" WHERE email = ?')
+      .bind("scene-owner@example.com")
+      .first<{ id: string }>();
+    const assetId = "asset-typed-scene";
+    const now = Date.now();
+    await env.DB.prepare(
+      `INSERT INTO assets (
+        id, workspace_id, uploaded_by_user_id, object_key, media_type, content_type,
+        original_filename, byte_length, lifecycle, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, 'image', 'image/png', 'scene.png', 1, 'active', ?, ?)`,
+    )
+      .bind(assetId, workspace.id, owner!.id, `assets/${workspace.id}/${assetId}/object`, now, now)
+      .run();
+
+    const response = await apiFetch(`/v1/workspaces/${workspace.id}/connect`, {
+      headers: { cookie, upgrade: "websocket" },
+    });
+    const socket = response.webSocket!;
+    socket.accept();
+    expect(JSON.parse(String(await nextWebSocketMessage(socket)))).toMatchObject({
+      protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      roomSequence: 0,
+      type: "hello",
+    });
+    expect(JSON.parse(String(await nextWebSocketMessage(socket)))).toEqual({
+      entities: [],
+      playback: [],
+      roomSequence: 0,
+      type: "scene-snapshot",
+    });
+
+    const createOperationId = "550e8400-e29b-41d4-a716-446655440050";
+    const createMessages = nextWebSocketMessages(socket, 2);
+    socket.send(sceneCreateMessage(createOperationId, "entity-scene", assetId, "Scene"));
+    const [createdPatch, createdAck] = await createMessages;
+    expect(JSON.parse(String(createdPatch))).toMatchObject({
+      changes: [{ entity: { id: "entity-scene" }, type: "entity.created" }],
+      operationId: createOperationId,
+      roomSequence: 1,
+      type: "scene-patch",
+    });
+    expect(JSON.parse(String(createdAck))).toEqual({
+      operationId: createOperationId,
+      roomSequence: 1,
+      type: "ack",
+    });
+
+    socket.send(sceneCreateMessage(createOperationId, "entity-scene", assetId, "Scene"));
+    expect(JSON.parse(String(await nextWebSocketMessage(socket)))).toEqual({
+      operationId: createOperationId,
+      roomSequence: 1,
+      type: "ack",
+    });
+
+    const patchOperationId = "550e8400-e29b-41d4-a716-446655440051";
+    const geometry = {
+      originalSize: { height: 100, width: 100 },
+      position: { x: 25, y: 50 },
+      rotation: 0,
+      size: { height: 100, width: 100 },
+    };
+    const patchMessages = nextWebSocketMessages(socket, 2);
+    socket.send(
+      JSON.stringify({
+        command: {
+          entityId: "entity-scene",
+          expected: { geometry: 0 },
+          generation: 0,
+          kind: "entity.patch",
+          operationId: patchOperationId,
+          patch: { geometry },
+        },
+        type: "scene-command",
+      }),
+    );
+    const [geometryPatch, geometryAck] = await patchMessages;
+    expect(JSON.parse(String(geometryPatch))).toMatchObject({
+      changes: [{ patch: { geometry }, revisions: { geometry: 1 }, type: "entity.patched" }],
+      roomSequence: 2,
+    });
+    expect(JSON.parse(String(geometryAck))).toMatchObject({
+      operationId: patchOperationId,
+      roomSequence: 2,
+      type: "ack",
+    });
+
+    socket.send(
+      JSON.stringify({
+        command: {
+          entityId: "entity-scene",
+          expected: { geometry: 0 },
+          generation: 0,
+          kind: "entity.patch",
+          operationId: "550e8400-e29b-41d4-a716-446655440052",
+          patch: { geometry: { ...geometry, position: { x: 80, y: 90 } } },
+        },
+        type: "scene-command",
+      }),
+    );
+    expect(JSON.parse(String(await nextWebSocketMessage(socket)))).toMatchObject({
+      current: { position: { x: 25, y: 50 } },
+      reason: "revision",
+      roomSequence: 2,
+      type: "conflict",
+    });
+
+    const reconnect = await apiFetch(`/v1/workspaces/${workspace.id}/connect`, {
+      headers: { cookie, upgrade: "websocket" },
+    });
+    const reconnectSocket = reconnect.webSocket!;
+    reconnectSocket.accept();
+    await nextWebSocketMessage(reconnectSocket);
+    expect(JSON.parse(String(await nextWebSocketMessage(reconnectSocket)))).toMatchObject({
+      entities: [{ id: "entity-scene", position: { x: 25, y: 50 } }],
+      roomSequence: 2,
+      type: "scene-snapshot",
+    });
+    socket.close();
+    reconnectSocket.close();
+  });
+
+  /* Pre-V5 binary/Yjs migration scenarios are intentionally retired. There is no production
+  compatibility path because hosted workspaces have no users yet.
+  it.skip("authenticates WebSockets and deduplicates retried offline Yjs updates", async () => {
     const cookie = await signUp("realtime-owner@example.com", "Realtime Owner");
     const workspace = await createWorkspace(cookie, "Realtime workspace");
     const owner = await env.DB.prepare('SELECT id FROM "user" WHERE email = ?')
@@ -1799,7 +1916,7 @@ describe("Voidmesh API", () => {
     reconnectSocket.close(1000, "test complete");
   });
 
-  it("serializes dependent Yjs updates that arrive while asset validation is pending", async () => {
+  it.skip("serializes dependent Yjs updates that arrive while asset validation is pending", async () => {
     const cookie = await signUp("ordered-updates@example.com", "Ordered Updates");
     const workspace = await createWorkspace(cookie, "Ordered updates workspace");
     const owner = await env.DB.prepare('SELECT id FROM "user" WHERE email = ?')
@@ -1876,7 +1993,7 @@ describe("Voidmesh API", () => {
     reconnectSocket.close();
   });
 
-  it("rejects dangling Yjs history and rebases it for a second installation", async () => {
+  it.skip("rejects dangling Yjs history and rebases it for a second installation", async () => {
     const cookie = await signUp("rebase-owner@example.com", "Rebase Owner");
     const workspace = await createWorkspace(cookie, "Rebased workspace");
     const owner = await env.DB.prepare('SELECT id FROM "user" WHERE email = ?')
@@ -2054,7 +2171,7 @@ describe("Voidmesh API", () => {
     restoredSocket.close();
   });
 
-  it("repairs a dangling remote checkpoint before a fresh room serves it", async () => {
+  it.skip("repairs a dangling remote checkpoint before a fresh room serves it", async () => {
     const cookie = await signUp("checkpoint-recovery@example.com", "Checkpoint Recovery");
     const workspace = await createWorkspace(cookie, "Checkpoint recovery");
     const room = env.WORKSPACE_ROOMS.getByName(workspace.id);
@@ -2152,6 +2269,7 @@ describe("Voidmesh API", () => {
     socket.close();
   });
 
+  */
   it("exchanges an authenticated session for a short-lived direct WebSocket ticket", async () => {
     const cookie = await signUp("ticket-owner@example.com", "Ticket Owner");
     const workspace = await createWorkspace(cookie, "Ticket workspace");
@@ -2286,43 +2404,70 @@ describe("Voidmesh API", () => {
     await nextWebSocketMessage(socket);
     await nextWebSocketMessage(socket);
 
-    const document = new Y.Doc();
-    const entity = testWorkspaceEntity(assetId, "Playback");
-    entity.set("playback", {
-      commandId: "playback-command-1",
-      duration: 30,
-      state: {
-        currentTime: 4,
-        isPlaying: true,
-        loop: true,
-        muted: false,
-        playbackRate: 1,
-        volume: 0.5,
-      },
-      updatedAt: 1,
-    });
-    document.getMap<Y.Map<unknown>>("entities").set("entity-playback", entity);
-    const updateId = "550e8400-e29b-41d4-a716-446655440008";
+    const createOperationId = "550e8400-e29b-41d4-a716-446655440008";
+    const createMessages = nextWebSocketMessages(socket, 2);
+    socket.send(
+      sceneCreateMessage(createOperationId, "entity-playback", assetId, "Playback", {
+        contentType: "video/mp4",
+        mediaType: "video",
+        playbackDuration: 30,
+      }),
+    );
+    await createMessages;
+    const commandId = "playback-command-1";
     const sentAt = Date.now();
-    const ack = nextWebSocketMessage(socket);
-    socket.send(encodeClientYjsUpdate(updateId, Y.encodeStateAsUpdate(document)));
-    expect(JSON.parse(String(await ack))).toEqual({
-      roomSequence: 1,
+    const playbackMessages = nextWebSocketMessages(socket, 2);
+    socket.send(
+      JSON.stringify({
+        command: {
+          commandId,
+          duration: 30,
+          entityId: "entity-playback",
+          loop: true,
+          mediaRevision: 0,
+          playbackRate: 1,
+          positionSeconds: 4,
+          state: "playing",
+          type: "media",
+        },
+        type: "playback-command",
+      }),
+    );
+    const [playbackMessage, playbackAck] = await playbackMessages;
+    const anchor = JSON.parse(String(playbackMessage)).anchor as {
+      effectiveAtRoomMs: number;
+      sequence: number;
+    };
+    expect(anchor.sequence).toBe(2);
+    expect(anchor.effectiveAtRoomMs).toBeGreaterThanOrEqual(sentAt);
+    expect(anchor.effectiveAtRoomMs).toBeLessThanOrEqual(Date.now());
+    expect(JSON.parse(String(playbackAck))).toEqual({
+      operationId: commandId,
+      roomSequence: 2,
       type: "ack",
-      updateId,
     });
-    const correction = await nextWebSocketMessage(socket);
-    expect(correction).toBeInstanceOf(ArrayBuffer);
-    const decoded = decodeServerYjsUpdate(correction as ArrayBuffer);
-    expect(decoded).toMatchObject({ roomSequence: 1, updateId });
-    Y.applyUpdate(document, decoded!.update);
-    const anchor = document
-      .getMap<Y.Map<unknown>>("entities")
-      .get("entity-playback")!
-      .get("playback") as { sequence: number; updatedAt: number };
-    expect(anchor.sequence).toBe(1);
-    expect(anchor.updatedAt).toBeGreaterThanOrEqual(sentAt);
-    expect(anchor.updatedAt).toBeLessThanOrEqual(Date.now());
+
+    const reconnected = await apiFetch(`/v1/workspaces/${workspace.id}/connect`, {
+      headers: { cookie, upgrade: "websocket" },
+    });
+    expect(reconnected.status).toBe(101);
+    const reconnectSocket = reconnected.webSocket!;
+    reconnectSocket.accept();
+    await nextWebSocketMessage(reconnectSocket);
+    expect(JSON.parse(String(await nextWebSocketMessage(reconnectSocket)))).toMatchObject({
+      playback: [
+        {
+          commandId,
+          effectiveAtRoomMs: anchor.effectiveAtRoomMs,
+          entityId: "entity-playback",
+          sequence: 2,
+          type: "media",
+        },
+      ],
+      roomSequence: 2,
+      type: "scene-snapshot",
+    });
+    reconnectSocket.close();
     socket.close();
   });
 
@@ -2354,16 +2499,14 @@ describe("Voidmesh API", () => {
     socket.accept();
     await nextWebSocketMessage(socket);
     await nextWebSocketMessage(socket);
-    const document = new Y.Doc();
-    document
-      .getMap<Y.Map<unknown>>("entities")
-      .set("entity-export", testWorkspaceEntity(assetId, "Exported image"));
-    const updateId = "550e8400-e29b-41d4-a716-446655440009";
-    socket.send(encodeClientYjsUpdate(updateId, Y.encodeStateAsUpdate(document)));
-    expect(JSON.parse(String(await nextWebSocketMessage(socket)))).toMatchObject({
+    const operationId = "550e8400-e29b-41d4-a716-446655440009";
+    const sceneMessages = nextWebSocketMessages(socket, 2);
+    socket.send(sceneCreateMessage(operationId, "entity-export", assetId, "Exported image"));
+    const [, sceneAck] = await sceneMessages;
+    expect(JSON.parse(String(sceneAck))).toMatchObject({
+      operationId,
       roomSequence: 1,
       type: "ack",
-      updateId,
     });
 
     const created = await apiFetch(`/v1/workspaces/${workspace.id}/export`, {
@@ -2562,6 +2705,28 @@ function nextWebSocketMessage(socket: WebSocket): Promise<string | ArrayBuffer> 
   });
 }
 
+/* Retired binary-frame helpers retained as commented migration history with the tests above.
+function encodeClientYjsUpdate(_updateId: string, update: Uint8Array): ArrayBuffer {
+  return new Uint8Array(update).buffer;
+}
+
+function encodeClientYjsRebase(_updateId: string, update: Uint8Array): ArrayBuffer {
+  return new Uint8Array(update).buffer;
+}
+
+function decodeServerYjsUpdate(
+  _frame: ArrayBuffer,
+): { roomSequence: number; update: Uint8Array; updateId: string } | null {
+  return null;
+}
+
+function decodeServerYjsRebase(
+  _frame: ArrayBuffer,
+): { roomSequence: number; update: Uint8Array; updateId: string } | null {
+  return null;
+}
+*/
+
 function nextWebSocketMessages(
   socket: WebSocket,
   count: number,
@@ -2584,6 +2749,7 @@ function nextWebSocketMessages(
   });
 }
 
+/* Retired Yjs fixture.
 function testWorkspaceEntity(assetId: string, name: string): Y.Map<unknown> {
   const entity = new Y.Map<unknown>();
   entity.set("identity.name", name);
@@ -2616,6 +2782,61 @@ function testWorkspaceEntity(assetId: string, name: string): Y.Map<unknown> {
   });
   return entity;
 }
+*/
+
+function sceneCreateMessage(
+  operationId: string,
+  entityId: string,
+  assetId: string,
+  name: string,
+  options: {
+    contentType?: string;
+    mediaType?: "gif" | "image" | "svg" | "video";
+    playbackDuration?: number;
+  } = {},
+): string {
+  return JSON.stringify({
+    command: {
+      entity: {
+        asset: {
+          byteLength: 1,
+          contentType: options.contentType ?? "image/png",
+          id: assetId,
+          mediaType: options.mediaType ?? "image",
+          originalFilename: `${name}.${options.mediaType === "video" ? "mp4" : "png"}`,
+        },
+        edited: false,
+        generation: 0,
+        id: entityId,
+        locked: false,
+        name,
+        originalSize: { height: 100, width: 100 },
+        ...(options.playbackDuration !== undefined && {
+          playbackDuration: options.playbackDuration,
+        }),
+        position: { x: 0, y: 0 },
+        rotation: 0,
+        shaderParams: {
+          background: [0, 0, 0, 1],
+          color: [1, 1, 1, 1],
+          intensity: 1,
+          preserveColors: false,
+          reversePalette: false,
+          scale: 1,
+          shape: "circle",
+          showOriginal: false,
+          size: 1,
+        },
+        shaderType: "dithering",
+        size: { height: 100, width: 100 },
+        zIndex: 0,
+      },
+      kind: "entity.create",
+      operationId,
+    },
+    type: "scene-command",
+  });
+}
 
 function nextWebSocketClose(socket: WebSocket): Promise<CloseEvent> {
   return new Promise((resolve) => {
@@ -2630,22 +2851,4 @@ function bounded<T>(promise: Promise<T>, label: string): Promise<T> {
       setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), 1_000),
     ),
   ]);
-}
-
-async function waitForWorkspaceSnapshot(
-  workspaceId: string,
-  minimumRoomSequence: number,
-): Promise<{ object_key: string; room_sequence: number }> {
-  for (let attempt = 0; attempt < 50; attempt++) {
-    const snapshot = await env.DB.prepare(
-      `SELECT object_key, room_sequence FROM workspace_snapshots
-       WHERE workspace_id = ? AND room_sequence >= ?
-       ORDER BY room_sequence DESC LIMIT 1`,
-    )
-      .bind(workspaceId, minimumRoomSequence)
-      .first<{ object_key: string; room_sequence: number }>();
-    if (snapshot) return snapshot;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error("Timed out waiting for workspace snapshot");
 }

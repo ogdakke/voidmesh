@@ -1,14 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as Y from "yjs";
+import type {
+  ClientDurableMessage,
+  HostedAssetReference,
+  HostedSceneEntityInput,
+} from "@voidmesh/collaboration";
 import { R2HostedAssetRegistry } from "#application/canvas/hosted-asset-registry.ts";
 import { config } from "#config";
 import type { HostedApiClient } from "#lib/hosted-api-client.ts";
 import type { HostedAssetCache } from "#lib/hosted-asset-cache.ts";
-import {
-  HostedWorkspaceDocument,
-  type HostedAssetReference,
-  type HostedWorkspaceEntity,
-} from "#lib/hosted-workspace-document.ts";
 import { MediaType, ShaderType, type ShaderCanvasEntity } from "#types/canvas.ts";
 
 class MemoryAssetCache implements HostedAssetCache {
@@ -28,10 +27,11 @@ class MemoryAssetCache implements HostedAssetCache {
   }
 }
 
-function hostedEntity(asset: HostedAssetReference): HostedWorkspaceEntity {
+function hostedEntity(asset: HostedAssetReference): HostedSceneEntityInput {
   return {
     asset,
     edited: false,
+    generation: 0,
     id: "entity-1",
     locked: false,
     name: "Offline source",
@@ -43,6 +43,19 @@ function hostedEntity(asset: HostedAssetReference): HostedWorkspaceEntity {
     size: { height: 10, width: 10 },
     zIndex: 1,
   };
+}
+
+function pendingCreate(asset: HostedAssetReference): ClientDurableMessage[] {
+  return [
+    {
+      command: {
+        entity: hostedEntity(asset),
+        kind: "entity.create",
+        operationId: "operation-1",
+      },
+      type: "scene-command",
+    },
+  ];
 }
 
 function runtimeEntity(blob: Blob, name: string): ShaderCanvasEntity {
@@ -181,7 +194,7 @@ describe("R2HostedAssetRegistry", () => {
 
   it("uploads cached offline originals before replacing provisional document references", async () => {
     const recoveredBitmap = {
-      close: vi.fn(),
+      close: vi.fn<() => void>(),
       height: 10,
       width: 10,
     } as unknown as ImageBitmap;
@@ -190,7 +203,7 @@ describe("R2HostedAssetRegistry", () => {
       vi.fn(async () => recoveredBitmap),
     );
     const canvas = {
-      getContext: () => ({ drawImage: vi.fn() }),
+      getContext: () => ({ drawImage: vi.fn<() => void>() }),
       height: 0,
       toBlob(callback: BlobCallback) {
         callback(new Blob(["preview"], { type: "image/webp" }));
@@ -238,12 +251,13 @@ describe("R2HostedAssetRegistry", () => {
       vi.fn<(error: unknown) => void>(),
       vi.fn<() => void>(),
     );
-    const document = new HostedWorkspaceDocument({ document: new Y.Doc() });
-    document.addEntity(hostedEntity(provisional));
+    const commands = await registry.flushPendingCommands(pendingCreate(provisional));
 
-    await registry.flushPending(document);
-
-    expect(document.getEntity("entity-1")?.asset).toEqual(uploaded);
+    expect(
+      commands[0]?.type === "scene-command" && commands[0].command.kind === "entity.create"
+        ? commands[0].command.entity.asset
+        : null,
+    ).toEqual(uploaded);
     expect(cache.values.has(provisional.id)).toBe(false);
     expect(cache.values.has(uploaded.id)).toBe(true);
     expect(api.reserveAssetUpload).toHaveBeenCalledOnce();
@@ -305,12 +319,13 @@ describe("R2HostedAssetRegistry", () => {
       onCacheError,
       vi.fn<() => void>(),
     );
-    const document = new HostedWorkspaceDocument({ document: new Y.Doc() });
-    document.addEntity(hostedEntity(provisional));
+    const commands = await registry.flushPendingCommands(pendingCreate(provisional));
 
-    await expect(registry.flushPending(document)).resolves.toBeUndefined();
-
-    expect(document.getEntity("entity-1")?.asset).toEqual(uploaded);
+    expect(
+      commands[0]?.type === "scene-command" && commands[0].command.kind === "entity.create"
+        ? commands[0].command.entity.asset
+        : null,
+    ).toEqual(uploaded);
     expect(onCacheError).toHaveBeenCalledWith(cacheError);
   });
 
@@ -324,7 +339,7 @@ describe("R2HostedAssetRegistry", () => {
       originalFilename: "legacy.png",
     };
     const canvas = {
-      getContext: () => ({ drawImage: vi.fn() }),
+      getContext: () => ({ drawImage: vi.fn<() => void>() }),
       height: 0,
       toBlob(callback: BlobCallback) {
         callback(new Blob(["preview"], { type: "image/webp" }));
@@ -370,7 +385,7 @@ describe("R2HostedAssetRegistry", () => {
     const firstBlob = new Blob([new Uint8Array([1])], { type: "image/png" });
     const secondBlob = new Blob([new Uint8Array([2])], { type: "image/png" });
     const adoptedBlob = new Blob([new Uint8Array([0])], { type: "image/png" });
-    const adopted = {
+    const adopted: HostedAssetReference = {
       byteLength: adoptedBlob.size,
       contentType: adoptedBlob.type,
       id: "asset-adopted",

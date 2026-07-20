@@ -8,6 +8,7 @@ React composition and orchestration connecting application services, engine stat
 - `use-canvas.ts` — Narrow selectors, commands, and capability contexts.
 - `keybind-context.ts`, `keybind-provider.tsx` — Hierarchical keyboard shortcuts.
 - `export-queue-context.tsx`, `video-export-context.tsx` — Export state and sequential jobs.
+- `hosted-workspace-runtime.tsx` — Hosted transport, projection, asset cache, and presence composition.
 
 ## Invariants
 

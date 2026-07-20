@@ -19,7 +19,6 @@ import {
   type HostedArchiveAsset,
 } from "@voidmesh/workspace-format";
 import { Zip, ZipDeflate, ZipPassThrough, strToU8 } from "fflate";
-import * as Y from "yjs";
 import { errorResponse, json } from "./http.ts";
 
 const EXPORT_PATH =
@@ -294,11 +293,8 @@ export async function processWorkspaceExport(env: Env, exportId: ExportId): Prom
   try {
     const snapshot = await env.ASSETS.get(row.snapshot_object_key);
     if (!snapshot) throw new Error("Export source snapshot is missing");
-    const update = new Uint8Array(await snapshot.arrayBuffer());
-    const document = new Y.Doc();
-    Y.applyUpdate(document, update);
-    const entities = readHostedArchiveEntities(document, startedAt);
-    document.destroy();
+    const source: unknown = JSON.parse(await snapshot.text());
+    const entities = readHostedArchiveEntities(source, startedAt);
     const assets = await readWorkspaceAssets(env.DB, row.workspace_id);
     const referencedAssets = validateReferencedAssets(entities, assets);
     const manifest = createVdmshManifest(

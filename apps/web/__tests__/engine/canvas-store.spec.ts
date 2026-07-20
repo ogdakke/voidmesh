@@ -231,6 +231,27 @@ describe("canvasStore.seekVideo", () => {
     expect(entity.mediaSource.videoElement.currentTime).toBe(0);
     expect(entity.playback?.currentTime).toBe(50);
   });
+
+  test("invalidates the decoded texture when an asynchronous seek finishes", () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
+    if (entity.mediaSource.type !== "video") throw new Error("Expected video entity");
+    const seekedListeners: EventListener[] = [];
+    const addEventListener = vi.fn<
+      (type: string, listener: EventListenerOrEventListenerObject) => void
+    >((type, listener) => {
+      if (type === "seeked" && typeof listener === "function") seekedListeners.push(listener);
+    });
+    entity.mediaSource.videoElement.addEventListener = addEventListener;
+    canvasStore.addEntity(entity);
+    entity.textureDirty = false;
+
+    canvasStore.seekVideo(entity.id, 50);
+    entity.textureDirty = false;
+    seekedListeners[0]?.(new Event("seeked"));
+
+    expect(entity.textureDirty).toBe(true);
+    expect(canvasStore.getState().entitiesDirty.has(entity.id)).toBe(true);
+  });
 });
 
 describe("canvasStore.playVideo", () => {
@@ -248,6 +269,52 @@ describe("canvasStore.playVideo", () => {
     expect(entity.mediaSource.videoElement.src).toMatch(/^blob:mock-/);
     expect(entity.mediaSource.videoElement.currentTime).toBe(24);
     expect(entity.playback.isPlaying).toBe(true);
+  });
+});
+
+describe("canvasStore.setVideoPlaybackIntent", () => {
+  test("starts logical playback without opening a dormant decoder", () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
+    if (entity.mediaSource.type !== "video" || !entity.playback) {
+      throw new Error("Expected video entity with playback");
+    }
+    entity.mediaSource.videoElement.removeAttribute("src");
+    canvasStore.addEntity(entity);
+
+    const hasDecoder = canvasStore.setVideoPlaybackIntent(
+      entity.id,
+      { currentTime: 24, isPlaying: true, loop: true, playbackRate: 1.5 },
+      true,
+    );
+
+    expect(hasDecoder).toBe(false);
+    expect(entity.mediaSource.videoElement.src).toBe("");
+    expect(entity.playback).toMatchObject({
+      currentTime: 24,
+      isPlaying: true,
+      loop: true,
+      playbackRate: 1.5,
+    });
+  });
+
+  test("seeks a newly activated decoder to the existing logical intent", () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
+    if (entity.mediaSource.type !== "video" || !entity.playback) {
+      throw new Error("Expected video entity with playback");
+    }
+    entity.mediaSource.videoElement.src = "blob:active";
+    entity.mediaSource.videoElement.currentTime = 0;
+    entity.playback.currentTime = 24;
+    canvasStore.addEntity(entity);
+
+    const hasDecoder = canvasStore.setVideoPlaybackIntent(
+      entity.id,
+      { currentTime: 24, isPlaying: false, loop: false, playbackRate: 1 },
+      true,
+    );
+
+    expect(hasDecoder).toBe(true);
+    expect(entity.mediaSource.videoElement.currentTime).toBe(24);
   });
 });
 

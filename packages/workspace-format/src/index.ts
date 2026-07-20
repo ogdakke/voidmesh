@@ -1,6 +1,3 @@
-import * as Y from "yjs";
-
-const PARAM_PREFIX = "appearance.params.";
 const MAX_COORDINATE = 100_000_000;
 
 type JsonObject = { [key: string]: JsonValue };
@@ -63,14 +60,24 @@ export type VdmshEntity = Record<string, unknown> & {
 };
 
 export function readHostedArchiveEntities(
-  document: Y.Doc,
+  snapshot: unknown,
   now = Date.now(),
 ): HostedArchiveEntity[] {
-  const entities = document.getMap<Y.Map<unknown>>("entities");
+  if (
+    !isRecord(snapshot) ||
+    !Array.isArray(snapshot.entities) ||
+    !Array.isArray(snapshot.playback)
+  ) {
+    throw new Error("Invalid hosted workspace snapshot");
+  }
+  const playback = new Map<string, Record<string, unknown>>();
+  for (const anchor of snapshot.playback) {
+    if (isRecord(anchor) && isIdentifier(anchor.entityId)) playback.set(anchor.entityId, anchor);
+  }
   const result: HostedArchiveEntity[] = [];
-  for (const [id, map] of entities) {
-    const entity = readEntity(id, map, now);
-    if (!entity) throw new Error(`Invalid hosted workspace entity: ${id}`);
+  for (const value of snapshot.entities) {
+    const entity = readEntity(value, playback.get(isRecord(value) ? String(value.id) : ""), now);
+    if (!entity) throw new Error("Invalid hosted workspace entity");
     result.push(entity);
   }
   return result.sort(
@@ -144,35 +151,34 @@ function toVdmshEntity(entity: HostedArchiveEntity): VdmshEntity {
   return base;
 }
 
-function readEntity(id: string, map: Y.Map<unknown>, now: number): HostedArchiveEntity | null {
-  const name = map.get("identity.name");
-  const locked = map.get("identity.locked");
-  const edited = map.get("identity.edited");
-  const originalPalette = map.get("identity.originalPalette");
-  const position = {
-    x: map.get("geometry.position.x"),
-    y: map.get("geometry.position.y"),
-  };
-  const size = {
-    height: map.get("geometry.size.height"),
-    width: map.get("geometry.size.width"),
-  };
-  const originalSize = {
-    height: map.get("geometry.originalSize.height"),
-    width: map.get("geometry.originalSize.width"),
-  };
-  const rotation = map.get("geometry.rotation");
-  const zIndex = map.get("geometry.zIndex");
-  const shaderType = map.get("appearance.shaderType");
-  const shaderParams = readFlatRecord(map);
-  const asset = map.get("asset");
-  const playback = map.get("playback");
-  const shaderPlayback = map.get("appearance.shaderPlayback");
-  const fps = map.get("media.fps");
-  const hasAudio = map.get("media.hasAudio");
+function readEntity(
+  value: unknown,
+  playback: Record<string, unknown> | undefined,
+  now: number,
+): HostedArchiveEntity | null {
+  if (!isRecord(value)) return null;
+  const {
+    asset,
+    edited,
+    fps,
+    hasAudio,
+    id,
+    locked,
+    name,
+    originalPalette,
+    originalSize,
+    playbackDuration,
+    position,
+    rotation,
+    shaderParams,
+    shaderType,
+    size,
+    zIndex,
+  } = value;
   if (
     !isIdentifier(id) ||
     typeof name !== "string" ||
+    name.length === 0 ||
     name.length > 1_024 ||
     typeof locked !== "boolean" ||
     typeof edited !== "boolean" ||
@@ -186,17 +192,20 @@ function readEntity(id: string, map: Y.Map<unknown>, now: number): HostedArchive
     !isJsonObject(shaderParams) ||
     !isAsset(asset) ||
     (originalPalette !== undefined && !isJsonObject(originalPalette)) ||
-    (playback !== undefined && !isPlaybackAnchor(playback)) ||
-    (shaderPlayback !== undefined && !isShaderPlaybackAnchor(shaderPlayback)) ||
     (fps !== undefined && fps !== null && (!isFiniteNumber(fps) || fps <= 0)) ||
-    (hasAudio !== undefined && typeof hasAudio !== "boolean")
+    (hasAudio !== undefined && typeof hasAudio !== "boolean") ||
+    (playbackDuration !== undefined && (!isFiniteNumber(playbackDuration) || playbackDuration < 0))
   ) {
     return null;
   }
-  if (shaderPlayback) {
-    shaderParams.time = advanceShaderPlayback(shaderPlayback, now);
-    shaderParams.timeAutoPlay = shaderPlayback.isPlaying;
+  const nextShaderParams = clone(shaderParams);
+  if (isShaderPlaybackAnchor(playback)) {
+    nextShaderParams.time = advanceShaderPlayback(playback, now);
+    nextShaderParams.timeAutoPlay = playback.state === "playing";
   }
+  const playbackState = isMediaPlaybackAnchor(playback)
+    ? advancePlayback(playback, now)
+    : undefined;
   return {
     asset,
     edited,
@@ -207,64 +216,61 @@ function readEntity(id: string, map: Y.Map<unknown>, now: number): HostedArchive
     name,
     ...(originalPalette && { originalPalette }),
     originalSize,
-    ...(playback && {
-      playback: advancePlayback(playback, now),
-      playbackDuration: playback.duration,
+    ...(playbackState && {
+      playback: playbackState,
+      playbackDuration: playback!.duration as number,
     }),
     position,
     rotation,
-    shaderParams,
+    shaderParams: nextShaderParams,
     shaderType,
     size,
     zIndex,
   };
 }
 
-interface PlaybackAnchor {
+interface MediaPlaybackAnchor {
   duration: number;
-  state: ArchivePlaybackState;
-  updatedAt: number;
+  effectiveAtRoomMs: number;
+  loop: boolean;
+  playbackRate: number;
+  positionSeconds: number;
+  state: "paused" | "playing";
+  type: "media";
 }
 
 interface ShaderPlaybackAnchor {
-  isPlaying: boolean;
-  time: number;
-  updatedAt: number;
+  effectiveAtRoomMs: number;
+  shaderTime: number;
+  state: "paused" | "playing";
+  type: "shader";
 }
 
-function advancePlayback(anchor: PlaybackAnchor, now: number): ArchivePlaybackState {
-  const state = clone(anchor.state);
-  if (!state.isPlaying) return state;
-  state.currentTime += (Math.max(0, now - anchor.updatedAt) * state.playbackRate) / 1_000;
-  if (anchor.duration > 0 && state.loop) state.currentTime %= anchor.duration;
-  else if (anchor.duration > 0 && state.currentTime >= anchor.duration) {
-    state.currentTime = anchor.duration;
-    state.isPlaying = false;
+function advancePlayback(anchor: MediaPlaybackAnchor, now: number): ArchivePlaybackState {
+  let currentTime = anchor.positionSeconds;
+  let isPlaying = anchor.state === "playing";
+  if (isPlaying) {
+    currentTime += (Math.max(0, now - anchor.effectiveAtRoomMs) * anchor.playbackRate) / 1_000;
   }
-  return state;
+  if (anchor.duration > 0 && anchor.loop) currentTime %= anchor.duration;
+  else if (anchor.duration > 0 && currentTime >= anchor.duration) {
+    currentTime = anchor.duration;
+    isPlaying = false;
+  }
+  return {
+    currentTime,
+    isPlaying,
+    loop: anchor.loop,
+    muted: true,
+    playbackRate: anchor.playbackRate,
+    volume: 1,
+  };
 }
 
 function advanceShaderPlayback(anchor: ShaderPlaybackAnchor, now: number): number {
-  return anchor.isPlaying ? anchor.time + Math.max(0, now - anchor.updatedAt) / 1_000 : anchor.time;
-}
-
-function readFlatRecord(map: Y.Map<unknown>): JsonObject {
-  const result: JsonObject = {};
-  for (const [key, value] of map) {
-    if (!key.startsWith(PARAM_PREFIX)) continue;
-    setPath(result, key.slice(PARAM_PREFIX.length).split("."), value);
-  }
-  return result;
-}
-
-function setPath(target: JsonObject, path: string[], value: unknown): void {
-  let current = target;
-  for (let index = 0; index < path.length - 1; index++) {
-    const segment = path[index]!;
-    if (!isJsonObject(current[segment])) current[segment] = {};
-    current = current[segment] as JsonObject;
-  }
-  current[path.at(-1)!] = clone(value) as JsonValue;
+  return anchor.state === "playing"
+    ? anchor.shaderTime + Math.max(0, now - anchor.effectiveAtRoomMs) / 1_000
+    : anchor.shaderTime;
 }
 
 function isAsset(value: unknown): value is HostedArchiveAsset {
@@ -284,38 +290,29 @@ function isAsset(value: unknown): value is HostedArchiveAsset {
   );
 }
 
-function isPlaybackAnchor(value: unknown): value is PlaybackAnchor {
+function isMediaPlaybackAnchor(value: unknown): value is MediaPlaybackAnchor {
   return (
     isRecord(value) &&
+    value.type === "media" &&
     isFiniteNumber(value.duration) &&
     value.duration >= 0 &&
-    isFiniteNumber(value.updatedAt) &&
-    isPlaybackState(value.state)
+    isFiniteNumber(value.effectiveAtRoomMs) &&
+    typeof value.loop === "boolean" &&
+    isFiniteNumber(value.playbackRate) &&
+    value.playbackRate > 0 &&
+    isFiniteNumber(value.positionSeconds) &&
+    value.positionSeconds >= 0 &&
+    (value.state === "paused" || value.state === "playing")
   );
 }
 
 function isShaderPlaybackAnchor(value: unknown): value is ShaderPlaybackAnchor {
   return (
     isRecord(value) &&
-    typeof value.isPlaying === "boolean" &&
-    isFiniteNumber(value.time) &&
-    isFiniteNumber(value.updatedAt)
-  );
-}
-
-function isPlaybackState(value: unknown): value is ArchivePlaybackState {
-  return (
-    isRecord(value) &&
-    isFiniteNumber(value.currentTime) &&
-    value.currentTime >= 0 &&
-    typeof value.isPlaying === "boolean" &&
-    typeof value.loop === "boolean" &&
-    typeof value.muted === "boolean" &&
-    isFiniteNumber(value.playbackRate) &&
-    value.playbackRate > 0 &&
-    isFiniteNumber(value.volume) &&
-    value.volume >= 0 &&
-    value.volume <= 1
+    value.type === "shader" &&
+    isFiniteNumber(value.effectiveAtRoomMs) &&
+    isFiniteNumber(value.shaderTime) &&
+    (value.state === "paused" || value.state === "playing")
   );
 }
 

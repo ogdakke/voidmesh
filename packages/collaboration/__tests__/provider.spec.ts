@@ -1,20 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
-import * as Y from "yjs";
 import {
   COLLABORATION_PROTOCOL_VERSION,
-  base64UrlToBytes,
-  bytesToBase64Url,
-  decodeClientYjsRebase,
-  decodeClientYjsUpdate,
-  encodeServerYjsRebase,
-  encodeServerYjsUpdate,
+  type ClientDurableMessage,
+  type ServerConflictMessage,
+  type ServerPlaybackMessage,
+  type ServerScenePatchMessage,
+  type ServerSceneSnapshotMessage,
 } from "../src/index.ts";
-import { HostedCollaborationProvider } from "../src/provider.ts";
+import { HostedCollaborationProvider, type PendingCommandStore } from "../src/provider.ts";
 
 class FakeSocket extends EventTarget {
-  binaryType = "blob";
   readyState = 0;
-  readonly sent: (string | ArrayBuffer)[] = [];
+  readonly sent: string[] = [];
   closedWith: number | null = null;
 
   open(): void {
@@ -22,18 +19,15 @@ class FakeSocket extends EventTarget {
     this.dispatchEvent(new Event("open"));
   }
 
-  send(value: string | ArrayBuffer): void {
+  send(value: string): void {
     this.sent.push(value);
   }
 
-  receive(value: string | ArrayBuffer | Blob): void {
-    this.dispatchEvent(new MessageEvent("message", { data: value }));
+  receive(value: object): void {
+    this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(value) }));
   }
 
   close(code = 1000): void {
-    if (code !== 1000 && (code < 3000 || code > 4999)) {
-      throw new DOMException("Invalid WebSocket close code", "InvalidAccessError");
-    }
     if (this.readyState === 3) return;
     this.closedWith = code;
     this.readyState = 3;
@@ -43,575 +37,230 @@ class FakeSocket extends EventTarget {
   }
 }
 
+class FakeStore implements PendingCommandStore {
+  commands: ClientDurableMessage[] = [];
+
+  async load(): Promise<ClientDurableMessage[]> {
+    return structuredClone(this.commands);
+  }
+
+  async save(commands: readonly ClientDurableMessage[]): Promise<void> {
+    this.commands = [...structuredClone(commands)];
+  }
+}
+
+function synchronize(socket: FakeSocket): void {
+  socket.receive({
+    connectionId: "connection-1",
+    peers: [],
+    protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+    role: "owner",
+    roomSequence: 0,
+    serverTime: Date.now(),
+    type: "hello",
+    user: { color: "red", name: "Owner", userId: "user-1" },
+  });
+  socket.receive({ entities: [], playback: [], roomSequence: 0, type: "scene-snapshot" });
+}
+
+function command(operationId: string) {
+  return {
+    entities: [],
+    kind: "scene.replace" as const,
+    operationId,
+  };
+}
+
+function playbackCommand(commandId: string, positionSeconds: number, state = "paused" as const) {
+  return {
+    commandId,
+    duration: 10,
+    entityId: "entity-1",
+    loop: true,
+    mediaRevision: 0,
+    playbackRate: 1,
+    positionSeconds,
+    state,
+    type: "media" as const,
+  };
+}
+
 describe("HostedCollaborationProvider", () => {
-  it("uses the lowest-RTT recent room-clock sample and notifies playback projection", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000_000);
+  it("restores pending commands and sends them one at a time after the snapshot", async () => {
+    const store = new FakeStore();
+    store.commands = [{ command: command("offline-1"), type: "scene-command" }];
     const socket = new FakeSocket();
-    const onClockSample = vi.fn();
     const provider = new HostedCollaborationProvider({
-      document: new Y.Doc(),
-      onClockSample,
+      pendingStore: store,
       socketFactory: () => socket as unknown as WebSocket,
     });
     provider.connect();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(provider.status).toBe("connecting"));
     socket.open();
-    const firstPing = JSON.parse(socket.sent[0] as string);
-    vi.setSystemTime(1_000_100);
-    socket.receive(
-      JSON.stringify({
-        clientTime: firstPing.clientTime,
-        requestId: firstPing.requestId,
-        serverTime: 1_000_070,
-        type: "clock-pong",
-      }),
-    );
-    expect(provider.serverNow()).toBe(1_000_120);
+    synchronize(socket);
 
-    vi.advanceTimersByTime(15_000);
-    const secondPing = JSON.parse(socket.sent.at(-1) as string);
-    vi.setSystemTime(secondPing.clientTime + 20);
-    socket.receive(
-      JSON.stringify({
-        clientTime: secondPing.clientTime,
-        requestId: secondPing.requestId,
-        serverTime: secondPing.clientTime + 30,
-        type: "clock-pong",
-      }),
+    await vi.waitFor(() =>
+      expect(
+        socket.sent.some((value) => JSON.parse(value).command?.operationId === "offline-1"),
+      ).toBe(true),
     );
-    expect(provider.serverNow()).toBe(secondPing.clientTime + 40);
-    expect(onClockSample).toHaveBeenCalledTimes(2);
+    provider.submitSceneCommand(command("offline-2"));
+    expect(
+      socket.sent.some((value) => JSON.parse(value).command?.operationId === "offline-2"),
+    ).toBe(false);
+
+    socket.receive({ operationId: "offline-1", roomSequence: 1, type: "ack" });
+    await vi.waitFor(() =>
+      expect(
+        socket.sent.some((value) => JSON.parse(value).command?.operationId === "offline-2"),
+      ).toBe(true),
+    );
+    expect(store.commands).toHaveLength(1);
     provider.destroy();
-    vi.useRealTimers();
   });
 
-  it("publishes an IndexedDB-restored offline diff after the server state vector", async () => {
-    const local = new Y.Doc();
-    local.getMap("entities").set("offline-entity", { x: 1 });
-    const server = new Y.Doc();
+  it("publishes snapshots, narrow patches, and playback separately", async () => {
     const socket = new FakeSocket();
-    const statuses: string[] = [];
+    const snapshots = vi.fn<(message: ServerSceneSnapshotMessage) => void>();
+    const patches = vi.fn<(message: ServerScenePatchMessage) => void>();
+    const playback = vi.fn<(message: ServerPlaybackMessage) => void>();
     const provider = new HostedCollaborationProvider({
-      beforeSync: async () => {
-        local.getMap("metadata").set("assetsReady", true);
+      socketFactory: () => socket as unknown as WebSocket,
+    });
+    provider.onSnapshot(snapshots);
+    provider.onPatch(patches);
+    provider.onPlayback(playback);
+    provider.connect();
+    await vi.waitFor(() => expect(provider.status).toBe("connecting"));
+    socket.open();
+    synchronize(socket);
+    socket.receive({
+      changes: [],
+      operationId: "operation-1",
+      roomSequence: 1,
+      type: "scene-patch",
+    });
+    socket.receive({
+      anchor: {
+        commandId: "playback-1",
+        duration: 10,
+        effectiveAtRoomMs: Date.now(),
+        entityId: "entity-1",
+        loop: true,
+        mediaRevision: 0,
+        playbackRate: 1,
+        positionSeconds: 2,
+        sequence: 2,
+        state: "playing",
+        type: "media",
       },
-      document: local,
-      persistenceReady: Promise.resolve(),
-      socketFactory: () => socket as unknown as WebSocket,
+      roomSequence: 2,
+      type: "playback",
     });
-    provider.onStatus((status) => statuses.push(status));
-    provider.connect();
-    await Promise.resolve();
-    socket.open();
-    socket.receive(
-      JSON.stringify({
-        connectionId: "connection-1",
-        peers: [],
-        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
-        role: "owner",
-        roomSequence: 0,
-        serverTime: Date.now(),
-        type: "hello",
-        user: { color: "red", name: "Owner", userId: "user-1" },
-      }),
-    );
-    socket.receive(
-      JSON.stringify({
-        roomSequence: 0,
-        stateVector: bytesToBase64Url(Y.encodeStateVector(server)),
-        type: "sync-complete",
-      }),
-    );
 
-    await vi.waitFor(() =>
-      expect(socket.sent.some((value) => value instanceof ArrayBuffer)).toBe(true),
-    );
-
-    const frame = socket.sent.find((value): value is ArrayBuffer => value instanceof ArrayBuffer);
-    expect(frame).toBeTruthy();
-    const decoded = decodeClientYjsUpdate(frame!);
-    expect(decoded).toBeTruthy();
-    Y.applyUpdate(server, decoded!.update);
-    expect(server.getMap("entities").get("offline-entity")).toEqual({ x: 1 });
-    expect(server.getMap("metadata").get("assetsReady")).toBe(true);
-    expect(statuses).toContain("connected");
-    expect(base64UrlToBytes("not base64 !")).toBeNull();
+    expect(snapshots).toHaveBeenCalledOnce();
+    expect(patches).toHaveBeenCalledOnce();
+    expect(playback).toHaveBeenCalledOnce();
     provider.destroy();
   });
 
-  it("applies Blob snapshot frames before completing synchronization", async () => {
-    const local = new Y.Doc();
-    const server = new Y.Doc();
-    server.getMap("entities").set("cloud-entity", { name: "From cloud" });
+  it("coalesces queued playback intent and does not replay an optimistic command locally", async () => {
     const socket = new FakeSocket();
+    const playback = vi.fn<(message: ServerPlaybackMessage) => void>();
     const provider = new HostedCollaborationProvider({
-      document: local,
       socketFactory: () => socket as unknown as WebSocket,
     });
+    provider.onPlayback(playback);
     provider.connect();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(provider.status).toBe("connecting"));
     socket.open();
-    socket.receive(
-      new Blob([
-        encodeServerYjsUpdate(
-          1,
-          "550e8400-e29b-41d4-a716-446655440010",
-          Y.encodeStateAsUpdate(server),
-        ),
-      ]),
-    );
-    socket.receive(
-      JSON.stringify({
-        roomSequence: 1,
-        stateVector: bytesToBase64Url(Y.encodeStateVector(server)),
-        type: "sync-complete",
-      }),
-    );
-
-    await vi.waitFor(() =>
-      expect(local.getMap("entities").get("cloud-entity")).toEqual({ name: "From cloud" }),
-    );
-    expect(provider.status).toBe("connected");
-    provider.destroy();
-  });
-
-  it("replaces a stale persisted generation from room authority without echoing stale history", async () => {
-    const local = new Y.Doc();
-    local.getMap("recovery").set("generation", "stale-generation");
-    local.getMap("entities").set("stale-entity", { name: "Stale" });
-    const server = new Y.Doc();
-    server.getMap("recovery").set("generation", "room-generation");
-    server.getMap("entities").set("room-entity", { name: "From room" });
-    const socket = new FakeSocket();
-    const provider = new HostedCollaborationProvider({
-      document: local,
-      socketFactory: () => socket as unknown as WebSocket,
-    });
-    provider.connect();
-    await Promise.resolve();
-    socket.open();
-    socket.receive(
-      encodeServerYjsRebase(
-        8,
-        "550e8400-e29b-41d4-a716-446655440080",
-        Y.encodeStateAsUpdate(server),
-      ),
-    );
-    socket.receive(
-      JSON.stringify({
-        roomSequence: 8,
-        stateVector: bytesToBase64Url(Y.encodeStateVector(server)),
-        type: "sync-complete",
-      }),
-    );
-
-    await vi.waitFor(() => expect(provider.status).toBe("connected"));
-    expect(local.getMap("entities").has("stale-entity")).toBe(false);
-    expect(local.getMap("entities").get("room-entity")).toEqual({ name: "From room" });
-    expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(0);
-    provider.destroy();
-  });
-
-  it("merges same-generation offline changes after an authoritative snapshot", async () => {
-    const server = new Y.Doc();
-    server.getMap("recovery").set("generation", "shared-generation");
-    server.getMap("entities").set("room-entity", { name: "From room" });
-    const local = new Y.Doc();
-    Y.applyUpdate(local, Y.encodeStateAsUpdate(server));
-    local.getMap("entities").set("offline-entity", { name: "Offline" });
-    const socket = new FakeSocket();
-    const provider = new HostedCollaborationProvider({
-      document: local,
-      socketFactory: () => socket as unknown as WebSocket,
-    });
-    provider.connect();
-    await Promise.resolve();
-    socket.open();
-    socket.receive(
-      encodeServerYjsRebase(
-        9,
-        "550e8400-e29b-41d4-a716-446655440090",
-        Y.encodeStateAsUpdate(server),
-      ),
-    );
-    socket.receive(
-      JSON.stringify({
-        roomSequence: 9,
-        stateVector: bytesToBase64Url(Y.encodeStateVector(server)),
-        type: "sync-complete",
-      }),
-    );
-
-    await vi.waitFor(() =>
-      expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(1),
-    );
-    const offline = decodeClientYjsUpdate(
-      socket.sent.find((value): value is ArrayBuffer => value instanceof ArrayBuffer)!,
-    )!;
-    Y.applyUpdate(server, offline.update);
-    expect(server.getMap("entities").get("offline-entity")).toEqual({ name: "Offline" });
-    provider.destroy();
-  });
-
-  it("rebases logical state when the server reports missing Yjs dependencies", async () => {
-    const local = new Y.Doc();
-    const entity = new Y.Map<unknown>();
-    entity.set("name", "Recovered");
-    local.getMap<Y.Map<unknown>>("entities").set("entity-1", entity);
-    const server = new Y.Doc();
-    const socket = new FakeSocket();
-    const provider = new HostedCollaborationProvider({
-      document: local,
-      socketFactory: () => socket as unknown as WebSocket,
-    });
-    provider.connect();
-    await Promise.resolve();
-    socket.open();
-    socket.receive(
-      JSON.stringify({
-        roomSequence: 0,
-        stateVector: bytesToBase64Url(Y.encodeStateVector(server)),
-        type: "sync-complete",
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(1),
-    );
-    const rejected = decodeClientYjsUpdate(
-      socket.sent.find((value): value is ArrayBuffer => value instanceof ArrayBuffer)!,
-    )!;
-
-    socket.receive(
-      JSON.stringify({
-        code: "missing-yjs-dependencies",
-        type: "error",
-        updateId: rejected.updateId,
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(2),
-    );
-    const recoveryFrame = socket.sent.filter(
-      (value): value is ArrayBuffer => value instanceof ArrayBuffer,
-    )[1]!;
-    const recovery = decodeClientYjsRebase(recoveryFrame)!;
-    Y.applyUpdate(server, recovery.update);
-    expect(server.getMap<Y.Map<unknown>>("entities").get("entity-1")?.get("name")).toBe(
-      "Recovered",
-    );
-
-    const competingRebase = new Y.Doc();
-    competingRebase.getMap<string>("recovery").set("generation", crypto.randomUUID());
-    socket.receive(
-      encodeServerYjsRebase(
-        1,
-        "550e8400-e29b-41d4-a716-446655440099",
-        Y.encodeStateAsUpdate(competingRebase),
-      ),
-    );
-    expect(local.getMap<Y.Map<unknown>>("entities").has("entity-1")).toBe(true);
-
-    local.getMap<Y.Map<unknown>>("entities").get("entity-1")!.set("name", "Still synced");
-    expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(2);
-
-    socket.receive(JSON.stringify({ roomSequence: 1, type: "ack", updateId: recovery.updateId }));
-    socket.receive(encodeServerYjsRebase(1, recovery.updateId, Y.encodeStateAsUpdate(server)));
-    await vi.waitFor(() =>
-      expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(3),
-    );
-    expect(local.getMap<Y.Map<unknown>>("entities").get("entity-1")?.get("name")).toBe(
-      "Still synced",
-    );
-    const followup = decodeClientYjsUpdate(
-      socket.sent.filter((value): value is ArrayBuffer => value instanceof ArrayBuffer)[2]!,
-    )!;
-    Y.applyUpdate(server, followup.update);
-    expect(server.getMap<Y.Map<unknown>>("entities").get("entity-1")?.get("name")).toBe(
-      "Still synced",
-    );
-    provider.destroy();
-  });
-
-  it("does not send obsolete delete sets after an unchanged recovery", async () => {
-    const local = new Y.Doc();
-    const staleEntity = new Y.Map<unknown>();
-    staleEntity.set("name", "Stale");
-    local.getMap<Y.Map<unknown>>("entities").set("stale-entity", staleEntity);
-    local.getMap("entities").delete("stale-entity");
-    const server = new Y.Doc();
-    const socket = new FakeSocket();
-    const provider = new HostedCollaborationProvider({
-      document: local,
-      socketFactory: () => socket as unknown as WebSocket,
-    });
-    provider.connect();
-    await Promise.resolve();
-    socket.open();
-    socket.receive(
-      JSON.stringify({
-        roomSequence: 0,
-        stateVector: bytesToBase64Url(Y.encodeStateVector(server)),
-        type: "sync-complete",
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(1),
-    );
-    const rejected = decodeClientYjsUpdate(
-      socket.sent.find((value): value is ArrayBuffer => value instanceof ArrayBuffer)!,
-    )!;
-
-    socket.receive(
-      JSON.stringify({
-        code: "missing-yjs-dependencies",
-        type: "error",
-        updateId: rejected.updateId,
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(2),
-    );
-    const recovery = decodeClientYjsRebase(
-      socket.sent.filter((value): value is ArrayBuffer => value instanceof ArrayBuffer)[1]!,
-    )!;
-
-    socket.receive(JSON.stringify({ roomSequence: 1, type: "ack", updateId: recovery.updateId }));
-    socket.receive(encodeServerYjsRebase(1, recovery.updateId, recovery.update));
-    await Promise.resolve();
-
-    expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(2);
-    provider.destroy();
-  });
-
-  it("preserves an unacknowledged local entity when another client rebases the room", async () => {
-    const local = new Y.Doc();
-    const server = new Y.Doc();
-    const socket = new FakeSocket();
-    const provider = new HostedCollaborationProvider({
-      document: local,
-      socketFactory: () => socket as unknown as WebSocket,
-    });
-    provider.connect();
-    await Promise.resolve();
-    socket.open();
-    socket.receive(
-      JSON.stringify({
-        roomSequence: 0,
-        stateVector: bytesToBase64Url(Y.encodeStateVector(server)),
-        type: "sync-complete",
-      }),
-    );
+    synchronize(socket);
     await vi.waitFor(() => expect(provider.status).toBe("connected"));
 
-    const entity = new Y.Map<unknown>();
-    entity.set("name", "Pending local entity");
-    local.getMap<Y.Map<unknown>>("entities").set("entity-local", entity);
+    provider.submitPlaybackCommand(playbackCommand("scrub-1", 1));
+    provider.submitPlaybackCommand(playbackCommand("scrub-2", 2));
+    provider.submitPlaybackCommand(playbackCommand("scrub-3", 3));
+    expect(
+      socket.sent.filter((value) => JSON.parse(value).type === "playback-command"),
+    ).toHaveLength(1);
+
+    socket.receive({
+      anchor: {
+        ...playbackCommand("scrub-1", 1),
+        effectiveAtRoomMs: Date.now(),
+        sequence: 1,
+      },
+      roomSequence: 1,
+      type: "playback",
+    });
+    expect(playback).not.toHaveBeenCalled();
+    socket.receive({ operationId: "scrub-1", roomSequence: 1, type: "ack" });
+
     await vi.waitFor(() =>
-      expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(1),
+      expect(
+        socket.sent
+          .map((value) => JSON.parse(value))
+          .filter((value) => value.type === "playback-command")
+          .map((value) => value.command.commandId),
+      ).toEqual(["scrub-1", "scrub-3"]),
     );
-    const pending = decodeClientYjsUpdate(
-      socket.sent.find((value): value is ArrayBuffer => value instanceof ArrayBuffer)!,
-    )!;
-
-    const competing = new Y.Doc();
-    competing.getMap<string>("recovery").set("generation", crypto.randomUUID());
-    socket.receive(
-      encodeServerYjsRebase(
-        1,
-        "550e8400-e29b-41d4-a716-446655440099",
-        Y.encodeStateAsUpdate(competing),
-      ),
-    );
-
-    expect(local.getMap("entities").has("entity-local")).toBe(true);
-
-    socket.receive(
-      JSON.stringify({
-        code: "missing-yjs-dependencies",
-        type: "error",
-        updateId: pending.updateId,
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(2),
-    );
-    const recovery = decodeClientYjsRebase(
-      socket.sent.filter((value): value is ArrayBuffer => value instanceof ArrayBuffer)[1]!,
-    )!;
-    const recovered = new Y.Doc();
-    Y.applyUpdate(recovered, recovery.update);
-    expect(recovered.getMap<Y.Map<unknown>>("entities").get("entity-local")?.get("name")).toBe(
-      "Pending local entity",
+    expect(socket.sent.some((value) => JSON.parse(value).command?.commandId === "scrub-2")).toBe(
+      false,
     );
     provider.destroy();
   });
 
-  it("uses a browser-valid application close code when offline assets block synchronization", async () => {
-    const local = new Y.Doc();
-    const server = new Y.Doc();
+  it("compacts a restored scrub backlog before reconnecting", async () => {
+    const store = new FakeStore();
+    store.commands = [
+      { command: playbackCommand("restored-1", 1), type: "playback-command" },
+      { command: playbackCommand("restored-2", 2), type: "playback-command" },
+      { command: playbackCommand("restored-3", 3), type: "playback-command" },
+    ];
     const socket = new FakeSocket();
-    const onSynchronizationError = vi.fn<(error: unknown) => void>();
     const provider = new HostedCollaborationProvider({
-      beforeSync: () => Promise.reject(new Error("Offline asset unavailable")),
-      document: local,
-      onSynchronizationError,
+      pendingStore: store,
       socketFactory: () => socket as unknown as WebSocket,
     });
     provider.connect();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(provider.status).toBe("connecting"));
     socket.open();
-    socket.receive(
-      JSON.stringify({
-        roomSequence: 0,
-        stateVector: bytesToBase64Url(Y.encodeStateVector(server)),
-        type: "sync-complete",
-      }),
-    );
+    synchronize(socket);
 
-    await vi.waitFor(() => expect(socket.readyState).toBe(3));
-    expect(socket.closedWith).toBeGreaterThanOrEqual(3000);
-    expect(onSynchronizationError).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() =>
+      expect(
+        socket.sent
+          .map((value) => JSON.parse(value))
+          .find((value) => value.type === "playback-command")?.command.commandId,
+      ).toBe("restored-3"),
+    );
+    expect(store.commands).toHaveLength(1);
     provider.destroy();
   });
 
-  it("reports a rejected document rebase once and stops reconnecting", async () => {
-    const local = new Y.Doc();
-    const entity = new Y.Map<unknown>();
-    entity.set("name", "Recovered");
-    local.getMap<Y.Map<unknown>>("entities").set("entity-1", entity);
-    const server = new Y.Doc();
+  it("removes conflicted commands without retrying forever", async () => {
+    const store = new FakeStore();
     const socket = new FakeSocket();
-    const onSynchronizationError = vi.fn<(error: unknown) => void>();
+    const onConflict = vi.fn<(message: ServerConflictMessage) => void>();
     const provider = new HostedCollaborationProvider({
-      document: local,
-      onSynchronizationError,
+      onConflict,
+      pendingStore: store,
       socketFactory: () => socket as unknown as WebSocket,
     });
     provider.connect();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(provider.status).toBe("connecting"));
     socket.open();
-    socket.receive(
-      JSON.stringify({
-        roomSequence: 0,
-        stateVector: bytesToBase64Url(Y.encodeStateVector(server)),
-        type: "sync-complete",
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(1),
-    );
-    const rejected = decodeClientYjsUpdate(
-      socket.sent.find((value): value is ArrayBuffer => value instanceof ArrayBuffer)!,
-    )!;
-    socket.receive(
-      JSON.stringify({
-        code: "missing-yjs-dependencies",
-        type: "error",
-        updateId: rejected.updateId,
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(socket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(2),
-    );
-    const recovery = decodeClientYjsRebase(
-      socket.sent.filter((value): value is ArrayBuffer => value instanceof ArrayBuffer)[1]!,
-    )!;
-    const error = JSON.stringify({
-      code: "invalid-document",
-      type: "error",
-      updateId: recovery.updateId,
+    synchronize(socket);
+    provider.submitSceneCommand(command("conflict-1"));
+    socket.receive({
+      operationId: "conflict-1",
+      reason: "revision",
+      roomSequence: 4,
+      type: "conflict",
     });
-    socket.receive(error);
-    socket.receive(error);
 
-    expect(onSynchronizationError).toHaveBeenCalledTimes(1);
-    expect(socket.closedWith).toBe(4102);
-    expect(provider.status).toBe("offline");
-    provider.destroy();
-  });
-
-  it("retries the rebase before queued edits after reconnecting", async () => {
-    const local = new Y.Doc();
-    const entity = new Y.Map<unknown>();
-    entity.set("name", "Recovered");
-    local.getMap<Y.Map<unknown>>("entities").set("entity-1", entity);
-    const server = new Y.Doc();
-    const firstSocket = new FakeSocket();
-    const secondSocket = new FakeSocket();
-    const sockets = [firstSocket, secondSocket];
-    const provider = new HostedCollaborationProvider({
-      document: local,
-      socketFactory: () => sockets.shift() as unknown as WebSocket,
-    });
-    provider.connect();
-    await Promise.resolve();
-    firstSocket.open();
-    firstSocket.receive(
-      JSON.stringify({
-        roomSequence: 0,
-        stateVector: bytesToBase64Url(Y.encodeStateVector(server)),
-        type: "sync-complete",
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(firstSocket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(1),
-    );
-    const rejected = decodeClientYjsUpdate(
-      firstSocket.sent.find((value): value is ArrayBuffer => value instanceof ArrayBuffer)!,
-    )!;
-    firstSocket.receive(
-      JSON.stringify({
-        code: "missing-yjs-dependencies",
-        type: "error",
-        updateId: rejected.updateId,
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(firstSocket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(2),
-    );
-    const recovery = decodeClientYjsRebase(
-      firstSocket.sent.filter((value): value is ArrayBuffer => value instanceof ArrayBuffer)[1]!,
-    )!;
-    local
-      .getMap<Y.Map<unknown>>("entities")
-      .get("entity-1")!
-      .set("name", "Edited while reconnecting");
-    expect(firstSocket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(2);
-
-    firstSocket.close(1000);
-    await vi.waitFor(() => expect(provider.status).toBe("offline"));
-    await new Promise((resolve) => setTimeout(resolve, 550));
-    secondSocket.open();
-    secondSocket.receive(
-      JSON.stringify({
-        roomSequence: 0,
-        stateVector: bytesToBase64Url(Y.encodeStateVector(server)),
-        type: "sync-complete",
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(secondSocket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(1),
-    );
-    const retriedRecovery = decodeClientYjsRebase(
-      secondSocket.sent.find((value): value is ArrayBuffer => value instanceof ArrayBuffer)!,
-    )!;
-    expect(retriedRecovery.updateId).toBe(recovery.updateId);
-    Y.applyUpdate(server, retriedRecovery.update);
-
-    secondSocket.receive(
-      JSON.stringify({ roomSequence: 1, type: "ack", updateId: recovery.updateId }),
-    );
-    await vi.waitFor(() =>
-      expect(secondSocket.sent.filter((value) => value instanceof ArrayBuffer)).toHaveLength(2),
-    );
-    const queued = decodeClientYjsUpdate(
-      secondSocket.sent.filter((value): value is ArrayBuffer => value instanceof ArrayBuffer)[1]!,
-    )!;
-    Y.applyUpdate(server, queued.update);
-    expect(server.getMap<Y.Map<unknown>>("entities").get("entity-1")?.get("name")).toBe(
-      "Edited while reconnecting",
-    );
+    await vi.waitFor(() => expect(store.commands).toEqual([]));
+    expect(onConflict).toHaveBeenCalledOnce();
     provider.destroy();
   });
 
@@ -620,7 +269,6 @@ describe("HostedCollaborationProvider", () => {
     let socketCreations = 0;
     const roles: string[] = [];
     const provider = new HostedCollaborationProvider({
-      document: new Y.Doc(),
       socketFactory: () => {
         socketCreations += 1;
         return socket as unknown as WebSocket;
@@ -628,9 +276,9 @@ describe("HostedCollaborationProvider", () => {
     });
     provider.onRole((role) => roles.push(role));
     provider.connect();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(provider.status).toBe("connecting"));
     socket.open();
-    socket.receive(JSON.stringify({ role: "viewer", type: "role-changed" }));
+    socket.receive({ role: "viewer", type: "role-changed" });
     expect(roles).toEqual(["viewer"]);
 
     socket.close(4003);

@@ -160,6 +160,7 @@ describe("Animated media render scheduling", () => {
     const { blob, videoElement } = entity.mediaSource;
     videoElement.removeAttribute("src");
     entity.playback.isPlaying = true;
+    entity.playback.currentTime = 4;
     canvasStore.addEntity(entity);
 
     loop.setRenderer(renderer);
@@ -168,6 +169,40 @@ describe("Animated media render scheduling", () => {
 
     expect(createObjectURL).toHaveBeenCalledWith(blob);
     expect(videoElement.src).toBe("blob:activated");
+    expect(videoElement.currentTime).toBe(4);
+    loop.stop();
+  });
+
+  test("does not report decoder-budget play cancellation as a media failure", async () => {
+    const loop = new GameLoop(deps, {
+      maxActiveVideoElements: Number.POSITIVE_INFINITY,
+      minActiveVideoScreenEdge: 0,
+    });
+    loop.setContainer(createMockContainer());
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const loggerError = vi.spyOn(logger, "error").mockImplementation(() => undefined);
+    const entity = createTestEntity({ id: "interrupted-video", mediaType: "video" });
+    if (entity.mediaSource.type !== "video" || !entity.playback) {
+      throw new Error("Expected a video test entity");
+    }
+    const play = vi
+      .fn<HTMLVideoElement["play"]>()
+      .mockRejectedValue(new DOMException("Playback was interrupted", "AbortError"));
+    entity.mediaSource.videoElement.play = play;
+    entity.mediaSource.videoElement.removeAttribute("src");
+    entity.playback.isPlaying = true;
+    canvasStore.addEntity(entity);
+
+    loop.setRenderer(createLoopRenderer(true));
+    loop.start();
+    await vi.waitFor(() => expect(play).toHaveBeenCalled());
+    await Promise.resolve();
+
+    expect(loggerError).not.toHaveBeenCalledWith(
+      "[GameLoop] Video resume failed",
+      expect.anything(),
+    );
     loop.stop();
   });
 

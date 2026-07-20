@@ -6,7 +6,9 @@ Cloudflare Worker providing the authoritative hosted-workspace control plane and
 
 - D1 owns accounts, memberships, invitation redemptions, entitlements, quota counters, asset metadata, audit events, and deletion lifecycle.
 - R2 stores opaque media and snapshot bytes. R2 keys never grant access.
-- `WorkspaceRoom` serializes Yjs updates and owns ephemeral WebSocket presence. Persisted snapshots are internal recovery data, not user-visible history.
+- `WorkspaceRoom` is the single writer for typed scene commands. Its SQLite storage owns normalized
+  entities, grouped revisions, operation receipts, durable playback anchors, and ephemeral
+  WebSocket presence. Persisted R2 snapshots are internal recovery data, not user-visible history.
 - A workspace owns every uploaded asset; `uploaded_by_user_id` is attribution only. The immutable original workspace owner is billed.
 
 ## Request Invariants

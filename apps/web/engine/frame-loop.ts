@@ -2,6 +2,7 @@ import type { AnimationScheduler } from "#lib/animation-scheduler.ts";
 import {
   activateVideoElement,
   hasActiveVideoSource,
+  isMediaPlaybackInterruption,
   suspendVideoElement,
 } from "#lib/media-resources.ts";
 import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
@@ -338,12 +339,14 @@ export class FrameLoop {
       return;
     }
     if (this.#resumingVideoIds.has(entity.id) || this.#resumeFailedVideoIds.has(entity.id)) return;
+    this.#budgetSuspendedVideoIds.add(entity.id);
     this.#resumingVideoIds.add(entity.id);
     const expectedEntity = entity;
     void activateVideoElement(video, entity.mediaSource.blob)
       .then(async () => {
         if (
           canvasStore.getState().entities.get(entity.id) !== expectedEntity ||
+          !entity.playback?.isPlaying ||
           !this.#admittedVideoIds.has(entity.id)
         ) {
           suspendVideoElement(video);
@@ -360,6 +363,7 @@ export class FrameLoop {
         canvasStore.markEntityTextureDirty(entity.id);
       })
       .catch((error) => {
+        if (isMediaPlaybackInterruption(error)) return;
         this.#resumeFailedVideoIds.add(entity.id);
         this.#callbacks.onVideoPlaybackError(error);
       })

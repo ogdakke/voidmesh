@@ -8,8 +8,5 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json"
-  },
-  "dependencies": {
-    "yjs": "^13.6.27"
   }
 }

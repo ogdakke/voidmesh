@@ -5,6 +5,16 @@ const VIDEO_READY_TIMEOUT_MS = 15_000;
 const HAVE_CURRENT_DATA_READY_STATE = 2;
 const videoActivations = new WeakMap<HTMLVideoElement, Promise<void>>();
 
+/** A pending play is routinely cancelled when decoder admission changes and calls load(). */
+export function isMediaPlaybackInterruption(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    error.name === "AbortError"
+  );
+}
+
 export function createDormantVideoElement(): HTMLVideoElement {
   const video = document.createElement("video");
   video.muted = true;

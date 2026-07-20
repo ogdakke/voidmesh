@@ -1,12 +1,11 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import type { WorkspaceId } from "@voidmesh/domain";
+import type { ClientDurableMessage, HostedAssetReference } from "@voidmesh/collaboration";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
 import type { HostedAssetRegistry } from "#application/canvas/hosted-canvas-sync.ts";
-import type { HostedAssetReference } from "#lib/hosted-workspace-document.ts";
 import { HostedApiClient } from "#lib/hosted-api-client.ts";
 import { HostedApiError } from "#lib/hosted-api-client.ts";
 import type { HostedAssetCache } from "#lib/hosted-asset-cache.ts";
-import type { HostedWorkspaceDocument } from "#lib/hosted-workspace-document.ts";
 import {
   blobToBase64,
   createHostedAssetThumbnail,
@@ -133,12 +132,13 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
     return pending;
   }
 
-  async flushPending(document: HostedWorkspaceDocument): Promise<void> {
+  async flushPendingCommands(
+    commands: readonly ClientDurableMessage[],
+  ): Promise<readonly ClientDurableMessage[]> {
+    const rewritten = structuredClone(commands);
     const pending = new Map<string, HostedAssetReference>();
-    for (const entity of document.getEntities()) {
-      if (entity.asset.id.startsWith(LOCAL_ASSET_PREFIX))
-        pending.set(entity.asset.id, entity.asset);
-    }
+    for (const message of rewritten) collectPendingReferences(message, pending);
+    const replacements = new Map<string, HostedAssetReference>();
     for (const reference of pending.values()) {
       const blob = await this.#cache.get(reference.id, reference.contentType);
       if (!blob || blob.size !== reference.byteLength) {
@@ -160,7 +160,7 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
         thumbnail,
         new AbortController().signal,
       );
-      document.replaceAssetReference(reference.id, uploaded);
+      replacements.set(reference.id, uploaded);
       for (const [entityId, current] of this.#references) {
         if (current.id === reference.id) this.#references.set(entityId, uploaded);
       }
@@ -171,6 +171,8 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
         this.#onCacheError(error);
       }
     }
+    for (const message of rewritten) replacePendingReferences(message, replacements);
+    return rewritten;
   }
 
   async createOriginalDownload(entityId: string): Promise<{ filename: string; url: string }> {
@@ -228,7 +230,7 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
     );
     void this.#cache.put(finalized.asset.id, blob).catch(this.#onCacheError);
     this.#onUploadComplete();
-    return finalized.asset;
+    return { ...finalized.asset, mediaType: parseMediaType(finalized.asset.mediaType) };
   }
 
   #getContentHash(blob: Blob, signal: AbortSignal): Promise<string> {
@@ -243,7 +245,7 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
   async #uploadOrQueue(
     blob: Blob,
     filename: string,
-    mediaType: string,
+    mediaType: HostedAssetReference["mediaType"],
     thumbnail: Blob | undefined,
     signal: AbortSignal,
   ): Promise<HostedAssetReference> {
@@ -269,6 +271,11 @@ export class R2HostedAssetRegistry implements HostedAssetRegistry {
   }
 }
 
+function parseMediaType(value: string): HostedAssetReference["mediaType"] {
+  if (value === "gif" || value === "image" || value === "svg" || value === "video") return value;
+  throw new Error(`Unsupported hosted media type: ${value}`);
+}
+
 async function thumbnailRequest(thumbnail: Blob) {
   return {
     byteLength: thumbnail.size,
@@ -276,6 +283,45 @@ async function thumbnailRequest(thumbnail: Blob) {
     contentType: "image/webp" as const,
     data: await blobToBase64(thumbnail),
   };
+}
+
+function collectPendingReferences(
+  message: ClientDurableMessage,
+  output: Map<string, HostedAssetReference>,
+): void {
+  if (message.type !== "scene-command") return;
+  const command = message.command;
+  if (command.kind === "entity.create") addPendingReference(command.entity.asset, output);
+  else if (command.kind === "entity.patch" && command.patch.asset) {
+    addPendingReference(command.patch.asset.asset, output);
+  } else if (command.kind === "scene.replace") {
+    for (const entity of command.entities) addPendingReference(entity.asset, output);
+  }
+}
+
+function addPendingReference(
+  reference: HostedAssetReference,
+  output: Map<string, HostedAssetReference>,
+): void {
+  if (reference.id.startsWith(LOCAL_ASSET_PREFIX)) output.set(reference.id, reference);
+}
+
+function replacePendingReferences(
+  message: ClientDurableMessage,
+  replacements: ReadonlyMap<string, HostedAssetReference>,
+): void {
+  if (message.type !== "scene-command") return;
+  const command = message.command;
+  if (command.kind === "entity.create") {
+    command.entity.asset = replacements.get(command.entity.asset.id) ?? command.entity.asset;
+  } else if (command.kind === "entity.patch" && command.patch.asset) {
+    command.patch.asset.asset =
+      replacements.get(command.patch.asset.asset.id) ?? command.patch.asset.asset;
+  } else if (command.kind === "scene.replace") {
+    for (const entity of command.entities) {
+      entity.asset = replacements.get(entity.asset.id) ?? entity.asset;
+    }
+  }
 }
 
 async function sha256Blob(blob: Blob, signal: AbortSignal): Promise<string> {

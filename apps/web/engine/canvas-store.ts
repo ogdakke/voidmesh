@@ -282,6 +282,7 @@ export class CanvasStore extends Store<CanvasState> {
   });
   #viewportListeners = new Set<() => void>();
   #entityMutationListeners = new Set<CanvasEntityMutationListener>();
+  readonly #videoSeekListeners = new WeakSet<HTMLVideoElement>();
   #localPresenceListeners = new Set<LocalPresenceListener>();
   #localCursor: Point | null = null;
   #selectedEntitiesCache: ShaderCanvasEntity[] = [];
@@ -1203,6 +1204,42 @@ export class CanvasStore extends Store<CanvasState> {
     this.#emitPlayback(entityId, projected);
   }
 
+  /** Apply playback intent without acquiring a decoder for a dormant video. */
+  setVideoPlaybackIntent(
+    entityId: string,
+    intent: Pick<PlaybackState, "currentTime" | "isPlaying" | "loop" | "playbackRate">,
+    projected = false,
+  ): boolean {
+    const entity = this.state.entities.get(entityId);
+    if (!entity || entity.mediaSource.type !== MediaType.video || !entity.playback) return false;
+
+    const video = entity.mediaSource.videoElement;
+    const currentTime = Math.max(0, Math.min(intent.currentTime, entity.mediaSource.duration));
+    const hasDecoder = hasActiveVideoSource(video);
+    const timeChanged = entity.playback.currentTime !== currentTime;
+    const decoderTimeChanged = hasDecoder && video.currentTime !== currentTime;
+    const changed =
+      timeChanged ||
+      entity.playback.isPlaying !== intent.isPlaying ||
+      entity.playback.loop !== intent.loop ||
+      entity.playback.playbackRate !== intent.playbackRate;
+
+    video.loop = intent.loop;
+    video.playbackRate = intent.playbackRate;
+    if (decoderTimeChanged) video.currentTime = currentTime;
+    if (!changed) return hasDecoder;
+
+    entity.playback.currentTime = currentTime;
+    entity.playback.isPlaying = intent.isPlaying;
+    entity.playback.loop = intent.loop;
+    entity.playback.playbackRate = intent.playbackRate;
+    if (decoderTimeChanged) entity.textureDirty = true;
+    this.state.entitiesDirty.add(entityId);
+    this.notifyEntityChange();
+    this.#emitPlayback(entityId, projected);
+    return hasDecoder;
+  }
+
   setVideoMuted(entityId: string, muted: boolean): void {
     const entity = this.state.entities.get(entityId);
     if (!entity || entity.mediaSource.type !== MediaType.video || !entity.playback) return;
@@ -1441,6 +1478,18 @@ export class CanvasStore extends Store<CanvasState> {
     videoElement.volume = Math.max(0, Math.min(playback?.volume ?? 1, 1));
     videoElement.loop = playback?.loop ?? true;
     videoElement.playbackRate = playback?.playbackRate ?? 1;
+    if (this.#videoSeekListeners.has(videoElement)) return;
+    this.#videoSeekListeners.add(videoElement);
+    videoElement.addEventListener("seeked", () => {
+      const current = this.state.entities.get(entity.id);
+      if (current?.mediaSource.type !== MediaType.video) return;
+      if (current.mediaSource.videoElement !== videoElement || !current.playback) return;
+      current.playback.currentTime = videoElement.currentTime;
+      current.textureDirty = true;
+      this.state.entitiesDirty.add(entity.id);
+      this.state.playbackVersion++;
+      this.notify();
+    });
   }
 
   /**

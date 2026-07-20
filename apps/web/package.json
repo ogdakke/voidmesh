@@ -56,8 +56,7 @@
     "react-dom": "^19.2.7",
     "react-resizable-panels": "^4.12.2",
     "thumbhash": "^0.1.1",
-    "unstorage": "^1.17.5",
-    "yjs": "^13.6.27"
+    "unstorage": "^1.17.5"
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "^20.10.6",

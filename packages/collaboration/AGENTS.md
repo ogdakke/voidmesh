@@ -1,10 +1,13 @@
 # Collaboration Protocol
 
-Platform-neutral wire contracts for hosted Yjs synchronization and ephemeral presence.
+Platform-neutral wire contracts and client transport for hosted scene synchronization and
+ephemeral presence.
 
-- Yjs updates are opaque binary payloads here; the protocol must not depend on canvas or React implementations.
-- Every client update carries a stable update ID so indefinitely offline clients can retry safely.
-- A room acknowledges only updates whose Yjs dependencies fully integrate. Missing history is recovered through an explicit, validated document rebase that every connected client applies as a replacement generation.
-- Cursor and selection presence is ephemeral and must never be included in persisted document frames.
-- Playback and animated shader anchors are durable Yjs document data, not presence messages.
+- Scene mutations are typed, idempotent commands with stable operation IDs. Field-group revisions
+  provide explicit conflict detection without coupling the protocol to canvas or React code.
+- Clients hydrate from an authoritative scene snapshot and then apply ordered, narrow patches.
+  Pending commands are persisted locally and sent one at a time until acknowledged.
+- Cursor and selection presence is ephemeral and never enters scene snapshots or command storage.
+- Media and time-dependent shader playback use separate durable anchors tied to entity revisions.
+  Local audio preferences are not collaborative state.
 - Protocol changes require round-trip validation tests and an explicit version increment.

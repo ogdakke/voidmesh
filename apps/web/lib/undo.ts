@@ -146,8 +146,8 @@ export class Undo {
   /** Add a new command to the undo stack */
   add(command: Command) {
     if (this.#delegate) {
-      // Hosted history is reconstructed from the Yjs document. The local command
-      // snapshot is redundant, but it may own retained media that must be released.
+      // A delegated history implementation owns its own command stack. The local snapshot
+      // is redundant, but it may own retained media that must be released.
       command.evict();
       return;
     }

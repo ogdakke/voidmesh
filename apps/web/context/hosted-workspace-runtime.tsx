@@ -2,8 +2,8 @@ import type { WorkspaceAssetSummary, WorkspaceSummary } from "@voidmesh/api-cont
 import { useQueryClient } from "@tanstack/react-query";
 import { canEditWorkspace } from "@voidmesh/domain";
 import {
+  createIndexedDbPendingCommandStore,
   HostedCollaborationProvider,
-  createPersistedHostedDocument,
   type CollaborationConnectionStatus,
 } from "@voidmesh/collaboration/provider";
 import type { PresencePoint, ServerPresenceMessage } from "@voidmesh/collaboration";
@@ -15,12 +15,10 @@ import { HostedCanvasSync } from "#application/canvas/hosted-canvas-sync.ts";
 import { HostedViewportSync } from "#application/canvas/hosted-viewport-sync.ts";
 import { canvasStore } from "#engine";
 import { HostedApiClient } from "#lib/hosted-api-client.ts";
-import { HostedWorkspaceDocument } from "#lib/hosted-workspace-document.ts";
 import { BrowserHostedAssetCache } from "#lib/hosted-asset-cache.ts";
 import { mapSettledWithConcurrency } from "#lib/async-concurrency.ts";
 import { cssColorToRGBA } from "#lib/color-utils.ts";
 import { logger } from "#lib/client.logger.ts";
-import { undo } from "#lib/undo.ts";
 import { toastManager } from "#application/notifications.ts";
 import type { RGBA } from "#types/canvas.ts";
 import { useCanvasRendererService } from "./use-canvas.ts";
@@ -55,12 +53,6 @@ export function HostedWorkspaceRuntime({
 
   useEffect(() => {
     let disposed = false;
-    const persisted = createPersistedHostedDocument(workspace.id);
-    const document = new HostedWorkspaceDocument({
-      document: persisted.document,
-      now: () => providerRef.current?.serverNow() ?? Date.now(),
-    });
-    const releaseUndoDelegate = undo.setDelegate(document.undo);
     const cache = new BrowserHostedAssetCache(workspace.id);
     const assets = new R2HostedAssetRegistry(
       api,
@@ -88,11 +80,19 @@ export function HostedWorkspaceRuntime({
     const flushViewport = () => viewportSync.flush(true);
     window.addEventListener("pagehide", flushViewport);
     const provider = new HostedCollaborationProvider({
-      beforeSync: () => assets.flushPending(document),
-      document: persisted.document,
       onClockSample: () => sync?.refreshPlayback(),
+      onConflict: (conflict) => {
+        reportError(
+          new Error(
+            conflict.reason === "revision"
+              ? "A collaborator changed the same part of this item. The latest room version was kept."
+              : `The room rejected a change (${conflict.reason}).`,
+          ),
+        );
+      },
       onSynchronizationError: reportError,
-      persistenceReady: persisted.whenSynced,
+      pendingStore: createIndexedDbPendingCommandStore(workspace.id),
+      preparePending: (commands) => assets.flushPendingCommands(commands),
       socketFactory: () => api.createWorkspaceSocket(workspace.id),
     });
     providerRef.current = provider;
@@ -120,7 +120,6 @@ export function HostedWorkspaceRuntime({
     });
     sync = new HostedCanvasSync({
       assets,
-      document,
       onError: reportError,
       projection,
       source: {
@@ -128,6 +127,7 @@ export function HostedWorkspaceRuntime({
         getEntity: (id) => canvasStore.getState().entities.get(id),
         subscribeMutations: (listener) => canvasStore.subscribeEntityMutations(listener),
       },
+      transport: provider,
       writable: canEditWorkspace(workspace.role),
     });
     const presenceByConnection = new Map<string, ServerPresenceMessage>();
@@ -222,7 +222,7 @@ export function HostedWorkspaceRuntime({
       }
     });
     const unsubscribeRole = provider.onRole(onRoleChange);
-    void Promise.all([persisted.whenSynced, viewportSync.start()]).then(() => {
+    void viewportSync.start().then(() => {
       if (disposed) return;
       sync.start();
       provider.connect();
@@ -243,9 +243,6 @@ export function HostedWorkspaceRuntime({
       sync?.destroy();
       projection.destroy();
       provider.destroy();
-      releaseUndoDelegate();
-      document.destroy();
-      void persisted.destroy();
     };
   }, [api, onRoleChange, queryClient, workspace.id, workspace.role]);
 
@@ -281,7 +278,11 @@ export function HostedWorkspaceRuntime({
     const file = new File([await response.blob()], asset.originalFilename, {
       type: asset.contentType,
     });
-    registry.adoptBlob(asset, file, asset.thumbnailUrl === null);
+    registry.adoptBlob(
+      { ...asset, mediaType: parseHostedMediaType(asset.mediaType) },
+      file,
+      asset.thumbnailUrl === null,
+    );
     return file;
   };
 
@@ -342,6 +343,11 @@ export function HostedWorkspaceRuntime({
       {children}
     </HostedWorkspaceRuntimeContext>
   );
+}
+
+function parseHostedMediaType(value: string): "gif" | "image" | "svg" | "video" {
+  if (value === "gif" || value === "image" || value === "svg" || value === "video") return value;
+  throw new Error(`Unsupported hosted media type: ${value}`);
 }
 
 function reportError(error: unknown): void {
