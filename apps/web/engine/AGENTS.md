@@ -20,6 +20,7 @@ GPU-agnostic canvas state, input, animation, spatial queries, and RAF scheduling
 - Use ordered spatial queries for rendering/hit testing and unordered queries for membership-only operations.
 - Selection dragging uses transient offsets during the gesture and commits geometry once on release.
 - Cache selection-derived arrays, bounds, and parameter aggregation by the narrow version that invalidates them.
+- Remote cursor and selection presence is ephemeral render state with independent cursor and selection versions; presence updates must not notify React or dirty entity textures.
 
 ## Runtime Invariants
 

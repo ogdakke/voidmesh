@@ -7,7 +7,6 @@ interface UseCanvasSurfaceEventsOptions {
   containerRef: RefObject<HTMLDivElement | null>;
   isMobile: boolean;
   isReady: boolean;
-  onCursor?: (point: { x: number; y: number } | null) => void;
   onSpaceTap: (event: KeyboardEvent) => void | Promise<void>;
 }
 
@@ -16,7 +15,6 @@ export function useCanvasSurfaceEvents({
   containerRef,
   isMobile,
   isReady,
-  onCursor,
   onSpaceTap,
 }: UseCanvasSurfaceEventsOptions) {
   const interaction = useCanvasInteraction();
@@ -24,12 +22,7 @@ export function useCanvasSurfaceEvents({
   const isMetaHeldRef = useRef(false);
   const touchPointsRef = useRef<{ x: number; y: number }[]>([]);
   const initializedRef = useRef(false);
-  const onCursorRef = useRef(onCursor);
   const handleSpaceTap = useEffectEvent(onSpaceTap);
-
-  useEffect(() => {
-    onCursorRef.current = onCursor;
-  }, [onCursor]);
 
   const getTouchPoints = (touches: React.TouchList) => {
     const points = touchPointsRef.current;
@@ -62,20 +55,10 @@ export function useCanvasSurfaceEvents({
   const handlePointerMove = (event: React.PointerEvent) => {
     if (event.pointerType === "touch") return;
     interaction.pointerMove({ x: event.clientX, y: event.clientY });
-    const container = containerRef.current;
-    if (container) {
-      onCursorRef.current?.(
-        interaction.screenToWorld(
-          { x: event.clientX, y: event.clientY },
-          container.getBoundingClientRect(),
-          window.devicePixelRatio,
-        ),
-      );
-    }
   };
 
   const handlePointerLeave = (event: React.PointerEvent) => {
-    if (event.pointerType !== "touch") onCursorRef.current?.(null);
+    if (event.pointerType !== "touch") interaction.pointerLeave();
   };
 
   const handlePointerUp = (event: React.PointerEvent) => {

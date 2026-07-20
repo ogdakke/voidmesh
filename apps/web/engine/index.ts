@@ -9,6 +9,7 @@ export type {
   DragVisualRenderState,
   DisintegrationRenderOverlay,
   DisintegrationRenderState,
+  RemotePeerPresence,
   ParamResult,
   DragSnapshot,
   ActionLayerSnapshot,

@@ -13,6 +13,7 @@ import {
   type SelectionState,
   type PlaybackState,
   type ShaderType,
+  type RGBA,
   MediaType,
 } from "#types/canvas.ts";
 import { getFrameAtTime } from "#lib/gif-decoder.ts";
@@ -56,6 +57,7 @@ export interface CanvasState {
   selectionDirty: boolean;
   containerSizeDirty: boolean;
   canvasCalloutsDirty: boolean;
+  presenceDirty: boolean;
 
   // Frame counter for debugging
   frameCount: number;
@@ -69,6 +71,8 @@ export interface CanvasState {
   preferencesVersion: number; // Incremented on preference changes
   playbackVersion: number; // Incremented on video time updates (lightweight, isolated)
   dragVersion: number; // Incremented on entity drag state changes (mobile long-press drag)
+  presenceVersion: number; // Incremented for any remote presence change
+  presenceSelectionVersion: number; // Incremented when remote identity/selection geometry changes
 
   // Mobile entity drag state (transient)
   /** Whether a mobile long-press entity drag is currently active */
@@ -86,6 +90,7 @@ export interface CanvasState {
 
   // Canvas-rendered instructional callouts (transient, not persisted)
   canvasCallouts: readonly CanvasCallout[];
+  remotePeerPresences: Map<string, RemotePeerPresence>;
 }
 
 export interface CanvasEntityUpdate {
@@ -203,6 +208,20 @@ export interface DisintegrationRenderState {
   overlays: readonly DisintegrationRenderOverlay[];
 }
 
+/** GPU-agnostic, ephemeral collaborator state consumed only by the canvas renderer. */
+export interface RemotePeerPresence {
+  peerId: string;
+  name: string;
+  color: RGBA;
+  cursor: Point | null;
+  selectedEntityIds: readonly string[];
+}
+
+export type LocalPresenceListener = (
+  cursor: Point | null,
+  selectedEntityIds: ReadonlySet<string>,
+) => void;
+
 export interface RenderState {
   viewport: Viewport;
   entities: ShaderCanvasEntity[];
@@ -218,6 +237,8 @@ export interface RenderState {
   debugMode: boolean;
   debugView: "none" | "alpha" | "spatial" | "all";
   dirty: boolean;
+  /** Scene content changed, excluding final compositor-only overlays such as presence. */
+  sceneDirty: boolean;
   canvasCallouts: readonly CanvasCallout[];
   /** Drag-select rectangle bounds in world coordinates (null if not active) */
   dragSelectBounds: Bounds | null;
@@ -228,6 +249,9 @@ export interface RenderState {
   actionLayer: ActionLayerRenderState;
   dragVisual: DragVisualRenderState;
   disintegration: DisintegrationRenderState;
+  remotePeerPresences: readonly RemotePeerPresence[];
+  presenceVersion: number;
+  presenceSelectionVersion: number;
 }
 
 export interface ParamResult<T> {
@@ -258,6 +282,8 @@ export class CanvasStore extends Store<CanvasState> {
   });
   #viewportListeners = new Set<() => void>();
   #entityMutationListeners = new Set<CanvasEntityMutationListener>();
+  #localPresenceListeners = new Set<LocalPresenceListener>();
+  #localCursor: Point | null = null;
   #selectedEntitiesCache: ShaderCanvasEntity[] = [];
   #selectedEntitiesVersion = -1;
   #selectionStateCache: {
@@ -289,6 +315,8 @@ export class CanvasStore extends Store<CanvasState> {
   };
   readonly #transientEntityDragOffset: Point = { x: 0, y: 0 };
   readonly #renderDisintegration: DisintegrationRenderState = { overlays: [] };
+  readonly #renderPeerPresences: RemotePeerPresence[] = [];
+  #renderPresenceVersion = -1;
   readonly #renderState: RenderState = {
     viewport: this.#renderViewport,
     entities: this.#renderEntities,
@@ -302,6 +330,7 @@ export class CanvasStore extends Store<CanvasState> {
     debugMode: false,
     debugView: "none",
     dirty: false,
+    sceneDirty: false,
     canvasCallouts: [],
     dragSelectBounds: null,
     dragSelectMode: null,
@@ -309,6 +338,9 @@ export class CanvasStore extends Store<CanvasState> {
     actionLayer: this.#renderActionLayer,
     dragVisual: this.#renderDragVisual,
     disintegration: this.#renderDisintegration,
+    remotePeerPresences: this.#renderPeerPresences,
+    presenceVersion: 0,
+    presenceSelectionVersion: 0,
   };
 
   /** Throttle interval for passive playback notifications (hard cap at 60fps) */
@@ -350,6 +382,7 @@ export class CanvasStore extends Store<CanvasState> {
       selectionDirty: false,
       containerSizeDirty: false,
       canvasCalloutsDirty: false,
+      presenceDirty: false,
       frameCount: 0,
       version: 0,
       entityVersion: 0,
@@ -359,12 +392,15 @@ export class CanvasStore extends Store<CanvasState> {
       preferencesVersion: 0,
       playbackVersion: 0,
       dragVersion: 0,
+      presenceVersion: 0,
+      presenceSelectionVersion: 0,
       entityDragActive: false,
       actionLayerActive: false,
       actionLayerEntityIds: new Set(),
       actionLayerTouchOrigin: { x: 0, y: 0 },
       actionLayerVersion: 0,
       canvasCallouts: [],
+      remotePeerPresences: new Map(),
     });
 
     this.#logger = logger;
@@ -936,11 +972,14 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.actionLayerEntityIds = new Set();
     this.state.actionLayerTouchOrigin = { x: 0, y: 0 };
     this.state.canvasCallouts = [];
+    this.state.remotePeerPresences.clear();
+    this.#localCursor = null;
     this.state.entitiesDirty.clear();
     this.state.selectionDirty = false;
     this.state.viewportDirty = false;
     this.state.containerSizeDirty = false;
     this.state.canvasCalloutsDirty = false;
+    this.state.presenceDirty = false;
     // Increment versions to invalidate cached snapshots
     this.state.version++;
     this.state.entityVersion++;
@@ -951,6 +990,8 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.playbackVersion++;
     this.state.dragVersion++;
     this.state.actionLayerVersion++;
+    this.state.presenceVersion++;
+    this.state.presenceSelectionVersion++;
     // Clear computed cache
     this.clearComputedCache();
     this.#resetSelectorCaches();
@@ -1064,6 +1105,55 @@ export class CanvasStore extends Store<CanvasState> {
     if (sameCanvasCallouts(this.state.canvasCallouts, callouts)) return;
     this.state.canvasCallouts = callouts;
     this.state.canvasCalloutsDirty = true;
+  }
+
+  setRemotePeerPresence(presence: RemotePeerPresence): void {
+    const previous = this.state.remotePeerPresences.get(presence.peerId);
+    const cursorChanged = !samePoint(previous?.cursor ?? null, presence.cursor);
+    const identityChanged =
+      !previous || previous.name !== presence.name || !sameRgba(previous.color, presence.color);
+    const selectionChanged =
+      !previous || !sameStringArray(previous.selectedEntityIds, presence.selectedEntityIds);
+    if (!cursorChanged && !identityChanged && !selectionChanged) return;
+
+    this.state.remotePeerPresences.set(presence.peerId, {
+      ...presence,
+      color: identityChanged ? [...presence.color] : previous!.color,
+      cursor: presence.cursor ? { ...presence.cursor } : null,
+      selectedEntityIds: selectionChanged
+        ? [...presence.selectedEntityIds]
+        : previous!.selectedEntityIds,
+    });
+    this.state.presenceVersion++;
+    if (identityChanged || selectionChanged) this.state.presenceSelectionVersion++;
+    this.state.presenceDirty = true;
+  }
+
+  removeRemotePeerPresence(peerId: string): void {
+    if (!this.state.remotePeerPresences.delete(peerId)) return;
+    this.state.presenceVersion++;
+    this.state.presenceSelectionVersion++;
+    this.state.presenceDirty = true;
+  }
+
+  clearRemotePeerPresences(): void {
+    if (this.state.remotePeerPresences.size === 0) return;
+    this.state.remotePeerPresences.clear();
+    this.state.presenceVersion++;
+    this.state.presenceSelectionVersion++;
+    this.state.presenceDirty = true;
+  }
+
+  setLocalCursor(cursor: Point | null): void {
+    if (samePoint(this.#localCursor, cursor)) return;
+    this.#localCursor = cursor ? { ...cursor } : null;
+    this.#emitLocalPresence();
+  }
+
+  subscribeLocalPresence(listener: LocalPresenceListener): () => void {
+    this.#localPresenceListeners.add(listener);
+    listener(this.#localCursor, this.state.selectedEntityIds);
+    return () => this.#localPresenceListeners.delete(listener);
   }
 
   setMultiSelectMode(enabled: boolean): void {
@@ -1399,6 +1489,10 @@ export class CanvasStore extends Store<CanvasState> {
 
   // Snapshot for rendering (called once per frame)
   hasRenderChanges(): boolean {
+    return this.#hasSceneRenderChanges() || this.state.presenceDirty;
+  }
+
+  #hasSceneRenderChanges(): boolean {
     return (
       this.state.viewportDirty ||
       this.state.entitiesDirty.size > 0 ||
@@ -1442,6 +1536,14 @@ export class CanvasStore extends Store<CanvasState> {
       this.#renderEntitiesVersion = this.state.entityVersion;
     }
 
+    if (this.#renderPresenceVersion !== this.state.presenceVersion) {
+      this.#renderPeerPresences.length = 0;
+      for (const presence of this.state.remotePeerPresences.values()) {
+        this.#renderPeerPresences.push(presence);
+      }
+      this.#renderPresenceVersion = this.state.presenceVersion;
+    }
+
     this.#renderViewport.offset.x = this.state.viewport.offset.x;
     this.#renderViewport.offset.y = this.state.viewport.offset.y;
     this.#renderViewport.zoom = this.state.viewport.zoom;
@@ -1457,6 +1559,7 @@ export class CanvasStore extends Store<CanvasState> {
     renderState.selectedEntityIds = this.state.selectedEntityIds;
     renderState.debugMode = this.state.debugMode;
     renderState.dirty = this.hasRenderChanges();
+    renderState.sceneDirty = this.#hasSceneRenderChanges();
     renderState.canvasCallouts = this.state.canvasCallouts;
     renderState.dragSelectBounds = null;
     renderState.dragSelectMode = null;
@@ -1464,6 +1567,8 @@ export class CanvasStore extends Store<CanvasState> {
     renderState.actionLayer = this.#renderActionLayer;
     renderState.dragVisual = this.#renderDragVisual;
     renderState.disintegration = this.#renderDisintegration;
+    renderState.presenceVersion = this.state.presenceVersion;
+    renderState.presenceSelectionVersion = this.state.presenceSelectionVersion;
     return renderState;
   }
 
@@ -1486,6 +1591,7 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.selectionDirty = false;
     this.state.containerSizeDirty = false;
     this.state.canvasCalloutsDirty = false;
+    this.state.presenceDirty = false;
     this.state.frameCount++;
   }
 
@@ -1518,7 +1624,14 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.selectionVersion++;
     this.state.version++;
     this.state.playbackVersion++;
+    this.#emitLocalPresence();
     this.notify();
+  }
+
+  #emitLocalPresence(): void {
+    for (const listener of this.#localPresenceListeners) {
+      listener(this.#localCursor, this.state.selectedEntityIds);
+    }
   }
 
   private notifyEntityChange(): void {
@@ -1776,6 +1889,23 @@ function sameCanvasCallouts(a: readonly CanvasCallout[], b: readonly CanvasCallo
     }
   }
 
+  return true;
+}
+
+function samePoint(a: Point | null, b: Point | null): boolean {
+  return a === b || (a !== null && b !== null && a.x === b.x && a.y === b.y);
+}
+
+function sameRgba(a: RGBA, b: RGBA): boolean {
+  return a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
+}
+
+function sameStringArray(a: readonly string[], b: readonly string[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index++) {
+    if (a[index] !== b[index]) return false;
+  }
   return true;
 }
 

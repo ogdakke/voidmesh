@@ -43,6 +43,7 @@ export interface CanvasInteractionService {
   ): void;
   pointerDown(point: Point, shiftKey: boolean): boolean;
   pointerMove(point: Point): void;
+  pointerLeave(): void;
   pointerUp(point: Point): void;
   touchStart(points: Point[], eventTime: number): void;
   touchMove(points: Point[], eventTime: number): void;
@@ -116,6 +117,7 @@ export function createCanvasInteractionService({
       return gameLoop.getDragSelectMode() !== null;
     },
     pointerMove: (point) => gameLoop.handlePointerMove(point),
+    pointerLeave: () => gameLoop.handlePointerLeave(),
     pointerUp: (point) => gameLoop.handlePointerUp(point),
     touchStart: (points, eventTime) => gameLoop.handleTouchStart(points, eventTime),
     touchMove: (points, eventTime) => gameLoop.handleTouchMove(points, eventTime),

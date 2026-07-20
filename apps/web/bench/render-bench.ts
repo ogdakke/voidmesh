@@ -1388,6 +1388,7 @@ function createRenderState(
     debugMode,
     debugView: "none",
     dirty,
+    sceneDirty: dirty,
     canvasCallouts: [],
     dragSelectBounds: dragSelectEntities ? { x: 0, y: 0, width: 0, height: 0 } : null,
     dragSelectMode: dragSelectEntities ? "replace" : null,
@@ -1407,6 +1408,9 @@ function createRenderState(
       appliesToSelection: dragSelectedEntities,
     },
     disintegration: { overlays: [] },
+    remotePeerPresences: [],
+    presenceVersion: 0,
+    presenceSelectionVersion: 0,
   };
 }
 

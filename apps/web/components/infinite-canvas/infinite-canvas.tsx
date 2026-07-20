@@ -1,6 +1,5 @@
 import { useKeybinds } from "#context/keybind-context.ts";
 import { useCanvasAccess, useCanvasPreferences } from "#context/use-canvas.ts";
-import { useHostedWorkspaceRuntime } from "#context/use-hosted-workspace-runtime.ts";
 import { useLayout } from "#context/use-layout.ts";
 import { useCanvasContainerResize } from "#hooks/use-canvas-container-resize.ts";
 import { useCanvasRendererRuntime } from "#hooks/use-canvas-renderer-runtime.ts";
@@ -27,7 +26,6 @@ export function InfiniteCanvas() {
   const isMobile = useIsMobile();
   const darkTheme = useMediaQuery("(prefers-color-scheme: dark)");
   const { isFullscreen } = useLayout();
-  const hostedWorkspace = useHostedWorkspaceRuntime();
 
   const { isReady, isSupported, error } = useCanvasRendererRuntime({
     canvasRef,
@@ -44,7 +42,6 @@ export function InfiniteCanvas() {
     containerRef,
     isMobile,
     isReady,
-    onCursor: hostedWorkspace?.publishCursor,
     onSpaceTap: access.canEdit ? keybinds.playPause : () => undefined,
   });
   const { handleDrop } = useImageInput({ containerRef, multipleFiles: true });

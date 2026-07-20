@@ -327,8 +327,7 @@ function parseChannel(raw: string): number {
 
 /**
  * Parse a CSS color string to normalized RGBA.
- * Supports color(display-p3 ...) with decimal, percentage, or `none` channel values,
- * with hex string fallback. Works in both P3 and sRGB modes.
+ * Supports color(display-p3 ...), HSL, and hex values.
  */
 export function cssColorToRGBA(cssString: string): [number, number, number, number] {
   const trimmed = cssString.trim();
@@ -341,6 +340,25 @@ export function cssColorToRGBA(cssString: string): [number, number, number, numb
       parseChannel(p3Match[2]!),
       parseChannel(p3Match[3]!),
       p3Match[4] ? parseChannel(p3Match[4]) : 1,
+    ];
+  }
+  const hslMatch = trimmed.match(
+    /hsl\(\s*(-?[\d.]+)(?:deg)?[\s,]+([\d.]+)%[\s,]+([\d.]+)%(?:\s*\/\s*|\s*,\s*)?([\d.]+%?)?\s*\)/,
+  );
+  if (hslMatch) {
+    const hue = (((Number.parseFloat(hslMatch[1]!) % 360) + 360) % 360) / 360;
+    const saturation = Number.parseFloat(hslMatch[2]!) / 100;
+    const lightness = Number.parseFloat(hslMatch[3]!) / 100;
+    const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
+    const channel = (offset: number) => {
+      const segment = (offset + hue * 12) % 12;
+      return lightness - (chroma / 2) * Math.max(-1, Math.min(segment - 3, 9 - segment, 1));
+    };
+    return [
+      channel(0),
+      channel(8),
+      channel(4),
+      hslMatch[4] ? parseChannel(hslMatch[4]) : 1,
     ];
   }
   return hexToNormalizedRGBA(trimmed);

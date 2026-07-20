@@ -13,7 +13,6 @@ import type { RefObject } from "react";
 import SettingsDrawer from "../settings/settings.mobile.tsx";
 import { Button } from "../ui/button/index.tsx";
 import { UndoRedoButtons } from "./undo-redo.tsx";
-import { HostedPresenceOverlay } from "./hosted-presence-overlay.tsx";
 import { useHostedWorkspaceRuntime } from "#context/use-hosted-workspace-runtime.ts";
 
 interface CanvasOverlayProps {
@@ -34,7 +33,6 @@ export function CanvasOverlay({
 
   return (
     <div className="infinite-canvas__overlay">
-      <HostedPresenceOverlay />
       <div ref={perfRef} className="infinite-canvas__perf-overlay" style={{ display: "none" }} />
       {!isMobile && <DesktopTopControls />}
       {!(isMobile && isFullscreen) && (
@@ -76,8 +74,8 @@ function DesktopTopControls() {
           {hosted?.workspace.role === "viewer" && (
             <span className="hosted-workspace-indicator__role">View only</span>
           )}
-          {hosted && hosted.peers.length > 0 && (
-            <span className="hosted-workspace-indicator__peers">+{hosted.peers.length}</span>
+          {hosted && hosted.peerCount > 0 && (
+            <span className="hosted-workspace-indicator__peers">+{hosted.peerCount}</span>
           )}
         </Button>
       </div>

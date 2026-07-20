@@ -24,6 +24,7 @@ WebGPU rendering, shader execution, composition, resource caching, and export.
 - Source and processed textures are keyed by immutable asset/effect identity. Entity IDs track retain/release ownership.
 - Renderer caches and pooled textures are byte-bounded. Eviction and shutdown destroy resources and invalidate dependent bindings.
 - Reuse buffers, typed arrays, bind groups, views, and scratch records in frame loops.
+- Render remote presence into the WebGPU scene target before canvas-wide effects; React/DOM overlays must not own collaborator cursors or selection outlines.
 
 ## Color and Layering
 

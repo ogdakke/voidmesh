@@ -285,6 +285,7 @@ export class CanvasInputController {
     if (!pointerPosition || !this.#container) return;
 
     const worldPoint = this.#viewport.screenToWorld(pointerPosition);
+    canvasStore.setLocalCursor(worldPoint);
 
     // Pointer events may arrive faster than RAF. Only do the spatial query and
     // selection-set construction once for the latest point in each frame.
@@ -396,6 +397,11 @@ export class CanvasInputController {
     }
 
     if (this.#dragSelect?.isActive) this.#dragSelectPendingUpdate = true;
+  }
+
+  handlePointerLeave(): void {
+    this.#inputState.pointerPosition = null;
+    canvasStore.setLocalCursor(null);
   }
 
   handlePointerUp(screenPoint: Point): void {

@@ -118,6 +118,10 @@ export class GameLoop {
     this.#input.handlePointerMove(screenPoint);
   }
 
+  handlePointerLeave(): void {
+    this.#input.handlePointerLeave();
+  }
+
   handlePointerUp(screenPoint: Point): void {
     this.#input.handlePointerUp(screenPoint);
   }

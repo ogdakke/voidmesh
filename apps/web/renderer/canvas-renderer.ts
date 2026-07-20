@@ -9,6 +9,7 @@ import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "
 import { CanvasLensing } from "#types/enums.ts";
 import { ActionLayerBlurPass } from "./action-layer-blur-pass.ts";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
+import { CollaborationPresencePass } from "./collaboration-presence-pass.ts";
 import { CanvasDebugPass } from "./canvas-debug-pass.ts";
 import {
   CompositionPass,
@@ -77,6 +78,7 @@ export class InfiniteCanvasRenderer {
   #entityLabelPass: EntityLabelPass | null = null;
   #canvasCalloutPass: CanvasCalloutPass | null = null;
   #canvasDebugPass: CanvasDebugPass | null = null;
+  #collaborationPresencePass: CollaborationPresencePass | null = null;
 
   // Cached canvas dimensions (updated by ResizeObserver, avoids getBoundingClientRect in render loop)
   #cachedCanvasWidth = 0;
@@ -334,6 +336,12 @@ export class InfiniteCanvasRenderer {
     );
     this.#entityLabelPass.initialize();
 
+    this.#collaborationPresencePass = new CollaborationPresencePass(
+      this.#device,
+      this.#canvasFormat,
+      this.#viewportUniforms.buffer,
+    );
+
     this.#canvasCalloutPass = new CanvasCalloutPass(
       this.#device,
       this.#canvasFormat,
@@ -476,6 +484,17 @@ export class InfiniteCanvasRenderer {
     const prepareStart = performance.now();
     this.#lastPhaseStats.setupMs = tracePerformancePhase("render.setup", renderStart, prepareStart);
 
+    this.#collaborationPresencePass?.prepareSelections({
+      presences: state.remotePeerPresences,
+      entities,
+      entityIndices: state.entityIndices,
+      presenceSelectionVersion: state.presenceSelectionVersion,
+      entityVersion: state.entityVersion,
+      geometryVersion: state.geometryVersion,
+      viewport,
+      devicePixelRatio: dpr,
+    });
+
     // Pre-process entities: render to textures and prepare bind groups
     // Uses caching to avoid per-frame allocations
     const preparedEntityDrawItems = this.#entityDrawItemPreparer.prepare({
@@ -589,7 +608,7 @@ export class InfiniteCanvasRenderer {
         width,
         height,
         blurIntensity,
-        contentDirty: state.dirty || hasAnimatingContent,
+        contentDirty: state.sceneDirty || hasAnimatingContent,
       });
     }
 
@@ -695,6 +714,16 @@ export class InfiniteCanvasRenderer {
       });
     }
 
+    // Match the proven multiplayer renderer: presence is part of the scene target.
+    // This is important when mobile rendering uses an intermediate lens texture.
+    this.#collaborationPresencePass?.encode({
+      encoder,
+      targetView: sceneTargetView,
+      presences: state.remotePeerPresences,
+      viewport,
+      devicePixelRatio: dpr,
+    });
+
     const lensApplied = viewportLensTarget
       ? this.#viewportLensPass!.encode(encoder, targetView, width, height)
       : false;
@@ -710,7 +739,7 @@ export class InfiniteCanvasRenderer {
         height,
         devicePixelRatio: dpr,
         contentDirty:
-          state.dirty ||
+          state.sceneDirty ||
           hasAnimatingContent ||
           lensApplied ||
           !!this.#disintegrationPass?.hasOverlays ||
@@ -1037,6 +1066,8 @@ export class InfiniteCanvasRenderer {
     this.#canvasCalloutPass = null;
     this.#canvasDebugPass?.destroy();
     this.#canvasDebugPass = null;
+    this.#collaborationPresencePass?.destroy();
+    this.#collaborationPresencePass = null;
 
     this.#wlurOverlayPass?.destroy();
     this.#wlurOverlayPass = null;

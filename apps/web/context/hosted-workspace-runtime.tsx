@@ -18,9 +18,11 @@ import { HostedApiClient } from "#lib/hosted-api-client.ts";
 import { HostedWorkspaceDocument } from "#lib/hosted-workspace-document.ts";
 import { BrowserHostedAssetCache } from "#lib/hosted-asset-cache.ts";
 import { mapSettledWithConcurrency } from "#lib/async-concurrency.ts";
+import { cssColorToRGBA } from "#lib/color-utils.ts";
 import { logger } from "#lib/client.logger.ts";
 import { undo } from "#lib/undo.ts";
 import { toastManager } from "#application/notifications.ts";
+import type { RGBA } from "#types/canvas.ts";
 import { useCanvasRendererService } from "./use-canvas.ts";
 import { HostedWorkspaceRuntimeContext } from "./use-hosted-workspace-runtime.ts";
 
@@ -43,11 +45,9 @@ export function HostedWorkspaceRuntime({
   const activeRendererRef = useRef(renderer.renderer);
   const [connectionStatus, setConnectionStatus] =
     useState<CollaborationConnectionStatus>("offline");
-  const [peers, setPeers] = useState<readonly ServerPresenceMessage[]>([]);
+  const [peerCount, setPeerCount] = useState(0);
   const providerRef = useRef<HostedCollaborationProvider | null>(null);
   const assetsRef = useRef<R2HostedAssetRegistry | null>(null);
-  const pendingCursorRef = useRef<PresencePoint | null>(null);
-  const cursorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     activeRendererRef.current = renderer.renderer;
@@ -131,11 +131,17 @@ export function HostedWorkspaceRuntime({
       writable: canEditWorkspace(workspace.role),
     });
     const presenceByConnection = new Map<string, ServerPresenceMessage>();
+    const presenceColors = new Map<string, RGBA>();
     const unsubscribePresence = provider.onPresence((presence) => {
-      if (!presence.name) presenceByConnection.delete(presence.connectionId);
-      else {
+      if (!presence.name) {
+        if (presenceByConnection.delete(presence.connectionId)) {
+          presenceColors.delete(presence.connectionId);
+          canvasStore.removeRemotePeerPresence(presence.connectionId);
+          setPeerCount(presenceByConnection.size);
+        }
+      } else {
         const previous = presenceByConnection.get(presence.connectionId);
-        presenceByConnection.set(presence.connectionId, {
+        const merged = {
           ...previous,
           ...presence,
           cursor: presence.cursor === undefined ? previous?.cursor : presence.cursor,
@@ -143,22 +149,74 @@ export function HostedWorkspaceRuntime({
             presence.selectedEntityIds === undefined
               ? previous?.selectedEntityIds
               : presence.selectedEntityIds,
+        };
+        presenceByConnection.set(presence.connectionId, merged);
+        let color = presenceColors.get(presence.connectionId);
+        if (!color || previous?.color !== merged.color) {
+          color = cssColorToRGBA(merged.color);
+          presenceColors.set(presence.connectionId, color);
+        }
+        canvasStore.setRemotePeerPresence({
+          peerId: merged.connectionId,
+          name: merged.name,
+          color,
+          cursor: merged.cursor ?? null,
+          selectedEntityIds: merged.selectedEntityIds ?? [],
         });
+        if (!previous) setPeerCount(presenceByConnection.size);
       }
-      setPeers([...presenceByConnection.values()]);
     });
-    const publishSelection = () => {
-      provider.publishPresence({
-        selectedEntityIds: [...canvasStore.getState().selectedEntityIds],
-      });
+    let presenceTimer: ReturnType<typeof setTimeout> | null = null;
+    let pendingPresence: {
+      cursor?: PresencePoint | null;
+      selectedEntityIds?: string[];
+    } | null = null;
+    let localCursor: PresencePoint | null = null;
+    let localSelection: ReadonlySet<string> | null = null;
+    let localSelectedEntityIds: string[] = [];
+    const flushPresence = () => {
+      if (provider.status !== "connected" || !pendingPresence) return;
+      const presence = pendingPresence;
+      pendingPresence = null;
+      provider.publishPresence(presence);
     };
-    const unsubscribeSelection = canvasStore.subscribeSelector(
-      (state) => state.selectedEntityIds,
-      publishSelection,
+    const schedulePresence = () => {
+      if (presenceTimer) return;
+      presenceTimer = setTimeout(() => {
+        presenceTimer = null;
+        flushPresence();
+      }, 16);
+    };
+    const unsubscribeLocalPresence = canvasStore.subscribeLocalPresence(
+      (cursor, selectedEntityIds) => {
+        if (
+          localCursor?.x !== cursor?.x ||
+          localCursor?.y !== cursor?.y ||
+          (localCursor === null) !== (cursor === null)
+        ) {
+          localCursor = cursor ? { ...cursor } : null;
+          pendingPresence = { ...pendingPresence, cursor: localCursor };
+        }
+        if (localSelection !== selectedEntityIds) {
+          localSelection = selectedEntityIds;
+          localSelectedEntityIds = [...selectedEntityIds];
+          pendingPresence = {
+            ...pendingPresence,
+            selectedEntityIds: localSelectedEntityIds,
+          };
+        }
+        if (pendingPresence) schedulePresence();
+      },
     );
     const unsubscribeStatus = provider.onStatus((status) => {
       setConnectionStatus(status);
-      if (status === "connected") publishSelection();
+      if (status === "connected") {
+        pendingPresence = {
+          cursor: localCursor,
+          selectedEntityIds: localSelectedEntityIds,
+        };
+        flushPresence();
+      }
       if (status === "revoked" || status === "unavailable") {
         location.replace(`/cloud?access=${status}`);
       }
@@ -172,12 +230,12 @@ export function HostedWorkspaceRuntime({
 
     return () => {
       disposed = true;
-      if (cursorTimerRef.current) clearTimeout(cursorTimerRef.current);
-      cursorTimerRef.current = null;
+      if (presenceTimer) clearTimeout(presenceTimer);
       providerRef.current = null;
       assetsRef.current = null;
+      canvasStore.clearRemotePeerPresences();
       unsubscribePresence();
-      unsubscribeSelection();
+      unsubscribeLocalPresence();
       unsubscribeStatus();
       unsubscribeRole();
       window.removeEventListener("pagehide", flushViewport);
@@ -191,24 +249,10 @@ export function HostedWorkspaceRuntime({
     };
   }, [api, onRoleChange, queryClient, workspace.id, workspace.role]);
 
-  const publishCursor = (cursor: PresencePoint | null) => {
-    pendingCursorRef.current = cursor;
-    if (cursorTimerRef.current) return;
-    cursorTimerRef.current = setTimeout(() => {
-      cursorTimerRef.current = null;
-      providerRef.current?.publishPresence({
-        cursor: pendingCursorRef.current,
-      });
-    }, 16);
-  };
-
   useEffect(() => {
     const clearCursor = () => {
       if (!document.hidden && document.visibilityState !== "hidden") return;
-      pendingCursorRef.current = null;
-      if (cursorTimerRef.current) clearTimeout(cursorTimerRef.current);
-      cursorTimerRef.current = null;
-      providerRef.current?.publishPresence({ cursor: null });
+      canvasStore.setLocalCursor(null);
     };
     document.addEventListener("visibilitychange", clearCursor);
     window.addEventListener("pagehide", clearCursor);
@@ -291,8 +335,7 @@ export function HostedWorkspaceRuntime({
         getCanvasAssetIds,
         getCanvasVideoPreviews,
         loadAsset,
-        peers,
-        publishCursor,
+        peerCount,
         workspace,
       }}
     >

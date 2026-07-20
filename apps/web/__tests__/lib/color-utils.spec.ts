@@ -1,4 +1,5 @@
 import {
+  cssColorToRGBA,
   cssColorToRGBAInColorSpace,
   luminance,
   rgbaToCss,
@@ -142,5 +143,12 @@ describe("cssColorToRGBAInColorSpace", () => {
     expect(rgbaToCss(rgba, ColorSpace.displayP3)).toMatch(/^color\(display-p3 /);
     expect(rgba[0]).not.toBeCloseTo(1, 4);
     expect(rgba[1]).not.toBeCloseTo(0.470588, 4);
+  });
+});
+
+describe("cssColorToRGBA", () => {
+  test("parses hosted collaborator HSL colors", () => {
+    expect(cssColorToRGBA("hsl(0 100% 50%)")).toEqual([1, 0, 0, 1]);
+    expect(cssColorToRGBA("hsl(120 100% 25% / 50%)")).toEqual([0, 0.5, 0, 0.5]);
   });
 });

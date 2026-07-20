@@ -48,8 +48,7 @@ function runtime(role: WorkspaceSummary["role"]): Runtime {
     getCanvasAssetIds: () => new Set(),
     getCanvasVideoPreviews: async () => new Map(),
     loadAsset: vi.fn<Runtime["loadAsset"]>(),
-    peers: [],
-    publishCursor: vi.fn<Runtime["publishCursor"]>(),
+    peerCount: 0,
     workspace: workspace(role),
   };
 }
