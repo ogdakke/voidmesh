@@ -1,5 +1,7 @@
 # Architecture
 
+> Client paths in this document are relative to `apps/web/`. The repository also contains the Cloudflare control plane in `apps/api/` and shared hosted-product contracts in `packages/domain/` and `packages/api-contract/`; see `docs/hosted-workspaces-specification.md` for that architecture.
+
 ```mermaid
 flowchart LR
   %% Voidmesh canvas-focused architecture

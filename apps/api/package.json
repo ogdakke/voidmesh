@@ -1,0 +1,26 @@
+{
+  "name": "@voidmesh/api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run db:migrate:local && wrangler dev --port 8787",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "test": "vitest run --config vitest.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "types": "wrangler types",
+    "types:check": "wrangler types --check",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "r2:cors:preview": "wrangler r2 bucket cors set voidmesh-assets-preview --file r2-cors.preview.json --force",
+    "r2:cors:production": "wrangler r2 bucket cors set voidmesh-assets-production --file r2-cors.production.json --force"
+  },
+  "dependencies": {
+    "@voidmesh/api-contract": "workspace:*",
+    "@voidmesh/collaboration": "workspace:*",
+    "@voidmesh/domain": "workspace:*",
+    "@voidmesh/workspace-format": "workspace:*",
+    "aws4fetch": "^1.0.20",
+    "better-auth": "^1.6.23",
+    "fflate": "^0.8.3",
+    "stripe": "^22.3.2"
+  }
+}

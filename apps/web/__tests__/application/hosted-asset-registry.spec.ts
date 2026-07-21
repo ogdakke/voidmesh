@@ -1,0 +1,465 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  ClientDurableMessage,
+  HostedAssetReference,
+  HostedSceneEntityInput,
+} from "@voidmesh/collaboration";
+import { R2HostedAssetRegistry } from "#application/canvas/hosted-asset-registry.ts";
+import { config } from "#config";
+import type { HostedApiClient } from "#lib/hosted-api-client.ts";
+import type { HostedAssetCache } from "#lib/hosted-asset-cache.ts";
+import { MediaType, ShaderType, type ShaderCanvasEntity } from "#types/canvas.ts";
+
+class MemoryAssetCache implements HostedAssetCache {
+  readonly values = new Map<string, Blob>();
+
+  async delete(assetId: string): Promise<void> {
+    this.values.delete(assetId);
+  }
+
+  async get(assetId: string, contentType: string): Promise<Blob | null> {
+    const value = this.values.get(assetId);
+    return value ? new Blob([value], { type: contentType }) : null;
+  }
+
+  async put(assetId: string, blob: Blob): Promise<void> {
+    this.values.set(assetId, blob);
+  }
+}
+
+function hostedEntity(asset: HostedAssetReference): HostedSceneEntityInput {
+  return {
+    asset,
+    edited: false,
+    generation: 0,
+    id: "entity-1",
+    locked: false,
+    name: "Offline source",
+    originalSize: { height: 10, width: 10 },
+    position: { x: 0, y: 0 },
+    rotation: 0,
+    shaderParams: structuredClone(config.defaults.shaderParams),
+    shaderType: ShaderType.halftone,
+    size: { height: 10, width: 10 },
+    zIndex: 1,
+  };
+}
+
+function pendingCreate(asset: HostedAssetReference): ClientDurableMessage[] {
+  return [
+    {
+      command: {
+        entity: hostedEntity(asset),
+        kind: "entity.create",
+        operationId: "operation-1",
+      },
+      type: "scene-command",
+    },
+  ];
+}
+
+function runtimeEntity(blob: Blob, name: string): ShaderCanvasEntity {
+  const imageBitmap = {} as ImageBitmap;
+  return {
+    edited: false,
+    id: "entity-1",
+    imageBitmap,
+    locked: false,
+    mediaSource: {
+      asset: {
+        alphaMode: "supported",
+        blob,
+        id: `local-${name}`,
+        imageBitmap,
+        revision: 0,
+      },
+      type: MediaType.image,
+    },
+    name,
+    originalSize: { height: 10, width: 10 },
+    position: { x: 0, y: 0 },
+    rotation: 0,
+    shaderParams: structuredClone(config.defaults.shaderParams),
+    shaderType: ShaderType.halftone,
+    size: { height: 10, width: 10 },
+    zIndex: 1,
+  };
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
+describe("R2HostedAssetRegistry", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("reuses the same stored asset when the media library adds another canvas entity", async () => {
+    const blob = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
+    const reference: HostedAssetReference = {
+      byteLength: blob.size,
+      contentHash: "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+      contentType: blob.type,
+      id: "asset-existing",
+      mediaType: "image",
+      originalFilename: "existing.png",
+    };
+    const api = {
+      reserveAssetUpload: vi.fn<HostedApiClient["reserveAssetUpload"]>(),
+    } as unknown as HostedApiClient;
+    const registry = new R2HostedAssetRegistry(
+      api,
+      "workspace-1",
+      new MemoryAssetCache(),
+      vi.fn<(error: unknown) => void>(),
+      vi.fn<() => void>(),
+    );
+    registry.adoptBlob(reference, blob, false);
+
+    const registered = await registry.register(
+      { ...runtimeEntity(blob, "existing.png"), id: "entity-copy" },
+      new AbortController().signal,
+    );
+
+    expect(registered).toBe(reference);
+    expect(api.reserveAssetUpload).not.toHaveBeenCalled();
+  });
+
+  it("reuses one upload for distinct blobs with identical content", async () => {
+    const firstBlob = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
+    const secondBlob = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
+    const canvas = {
+      getContext: () => ({ drawImage: vi.fn<() => void>() }),
+      height: 0,
+      toBlob(callback: BlobCallback) {
+        callback(new Blob(["preview"], { type: "image/webp" }));
+      },
+      width: 0,
+    } as unknown as HTMLCanvasElement;
+    vi.spyOn(globalThis.document, "createElement").mockReturnValue(canvas);
+    const uploaded = {
+      byteLength: firstBlob.size,
+      contentHash: "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+      contentType: firstBlob.type,
+      id: "asset-shared",
+      mediaType: "image",
+      originalFilename: "first.png",
+      workspaceId: "workspace-1",
+    };
+    const api = {
+      finalizeAssetUpload: vi.fn<HostedApiClient["finalizeAssetUpload"]>(async () => ({
+        asset: uploaded,
+      })),
+      reserveAssetUpload: vi.fn<HostedApiClient["reserveAssetUpload"]>(async () => ({
+        assetId: uploaded.id,
+        expiresAt: Date.now() + 1_000,
+        headers: { "content-type": firstBlob.type },
+        reservationId: "reservation-shared",
+        uploadUrl: "https://uploads.example.test/shared",
+      })),
+    } as unknown as HostedApiClient;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () =>
+        Promise.resolve(new Response(null, { status: 204 })),
+      ),
+    );
+    const registry = new R2HostedAssetRegistry(
+      api,
+      "workspace-1",
+      new MemoryAssetCache(),
+      vi.fn<(error: unknown) => void>(),
+      vi.fn<() => void>(),
+    );
+    const first = runtimeEntity(firstBlob, "first.png");
+    const second = { ...runtimeEntity(secondBlob, "second.png"), id: "entity-2" };
+
+    const [firstReference, secondReference] = await Promise.all([
+      registry.register(first, new AbortController().signal),
+      registry.register(second, new AbortController().signal),
+    ]);
+
+    expect(firstReference).toEqual(uploaded);
+    expect(secondReference).toEqual(uploaded);
+    expect(api.reserveAssetUpload).toHaveBeenCalledOnce();
+    expect(api.finalizeAssetUpload).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("uploads cached offline originals before replacing provisional document references", async () => {
+    const recoveredBitmap = {
+      close: vi.fn<() => void>(),
+      height: 10,
+      width: 10,
+    } as unknown as ImageBitmap;
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn(async () => recoveredBitmap),
+    );
+    const canvas = {
+      getContext: () => ({ drawImage: vi.fn<() => void>() }),
+      height: 0,
+      toBlob(callback: BlobCallback) {
+        callback(new Blob(["preview"], { type: "image/webp" }));
+      },
+      width: 0,
+    } as unknown as HTMLCanvasElement;
+    vi.spyOn(globalThis.document, "createElement").mockReturnValue(canvas);
+    const provisional: HostedAssetReference = {
+      byteLength: 3,
+      contentType: "image/png",
+      id: "local_123",
+      mediaType: "image",
+      originalFilename: "offline.png",
+    };
+    const cache = new MemoryAssetCache();
+    await cache.put(provisional.id, new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" }));
+    const uploaded = {
+      ...provisional,
+      contentHash: null,
+      id: "asset-remote",
+      workspaceId: "workspace-1",
+    };
+    const api = {
+      finalizeAssetUpload: vi.fn<HostedApiClient["finalizeAssetUpload"]>(async () => ({
+        asset: uploaded,
+      })),
+      reserveAssetUpload: vi.fn<HostedApiClient["reserveAssetUpload"]>(async () => ({
+        assetId: uploaded.id,
+        expiresAt: Date.now() + 1_000,
+        headers: { "content-type": "image/png" },
+        reservationId: "reservation-1",
+        uploadUrl: "https://uploads.example.test/object",
+      })),
+    } as unknown as HostedApiClient;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () =>
+        Promise.resolve(new Response(null, { status: 204 })),
+      ),
+    );
+    const registry = new R2HostedAssetRegistry(
+      api,
+      "workspace-1",
+      cache,
+      vi.fn<(error: unknown) => void>(),
+      vi.fn<() => void>(),
+    );
+    const commands = await registry.flushPendingCommands(pendingCreate(provisional));
+
+    expect(
+      commands[0]?.type === "scene-command" && commands[0].command.kind === "entity.create"
+        ? commands[0].command.entity.asset
+        : null,
+    ).toEqual(uploaded);
+    expect(cache.values.has(provisional.id)).toBe(false);
+    expect(cache.values.has(uploaded.id)).toBe(true);
+    expect(api.reserveAssetUpload).toHaveBeenCalledOnce();
+    expect(api.reserveAssetUpload).toHaveBeenCalledWith(
+      "workspace-1",
+      expect.objectContaining({
+        contentHash: "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+        thumbnail: expect.objectContaining({
+          byteLength: 7,
+          contentType: "image/webp",
+        }),
+      }),
+      expect.any(String),
+    );
+    expect(api.finalizeAssetUpload).toHaveBeenCalledOnce();
+  });
+
+  it("does not fail synchronization when an uploaded offline original cannot be evicted", async () => {
+    const provisional: HostedAssetReference = {
+      byteLength: 3,
+      contentType: "image/png",
+      id: "local_123",
+      mediaType: "image",
+      originalFilename: "offline.png",
+    };
+    const cache = new MemoryAssetCache();
+    await cache.put(provisional.id, new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" }));
+    const cacheError = new DOMException("The object can not be found here.", "NotFoundError");
+    vi.spyOn(cache, "delete").mockRejectedValue(cacheError);
+    const uploaded = {
+      ...provisional,
+      contentHash: null,
+      id: "asset-remote",
+      workspaceId: "workspace-1",
+    };
+    const api = {
+      finalizeAssetUpload: vi.fn<HostedApiClient["finalizeAssetUpload"]>(async () => ({
+        asset: uploaded,
+      })),
+      reserveAssetUpload: vi.fn<HostedApiClient["reserveAssetUpload"]>(async () => ({
+        assetId: uploaded.id,
+        expiresAt: Date.now() + 1_000,
+        headers: { "content-type": "image/png" },
+        reservationId: "reservation-1",
+        uploadUrl: "https://uploads.example.test/object",
+      })),
+    } as unknown as HostedApiClient;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () =>
+        Promise.resolve(new Response(null, { status: 204 })),
+      ),
+    );
+    const onCacheError = vi.fn<(error: unknown) => void>();
+    const registry = new R2HostedAssetRegistry(
+      api,
+      "workspace-1",
+      cache,
+      onCacheError,
+      vi.fn<() => void>(),
+    );
+    const commands = await registry.flushPendingCommands(pendingCreate(provisional));
+
+    expect(
+      commands[0]?.type === "scene-command" && commands[0].command.kind === "entity.create"
+        ? commands[0].command.entity.asset
+        : null,
+    ).toEqual(uploaded);
+    expect(onCacheError).toHaveBeenCalledWith(cacheError);
+  });
+
+  it("backfills a missing thumbnail when a stored original is adopted", async () => {
+    const blob = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
+    const reference: HostedAssetReference = {
+      byteLength: blob.size,
+      contentType: blob.type,
+      id: "asset-without-thumbnail",
+      mediaType: "image",
+      originalFilename: "legacy.png",
+    };
+    const canvas = {
+      getContext: () => ({ drawImage: vi.fn<() => void>() }),
+      height: 0,
+      toBlob(callback: BlobCallback) {
+        callback(new Blob(["preview"], { type: "image/webp" }));
+      },
+      width: 0,
+    } as unknown as HTMLCanvasElement;
+    vi.spyOn(globalThis.document, "createElement").mockReturnValue(canvas);
+    const api = {
+      uploadAssetThumbnail: vi.fn<HostedApiClient["uploadAssetThumbnail"]>(async () => {}),
+    } as unknown as HostedApiClient;
+    const onUploadComplete = vi.fn<() => void>();
+    const registry = new R2HostedAssetRegistry(
+      api,
+      "workspace-1",
+      new MemoryAssetCache(),
+      vi.fn<(error: unknown) => void>(),
+      vi.fn<() => void>(),
+      onUploadComplete,
+    );
+    registry.adoptBlob(reference, blob, true);
+
+    await expect(
+      registry.register(
+        runtimeEntity(blob, reference.originalFilename),
+        new AbortController().signal,
+      ),
+    ).resolves.toBe(reference);
+    await vi.waitFor(() => expect(api.uploadAssetThumbnail).toHaveBeenCalledOnce());
+
+    expect(api.uploadAssetThumbnail).toHaveBeenCalledWith(
+      "workspace-1",
+      reference.id,
+      expect.objectContaining({
+        byteLength: 7,
+        contentType: "image/webp",
+      }),
+    );
+    expect(onUploadComplete).toHaveBeenCalledOnce();
+  });
+
+  it("binds references to media identity and ignores stale upload completion", async () => {
+    const cache = new MemoryAssetCache();
+    const firstBlob = new Blob([new Uint8Array([1])], { type: "image/png" });
+    const secondBlob = new Blob([new Uint8Array([2])], { type: "image/png" });
+    const adoptedBlob = new Blob([new Uint8Array([0])], { type: "image/png" });
+    const adopted: HostedAssetReference = {
+      byteLength: adoptedBlob.size,
+      contentType: adoptedBlob.type,
+      id: "asset-adopted",
+      mediaType: "image",
+      originalFilename: "adopted.png",
+    };
+    type FinalizeResult = Awaited<ReturnType<HostedApiClient["finalizeAssetUpload"]>>;
+    const firstFinalized = deferred<FinalizeResult>();
+    const secondFinalized = deferred<FinalizeResult>();
+    const uploaded = (id: string, filename: string): FinalizeResult["asset"] => ({
+      byteLength: 1,
+      contentHash: null,
+      contentType: "image/png",
+      id,
+      mediaType: "image",
+      originalFilename: filename,
+      workspaceId: "workspace-1",
+    });
+    const api = {
+      finalizeAssetUpload: vi.fn<HostedApiClient["finalizeAssetUpload"]>((_workspaceId, id) =>
+        id === "reservation-first" ? firstFinalized.promise : secondFinalized.promise,
+      ),
+      reserveAssetUpload: vi.fn<HostedApiClient["reserveAssetUpload"]>(
+        async (_workspaceId, request) => ({
+          assetId: `asset-${request.originalFilename}`,
+          expiresAt: Date.now() + 1_000,
+          headers: { "content-type": "image/png" },
+          reservationId: `reservation-${request.originalFilename.replace(".png", "")}`,
+          uploadUrl: `https://uploads.example.test/${request.originalFilename}`,
+        }),
+      ),
+    } as unknown as HostedApiClient;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () =>
+        Promise.resolve(new Response(null, { status: 204 })),
+      ),
+    );
+    const registry = new R2HostedAssetRegistry(
+      api,
+      "workspace-1",
+      cache,
+      vi.fn<(error: unknown) => void>(),
+      vi.fn<() => void>(),
+    );
+    registry.adopt("entity-1", adopted, adoptedBlob);
+
+    expect(
+      await registry.register(
+        runtimeEntity(adoptedBlob, "adopted.png"),
+        new AbortController().signal,
+      ),
+    ).toBe(adopted);
+
+    const firstRegistration = registry.register(
+      runtimeEntity(firstBlob, "first.png"),
+      new AbortController().signal,
+    );
+    const secondRegistration = registry.register(
+      runtimeEntity(secondBlob, "second.png"),
+      new AbortController().signal,
+    );
+    await vi.waitFor(() => expect(api.finalizeAssetUpload).toHaveBeenCalledTimes(2));
+
+    const secondAsset = uploaded("asset-second", "second.png");
+    secondFinalized.resolve({ asset: secondAsset });
+    await expect(secondRegistration).resolves.toEqual(secondAsset);
+    expect(registry.getReference("entity-1")).toEqual(secondAsset);
+
+    firstFinalized.resolve({ asset: uploaded("asset-first", "first.png") });
+    await firstRegistration;
+    expect(registry.getReference("entity-1")).toEqual(secondAsset);
+
+    registry.release("entity-1");
+    expect(registry.getReference("entity-1")).toBeUndefined();
+  });
+});

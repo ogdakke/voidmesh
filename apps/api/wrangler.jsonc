@@ -1,0 +1,209 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "voidmesh-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-17",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "ENVIRONMENT": "development",
+    "REALTIME_ORIGIN": "",
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ASSETS",
+    },
+    {
+      "binding": "SECURITY_AUDIT",
+    },
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "WORKSPACE_EXPORTS",
+        "queue": "voidmesh-workspace-exports",
+      },
+      {
+        "binding": "SECURITY_AUDIT_EVENTS",
+        "queue": "voidmesh-security-audit",
+      },
+    ],
+    "consumers": [
+      {
+        "queue": "voidmesh-workspace-exports",
+        "max_batch_size": 1,
+        "max_retries": 3,
+      },
+      {
+        "queue": "voidmesh-security-audit",
+        "max_batch_size": 1,
+        "max_batch_timeout": 5,
+        "max_retries": 10,
+        "dead_letter_queue": "voidmesh-security-audit-dlq",
+      },
+    ],
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "WORKSPACE_ROOMS",
+        "class_name": "WorkspaceRoom",
+      },
+    ],
+  },
+  "exports": {
+    "WorkspaceRoom": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.01,
+    },
+  },
+  "triggers": {
+    "crons": ["* * * * *", "0 * * * *"],
+  },
+  "env": {
+    "production": {
+      "name": "voidmesh-api-production",
+      "vars": {
+        "ENVIRONMENT": "production",
+        "BETTER_AUTH_URL": "https://voidmesh.xyz",
+        "WEB_ORIGIN": "https://voidmesh.xyz",
+        "REALTIME_ORIGIN": "https://voidmesh-api-production.dwe.workers.dev",
+        "TRUSTED_WEB_ORIGINS": "https://www.voidmesh.xyz,https://voidmesh-*-ogdakkes-projects.vercel.app",
+        "R2_ACCOUNT_ID": "21d89c6498aeb4c017e2d89fbb6ba4cd",
+        "R2_BUCKET_NAME": "voidmesh-assets-production",
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "voidmesh-production",
+          "database_id": "2674758e-14a6-4193-8356-d788d8180622",
+          "migrations_dir": "migrations",
+        },
+      ],
+      "r2_buckets": [
+        {
+          "binding": "ASSETS",
+          "bucket_name": "voidmesh-assets-production",
+        },
+        {
+          "binding": "SECURITY_AUDIT",
+          "bucket_name": "voidmesh-security-audit-production",
+        },
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "WORKSPACE_EXPORTS",
+            "queue": "voidmesh-workspace-exports",
+          },
+          {
+            "binding": "SECURITY_AUDIT_EVENTS",
+            "queue": "voidmesh-security-audit",
+          },
+        ],
+        "consumers": [
+          {
+            "queue": "voidmesh-workspace-exports",
+            "max_batch_size": 1,
+            "max_retries": 3,
+          },
+          {
+            "queue": "voidmesh-security-audit",
+            "max_batch_size": 1,
+            "max_batch_timeout": 5,
+            "max_retries": 10,
+            "dead_letter_queue": "voidmesh-security-audit-dlq",
+          },
+        ],
+      },
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "WORKSPACE_ROOMS",
+            "class_name": "WorkspaceRoom",
+          },
+        ],
+      },
+    },
+    "preview": {
+      "name": "voidmesh-api-preview",
+      "vars": {
+        "ENVIRONMENT": "preview",
+        "BETTER_AUTH_URL": "https://voidmesh.xyz",
+        "WEB_ORIGIN": "https://voidmesh.xyz",
+        "REALTIME_ORIGIN": "https://voidmesh-api-preview.dwe.workers.dev",
+        "TRUSTED_WEB_ORIGINS": "https://www.voidmesh.xyz,https://voidmesh-*-ogdakkes-projects.vercel.app",
+        "R2_ACCOUNT_ID": "21d89c6498aeb4c017e2d89fbb6ba4cd",
+        "R2_BUCKET_NAME": "voidmesh-assets-preview",
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "voidmesh-preview",
+          "database_id": "dfbaef65-e51a-42b9-ac39-78a7fa3bd1d1",
+          "migrations_dir": "migrations",
+        },
+      ],
+      "r2_buckets": [
+        {
+          "binding": "ASSETS",
+          "bucket_name": "voidmesh-assets-preview",
+        },
+        {
+          "binding": "SECURITY_AUDIT",
+          "bucket_name": "voidmesh-security-audit-preview",
+        },
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "WORKSPACE_EXPORTS",
+            "queue": "voidmesh-workspace-exports-preview",
+          },
+          {
+            "binding": "SECURITY_AUDIT_EVENTS",
+            "queue": "voidmesh-security-audit-preview",
+          },
+        ],
+        "consumers": [
+          {
+            "queue": "voidmesh-workspace-exports-preview",
+            "max_batch_size": 1,
+            "max_retries": 3,
+          },
+          {
+            "queue": "voidmesh-security-audit-preview",
+            "max_batch_size": 1,
+            "max_batch_timeout": 5,
+            "max_retries": 10,
+            "dead_letter_queue": "voidmesh-security-audit-dlq-preview",
+          },
+        ],
+      },
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "WORKSPACE_ROOMS",
+            "class_name": "WorkspaceRoom",
+          },
+        ],
+      },
+    },
+  },
+}

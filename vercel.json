@@ -1,5 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "github": {
+    "autoAlias": true
+  },
+  "buildCommand": "bun run build:web",
+  "outputDirectory": "apps/web/dist",
   "headers": [
     {
       "source": "/",
@@ -49,6 +54,20 @@
   ],
   "rewrites": [
     {
+      "source": "/v1/:path*",
+      "has": [
+        {
+          "type": "host",
+          "value": "voidmesh-.*-ogdakkes-projects\\.vercel\\.app"
+        }
+      ],
+      "destination": "https://voidmesh-api-preview.dwe.workers.dev/v1/:path*"
+    },
+    {
+      "source": "/v1/:path*",
+      "destination": "https://voidmesh-api-production.dwe.workers.dev/v1/:path*"
+    },
+    {
       "source": "/m/:path(.*)",
       "destination": "https://2qb6b1mvwcbadvhf.public.blob.vercel-storage.com/media/:path"
     },
@@ -59,6 +78,10 @@
     {
       "source": "/ph/:path(.*)",
       "destination": "https://eu.i.posthog.com/:path"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }

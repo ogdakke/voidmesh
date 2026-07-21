@@ -1,0 +1,32 @@
+BETTER_AUTH_SECRET="replace-with-at-least-32-random-characters"
+BETTER_AUTH_URL="http://127.0.0.1:8787"
+WEB_ORIGIN="http://localhost:5173"
+# Exact additional browser origins allowed for auth callbacks and same-origin links.
+TRUSTED_WEB_ORIGINS="https://voidmesh.localhost,https://your-device.your-tailnet.ts.net"
+R2_ACCOUNT_ID="replace-with-cloudflare-account-id"
+R2_BUCKET_NAME="replace-with-r2-bucket-name"
+R2_ACCESS_KEY_ID="replace-with-r2-access-key-id"
+R2_SECRET_ACCESS_KEY="replace-with-r2-secret-access-key"
+
+# Stripe subscriptions. Create a recurring price in Stripe and forward
+# checkout.session.completed plus customer.subscription.* events to
+# /v1/billing/webhooks/stripe.
+STRIPE_SECRET_KEY="sk_test_replace-me"
+STRIPE_WEBHOOK_SECRET="whsec_replace-me"
+STRIPE_PRO_PRICE_ID="price_replace-me"
+
+# Pro limits are entitlement data, not hard-coded product behavior.
+PRO_HOSTED_WORKSPACE_LIMIT="5"
+PRO_ACCOUNT_STORAGE_LIMIT_BYTES="10737418240"
+PRO_WORKSPACE_STORAGE_LIMIT_BYTES="4294967296"
+PRO_HARD_ASSET_LIMIT_BYTES="2147483648"
+
+# Internal recovery checkpoint cadence; snapshots are not customer-visible history.
+ROOM_SNAPSHOT_INTERVAL="100"
+
+# Optional. When set, email signup requires a matching Turnstile token.
+TURNSTILE_SECRET_KEY="replace-with-turnstile-secret-key"
+
+# Transactional auth email. When configured, new accounts must verify their email.
+RESEND_API_KEY="re_replace-me"
+EMAIL_FROM="Voidmesh <accounts@example.com>"
