@@ -48,6 +48,8 @@ export interface HostedCollaborationProviderOptions {
   socketFactory: () => Promise<WebSocket> | WebSocket;
 }
 
+export type ScenePatchOrigin = "local" | "remote";
+
 export class HostedCollaborationProvider {
   readonly #beforeFlush: () => Promise<void>;
   readonly #onClockSample: () => void;
@@ -64,7 +66,9 @@ export class HostedCollaborationProvider {
   readonly #snapshotListeners = new Set<
     (snapshot: ServerSceneSnapshotMessage) => Promise<void> | void
   >();
-  readonly #patchListeners = new Set<(patch: ServerScenePatchMessage) => void>();
+  readonly #patchListeners = new Set<
+    (patch: ServerScenePatchMessage, origin: ScenePatchOrigin) => void
+  >();
   readonly #playbackListeners = new Set<(message: ServerPlaybackMessage) => void>();
   readonly #clockRequests = new Map<string, number>();
   #socket: WebSocket | null = null;
@@ -169,7 +173,9 @@ export class HostedCollaborationProvider {
     return () => this.#snapshotListeners.delete(listener);
   }
 
-  onPatch(listener: (patch: ServerScenePatchMessage) => void): () => void {
+  onPatch(
+    listener: (patch: ServerScenePatchMessage, origin: ScenePatchOrigin) => void,
+  ): () => void {
     this.#patchListeners.add(listener);
     return () => this.#patchListeners.delete(listener);
   }
@@ -273,7 +279,7 @@ export class HostedCollaborationProvider {
         void this.#finishSynchronization(message);
         return;
       case "scene-patch":
-        for (const listener of this.#patchListeners) listener(message);
+        this.#publishScenePatch(message);
         return;
       case "playback":
         if (
@@ -344,6 +350,20 @@ export class HostedCollaborationProvider {
     if (this.#inFlightOperationId === operationId) this.#inFlightOperationId = null;
     void this.#persistPending();
     this.#flushNext();
+  }
+
+  #publishScenePatch(message: ServerScenePatchMessage): void {
+    const local = this.#pending.some(
+      (entry) =>
+        entry.type === "scene-command" && entry.command.operationId === message.operationId,
+    );
+    // A scene patch is emitted only after the room transaction commits, so it is also a
+    // durable acceptance receipt. Persist that immediately instead of risking a replay if
+    // the socket closes before the following ack arrives.
+    if (local) this.#acknowledge(message.operationId);
+    for (const listener of this.#patchListeners) {
+      listener(message, local ? "local" : "remote");
+    }
   }
 
   #rejectPending(conflict: ServerConflictMessage): void {

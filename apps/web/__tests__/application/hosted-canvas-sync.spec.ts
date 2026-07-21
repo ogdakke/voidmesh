@@ -8,6 +8,7 @@ import type {
   ServerScenePatchMessage,
   ServerSceneSnapshotMessage,
 } from "@voidmesh/collaboration";
+import type { ScenePatchOrigin } from "@voidmesh/collaboration/provider";
 import { describe, expect, it, vi } from "vitest";
 import {
   HostedCanvasSync,
@@ -101,7 +102,9 @@ class FakeTransport implements HostedSceneTransport {
   readonly sceneCommands: HostedSceneCommand[] = [];
   readonly playbackCommands: HostedPlaybackCommand[] = [];
   readonly snapshots = new Set<(message: ServerSceneSnapshotMessage) => void>();
-  readonly patches = new Set<(message: ServerScenePatchMessage) => void>();
+  readonly patches = new Set<
+    (message: ServerScenePatchMessage, origin: ScenePatchOrigin) => void
+  >();
   readonly playback = new Set<(message: ServerPlaybackMessage) => void>();
   now = 2_000;
 
@@ -110,7 +113,9 @@ class FakeTransport implements HostedSceneTransport {
     return () => this.snapshots.delete(listener);
   }
 
-  onPatch(listener: (message: ServerScenePatchMessage) => void): () => void {
+  onPatch(
+    listener: (message: ServerScenePatchMessage, origin: ScenePatchOrigin) => void,
+  ): () => void {
     this.patches.add(listener);
     return () => this.patches.delete(listener);
   }
@@ -143,13 +148,18 @@ class FakeTransport implements HostedSceneTransport {
       listener({ anchor, roomSequence: anchor.sequence, type: "playback" });
     }
   }
+
+  emitPatch(message: ServerScenePatchMessage, origin: ScenePatchOrigin): void {
+    for (const listener of this.patches) listener(message, origin);
+  }
 }
 
 function createSync(source: FakeSource, transport: FakeTransport) {
   const register = vi.fn<HostedAssetRegistry["register"]>(async () => asset);
+  const applyChange = vi.fn<HostedCanvasProjection["applyChange"]>(async () => {});
   const applyPlayback = vi.fn<HostedCanvasProjection["applyPlayback"]>(async () => {});
   const projection: HostedCanvasProjection = {
-    applyChange: async () => {},
+    applyChange,
     applyPlayback,
     applySnapshot: async () => {},
   };
@@ -163,7 +173,7 @@ function createSync(source: FakeSource, transport: FakeTransport) {
     transport,
     writable: true,
   });
-  return { applyPlayback, register, sync };
+  return { applyChange, applyPlayback, register, sync };
 }
 
 describe("HostedCanvasSync", () => {
@@ -270,6 +280,205 @@ describe("HostedCanvasSync", () => {
 
     expect(register).not.toHaveBeenCalled();
     expect(transport.sceneCommands).toHaveLength(0);
+    sync.destroy();
+  });
+
+  it("keeps newer optimistic revisions when an earlier local patch is echoed", async () => {
+    const source = new FakeSource();
+    const transport = new FakeTransport();
+    const entity = runtimeEntity();
+    source.entities.set(entity.id, entity);
+    const { sync } = createSync(source, transport);
+    sync.start();
+    transport.emitSnapshot([hostedEntity()]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    entity.position = { x: 10, y: 0 };
+    source.emit({
+      batch: [{ id: entity.id, updates: { position: entity.position } }],
+      projected: false,
+      type: "update",
+    });
+    entity.position = { x: 20, y: 0 };
+    source.emit({
+      batch: [{ id: entity.id, updates: { position: entity.position } }],
+      projected: false,
+      type: "update",
+    });
+
+    const first = transport.sceneCommands[0];
+    const second = transport.sceneCommands[1];
+    expect(first).toMatchObject({ expected: { geometry: 0 }, kind: "entity.patch" });
+    expect(second).toMatchObject({ expected: { geometry: 1 }, kind: "entity.patch" });
+    transport.emitPatch(
+      {
+        changes: [
+          {
+            entityId: entity.id,
+            generation: 0,
+            patch: {
+              geometry: {
+                originalSize: { height: 100, width: 100 },
+                position: { x: 10, y: 0 },
+                rotation: 0,
+                size: { height: 100, width: 100 },
+              },
+            },
+            revisions: { appearance: 0, asset: 0, geometry: 1, identity: 0, layering: 0 },
+            type: "entity.patched",
+          },
+        ],
+        operationId: first!.operationId,
+        roomSequence: 2,
+        type: "scene-patch",
+      },
+      "local",
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    entity.position = { x: 30, y: 0 };
+    source.emit({
+      batch: [{ id: entity.id, updates: { position: entity.position } }],
+      projected: false,
+      type: "update",
+    });
+
+    expect(transport.sceneCommands[2]).toMatchObject({
+      expected: { geometry: 2 },
+      kind: "entity.patch",
+    });
+    sync.destroy();
+  });
+
+  it("rebases a persisted patch onto the authoritative snapshot revision", async () => {
+    const source = new FakeSource();
+    const transport = new FakeTransport();
+    const authoritative = hostedEntity();
+    authoritative.revisions.geometry = 4;
+    const { sync } = createSync(source, transport);
+    sync.start();
+    transport.emitSnapshot([authoritative]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const [message] = sync.preparePending([
+      {
+        command: {
+          entityId: authoritative.id,
+          expected: { geometry: 0 },
+          generation: authoritative.generation,
+          kind: "entity.patch",
+          operationId: "offline-geometry",
+          patch: {
+            geometry: {
+              originalSize: authoritative.originalSize,
+              position: { x: 50, y: 25 },
+              rotation: authoritative.rotation,
+              size: authoritative.size,
+            },
+          },
+        },
+        type: "scene-command",
+      },
+    ]);
+
+    expect(message).toMatchObject({
+      command: { expected: { geometry: 4 }, operationId: "offline-geometry" },
+    });
+    sync.destroy();
+  });
+
+  it("does not project an accepted local create over its existing media resources", async () => {
+    const source = new FakeSource();
+    const transport = new FakeTransport();
+    const entity = runtimeEntity();
+    source.entities.set(entity.id, entity);
+    const { applyChange, sync } = createSync(source, transport);
+    sync.start();
+    source.emit({ entities: [entity], projected: false, type: "add" });
+    await vi.waitFor(() => expect(transport.sceneCommands).toHaveLength(1));
+    const create = transport.sceneCommands[0]!;
+    expect(create.kind).toBe("entity.create");
+    if (create.kind !== "entity.create") throw new Error("Expected a create command");
+    const accepted: HostedSceneEntity = {
+      ...create.entity,
+      revisions: { appearance: 0, asset: 0, geometry: 0, identity: 0, layering: 0 },
+    };
+
+    transport.emitPatch(
+      {
+        changes: [{ entity: accepted, type: "entity.created" }],
+        operationId: create.operationId,
+        roomSequence: 1,
+        type: "scene-patch",
+      },
+      "local",
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(applyChange).not.toHaveBeenCalled();
+    expect(source.entities.get(entity.id)?.mediaSource).toBe(entity.mediaSource);
+    sync.destroy();
+  });
+
+  it("preserves and rebases a later edit after a genuine same-group conflict", async () => {
+    const source = new FakeSource();
+    const transport = new FakeTransport();
+    const entity = runtimeEntity();
+    source.entities.set(entity.id, entity);
+    const { applyChange, sync } = createSync(source, transport);
+    sync.start();
+    transport.emitSnapshot([hostedEntity()]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    entity.position = { x: 10, y: 0 };
+    source.emit({
+      batch: [{ id: entity.id, updates: { position: entity.position } }],
+      projected: false,
+      type: "update",
+    });
+    const conflicted = transport.sceneCommands[0]!;
+    transport.emitPatch(
+      {
+        changes: [
+          {
+            entityId: entity.id,
+            generation: 0,
+            patch: {
+              geometry: {
+                originalSize: entity.originalSize,
+                position: { x: -10, y: 0 },
+                rotation: entity.rotation,
+                size: entity.size,
+              },
+            },
+            revisions: { appearance: 0, asset: 0, geometry: 1, identity: 0, layering: 0 },
+            type: "entity.patched",
+          },
+        ],
+        operationId: "remote-geometry",
+        roomSequence: 2,
+        type: "scene-patch",
+      },
+      "remote",
+    );
+    await vi.waitFor(() => expect(applyChange).toHaveBeenCalledOnce());
+
+    entity.position = { x: 20, y: 0 };
+    source.emit({
+      batch: [{ id: entity.id, updates: { position: entity.position } }],
+      projected: false,
+      type: "update",
+    });
+    const later = transport.sceneCommands[1]!;
+    sync.handleConflict(conflicted.operationId);
+    const [rebased] = sync.preparePending([{ command: later, type: "scene-command" }]);
+
+    expect(rebased).toMatchObject({ command: { expected: { geometry: 1 } } });
     sync.destroy();
   });
 });

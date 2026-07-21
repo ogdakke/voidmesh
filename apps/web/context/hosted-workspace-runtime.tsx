@@ -82,17 +82,20 @@ export function HostedWorkspaceRuntime({
     const provider = new HostedCollaborationProvider({
       onClockSample: () => sync?.refreshPlayback(),
       onConflict: (conflict) => {
-        reportError(
-          new Error(
-            conflict.reason === "revision"
-              ? "A collaborator changed the same part of this item. The latest room version was kept."
-              : `The room rejected a change (${conflict.reason}).`,
-          ),
-        );
+        sync?.handleConflict(conflict.operationId);
+        const description =
+          conflict.reason === "revision"
+            ? "This change conflicted with a newer workspace edit. Your later edits will be retried."
+            : `The room rejected a change (${conflict.reason}).`;
+        logger.warn("Hosted workspace edit conflict", conflict);
+        toastManager.add({ description, title: "Workspace changed", type: "secondary" });
       },
       onSynchronizationError: reportError,
       pendingStore: createIndexedDbPendingCommandStore(workspace.id),
-      preparePending: (commands) => assets.flushPendingCommands(commands),
+      preparePending: async (commands) => {
+        const prepared = await assets.flushPendingCommands(commands);
+        return sync?.preparePending(prepared) ?? prepared;
+      },
       socketFactory: () => api.createWorkspaceSocket(workspace.id),
     });
     providerRef.current = provider;

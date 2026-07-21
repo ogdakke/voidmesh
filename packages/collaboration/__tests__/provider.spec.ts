@@ -164,6 +164,34 @@ describe("HostedCollaborationProvider", () => {
     provider.destroy();
   });
 
+  it("treats a local scene patch as a durable acceptance before the ack arrives", async () => {
+    const store = new FakeStore();
+    const socket = new FakeSocket();
+    const patches = vi.fn<(message: ServerScenePatchMessage, origin: "local" | "remote") => void>();
+    const provider = new HostedCollaborationProvider({
+      pendingStore: store,
+      socketFactory: () => socket as unknown as WebSocket,
+    });
+    provider.onPatch(patches);
+    provider.connect();
+    await vi.waitFor(() => expect(provider.status).toBe("connecting"));
+    socket.open();
+    synchronize(socket);
+    provider.submitSceneCommand(command("accepted-before-ack"));
+
+    const patch: ServerScenePatchMessage = {
+      changes: [],
+      operationId: "accepted-before-ack",
+      roomSequence: 1,
+      type: "scene-patch",
+    };
+    socket.receive(patch);
+
+    await vi.waitFor(() => expect(store.commands).toEqual([]));
+    expect(patches).toHaveBeenCalledWith(patch, "local");
+    provider.destroy();
+  });
+
   it("coalesces queued playback intent and does not replay an optimistic command locally", async () => {
     const socket = new FakeSocket();
     const playback = vi.fn<(message: ServerPlaybackMessage) => void>();

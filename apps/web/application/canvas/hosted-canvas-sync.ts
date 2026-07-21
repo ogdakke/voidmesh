@@ -1,4 +1,5 @@
 import type {
+  ClientDurableMessage,
   HostedAssetReference,
   HostedEntityPatch,
   HostedEntityRevisions,
@@ -14,6 +15,7 @@ import type {
   ServerSceneSnapshotMessage,
 } from "@voidmesh/collaboration";
 import { initialEntityRevisions, isTimeDependentShader } from "@voidmesh/collaboration";
+import type { ScenePatchOrigin } from "@voidmesh/collaboration/provider";
 import type { CanvasEntityMutation } from "#engine";
 import type { ShaderCanvasEntity, ShaderParams } from "#types/canvas.ts";
 import { MediaType, isAnimatedEntity } from "#types/canvas.ts";
@@ -34,7 +36,9 @@ export interface HostedCanvasProjection {
 }
 
 export interface HostedSceneTransport {
-  onPatch(listener: (message: ServerScenePatchMessage) => void): () => void;
+  onPatch(
+    listener: (message: ServerScenePatchMessage, origin: ScenePatchOrigin) => void,
+  ): () => void;
   onPlayback(listener: (message: ServerPlaybackMessage) => void): () => void;
   onSnapshot(listener: (message: ServerSceneSnapshotMessage) => Promise<void> | void): () => void;
   serverNow(): number;
@@ -68,7 +72,9 @@ export class HostedCanvasSync {
   readonly #abortController = new AbortController();
   readonly #entityRevisions = new Map<string, number>();
   readonly #geometryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  readonly #authoritativeEntities = new Map<string, HostedSceneEntity>();
   readonly #remoteEntities = new Map<string, HostedSceneEntity>();
+  readonly #pendingSceneCommands = new Map<string, HostedSceneCommand>();
   readonly #playbackAnchors = new Map<string, HostedPlaybackAnchor>();
   #unsubscribeMutations: (() => void) | null = null;
   #unsubscribeSnapshot: (() => void) | null = null;
@@ -91,8 +97,8 @@ export class HostedCanvasSync {
     this.#unsubscribeSnapshot = this.#transport.onSnapshot((snapshot) =>
       this.#enqueueRemote(() => this.#applySnapshot(snapshot)),
     );
-    this.#unsubscribePatch = this.#transport.onPatch((patch) => {
-      void this.#enqueueRemote(() => this.#applyPatch(patch));
+    this.#unsubscribePatch = this.#transport.onPatch((patch, origin) => {
+      void this.#enqueueRemote(() => this.#applyPatch(patch, origin));
     });
     this.#unsubscribePlayback = this.#transport.onPlayback((message) => {
       this.#playbackAnchors.set(message.anchor.entityId, message.anchor);
@@ -122,7 +128,9 @@ export class HostedCanvasSync {
     this.#driftTimer = null;
     for (const timer of this.#geometryTimers.values()) clearTimeout(timer);
     this.#geometryTimers.clear();
+    this.#authoritativeEntities.clear();
     this.#remoteEntities.clear();
+    this.#pendingSceneCommands.clear();
     this.#playbackAnchors.clear();
   }
 
@@ -134,6 +142,30 @@ export class HostedCanvasSync {
         await this.#projection.applyPlayback(anchor, roomNow);
       }
     });
+  }
+
+  preparePending(commands: readonly ClientDurableMessage[]): ClientDurableMessage[] {
+    this.#pendingSceneCommands.clear();
+    const rebased: ClientDurableMessage[] = [];
+    const forecast = cloneEntityMap(this.#authoritativeEntities);
+    for (const message of commands) {
+      if (message.type !== "scene-command") {
+        rebased.push(message);
+        continue;
+      }
+      const command = rebaseSceneCommand(message.command, forecast);
+      if (!command) continue;
+      this.#pendingSceneCommands.set(command.operationId, command);
+      applyOptimisticCommand(forecast, command);
+      rebased.push({ command, type: "scene-command" });
+    }
+    replaceEntityMap(this.#remoteEntities, forecast);
+    return rebased;
+  }
+
+  handleConflict(operationId: string): void {
+    this.#pendingSceneCommands.delete(operationId);
+    this.#rebuildOptimisticEntities();
   }
 
   #handleMutation(mutation: CanvasEntityMutation): void {
@@ -157,7 +189,7 @@ export class HostedCanvasSync {
           .filter((entity): entity is HostedSceneEntity => entity !== undefined)
           .map((entity) => ({ generation: entity.generation, id: entity.id }));
         if (entities.length > 0) {
-          this.#transport.submitSceneCommand({
+          this.#submitSceneCommand({
             entities,
             kind: "entities.remove",
             operationId: crypto.randomUUID(),
@@ -194,7 +226,7 @@ export class HostedCanvasSync {
         const remote = this.#remoteEntities.get(entityId);
         if (mode === "create" || !remote) {
           const hosted = toHostedEntity(latest, asset, remote?.generation ?? 0);
-          this.#transport.submitSceneCommand({
+          this.#submitSceneCommand({
             entity: hosted,
             kind: "entity.create",
             operationId: crypto.randomUUID(),
@@ -237,7 +269,7 @@ export class HostedCanvasSync {
     for (const group of Object.keys(patch) as Array<keyof HostedEntityRevisions>) {
       expected[group] = remote.revisions[group];
     }
-    this.#transport.submitSceneCommand({
+    this.#submitSceneCommand({
       entityId: remote.id,
       expected,
       generation: remote.generation,
@@ -271,7 +303,7 @@ export class HostedCanvasSync {
       })),
     );
     if (this.#abortController.signal.aborted) return;
-    this.#transport.submitSceneCommand({
+    this.#submitSceneCommand({
       entities: registered.map(({ asset, entity }) => toHostedEntity(entity, asset, 0)),
       kind: "scene.replace",
       operationId: crypto.randomUUID(),
@@ -323,8 +355,8 @@ export class HostedCanvasSync {
   }
 
   async #applySnapshot(snapshot: ServerSceneSnapshotMessage): Promise<void> {
-    this.#remoteEntities.clear();
-    for (const entity of snapshot.entities) this.#remoteEntities.set(entity.id, entity);
+    replaceEntityMap(this.#authoritativeEntities, snapshot.entities);
+    replaceEntityMap(this.#remoteEntities, snapshot.entities);
     this.#playbackAnchors.clear();
     for (const anchor of snapshot.playback) this.#playbackAnchors.set(anchor.entityId, anchor);
     await this.#projection.applySnapshot(snapshot.entities);
@@ -332,27 +364,19 @@ export class HostedCanvasSync {
     for (const anchor of snapshot.playback) await this.#projection.applyPlayback(anchor, roomNow);
   }
 
-  async #applyPatch(message: ServerScenePatchMessage): Promise<void> {
+  async #applyPatch(message: ServerScenePatchMessage, origin: ScenePatchOrigin): Promise<void> {
     for (const change of message.changes) {
-      if (change.type === "entity.created")
-        this.#remoteEntities.set(change.entity.id, change.entity);
-      else if (change.type === "entity.patched") {
-        const current = this.#remoteEntities.get(change.entityId);
-        if (current) {
-          this.#remoteEntities.set(change.entityId, applyHostedPatch(current, change));
-        }
+      applyAuthoritativeChange(this.#authoritativeEntities, change);
+      if (change.type === "entity.patched") {
         if (change.patch.asset || change.patch.appearance) {
           this.#playbackAnchors.delete(change.entityId);
         }
       } else if (change.type === "entity.removed") {
-        this.#remoteEntities.delete(change.entityId);
         this.#playbackAnchors.delete(change.entityId);
       } else {
-        this.#remoteEntities.clear();
-        for (const entity of change.entities) this.#remoteEntities.set(entity.id, entity);
-        this.#playbackAnchors.clear();
+        if (change.type === "scene.replaced") this.#playbackAnchors.clear();
       }
-      await this.#projection.applyChange(change);
+      if (origin === "remote") await this.#projection.applyChange(change);
       const anchor =
         change.type === "entity.created" || change.type === "entity.patched"
           ? this.#playbackAnchors.get(
@@ -361,6 +385,8 @@ export class HostedCanvasSync {
           : undefined;
       if (anchor) await this.#projection.applyPlayback(anchor, this.#transport.serverNow());
     }
+    if (origin === "local") this.#pendingSceneCommands.delete(message.operationId);
+    this.#rebuildOptimisticEntities();
   }
 
   #enqueueRemote(operation: () => Promise<void>): Promise<void> {
@@ -373,6 +399,19 @@ export class HostedCanvasSync {
     const revision = (this.#entityRevisions.get(entityId) ?? 0) + 1;
     this.#entityRevisions.set(entityId, revision);
     return revision;
+  }
+
+  #submitSceneCommand(command: HostedSceneCommand): void {
+    this.#pendingSceneCommands.set(command.operationId, command);
+    this.#transport.submitSceneCommand(command);
+  }
+
+  #rebuildOptimisticEntities(): void {
+    const forecast = cloneEntityMap(this.#authoritativeEntities);
+    for (const command of this.#pendingSceneCommands.values()) {
+      applyOptimisticCommand(forecast, command);
+    }
+    replaceEntityMap(this.#remoteEntities, forecast);
   }
 }
 
@@ -494,4 +533,107 @@ function applyHostedPatch(
     ...(patch.asset && patch.asset),
     revisions: change.revisions,
   };
+}
+
+function cloneEntityMap(
+  entities: ReadonlyMap<string, HostedSceneEntity>,
+): Map<string, HostedSceneEntity> {
+  return new Map([...entities].map(([id, entity]) => [id, structuredClone(entity)] as const));
+}
+
+function replaceEntityMap(
+  target: Map<string, HostedSceneEntity>,
+  entities: readonly HostedSceneEntity[] | ReadonlyMap<string, HostedSceneEntity>,
+): void {
+  target.clear();
+  if (!Array.isArray(entities)) {
+    for (const [id, entity] of entities as ReadonlyMap<string, HostedSceneEntity>) {
+      target.set(id, structuredClone(entity));
+    }
+    return;
+  }
+  for (const entity of entities as readonly HostedSceneEntity[]) {
+    target.set(entity.id, structuredClone(entity));
+  }
+}
+
+function applyAuthoritativeChange(
+  entities: Map<string, HostedSceneEntity>,
+  change: HostedSceneChange,
+): void {
+  switch (change.type) {
+    case "entity.created":
+      entities.set(change.entity.id, structuredClone(change.entity));
+      break;
+    case "entity.patched": {
+      const current = entities.get(change.entityId);
+      if (current) entities.set(change.entityId, applyHostedPatch(current, change));
+      break;
+    }
+    case "entity.removed":
+      entities.delete(change.entityId);
+      break;
+    case "scene.replaced":
+      replaceEntityMap(entities, change.entities);
+      break;
+  }
+}
+
+function rebaseSceneCommand(
+  command: HostedSceneCommand,
+  forecast: ReadonlyMap<string, HostedSceneEntity>,
+): HostedSceneCommand | null {
+  if (command.kind !== "entity.patch") return command;
+  const current = forecast.get(command.entityId);
+  if (!current || current.generation !== command.generation) return command;
+  const expected: Partial<HostedEntityRevisions> = {};
+  for (const group of Object.keys(command.patch) as Array<keyof HostedEntityRevisions>) {
+    expected[group] = current.revisions[group];
+  }
+  return { ...command, expected };
+}
+
+function applyOptimisticCommand(
+  entities: Map<string, HostedSceneEntity>,
+  command: HostedSceneCommand,
+): void {
+  switch (command.kind) {
+    case "entity.create":
+      if (!entities.has(command.entity.id)) {
+        entities.set(command.entity.id, {
+          ...structuredClone(command.entity),
+          revisions: initialEntityRevisions(),
+        });
+      }
+      break;
+    case "entity.patch": {
+      const current = entities.get(command.entityId);
+      if (!current || current.generation !== command.generation) break;
+      const revisions = { ...current.revisions };
+      for (const group of Object.keys(command.patch) as Array<keyof HostedEntityRevisions>) {
+        revisions[group] += 1;
+      }
+      entities.set(
+        command.entityId,
+        applyHostedPatch(current, { patch: command.patch, revisions }),
+      );
+      break;
+    }
+    case "entities.remove":
+      for (const requested of command.entities) {
+        if (entities.get(requested.id)?.generation === requested.generation) {
+          entities.delete(requested.id);
+        }
+      }
+      break;
+    case "scene.replace":
+      replaceEntityMap(
+        entities,
+        command.entities.map((entity) => ({
+          ...structuredClone(entity),
+          revisions: initialEntityRevisions(),
+        })),
+      );
+      break;
+  }
 }
