@@ -102,11 +102,12 @@ describe("CollaborationPresencePass", () => {
 function createDevice() {
   const writeBuffer = vi.fn<GPUQueue["writeBuffer"]>();
   const copyExternalImageToTexture = vi.fn<GPUQueue["copyExternalImageToTexture"]>();
-  const createTexture = vi.fn<GPUDevice["createTexture"]>(() =>
-    ({
-      createView: vi.fn<GPUTexture["createView"]>(() => ({} as GPUTextureView)),
-      destroy: vi.fn<GPUTexture["destroy"]>(),
-    }) as unknown as GPUTexture,
+  const createTexture = vi.fn<GPUDevice["createTexture"]>(
+    () =>
+      ({
+        createView: vi.fn<GPUTexture["createView"]>(() => ({}) as GPUTextureView),
+        destroy: vi.fn<GPUTexture["destroy"]>(),
+      }) as unknown as GPUTexture,
   );
   const device = {
     queue: { writeBuffer, copyExternalImageToTexture },
@@ -115,12 +116,8 @@ function createDevice() {
     ),
     createBindGroup: vi.fn<GPUDevice["createBindGroup"]>(() => ({}) as GPUBindGroup),
     createShaderModule: vi.fn<GPUDevice["createShaderModule"]>(() => ({}) as GPUShaderModule),
-    createPipelineLayout: vi.fn<GPUDevice["createPipelineLayout"]>(
-      () => ({}) as GPUPipelineLayout,
-    ),
-    createRenderPipeline: vi.fn<GPUDevice["createRenderPipeline"]>(
-      () => ({}) as GPURenderPipeline,
-    ),
+    createPipelineLayout: vi.fn<GPUDevice["createPipelineLayout"]>(() => ({}) as GPUPipelineLayout),
+    createRenderPipeline: vi.fn<GPUDevice["createRenderPipeline"]>(() => ({}) as GPURenderPipeline),
     createSampler: vi.fn<GPUDevice["createSampler"]>(() => ({}) as GPUSampler),
     createBuffer: vi.fn<GPUDevice["createBuffer"]>(
       () => ({ destroy: vi.fn<GPUBuffer["destroy"]>() }) as unknown as GPUBuffer,

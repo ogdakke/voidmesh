@@ -8,10 +8,7 @@ const videoActivations = new WeakMap<HTMLVideoElement, Promise<void>>();
 /** A pending play is routinely cancelled when decoder admission changes and calls load(). */
 export function isMediaPlaybackInterruption(error: unknown): boolean {
   return (
-    typeof error === "object" &&
-    error !== null &&
-    "name" in error &&
-    error.name === "AbortError"
+    typeof error === "object" && error !== null && "name" in error && error.name === "AbortError"
   );
 }
 

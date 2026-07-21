@@ -185,12 +185,13 @@ describe("HostedCanvasProjectionService", () => {
 
   it("does not report decoder-admission cancellation as a hosted media failure", async () => {
     const nativeCreateElement = document.createElement.bind(document);
-    vi.spyOn(document, "createElement").mockImplementation(
-      ((tagName: string, options?: ElementCreationOptions) =>
-        tagName === "video"
-          ? createMockVideoElement({ duration: 10 })
-          : nativeCreateElement(tagName, options)) as typeof document.createElement,
-    );
+    vi.spyOn(document, "createElement").mockImplementation(((
+      tagName: string,
+      options?: ElementCreationOptions,
+    ) =>
+      tagName === "video"
+        ? createMockVideoElement({ duration: 10 })
+        : nativeCreateElement(tagName, options)) as typeof document.createElement);
     const cache: HostedAssetCache = {
       delete: async () => {},
       get: async (_assetId, contentType) => new Blob([new Uint8Array([1])], { type: contentType }),

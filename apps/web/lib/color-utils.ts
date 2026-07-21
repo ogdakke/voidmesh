@@ -354,12 +354,7 @@ export function cssColorToRGBA(cssString: string): [number, number, number, numb
       const segment = (offset + hue * 12) % 12;
       return lightness - (chroma / 2) * Math.max(-1, Math.min(segment - 3, 9 - segment, 1));
     };
-    return [
-      channel(0),
-      channel(8),
-      channel(4),
-      hslMatch[4] ? parseChannel(hslMatch[4]) : 1,
-    ];
+    return [channel(0), channel(8), channel(4), hslMatch[4] ? parseChannel(hslMatch[4]) : 1];
   }
   return hexToNormalizedRGBA(trimmed);
 }

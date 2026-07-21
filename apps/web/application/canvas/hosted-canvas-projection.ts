@@ -190,13 +190,7 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
       return;
     }
     if (anchor.mediaRevision !== collaborative.revisions.asset) return;
-    await this.#applyMediaPlayback(
-      current,
-      collaborative,
-      anchor,
-      roomNow,
-      activateDormantPreview,
-    );
+    await this.#applyMediaPlayback(current, collaborative, anchor, roomNow, activateDormantPreview);
   }
 
   async #projectEntity(entity: HostedSceneEntity): Promise<void> {
