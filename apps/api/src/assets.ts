@@ -50,6 +50,7 @@ interface ReservationRow extends AssetAccessRow {
   can_edit_collaborate: number;
   expires_at: number;
   expected_bytes: number;
+  grant_created_at?: number;
   grant_id?: string;
   reservation_id: string;
   state: string;
@@ -399,6 +400,8 @@ async function reserveUpload(
     trustedRequestOrigin(env, request),
     input.contentType,
     input.contentHash,
+    GRANT_TTL_SECONDS,
+    now,
   );
 
   try {
@@ -528,6 +531,7 @@ async function replayUploadReservation(
       assets.thumbnail_content_type,
       assets.thumbnail_byte_length,
       asset_transfer_grants.id AS grant_id,
+      asset_transfer_grants.created_at AS grant_created_at,
       1 AS can_edit_collaborate,
       'owner' AS role
     FROM upload_reservations
@@ -575,7 +579,8 @@ async function replayUploadReservation(
     trustedRequestOrigin(env, request),
     reservation.content_type,
     reservation.content_hash ?? undefined,
-    Math.max(1, Math.ceil((reservation.expires_at - Date.now()) / 1_000)),
+    GRANT_TTL_SECONDS,
+    reservation.grant_created_at,
   );
   return json({
     assetId: reservation.id,
@@ -1376,6 +1381,7 @@ async function signObjectUrl(
   contentType?: string,
   contentHash?: string,
   ttlSeconds = GRANT_TTL_SECONDS,
+  signedAt?: number,
 ): Promise<string> {
   const config = readR2Configuration(env);
   if (config.accountId === "local") {
@@ -1397,9 +1403,16 @@ async function signObjectUrl(
     service: "s3",
   });
   const signed = await client.sign(new Request(url, { headers, method }), {
-    aws: { signQuery: true },
+    aws: {
+      ...(signedAt === undefined ? {} : { datetime: awsDateTime(signedAt) }),
+      signQuery: true,
+    },
   });
   return signed.url;
+}
+
+function awsDateTime(timestamp: number): string {
+  return new Date(timestamp).toISOString().replace(/[:-]|\.\d{3}/g, "");
 }
 
 function uploadHeaders(contentType: string, contentHash?: string): Record<string, string> {
