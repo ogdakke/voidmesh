@@ -183,7 +183,53 @@ describe("HostedCanvasProjectionService", () => {
     expect(requestRender).toHaveBeenCalledWith();
   });
 
-  it("does not report decoder-admission cancellation as a hosted media failure", async () => {
+  it("hydrates each hosted video as an independent source-attached element", async () => {
+    const nativeCreateElement = document.createElement.bind(document);
+    const videos: HTMLVideoElement[] = [];
+    vi.spyOn(document, "createElement").mockImplementation(((
+      tagName: string,
+      options?: ElementCreationOptions,
+    ) => {
+      if (tagName !== "video") return nativeCreateElement(tagName, options);
+      const video = createMockVideoElement({ duration: 10 });
+      videos.push(video);
+      return video;
+    }) as typeof document.createElement);
+    const cache: HostedAssetCache = {
+      delete: async () => {},
+      get: async (_assetId, contentType) => new Blob([new Uint8Array([1])], { type: contentType }),
+      put: async () => {},
+    };
+    const { projection, store } = createProjection(cache);
+    const reference: HostedAssetReference = {
+      byteLength: 1,
+      contentHash: "shared-video-content",
+      contentType: "video/mp4",
+      id: "asset-video",
+      mediaType: "video",
+      originalFilename: "video.mp4",
+    };
+    const entities = [hostedEntity("video-1", reference), hostedEntity("video-2", reference)];
+    for (const entity of entities) {
+      entity.fps = 30;
+      entity.hasAudio = false;
+      entity.playbackDuration = 10;
+    }
+
+    await projection.applySnapshot(entities);
+
+    expect(videos).toHaveLength(2);
+    expect(videos[0]).not.toBe(videos[1]);
+    for (const entity of entities) {
+      const current = store.getState().entities.get(entity.id)!;
+      if (current.mediaSource.type !== "video") throw new Error("Expected video entity");
+      expect(current.mediaSource.videoElement.src).toMatch(/^blob:mock-/);
+      expect(current.mediaSource.videoElement.paused).toBe(true);
+      expect(current.playback?.isPlaying).toBe(false);
+    }
+  });
+
+  it("does not report an interrupted play as a hosted media failure", async () => {
     const nativeCreateElement = document.createElement.bind(document);
     vi.spyOn(document, "createElement").mockImplementation(((
       tagName: string,
@@ -211,7 +257,6 @@ describe("HostedCanvasProjectionService", () => {
     await projection.applySnapshot([entity]);
     const current = store.getState().entities.get(entity.id)!;
     if (current.mediaSource.type !== "video") throw new Error("Expected video entity");
-    current.mediaSource.videoElement.src = "blob:active";
     vi.spyOn(store, "playVideo").mockRejectedValue(
       new DOMException("Playback was interrupted", "AbortError"),
     );
@@ -231,7 +276,6 @@ describe("HostedCanvasProjectionService", () => {
         type: "media",
       },
       1_000,
-      true,
     );
 
     expect(onError).not.toHaveBeenCalled();

@@ -1,4 +1,4 @@
-import { act } from "@testing-library/react";
+import { act, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { canvasStore } from "#engine";
 import { undo } from "#lib/undo.ts";
@@ -50,5 +50,28 @@ describe("CanvasCommands.deleteSelection", () => {
     expect(canvasStore.getState().entities.size).toBe(1_000);
     expect(canvasStore.getState().entityIds).toEqual(entities.map(({ id }) => id));
     unsubscribe();
+  });
+
+  test("resumes the existing playing video when deletion is undone", async () => {
+    const { canvas } = renderWithCanvas(undefined, { skip: skipProviders });
+    const entity = createTestEntity({ id: "deleted-video", mediaType: "video" });
+    if (entity.mediaSource.type !== "video" || !entity.playback) {
+      throw new Error("Expected video entity with playback");
+    }
+    const video = entity.mediaSource.videoElement;
+    const source = video.src;
+    entity.playback.isPlaying = true;
+    entity.playback.currentTime = 4;
+    video.currentTime = 4;
+    canvasStore.addEntity(entity);
+    canvasStore.replaceSelection([entity.id]);
+    canvasStore.setFancyDelete(false);
+
+    act(() => canvas.deleteSelection());
+    performUndo();
+
+    await waitFor(() => expect(video.paused).toBe(false));
+    expect(video.src).toBe(source);
+    expect(video.currentTime).toBe(4);
   });
 });

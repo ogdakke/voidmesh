@@ -12,19 +12,10 @@ import { R2HostedAssetRegistry } from "#application/canvas/hosted-asset-registry
 import { HostedApiClient } from "#lib/hosted-api-client.ts";
 import { loadMediaFromBlob, loadVideo } from "#lib/media-loader.ts";
 import { createPlaybackState } from "#lib/media-playback.ts";
+import { getImageAssetReferenceCount, retainImageAsset } from "#lib/media-assets.ts";
 import {
-  createImageAsset,
-  getImageAssetReferenceCount,
-  releaseImageAsset,
-  retainImageAsset,
-} from "#lib/media-assets.ts";
-import {
-  activateVideoElement,
-  createDormantVideoElement,
   disposeEntityMedia,
   disposeMediaSource,
-  disposeVideoElement,
-  hasActiveVideoSource,
   isMediaPlaybackInterruption,
 } from "#lib/media-resources.ts";
 import type { HostedAssetCache } from "#lib/hosted-asset-cache.ts";
@@ -33,27 +24,14 @@ import {
   ShaderType,
   isGifEntity,
   isVideoEntity,
-  type MediaImageAsset,
   type ColorPalette,
+  type MediaImageAsset,
   type ShaderCanvasEntity,
   type ShaderParams,
 } from "#types/canvas.ts";
 
 const PLAYBACK_DRIFT_TOLERANCE_SECONDS = 0.15;
 const MAX_CONCURRENT_REMOTE_ASSET_LOADS = 4;
-
-interface HostedVideoTemplate {
-  alphaMode: Extract<
-    ShaderCanvasEntity,
-    { mediaSource: { type: "video" } }
-  >["mediaSource"]["alphaMode"];
-  blob: Blob;
-  duration: number;
-  fps: number | null;
-  hasAudio: boolean;
-  posterAsset: MediaImageAsset;
-  released: boolean;
-}
 
 export interface HostedCanvasProjectionOptions {
   api: HostedApiClient;
@@ -82,14 +60,12 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
   readonly #workspaceId: WorkspaceId;
   readonly #assetBlobs = new Map<string, Promise<Blob>>();
   readonly #sharedImages = new Map<string, MediaImageAsset>();
-  readonly #videoTemplates = new Map<string, Promise<HostedVideoTemplate>>();
   readonly #entityAssets = new Map<string, string>();
   readonly #entityBlobKeys = new Map<string, string>();
   readonly #blobEntityCounts = new Map<string, number>();
   readonly #entityRevisions = new Map<string, number>();
   readonly #remoteEntities = new Map<string, HostedSceneEntity>();
   readonly #autoplayBlocked = new Set<string>();
-  readonly #previewActivations = new Map<string, Promise<void>>();
 
   constructor(options: HostedCanvasProjectionOptions) {
     this.#api = options.api;
@@ -105,10 +81,7 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
   }
 
   destroy(): void {
-    for (const pending of this.#videoTemplates.values()) this.#releaseVideoTemplate(pending);
-    this.#videoTemplates.clear();
     this.#remoteEntities.clear();
-    this.#previewActivations.clear();
   }
 
   async applySnapshot(entities: readonly HostedSceneEntity[]): Promise<void> {
@@ -172,11 +145,7 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     }
   }
 
-  async applyPlayback(
-    anchor: HostedPlaybackAnchor,
-    roomNow: number,
-    activateDormantPreview = false,
-  ): Promise<void> {
+  async applyPlayback(anchor: HostedPlaybackAnchor, roomNow: number): Promise<void> {
     const current = this.#store.getState().entities.get(anchor.entityId);
     const collaborative = this.#remoteEntities.get(anchor.entityId);
     if (!current || !collaborative) return;
@@ -190,7 +159,7 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
       return;
     }
     if (anchor.mediaRevision !== collaborative.revisions.asset) return;
-    await this.#applyMediaPlayback(current, collaborative, anchor, roomNow, activateDormantPreview);
+    await this.#applyMediaPlayback(current, collaborative, anchor, roomNow);
   }
 
   async #projectEntity(entity: HostedSceneEntity): Promise<void> {
@@ -303,19 +272,23 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     entity: HostedSceneEntity,
   ): Promise<Pick<ShaderCanvasEntity, "imageBitmap" | "mediaSource" | "playback">> {
     if (entity.asset.mediaType === MediaType.video) {
-      const template = await this.#getVideoTemplate(entity);
-      retainImageAsset(template.posterAsset);
+      const blob = await this.#getAssetBlob(entity);
+      const loaded = await loadVideo(blob, {
+        alphaMode: "unknown",
+        fps: entity.fps,
+        hasAudio: entity.hasAudio,
+      });
+      loaded.videoElement.pause();
       return {
-        imageBitmap: template.posterAsset.imageBitmap,
+        imageBitmap: loaded.initialFrame,
         mediaSource: {
-          alphaMode: template.alphaMode,
-          blob: template.blob,
-          duration: template.duration,
-          fps: template.fps,
-          hasAudio: template.hasAudio,
-          posterAsset: template.posterAsset,
+          alphaMode: loaded.alphaMode,
+          blob,
+          duration: loaded.duration,
+          fps: loaded.fps,
+          hasAudio: loaded.hasAudio,
           type: MediaType.video,
-          videoElement: createDormantVideoElement(),
+          videoElement: loaded.videoElement,
         },
         playback: createPlaybackState({ isPlaying: false }),
       };
@@ -361,43 +334,6 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     disposeMediaSource(media.mediaSource, media.imageBitmap);
   }
 
-  #getVideoTemplate(entity: HostedSceneEntity): Promise<HostedVideoTemplate> {
-    const blobKey = entity.asset.contentHash ?? entity.asset.id;
-    let pending = this.#videoTemplates.get(blobKey);
-    if (pending) return pending;
-    pending = this.#createVideoTemplate(entity);
-    this.#videoTemplates.set(blobKey, pending);
-    void pending.catch(() => {
-      if (this.#videoTemplates.get(blobKey) === pending) this.#videoTemplates.delete(blobKey);
-    });
-    return pending;
-  }
-
-  async #createVideoTemplate(entity: HostedSceneEntity): Promise<HostedVideoTemplate> {
-    const blob = await this.#getAssetBlob(entity);
-    const loaded = await loadVideo(blob, {
-      alphaMode: "unknown",
-      fps: entity.fps,
-      hasAudio: entity.hasAudio,
-      startPlayback: false,
-    });
-    const posterAsset = createImageAsset({
-      alphaMode: loaded.alphaMode,
-      blob,
-      imageBitmap: loaded.initialFrame,
-    });
-    disposeVideoElement(loaded.videoElement);
-    return {
-      alphaMode: loaded.alphaMode,
-      blob,
-      duration: loaded.duration,
-      fps: loaded.fps,
-      hasAudio: loaded.hasAudio,
-      posterAsset,
-      released: false,
-    };
-  }
-
   #getAssetBlob(entity: HostedSceneEntity): Promise<Blob> {
     const blobKey = entity.asset.contentHash ?? entity.asset.id;
     let pending = this.#assetBlobs.get(blobKey);
@@ -432,7 +368,6 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     collaborative: HostedSceneEntity,
     anchor: Extract<HostedPlaybackAnchor, { type: "media" }>,
     roomNow: number,
-    activateDormantPreview: boolean,
   ): Promise<void> {
     if (!current.playback) return;
     const target = mediaTimeAt(anchor, roomNow);
@@ -441,14 +376,12 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
       // Audio preference is local. Collaboration never overwrites mute or volume.
       video.muted = current.playback.muted;
       video.volume = current.playback.volume;
-      const hasDecoder = hasActiveVideoSource(video);
-      const playbackTime = hasDecoder ? video.currentTime : current.playback.currentTime;
       const currentTime =
-        playbackDistance(playbackTime, target, current.mediaSource.duration, anchor.loop) >=
+        playbackDistance(video.currentTime, target, current.mediaSource.duration, anchor.loop) >=
         PLAYBACK_DRIFT_TOLERANCE_SECONDS
           ? target
           : current.playback.currentTime;
-      const remainsActive = this.#store.setVideoPlaybackIntent(
+      this.#store.setVideoPlaybackIntent(
         current.id,
         {
           currentTime,
@@ -458,13 +391,6 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
         },
         true,
       );
-      if (!remainsActive) {
-        if (anchor.state === "paused") this.#autoplayBlocked.delete(current.id);
-        if (anchor.state === "paused" && activateDormantPreview) {
-          this.#activatePausedVideoPreview(current);
-        }
-        return;
-      }
       if (anchor.state === "paused") this.#autoplayBlocked.delete(current.id);
       if (anchor.state === "playing" && video.paused) {
         if (this.#autoplayBlocked.has(current.id) && !current.playback.muted) return;
@@ -506,37 +432,6 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     }
   }
 
-  #activatePausedVideoPreview(entity: ShaderCanvasEntity): void {
-    if (!isVideoEntity(entity) || this.#previewActivations.has(entity.id)) return;
-    const expectedVideo = entity.mediaSource.videoElement;
-    const pending = activateVideoElement(expectedVideo, entity.mediaSource.blob)
-      .then(() => {
-        const current = this.#store.getState().entities.get(entity.id);
-        if (
-          !current ||
-          !isVideoEntity(current) ||
-          current.mediaSource.videoElement !== expectedVideo
-        )
-          return;
-        if (!current.playback || current.playback.isPlaying) return;
-        expectedVideo.muted = current.playback.muted;
-        expectedVideo.volume = current.playback.volume;
-        this.#store.setVideoPlaybackIntent(
-          current.id,
-          {
-            currentTime: current.playback.currentTime,
-            isPlaying: false,
-            loop: current.playback.loop,
-            playbackRate: current.playback.playbackRate,
-          },
-          true,
-        );
-      })
-      .catch(this.#onError)
-      .finally(() => this.#previewActivations.delete(entity.id));
-    this.#previewActivations.set(entity.id, pending);
-  }
-
   #releaseEntity(entity: ShaderCanvasEntity): void {
     const assetId = this.#entityAssets.get(entity.id);
     if (
@@ -570,22 +465,6 @@ export class HostedCanvasProjectionService implements HostedCanvasProjection {
     }
     this.#blobEntityCounts.delete(blobKey);
     this.#assetBlobs.delete(blobKey);
-    const template = this.#videoTemplates.get(blobKey);
-    if (template) {
-      this.#videoTemplates.delete(blobKey);
-      this.#releaseVideoTemplate(template);
-    }
-  }
-
-  #releaseVideoTemplate(pending: Promise<HostedVideoTemplate>): void {
-    void pending.then(
-      (template) => {
-        if (template.released) return;
-        template.released = true;
-        releaseImageAsset(template.posterAsset);
-      },
-      () => {},
-    );
   }
 
   #bumpRevision(entityId: string): number {

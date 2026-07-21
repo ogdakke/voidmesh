@@ -220,15 +220,14 @@ describe("canvasStore.seekVideo", () => {
     expect(entity.textureDirty).toBe(true);
   });
 
-  test("updates logical time without opening a dormant decoder", () => {
+  test("seeks the video element and logical playback together", () => {
     const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
     if (entity.mediaSource.type !== "video") throw new Error("Expected video entity");
-    entity.mediaSource.videoElement.removeAttribute("src");
     canvasStore.addEntity(entity);
 
     canvasStore.seekVideo(entity.id, 50);
 
-    expect(entity.mediaSource.videoElement.currentTime).toBe(0);
+    expect(entity.mediaSource.videoElement.currentTime).toBe(50);
     expect(entity.playback?.currentTime).toBe(50);
   });
 
@@ -255,40 +254,38 @@ describe("canvasStore.seekVideo", () => {
 });
 
 describe("canvasStore.playVideo", () => {
-  test("activates a dormant decoder at its logical playback time", async () => {
+  test("plays the existing video element at its logical playback time", async () => {
     const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
     if (entity.mediaSource.type !== "video" || !entity.playback) {
       throw new Error("Expected video entity with playback");
     }
-    entity.mediaSource.videoElement.removeAttribute("src");
+    const source = entity.mediaSource.videoElement.src;
     entity.playback.currentTime = 24;
     canvasStore.addEntity(entity);
 
     await canvasStore.playVideo(entity.id);
 
-    expect(entity.mediaSource.videoElement.src).toMatch(/^blob:mock-/);
+    expect(entity.mediaSource.videoElement.src).toBe(source);
     expect(entity.mediaSource.videoElement.currentTime).toBe(24);
     expect(entity.playback.isPlaying).toBe(true);
   });
 });
 
 describe("canvasStore.setVideoPlaybackIntent", () => {
-  test("starts logical playback without opening a dormant decoder", () => {
+  test("applies playback intent to the video element and logical state", () => {
     const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
     if (entity.mediaSource.type !== "video" || !entity.playback) {
       throw new Error("Expected video entity with playback");
     }
-    entity.mediaSource.videoElement.removeAttribute("src");
     canvasStore.addEntity(entity);
 
-    const hasDecoder = canvasStore.setVideoPlaybackIntent(
+    canvasStore.setVideoPlaybackIntent(
       entity.id,
       { currentTime: 24, isPlaying: true, loop: true, playbackRate: 1.5 },
       true,
     );
 
-    expect(hasDecoder).toBe(false);
-    expect(entity.mediaSource.videoElement.src).toBe("");
+    expect(entity.mediaSource.videoElement.currentTime).toBe(24);
     expect(entity.playback).toMatchObject({
       currentTime: 24,
       isPlaying: true,
@@ -297,7 +294,7 @@ describe("canvasStore.setVideoPlaybackIntent", () => {
     });
   });
 
-  test("seeks a newly activated decoder to the existing logical intent", () => {
+  test("seeks the video to the existing logical intent", () => {
     const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
     if (entity.mediaSource.type !== "video" || !entity.playback) {
       throw new Error("Expected video entity with playback");
@@ -307,14 +304,33 @@ describe("canvasStore.setVideoPlaybackIntent", () => {
     entity.playback.currentTime = 24;
     canvasStore.addEntity(entity);
 
-    const hasDecoder = canvasStore.setVideoPlaybackIntent(
+    canvasStore.setVideoPlaybackIntent(
       entity.id,
       { currentTime: 24, isPlaying: false, loop: false, playbackRate: 1 },
       true,
     );
 
-    expect(hasDecoder).toBe(true);
     expect(entity.mediaSource.videoElement.currentTime).toBe(24);
+  });
+
+  test("keeps controlling an attached video during a buffering readyState drop", () => {
+    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
+    if (entity.mediaSource.type !== "video" || !entity.playback) {
+      throw new Error("Expected video entity with playback");
+    }
+    const video = entity.mediaSource.videoElement;
+    video.src = "blob:buffering";
+    video.currentTime = 4;
+    Object.defineProperty(video, "readyState", { configurable: true, value: 1 });
+    canvasStore.addEntity(entity);
+
+    canvasStore.setVideoPlaybackIntent(
+      entity.id,
+      { currentTime: 24, isPlaying: false, loop: false, playbackRate: 1 },
+      true,
+    );
+
+    expect(video.currentTime).toBe(24);
   });
 });
 
@@ -445,24 +461,6 @@ describe("canvasStore.pauseVideo", () => {
 
     expect(previousClose).toHaveBeenCalledOnce();
     expect(entity.textureDirty).toBe(true);
-  });
-
-  test("preserves logical time and the poster while the decoder is dormant", () => {
-    const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
-    if (entity.mediaSource.type !== "video" || !entity.playback) {
-      throw new Error("Expected video entity with playback");
-    }
-    entity.mediaSource.videoElement.removeAttribute("src");
-    entity.playback.currentTime = 24;
-    entity.playback.isPlaying = true;
-    const poster = entity.imageBitmap;
-    canvasStore.addEntity(entity);
-
-    canvasStore.pauseVideo(entity.id);
-
-    expect(entity.playback.currentTime).toBe(24);
-    expect(entity.playback.isPlaying).toBe(false);
-    expect(entity.imageBitmap).toBe(poster);
   });
 });
 

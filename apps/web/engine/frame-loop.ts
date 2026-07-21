@@ -1,10 +1,4 @@
 import type { AnimationScheduler } from "#lib/animation-scheduler.ts";
-import {
-  activateVideoElement,
-  hasActiveVideoSource,
-  isMediaPlaybackInterruption,
-  suspendVideoElement,
-} from "#lib/media-resources.ts";
 import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import {
   canvasStore,
@@ -42,10 +36,6 @@ export interface CanvasRendererPort {
 
 interface FrameLoopDeps {
   scheduler: AnimationScheduler;
-  videoPlayback: {
-    maxActiveElements: number;
-    minScreenEdge: number;
-  };
   perf: {
     setRenderer(
       device: GPUDevice | null,
@@ -69,7 +59,6 @@ interface FrameLoopCallbacks {
   isDragSelectActive(): boolean;
   onAfterFrame(): void;
   onRenderError(error: unknown): void;
-  onVideoPlaybackError(error: unknown): void;
 }
 
 export class FrameLoop {
@@ -87,11 +76,6 @@ export class FrameLoop {
   readonly #classifiedEntityIds = new Set<string>();
   #playingGifs = new Map<string, ShaderCanvasEntity>();
   #playingVideos = new Map<string, ShaderCanvasEntity>();
-  readonly #videoPlaybackCandidates: ShaderCanvasEntity[] = [];
-  readonly #admittedVideoIds = new Set<string>();
-  readonly #budgetSuspendedVideoIds = new Set<string>();
-  readonly #resumingVideoIds = new Set<string>();
-  readonly #resumeFailedVideoIds = new Set<string>();
   #continuousShaderEntities = new Map<string, ShaderCanvasEntity>();
 
   constructor(deps: FrameLoopDeps, callbacks: FrameLoopCallbacks) {
@@ -142,7 +126,6 @@ export class FrameLoop {
     // Uses entity refs directly — getRenderState() is deferred until after all ticks
     // so the viewport snapshot reflects this frame's updates, not the previous frame's.
     const viewport = canvasStore.getState().viewport;
-    this.#updateVideoPlaybackBudget(viewport, deltaSeconds);
     for (const entity of this.#playingGifs.values()) {
       if (entity.mediaSource.type !== MediaType.gif || !entity.playback?.isPlaying) continue;
       const updateFrame = this.#renderer?.isEntityVisible(entity, viewport) ?? true;
@@ -152,7 +135,6 @@ export class FrameLoop {
     }
     for (const entity of this.#playingVideos.values()) {
       if (entity.mediaSource.type !== MediaType.video || !entity.playback?.isPlaying) continue;
-      if (this.#budgetSuspendedVideoIds.has(entity.id)) continue;
       const video = entity.mediaSource.videoElement;
       const isVisible = this.#renderer?.isEntityVisible(entity, viewport) ?? true;
       canvasStore.updatePlaybackTime(entity.id, video.currentTime);
@@ -263,111 +245,6 @@ export class FrameLoop {
     if (this.#renderer?.needsContinuousRenderForEntity(entity)) {
       this.#continuousShaderEntities.set(entity.id, entity);
     }
-  }
-
-  #updateVideoPlaybackBudget(viewport: Viewport, deltaSeconds: number): void {
-    const { maxActiveElements, minScreenEdge } = this.#deps.videoPlayback;
-    this.#videoPlaybackCandidates.length = 0;
-    this.#admittedVideoIds.clear();
-    const selected = canvasStore.getState().selectedEntityIds;
-
-    for (const entity of this.#playingVideos.values()) {
-      if (entity.mediaSource.type !== MediaType.video || !entity.playback?.isPlaying) continue;
-      const isVisible = this.#renderer?.isEntityVisible(entity, viewport) ?? true;
-      const screenEdge = Math.max(entity.size.width, entity.size.height) * viewport.zoom;
-      if (isVisible && (selected.has(entity.id) || screenEdge >= minScreenEdge)) {
-        this.#videoPlaybackCandidates.push(entity);
-      }
-    }
-
-    if (this.#videoPlaybackCandidates.length > maxActiveElements) {
-      this.#videoPlaybackCandidates.sort((left, right) => {
-        const selectionDifference = Number(selected.has(right.id)) - Number(selected.has(left.id));
-        if (selectionDifference !== 0) return selectionDifference;
-        const rightArea = right.size.width * right.size.height;
-        const leftArea = left.size.width * left.size.height;
-        if (rightArea !== leftArea) return rightArea - leftArea;
-        return right.zIndex - left.zIndex;
-      });
-    }
-
-    const admittedCount = Math.min(maxActiveElements, this.#videoPlaybackCandidates.length);
-    for (let index = 0; index < admittedCount; index++) {
-      this.#admittedVideoIds.add(this.#videoPlaybackCandidates[index]!.id);
-    }
-
-    for (const entity of this.#playingVideos.values()) {
-      if (entity.mediaSource.type !== MediaType.video || !entity.playback?.isPlaying) continue;
-      if (this.#admittedVideoIds.has(entity.id)) this.#resumeBudgetSuspendedVideo(entity);
-      else this.#suspendOrAdvanceVideo(entity, deltaSeconds);
-    }
-    for (const entityId of this.#budgetSuspendedVideoIds) {
-      if (!this.#playingVideos.has(entityId)) this.#budgetSuspendedVideoIds.delete(entityId);
-    }
-    for (const entityId of this.#resumeFailedVideoIds) {
-      if (!this.#playingVideos.has(entityId)) this.#resumeFailedVideoIds.delete(entityId);
-    }
-  }
-
-  #suspendOrAdvanceVideo(entity: ShaderCanvasEntity, deltaSeconds: number): void {
-    if (entity.mediaSource.type !== MediaType.video || !entity.playback) return;
-    const video = entity.mediaSource.videoElement;
-    if (!this.#budgetSuspendedVideoIds.has(entity.id)) {
-      if (hasActiveVideoSource(video)) {
-        entity.playback.currentTime = video.currentTime;
-        suspendVideoElement(video);
-        canvasStore.markEntityTextureDirty(entity.id);
-      }
-      this.#budgetSuspendedVideoIds.add(entity.id);
-      return;
-    }
-
-    const duration = entity.mediaSource.duration;
-    const next = entity.playback.currentTime + deltaSeconds * entity.playback.playbackRate;
-    const currentTime =
-      entity.playback.loop && duration > 0
-        ? ((next % duration) + duration) % duration
-        : Math.max(0, Math.min(next, duration));
-    canvasStore.updatePlaybackTime(entity.id, currentTime);
-  }
-
-  #resumeBudgetSuspendedVideo(entity: ShaderCanvasEntity): void {
-    if (entity.mediaSource.type !== MediaType.video || !entity.playback) return;
-    const video = entity.mediaSource.videoElement;
-    if (hasActiveVideoSource(video) && !video.paused) {
-      this.#budgetSuspendedVideoIds.delete(entity.id);
-      return;
-    }
-    if (this.#resumingVideoIds.has(entity.id) || this.#resumeFailedVideoIds.has(entity.id)) return;
-    this.#budgetSuspendedVideoIds.add(entity.id);
-    this.#resumingVideoIds.add(entity.id);
-    const expectedEntity = entity;
-    void activateVideoElement(video, entity.mediaSource.blob)
-      .then(async () => {
-        if (
-          canvasStore.getState().entities.get(entity.id) !== expectedEntity ||
-          !entity.playback?.isPlaying ||
-          !this.#admittedVideoIds.has(entity.id)
-        ) {
-          suspendVideoElement(video);
-          return;
-        }
-        video.currentTime = entity.playback!.currentTime;
-        video.loop = entity.playback!.loop;
-        video.muted = entity.playback!.muted;
-        video.playbackRate = entity.playback!.playbackRate;
-        video.volume = entity.playback!.volume;
-        await video.play();
-        this.#budgetSuspendedVideoIds.delete(entity.id);
-        this.#resumeFailedVideoIds.delete(entity.id);
-        canvasStore.markEntityTextureDirty(entity.id);
-      })
-      .catch((error) => {
-        if (isMediaPlaybackInterruption(error)) return;
-        this.#resumeFailedVideoIds.add(entity.id);
-        this.#callbacks.onVideoPlaybackError(error);
-      })
-      .finally(() => this.#resumingVideoIds.delete(entity.id));
   }
 
   #hasVisibleContinuousShader(viewport: Viewport): boolean {

@@ -232,7 +232,7 @@ describe("HostedCanvasSync", () => {
     sync.destroy();
   });
 
-  it("allows a live remote scrub to activate one dormant preview", async () => {
+  it("forwards a live remote scrub to the existing media element", async () => {
     const source = new FakeSource();
     const transport = new FakeTransport();
     const { applyPlayback, sync } = createSync(source, transport);
@@ -253,7 +253,7 @@ describe("HostedCanvasSync", () => {
 
     transport.emitPlayback(anchor);
 
-    await vi.waitFor(() => expect(applyPlayback).toHaveBeenCalledWith(anchor, 2_000, true));
+    await vi.waitFor(() => expect(applyPlayback).toHaveBeenCalledWith(anchor, 2_000));
     sync.destroy();
   });
 

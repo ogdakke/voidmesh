@@ -1,6 +1,5 @@
 import { config } from "#config";
 import { getStaticShaderParamsIdentity } from "#lib/shader-params-identity.ts";
-import { hasActiveVideoSource } from "#lib/media-resources.ts";
 import { getTextureByteSize } from "#lib/textures.ts";
 import {
   isAnimatedEntity,
@@ -182,9 +181,7 @@ export class EntityTexturePipeline {
   ): EntityCompositionSource | null {
     const width = renderSize.width;
     const height = renderSize.height;
-    const useExternalVideoSource =
-      entity.mediaSource.type === MediaType.video &&
-      hasActiveVideoSource(entity.mediaSource.videoElement);
+    const useExternalVideoSource = entity.mediaSource.type === MediaType.video;
     const contentRevision = this.#resolveContentRevision(entity);
 
     // Time-based shaders need the shader pass every canvas render. Processed videos do not:
@@ -770,7 +767,7 @@ export class EntityTexturePipeline {
       case MediaType.svg:
         return `svg:${entity.id}:${width}x${height}`;
       case MediaType.video:
-        return `video-fallback:${entity.id}:${width}x${height}`;
+        throw new Error("External video textures do not have source cache keys");
     }
   }
 

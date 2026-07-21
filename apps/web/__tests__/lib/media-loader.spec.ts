@@ -78,7 +78,61 @@ describe("loadVideo", () => {
     expect(result.initialFrame).toMatchObject({ width: 320, height: 180 });
   });
 
-  test("hydrates a hosted video paused and reuses persisted metadata", async () => {
+  test("uses muted playback and a non-zero seek when iPhone ignores a seek to zero", async () => {
+    const video = new EventTarget() as HTMLVideoElement;
+    let currentTime = 0;
+    let readyState = 0;
+    Object.defineProperties(video, {
+      currentTime: {
+        configurable: true,
+        get: () => currentTime,
+        set: (value: number) => {
+          currentTime = value;
+          if (readyState !== 1 || value === 0) return;
+          queueMicrotask(() => {
+            readyState = 2;
+            video.dispatchEvent(new Event("seeked"));
+          });
+        },
+      },
+      duration: { configurable: true, value: 1 },
+      readyState: { configurable: true, get: () => readyState },
+      src: {
+        configurable: true,
+        set: () => {
+          queueMicrotask(() => {
+            readyState = 1;
+            video.dispatchEvent(new Event("loadedmetadata"));
+          });
+        },
+      },
+      videoHeight: { configurable: true, value: 180 },
+      videoWidth: { configurable: true, value: 320 },
+    });
+    const play = vi.fn<() => Promise<void>>(async () => undefined);
+    const pause = vi.fn<() => void>();
+    video.play = play;
+    video.pause = pause;
+
+    const createElement = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation(((tagName: string) => {
+      if (tagName.toLowerCase() === "video") return video;
+      return createElement(tagName);
+    }) as typeof document.createElement);
+
+    const result = await loadVideo(new Blob(["video"], { type: "video/mp4" }), {
+      alphaMode: "unknown",
+      fps: 30,
+      hasAudio: true,
+    });
+
+    expect(result).toMatchObject({ width: 320, height: 180 });
+    expect(currentTime).toBe(0.001);
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(pause).not.toHaveBeenCalled();
+  });
+
+  test("reuses persisted hosted metadata while keeping normal playback", async () => {
     const video = new EventTarget() as HTMLVideoElement;
     let readyState = 0;
     const play = vi.fn<() => Promise<void>>(async () => undefined);
@@ -99,6 +153,7 @@ describe("loadVideo", () => {
       videoWidth: { configurable: true, value: 1280 },
     });
     video.play = play;
+    video.pause = vi.fn<() => void>();
 
     const createElement = document.createElement.bind(document);
     vi.spyOn(document, "createElement").mockImplementation(((tagName: string) => {
@@ -110,10 +165,9 @@ describe("loadVideo", () => {
       alphaMode: "unknown",
       fps: 30,
       hasAudio: true,
-      startPlayback: false,
     });
 
-    expect(play).not.toHaveBeenCalled();
+    expect(play).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ alphaMode: "unknown", fps: 30, hasAudio: true });
   });
 });

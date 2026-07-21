@@ -143,66 +143,33 @@ describe("Render loop errors", () => {
 });
 
 describe("Animated media render scheduling", () => {
-  test("activates a dormant video when its entity becomes visible", async () => {
-    const loop = new GameLoop(deps, {
-      maxActiveVideoElements: Number.POSITIVE_INFINITY,
-      minActiveVideoScreenEdge: 0,
-    });
+  test("does not reload, replay, or reseek a buffering video", async () => {
+    const loop = new GameLoop(deps);
     loop.setContainer(createMockContainer());
-    const renderer = createLoopRenderer(true);
     vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
     vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
-    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:activated");
-    const entity = createTestEntity({ id: "dormant-video", mediaType: "video" });
+    const createObjectURL = vi.spyOn(URL, "createObjectURL");
+    const entity = createTestEntity({ id: "buffering-video", mediaType: "video" });
     if (entity.mediaSource.type !== "video" || !entity.playback) {
       throw new Error("Expected a video test entity");
     }
-    const { blob, videoElement } = entity.mediaSource;
-    videoElement.removeAttribute("src");
+    const video = entity.mediaSource.videoElement;
+    video.src = "blob:already-attached";
+    video.currentTime = 4;
+    await video.play();
+    Object.defineProperty(video, "readyState", { configurable: true, value: 1 });
+    const play = vi.spyOn(video, "play");
     entity.playback.isPlaying = true;
     entity.playback.currentTime = 4;
     canvasStore.addEntity(entity);
 
-    loop.setRenderer(renderer);
-    loop.start();
-    await vi.waitFor(() => expect(videoElement.paused).toBe(false));
-
-    expect(createObjectURL).toHaveBeenCalledWith(blob);
-    expect(videoElement.src).toBe("blob:activated");
-    expect(videoElement.currentTime).toBe(4);
-    loop.stop();
-  });
-
-  test("does not report decoder-budget play cancellation as a media failure", async () => {
-    const loop = new GameLoop(deps, {
-      maxActiveVideoElements: Number.POSITIVE_INFINITY,
-      minActiveVideoScreenEdge: 0,
-    });
-    loop.setContainer(createMockContainer());
-    vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
-    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
-    const loggerError = vi.spyOn(logger, "error").mockImplementation(() => undefined);
-    const entity = createTestEntity({ id: "interrupted-video", mediaType: "video" });
-    if (entity.mediaSource.type !== "video" || !entity.playback) {
-      throw new Error("Expected a video test entity");
-    }
-    const play = vi
-      .fn<HTMLVideoElement["play"]>()
-      .mockRejectedValue(new DOMException("Playback was interrupted", "AbortError"));
-    entity.mediaSource.videoElement.play = play;
-    entity.mediaSource.videoElement.removeAttribute("src");
-    entity.playback.isPlaying = true;
-    canvasStore.addEntity(entity);
-
     loop.setRenderer(createLoopRenderer(true));
     loop.start();
-    await vi.waitFor(() => expect(play).toHaveBeenCalled());
     await Promise.resolve();
 
-    expect(loggerError).not.toHaveBeenCalledWith(
-      "[GameLoop] Video resume failed",
-      expect.anything(),
-    );
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(play).not.toHaveBeenCalled();
+    expect(video.currentTime).toBe(4);
     loop.stop();
   });
 
@@ -226,17 +193,14 @@ describe("Animated media render scheduling", () => {
     expect(renderer.render).toHaveBeenCalledOnce();
   });
 
-  test("limits physical video playback while preserving the logical mobile workload", async () => {
-    const mobileLoop = new GameLoop(deps, {
-      maxActiveVideoElements: 4,
-      minActiveVideoScreenEdge: 0,
-    });
-    mobileLoop.setContainer(createMockContainer());
-    const renderer = createLoopRenderer(true);
+  test("keeps every playing video active when entities are off-screen", async () => {
+    const loop = new GameLoop(deps);
+    loop.setContainer(createMockContainer());
+    const renderer = createLoopRenderer(false);
     vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
     vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
     const entities = Array.from({ length: 43 }, (_, index) => {
-      const entity = createTestEntity({ id: `mobile-video-${index}`, mediaType: "video" });
+      const entity = createTestEntity({ id: `offscreen-video-${index}`, mediaType: "video" });
       if (entity.mediaSource.type !== "video" || !entity.playback) {
         throw new Error("Expected a video test entity");
       }
@@ -251,15 +215,15 @@ describe("Animated media render scheduling", () => {
     );
     canvasStore.addEntities(entities);
 
-    mobileLoop.setRenderer(renderer);
-    mobileLoop.start();
+    loop.setRenderer(renderer);
+    loop.start();
 
     const activeVideoCount = entities.filter(
       (entity) => entity.mediaSource.type === "video" && !entity.mediaSource.videoElement.paused,
     ).length;
-    expect(activeVideoCount).toBe(4);
+    expect(activeVideoCount).toBe(entities.length);
     expect(entities.every((entity) => entity.playback?.isPlaying === true)).toBe(true);
-    mobileLoop.stop();
+    loop.stop();
   });
 
   test("incrementally reclassifies bulk entity edits without a fixed count cutoff", () => {

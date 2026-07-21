@@ -29,11 +29,7 @@ export interface HostedCanvasSource {
 
 export interface HostedCanvasProjection {
   applyChange(change: HostedSceneChange): Promise<void>;
-  applyPlayback(
-    anchor: HostedPlaybackAnchor,
-    roomNow: number,
-    activateDormantPreview?: boolean,
-  ): Promise<void>;
+  applyPlayback(anchor: HostedPlaybackAnchor, roomNow: number): Promise<void>;
   applySnapshot(entities: readonly HostedSceneEntity[]): Promise<void>;
 }
 
@@ -101,7 +97,7 @@ export class HostedCanvasSync {
     this.#unsubscribePlayback = this.#transport.onPlayback((message) => {
       this.#playbackAnchors.set(message.anchor.entityId, message.anchor);
       void this.#enqueueRemote(() =>
-        this.#projection.applyPlayback(message.anchor, this.#transport.serverNow(), true),
+        this.#projection.applyPlayback(message.anchor, this.#transport.serverNow()),
       );
     });
     if (this.#writable) {

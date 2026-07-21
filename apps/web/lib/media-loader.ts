@@ -55,8 +55,6 @@ export interface VideoLoadResult {
 }
 
 export interface VideoLoadOptions {
-  /** Start the decoder after the first frame is available. Defaults to true for local imports. */
-  startPlayback?: boolean;
   /** Reuse media metadata already persisted by a hosted workspace. */
   fps?: number | null;
   hasAudio?: boolean;
@@ -227,22 +225,19 @@ export async function loadVideo(
     const width = video.videoWidth;
     const height = video.videoHeight;
 
-    await waitForVideoReady(video, blob, HAVE_CURRENT_DATA_READY_STATE, "loadeddata");
+    await waitForVideoFrame(video, blob);
 
     const canvas = new OffscreenCanvas(width, height);
     const ctx = canvas.getContext("2d")!;
     ctx.drawImage(video, 0, 0);
     initialFrame = await createImageBitmap(canvas);
 
-    const startPlayback = options.startPlayback ?? true;
-    if (startPlayback) {
-      await video.play().catch((e) => {
-        logger.error("Failed to autoplay video", e);
-      });
-    }
+    await video.play().catch((e) => {
+      logger.error("Failed to autoplay video", e);
+    });
 
     const [fps, hasAudio, alphaMode] = await Promise.all([
-      options.fps !== undefined ? options.fps : startPlayback ? detectVideoFps(video) : null,
+      options.fps !== undefined ? options.fps : detectVideoFps(video),
       options.hasAudio !== undefined
         ? options.hasAudio
         : import("#lib/audio-demux.ts").then(({ hasAudioTrack }) => hasAudioTrack(blob)),
@@ -299,6 +294,49 @@ async function waitForVideoReady(
 
     // Avoid missing an event that fired between the initial check and listener registration.
     if (video.readyState >= readyState) onReady();
+  });
+}
+
+async function waitForVideoFrame(video: HTMLVideoElement, blob: Blob): Promise<void> {
+  if (video.readyState >= HAVE_CURRENT_DATA_READY_STATE) return;
+
+  await new Promise<void>((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      cleanup();
+      reject(new Error("Timed out waiting for video loadeddata or seeked"));
+    }, VIDEO_READY_TIMEOUT_MS);
+
+    const cleanup = (): void => {
+      clearTimeout(timeoutId);
+      video.removeEventListener("loadeddata", onReady);
+      video.removeEventListener("playing", onReady);
+      video.removeEventListener("seeked", onReady);
+      video.removeEventListener("timeupdate", onReady);
+      video.removeEventListener("error", onError);
+    };
+    const onReady = (): void => {
+      if (video.readyState < HAVE_CURRENT_DATA_READY_STATE) return;
+      cleanup();
+      resolve();
+    };
+    const onError = (): void => {
+      cleanup();
+      void createVideoLoadError(video, blob).then(reject, reject);
+    };
+
+    video.addEventListener("loadeddata", onReady);
+    video.addEventListener("playing", onReady);
+    video.addEventListener("seeked", onReady);
+    video.addEventListener("timeupdate", onReady);
+    video.addEventListener("error", onError, { once: true });
+
+    // Mobile WebKit can remain at HAVE_METADATA forever when assigning the already-current time
+    // of zero. A muted play plus a tiny non-zero seek actively asks the decoder for frame data.
+    // The caller pauses the element again when it only needs a hosted poster frame.
+    void video.play().catch(() => undefined);
+    const duration = Number.isFinite(video.duration) ? video.duration : 0;
+    video.currentTime = duration > 0 ? Math.min(0.001, duration / 2) : 0;
+    if (video.readyState >= HAVE_CURRENT_DATA_READY_STATE) onReady();
   });
 }
 
