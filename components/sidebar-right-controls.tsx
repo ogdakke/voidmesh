@@ -16,6 +16,9 @@ import {
   GLASS_KIND_OPTIONS,
   GlitchKind,
   GLITCH_KIND_OPTIONS,
+  CAUSTICS_KIND_OPTIONS,
+  IRIDESCENCE_KIND_OPTIONS,
+  TOPOGRAPHIC_KIND_OPTIONS,
 } from "#types/canvas.ts";
 import { useParamValue } from "#hooks/use-param-value.ts";
 import { analytics } from "#lib/analytics.ts";
@@ -145,6 +148,30 @@ function SelectedSidebarSections() {
           <BlobParams />
           <GlassParamsControl />
           <GlitchParamsControl />
+          <SimpleSubtypeControl
+            paramPath="caustics.kind"
+            defaultValue={config.defaults.shaderParams.caustics!.kind}
+            label="Caustics Type"
+            name="caustics-kind"
+            options={CAUSTICS_KIND_OPTIONS}
+            onChangeCommand="changeCausticsKind"
+          />
+          <SimpleSubtypeControl
+            paramPath="iridescence.kind"
+            defaultValue={config.defaults.shaderParams.iridescence!.kind}
+            label="Iridescence Type"
+            name="iridescence-kind"
+            options={IRIDESCENCE_KIND_OPTIONS}
+            onChangeCommand="changeIridescenceKind"
+          />
+          <SimpleSubtypeControl
+            paramPath="topographic.kind"
+            defaultValue={config.defaults.shaderParams.topographic!.kind}
+            label="Topographic Type"
+            name="topographic-kind"
+            options={TOPOGRAPHIC_KIND_OPTIONS}
+            onChangeCommand="changeTopographicKind"
+          />
           <DitheringKnobs />
           <AsciiKnobs />
           <EffectParams />
@@ -312,6 +339,43 @@ export function BlobParams() {
         }}
         showValue={!eagerness.isMixed}
       />
+    </div>
+  );
+}
+
+function SimpleSubtypeControl({
+  paramPath,
+  defaultValue,
+  label,
+  name,
+  options,
+  onChangeCommand,
+}: {
+  paramPath: "caustics.kind" | "iridescence.kind" | "topographic.kind";
+  defaultValue: string;
+  label: string;
+  name: string;
+  options: readonly { value: string; label: string }[];
+  onChangeCommand: "changeCausticsKind" | "changeIridescenceKind" | "changeTopographicKind";
+}) {
+  const commands = useCanvasCommands();
+  const kind = useParamValue(paramPath, defaultValue as never);
+  if (!kind.isSupported) return null;
+  return (
+    <div className="sidebar-row">
+      <Select
+        name={name}
+        label={label}
+        value={kind.isMixed ? "" : (kind.value ?? defaultValue)}
+        onValueChange={commands[onChangeCommand]}
+        items={options}
+      >
+        {options.map((option) => (
+          <SelectItem key={option.value} value={option.value}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </Select>
     </div>
   );
 }

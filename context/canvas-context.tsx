@@ -34,6 +34,9 @@ import {
   AsciiKind,
   GlassKind,
   GlitchKind,
+  CausticsKind,
+  IridescenceKind,
+  TopographicKind,
   MediaType,
   isGifEntity,
 } from "#types/canvas.ts";
@@ -1256,6 +1259,21 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  const changeCausticsKind = (value: string | null) => {
+    if (!value) return;
+    updateSelectedEntityParams({ caustics: { kind: value as CausticsKind } });
+  };
+
+  const changeIridescenceKind = (value: string | null) => {
+    if (!value) return;
+    updateSelectedEntityParams({ iridescence: { kind: value as IridescenceKind } });
+  };
+
+  const changeTopographicKind = (value: string | null) => {
+    if (!value) return;
+    updateSelectedEntityParams({ topographic: { kind: value as TopographicKind } });
+  };
+
   const setShowOriginal = (value: boolean) => {
     updateSelectedEntityParams({ showOriginal: value });
   };
@@ -1539,6 +1557,9 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           shaderUrlParams.glitchAngle.parse(parsedParams.glitchAngle ?? "") ??
           config.defaults.shaderParams.glitch.angle,
       },
+      caustics: config.defaults.shaderParams.caustics,
+      iridescence: config.defaults.shaderParams.iridescence,
+      topographic: config.defaults.shaderParams.topographic,
       palette: palette ?? config.defaults.shaderParams.palette,
       postProcess,
     };
@@ -2166,6 +2187,9 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setAsciiInvert,
     changeGlassKind,
     changeGlitchKind,
+    changeCausticsKind,
+    changeIridescenceKind,
+    changeTopographicKind,
     changePalette,
     renamePalette,
     uploadPalette,
@@ -2215,6 +2239,9 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       setAsciiInvert,
       changeGlassKind,
       changeGlitchKind,
+      changeCausticsKind,
+      changeIridescenceKind,
+      changeTopographicKind,
       changePalette,
       renamePalette,
       uploadPalette,
@@ -2266,6 +2293,9 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setAsciiInvert: (...args) => commandsImplRef.current.setAsciiInvert(...args),
     changeGlassKind: (...args) => commandsImplRef.current.changeGlassKind(...args),
     changeGlitchKind: (...args) => commandsImplRef.current.changeGlitchKind(...args),
+    changeCausticsKind: (...args) => commandsImplRef.current.changeCausticsKind(...args),
+    changeIridescenceKind: (...args) => commandsImplRef.current.changeIridescenceKind(...args),
+    changeTopographicKind: (...args) => commandsImplRef.current.changeTopographicKind(...args),
     changePalette: (...args) => commandsImplRef.current.changePalette(...args),
     renamePalette: (...args) => commandsImplRef.current.renamePalette(...args),
     uploadPalette: (...args) => commandsImplRef.current.uploadPalette(...args),

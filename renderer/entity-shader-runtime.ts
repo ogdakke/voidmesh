@@ -8,11 +8,14 @@ import type { GpuColorConfig } from "./gpu-color-space.ts";
 import { ProcessingPipeline } from "./processing-pipeline.ts";
 import { AsciiShader } from "./shaders/ascii-shader.ts";
 import { BlobsShader } from "./shaders/blobs-shader.ts";
+import { CausticsShader } from "./shaders/caustics-shader.ts";
 import { DitheringShader } from "./shaders/dithering-shader.ts";
 import { GlassShader } from "./shaders/glass-shader.ts";
 import { GlitchShader } from "./shaders/glitch-shader.ts";
 import { HalftoneShader } from "./shaders/halftone-shader.ts";
+import { IridescenceShader } from "./shaders/iridescence-shader.ts";
 import { MeltShader } from "./shaders/melt-shader.ts";
+import { TopographicShader } from "./shaders/topographic-shader.ts";
 import type { ShaderContext } from "./shaders/shader-pass.ts";
 import type { ExternalTextureSource } from "./shaders/shader-pass.ts";
 import { ShaderRegistry } from "./shaders/shader-registry.ts";
@@ -110,6 +113,9 @@ export class EntityShaderRuntime {
       [ShaderType.glitch, new GlitchShader(this.#shaderContext)] as const,
       [ShaderType.ascii, asciiShader] as const,
       [ShaderType.dithering, new DitheringShader(this.#shaderContext)] as const,
+      [ShaderType.caustics, new CausticsShader(this.#shaderContext)] as const,
+      [ShaderType.iridescence, new IridescenceShader(this.#shaderContext)] as const,
+      [ShaderType.topographic, new TopographicShader(this.#shaderContext)] as const,
     ];
 
     await Promise.all(

@@ -68,6 +68,9 @@ export interface CanvasCommands {
   setAsciiInvert: (value: boolean) => void;
   changeGlassKind: (value: string | null) => void;
   changeGlitchKind: (value: string | null) => void;
+  changeCausticsKind: (value: string | null) => void;
+  changeIridescenceKind: (value: string | null) => void;
+  changeTopographicKind: (value: string | null) => void;
   changePalette: (palette: ColorPalette) => void;
   renamePalette: (paletteId: string, name: string) => void;
   uploadPalette: (files: FileList | File | null) => Promise<void>;

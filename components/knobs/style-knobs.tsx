@@ -9,6 +9,9 @@ import {
   GlassKind,
   GlitchKind,
   Shape,
+  CAUSTICS_KIND_OPTIONS,
+  IRIDESCENCE_KIND_OPTIONS,
+  TOPOGRAPHIC_KIND_OPTIONS,
 } from "#types/canvas.ts";
 import {
   useCanvasCommands,
@@ -42,6 +45,9 @@ const shaderIconMap: Record<ShaderType, () => ReactNode> = {
   [ShaderType.melt]: () => <span>M</span>,
   [ShaderType.glass]: () => <span>G</span>,
   [ShaderType.glitch]: () => <span>X</span>,
+  [ShaderType.caustics]: () => <span>C</span>,
+  [ShaderType.iridescence]: () => <span>I</span>,
+  [ShaderType.topographic]: () => <span>T</span>,
 };
 
 // ============================================================================
@@ -728,6 +734,58 @@ function MobileShapeStyleKnobs() {
   );
 }
 
+function MobileSimpleSubtypeStyleKnobs({
+  paramPath,
+  defaultValue,
+  options,
+  change,
+  ariaLabel,
+}: {
+  paramPath: "caustics.kind" | "iridescence.kind" | "topographic.kind";
+  defaultValue: string;
+  options: readonly { value: string; label: string }[];
+  change: (value: string | null) => void;
+  ariaLabel: string;
+}) {
+  const kind = useParamValue(paramPath, defaultValue as never);
+  if (!kind.isSupported) return null;
+  return (
+    <SliderPicker
+      value={kind.isMixed ? "" : (kind.value ?? defaultValue)}
+      onValueChange={change}
+      onInteractionStart={() => undo.beginTransaction()}
+      onValueCommit={() => undo.commitTransaction()}
+      className="mobile-style-knobs"
+    >
+      <SliderPickerWindow className="mobile-style-knobs__window">
+        <SliderPickerOptions className="mobile-style-knobs__options" aria-label={ariaLabel}>
+          {kind.isMixed && (
+            <SliderPickerMixedItem className="mobile-style-knobs__item">
+              <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <QuestionMark />
+              </button>
+              <span className="mobile-style-knobs__label">Mixed</span>
+            </SliderPickerMixedItem>
+          )}
+          {options.map((item) => (
+            <SliderPickerItem
+              key={item.value}
+              value={item.value}
+              className="mobile-style-knobs__item"
+            >
+              <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <span>{item.label.slice(0, 1)}</span>
+              </button>
+              <span className="mobile-style-knobs__label">{item.label}</span>
+            </SliderPickerItem>
+          ))}
+        </SliderPickerOptions>
+        <div className="mobile-style-knobs__highlight" aria-hidden="true" />
+      </SliderPickerWindow>
+    </SliderPicker>
+  );
+}
+
 // ============================================================================
 // Main Mobile Style Knobs Component
 // ============================================================================
@@ -736,7 +794,13 @@ export function MobileStyleKnobs() {
   const selectedEntities = useSelectedEntities();
   const selectedShaderType = useSelectedShaderType();
   const selectionState = useSelectionState();
-  const { setShowOriginal, changeShaderType } = useCanvasCommands();
+  const {
+    setShowOriginal,
+    changeShaderType,
+    changeCausticsKind,
+    changeIridescenceKind,
+    changeTopographicKind,
+  } = useCanvasCommands();
 
   // Floating label state
   const [floatingLabel, setFloatingLabel] = useState<string | null>(null);
@@ -864,6 +928,27 @@ export function MobileStyleKnobs() {
       <MobileAsciiStyleKnobs />
       <MobileGlassStyleKnobs />
       <MobileGlitchStyleKnobs />
+      <MobileSimpleSubtypeStyleKnobs
+        paramPath="caustics.kind"
+        defaultValue={config.defaults.shaderParams.caustics!.kind}
+        options={CAUSTICS_KIND_OPTIONS}
+        change={changeCausticsKind}
+        ariaLabel="Caustics type selection"
+      />
+      <MobileSimpleSubtypeStyleKnobs
+        paramPath="iridescence.kind"
+        defaultValue={config.defaults.shaderParams.iridescence!.kind}
+        options={IRIDESCENCE_KIND_OPTIONS}
+        change={changeIridescenceKind}
+        ariaLabel="Iridescence type selection"
+      />
+      <MobileSimpleSubtypeStyleKnobs
+        paramPath="topographic.kind"
+        defaultValue={config.defaults.shaderParams.topographic!.kind}
+        options={TOPOGRAPHIC_KIND_OPTIONS}
+        change={changeTopographicKind}
+        ariaLabel="Topographic type selection"
+      />
       <MobileShapeStyleKnobs />
     </>
   );

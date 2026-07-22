@@ -13,6 +13,9 @@ import {
   type ViewportLensDistortionConfig,
   GlassKind,
   GlitchKind,
+  CausticsKind,
+  IridescenceKind,
+  TopographicKind,
 } from "#types/canvas.ts";
 import type { PartialDeep } from "type-fest";
 import type { easings } from "../canvas-math";
@@ -141,6 +144,51 @@ export const shaderFeatures: Record<ShaderType, ShaderFeature> = {
     ] as const,
     colorMode: "palette",
   },
+  topographic: {
+    params: [
+      "size",
+      "intensity",
+      "scale",
+      "preserveColors",
+      "reversePalette",
+      "showOriginal",
+      "topographic",
+      "palette",
+      "adjustments",
+      "postProcess",
+    ] as const,
+    colorMode: "palette",
+  },
+  iridescence: {
+    params: [
+      "size",
+      "intensity",
+      "scale",
+      "preserveColors",
+      "reversePalette",
+      "showOriginal",
+      "iridescence",
+      "palette",
+      "adjustments",
+      "postProcess",
+    ] as const,
+    colorMode: "palette",
+  },
+  caustics: {
+    params: [
+      "size",
+      "intensity",
+      "scale",
+      "preserveColors",
+      "reversePalette",
+      "showOriginal",
+      "caustics",
+      "palette",
+      "adjustments",
+      "postProcess",
+    ] as const,
+    colorMode: "palette",
+  },
 };
 
 // ============================================================================
@@ -211,6 +259,36 @@ export const shaderDefaults: Record<ShaderType, ShaderDefaultsConfig> = {
     mergeParams: {
       glitch: { kind: GlitchKind.channelShift, angle: 0 },
     },
+  },
+  caustics: {
+    resetParams: {
+      size: 36,
+      intensity: 1.25,
+      scale: 1,
+      preserveColors: true,
+      adjustments: { blur: 0 },
+    },
+    mergeParams: { caustics: { kind: CausticsKind.pool } },
+  },
+  iridescence: {
+    resetParams: {
+      size: 28,
+      intensity: 1.4,
+      scale: 1,
+      preserveColors: true,
+      adjustments: { blur: 0 },
+    },
+    mergeParams: { iridescence: { kind: IridescenceKind.foil } },
+  },
+  topographic: {
+    resetParams: {
+      size: 14,
+      intensity: 1.2,
+      scale: 1,
+      preserveColors: false,
+      adjustments: { blur: 0 },
+    },
+    mergeParams: { topographic: { kind: TopographicKind.contourLines } },
   },
 };
 
@@ -624,6 +702,9 @@ export const config = {
         kind: GlitchKind.channelShift,
         angle: 0,
       },
+      caustics: { kind: CausticsKind.pool },
+      iridescence: { kind: IridescenceKind.foil },
+      topographic: { kind: TopographicKind.contourLines },
       palette: palettes.blackAndWhite,
       postProcess: {
         enabled: true,

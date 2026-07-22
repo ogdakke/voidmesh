@@ -74,6 +74,9 @@ export const ShaderType = createEnum({
   ascii: "ascii",
   glass: "glass",
   glitch: "glitch",
+  caustics: "caustics",
+  iridescence: "iridescence",
+  topographic: "topographic",
 });
 /** Shader types available for entity processing */
 export type ShaderType = typeof ShaderType.infer;
@@ -91,6 +94,55 @@ export const GLASS_KIND_OPTIONS = [
   { value: GlassKind.fluted, label: "Fluted" },
   { value: GlassKind.frostedVoronoi, label: "Frosted Voronoi" },
   { value: GlassKind.flowing, label: "Flowing" },
+];
+
+/** Caustics effect subtypes */
+export const CausticsKind = createEnum({
+  pool: "pool",
+  crystal: "crystal",
+  lunar: "lunar",
+  oil: "oil",
+});
+export type CausticsKind = typeof CausticsKind.infer;
+export const CAUSTICS_KIND_OPTIONS = [
+  { value: CausticsKind.pool, label: "Pool" },
+  { value: CausticsKind.crystal, label: "Crystal" },
+  { value: CausticsKind.lunar, label: "Lunar" },
+  { value: CausticsKind.oil, label: "Oil" },
+];
+
+/** Iridescence effect subtypes */
+export const IridescenceKind = createEnum({
+  foil: "foil",
+  soapBubble: "soapBubble",
+  pearl: "pearl",
+  cdDiffraction: "cdDiffraction",
+  prismaticChrome: "prismaticChrome",
+});
+export type IridescenceKind = typeof IridescenceKind.infer;
+export const IRIDESCENCE_KIND_OPTIONS = [
+  { value: IridescenceKind.foil, label: "Foil" },
+  { value: IridescenceKind.soapBubble, label: "Soap Bubble" },
+  { value: IridescenceKind.pearl, label: "Pearl" },
+  { value: IridescenceKind.cdDiffraction, label: "CD Diffraction" },
+  { value: IridescenceKind.prismaticChrome, label: "Prismatic Chrome" },
+];
+
+/** Topographic effect subtypes */
+export const TopographicKind = createEnum({
+  contourLines: "contourLines",
+  thermalMap: "thermalMap",
+  bathymetry: "bathymetry",
+  weatherRadar: "weatherRadar",
+  seismicLines: "seismicLines",
+});
+export type TopographicKind = typeof TopographicKind.infer;
+export const TOPOGRAPHIC_KIND_OPTIONS = [
+  { value: TopographicKind.contourLines, label: "Contour Lines" },
+  { value: TopographicKind.thermalMap, label: "Thermal Map" },
+  { value: TopographicKind.bathymetry, label: "Bathymetry" },
+  { value: TopographicKind.weatherRadar, label: "Weather Radar" },
+  { value: TopographicKind.seismicLines, label: "Seismic Lines" },
 ];
 
 /** Dithering algorithm types */
@@ -132,6 +184,9 @@ export const SHADER_TYPE_OPTIONS = [
   { value: ShaderType.ascii, label: "ASCII" },
   { value: ShaderType.glass, label: "Glass" },
   { value: ShaderType.glitch, label: "Glitch" },
+  { value: ShaderType.caustics, label: "Caustics" },
+  { value: ShaderType.iridescence, label: "Iridescence" },
+  { value: ShaderType.topographic, label: "Topographic" },
 ];
 
 /** ASCII character set types */
@@ -310,6 +365,21 @@ export interface GlassParams {
   flow: number;
 }
 
+/** Parameters for the caustics shader */
+export interface CausticsParams {
+  kind: CausticsKind;
+}
+
+/** Parameters for the iridescence shader */
+export interface IridescenceParams {
+  kind: IridescenceKind;
+}
+
+/** Parameters for the topographic shader */
+export interface TopographicParams {
+  kind: TopographicKind;
+}
+
 /** Glitch effect subtypes */
 export const GlitchKind = createEnum({
   channelShift: "channelShift",
@@ -362,6 +432,12 @@ export interface ShaderParams {
   glass?: GlassParams;
   /** Parameters for the glitch shader (only used when shaderType is 'glitch') */
   glitch?: GlitchParams;
+  /** Parameters for the caustics shader (only used when shaderType is 'caustics') */
+  caustics?: CausticsParams;
+  /** Parameters for the iridescence shader (only used when shaderType is 'iridescence') */
+  iridescence?: IridescenceParams;
+  /** Parameters for the topographic shader (only used when shaderType is 'topographic') */
+  topographic?: TopographicParams;
   /** Color palette for multi-color effects (used by all shaders) */
   palette?: ColorPalette;
   /** Post-processing effects (grain, bloom, chromatic aberration) */
