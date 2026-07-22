@@ -1,25 +1,9 @@
 @layer components {
   .drawer-overlay {
-    --backdrop-opacity: 0.5;
     position: fixed;
     inset: 0;
     min-height: 100dvh;
-    background-color: black;
-    opacity: calc(var(--backdrop-opacity) * (1 - var(--drawer-swipe-progress)));
-    transition: opacity 450ms cubic-bezier(0.32, 0.72, 0, 1);
-
-    &[data-starting-style],
-    &[data-ending-style] {
-      opacity: 0;
-    }
-
-    &[data-swiping] {
-      transition-duration: 0ms;
-    }
-
-    &[data-ending-style] {
-      transition-duration: calc(var(--drawer-swipe-strength) * 400ms);
-    }
+    background: transparent;
   }
 
   .drawer-viewport {
@@ -86,17 +70,6 @@
       border-top-right-radius: calc(var(--drawer-radius) * 1.8);
     }
 
-    &::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      border-top-left-radius: var(--drawer-radius);
-      border-top-right-radius: var(--drawer-radius);
-      background: transparent;
-      pointer-events: none;
-      transition: background-color 450ms cubic-bezier(0.32, 0.72, 0, 1);
-    }
-
     &[data-swiping] {
       user-select: none;
     }
@@ -109,10 +82,6 @@
     &[data-nested-drawer-open] {
       height: calc(var(--stack-height) + var(--bleed));
       overflow: hidden;
-
-      &::after {
-        background: rgb(0 0 0 / 0.05);
-      }
     }
 
     &[data-starting-style],
@@ -165,43 +134,6 @@
   .drawer-popup[data-nested-drawer-open][data-nested-drawer-swiping] > .drawer-handle,
   .drawer-popup[data-nested-drawer-open][data-nested-drawer-swiping] .drawer-content {
     opacity: 1;
-  }
-
-  .drawer-indent-root {
-    position: relative;
-    height: 100%;
-    overflow: hidden;
-  }
-
-  .drawer-indent-bg {
-    position: absolute;
-    inset: 0;
-    background-color: black;
-  }
-
-  .drawer-indent {
-    height: 100%;
-    background-color: var(--background);
-    --indent-progress: var(--drawer-swipe-progress);
-    /* calculate indent radius based on safe area inset. Larger radius if safe area inset is present. */
-    --indent-radius-base: max(1.5rem, min(36px, calc(1.5rem + env(safe-area-inset-top, 0px))));
-    --indent-radius: calc(var(--indent-radius-base) * (1 - var(--indent-progress)));
-    --indent-transition: calc(1 - clamp(0, calc(var(--drawer-swipe-progress) * 100000), 1));
-    position: relative;
-    transition:
-      transform 0.4s cubic-bezier(0.32, 0.72, 0, 1),
-      border-radius 0.25s cubic-bezier(0.32, 0.72, 0, 1);
-    transition-duration:
-      calc(400ms * var(--indent-transition)), calc(250ms * var(--indent-transition));
-    transform-origin: center top;
-    will-change: transform;
-
-    &[data-active] {
-      transform: scale(calc(0.94 + (0.06 * var(--indent-progress))))
-        translateY(calc(14px * (1 - var(--indent-progress))));
-      border-radius: var(--indent-radius);
-      overflow: hidden;
-    }
   }
 
   .drawer-snap-area-default {

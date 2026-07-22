@@ -19,7 +19,6 @@ import { CopyPasteDrawer } from "./action-layer/copy-paste-drawer.tsx";
 import { IonDuplicateOutline } from "./icons/duplicate.tsx";
 import { MaterialSymbolsResetImage } from "./icons/reset-image.tsx";
 import { MobileExportDrawer } from "./export-knobs/export-knobs.mobile.tsx";
-import { Drawer } from "#ui/drawer/index.tsx";
 import {
   useCanvasCommands,
   useDebugMode,
@@ -131,18 +130,11 @@ function MobileFloat() {
 
 export default function MobileLayout() {
   return (
-    <Drawer.Provider>
-      <div className="drawer-indent-root">
-        <Drawer.IndentBackground className="drawer-indent-bg" />
-        <Drawer.Indent className="drawer-indent">
-          <div className="mobile-layout">
-            <div className="content mobile-content">
-              <Canvas />
-            </div>
-            <MobileFloat />
-          </div>
-        </Drawer.Indent>
+    <div className="mobile-layout">
+      <div className="content mobile-content">
+        <Canvas />
       </div>
-    </Drawer.Provider>
+      <MobileFloat />
+    </div>
   );
 }

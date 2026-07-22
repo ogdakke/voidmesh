@@ -72,7 +72,5 @@ export const Drawer = {
   Popup,
   Content,
   Provider: BaseDrawer.Provider,
-  Indent: BaseDrawer.Indent,
-  IndentBackground: BaseDrawer.IndentBackground,
   DefaultSnapContentArea,
 };
