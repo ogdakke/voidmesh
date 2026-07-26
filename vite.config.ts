@@ -170,7 +170,7 @@ export default defineConfig(({ mode }) => {
 
     build: {
       emptyOutDir: true,
-      sourcemap: env.NODE_ENV !== "production",
+      sourcemap: true,
       target: ["ios26"],
       rolldownOptions: {
         external: [".vendor/"],
