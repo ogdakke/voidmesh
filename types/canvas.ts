@@ -508,12 +508,8 @@ type ShaderCanvasEntityBase = {
   /** Shader parameters */
   shaderParams: ShaderParams;
 
-  /** Cached processed texture (managed by renderer) */
-  texture?: GPUTexture;
-  /** True when shader params changed and texture needs re-render */
-  textureDirty?: boolean;
-  /** Whether entity is currently selected */
-  selected?: boolean;
+  /** Monotonic visual-content revision consumed by renderer-owned caches. */
+  textureRevision: number;
   /** Whether entity is locked (cannot be moved) */
   locked?: boolean;
 

@@ -142,6 +142,26 @@ describe("Render loop errors", () => {
   });
 });
 
+describe("Idle frame scheduling", () => {
+  test("sleeps after a clean static frame and wakes on render invalidation", () => {
+    const requestAnimationFrame = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation(() => 1);
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const renderer = createLoopRenderer();
+
+    gl.setRenderer(renderer);
+    gl.start();
+
+    expect(renderer.render).toHaveBeenCalledOnce();
+    expect(requestAnimationFrame).not.toHaveBeenCalled();
+
+    canvasStore.panBy({ x: 1, y: 0 });
+
+    expect(requestAnimationFrame).toHaveBeenCalledOnce();
+  });
+});
+
 describe("Animated media render scheduling", () => {
   test("incrementally reclassifies bulk entity edits without a fixed count cutoff", () => {
     const renderer = createLoopRenderer();

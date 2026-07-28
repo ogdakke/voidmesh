@@ -64,6 +64,7 @@ export class GameLoop {
 
   setSpaceHeld(held: boolean): void {
     this.#input.setSpaceHeld(held);
+    this.#frameLoop.requestFrame();
   }
 
   get spacePanMode(): SpacePanMode {
@@ -96,26 +97,32 @@ export class GameLoop {
 
   handlePointerDown(screenPoint: Point, shiftKey: boolean = false): void {
     this.#input.handlePointerDown(screenPoint, shiftKey);
+    this.#frameLoop.requestFrame();
   }
 
   handlePointerMove(screenPoint: Point): void {
     this.#input.handlePointerMove(screenPoint);
+    this.#frameLoop.requestFrame();
   }
 
   handlePointerUp(screenPoint: Point): void {
     this.#input.handlePointerUp(screenPoint);
+    this.#frameLoop.requestFrame();
   }
 
   handleWheel(deltaX: number, deltaY: number, screenPoint: Point, ctrlKey: boolean): void {
     this.#input.handleWheel(deltaX, deltaY, screenPoint, ctrlKey);
+    this.#frameLoop.requestFrame();
   }
 
   handleContextMenu(screenPoint: Point): void {
     this.#input.handleContextMenu(screenPoint);
+    this.#frameLoop.requestFrame();
   }
 
   handleContextMenuClose(): void {
     this.#input.handleContextMenuClose();
+    this.#frameLoop.requestFrame();
   }
 
   getDragSelectBounds(): Bounds | null {

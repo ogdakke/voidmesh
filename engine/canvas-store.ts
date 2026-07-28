@@ -18,8 +18,20 @@ import { getFrameAtTime } from "#lib/gif-decoder.ts";
 import { completeOnboardingStarterSelectionFromEvent } from "#lib/onboarding-runtime.ts";
 import { EntitySpatialIndex } from "#lib/entity-spatial-index.ts";
 import { CanvasLensing } from "#types/enums.ts";
+import { createEnum } from "#types/index.ts";
 
 export type DragSelectMode = "replace" | "additive" | "subtractive";
+
+export const CanvasDirtyFlag = createEnum({
+  viewport: 1 << 0,
+  entityContent: 1 << 1,
+  geometry: 1 << 2,
+  selection: 1 << 3,
+  container: 1 << 4,
+  callouts: 1 << 5,
+});
+
+export type CanvasDirtyFlag = typeof CanvasDirtyFlag.infer;
 
 export interface CanvasState {
   // Core state
@@ -47,12 +59,8 @@ export interface CanvasState {
   canvasLensing: CanvasLensing;
 
   // Dirty flags for optimization
-  viewportDirty: boolean;
   entitiesDirty: Set<string>;
-  geometryDirty: boolean;
-  selectionDirty: boolean;
-  containerSizeDirty: boolean;
-  canvasCalloutsDirty: boolean;
+  dirtyMask: number;
 
   // Frame counter for debugging
   frameCount: number;
@@ -60,6 +68,7 @@ export interface CanvasState {
   // Version counters for React change detection (selective subscriptions)
   version: number; // Overall version (for backward compat)
   entityVersion: number; // Entity membership/reference/animation classification changes
+  membershipVersion: number; // Entity additions, removals, and workspace replacement
   geometryVersion: number; // Imperative position changes that do not notify React
   viewportVersion: number; // Incremented only on viewport changes
   selectionVersion: number; // Incremented on selection/entity changes
@@ -85,9 +94,14 @@ export interface CanvasState {
   canvasCallouts: readonly CanvasCallout[];
 }
 
+export type CanvasEntityPatch = Partial<ShaderCanvasEntity> & {
+  /** Request a new texture revision without exposing renderer-owned state. */
+  textureDirty?: boolean;
+};
+
 export interface CanvasEntityUpdate {
   id: string;
-  updates: Partial<ShaderCanvasEntity>;
+  updates: CanvasEntityPatch;
 }
 
 // Snapshot types for selective subscriptions
@@ -194,6 +208,7 @@ export interface RenderState {
   entityVersion: number;
   geometryVersion: number;
   selectionVersion: number;
+  dirtyMask: number;
   /** Entity references changed since the previous render; valid until dirty flags clear. */
   dirtyEntityIds: ReadonlySet<string>;
   selectedEntityIds: ReadonlySet<string>;
@@ -235,6 +250,7 @@ export interface ParamResult<T> {
 export class CanvasStore extends Store<CanvasState> {
   #logger: Logger;
   #viewportListeners = new Set<() => void>();
+  #renderInvalidationListeners = new Set<() => void>();
   #selectedEntitiesCache: ShaderCanvasEntity[] = [];
   #selectedEntitiesVersion = -1;
   #selectionStateCache: { entities: ShaderCanvasEntity[]; value: SelectionState } | null = null;
@@ -271,6 +287,7 @@ export class CanvasStore extends Store<CanvasState> {
     entityVersion: 0,
     geometryVersion: 0,
     selectionVersion: 0,
+    dirtyMask: 0,
     dirtyEntityIds: new Set<string>(),
     selectedEntityIds: new Set<string>(),
     debugMode: false,
@@ -318,15 +335,12 @@ export class CanvasStore extends Store<CanvasState> {
       fancyDelete: true,
       haptics: true,
       canvasLensing: CanvasLensing.off,
-      viewportDirty: false,
       entitiesDirty: new Set(),
-      geometryDirty: false,
-      selectionDirty: false,
-      containerSizeDirty: false,
-      canvasCalloutsDirty: false,
+      dirtyMask: 0,
       frameCount: 0,
       version: 0,
       entityVersion: 0,
+      membershipVersion: 0,
       geometryVersion: 0,
       viewportVersion: 0,
       selectionVersion: 0,
@@ -474,14 +488,14 @@ export class CanvasStore extends Store<CanvasState> {
   // Viewport mutations (only notify viewport subscribers)
   setViewport(viewport: Viewport): void {
     this.state.viewport = { ...viewport, offset: { ...viewport.offset } };
-    this.state.viewportDirty = true;
+    this.#markDirty(CanvasDirtyFlag.viewport);
     this.notifyViewportChange();
   }
 
   panBy(delta: Point): void {
     this.state.viewport.offset.x += delta.x;
     this.state.viewport.offset.y += delta.y;
-    this.state.viewportDirty = true;
+    this.#markDirty(CanvasDirtyFlag.viewport);
     this.notifyViewportChange();
   }
 
@@ -494,6 +508,8 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.entityIds.push(entity.id);
     this.#entitySpatialIndex.upsert(entity);
     this.state.entitiesDirty.add(entity.id);
+    this.#markDirty(CanvasDirtyFlag.entityContent);
+    this.state.membershipVersion++;
     this.notifyEntityChange();
   }
 
@@ -508,6 +524,8 @@ export class CanvasStore extends Store<CanvasState> {
       this.#entitySpatialIndex.upsert(entity);
       this.state.entitiesDirty.add(entity.id);
     }
+    this.#markDirty(CanvasDirtyFlag.entityContent);
+    this.state.membershipVersion++;
     this.notifyEntityChange();
   }
 
@@ -542,15 +560,14 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.actionLayerEntityIds = new Set();
     this.state.actionLayerTouchOrigin = { x: 0, y: 0 };
     this.state.canvasCallouts = [];
-    // Every restored entity is already textureDirty. One scene-level dirty flag is
+    // Every restored entity has a fresh texture revision. One scene-level dirty flag is
     // sufficient; retaining 131k duplicate IDs until the first frame is wasted memory.
     this.state.entitiesDirty.clear();
-    this.state.selectionDirty = true;
-    this.state.viewportDirty = true;
-    this.state.containerSizeDirty = false;
-    this.state.canvasCalloutsDirty = false;
+    this.state.dirtyMask = 0;
+    this.#markDirty(CanvasDirtyFlag.selection | CanvasDirtyFlag.viewport);
     this.state.version++;
     this.state.entityVersion++;
+    this.state.membershipVersion++;
     this.state.geometryVersion++;
     this.state.selectionVersion++;
     this.state.viewportVersion++;
@@ -564,7 +581,7 @@ export class CanvasStore extends Store<CanvasState> {
     for (const listener of this.#viewportListeners) listener();
   }
 
-  updateEntity(id: string, updates: Partial<ShaderCanvasEntity>): void {
+  updateEntity(id: string, updates: CanvasEntityPatch): void {
     this.updateEntities([{ id, updates }]);
   }
 
@@ -576,9 +593,14 @@ export class CanvasStore extends Store<CanvasState> {
     for (const { id, updates } of batch) {
       const entity = this.state.entities.get(id);
       if (!entity) continue;
-      const updatedEntity = { ...entity, ...updates } as ShaderCanvasEntity;
+      const { textureDirty, ...entityUpdates } = updates;
+      const updatedEntity = {
+        ...entity,
+        ...entityUpdates,
+        textureRevision: textureDirty ? entity.textureRevision + 1 : entity.textureRevision,
+      } as ShaderCanvasEntity;
       this.state.entities.set(id, updatedEntity);
-      if (hasSpatialEntityUpdates(updates)) {
+      if (hasSpatialEntityUpdates(entityUpdates)) {
         this.#entitySpatialIndex.upsert(updatedEntity);
       } else {
         this.#entitySpatialIndex.updateEntityReference(updatedEntity);
@@ -588,6 +610,7 @@ export class CanvasStore extends Store<CanvasState> {
     }
 
     if (updatedCount === 0) return 0;
+    this.#markDirty(CanvasDirtyFlag.entityContent);
     this.notifyEntityChange();
     this.#logger.debug("Updated entity batch", { entityCount: updatedCount });
     return updatedCount;
@@ -598,11 +621,11 @@ export class CanvasStore extends Store<CanvasState> {
     if (entity) {
       entity.position.x += delta.x;
       entity.position.y += delta.y;
-      this.#entitySpatialIndex.upsert(entity);
+      this.#entitySpatialIndex.translateEntities([id], delta);
       this.state.geometryVersion++;
       // Position-only updates still change the composed scene and must invalidate
       // renderer caches such as the fullscreen wlur overlay during drag.
-      this.state.geometryDirty = true;
+      this.#markDirty(CanvasDirtyFlag.geometry);
     }
   }
 
@@ -620,7 +643,7 @@ export class CanvasStore extends Store<CanvasState> {
     if (movedCount === 0) return 0;
     this.#entitySpatialIndex.translateEntities(entityIds, delta);
     this.state.geometryVersion++;
-    this.state.geometryDirty = true;
+    this.#markDirty(CanvasDirtyFlag.geometry);
     return movedCount;
   }
 
@@ -634,7 +657,8 @@ export class CanvasStore extends Store<CanvasState> {
 
     this.state.entitiesDirty.delete(id);
     // Always mark dirty since entity list changed (needed for undo/redo re-render)
-    this.state.selectionDirty = true;
+    this.#markDirty(CanvasDirtyFlag.entityContent | CanvasDirtyFlag.selection);
+    this.state.membershipVersion++;
     // Remove from selection if present (immutable update for React)
     if (this.state.selectedEntityIds.has(id)) {
       const newSelection = new Set(this.state.selectedEntityIds);
@@ -669,7 +693,8 @@ export class CanvasStore extends Store<CanvasState> {
       if (!entityIds.has(id)) nextSelection.add(id);
     }
     this.state.selectedEntityIds = nextSelection;
-    this.state.selectionDirty = true;
+    this.#markDirty(CanvasDirtyFlag.entityContent | CanvasDirtyFlag.selection);
+    this.state.membershipVersion++;
     this.notifyEntityChange();
     this.#logger.debug("Removed entity batch", { entityCount: removedCount });
     return removedCount;
@@ -683,7 +708,7 @@ export class CanvasStore extends Store<CanvasState> {
   addToSelection(id: string): void {
     if (!this.state.entities.has(id)) return;
     this.state.selectedEntityIds = new Set(this.state.selectedEntityIds).add(id);
-    this.state.selectionDirty = true;
+    this.#markDirty(CanvasDirtyFlag.selection);
     completeOnboardingStarterSelectionFromEvent(this.state.selectedEntityIds);
     this.#logger.debug(`Added to selection: ${id}`, this.state.entities.get(id));
     this.notifySelectionChange();
@@ -694,7 +719,7 @@ export class CanvasStore extends Store<CanvasState> {
     const newSelection = new Set(this.state.selectedEntityIds);
     newSelection.delete(id);
     this.state.selectedEntityIds = newSelection;
-    this.state.selectionDirty = true;
+    this.#markDirty(CanvasDirtyFlag.selection);
     this.#logger.debug(`Removed from selection: ${id}`);
     this.notifySelectionChange();
   }
@@ -717,7 +742,7 @@ export class CanvasStore extends Store<CanvasState> {
       }
     }
     this.state.selectedEntityIds = newSelection;
-    this.state.selectionDirty = true;
+    this.#markDirty(CanvasDirtyFlag.selection);
     completeOnboardingStarterSelectionFromEvent(this.state.selectedEntityIds);
     this.#logger.debug("Selection replaced", {
       entityCount: newSelection.size,
@@ -737,7 +762,7 @@ export class CanvasStore extends Store<CanvasState> {
       return;
     }
     this.state.selectedEntityIds = new Set(this.state.entityIds);
-    this.state.selectionDirty = true;
+    this.#markDirty(CanvasDirtyFlag.selection);
     completeOnboardingStarterSelectionFromEvent(this.state.selectedEntityIds);
     this.#logger.debug("All entities selected", { entityCount: this.state.selectedEntityIds.size });
     this.notifySelectionChange();
@@ -747,7 +772,7 @@ export class CanvasStore extends Store<CanvasState> {
   replaceTransientSelection(ids: Set<string>): Set<string> {
     const previousSelection = this.state.selectedEntityIds;
     this.state.selectedEntityIds = ids;
-    this.state.selectionDirty = true;
+    this.#markDirty(CanvasDirtyFlag.selection);
     return previousSelection;
   }
 
@@ -763,7 +788,7 @@ export class CanvasStore extends Store<CanvasState> {
   /** Clear all selection */
   clearSelection(): void {
     this.state.selectedEntityIds = new Set();
-    this.state.selectionDirty = true;
+    this.#markDirty(CanvasDirtyFlag.selection);
     this.#logger.debug(`Selection cleared`);
     this.notifySelectionChange();
   }
@@ -832,7 +857,7 @@ export class CanvasStore extends Store<CanvasState> {
 
   setContextOpenEntity(id: string | null): void {
     this.state.contextOpenEntityId = id;
-    this.state.selectionDirty = true;
+    this.#markDirty(CanvasDirtyFlag.selection);
     if (id) {
       this.#logger.debug(`context menu opened for entity: ${id}`, this.state.entities.get(id));
     }
@@ -849,7 +874,7 @@ export class CanvasStore extends Store<CanvasState> {
     }
 
     this.state.contextOpenEntityId = null;
-    this.state.selectionDirty = true;
+    this.#markDirty(CanvasDirtyFlag.selection);
 
     this.notifySelectionChange();
   }
@@ -875,13 +900,11 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.actionLayerTouchOrigin = { x: 0, y: 0 };
     this.state.canvasCallouts = [];
     this.state.entitiesDirty.clear();
-    this.state.selectionDirty = false;
-    this.state.viewportDirty = false;
-    this.state.containerSizeDirty = false;
-    this.state.canvasCalloutsDirty = false;
+    this.state.dirtyMask = 0;
     // Increment versions to invalidate cached snapshots
     this.state.version++;
     this.state.entityVersion++;
+    this.state.membershipVersion++;
     this.state.geometryVersion++;
     this.state.selectionVersion++;
     this.state.viewportVersion++;
@@ -899,7 +922,7 @@ export class CanvasStore extends Store<CanvasState> {
   // Debug mode toggle
   toggleDebugMode(): void {
     this.state.version++;
-    this.state.viewportDirty = true;
+    this.#markDirty(CanvasDirtyFlag.viewport);
     this.state.debugMode = !this.state.debugMode;
     this.#logger.setLevel(this.state.debugMode ? LogLevel.DEBUG : LogLevel.ERROR);
     this.notifySelectionChange();
@@ -908,7 +931,7 @@ export class CanvasStore extends Store<CanvasState> {
 
   setDebugMode(enabled: boolean): void {
     this.state.version++;
-    this.state.viewportDirty = true;
+    this.#markDirty(CanvasDirtyFlag.viewport);
     this.state.debugMode = enabled;
     this.#logger.setLevel(enabled ? LogLevel.DEBUG : LogLevel.ERROR);
     this.notifySelectionChange();
@@ -964,7 +987,7 @@ export class CanvasStore extends Store<CanvasState> {
   setTransientEntityDragOffset(offset: Point): void {
     this.#transientEntityDragOffset.x = offset.x;
     this.#transientEntityDragOffset.y = offset.y;
-    this.state.geometryDirty = true;
+    this.#markDirty(CanvasDirtyFlag.geometry);
   }
 
   getTransientEntityDragOffset(): Readonly<Point> {
@@ -1001,7 +1024,7 @@ export class CanvasStore extends Store<CanvasState> {
   setCanvasCallouts(callouts: readonly CanvasCallout[]): void {
     if (sameCanvasCallouts(this.state.canvasCallouts, callouts)) return;
     this.state.canvasCallouts = callouts;
-    this.state.canvasCalloutsDirty = true;
+    this.#markDirty(CanvasDirtyFlag.callouts);
   }
 
   setMultiSelectMode(enabled: boolean): void {
@@ -1042,6 +1065,7 @@ export class CanvasStore extends Store<CanvasState> {
       entity.playback.currentTime = video.currentTime;
     }
     this.state.entitiesDirty.add(entityId);
+    this.#markDirty(CanvasDirtyFlag.entityContent);
     this.notifyEntityChange();
   }
 
@@ -1056,6 +1080,7 @@ export class CanvasStore extends Store<CanvasState> {
     entity.playback.muted = muted;
     entity.mediaSource.videoElement.muted = muted;
     this.state.entitiesDirty.add(entityId);
+    this.#markDirty(CanvasDirtyFlag.entityContent);
     this.notifySelectionChange();
   }
 
@@ -1097,13 +1122,15 @@ export class CanvasStore extends Store<CanvasState> {
           }
           entity.imageBitmap = bitmap;
           previousBitmap.close();
-          entity.textureDirty = true;
+          entity.textureRevision++;
           this.state.entitiesDirty.add(entityId);
+          this.#markDirty(CanvasDirtyFlag.entityContent);
         })
         .catch((e) => logger.error(e));
     }
 
     this.state.entitiesDirty.add(entityId);
+    this.#markDirty(CanvasDirtyFlag.entityContent);
     this.notifyEntityChange();
   }
 
@@ -1124,8 +1151,9 @@ export class CanvasStore extends Store<CanvasState> {
       entity.playback.currentTime = clampedTime;
     }
 
-    entity.textureDirty = true;
+    entity.textureRevision++;
     this.state.entitiesDirty.add(entityId);
+    this.#markDirty(CanvasDirtyFlag.entityContent);
     this.state.playbackVersion++;
     this.notify();
   }
@@ -1155,8 +1183,9 @@ export class CanvasStore extends Store<CanvasState> {
     const entity = this.state.entities.get(entityId);
     if (!entity) return;
 
-    entity.textureDirty = true;
+    entity.textureRevision++;
     this.state.entitiesDirty.add(entityId);
+    this.#markDirty(CanvasDirtyFlag.entityContent);
   }
 
   // GIF playback controls
@@ -1168,6 +1197,7 @@ export class CanvasStore extends Store<CanvasState> {
       entity.playback.isPlaying = true;
     }
     this.state.entitiesDirty.add(entityId);
+    this.#markDirty(CanvasDirtyFlag.entityContent);
     this.notifyEntityChange();
   }
 
@@ -1180,8 +1210,9 @@ export class CanvasStore extends Store<CanvasState> {
     }
 
     // Snapshot current frame for static display (already set by advanceGifPlayback)
-    entity.textureDirty = true;
+    entity.textureRevision++;
     this.state.entitiesDirty.add(entityId);
+    this.#markDirty(CanvasDirtyFlag.entityContent);
     this.notifyEntityChange();
   }
 
@@ -1203,8 +1234,9 @@ export class CanvasStore extends Store<CanvasState> {
     // Update frame to match seek position
     const frame = getFrameAtTime(frames, clampedTime, entity.playback?.loop ?? true);
     entity.imageBitmap = frame.bitmap;
-    entity.textureDirty = true;
+    entity.textureRevision++;
     this.state.entitiesDirty.add(entityId);
+    this.#markDirty(CanvasDirtyFlag.entityContent);
     this.state.playbackVersion++;
     this.notify();
   }
@@ -1289,26 +1321,20 @@ export class CanvasStore extends Store<CanvasState> {
 
     entity.imageBitmap = frame.bitmap;
     // Mark as dirty so renderer picks up the new frame
-    entity.textureDirty = true;
+    entity.textureRevision++;
     this.state.entitiesDirty.add(entityId);
+    this.#markDirty(CanvasDirtyFlag.entityContent);
     return true;
   }
 
   // Mark container as needing resize handling (no React notification needed)
   setContainerDirty(): void {
-    this.state.containerSizeDirty = true;
+    this.#markDirty(CanvasDirtyFlag.container);
   }
 
   // Snapshot for rendering (called once per frame)
   hasRenderChanges(): boolean {
-    return (
-      this.state.viewportDirty ||
-      this.state.entitiesDirty.size > 0 ||
-      this.state.geometryDirty ||
-      this.state.selectionDirty ||
-      this.state.containerSizeDirty ||
-      this.state.canvasCalloutsDirty
-    );
+    return this.state.dirtyMask !== 0;
   }
 
   getRenderState(): RenderState {
@@ -1355,6 +1381,7 @@ export class CanvasStore extends Store<CanvasState> {
     renderState.entityVersion = this.state.entityVersion;
     renderState.geometryVersion = this.state.geometryVersion;
     renderState.selectionVersion = this.state.selectionVersion;
+    renderState.dirtyMask = this.state.dirtyMask;
     renderState.dirtyEntityIds = this.state.entitiesDirty;
     renderState.selectedEntityIds = this.state.selectedEntityIds;
     renderState.debugMode = this.state.debugMode;
@@ -1382,12 +1409,8 @@ export class CanvasStore extends Store<CanvasState> {
 
   // Clear dirty flags after render
   clearDirtyFlags(): void {
-    this.state.viewportDirty = false;
     this.state.entitiesDirty.clear();
-    this.state.geometryDirty = false;
-    this.state.selectionDirty = false;
-    this.state.containerSizeDirty = false;
-    this.state.canvasCalloutsDirty = false;
+    this.state.dirtyMask = 0;
     this.state.frameCount++;
   }
 
@@ -1401,6 +1424,11 @@ export class CanvasStore extends Store<CanvasState> {
     return () => this.#viewportListeners.delete(listener);
   };
 
+  subscribeRenderInvalidation = (listener: () => void): (() => void) => {
+    this.#renderInvalidationListeners.add(listener);
+    return () => this.#renderInvalidationListeners.delete(listener);
+  };
+
   // ============================================================================
   // Notification Helpers (use base class notify())
   // ============================================================================
@@ -1412,6 +1440,13 @@ export class CanvasStore extends Store<CanvasState> {
     for (const listener of this.#viewportListeners) {
       listener();
     }
+  }
+
+  #markDirty(flags: number): void {
+    const previous = this.state.dirtyMask;
+    this.state.dirtyMask |= flags;
+    if (previous !== 0) return;
+    for (const listener of this.#renderInvalidationListeners) listener();
   }
 
   private notifySelectionChange(): void {
@@ -1547,10 +1582,7 @@ export class CanvasStore extends Store<CanvasState> {
 
 function hasSpatialEntityUpdates(updates: Partial<ShaderCanvasEntity>): boolean {
   return (
-    updates.position !== undefined ||
-    updates.size !== undefined ||
-    updates.rotation !== undefined ||
-    updates.zIndex !== undefined
+    updates.position !== undefined || updates.size !== undefined || updates.rotation !== undefined
   );
 }
 

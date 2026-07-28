@@ -40,11 +40,11 @@ interface CachedEntityTexture {
 interface CachedSourceTexture extends CachedEntityTexture {
   width: number;
   height: number;
-  entityIds: Set<string>;
+  entityCount: number;
 }
 
 interface CachedProcessedTexture extends CachedEntityTexture {
-  entityIds: Set<string>;
+  entityCount: number;
 }
 
 interface GifResizeSurface {
@@ -92,7 +92,6 @@ export class EntityTexturePipeline {
   #textureCacheRevision = 0;
   readonly #residentTextureEntries = new WeakMap<GPUTexture, CachedEntityTexture>();
   readonly #lodCacheLookups = new Map<object, LodCacheLookup>();
-  #entityContentRevisions = new Map<string, number>();
   #gifResizeSurfaces = new Map<string, GifResizeSurface>();
   #renderEntityView: EffectRenderEntity | null = null;
   #sourceBytes = 0;
@@ -190,29 +189,29 @@ export class EntityTexturePipeline {
     const needsContinuousShaderRender =
       !entity.shaderParams.showOriginal && this.#runtime.needsContinuousRender(entity);
 
-    if (!entity.textureDirty) {
-      if (entity.shaderParams.showOriginal && !useExternalVideoSource) {
-        const currentSource = this.#entitySourceBindings.get(entity.id);
-        if (
-          currentSource &&
-          currentSource.width === width &&
-          currentSource.height === height &&
-          currentSource.contentRevision === contentRevision
-        ) {
-          currentSource.lastUsedFrame = this.#currentFrame;
-          return currentSource.compositionSource;
-        }
-      } else if (!entity.shaderParams.showOriginal && !needsContinuousShaderRender) {
-        const currentProcessed = this.#entityProcessedBindings.get(entity.id);
-        if (
-          currentProcessed &&
-          currentProcessed.texture.width === width &&
-          currentProcessed.texture.height === height &&
-          currentProcessed.contentRevision === contentRevision
-        ) {
-          currentProcessed.lastUsedFrame = this.#currentFrame;
-          return currentProcessed.compositionSource;
-        }
+    if (entity.shaderParams.showOriginal && !useExternalVideoSource) {
+      const currentSource = this.#entitySourceBindings.get(entity.id);
+      if (
+        currentSource &&
+        currentSource.width === width &&
+        currentSource.height === height &&
+        currentSource.contentRevision === contentRevision
+      ) {
+        this.#touchTexture(currentSource);
+        return currentSource.compositionSource;
+      }
+    } else if (!entity.shaderParams.showOriginal && !needsContinuousShaderRender) {
+      const currentProcessed = this.#entityProcessedBindings.get(entity.id);
+      if (
+        currentProcessed &&
+        currentProcessed.key ===
+          this.#getProcessedCacheKey(entity, width, height, needsContinuousShaderRender) &&
+        currentProcessed.texture.width === width &&
+        currentProcessed.texture.height === height &&
+        currentProcessed.contentRevision === contentRevision
+      ) {
+        this.#touchTexture(currentProcessed);
+        return currentProcessed.compositionSource;
       }
     }
 
@@ -225,16 +224,13 @@ export class EntityTexturePipeline {
     );
     let cachedTexture = this.#processedTextures.get(processedKey);
     const processedKeyWasCached = !!cachedTexture;
-    const canReuseDirtyTexture =
-      entity.mediaSource.type === MediaType.image && !needsContinuousShaderRender;
     if (
       !entity.shaderParams.showOriginal &&
       !needsContinuousShaderRender &&
       cachedTexture &&
-      cachedTexture.contentRevision === contentRevision &&
-      (!entity.textureDirty || canReuseDirtyTexture)
+      cachedTexture.contentRevision === contentRevision
     ) {
-      cachedTexture.lastUsedFrame = this.#currentFrame;
+      this.#touchTexture(cachedTexture);
       this.#bindEntityToProcessed(entity.id, processedKey, cachedTexture);
       return cachedTexture.compositionSource;
     }
@@ -284,7 +280,7 @@ export class EntityTexturePipeline {
           byteSize: getTextureByteSize(width, height, "rgba8unorm"),
           lastUsedFrame: this.#currentFrame,
           contentRevision,
-          entityIds: new Set(),
+          entityCount: 0,
         };
         this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
         this.#sourceTextures.set(sourceKey, cachedSource);
@@ -293,7 +289,7 @@ export class EntityTexturePipeline {
         this.#textureCacheRevision++;
       } else {
         sourceTexture = cachedSource.texture;
-        cachedSource.lastUsedFrame = this.#currentFrame;
+        this.#touchTexture(cachedSource);
         if (cachedSource.contentRevision !== contentRevision) {
           this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
           cachedSource.contentRevision = contentRevision;
@@ -323,9 +319,9 @@ export class EntityTexturePipeline {
         previousCached &&
         previousCached.texture.width === width &&
         previousCached.texture.height === height &&
-        previousCached.entityIds.size === 1;
+        previousCached.entityCount === 1;
       if (canRecyclePrevious && !cachedTexture) {
-        previousCached.entityIds.delete(entity.id);
+        previousCached.entityCount--;
         this.#entityProcessedBindings.delete(entity.id);
         this.#processedTextures.delete(previousProcessedKey);
         recycledTexture = previousCached;
@@ -390,7 +386,7 @@ export class EntityTexturePipeline {
       byteSize: getTextureByteSize(width, height, this.#colorConfig.intermediateFormat),
       lastUsedFrame: this.#currentFrame,
       contentRevision,
-      entityIds: cachedTexture?.entityIds ?? recycledTexture?.entityIds ?? new Set(),
+      entityCount: cachedTexture?.entityCount ?? recycledTexture?.entityCount ?? 0,
     };
     this.#processedTextures.set(processedKey, processedEntry);
     this.#residentTextureEntries.set(outputTexture, processedEntry);
@@ -427,11 +423,7 @@ export class EntityTexturePipeline {
     desired: { width: number; height: number },
     needsContinuousRender: boolean,
   ): EntityCompositionSource | null {
-    if (
-      entity.textureDirty ||
-      entity.mediaSource.type !== MediaType.image ||
-      needsContinuousRender
-    ) {
+    if (entity.mediaSource.type !== MediaType.image || needsContinuousRender) {
       return null;
     }
 
@@ -440,13 +432,17 @@ export class EntityTexturePipeline {
       : this.#entityProcessedBindings.get(entity.id);
     if (
       !entry ||
+      entry.key !==
+        (entity.shaderParams.showOriginal
+          ? this.#getSourceCacheKey(entity, desired.width, desired.height)
+          : this.#getProcessedCacheKey(entity, desired.width, desired.height, false)) ||
       entry.texture.width !== desired.width ||
       entry.texture.height !== desired.height
     ) {
       return null;
     }
 
-    entry.lastUsedFrame = this.#currentFrame;
+    this.#touchTexture(entry);
     return entry.compositionSource;
   }
 
@@ -487,7 +483,7 @@ export class EntityTexturePipeline {
     // frame even though they all use the same source and processed texture.
     const lookupToken = current ?? getSharedImageAsset(entity);
     const canReuseSharedTier =
-      !current || (currentEntry?.entityIds.size ?? 0) > 1 || this.#lodCacheLookups.has(current);
+      !current || (currentEntry?.entityCount ?? 0) > 1 || this.#lodCacheLookups.has(current);
     if (
       lookupToken &&
       canReuseSharedTier &&
@@ -515,7 +511,7 @@ export class EntityTexturePipeline {
     const allowAnimatedDemotion = isAnimatedEntity(entity) && pixelCost < currentPixelCount;
     const allowSharedImageDemotion =
       entity.mediaSource.type === MediaType.image &&
-      (currentEntry?.entityIds.size ?? 0) > 1 &&
+      (currentEntry?.entityCount ?? 0) > 1 &&
       pixelCost < currentPixelCount;
     if (
       !this.#tryAdmitLodTransition(pixelCost, allowAnimatedDemotion || allowSharedImageDemotion)
@@ -542,7 +538,7 @@ export class EntityTexturePipeline {
   pinCachedTexture(texture: GPUTexture): boolean {
     const entry = this.#residentTextureEntries.get(texture);
     if (!entry) return false;
-    entry.lastUsedFrame = this.#currentFrame;
+    this.#touchTexture(entry);
     return true;
   }
 
@@ -573,7 +569,6 @@ export class EntityTexturePipeline {
 
     this.#releaseEntitySourceTexture(entityId);
 
-    this.#entityContentRevisions.delete(entityId);
     const resizeSurface = this.#gifResizeSurfaces.get(entityId);
     if (resizeSurface) {
       resizeSurface.canvas.width = 1;
@@ -614,7 +609,6 @@ export class EntityTexturePipeline {
       canvas.height = 1;
     }
     this.#gifResizeSurfaces.clear();
-    this.#entityContentRevisions.clear();
 
     this.#runtime.destroy();
   }
@@ -659,14 +653,7 @@ export class EntityTexturePipeline {
   }
 
   #resolveContentRevision(entity: ShaderCanvasEntity): number {
-    if (!isAnimatedEntity(entity)) return 0;
-
-    const current = this.#entityContentRevisions.get(entity.id) ?? 0;
-    if (!entity.textureDirty) return current;
-
-    const next = current + 1;
-    this.#entityContentRevisions.set(entity.id, next);
-    return next;
+    return isAnimatedEntity(entity) ? entity.textureRevision : 0;
   }
 
   #getRenderEntityView(
@@ -796,13 +783,12 @@ export class EntityTexturePipeline {
     const previous = this.#entityProcessedBindings.get(entityId);
     const previousKey = previous?.key;
     if (previousKey === processedKey) {
-      cachedProcessed.entityIds.add(entityId);
       this.#entityProcessedBindings.set(entityId, cachedProcessed);
       return;
     }
     if (previousKey) this.#releaseEntityProcessedTexture(entityId, false);
 
-    cachedProcessed.entityIds.add(entityId);
+    cachedProcessed.entityCount++;
     this.#entityProcessedBindings.set(entityId, cachedProcessed);
   }
 
@@ -812,8 +798,8 @@ export class EntityTexturePipeline {
 
     this.#entityProcessedBindings.delete(entityId);
 
-    cachedProcessed.entityIds.delete(entityId);
-    if (destroyOrphan && cachedProcessed.entityIds.size === 0) {
+    cachedProcessed.entityCount--;
+    if (destroyOrphan && cachedProcessed.entityCount === 0) {
       cachedProcessed.texture.destroy();
       this.#residentTextureEntries.delete(cachedProcessed.texture);
       this.#processedTextures.delete(cachedProcessed.key);
@@ -831,7 +817,7 @@ export class EntityTexturePipeline {
     if (previousKey === sourceKey) return;
     if (previousKey) this.#releaseEntitySourceTexture(entityId, false);
 
-    cachedSource.entityIds.add(entityId);
+    cachedSource.entityCount++;
     this.#entitySourceBindings.set(entityId, cachedSource);
   }
 
@@ -841,8 +827,8 @@ export class EntityTexturePipeline {
 
     this.#entitySourceBindings.delete(entityId);
 
-    cachedSource.entityIds.delete(entityId);
-    if (destroyOrphan && cachedSource.entityIds.size === 0) {
+    cachedSource.entityCount--;
+    if (destroyOrphan && cachedSource.entityCount === 0) {
       cachedSource.texture.destroy();
       this.#residentTextureEntries.delete(cachedSource.texture);
       this.#sourceTextures.delete(cachedSource.key);
@@ -854,47 +840,84 @@ export class EntityTexturePipeline {
     if (this.#sourceBytes + this.#processedBytes <= this.#textureBudgetBytes) return;
 
     let residentBytes = this.#sourceBytes + this.#processedBytes;
-    const candidates: Array<
-      | { kind: "processed"; key: string; cached: CachedProcessedTexture }
-      | { kind: "source"; key: string; cached: CachedSourceTexture }
-    > = [];
+    const evictedProcessed = new Set<CachedProcessedTexture>();
+    const evictedSources = new Set<CachedSourceTexture>();
 
-    for (const [key, cached] of this.#processedTextures) {
-      if (cached.lastUsedFrame !== this.#currentFrame) {
-        candidates.push({ kind: "processed", key, cached });
-      }
-    }
-    for (const [key, cached] of this.#sourceTextures) {
-      if (cached.lastUsedFrame !== this.#currentFrame) {
-        candidates.push({ kind: "source", key, cached });
-      }
-    }
-    candidates.sort((a, b) => a.cached.lastUsedFrame - b.cached.lastUsedFrame);
+    while (residentBytes > this.#textureBudgetBytes) {
+      const processed = this.#oldestEvictable(this.#processedTextures);
+      const source = this.#oldestEvictable(this.#sourceTextures);
+      if (!processed && !source) break;
 
-    for (const candidate of candidates) {
-      if (residentBytes <= this.#textureBudgetBytes) break;
-      candidate.cached.texture.destroy();
-      this.#residentTextureEntries.delete(candidate.cached.texture);
-      residentBytes -= candidate.cached.byteSize;
+      const evictProcessed =
+        !!processed && (!source || processed.lastUsedFrame <= source.lastUsedFrame);
+      const cached = evictProcessed ? processed! : source!;
+      cached.texture.destroy();
+      this.#residentTextureEntries.delete(cached.texture);
+      residentBytes -= cached.byteSize;
       this.#evictions++;
       this.#textureCacheRevision++;
 
-      if (candidate.kind === "processed") {
-        this.#processedTextures.delete(candidate.key);
-        this.#processedBytes -= candidate.cached.byteSize;
-        for (const entityId of candidate.cached.entityIds) {
-          this.#entityProcessedBindings.delete(entityId);
-        }
-        this.#onTextureEvicted?.(candidate.cached.entityIds);
+      if (evictProcessed) {
+        const processedEntry = cached as CachedProcessedTexture;
+        this.#processedTextures.delete(processedEntry.key);
+        this.#processedBytes -= processedEntry.byteSize;
+        evictedProcessed.add(processedEntry);
         continue;
       }
 
-      this.#sourceTextures.delete(candidate.key);
-      this.#sourceBytes -= candidate.cached.byteSize;
-      for (const entityId of candidate.cached.entityIds) {
-        this.#entitySourceBindings.delete(entityId);
+      const sourceEntry = cached as CachedSourceTexture;
+      this.#sourceTextures.delete(sourceEntry.key);
+      this.#sourceBytes -= sourceEntry.byteSize;
+      evictedSources.add(sourceEntry);
+    }
+
+    this.#deleteBindingsForEntries(this.#entityProcessedBindings, evictedProcessed);
+    this.#deleteBindingsForEntries(this.#entitySourceBindings, evictedSources);
+  }
+
+  #touchTexture(entry: CachedEntityTexture): void {
+    if (entry.lastUsedFrame === this.#currentFrame) return;
+
+    entry.lastUsedFrame = this.#currentFrame;
+    if (Object.is(this.#processedTextures.get(entry.key), entry)) {
+      const processed = entry as CachedProcessedTexture;
+      this.#processedTextures.delete(entry.key);
+      this.#processedTextures.set(entry.key, processed);
+      return;
+    }
+    if (Object.is(this.#sourceTextures.get(entry.key), entry)) {
+      const source = entry as CachedSourceTexture;
+      this.#sourceTextures.delete(entry.key);
+      this.#sourceTextures.set(entry.key, source);
+    }
+  }
+
+  #oldestEvictable<T extends CachedEntityTexture>(cache: Map<string, T>): T | null {
+    const oldest = cache.values().next().value as T | undefined;
+    return oldest && oldest.lastUsedFrame !== this.#currentFrame ? oldest : null;
+  }
+
+  #deleteBindingsForEntries<T extends CachedEntityTexture>(
+    bindings: Map<string, T>,
+    evictedEntries: ReadonlySet<T>,
+  ): void {
+    if (evictedEntries.size === 0) return;
+
+    const entityIdsByEntry = new Map<T, Set<string>>();
+    for (const [entityId, boundEntry] of bindings) {
+      if (!evictedEntries.has(boundEntry)) continue;
+      bindings.delete(entityId);
+      let entityIds = entityIdsByEntry.get(boundEntry);
+      if (!entityIds) {
+        entityIds = new Set();
+        entityIdsByEntry.set(boundEntry, entityIds);
       }
-      this.#onTextureEvicted?.(candidate.cached.entityIds);
+      entityIds.add(entityId);
+    }
+    if (this.#onTextureEvicted) {
+      for (const entityIds of entityIdsByEntry.values()) {
+        this.#onTextureEvicted(entityIds);
+      }
     }
   }
 }

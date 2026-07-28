@@ -168,8 +168,8 @@ describe("CompositionPass instancing", () => {
       normalInstanceUploadBytes: 0,
     });
     expect(secondFramePass.draw).toHaveBeenCalledWith(6, 2, 0, 0);
-    expect(first.textureDirty).toBe(false);
-    expect(second.textureDirty).toBe(false);
+    expect(first.textureRevision).toBe(0);
+    expect(second.textureRevision).toBe(0);
 
     pass.destroy();
     releaseImageEntity(first);

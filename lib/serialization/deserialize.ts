@@ -728,8 +728,7 @@ function createDeserializedEntityBase(
     edited: serialized.edited,
     shaderType,
     shaderParams,
-    textureDirty: true as const,
-    selected: false as const,
+    textureRevision: 1,
     ...(originalPalette && {
       originalPalette,
     }),

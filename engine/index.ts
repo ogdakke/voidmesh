@@ -1,8 +1,9 @@
-export { CanvasStore, canvasStore } from "./canvas-store.ts";
+export { CanvasDirtyFlag, CanvasStore, canvasStore } from "./canvas-store.ts";
 export type {
   CanvasState,
   RenderState,
   CanvasEntityUpdate,
+  CanvasEntityPatch,
   ActionLayerRenderState,
   DragVisualRenderState,
   DisintegrationRenderOverlay,

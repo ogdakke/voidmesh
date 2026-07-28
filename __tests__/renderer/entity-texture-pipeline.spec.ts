@@ -57,7 +57,7 @@ describe("EntityTexturePipeline shared image sources", () => {
       ...first,
       id: "image-second",
       mediaSource: { type: "image", asset: first.mediaSource.asset },
-      textureDirty: true,
+      textureRevision: first.textureRevision + 1,
     };
 
     const sourceTexture = createTexture(200, 150);
@@ -116,7 +116,6 @@ describe("EntityTexturePipeline shared image sources", () => {
     pipeline.endFrame();
     expect(pipeline.getResidencyStats().residentBytes).toBe(200 * 150 * 4 * 2);
 
-    second.textureDirty = false;
     pipeline.renderEntityToTexture(second, encoder);
     pipeline.endFrame();
 
@@ -246,7 +245,7 @@ describe("EntityTexturePipeline shared image sources", () => {
       ...first,
       id: "resident-second",
       mediaSource: { type: "image", asset: first.mediaSource.asset },
-      textureDirty: true,
+      textureRevision: first.textureRevision + 1,
     };
     const pipeline = new EntityTexturePipeline({
       device: createDevice([createTexture(200, 150)]),

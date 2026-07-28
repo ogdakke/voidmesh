@@ -278,7 +278,7 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     const changed = {
       ...scene.entities[1]!,
       shaderParams: structuredClone(scene.entities[1]!.shaderParams),
-      textureDirty: true,
+      textureRevision: scene.entities[1]!.textureRevision + 1,
     };
     changed.shaderParams.size += 1;
     scene.entities[1] = changed;
@@ -303,7 +303,7 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     const changed = {
       ...scene.entities[1]!,
       shaderParams: structuredClone(scene.entities[1]!.shaderParams),
-      textureDirty: true,
+      textureRevision: scene.entities[1]!.textureRevision + 1,
     };
     changed.shaderParams.size += 1;
     scene.entities[1] = changed;
@@ -331,7 +331,7 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
       const entity = entities[index]!;
       entity.shaderParams = structuredClone(entity.shaderParams);
       entity.shaderParams.size += 1;
-      entity.textureDirty = true;
+      entity.textureRevision++;
       dirtyEntityIds.add(entity.id);
     }
     harness.options.entityVersion++;

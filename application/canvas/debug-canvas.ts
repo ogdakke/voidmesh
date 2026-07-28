@@ -45,7 +45,7 @@ export async function debugCanvas(store: CanvasStore) {
     shaderType: ShaderType.ascii,
     size: { width: imageBitmap.width, height: imageBitmap.height },
     zIndex: 0,
-    textureDirty: true,
+    textureRevision: 1,
     edited: true,
   });
 }

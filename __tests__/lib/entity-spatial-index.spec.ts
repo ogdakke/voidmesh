@@ -81,6 +81,35 @@ describe("EntitySpatialIndex", () => {
     expect(index.queryBounds({ x: 99, y: -1, width: 30, height: 10 }, [])).toEqual([first, second]);
   });
 
+  test("keeps full-scene containment valid when an interior entity translates", () => {
+    const index = new EntitySpatialIndex(10);
+    const left = createTestEntity({
+      id: "bounds-left",
+      position: { x: 0, y: 0 },
+      size: { width: 2, height: 2 },
+      zIndex: 1,
+    });
+    const interior = createTestEntity({
+      id: "bounds-interior",
+      position: { x: 5, y: 0 },
+      size: { width: 2, height: 2 },
+      zIndex: 2,
+    });
+    const right = createTestEntity({
+      id: "bounds-right",
+      position: { x: 10, y: 0 },
+      size: { width: 2, height: 2 },
+      zIndex: 3,
+    });
+    for (const entity of [left, interior, right]) index.upsert(entity);
+    const ordered = [left, interior, right];
+
+    interior.position.x++;
+    index.translateEntities([interior.id], { x: 1, y: 0 });
+
+    expect(index.queryBounds({ x: -1, y: -1, width: 14, height: 4 }, [], ordered)).toBe(ordered);
+  });
+
   test("removes entities and includes very large entities without indexing every cell", () => {
     const index = new EntitySpatialIndex(1);
     const large = createTestEntity({

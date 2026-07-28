@@ -31,7 +31,7 @@ export class WlurOverlayPass {
   readonly #sourceCopyPass: CopyPass;
   readonly #presentCopyPass: CopyPass;
 
-  #config: WlurOverlayConfig | null = null;
+  #resolvedConfig: ResolvedWlurOverlayConfig | null = null;
   #textures: {
     width: number;
     height: number;
@@ -39,8 +39,6 @@ export class WlurOverlayPass {
     output: GPUTexture;
   } | null = null;
   #cacheValid = false;
-  #cacheKey = "";
-  #lastQualityKey = "";
 
   constructor(options: WlurOverlayPassOptions) {
     this.#device = options.device;
@@ -57,10 +55,9 @@ export class WlurOverlayPass {
   }
 
   setConfig(config: WlurOverlayConfig | null): void {
-    this.#config = config;
-    this.#lastQualityKey = "";
-    if (config?.quality) {
-      this.#wlurPass.updateConfig({ quality: config.quality });
+    this.#resolvedConfig = resolveWlurOverlayRuntimeConfig(config, 2, 1);
+    if (this.#resolvedConfig) {
+      this.#wlurPass.updateConfig({ quality: this.#resolvedConfig.quality });
     } else if (!config) {
       this.#destroyTextures();
     }
@@ -69,36 +66,17 @@ export class WlurOverlayPass {
 
   invalidateCache(): void {
     this.#cacheValid = false;
-    this.#cacheKey = "";
   }
 
   encode(options: EncodeWlurOverlayOptions): boolean {
-    const resolvedConfig = resolveWlurOverlayRuntimeConfig(
-      this.#config,
-      options.height,
-      options.devicePixelRatio,
-    );
+    const resolvedConfig = this.#resolvedConfig;
     if (!resolvedConfig) {
       this.invalidateCache();
       return false;
     }
 
     const textures = this.#getOrCreateTextures(options.width, options.height);
-    const cacheKey = this.#buildCacheKey(options.width, options.height, resolvedConfig);
-    const needsUpdate =
-      !resolvedConfig.cache ||
-      !this.#cacheValid ||
-      this.#cacheKey !== cacheKey ||
-      options.contentDirty;
-
-    const qualityKey = [
-      resolvedConfig.quality.kernelSize,
-      resolvedConfig.quality.resolutionScale,
-    ].join("|");
-    if (qualityKey !== this.#lastQualityKey) {
-      this.#wlurPass.updateConfig({ quality: resolvedConfig.quality });
-      this.#lastQualityKey = qualityKey;
-    }
+    const needsUpdate = !resolvedConfig.cache || !this.#cacheValid || options.contentDirty;
 
     if (needsUpdate) {
       let wlurSource = options.sourceTexture;
@@ -123,7 +101,6 @@ export class WlurOverlayPass {
 
       if (resolvedConfig.cache) {
         this.#cacheValid = true;
-        this.#cacheKey = cacheKey;
       } else {
         this.invalidateCache();
       }
@@ -144,8 +121,7 @@ export class WlurOverlayPass {
 
   destroy(): void {
     this.#wlurPass.destroy();
-    this.#config = null;
-    this.#lastQualityKey = "";
+    this.#resolvedConfig = null;
     this.#destroyTextures();
     this.invalidateCache();
   }
@@ -192,25 +168,5 @@ export class WlurOverlayPass {
 
     this.#textures = { width, height, input, output };
     return this.#textures;
-  }
-
-  #buildCacheKey(width: number, height: number, resolvedConfig: ResolvedWlurOverlayConfig): string {
-    const { params, quality } = resolvedConfig;
-    return [
-      width,
-      height,
-      quality.kernelSize,
-      quality.resolutionScale,
-      params.radius,
-      params.offset,
-      params.interpolation,
-      params.direction,
-      params.noise,
-      params.curve?.join(",") ?? "",
-      params.mixCurve?.join(",") ?? "",
-      params.tint?.color.join(",") ?? "",
-      params.tint?.amount ?? "",
-      params.tint?.curve?.join(",") ?? "",
-    ].join("|");
   }
 }

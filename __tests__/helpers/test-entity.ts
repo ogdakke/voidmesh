@@ -45,8 +45,6 @@ export interface CreateEntityOptions {
   zIndex?: number;
   /** Rotation in degrees */
   rotation?: number;
-  /** Whether entity is selected */
-  selected?: boolean;
   /** Whether entity is locked */
   locked?: boolean;
   /** Whether entity has been edited */
@@ -82,7 +80,6 @@ export interface CreateEntityOptions {
  *   id: "my-entity",
  *   shaderType: "halftone",
  *   shaderParams: { size: 20 },
- *   selected: true,
  * });
  *
  * @example
@@ -122,8 +119,7 @@ export function createTestEntity(options: CreateEntityOptions = {}): ShaderCanva
     originalSize: { width, height },
     shaderType: (options.shaderType ?? config.defaults.shader) as ShaderType,
     shaderParams,
-    textureDirty: false,
-    selected: options.selected ?? false,
+    textureRevision: 0,
     locked: options.locked ?? false,
     edited: options.edited ?? false,
   };

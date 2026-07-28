@@ -62,7 +62,6 @@ export function captureEntityState(entityId: string): Record<string, unknown> | 
     size: { ...entity.size },
     zIndex: entity.zIndex,
     rotation: entity.rotation,
-    selected: entity.selected,
     locked: entity.locked,
     edited: entity.edited,
   };
