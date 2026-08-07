@@ -95,9 +95,9 @@
   }
 
   &:is(
-    [data-active]:not([aria-disabled="true"]),
-    :focus-visible:not([aria-disabled="true"])
-  )::before {
+      [data-active]:not([aria-disabled="true"]),
+      :focus-visible:not([aria-disabled="true"])
+    )::before {
     opacity: 1;
     transform: scale(1);
 

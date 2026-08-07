@@ -13,7 +13,7 @@ export default defineConfig(({ mode }) => {
   const iconVariant = EnvAwareIcon.getIconVariant(env);
 
   return {
-    publicDir: resolve(__dirname, "public"),
+    publicDir: resolve(import.meta.dirname, "public"),
     appType: "spa",
     server: {
       allowedHosts: true,
