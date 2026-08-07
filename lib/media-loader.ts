@@ -456,8 +456,7 @@ export function createImageEntityData(
     rotation: 0,
     shaderType: config.defaults.shader,
     shaderParams: config.defaults.shaderParams,
-    textureDirty: true,
-    selected: false,
+    textureRevision: 1,
     locked: false,
     edited: false,
   };
@@ -509,8 +508,7 @@ export function createGifEntityData(
     rotation: 0,
     shaderType: config.defaults.shader,
     shaderParams: config.defaults.shaderParams,
-    textureDirty: true,
-    selected: false,
+    textureRevision: 1,
     locked: false,
     edited: false,
     playback: createPlaybackState({ isPlaying: true }), // Autoplay when added
@@ -607,8 +605,7 @@ export function createSvgEntityData(
     rotation: 0,
     shaderType: config.defaults.shader,
     shaderParams: config.defaults.shaderParams,
-    textureDirty: true,
-    selected: false,
+    textureRevision: 1,
     locked: false,
     edited: false,
   };
@@ -644,8 +641,7 @@ export function createVideoEntityData(
     rotation: 0,
     shaderType: config.defaults.shader,
     shaderParams: config.defaults.shaderParams,
-    textureDirty: true,
-    selected: false,
+    textureRevision: 1,
     locked: false,
     edited: false,
     playback: createPlaybackState({ isPlaying: true }), // Autoplay when added

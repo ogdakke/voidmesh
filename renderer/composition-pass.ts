@@ -691,7 +691,6 @@ export class CompositionPass {
         selectedEntityIds.has(entity.id),
         options.debugMode,
       );
-      entity.textureDirty = false;
     }
     const uploadBytes = entities.length * INSTANCE_STRIDE_BYTES;
     this.#device.queue.writeBuffer(buffer, 0, this.#instanceData, 0, uploadBytes);
@@ -735,7 +734,6 @@ export class CompositionPass {
         selectedEntityIds.has(entity.id),
         options.debugMode,
       );
-      entity.textureDirty = false;
     }
     const uploadBytes = entities.length * INSTANCE_STRIDE_BYTES;
     this.#device.queue.writeBuffer(buffer, 0, this.#instanceData, 0, uploadBytes);
@@ -922,7 +920,6 @@ export class CompositionPass {
 
     for (const { index, entity, isSelected } of sortedPatches) {
       this.#writeFullSceneInstance(index, entity, isSelected, key.debugMode);
-      entity.textureDirty = false;
     }
     for (let start = 0; start < sortedPatches.length;) {
       let end = start + 1;

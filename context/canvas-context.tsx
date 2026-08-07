@@ -59,6 +59,7 @@ import {
   gameLoop,
   viewportAnimation,
   perfOverlay,
+  type CanvasEntityPatch,
   type CanvasEntityUpdate,
 } from "#engine";
 import { PerfGraphRenderer } from "#renderer/perf-graph-renderer.ts";
@@ -579,7 +580,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       shaderType: renderStateRef.current.shader as ShaderType,
       shaderParams,
       mediaSource: entity.mediaSource as any,
-      textureDirty: true,
+      textureRevision: entity.textureRevision + 1,
       edited: false,
     };
 
@@ -650,13 +651,14 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     return id;
   };
 
-  const updateEntity = (id: string, updates: Partial<ShaderCanvasEntity>) => {
+  const updateEntity = (id: string, updates: CanvasEntityPatch) => {
     const entity = canvasStore.getState().entities.get(id);
     if (!entity) return;
 
     // Capture only the fields being changed (before mutation)
-    const previousValues: Partial<ShaderCanvasEntity> = {};
-    for (const key of Object.keys(updates) as (keyof ShaderCanvasEntity)[]) {
+    const previousValues: CanvasEntityPatch = {};
+    for (const key of Object.keys(updates) as (keyof ShaderCanvasEntity | "textureDirty")[]) {
+      if (key === "textureDirty") continue;
       // Deep clone to avoid reference issues
       const value = entity[key];
       // Use type assertion since we know we're copying valid entity fields
@@ -965,9 +967,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           shaderParams: { ...entity.shaderParams },
           originalPalette: entity.originalPalette,
           playback,
-          texture: undefined,
-          textureDirty: true,
-          selected: false,
+          textureRevision: entity.textureRevision + 1,
           edited: false,
         };
 
@@ -1347,7 +1347,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         ? { ...shaderParams, palette: clonedPalette }
         : shaderParams;
 
-      const updates: Partial<ShaderCanvasEntity> = {
+      const updates: CanvasEntityPatch = {
         shaderType,
         shaderParams: pastedParams,
         textureDirty: true,
@@ -1384,7 +1384,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           ? { ...shaderParams, palette: clonedPalette }
           : shaderParams;
 
-        const updates: Partial<ShaderCanvasEntity> = {
+        const updates: CanvasEntityPatch = {
           shaderType,
           shaderParams: pastedParams,
           textureDirty: true,

@@ -43,6 +43,9 @@ export class CanvasCalloutPass {
   #viewport: Viewport | null = null;
   #dpr = 1;
   #isMobile = false;
+  readonly #activeIds = new Set<string>();
+  readonly #uniformData = new Float32Array(UNIFORM_SIZE / 4);
+  readonly #resolvedPosition = { x: 0, y: 0 };
 
   constructor(device: GPUDevice, canvasFormat: GPUTextureFormat, viewportUniformBuffer: GPUBuffer) {
     this.#device = device;
@@ -108,18 +111,20 @@ export class CanvasCalloutPass {
   drawCallouts(
     pass: GPURenderPassEncoder,
     callouts: readonly CanvasCallout[],
-    entitiesById: ReadonlyMap<string, ShaderCanvasEntity>,
+    entities: readonly ShaderCanvasEntity[],
+    entityIndices: ReadonlyMap<string, number>,
   ): void {
     if (!this.#pipeline || !this.#viewport) return;
 
-    const activeIds = new Set<string>();
+    const activeIds = this.#activeIds;
+    activeIds.clear();
     for (const callout of callouts) {
       activeIds.add(callout.id);
       const entry = this.#getEntry(callout);
-      const position = this.#resolveWorldPosition(callout, entry, entitiesById);
+      const position = this.#resolveWorldPosition(callout, entry, entities, entityIndices);
       if (!position) continue;
 
-      const data = new Float32Array(UNIFORM_SIZE / 4);
+      const data = this.#uniformData;
       data[0] = position.x;
       data[1] = position.y;
       data[2] = entry.textureWidth / this.#viewport.zoom;
@@ -152,7 +157,8 @@ export class CanvasCalloutPass {
   #resolveWorldPosition(
     callout: CanvasCallout,
     entry: CalloutCacheEntry,
-    entitiesById: ReadonlyMap<string, ShaderCanvasEntity>,
+    entities: readonly ShaderCanvasEntity[],
+    entityIndices: ReadonlyMap<string, number>,
   ): { x: number; y: number } | null {
     const viewport = this.#viewport;
     if (!viewport) return null;
@@ -165,28 +171,28 @@ export class CanvasCalloutPass {
     if (callout.anchor.type === "screen") {
       const x = viewport.offset.x + (callout.anchor.position.x * this.#dpr) / viewport.zoom;
       const y = viewport.offset.y + (callout.anchor.position.y * this.#dpr) / viewport.zoom;
-      return {
-        x: x - (callout.anchor.align === "center" ? worldWidth / 2 : 0) + offsetX,
-        y: y + offsetY,
-      };
+      const result = this.#resolvedPosition;
+      result.x = x - (callout.anchor.align === "center" ? worldWidth / 2 : 0) + offsetX;
+      result.y = y + offsetY;
+      return result;
     }
 
-    const entity = entitiesById.get(callout.anchor.entityId);
+    const entityIndex = entityIndices.get(callout.anchor.entityId);
+    const entity = entityIndex === undefined ? undefined : entities[entityIndex];
     if (!entity) return null;
 
     const x = entity.position.x + entity.size.width / 2 - worldWidth / 2 + offsetX;
+    const result = this.#resolvedPosition;
+    result.x = x;
     if (callout.anchor.placement === "top") {
-      return {
-        x,
-        y: entity.position.y - (ENTITY_GAP * this.#dpr) / viewport.zoom - worldHeight + offsetY,
-      };
+      result.y =
+        entity.position.y - (ENTITY_GAP * this.#dpr) / viewport.zoom - worldHeight + offsetY;
+      return result;
     }
 
-    return {
-      x,
-      y:
-        entity.position.y + entity.size.height + (ENTITY_GAP * this.#dpr) / viewport.zoom + offsetY,
-    };
+    result.y =
+      entity.position.y + entity.size.height + (ENTITY_GAP * this.#dpr) / viewport.zoom + offsetY;
+    return result;
   }
 
   #getEntry(callout: CanvasCallout): CalloutCacheEntry {

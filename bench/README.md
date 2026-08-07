@@ -141,6 +141,16 @@ commit separately:
 bun run --bun vitest bench bench/large-selection-operations.bench.ts --run
 ```
 
+Run the bounded engine/renderer CPU hot-path benchmarks separately:
+
+```bash
+bun run --bun vitest bench bench/engine-renderer-hot-paths.bench.ts --run
+```
+
+This covers a 131k-entity interior translation followed by a full-bounds
+spatial query, a z-order-only entity update, clean dirty-state checks, and
+eviction under a 16k-entry renderer cache workload.
+
 ### Mixed-media zoom regression
 
 The zoom scenarios model the reported interactive workspace rather than a

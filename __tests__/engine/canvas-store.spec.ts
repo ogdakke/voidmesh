@@ -188,12 +188,12 @@ describe("canvasStore.seekVideo", () => {
 
   test("marks texture as dirty", () => {
     const entity = createTestEntity({ mediaType: "video", videoDuration: 100 });
-    entity.textureDirty = false;
+    const previousRevision = entity.textureRevision;
     canvasStore.addEntity(entity);
 
     canvasStore.seekVideo(entity.id, 50);
 
-    expect(entity.textureDirty).toBe(true);
+    expect(entity.textureRevision).toBe(previousRevision + 1);
   });
 });
 
@@ -323,7 +323,7 @@ describe("canvasStore.pauseVideo", () => {
     await Promise.resolve();
 
     expect(previousClose).toHaveBeenCalledOnce();
-    expect(entity.textureDirty).toBe(true);
+    expect(entity.textureRevision).toBe(1);
   });
 });
 
@@ -365,12 +365,12 @@ describe("canvasStore.seekGif", () => {
 
   test("marks texture as dirty", () => {
     const entity = createTestEntity({ mediaType: "gif", gifDuration: 2, gifFrameCount: 20 });
-    entity.textureDirty = false;
+    const previousRevision = entity.textureRevision;
     canvasStore.addEntity(entity);
 
     canvasStore.seekGif(entity.id, 1.0);
 
-    expect(entity.textureDirty).toBe(true);
+    expect(entity.textureRevision).toBe(previousRevision + 1);
   });
 });
 

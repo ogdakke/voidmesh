@@ -857,7 +857,7 @@ async function createEntities(scenario: BenchScenario): Promise<BenchEntitySet> 
         entities: [createdEntity],
         beforeFrame: (frameIndex) => {
           synthetic.drawFrame(frameIndex);
-          createdEntity.textureDirty = true;
+          createdEntity.textureRevision++;
         },
         cleanup: () => {
           disposeBenchCleanupActions(synthetic.cleanup, () =>
@@ -917,7 +917,7 @@ async function createEntities(scenario: BenchScenario): Promise<BenchEntitySet> 
       beforeFrame:
         scenario.dirtyMode === "texture"
           ? () => {
-              for (const entity of entities) entity.textureDirty = true;
+              for (const entity of entities) entity.textureRevision++;
             }
           : undefined,
       cleanup: () => disposeBenchEntities(entities),
@@ -1040,7 +1040,7 @@ async function createZoomStressEntitySet(
               syntheticVideos[index]!.drawFrame(videoFrameIndex + index * 3);
             }
             for (const entity of entities) {
-              if (entity.mediaSource.type === MediaType.video) entity.textureDirty = true;
+              if (entity.mediaSource.type === MediaType.video) entity.textureRevision++;
             }
           }
         : undefined,
@@ -1334,8 +1334,7 @@ function createEntity(options: CreateEntityOptions): ShaderCanvasEntity {
         options.params.glass?.kind === GlassKind.flowing &&
         options.params.timeAutoPlay !== false,
     ),
-    textureDirty: true,
-    selected: false,
+    textureRevision: 1,
     locked: false,
     edited: false,
   };
@@ -1383,6 +1382,7 @@ function createRenderState(
     entityVersion: 0,
     geometryVersion: 0,
     selectionVersion: selectedEntityIds.size > 0 ? 1 : 0,
+    dirtyMask: dirty ? 0xffff_ffff : 0,
     dirtyEntityIds: new Set(),
     selectedEntityIds,
     debugMode,
@@ -1486,7 +1486,11 @@ async function runFrames(params: {
     if (parameterTargetIndex >= 0) {
       const previous = params.entities[parameterTargetIndex]!;
       const shaderParams = { ...previous.shaderParams, size: 1 + (frameIndex % 24) * 0.125 };
-      const next = { ...previous, shaderParams, textureDirty: true };
+      const next = {
+        ...previous,
+        shaderParams,
+        textureRevision: previous.textureRevision + 1,
+      };
       params.entities[parameterTargetIndex] = next;
       dirtyEntityIds.clear();
       dirtyEntityIds.add(next.id);
@@ -1661,7 +1665,7 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
         await benchRenderer.waitForGPU();
         for (const entity of entitySet.entities) {
           benchRenderer.removeEntityTexture(entity.id);
-          entity.textureDirty = true;
+          entity.textureRevision++;
         }
       }
       const startFrameIndex = frameIndex;

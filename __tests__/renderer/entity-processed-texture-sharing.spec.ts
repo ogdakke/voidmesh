@@ -64,7 +64,7 @@ describe("EntityTexturePipeline processed image sharing", () => {
       id: "processed-second",
       shaderParams: structuredClone(first.shaderParams),
       mediaSource: { type: "image", asset: first.mediaSource.asset },
-      textureDirty: true,
+      textureRevision: first.textureRevision + 1,
     };
 
     const sourceTexture = createTexture();
@@ -104,7 +104,6 @@ describe("EntityTexturePipeline processed image sharing", () => {
       processedTextureCount: 1,
       processedTextureAllocations: 1,
     });
-    first.textureDirty = false;
     expect(
       pipeline.getReusableStaticCompositionSource(
         first,
@@ -115,14 +114,14 @@ describe("EntityTexturePipeline processed image sharing", () => {
     expect(
       pipeline.getReusableStaticCompositionSource(first, { width: 100, height: 75 }, false),
     ).toBeNull();
-    first.textureDirty = true;
+    first.textureRevision++;
     expect(
       pipeline.getReusableStaticCompositionSource(
         first,
         { width: processedTexture.width, height: processedTexture.height },
         false,
       ),
-    ).toBeNull();
+    ).toEqual(firstResult);
 
     pipeline.removeEntity(first.id);
     expect(processedTexture.destroy).not.toHaveBeenCalled();
@@ -143,7 +142,7 @@ describe("EntityTexturePipeline processed image sharing", () => {
       id: "lod-shared-second",
       shaderParams: structuredClone(first.shaderParams),
       mediaSource: { type: "image", asset: first.mediaSource.asset },
-      textureDirty: true,
+      textureRevision: first.textureRevision + 1,
     };
 
     const detailSource = createTexture(200, 150);
@@ -157,8 +156,6 @@ describe("EntityTexturePipeline processed image sharing", () => {
 
     pipeline.renderEntityToTexture(first, encoder);
     pipeline.renderEntityToTexture(second, encoder);
-    first.textureDirty = false;
-    second.textureDirty = false;
 
     // A shared demotion is one small render followed by cache rebinds, so it can safely
     // start while the viewport is still moving.
@@ -202,7 +199,7 @@ describe("EntityTexturePipeline processed image sharing", () => {
 
     entity.shaderParams = structuredClone(entity.shaderParams);
     entity.shaderParams.size += 1;
-    entity.textureDirty = true;
+    entity.textureRevision++;
 
     expect(pipeline.renderEntityToTexture(entity, {} as GPUCommandEncoder)).toEqual({
       kind: "texture",
@@ -228,13 +225,11 @@ describe("EntityTexturePipeline processed image sharing", () => {
     const device = createDevice([detailTexture, overviewTexture]);
     const pipeline = createPipeline(device);
 
-    entity.textureDirty = true;
+    entity.textureRevision++;
     pipeline.renderEntityToTexture(entity, {} as GPUCommandEncoder);
-    entity.textureDirty = false;
 
-    entity.textureDirty = true;
+    entity.textureRevision++;
     pipeline.renderEntityToTexture(entity, {} as GPUCommandEncoder, { width: 100, height: 75 });
-    entity.textureDirty = false;
 
     expect(pipeline.renderEntityToTexture(entity, {} as GPUCommandEncoder)).toEqual({
       kind: "texture",
@@ -257,16 +252,14 @@ describe("EntityTexturePipeline processed image sharing", () => {
     const device = createDevice(textures);
     const pipeline = createPipeline(device);
 
-    entity.textureDirty = true;
+    entity.textureRevision++;
     pipeline.renderEntityToTexture(entity, {} as GPUCommandEncoder);
-    entity.textureDirty = false;
 
-    entity.textureDirty = true;
+    entity.textureRevision++;
     pipeline.renderEntityToTexture(entity, {} as GPUCommandEncoder, { width: 100, height: 75 });
-    entity.textureDirty = false;
 
     pipeline.renderEntityToTexture(entity, {} as GPUCommandEncoder);
-    entity.textureDirty = true;
+    entity.textureRevision++;
     pipeline.renderEntityToTexture(entity, {} as GPUCommandEncoder, { width: 100, height: 75 });
 
     expect(device.createTexture).toHaveBeenCalledTimes(4);
@@ -279,7 +272,7 @@ describe("EntityTexturePipeline processed image sharing", () => {
     const entity = createTestEntity({ id: "video-demotion", mediaType: "video" });
     const pipeline = createPipeline(createDevice([createTexture(200, 150)]));
 
-    entity.textureDirty = true;
+    entity.textureRevision++;
     pipeline.renderEntityToTexture(entity, {} as GPUCommandEncoder);
     pipeline.beginFrame(false);
 

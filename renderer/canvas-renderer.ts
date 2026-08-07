@@ -94,6 +94,7 @@ export class InfiniteCanvasRenderer {
   #entityTexturePipeline: EntityTexturePipeline | null = null;
   readonly #protectedFullSceneTextureOwners = new Set<string>();
   readonly #deferredEntityTextureRemovals = new Set<string>();
+  readonly #debugEntities: ShaderCanvasEntity[] = [];
 
   // Export service for rendering entities to blobs/bitmaps
   #exportService: ExportService | null = null;
@@ -118,6 +119,11 @@ export class InfiniteCanvasRenderer {
   #mixedBatchLodRefreshStarted = false;
   readonly #visibilityViewportBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
   readonly #visibilityEntityBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  #visibilityOffsetX = Number.NaN;
+  #visibilityOffsetY = Number.NaN;
+  #visibilityZoom = Number.NaN;
+  #visibilityWidth = Number.NaN;
+  #visibilityHeight = Number.NaN;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -141,15 +147,30 @@ export class InfiniteCanvasRenderer {
     const height = Math.floor(this.#cachedCanvasHeight * dpr);
     if (width <= 0 || height <= 0) return true;
 
-    return boundsIntersect(
-      getRotatedAABB(entity.position, entity.size, entity.rotation, this.#visibilityEntityBounds),
+    if (
+      viewport.offset.x !== this.#visibilityOffsetX ||
+      viewport.offset.y !== this.#visibilityOffsetY ||
+      viewport.zoom !== this.#visibilityZoom ||
+      width !== this.#visibilityWidth ||
+      height !== this.#visibilityHeight
+    ) {
       getViewportWorldBounds(
         viewport,
         width,
         height,
         config.canvas.cullingBufferFraction,
         this.#visibilityViewportBounds,
-      ),
+      );
+      this.#visibilityOffsetX = viewport.offset.x;
+      this.#visibilityOffsetY = viewport.offset.y;
+      this.#visibilityZoom = viewport.zoom;
+      this.#visibilityWidth = width;
+      this.#visibilityHeight = height;
+    }
+
+    return boundsIntersect(
+      getRotatedAABB(entity.position, entity.size, entity.rotation, this.#visibilityEntityBounds),
+      this.#visibilityViewportBounds,
     );
   }
 
@@ -656,7 +677,8 @@ export class InfiniteCanvasRenderer {
       this.#canvasCalloutPass.drawCallouts(
         calloutPass,
         state.canvasCallouts,
-        new Map(entities.map((entity) => [entity.id, entity])),
+        entities,
+        state.entityIndices,
       );
       calloutPass.end();
     }
@@ -683,6 +705,8 @@ export class InfiniteCanvasRenderer {
     }
 
     if (import.meta.env.DEV && state.debugView !== "none" && this.#canvasDebugPass) {
+      this.#debugEntities.length = 0;
+      for (const item of entityDrawItems) this.#debugEntities.push(item.entity);
       this.#canvasDebugPass.encode({
         encoder,
         targetView: sceneTargetView,
@@ -690,7 +714,7 @@ export class InfiniteCanvasRenderer {
         viewport,
         width,
         height,
-        entities: entityDrawItems.map((item) => item.entity),
+        entities: this.#debugEntities,
         spatialIndex: state.entitySpatialIndex,
       });
     }

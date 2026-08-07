@@ -67,13 +67,13 @@ export class FrameLoop {
   #renderer: CanvasRendererPort | null = null;
   #running = false;
   #animationFrameId: number | null = null;
+  #unsubscribeRenderInvalidation: (() => void) | null = null;
   #videoFrameTrackers = new Map<string, VideoFrameTracker>();
   #videoFrameTrackerGeneration = 0;
   #firstFrameRendered = false;
   #lastFrameTime: number | null = null;
   #activeEntityVersion = -1;
-  #activeEntityCount = 0;
-  readonly #classifiedEntityIds = new Set<string>();
+  #activeMembershipVersion = -1;
   #playingGifs = new Map<string, ShaderCanvasEntity>();
   #playingVideos = new Map<string, ShaderCanvasEntity>();
   #continuousShaderEntities = new Map<string, ShaderCanvasEntity>();
@@ -92,17 +92,24 @@ export class FrameLoop {
     );
     this.#firstFrameRendered = false;
     this.#activeEntityVersion = -1;
+    this.#activeMembershipVersion = -1;
+    this.requestFrame();
   }
 
   start(): void {
     if (this.#running) return;
     this.#running = true;
+    this.#unsubscribeRenderInvalidation = canvasStore.subscribeRenderInvalidation(
+      this.requestFrame,
+    );
     this.#tick();
   }
 
   stop(): void {
     this.#running = false;
     this.#lastFrameTime = null;
+    this.#unsubscribeRenderInvalidation?.();
+    this.#unsubscribeRenderInvalidation = null;
     this.#clearVideoFrameTrackers();
     if (this.#animationFrameId !== null) {
       cancelAnimationFrame(this.#animationFrameId);
@@ -110,8 +117,14 @@ export class FrameLoop {
     }
   }
 
+  requestFrame = (): void => {
+    if (!this.#running || this.#animationFrameId !== null) return;
+    this.#animationFrameId = requestAnimationFrame(this.#tick);
+  };
+
   #tick = (): void => {
     if (!this.#running) return;
+    this.#animationFrameId = null;
 
     // 1. Compute delta time for GIF playback advancement
     const now = performance.now();
@@ -166,6 +179,7 @@ export class FrameLoop {
       this.#renderer?.hasPendingRenderWork();
 
     // 8. Render only when needed (skip idle frames)
+    let renderedSuccessfully = false;
     if (this.#renderer?.isReady && needsRender) {
       // Snapshot the O(entity count) render array only after deciding that a frame is needed.
       const renderState = canvasStore.getRenderState();
@@ -179,6 +193,7 @@ export class FrameLoop {
       try {
         this.#renderer.render(renderState);
         this.#firstFrameRendered = true;
+        renderedSuccessfully = true;
         this.#deps.perf.onRender(this.#renderer.getFrameStats(), debugMode);
       } catch (error) {
         this.#callbacks.onRenderError(error);
@@ -186,14 +201,24 @@ export class FrameLoop {
     }
 
     // 10. Clear dirty flags
-    canvasStore.clearDirtyFlags();
+    if (renderedSuccessfully) canvasStore.clearDirtyFlags();
 
     // 11. Run frame-end work after the final touch-driven viewport has passed
     // through this render tick.
     this.#callbacks.onAfterFrame();
 
-    // 12. Schedule next frame
-    this.#animationFrameId = requestAnimationFrame(this.#tick);
+    if (
+      this.#playingGifs.size > 0 ||
+      this.#playingVideos.size > 0 ||
+      this.#continuousShaderEntities.size > 0 ||
+      this.#deps.scheduler.hasActive ||
+      this.#callbacks.isPointerDragging() ||
+      this.#callbacks.isDragSelectActive() ||
+      this.#renderer?.hasPendingRenderWork() ||
+      canvasStore.hasRenderChanges()
+    ) {
+      this.requestFrame();
+    }
   };
 
   #refreshActiveEntities(): void {
@@ -202,19 +227,11 @@ export class FrameLoop {
 
     const hasActiveSnapshot = this.#activeEntityVersion >= 0;
     this.#activeEntityVersion = state.entityVersion;
-    let canPatch =
+    const canPatch =
       hasActiveSnapshot &&
-      this.#activeEntityCount === state.entities.size &&
+      this.#activeMembershipVersion === state.membershipVersion &&
       state.entitiesDirty.size > 0;
-    if (canPatch) {
-      for (const entityId of state.entitiesDirty) {
-        if (!this.#classifiedEntityIds.has(entityId)) {
-          canPatch = false;
-          break;
-        }
-      }
-    }
-    this.#activeEntityCount = state.entities.size;
+    this.#activeMembershipVersion = state.membershipVersion;
     if (canPatch) {
       for (const entityId of state.entitiesDirty) {
         this.#playingGifs.delete(entityId);
@@ -229,9 +246,7 @@ export class FrameLoop {
     this.#playingGifs.clear();
     this.#playingVideos.clear();
     this.#continuousShaderEntities.clear();
-    this.#classifiedEntityIds.clear();
     for (const entity of state.entities.values()) {
-      this.#classifiedEntityIds.add(entity.id);
       this.#classifyActiveEntity(entity);
     }
   }

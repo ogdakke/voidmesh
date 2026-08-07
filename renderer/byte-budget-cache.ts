@@ -36,6 +36,10 @@ export class ByteBudgetCache {
     const entry = this.#entries.get(key);
     if (!entry) throw new Error(`Byte-budget cache does not contain ${key}`);
     entry.lastUsedFrame = this.#currentFrame;
+    // Map iteration order is the LRU queue. Reinsert in O(1) instead of sorting
+    // the entire cache when pressure eventually requires eviction.
+    this.#entries.delete(key);
+    this.#entries.set(key, entry);
   }
 
   endFrame(): void {
@@ -62,12 +66,11 @@ export class ByteBudgetCache {
   #evictToBudget(): void {
     if (this.#residentBytes <= this.#budgetBytes) return;
 
-    const candidates = [...this.#entries.entries()]
-      .filter(([, entry]) => entry.lastUsedFrame !== this.#currentFrame)
-      .sort((a, b) => a[1].lastUsedFrame - b[1].lastUsedFrame);
-
-    for (const [key, entry] of candidates) {
+    for (const [key, entry] of this.#entries) {
       if (this.#residentBytes <= this.#budgetBytes) break;
+      // Current-frame entries were most recently reinserted at the tail. Once
+      // one is reached, every remaining entry is protected for this frame.
+      if (entry.lastUsedFrame === this.#currentFrame) break;
       this.#entries.delete(key);
       this.#residentBytes -= entry.byteSize;
       this.#evictions++;

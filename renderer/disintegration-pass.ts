@@ -25,6 +25,8 @@ export class DisintegrationPass {
   readonly #compositionPass: CompositionPass;
   readonly #particleSystem: DisintegrationParticleSystem;
   readonly #overlays = new Map<string, DisintegrationOverlayGpu>();
+  readonly #liveIds = new Set<string>();
+  readonly #completedIds: string[] = [];
 
   constructor(options: DisintegrationPassOptions) {
     this.#device = options.device;
@@ -85,8 +87,11 @@ export class DisintegrationPass {
 
     // Clean up GPU resources for overlays whose animations have completed.
     // The engine snapshot omits overlays once their animation has completed.
-    const liveIds = new Set(overlays.map((overlay) => overlay.id));
-    const completedIds: string[] = [];
+    const liveIds = this.#liveIds;
+    liveIds.clear();
+    for (const overlay of overlays) liveIds.add(overlay.id);
+    const completedIds = this.#completedIds;
+    completedIds.length = 0;
     for (const id of this.#overlays.keys()) {
       if (!liveIds.has(id)) {
         completedIds.push(id);

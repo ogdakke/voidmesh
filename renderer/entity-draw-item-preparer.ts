@@ -253,7 +253,7 @@ export class EntityDrawItemPreparer {
     for (const entity of visibleEntities) {
       // Check if texture needs regeneration. Animated media is marked dirty by the
       // game loop only when the decoded frame changes.
-      const textureWasDirty = !!entity.textureDirty;
+      const textureWasDirty = options.dirtyEntityIds.has(entity.id);
       const needsContinuousRender = this.#texturePipeline.needsContinuousRenderForEntity(entity);
       if (textureWasDirty || needsContinuousRender) {
         hasAnimatingContent = true;
@@ -294,9 +294,6 @@ export class EntityDrawItemPreparer {
         );
       }
       if (!compositionSource) continue;
-
-      // Clear dirty flag
-      entity.textureDirty = false;
 
       // Determine whether this entity is selected.
       const isSelected = allEntitiesSelected || selectedEntityIds.has(entity.id);
@@ -454,8 +451,6 @@ export class EntityDrawItemPreparer {
       );
     }
     if (compositionSource?.kind !== "texture") return null;
-    representative.textureDirty = false;
-
     const key = this.#fullSceneBatchKey ?? {
       entityVersion,
       geometryVersion,
@@ -822,7 +817,6 @@ export class EntityDrawItemPreparer {
       }
       if (source?.kind !== "texture") return false;
 
-      run.representative.textureDirty = false;
       run.texture = source.texture;
       if (source.texture !== previousTexture) {
         previousTexture = source.texture;
@@ -911,7 +905,6 @@ export class EntityDrawItemPreparer {
         return null;
       }
 
-      entity.textureDirty = false;
       if (source.texture !== previousTexture) {
         previousTexture = source.texture;
         fullTextureRunCount++;

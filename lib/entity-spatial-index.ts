@@ -80,6 +80,12 @@ export class EntitySpatialIndex {
     for (const entityId of entityIds) {
       const entry = this.#entries.get(entityId);
       if (!entry) continue;
+      if (
+        !this.#overallBoundsDirty &&
+        movesExistingBoundsEdgeInward(entry.bounds, this.#overallBounds, delta)
+      ) {
+        this.#overallBoundsDirty = true;
+      }
       entry.bounds.x += delta.x;
       entry.bounds.y += delta.y;
       const nextCellX = this.#cellCoordinate(
@@ -96,9 +102,9 @@ export class EntitySpatialIndex {
         entry.cellY = nextCellY;
         this.#addToCell(entry);
       }
+      if (!this.#overallBoundsDirty) expandBounds(this.#overallBounds, entry.bounds, false);
       translatedCount++;
     }
-    if (translatedCount > 0) this.#overallBoundsDirty = true;
     return translatedCount;
   }
 
@@ -316,6 +322,19 @@ function touchesBoundsEdge(inner: Bounds, outer: Bounds): boolean {
     inner.y <= outer.y ||
     inner.x + inner.width >= outer.x + outer.width ||
     inner.y + inner.height >= outer.y + outer.height
+  );
+}
+
+function movesExistingBoundsEdgeInward(
+  inner: Bounds,
+  outer: Bounds,
+  delta: { x: number; y: number },
+): boolean {
+  return (
+    (delta.x > 0 && inner.x <= outer.x) ||
+    (delta.x < 0 && inner.x + inner.width >= outer.x + outer.width) ||
+    (delta.y > 0 && inner.y <= outer.y) ||
+    (delta.y < 0 && inner.y + inner.height >= outer.y + outer.height)
   );
 }
 
