@@ -223,6 +223,14 @@
     opacity: 0.8;
   }
 
+  .select-group-label {
+    font-size: var(--text-sm);
+    line-height: 1rem;
+    opacity: 0.8;
+    padding-inline: var(--spacing-2) 0;
+    padding-block: var(--spacing);
+  }
+
   .select-scroll_arrow {
     width: 100%;
     background: var(--input-bg);
