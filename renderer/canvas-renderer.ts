@@ -656,7 +656,10 @@ export class InfiniteCanvasRenderer {
       this.#canvasCalloutPass.drawCallouts(
         calloutPass,
         state.canvasCallouts,
-        new Map(entities.map((entity) => [entity.id, entity])),
+        entities,
+        state.entityIndices,
+        state.actionLayer,
+        state.dragVisual,
       );
       calloutPass.end();
     }

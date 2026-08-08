@@ -1,4 +1,5 @@
 import type { CanvasCallout, ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
+import type { ActionLayerRenderState, DragVisualRenderState } from "#engine";
 import shaderSource from "./entity-label.wgsl?raw";
 
 const FONT_SIZE_DESKTOP = 15;
@@ -30,6 +31,13 @@ interface CalloutCacheEntry {
   rasterState: CalloutRasterState;
 }
 
+interface EntityVisualBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export class CanvasCalloutPass {
   #device: GPUDevice;
   #canvasFormat: GPUTextureFormat;
@@ -40,6 +48,10 @@ export class CanvasCalloutPass {
   #canvas = new OffscreenCanvas(1, 1);
   #ctx = this.#canvas.getContext("2d")!;
   #cache = new Map<string, CalloutCacheEntry>();
+  readonly #activeIds = new Set<string>();
+  readonly #uniformData = new Float32Array(UNIFORM_SIZE / 4);
+  readonly #position = { x: 0, y: 0 };
+  readonly #entityVisualBounds: EntityVisualBounds = { x: 0, y: 0, width: 0, height: 0 };
   #viewport: Viewport | null = null;
   #dpr = 1;
   #isMobile = false;
@@ -108,18 +120,29 @@ export class CanvasCalloutPass {
   drawCallouts(
     pass: GPURenderPassEncoder,
     callouts: readonly CanvasCallout[],
-    entitiesById: ReadonlyMap<string, ShaderCanvasEntity>,
+    entities: readonly ShaderCanvasEntity[],
+    entityIndices: ReadonlyMap<string, number>,
+    actionLayer: ActionLayerRenderState,
+    dragVisual: DragVisualRenderState,
   ): void {
     if (!this.#pipeline || !this.#viewport) return;
 
-    const activeIds = new Set<string>();
+    const activeIds = this.#activeIds;
+    activeIds.clear();
     for (const callout of callouts) {
       activeIds.add(callout.id);
       const entry = this.#getEntry(callout);
-      const position = this.#resolveWorldPosition(callout, entry, entitiesById);
+      const position = this.#resolveWorldPosition(
+        callout,
+        entry,
+        entities,
+        entityIndices,
+        actionLayer,
+        dragVisual,
+      );
       if (!position) continue;
 
-      const data = new Float32Array(UNIFORM_SIZE / 4);
+      const data = this.#uniformData;
       data[0] = position.x;
       data[1] = position.y;
       data[2] = entry.textureWidth / this.#viewport.zoom;
@@ -152,7 +175,10 @@ export class CanvasCalloutPass {
   #resolveWorldPosition(
     callout: CanvasCallout,
     entry: CalloutCacheEntry,
-    entitiesById: ReadonlyMap<string, ShaderCanvasEntity>,
+    entities: readonly ShaderCanvasEntity[],
+    entityIndices: ReadonlyMap<string, number>,
+    actionLayer: ActionLayerRenderState,
+    dragVisual: DragVisualRenderState,
   ): { x: number; y: number } | null {
     const viewport = this.#viewport;
     if (!viewport) return null;
@@ -165,28 +191,34 @@ export class CanvasCalloutPass {
     if (callout.anchor.type === "screen") {
       const x = viewport.offset.x + (callout.anchor.position.x * this.#dpr) / viewport.zoom;
       const y = viewport.offset.y + (callout.anchor.position.y * this.#dpr) / viewport.zoom;
-      return {
-        x: x - (callout.anchor.align === "center" ? worldWidth / 2 : 0) + offsetX,
-        y: y + offsetY,
-      };
+      this.#position.x = x - (callout.anchor.align === "center" ? worldWidth / 2 : 0) + offsetX;
+      this.#position.y = y + offsetY;
+      return this.#position;
     }
 
-    const entity = entitiesById.get(callout.anchor.entityId);
+    const entityIndex = entityIndices.get(callout.anchor.entityId);
+    const entity = entityIndex === undefined ? undefined : entities[entityIndex];
     if (!entity) return null;
 
-    const x = entity.position.x + entity.size.width / 2 - worldWidth / 2 + offsetX;
+    const bounds = resolveEntityVisualBounds(
+      entity,
+      actionLayer,
+      dragVisual,
+      this.#dpr,
+      viewport.zoom,
+      this.#entityVisualBounds,
+    );
+    const x = bounds.x + bounds.width / 2 - worldWidth / 2 + offsetX;
+    this.#position.x = x;
     if (callout.anchor.placement === "top") {
-      return {
-        x,
-        y: entity.position.y - (ENTITY_GAP * this.#dpr) / viewport.zoom - worldHeight + offsetY,
-      };
+      this.#position.y =
+        bounds.y - (ENTITY_GAP * this.#dpr) / viewport.zoom - worldHeight + offsetY;
+      return this.#position;
     }
 
-    return {
-      x,
-      y:
-        entity.position.y + entity.size.height + (ENTITY_GAP * this.#dpr) / viewport.zoom + offsetY,
-    };
+    this.#position.y =
+      bounds.y + bounds.height + (ENTITY_GAP * this.#dpr) / viewport.zoom + offsetY;
+    return this.#position;
   }
 
   #getEntry(callout: CanvasCallout): CalloutCacheEntry {
@@ -324,6 +356,31 @@ export class CanvasCalloutPass {
 
     return { width: canvasWidth, height: canvasHeight };
   }
+}
+
+export function resolveEntityVisualBounds(
+  entity: ShaderCanvasEntity,
+  actionLayer: ActionLayerRenderState,
+  dragVisual: DragVisualRenderState,
+  dpr: number,
+  viewportZoom: number,
+  out: EntityVisualBounds = { x: 0, y: 0, width: 0, height: 0 },
+): EntityVisualBounds {
+  const isActionLayerEntity = actionLayer.active && actionLayer.entityIds.has(entity.id);
+  const isDragVisualEntity = dragVisual.active && dragVisual.entityIds.has(entity.id);
+  const scale = isDragVisualEntity ? dragVisual.scale : 1;
+  const actionOffsetX = isActionLayerEntity ? (actionLayer.entityOffset.x * dpr) / viewportZoom : 0;
+  const actionOffsetY = isActionLayerEntity ? (actionLayer.entityOffset.y * dpr) / viewportZoom : 0;
+  const dragOffsetX = isDragVisualEntity && dragVisual.appliesToSelection ? dragVisual.offset.x : 0;
+  const dragOffsetY = isDragVisualEntity && dragVisual.appliesToSelection ? dragVisual.offset.y : 0;
+  const width = entity.size.width * scale;
+  const height = entity.size.height * scale;
+
+  out.x = entity.position.x + actionOffsetX + dragOffsetX + (entity.size.width - width) / 2;
+  out.y = entity.position.y + actionOffsetY + dragOffsetY + (entity.size.height - height) / 2;
+  out.width = width;
+  out.height = height;
+  return out;
 }
 
 function rasterStatesEqual(a: CalloutRasterState, b: CalloutRasterState): boolean {
