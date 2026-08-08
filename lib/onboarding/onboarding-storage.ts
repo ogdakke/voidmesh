@@ -1,4 +1,4 @@
-import { storage } from "./preferences.ts";
+import { storage } from "../preferences.ts";
 import {
   ALL_ONBOARDING_STEP_IDS,
   ONBOARDING_RESET_EVENT,

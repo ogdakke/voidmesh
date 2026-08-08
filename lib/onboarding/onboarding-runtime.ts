@@ -25,11 +25,21 @@ export function completeOnboardingStepFromEvent(stepId: OnboardingStepIdType): v
 export function completeOnboardingStarterSelectionFromEvent(
   selectedEntityIds: ReadonlySet<string> | readonly string[],
 ): void {
-  if (!starterEntityId) return;
-  for (const id of selectedEntityIds) {
-    if (id === starterEntityId) {
-      completeOnboardingStepFromEvent(OnboardingStepId.selectStarter);
-      return;
-    }
+  if (!includesStarterEntity(selectedEntityIds)) return;
+  completeOnboardingStepFromEvent(OnboardingStepId.selectStarter);
+}
+
+export function completeOnboardingStarterDeletionFromEvent(
+  deletedEntityIds: ReadonlySet<string> | readonly string[],
+): void {
+  if (!includesStarterEntity(deletedEntityIds)) return;
+  completeOnboardingStepFromEvent(OnboardingStepId.deleteOnDesktop);
+}
+
+function includesStarterEntity(entityIds: ReadonlySet<string> | readonly string[]): boolean {
+  if (!starterEntityId) return false;
+  for (const id of entityIds) {
+    if (id === starterEntityId) return true;
   }
+  return false;
 }

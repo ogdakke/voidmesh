@@ -87,6 +87,7 @@ import { downloadBlob } from "#lib/download.ts";
 import { deepMerge } from "#lib/deep-merge.ts";
 import { applyShaderDefaults } from "#lib/shader-defaults.ts";
 import { extractPaletteFromImage } from "#lib/palette-extraction/index.ts";
+import { completeOnboardingStarterDeletionFromEvent } from "#lib/onboarding/onboarding-runtime.ts";
 import { CanvasLensing, ColorSpace } from "#types/enums.ts";
 import type { PartialDeep } from "type-fest";
 import {
@@ -1820,10 +1821,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
     if (entities.length === 1) {
       removeEntity(entities[0]!.id);
-      return;
+    } else {
+      removeEntityBatch(entities);
     }
 
-    removeEntityBatch(entities);
+    completeOnboardingStarterDeletionFromEvent(entities.map((entity) => entity.id));
   };
 
   const copySelectionImage = async (e?: KeyboardEvent) => {

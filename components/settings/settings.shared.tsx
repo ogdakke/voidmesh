@@ -2,7 +2,7 @@ import { NavArrowRight } from "iconoir-react";
 import { Checkbox } from "#ui/checkbox/index.tsx";
 import { NativeSelect, NativeSelectOption } from "#ui/native-select/index.ts";
 import { useCanvasCommands, useCanvasPreferences } from "#context/use-canvas.ts";
-import { resetOnboardingProgress } from "#lib/onboarding-storage.ts";
+import { resetOnboardingProgress } from "#lib/onboarding/onboarding-storage.ts";
 import { shareOrCopyUrl } from "./share.ts";
 import { CanvasLensing } from "#types/enums.ts";
 import "#components/ui/field/field.css";

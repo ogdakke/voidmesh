@@ -4,8 +4,8 @@ import { useCanvasCommands, useCanvasPreferences } from "#context/use-canvas.ts"
 import { useEntityDrag } from "#hooks/use-entity-drag.ts";
 import { useActionLayer } from "#hooks/use-action-layer.ts";
 import { haptic } from "#lib/haptic.ts";
-import { completeOnboardingStepFromEvent } from "#lib/onboarding-runtime.ts";
-import { OnboardingStepId } from "#lib/onboarding.ts";
+import { completeOnboardingStepFromEvent } from "#lib/onboarding/onboarding-runtime.ts";
+import { OnboardingStepId } from "#lib/onboarding/onboarding.ts";
 import "./delete-drop-zone.css";
 
 /** Pixels around the drop zone that trigger proximity feedback */

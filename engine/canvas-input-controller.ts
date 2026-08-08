@@ -13,8 +13,8 @@ import { perfOverlay } from "./perf-overlay.ts";
 import { viewportAnimation } from "./viewport-animation.ts";
 import { scheduler } from "#lib/animation-scheduler.ts";
 import { haptic } from "#lib/haptic.ts";
-import { OnboardingStepId } from "#lib/onboarding.ts";
-import { completeOnboardingStepFromEvent } from "#lib/onboarding-runtime.ts";
+import { OnboardingStepId } from "#lib/onboarding/onboarding.ts";
+import { completeOnboardingStepFromEvent } from "#lib/onboarding/onboarding-runtime.ts";
 import { EntityDragController } from "./entity-drag-controller.ts";
 import {
   CanvasSelectionController,

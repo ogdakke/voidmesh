@@ -5,6 +5,7 @@ export const ONBOARDING_RESET_EVENT = "voidmesh:onboarding-reset";
 
 export const OnboardingStepId = {
   selectStarter: "select-starter",
+  deleteOnDesktop: "delete-on-desktop",
   openActionLayer: "open-action-layer",
   hoverAction: "hover-action",
   deleteFromActionLayer: "delete-from-action-layer",
@@ -28,6 +29,7 @@ export interface OnboardingRuntime {
 
 export const ALL_ONBOARDING_STEP_IDS: readonly OnboardingStepId[] = [
   OnboardingStepId.selectStarter,
+  OnboardingStepId.deleteOnDesktop,
   OnboardingStepId.openActionLayer,
   OnboardingStepId.hoverAction,
   OnboardingStepId.deleteFromActionLayer,
@@ -44,8 +46,14 @@ export function createDefaultOnboardingProgress(): OnboardingProgress {
 export function getAvailableOnboardingStepIds(
   supportsActionLayer: boolean,
 ): readonly OnboardingStepId[] {
-  if (supportsActionLayer) return ALL_ONBOARDING_STEP_IDS;
-  return [OnboardingStepId.selectStarter];
+  if (supportsActionLayer)
+    return [
+      OnboardingStepId.selectStarter,
+      OnboardingStepId.openActionLayer,
+      OnboardingStepId.hoverAction,
+      OnboardingStepId.deleteFromActionLayer,
+    ];
+  return [OnboardingStepId.selectStarter, OnboardingStepId.deleteOnDesktop];
 }
 
 export function isOnboardingSkipped(progress: OnboardingProgress): boolean {
@@ -92,6 +100,22 @@ export function buildOnboardingCallouts(
     callouts.push({
       id: OnboardingStepId.selectStarter,
       text: "Select this image to edit its effects",
+      anchor: {
+        type: "entity",
+        entityId: runtime.starterEntityId,
+        placement: "top",
+      },
+    });
+  }
+
+  if (
+    !runtime.supportsActionLayer &&
+    completed.has(OnboardingStepId.selectStarter) &&
+    !completed.has(OnboardingStepId.deleteOnDesktop)
+  ) {
+    callouts.push({
+      id: OnboardingStepId.deleteOnDesktop,
+      text: "Delete by pressing backspace",
       anchor: {
         type: "entity",
         entityId: runtime.starterEntityId,

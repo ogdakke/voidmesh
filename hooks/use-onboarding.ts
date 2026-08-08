@@ -11,12 +11,15 @@ import {
   OnboardingStepId,
   skipCurrentOnboardingVersion,
   type OnboardingProgress,
-} from "#lib/onboarding.ts";
-import { getOnboardingProgress, setOnboardingProgress } from "#lib/onboarding-storage.ts";
+} from "#lib/onboarding/onboarding.ts";
+import {
+  getOnboardingProgress,
+  setOnboardingProgress,
+} from "#lib/onboarding/onboarding-storage.ts";
 import {
   setOnboardingStarterEntityId,
   setOnboardingStepCompleteHandler,
-} from "#lib/onboarding-runtime.ts";
+} from "#lib/onboarding/onboarding-runtime.ts";
 import { logger } from "#lib/client.logger.ts";
 import { loadMediaFromBlob } from "#lib/media-loader.ts";
 import { useCanvasCommands, useCanvasInteraction, useCanvasSelector } from "#context/use-canvas.ts";
@@ -77,9 +80,10 @@ export function useOnboarding({ containerRef, ready }: UseOnboardingOptions): Us
 
   useEffect(() => {
     return setOnboardingStepCompleteHandler((stepId) => {
+      if (!getAvailableOnboardingStepIds(isMobile).includes(stepId)) return;
       setProgress((current) => completeStepAndPersist(current, stepId));
     });
-  }, []);
+  }, [isMobile]);
 
   useEffect(() => {
     if (!ready || !progress || hasAttemptedAutoStartRef.current || entityCount !== 0) return;

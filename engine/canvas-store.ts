@@ -15,7 +15,7 @@ import {
   MediaType,
 } from "#types/canvas.ts";
 import { getFrameAtTime } from "#lib/gif-decoder.ts";
-import { completeOnboardingStarterSelectionFromEvent } from "#lib/onboarding-runtime.ts";
+import { completeOnboardingStarterSelectionFromEvent } from "#lib/onboarding/onboarding-runtime.ts";
 import { EntitySpatialIndex } from "#lib/entity-spatial-index.ts";
 import { CanvasLensing } from "#types/enums.ts";
 

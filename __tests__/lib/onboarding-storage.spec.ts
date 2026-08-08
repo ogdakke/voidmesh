@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { ONBOARDING_VERSION, OnboardingStepId } from "#lib/onboarding.ts";
+import { ONBOARDING_VERSION, OnboardingStepId } from "#lib/onboarding/onboarding.ts";
 
 let storedValue: unknown;
 const getItem = vi.fn<() => Promise<unknown>>(async () => storedValue);
@@ -19,7 +19,7 @@ const {
   markOnboardingStepCompleted,
   normalizeOnboardingProgress,
   skipOnboardingVersion,
-} = await import("#lib/onboarding-storage.ts");
+} = await import("#lib/onboarding/onboarding-storage.ts");
 
 describe("onboarding storage", () => {
   beforeEach(() => {
