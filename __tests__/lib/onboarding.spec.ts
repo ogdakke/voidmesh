@@ -8,11 +8,14 @@ import {
   getAvailableOnboardingStepIds,
   isOnboardingComplete,
   skipCurrentOnboardingVersion,
-} from "#lib/onboarding.ts";
+} from "#lib/onboarding/onboarding.ts";
 
 describe("onboarding controller helpers", () => {
   test("uses only starter selection on non-action-layer devices", () => {
-    expect(getAvailableOnboardingStepIds(false)).toEqual([OnboardingStepId.selectStarter]);
+    expect(getAvailableOnboardingStepIds(false)).toEqual([
+      OnboardingStepId.selectStarter,
+      OnboardingStepId.deleteOnDesktop,
+    ]);
   });
 
   test("uses action-layer steps where supported", () => {
@@ -34,10 +37,11 @@ describe("onboarding controller helpers", () => {
   });
 
   test("does not become incomplete when external canvas state reverses", () => {
-    const completed = completeOnboardingStep(
+    const selected = completeOnboardingStep(
       createDefaultOnboardingProgress(),
       OnboardingStepId.selectStarter,
     );
+    const completed = completeOnboardingStep(selected, OnboardingStepId.deleteOnDesktop);
 
     expect(isOnboardingComplete(completed, getAvailableOnboardingStepIds(false))).toBe(true);
   });
