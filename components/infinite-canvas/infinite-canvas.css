@@ -184,17 +184,27 @@
   }
 }
 
-.infinite-canvas__zoom-indicator {
-  font-variant-numeric: tabular-nums;
-  font-family: var(--font-mono, monospace);
+.infinite-canvas__minimap-control {
+  position: absolute;
+  z-index: var(--canvas-overlay-z-2);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: transparent;
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
 
-  @media screen and (max-width: 768px) {
-    display: none;
+  &:active {
+    cursor: grabbing;
   }
-}
 
-.infinite-canvas__center {
-  font-size: var(--text);
+  &:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 4px;
+  }
 }
 
 .infinite-canvas__select,

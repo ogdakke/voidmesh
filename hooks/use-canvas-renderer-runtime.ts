@@ -1,4 +1,4 @@
-import { config, getViewportLensDistortionConfig } from "#config";
+import { config, getMiniMapConfig, getViewportLensDistortionConfig } from "#config";
 import { useCanvasInteraction, useCanvasRendererService } from "#context/use-canvas.ts";
 import { appLoader } from "#lib/app-loader.ts";
 import { applyWlurOverlayDebugConfig } from "#renderer/wlur-debug.ts";
@@ -12,6 +12,7 @@ interface UseCanvasRendererRuntimeOptions {
   perfRef: RefObject<HTMLDivElement | null>;
   darkTheme: boolean;
   canvasLensing: Parameters<typeof getViewportLensDistortionConfig>[0];
+  minimap: boolean;
   isMobile: boolean;
   isFullscreen: boolean;
 }
@@ -22,6 +23,7 @@ export function useCanvasRendererRuntime({
   perfRef,
   darkTheme,
   canvasLensing,
+  minimap,
   isMobile,
   isFullscreen,
 }: UseCanvasRendererRuntimeOptions) {
@@ -39,6 +41,11 @@ export function useCanvasRendererRuntime({
     renderer?.setViewportLensDistortion(getViewportLensDistortionConfig(canvasLensing));
     interaction.markContainerDirty();
   }, [canvasLensing, interaction, renderer]);
+
+  useEffect(() => {
+    renderer?.setMinimapConfig(getMiniMapConfig({ enabled: minimap }));
+    interaction.markContainerDirty();
+  }, [interaction, minimap, renderer]);
 
   useEffect(() => {
     appLoader.setText("Initializing canvas...");

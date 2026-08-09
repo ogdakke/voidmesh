@@ -45,6 +45,8 @@ export interface CanvasState {
   haptics: boolean;
   // Full-canvas edge lensing effect intensity
   canvasLensing: CanvasLensing;
+  // Minimap visibility
+  minimap: boolean;
 
   // Dirty flags for optimization
   viewportDirty: boolean;
@@ -117,6 +119,7 @@ export interface PreferencesSnapshot {
   fancyDelete: boolean;
   haptics: boolean;
   canvasLensing: CanvasLensing;
+  minimap: boolean;
   version: number;
 }
 
@@ -318,6 +321,7 @@ export class CanvasStore extends Store<CanvasState> {
       fancyDelete: true,
       haptics: true,
       canvasLensing: CanvasLensing.off,
+      minimap: false,
       viewportDirty: false,
       entitiesDirty: new Set(),
       geometryDirty: false,
@@ -395,6 +399,7 @@ export class CanvasStore extends Store<CanvasState> {
       fancyDelete: s.fancyDelete,
       haptics: s.haptics,
       canvasLensing: s.canvasLensing,
+      minimap: s.minimap,
       version: s.preferencesVersion,
     }));
 
@@ -950,6 +955,13 @@ export class CanvasStore extends Store<CanvasState> {
   setCanvasLensing(value: CanvasLensing): void {
     if (this.state.canvasLensing === value) return;
     this.state.canvasLensing = value;
+    this.state.version++;
+    this.notifyPreferencesChange();
+  }
+
+  setMinimap(enabled: boolean): void {
+    if (this.state.minimap === enabled) return;
+    this.state.minimap = enabled;
     this.state.version++;
     this.notifyPreferencesChange();
   }

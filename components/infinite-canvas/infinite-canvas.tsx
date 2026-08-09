@@ -20,7 +20,7 @@ export function InfiniteCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const perfRef = useRef<HTMLDivElement>(null);
-  const { canvasLensing } = useCanvasPreferences();
+  const { canvasLensing, minimap } = useCanvasPreferences();
   const keybindStore = useKeybinds();
   const isMobile = useIsMobile();
   const darkTheme = useMediaQuery("(prefers-color-scheme: dark)");
@@ -32,6 +32,7 @@ export function InfiniteCanvas() {
     perfRef,
     darkTheme,
     canvasLensing,
+    minimap,
     isMobile,
     isFullscreen,
   });
@@ -85,9 +86,9 @@ export function InfiniteCanvas() {
           </div>
         )}
         <CanvasOverlay
+          containerRef={containerRef}
           perfRef={perfRef}
           onboarding={onboarding}
-          centerSelection={keybinds.centerSelection}
           resetZoom={keybinds.resetZoom}
         />
       </div>

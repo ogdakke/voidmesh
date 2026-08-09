@@ -195,25 +195,6 @@ export class CanvasSelectionController {
     return state.selectedEntityIds.has(entityId) ? state.selectedEntityIds : new Set([entityId]);
   }
 
-  handlePointerEntityClick(
-    entityId: string,
-    state: CanvasState,
-    pointerDownWasSelected: boolean,
-  ): void {
-    if (
-      pointerDownWasSelected &&
-      state.selectedEntityIds.size > 1 &&
-      state.selectedEntityIds.has(entityId)
-    ) {
-      canvasStore.replaceSelection([entityId]);
-    } else if (pointerDownWasSelected) {
-      const entity = state.entities.get(entityId);
-      if (entity && isAnimatedEntity(entity)) {
-        canvasStore.togglePlayback(entityId).catch((error) => logger.error(error));
-      }
-    }
-  }
-
   handleContextMenuEntity(entityId: string, state: CanvasState): void {
     if (!state.selectedEntityIds.has(entityId)) {
       canvasStore.setSelectedEntity(entityId);

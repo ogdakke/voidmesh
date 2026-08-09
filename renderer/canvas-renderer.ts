@@ -5,7 +5,13 @@ import { boundsIntersect, getRotatedAABB, getViewportWorldBounds } from "#lib/ca
 import { getFrameAtTime } from "#lib/gif-decoder.ts";
 import { setGpuContext } from "./gpu-color-space.ts";
 import type { DisintegrationRenderOverlay, RenderState } from "#engine";
-import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
+import {
+  MediaType,
+  type Bounds,
+  type MinimapConfig,
+  type ShaderCanvasEntity,
+  type Viewport,
+} from "#types/canvas.ts";
 import { CanvasLensing } from "#types/enums.ts";
 import { ActionLayerBlurPass } from "./action-layer-blur-pass.ts";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
@@ -28,6 +34,7 @@ import { ExternalTextureCopyPass } from "./external-texture-copy-pass.ts";
 import type { ImageExportOptions } from "./export-formats.ts";
 import { detectGpuColorConfig, type GpuColorConfig } from "./gpu-color-space.ts";
 import { GridPass } from "./grid-pass.ts";
+import { MinimapPass } from "./minimap-pass.ts";
 import type { ByteBudgetCacheStats } from "./byte-budget-cache.ts";
 import { SelectionRectPass } from "./selection-rect-pass.ts";
 import { TexturePool, type TexturePoolStats } from "./texture-pool.ts";
@@ -37,6 +44,7 @@ import type { WlurOverlayConfig } from "./wlur-overlay.ts";
 import { WlurOverlayPass } from "./wlur-overlay-pass.ts";
 
 export type { ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
+export type { MinimapConfig } from "#types/canvas.ts";
 
 export interface RendererResourceStats {
   entityTextures: EntityTextureResidencyStats;
@@ -89,6 +97,7 @@ export class InfiniteCanvasRenderer {
   #viewportLensPass: ViewportLensPass | null = null;
 
   #wlurOverlayPass: WlurOverlayPass | null = null;
+  #minimapPass: MinimapPass | null = null;
 
   #entityDrawItemPreparer: EntityDrawItemPreparer | null = null;
   #entityTexturePipeline: EntityTexturePipeline | null = null;
@@ -308,6 +317,7 @@ export class InfiniteCanvasRenderer {
       canvasFormat: this.#canvasFormat,
       intermediateFormat: this.#colorConfig.intermediateFormat,
     });
+    this.#minimapPass = new MinimapPass(this.#device, this.#canvasFormat, config.canvas.minimap);
 
     // Initialize export service with callbacks into renderer
     this.#exportService = new ExportService(
@@ -702,6 +712,22 @@ export class InfiniteCanvasRenderer {
       ? this.#viewportLensPass!.encode(encoder, targetView, width, height)
       : false;
 
+    const minimapApplied =
+      this.#minimapPass?.encode({
+        encoder,
+        sourceTexture: texture,
+        targetView,
+        entities,
+        selectedEntityIds,
+        entityVersion: state.entityVersion,
+        geometryVersion: state.geometryVersion,
+        selectionVersion: state.selectionVersion,
+        viewport,
+        width,
+        height,
+        devicePixelRatio: dpr,
+      }) ?? false;
+
     // Final pass: WLUR progressive blur overlay (renders on top of everything)
     if (this.#wlurOverlayPass) {
       this.#wlurOverlayPass.encode({
@@ -716,6 +742,7 @@ export class InfiniteCanvasRenderer {
           state.dirty ||
           hasAnimatingContent ||
           lensApplied ||
+          minimapApplied ||
           !!this.#disintegrationPass?.hasOverlays ||
           blurIntensity > 0.01 ||
           state.dragSelectBounds !== null,
@@ -777,6 +804,15 @@ export class InfiniteCanvasRenderer {
 
   get viewPortLensConfig(): ViewportLensDistortionConfig {
     return this.#viewportLensPass?.config ?? getViewportLensDistortionConfig(CanvasLensing.off);
+  }
+
+  setMinimapConfig(config: MinimapConfig): void {
+    this.#minimapPass?.setConfig(config);
+    this.#wlurOverlayPass?.invalidateCache();
+  }
+
+  get minimapConfig(): MinimapConfig {
+    return this.#minimapPass?.config ?? config.canvas.minimap;
   }
 
   /**
@@ -1046,6 +1082,9 @@ export class InfiniteCanvasRenderer {
 
     this.#viewportLensPass?.destroy();
     this.#viewportLensPass = null;
+
+    this.#minimapPass?.destroy();
+    this.#minimapPass = null;
 
     // Destroy export service
     this.#exportService = null;
