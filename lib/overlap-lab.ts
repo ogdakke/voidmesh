@@ -3,12 +3,12 @@ import { Store } from "./store.ts";
 export const overlapDefaults = {
   enabled: false,
   transition: 200,
-  rgbStrength: 1.55,
-  rgbDecay: 400,
-  rgbSplit: 7,
-  wakeStrength: 0.3,
-  wakeDecay: 400,
-  wakeWidth: 14,
+  rgbStrength: 0.5,
+  rgbDecay: 200,
+  rgbSplit: 20,
+  wakeStrength: 0.2,
+  wakeDecay: 600,
+  wakeWidth: 12,
 };
 class OverlapLab extends Store<typeof overlapDefaults> {
   constructor() {
