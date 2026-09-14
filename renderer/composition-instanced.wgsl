@@ -61,7 +61,6 @@ struct VertexOutput {
   @builtin(position) position: vec4f,
   @location(0) uv: vec2f,
   @location(3) world: vec2f,
-  @location(7) projectedWorld: vec2f,
   @location(4) @interpolate(flat) contactKey: u32,
   @location(5) @interpolate(flat) cardSize: vec2f,
   @location(6) @interpolate(flat) cardPose: vec2f,
@@ -124,7 +123,6 @@ fn vs_main(
   ) + center + entity.position + scaleOffset;
 
   let contactWorld = worldPos;
-  worldPos = crossingBend(worldPos, entity._padding, uv, scaledSize, rotation);
   let m0 = viewport.matrix_row0;
   let m1 = viewport.matrix_row1;
   let m2 = viewport.matrix_row2;
@@ -137,7 +135,6 @@ fn vs_main(
   output.position = vec4f(clipPos, 0.0, 1.0);
   output.uv = expandedUV;
   output.world = contactWorld;
-  output.projectedWorld = worldPos;
   output.contactKey = entity._padding;
   output.cardSize = scaledSize;
   output.cardPose = vec2f(cosR, sinR);
@@ -197,7 +194,6 @@ fn vs_interactive(
   ) + center + entity.position + selectedOffset + scaleOffset;
 
   let contactWorld = worldPos;
-  worldPos = crossingBend(worldPos, entity._padding, uv, scaledSize, rotation);
   let m0 = viewport.matrix_row0;
   let m1 = viewport.matrix_row1;
   let m2 = viewport.matrix_row2;
@@ -210,7 +206,6 @@ fn vs_interactive(
   output.position = vec4f(clipPos, 0.0, 1.0);
   output.uv = expandedUV;
   output.world = contactWorld;
-  output.projectedWorld = worldPos;
   output.contactKey = entity._padding;
   output.cardSize = scaledSize;
   output.cardPose = vec2f(cosR, sinR);
@@ -221,6 +216,6 @@ fn vs_interactive(
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
-  let textureColor = crossingColor(input.uv, input.world, input.contactKey, input.cardSize, input.cardPose, input.projectedWorld, CrossingPaint(input.isSelected, input.debugMode, vec2f(BORDER_PX) / (input.cardSize * viewport.zoom)));
+  let textureColor = crossingColor(input.uv, input.world, input.contactKey, input.cardSize, input.cardPose, CrossingPaint(input.isSelected, input.debugMode, vec2f(BORDER_PX) / (input.cardSize * viewport.zoom)));
   return textureColor;
 }

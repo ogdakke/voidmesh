@@ -1,4 +1,4 @@
-import { overlapLab } from "#lib/overlap-lab.ts";
+import { overlapLab, overlapDefaults } from "#lib/overlap-lab.ts";
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import { ActionLayerController, canvasStore } from "#engine";
 import { config } from "#config";
@@ -54,7 +54,7 @@ describe("ActionLayerController", () => {
   });
 
   test("keeps dismissal alive for the chosen crossing duration", () => {
-    overlapLab.configure({ enabled: true, effect: "yield", transition: 600 });
+    overlapLab.configure({ enabled: true, transition: 600 });
     try {
       controller.activate({ x: 200, y: 200 }, new Set(["crossing-card"]));
       clock.advanceUntilSettled();
@@ -65,12 +65,12 @@ describe("ActionLayerController", () => {
       clock.advanceBy(450);
       expect(controller.isActive()).toBe(false);
     } finally {
-      overlapLab.configure({ enabled: false, transition: 360 });
+      overlapLab.configure(overlapDefaults);
     }
   });
 
   test("drag pickup returns through the stack without applying its transferred offset twice", () => {
-    overlapLab.configure({ enabled: true, effect: "peel", transition: 600 });
+    overlapLab.configure({ enabled: true, transition: 600 });
     try {
       controller.activate({ x: 200, y: 200 }, new Set(["dragged"]));
       controller.updateFingerPosition({ x: 400, y: 200 });
@@ -85,7 +85,7 @@ describe("ActionLayerController", () => {
       clock.advanceBy(450);
       expect(controller.isActive()).toBe(false);
     } finally {
-      overlapLab.configure({ enabled: false, effect: "yield", transition: 360 });
+      overlapLab.configure(overlapDefaults);
     }
   });
 

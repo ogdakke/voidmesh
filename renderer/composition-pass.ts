@@ -1007,7 +1007,7 @@ export class CompositionPass {
     for (const range of cached.drawRanges) {
       pass.setBindGroup(0, this.#getInstancedBindGroup(range.texture));
       pass.setBindGroup(1, this.crossing.bindGroup);
-      pass.draw(this.crossing.vertexCount, range.instanceCount, 0, range.firstInstance);
+      pass.draw(6, range.instanceCount, 0, range.firstInstance);
     }
     return true;
   }
@@ -1041,7 +1041,7 @@ export class CompositionPass {
         }
         pass.setBindGroup(0, this.#getInstancedBindGroup(texture));
         pass.setBindGroup(1, this.crossing.bindGroup);
-        pass.draw(this.crossing.vertexCount, command.instanceCount, 0, command.firstInstance);
+        pass.draw(6, command.instanceCount, 0, command.firstInstance);
       } else {
         const item = command.item;
         if (!item?.bindGroup) continue;
@@ -1051,7 +1051,7 @@ export class CompositionPass {
         }
         pass.setBindGroup(0, item.bindGroup);
         pass.setBindGroup(1, this.crossing.bindGroup);
-        pass.draw(this.crossing.vertexCount);
+        pass.draw(6);
       }
     }
   }
@@ -1097,7 +1097,7 @@ export class CompositionPass {
     pass.setPipeline(this.#pipeline);
     pass.setBindGroup(0, bindGroup);
     pass.setBindGroup(1, this.crossing.bindGroup);
-    pass.draw(this.crossing.vertexCount);
+    pass.draw(6);
   }
 
   removeEntity(entityId: string): void {

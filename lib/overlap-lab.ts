@@ -1,32 +1,18 @@
-import { createEnum } from "#types/index.ts";
 import { Store } from "./store.ts";
 
-export const OverlapEffect = createEnum({
-  off: "off",
-  yield: "yield",
-  diffusion: "diffusion",
-  prism: "prism",
-  wake: "wake",
-  peel: "peel",
-});
-export type OverlapEffect = typeof OverlapEffect.infer;
-export const overlapEffectOptions: readonly OverlapEffect[] = [
-  "off",
-  "yield",
-  "diffusion",
-  "prism",
-  "wake",
-  "peel",
-];
-class OverlapLab extends Store<{
-  enabled: boolean;
-  effect: OverlapEffect;
-  strength: number;
-  duration: number;
-  transition: number;
-}> {
+export const overlapDefaults = {
+  enabled: false,
+  transition: 200,
+  rgbStrength: 1.55,
+  rgbDecay: 400,
+  rgbSplit: 7,
+  wakeStrength: 0.3,
+  wakeDecay: 400,
+  wakeWidth: 14,
+};
+class OverlapLab extends Store<typeof overlapDefaults> {
   constructor() {
-    super({ enabled: false, effect: "prism", strength: 1.55, duration: 400, transition: 200 });
+    super({ ...overlapDefaults });
   }
   getSnapshot = () => this.state;
   configure(patch: Partial<typeof this.state>): void {
@@ -34,5 +20,5 @@ class OverlapLab extends Store<{
     this.notify();
   }
 }
-/** Session-only controls for the canvas overlap experiments. */
+/** Session-only controls for the canvas overlap treatment. */
 export const overlapLab = new OverlapLab();
