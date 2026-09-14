@@ -1,6 +1,6 @@
 import type { ActionLayerRenderState, DragVisualRenderState } from "#engine";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
-import { overlapLab, overlapEffectOptions } from "#lib/overlap-lab.ts";
+import { overlapLab } from "#lib/overlap-lab.ts";
 
 type CardGeometry = Pick<ShaderCanvasEntity, "position" | "size" | "rotation">;
 interface RenderedCard extends CardGeometry {
@@ -71,12 +71,12 @@ export class OverlapCrossing {
   #liftTarget = 1;
   #sceneCount = 0;
   #entityIds: ReadonlySet<string> = new Set();
-  #mesh = false;
   #active = false;
   #returning = false;
   #started = -Infinity;
-  #duration = 1100;
-  #transition = 360;
+  #rgbDecay = 400;
+  #wakeDecay = 400;
+  #transition = 200;
   #direction = 1;
   #pending = false;
   #enabled = false;
@@ -128,9 +128,6 @@ export class OverlapCrossing {
   get pending(): boolean {
     return this.#pending;
   }
-  get vertexCount(): number {
-    return this.#pending && this.#mesh ? 16 * 16 * 6 : 6;
-  }
 
   update(
     entities: readonly ShaderCanvasEntity[],
@@ -141,7 +138,7 @@ export class OverlapCrossing {
     drag?: DragVisualRenderState,
   ): void {
     const settings = overlapLab.getSnapshot();
-    const enabled = settings.enabled && settings.effect !== "off";
+    const enabled = settings.enabled;
     const returning = action.returning === true;
     const trigger =
       enabled &&
@@ -149,13 +146,13 @@ export class OverlapCrossing {
       (!this.#active || !this.#enabled || returning !== this.#returning);
     this.#sceneCount = entities.length;
     if (action.active) this.#entityIds = action.entityIds;
-    this.#mesh = settings.effect === "peel";
     if (trigger) {
       this.#liftFrom = this.#active && this.#enabled ? this.#motionAt(now) : returning ? 1 : 0;
       this.#liftTarget = returning ? 0 : 1;
       this.#pairCount = 0;
       this.#started = now;
-      this.#duration = settings.duration;
+      this.#rgbDecay = settings.rgbDecay;
+      this.#wakeDecay = settings.wakeDecay;
       this.#transition = settings.transition;
       this.#direction = returning ? -1 : 1;
     }
@@ -164,7 +161,10 @@ export class OverlapCrossing {
     this.#returning = returning;
     this.#enabled = enabled;
     const elapsed = Math.max(0, now - this.#started);
-    const age = Math.max(0, (elapsed - this.#transition) / this.#duration);
+    const tail = Math.max(0, elapsed - this.#transition);
+    const rgbAge = Math.min(1, tail / this.#rgbDecay);
+    const wakeAge = Math.min(1, tail / this.#wakeDecay);
+    const age = Math.min(rgbAge, wakeAge);
     const crossing = Math.min(1, elapsed / this.#transition);
     this.#lift = this.#motionAt(now);
     if (enabled && age < 1) {
@@ -189,7 +189,7 @@ export class OverlapCrossing {
     this.#pending = enabled && age < 1 && this.#pairCount > 0;
     const count = this.#pending ? this.#pairCount * 2 : 0;
     if (count === 0 && this.#data[0] === 0) return;
-    const needed = 8 + count * 16;
+    const needed = 12 + count * 16;
     if (needed > this.#data.length) {
       this.#data = new Float32Array(2 ** Math.ceil(Math.log2(needed)));
       this.#buffer.destroy();
@@ -197,14 +197,16 @@ export class OverlapCrossing {
       this.bindGroup = this.#createBindGroup();
     }
     this.#data[0] = count;
-    this.#data[1] = overlapEffectOptions.indexOf(settings.effect);
-    this.#data[2] = Math.min(age, 1);
-    this.#data[3] = settings.strength;
+    this.#data[1] = settings.rgbStrength;
+    this.#data[2] = rgbAge;
+    this.#data[3] = settings.wakeStrength;
     this.#data[4] = this.#lift;
     this.#data[5] = this.#direction;
     this.#data[6] = crossing;
-    this.#data[7] = this.#duration / 1000;
-    let offset = 8;
+    this.#data[7] = wakeAge;
+    this.#data[8] = settings.rgbSplit;
+    this.#data[9] = settings.wakeWidth;
+    let offset = 12;
     if (this.#pending)
       for (let i = 0; i < this.#pairCount; i++) {
         const pair = this.#pairs[i]!;

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { cardsOverlap, OverlapCrossing } from "#renderer/overlap-crossing.ts";
-import { overlapLab } from "#lib/overlap-lab.ts";
+import { overlapLab, overlapDefaults } from "#lib/overlap-lab.ts";
 import type { ActionLayerRenderState, DragVisualRenderState } from "#engine";
 import { createTestEntity } from "../helpers/test-entity.ts";
 
@@ -8,10 +8,10 @@ describe("canvas overlap crossings", () => {
   beforeEach(() => {
     vi.stubGlobal("GPUShaderStage", { VERTEX: 1, FRAGMENT: 2 });
     vi.stubGlobal("GPUBufferUsage", { STORAGE: 1, COPY_DST: 2 });
-    overlapLab.configure({ enabled: true, effect: "yield", transition: 400, duration: 800 });
+    overlapLab.configure({ enabled: true, transition: 400, rgbDecay: 800, wakeDecay: 800 });
   });
   afterEach(() => {
-    overlapLab.configure({ enabled: false, effect: "yield", transition: 360, duration: 1100 });
+    overlapLab.configure(overlapDefaults);
     vi.unstubAllGlobals();
   });
   test("rejects separated rotated cards even when their axis-aligned bounds overlap", () => {
@@ -50,18 +50,17 @@ describe("canvas overlap crossings", () => {
     };
     field.update(entities, action, 0, 1, 1);
     expect(uploads.at(-1)![0]).toBe(2);
-    expect(uploads.at(-1)![14]).toBe(field.key(lifted.id));
-    expect(uploads.at(-1)![30]).toBe(field.key(cover.id));
+    expect(uploads.at(-1)![18]).toBe(field.key(lifted.id));
+    expect(uploads.at(-1)![34]).toBe(field.key(cover.id));
     expect(field.order(1, lifted.id)).toBeLessThan(2);
     field.update(entities, action, 220, 1, 1);
     expect(field.order(1, lifted.id)).toBeGreaterThan(2);
     field.update(entities, action, 1300, 1, 1);
     expect(field.pending).toBe(false);
-    expect(field.vertexCount).toBe(6);
     action.returning = true;
     field.update(entities, action, 1500, 1, 1);
     expect(field.order(1, lifted.id)).toBeGreaterThan(2);
-    expect(uploads.at(-1)![15]).toBe(1);
+    expect(uploads.at(-1)![19]).toBe(1);
     expect(uploads.at(-1)![5]).toBe(-1);
     field.update(entities, action, 1720, 1, 1);
     expect(field.order(1, lifted.id)).toBeGreaterThan(2);
@@ -156,12 +155,12 @@ describe("canvas overlap crossings", () => {
     field.update(entities, action, 500, 2, 2, drag);
     expect(upload[5]).toBe(-1);
     expect(upload[0]).toBe(8); // Two selected cards, two new neighbors, reciprocal fields.
-    expect(upload[24]).toBe(200); // Dragged a's rendered center, including transient offset.
-    expect(upload[26]).toBe(45); // Scale applied about the center.
+    expect(upload[28]).toBe(200); // Dragged a's rendered center, including transient offset.
+    expect(upload[30]).toBe(45); // Scale applied about the center.
     expect(field.order(0, "a")).toBeGreaterThan(4);
     drag.offset.x = 170;
     field.update(entities, action, 750, 2, 2, drag);
-    expect(upload[24]).toBe(220);
+    expect(upload[28]).toBe(220);
     field.update(entities, action, 900, 2, 2, drag);
     expect(field.order(0, "a")).toBe(0);
     // Release commits transient positions by replacing entity objects.
@@ -171,11 +170,59 @@ describe("canvas overlap crossings", () => {
     action.active = false;
     action.returning = false;
     field.update(entities, action, 950, 2, 2, drag);
-    expect(upload[24]).toBe(220);
+    expect(upload[28]).toBe(220);
     expect(field.pending).toBe(true);
     entities.splice(3, 2); // Deleted neighbors cannot leave phantom fields.
     field.update(entities, action, 1000, 2, 2, drag);
     expect(upload[0]).toBe(0);
+    field.destroy();
+  });
+
+  test("RGB and wake controls upload independently and the longer tail stays scheduled", () => {
+    let upload = new Float32Array();
+    const device = {
+      limits: { maxStorageBufferBindingSize: 1024 * 1024 },
+      createBuffer: () => ({ destroy() {} }),
+      createBindGroup: () => ({}),
+      createBindGroupLayout: () => ({}),
+      queue: {
+        writeBuffer: (_buffer: unknown, _offset: number, source: ArrayBuffer) => {
+          upload = new Float32Array(source).slice();
+        },
+      },
+    } as unknown as GPUDevice;
+    const field = new OverlapCrossing(device);
+    const entities = [createTestEntity(), createTestEntity()];
+    const action: ActionLayerRenderState = {
+      active: true,
+      entityIds: new Set([entities[0]!.id]),
+      entityOffset: { x: 0, y: 0 },
+      blurIntensity: 0,
+    };
+    overlapLab.configure({
+      rgbStrength: 1.55,
+      wakeStrength: 0.3,
+      rgbDecay: 200,
+      wakeDecay: 800,
+      rgbSplit: 7,
+      wakeWidth: 14,
+    });
+    field.update(entities, action, 0, 1, 1);
+    field.update(entities, action, 800, 1, 1);
+    expect(upload[1]).toBeCloseTo(1.55);
+    expect(upload[2]).toBe(1); // RGB has finished.
+    expect(upload[3]).toBeCloseTo(0.3);
+    expect(upload[7]).toBe(0.5); // Wake still has half its decay remaining.
+    expect(Array.from(upload.slice(8, 10))).toEqual([7, 14]);
+    expect(field.pending).toBe(true);
+    overlapLab.configure({ wakeStrength: 0, wakeWidth: 20 });
+    field.update(entities, action, 900, 1, 1);
+    expect(upload[1]).toBeCloseTo(1.55);
+    expect(upload[3]).toBe(0);
+    expect(upload[8]).toBe(7);
+    expect(upload[9]).toBe(20);
+    field.update(entities, action, 1201, 1, 1);
+    expect(field.pending).toBe(false);
     field.destroy();
   });
 
