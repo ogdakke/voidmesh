@@ -36,7 +36,6 @@ struct VertexOutput {
   @builtin(position) position: vec4f,
   @location(0) uv: vec2f,
   @location(3) world: vec2f,
-  @location(7) projectedWorld: vec2f,
   @location(4) @interpolate(flat) contactKey: u32,
   @location(5) @interpolate(flat) cardSize: vec2f,
   @location(6) @interpolate(flat) cardPose: vec2f,
@@ -123,7 +122,6 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
   // Apply viewport transform (world to clip space)
   // Reconstruct 3x3 matrix and apply
   let contactWorld = worldPos;
-  worldPos = crossingBend(worldPos, entity._reserved, uv, scaledSize, entity.rotation);
   let m0 = viewport.matrix_row0;
   let m1 = viewport.matrix_row1;
   let m2 = viewport.matrix_row2;
@@ -137,7 +135,6 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
   output.position = vec4f(clipPos, 0.0, 1.0);
   output.uv = expandedUV;
   output.world = contactWorld;
-  output.projectedWorld = worldPos;
   output.contactKey = entity._reserved;
   output.cardSize = scaledSize;
   output.cardPose = vec2f(cosR, sinR);
@@ -150,7 +147,7 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
     // Sample texture (clamp UV for expanded border region)
-    let textureColor = crossingColor(input.uv, input.world, input.contactKey, input.cardSize, input.cardPose, input.projectedWorld, CrossingPaint(entity.isSelected, entity.debugMode, vec2f(BORDER_PX) / (input.cardSize * viewport.zoom)));
+    let textureColor = crossingColor(input.uv, input.world, input.contactKey, input.cardSize, input.cardPose, CrossingPaint(entity.isSelected, entity.debugMode, vec2f(BORDER_PX) / (input.cardSize * viewport.zoom)));
 
     // Outside border: UV is outside [0,1] when quad is expanded for selection
     let inBorder = input.uv.x < 0.0 || input.uv.x > 1.0 || input.uv.y < 0.0 || input.uv.y > 1.0;

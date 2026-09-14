@@ -392,8 +392,7 @@ export class ActionLayerController {
 
           // If all animations settled, return to idle
           const overlap = overlapLab.getSnapshot();
-          const crossingSettled =
-            !overlap.enabled || overlap.effect === "off" || elapsed >= overlap.transition;
+          const crossingSettled = !overlap.enabled || elapsed >= overlap.transition;
           if (
             valX === null &&
             valY === null &&
