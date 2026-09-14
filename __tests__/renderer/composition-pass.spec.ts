@@ -18,6 +18,20 @@ describe("CompositionPass instancing", () => {
 
   afterAll(() => vi.unstubAllGlobals());
 
+  test("exposes the viewport to fragment shading for the effected selection outline", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const layout = vi
+      .mocked(device.createBindGroupLayout)
+      .mock.calls.find(
+        ([descriptor]) => descriptor.label === "Instanced composition bind group layout",
+      )![0];
+    expect(Array.from(layout.entries).find((entry) => entry.binding === 0)?.visibility).toBe(
+      GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+    );
+    pass.destroy();
+  });
+
   test("draws adjacent entities sharing one texture as one instance batch", () => {
     const { device, instanceBuffer } = createDevice();
     const pass = createPass(device);
@@ -31,10 +45,10 @@ describe("CompositionPass instancing", () => {
     pass.drawItems(renderPass, [first, second]);
 
     expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
-    expect(device.createBuffer).toHaveBeenCalledTimes(2);
-    expect(device.createBindGroup).toHaveBeenCalledOnce();
+    expect(device.createBuffer).toHaveBeenCalledTimes(3);
+    expect(device.createBindGroup).toHaveBeenCalledTimes(2);
     expect(renderPass.setPipeline).toHaveBeenCalledOnce();
-    expect(renderPass.setBindGroup).toHaveBeenCalledOnce();
+    expect(renderPass.setBindGroup).toHaveBeenCalledTimes(2);
     expect(renderPass.draw).toHaveBeenCalledWith(6, 2, 0, 0);
 
     const upload = device.queue.writeBuffer.mock.calls[0]![2] as ArrayBuffer;
@@ -43,7 +57,7 @@ describe("CompositionPass instancing", () => {
     expect(Array.from(floats.slice(6, 10))).toEqual([30, 40, 200, 150]);
 
     pass.destroy();
-    expect(instanceBuffer.destroy).toHaveBeenCalledTimes(2);
+    expect(instanceBuffer.destroy).toHaveBeenCalledTimes(3);
     releaseImageEntity(firstEntity);
     releaseImageEntity(secondEntity);
   });
@@ -72,7 +86,7 @@ describe("CompositionPass instancing", () => {
       [6, 4, 0, 0],
       [6, 1, 0, 4],
     ]);
-    expect(device.createBindGroup).toHaveBeenCalledTimes(2);
+    expect(device.createBindGroup).toHaveBeenCalledTimes(3);
     expect(renderPass.setPipeline).toHaveBeenCalledOnce();
 
     pass.destroy();

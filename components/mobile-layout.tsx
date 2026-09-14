@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { overlapLab } from "#lib/overlap-lab.ts";
+import { overlapBarItem, type OverlapBarItem } from "./mobile-bottom/bar-items.ts";
+import { useState, useSyncExternalStore } from "react";
 import {
   ColorFilter,
   Component,
@@ -62,13 +64,16 @@ function MobileActionLayer() {
 }
 
 function MobileFloat() {
-  const [activeItem, setActiveItem] = useState<BarItem | DebugBarItem | null>(items.at(0)!);
+  const [activeItem, setActiveItem] = useState<BarItem | DebugBarItem | OverlapBarItem | null>(
+    items.at(0)!,
+  );
   const multiSelectMode = useMultiSelectMode();
   const selectedEntityIds = useSelectedEntityIds();
   const { entityDragActive } = useEntityDrag();
   const { isFullscreen } = useLayout();
   const { active: actionLayerActive } = useActionLayer();
   const debugMode = useDebugMode();
+  const overlap = useSyncExternalStore(overlapLab.subscribe, overlapLab.getSnapshot);
   const palette = useParamValue("palette", null);
   const bottomBarDisabled = multiSelectMode || selectedEntityIds.size === 0 || isFullscreen;
   const hideMobileControls = isFullscreen || actionLayerActive || entityDragActive;
@@ -100,7 +105,7 @@ function MobileFloat() {
 
       <MobileBottomBar
         items={items}
-        onChange={(item) => setActiveItem(item as BarItem | DebugBarItem | null)}
+        onChange={(item) => setActiveItem(item as BarItem | DebugBarItem | OverlapBarItem | null)}
         value={activeItem}
       >
         <BottomBarItem label="style" {...propsMapByItem["style"]}>
@@ -118,6 +123,11 @@ function MobileFloat() {
         >
           <ColorFilter />
         </BottomBarItem>
+        {overlap.enabled && (
+          <BottomBarItem label={overlapBarItem} disabled={isFullscreen}>
+            <Copy />
+          </BottomBarItem>
+        )}
         {debugMode && (
           <BottomBarItem label={debugBarItem} disabled={isFullscreen}>
             <Settings />

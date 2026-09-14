@@ -143,6 +143,8 @@ export interface SelectedVideoAudioSnapshot {
 }
 
 export interface ActionLayerRenderState {
+  /** True while returning to the stack, including the handoff into dragging. */
+  returning?: boolean;
   /** Whether the action layer is active or dismiss/transition animation is still visible. */
   active: boolean;
   /** Entity IDs to keep sharp and offset while the action layer is rendering. */

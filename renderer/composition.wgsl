@@ -35,6 +35,11 @@ const BORDER_PX: f32 = 2.0;
 struct VertexOutput {
   @builtin(position) position: vec4f,
   @location(0) uv: vec2f,
+  @location(3) world: vec2f,
+  @location(7) projectedWorld: vec2f,
+  @location(4) @interpolate(flat) contactKey: u32,
+  @location(5) @interpolate(flat) cardSize: vec2f,
+  @location(6) @interpolate(flat) cardPose: vec2f,
   @location(1) size: vec2f,
 }
 
@@ -78,26 +83,10 @@ fn fbmNoise(p: vec2f) -> f32 {
 @vertex
 fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
   // Quad vertices in local space (0,0 to 1,1)
-  var localPositions = array<vec2f, 6>(
-    vec2f(0.0, 0.0),  // Triangle 1
-    vec2f(1.0, 0.0),
-    vec2f(0.0, 1.0),
-    vec2f(1.0, 0.0),  // Triangle 2
-    vec2f(1.0, 1.0),
-    vec2f(0.0, 1.0)
-  );
 
-  var uvs = array<vec2f, 6>(
-    vec2f(0.0, 0.0),
-    vec2f(1.0, 0.0),
-    vec2f(0.0, 1.0),
-    vec2f(1.0, 0.0),
-    vec2f(1.0, 1.0),
-    vec2f(0.0, 1.0)
-  );
 
-  let localPos = localPositions[vertexIndex];
-  let uv = uvs[vertexIndex];
+  let localPos = crossingGrid(vertexIndex);
+  let uv = localPos;
 
   // Apply visual drag scale around entity center
   let scaledSize = entity.size * entity.scale;
@@ -133,6 +122,8 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
 
   // Apply viewport transform (world to clip space)
   // Reconstruct 3x3 matrix and apply
+  let contactWorld = worldPos;
+  worldPos = crossingBend(worldPos, entity._reserved, uv, scaledSize, entity.rotation);
   let m0 = viewport.matrix_row0;
   let m1 = viewport.matrix_row1;
   let m2 = viewport.matrix_row2;
@@ -145,6 +136,11 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
   var output: VertexOutput;
   output.position = vec4f(clipPos, 0.0, 1.0);
   output.uv = expandedUV;
+  output.world = contactWorld;
+  output.projectedWorld = worldPos;
+  output.contactKey = entity._reserved;
+  output.cardSize = scaledSize;
+  output.cardPose = vec2f(cosR, sinR);
   output.size = scaledSize;
   return output;
 }
@@ -154,7 +150,7 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
     // Sample texture (clamp UV for expanded border region)
-    let textureColor = textureSample(entityTexture, entitySampler, clamp(input.uv, vec2f(0.0), vec2f(1.0)));
+    let textureColor = crossingColor(input.uv, input.world, input.contactKey, input.cardSize, input.cardPose, input.projectedWorld, CrossingPaint(entity.isSelected, entity.debugMode, vec2f(BORDER_PX) / (input.cardSize * viewport.zoom)));
 
     // Outside border: UV is outside [0,1] when quad is expanded for selection
     let inBorder = input.uv.x < 0.0 || input.uv.x > 1.0 || input.uv.y < 0.0 || input.uv.y > 1.0;
@@ -163,14 +159,6 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
     if (entity.disintProgress > 0.0) {
         if (inBorder) { discard; }
         return disintegrate(input, textureColor);
-    }
-
-    // Selection border. Debug mode uses red for selected entities only.
-    if (entity.isSelected == 1u && inBorder) {
-        if (entity.debugMode == 1u) {
-            return vec4f(1.0, 0.0, 0.0, 1.0); // Red
-        }
-        return vec4f(59.0/255.0, 130.0/255.0, 246.0/255.0, 1.0); // #3B82F6
     }
 
     // Normal texture
