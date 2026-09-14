@@ -60,6 +60,11 @@ fn hasInstanceFlag(entity: EntityInstance, flag: u32) -> bool {
 struct VertexOutput {
   @builtin(position) position: vec4f,
   @location(0) uv: vec2f,
+  @location(3) world: vec2f,
+  @location(7) projectedWorld: vec2f,
+  @location(4) @interpolate(flat) contactKey: u32,
+  @location(5) @interpolate(flat) cardSize: vec2f,
+  @location(6) @interpolate(flat) cardPose: vec2f,
   @location(1) @interpolate(flat) isSelected: u32,
   @location(2) @interpolate(flat) debugMode: u32,
 }
@@ -88,26 +93,10 @@ fn vs_main(
   @builtin(vertex_index) vertexIndex: u32,
   @builtin(instance_index) instanceIndex: u32,
 ) -> VertexOutput {
-  var localPositions = array<vec2f, 6>(
-    vec2f(0.0, 0.0),
-    vec2f(1.0, 0.0),
-    vec2f(0.0, 1.0),
-    vec2f(1.0, 0.0),
-    vec2f(1.0, 1.0),
-    vec2f(0.0, 1.0)
-  );
-  var uvs = array<vec2f, 6>(
-    vec2f(0.0, 0.0),
-    vec2f(1.0, 0.0),
-    vec2f(0.0, 1.0),
-    vec2f(1.0, 0.0),
-    vec2f(1.0, 1.0),
-    vec2f(0.0, 1.0)
-  );
 
   let entity = entities[instanceIndex];
-  let localPos = localPositions[vertexIndex];
-  let uv = uvs[vertexIndex];
+  let localPos = crossingGrid(vertexIndex);
+  let uv = localPos;
   let scale = instanceScale(entity);
   let scaledSize = entity.size * scale;
   let scaleOffset = (entity.size - scaledSize) * 0.5;
@@ -134,6 +123,8 @@ fn vs_main(
     centered.x * sinR + centered.y * cosR,
   ) + center + entity.position + scaleOffset;
 
+  let contactWorld = worldPos;
+  worldPos = crossingBend(worldPos, entity._padding, uv, scaledSize, rotation);
   let m0 = viewport.matrix_row0;
   let m1 = viewport.matrix_row1;
   let m2 = viewport.matrix_row2;
@@ -145,6 +136,11 @@ fn vs_main(
   var output: VertexOutput;
   output.position = vec4f(clipPos, 0.0, 1.0);
   output.uv = expandedUV;
+  output.world = contactWorld;
+  output.projectedWorld = worldPos;
+  output.contactKey = entity._padding;
+  output.cardSize = scaledSize;
+  output.cardPose = vec2f(cosR, sinR);
   output.isSelected = select(0u, 1u, selected);
   output.debugMode = select(0u, 1u, hasInstanceFlag(entity, FLAG_DEBUG));
   return output;
@@ -155,26 +151,10 @@ fn vs_interactive(
   @builtin(vertex_index) vertexIndex: u32,
   @builtin(instance_index) instanceIndex: u32,
 ) -> VertexOutput {
-  var localPositions = array<vec2f, 6>(
-    vec2f(0.0, 0.0),
-    vec2f(1.0, 0.0),
-    vec2f(0.0, 1.0),
-    vec2f(1.0, 0.0),
-    vec2f(1.0, 1.0),
-    vec2f(0.0, 1.0)
-  );
-  var uvs = array<vec2f, 6>(
-    vec2f(0.0, 0.0),
-    vec2f(1.0, 0.0),
-    vec2f(0.0, 1.0),
-    vec2f(1.0, 0.0),
-    vec2f(1.0, 1.0),
-    vec2f(0.0, 1.0)
-  );
 
   let entity = entities[instanceIndex];
-  let localPos = localPositions[vertexIndex];
-  let uv = uvs[vertexIndex];
+  let localPos = crossingGrid(vertexIndex);
+  let uv = localPos;
   let rotation = instanceRotation(entity);
   let scale = instanceScale(entity);
   let cosR = cos(rotation);
@@ -216,6 +196,8 @@ fn vs_interactive(
     centered.x * sinR + centered.y * cosR,
   ) + center + entity.position + selectedOffset + scaleOffset;
 
+  let contactWorld = worldPos;
+  worldPos = crossingBend(worldPos, entity._padding, uv, scaledSize, rotation);
   let m0 = viewport.matrix_row0;
   let m1 = viewport.matrix_row1;
   let m2 = viewport.matrix_row2;
@@ -227,6 +209,11 @@ fn vs_interactive(
   var output: VertexOutput;
   output.position = vec4f(clipPos, 0.0, 1.0);
   output.uv = expandedUV;
+  output.world = contactWorld;
+  output.projectedWorld = worldPos;
+  output.contactKey = entity._padding;
+  output.cardSize = scaledSize;
+  output.cardPose = vec2f(cosR, sinR);
   output.isSelected = select(0u, 1u, selected);
   output.debugMode = select(0u, 1u, hasInstanceFlag(entity, FLAG_DEBUG));
   return output;
@@ -234,20 +221,6 @@ fn vs_interactive(
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
-  let textureColor = textureSample(
-    entityTexture,
-    entitySampler,
-    clamp(input.uv, vec2f(0.0), vec2f(1.0)),
-  );
-  let inBorder =
-    input.uv.x < 0.0 || input.uv.x > 1.0 || input.uv.y < 0.0 || input.uv.y > 1.0;
-
-  if (input.isSelected == 1u && inBorder) {
-    if (input.debugMode == 1u) {
-      return vec4f(1.0, 0.0, 0.0, 1.0);
-    }
-    return vec4f(59.0 / 255.0, 130.0 / 255.0, 246.0 / 255.0, 1.0);
-  }
-
+  let textureColor = crossingColor(input.uv, input.world, input.contactKey, input.cardSize, input.cardPose, input.projectedWorld, CrossingPaint(input.isSelected, input.debugMode, vec2f(BORDER_PX) / (input.cardSize * viewport.zoom)));
   return textureColor;
 }

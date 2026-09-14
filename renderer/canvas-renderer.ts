@@ -199,6 +199,7 @@ export class InfiniteCanvasRenderer {
 
   hasPendingRenderWork(): boolean {
     return (
+      (this.#compositionPass?.crossing.pending ?? false) ||
       this.#lodSettleFramesRemaining > 0 ||
       this.#mixedBatchLodRefreshPending ||
       (this.#entityTexturePipeline?.hasPendingLodWork ?? false)
@@ -478,6 +479,14 @@ export class InfiniteCanvasRenderer {
 
     // Pre-process entities: render to textures and prepare bind groups
     // Uses caching to avoid per-frame allocations
+    this.#compositionPass.crossing.update(
+      entities,
+      state.actionLayer,
+      performance.now(),
+      viewport.zoom,
+      dpr,
+      state.dragVisual,
+    );
     const preparedEntityDrawItems = this.#entityDrawItemPreparer.prepare({
       entities,
       entityIndices: state.entityIndices,
@@ -517,7 +526,8 @@ export class InfiniteCanvasRenderer {
       singleSelectedOffsetX,
       singleSelectedOffsetY,
     } = preparedEntityDrawItems;
-    let hasAnimatingContent = preparedEntityDrawItems.hasAnimatingContent;
+    let hasAnimatingContent =
+      preparedEntityDrawItems.hasAnimatingContent || this.#compositionPass.crossing.pending;
     this.#compositionPass.beginFrame(
       fullSceneBatch?.instanceCount ?? entityDrawItems.length + actionLayerDrawItems.length,
     );
@@ -574,7 +584,9 @@ export class InfiniteCanvasRenderer {
 
     // Pass 2a: Action layer blur overlay
     // Blur+dim everything, then re-render selected entities sharp on top
-    const blurIntensity = state.actionLayer.blurIntensity;
+    const blurIntensity = this.#compositionPass.crossing.enabled
+      ? 0
+      : state.actionLayer.blurIntensity;
     if (
       blurIntensity > 0.01 &&
       this.#canvasFormat === this.#colorConfig.intermediateFormat &&

@@ -1,3 +1,5 @@
+import { OverlapCrossing } from "./overlap-crossing.ts";
+import crossingShaderSource from "./overlap-crossing.wgsl?raw";
 import { config } from "#config";
 import type { DragSelectMode } from "#engine";
 import type { Bounds, ShaderCanvasEntity } from "#types/canvas.ts";
@@ -234,6 +236,7 @@ function createExternalCompositionShaderSource(source: string): string {
 
 export class CompositionPass {
   readonly #device: GPUDevice;
+  readonly crossing: OverlapCrossing;
   readonly #viewportUniformBuffer: GPUBuffer;
   readonly #pipeline: GPURenderPipeline;
   readonly #instancedPipeline: GPURenderPipeline;
@@ -297,11 +300,17 @@ export class CompositionPass {
 
   constructor(options: CompositionPassOptions) {
     this.#device = options.device;
+    this.crossing = new OverlapCrossing(this.#device);
     this.#viewportUniformBuffer = options.viewportUniformBuffer;
 
+    // Contact membership varies per fragment. Composition sources have one mip level,
+    // so sampling inside contact branches does not depend on implicit LOD derivatives.
     const shaderModule = this.#device.createShaderModule({
       label: "Composition shader",
-      code: compositionShaderSource,
+      code:
+        "diagnostic(off, derivative_uniformity);\n" +
+        compositionShaderSource +
+        crossingShaderSource,
     });
 
     this.#bindGroupLayout = this.#device.createBindGroupLayout({
@@ -335,7 +344,7 @@ export class CompositionPass {
       entries: [
         {
           binding: 0,
-          visibility: GPUShaderStage.VERTEX,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
           buffer: { type: "uniform" },
         },
         {
@@ -402,7 +411,7 @@ export class CompositionPass {
 
     const pipelineLayout = this.#device.createPipelineLayout({
       label: "Composition pipeline layout",
-      bindGroupLayouts: [this.#bindGroupLayout],
+      bindGroupLayouts: [this.#bindGroupLayout, this.crossing.layout],
     });
 
     this.#pipeline = this.#device.createRenderPipeline({
@@ -440,11 +449,14 @@ export class CompositionPass {
 
     const instancedShaderModule = this.#device.createShaderModule({
       label: "Instanced composition shader",
-      code: instancedCompositionShaderSource,
+      code:
+        "diagnostic(off, derivative_uniformity);\n" +
+        instancedCompositionShaderSource +
+        crossingShaderSource,
     });
     const instancedPipelineLayout = this.#device.createPipelineLayout({
       label: "Instanced composition pipeline layout",
-      bindGroupLayouts: [this.#instancedBindGroupLayout],
+      bindGroupLayouts: [this.#instancedBindGroupLayout, this.crossing.layout],
     });
     this.#instancedPipeline = this.#device.createRenderPipeline({
       label: "Instanced composition pipeline",
@@ -513,12 +525,16 @@ export class CompositionPass {
 
     const externalShaderModule = this.#device.createShaderModule({
       label: "External composition shader",
-      code: createExternalCompositionShaderSource(compositionShaderSource),
+      code: createExternalCompositionShaderSource(
+        "diagnostic(off, derivative_uniformity);\n" +
+          compositionShaderSource +
+          crossingShaderSource,
+      ),
     });
 
     const externalPipelineLayout = this.#device.createPipelineLayout({
       label: "External composition pipeline layout",
-      bindGroupLayouts: [this.#externalBindGroupLayout],
+      bindGroupLayouts: [this.#externalBindGroupLayout, this.crossing.layout],
     });
 
     this.#externalPipeline = this.#device.createRenderPipeline({
@@ -990,7 +1006,8 @@ export class CompositionPass {
     );
     for (const range of cached.drawRanges) {
       pass.setBindGroup(0, this.#getInstancedBindGroup(range.texture));
-      pass.draw(6, range.instanceCount, 0, range.firstInstance);
+      pass.setBindGroup(1, this.crossing.bindGroup);
+      pass.draw(this.crossing.vertexCount, range.instanceCount, 0, range.firstInstance);
     }
     return true;
   }
@@ -1023,7 +1040,8 @@ export class CompositionPass {
           currentPipeline = "texture";
         }
         pass.setBindGroup(0, this.#getInstancedBindGroup(texture));
-        pass.draw(6, command.instanceCount, 0, command.firstInstance);
+        pass.setBindGroup(1, this.crossing.bindGroup);
+        pass.draw(this.crossing.vertexCount, command.instanceCount, 0, command.firstInstance);
       } else {
         const item = command.item;
         if (!item?.bindGroup) continue;
@@ -1032,7 +1050,8 @@ export class CompositionPass {
           currentPipeline = "external";
         }
         pass.setBindGroup(0, item.bindGroup);
-        pass.draw(6);
+        pass.setBindGroup(1, this.crossing.bindGroup);
+        pass.draw(this.crossing.vertexCount);
       }
     }
   }
@@ -1077,10 +1096,12 @@ export class CompositionPass {
   drawTextureBindGroup(pass: GPURenderPassEncoder, bindGroup: GPUBindGroup): void {
     pass.setPipeline(this.#pipeline);
     pass.setBindGroup(0, bindGroup);
-    pass.draw(6);
+    pass.setBindGroup(1, this.crossing.bindGroup);
+    pass.draw(this.crossing.vertexCount);
   }
 
   removeEntity(entityId: string): void {
+    this.crossing.forget(entityId);
     const externalCached = this.#entityExternalCompositionCache.get(entityId);
     if (externalCached) {
       externalCached.uniformBuffer.destroy();
@@ -1089,6 +1110,7 @@ export class CompositionPass {
   }
 
   destroy(): void {
+    this.crossing.destroy();
     this.#entityCompositionCache = new WeakMap();
 
     for (const cached of this.#entityExternalCompositionCache.values()) {
@@ -1252,7 +1274,7 @@ export class CompositionPass {
     this.#instanceFloatView[offset + 2] = entity.size.width;
     this.#instanceFloatView[offset + 3] = entity.size.height;
     this.#instanceUintView[offset + 4] = packInstanceState(entity, isSelected, debugMode, 1);
-    this.#instanceUintView[offset + 5] = 0;
+    this.#instanceUintView[offset + 5] = this.crossing.key(entity.id);
   }
 
   #writeInstance(index: number, item: CompositionDrawItem): void {
@@ -1268,7 +1290,7 @@ export class CompositionPass {
       item.debugMode,
       item.visualScale,
     );
-    this.#instanceUintView[offset + 5] = 0;
+    this.#instanceUintView[offset + 5] = this.crossing.key(entity.id);
   }
 
   #getInstancedBindGroup(texture: GPUTexture): GPUBindGroup {
@@ -1367,7 +1389,7 @@ export class CompositionPass {
     this.#entityFloatView[2] = width;
     this.#entityFloatView[3] = height;
     this.#entityFloatView[4] = (rotation * Math.PI) / 180;
-    this.#entityUintView[5] = 0;
+    this.#entityUintView[5] = this.crossing.key(entity.id);
     this.#entityUintView[6] = isSelected ? 1 : 0;
     this.#entityUintView[7] = debugMode ? 1 : 0;
     this.#entityFloatView[8] = visualScale;
