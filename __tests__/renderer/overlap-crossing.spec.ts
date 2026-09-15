@@ -261,6 +261,27 @@ describe("canvas overlap crossings", () => {
     field.destroy();
   });
 
+  test("steers RGB through reversals without immediately flipping the old flow", () => {
+    settings.dragUnder = true;
+    const { field, latest, entities, action, drag } = motionFixture();
+    field.update(entities, action, 0, 1, 1, drag);
+    drag.offset.x = 16;
+    field.update(entities, action, 16, 1, 1, drag);
+    expect(latest()[24]).toBeCloseTo(1);
+    expect(latest()[25]).toBeCloseTo(0);
+    drag.offset.x = 0;
+    field.update(entities, action, 32, 1, 1, drag);
+    expect(latest()[24]).toBeGreaterThan(0);
+    expect(latest()[24]).toBeLessThan(0.4);
+    drag.offset.x = -16;
+    field.update(entities, action, 48, 1, 1, drag);
+    expect(latest()[24]).toBeLessThan(0);
+    const direction = latest()[24];
+    field.update(entities, action, 100, 1, 1, drag);
+    expect(latest()[24]).toBe(direction); // Decay continues in the last travel direction.
+    field.destroy();
+  });
+
   test("drag-under tracks group offsets, retains the last footprint, and clears when disabled", () => {
     const { field, latest, entities, action, drag } = motionFixture();
     Object.assign(settings, { dragUnder: true });
