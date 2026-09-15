@@ -463,6 +463,8 @@ export class OverlapCrossing {
           contact.mover = mover;
           contact.cover = cover;
           contact.strength = 0;
+          contact.directionX = mover.dx / distance;
+          contact.directionY = mover.dy / distance;
           contact.travel = 0;
           contact.lastMotion = now;
           this.#motionCount++;
@@ -478,8 +480,11 @@ export class OverlapCrossing {
         contact.width = mover.size.width;
         contact.height = mover.size.height;
         contact.rotation = (mover.rotation * Math.PI) / 180;
-        contact.directionX = mover.dx / distance;
-        contact.directionY = mover.dy / distance;
+        // Keep vector magnitude: opposing motion briefly cancels the old flow
+        // instead of instantly flipping a full-strength chromatic split.
+        const steering = 1 - Math.exp(-dt / 35);
+        contact.directionX += (mover.dx / distance - contact.directionX) * steering;
+        contact.directionY += (mover.dy / distance - contact.directionY) * steering;
         contact.travel =
           (contact.travel + (distance / worldPerCss) * 0.25) %
           (Math.PI * 2 * settings.wakeWidth * 0.643);

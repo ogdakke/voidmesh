@@ -45,6 +45,9 @@ struct ContactField {
   radius: f32,
   phase: f32,
   flow: vec2f,
+  rgbFlow: vec2f,
+  rgbRadius: f32,
+  rgbWidth: f32,
 }
 // Select the strongest nearby contact. Deep stacks cannot amplify without bound.
 fn crossingField(world: vec2f, key: u32) -> ContactField {
@@ -74,7 +77,22 @@ fn crossingField(world: vec2f, key: u32) -> ContactField {
     result.pixel = pixel;
     result.distance = sd;
     result.normal = contactRotate(contactNormal(local, contact.rect.zw), contact.pose.xy);
-    result.rgbPulse = rgbPulse;
+    // Drag refraction comes from the advancing edge, in the direction of travel.
+    // During a depth crossing both participants share one entry-to-exit direction.
+    let rgbFlow = select(-contact.axis.xy * contact.pose.w * contacts.timeline.y, contact.axis.xy, motion);
+    let coherence = min(length(rgbFlow), 1.0);
+    let direction = rgbFlow / max(length(rgbFlow), 0.0001);
+    let leading = mix(0.12, 1.0, smoothstep(-0.25, 0.8, dot(result.normal, direction)));
+    let localDirection = contactLocal(direction, contact.pose.xy);
+    let extent = dot(abs(localDirection), contact.rect.zw);
+    let front = mix(-extent, extent, contacts.timeline.z);
+    let frontWidth = max(24.0 * pixel, extent * 0.45);
+    let frontDistance = dot(world - contact.rect.xy, direction) - front;
+    let crossingWave = 0.25 + 0.75 * exp(-frontDistance * frontDistance / (2.0 * frontWidth * frontWidth));
+    result.rgbPulse = rgbPulse * coherence * select(crossingWave, leading, motion);
+    result.rgbFlow = direction;
+    result.rgbRadius = select(0.0, contact.axis.z * (0.5 + contact.metric.y), motion);
+    result.rgbWidth = select(18.0, 14.0 + 12.0 * contact.metric.y, motion);
     result.wakePulse = wakePulse;
     result.radius = select(6.0 + (contacts.timeline.z * 0.25 + contacts.timeline.w) * 96.0, 6.0 + contact.axis.z, motion);
     result.phase = select(0.0, contact.metric.w, motion);
@@ -115,11 +133,11 @@ fn crossingMaterial(uv: vec2f, world: vec2f, key: u32, size: vec2f, pose: vec2f,
   let wakeAmplitude = field.wakePulse * contacts.header.w;
   let warp = contactLocal(field.flow, pose) * pixel * packet * wakeAmplitude * 9.0;
 
-  let d = seamDistance / field.pixel;
-  let band = exp(-d * d / (2.0 * 18.0 * 18.0));
+  let d = seamDistance / field.pixel - field.rgbRadius;
+  let band = exp(-d * d / (2.0 * field.rgbWidth * field.rgbWidth));
   let energy = field.rgbPulse * band * contacts.header.y;
   let bend = normal * pixel * energy * 5.0 * field.role;
-  let split = normal * pixel * energy * contacts.tuning.x;
+  let split = contactLocal(field.rgbFlow, pose) * pixel * energy * contacts.tuning.x;
   let base = crossingSample(uv + warp + bend, paint);
   let red = crossingSample(uv + warp + bend + split, paint);
   let blue = crossingSample(uv + warp + bend - split, paint);
