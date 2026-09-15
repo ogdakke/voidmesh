@@ -1,3 +1,5 @@
+import { FancyEffects, isFancyEffects } from "#types/fancy-effects.ts";
+import { Select, SelectItem } from "#ui/select/index.tsx";
 import { NavArrowRight } from "iconoir-react";
 import { Button } from "#ui/button/button.tsx";
 import { Checkbox } from "#ui/checkbox/index.tsx";
@@ -22,18 +24,60 @@ export function SnapToGridToggle() {
   );
 }
 
-export function FancyDeleteToggle() {
-  const { fancyDelete } = useCanvasPreferences();
-  const { setFancyDelete } = useCanvasCommands();
+const fancyEffectOptions = [
+  { value: FancyEffects.none, label: "None" },
+  { value: FancyEffects.all, label: "All" },
+  { value: FancyEffects.deletions, label: "Deletions" },
+  { value: FancyEffects.prismWake, label: "Prism wake" },
+];
+
+export function FancyEffectsMobileSelect() {
+  const { fancyEffects } = useCanvasPreferences();
+  const { setFancyEffects } = useCanvasCommands();
   return (
-    <Checkbox
-      name="fancy_delete"
-      checked={fancyDelete}
-      onChange={(e) => setFancyDelete(e.target.checked)}
-      switch
+    <div className="native-select-field native-select-field--mobile">
+      <label className="ui-field-label settings-label" htmlFor="fancy_effects">
+        Fancy Effects
+      </label>
+      <NativeSelect
+        id="fancy_effects"
+        name="fancy_effects"
+        value={fancyEffects}
+        size="sm"
+        variant="quiet"
+        onChange={(event) => {
+          if (isFancyEffects(event.target.value)) setFancyEffects(event.target.value);
+        }}
+      >
+        {fancyEffectOptions.map(({ value, label }) => (
+          <NativeSelectOption key={value} value={value}>
+            {label}
+          </NativeSelectOption>
+        ))}
+      </NativeSelect>
+    </div>
+  );
+}
+
+export function FancyEffectsDesktopSelect() {
+  const { fancyEffects } = useCanvasPreferences();
+  const { setFancyEffects } = useCanvasCommands();
+  return (
+    <Select
+      name="fancy_effects"
+      label="Fancy Effects"
+      value={fancyEffects}
+      items={fancyEffectOptions}
+      onValueChange={(value) => {
+        if (isFancyEffects(value)) setFancyEffects(value);
+      }}
     >
-      Fancy deletions
-    </Checkbox>
+      {fancyEffectOptions.map(({ value, label }) => (
+        <SelectItem key={value} value={value}>
+          {label}
+        </SelectItem>
+      ))}
+    </Select>
   );
 }
 

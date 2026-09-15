@@ -303,6 +303,20 @@ describe("canvas overlap crossings", () => {
     field.destroy();
   });
 
+  test("changing the user preference clears a live desktop drag-under field", () => {
+    const { field, latest, entities, action, drag } = motionFixture();
+    settings.dragUnder = true;
+    field.update(entities, action, 0, 1, 1, drag, true);
+    drag.offset.x = 10;
+    field.update(entities, action, 16, 1, 1, drag, true);
+    expect(field.pending).toBe(true);
+    field.update(entities, action, 32, 1, 1, drag, false);
+    expect(field.enabled).toBe(false);
+    expect(field.pending).toBe(false);
+    expect(latest()[0]).toBe(0);
+    field.destroy();
+  });
+
   test("off and cancellation clear the contact field", () => {
     const device = {
       limits: { maxStorageBufferBindingSize: 1024 * 1024 },

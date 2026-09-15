@@ -396,6 +396,15 @@ describe("Desktop pointer interactions", () => {
       expect(deps.dragVisual.startPossibleDrag).toHaveBeenCalled();
     });
 
+    test("desktop movement activates the shared drag visual used by Prism wake", () => {
+      const id = addEntity(100, 100);
+      gl.handlePointerDown({ x: 150, y: 150 });
+      gl.handlePointerMove({ x: 170, y: 150 });
+      gl.processInput();
+      expect(deps.dragVisual.activateDrag).toHaveBeenCalledWith(new Set([id]));
+      expect(deps.actionLayer.activate).not.toHaveBeenCalled();
+    });
+
     test("pointer up releases drag visual", () => {
       addEntity(100, 100);
       gl.handlePointerDown({ x: 150, y: 150 });

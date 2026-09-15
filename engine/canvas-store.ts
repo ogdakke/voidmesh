@@ -1,3 +1,4 @@
+import { FancyEffects } from "#types/fancy-effects.ts";
 import { logger, LogLevel, type Logger } from "#lib/client.logger.ts";
 import { Store } from "#lib/store.ts";
 import { getCommonFeatures, paramVisibilityRules, shaderFeatures } from "#config";
@@ -39,8 +40,8 @@ export interface CanvasState {
   debugMode: boolean;
   // Snap-to-grid mode - entities snap to visible grid during drag
   snapToGrid: boolean;
-  // Fancy deletions - disintegration shader animation on entity removal
-  fancyDelete: boolean;
+  // Persisted choice of deletion and overlap effects
+  fancyEffects: FancyEffects;
   // Haptic feedback on touch interactions
   haptics: boolean;
   // Full-canvas edge lensing effect intensity
@@ -102,7 +103,7 @@ export interface SelectionSnapshot {
   entities: Map<string, ShaderCanvasEntity>;
   multiSelectMode: boolean;
   snapToGrid: boolean;
-  fancyDelete: boolean;
+  fancyEffects: FancyEffects;
   haptics: boolean;
   version: number;
 }
@@ -114,7 +115,7 @@ export interface DragSnapshot {
 
 export interface PreferencesSnapshot {
   snapToGrid: boolean;
-  fancyDelete: boolean;
+  fancyEffects: FancyEffects;
   haptics: boolean;
   canvasLensing: CanvasLensing;
   version: number;
@@ -188,6 +189,7 @@ export interface DisintegrationRenderState {
 }
 
 export interface RenderState {
+  fancyEffects: FancyEffects;
   viewport: Viewport;
   entities: ShaderCanvasEntity[];
   /** Stable entity ID to sorted render-array index lookup for the current entity version. */
@@ -266,6 +268,7 @@ export class CanvasStore extends Store<CanvasState> {
   readonly #transientEntityDragOffset: Point = { x: 0, y: 0 };
   readonly #renderDisintegration: DisintegrationRenderState = { overlays: [] };
   readonly #renderState: RenderState = {
+    fancyEffects: FancyEffects.all,
     viewport: this.#renderViewport,
     entities: this.#renderEntities,
     entityIndices: this.#renderEntityIndices,
@@ -317,7 +320,7 @@ export class CanvasStore extends Store<CanvasState> {
       multiSelectMode: false,
       debugMode: false,
       snapToGrid: false,
-      fancyDelete: true,
+      fancyEffects: FancyEffects.all,
       haptics: true,
       canvasLensing: CanvasLensing.off,
       viewportDirty: false,
@@ -357,7 +360,7 @@ export class CanvasStore extends Store<CanvasState> {
       entities: s.entities,
       multiSelectMode: s.multiSelectMode,
       snapToGrid: s.snapToGrid,
-      fancyDelete: s.fancyDelete,
+      fancyEffects: s.fancyEffects,
       haptics: s.haptics,
       version: s.selectionVersion,
     }));
@@ -394,7 +397,7 @@ export class CanvasStore extends Store<CanvasState> {
 
     this.getPreferencesSnapshot = this.createSnapshot("preferencesVersion", (s) => ({
       snapToGrid: s.snapToGrid,
-      fancyDelete: s.fancyDelete,
+      fancyEffects: s.fancyEffects,
       haptics: s.haptics,
       canvasLensing: s.canvasLensing,
       version: s.preferencesVersion,
@@ -935,9 +938,10 @@ export class CanvasStore extends Store<CanvasState> {
     this.notifyPreferencesChange();
   }
 
-  setFancyDelete(enabled: boolean): void {
-    if (this.state.fancyDelete === enabled) return;
-    this.state.fancyDelete = enabled;
+  setFancyEffects(value: FancyEffects): void {
+    if (this.state.fancyEffects === value) return;
+    this.state.fancyEffects = value;
+    this.setContainerDirty();
     this.state.version++;
     this.notifyPreferencesChange();
   }
@@ -1359,6 +1363,7 @@ export class CanvasStore extends Store<CanvasState> {
     renderState.selectionVersion = this.state.selectionVersion;
     renderState.dirtyEntityIds = this.state.entitiesDirty;
     renderState.selectedEntityIds = this.state.selectedEntityIds;
+    renderState.fancyEffects = this.state.fancyEffects;
     renderState.debugMode = this.state.debugMode;
     renderState.dirty = this.hasRenderChanges();
     renderState.canvasCallouts = this.state.canvasCallouts;

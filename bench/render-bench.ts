@@ -1,3 +1,4 @@
+import { FancyEffects } from "#types/fancy-effects.ts";
 import { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
 import {
   DitheringKind,
@@ -1376,6 +1377,7 @@ function createRenderState(
   const entitySpatialIndex = new EntitySpatialIndex();
   for (const entity of entities) entitySpatialIndex.upsert(entity);
   return {
+    fancyEffects: FancyEffects.all,
     viewport,
     entities,
     entityIndices: new Map(entities.map((entity, index) => [entity.id, index])),
