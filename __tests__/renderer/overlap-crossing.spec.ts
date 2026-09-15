@@ -226,6 +226,74 @@ describe("canvas overlap crossings", () => {
     field.destroy();
   });
 
+  test("drag-under affects only upper neighbors, responds to speed, and fades when paused", () => {
+    const { field, latest, entities, action, drag } = motionFixture();
+    overlapLab.configure({ dragUnder: true, rgbDecay: 200, wakeDecay: 600 });
+    field.update(entities, action, 0, 1, 1, drag);
+    expect(field.pending).toBe(false);
+    drag.offset.x = 1;
+    field.update(entities, action, 16, 1, 1, drag);
+    expect(latest()[0]).toBe(2); // Two upper cards, no effect on the mover.
+    expect(latest()[18]).toBe(field.key("upper-a"));
+    expect(latest()[34]).toBe(field.key("upper-b"));
+    expect(latest()[19]).toBe(0); // Motion fields never exchange depth.
+    const slow = latest()[21]!;
+    drag.offset.x = 17;
+    field.update(entities, action, 32, 1, 1, drag);
+    expect(latest()[21]).toBeGreaterThan(slow);
+    expect(field.order(0, "moving")).toBe(0);
+    const moving = latest()[22]!;
+    field.update(entities, action, 250, 1, 1, drag);
+    expect(latest()[21]).toBe(0); // RGB tail completed; wake continues.
+    expect(latest()[22]).toBeGreaterThan(0);
+    expect(latest()[22]).toBeLessThan(moving);
+    field.update(entities, action, 633, 1, 1, drag);
+    expect(field.pending).toBe(false);
+    field.destroy();
+  });
+
+  test("drag-under tracks group offsets, retains the last footprint, and clears when disabled", () => {
+    const { field, latest, entities, action, drag } = motionFixture();
+    overlapLab.configure({ dragUnder: true });
+    drag.entityIds = new Set(["moving", "upper-a"]);
+    field.update(entities, action, 0, 1, 1, drag);
+    drag.offset.x = 10;
+    field.update(entities, action, 16, 1, 1, drag);
+    expect(latest()[0]).toBe(2); // Both group members influence upper-b, never each other.
+    expect(latest()[18]).toBe(field.key("upper-b"));
+    expect(latest()[34]).toBe(field.key("upper-b"));
+    const footprint = latest()[12];
+    drag.offset.x = 400;
+    field.update(entities, action, 32, 1, 1, drag);
+    expect(latest()[12]).toBe(footprint); // Leaving keeps the old imprint while it decays.
+    overlapLab.configure({ dragUnder: false });
+    field.update(entities, action, 48, 1, 1, drag);
+    expect(latest()[0]).toBe(0);
+    expect(field.pending).toBe(false);
+    field.destroy();
+  });
+
+  test("drag-under ignores viewport changes and drag commits; the flag starts disabled", () => {
+    const { field, latest, entities, action, drag } = motionFixture();
+    expect(overlapDefaults.dragUnder).toBe(false);
+    field.update(entities, action, 0, 1, 1, drag);
+    drag.offset.x = 10;
+    field.update(entities, action, 16, 1, 1, drag);
+    expect(field.pending).toBe(false);
+    overlapLab.configure({ dragUnder: true });
+    field.update(entities, action, 32, 1, 1, drag);
+    field.update(entities, action, 48, 2, 2, drag);
+    expect(field.pending).toBe(false);
+    drag.offset.x = 20;
+    field.update(entities, action, 64, 2, 2, drag);
+    const energy = latest()[21]!;
+    entities[0] = { ...entities[0]!, position: { x: 20, y: 0 } };
+    drag.offset.x = 0;
+    field.update(entities, action, 80, 2, 2, drag);
+    expect(latest()[21]).toBeLessThan(energy); // No spurious movement on commit.
+    field.destroy();
+  });
+
   test("off and cancellation clear the contact field", () => {
     const device = {
       limits: { maxStorageBufferBindingSize: 1024 * 1024 },
@@ -255,3 +323,36 @@ describe("canvas overlap crossings", () => {
     field.destroy();
   });
 });
+
+function motionFixture() {
+  let upload = new Float32Array();
+  const device = {
+    limits: { maxStorageBufferBindingSize: 1024 * 1024 },
+    createBuffer: () => ({ destroy() {} }),
+    createBindGroup: () => ({}),
+    createBindGroupLayout: () => ({}),
+    queue: {
+      writeBuffer: (_buffer: unknown, _offset: number, source: ArrayBuffer) => {
+        upload = new Float32Array(source).slice();
+      },
+    },
+  } as unknown as GPUDevice;
+  const entities = ["moving", "upper-a", "upper-b"].map((id) =>
+    createTestEntity({ id, position: { x: 0, y: 0 }, size: { width: 100, height: 100 } }),
+  );
+  const action: ActionLayerRenderState = {
+    active: false,
+    entityIds: new Set(),
+    entityOffset: { x: 0, y: 0 },
+    blurIntensity: 0,
+  };
+  const drag: DragVisualRenderState = {
+    active: true,
+    isDragPhase: true,
+    entityIds: new Set(["moving"]),
+    scale: 1,
+    offset: { x: 0, y: 0 },
+    appliesToSelection: true,
+  };
+  return { field: new OverlapCrossing(device), latest: () => upload, entities, action, drag };
+}

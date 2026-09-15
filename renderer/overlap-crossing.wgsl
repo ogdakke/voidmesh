@@ -1,8 +1,8 @@
 // Contact-space effects shared by image, SVG/GIF textures, and external video.
 struct Contact {
   rect: vec4f, // Other card center and half size in world coordinates.
-  pose: vec4f, // cos, sin, participant key, role (+lifted / -cover).
-  metric: vec4f, // world units per CSS pixel, crossing depth, partner key, shared contact span.
+  pose: vec4f, // cos, sin, participant key, role (+lifted / -cover / 0 motion).
+  metric: vec4f, // Crossing: pixel scale/depth/partner/span. Motion: pixel scale/RGB energy/wake energy/phase.
   axis: vec4f, // Separation direction away from other card; shared contact center.
 }
 struct Contacts {
@@ -40,7 +40,11 @@ struct ContactField {
   pixel: f32,
   distance: f32,
   normal: vec2f,
-  away: vec2f,
+  rgbPulse: f32,
+  wakePulse: f32,
+  radius: f32,
+  phase: f32,
+  flow: vec2f,
 }
 // Select the strongest nearby contact. Deep stacks cannot amplify without bound.
 fn crossingField(world: vec2f, key: u32) -> ContactField {
@@ -56,16 +60,25 @@ fn crossingField(world: vec2f, key: u32) -> ContactField {
     let zWindow = 1.0 - smoothstep(0.02, 0.38, abs(lift - contact.metric.y));
     // Contact pressure peaks between resting layers.
     let passing = 4.0 * lift * (1.0 - lift) * max(zWindow, 0.4);
-    let score = exp(-max(sd, 0.0) / max(120.0 * pixel, 1.0)) * (0.1 + passing);
+    let motion = contact.pose.w == 0.0;
+    let rgbEcho = smoothstep(0.2, 0.75, contacts.timeline.z) * pow(1.0 - contacts.header.z, 2.0);
+    let rgbPulse = select(passing + 0.22 * rgbEcho, contact.metric.y, motion);
+    let wakePulse = select(smoothstep(0.0, 0.2, contacts.timeline.z) * pow(1.0 - contacts.timeline.w, 2.0), contact.metric.z, motion);
+    let score = exp(-max(sd, 0.0) / max(120.0 * pixel, 1.0)) * max(rgbPulse, wakePulse);
+    if (score <= 0.00001) { continue; }
     if (score <= best) { continue; }
     best = score;
     result.coverage = 1.0 - smoothstep(-24.0 * pixel, 24.0 * pixel, sd);
     result.passing = passing;
-    result.role = contact.pose.w;
+    result.role = select(contact.pose.w, -1.0, motion);
     result.pixel = pixel;
     result.distance = sd;
     result.normal = contactRotate(contactNormal(local, contact.rect.zw), contact.pose.xy);
-    result.away = contact.axis.xy;
+    result.rgbPulse = rgbPulse;
+    result.wakePulse = wakePulse;
+    result.radius = select(6.0 + (contacts.timeline.z * 0.25 + contacts.timeline.w) * 96.0, 6.0 + contact.axis.z, motion);
+    result.phase = select(0.0, contact.metric.w, motion);
+    result.flow = select(result.normal * contacts.timeline.y, contact.axis.xy, motion);
   }
   return result;
 }
@@ -95,18 +108,15 @@ fn crossingMaterial(uv: vec2f, world: vec2f, key: u32, size: vec2f, pose: vec2f,
   let normal = contactLocal(worldNormal, pose);
   // A subtle displacement is shared by all three color samples. RGB refraction
   // stays coherent with the moving wake rather than compositing a second image.
-  let wakeAge = contacts.timeline.z * 0.25 + contacts.timeline.w;
-  let radius = 6.0 + wakeAge * 96.0;
-  let waveDistance = abs(field.distance / field.pixel) - radius;
+  let waveDistance = abs(field.distance / field.pixel) - field.radius;
   let width = contacts.tuning.y;
-  let packet = exp(-waveDistance * waveDistance / (2.0 * width * width)) * sin(waveDistance / (width * 0.643));
-  let wakeAmplitude = smoothstep(0.0, 0.2, contacts.timeline.z) * pow(1.0 - contacts.timeline.w, 2.0) * contacts.header.w;
-  let warp = contactLocal(field.normal, pose) * pixel * packet * wakeAmplitude * 9.0 * contacts.timeline.y;
+  let packet = exp(-waveDistance * waveDistance / (2.0 * width * width)) * sin((waveDistance - field.phase) / (width * 0.643));
+  let wakeAmplitude = field.wakePulse * contacts.header.w;
+  let warp = contactLocal(field.flow, pose) * pixel * packet * wakeAmplitude * 9.0;
 
   let d = seamDistance / field.pixel;
   let band = exp(-d * d / (2.0 * 18.0 * 18.0));
-  let echo = smoothstep(0.2, 0.75, contacts.timeline.z) * pow(1.0 - contacts.header.z, 2.0);
-  let energy = (field.passing + 0.22 * echo) * band * contacts.header.y;
+  let energy = field.rgbPulse * band * contacts.header.y;
   let bend = normal * pixel * energy * 5.0 * field.role;
   let split = normal * pixel * energy * contacts.tuning.x;
   let base = crossingSample(uv + warp + bend, paint);
@@ -124,7 +134,7 @@ fn crossingTransmission(world: vec2f, key: u32) -> f32 {
   var transmission = 1.0;
   for (var i = 0u; i < u32(contacts.header.x); i++) {
     let contact = contacts.items[i];
-    if (u32(contact.pose.z) != key) { continue; }
+    if (contact.pose.w == 0.0 || u32(contact.pose.z) != key) { continue; }
     let depth = contacts.timeline.x - contact.metric.y;
     let front = select((depth < 0.0), (depth >= 0.0), (contact.pose.w > 0.0));
     if (!front) { continue; }
