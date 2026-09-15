@@ -31,7 +31,8 @@ WebGPU rendering, shader execution, composition, resource caching, and export.
 
 - GPU color configuration is detected once and passed explicitly to dependent systems.
 - Preserve source alpha across shader output.
-- Action-layer blur sits between canvas and foreground crossing slices. Draw each slice once, keeping the foreground sharp after blur.
+- Active action-layer material never enters scene blur. Reconstruct lower crossing slices after blur using sharp active material, blurred backdrop color, and original cover alpha; preserve animated depth and draw each active slice once.
+- Composition owns crossing layer targets and texture-identity opacity proofs. Prime proofs only from immutable image uploads, keep current-frame resources alive through submission, and destroy them on eviction or shutdown.
 - Keep base entities, selection/labels, action-layer content, disintegration, lensing, and progressive blur in their intended layer order.
 
 ## Boundaries

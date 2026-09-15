@@ -366,6 +366,156 @@ describe("canvas overlap crossings", () => {
     expect(field.order(0, entities[0]!.id)).toBe(0);
     field.destroy();
   });
+
+  test("indexes only each participant's contacts in stack order and clears stale membership", () => {
+    let upload = new ArrayBuffer(0);
+    const device = {
+      limits: { maxStorageBufferBindingSize: 1024 * 1024 },
+      createBuffer: () => ({ destroy() {} }),
+      createBindGroup: () => ({}),
+      createBindGroupLayout: () => ({}),
+      queue: {
+        writeBuffer: (_buffer: unknown, _offset: number, source: ArrayBuffer) => {
+          upload = source.slice(0);
+        },
+      },
+    } as unknown as GPUDevice;
+    const field = new OverlapCrossing(device, settings);
+    const entities = ["lifted", "cover-a", "cover-b", "unrelated"].map((id) =>
+      createTestEntity({ id, position: { x: id === "unrelated" ? 1000 : 0, y: 0 } }),
+    );
+    const action: ActionLayerRenderState = {
+      active: true,
+      entityIds: new Set(["lifted"]),
+      entityOffset: { x: 0, y: 0 },
+      blurIntensity: 0,
+    };
+    // Reserve an unrelated key before upload; new keys after upload must also be safe.
+    field.key("unrelated");
+    const membership = (id: string): number[] => {
+      const words = new Uint32Array(upload);
+      const key = field.key(id);
+      if (key >= words[10]!) return [];
+      const offset = words[11]! + key * 2;
+      return Array.from(words.slice(words[offset]!, words[offset]! + words[offset + 1]!));
+    };
+    field.update(entities, action, 0, 1, 1);
+    expect(membership("lifted")).toEqual([0, 2]);
+    expect(membership("cover-a")).toEqual([1]);
+    expect(membership("cover-b")).toEqual([3]);
+    expect(membership("unrelated")).toEqual([]);
+    expect(membership("new-key")).toEqual([]);
+    entities[1] = createTestEntity({ id: "cover-a", position: { x: 1000, y: 0 } });
+    field.update(entities, action, 100, 1, 1);
+    expect(membership("lifted")).toEqual([0]);
+    expect(membership("cover-a")).toEqual([]);
+    expect(membership("cover-b")).toEqual([1]);
+    field.update(entities, { ...action, active: false }, 200, 1, 1);
+    expect(new Float32Array(upload)[0]).toBe(0);
+    field.destroy();
+  });
+
+  test.each([0, 35, -45])(
+    "slice pruning preserves the per-pixel partition at rotation %s",
+    (rotation) => {
+      let upload = new Float32Array();
+      const device = {
+        limits: { maxStorageBufferBindingSize: 1024 * 1024 },
+        createBuffer: () => ({ destroy() {} }),
+        createBindGroup: () => ({}),
+        createBindGroupLayout: () => ({}),
+        queue: {
+          writeBuffer: (_buffer: unknown, _offset: number, source: ArrayBuffer) => {
+            upload = new Float32Array(source).slice();
+          },
+        },
+      } as unknown as GPUDevice;
+      const field = new OverlapCrossing(device, settings);
+      const entities = Array.from({ length: 12 }, (_, index) =>
+        createTestEntity({
+          id: `card-${index}`,
+          size: { width: 240, height: 180 },
+          position: { x: index * 5, y: index * 3 },
+          rotation: index === 0 ? rotation : (index % 2) * 12,
+        }),
+      );
+      const action: ActionLayerRenderState = {
+        active: true,
+        entityIds: new Set(["card-0"]),
+        entityOffset: { x: 0, y: -12 },
+        blurIntensity: 1,
+      };
+      let pruned = false;
+      for (const now of [0, 20, 60, 100, 160, 220, 280, 360, 400, 900]) {
+        action.returning = rotation < 0 && now >= 220;
+        field.update(entities, action, now, 2, 3);
+        const emitted = new Map<number, number>();
+        field.appendSlices("card-0", (anchor, slice) => {
+          const original = anchor === 0 ? 1 : (anchor - 0.5 - 1) * 2 + 2;
+          emitted.set(original, slice);
+        });
+        pruned ||= emitted.size < 12;
+        const lift = upload[4]!;
+        const angle = (rotation * Math.PI) / 180;
+        for (let y = -3; y <= 183; y += 6)
+          for (let x = -3; x <= 243; x += 6) {
+            const worldX = (x - 120) * Math.cos(angle) - (y - 90) * Math.sin(angle) + 120;
+            const worldY = (x - 120) * Math.sin(angle) + (y - 90) * Math.cos(angle) + 90 - 18;
+            let previous = 1;
+            let previousSlice = 1;
+            for (let i = 0; i < upload[0]!; i += 2) {
+              const offset = 12 + i * 16;
+              const axisX = upload[offset + 12]!,
+                axisY = upload[offset + 13]!;
+              const dx = worldX - upload[offset + 14]!,
+                dy = worldY - upload[offset + 15]!;
+              const along = (dx * axisX + dy * axisY) / upload[offset + 11]!;
+              const across = (-dx * axisY + dy * axisX) / upload[offset + 11]!;
+              const depth = upload[offset + 9]!;
+              const width = Math.min(0.14, Math.min(depth, 1 - depth) * 0.8);
+              const ripple = 0.12 * Math.sin(across * 8 - lift * 6) * Math.min(upload[3]!, 1);
+              const travel = lift - depth + (along + ripple) * 4 * lift * (1 - lift) * 0.28;
+              const t = Math.max(0, Math.min(1, (travel + width) / (2 * width)));
+              const passage = Math.min(previous, t * t * (3 - 2 * t));
+              const weight = previous - passage;
+              expect(weight).toBe(
+                !emitted.has(previousSlice) ? 0 : emitted.get(previousSlice) === 0 ? 1 : weight,
+              );
+              previous = passage;
+              previousSlice = i + 2;
+            }
+            expect(previous).toBe(
+              !emitted.has(previousSlice) ? 0 : emitted.get(previousSlice) === 0 ? 1 : previous,
+            );
+          }
+      }
+      expect(pruned).toBe(true);
+      field.destroy();
+    },
+  );
+
+  test("fails explicitly at the storage limit without destroying the previous allocation", () => {
+    const buffer = { destroy: vi.fn<GPUBuffer["destroy"]>() };
+    const device = {
+      limits: { maxStorageBufferBindingSize: 128 },
+      createBuffer: vi.fn<() => typeof buffer>(() => buffer),
+      createBindGroup: () => ({}),
+      createBindGroupLayout: () => ({}),
+      queue: { writeBuffer() {} },
+    } as unknown as GPUDevice;
+    const field = new OverlapCrossing(device, settings);
+    const entities = [createTestEntity(), createTestEntity()];
+    const action: ActionLayerRenderState = {
+      active: true,
+      entityIds: new Set([entities[0]!.id]),
+      entityOffset: { x: 0, y: 0 },
+      blurIntensity: 0,
+    };
+    expect(() => field.update(entities, action, 0, 1, 1)).toThrow("GPU storage binding limit");
+    expect(device.createBuffer).toHaveBeenCalledOnce();
+    expect(buffer.destroy).not.toHaveBeenCalled();
+    field.destroy();
+  });
 });
 
 function motionFixture() {
