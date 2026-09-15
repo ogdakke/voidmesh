@@ -29,6 +29,7 @@ struct EntityUniforms {
 @group(0) @binding(1) var<uniform> entity: EntityUniforms;
 @group(0) @binding(2) var entityTexture: texture_2d<f32>;
 @group(0) @binding(3) var entitySampler: sampler;
+@group(2) @binding(0) var backdrop: texture_2d<f32>;
 
 const BORDER_PX: f32 = 2.0;
 
@@ -37,10 +38,11 @@ struct VertexOutput {
   @location(0) uv: vec2f,
   @location(7) @interpolate(flat) crossingSlice: u32,
   @location(3) world: vec2f,
-  @location(4) @interpolate(flat) contactKey: u32,
+  @location(4) @interpolate(flat) contactRange: vec2u,
   @location(5) @interpolate(flat) cardSize: vec2f,
   @location(6) @interpolate(flat) cardPose: vec2f,
   @location(1) size: vec2f,
+  @location(8) @interpolate(flat) actionCard: u32,
 }
 
 // --- Noise functions for disintegration ---
@@ -137,11 +139,21 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
   output.position = vec4f(clipPos, 0.0, 1.0);
   output.uv = expandedUV;
   output.world = contactWorld;
-  output.contactKey = entity._reserved;
+  output.contactRange = crossingRange(entity._reserved);
+  output.position.z = crossingDepth(entity._reserved, output.contactRange, entity.isSelected != 0u);
+  output.actionCard = crossingIsActive(entity._reserved);
   output.cardSize = scaledSize;
   output.cardPose = vec2f(cosR, sinR);
   output.size = scaledSize;
   return output;
+}
+
+@fragment
+fn fs_restore(input: VertexOutput) -> @location(0) vec4f {
+  let paint = CrossingPaint(input.crossingSlice, entity.isSelected, entity.debugMode, vec2f(BORDER_PX) / (input.cardSize * viewport.zoom));
+  if (input.actionCard != 0u) { return crossingColor(input.uv, input.world, input.contactRange, input.cardSize, input.cardPose, paint); }
+  let alpha = crossingMaterial(input.uv, input.world, input.contactRange, input.cardSize, input.cardPose, paint, true).a;
+  return vec4f(textureLoad(backdrop, vec2i(input.position.xy), 0).rgb, alpha);
 }
 
 // Fragment shader - samples entity texture and renders selection borders
@@ -149,7 +161,7 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
     // Sample texture (clamp UV for expanded border region)
-    let textureColor = crossingColor(input.uv, input.world, input.contactKey, input.cardSize, input.cardPose, CrossingPaint(input.crossingSlice, entity.isSelected, entity.debugMode, vec2f(BORDER_PX) / (input.cardSize * viewport.zoom)));
+    let textureColor = crossingColor(input.uv, input.world, input.contactRange, input.cardSize, input.cardPose, CrossingPaint(input.crossingSlice, entity.isSelected, entity.debugMode, vec2f(BORDER_PX) / (input.cardSize * viewport.zoom)));
 
     // Outside border: UV is outside [0,1] when quad is expanded for selection
     let inBorder = input.uv.x < 0.0 || input.uv.x > 1.0 || input.uv.y < 0.0 || input.uv.y > 1.0;

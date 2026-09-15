@@ -29,6 +29,8 @@ struct InteractionUniforms {
 @group(0) @binding(2) var entityTexture: texture_2d<f32>;
 @group(0) @binding(3) var entitySampler: sampler;
 @group(0) @binding(4) var<uniform> interaction: InteractionUniforms;
+@group(2) @binding(0) var backdrop: texture_2d<f32>;
+@group(2) @binding(1) var<storage, read> textureOpaque: array<u32>;
 
 const BORDER_PX: f32 = 2.0;
 const TAU: f32 = 6.283185307179586;
@@ -62,11 +64,13 @@ struct VertexOutput {
   @location(0) uv: vec2f,
   @location(7) @interpolate(flat) crossingSlice: u32,
   @location(3) world: vec2f,
-  @location(4) @interpolate(flat) contactKey: u32,
+  @location(4) @interpolate(flat) contactRange: vec2u,
   @location(5) @interpolate(flat) cardSize: vec2f,
   @location(6) @interpolate(flat) cardPose: vec2f,
   @location(1) @interpolate(flat) isSelected: u32,
   @location(2) @interpolate(flat) debugMode: u32,
+  @location(8) @interpolate(flat) actionCard: u32,
+  @location(9) @interpolate(flat) opaqueMargin: vec2f,
 }
 
 fn intersectsDragSelection(entity: EntityInstance, cosR: f32, sinR: f32) -> bool {
@@ -88,11 +92,7 @@ fn intersectsDragSelection(entity: EntityInstance, cosR: f32, sinR: f32) -> bool
   );
 }
 
-@vertex
-fn vs_main(
-  @builtin(vertex_index) vertexIndex: u32,
-  @builtin(instance_index) instanceIndex: u32,
-) -> VertexOutput {
+fn compositionVertex(vertexIndex: u32, instanceIndex: u32) -> VertexOutput {
 
   let entity = entities[instanceIndex];
   let localPos = crossingGrid(vertexIndex);
@@ -137,12 +137,46 @@ fn vs_main(
   output.position = vec4f(clipPos, 0.0, 1.0);
   output.uv = expandedUV;
   output.world = contactWorld;
-  output.contactKey = entity._padding;
+  output.contactRange = crossingRange(entity._padding);
+  output.position.z = crossingDepth(entity._padding, output.contactRange, selected);
+  output.actionCard = crossingIsActive(entity._padding);
+  output.opaqueMargin = crossingOcclusionMargin(output.contactRange, scaledSize);
   output.cardSize = scaledSize;
   output.cardPose = vec2f(cosR, sinR);
   output.isSelected = select(0u, 1u, selected);
   output.debugMode = select(0u, 1u, hasInstanceFlag(entity, FLAG_DEBUG));
   return output;
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instanceIndex: u32) -> VertexOutput {
+  return compositionVertex(vertexIndex, instanceIndex);
+}
+
+@vertex
+fn vs_occlusion(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instanceIndex: u32) -> VertexOutput {
+  if (textureOpaque[instanceIndex] == 0u) {
+    var output: VertexOutput;
+    output.position = vec4f(2.0, 2.0, 0.0, 1.0);
+    return output;
+  }
+  return compositionVertex(vertexIndex, instanceIndex);
+}
+
+@fragment
+fn fs_occlusion(input: VertexOutput) {
+  if (input.position.z == 0.0 || any(input.uv <= input.opaqueMargin) || any(input.uv >= vec2f(1.0) - input.opaqueMargin)) { discard; }
+}
+
+@fragment
+fn fs_restore(input: VertexOutput) -> @location(0) vec4f {
+  let paint = CrossingPaint(input.crossingSlice, input.isSelected, input.debugMode, vec2f(BORDER_PX) / (input.cardSize * viewport.zoom));
+  if (input.actionCard != 0u) { return crossingColor(input.uv, input.world, input.contactRange, input.cardSize, input.cardPose, paint); }
+  if (textureOpaque[0] != 0u && all(input.uv > input.opaqueMargin) && all(input.uv < vec2f(1.0) - input.opaqueMargin)) {
+    return vec4f(textureLoad(backdrop, vec2i(input.position.xy), 0).rgb, 1.0);
+  }
+  let alpha = crossingMaterial(input.uv, input.world, input.contactRange, input.cardSize, input.cardPose, paint, true).a;
+  return vec4f(textureLoad(backdrop, vec2i(input.position.xy), 0).rgb, alpha);
 }
 
 @vertex
@@ -209,7 +243,9 @@ fn vs_interactive(
   output.position = vec4f(clipPos, 0.0, 1.0);
   output.uv = expandedUV;
   output.world = contactWorld;
-  output.contactKey = entity._padding;
+  output.contactRange = crossingRange(entity._padding);
+  output.actionCard = crossingIsActive(entity._padding);
+  output.opaqueMargin = vec2f(0.0);
   output.cardSize = scaledSize;
   output.cardPose = vec2f(cosR, sinR);
   output.isSelected = select(0u, 1u, selected);
@@ -219,7 +255,7 @@ fn vs_interactive(
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
-  let textureColor = crossingColor(input.uv, input.world, input.contactKey, input.cardSize, input.cardPose, CrossingPaint(input.crossingSlice, input.isSelected, input.debugMode, vec2f(BORDER_PX) / (input.cardSize * viewport.zoom)));
+  let textureColor = crossingColor(input.uv, input.world, input.contactRange, input.cardSize, input.cardPose, CrossingPaint(input.crossingSlice, input.isSelected, input.debugMode, vec2f(BORDER_PX) / (input.cardSize * viewport.zoom)));
   return textureColor;
 }
 
