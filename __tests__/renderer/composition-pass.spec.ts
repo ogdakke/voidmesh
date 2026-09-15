@@ -32,6 +32,84 @@ describe("CompositionPass instancing", () => {
     pass.destroy();
   });
 
+  test.each([false, true])(
+    "partitions a lifted material around every cover, including culled partners (%s)",
+    (cullMiddle) => {
+      const { device } = createDevice();
+      const pass = createPass(device);
+      const entities = ["lifted", "middle", "upper"].map((id) => createTestEntity({ id }));
+      const action = {
+        active: true,
+        entityIds: new Set(["lifted"]),
+        entityOffset: { x: 0, y: 0 },
+        blurIntensity: 0,
+      };
+      pass.crossing.update(entities, action, 0, 1, 1);
+      pass.crossing.update(entities, action, 100, 1, 1);
+      const texture = createTexture();
+      const items = entities.map((entity) => prepare(pass, entity, texture));
+      const renderPass = createRenderPass();
+      // Input arrives in the instantaneous depth order, not its resting order.
+      pass.drawItems(
+        renderPass,
+        cullMiddle ? [items[2]!, items[0]!] : [items[2]!, items[0]!, items[1]!],
+      );
+      const calls = renderPass.draw.mock.calls;
+      expect(calls.map((call) => call[2])).toEqual(cullMiddle ? [6, 12, 0, 24] : [6, 0, 12, 0, 24]);
+      // Only the lifted material is split. Covers retain their full source alpha.
+      expect(calls.every((call) => call[0] === 6 && call[1] === 1)).toBe(true);
+      const uploads = device.queue.writeBuffer.mock.calls.filter(
+        (call) => call[2] instanceof ArrayBuffer,
+      );
+      const instanceUpload = uploads.at(-1)!;
+      const keys = new Uint32Array(instanceUpload[2] as ArrayBuffer);
+      expect(calls.map((call) => keys[Number(call[3]) * 6 + 5])).toEqual(
+        (cullMiddle
+          ? ["lifted", "lifted", "upper", "lifted"]
+          : ["lifted", "middle", "lifted", "upper", "lifted"]
+        ).map((id) => pass.crossing.key(id)),
+      );
+      pass.destroy();
+      entities.forEach(releaseImageEntity);
+    },
+  );
+
+  test("splits external video draws and returns to ordinary batching after the crossing", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const lifted = createTestEntity({ id: "video" });
+    const cover = createTestEntity({ id: "cutout" });
+    const entities = [lifted, cover];
+    const action = {
+      active: true,
+      entityIds: new Set([lifted.id]),
+      entityOffset: { x: 0, y: 0 },
+      blurIntensity: 0,
+    };
+    pass.crossing.update(entities, action, 0, 1, 1);
+    expect(pass.crossing.hasSlices).toBe(false);
+    pass.crossing.update(entities, action, 100, 1, 1);
+    const video = pass.prepareDrawItem({
+      entity: lifted,
+      source: { kind: "external", texture: {} as GPUExternalTexture },
+      isSelected: true,
+      debugMode: false,
+      positionOffsetX: 0,
+      positionOffsetY: 0,
+      visualScale: 1,
+    });
+    const image = prepare(pass, cover, createTexture());
+    const renderPass = createRenderPass();
+    pass.drawItems(renderPass, [video, image]);
+    expect(renderPass.draw.mock.calls.map((call) => call[2])).toEqual([6, 0, 12]);
+    pass.crossing.update(entities, { ...action, returning: true }, 100, 1, 1);
+    expect(pass.crossing.hasSlices).toBe(true);
+    pass.crossing.update(entities, { ...action, active: false }, 1000, 1, 1);
+    expect(pass.crossing.hasSlices).toBe(false);
+    pass.destroy();
+    entities.forEach(releaseImageEntity);
+  });
+
   test("draws adjacent entities sharing one texture as one instance batch", () => {
     const { device, instanceBuffer } = createDevice();
     const pass = createPass(device);

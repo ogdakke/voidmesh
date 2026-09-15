@@ -60,6 +60,7 @@ fn hasInstanceFlag(entity: EntityInstance, flag: u32) -> bool {
 struct VertexOutput {
   @builtin(position) position: vec4f,
   @location(0) uv: vec2f,
+  @location(7) @interpolate(flat) crossingSlice: u32,
   @location(3) world: vec2f,
   @location(4) @interpolate(flat) contactKey: u32,
   @location(5) @interpolate(flat) cardSize: vec2f,
@@ -132,6 +133,7 @@ fn vs_main(
   );
 
   var output: VertexOutput;
+  output.crossingSlice = vertexIndex / 6u;
   output.position = vec4f(clipPos, 0.0, 1.0);
   output.uv = expandedUV;
   output.world = contactWorld;
@@ -203,6 +205,7 @@ fn vs_interactive(
   );
 
   var output: VertexOutput;
+  output.crossingSlice = vertexIndex / 6u;
   output.position = vec4f(clipPos, 0.0, 1.0);
   output.uv = expandedUV;
   output.world = contactWorld;
@@ -216,6 +219,6 @@ fn vs_interactive(
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
-  let textureColor = crossingColor(input.uv, input.world, input.contactKey, input.cardSize, input.cardPose, CrossingPaint(input.isSelected, input.debugMode, vec2f(BORDER_PX) / (input.cardSize * viewport.zoom)));
+  let textureColor = crossingColor(input.uv, input.world, input.contactKey, input.cardSize, input.cardPose, CrossingPaint(input.crossingSlice, input.isSelected, input.debugMode, vec2f(BORDER_PX) / (input.cardSize * viewport.zoom)));
   return textureColor;
 }
