@@ -1,14 +1,17 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { cardsOverlap, OverlapCrossing } from "#renderer/overlap-crossing.ts";
-import { overlapLab, overlapDefaults } from "#lib/overlap-lab.ts";
+import { overlapConfig, type OverlapConfig } from "#lib/config/overlap.config.ts";
+
+let settings: OverlapConfig;
 import type { ActionLayerRenderState, DragVisualRenderState } from "#engine";
 import { createTestEntity } from "../helpers/test-entity.ts";
 
 describe("canvas overlap crossings", () => {
   beforeEach(() => {
+    settings = { ...overlapConfig };
     vi.stubGlobal("GPUShaderStage", { VERTEX: 1, FRAGMENT: 2 });
     vi.stubGlobal("GPUBufferUsage", { STORAGE: 1, COPY_DST: 2 });
-    overlapLab.configure({
+    Object.assign(settings, {
       enabled: true,
       dragUnder: false,
       transition: 400,
@@ -17,7 +20,7 @@ describe("canvas overlap crossings", () => {
     });
   });
   afterEach(() => {
-    overlapLab.configure(overlapDefaults);
+    Object.assign(settings, overlapConfig);
     vi.unstubAllGlobals();
   });
   test("rejects separated rotated cards even when their axis-aligned bounds overlap", () => {
@@ -43,7 +46,7 @@ describe("canvas overlap crossings", () => {
           uploads.push(new Float32Array(source).slice()),
       },
     } as unknown as GPUDevice;
-    const field = new OverlapCrossing(device);
+    const field = new OverlapCrossing(device, settings);
     const below = createTestEntity({ id: "below" });
     const lifted = createTestEntity({ id: "lifted" });
     const cover = createTestEntity({ id: "cover", position: { x: 40, y: 30 } });
@@ -90,7 +93,7 @@ describe("canvas overlap crossings", () => {
       createBindGroupLayout: () => ({}),
       queue: { writeBuffer() {} },
     } as unknown as GPUDevice;
-    const field = new OverlapCrossing(device);
+    const field = new OverlapCrossing(device, settings);
     const entities = [
       createTestEntity(),
       createTestEntity(),
@@ -129,7 +132,7 @@ describe("canvas overlap crossings", () => {
         },
       },
     } as unknown as GPUDevice;
-    const field = new OverlapCrossing(device);
+    const field = new OverlapCrossing(device, settings);
     const card = (id: string, x: number) =>
       createTestEntity({ id, position: { x, y: 0 }, size: { width: 100, height: 100 } });
     const entities = [
@@ -197,7 +200,7 @@ describe("canvas overlap crossings", () => {
         },
       },
     } as unknown as GPUDevice;
-    const field = new OverlapCrossing(device);
+    const field = new OverlapCrossing(device, settings);
     const entities = [createTestEntity(), createTestEntity()];
     const action: ActionLayerRenderState = {
       active: true,
@@ -205,7 +208,7 @@ describe("canvas overlap crossings", () => {
       entityOffset: { x: 0, y: 0 },
       blurIntensity: 0,
     };
-    overlapLab.configure({
+    Object.assign(settings, {
       rgbStrength: 1.55,
       wakeStrength: 0.3,
       rgbDecay: 200,
@@ -221,7 +224,7 @@ describe("canvas overlap crossings", () => {
     expect(upload[7]).toBe(0.5); // Wake still has half its decay remaining.
     expect(Array.from(upload.slice(8, 10))).toEqual([7, 14]);
     expect(field.pending).toBe(true);
-    overlapLab.configure({ wakeStrength: 0, wakeWidth: 20 });
+    Object.assign(settings, { wakeStrength: 0, wakeWidth: 20 });
     field.update(entities, action, 900, 1, 1);
     expect(upload[1]).toBeCloseTo(1.55);
     expect(upload[3]).toBe(0);
@@ -234,7 +237,7 @@ describe("canvas overlap crossings", () => {
 
   test("drag-under affects only upper neighbors, responds to speed, and fades when paused", () => {
     const { field, latest, entities, action, drag } = motionFixture();
-    overlapLab.configure({ dragUnder: true, rgbDecay: 200, wakeDecay: 600 });
+    Object.assign(settings, { dragUnder: true, rgbDecay: 200, wakeDecay: 600 });
     field.update(entities, action, 0, 1, 1, drag);
     expect(field.pending).toBe(false);
     drag.offset.x = 1;
@@ -260,7 +263,7 @@ describe("canvas overlap crossings", () => {
 
   test("drag-under tracks group offsets, retains the last footprint, and clears when disabled", () => {
     const { field, latest, entities, action, drag } = motionFixture();
-    overlapLab.configure({ dragUnder: true });
+    Object.assign(settings, { dragUnder: true });
     drag.entityIds = new Set(["moving", "upper-a"]);
     field.update(entities, action, 0, 1, 1, drag);
     drag.offset.x = 10;
@@ -272,7 +275,7 @@ describe("canvas overlap crossings", () => {
     drag.offset.x = 400;
     field.update(entities, action, 32, 1, 1, drag);
     expect(latest()[12]).toBe(footprint); // Leaving keeps the old imprint while it decays.
-    overlapLab.configure({ dragUnder: false });
+    Object.assign(settings, { dragUnder: false });
     field.update(entities, action, 48, 1, 1, drag);
     expect(latest()[0]).toBe(0);
     expect(field.pending).toBe(false);
@@ -281,12 +284,12 @@ describe("canvas overlap crossings", () => {
 
   test("drag-under ignores viewport changes and drag commits; drag-under defaults on", () => {
     const { field, latest, entities, action, drag } = motionFixture();
-    expect(overlapDefaults.dragUnder).toBe(true);
+    expect(overlapConfig.dragUnder).toBe(true);
     field.update(entities, action, 0, 1, 1, drag);
     drag.offset.x = 10;
     field.update(entities, action, 16, 1, 1, drag);
     expect(field.pending).toBe(false);
-    overlapLab.configure({ dragUnder: true });
+    Object.assign(settings, { dragUnder: true });
     field.update(entities, action, 32, 1, 1, drag);
     field.update(entities, action, 48, 2, 2, drag);
     expect(field.pending).toBe(false);
@@ -308,7 +311,7 @@ describe("canvas overlap crossings", () => {
       createBindGroupLayout: () => ({}),
       queue: { writeBuffer() {} },
     } as unknown as GPUDevice;
-    const field = new OverlapCrossing(device);
+    const field = new OverlapCrossing(device, settings);
     const entities = [createTestEntity(), createTestEntity()];
     const action: ActionLayerRenderState = {
       active: true,
@@ -322,7 +325,7 @@ describe("canvas overlap crossings", () => {
     expect(field.pending).toBe(false);
     action.active = true;
     field.update(entities, action, 20, 1, 1);
-    overlapLab.configure({ enabled: false });
+    Object.assign(settings, { enabled: false });
     field.update(entities, action, 30, 1, 1);
     expect(field.pending).toBe(false);
     expect(field.order(0, entities[0]!.id)).toBe(0);
@@ -360,5 +363,11 @@ function motionFixture() {
     offset: { x: 0, y: 0 },
     appliesToSelection: true,
   };
-  return { field: new OverlapCrossing(device), latest: () => upload, entities, action, drag };
+  return {
+    field: new OverlapCrossing(device, settings),
+    latest: () => upload,
+    entities,
+    action,
+    drag,
+  };
 }

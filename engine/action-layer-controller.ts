@@ -1,4 +1,4 @@
-import { overlapLab } from "#lib/overlap-lab.ts";
+import { overlapConfig } from "#lib/config/overlap.config.ts";
 import { SpringBack } from "#lib/touch-scroll/spring-back.ts";
 import { config } from "#config";
 import { canvasStore, type ActionLayerRenderState } from "./canvas-store.ts";
@@ -390,7 +390,7 @@ export class ActionLayerController {
           visualChanged = true;
 
           // If all animations settled, return to idle
-          const overlap = overlapLab.getSnapshot();
+          const overlap = overlapConfig;
           const crossingSettled = !overlap.enabled || elapsed >= overlap.transition;
           if (
             valX === null &&
