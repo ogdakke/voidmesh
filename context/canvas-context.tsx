@@ -1,3 +1,5 @@
+import { hasDeletionEffects, resolveFancyEffectsPreference } from "#lib/fancy-effects.ts";
+import type { FancyEffects } from "#types/fancy-effects.ts";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   CanvasCommandsContext,
@@ -317,16 +319,24 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     canvasStore.setDebugView(import.meta.env.DEV && isCanvasDebugType ? debugType : "none");
   }, [debugType, debug, isCanvasDebugType]);
 
+  const fancyEffectsRevision = useRef(0);
+
   // Hydrate persisted preferences on mount
   useEffect(() => {
     preferences.getSnapToGrid().then((v) => canvasStore.setSnapToGrid(v));
-    preferences.getFancyDelete().then((v) => {
+    const revision = fancyEffectsRevision.current;
+    let cancelled = false;
+    preferences.getFancyEffects().then((v) => {
+      if (cancelled || revision !== fancyEffectsRevision.current) return;
       const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      canvasStore.setFancyDelete(v ?? !reduced);
+      canvasStore.setFancyEffects(resolveFancyEffectsPreference(v, reduced));
     });
     preferences.getHaptics().then((v) => canvasStore.setHaptics(v));
     preferences.getCanvasLensing().then((v) => canvasStore.setCanvasLensing(v));
     preferences.getCustomPalettes().then((palettes) => paletteStore.setPalettes(palettes));
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Helper: Build shader params from URL state
@@ -722,7 +732,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
     // Snapshot the entity's rendered texture and start dust animation overlay.
     // This copies the GPU texture so the entity can be removed immediately.
-    if (canvasStore.getState().fancyDelete) {
+    if (hasDeletionEffects(canvasStore.getState().fancyEffects)) {
       // Selected drags stay transient until touch release. The delete-zone listener
       // runs before that release, so place the overlay at the rendered drag position.
       const position = canvasStore.getEntityPositionWithTransientDrag(entity.id) ?? entity.position;
@@ -772,7 +782,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     const entityIds = new Set<string>();
     const renderer = rendererRef.current;
     const animate =
-      canvasStore.getState().fancyDelete &&
+      hasDeletionEffects(canvasStore.getState().fancyEffects) &&
       entities.length <= config.canvas.fancyDeleteMaxBatchSize;
 
     for (let index = 0; index < entities.length; index++) {
@@ -1951,9 +1961,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     preferences.setSnapToGrid(enabled);
   };
 
-  const setFancyDeletePreference = (enabled: boolean) => {
-    canvasStore.setFancyDelete(enabled);
-    preferences.setFancyDelete(enabled);
+  const setFancyEffectsPreference = (value: FancyEffects) => {
+    fancyEffectsRevision.current++;
+    canvasStore.setFancyEffects(value);
+    preferences.setFancyEffects(value);
   };
 
   const setHapticsPreference = (enabled: boolean) => {
@@ -2184,7 +2195,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     pasteEffects,
     resetSelectionToDefaults,
     setSnapToGrid: setSnapToGridPreference,
-    setFancyDelete: setFancyDeletePreference,
+    setFancyEffects: setFancyEffectsPreference,
     setHaptics: setHapticsPreference,
     setCanvasLensing: setCanvasLensingPreference,
     changeSize,
@@ -2233,7 +2244,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       pasteEffects,
       resetSelectionToDefaults,
       setSnapToGrid: setSnapToGridPreference,
-      setFancyDelete: setFancyDeletePreference,
+      setFancyEffects: setFancyEffectsPreference,
       setHaptics: setHapticsPreference,
       setCanvasLensing: setCanvasLensingPreference,
       changeSize,
@@ -2284,7 +2295,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     pasteEffects: () => commandsImplRef.current.pasteEffects(),
     resetSelectionToDefaults: () => commandsImplRef.current.resetSelectionToDefaults(),
     setSnapToGrid: (...args) => commandsImplRef.current.setSnapToGrid(...args),
-    setFancyDelete: (...args) => commandsImplRef.current.setFancyDelete(...args),
+    setFancyEffects: (...args) => commandsImplRef.current.setFancyEffects(...args),
     setHaptics: (...args) => commandsImplRef.current.setHaptics(...args),
     setCanvasLensing: (...args) => commandsImplRef.current.setCanvasLensing(...args),
     changeSize: (...args) => commandsImplRef.current.changeSize(...args),

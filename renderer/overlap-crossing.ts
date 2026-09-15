@@ -160,9 +160,10 @@ export class OverlapCrossing {
     zoom: number,
     dpr: number,
     drag?: DragVisualRenderState,
+    effectsEnabled = true,
   ): void {
     const settings = this.#settings;
-    const enabled = settings.enabled;
+    const enabled = settings.enabled && effectsEnabled;
     const returning = action.returning === true;
     const trigger =
       enabled &&

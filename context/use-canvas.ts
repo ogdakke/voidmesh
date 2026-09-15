@@ -1,3 +1,4 @@
+import { FancyEffects } from "#types/fancy-effects.ts";
 import { createContext, use, useSyncExternalStore } from "react";
 import { config } from "#config";
 import { canvasStore, type ParamResult, type PreferencesSnapshot } from "#engine";
@@ -84,7 +85,7 @@ export interface CanvasCommands {
   pasteEffects: () => Promise<void>;
   resetSelectionToDefaults: () => void;
   setSnapToGrid: (enabled: boolean) => void;
-  setFancyDelete: (enabled: boolean) => void;
+  setFancyEffects: (value: FancyEffects) => void;
   setHaptics: (enabled: boolean) => void;
   setCanvasLensing: (value: CanvasLensing) => void;
   changeSize: (value: number | number[]) => void;
@@ -272,11 +273,11 @@ export function useHasEntities(): boolean {
 
 export function useCanvasPreferences(): PreferencesSnapshot {
   const snapToGrid = useCanvasSelector((state) => state.snapToGrid);
-  const fancyDelete = useCanvasSelector((state) => state.fancyDelete);
+  const fancyEffects = useCanvasSelector((state) => state.fancyEffects);
   const haptics = useCanvasSelector((state) => state.haptics);
   const canvasLensing = useCanvasSelector((state) => state.canvasLensing);
   const version = useCanvasSelector((state) => state.preferencesVersion);
-  return { snapToGrid, fancyDelete, haptics, canvasLensing, version };
+  return { snapToGrid, fancyEffects, haptics, canvasLensing, version };
 }
 
 export function useHasSelection(): boolean {

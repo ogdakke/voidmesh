@@ -1,3 +1,4 @@
+import { hasPrismWakeEffects } from "#lib/fancy-effects.ts";
 import { overlapConfig } from "#lib/config/overlap.config.ts";
 import { SpringBack } from "#lib/touch-scroll/spring-back.ts";
 import { config } from "#config";
@@ -392,7 +393,10 @@ export class ActionLayerController {
 
           // If all animations settled, return to idle
           const overlap = overlapConfig;
-          const crossingSettled = !overlap.enabled || elapsed >= overlap.transition;
+          const crossingSettled =
+            !overlap.enabled ||
+            !hasPrismWakeEffects(canvasStore.getState().fancyEffects) ||
+            elapsed >= overlap.transition;
           if (
             valX === null &&
             valY === null &&

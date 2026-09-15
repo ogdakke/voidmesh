@@ -1,3 +1,4 @@
+import { hasPrismWakeEffects } from "#lib/fancy-effects.ts";
 import { config, getViewportLensDistortionConfig, type GridConfig } from "#config";
 import { logger } from "#lib/client.logger.ts";
 import { tracePerformancePhase } from "#lib/performance-tracing.ts";
@@ -486,6 +487,7 @@ export class InfiniteCanvasRenderer {
       viewport.zoom,
       dpr,
       state.dragVisual,
+      hasPrismWakeEffects(state.fancyEffects),
     );
     const preparedEntityDrawItems = this.#entityDrawItemPreparer.prepare({
       entities,
