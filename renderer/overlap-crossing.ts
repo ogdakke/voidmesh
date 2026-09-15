@@ -6,6 +6,23 @@ type CardGeometry = Pick<ShaderCanvasEntity, "position" | "size" | "rotation">;
 interface RenderedCard extends CardGeometry {
   id: string;
   frame: number;
+  dx: number;
+  dy: number;
+}
+
+interface MotionContact {
+  mover: RenderedCard;
+  cover: RenderedCard;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+  directionX: number;
+  directionY: number;
+  strength: number;
+  lastMotion: number;
+  travel: number;
 }
 
 /** Separating-axis test avoids triggering on empty corners of rotated bounds. */
@@ -65,6 +82,11 @@ export class OverlapCrossing {
   #pairCount = 0;
   #poses = new Map<string, RenderedCard>();
   #frame = 0;
+  #motionContacts: MotionContact[] = [];
+  #motionCount = 0;
+  #lastFrameTime = -Infinity;
+  #motionEnabled = false;
+  #dragWasActive = false;
   readonly #contactAxis = { x: 0, y: 0, depth: 0 };
   #lift = 0;
   #liftFrom = 0;
@@ -167,8 +189,13 @@ export class OverlapCrossing {
     const age = Math.min(rgbAge, wakeAge);
     const crossing = Math.min(1, elapsed / this.#transition);
     this.#lift = this.#motionAt(now);
-    if (enabled && age < 1) {
+    const motionEnabled = enabled && settings.dragUnder;
+    const dt = now - this.#lastFrameTime;
+    this.#lastFrameTime = now;
+    if (enabled && (age < 1 || (motionEnabled && (drag?.active || this.#motionCount > 0)))) {
       this.#updatePoses(entities, action, drag, dpr / zoom);
+    }
+    if (enabled && age < 1) {
       if (elapsed <= this.#transition) this.#findContacts(entities);
       // Retain the last contacts during decay, but follow current geometry and
       // discard removed entities. Committing a transient drag keeps this pose.
@@ -186,8 +213,13 @@ export class OverlapCrossing {
       }
       this.#pairCount = live;
     }
-    this.#pending = enabled && age < 1 && this.#pairCount > 0;
-    const count = this.#pending ? this.#pairCount * 2 : 0;
+    if (motionEnabled) this.#updateMotion(entities, drag, now, dt, dpr / zoom);
+    else this.#motionCount = 0;
+    this.#motionEnabled = motionEnabled;
+    this.#dragWasActive = drag?.active === true;
+    const crossingCount = enabled && age < 1 ? this.#pairCount * 2 : 0;
+    const count = crossingCount + this.#motionCount;
+    this.#pending = count > 0;
     if (count === 0 && this.#data[0] === 0) return;
     const needed = 12 + count * 16;
     if (needed > this.#data.length) {
@@ -207,7 +239,7 @@ export class OverlapCrossing {
     this.#data[8] = settings.rgbSplit;
     this.#data[9] = settings.wakeWidth;
     let offset = 12;
-    if (this.#pending)
+    if (crossingCount > 0)
       for (let i = 0; i < this.#pairCount; i++) {
         const pair = this.#pairs[i]!;
         for (let side = 0; side < 2; side++) {
@@ -252,6 +284,29 @@ export class OverlapCrossing {
           offset += 16;
         }
       }
+    for (let i = 0; i < this.#motionCount; i++) {
+      const contact = this.#motionContacts[i]!;
+      const sinceMotion = Math.max(0, now - contact.lastMotion);
+      const rgbTail = Math.max(0, 1 - sinceMotion / settings.rgbDecay);
+      const wakeTail = Math.max(0, 1 - sinceMotion / settings.wakeDecay);
+      this.#data[offset] = contact.cover.position.x + contact.x;
+      this.#data[offset + 1] = contact.cover.position.y + contact.y;
+      this.#data[offset + 2] = contact.width / 2;
+      this.#data[offset + 3] = contact.height / 2;
+      this.#data[offset + 4] = Math.cos(contact.rotation);
+      this.#data[offset + 5] = Math.sin(contact.rotation);
+      this.#data[offset + 6] = this.key(contact.cover.id);
+      this.#data[offset + 7] = 0; // Motion affects only the upper card; no depth exchange.
+      this.#data[offset + 8] = dpr / zoom;
+      this.#data[offset + 9] = contact.strength * rgbTail * rgbTail;
+      this.#data[offset + 10] = contact.strength * wakeTail * wakeTail;
+      this.#data[offset + 11] = contact.travel;
+      this.#data[offset + 12] = contact.directionX;
+      this.#data[offset + 13] = contact.directionY;
+      this.#data[offset + 14] = sinceMotion * 0.08;
+      this.#data[offset + 15] = 0;
+      offset += 16;
+    }
     this.#device.queue.writeBuffer(this.#buffer, 0, this.#data.buffer, 0, Math.max(16, needed * 4));
   }
   #updatePoses(
@@ -270,9 +325,14 @@ export class OverlapCrossing {
           size: { width: 0, height: 0 },
           rotation: 0,
           frame: 0,
+          dx: 0,
+          dy: 0,
         };
         this.#poses.set(entity.id, pose);
       }
+      const previousX = pose.position.x + pose.size.width / 2;
+      const previousY = pose.position.y + pose.size.height / 2;
+      const consecutive = pose.frame === this.#frame - 1;
       const inAction = action.active && action.entityIds.has(entity.id);
       const inDrag = drag?.active && drag.entityIds.has(entity.id);
       const scale = inDrag ? drag.scale : 1;
@@ -288,8 +348,109 @@ export class OverlapCrossing {
         (entity.size.height - pose.size.height) / 2 +
         (inAction ? action.entityOffset.y * worldPerCss : 0) +
         (inDrag && drag.appliesToSelection ? drag.offset.y : 0);
+      pose.dx = consecutive ? pose.position.x + pose.size.width / 2 - previousX : 0;
+      pose.dy = consecutive ? pose.position.y + pose.size.height / 2 - previousY : 0;
       pose.rotation = entity.rotation;
       pose.frame = this.#frame;
+    }
+  }
+  #updateMotion(
+    entities: readonly ShaderCanvasEntity[],
+    drag: DragVisualRenderState | undefined,
+    now: number,
+    dt: number,
+    worldPerCss: number,
+  ): void {
+    const settings = overlapLab.getSnapshot();
+    // Expired or deleted contacts release their slots. The last footprint stays
+    // attached to the upper card during decay, even after the mover leaves it.
+    for (let i = this.#motionCount - 1; i >= 0; i--) {
+      const contact = this.#motionContacts[i]!;
+      if (
+        contact.cover.frame === this.#frame &&
+        contact.mover.frame === this.#frame &&
+        now - contact.lastMotion < Math.max(settings.rgbDecay, settings.wakeDecay)
+      )
+        continue;
+      this.#motionCount--;
+      this.#motionContacts[i] = this.#motionContacts[this.#motionCount]!;
+      this.#motionContacts[this.#motionCount] = contact;
+    }
+    if (
+      !drag?.active ||
+      !this.#dragWasActive ||
+      !this.#motionEnabled ||
+      !Number.isFinite(dt) ||
+      dt <= 0
+    )
+      return;
+    for (let i = 0; i < entities.length; i++) {
+      const mover = this.#poses.get(entities[i]!.id)!;
+      if (!drag.entityIds.has(mover.id)) continue;
+      const distance = Math.hypot(mover.dx, mover.dy);
+      if (distance < 0.001 * worldPerCss) continue;
+      const speed = distance / worldPerCss / (dt / 1000);
+      const target = 1 - Math.exp(-speed / 300);
+      for (let j = i + 1; j < entities.length; j++) {
+        const cover = this.#poses.get(entities[j]!.id)!;
+        if (
+          drag.entityIds.has(cover.id) ||
+          this.order(i, mover.id) >= j ||
+          !cardsOverlap(mover, cover)
+        )
+          continue;
+        let contact: MotionContact | undefined;
+        for (let k = 0; k < this.#motionCount; k++) {
+          const candidate = this.#motionContacts[k]!;
+          if (candidate.mover.id === mover.id && candidate.cover.id === cover.id) {
+            contact = candidate;
+            break;
+          }
+        }
+        if (!contact) {
+          contact = this.#motionContacts[this.#motionCount];
+          if (!contact) {
+            contact = {
+              mover,
+              cover,
+              x: 0,
+              y: 0,
+              width: 0,
+              height: 0,
+              rotation: 0,
+              directionX: 0,
+              directionY: 0,
+              strength: 0,
+              lastMotion: now,
+              travel: 0,
+            };
+            this.#motionContacts.push(contact);
+          }
+          contact.mover = mover;
+          contact.cover = cover;
+          contact.strength = 0;
+          contact.travel = 0;
+          contact.lastMotion = now;
+          this.#motionCount++;
+        }
+        const release = Math.max(
+          0,
+          1 - (now - contact.lastMotion) / Math.max(settings.rgbDecay, settings.wakeDecay),
+        );
+        contact.strength *= release * release;
+        contact.strength += (target - contact.strength) * (1 - Math.exp(-dt / 55));
+        contact.x = mover.position.x + mover.size.width / 2 - cover.position.x;
+        contact.y = mover.position.y + mover.size.height / 2 - cover.position.y;
+        contact.width = mover.size.width;
+        contact.height = mover.size.height;
+        contact.rotation = (mover.rotation * Math.PI) / 180;
+        contact.directionX = mover.dx / distance;
+        contact.directionY = mover.dy / distance;
+        contact.travel =
+          (contact.travel + (distance / worldPerCss) * 0.25) %
+          (Math.PI * 2 * settings.wakeWidth * 0.643);
+        contact.lastMotion = now;
+      }
     }
   }
   #findContacts(entities: readonly ShaderCanvasEntity[]): void {
@@ -336,6 +497,8 @@ export class OverlapCrossing {
     this.#buffer.destroy();
     this.#keys.clear();
     this.#poses.clear();
+    this.#motionContacts.length = 0;
+    this.#motionCount = 0;
     this.#pairs.length = 0;
   }
 }
