@@ -71,6 +71,8 @@ export class OverlapCrossing {
   #device: GPUDevice;
   #buffer: GPUBuffer;
   #data = new Float32Array(32);
+  #words = new Uint32Array(this.#data.buffer);
+  #indexCursors = new Uint32Array(0);
   #keys = new Map<string, number>();
   #nextKey = 1;
   #pairs: {
@@ -79,6 +81,8 @@ export class OverlapCrossing {
     axisX: number;
     axisY: number;
     crossingDepth: number;
+    minimumPassage: number;
+    maximumPassage: number;
   }[] = [];
   #pairCount = 0;
   #crossingCount = 0;
@@ -117,6 +121,11 @@ export class OverlapCrossing {
           visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
           buffer: { type: "read-only-storage" },
         },
+        {
+          binding: 1,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+          buffer: { type: "read-only-storage" },
+        },
       ],
     });
     this.#buffer = this.#createBuffer();
@@ -150,18 +159,38 @@ export class OverlapCrossing {
   ): void {
     const index = this.#sceneIndices.get(id);
     if (index === undefined) throw new Error("Crossing entity is missing its scene index");
-    let last = -1;
-    for (let i = 0; i < this.#crossingCount / 2; i++) {
-      if (this.#pairs[i]!.lifted.id === id) last = i;
-    }
-    for (let i = 0; i < this.#crossingCount / 2; i++) {
+    let anchor = index;
+    let slice = 1;
+    let minimum = 1;
+    let maximum = 1;
+    let found = false;
+    const key = this.#keys.get(id);
+    const range = key === undefined || key >= this.#words[10]! ? 0 : this.#words[11]! + key * 2;
+    const count = range === 0 ? 0 : this.#words[range + 1]!;
+    const start = range === 0 ? 0 : this.#words[range]!;
+    for (let entry = 0; entry < count; entry++) {
+      const contact = this.#words[start + entry]!;
+      if (contact >= this.#crossingCount || contact % 2 !== 0) continue;
+      const i = contact / 2;
       const pair = this.#pairs[i]!;
-      if (pair.lifted.id !== id) continue;
-      const anchor = this.#sceneIndices.get(pair.cover.id);
-      if (anchor === undefined) throw new Error("Crossing partner is missing its scene index");
-      emit(anchor, i * 2 + 2, index, i === last);
+      found = true;
+      const nextMinimum = Math.min(minimum, pair.minimumPassage);
+      const nextMaximum = Math.min(maximum, pair.maximumPassage);
+      // A slice's weight is previous passage minus next passage. Bounds cover
+      // the whole expanded card, so zero-weight slices need no draw at all.
+      if (maximum > nextMinimum)
+        emit(anchor, minimum === 1 && nextMaximum === 0 ? 0 : slice, index, false);
+      const nextAnchor = this.#sceneIndices.get(pair.cover.id);
+      if (nextAnchor === undefined) throw new Error("Crossing partner is missing its scene index");
+      // Keep an unsplit, full-weight upper slice after its cover even though its
+      // slice ID is zero. It still precedes the next integer scene index.
+      anchor = nextAnchor + 0.5;
+      slice = i * 2 + 2;
+      minimum = nextMinimum;
+      maximum = nextMaximum;
     }
-    emit(index, last >= 0 ? 1 : 0, index, last < 0 && this.#active && this.#entityIds.has(id));
+    if (!found) emit(index, 0, index, this.#active && this.#entityIds.has(id));
+    else if (maximum > 0) emit(anchor, minimum === 1 ? 0 : slice, index, true);
   }
   /** Layered composition also partitions endpoint frames and the effect tail. */
   get hasLayerSlices(): boolean {
@@ -180,6 +209,15 @@ export class OverlapCrossing {
   }
   get enabled(): boolean {
     return this.#enabled;
+  }
+  isActiveEntity(id: string): boolean {
+    return this.#active && this.#entityIds.has(id);
+  }
+  get hasSharpScene(): boolean {
+    return this.#active && this.hasLayerSlices && this.#lift < 1;
+  }
+  get contactCount(): number {
+    return this.#data[0]!;
   }
   get pending(): boolean {
     return this.#pending;
@@ -242,6 +280,34 @@ export class OverlapCrossing {
           pair.axisX = this.#contactAxis.x;
           pair.axisY = this.#contactAxis.y;
         }
+        const own = pair.lifted;
+        const other = pair.cover;
+        const span = Math.max(
+          1,
+          Math.min(own.size.width, own.size.height, other.size.width, other.size.height),
+        );
+        const angle = (own.rotation * Math.PI) / 180;
+        const cosine = Math.cos(angle),
+          sine = Math.sin(angle);
+        const along =
+          ((own.position.x + own.size.width / 2 - other.position.x - other.size.width / 2) *
+            -pair.axisX +
+            (own.position.y + own.size.height / 2 - other.position.y - other.size.height / 2) *
+              -pair.axisY) /
+          (2 * span);
+        // Include selection border and packed instance rotation/scale error.
+        const extent =
+          ((Math.abs(cosine * pair.axisX + sine * pair.axisY) * own.size.width) / 2 +
+            (Math.abs(-sine * pair.axisX + cosine * pair.axisY) * own.size.height) / 2 +
+            (4 * dpr) / zoom +
+            Math.hypot(own.size.width, own.size.height) * 0.001) /
+          span;
+        const ripple = 0.12 * Math.abs(Math.min(settings.wakeStrength, 1));
+        const activity = 4 * this.#lift * (1 - this.#lift) * 0.28;
+        const depth = this.#lift - pair.crossingDepth;
+        const width = Math.min(0.14, Math.min(pair.crossingDepth, 1 - pair.crossingDepth) * 0.8);
+        pair.minimumPassage = depth + (along - extent - ripple) * activity >= width ? 1 : 0;
+        pair.maximumPassage = depth + (along + extent + ripple) * activity <= -width ? 0 : 1;
         const spare = this.#pairs[live]!;
         this.#pairs[live++] = pair;
         this.#pairs[i] = spare;
@@ -261,9 +327,18 @@ export class OverlapCrossing {
     const count = crossingCount + this.#motionCount;
     this.#pending = count > 0;
     if (count === 0 && this.#data[0] === 0) return;
-    const needed = 12 + count * 16;
+    // Allocate all participant keys before sizing the adjacency table. Composition
+    // may allocate more keys later; the vertex lookup guards those absent entries.
+    if (count > 0) for (const entity of entities) this.key(entity.id);
+    for (let i = 0; i < this.#motionCount; i++) this.key(this.#motionContacts[i]!.cover.id);
+    const rangeBase = 12 + count * 16;
+    const needed = count === 0 ? 12 : rangeBase + this.#nextKey * 3 + count;
     if (needed > this.#data.length) {
-      this.#data = new Float32Array(2 ** Math.ceil(Math.log2(needed)));
+      const capacity = 2 ** Math.ceil(Math.log2(needed));
+      if (capacity * 4 > this.#device.limits.maxStorageBufferBindingSize)
+        throw new Error("Overlap contacts exceed the GPU storage binding limit.");
+      this.#data = new Float32Array(capacity);
+      this.#words = new Uint32Array(this.#data.buffer);
       this.#buffer.destroy();
       this.#buffer = this.#createBuffer();
       this.bindGroup = this.#createBindGroup();
@@ -347,7 +422,40 @@ export class OverlapCrossing {
       this.#data[offset + 15] = 0;
       offset += 16;
     }
+    if (count > 0) {
+      this.#writeContactIndex(count, rangeBase);
+      const orderBase = rangeBase + this.#nextKey * 2 + count;
+      this.#words.fill(0, orderBase, orderBase + this.#nextKey);
+      for (let i = 0; i < entities.length; i++)
+        this.#words[orderBase + this.key(entities[i]!.id)] =
+          (i + 1) | (this.isActiveEntity(entities[i]!.id) ? 0x80000000 : 0);
+    }
     this.#device.queue.writeBuffer(this.#buffer, 0, this.#data.buffer, 0, Math.max(16, needed * 4));
+  }
+  #writeContactIndex(count: number, rangeBase: number): void {
+    // Two views of the same GPU allocation: contact floats and exact integer
+    // ranges/indices. Each fragment traverses only its card's contacts, in the
+    // original order so slice IDs and strongest-contact tie breaking stay intact.
+    const words = this.#words;
+    words[10] = this.#nextKey;
+    words[11] = rangeBase;
+    words.fill(0, rangeBase, rangeBase + this.#nextKey * 2);
+    if (this.#indexCursors.length < this.#nextKey)
+      this.#indexCursors = new Uint32Array(this.#nextKey);
+    for (let i = 0; i < count; i++) {
+      const key = this.#data[12 + i * 16 + 6]!;
+      words[rangeBase + key * 2 + 1]!++;
+    }
+    let cursor = rangeBase + this.#nextKey * 2;
+    for (let key = 0; key < this.#nextKey; key++) {
+      words[rangeBase + key * 2] = cursor;
+      this.#indexCursors[key] = cursor;
+      cursor += words[rangeBase + key * 2 + 1]!;
+    }
+    for (let i = 0; i < count; i++) {
+      const key = this.#data[12 + i * 16 + 6]!;
+      words[this.#indexCursors[key]!++] = i;
+    }
   }
   #updatePoses(
     entities: readonly ShaderCanvasEntity[],
@@ -511,7 +619,15 @@ export class OverlapCrossing {
           continue;
         let pair = this.#pairs[this.#pairCount];
         if (!pair) {
-          pair = { lifted, cover, axisX: 0, axisY: 0, crossingDepth: 0 };
+          pair = {
+            lifted,
+            cover,
+            axisX: 0,
+            axisY: 0,
+            crossingDepth: 0,
+            minimumPassage: 0,
+            maximumPassage: 1,
+          };
           this.#pairs.push(pair);
         }
         pair.lifted = lifted;
@@ -535,7 +651,10 @@ export class OverlapCrossing {
   #createBindGroup(): GPUBindGroup {
     return this.#device.createBindGroup({
       layout: this.layout,
-      entries: [{ binding: 0, resource: { buffer: this.#buffer } }],
+      entries: [
+        { binding: 0, resource: { buffer: this.#buffer } },
+        { binding: 1, resource: { buffer: this.#buffer } },
+      ],
     });
   }
   destroy(): void {

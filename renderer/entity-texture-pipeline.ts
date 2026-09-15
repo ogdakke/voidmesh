@@ -26,6 +26,7 @@ export interface EntityTexturePipelineOptions {
   textureBudgetBytes?: number;
   onEntityError?: (entityId: string, error: string) => void;
   onTextureEvicted?: (entityIds: ReadonlySet<string>) => void;
+  onImmutableSourceUpload?: (texture: GPUTexture, encoder: GPUCommandEncoder) => void;
 }
 
 interface CachedEntityTexture {
@@ -79,6 +80,7 @@ export class EntityTexturePipeline {
   readonly #runtime: EntityShaderRuntime;
   readonly #textureBudgetBytes: number;
   readonly #onTextureEvicted?: (entityIds: ReadonlySet<string>) => void;
+  readonly #onImmutableSourceUpload?: (texture: GPUTexture, encoder: GPUCommandEncoder) => void;
   #currentFrame = 0;
   #sourceTextureAllocations = 0;
   #processedTextureAllocations = 0;
@@ -111,6 +113,7 @@ export class EntityTexturePipeline {
     this.#textureBudgetBytes =
       options.textureBudgetBytes ?? config.rendering.entityTextureBudgetBytes;
     this.#onTextureEvicted = options.onTextureEvicted;
+    this.#onImmutableSourceUpload = options.onImmutableSourceUpload;
     this.#runtime = new EntityShaderRuntime({
       device: options.device,
       colorConfig: options.colorConfig,
@@ -287,6 +290,8 @@ export class EntityTexturePipeline {
           entityIds: new Set(),
         };
         this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
+        if (entity.mediaSource.type === MediaType.image)
+          this.#onImmutableSourceUpload?.(sourceTexture, encoder);
         this.#sourceTextures.set(sourceKey, cachedSource);
         this.#residentTextureEntries.set(sourceTexture, cachedSource);
         this.#sourceBytes += cachedSource.byteSize;
