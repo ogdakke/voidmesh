@@ -199,3 +199,5 @@ fn disintegrate(input: VertexOutput, textureColor: vec4f) -> vec4f {
     discard;
     return vec4f(0.0);
 }
+
+// @include "overlap-crossing.wgsl"

@@ -14,6 +14,8 @@ WebGPU rendering, shader execution, composition, resource caching, and export.
 
 ## Rendering Invariants
 
+- Assemble shared WGSL with `// @include "..."` through `plugins/vite-plugin-wgsl-minify.ts` in development, tests, and builds. Minify complete modules; never concatenate independently minified shader fragments.
+
 - Preserve exact entity z-order. Batch only when draw ordering and texture identity remain correct.
 - Static-image composition plans may persist across viewport-only frames. Membership, ordering, incompatible media, dirty textures, or lost resources must invalidate or patch the plan correctly.
 - Pan and zoom should update uniforms rather than rebuild scene data when entity/effect identity is unchanged.

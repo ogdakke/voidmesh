@@ -1,5 +1,4 @@
 import { OverlapCrossing } from "./overlap-crossing.ts";
-import crossingShaderSource from "./overlap-crossing.wgsl?raw";
 import { config } from "#config";
 import type { DragSelectMode } from "#engine";
 import type { Bounds, ShaderCanvasEntity } from "#types/canvas.ts";
@@ -224,10 +223,10 @@ function packInstanceState(
   );
 }
 
-function createExternalCompositionShaderSource(source: string): string {
+export function createExternalCompositionShaderSource(source: string): string {
   const rewritten = source
     .replace(
-      /@group\(0\)\s+@binding\(2\)\s+var\s+entityTexture\s*:\s*texture_2d<f32>;/,
+      /@group\(0\)\s*@binding\(2\)\s*var\s+entityTexture\s*:\s*texture_2d\s*<\s*f32\s*>\s*;/,
       "@group(0) @binding(2) var entityTexture: texture_external;",
     )
     .replace(
@@ -334,10 +333,7 @@ export class CompositionPass {
     // so sampling inside contact branches does not depend on implicit LOD derivatives.
     const shaderModule = this.#device.createShaderModule({
       label: "Composition shader",
-      code:
-        "diagnostic(off, derivative_uniformity);\n" +
-        compositionShaderSource +
-        crossingShaderSource,
+      code: "diagnostic(off, derivative_uniformity);\n" + compositionShaderSource,
     });
 
     this.#bindGroupLayout = this.#device.createBindGroupLayout({
@@ -476,10 +472,7 @@ export class CompositionPass {
 
     const instancedShaderModule = this.#device.createShaderModule({
       label: "Instanced composition shader",
-      code:
-        "diagnostic(off, derivative_uniformity);\n" +
-        instancedCompositionShaderSource +
-        crossingShaderSource,
+      code: "diagnostic(off, derivative_uniformity);\n" + instancedCompositionShaderSource,
     });
     const instancedPipelineLayout = this.#device.createPipelineLayout({
       label: "Instanced composition pipeline layout",
@@ -553,9 +546,7 @@ export class CompositionPass {
     const externalShaderModule = this.#device.createShaderModule({
       label: "External composition shader",
       code: createExternalCompositionShaderSource(
-        "diagnostic(off, derivative_uniformity);\n" +
-          compositionShaderSource +
-          crossingShaderSource,
+        "diagnostic(off, derivative_uniformity);\n" + compositionShaderSource,
       ),
     });
 

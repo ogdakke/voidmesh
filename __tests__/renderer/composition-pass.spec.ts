@@ -1,7 +1,10 @@
+import { resolve } from "node:path";
+import wgslMinifyPlugin from "../../plugins/vite-plugin-wgsl-minify.ts";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { releaseImageAsset, retainImageAsset } from "#lib/media-assets.ts";
 import {
   CompositionPass,
+  createExternalCompositionShaderSource,
   type CompositionDrawItem,
   type FullSceneBatchKey,
   type FullSceneTextureRange,
@@ -17,6 +20,43 @@ describe("CompositionPass instancing", () => {
   });
 
   afterAll(() => vi.unstubAllGlobals());
+
+  test("minifies complete composition modules before rewriting external textures", async () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const plugin = wgslMinifyPlugin();
+    if (typeof plugin.configResolved !== "function" || typeof plugin.load !== "function")
+      throw new Error("WGSL plugin hooks are unavailable");
+    Reflect.apply(plugin.configResolved, {}, [{ command: "build" }]);
+    const context = {
+      addWatchFile: vi.fn<(path: string) => void>(),
+      debug: vi.fn<(message: string) => void>(),
+      warn: vi.fn<(message: string) => void>(),
+    };
+    const modules = vi
+      .mocked(device.createShaderModule)
+      .mock.calls.map(([descriptor]) => descriptor);
+    for (const module of modules.filter(
+      (module) => module.label !== "External composition shader",
+    )) {
+      expect(module.code).toContain("fn crossingColor(");
+      const file =
+        module.label === "Composition shader" ? "composition.wgsl" : "composition-instanced.wgsl";
+      const output: unknown = await Reflect.apply(plugin.load, context, [
+        resolve("renderer", file) + "?raw",
+      ]);
+      if (typeof output !== "string") throw new Error("WGSL build returned no shader source");
+      const code: string = JSON.parse(output.slice("export default ".length));
+      expect(context.warn).not.toHaveBeenCalled();
+      // Minifying a fragment alone removes this declaration as unused.
+      expect(code).toContain("entityTexture:texture_2d<f32>");
+      const external = createExternalCompositionShaderSource(code);
+      expect(external).toContain("entityTexture: texture_external;");
+      expect(external).toContain("textureSampleBaseClampToEdge(entityTexture,");
+      expect(external).not.toMatch(/textureSample\(entityTexture,/);
+    }
+    pass.destroy();
+  });
 
   test("exposes the viewport to fragment shading for the effected selection outline", () => {
     const { device } = createDevice();

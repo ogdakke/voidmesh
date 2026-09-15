@@ -1,3 +1,4 @@
+import wgslMinifyPlugin from "./plugins/vite-plugin-wgsl-minify.ts";
 import babel from "@rolldown/plugin-babel";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { resolve } from "path";
@@ -13,6 +14,7 @@ export default defineConfig({
     },
   },
   plugins: [
+    wgslMinifyPlugin(),
     react(),
     babel({
       presets: [reactCompilerPreset()],
