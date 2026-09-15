@@ -21,6 +21,7 @@ function createHarness() {
   const actionLayer = {
     getEntityOffset: vi.fn<ActionLayerController["getEntityOffset"]>(() => ({ x: 0, y: 0 })),
     updateSafeZoneProgress: vi.fn<ActionLayerController["updateSafeZoneProgress"]>(),
+    dismiss: vi.fn<ActionLayerController["dismiss"]>(),
     cancel: vi.fn<ActionLayerController["cancel"]>(),
   } as unknown as ActionLayerController;
   const service = createCanvasInteractionService({
@@ -29,10 +30,20 @@ function createHarness() {
     viewportAnimation,
     actionLayer,
   });
-  return { store, gameLoop, animateTo, service };
+  return { store, gameLoop, animateTo, service, actionLayer };
 }
 
 describe("CanvasInteractionService", () => {
+  it("closes the action UI through animated dismissal instead of cancelling render state", () => {
+    const { store, service, actionLayer } = createHarness();
+    store.setActionLayerActive(true);
+    const close = vi.spyOn(store, "setActionLayerActive");
+    service.dismissActionLayer();
+    expect(actionLayer.dismiss).toHaveBeenCalledOnce();
+    expect(actionLayer.cancel).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledWith(false);
+  });
+
   it("initializes the viewport from surface metrics", () => {
     const { store, service } = createHarness();
     service.initializeViewport({ width: 800, height: 600, dpr: 2 });

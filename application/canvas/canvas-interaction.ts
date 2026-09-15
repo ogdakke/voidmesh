@@ -62,7 +62,7 @@ export interface CanvasInteractionService {
   setCanvasCallouts(callouts: readonly CanvasCallout[]): void;
   getActionLayerEntityOffset(): Point;
   updateActionLayerSafeZone(progress: number): void;
-  cancelActionLayer(): void;
+  dismissActionLayer(): void;
   captureContextMenuState(): {
     entity: ShaderCanvasEntity | undefined;
     selectedEntities: ShaderCanvasEntity[];
@@ -187,7 +187,10 @@ export function createCanvasInteractionService({
     setCanvasCallouts: (callouts) => store.setCanvasCallouts(callouts),
     getActionLayerEntityOffset: () => actionLayer.getEntityOffset(),
     updateActionLayerSafeZone: (progress) => actionLayer.updateSafeZoneProgress(progress),
-    cancelActionLayer: () => actionLayer.cancel(),
+    dismissActionLayer: () => {
+      actionLayer.dismiss();
+      store.setActionLayerActive(false);
+    },
     captureContextMenuState() {
       const state = store.getState();
       const entity = state.contextOpenEntityId
