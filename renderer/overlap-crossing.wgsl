@@ -15,7 +15,7 @@ struct Contacts {
 
 fn crossingGrid(index: u32) -> vec2f {
   let corners = array<vec2f, 6>(vec2f(0,0), vec2f(1,0), vec2f(0,1), vec2f(1,0), vec2f(1,1), vec2f(0,1));
-  return corners[index];
+  return corners[index % 6u];
 }
 fn contactDistance(local: vec2f, halfSize: vec2f) -> f32 {
   let q = abs(local) - halfSize;
@@ -83,6 +83,7 @@ fn crossingField(world: vec2f, key: u32) -> ContactField {
   return result;
 }
 struct CrossingPaint {
+  slice: u32,
   selected: u32,
   debug: u32,
   border: vec2f,
@@ -126,38 +127,36 @@ fn crossingMaterial(uv: vec2f, world: vec2f, key: u32, size: vec2f, pose: vec2f,
   return vec4f(rgb, base.a);
 }
 
-// Cross-fade the two possible occlusion orders at their shared depth. Only the
-// currently front card becomes transmissive; the rear card stays solid. At the
-// sorting boundary both orders produce 50% of each image, rather than a snap
-// or two half-transparent cards exposing a hole through to the canvas.
-fn crossingTransmission(world: vec2f, key: u32) -> f32 {
-  var transmission = 1.0;
+// Partition the lifted material between draws below/above each covering card.
+// For alpha a, a lower slice with weight w and remaining weight r above it uses
+// a*w/(1-a*r). Source-over then preserves the original alpha exactly, including
+// transparent partners and feathered edges. Covering cards keep their own alpha.
+fn crossingAlpha(world: vec2f, key: u32, alpha: f32, slice: u32) -> f32 {
+  if (slice == 0u) { return alpha; }
+  var previous = 1.0;
+  var below = 1.0;
+  var above = 0.0;
+  var found = slice == 1u;
   for (var i = 0u; i < u32(contacts.header.x); i++) {
     let contact = contacts.items[i];
-    if (contact.pose.w == 0.0 || u32(contact.pose.z) != key) { continue; }
-    let depth = contacts.timeline.x - contact.metric.y;
-    let front = select((depth < 0.0), (depth >= 0.0), (contact.pose.w > 0.0));
-    if (!front) { continue; }
-    let local = contactLocal(world - contact.rect.xy, contact.pose.xy);
-    let sd = contactDistance(local, contact.rect.zw);
-    let coverage = 1.0 - smoothstep(-contact.metric.x, contact.metric.x, sd);
+    if (contact.pose.w <= 0.0 || u32(contact.pose.z) != key) { continue; }
     let lift = contacts.timeline.x;
+    let depth = lift - contact.metric.y;
     let activity = 4.0 * lift * (1.0 - lift);
-    // Shared coordinates are identical on both participants. Each material
-    // advances its own crossing front without a discontinuity when draws swap.
-    let along = dot(world - contact.axis.zw, contact.axis.xy * contact.pose.w) / contact.metric.w;
-    let across = dot(world - contact.axis.zw, vec2f(-contact.axis.y, contact.axis.x) * contact.pose.w) / contact.metric.w;
-    // Preserve Prism's tilted crossing; the wake adds a small curved ripple.
+    let along = dot(world - contact.axis.zw, contact.axis.xy) / contact.metric.w;
+    let across = dot(world - contact.axis.zw, vec2f(-contact.axis.y, contact.axis.x)) / contact.metric.w;
     let ripple = 0.12 * sin(across * 8.0 - lift * 6.0) * min(contacts.header.w, 1.0);
     let travel = depth + (along + ripple) * activity * 0.28;
     let width = min(0.14, min(contact.metric.y, 1.0 - contact.metric.y) * 0.8);
-    let passage = smoothstep(-width, width, travel);
-    let opacity = select(1.0 - passage, passage, contact.pose.w > 0.0);
-    transmission *= mix(1.0, opacity, coverage);
+    // A pixel cannot pass a higher layer before it passes the lower layers.
+    let passage = min(previous, smoothstep(-width, width, travel));
+    if (found) { above = passage; break; }
+    if (slice == i + 2u) { below = passage; found = true; }
+    previous = passage;
   }
-  return transmission;
+  return alpha * max(below - above, 0.0) / max(1.0 - alpha * above, 0.000001);
 }
 fn crossingColor(uv: vec2f, world: vec2f, key: u32, size: vec2f, pose: vec2f, paint: CrossingPaint) -> vec4f {
   let color = crossingMaterial(uv, world, key, size, pose, paint);
-  return vec4f(color.rgb, color.a * crossingTransmission(world, key));
+  return vec4f(color.rgb, crossingAlpha(world, key, color.a, paint.slice));
 }
