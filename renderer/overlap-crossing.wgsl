@@ -82,9 +82,12 @@ fn crossingField(world: vec2f, key: u32) -> ContactField {
     let rgbFlow = select(-contact.axis.xy * contact.pose.w * contacts.timeline.y, contact.axis.xy, motion);
     let coherence = min(length(rgbFlow), 1.0);
     let direction = rgbFlow / max(length(rgbFlow), 0.0001);
-    let leading = mix(0.12, 1.0, smoothstep(-0.25, 0.8, dot(result.normal, direction)));
     let localDirection = contactLocal(direction, contact.pose.xy);
     let extent = dot(abs(localDirection), contact.rect.zw);
+    // Bias the whole overlap toward its advancing side, without reducing the
+    // effect to the mover's perimeter or introducing a seam at its center.
+    let along = dot(world - contact.rect.xy, direction) / max(extent, pixel);
+    let leading = mix(0.45, 1.0, smoothstep(-1.0, 1.0, along));
     let front = mix(-extent, extent, contacts.timeline.z);
     let frontWidth = max(24.0 * pixel, extent * 0.45);
     let frontDistance = dot(world - contact.rect.xy, direction) - front;
@@ -135,14 +138,26 @@ fn crossingMaterial(uv: vec2f, world: vec2f, key: u32, size: vec2f, pose: vec2f,
 
   let d = seamDistance / field.pixel - field.rgbRadius;
   let band = exp(-d * d / (2.0 * field.rgbWidth * field.rgbWidth));
-  let energy = field.rgbPulse * band * contacts.header.y;
+  // Carry color through the overlap interior as well as its contact rim.
+  let influence = max(band, 0.65 * field.coverage);
+  let energy = field.rgbPulse * influence * contacts.header.y;
   let bend = normal * pixel * energy * 5.0 * field.role;
   let split = contactLocal(field.rgbFlow, pose) * pixel * energy * contacts.tuning.x;
   let base = crossingSample(uv + warp + bend, paint);
   let red = crossingSample(uv + warp + bend + split, paint);
   let blue = crossingSample(uv + warp + bend - split, paint);
   let rgb = vec3f(red.r * red.a, base.g * base.a, blue.b * blue.a) / max(base.a, 0.001);
-  return vec4f(rgb, base.a);
+  if (energy < 0.001) { return vec4f(rgb, base.a); }
+  // A short exposure trail stretches detail behind the advancing contact.
+  // Weight colors by alpha, but retain the material's own coverage: smearing
+  // must not fill transparent cutouts or open another hole through the stack.
+  let trail = contactLocal(field.rgbFlow, pose) * pixel * min(energy * 40.0, 24.0);
+  let near = crossingSample(uv + warp + bend - trail * 0.33, paint);
+  let middle = crossingSample(uv + warp + bend - trail * 0.67, paint);
+  let far = crossingSample(uv + warp + bend - trail, paint);
+  let coverage = base.a * 0.4 + near.a * 0.3 + middle.a * 0.2 + far.a * 0.1;
+  let exposed = (base.rgb * base.a * 0.4 + near.rgb * near.a * 0.3 + middle.rgb * middle.a * 0.2 + far.rgb * far.a * 0.1) / max(coverage, 0.001);
+  return vec4f(mix(rgb, exposed, min(energy * 1.5, 0.55)), base.a);
 }
 
 // Partition the lifted material between draws below/above each covering card.
