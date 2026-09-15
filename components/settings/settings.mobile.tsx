@@ -1,4 +1,3 @@
-import { OverlapLabToggle } from "./overlap-lab.tsx";
 import { useHasEntities } from "#context/use-canvas.ts";
 import { useStudioFile } from "#hooks/use-studio-file.ts";
 import { WorkspaceActions } from "#components/workspace-actions/workspace-actions.tsx";
