@@ -81,6 +81,8 @@ export class OverlapCrossing {
     crossingDepth: number;
   }[] = [];
   #pairCount = 0;
+  #crossingCount = 0;
+  #sceneIndices = new Map<string, number>();
   #poses = new Map<string, RenderedCard>();
   #frame = 0;
   #motionContacts: MotionContact[] = [];
@@ -137,6 +139,30 @@ export class OverlapCrossing {
   order(index: number, id: string): number {
     if (!this.#enabled || !this.#active || !this.#entityIds.has(id)) return index;
     return index + (this.#targetOrder(index) - index) * this.#lift;
+  }
+  /** Draw the lifted material on both sides of each covering layer.
+   * Slice 0 is unsplit, 1 is the resting layer, and contact index + 2 is above
+   * that partner. Composition passes this ID through firstVertex / 6.
+   */
+  appendSlices(
+    id: string,
+    emit: (anchor: number, slice: number, sourceIndex: number) => void,
+  ): void {
+    const index = this.#sceneIndices.get(id);
+    if (index === undefined) throw new Error("Crossing entity is missing its scene index");
+    let split = false;
+    for (let i = 0; i < this.#crossingCount / 2; i++) {
+      const pair = this.#pairs[i]!;
+      if (pair.lifted.id !== id) continue;
+      split = true;
+      const anchor = this.#sceneIndices.get(pair.cover.id);
+      if (anchor === undefined) throw new Error("Crossing partner is missing its scene index");
+      emit(anchor, i * 2 + 2, index);
+    }
+    emit(index, split ? 1 : 0, index);
+  }
+  get hasSlices(): boolean {
+    return this.#crossingCount > 0 && this.#lift > 0 && this.#lift < 1;
   }
   #targetOrder(index: number): number {
     return this.#sceneCount + 1 + index / (this.#sceneCount + 1);
@@ -221,6 +247,11 @@ export class OverlapCrossing {
     this.#motionEnabled = motionEnabled;
     this.#dragWasActive = drag?.active === true;
     const crossingCount = enabled && age < 1 ? this.#pairCount * 2 : 0;
+    this.#crossingCount = crossingCount;
+    if (crossingCount > 0) {
+      this.#sceneIndices.clear();
+      for (let i = 0; i < entities.length; i++) this.#sceneIndices.set(entities[i]!.id, i);
+    }
     const count = crossingCount + this.#motionCount;
     this.#pending = count > 0;
     if (count === 0 && this.#data[0] === 0) return;
@@ -499,6 +530,7 @@ export class OverlapCrossing {
   destroy(): void {
     this.#buffer.destroy();
     this.#keys.clear();
+    this.#sceneIndices.clear();
     this.#poses.clear();
     this.#motionContacts.length = 0;
     this.#motionCount = 0;

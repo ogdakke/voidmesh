@@ -22,6 +22,13 @@ export interface CompositionDrawItem {
   visualScale: number;
 }
 
+interface CrossingSliceDraw {
+  item: CompositionDrawItem | null;
+  anchor: number;
+  slice: number;
+  sourceIndex: number;
+}
+
 export interface CompositionPassOptions {
   device: GPUDevice;
   format: GPUTextureFormat;
@@ -236,6 +243,26 @@ function createExternalCompositionShaderSource(source: string): string {
 
 export class CompositionPass {
   readonly #device: GPUDevice;
+  readonly #slicePool: CrossingSliceDraw[] = [];
+  readonly #slicePlan: CrossingSliceDraw[] = [];
+  readonly #sliceItem: CompositionDrawItem[] = [];
+  #sliceSource: CompositionDrawItem | null = null;
+  readonly #appendSlice = (anchor: number, slice: number, sourceIndex: number): void => {
+    const item = this.#sliceSource;
+    if (!item) throw new Error("Crossing slice has no source material");
+    const index = this.#slicePlan.length;
+    const draw = this.#slicePool[index] ?? { item, anchor, slice, sourceIndex };
+    draw.item = item;
+    draw.anchor = anchor;
+    draw.slice = slice;
+    draw.sourceIndex = sourceIndex;
+    this.#slicePool[index] = draw;
+    this.#slicePlan.push(draw);
+  };
+  readonly #compareSlices = (a: CrossingSliceDraw, b: CrossingSliceDraw): number =>
+    a.anchor - b.anchor ||
+    Number(a.slice > 1) - Number(b.slice > 1) ||
+    a.sourceIndex - b.sourceIndex;
   readonly crossing: OverlapCrossing;
   readonly #viewportUniformBuffer: GPUBuffer;
   readonly #pipeline: GPURenderPipeline;
@@ -1013,6 +1040,40 @@ export class CompositionPass {
   }
 
   drawItems(pass: GPURenderPassEncoder, items: readonly CompositionDrawItem[]): void {
+    if (!this.crossing.hasSlices) {
+      this.#drawItems(pass, items, 0);
+      return;
+    }
+    this.#slicePlan.length = 0;
+    for (const item of items) {
+      this.#sliceSource = item;
+      this.crossing.appendSlices(item.entity.id, this.#appendSlice);
+    }
+    this.#sliceSource = null;
+    this.#slicePlan.sort(this.#compareSlices);
+    // Reserve once before recording any draw, so later slices cannot replace
+    // the instance buffer already referenced by this render pass.
+    this.#ensureInstanceCapacity(this.#instanceWriteCursor + this.#slicePlan.length);
+    let slice = -1;
+    for (const draw of this.#slicePlan) {
+      if (slice !== draw.slice && this.#sliceItem.length > 0) {
+        this.#drawItems(pass, this.#sliceItem, slice);
+        this.#sliceItem.length = 0;
+      }
+      slice = draw.slice;
+      if (!draw.item) throw new Error("Crossing slice lost its source material");
+      this.#sliceItem.push(draw.item);
+      draw.item = null;
+    }
+    if (this.#sliceItem.length > 0) this.#drawItems(pass, this.#sliceItem, slice);
+    this.#sliceItem.length = 0;
+  }
+
+  #drawItems(
+    pass: GPURenderPassEncoder,
+    items: readonly CompositionDrawItem[],
+    slice: number,
+  ): void {
     this.#writeInteractionUniforms(0, 0, 0, null, null);
     this.#fullSceneBatch = null;
     const firstWrittenInstance = this.#instanceWriteCursor;
@@ -1041,7 +1102,7 @@ export class CompositionPass {
         }
         pass.setBindGroup(0, this.#getInstancedBindGroup(texture));
         pass.setBindGroup(1, this.crossing.bindGroup);
-        pass.draw(6, command.instanceCount, 0, command.firstInstance);
+        pass.draw(6, command.instanceCount, slice * 6, command.firstInstance);
       } else {
         const item = command.item;
         if (!item?.bindGroup) continue;
@@ -1051,7 +1112,7 @@ export class CompositionPass {
         }
         pass.setBindGroup(0, item.bindGroup);
         pass.setBindGroup(1, this.crossing.bindGroup);
-        pass.draw(6);
+        pass.draw(6, 1, slice * 6);
       }
     }
   }
@@ -1111,6 +1172,9 @@ export class CompositionPass {
 
   destroy(): void {
     this.crossing.destroy();
+    this.#slicePool.length = 0;
+    this.#slicePlan.length = 0;
+    this.#sliceItem.length = 0;
     this.#entityCompositionCache = new WeakMap();
 
     for (const cached of this.#entityExternalCompositionCache.values()) {
