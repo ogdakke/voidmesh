@@ -222,3 +222,5 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
   let textureColor = crossingColor(input.uv, input.world, input.contactKey, input.cardSize, input.cardPose, CrossingPaint(input.crossingSlice, input.isSelected, input.debugMode, vec2f(BORDER_PX) / (input.cardSize * viewport.zoom)));
   return textureColor;
 }
+
+// @include "overlap-crossing.wgsl"

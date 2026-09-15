@@ -1,6 +1,22 @@
 import type { Plugin, ResolvedConfig } from "vite";
 import { readFileSync } from "fs";
+import { dirname, resolve } from "path";
 import { initialize, minify, type InitializeOptions, type MinifyOptions } from "miniray";
+
+const INCLUDE_RE = /^[ \t]*\/\/ @include "([^"\n]+)"[ \t]*$/gm;
+
+function assembleShader(
+  filePath: string,
+  watch: (path: string) => void,
+  stack: string[] = [],
+): string {
+  if (stack.includes(filePath))
+    throw new Error(`Circular WGSL include: ${[...stack, filePath].join(" -> ")}`);
+  watch(filePath);
+  return readFileSync(filePath, "utf-8").replace(INCLUDE_RE, (_match, include: string) =>
+    assembleShader(resolve(dirname(filePath), include), watch, [...stack, filePath]),
+  );
+}
 
 const WGSL_RAW_RE = /\.wgsl\?raw$/;
 let initPromise: Promise<void> | null = null;
@@ -37,11 +53,11 @@ export default function wgslMinifyPlugin(
 
     async load(id) {
       if (!WGSL_RAW_RE.test(id)) return null;
-      if (config.command !== "build") return null;
       const then = performance.now();
 
       const filePath = id.replace(/\?raw$/, "");
-      const source = readFileSync(filePath, "utf-8");
+      const source = assembleShader(filePath, (path) => this.addWatchFile(path));
+      if (config.command !== "build") return `export default ${JSON.stringify(source)}`;
 
       initPromise ??= initialize(options.initialize ?? {});
       await initPromise;
