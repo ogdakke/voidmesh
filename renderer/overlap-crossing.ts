@@ -1,6 +1,6 @@
 import type { ActionLayerRenderState, DragVisualRenderState } from "#engine";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
-import { overlapLab } from "#lib/overlap-lab.ts";
+import { overlapConfig, type OverlapConfig } from "#lib/config/overlap.config.ts";
 
 type CardGeometry = Pick<ShaderCanvasEntity, "position" | "size" | "rotation">;
 interface RenderedCard extends CardGeometry {
@@ -67,6 +67,7 @@ export function cardsOverlap(a: CardGeometry, b: CardGeometry, axis?: ContactAxi
 export class OverlapCrossing {
   readonly layout: GPUBindGroupLayout;
   bindGroup: GPUBindGroup;
+  readonly #settings: Readonly<OverlapConfig>;
   #device: GPUDevice;
   #buffer: GPUBuffer;
   #data = new Float32Array(32);
@@ -103,7 +104,8 @@ export class OverlapCrossing {
   #pending = false;
   #enabled = false;
 
-  constructor(device: GPUDevice) {
+  constructor(device: GPUDevice, settings: Readonly<OverlapConfig> = overlapConfig) {
+    this.#settings = settings;
     this.#device = device;
     this.layout = device.createBindGroupLayout({
       label: "Overlap fields",
@@ -159,7 +161,7 @@ export class OverlapCrossing {
     dpr: number,
     drag?: DragVisualRenderState,
   ): void {
-    const settings = overlapLab.getSnapshot();
+    const settings = this.#settings;
     const enabled = settings.enabled;
     const returning = action.returning === true;
     const trigger =
@@ -361,7 +363,7 @@ export class OverlapCrossing {
     dt: number,
     worldPerCss: number,
   ): void {
-    const settings = overlapLab.getSnapshot();
+    const settings = this.#settings;
     // Expired or deleted contacts release their slots. The last footprint stays
     // attached to the upper card during decay, even after the mover leaves it.
     for (let i = this.#motionCount - 1; i >= 0; i--) {
@@ -480,7 +482,7 @@ export class OverlapCrossing {
   }
   #createBuffer(): GPUBuffer {
     if (this.#data.byteLength > this.#device.limits.maxStorageBufferBindingSize)
-      throw new Error("Overlap lab exceeds the GPU storage binding limit.");
+      throw new Error("Overlap contacts exceed the GPU storage binding limit.");
     return this.#device.createBuffer({
       label: "Overlap fields",
       size: this.#data.byteLength,
