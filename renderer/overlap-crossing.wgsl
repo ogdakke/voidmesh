@@ -126,8 +126,9 @@ fn crossingMaterial(uv: vec2f, world: vec2f, key: u32, size: vec2f, pose: vec2f,
   let local = (uv - 0.5) * size;
   let ownDistance = contactDistance(local, size * 0.5);
   let seamDistance = max(ownDistance, field.distance);
-  let worldNormal = select(field.normal, contactRotate(contactNormal(local, size * 0.5), pose), ownDistance > field.distance);
-  let normal = contactLocal(worldNormal, pose);
+  // A rectangle's nearest-edge normal jumps along its corner bisectors.
+  // Use the continuous travel direction for both bend and dispersion instead.
+  let direction = contactLocal(field.rgbFlow, pose);
   // A subtle displacement is shared by all three color samples. RGB refraction
   // stays coherent with the moving wake rather than compositing a second image.
   let waveDistance = abs(field.distance / field.pixel) - field.radius;
@@ -141,8 +142,8 @@ fn crossingMaterial(uv: vec2f, world: vec2f, key: u32, size: vec2f, pose: vec2f,
   // Carry color through the overlap interior as well as its contact rim.
   let influence = max(band, 0.65 * field.coverage);
   let energy = field.rgbPulse * influence * contacts.header.y;
-  let bend = normal * pixel * energy * 5.0 * field.role;
-  let split = contactLocal(field.rgbFlow, pose) * pixel * energy * contacts.tuning.x;
+  let bend = direction * pixel * energy * 5.0 * field.role;
+  let split = direction * pixel * energy * contacts.tuning.x;
   let base = crossingSample(uv + warp + bend, paint);
   let red = crossingSample(uv + warp + bend + split, paint);
   let blue = crossingSample(uv + warp + bend - split, paint);
