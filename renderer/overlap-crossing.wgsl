@@ -147,17 +147,7 @@ fn crossingMaterial(uv: vec2f, world: vec2f, key: u32, size: vec2f, pose: vec2f,
   let red = crossingSample(uv + warp + bend + split, paint);
   let blue = crossingSample(uv + warp + bend - split, paint);
   let rgb = vec3f(red.r * red.a, base.g * base.a, blue.b * blue.a) / max(base.a, 0.001);
-  if (energy < 0.001) { return vec4f(rgb, base.a); }
-  // A short exposure trail stretches detail behind the advancing contact.
-  // Weight colors by alpha, but retain the material's own coverage: smearing
-  // must not fill transparent cutouts or open another hole through the stack.
-  let trail = contactLocal(field.rgbFlow, pose) * pixel * min(energy * 40.0, 24.0);
-  let near = crossingSample(uv + warp + bend - trail * 0.33, paint);
-  let middle = crossingSample(uv + warp + bend - trail * 0.67, paint);
-  let far = crossingSample(uv + warp + bend - trail, paint);
-  let coverage = base.a * 0.4 + near.a * 0.3 + middle.a * 0.2 + far.a * 0.1;
-  let exposed = (base.rgb * base.a * 0.4 + near.rgb * near.a * 0.3 + middle.rgb * middle.a * 0.2 + far.rgb * far.a * 0.1) / max(coverage, 0.001);
-  return vec4f(mix(rgb, exposed, min(energy * 1.5, 0.55)), base.a);
+  return vec4f(rgb, base.a);
 }
 
 // Partition the lifted material between draws below/above each covering card.
