@@ -985,7 +985,7 @@ export class CanvasInputController {
         };
       } else if (this.#touchState.isActionLayerActive) {
         // Action layer finger lift — dismiss the controller (animates blur out + entity spring-back).
-        // React may also call dismiss() on its touchend, but dismiss() is idempotent for idle phase.
+        // The action handler may already have started dismissal in capture phase; repeated calls preserve its spring.
         this.#touchState.isActionLayerActive = false;
         this.#deps.actionLayer.dismiss();
         canvasStore.setActionLayerActive(false);

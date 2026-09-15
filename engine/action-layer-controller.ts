@@ -240,7 +240,8 @@ export class ActionLayerController {
 
   /** Dismiss the action layer. Spring entity back to origin, fade blur. */
   dismiss(): void {
-    if (this.#phase === ActionLayerPhase.idle) return;
+    if (this.#phase === ActionLayerPhase.idle || this.#phase === ActionLayerPhase.dismissing)
+      return;
     this.#phase = ActionLayerPhase.dismissing;
 
     // Spring entity back to origin, carrying current velocity for seamless handoff

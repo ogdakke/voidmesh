@@ -17,6 +17,41 @@ describe("ActionLayerController", () => {
     clock.restore();
   });
 
+  test("a second touch-end dismissal does not restart the return transition", () => {
+    const comparison = new ActionLayerController(clock.scheduler);
+    controller.activate({ x: 200, y: 200 }, new Set(["original"]));
+    comparison.activate({ x: 200, y: 200 }, new Set(["comparison"]));
+    controller.updateFingerPosition({ x: 400, y: 200 });
+    comparison.updateFingerPosition({ x: 400, y: 200 });
+    clock.advanceUntilSettled();
+    controller.dismiss();
+    comparison.dismiss();
+    clock.advanceBy(100);
+    controller.dismiss();
+    clock.advanceBy(16);
+    expect(controller.getRenderState().entityIds.has("original")).toBe(true);
+    expect(controller.getEntityOffset().x).toBeCloseTo(comparison.getEntityOffset().x, 5);
+    clock.advanceUntilSettled();
+    expect(controller.isActive()).toBe(false);
+  });
+
+  test("action selection changes retain the original entity's return spring", () => {
+    controller.activate({ x: 200, y: 200 }, new Set(["original"]));
+    controller.updateFingerPosition({ x: 400, y: 200 });
+    clock.advanceUntilSettled();
+    const offset = controller.getEntityOffset().x;
+    expect(offset).toBeGreaterThan(1);
+    controller.dismiss();
+    canvasStore.setActionLayerActive(false);
+    canvasStore.replaceSelection(["new-selection"]);
+    expect(controller.isActive()).toBe(true);
+    expect(controller.getRenderState().entityIds.has("original")).toBe(true);
+    expect(controller.getEntityOffset().x).toBe(offset);
+    clock.advanceUntilSettled();
+    expect(controller.getEntityOffset().x).toBe(0);
+    expect(controller.isActive()).toBe(false);
+  });
+
   test("dismiss after spring settles fades blur to 0", () => {
     // Activate the action layer
     controller.activate({ x: 200, y: 200 });
