@@ -339,9 +339,8 @@ export class EntityDrawItemPreparer {
         this.#prepared.singleSelectedOffsetY = drawItem.offsetY;
       }
 
-      if (isActionLayerEntity && !this.#compositionPass.crossing.enabled) {
-        actionLayerDrawItems.push(drawItem);
-      } else {
+      if (isActionLayerEntity) actionLayerDrawItems.push(drawItem);
+      if (!isActionLayerEntity || this.#compositionPass.crossing.hasLayerSlices) {
         entityDrawItems.push(drawItem);
       }
     }

@@ -21,6 +21,8 @@ export interface CompositionDrawItem {
   visualScale: number;
 }
 
+export type CompositionLayer = "all" | "scene" | "action";
+
 interface CrossingSliceDraw {
   item: CompositionDrawItem | null;
   anchor: number;
@@ -246,7 +248,18 @@ export class CompositionPass {
   readonly #slicePlan: CrossingSliceDraw[] = [];
   readonly #sliceItem: CompositionDrawItem[] = [];
   #sliceSource: CompositionDrawItem | null = null;
-  readonly #appendSlice = (anchor: number, slice: number, sourceIndex: number): void => {
+  #sliceLayer: CompositionLayer = "all";
+  readonly #appendSlice = (
+    anchor: number,
+    slice: number,
+    sourceIndex: number,
+    foreground: boolean,
+  ): void => {
+    if (
+      (this.#sliceLayer === "scene" && foreground) ||
+      (this.#sliceLayer === "action" && !foreground)
+    )
+      return;
     const item = this.#sliceSource;
     if (!item) throw new Error("Crossing slice has no source material");
     const index = this.#slicePlan.length;
@@ -1030,11 +1043,16 @@ export class CompositionPass {
     return true;
   }
 
-  drawItems(pass: GPURenderPassEncoder, items: readonly CompositionDrawItem[]): void {
-    if (!this.crossing.hasSlices) {
+  drawItems(
+    pass: GPURenderPassEncoder,
+    items: readonly CompositionDrawItem[],
+    layer: CompositionLayer = "all",
+  ): void {
+    if (!(layer === "all" ? this.crossing.hasSlices : this.crossing.hasLayerSlices)) {
       this.#drawItems(pass, items, 0);
       return;
     }
+    this.#sliceLayer = layer;
     this.#slicePlan.length = 0;
     for (const item of items) {
       this.#sliceSource = item;
@@ -1044,7 +1062,11 @@ export class CompositionPass {
     this.#slicePlan.sort(this.#compareSlices);
     // Reserve once before recording any draw, so later slices cannot replace
     // the instance buffer already referenced by this render pass.
-    this.#ensureInstanceCapacity(this.#instanceWriteCursor + this.#slicePlan.length);
+    // Reserve the later sharp action draws too; growing between render passes
+    // would destroy an instance buffer still referenced by the scene pass.
+    this.#ensureInstanceCapacity(
+      this.#instanceWriteCursor + this.#slicePlan.length + (layer === "scene" ? items.length : 0),
+    );
     let slice = -1;
     for (const draw of this.#slicePlan) {
       if (slice !== draw.slice && this.#sliceItem.length > 0) {
