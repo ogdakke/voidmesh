@@ -1,4 +1,3 @@
-import { overlapBarItem, type OverlapBarItem } from "./mobile-bottom/bar-items.ts";
 import { lazy, Suspense } from "react";
 import { useDebugMode, useMultiSelectMode, useSelectedEntityIds } from "#context/use-canvas.ts";
 import { debugBarItem, type BarItem, type DebugBarItem } from "./mobile-bottom/bar-items.ts";
@@ -10,10 +9,8 @@ import { MultiSelectionControls } from "./multi-selection-controls";
 import { UploadControls } from "./upload-button-controls";
 
 interface MobileControlsProps {
-  activeItem: BarItem | DebugBarItem | OverlapBarItem | null;
+  activeItem: BarItem | DebugBarItem | null;
 }
-
-const OverlapDebugKnobs = lazy(() => import("./knobs/overlap-debug-knobs.tsx"));
 
 const WlurDebugKnobs = lazy(() => import("./knobs/wlur-debug-knobs.tsx"));
 
@@ -22,14 +19,6 @@ export function MobileControls({ activeItem }: MobileControlsProps) {
   const multiSelectMode = useMultiSelectMode();
   const debugMode = useDebugMode();
   const hasSelection = selectedEntityIds.size > 0;
-
-  if (activeItem === overlapBarItem) {
-    return (
-      <Suspense fallback={null}>
-        <OverlapDebugKnobs />
-      </Suspense>
-    );
-  }
 
   if (activeItem === debugBarItem && debugMode) {
     return (

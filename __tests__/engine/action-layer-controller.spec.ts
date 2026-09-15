@@ -1,4 +1,4 @@
-import { overlapLab, overlapDefaults } from "#lib/overlap-lab.ts";
+import { overlapConfig } from "#lib/config/overlap.config.ts";
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import { ActionLayerController, canvasStore } from "#engine";
 import { config } from "#config";
@@ -53,40 +53,30 @@ describe("ActionLayerController", () => {
     expect(controller.isActive()).toBe(false);
   });
 
-  test("keeps dismissal alive for the chosen crossing duration", () => {
-    overlapLab.configure({ enabled: true, transition: 600 });
-    try {
-      controller.activate({ x: 200, y: 200 }, new Set(["crossing-card"]));
-      clock.advanceUntilSettled();
-      controller.dismiss();
-      clock.advanceBy(200);
-      expect(controller.getRenderState().returning).toBe(true);
-      expect(controller.isActive()).toBe(true);
-      clock.advanceBy(450);
-      expect(controller.isActive()).toBe(false);
-    } finally {
-      overlapLab.configure(overlapDefaults);
-    }
+  test("keeps dismissal alive for the production crossing duration", () => {
+    controller.activate({ x: 200, y: 200 }, new Set(["crossing-card"]));
+    clock.advanceUntilSettled();
+    controller.dismiss();
+    clock.advanceBy(overlapConfig.transition / 2);
+    expect(controller.getRenderState().returning).toBe(true);
+    expect(controller.isActive()).toBe(true);
+    clock.advanceBy(overlapConfig.transition);
+    expect(controller.isActive()).toBe(false);
   });
 
   test("drag pickup returns through the stack without applying its transferred offset twice", () => {
-    overlapLab.configure({ enabled: true, transition: 600 });
-    try {
-      controller.activate({ x: 200, y: 200 }, new Set(["dragged"]));
-      controller.updateFingerPosition({ x: 400, y: 200 });
-      clock.advanceUntilSettled();
-      expect(controller.getEntityOffset().x).toBeGreaterThan(1);
-      controller.transitionToDrag();
-      expect(controller.getRenderState().returning).toBe(true);
-      expect(controller.getRenderState().entityOffset).toEqual({ x: 0, y: 0 });
-      clock.advanceBy(200);
-      expect(controller.isActive()).toBe(true);
-      expect(controller.getRenderState().entityIds.has("dragged")).toBe(true);
-      clock.advanceBy(450);
-      expect(controller.isActive()).toBe(false);
-    } finally {
-      overlapLab.configure(overlapDefaults);
-    }
+    controller.activate({ x: 200, y: 200 }, new Set(["dragged"]));
+    controller.updateFingerPosition({ x: 400, y: 200 });
+    clock.advanceUntilSettled();
+    expect(controller.getEntityOffset().x).toBeGreaterThan(1);
+    controller.transitionToDrag();
+    expect(controller.getRenderState().returning).toBe(true);
+    expect(controller.getRenderState().entityOffset).toEqual({ x: 0, y: 0 });
+    clock.advanceBy(overlapConfig.transition / 2);
+    expect(controller.isActive()).toBe(true);
+    expect(controller.getRenderState().entityIds.has("dragged")).toBe(true);
+    clock.advanceBy(overlapConfig.transition);
+    expect(controller.isActive()).toBe(false);
   });
 
   test("dismiss after spring settles fades blur to 0", () => {
