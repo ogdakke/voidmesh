@@ -15,7 +15,7 @@ export const overlapConfig: Readonly<OverlapConfig> = Object.freeze({
   enabled: true,
   dragUnder: true,
   transition: 200,
-  rgbStrength: 0.5,
+  rgbStrength: 1.5,
   rgbDecay: 200,
   rgbSplit: 20,
   wakeStrength: 0.2,
