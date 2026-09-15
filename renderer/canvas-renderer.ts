@@ -11,11 +11,7 @@ import { CanvasLensing } from "#types/enums.ts";
 import { ActionLayerBlurPass } from "./action-layer-blur-pass.ts";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
 import { CanvasDebugPass } from "./canvas-debug-pass.ts";
-import {
-  CompositionPass,
-  type CompositionDrawItem,
-  type CompositionPassStats,
-} from "./composition-pass.ts";
+import { CompositionPass, type CompositionPassStats } from "./composition-pass.ts";
 import { DisintegrationPass } from "./disintegration-pass.ts";
 import { EntityDrawItemPreparer } from "./entity-draw-item-preparer.ts";
 import { EntityLabelPass } from "./entity-label-pass.ts";
@@ -378,10 +374,6 @@ export class InfiniteCanvasRenderer {
     this.#cachedCanvasHeight = initialRect.height;
   }
 
-  #drawCompositionItems(pass: GPURenderPassEncoder, items: readonly CompositionDrawItem[]): void {
-    this.#compositionPass!.drawItems(pass, items);
-  }
-
   /**
    * Render an entity's image through its shader to a texture.
    * Returns the texture, caching it for future frames.
@@ -580,15 +572,13 @@ export class InfiniteCanvasRenderer {
         throw new Error("Prepared full-scene composition batch was invalidated before drawing");
       }
     } else {
-      this.#drawCompositionItems(entityPass, entityDrawItems);
+      this.#compositionPass.drawItems(entityPass, entityDrawItems, "scene");
     }
     entityPass.end();
 
     // Pass 2a: Action layer blur overlay
-    // Blur+dim everything, then re-render selected entities sharp on top
-    const blurIntensity = this.#compositionPass.crossing.enabled
-      ? 0
-      : state.actionLayer.blurIntensity;
+    // Blur+dim canvas-layer slices, then draw the final action slices sharp on top.
+    const blurIntensity = state.actionLayer.blurIntensity;
     if (
       blurIntensity > 0.01 &&
       this.#canvasFormat === this.#colorConfig.intermediateFormat &&
@@ -612,7 +602,7 @@ export class InfiniteCanvasRenderer {
       this.#actionLayerBlurPass?.invalidateCache();
     }
 
-    // Always render action layer entities on top (sharp, after blur or normally)
+    // Render only the action-plane portions here; lower crossing slices were drawn above.
     if (actionLayerDrawItems.length > 0) {
       const sharpPass = encoder.beginRenderPass({
         label: "Action layer sharp entity pass",
@@ -624,7 +614,7 @@ export class InfiniteCanvasRenderer {
           },
         ],
       });
-      this.#drawCompositionItems(sharpPass, actionLayerDrawItems);
+      this.#compositionPass.drawItems(sharpPass, actionLayerDrawItems, "action");
       sharpPass.end();
     }
 

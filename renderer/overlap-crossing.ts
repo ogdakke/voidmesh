@@ -146,20 +146,26 @@ export class OverlapCrossing {
    */
   appendSlices(
     id: string,
-    emit: (anchor: number, slice: number, sourceIndex: number) => void,
+    emit: (anchor: number, slice: number, sourceIndex: number, foreground: boolean) => void,
   ): void {
     const index = this.#sceneIndices.get(id);
     if (index === undefined) throw new Error("Crossing entity is missing its scene index");
-    let split = false;
+    let last = -1;
+    for (let i = 0; i < this.#crossingCount / 2; i++) {
+      if (this.#pairs[i]!.lifted.id === id) last = i;
+    }
     for (let i = 0; i < this.#crossingCount / 2; i++) {
       const pair = this.#pairs[i]!;
       if (pair.lifted.id !== id) continue;
-      split = true;
       const anchor = this.#sceneIndices.get(pair.cover.id);
       if (anchor === undefined) throw new Error("Crossing partner is missing its scene index");
-      emit(anchor, i * 2 + 2, index);
+      emit(anchor, i * 2 + 2, index, i === last);
     }
-    emit(index, split ? 1 : 0, index);
+    emit(index, last >= 0 ? 1 : 0, index, last < 0 && this.#active && this.#entityIds.has(id));
+  }
+  /** Layered composition also partitions endpoint frames and the effect tail. */
+  get hasLayerSlices(): boolean {
+    return this.#crossingCount > 0;
   }
   get hasSlices(): boolean {
     return this.#crossingCount > 0 && this.#lift > 0 && this.#lift < 1;
