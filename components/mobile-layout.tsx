@@ -1,6 +1,5 @@
-import { overlapLab } from "#lib/overlap-lab.ts";
 import { overlapBarItem, type OverlapBarItem } from "./mobile-bottom/bar-items.ts";
-import { useState, useSyncExternalStore } from "react";
+import { useState } from "react";
 import {
   ColorFilter,
   Component,
@@ -73,7 +72,6 @@ function MobileFloat() {
   const { isFullscreen } = useLayout();
   const { active: actionLayerActive } = useActionLayer();
   const debugMode = useDebugMode();
-  const overlap = useSyncExternalStore(overlapLab.subscribe, overlapLab.getSnapshot);
   const palette = useParamValue("palette", null);
   const bottomBarDisabled = multiSelectMode || selectedEntityIds.size === 0 || isFullscreen;
   const hideMobileControls = isFullscreen || actionLayerActive || entityDragActive;
@@ -123,11 +121,9 @@ function MobileFloat() {
         >
           <ColorFilter />
         </BottomBarItem>
-        {overlap.enabled && (
-          <BottomBarItem label={overlapBarItem} disabled={isFullscreen}>
-            <Copy />
-          </BottomBarItem>
-        )}
+        <BottomBarItem label={overlapBarItem} disabled={isFullscreen}>
+          <Copy />
+        </BottomBarItem>
         {debugMode && (
           <BottomBarItem label={debugBarItem} disabled={isFullscreen}>
             <Settings />

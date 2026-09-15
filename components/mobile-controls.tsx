@@ -1,6 +1,5 @@
-import { overlapLab } from "#lib/overlap-lab.ts";
 import { overlapBarItem, type OverlapBarItem } from "./mobile-bottom/bar-items.ts";
-import { lazy, Suspense, useSyncExternalStore } from "react";
+import { lazy, Suspense } from "react";
 import { useDebugMode, useMultiSelectMode, useSelectedEntityIds } from "#context/use-canvas.ts";
 import { debugBarItem, type BarItem, type DebugBarItem } from "./mobile-bottom/bar-items.ts";
 import { MobileStyleKnobs } from "./knobs/style-knobs";
@@ -22,10 +21,9 @@ export function MobileControls({ activeItem }: MobileControlsProps) {
   const selectedEntityIds = useSelectedEntityIds();
   const multiSelectMode = useMultiSelectMode();
   const debugMode = useDebugMode();
-  const overlap = useSyncExternalStore(overlapLab.subscribe, overlapLab.getSnapshot);
   const hasSelection = selectedEntityIds.size > 0;
 
-  if (activeItem === overlapBarItem && overlap.enabled) {
+  if (activeItem === overlapBarItem) {
     return (
       <Suspense fallback={null}>
         <OverlapDebugKnobs />

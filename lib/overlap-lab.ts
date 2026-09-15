@@ -2,7 +2,7 @@ import { Store } from "./store.ts";
 
 export const overlapDefaults = {
   enabled: true,
-  dragUnder: false,
+  dragUnder: true,
   transition: 200,
   rgbStrength: 0.5,
   rgbDecay: 200,
