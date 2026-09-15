@@ -79,6 +79,35 @@ describe("ActionLayerController", () => {
     expect(controller.isActive()).toBe(false);
   });
 
+  test("a second touch-end dismissal does not restart the return transition", () => {
+    controller.activate({ x: 200, y: 200 }, new Set(["original"]));
+    clock.advanceUntilSettled();
+    controller.dismiss();
+    clock.advanceBy(overlapConfig.transition / 2);
+    controller.dismiss();
+    expect(controller.getRenderState().returning).toBe(true);
+    expect(controller.getRenderState().entityIds.has("original")).toBe(true);
+    clock.advanceBy(overlapConfig.transition / 2 + 32);
+    expect(controller.isActive()).toBe(false);
+  });
+
+  test("action selection changes retain the original entity's return spring", () => {
+    controller.activate({ x: 200, y: 200 }, new Set(["original"]));
+    controller.updateFingerPosition({ x: 400, y: 200 });
+    clock.advanceUntilSettled();
+    const offset = controller.getEntityOffset().x;
+    expect(offset).toBeGreaterThan(1);
+    controller.dismiss();
+    canvasStore.setActionLayerActive(false);
+    canvasStore.replaceSelection(["new-selection"]);
+    expect(controller.getRenderState().returning).toBe(true);
+    expect(controller.getRenderState().entityIds.has("original")).toBe(true);
+    expect(controller.getEntityOffset().x).toBe(offset);
+    clock.advanceUntilSettled();
+    expect(controller.getEntityOffset().x).toBe(0);
+    expect(controller.isActive()).toBe(false);
+  });
+
   test("dismiss after spring settles fades blur to 0", () => {
     // Activate the action layer
     controller.activate({ x: 200, y: 200 });
