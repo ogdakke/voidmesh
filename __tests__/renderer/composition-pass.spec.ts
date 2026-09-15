@@ -114,6 +114,33 @@ describe("CompositionPass instancing", () => {
     },
   );
 
+  test.each([0, 100, 200])("partitions crossing draws around the blur pass at %s ms", (now) => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const entities = ["lifted", "middle", "upper"].map((id) => createTestEntity({ id }));
+    const action = {
+      active: true,
+      entityIds: new Set(["lifted"]),
+      entityOffset: { x: 0, y: 0 },
+      blurIntensity: 1,
+    };
+    pass.crossing.update(entities, action, 0, 1, 1);
+    pass.crossing.update(entities, action, now, 1, 1);
+    const texture = createTexture();
+    const items = entities.map((entity) => prepare(pass, entity, texture));
+    const scene = createRenderPass();
+    const sharp = createRenderPass();
+    pass.beginFrame(4);
+    pass.drawItems(scene, items, "scene");
+    const buffers = device.createBuffer.mock.calls.length;
+    pass.drawItems(sharp, [items[0]!], "action");
+    expect(scene.draw.mock.calls.map((call) => call[2])).toEqual([6, 0, 12, 0]);
+    expect(sharp.draw.mock.calls.map((call) => call[2])).toEqual([24]);
+    expect(device.createBuffer.mock.calls).toHaveLength(buffers);
+    pass.destroy();
+    entities.forEach(releaseImageEntity);
+  });
+
   test("splits external video draws and returns to ordinary batching after the crossing", () => {
     const { device } = createDevice();
     const pass = createPass(device);

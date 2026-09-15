@@ -31,6 +31,7 @@ WebGPU rendering, shader execution, composition, resource caching, and export.
 
 - GPU color configuration is detected once and passed explicitly to dependent systems.
 - Preserve source alpha across shader output.
+- Action-layer blur sits between canvas and foreground crossing slices. Draw each slice once, keeping the foreground sharp after blur.
 - Keep base entities, selection/labels, action-layer content, disintegration, lensing, and progressive blur in their intended layer order.
 
 ## Boundaries
