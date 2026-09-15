@@ -62,10 +62,13 @@ describe("EntityTexturePipeline shared image sources", () => {
 
     const sourceTexture = createTexture(200, 150);
     const device = createDevice([sourceTexture]);
+    const onImmutableSourceUpload =
+      vi.fn<(texture: GPUTexture, encoder: GPUCommandEncoder) => void>();
     const pipeline = new EntityTexturePipeline({
       device,
       colorConfig,
       texturePool: null,
+      onImmutableSourceUpload,
     });
     const encoder = {} as GPUCommandEncoder;
 
@@ -76,6 +79,7 @@ describe("EntityTexturePipeline shared image sources", () => {
     expect(secondSource).toEqual({ kind: "texture", texture: sourceTexture });
     expect(device.createTexture).toHaveBeenCalledOnce();
     expect(device.queue.copyExternalImageToTexture).toHaveBeenCalledOnce();
+    expect(onImmutableSourceUpload).toHaveBeenCalledExactlyOnceWith(sourceTexture, encoder);
 
     pipeline.removeEntity(first.id);
     expect(sourceTexture.destroy).not.toHaveBeenCalled();

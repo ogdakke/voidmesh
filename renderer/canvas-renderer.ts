@@ -1,3 +1,4 @@
+import { hasPrismWakeEffects } from "#lib/fancy-effects.ts";
 import { config, getViewportLensDistortionConfig, type GridConfig } from "#config";
 import { logger } from "#lib/client.logger.ts";
 import { tracePerformancePhase } from "#lib/performance-tracing.ts";
@@ -10,11 +11,7 @@ import { CanvasLensing } from "#types/enums.ts";
 import { ActionLayerBlurPass } from "./action-layer-blur-pass.ts";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
 import { CanvasDebugPass } from "./canvas-debug-pass.ts";
-import {
-  CompositionPass,
-  type CompositionDrawItem,
-  type CompositionPassStats,
-} from "./composition-pass.ts";
+import { CompositionPass, type CompositionPassStats } from "./composition-pass.ts";
 import { DisintegrationPass } from "./disintegration-pass.ts";
 import { EntityDrawItemPreparer } from "./entity-draw-item-preparer.ts";
 import { EntityLabelPass } from "./entity-label-pass.ts";
@@ -193,12 +190,17 @@ export class InfiniteCanvasRenderer {
         fullSceneBatchRebuilds: 0,
         fullSceneBatchUploadBytes: 0,
         normalInstanceUploadBytes: 0,
+        occlusionPasses: 0,
+        opacityProofs: 0,
+        opacityBufferBytes: 0,
+        layerTextureBytes: 0,
       },
     };
   }
 
   hasPendingRenderWork(): boolean {
     return (
+      (this.#compositionPass?.crossing.pending ?? false) ||
       this.#lodSettleFramesRemaining > 0 ||
       this.#mixedBatchLodRefreshPending ||
       (this.#entityTexturePipeline?.hasPendingLodWork ?? false)
@@ -270,6 +272,7 @@ export class InfiniteCanvasRenderer {
       format: this.#canvasFormat,
       viewportUniformBuffer: this.#viewportUniforms.buffer,
     });
+    await this.#compositionPass.initializeOverlap();
     this.#externalTextureCopyPass = new ExternalTextureCopyPass(
       this.#device,
       this.#colorConfig.intermediateFormat,
@@ -278,6 +281,8 @@ export class InfiniteCanvasRenderer {
       device: this.#device,
       colorConfig: this.#colorConfig,
       texturePool: this.#texturePool,
+      onImmutableSourceUpload: (texture, encoder) =>
+        this.#compositionPass!.primeImmutableSource(texture, encoder),
       onEntityError: (entityId, error) => {
         if (!this.#entityErrors.has(entityId)) {
           this.#entityErrors.set(entityId, error);
@@ -374,10 +379,6 @@ export class InfiniteCanvasRenderer {
     const initialRect = this.canvas.getBoundingClientRect();
     this.#cachedCanvasWidth = initialRect.width;
     this.#cachedCanvasHeight = initialRect.height;
-  }
-
-  #drawCompositionItems(pass: GPURenderPassEncoder, items: readonly CompositionDrawItem[]): void {
-    this.#compositionPass!.drawItems(pass, items);
   }
 
   /**
@@ -478,6 +479,15 @@ export class InfiniteCanvasRenderer {
 
     // Pre-process entities: render to textures and prepare bind groups
     // Uses caching to avoid per-frame allocations
+    this.#compositionPass.crossing.update(
+      entities,
+      state.actionLayer,
+      performance.now(),
+      viewport.zoom,
+      dpr,
+      state.dragVisual,
+      hasPrismWakeEffects(state.fancyEffects),
+    );
     const preparedEntityDrawItems = this.#entityDrawItemPreparer.prepare({
       entities,
       entityIndices: state.entityIndices,
@@ -517,7 +527,8 @@ export class InfiniteCanvasRenderer {
       singleSelectedOffsetX,
       singleSelectedOffsetY,
     } = preparedEntityDrawItems;
-    let hasAnimatingContent = preparedEntityDrawItems.hasAnimatingContent;
+    let hasAnimatingContent =
+      preparedEntityDrawItems.hasAnimatingContent || this.#compositionPass.crossing.pending;
     this.#compositionPass.beginFrame(
       fullSceneBatch?.instanceCount ?? entityDrawItems.length + actionLayerDrawItems.length,
     );
@@ -532,6 +543,21 @@ export class InfiniteCanvasRenderer {
     const viewportLensTarget = this.#viewportLensPass?.getTarget(width, height) ?? null;
     const sceneTargetTexture = viewportLensTarget?.texture ?? texture;
     const sceneTargetView = viewportLensTarget?.view ?? targetView;
+    const overlapDepth = fullSceneBatch
+      ? undefined
+      : this.#compositionPass.prepareOcclusion(
+          encoder,
+          entityDrawItems,
+          width,
+          height,
+          viewport.zoom,
+        );
+    const blurIntensity = state.actionLayer.blurIntensity;
+    const renderActionBlur =
+      blurIntensity > 0.01 &&
+      this.#canvasFormat === this.#colorConfig.intermediateFormat &&
+      !!this.#entityTexturePipeline &&
+      !!this.#actionLayerBlurPass;
 
     // Pass 1: Render dot grid background
     this.#gridPass.encode({ encoder, targetView: sceneTargetView, viewport, width, height });
@@ -546,6 +572,7 @@ export class InfiniteCanvasRenderer {
         : undefined;
     const entityPass = encoder.beginRenderPass({
       label: "Entity composition pass",
+      ...(overlapDepth ? { depthStencilAttachment: overlapDepth } : {}),
       colorAttachments: [
         {
           view: sceneTargetView,
@@ -568,13 +595,14 @@ export class InfiniteCanvasRenderer {
         throw new Error("Prepared full-scene composition batch was invalidated before drawing");
       }
     } else {
-      this.#drawCompositionItems(entityPass, entityDrawItems);
+      if (renderActionBlur) this.#compositionPass.drawBackdropScene(entityPass, entityDrawItems);
+      else this.#compositionPass.drawItems(entityPass, entityDrawItems, "scene");
     }
     entityPass.end();
 
     // Pass 2a: Action layer blur overlay
-    // Blur+dim everything, then re-render selected entities sharp on top
-    const blurIntensity = state.actionLayer.blurIntensity;
+    // Blur+dim the scene without active material, then reconstruct lower sharp
+    // crossing slices at their animated depth before the final foreground slices.
     if (
       blurIntensity > 0.01 &&
       this.#canvasFormat === this.#colorConfig.intermediateFormat &&
@@ -597,8 +625,16 @@ export class InfiniteCanvasRenderer {
     if (blurIntensity <= 0.01) {
       this.#actionLayerBlurPass?.invalidateCache();
     }
+    if (renderActionBlur)
+      this.#compositionPass.restoreSharpScene(
+        encoder,
+        sceneTargetTexture,
+        sceneTargetView,
+        entityDrawItems,
+      );
 
-    // Always render action layer entities on top (sharp, after blur or normally)
+    // Render final action-plane portions. Lower active material is already sharp
+    // beneath the reconstructed covers; no active material passed through blur.
     if (actionLayerDrawItems.length > 0) {
       const sharpPass = encoder.beginRenderPass({
         label: "Action layer sharp entity pass",
@@ -610,7 +646,7 @@ export class InfiniteCanvasRenderer {
           },
         ],
       });
-      this.#drawCompositionItems(sharpPass, actionLayerDrawItems);
+      this.#compositionPass.drawItems(sharpPass, actionLayerDrawItems, "action");
       sharpPass.end();
     }
 
@@ -730,6 +766,7 @@ export class InfiniteCanvasRenderer {
     this.#lastPhaseStats.submitMs = tracePerformancePhase("render.submit", submitStart, submitEnd);
     this.#entityTexturePipeline?.flushTextureReleases();
     this.#entityTexturePipeline?.endFrame();
+    this.#compositionPass.endFrame();
 
     // Record frame stats for performance overlay
     const renderEnd = performance.now();

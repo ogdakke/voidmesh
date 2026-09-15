@@ -14,6 +14,8 @@ WebGPU rendering, shader execution, composition, resource caching, and export.
 
 ## Rendering Invariants
 
+- Assemble shared WGSL with `// @include "..."` through `plugins/vite-plugin-wgsl-minify.ts` in development, tests, and builds. Minify complete modules; never concatenate independently minified shader fragments.
+
 - Preserve exact entity z-order. Batch only when draw ordering and texture identity remain correct.
 - Static-image composition plans may persist across viewport-only frames. Membership, ordering, incompatible media, dirty textures, or lost resources must invalidate or patch the plan correctly.
 - Pan and zoom should update uniforms rather than rebuild scene data when entity/effect identity is unchanged.
@@ -29,6 +31,8 @@ WebGPU rendering, shader execution, composition, resource caching, and export.
 
 - GPU color configuration is detected once and passed explicitly to dependent systems.
 - Preserve source alpha across shader output.
+- Active action-layer material never enters scene blur. Reconstruct lower crossing slices after blur using sharp active material, blurred backdrop color, and original cover alpha; preserve animated depth and draw each active slice once.
+- Composition owns crossing layer targets and texture-identity opacity proofs. Prime proofs only from immutable image uploads, keep current-frame resources alive through submission, and destroy them on eviction or shutdown.
 - Keep base entities, selection/labels, action-layer content, disintegration, lensing, and progressive blur in their intended layer order.
 
 ## Boundaries

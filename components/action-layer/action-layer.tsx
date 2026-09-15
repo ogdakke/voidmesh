@@ -252,11 +252,12 @@ function Root({ children }: PropsWithChildren) {
         if (item) {
           analytics.track("action_layer.button_selected", { button: item.label });
           completeOnboardingStepFromEvent(OnboardingStepId.hoverAction);
+          // Capture the return spring before the action can change selection,
+          // replace an entity, or open a drawer. Rendering keeps the original IDs
+          // until the controller finishes even though the action UI closes now.
+          interaction.dismissActionLayer();
           item.onAction();
         }
-        // Cancel immediately so entities return to normal render order on the next frame.
-        // The game loop's dismiss() (bubble phase) becomes a no-op since phase is already idle.
-        interaction.cancelActionLayer();
       }
       // When no action was fired, dismiss + setActionLayerActive(false) is handled by
       // the game loop's handleTouchEnd (bubble phase), which animates blur fade-out

@@ -1,7 +1,7 @@
 import { Modal } from "#ui/modal/modal.tsx";
 import {
   CanvasLensingSelect,
-  FancyDeleteToggle,
+  FancyEffectsDesktopSelect,
   FeedbackLink,
   LinkItem,
   RedoOnboardingLink,
@@ -25,7 +25,7 @@ export default function DesktopSettingsContent({
           <SnapToGridToggle />
         </div>
         <div className="desktop-settings-switch">
-          <FancyDeleteToggle />
+          <FancyEffectsDesktopSelect />
         </div>
         <div className="desktop-settings-switch">
           <CanvasLensingSelect />

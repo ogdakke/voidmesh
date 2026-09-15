@@ -8,7 +8,7 @@ import { useState } from "react";
 import "./settings.mobile.css";
 import {
   CanvasLensingSelect,
-  FancyDeleteToggle,
+  FancyEffectsMobileSelect,
   FeedbackLink,
   HapticsToggle,
   LinkItem,
@@ -59,7 +59,7 @@ export default function SettingsDrawer() {
             <SnapToGridToggle />
           </div>
           <div className="settings-drawer-switch">
-            <FancyDeleteToggle />
+            <FancyEffectsMobileSelect />
           </div>
           <div className="settings-drawer-switch">
             <HapticsToggle />

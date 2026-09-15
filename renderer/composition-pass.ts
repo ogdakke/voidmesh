@@ -1,6 +1,9 @@
+import { OverlapCrossing } from "./overlap-crossing.ts";
+import { OpaqueTextureProof } from "./opaque-texture-proof.ts";
+import { getTextureByteSize } from "#lib/textures.ts";
 import { config } from "#config";
 import type { DragSelectMode } from "#engine";
-import type { Bounds, ShaderCanvasEntity } from "#types/canvas.ts";
+import { MediaType, type Bounds, type ShaderCanvasEntity } from "#types/canvas.ts";
 import instancedCompositionShaderSource from "./composition-instanced.wgsl?raw";
 import compositionShaderSource from "./composition.wgsl?raw";
 
@@ -18,6 +21,15 @@ export interface CompositionDrawItem {
   offsetX: number;
   offsetY: number;
   visualScale: number;
+}
+
+export type CompositionLayer = "all" | "scene" | "action";
+
+interface CrossingSliceDraw {
+  item: CompositionDrawItem | null;
+  anchor: number;
+  slice: number;
+  sourceIndex: number;
 }
 
 export interface CompositionPassOptions {
@@ -91,6 +103,10 @@ export interface CompositionPassStats {
   fullSceneBatchRebuilds: number;
   fullSceneBatchUploadBytes: number;
   normalInstanceUploadBytes: number;
+  occlusionPasses: number;
+  opacityProofs: number;
+  opacityBufferBytes: number;
+  layerTextureBytes: number;
 }
 
 interface CompositionUniformState {
@@ -215,25 +231,88 @@ function packInstanceState(
   );
 }
 
-function createExternalCompositionShaderSource(source: string): string {
+export function createExternalCompositionShaderSource(source: string): string {
   const rewritten = source
     .replace(
-      /@group\(0\)\s+@binding\(2\)\s+var\s+entityTexture\s*:\s*texture_2d<f32>;/,
+      /@group\(0\)\s*@binding\(2\)\s*var\s+entityTexture\s*:\s*texture_2d\s*<\s*f32\s*>\s*;/,
       "@group(0) @binding(2) var entityTexture: texture_external;",
     )
     .replace(
-      /textureSample\(entityTexture,\s*entitySampler,/g,
-      "textureSampleBaseClampToEdge(entityTexture, entitySampler,",
+      /textureSampleLevel\(entityTexture,\s*entitySampler,\s*(\w+),\s*0(?:\.0*)?\)/g,
+      "textureSampleBaseClampToEdge(entityTexture, entitySampler, $1)",
     );
 
-  if (rewritten === source || !rewritten.includes("texture_external")) {
+  if (
+    rewritten === source ||
+    !rewritten.includes("texture_external") ||
+    !rewritten.includes("textureSampleBaseClampToEdge(entityTexture,") ||
+    /textureSample(?:Level)?\(entityTexture,/.test(rewritten)
+  ) {
     throw new Error("Failed to rewrite composition shader source for external texture input.");
   }
   return rewritten;
 }
 
 export class CompositionPass {
+  readonly #format: GPUTextureFormat;
+  readonly #instancedDescriptor: GPURenderPipelineDescriptor;
+  readonly #externalDescriptor: GPURenderPipelineDescriptor;
+  #proof: OpaqueTextureProof | null = null;
+  #prepassPipeline: GPURenderPipeline | null = null;
+  #depthPipelines: { texture: GPURenderPipeline; external: GPURenderPipeline } | null = null;
+  #restorePipelines: { texture: GPURenderPipeline; external: GPURenderPipeline } | null = null;
+  #restoreDepthPipelines: { texture: GPURenderPipeline; external: GPURenderPipeline } | null = null;
+  #backdropLayout: GPUBindGroupLayout | null = null;
+  #backdropGroup: GPUBindGroup | null = null;
+  #externalBackdropLayout: GPUBindGroupLayout | null = null;
+  #unprovenOpacity: GPUBuffer | null = null;
+  #restoreGroups = new WeakMap<GPUTexture, { buffer: GPUBuffer; group: GPUBindGroup }>();
+  #backdrop: GPUTexture | null = null;
+  #depth: GPUTexture | null = null;
+  #depthView: GPUTextureView | null = null;
+  #occlusion = false;
+  #drawMode: "normal" | "depth" | "restore" = "normal";
+  #occlusionPasses = 0;
+  readonly #backdropItems: CompositionDrawItem[] = [];
+  readonly #occluderItems: CompositionDrawItem[] = [];
+  #prepassLayout: GPUBindGroupLayout | null = null;
+  #prepassInstances: { buffer: GPUBuffer; group: GPUBindGroup } | null = null;
+  #opacityTable: GPUBuffer | null = null;
+  #opacityTableBytes = 0;
+  #opacityTableGroup: GPUBindGroup | null = null;
   readonly #device: GPUDevice;
+  readonly #slicePool: CrossingSliceDraw[] = [];
+  readonly #slicePlan: CrossingSliceDraw[] = [];
+  readonly #sliceItem: CompositionDrawItem[] = [];
+  #sliceSource: CompositionDrawItem | null = null;
+  #sliceLayer: CompositionLayer = "all";
+  readonly #appendSlice = (
+    anchor: number,
+    slice: number,
+    sourceIndex: number,
+    foreground: boolean,
+  ): void => {
+    if (
+      (this.#sliceLayer === "scene" && foreground) ||
+      (this.#sliceLayer === "action" && !foreground)
+    )
+      return;
+    const item = this.#sliceSource;
+    if (!item) throw new Error("Crossing slice has no source material");
+    const index = this.#slicePlan.length;
+    const draw = this.#slicePool[index] ?? { item, anchor, slice, sourceIndex };
+    draw.item = item;
+    draw.anchor = anchor;
+    draw.slice = slice;
+    draw.sourceIndex = sourceIndex;
+    this.#slicePool[index] = draw;
+    this.#slicePlan.push(draw);
+  };
+  readonly #compareSlices = (a: CrossingSliceDraw, b: CrossingSliceDraw): number =>
+    a.anchor - b.anchor ||
+    Number(a.slice > 1) - Number(b.slice > 1) ||
+    a.sourceIndex - b.sourceIndex;
+  readonly crossing: OverlapCrossing;
   readonly #viewportUniformBuffer: GPUBuffer;
   readonly #pipeline: GPURenderPipeline;
   readonly #instancedPipeline: GPURenderPipeline;
@@ -296,7 +375,9 @@ export class CompositionPass {
   > = new Map();
 
   constructor(options: CompositionPassOptions) {
+    this.#format = options.format;
     this.#device = options.device;
+    this.crossing = new OverlapCrossing(this.#device);
     this.#viewportUniformBuffer = options.viewportUniformBuffer;
 
     const shaderModule = this.#device.createShaderModule({
@@ -335,7 +416,7 @@ export class CompositionPass {
       entries: [
         {
           binding: 0,
-          visibility: GPUShaderStage.VERTEX,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
           buffer: { type: "uniform" },
         },
         {
@@ -402,7 +483,7 @@ export class CompositionPass {
 
     const pipelineLayout = this.#device.createPipelineLayout({
       label: "Composition pipeline layout",
-      bindGroupLayouts: [this.#bindGroupLayout],
+      bindGroupLayouts: [this.#bindGroupLayout, this.crossing.layout],
     });
 
     this.#pipeline = this.#device.createRenderPipeline({
@@ -444,9 +525,9 @@ export class CompositionPass {
     });
     const instancedPipelineLayout = this.#device.createPipelineLayout({
       label: "Instanced composition pipeline layout",
-      bindGroupLayouts: [this.#instancedBindGroupLayout],
+      bindGroupLayouts: [this.#instancedBindGroupLayout, this.crossing.layout],
     });
-    this.#instancedPipeline = this.#device.createRenderPipeline({
+    this.#instancedDescriptor = {
       label: "Instanced composition pipeline",
       layout: instancedPipelineLayout,
       vertex: {
@@ -477,7 +558,8 @@ export class CompositionPass {
       primitive: {
         topology: "triangle-list",
       },
-    });
+    };
+    this.#instancedPipeline = this.#device.createRenderPipeline(this.#instancedDescriptor);
     this.#interactiveInstancedPipeline = this.#device.createRenderPipeline({
       label: "Interactive instanced composition pipeline",
       layout: instancedPipelineLayout,
@@ -518,10 +600,10 @@ export class CompositionPass {
 
     const externalPipelineLayout = this.#device.createPipelineLayout({
       label: "External composition pipeline layout",
-      bindGroupLayouts: [this.#externalBindGroupLayout],
+      bindGroupLayouts: [this.#externalBindGroupLayout, this.crossing.layout],
     });
 
-    this.#externalPipeline = this.#device.createRenderPipeline({
+    this.#externalDescriptor = {
       label: "External composition pipeline",
       layout: externalPipelineLayout,
       vertex: {
@@ -552,7 +634,8 @@ export class CompositionPass {
       primitive: {
         topology: "triangle-list",
       },
-    });
+    };
+    this.#externalPipeline = this.#device.createRenderPipeline(this.#externalDescriptor);
   }
 
   prepareDrawItem(options: PrepareCompositionItemOptions): CompositionDrawItem {
@@ -647,6 +730,10 @@ export class CompositionPass {
   }
 
   beginFrame(maximumInstanceCount: number): void {
+    this.#occlusion = false;
+    this.#drawMode = "normal";
+    this.#backdropItems.length = 0;
+    this.#occluderItems.length = 0;
     this.#instanceWriteCursor = 0;
     if (maximumInstanceCount > 0) this.#ensureInstanceCapacity(maximumInstanceCount);
   }
@@ -656,7 +743,335 @@ export class CompositionPass {
       fullSceneBatchRebuilds: this.#fullSceneBatchRebuilds,
       fullSceneBatchUploadBytes: this.#fullSceneBatchUploadBytes,
       normalInstanceUploadBytes: this.#normalInstanceUploadBytes,
+      occlusionPasses: this.#occlusionPasses,
+      opacityProofs: this.#proof?.getStats().proofs ?? 0,
+      opacityBufferBytes: (this.#proof?.getStats().residentBytes ?? 0) + this.#opacityTableBytes,
+      layerTextureBytes:
+        (this.#depth ? this.#depth.width * this.#depth.height * 4 : 0) +
+        (this.#backdrop
+          ? getTextureByteSize(this.#backdrop.width, this.#backdrop.height, this.#format)
+          : 0),
     };
+  }
+
+  endFrame(): void {
+    this.#proof?.endFrame();
+  }
+  primeImmutableSource(texture: GPUTexture, encoder: GPUCommandEncoder): void {
+    this.#proof ??= new OpaqueTextureProof(this.#device);
+    this.#proof.get(texture, encoder);
+  }
+
+  /** Compile crossing pipelines before user input, rather than on first return. */
+  async initializeOverlap(): Promise<void> {
+    this.#ensureBackdropBindings();
+    this.#proof ??= new OpaqueTextureProof(this.#device);
+    const make = async (entryPoint: string, depth: boolean) => {
+      const descriptors = this.#pipelineDescriptors(entryPoint, depth);
+      const [texture, external] = await Promise.all([
+        this.#device.createRenderPipelineAsync(descriptors.texture),
+        this.#device.createRenderPipelineAsync(descriptors.external),
+      ]);
+      return { texture, external };
+    };
+    const [depth, restore, restoreDepth, prepass] = await Promise.all([
+      make("fs_main", true),
+      make("fs_restore", false),
+      make("fs_restore", true),
+      this.#device.createRenderPipelineAsync(this.#prepassDescriptor()),
+      this.#proof.initialize(),
+    ]);
+    this.#depthPipelines = depth;
+    this.#restorePipelines = restore;
+    this.#restoreDepthPipelines = restoreDepth;
+    this.#prepassPipeline = prepass;
+  }
+
+  #ensureBackdropBindings(): void {
+    this.#backdropLayout ??= this.#device.createBindGroupLayout({
+      label: "Sharp overlap backdrop",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
+      ],
+    });
+    this.#externalBackdropLayout ??= this.#device.createBindGroupLayout({
+      label: "External sharp overlap backdrop",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+      ],
+    });
+    this.#unprovenOpacity ??= this.#device.createBuffer({
+      label: "Unproven opacity",
+      size: 4,
+      usage: GPUBufferUsage.STORAGE,
+    });
+  }
+
+  #prepassDescriptor(): GPURenderPipelineDescriptor {
+    this.#prepassLayout ??= this.#device.createBindGroupLayout({
+      label: "Overlap depth instances",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } },
+        { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
+      ],
+    });
+    return {
+      label: "Opaque overlap depth prepass",
+      layout: this.#device.createPipelineLayout({
+        bindGroupLayouts: [this.#prepassLayout, this.crossing.layout, this.#proof!.layout],
+      }),
+      vertex: { ...this.#instancedDescriptor.vertex, entryPoint: "vs_occlusion" },
+      fragment: {
+        module: this.#instancedDescriptor.vertex.module,
+        entryPoint: "fs_occlusion",
+        targets: [],
+      },
+      primitive: { topology: "triangle-list" },
+      depthStencil: { format: "depth32float", depthWriteEnabled: true, depthCompare: "less-equal" },
+    };
+  }
+
+  #pipelineDescriptors(entryPoint: string, depth: boolean) {
+    const make = (
+      descriptor: GPURenderPipelineDescriptor,
+      baseLayout: GPUBindGroupLayout,
+      backdropLayout: GPUBindGroupLayout | null,
+    ): GPURenderPipelineDescriptor => {
+      if (!descriptor.fragment) throw new Error("Composition pipeline has no fragment stage");
+      return {
+        ...descriptor,
+        label: `${descriptor.label} ${entryPoint}${depth ? " depth-tested" : ""}`,
+        layout:
+          entryPoint === "fs_restore"
+            ? this.#device.createPipelineLayout({
+                bindGroupLayouts: [baseLayout, this.crossing.layout, backdropLayout!],
+              })
+            : descriptor.layout,
+        fragment: { ...descriptor.fragment, entryPoint },
+        ...(depth
+          ? {
+              depthStencil: {
+                format: "depth32float" as const,
+                depthWriteEnabled: false,
+                depthCompare: "less-equal" as const,
+              },
+            }
+          : {}),
+      };
+    };
+    return {
+      texture: make(
+        this.#instancedDescriptor,
+        this.#instancedBindGroupLayout,
+        this.#backdropLayout,
+      ),
+      external: make(
+        this.#externalDescriptor,
+        this.#externalBindGroupLayout,
+        this.#externalBackdropLayout,
+      ),
+    };
+  }
+
+  #makePipelines(entryPoint: string, depth: boolean) {
+    const descriptors = this.#pipelineDescriptors(entryPoint, depth);
+    return {
+      texture: this.#device.createRenderPipeline(descriptors.texture),
+      external: this.#device.createRenderPipeline(descriptors.external),
+    };
+  }
+
+  /** Exact opacity is cached only for immutable, original still-image uploads. */
+  prepareOcclusion(
+    encoder: GPUCommandEncoder,
+    items: readonly CompositionDrawItem[],
+    width: number,
+    height: number,
+    zoom: number,
+  ): GPURenderPassDepthStencilAttachment | undefined {
+    if (!this.crossing.hasLayerSlices) return undefined;
+    if (this.#instanceWriteCursor !== 0)
+      throw new Error("Prepare overlap occlusion before entity draws");
+    this.#ensureInstanceCapacity(items.length * 3 + this.crossing.contactCount);
+    this.#occluderItems.length = 0;
+    let area = 0;
+    for (const item of items) {
+      if (
+        item.pipeline !== "texture" ||
+        !item.texture ||
+        item.entity.mediaSource.type !== MediaType.image ||
+        !item.entity.shaderParams.showOriginal ||
+        this.crossing.isActiveEntity(item.entity.id) ||
+        item.isSelected ||
+        item.debugMode
+      )
+        continue;
+      this.#occluderItems.push(item);
+      area += item.entity.size.width * item.entity.size.height * item.visualScale ** 2 * zoom ** 2;
+    }
+    // Pay for a prepass only when original-image overdraw can outweigh it.
+    if (area < width * height * 2) return undefined;
+    if (width * height * 4 > config.rendering.processingTextureBudgetBytes)
+      throw new Error("Overlap depth target exceeds its byte budget");
+    this.#proof ??= new OpaqueTextureProof(this.#device);
+    this.#depthPipelines ??= this.#makePipelines("fs_main", true);
+    this.#prepassPipeline ??= this.#device.createRenderPipeline(this.#prepassDescriptor());
+    if (!this.#depth || this.#depth.width !== width || this.#depth.height !== height) {
+      if (this.#backdrop && (this.#backdrop.width !== width || this.#backdrop.height !== height)) {
+        this.#backdrop.destroy();
+        this.#backdrop = null;
+        this.#backdropGroup = null;
+        this.#restoreGroups = new WeakMap();
+      }
+      const backdropBytes = this.#backdrop ? getTextureByteSize(width, height, this.#format) : 0;
+      if (width * height * 4 + backdropBytes > config.rendering.processingTextureBudgetBytes)
+        throw new Error("Overlap layer targets exceed their byte budget");
+      this.#depth?.destroy();
+      this.#depth = this.#device.createTexture({
+        label: "Overlap opaque depth",
+        size: [width, height],
+        format: "depth32float",
+        usage: GPUTextureUsage.RENDER_ATTACHMENT,
+      });
+      this.#depthView = this.#depth.createView();
+    }
+    // Reserve before encoding any pass that refers to the shared instance buffer.
+    this.#ensureInstanceCapacity(
+      items.length * 3 + this.crossing.contactCount + this.#occluderItems.length,
+    );
+    const count = this.#occluderItems.length;
+    const firstInstance = this.#instanceWriteCursor;
+    const tableBytes = Math.max(256, 2 ** Math.ceil(Math.log2((firstInstance + count) * 4)));
+    if (tableBytes > this.#device.limits.maxStorageBufferBindingSize)
+      throw new Error("Overlap opacity table exceeds the GPU storage binding limit");
+    if (this.#opacityTableBytes < tableBytes) {
+      this.#opacityTable?.destroy();
+      this.#opacityTable = this.#device.createBuffer({
+        label: "Overlap instance opacity",
+        size: tableBytes,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      });
+      this.#opacityTableBytes = tableBytes;
+      this.#opacityTableGroup = this.#device.createBindGroup({
+        layout: this.#proof.layout,
+        entries: [{ binding: 1, resource: { buffer: this.#opacityTable } }],
+      });
+    }
+    for (let i = 0; i < count; i++) {
+      const item = this.#occluderItems[i]!;
+      const proof = this.#proof.get(item.texture!, encoder);
+      encoder.copyBufferToBuffer(proof.buffer, 0, this.#opacityTable!, (firstInstance + i) * 4, 4);
+      this.#writeInstance(firstInstance + i, item);
+    }
+    this.#device.queue.writeBuffer(
+      this.#instanceBuffer!,
+      firstInstance * INSTANCE_STRIDE_BYTES,
+      this.#instanceData,
+      firstInstance * INSTANCE_STRIDE_BYTES,
+      count * INSTANCE_STRIDE_BYTES,
+    );
+    this.#normalInstanceUploadBytes += count * INSTANCE_STRIDE_BYTES;
+    this.#instanceWriteCursor += count;
+    if (this.#prepassInstances?.buffer !== this.#instanceBuffer)
+      this.#prepassInstances = {
+        buffer: this.#instanceBuffer!,
+        group: this.#device.createBindGroup({
+          layout: this.#prepassLayout!,
+          entries: [
+            { binding: 0, resource: { buffer: this.#viewportUniformBuffer } },
+            { binding: 1, resource: { buffer: this.#instanceBuffer! } },
+          ],
+        }),
+      };
+    const pass = encoder.beginRenderPass({
+      label: "Overlap opaque depth prepass",
+      colorAttachments: [],
+      depthStencilAttachment: {
+        view: this.#depthView!,
+        depthClearValue: 1,
+        depthLoadOp: "clear",
+        depthStoreOp: "store",
+      },
+    });
+    pass.setPipeline(this.#prepassPipeline!);
+    pass.setBindGroup(0, this.#prepassInstances.group);
+    pass.setBindGroup(1, this.crossing.bindGroup);
+    pass.setBindGroup(2, this.#opacityTableGroup!);
+    pass.draw(6, count, 0, firstInstance);
+    pass.end();
+    this.#drawMode = "depth";
+    this.#occlusion = true;
+    this.#occlusionPasses++;
+    return { view: this.#depthView!, depthReadOnly: true };
+  }
+
+  drawBackdropScene(pass: GPURenderPassEncoder, items: readonly CompositionDrawItem[]): void {
+    this.#drawMode = this.#occlusion ? "depth" : "normal";
+    if (!this.crossing.hasSharpScene) {
+      this.drawItems(pass, items, "scene");
+      return;
+    }
+    this.#backdropItems.length = 0;
+    for (const item of items)
+      if (!this.crossing.isActiveEntity(item.entity.id)) this.#backdropItems.push(item);
+    this.#drawItems(pass, this.#backdropItems, 0);
+  }
+
+  restoreSharpScene(
+    encoder: GPUCommandEncoder,
+    target: GPUTexture,
+    view: GPUTextureView,
+    items: readonly CompositionDrawItem[],
+  ): void {
+    if (!this.crossing.hasSharpScene) {
+      this.#drawMode = "normal";
+      return;
+    }
+    const bytes =
+      getTextureByteSize(target.width, target.height, this.#format) +
+      (this.#depth ? this.#depth.width * this.#depth.height * 4 : 0);
+    if (bytes > config.rendering.processingTextureBudgetBytes)
+      throw new Error("Overlap layer targets exceed their byte budget");
+    this.#ensureBackdropBindings();
+    if (
+      !this.#backdrop ||
+      this.#backdrop.width !== target.width ||
+      this.#backdrop.height !== target.height
+    ) {
+      this.#backdrop?.destroy();
+      this.#backdrop = this.#device.createTexture({
+        label: "Blurred overlap backdrop",
+        size: [target.width, target.height],
+        format: this.#format,
+        usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+      });
+      this.#backdropGroup = this.#device.createBindGroup({
+        layout: this.#externalBackdropLayout!,
+        entries: [{ binding: 0, resource: this.#backdrop.createView() }],
+      });
+      this.#restoreGroups = new WeakMap();
+    }
+    this.#restorePipelines ??= this.#makePipelines("fs_restore", false);
+    if (this.#occlusion) this.#restoreDepthPipelines ??= this.#makePipelines("fs_restore", true);
+    encoder.copyTextureToTexture({ texture: target }, { texture: this.#backdrop }, [
+      target.width,
+      target.height,
+    ]);
+    this.#ensureInstanceCapacity(
+      this.#instanceWriteCursor + items.length * 2 + this.crossing.contactCount,
+    );
+    const pass = encoder.beginRenderPass({
+      label: "Sharp lower crossing reconstruction",
+      colorAttachments: [{ view, loadOp: "load", storeOp: "store" }],
+      ...(this.#occlusion
+        ? { depthStencilAttachment: { view: this.#depthView!, depthReadOnly: true } }
+        : {}),
+    });
+    this.#drawMode = "restore";
+    this.drawItems(pass, items, "scene");
+    pass.end();
+    this.#drawMode = "normal";
   }
 
   hasFullSceneBatch(key: FullSceneBatchKey): boolean {
@@ -990,12 +1405,57 @@ export class CompositionPass {
     );
     for (const range of cached.drawRanges) {
       pass.setBindGroup(0, this.#getInstancedBindGroup(range.texture));
+      pass.setBindGroup(1, this.crossing.bindGroup);
       pass.draw(6, range.instanceCount, 0, range.firstInstance);
     }
     return true;
   }
 
-  drawItems(pass: GPURenderPassEncoder, items: readonly CompositionDrawItem[]): void {
+  drawItems(
+    pass: GPURenderPassEncoder,
+    items: readonly CompositionDrawItem[],
+    layer: CompositionLayer = "all",
+  ): void {
+    if (layer === "action") this.#drawMode = "normal";
+    if (!(layer === "all" ? this.crossing.hasSlices : this.crossing.hasLayerSlices)) {
+      this.#drawItems(pass, items, 0);
+      return;
+    }
+    this.#sliceLayer = layer;
+    this.#slicePlan.length = 0;
+    for (const item of items) {
+      this.#sliceSource = item;
+      this.crossing.appendSlices(item.entity.id, this.#appendSlice);
+    }
+    this.#sliceSource = null;
+    this.#slicePlan.sort(this.#compareSlices);
+    // Reserve once before recording any draw, so later slices cannot replace
+    // the instance buffer already referenced by this render pass.
+    // Reserve the later sharp action draws too; growing between render passes
+    // would destroy an instance buffer still referenced by the scene pass.
+    this.#ensureInstanceCapacity(
+      this.#instanceWriteCursor + this.#slicePlan.length + (layer === "scene" ? items.length : 0),
+    );
+    let slice = -1;
+    for (const draw of this.#slicePlan) {
+      if (slice !== draw.slice && this.#sliceItem.length > 0) {
+        this.#drawItems(pass, this.#sliceItem, slice);
+        this.#sliceItem.length = 0;
+      }
+      slice = draw.slice;
+      if (!draw.item) throw new Error("Crossing slice lost its source material");
+      this.#sliceItem.push(draw.item);
+      draw.item = null;
+    }
+    if (this.#sliceItem.length > 0) this.#drawItems(pass, this.#sliceItem, slice);
+    this.#sliceItem.length = 0;
+  }
+
+  #drawItems(
+    pass: GPURenderPassEncoder,
+    items: readonly CompositionDrawItem[],
+    slice: number,
+  ): void {
     this.#writeInteractionUniforms(0, 0, 0, null, null);
     this.#fullSceneBatch = null;
     const firstWrittenInstance = this.#instanceWriteCursor;
@@ -1019,20 +1479,54 @@ export class CompositionPass {
         const texture = command.texture;
         if (!texture) continue;
         if (currentPipeline !== "texture") {
-          pass.setPipeline(this.#instancedPipeline);
+          pass.setPipeline(
+            this.#drawMode === "depth"
+              ? this.#depthPipelines!.texture
+              : this.#drawMode === "restore"
+                ? (this.#occlusion ? this.#restoreDepthPipelines! : this.#restorePipelines!).texture
+                : this.#instancedPipeline,
+          );
           currentPipeline = "texture";
         }
         pass.setBindGroup(0, this.#getInstancedBindGroup(texture));
-        pass.draw(6, command.instanceCount, 0, command.firstInstance);
+        pass.setBindGroup(1, this.crossing.bindGroup);
+        if (this.#drawMode === "restore") {
+          const buffer = this.#proof?.find(texture) ?? this.#unprovenOpacity!;
+          let cached = this.#restoreGroups.get(texture);
+          if (!cached || cached.buffer !== buffer) {
+            cached = {
+              buffer,
+              group: this.#device.createBindGroup({
+                layout: this.#backdropLayout!,
+                entries: [
+                  { binding: 0, resource: this.#backdrop!.createView() },
+                  { binding: 1, resource: { buffer } },
+                ],
+              }),
+            };
+            this.#restoreGroups.set(texture, cached);
+          }
+          pass.setBindGroup(2, cached.group);
+        }
+        pass.draw(6, command.instanceCount, slice * 6, command.firstInstance);
       } else {
         const item = command.item;
         if (!item?.bindGroup) continue;
         if (currentPipeline !== "external") {
-          pass.setPipeline(this.#externalPipeline);
+          pass.setPipeline(
+            this.#drawMode === "depth"
+              ? this.#depthPipelines!.external
+              : this.#drawMode === "restore"
+                ? (this.#occlusion ? this.#restoreDepthPipelines! : this.#restorePipelines!)
+                    .external
+                : this.#externalPipeline,
+          );
           currentPipeline = "external";
         }
         pass.setBindGroup(0, item.bindGroup);
-        pass.draw(6);
+        pass.setBindGroup(1, this.crossing.bindGroup);
+        if (this.#drawMode === "restore") pass.setBindGroup(2, this.#backdropGroup!);
+        pass.draw(6, 1, slice * 6);
       }
     }
   }
@@ -1077,10 +1571,12 @@ export class CompositionPass {
   drawTextureBindGroup(pass: GPURenderPassEncoder, bindGroup: GPUBindGroup): void {
     pass.setPipeline(this.#pipeline);
     pass.setBindGroup(0, bindGroup);
+    pass.setBindGroup(1, this.crossing.bindGroup);
     pass.draw(6);
   }
 
   removeEntity(entityId: string): void {
+    this.crossing.forget(entityId);
     const externalCached = this.#entityExternalCompositionCache.get(entityId);
     if (externalCached) {
       externalCached.uniformBuffer.destroy();
@@ -1089,6 +1585,28 @@ export class CompositionPass {
   }
 
   destroy(): void {
+    this.#proof?.destroy();
+    this.#depth?.destroy();
+    this.#backdrop?.destroy();
+    this.#unprovenOpacity?.destroy();
+    this.#opacityTable?.destroy();
+    this.#proof = null;
+    this.#opacityTable = null;
+    this.#opacityTableBytes = 0;
+    this.#unprovenOpacity = null;
+    this.#backdropGroup = null;
+    this.#depthView = null;
+    this.#opacityTableGroup = null;
+    this.#prepassInstances = null;
+    this.#restoreGroups = new WeakMap();
+    this.#backdropItems.length = 0;
+    this.#occluderItems.length = 0;
+    this.#depth = null;
+    this.#backdrop = null;
+    this.crossing.destroy();
+    this.#slicePool.length = 0;
+    this.#slicePlan.length = 0;
+    this.#sliceItem.length = 0;
     this.#entityCompositionCache = new WeakMap();
 
     for (const cached of this.#entityExternalCompositionCache.values()) {
@@ -1252,7 +1770,7 @@ export class CompositionPass {
     this.#instanceFloatView[offset + 2] = entity.size.width;
     this.#instanceFloatView[offset + 3] = entity.size.height;
     this.#instanceUintView[offset + 4] = packInstanceState(entity, isSelected, debugMode, 1);
-    this.#instanceUintView[offset + 5] = 0;
+    this.#instanceUintView[offset + 5] = this.crossing.key(entity.id);
   }
 
   #writeInstance(index: number, item: CompositionDrawItem): void {
@@ -1268,7 +1786,7 @@ export class CompositionPass {
       item.debugMode,
       item.visualScale,
     );
-    this.#instanceUintView[offset + 5] = 0;
+    this.#instanceUintView[offset + 5] = this.crossing.key(entity.id);
   }
 
   #getInstancedBindGroup(texture: GPUTexture): GPUBindGroup {
@@ -1367,7 +1885,7 @@ export class CompositionPass {
     this.#entityFloatView[2] = width;
     this.#entityFloatView[3] = height;
     this.#entityFloatView[4] = (rotation * Math.PI) / 180;
-    this.#entityUintView[5] = 0;
+    this.#entityUintView[5] = this.crossing.key(entity.id);
     this.#entityUintView[6] = isSelected ? 1 : 0;
     this.#entityUintView[7] = debugMode ? 1 : 0;
     this.#entityFloatView[8] = visualScale;
