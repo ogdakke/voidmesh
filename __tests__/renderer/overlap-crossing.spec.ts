@@ -8,7 +8,13 @@ describe("canvas overlap crossings", () => {
   beforeEach(() => {
     vi.stubGlobal("GPUShaderStage", { VERTEX: 1, FRAGMENT: 2 });
     vi.stubGlobal("GPUBufferUsage", { STORAGE: 1, COPY_DST: 2 });
-    overlapLab.configure({ enabled: true, transition: 400, rgbDecay: 800, wakeDecay: 800 });
+    overlapLab.configure({
+      enabled: true,
+      dragUnder: false,
+      transition: 400,
+      rgbDecay: 800,
+      wakeDecay: 800,
+    });
   });
   afterEach(() => {
     overlapLab.configure(overlapDefaults);
@@ -273,9 +279,9 @@ describe("canvas overlap crossings", () => {
     field.destroy();
   });
 
-  test("drag-under ignores viewport changes and drag commits; the flag starts disabled", () => {
+  test("drag-under ignores viewport changes and drag commits; drag-under defaults on", () => {
     const { field, latest, entities, action, drag } = motionFixture();
-    expect(overlapDefaults.dragUnder).toBe(false);
+    expect(overlapDefaults.dragUnder).toBe(true);
     field.update(entities, action, 0, 1, 1, drag);
     drag.offset.x = 10;
     field.update(entities, action, 16, 1, 1, drag);

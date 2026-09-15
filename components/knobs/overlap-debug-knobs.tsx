@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { config } from "#config";
 import { overlapLab } from "#lib/overlap-lab.ts";
-import { Checkbox } from "#ui/checkbox/index.tsx";
 import { InfiniteSlider } from "#ui/infinite-slider/index.ts";
 import {
   SliderPicker,
@@ -60,14 +59,6 @@ export default function OverlapDebugKnobs() {
     Math.round(((state[key] - ranges[key].min) / (ranges[key].max - ranges[key].min)) * 100);
   return (
     <div className="params-knobs">
-      <Checkbox
-        name="overlap_drag_under"
-        checked={state.dragUnder}
-        switch
-        onChange={(event) => overlapLab.configure({ dragUnder: event.target.checked })}
-      >
-        Drag underneath
-      </Checkbox>
       {floatingLabel &&
         createPortal(
           <div className="mobile-style-knobs__floating-label" data-visible>

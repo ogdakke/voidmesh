@@ -1,4 +1,3 @@
-import { OverlapLabToggle } from "./overlap-lab.tsx";
 import { useHasEntities } from "#context/use-canvas.ts";
 import { useStudioFile } from "#hooks/use-studio-file.ts";
 import { WorkspaceActions } from "#components/workspace-actions/workspace-actions.tsx";
@@ -67,9 +66,6 @@ export default function SettingsDrawer() {
           </div>
           <div className="settings-drawer-switch">
             <CanvasLensingSelect />
-          </div>
-          <div className="settings-drawer-switch">
-            <OverlapLabToggle />
           </div>
           <hr className="divider" />
           <div className="settings-drawer-ext-item field-label">
