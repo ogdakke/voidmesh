@@ -3,7 +3,7 @@ import { Button } from "#ui/button/button.tsx";
 import { Drawer } from "#ui/drawer/index.tsx";
 import { Drawer as BaseDrawer } from "@base-ui/react/drawer";
 import { Xmark } from "iconoir-react";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { AboutSection, Footer, FeatureSection } from "./about";
 import { CarouselDots } from "./carousel-dots.tsx";
 import { Updates } from "./updates";
@@ -16,6 +16,7 @@ export default function MobileAboutContent({
   onOpenChange: (open: boolean) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const resumeVideosRef = useRef(new Set<HTMLMediaElement>());
   const { activeIndex, count, progress, ids, scrollTo, attach } = useCarouselDots(containerRef);
 
   const contentRef = (el: HTMLDivElement | null) => {
@@ -26,10 +27,26 @@ export default function MobileAboutContent({
   const handleOpenChange = (nextOpen: boolean) => {
     if (!nextOpen) {
       // Retained media must stop when the drawer closes, just as unmounted media did.
-      containerRef.current?.querySelectorAll("video").forEach((video) => video.pause());
+      containerRef.current?.querySelectorAll("video").forEach((video) => {
+        if (!video.paused) resumeVideosRef.current.add(video);
+        video.pause();
+      });
     }
     onOpenChange(nextOpen);
   };
+
+  useEffect(() => {
+    if (!open) return;
+    const videos = [...resumeVideosRef.current];
+    resumeVideosRef.current.clear();
+    for (const video of videos) {
+      void video.play().catch((error: unknown) => {
+        // Closing again may interrupt a pending play request.
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        console.error("Failed to resume About video", error);
+      });
+    }
+  }, [open]);
 
   return (
     <Drawer.Root open={open} onOpenChange={handleOpenChange}>
@@ -51,7 +68,10 @@ export default function MobileAboutContent({
                 ref={contentRef}
                 className="about-carousel about"
                 onPlayCapture={(event) => {
-                  if (!open && event.target instanceof HTMLMediaElement) event.target.pause();
+                  if (!open && event.target instanceof HTMLMediaElement) {
+                    resumeVideosRef.current.add(event.target);
+                    event.target.pause();
+                  }
                 }}
               >
                 <AboutSection id="about">
