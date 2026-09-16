@@ -16,17 +16,27 @@ export default function MobileAbout(props: MobileAboutProps) {
   const [mounted, setMounted] = useState(initiallyOpen);
 
   useEffect(() => {
+    let cancelled = false;
     const preload = () => {
-      void loadMobileAboutContent();
+      // Prepare the closed drawer after load, including React mounting work.
+      // This does not depend on requestIdleCallback, which is absent on some browsers.
+      void loadMobileAboutContent()
+        .then(() => {
+          if (!cancelled) setMounted(true);
+        })
+        .catch((error: unknown) => console.error("Failed to prepare About drawer", error));
     };
 
     if (document.readyState === "complete") {
       preload();
-      return;
+    } else {
+      window.addEventListener("load", preload, { once: true });
     }
 
-    window.addEventListener("load", preload, { once: true });
-    return () => window.removeEventListener("load", preload);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("load", preload);
+    };
   }, []);
 
   const handleOpenChange = (nextOpen: boolean) => {
@@ -42,6 +52,7 @@ export default function MobileAbout(props: MobileAboutProps) {
       <Button
         variant="primary"
         size="md"
+        aria-label="About"
         onClick={() => {
           setMounted(true);
           handleOpenChange(true);

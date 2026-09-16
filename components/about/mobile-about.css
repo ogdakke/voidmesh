@@ -6,6 +6,13 @@
   overflow: hidden;
 }
 
+/* Keep layout ready without showing or focusing the pre-mounted drawer.
+   The shared flex display overrides the browser's default hidden display. */
+.about-drawer-viewport[hidden],
+.about-drawer[hidden] {
+  visibility: hidden;
+}
+
 .about-drawer__close {
   position: absolute;
   top: var(--spacing-3);
