@@ -31,7 +31,7 @@ describe("SidebarRight", () => {
     test("shows upload button", () => {
       renderWithProviders(<SidebarRight />, { skip: skipProviders });
 
-      const uploadButton = screen.getByRole("button", { name: /add images\/videos/i });
+      const uploadButton = screen.getByRole("button", { name: "Add" });
       expect(uploadButton).toBeInTheDocument();
     });
 

@@ -67,7 +67,7 @@ export function FileUploadComponent() {
         }}
       >
         <MediaImagePlus />
-        <span>Add Images/Videos</span>
+        <span>Add</span>
       </Button>
     </>
   );
