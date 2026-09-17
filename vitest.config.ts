@@ -7,7 +7,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "virtual:pwa-register/react": resolve(
-        __dirname,
+        import.meta.dirname,
         "./__tests__/mocks/virtual-pwa-register-react.ts",
       ),
     },

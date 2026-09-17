@@ -3,12 +3,11 @@
  * Tests the useParamValue hook with multi-select support
  */
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
-import { waitFor } from "@testing-library/react";
-import React, { useEffect, useState } from "react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { useParamValue, type ParamResult } from "#hooks/use-param-value.ts";
 import { canvasStore } from "#engine";
 import { createTestEntity } from "../helpers/test-entity.ts";
-import { renderWithProviders } from "../helpers/render-with-providers.tsx";
+import { createAllProvidersWrapper } from "../helpers/render-with-providers.tsx";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
 import { ShaderType, DitheringKind, GlassKind } from "#types/canvas.ts";
 import { config } from "#config";
@@ -32,151 +31,97 @@ const skipProviders = {
   exportQueue: true,
 };
 
+function renderParamValue<T>(readValue: () => ParamResult<T>, setup?: () => void) {
+  const { result } = renderHook(readValue, {
+    wrapper: createAllProvidersWrapper({ skip: skipProviders }),
+  });
+
+  if (setup) {
+    act(setup);
+  }
+
+  return () => result.current;
+}
+
 describe("useParamValue", () => {
   test("returns default when no selection", () => {
-    let result: ParamResult<number> | null = null;
+    const getResult = renderParamValue(() => useParamValue("size", 15));
+    const result = getResult();
 
-    function TestComponent() {
-      result = useParamValue("size", 15);
-      return <div data-testid="test">Value: {result.value}</div>;
-    }
-
-    renderWithProviders(<TestComponent />, { skip: skipProviders });
-
-    expect(result).not.toBeNull();
-    expect(result!.value).toBe(15);
-    expect(result!.isMixed).toBe(false);
-    expect(result!.isSupported).toBe(true);
+    expect(result.value).toBe(15);
+    expect(result.isMixed).toBe(false);
+    expect(result.isSupported).toBe(true);
   });
 
   test("returns entity value when single selected", async () => {
-    let result: ParamResult<number> | null = null;
     const entityCellSize = 42;
+    const getResult = renderParamValue(
+      () => useParamValue("size", 10),
+      () => {
+        const entity = createTestEntity({ shaderParams: { size: entityCellSize } });
+        canvasStore.addEntity(entity);
+        canvasStore.replaceSelection([entity.id]);
+      },
+    );
 
-    function TestComponent() {
-      const [ready, setReady] = useState(false);
+    await waitFor(() => expect(getResult().value).toBe(entityCellSize));
 
-      useEffect(() => {
-        if (!ready) {
-          // Create entity directly in store to bypass URL param override
-          const entity = createTestEntity({ shaderParams: { size: entityCellSize } });
-          canvasStore.addEntity(entity);
-          canvasStore.replaceSelection([entity.id]);
-          setReady(true);
-        }
-      }, [ready]);
-
-      result = useParamValue("size", 10);
-      return <div data-testid="test">Value: {result.value}</div>;
-    }
-
-    renderWithProviders(<TestComponent />, { skip: skipProviders });
-
-    await waitFor(() => result?.value === entityCellSize);
-
-    expect(result!.value).toBe(entityCellSize);
-    expect(result!.isMixed).toBe(false);
+    expect(getResult().isMixed).toBe(false);
   });
 
   test("returns first value with isMixed=true when values differ", async () => {
-    let result: ParamResult<number> | null = null;
-    const entityIds: string[] = [];
+    const getResult = renderParamValue(
+      () => useParamValue("size", 5),
+      () => {
+        const entities = [10, 20, 30].map((size) => createTestEntity({ shaderParams: { size } }));
+        canvasStore.addEntities(entities);
+        canvasStore.replaceSelection(entities.map((entity) => entity.id));
+      },
+    );
 
-    function TestComponent() {
-      const [ready, setReady] = useState(false);
+    await waitFor(() => expect(getResult().isMixed).toBe(true));
 
-      useEffect(() => {
-        if (!ready) {
-          // Create entities directly in store to bypass URL param override
-          const entity1 = createTestEntity({ shaderParams: { size: 10 } });
-          const entity2 = createTestEntity({ shaderParams: { size: 20 } });
-          const entity3 = createTestEntity({ shaderParams: { size: 30 } });
-          canvasStore.addEntity(entity1);
-          canvasStore.addEntity(entity2);
-          canvasStore.addEntity(entity3);
-          entityIds.push(entity1.id, entity2.id, entity3.id);
-          canvasStore.replaceSelection(entityIds);
-          setReady(true);
-        }
-      }, [ready]);
-
-      result = useParamValue("size", 5);
-      return <div data-testid="test">Mixed: {String(result.isMixed)}</div>;
-    }
-
-    renderWithProviders(<TestComponent />, { skip: skipProviders });
-
-    await waitFor(() => result?.isMixed === true);
-
-    expect(result!.isMixed).toBe(true);
+    const result = getResult();
     // First entity's value should be returned
-    expect(result!.value).toBe(10);
+    expect(result.value).toBe(10);
     // All distinct values should be in the values set
-    expect(result!.values.size).toBe(3);
-    expect(result!.values.has(10)).toBe(true);
-    expect(result!.values.has(20)).toBe(true);
-    expect(result!.values.has(30)).toBe(true);
+    expect(result.values.size).toBe(3);
+    expect(result.values.has(10)).toBe(true);
+    expect(result.values.has(20)).toBe(true);
+    expect(result.values.has(30)).toBe(true);
   });
 
   test("returns isMixed=false when all values are same", async () => {
-    let result: ParamResult<number> | null = null;
-    const entityIds: string[] = [];
     const uniformValue = 25;
+    const getResult = renderParamValue(
+      () => useParamValue("size", 5),
+      () => {
+        const entities = [
+          createTestEntity({ shaderParams: { size: uniformValue } }),
+          createTestEntity({ shaderParams: { size: uniformValue } }),
+        ];
+        canvasStore.addEntities(entities);
+        canvasStore.replaceSelection(entities.map((entity) => entity.id));
+      },
+    );
 
-    function TestComponent() {
-      const [ready, setReady] = useState(false);
+    await waitFor(() => expect(getResult().value).toBe(uniformValue));
 
-      useEffect(() => {
-        if (!ready) {
-          // Create entities directly in store to bypass URL param override
-          const entity1 = createTestEntity({ shaderParams: { size: uniformValue } });
-          const entity2 = createTestEntity({ shaderParams: { size: uniformValue } });
-          canvasStore.addEntity(entity1);
-          canvasStore.addEntity(entity2);
-          entityIds.push(entity1.id, entity2.id);
-          canvasStore.replaceSelection(entityIds);
-          setReady(true);
-        }
-      }, [ready]);
-
-      result = useParamValue("size", 5);
-      return <div data-testid="test">Mixed: {String(result.isMixed)}</div>;
-    }
-
-    renderWithProviders(<TestComponent />, { skip: skipProviders });
-
-    await waitFor(() => result?.value === uniformValue);
-
-    expect(result!.isMixed).toBe(false);
-    expect(result!.value).toBe(uniformValue);
-    expect(result!.values.size).toBe(1);
+    expect(getResult().isMixed).toBe(false);
+    expect(getResult().values.size).toBe(1);
   });
 
   test("returns isSupported=false for unsupported params", async () => {
-    let result: ParamResult<number> | null = null;
+    const getResult = renderParamValue(
+      () => useParamValue("blobs.eagerness", 0.5),
+      () => {
+        const entity = createTestEntity({ shaderType: ShaderType.dithering });
+        canvasStore.addEntity(entity);
+        canvasStore.replaceSelection([entity.id]);
+      },
+    );
 
-    function TestComponent() {
-      const [ready, setReady] = useState(false);
-
-      useEffect(() => {
-        if (!ready) {
-          const entity = createTestEntity({ shaderType: ShaderType.dithering });
-          canvasStore.addEntity(entity);
-          canvasStore.replaceSelection([entity.id]);
-          setReady(true);
-        }
-      }, [ready]);
-
-      // blobs param is only supported by blobs shader
-      result = useParamValue("blobs.eagerness", 0.5);
-      return <div data-testid="test">Supported: {String(result.isSupported)}</div>;
-    }
-
-    renderWithProviders(<TestComponent />, { skip: skipProviders });
-
-    await waitFor(() => result?.isSupported === false);
-
-    expect(result!.isSupported).toBe(false);
+    await waitFor(() => expect(getResult().isSupported).toBe(false));
   });
 
   test("stops aggregating values as soon as a parameter is unsupported", () => {
@@ -200,213 +145,132 @@ describe("useParamValue", () => {
   });
 
   test("returns isSupported=true for supported params", async () => {
-    let result: ParamResult<number> | null = null;
+    const getResult = renderParamValue(
+      () => useParamValue("blobs.eagerness", 0.5),
+      () => {
+        const entity = createTestEntity({ shaderType: ShaderType.blobs });
+        canvasStore.addEntity(entity);
+        canvasStore.replaceSelection([entity.id]);
+      },
+    );
 
-    function TestComponent() {
-      const [ready, setReady] = useState(false);
-
-      useEffect(() => {
-        if (!ready) {
-          // Create a blobs entity directly in store to bypass URL param override
-          const entity = createTestEntity({ shaderType: ShaderType.blobs });
-          canvasStore.addEntity(entity);
-          canvasStore.replaceSelection([entity.id]);
-          setReady(true);
-        }
-      }, [ready]);
-
-      result = useParamValue("blobs.eagerness", 0.5);
-      return <div data-testid="test">Supported: {String(result.isSupported)}</div>;
-    }
-
-    renderWithProviders(<TestComponent />, { skip: skipProviders });
-
-    await waitFor(() => result?.isSupported === true);
-
-    expect(result!.isSupported).toBe(true);
+    await waitFor(() => expect(getResult().isSupported).toBe(true));
   });
 
   test("handles nested paths like 'adjustments.brightness'", async () => {
-    let result: ParamResult<number> | null = null;
     const brightnessValue = 0.75;
-
-    function TestComponent() {
-      const [ready, setReady] = useState(false);
-
-      useEffect(() => {
-        if (!ready) {
-          // Create entity directly in store to bypass URL param override
-          const entity = createTestEntity({
-            shaderParams: {
-              adjustments: {
-                brightness: brightnessValue,
-                contrast: 0.5,
-                saturation: 0.5,
-                blur: 0,
-              },
+    const getResult = renderParamValue(
+      () => useParamValue("adjustments.brightness", 0.5),
+      () => {
+        const entity = createTestEntity({
+          shaderParams: {
+            adjustments: {
+              brightness: brightnessValue,
+              contrast: 0.5,
+              saturation: 0.5,
+              blur: 0,
             },
-          });
-          canvasStore.addEntity(entity);
-          canvasStore.replaceSelection([entity.id]);
-          setReady(true);
-        }
-      }, [ready]);
+          },
+        });
+        canvasStore.addEntity(entity);
+        canvasStore.replaceSelection([entity.id]);
+      },
+    );
 
-      result = useParamValue("adjustments.brightness", 0.5);
-      return <div data-testid="test">Brightness: {result.value}</div>;
-    }
+    await waitFor(() => expect(getResult().value).toBe(brightnessValue));
 
-    renderWithProviders(<TestComponent />, { skip: skipProviders });
-
-    await waitFor(() => result?.value === brightnessValue);
-
-    expect(result!.value).toBe(brightnessValue);
-    expect(result!.isMixed).toBe(false);
+    expect(getResult().isMixed).toBe(false);
   });
 
   test("handles deeply nested paths like 'postProcess.grain.intensity'", async () => {
-    let result: ParamResult<number> | null = null;
     const grainIntensity = 0.3;
-
-    function TestComponent() {
-      const [ready, setReady] = useState(false);
-
-      useEffect(() => {
-        if (!ready) {
-          // Create entity directly in store to bypass URL param override
-          const entity = createTestEntity({
-            shaderParams: {
-              postProcess: {
+    const getResult = renderParamValue(
+      () => useParamValue("postProcess.grain.intensity", 0.15),
+      () => {
+        const entity = createTestEntity({
+          shaderParams: {
+            postProcess: {
+              enabled: true,
+              grain: {
                 enabled: true,
-                grain: {
-                  enabled: true,
-                  size: 1,
-                  intensity: grainIntensity,
-                },
+                size: 1,
+                intensity: grainIntensity,
               },
             },
-          });
-          canvasStore.addEntity(entity);
-          canvasStore.replaceSelection([entity.id]);
-          setReady(true);
-        }
-      }, [ready]);
+          },
+        });
+        canvasStore.addEntity(entity);
+        canvasStore.replaceSelection([entity.id]);
+      },
+    );
 
-      result = useParamValue("postProcess.grain.intensity", 0.15);
-      return <div data-testid="test">Intensity: {result.value}</div>;
-    }
-
-    renderWithProviders(<TestComponent />, { skip: skipProviders });
-
-    await waitFor(() => result?.value === grainIntensity);
-
-    expect(result!.value).toBe(grainIntensity);
+    await waitFor(() => expect(getResult().value).toBe(grainIntensity));
   });
 
   test("handles boolean params correctly", async () => {
-    let result: ParamResult<boolean> | null = null;
-    const entityIds: string[] = [];
+    const getResult = renderParamValue(
+      () => useParamValue("showOriginal", false),
+      () => {
+        const entities = [
+          createTestEntity({ shaderParams: { showOriginal: true } }),
+          createTestEntity({ shaderParams: { showOriginal: false } }),
+        ];
+        canvasStore.addEntities(entities);
+        canvasStore.replaceSelection(entities.map((entity) => entity.id));
+      },
+    );
 
-    function TestComponent() {
-      const [ready, setReady] = useState(false);
+    await waitFor(() => expect(getResult().isMixed).toBe(true));
 
-      useEffect(() => {
-        if (!ready) {
-          // Create entities directly in store to bypass URL param override
-          const entity1 = createTestEntity({ shaderParams: { showOriginal: true } });
-          const entity2 = createTestEntity({ shaderParams: { showOriginal: false } });
-          canvasStore.addEntity(entity1);
-          canvasStore.addEntity(entity2);
-          entityIds.push(entity1.id, entity2.id);
-          canvasStore.replaceSelection(entityIds);
-          setReady(true);
-        }
-      }, [ready]);
-
-      result = useParamValue("showOriginal", false);
-      return <div data-testid="test">Mixed: {String(result.isMixed)}</div>;
-    }
-
-    renderWithProviders(<TestComponent />, { skip: skipProviders });
-
-    await waitFor(() => result?.isMixed === true);
-
-    expect(result!.isMixed).toBe(true);
-    expect(result!.values.has(true)).toBe(true);
-    expect(result!.values.has(false)).toBe(true);
+    expect(getResult().values.has(true)).toBe(true);
+    expect(getResult().values.has(false)).toBe(true);
   });
 
   test("handles object params like palette", async () => {
-    let result: ParamResult<unknown> | null = null;
-    const entityIds: string[] = [];
+    const getResult = renderParamValue(
+      () => useParamValue("palette", null),
+      () => {
+        const entities = [
+          createTestEntity({ shaderParams: { palette: config.palettes.gameboy } }),
+          createTestEntity({ shaderParams: { palette: config.palettes.cga } }),
+        ];
+        canvasStore.addEntities(entities);
+        canvasStore.replaceSelection(entities.map((entity) => entity.id));
+      },
+    );
 
-    function TestComponent() {
-      const [ready, setReady] = useState(false);
+    await waitFor(() => expect(getResult().isMixed).toBe(true));
 
-      useEffect(() => {
-        if (!ready) {
-          // Create entities directly in store to bypass URL param override
-          const entity1 = createTestEntity({ shaderParams: { palette: config.palettes.gameboy } });
-          const entity2 = createTestEntity({ shaderParams: { palette: config.palettes.cga } });
-          canvasStore.addEntity(entity1);
-          canvasStore.addEntity(entity2);
-          entityIds.push(entity1.id, entity2.id);
-          canvasStore.replaceSelection(entityIds);
-          setReady(true);
-        }
-      }, [ready]);
-
-      result = useParamValue("palette", null);
-      return <div data-testid="test">Mixed: {String(result.isMixed)}</div>;
-    }
-
-    renderWithProviders(<TestComponent />, { skip: skipProviders });
-
-    await waitFor(() => result?.isMixed === true);
-
-    expect(result!.isMixed).toBe(true);
     // First entity's palette should be the value
-    expect((result!.value as typeof config.palettes.gameboy)?.id).toBe(config.palettes.gameboy.id);
+    expect((getResult().value as typeof config.palettes.gameboy)?.id).toBe(
+      config.palettes.gameboy.id,
+    );
   });
 
   test("handles enum params like dithering.kind", async () => {
-    let result: ParamResult<DitheringKind> | null = null;
-    const entityIds: string[] = [];
-
-    function TestComponent() {
-      const [ready, setReady] = useState(false);
-
-      useEffect(() => {
-        if (!ready) {
-          // Create entities directly in store to bypass URL param override
-          const entity1 = createTestEntity({
+    const getResult = renderParamValue(
+      () => useParamValue("dithering.kind", DitheringKind.bayer2x2),
+      () => {
+        const entities = [
+          createTestEntity({
             shaderType: ShaderType.dithering,
             shaderParams: { dithering: { kind: DitheringKind.bayer4x4 } },
-          });
-          const entity2 = createTestEntity({
+          }),
+          createTestEntity({
             shaderType: ShaderType.dithering,
             shaderParams: { dithering: { kind: DitheringKind.floydSteinberg } },
-          });
-          canvasStore.addEntity(entity1);
-          canvasStore.addEntity(entity2);
-          entityIds.push(entity1.id, entity2.id);
-          canvasStore.replaceSelection(entityIds);
-          setReady(true);
-        }
-      }, [ready]);
+          }),
+        ];
+        canvasStore.addEntities(entities);
+        canvasStore.replaceSelection(entities.map((entity) => entity.id));
+      },
+    );
 
-      result = useParamValue("dithering.kind", DitheringKind.bayer2x2);
-      return <div data-testid="test">Mixed: {String(result.isMixed)}</div>;
-    }
+    await waitFor(() => expect(getResult().isMixed).toBe(true));
 
-    renderWithProviders(<TestComponent />, { skip: skipProviders });
-
-    await waitFor(() => result?.isMixed === true);
-
-    expect(result!.isMixed).toBe(true);
-    expect(result!.value).toBe(DitheringKind.bayer4x4); // First entity's value
-    expect(result!.values.has(DitheringKind.bayer4x4)).toBe(true);
-    expect(result!.values.has(DitheringKind.floydSteinberg)).toBe(true);
+    expect(getResult().value).toBe(DitheringKind.bayer4x4);
+    expect(getResult().values.has(DitheringKind.bayer4x4)).toBe(true);
+    expect(getResult().values.has(DitheringKind.floydSteinberg)).toBe(true);
   });
 
   test("updates when selection changes", async () => {

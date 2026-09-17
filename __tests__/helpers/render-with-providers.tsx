@@ -1,7 +1,7 @@
 /**
  * Test helper that wraps components with necessary providers
  */
-import React, { type ReactNode } from "react";
+import React, { useEffect, type ReactNode } from "react";
 import { render, type RenderOptions, type RenderResult } from "@testing-library/react";
 import { withNuqsTestingAdapter, type UrlUpdateEvent } from "nuqs/adapters/testing";
 import { IconoirProvider } from "iconoir-react";
@@ -45,7 +45,7 @@ export interface RenderWithProvidersOptions extends Omit<RenderOptions, "wrapper
 /**
  * Create providers wrapper with configurable nuqs testing adapter
  */
-function createAllProvidersWrapper(options: RenderWithProvidersOptions = {}) {
+export function createAllProvidersWrapper(options: RenderWithProvidersOptions = {}) {
   const { skip = {}, nuqsOptions = {} } = options;
 
   // Create nuqs testing adapter
@@ -204,7 +204,10 @@ export function renderWithCanvas(
   let canvasRef: CanvasCommands | null = null;
 
   function ContextCapture({ children }: { children?: ReactNode }) {
-    canvasRef = useCanvasCommands();
+    const canvas = useCanvasCommands();
+    useEffect(() => {
+      canvasRef = canvas;
+    }, [canvas]);
     return <>{children}</>;
   }
 

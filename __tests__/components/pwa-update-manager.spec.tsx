@@ -65,7 +65,9 @@ describe("PwaUpdateManager", () => {
     expect(closeButton).not.toBeNull();
     fireEvent.click(closeButton!);
 
-    expect(screen.queryByText("Update available")).not.toBeInTheDocument();
+    expect(screen.getByText("Update available").closest(".toast_root")).toHaveAttribute(
+      "data-ending-style",
+    );
     expect(mockPwaState.updateServiceWorker).not.toHaveBeenCalled();
   });
 

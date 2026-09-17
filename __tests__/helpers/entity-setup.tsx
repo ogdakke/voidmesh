@@ -1,7 +1,7 @@
 /**
  * Multi-select scenario factory and entity setup utilities for testing
  */
-import React, { useEffect, useState, type ReactNode } from "react";
+import React, { useEffect, useRef, type ReactNode } from "react";
 import { useCanvasCommands } from "#context/use-canvas.ts";
 import { canvasStore } from "#engine";
 import { createTestEntity, createEntityInput, type CreateEntityOptions } from "./test-entity.ts";
@@ -80,10 +80,11 @@ export function EntitySetup({
   useStoreDirectly?: boolean;
 }): ReactNode {
   const { addEntity, selectEntity } = useCanvasCommands();
-  const [ready, setReady] = useState(false);
+  const initializedRef = useRef(false);
 
   useEffect(() => {
-    if (ready) return;
+    if (initializedRef.current) return;
+    initializedRef.current = true;
 
     const ids: string[] = [];
     for (const cfg of entityConfigs) {
@@ -109,9 +110,8 @@ export function EntitySetup({
       canvasStore.replaceSelection(selectedIds);
     }
 
-    setReady(true);
     onReady?.(ids);
-  }, [addEntity, selectEntity, entityConfigs, select, onReady, ready, useStoreDirectly]);
+  }, [addEntity, selectEntity, entityConfigs, select, onReady, useStoreDirectly]);
 
   return <>{children}</>;
 }

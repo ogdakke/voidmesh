@@ -12,7 +12,10 @@ describe("KeybindProvider", () => {
     let storeValue: KeybindStore | null = null;
 
     function TestComponent() {
-      storeValue = useKeybinds();
+      const store = useKeybinds();
+      useEffect(() => {
+        storeValue = store;
+      }, [store]);
       return <div data-testid="test">Rendered</div>;
     }
 
@@ -267,7 +270,10 @@ describe("withMod()", () => {
     let store: KeybindStore | null = null;
 
     function TestComponent() {
-      store = useKeybinds();
+      const keybindStore = useKeybinds();
+      useEffect(() => {
+        store = keybindStore;
+      }, [keybindStore]);
       useKeybind("global", {
         id: "mod_test",
         label: "Mod Test",

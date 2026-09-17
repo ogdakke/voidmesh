@@ -1,4 +1,4 @@
-import { bench, describe } from "vitest";
+import { describe, expect, test } from "vitest";
 import { CanvasStore } from "#engine";
 import type { ParamPaths, ShaderCanvasEntity } from "#types/canvas.ts";
 import { createTestEntity } from "../__tests__/helpers/test-entity.ts";
@@ -55,22 +55,22 @@ describe("262k selection operations", () => {
     for (const path of MOUNTED_DITHERING_PARAM_PATHS) store.getParamResult(path, null);
   };
 
-  bench(
-    "Command-A plus mounted parameter aggregation",
-    () => {
+  test("Command-A plus mounted parameter aggregation", async ({ bench }) => {
+    const result = await bench("Command-A plus mounted parameter aggregation", () => {
       prepareHalfSelection();
       store.selectAll();
       for (const path of MOUNTED_DITHERING_PARAM_PATHS) store.getParamResult(path, null);
-    },
-    { time: 0, iterations: 3, warmupTime: 0, warmupIterations: 1 },
-  );
+    }).run({ time: 0, iterations: 3, warmupTime: 0, warmupIterations: 1 });
 
-  bench(
-    "commit half-selection translation",
-    () => {
+    expect(result.name).toBe("Command-A plus mounted parameter aggregation");
+  });
+
+  test("commit half-selection translation", async ({ bench }) => {
+    const result = await bench("commit half-selection translation", () => {
       store.moveEntities(halfSelectedIds, { x: 1, y: 0 });
       store.moveEntities(halfSelectedIds, { x: -1, y: 0 });
-    },
-    { time: 0, iterations: 3, warmupTime: 0, warmupIterations: 1 },
-  );
+    }).run({ time: 0, iterations: 3, warmupTime: 0, warmupIterations: 1 });
+
+    expect(result.name).toBe("commit half-selection translation");
+  });
 });

@@ -289,8 +289,12 @@ function renderWithMediaHooks() {
       storeSnapshot.selectedEntityIds.size === 1
         ? storeSnapshot.entities.get([...storeSnapshot.selectedEntityIds][0]!)
         : undefined;
-    actionsRef = useMediaControlsActions(selectedEntity);
-    timeRef = usePlaybackTime();
+    const actions = useMediaControlsActions(selectedEntity);
+    const time = usePlaybackTime();
+    React.useEffect(() => {
+      actionsRef = actions;
+      timeRef = time;
+    }, [actions, time]);
     return <>{children}</>;
   }
 
