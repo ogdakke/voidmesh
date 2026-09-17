@@ -86,6 +86,7 @@ export interface CanvasCommands {
   setSnapToGrid: (enabled: boolean) => void;
   setFancyDelete: (enabled: boolean) => void;
   setHaptics: (enabled: boolean) => void;
+  setMinimap: (enabled: boolean) => void;
   setCanvasLensing: (value: CanvasLensing) => void;
   changeSize: (value: number | number[]) => void;
   copySelectedEntityToClipboard: () => Promise<boolean>;
@@ -275,8 +276,9 @@ export function useCanvasPreferences(): PreferencesSnapshot {
   const fancyDelete = useCanvasSelector((state) => state.fancyDelete);
   const haptics = useCanvasSelector((state) => state.haptics);
   const canvasLensing = useCanvasSelector((state) => state.canvasLensing);
+  const minimap = useCanvasSelector((state) => state.minimap);
   const version = useCanvasSelector((state) => state.preferencesVersion);
-  return { snapToGrid, fancyDelete, haptics, canvasLensing, version };
+  return { snapToGrid, fancyDelete, haptics, canvasLensing, version, minimap };
 }
 
 export function useHasSelection(): boolean {

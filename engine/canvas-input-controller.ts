@@ -69,6 +69,7 @@ export interface InputState {
   pointerDownEntityId: string | null;
   contextOpenEntityId: string | null;
   pointerDownWasSelected: boolean;
+  pointerDownModifiedSelection: boolean;
   contextOpen: boolean;
 }
 
@@ -129,6 +130,7 @@ export class CanvasInputController {
     pointerDownEntityId: null,
     contextOpenEntityId: null,
     pointerDownWasSelected: false,
+    pointerDownModifiedSelection: false,
     contextOpen: false,
   };
 
@@ -173,6 +175,9 @@ export class CanvasInputController {
   #lastTapEntityId: string | null = null;
   #lastTapPosition: Point | null = null;
   #doubleTapTimerId: ReturnType<typeof setTimeout> | null = null;
+  #lastPointerClickTime = 0;
+  #lastPointerClickEntityId: string | null = null;
+  #lastPointerClickPosition: Point | null = null;
 
   /** Double-tap + hold + drag zoom state (iOS Maps-style one-finger zoom) */
   #doubleTapHoldZoom = {
@@ -317,6 +322,7 @@ export class CanvasInputController {
     this.#inputState.pointerDown = true;
     this.#inputState.pointerPosition = screenPoint;
     this.#inputState.pointerDownPosition = screenPoint;
+    this.#inputState.pointerDownModifiedSelection = shiftKey || this.isInMultiSelectMode();
 
     if (this.#spacePanMode === SpacePanMode.ready || this.#spacePanMode === SpacePanMode.panned) {
       this.#spacePanMode = SpacePanMode.panning;
@@ -372,6 +378,8 @@ export class CanvasInputController {
 
     if (this.#spacePanMode === SpacePanMode.panning) {
       if (lastPos) {
+        this.#clearLastPointerClick();
+        this.#viewport.invalidateSavedViewport();
         this.#viewport.panByScreenDelta(screenPoint.x - lastPos.x, screenPoint.y - lastPos.y);
       }
       return;
@@ -386,6 +394,7 @@ export class CanvasInputController {
       this.#inputState.pointerDown = false;
       this.#inputState.pointerDownPosition = null;
       this.#inputState.lastWorldPoint = null;
+      this.#inputState.pointerDownModifiedSelection = false;
       return;
     }
 
@@ -399,6 +408,7 @@ export class CanvasInputController {
       this.#inputState.pointerDownPosition = null;
       this.#inputState.pointerDownEntityId = null;
       this.#inputState.pointerDownWasSelected = false;
+      this.#inputState.pointerDownModifiedSelection = false;
       this.#entityDrag.clear();
       if (this.#dragSelect?.isActive) canvasStore.commitTransientSelection();
       this.#dragSelect = null;
@@ -421,6 +431,7 @@ export class CanvasInputController {
       this.#inputState.pointerDown = false;
       this.#inputState.lastWorldPoint = null;
       this.#inputState.pointerDownPosition = null;
+      this.#inputState.pointerDownModifiedSelection = false;
       return;
     }
 
@@ -442,11 +453,7 @@ export class CanvasInputController {
         const currentEntityId = this.#selection.findEntityAtPoint(worldPoint, state);
 
         if (currentEntityId === downEntityId) {
-          this.#selection.handlePointerEntityClick(
-            currentEntityId,
-            state,
-            this.#inputState.pointerDownWasSelected,
-          );
+          this.#handlePointerEntityClick(currentEntityId, screenPoint, state);
         }
       }
     }
@@ -478,7 +485,64 @@ export class CanvasInputController {
     this.#inputState.pointerDownPosition = null;
     this.#inputState.pointerDownEntityId = null;
     this.#inputState.pointerDownWasSelected = false;
+    this.#inputState.pointerDownModifiedSelection = false;
     this.#entityDrag.clear();
+  }
+
+  #handlePointerEntityClick(
+    entityId: string,
+    clickPosition: Point,
+    state: ReturnType<typeof canvasStore.getState>,
+  ): void {
+    this.#cancelDoubleTapTimer();
+
+    if (this.#inputState.pointerDownModifiedSelection) {
+      this.#clearLastPointerClick();
+      return;
+    }
+
+    const now = performance.now();
+    const isDoubleClick =
+      this.#lastPointerClickTime > 0 &&
+      now - this.#lastPointerClickTime < this.#touchConfig.doubleTapWindow &&
+      this.#lastPointerClickPosition !== null &&
+      Math.hypot(
+        clickPosition.x - this.#lastPointerClickPosition.x,
+        clickPosition.y - this.#lastPointerClickPosition.y,
+      ) < POINTER_CLICK_THRESHOLD &&
+      entityId === this.#lastPointerClickEntityId;
+
+    if (isDoubleClick) {
+      this.#clearLastPointerClick();
+      this.#viewport.toggleEntityFit(entityId, 0);
+      return;
+    }
+
+    this.#lastPointerClickTime = now;
+    this.#lastPointerClickEntityId = entityId;
+    this.#lastPointerClickPosition = { ...clickPosition };
+
+    if (
+      this.#inputState.pointerDownWasSelected &&
+      state.selectedEntityIds.size > 1 &&
+      state.selectedEntityIds.has(entityId)
+    ) {
+      canvasStore.replaceSelection([entityId]);
+    } else if (this.#inputState.pointerDownWasSelected) {
+      this.#doubleTapTimerId = this.#selection.scheduleTouchPlaybackToggle(
+        entityId,
+        this.#touchConfig.doubleTapWindow,
+        () => {
+          this.#doubleTapTimerId = null;
+        },
+      );
+    }
+  }
+
+  #clearLastPointerClick(): void {
+    this.#lastPointerClickTime = 0;
+    this.#lastPointerClickEntityId = null;
+    this.#lastPointerClickPosition = null;
   }
 
   #hasPointerMovedBeyondClickThreshold(screenPoint: Point): boolean {
@@ -493,6 +557,7 @@ export class CanvasInputController {
   handleWheel(deltaX: number, deltaY: number, screenPoint: Point, ctrlKey: boolean): void {
     // Cancel any viewport animation when user starts panning/zooming
     this.#viewport.cancelInteraction();
+    this.#clearLastPointerClick();
     // Manual viewport change invalidates double-tap zoom-back
     this.#viewport.invalidateSavedViewport();
 
@@ -507,6 +572,7 @@ export class CanvasInputController {
 
   handleContextMenu(screenPoint: Point): void {
     if (!this.#container) return;
+    this.#clearLastPointerClick();
 
     // Reset any drag state from preceding pointerdown
     this.#inputState.pointerDown = false;
@@ -519,6 +585,7 @@ export class CanvasInputController {
     this.#inputState.contextOpen = true;
     this.#inputState.pointerPosition = screenPoint;
     this.#inputState.pointerDownPosition = screenPoint;
+    this.#inputState.pointerDownModifiedSelection = false;
 
     const state = canvasStore.getState();
     const worldPoint = this.#viewport.screenToWorld(screenPoint);
@@ -535,6 +602,7 @@ export class CanvasInputController {
     } else {
       this.#inputState.pointerDownEntityId = null;
       this.#inputState.pointerDownWasSelected = false;
+      this.#inputState.pointerDownModifiedSelection = false;
       this.#inputState.contextOpenEntityId = null;
       this.#entityDrag.clear();
       this.#selection.handleContextMenuEmpty();
@@ -1141,7 +1209,7 @@ export class CanvasInputController {
 
       if (entityId) {
         // Double-tap on entity → zoom to fit (or toggle back)
-        this.#viewport.handleDoubleTapOnEntity(entityId);
+        this.#viewport.toggleEntityFit(entityId, config.canvas.mobile.bottomInset);
         return;
       }
 
@@ -1236,6 +1304,7 @@ export class CanvasInputController {
     this.#inputState.pointerDownPosition = null;
     this.#inputState.pointerDownEntityId = null;
     this.#inputState.pointerDownWasSelected = false;
+    this.#inputState.pointerDownModifiedSelection = false;
   }
 
   /** Check if a touch interaction is active */

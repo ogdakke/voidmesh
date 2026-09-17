@@ -4,6 +4,7 @@ import {
   FancyDeleteToggle,
   FeedbackLink,
   LinkItem,
+  MinimapToggle,
   RedoOnboardingLink,
   ShareLink,
   SnapToGridToggle,
@@ -29,6 +30,9 @@ export default function DesktopSettingsContent({
         </div>
         <div className="desktop-settings-switch">
           <CanvasLensingSelect />
+        </div>
+        <div className="desktop-settings-switch">
+          <MinimapToggle />
         </div>
         <hr className="divider" />
         <div className="desktop-settings-ext-item field-label">

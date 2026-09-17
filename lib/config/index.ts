@@ -10,6 +10,7 @@ import {
   ShaderType,
   type RGBA,
   type ColorMode,
+  type MinimapConfig,
   type ViewportLensDistortionConfig,
   GlassKind,
   GlitchKind,
@@ -566,6 +567,30 @@ export const config = {
         vignetteDark: 0,
       } satisfies ViewportLensDistortionConfig,
     },
+    minimap: {
+      enabled: true,
+      width: 160,
+      height: 120,
+      borderRadius: 32,
+      margin: 8,
+      worldPaddingScale: 1,
+      dragSensitivity: 0.42,
+      backdropScale: 0.75,
+      backdropBlur: 0,
+      mapOpacity: 0.1,
+      mapTint: [1, 1, 0.96],
+      entityOpacity: 0.66,
+      entityColor: [0.88, 0.88, 0.86],
+      strength: 4,
+      edgeWidth: 1.2,
+      falloff: 10,
+      dispersion: 1.3,
+      scale: 1,
+      reflectionIntensity: 0.56,
+      reflectionFocus: 0.45,
+      occlusion: 0.14,
+      vignette: 0,
+    } satisfies MinimapConfig,
   },
   hitTesting: {
     alphaGrid: {
@@ -924,4 +949,11 @@ export function getViewportLensDistortionConfig(
   if (canvasLensing === CanvasLensing.extreme)
     return { ...config.canvas.lens.extreme, enabled: true };
   return { ...config.canvas.lens.subtle, enabled: false };
+}
+
+export function getMiniMapConfig({ enabled }: { enabled: boolean }): MinimapConfig {
+  return {
+    ...config.canvas.minimap,
+    enabled,
+  };
 }

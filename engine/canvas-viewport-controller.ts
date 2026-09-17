@@ -127,7 +127,7 @@ export class CanvasViewportController {
     return currentCenter;
   }
 
-  handleDoubleTapOnEntity(entityId: string): void {
+  toggleEntityFit(entityId: string, bottomInset: number): void {
     if (!this.#container) return;
 
     canvasStore.replaceSelection([entityId]);
@@ -163,7 +163,7 @@ export class CanvasViewportController {
       padding: config.canvas.fitToViewPadding,
       minZoom: undefined,
       maxZoom: undefined,
-      bottomInset: config.canvas.mobile.bottomInset,
+      bottomInset,
     });
 
     this.#viewportAnimation.animateTo(target, {

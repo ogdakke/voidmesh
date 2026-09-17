@@ -53,6 +53,21 @@ export function HapticsToggle() {
   );
 }
 
+export function MinimapToggle() {
+  const { minimap } = useCanvasPreferences();
+  const { setMinimap } = useCanvasCommands();
+  return (
+    <Checkbox
+      name="minimap"
+      checked={minimap}
+      onChange={(e) => setMinimap(e.target.checked)}
+      switch
+    >
+      Minimap
+    </Checkbox>
+  );
+}
+
 export function CanvasLensingSelect() {
   const { canvasLensing } = useCanvasPreferences();
   const { setCanvasLensing } = useCanvasCommands();

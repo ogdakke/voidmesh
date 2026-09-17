@@ -2,46 +2,49 @@ import About from "#components/about/index.tsx";
 import DesktopSettings from "#components/settings/settings.desktop.tsx";
 import {
   useCanvasInteraction,
+  useCanvasPreferences,
   useMultiSelectMode,
   useSelectedEntityIds,
-  useViewportZoom,
 } from "#context/use-canvas.ts";
 import { useLayout } from "#context/use-layout.ts";
 import { useIsMobile } from "#hooks/use-is-mobile.ts";
-import { Check, Enlarge, Reduce, Square3dFromCenter } from "iconoir-react";
+import { Check, Enlarge, Reduce } from "iconoir-react";
 import type { RefObject } from "react";
 import SettingsDrawer from "../settings/settings.mobile.tsx";
 import { Button } from "../ui/button/index.tsx";
+import { MinimapControl } from "./minimap-control.tsx";
 import { UndoRedoButtons } from "./undo-redo.tsx";
 
 interface CanvasOverlayProps {
+  containerRef: RefObject<HTMLDivElement | null>;
   perfRef: RefObject<HTMLDivElement | null>;
   onboarding: { active: boolean; skip: () => void };
-  centerSelection: () => void;
   resetZoom: () => void;
 }
 
 export function CanvasOverlay({
+  containerRef,
   perfRef,
   onboarding,
-  centerSelection,
   resetZoom,
 }: CanvasOverlayProps) {
   const isMobile = useIsMobile();
   const { isFullscreen } = useLayout();
+  const { minimap } = useCanvasPreferences();
 
   return (
     <div className="infinite-canvas__overlay">
       <div ref={perfRef} className="infinite-canvas__perf-overlay" style={{ display: "none" }} />
-      {!isMobile && <DesktopTopControls />}
+      {!isMobile && (
+        <>
+          {minimap && <MinimapControl containerRef={containerRef} onZoomReset={resetZoom} />}
+          <DesktopTopControls />
+        </>
+      )}
       {!(isMobile && isFullscreen) && (
         <div className="infinite-canvas-toolrow">
           <CanvasToolRowStart onboarding={onboarding} />
-          {isMobile ? (
-            <MobileCanvasActions />
-          ) : (
-            <DesktopCanvasActions centerSelection={centerSelection} resetZoom={resetZoom} />
-          )}
+          {isMobile && <MobileCanvasActions />}
         </div>
       )}
     </div>
@@ -90,39 +93,6 @@ function CanvasToolRowStart({ onboarding }: { onboarding: CanvasOverlayProps["on
           </Button>
         </div>
       )}
-    </div>
-  );
-}
-
-function DesktopCanvasActions({
-  centerSelection,
-  resetZoom,
-}: Pick<CanvasOverlayProps, "centerSelection" | "resetZoom">) {
-  const selectedEntityIds = useSelectedEntityIds();
-  const zoom = useViewportZoom();
-  return (
-    <div className="infinite-canvas__controls">
-      <Button
-        className="infinite-canvas__center"
-        onClick={centerSelection}
-        type="button"
-        aria-label="Center selection in view"
-        variant="secondary"
-        size="sm"
-        disabled={selectedEntityIds.size === 0}
-      >
-        <Square3dFromCenter />
-      </Button>
-      <Button
-        className="infinite-canvas__zoom-indicator"
-        onClick={resetZoom}
-        type="button"
-        aria-label="Reset zoom to 100%"
-        size="sm"
-        variant="secondary"
-      >
-        {Math.round(zoom * 100)}%
-      </Button>
     </div>
   );
 }

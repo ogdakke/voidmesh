@@ -52,6 +52,7 @@ export interface CanvasInteractionService {
   closeContextMenu(): void;
   beginSpacePan(): void;
   endSpacePan(): boolean;
+  stopViewportMotion(): void;
   initializeViewport(metrics: CanvasSurfaceMetrics): void;
   resetZoom(metrics: CanvasSurfaceMetrics): void;
   fitSelection(metrics: CanvasSurfaceMetrics, options: FitSelectionOptions): boolean;
@@ -133,6 +134,10 @@ export function createCanvasInteractionService({
       const wasReady = gameLoop.spacePanMode === SpacePanMode.ready;
       gameLoop.setSpaceHeld(false);
       return wasReady;
+    },
+    stopViewportMotion() {
+      gameLoop.stopMomentum();
+      viewportAnimation.cancel();
     },
     initializeViewport(metrics) {
       const offset = calculateCenteredOffset(metrics.width, metrics.height, 1, metrics.dpr);

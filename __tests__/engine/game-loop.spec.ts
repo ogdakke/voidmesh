@@ -613,6 +613,90 @@ describe("Space+drag pan", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Mouse Double-Click Entity Fit
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Mouse double-click entity fit", () => {
+  test("double-click on an entity fits it to the viewport", () => {
+    addEntity(100, 100);
+    const now = vi.spyOn(performance, "now");
+
+    now.mockReturnValue(100);
+    click(gl, { x: 150, y: 150 });
+    now.mockReturnValue(200);
+    click(gl, { x: 150, y: 150 });
+
+    expect(deps.viewportAnimation.animateTo).toHaveBeenCalledTimes(1);
+  });
+
+  test("double-clicking the same entity again restores the pre-fit viewport", () => {
+    addEntity(100, 100);
+    const initialViewport = getViewportValues();
+    const now = vi.spyOn(performance, "now");
+
+    now.mockReturnValue(100);
+    click(gl, { x: 150, y: 150 });
+    now.mockReturnValue(200);
+    click(gl, { x: 150, y: 150 });
+    now.mockReturnValue(400);
+    click(gl, { x: 150, y: 150 });
+    now.mockReturnValue(500);
+    click(gl, { x: 150, y: 150 });
+
+    expect(deps.viewportAnimation.animateTo).toHaveBeenCalledTimes(2);
+    expect(deps.viewportAnimation.animateTo).toHaveBeenLastCalledWith(initialViewport, {
+      duration: expect.any(Number),
+      easing: expect.any(Function),
+    });
+  });
+
+  test("clicks farther apart than the mouse tolerance do not fit the entity", () => {
+    addEntity(100, 100);
+    const now = vi.spyOn(performance, "now");
+
+    now.mockReturnValue(100);
+    click(gl, { x: 150, y: 150 });
+    now.mockReturnValue(200);
+    click(gl, { x: 156, y: 150 });
+
+    expect(deps.viewportAnimation.animateTo).not.toHaveBeenCalled();
+  });
+
+  test("clicks on different entities do not trigger entity fit", () => {
+    addEntity(100, 100);
+    addEntity(400, 100);
+    const now = vi.spyOn(performance, "now");
+
+    now.mockReturnValue(100);
+    click(gl, { x: 150, y: 150 });
+    now.mockReturnValue(200);
+    click(gl, { x: 450, y: 150 });
+
+    expect(deps.viewportAnimation.animateTo).not.toHaveBeenCalled();
+  });
+
+  test("double-clicking a selected video does not toggle playback", () => {
+    const entity = createTestEntity({
+      position: { x: 100, y: 100 },
+      size: { width: 200, height: 150 },
+      mediaType: "video",
+    });
+    canvasStore.addEntity(entity);
+    canvasStore.replaceSelection([entity.id]);
+    const togglePlayback = vi.spyOn(canvasStore, "togglePlayback");
+    const now = vi.spyOn(performance, "now");
+
+    now.mockReturnValue(100);
+    click(gl, { x: 150, y: 150 });
+    now.mockReturnValue(200);
+    click(gl, { x: 150, y: 150 });
+
+    expect(togglePlayback).not.toHaveBeenCalled();
+    expect(deps.viewportAnimation.animateTo).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Touch Tap Detection
 // ═══════════════════════════════════════════════════════════════════════════
 
