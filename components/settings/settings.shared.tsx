@@ -1,5 +1,9 @@
-import { FancyEffects, isFancyEffects } from "#types/fancy-effects.ts";
-import { Select, SelectItem } from "#ui/select/index.tsx";
+import {
+  hasDeletionEffects,
+  hasPrismWakeEffects,
+  withDeletionEffects,
+  withPrismWakeEffects,
+} from "#lib/fancy-effects.ts";
 import { NavArrowRight } from "iconoir-react";
 import { Button } from "#ui/button/button.tsx";
 import { Checkbox } from "#ui/checkbox/index.tsx";
@@ -24,60 +28,35 @@ export function SnapToGridToggle() {
   );
 }
 
-const fancyEffectOptions = [
-  { value: FancyEffects.none, label: "None" },
-  { value: FancyEffects.all, label: "All" },
-  { value: FancyEffects.deletions, label: "Deletions" },
-  { value: FancyEffects.prismWake, label: "Prism wake" },
-];
-
-export function FancyEffectsMobileSelect() {
+export function FancyDeleteToggle() {
   const { fancyEffects } = useCanvasPreferences();
   const { setFancyEffects } = useCanvasCommands();
   return (
-    <div className="native-select-field native-select-field--mobile">
-      <label className="ui-field-label settings-label" htmlFor="fancy_effects">
-        Fancy Effects
-      </label>
-      <NativeSelect
-        id="fancy_effects"
-        name="fancy_effects"
-        value={fancyEffects}
-        size="sm"
-        variant="quiet"
-        onChange={(event) => {
-          if (isFancyEffects(event.target.value)) setFancyEffects(event.target.value);
-        }}
-      >
-        {fancyEffectOptions.map(({ value, label }) => (
-          <NativeSelectOption key={value} value={value}>
-            {label}
-          </NativeSelectOption>
-        ))}
-      </NativeSelect>
-    </div>
+    <Checkbox
+      name="fancy_delete"
+      checked={hasDeletionEffects(fancyEffects)}
+      onChange={(event) => setFancyEffects(withDeletionEffects(fancyEffects, event.target.checked))}
+      switch
+    >
+      Fancy deletions
+    </Checkbox>
   );
 }
 
-export function FancyEffectsDesktopSelect() {
+export function OverlapEffectToggle() {
   const { fancyEffects } = useCanvasPreferences();
   const { setFancyEffects } = useCanvasCommands();
   return (
-    <Select
-      name="fancy_effects"
-      label="Fancy Effects"
-      value={fancyEffects}
-      items={fancyEffectOptions}
-      onValueChange={(value) => {
-        if (isFancyEffects(value)) setFancyEffects(value);
-      }}
+    <Checkbox
+      name="overlap_effect"
+      checked={hasPrismWakeEffects(fancyEffects)}
+      onChange={(event) =>
+        setFancyEffects(withPrismWakeEffects(fancyEffects, event.target.checked))
+      }
+      switch
     >
-      {fancyEffectOptions.map(({ value, label }) => (
-        <SelectItem key={value} value={value}>
-          {label}
-        </SelectItem>
-      ))}
-    </Select>
+      Overlap effect
+    </Checkbox>
   );
 }
 

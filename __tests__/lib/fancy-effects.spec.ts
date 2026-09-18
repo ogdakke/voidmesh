@@ -5,6 +5,8 @@ import {
   hasDeletionEffects,
   hasPrismWakeEffects,
   resolveFancyEffectsPreference,
+  withDeletionEffects,
+  withPrismWakeEffects,
 } from "#lib/fancy-effects.ts";
 
 async function clearEffectPreferences() {
@@ -53,5 +55,23 @@ describe("Fancy Effects preferences", () => {
   ] as const)("%s enables only its selected effects", (value, deletion, prism) => {
     expect(hasDeletionEffects(value)).toBe(deletion);
     expect(hasPrismWakeEffects(value)).toBe(prism);
+  });
+
+  test.each([
+    [FancyEffects.none, true, FancyEffects.deletions],
+    [FancyEffects.prismWake, true, FancyEffects.all],
+    [FancyEffects.all, false, FancyEffects.prismWake],
+    [FancyEffects.deletions, false, FancyEffects.none],
+  ] as const)("sets deletion effects on %s", (value, enabled, expected) => {
+    expect(withDeletionEffects(value, enabled)).toBe(expected);
+  });
+
+  test.each([
+    [FancyEffects.none, true, FancyEffects.prismWake],
+    [FancyEffects.deletions, true, FancyEffects.all],
+    [FancyEffects.all, false, FancyEffects.deletions],
+    [FancyEffects.prismWake, false, FancyEffects.none],
+  ] as const)("sets overlap effects on %s", (value, enabled, expected) => {
+    expect(withPrismWakeEffects(value, enabled)).toBe(expected);
   });
 });
