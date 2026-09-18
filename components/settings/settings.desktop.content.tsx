@@ -124,6 +124,9 @@ function CanvasLensingPreviews() {
               onChange={() => setCanvasLensing(value)}
             />
             <div className="desktop-settings-preview" data-lensing={value}>
+              <div className="desktop-settings-preview-glow" aria-hidden="true">
+                <LensingSpritePicture full={false} />
+              </div>
               <div
                 className="desktop-settings-preview-surface"
                 data-loaded={isSpriteLoaded || undefined}
