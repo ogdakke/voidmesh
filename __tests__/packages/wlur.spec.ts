@@ -167,6 +167,31 @@ describe("WlurPass resource reuse", () => {
 
     pass.destroy();
   });
+
+  test("renders the final composite into a caller-owned output view", () => {
+    const device = createWlurDevice();
+    const pass = new WlurPass({ device, format: "rgba16float" });
+    const encoder = createWlurEncoder();
+    const input = createWlurTexture(800, 600);
+    const output = createWlurTexture(800, 600);
+    const outputView = {} as GPUTextureView;
+
+    pass.encode(
+      encoder,
+      input,
+      output,
+      800,
+      600,
+      { ...DEFAULT_WLUR_PARAMS, radius: 20, noise: 0 },
+      { outputView },
+    );
+
+    expect(output.createView).not.toHaveBeenCalled();
+    const renderPasses = vi.mocked(encoder.beginRenderPass).mock.calls;
+    expect(renderPasses.at(-1)?.[0].colorAttachments[0]?.view).toBe(outputView);
+
+    pass.destroy();
+  });
 });
 
 function createWlurTexture(

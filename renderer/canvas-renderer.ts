@@ -31,7 +31,7 @@ import { TexturePool, type TexturePoolStats } from "./texture-pool.ts";
 import { ViewportLensPass, type ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
 import { ViewportUniforms } from "./viewport-uniforms.ts";
 import type { WlurOverlayConfig } from "./wlur-overlay.ts";
-import { WlurOverlayPass } from "./wlur-overlay-pass.ts";
+import { WlurOverlayPass, type WlurOverlayPassStats } from "./wlur-overlay-pass.ts";
 
 export type { ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
 
@@ -40,6 +40,7 @@ export interface RendererResourceStats {
   processingTextures: ByteBudgetCacheStats;
   texturePool: TexturePoolStats;
   composition: CompositionPassStats;
+  wlur: WlurOverlayPassStats;
 }
 
 export class InfiniteCanvasRenderer {
@@ -198,6 +199,13 @@ export class InfiniteCanvasRenderer {
         layerTextureBytes: 0,
         externalBindGroupCreations: 0,
         externalBindGroupReuses: 0,
+      },
+      wlur: this.#wlurOverlayPass?.getStats() ?? {
+        blurRefreshes: 0,
+        blurReuses: 0,
+        composites: 0,
+        directPresents: 0,
+        convertedPresents: 0,
       },
     };
   }
@@ -544,9 +552,12 @@ export class InfiniteCanvasRenderer {
       return;
     }
     const targetView = texture.createView();
+    const wlurSceneTarget = this.#wlurOverlayPass?.getSceneTarget(width, height, dpr) ?? null;
+    const presentationTargetTexture = wlurSceneTarget?.texture ?? texture;
+    const presentationTargetView = wlurSceneTarget?.view ?? targetView;
     const viewportLensTarget = this.#viewportLensPass?.getTarget(width, height) ?? null;
-    const sceneTargetTexture = viewportLensTarget?.texture ?? texture;
-    const sceneTargetView = viewportLensTarget?.view ?? targetView;
+    const sceneTargetTexture = viewportLensTarget?.texture ?? presentationTargetTexture;
+    const sceneTargetView = viewportLensTarget?.view ?? presentationTargetView;
     const overlapDepth = fullSceneBatch
       ? undefined
       : this.#compositionPass.prepareOcclusion(
@@ -739,14 +750,14 @@ export class InfiniteCanvasRenderer {
     }
 
     const lensApplied = viewportLensTarget
-      ? this.#viewportLensPass!.encode(encoder, targetView, width, height)
+      ? this.#viewportLensPass!.encode(encoder, presentationTargetView, width, height)
       : false;
 
     // Final pass: WLUR progressive blur overlay (renders on top of everything)
     if (this.#wlurOverlayPass) {
       this.#wlurOverlayPass.encode({
         encoder,
-        sourceTexture: texture,
+        sourceTexture: presentationTargetTexture,
         targetTexture: texture,
         targetView,
         width,
