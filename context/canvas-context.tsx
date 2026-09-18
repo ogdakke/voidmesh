@@ -3,14 +3,20 @@ import {
   CanvasCommandsContext,
   CanvasInteractionContext,
   CanvasMediaContext,
+  CanvasPerformanceContext,
   CanvasRendererContext,
   DebugType,
   type CanvasCommands,
+  type CanvasPerformanceService,
   type CanvasRendererService,
   type AddEntityOptions,
 } from "./use-canvas.ts";
 import { createCanvasInteractionService } from "#application/canvas/canvas-interaction.ts";
 import { createCanvasMediaService } from "#application/canvas/canvas-media.ts";
+import {
+  createActionLayerBenchmarkService,
+  DEFAULT_ACTION_LAYER_BENCHMARK_CONFIG,
+} from "#application/canvas/action-layer-benchmark.ts";
 import {
   useQueryState,
   parseAsBoolean,
@@ -108,6 +114,8 @@ const createPerfGraphRenderer = (
   format: GPUTextureFormat,
   colorSpace: PredefinedColorSpace,
 ) => new PerfGraphRenderer(canvas, device, format, colorSpace);
+const getPerformanceBenchmarkTime = () => performance.now();
+const ACTION_LAYER_BENCHMARK_TRANSITION_MS = 200;
 
 function formatErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
@@ -530,6 +538,105 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   // Renderer reference for cleanup
   const rendererRef = useRef<InfiniteCanvasRenderer | null>(null);
   const [rendererState, setRendererState] = useState<InfiniteCanvasRenderer | null>(null);
+  // Keep a running benchmark stable across unrelated provider renders.
+  // oxlint-disable-next-line voidmesh-react-compiler/no-manual-memoization
+  const performanceService = useMemo<CanvasPerformanceService>(() => {
+    const benchmark = createActionLayerBenchmarkService(
+      {
+        now: getPerformanceBenchmarkTime,
+        observeFrames: (observer) => perfOverlay.observeFrames(observer),
+        getSelectedEntityIds: () => canvasStore.getState().selectedEntityIds,
+        getTouchOrigin: () => {
+          const snapshot = canvasStore.getActionLayerSnapshot();
+          const hasRecordedPoint =
+            snapshot.version > 0 && (snapshot.touchOrigin.x !== 0 || snapshot.touchOrigin.y !== 0);
+          return hasRecordedPoint ? snapshot.touchOrigin : null;
+        },
+        getWorkload: () => {
+          const state = canvasStore.getState();
+          const renderer = rendererState;
+          if (!renderer?.isReady) throw new Error("The canvas renderer is not ready");
+          let visibleEntityCount = 0;
+          let imageCount = 0;
+          let svgCount = 0;
+          let videoCount = 0;
+          let playingVideoCount = 0;
+          let gifCount = 0;
+          let playingGifCount = 0;
+          for (const entity of state.entities.values()) {
+            if (renderer.isEntityVisible(entity, state.viewport)) visibleEntityCount++;
+            switch (entity.mediaSource.type) {
+              case MediaType.image:
+                imageCount++;
+                break;
+              case MediaType.svg:
+                svgCount++;
+                break;
+              case MediaType.video:
+                videoCount++;
+                if (entity.playback?.isPlaying) playingVideoCount++;
+                break;
+              case MediaType.gif:
+                gifCount++;
+                if (entity.playback?.isPlaying) playingGifCount++;
+                break;
+            }
+          }
+          return {
+            selectedEntityIds: [...state.selectedEntityIds],
+            entityCount: state.entities.size,
+            visibleEntityCount,
+            selectedEntityCount: state.selectedEntityIds.size,
+            imageCount,
+            svgCount,
+            videoCount,
+            playingVideoCount,
+            gifCount,
+            playingGifCount,
+          };
+        },
+        getEnvironment: () => ({
+          benchmarkLabel: new URLSearchParams(window.location.search).get("benchLabel"),
+          url: window.location.href,
+          userAgent: navigator.userAgent,
+          hardwareConcurrency: navigator.hardwareConcurrency || null,
+          devicePixelRatio: window.devicePixelRatio,
+          viewportCssWidth: window.innerWidth,
+          viewportCssHeight: window.innerHeight,
+          displayP3: window.matchMedia("(color-gamut: p3)").matches,
+          documentVisible: document.visibilityState === "visible",
+        }),
+        getResourceStats: () => {
+          const renderer = rendererState;
+          if (!renderer?.isReady) throw new Error("The canvas renderer is not ready");
+          return renderer.getResourceStats();
+        },
+        getActiveActionLayerEntityIds: () => {
+          const snapshot = canvasStore.getActionLayerSnapshot();
+          return snapshot.active ? snapshot.entityIds : null;
+        },
+        press: (touchOrigin, eventTime) => interaction.touchStart([touchOrigin], eventTime),
+        release: (eventTime) => interaction.touchEnd([], false, eventTime),
+        reset: () => {
+          interaction.touchEnd([], true, getPerformanceBenchmarkTime());
+          actionLayerController.cancel();
+          canvasStore.setActionLayerActive(false);
+        },
+      },
+      {
+        ...DEFAULT_ACTION_LAYER_BENCHMARK_CONFIG,
+        longPressDelayMs: config.touch.longPressDelay,
+        activeMs:
+          Math.max(ACTION_LAYER_BENCHMARK_TRANSITION_MS, config.actionLayer.blurFadeInMs) +
+          1000 / DEFAULT_ACTION_LAYER_BENCHMARK_CONFIG.targetFps,
+      },
+    );
+    return {
+      runActionLayerBenchmark: () => benchmark.run(),
+      cancelActionLayerBenchmark: () => benchmark.cancel(),
+      isActionLayerBenchmarkRunning: () => benchmark.running,
+    };
+  }, [interaction, rendererState]);
   const [colorSpace, setColorSpace] = useState<ColorSpace>(ColorSpace.srgb);
   const colorSpaceRef = useRef<ColorSpace>(ColorSpace.srgb);
   useEffect(() => {
@@ -2400,9 +2507,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     <CanvasCommandsContext.Provider value={commands}>
       <CanvasInteractionContext.Provider value={interaction}>
         <CanvasMediaContext.Provider value={media}>
-          <CanvasRendererContext.Provider value={rendererService}>
-            {children}
-          </CanvasRendererContext.Provider>
+          <CanvasPerformanceContext.Provider value={performanceService}>
+            <CanvasRendererContext.Provider value={rendererService}>
+              {children}
+            </CanvasRendererContext.Provider>
+          </CanvasPerformanceContext.Provider>
         </CanvasMediaContext.Provider>
       </CanvasInteractionContext.Provider>
     </CanvasCommandsContext.Provider>

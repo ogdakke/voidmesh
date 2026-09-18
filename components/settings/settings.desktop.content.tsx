@@ -6,6 +6,7 @@ import {
   FancyDeleteToggle,
   FeedbackLink,
   LinkItem,
+  OpenOverlapBenchmarkButton,
   RedoOnboardingButton,
   ShareLink,
   SnapToGridToggle,
@@ -53,6 +54,11 @@ export default function DesktopSettingsContent({
           <section className="desktop-settings-section" aria-labelledby="voidmesh-settings-title">
             <h2 id="voidmesh-settings-title">Voidmesh</h2>
             <div className="desktop-settings-group">
+              <div className="desktop-settings-action field-label">
+                <LinkItem>
+                  <OpenOverlapBenchmarkButton onOpen={onClose} />
+                </LinkItem>
+              </div>
               <div className="desktop-settings-action field-label">
                 <LinkItem>
                   <ShareLink />
