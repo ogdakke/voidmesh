@@ -303,13 +303,15 @@ describe("canvas overlap crossings", () => {
     field.destroy();
   });
 
-  test("drag-under ignores viewport changes and drag commits; drag-under defaults on", () => {
+  test("ordinary dragging does not create overlap effects by default", () => {
     const { field, latest, entities, action, drag } = motionFixture();
-    expect(overlapConfig.dragUnder).toBe(true);
+    expect(overlapConfig.dragUnder).toBe(false);
     field.update(entities, action, 0, 1, 1, drag);
     drag.offset.x = 10;
     field.update(entities, action, 16, 1, 1, drag);
     expect(field.pending).toBe(false);
+
+    // The remaining assertions exercise the dormant path's motion bookkeeping.
     Object.assign(settings, { dragUnder: true });
     field.update(entities, action, 32, 1, 1, drag);
     field.update(entities, action, 48, 2, 2, drag);
