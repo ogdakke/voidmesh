@@ -13,7 +13,7 @@ export interface OverlapConfig {
 
 export const overlapConfig: Readonly<OverlapConfig> = Object.freeze({
   enabled: true,
-  dragUnder: true,
+  dragUnder: false,
   transition: 200,
   rgbStrength: 1.5,
   rgbDecay: 200,
