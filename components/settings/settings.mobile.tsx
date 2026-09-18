@@ -12,6 +12,7 @@ import {
   FeedbackLink,
   HapticsToggle,
   LinkItem,
+  OverlapEffectToggle,
   RedoOnboardingLink,
   ShareLink,
   SnapToGridToggle,
@@ -75,7 +76,7 @@ export default function SettingsDrawer() {
             <HapticsToggle />
           </div>
           <div className="settings-drawer-switch">
-            <OverlapLabToggle />
+            <OverlapEffectToggle />
           </div>
           <hr className="divider" />
           <div className="settings-drawer-ext-item field-label">

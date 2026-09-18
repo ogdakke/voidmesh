@@ -7,34 +7,27 @@ vi.mock("#context/use-canvas.ts", () => ({
   useCanvasPreferences: () => ({ fancyEffects: FancyEffects.deletions }),
   useCanvasCommands: () => ({ setFancyEffects }),
 }));
-const { FancyEffectsMobileSelect, FancyEffectsDesktopSelect } =
+const { FancyDeleteToggle, OverlapEffectToggle } =
   await import("#components/settings/settings.shared.tsx");
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
 });
 
-describe("Fancy Effects selects", () => {
-  test("mobile uses the native select with four persisted choices", () => {
-    render(<FancyEffectsMobileSelect />);
-    const select = screen.getByRole("combobox", { name: "Fancy Effects" });
-    expect(select.tagName).toBe("SELECT");
-    expect((select as HTMLSelectElement).value).toBe(FancyEffects.deletions);
-    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
-      "None",
-      "All",
-      "Deletions",
-      "Prism wake",
-    ]);
-    fireEvent.change(select, { target: { value: FancyEffects.prismWake } });
-    expect(setFancyEffects).toHaveBeenCalledWith(FancyEffects.prismWake);
-  });
-  test("desktop uses the custom select trigger", async () => {
-    render(<FancyEffectsDesktopSelect />);
-    const trigger = screen.getByRole("combobox", { name: "Fancy Effects" });
-    expect(trigger.tagName).toBe("BUTTON");
-    fireEvent.click(trigger);
-    fireEvent.keyDown(await screen.findByRole("option", { name: "None" }), { key: "Enter" });
+describe("Fancy Effects toggles", () => {
+  test("fancy deletions can be disabled without enabling overlap effects", () => {
+    render(<FancyDeleteToggle />);
+    const toggle = screen.getByRole("checkbox", { name: "Fancy deletions" });
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
     expect(setFancyEffects).toHaveBeenCalledWith(FancyEffects.none);
+  });
+
+  test("overlap effects can be enabled without disabling fancy deletions", () => {
+    render(<OverlapEffectToggle />);
+    const toggle = screen.getByRole("checkbox", { name: "Overlap effect" });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    expect(setFancyEffects).toHaveBeenCalledWith(FancyEffects.all);
   });
 });
