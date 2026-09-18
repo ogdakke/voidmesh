@@ -1,6 +1,7 @@
 import { Button } from "#ui/button/button.tsx";
 import { Modal } from "#ui/modal/modal.tsx";
 import { useCanvasCommands, useCanvasPreferences } from "#context/use-canvas.ts";
+import useMediaQuery from "#hooks/use-media-query.ts";
 import lensingSpriteDark from "#media/lensing-preview-sprite-grain.png?img";
 import lensingSpriteLight from "#media/lensing-preview-sprite-light-grain.png?img";
 import { CanvasLensing } from "#types/enums.ts";
@@ -97,16 +98,30 @@ const LENSING_OPTIONS = [
   { value: CanvasLensing.extreme, label: "Extreme" },
 ] as const;
 
+type ColorScheme = "dark" | "light";
+
+const loadedLensingSprites = new Set<ColorScheme>();
+
 function CanvasLensingPreviews() {
   const { canvasLensing } = useCanvasPreferences();
   const { setCanvasLensing } = useCanvasCommands();
-  const [isSpriteLoaded, setIsSpriteLoaded] = useState(false);
+  const isDarkMode = useMediaQuery("(prefers-color-scheme: dark)");
+  const colorScheme = isDarkMode ? "dark" : "light";
+  const [loadedColorScheme, setLoadedColorScheme] = useState<ColorScheme | null>(() =>
+    loadedLensingSprites.has(colorScheme) ? colorScheme : null,
+  );
+  const isSpriteLoaded = loadedColorScheme === colorScheme || loadedLensingSprites.has(colorScheme);
+
+  const handleSpriteLoad = () => {
+    loadedLensingSprites.add(colorScheme);
+    setLoadedColorScheme(colorScheme);
+  };
 
   return (
     <fieldset className="desktop-settings-previews">
       <legend>Canvas lensing</legend>
       <span className="desktop-settings-sprite-preloader" aria-hidden="true">
-        <LensingSpritePicture full onLoad={() => setIsSpriteLoaded(true)} />
+        <LensingSpritePicture full onLoad={handleSpriteLoad} />
       </span>
       <div className="desktop-settings-preview-grid">
         {LENSING_OPTIONS.map(({ value, label }) => (
