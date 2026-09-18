@@ -26,6 +26,7 @@ export class ActionLayerBlurPass {
   readonly #pipeline: GPURenderPipeline;
   readonly #bindGroupLayout: GPUBindGroupLayout;
   readonly #uniformBuffer: GPUBuffer;
+  readonly #uniformData = new Float32Array(8);
   readonly #sampler: GPUSampler;
 
   #tintColor: [number, number, number];
@@ -139,7 +140,15 @@ export class ActionLayerBlurPass {
     // Always update uniforms (intensity may change during fade animation).
     const tintAmount = config.actionLayer.dimOpacity * blurIntensity;
     const [tr, tg, tb] = this.#tintColor;
-    const uniformData = new Float32Array([tintAmount, blurIntensity, 0, 0, tr, tg, tb, 0]);
+    const uniformData = this.#uniformData;
+    uniformData[0] = tintAmount;
+    uniformData[1] = blurIntensity;
+    uniformData[2] = 0;
+    uniformData[3] = 0;
+    uniformData[4] = tr;
+    uniformData[5] = tg;
+    uniformData[6] = tb;
+    uniformData[7] = 0;
     this.#device.queue.writeBuffer(this.#uniformBuffer, 0, uniformData);
 
     // Cache blit bind group (only recreate when textures change).

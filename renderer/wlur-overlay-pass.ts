@@ -144,6 +144,8 @@ export class WlurOverlayPass {
 
   destroy(): void {
     this.#wlurPass.destroy();
+    this.#sourceCopyPass.destroy();
+    this.#presentCopyPass.destroy();
     this.#config = null;
     this.#lastQualityKey = "";
     this.#destroyTextures();

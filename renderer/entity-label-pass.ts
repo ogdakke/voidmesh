@@ -58,6 +58,8 @@ interface LabelCacheEntry {
   uniformBuffer: GPUBuffer;
   textureWidth: number;
   textureHeight: number;
+  allocationWidth: number;
+  allocationHeight: number;
   rasterState: LabelRasterState;
 }
 
@@ -117,6 +119,7 @@ export class EntityLabelPass {
   #dpr = 1;
   #viewport: Viewport | null = null;
   #isAnimating = false;
+  readonly #uniformData = new Float32Array(UNIFORM_SIZE / 4);
 
   constructor(device: GPUDevice, canvasFormat: GPUTextureFormat, viewportUniformBuffer: GPUBuffer) {
     this.#device = device;
@@ -231,12 +234,15 @@ export class EntityLabelPass {
 
     // ── Write uniforms and draw ────────────────────────────────────────────
 
-    const data = new Float32Array(UNIFORM_SIZE / 4);
+    const data = this.#uniformData;
     data[0] = worldX;
     data[1] = worldY;
     data[2] = worldWidth;
     data[3] = worldHeight;
     data[4] = 1; // opacity
+    data[5] = 0;
+    data[6] = cached.textureWidth;
+    data[7] = cached.textureHeight;
     this.#device.queue.writeBuffer(cached.uniformBuffer, 0, data);
 
     pass.setPipeline(this.#pipeline);
@@ -310,16 +316,29 @@ export class EntityLabelPass {
   }
 
   #rasterizeLabel(entityId: string, rasterState: LabelRasterState): LabelCacheEntry {
-    const { width, height } = this.#rasterize(rasterState);
+    const { width, height, capacityWidth, capacityHeight } = this.#rasterize(rasterState);
     let cached = this.#cache.get(entityId);
 
-    if (!cached || cached.textureWidth !== width || cached.textureHeight !== height) {
+    if (
+      !cached ||
+      cached.allocationWidth < capacityWidth ||
+      cached.allocationHeight < capacityHeight
+    ) {
       cached?.texture.destroy();
       cached?.uniformBuffer.destroy();
 
-      cached = this.#createLabelEntry(entityId, width, height, rasterState);
+      cached = this.#createLabelEntry(
+        entityId,
+        width,
+        height,
+        capacityWidth,
+        capacityHeight,
+        rasterState,
+      );
       this.#cache.set(entityId, cached);
     } else {
+      cached.textureWidth = width;
+      cached.textureHeight = height;
       cached.rasterState = rasterState;
     }
 
@@ -336,11 +355,13 @@ export class EntityLabelPass {
     entityId: string,
     width: number,
     height: number,
+    allocationWidth: number,
+    allocationHeight: number,
     rasterState: LabelRasterState,
   ): LabelCacheEntry {
     const texture = this.#device.createTexture({
       label: `Label ${entityId}`,
-      size: [width, height],
+      size: [allocationWidth, allocationHeight],
       format: "rgba8unorm",
       usage:
         GPUTextureUsage.TEXTURE_BINDING |
@@ -371,13 +392,20 @@ export class EntityLabelPass {
       uniformBuffer,
       textureWidth: width,
       textureHeight: height,
+      allocationWidth,
+      allocationHeight,
       rasterState,
     };
   }
 
   // ── Private: Canvas 2D rasterization ─────────────────────────────────────
 
-  #rasterize(rasterState: LabelRasterState): { width: number; height: number } {
+  #rasterize(rasterState: LabelRasterState): {
+    width: number;
+    height: number;
+    capacityWidth: number;
+    capacityHeight: number;
+  } {
     const { name, warning: isWarning, dragProgress, isMobile, dpr } = rasterState;
     const ctx = this.#ctx;
     const fontSize = (isMobile ? FONT_SIZE_MOBILE : FONT_SIZE_DESKTOP) * dpr;
@@ -406,13 +434,16 @@ export class EntityLabelPass {
     const boxHeight = Math.ceil(paddingY + fontSize + paddingY);
     const canvasWidth = boxWidth + shadowPad * 2;
     const canvasHeight = boxHeight + shadowPad * 2;
+    const capacityContentWidth = iconSize + gap + textWidth;
+    const capacityBoxWidth = Math.ceil(paddingX + capacityContentWidth + paddingX);
+    const capacityWidth = capacityBoxWidth + shadowPad * 2;
 
-    if (this.#canvas.width !== canvasWidth || this.#canvas.height !== canvasHeight) {
-      this.#canvas.width = canvasWidth;
+    if (this.#canvas.width !== capacityWidth || this.#canvas.height !== canvasHeight) {
+      this.#canvas.width = capacityWidth;
       this.#canvas.height = canvasHeight;
     }
 
-    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+    ctx.clearRect(0, 0, capacityWidth, canvasHeight);
     ctx.font = fontStr;
 
     const ox = shadowPad;
@@ -486,7 +517,12 @@ export class EntityLabelPass {
     ctx.textBaseline = "middle";
     ctx.fillText(truncated, textX, oy + boxHeight / 2);
 
-    return { width: canvasWidth, height: canvasHeight };
+    return {
+      width: canvasWidth,
+      height: canvasHeight,
+      capacityWidth,
+      capacityHeight: canvasHeight,
+    };
   }
 
   #truncateText(ctx: OffscreenCanvasRenderingContext2D, text: string, maxWidth: number): string {
