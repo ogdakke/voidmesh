@@ -172,6 +172,8 @@ export class InfiniteCanvasRenderer {
         sourceTextureAllocations: 0,
         processedTextureAllocations: 0,
         sourceUploads: 0,
+        externalTextureImports: 0,
+        externalTextureIdentityReuses: 0,
         evictions: 0,
       },
       processingTextures:
@@ -194,6 +196,8 @@ export class InfiniteCanvasRenderer {
         opacityProofs: 0,
         opacityBufferBytes: 0,
         layerTextureBytes: 0,
+        externalBindGroupCreations: 0,
+        externalBindGroupReuses: 0,
       },
     };
   }

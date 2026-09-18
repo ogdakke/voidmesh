@@ -107,6 +107,8 @@ export interface CompositionPassStats {
   opacityProofs: number;
   opacityBufferBytes: number;
   layerTextureBytes: number;
+  externalBindGroupCreations: number;
+  externalBindGroupReuses: number;
 }
 
 interface CompositionUniformState {
@@ -354,6 +356,8 @@ export class CompositionPass {
   #fullSceneBatchRebuilds = 0;
   #fullSceneBatchUploadBytes = 0;
   #normalInstanceUploadBytes = 0;
+  #externalBindGroupCreations = 0;
+  #externalBindGroupReuses = 0;
 
   // Entity composition cache (uniform buffers, bind groups, texture views).
   // Invalidated when entity composition texture or visual state changes.
@@ -368,6 +372,8 @@ export class CompositionPass {
   readonly #entityExternalCompositionCache: Map<
     string,
     {
+      texture: GPUExternalTexture;
+      bindGroup: GPUBindGroup;
       uniformBuffer: GPUBuffer;
       uniformState: CompositionUniformState;
       drawItem: CompositionDrawItem;
@@ -684,16 +690,21 @@ export class CompositionPass {
       cached?.uniformState,
     );
 
-    const bindGroup = this.#device.createBindGroup({
-      label: `Entity ${entity.id} external composition bind group`,
-      layout: this.#externalBindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.#viewportUniformBuffer } },
-        { binding: 1, resource: { buffer: uniformBuffer } },
-        { binding: 2, resource: source.texture },
-        { binding: 3, resource: this.#sampler },
-      ],
-    });
+    const reusesExternalBinding = cached?.texture === source.texture;
+    if (reusesExternalBinding) this.#externalBindGroupReuses++;
+    else this.#externalBindGroupCreations++;
+    const bindGroup = reusesExternalBinding
+      ? cached.bindGroup
+      : this.#device.createBindGroup({
+          label: `Entity ${entity.id} external composition bind group`,
+          layout: this.#externalBindGroupLayout,
+          entries: [
+            { binding: 0, resource: { buffer: this.#viewportUniformBuffer } },
+            { binding: 1, resource: { buffer: uniformBuffer } },
+            { binding: 2, resource: source.texture },
+            { binding: 3, resource: this.#sampler },
+          ],
+        });
 
     const drawItem: CompositionDrawItem = cached?.drawItem ?? {
       bindGroup,
@@ -718,11 +729,15 @@ export class CompositionPass {
 
     if (!cached) {
       this.#entityExternalCompositionCache.set(entity.id, {
+        texture: source.texture,
+        bindGroup,
         uniformBuffer,
         uniformState,
         drawItem,
       });
     } else {
+      cached.texture = source.texture;
+      cached.bindGroup = bindGroup;
       cached.uniformState = uniformState;
     }
 
@@ -746,6 +761,8 @@ export class CompositionPass {
       occlusionPasses: this.#occlusionPasses,
       opacityProofs: this.#proof?.getStats().proofs ?? 0,
       opacityBufferBytes: (this.#proof?.getStats().residentBytes ?? 0) + this.#opacityTableBytes,
+      externalBindGroupCreations: this.#externalBindGroupCreations,
+      externalBindGroupReuses: this.#externalBindGroupReuses,
       layerTextureBytes:
         (this.#depth ? this.#depth.width * this.#depth.height * 4 : 0) +
         (this.#backdrop
