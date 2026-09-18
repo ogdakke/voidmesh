@@ -1,11 +1,9 @@
 import { NavArrowRight } from "iconoir-react";
 import { Button } from "#ui/button/button.tsx";
 import { Checkbox } from "#ui/checkbox/index.tsx";
-import { NativeSelect, NativeSelectOption } from "#ui/native-select/index.ts";
 import { useCanvasCommands, useCanvasPreferences } from "#context/use-canvas.ts";
 import { resetOnboardingProgress } from "#lib/onboarding/onboarding-storage.ts";
 import { shareOrCopyUrl } from "./share.ts";
-import { CanvasLensing } from "#types/enums.ts";
 import "#components/ui/field/field.css";
 import "./settings.shared.css";
 
@@ -51,31 +49,6 @@ export function HapticsToggle() {
     >
       Haptic feedback
     </Checkbox>
-  );
-}
-
-export function CanvasLensingSelect() {
-  const { canvasLensing } = useCanvasPreferences();
-  const { setCanvasLensing } = useCanvasCommands();
-
-  return (
-    <div className="native-select-field native-select-field--mobile">
-      <label className="ui-field-label settings-label" htmlFor="canvas_lensing">
-        Canvas lensing
-      </label>
-      <NativeSelect
-        id="canvas_lensing"
-        name="canvas_lensing"
-        value={canvasLensing}
-        size="sm"
-        onChange={(event) => setCanvasLensing(event.target.value as CanvasLensing)}
-        variant="quiet"
-      >
-        <NativeSelectOption value={CanvasLensing.off}>Off</NativeSelectOption>
-        <NativeSelectOption value={CanvasLensing.subtle}>Subtle</NativeSelectOption>
-        <NativeSelectOption value={CanvasLensing.extreme}>Extreme</NativeSelectOption>
-      </NativeSelect>
-    </div>
   );
 }
 

@@ -1,0 +1,251 @@
+.settings-lensing-previews {
+  min-width: 0;
+  margin: 0 0 var(--spacing-5);
+  padding: 0;
+  border: 0;
+
+  & > legend {
+    margin: 0 0 var(--spacing-3);
+    padding: 0;
+    color: var(--gray-1300);
+    font-size: var(--text-sm);
+    font-weight: 400;
+  }
+}
+
+.settings-lensing-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--spacing-3);
+}
+
+.desktop-settings-main .settings-lensing-preview-grid {
+  mask-image: none;
+  -webkit-mask-image: none;
+  animation: none;
+}
+
+.settings-lensing-preview-option {
+  display: block;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.settings-lensing-preview-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.settings-lensing-sprite-preloader {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.settings-lensing-preview-label {
+  display: block;
+  margin-top: var(--spacing-2);
+  color: var(--gray-900);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+.settings-lensing-preview-option[data-selected] .settings-lensing-preview-label {
+  color: var(--gray-1300);
+}
+
+.settings-lensing-preview {
+  position: relative;
+  isolation: isolate;
+  aspect-ratio: 1.55;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+
+  @supports (corner-shape: squircle) {
+    border-radius: 36px;
+    corner-shape: squircle;
+  }
+
+  :where(picture, img) {
+    display: block;
+    height: 100%;
+  }
+
+  :where(picture) {
+    position: relative;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  :where(img) {
+    position: absolute;
+    top: 0;
+    width: 300%;
+    max-width: none;
+  }
+
+  &[data-lensing="off"] :where(img) {
+    left: 0;
+  }
+
+  &[data-lensing="subtle"] :where(img) {
+    left: -100%;
+  }
+
+  &[data-lensing="extreme"] :where(img) {
+    left: -200%;
+  }
+}
+
+.settings-lensing-preview-glow {
+  position: absolute;
+  z-index: 0;
+  inset: 8%;
+  filter: blur(32px) saturate(1.35);
+  scale: 1.2 1.3;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease-out;
+}
+
+.settings-lensing-preview-option[data-selected] .settings-lensing-preview-glow {
+  opacity: 0.5;
+
+  @media (prefers-color-scheme: dark) {
+    opacity: 0.3;
+  }
+}
+
+.settings-lensing-preview-surface {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: inherit;
+  corner-shape: inherit;
+
+  &::before {
+    content: "";
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    pointer-events: none;
+    backdrop-filter: blur(14px);
+    opacity: 1;
+    transition: opacity 100ms ease-out;
+  }
+
+  &[data-loaded]::before {
+    opacity: 0;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    &::before {
+      transition: none;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-lensing-preview-glow {
+    transition: none;
+  }
+}
+
+.settings-lensing-preview-option[data-selected] .settings-lensing-preview {
+  outline: 2px solid var(--primary-50);
+  outline-offset: -2px;
+
+  @media (prefers-color-scheme: dark) {
+    outline-color: var(--primary-25);
+  }
+}
+
+.settings-lensing-preview-input:focus-visible + .settings-lensing-preview {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.settings-drawer-inner .settings-lensing-previews {
+  margin-bottom: var(--spacing-2);
+
+  & > legend {
+    margin-bottom: var(--spacing-2);
+    padding-inline: var(--spacing-2);
+  }
+}
+
+.settings-drawer-inner .settings-lensing-preview-grid {
+  --fade-mask-size: 5%;
+  --fade-range-end: 24px;
+
+  display: flex;
+  gap: var(--spacing-2);
+  margin-block: calc(-13 * var(--spacing));
+  padding: calc(16 * var(--spacing)) var(--spacing-6);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-padding-inline: var(--spacing-6);
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  mask-image:
+    linear-gradient(
+      to right,
+      transparent 0 1px,
+      black max(2px, var(--fade-mask-l)),
+      black min(calc(100% - 2px), calc(100% - var(--fade-mask-r))),
+      transparent calc(100% - 1px) 100%
+    ),
+    linear-gradient(
+      to bottom,
+      transparent 0 1px,
+      black calc(13 * var(--spacing)),
+      black calc(100% - 13 * var(--spacing)),
+      transparent calc(100% - 1px) 100%
+    );
+  mask-composite: intersect;
+  -webkit-mask-image:
+    linear-gradient(
+      to right,
+      transparent 0 1px,
+      black max(2px, var(--fade-mask-l)),
+      black min(calc(100% - 2px), calc(100% - var(--fade-mask-r))),
+      transparent calc(100% - 1px) 100%
+    ),
+    linear-gradient(
+      to bottom,
+      transparent 0 1px,
+      black calc(13 * var(--spacing)),
+      black calc(100% - 13 * var(--spacing)),
+      transparent calc(100% - 1px) 100%
+    );
+  -webkit-mask-composite: source-in;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.settings-drawer-inner .settings-lensing-preview-option {
+  flex: 0 0 min(38vw, 152px);
+  scroll-snap-align: start;
+}
+
+.settings-drawer-inner .settings-lensing-preview-label {
+  margin-top: var(--spacing-1);
+}

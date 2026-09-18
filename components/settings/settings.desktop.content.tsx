@@ -1,14 +1,7 @@
 import { Button } from "#ui/button/button.tsx";
 import { Modal } from "#ui/modal/modal.tsx";
-import { useCanvasCommands, useCanvasPreferences } from "#context/use-canvas.ts";
-import useMediaQuery from "#hooks/use-media-query.ts";
-import lensingSpriteDark from "#media/lensing-preview-sprite-grain.png?img";
-import lensingSpriteLight from "#media/lensing-preview-sprite-light-grain.png?img";
-import { CanvasLensing } from "#types/enums.ts";
 import { Xmark } from "iconoir-react";
-import { useState } from "react";
-import lensingSpriteDarkLqip from "./assets/lensing-preview-sprite-grain-lqip.webp?inline";
-import lensingSpriteLightLqip from "./assets/lensing-preview-sprite-light-grain-lqip.webp?inline";
+import { CanvasLensingPreviews } from "./canvas-lensing-previews.tsx";
 import {
   FancyDeleteToggle,
   FeedbackLink,
@@ -89,108 +82,5 @@ export default function DesktopSettingsContent({
         </main>
       </div>
     </Modal.Root>
-  );
-}
-
-const LENSING_OPTIONS = [
-  { value: CanvasLensing.off, label: "Off" },
-  { value: CanvasLensing.subtle, label: "Subtle" },
-  { value: CanvasLensing.extreme, label: "Extreme" },
-] as const;
-
-type ColorScheme = "dark" | "light";
-
-const loadedLensingSprites = new Set<ColorScheme>();
-
-function CanvasLensingPreviews() {
-  const { canvasLensing } = useCanvasPreferences();
-  const { setCanvasLensing } = useCanvasCommands();
-  const isDarkMode = useMediaQuery("(prefers-color-scheme: dark)");
-  const colorScheme = isDarkMode ? "dark" : "light";
-  const [loadedColorScheme, setLoadedColorScheme] = useState<ColorScheme | null>(() =>
-    loadedLensingSprites.has(colorScheme) ? colorScheme : null,
-  );
-  const isSpriteLoaded = loadedColorScheme === colorScheme || loadedLensingSprites.has(colorScheme);
-
-  const handleSpriteLoad = () => {
-    loadedLensingSprites.add(colorScheme);
-    setLoadedColorScheme(colorScheme);
-  };
-
-  return (
-    <fieldset className="desktop-settings-previews">
-      <legend>Canvas lensing</legend>
-      <span className="desktop-settings-sprite-preloader" aria-hidden="true">
-        <LensingSpritePicture full onLoad={handleSpriteLoad} />
-      </span>
-      <div className="desktop-settings-preview-grid">
-        {LENSING_OPTIONS.map(({ value, label }) => (
-          <label
-            className="desktop-settings-preview-option"
-            key={value}
-            data-selected={canvasLensing === value || undefined}
-          >
-            <input
-              className="desktop-settings-preview-input"
-              type="radio"
-              name="canvas-lensing"
-              value={value}
-              checked={canvasLensing === value}
-              onChange={() => setCanvasLensing(value)}
-            />
-            <div className="desktop-settings-preview" data-lensing={value}>
-              <div className="desktop-settings-preview-glow" aria-hidden="true">
-                <LensingSpritePicture full={false} />
-              </div>
-              <div
-                className="desktop-settings-preview-surface"
-                data-loaded={isSpriteLoaded || undefined}
-              >
-                <LensingSpritePicture full={isSpriteLoaded} />
-              </div>
-            </div>
-            <span className="desktop-settings-preview-label">{label}</span>
-          </label>
-        ))}
-      </div>
-    </fieldset>
-  );
-}
-
-function LensingSpritePicture({ full, onLoad }: { full: boolean; onLoad?: () => void }) {
-  if (!full) {
-    return (
-      <picture>
-        <source media="(prefers-color-scheme: light)" srcSet={lensingSpriteLightLqip} />
-        <img src={lensingSpriteDarkLqip} width={93} height={20} alt="" />
-      </picture>
-    );
-  }
-
-  return (
-    <picture>
-      {lensingSpriteLight.sources.map((source) => (
-        <source
-          key={source.type}
-          media="(prefers-color-scheme: light)"
-          srcSet={source.srcSet}
-          sizes="768px"
-          type={source.type}
-        />
-      ))}
-      <source media="(prefers-color-scheme: light)" srcSet={lensingSpriteLight.src} />
-      {lensingSpriteDark.sources.map((source) => (
-        <source key={source.type} srcSet={source.srcSet} sizes="768px" type={source.type} />
-      ))}
-      <img
-        src={lensingSpriteDark.src}
-        width={lensingSpriteDark.width}
-        height={lensingSpriteDark.height}
-        sizes="768px"
-        alt=""
-        decoding="async"
-        onLoad={onLoad}
-      />
-    </picture>
   );
 }

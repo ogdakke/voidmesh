@@ -6,8 +6,8 @@ import { Drawer } from "#ui/drawer/index.tsx";
 import { MoreVert } from "iconoir-react";
 import { useState } from "react";
 import "./settings.mobile.css";
+import { CanvasLensingPreviews } from "./canvas-lensing-previews.tsx";
 import {
-  CanvasLensingSelect,
   FancyDeleteToggle,
   FeedbackLink,
   HapticsToggle,
@@ -64,6 +64,7 @@ export default function SettingsDrawer() {
           <div className="settings-drawer-header">
             <h3 className="settings-drawer-title">Settings</h3>
           </div>
+          <CanvasLensingPreviews layout="mobile" />
           <div className="settings-drawer-switch">
             <SnapToGridToggle />
           </div>
@@ -72,9 +73,6 @@ export default function SettingsDrawer() {
           </div>
           <div className="settings-drawer-switch">
             <HapticsToggle />
-          </div>
-          <div className="settings-drawer-switch">
-            <CanvasLensingSelect />
           </div>
           <hr className="divider" />
           <div className="settings-drawer-ext-item field-label">

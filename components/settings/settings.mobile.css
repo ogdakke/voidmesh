@@ -28,7 +28,7 @@
 .settings-drawer-title {
   text-align: center;
   font-weight: 600;
-  margin: var(--spacing-1) 0 var(--spacing-3);
+  margin: var(--spacing-1) 0 var(--spacing-4);
 }
 
 .settings-drawer-workspace-actions {
