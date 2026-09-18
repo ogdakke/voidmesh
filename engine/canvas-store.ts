@@ -1134,28 +1134,6 @@ export class CanvasStore extends Store<CanvasState> {
     this.state.entitiesDirty.add(entityId);
     this.state.playbackVersion++;
     this.notify();
-
-    // A paused seek can render once before the browser has decoded the requested frame.
-    // Mark it dirty again when that frame is actually available so renderer-owned video
-    // textures cannot remain stuck on the pre-seek image.
-    if (!entity.playback?.isPlaying) {
-      const markDecodedFrameDirty = () => {
-        if (this.state.entities.get(entityId) !== entity) return;
-        entity.textureDirty = true;
-        this.state.entitiesDirty.add(entityId);
-        this.notifyEntityChange();
-      };
-      const requestVideoFrameCallback = (
-        video as {
-          requestVideoFrameCallback?: (callback: VideoFrameRequestCallback) => number;
-        }
-      ).requestVideoFrameCallback;
-      if (requestVideoFrameCallback) {
-        requestVideoFrameCallback.call(video, markDecodedFrameDirty);
-      } else {
-        video.addEventListener("seeked", markDecodedFrameDirty, { once: true });
-      }
-    }
   }
 
   /**

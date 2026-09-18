@@ -71,6 +71,8 @@ export interface EntityTextureResidencyStats {
   sourceTextureAllocations: number;
   processedTextureAllocations: number;
   sourceUploads: number;
+  externalTextureImports: number;
+  externalTextureIdentityReuses: number;
   evictions: number;
 }
 
@@ -85,6 +87,8 @@ export class EntityTexturePipeline {
   #sourceTextureAllocations = 0;
   #processedTextureAllocations = 0;
   #sourceUploads = 0;
+  #externalTextureImports = 0;
+  #externalTextureIdentityReuses = 0;
   #evictions = 0;
   #allowLodTransitions = false;
   #lodTransitionsRemaining = 0;
@@ -95,6 +99,7 @@ export class EntityTexturePipeline {
   readonly #residentTextureEntries = new WeakMap<GPUTexture, CachedEntityTexture>();
   readonly #lodCacheLookups = new Map<object, LodCacheLookup>();
   #entityContentRevisions = new Map<string, number>();
+  #lastExternalTextures = new Map<string, GPUExternalTexture>();
   #gifResizeSurfaces = new Map<string, GifResizeSurface>();
   #renderEntityView: EffectRenderEntity | null = null;
   #sourceBytes = 0;
@@ -184,8 +189,7 @@ export class EntityTexturePipeline {
   ): EntityCompositionSource | null {
     const width = renderSize.width;
     const height = renderSize.height;
-    const useExternalVideoSource =
-      entity.mediaSource.type === MediaType.video && !entity.shaderParams.showOriginal;
+    const useExternalVideoSource = entity.mediaSource.type === MediaType.video;
     const contentRevision = this.#resolveContentRevision(entity);
 
     // Time-based shaders need the shader pass every canvas render. Processed videos do not:
@@ -252,6 +256,12 @@ export class EntityTexturePipeline {
         source: video,
         colorSpace: this.#colorConfig.textureColorSpace,
       });
+      this.#externalTextureImports++;
+      if (this.#lastExternalTextures.get(entity.id) === externalTexture) {
+        this.#externalTextureIdentityReuses++;
+      } else {
+        this.#lastExternalTextures.set(entity.id, externalTexture);
+      }
 
       if (entity.shaderParams.showOriginal) {
         this.#releaseEntityProcessedTexture(entity.id, false);
@@ -290,7 +300,7 @@ export class EntityTexturePipeline {
           contentRevision,
           entityIds: new Set(),
         };
-        this.#uploadEntitySourceToTexture(entity, sourceTexture, width, height);
+        this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
         if (entity.mediaSource.type === MediaType.image)
           this.#onImmutableSourceUpload?.(sourceTexture, encoder);
         this.#sourceTextures.set(sourceKey, cachedSource);
@@ -301,7 +311,7 @@ export class EntityTexturePipeline {
         sourceTexture = cachedSource.texture;
         cachedSource.lastUsedFrame = this.#currentFrame;
         if (cachedSource.contentRevision !== contentRevision) {
-          this.#uploadEntitySourceToTexture(entity, sourceTexture, width, height);
+          this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
           cachedSource.contentRevision = contentRevision;
         }
       }
@@ -433,10 +443,11 @@ export class EntityTexturePipeline {
     desired: { width: number; height: number },
     needsContinuousRender: boolean,
   ): EntityCompositionSource | null {
-    const hasReusableSource =
-      entity.mediaSource.type === MediaType.image ||
-      (entity.mediaSource.type === MediaType.video && entity.shaderParams.showOriginal);
-    if (entity.textureDirty || !hasReusableSource || needsContinuousRender) {
+    if (
+      entity.textureDirty ||
+      entity.mediaSource.type !== MediaType.image ||
+      needsContinuousRender
+    ) {
       return null;
     }
 
@@ -445,8 +456,8 @@ export class EntityTexturePipeline {
       : this.#entityProcessedBindings.get(entity.id);
     if (
       !entry ||
-      (entity.mediaSource.type !== MediaType.video &&
-        (entry.texture.width !== desired.width || entry.texture.height !== desired.height))
+      entry.texture.width !== desired.width ||
+      entry.texture.height !== desired.height
     ) {
       return null;
     }
@@ -471,9 +482,8 @@ export class EntityTexturePipeline {
     output: { width: number; height: number } = { width: 0, height: 0 },
   ): { width: number; height: number } | null {
     if (entity.shaderParams.showOriginal && entity.mediaSource.type === MediaType.video) {
-      const video = entity.mediaSource.videoElement;
-      output.width = video.videoWidth || entity.originalSize.width;
-      output.height = video.videoHeight || entity.originalSize.height;
+      output.width = desired.width;
+      output.height = desired.height;
       return output;
     }
 
@@ -569,6 +579,8 @@ export class EntityTexturePipeline {
       sourceTextureAllocations: this.#sourceTextureAllocations,
       processedTextureAllocations: this.#processedTextureAllocations,
       sourceUploads: this.#sourceUploads,
+      externalTextureImports: this.#externalTextureImports,
+      externalTextureIdentityReuses: this.#externalTextureIdentityReuses,
       evictions: this.#evictions,
     };
   }
@@ -580,6 +592,7 @@ export class EntityTexturePipeline {
     this.#releaseEntitySourceTexture(entityId);
 
     this.#entityContentRevisions.delete(entityId);
+    this.#lastExternalTextures.delete(entityId);
     const resizeSurface = this.#gifResizeSurfaces.get(entityId);
     if (resizeSurface) {
       resizeSurface.canvas.width = 1;
@@ -621,29 +634,22 @@ export class EntityTexturePipeline {
     }
     this.#gifResizeSurfaces.clear();
     this.#entityContentRevisions.clear();
+    this.#lastExternalTextures.clear();
 
     this.#runtime.destroy();
   }
 
-  #uploadEntitySourceToTexture(
+  #uploadStaticEntitySourceToTexture(
     entity: ShaderCanvasEntity,
     texture: GPUTexture,
     width: number,
     height: number,
   ): void {
-    let source: CanvasImageSource;
-    if (entity.mediaSource.type === MediaType.video) {
-      source = entity.mediaSource.videoElement;
-    } else {
-      source =
-        entity.mediaSource.type === MediaType.image
-          ? entity.mediaSource.asset.imageBitmap
-          : entity.imageBitmap;
-    }
-    if (
-      entity.mediaSource.type !== MediaType.video &&
-      (source.width !== width || source.height !== height)
-    ) {
+    let source: CanvasImageSource =
+      entity.mediaSource.type === MediaType.image
+        ? entity.mediaSource.asset.imageBitmap
+        : entity.imageBitmap;
+    if (source.width !== width || source.height !== height) {
       const surface =
         entity.mediaSource.type === MediaType.gif
           ? this.#getGifResizeSurface(entity.id, width, height)
@@ -781,7 +787,7 @@ export class EntityTexturePipeline {
       case MediaType.svg:
         return `svg:${entity.id}:${width}x${height}`;
       case MediaType.video:
-        return `video:${entity.id}:${width}x${height}`;
+        throw new Error("External video textures do not have source cache keys");
     }
   }
 

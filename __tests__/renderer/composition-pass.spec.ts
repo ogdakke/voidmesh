@@ -375,6 +375,48 @@ describe("CompositionPass instancing", () => {
     entities.forEach(releaseImageEntity);
   });
 
+  test("reuses an external composition bind group while the texture identity is revived", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const entity = createTestEntity({ id: "external-cache", mediaType: "video" });
+    const firstFrame = {} as GPUExternalTexture;
+    const secondFrame = {} as GPUExternalTexture;
+    const options = {
+      entity,
+      source: { kind: "external" as const, texture: firstFrame },
+      isSelected: false,
+      debugMode: false,
+      positionOffsetX: 0,
+      positionOffsetY: 0,
+      visualScale: 1,
+    };
+    const initialBindGroupCount = device.createBindGroup.mock.calls.length;
+
+    const first = pass.prepareDrawItem(options);
+    const firstBindGroup = first.bindGroup;
+    const revived = pass.prepareDrawItem(options);
+
+    expect(revived.bindGroup).toBe(firstBindGroup);
+    expect(device.createBindGroup).toHaveBeenCalledTimes(initialBindGroupCount + 1);
+    expect(pass.getStats()).toMatchObject({
+      externalBindGroupCreations: 1,
+      externalBindGroupReuses: 1,
+    });
+
+    const next = pass.prepareDrawItem({
+      ...options,
+      source: { kind: "external", texture: secondFrame },
+    });
+    expect(next.bindGroup).not.toBe(firstBindGroup);
+    expect(device.createBindGroup).toHaveBeenCalledTimes(initialBindGroupCount + 2);
+    expect(pass.getStats()).toMatchObject({
+      externalBindGroupCreations: 2,
+      externalBindGroupReuses: 1,
+    });
+
+    pass.destroy();
+  });
+
   test("draws adjacent entities sharing one texture as one instance batch", () => {
     const { device, instanceBuffer } = createDevice();
     const pass = createPass(device);
@@ -527,6 +569,8 @@ describe("CompositionPass instancing", () => {
       opacityProofs: 0,
       opacityBufferBytes: 0,
       layerTextureBytes: 0,
+      externalBindGroupCreations: 0,
+      externalBindGroupReuses: 0,
     });
     expect(secondFramePass.draw).toHaveBeenCalledWith(6, 2, 0, 0);
     expect(first.textureDirty).toBe(false);

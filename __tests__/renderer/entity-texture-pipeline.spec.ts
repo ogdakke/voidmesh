@@ -322,15 +322,15 @@ describe("EntityTexturePipeline shared image sources", () => {
     if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
   });
 
-  test("copies original video frames into one stable composition texture", () => {
+  test("keeps original video frames on the zero-copy external path", () => {
     const entity = createTestEntity({
       id: "original-video",
       mediaType: "video",
       shaderParams: { showOriginal: true },
     });
     entity.textureDirty = true;
-    const sourceTexture = createTexture(200, 150);
-    const device = createDevice([sourceTexture]);
+    const device = createDevice([]);
+    vi.mocked(device.importExternalTexture).mockReturnValue({} as GPUExternalTexture);
     const pipeline = new EntityTexturePipeline({
       device,
       colorConfig,
@@ -338,24 +338,18 @@ describe("EntityTexturePipeline shared image sources", () => {
     });
     const encoder = {} as GPUCommandEncoder;
 
-    expect(pipeline.renderEntityToTexture(entity, encoder)).toEqual({
-      kind: "texture",
-      texture: sourceTexture,
-    });
+    expect(pipeline.renderEntityToTexture(entity, encoder)?.kind).toBe("external");
     entity.textureDirty = false;
-    expect(pipeline.renderEntityToTexture(entity, encoder)).toEqual({
-      kind: "texture",
-      texture: sourceTexture,
-    });
-    entity.textureDirty = true;
-    expect(pipeline.renderEntityToTexture(entity, encoder)).toEqual({
-      kind: "texture",
-      texture: sourceTexture,
-    });
+    expect(pipeline.renderEntityToTexture(entity, encoder)?.kind).toBe("external");
 
-    expect(device.createTexture).toHaveBeenCalledOnce();
-    expect(device.queue.copyExternalImageToTexture).toHaveBeenCalledTimes(2);
-    expect(device.importExternalTexture).not.toHaveBeenCalled();
+    expect(device.createTexture).not.toHaveBeenCalled();
+    expect(device.queue.copyExternalImageToTexture).not.toHaveBeenCalled();
+    expect(device.importExternalTexture).toHaveBeenCalledTimes(2);
+    expect(pipeline.getResidencyStats()).toMatchObject({
+      sourceUploads: 0,
+      externalTextureImports: 2,
+      externalTextureIdentityReuses: 1,
+    });
 
     pipeline.destroy();
   });
