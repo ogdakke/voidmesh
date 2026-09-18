@@ -35,6 +35,11 @@ interface ScratchTextures {
   composite: GPUTexture;
 }
 
+export interface WlurEncodeOptions {
+  /** Reuse a caller-owned output view, such as the current swapchain view. */
+  outputView?: GPUTextureView;
+}
+
 export class WlurPass {
   #device: GPUDevice;
   #format: GPUTextureFormat;
@@ -138,6 +143,7 @@ export class WlurPass {
     width: number,
     height: number,
     params: WlurParams,
+    options: WlurEncodeOptions = {},
   ): void {
     this.initialize();
 
@@ -168,7 +174,7 @@ export class WlurPass {
     this.#updateCurveTexture(baseCurve, tintCurve, mixCurve);
 
     if (resolvedParams.radius <= 0.001 && resolvedParams.noise <= 0.001) {
-      this.#encodeCopyPass(encoder, inputTexture, outputTexture);
+      this.#encodeCopyPass(encoder, inputTexture, outputTexture, options.outputView);
       return;
     }
 
@@ -246,7 +252,13 @@ export class WlurPass {
       resolvedParams.tint?.color,
       resolvedParams.tint?.amount ?? 0,
     );
-    this.#encodeCompositePass(encoder, inputTexture, scratch.blurOutput, compositeTarget);
+    this.#encodeCompositePass(
+      encoder,
+      inputTexture,
+      scratch.blurOutput,
+      compositeTarget,
+      resolvedParams.noise <= 0.001 ? options.outputView : undefined,
+    );
 
     if (resolvedParams.noise <= 0.001) {
       return;
@@ -260,7 +272,7 @@ export class WlurPass {
       directionIndex,
       resolvedParams.noise,
     );
-    this.#encodeNoisePass(encoder, scratch.composite, outputTexture);
+    this.#encodeNoisePass(encoder, scratch.composite, outputTexture, options.outputView);
   }
 
   destroy(): void {
@@ -700,6 +712,7 @@ export class WlurPass {
     encoder: GPUCommandEncoder,
     sourceTexture: GPUTexture,
     destinationTexture: GPUTexture,
+    destinationView?: GPUTextureView,
   ): void {
     let bindGroup = this.#copyBindings.get(sourceTexture);
     if (!bindGroup) {
@@ -718,7 +731,7 @@ export class WlurPass {
       label: `${this.#label} copy pass`,
       colorAttachments: [
         {
-          view: this.#getTextureView(destinationTexture),
+          view: destinationView ?? this.#getTextureView(destinationTexture),
           loadOp: "clear",
           storeOp: "store",
           clearValue: { r: 0, g: 0, b: 0, a: 0 },
@@ -784,6 +797,7 @@ export class WlurPass {
     originalTexture: GPUTexture,
     blurredTexture: GPUTexture,
     destinationTexture: GPUTexture,
+    destinationView?: GPUTextureView,
   ): void {
     let binding = this.#compositeBindings.get(originalTexture);
     if (binding?.blurred !== blurredTexture) {
@@ -808,7 +822,7 @@ export class WlurPass {
       label: `${this.#label} composite pass`,
       colorAttachments: [
         {
-          view: this.#getTextureView(destinationTexture),
+          view: destinationView ?? this.#getTextureView(destinationTexture),
           loadOp: "clear",
           storeOp: "store",
           clearValue: { r: 0, g: 0, b: 0, a: 0 },
@@ -826,6 +840,7 @@ export class WlurPass {
     encoder: GPUCommandEncoder,
     sourceTexture: GPUTexture,
     destinationTexture: GPUTexture,
+    destinationView?: GPUTextureView,
   ): void {
     let binding = this.#noiseBinding;
     if (binding?.source !== sourceTexture) {
@@ -849,7 +864,7 @@ export class WlurPass {
       label: `${this.#label} noise pass`,
       colorAttachments: [
         {
-          view: this.#getTextureView(destinationTexture),
+          view: destinationView ?? this.#getTextureView(destinationTexture),
           loadOp: "clear",
           storeOp: "store",
           clearValue: { r: 0, g: 0, b: 0, a: 0 },

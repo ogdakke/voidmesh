@@ -23,6 +23,27 @@ interface EncodeWlurOverlayOptions {
   contentDirty: boolean;
 }
 
+export interface WlurSceneTarget {
+  texture: GPUTexture;
+  view: GPUTextureView;
+}
+
+export interface WlurOverlayPassStats {
+  blurRefreshes: number;
+  blurReuses: number;
+  composites: number;
+  directPresents: number;
+  convertedPresents: number;
+}
+
+interface WlurOverlayTextures {
+  width: number;
+  height: number;
+  sceneTarget: WlurSceneTarget | null;
+  input: GPUTexture | null;
+  output: GPUTexture | null;
+}
+
 export class WlurOverlayPass {
   readonly #device: GPUDevice;
   readonly #canvasFormat: GPUTextureFormat;
@@ -32,15 +53,15 @@ export class WlurOverlayPass {
   readonly #presentCopyPass: CopyPass;
 
   #config: WlurOverlayConfig | null = null;
-  #textures: {
-    width: number;
-    height: number;
-    input: GPUTexture | null;
-    output: GPUTexture;
-  } | null = null;
+  #textures: WlurOverlayTextures | null = null;
   #cacheValid = false;
   #cacheKey = "";
   #lastQualityKey = "";
+  #blurRefreshes = 0;
+  #blurReuses = 0;
+  #composites = 0;
+  #directPresents = 0;
+  #convertedPresents = 0;
 
   constructor(options: WlurOverlayPassOptions) {
     this.#device = options.device;
@@ -67,9 +88,29 @@ export class WlurOverlayPass {
     this.invalidateCache();
   }
 
+  getSceneTarget(width: number, height: number, devicePixelRatio: number): WlurSceneTarget | null {
+    const config = resolveWlurOverlayRuntimeConfig(this.#config, height, devicePixelRatio);
+    if (!config || this.#canvasFormat !== this.#intermediateFormat) return null;
+    const textures = this.#getOrCreateTextures(width, height);
+    if (!textures.sceneTarget) {
+      throw new Error("Wlur direct scene target is unavailable");
+    }
+    return textures.sceneTarget;
+  }
+
   invalidateCache(): void {
     this.#cacheValid = false;
     this.#cacheKey = "";
+  }
+
+  getStats(): WlurOverlayPassStats {
+    return {
+      blurRefreshes: this.#blurRefreshes,
+      blurReuses: this.#blurReuses,
+      composites: this.#composites,
+      directPresents: this.#directPresents,
+      convertedPresents: this.#convertedPresents,
+    };
   }
 
   encode(options: EncodeWlurOverlayOptions): boolean {
@@ -83,14 +124,6 @@ export class WlurOverlayPass {
       return false;
     }
 
-    const textures = this.#getOrCreateTextures(options.width, options.height);
-    const cacheKey = this.#buildCacheKey(options.width, options.height, resolvedConfig);
-    const needsUpdate =
-      !resolvedConfig.cache ||
-      !this.#cacheValid ||
-      this.#cacheKey !== cacheKey ||
-      options.contentDirty;
-
     const qualityKey = [
       resolvedConfig.quality.kernelSize,
       resolvedConfig.quality.resolutionScale,
@@ -100,26 +133,43 @@ export class WlurOverlayPass {
       this.#lastQualityKey = qualityKey;
     }
 
+    const textures = this.#getOrCreateTextures(options.width, options.height);
+    const cacheKey = this.#buildCacheKey(options.width, options.height, resolvedConfig);
+    const directPresentation = this.#canvasFormat === this.#intermediateFormat;
+    const needsUpdate =
+      directPresentation ||
+      !resolvedConfig.cache ||
+      !this.#cacheValid ||
+      this.#cacheKey !== cacheKey ||
+      options.contentDirty;
+
     if (needsUpdate) {
       let wlurSource = options.sourceTexture;
-      if (this.#canvasFormat !== this.#intermediateFormat) {
-        if (!textures.input) {
-          throw new Error("Wlur format conversion texture is unavailable");
+      let wlurOutput = options.targetTexture;
+      if (directPresentation) {
+        if (wlurSource !== textures.sceneTarget?.texture) {
+          throw new Error("Wlur direct presentation requires its renderer-owned scene target");
+        }
+      } else {
+        if (!textures.input || !textures.output) {
+          throw new Error("Wlur format conversion textures are unavailable");
         }
         this.#sourceCopyPass.encode(options.encoder, options.sourceTexture, textures.input);
         wlurSource = textures.input;
+        wlurOutput = textures.output;
       }
 
-      // Matching formats sample the texture-bindable canvas directly before
-      // the later present copy writes back to that canvas texture.
       this.#wlurPass.encode(
         options.encoder,
         wlurSource,
-        textures.output,
+        wlurOutput,
         options.width,
         options.height,
         resolvedConfig.params,
+        directPresentation ? { outputView: options.targetView } : {},
       );
+      this.#blurRefreshes++;
+      this.#composites++;
 
       if (resolvedConfig.cache) {
         this.#cacheValid = true;
@@ -127,16 +177,15 @@ export class WlurOverlayPass {
       } else {
         this.invalidateCache();
       }
+    } else {
+      this.#blurReuses++;
     }
 
-    if (this.#canvasFormat === this.#intermediateFormat) {
-      options.encoder.copyTextureToTexture(
-        { texture: textures.output },
-        { texture: options.targetTexture },
-        { width: options.width, height: options.height },
-      );
+    if (directPresentation) {
+      this.#directPresents++;
     } else {
-      this.#presentCopyPass.encode(options.encoder, textures.output, options.targetView);
+      this.#presentCopyPass.encode(options.encoder, textures.output!, options.targetView);
+      this.#convertedPresents++;
     }
 
     return true;
@@ -155,15 +204,13 @@ export class WlurOverlayPass {
   #destroyTextures(): void {
     if (!this.#textures) return;
 
+    this.#textures.sceneTarget?.texture.destroy();
     this.#textures.input?.destroy();
-    this.#textures.output.destroy();
+    this.#textures.output?.destroy();
     this.#textures = null;
   }
 
-  #getOrCreateTextures(
-    width: number,
-    height: number,
-  ): { input: GPUTexture | null; output: GPUTexture } {
+  #getOrCreateTextures(width: number, height: number): WlurOverlayTextures {
     const cached = this.#textures;
     if (cached && cached.width === width && cached.height === height) {
       return cached;
@@ -172,27 +219,45 @@ export class WlurOverlayPass {
     this.#destroyTextures();
     this.invalidateCache();
 
-    const input =
-      this.#canvasFormat === this.#intermediateFormat
-        ? null
-        : this.#device.createTexture({
-            label: `Wlur format conversion (${width}x${height})`,
-            size: [width, height],
-            format: this.#intermediateFormat,
-            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-          });
+    const directPresentation = this.#canvasFormat === this.#intermediateFormat;
+    const sceneTexture = directPresentation
+      ? this.#device.createTexture({
+          label: `Wlur scene (${width}x${height})`,
+          size: [width, height],
+          format: this.#intermediateFormat,
+          usage:
+            GPUTextureUsage.TEXTURE_BINDING |
+            GPUTextureUsage.RENDER_ATTACHMENT |
+            GPUTextureUsage.COPY_SRC,
+        })
+      : null;
+    const sceneTarget = sceneTexture
+      ? { texture: sceneTexture, view: sceneTexture.createView() }
+      : null;
+    const input = directPresentation
+      ? null
+      : this.#device.createTexture({
+          label: `Wlur format conversion (${width}x${height})`,
+          size: [width, height],
+          format: this.#intermediateFormat,
+          usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+        });
+    const output = directPresentation
+      ? null
+      : this.#device.createTexture({
+          label: `Wlur output (${width}x${height})`,
+          size: [width, height],
+          format: this.#intermediateFormat,
+          usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+        });
 
-    const output = this.#device.createTexture({
-      label: `Wlur output (${width}x${height})`,
-      size: [width, height],
-      format: this.#intermediateFormat,
-      usage:
-        GPUTextureUsage.TEXTURE_BINDING |
-        GPUTextureUsage.RENDER_ATTACHMENT |
-        GPUTextureUsage.COPY_SRC,
-    });
-
-    this.#textures = { width, height, input, output };
+    this.#textures = {
+      width,
+      height,
+      sceneTarget,
+      input,
+      output,
+    };
     return this.#textures;
   }
 
