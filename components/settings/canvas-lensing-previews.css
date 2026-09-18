@@ -246,6 +246,10 @@
   scroll-snap-align: start;
 }
 
+.settings-drawer-inner .settings-lensing-preview-option[data-selected] .settings-lensing-preview {
+  outline-color: light-dark(var(--gray-900), var(--gray-1200));
+}
+
 .settings-drawer-inner .settings-lensing-preview-label {
   margin-top: var(--spacing-1);
 }
