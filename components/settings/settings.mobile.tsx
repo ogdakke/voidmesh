@@ -27,17 +27,26 @@ export default function SettingsDrawer() {
     isExporting,
     isImporting,
   } = useStudioFile();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(location.hash.slice(1) === "settings");
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    setOpen(nextOpen);
+    history.replaceState(
+      null,
+      "",
+      `${location.pathname}${location.search}${nextOpen ? "#settings" : ""}`,
+    );
+  };
 
   const importAndClose = (onSuccess?: () => void) => {
     importStudioFile(() => {
       onSuccess?.();
-      setOpen(false);
+      handleOpenChange(false);
     });
   };
 
   return (
-    <Drawer.Root open={open} onOpenChange={setOpen}>
+    <Drawer.Root open={open} onOpenChange={handleOpenChange}>
       <Drawer.Trigger
         render={(props) => (
           <Button
@@ -81,7 +90,7 @@ export default function SettingsDrawer() {
           <hr className="divider" />
           <div className="settings-drawer-ext-item field-label">
             <LinkItem>
-              <RedoOnboardingLink onDone={() => setOpen(false)} />
+              <RedoOnboardingLink onDone={() => handleOpenChange(false)} />
             </LinkItem>
           </div>
           <WorkspaceActions

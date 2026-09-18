@@ -17,11 +17,6 @@ app-lightbox[data-transitioning="image"]::part(image) {
   view-transition-name: lightbox-image;
 }
 
-/* prevent scroll on document when there is a open dialog */
-html:has(dialog[open]) {
-  overflow: hidden;
-}
-
 body {
   font-family: var(--sans-serif-rounded);
   background: var(--background);
@@ -85,6 +80,10 @@ html {
   -webkit-user-select: none;
   -moz-user-select: none;
   user-select: none;
+}
+
+html[data-overlay-open] .app-loading-container {
+  visibility: hidden;
 }
 
 .app-loading {

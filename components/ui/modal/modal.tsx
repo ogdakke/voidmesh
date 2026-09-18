@@ -3,6 +3,7 @@
 import { Dialog as BaseDialog } from "@base-ui/react/dialog";
 import clsx from "clsx";
 import { type ComponentProps, type ComponentPropsWithoutRef, type PropsWithChildren } from "react";
+import { useDocumentOverlayState } from "../overlay-state.ts";
 import "./modal.css";
 
 export interface ModalProps extends Omit<
@@ -14,6 +15,8 @@ export interface ModalProps extends Omit<
 }
 
 function Root({ open, onClose, children, className, ...props }: PropsWithChildren<ModalProps>) {
+  useDocumentOverlayState(open);
+
   return (
     <BaseDialog.Root
       open={open}

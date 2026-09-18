@@ -9,11 +9,17 @@ import { Drawer as BaseDrawer } from "@base-ui/react/drawer";
 import clsx from "clsx";
 import "./drawer.css";
 import type { ComponentProps, PropsWithChildren } from "react";
+import { useDocumentOverlayState } from "../overlay-state.ts";
 
 interface DrawerProps extends DrawerPopupProps {
   handle?: boolean;
   backdrop?: boolean;
 }
+
+const Root = ({ open = false, ...props }: ComponentProps<typeof BaseDrawer.Root>) => {
+  useDocumentOverlayState(open);
+  return <BaseDrawer.Root {...props} open={open} />;
+};
 
 const Popup = ({ children, handle = true, backdrop = true, ...props }: DrawerProps) => {
   return (
@@ -65,7 +71,7 @@ const DefaultSnapContentArea = ({
 };
 
 export const Drawer = {
-  Root: BaseDrawer.Root,
+  Root,
   Trigger: BaseDrawer.Trigger,
   Title,
   Close,
