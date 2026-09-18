@@ -19,7 +19,7 @@ function PreferencesMenu() {
       role="presentation"
       style={{
         display: "inline-block",
-        background: "light-dark(var(--gray-100), var(--gray-50))",
+        background: "var(--surface)",
         borderRadius: "99px",
         width: "1.5em",
         height: "1.5em",

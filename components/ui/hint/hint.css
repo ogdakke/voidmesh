@@ -4,7 +4,7 @@
     "title title close"
     "desc desc desc"
     "action action action";
-  background: light-dark(var(--gray-100), var(--gray-50));
+  background: var(--surface);
   padding: var(--spacing-1) var(--spacing-2);
   border-radius: var(--radius-lg);
   font-size: var(--text-sm);

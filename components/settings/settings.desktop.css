@@ -238,7 +238,7 @@
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: var(--gray-50);
+  background: var(--surface);
 }
 
 .desktop-settings-row,
