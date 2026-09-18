@@ -24,10 +24,23 @@ export default function DesktopAboutContent({
   };
 
   return (
-    <Modal.Root open={showModal} onClose={onClose} className="desktop-about-modal">
-      <Button variant="secondary" className="desktop-about-modal__close" onClick={onClose}>
+    <Modal.Root
+      open={showModal}
+      onClose={onClose}
+      aria-label="About Voidmesh"
+      className="desktop-about-modal"
+    >
+      <Modal.Close
+        render={
+          <Button
+            aria-label="Close About"
+            variant="secondary"
+            className="desktop-about-modal__close"
+          />
+        }
+      >
         <Xmark />
-      </Button>
+      </Modal.Close>
       <div ref={contentRef} className="about-carousel about">
         <section id="about">
           <AboutSection />

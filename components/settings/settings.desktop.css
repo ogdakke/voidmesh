@@ -1,40 +1,307 @@
-@scope (.desktop-settings) {
-  .desktop-settings-modal {
-    min-height: clamp(200px, 60dvh, 700px);
-    display: flex;
-    flex-direction: column;
+.desktop-settings-modal[data-open] {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--background);
+  border: none;
+  overflow: hidden;
+}
+
+.desktop-settings-modal__close {
+  position: absolute;
+  top: var(--spacing-5);
+  right: max(var(--spacing-3), calc((100% - 768px) / 2));
+  z-index: 2;
+}
+
+.desktop-settings-content {
+  box-sizing: border-box;
+  width: 100%;
+  flex: 1;
+  overflow-y: auto;
+  padding: clamp(32px, 8dvh, 72px) max(var(--spacing-4), calc((100% - 768px) / 2));
+  padding-bottom: var(--spacing-10);
+}
+
+.settings-trigger {
+  filter: drop-shadow(var(--floaty-shadow));
+  will-change: transform;
+}
+
+.desktop-settings-main {
+  width: 100%;
+
+  & > h1 {
+    margin: 0 0 var(--spacing-10);
+    font-size: var(--text-xl);
+    font-weight: 500;
+    letter-spacing: -0.02em;
+  }
+}
+
+.desktop-settings-section {
+  margin-top: var(--spacing-8);
+
+  &:first-of-type {
+    margin-top: 0;
   }
 
-  .settings-trigger {
-    filter: drop-shadow(var(--floaty-shadow));
-    will-change: transform;
+  & > h2 {
+    margin: 0 0 var(--spacing-3);
+    color: var(--gray-1100);
+    font-size: var(--text-sm);
+    font-weight: 600;
+  }
+}
+
+.desktop-settings-previews {
+  min-width: 0;
+  margin: 0 0 var(--spacing-5);
+  padding: 0;
+  border: 0;
+
+  & > legend {
+    margin: 0 0 var(--spacing-3);
+    padding: 0;
+    color: var(--gray-1300);
+    font-size: var(--text-sm);
+    font-weight: 400;
+  }
+}
+
+.desktop-settings-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--spacing-3);
+
+  :where(.desktop-settings-preview-option) {
+    display: block;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+}
+
+.desktop-settings-preview-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.desktop-settings-sprite-preloader {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.desktop-settings-preview-label {
+  display: block;
+  margin-top: var(--spacing-2);
+  color: var(--gray-900);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+.desktop-settings-preview-option[data-selected] .desktop-settings-preview-label {
+  color: var(--gray-1300);
+}
+
+.desktop-settings-preview {
+  position: relative;
+  aspect-ratio: 1.55;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+
+  :where(picture, img) {
+    display: block;
+    height: 100%;
   }
 
-  .desktop-settings-title {
-    text-align: center;
-    margin: var(--spacing-1) 0 var(--spacing-3);
+  :where(picture) {
+    width: 100%;
+    overflow: hidden;
   }
 
-  .desktop-settings-switch,
-  .desktop-settings-ext-item {
-    padding: var(--spacing-1) var(--spacing-2);
-    display: grid;
-    grid-template-columns: 1fr auto;
-    grid-auto-flow: row;
-    align-items: center;
+  :where(img) {
+    position: absolute;
+    top: 0;
+    width: 300%;
+    max-width: none;
+  }
 
-    @media (hover: hover) {
-      &:hover {
-        color: var(--gray-1200);
-      }
+  &[data-lensing="off"] :where(img) {
+    left: 0;
+  }
+
+  &[data-lensing="subtle"] :where(img) {
+    left: -100%;
+  }
+
+  &[data-lensing="extreme"] :where(img) {
+    left: -200%;
+  }
+}
+
+.desktop-settings-preview-surface {
+  position: relative;
+  width: 100%;
+  height: 100%;
+
+  &::before {
+    content: "";
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    pointer-events: none;
+    backdrop-filter: blur(14px);
+    opacity: 1;
+    transition: opacity 100ms ease-out;
+  }
+
+  &[data-loaded]::before {
+    opacity: 0;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    &::before {
+      transition: none;
     }
   }
+}
 
-  .desktop-settings-link {
-    color: var(--gray-900);
+.desktop-settings-preview-option[data-selected] .desktop-settings-preview {
+  outline: 2px solid var(--primary-50);
+  outline-offset: -2px;
+}
+
+.desktop-settings-preview-input:focus-visible + .desktop-settings-preview {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.desktop-settings-group {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--gray-50);
+}
+
+.desktop-settings-row,
+.desktop-settings-action {
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--border);
+
+  &:last-child {
+    border-bottom: none;
+  }
+}
+
+.desktop-settings-row {
+  min-height: 52px;
+  padding: 0 var(--spacing-4);
+  display: flex;
+  align-items: center;
+
+  :where(.ui-checkbox, .native-select-field) {
+    width: 100%;
   }
 
-  .flex {
-    display: flex;
+  :where(.ui-checkbox-label, .settings-label) {
+    color: var(--gray-1300);
   }
+}
+
+.desktop-settings-row input[switch] {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  appearance: none;
+  border: none;
+  border-radius: 999px;
+  background: var(--gray-400);
+  transition: background 160ms ease-out;
+
+  &::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: white;
+    box-shadow: 0 1px 3px rgb(0 0 0 / 0.35);
+    transition: transform 160ms ease-out;
+  }
+
+  &:checked {
+    background: var(--primary);
+  }
+
+  &:checked::after {
+    transform: translateX(14px);
+  }
+}
+
+.desktop-settings-action {
+  min-height: 52px;
+  padding: 0 var(--spacing-4);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+
+  @media (hover: hover) {
+    &:hover {
+      color: var(--gray-1200);
+    }
+  }
+}
+
+.desktop-settings-action :where(button, a) {
+  width: 100%;
+  color: var(--gray-1300);
+  text-align: left;
+}
+
+.desktop-settings-link {
+  color: var(--gray-1300);
+}
+
+.desktop-settings-onboarding {
+  min-height: 64px;
+  padding: var(--spacing-2) var(--spacing-4);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--spacing-5);
+  align-items: center;
+}
+
+.desktop-settings-option-label {
+  display: block;
+  color: var(--gray-1300);
+  font-size: var(--text-sm);
+  line-height: 1.25rem;
+}
+
+.desktop-settings-option-description {
+  margin-top: 2px;
+  color: var(--gray-800);
+  font-size: var(--text-xs);
+  line-height: 1.25rem;
 }

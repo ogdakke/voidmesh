@@ -5,6 +5,10 @@
   flex-direction: column;
 }
 
+.attribution {
+  margin-block-start: auto;
+}
+
 .sidebar-controls-overflow {
   overflow-y: auto;
   flex: 1 1 auto;
@@ -111,69 +115,6 @@
 .studio-heading {
   font-size: var(--text);
   font-weight: 500;
-}
-
-.renders-container {
-  overflow: auto;
-  padding: 4px 0 4px 12px;
-
-  :where(p) {
-    padding: 4px 0;
-    font-size: var(--text-sm);
-    color: var(--color-light);
-  }
-}
-
-.render-examples {
-  --box-padding: 24px;
-  display: grid;
-  overflow: auto;
-  grid-template-columns: 1fr;
-  padding-right: 12px;
-
-  :where(app-lightbox) {
-    margin: 0 0 1rem 0;
-  }
-
-  :where(app-lightbox:first-child) {
-    margin-top: calc(-1 * var(--box-padding));
-  }
-
-  :where(app-lightbox:last-child) {
-    margin-bottom: calc(-1 * var(--box-padding));
-  }
-}
-
-.render-examples::before,
-.render-examples::after {
-  content: "";
-  position: sticky;
-  left: 0;
-  width: 100%;
-  height: var(--box-padding);
-  z-index: 1;
-  pointer-events: none;
-  animation: scroll linear;
-  animation-timeline: scroll();
-  animation-fill-mode: both;
-}
-
-.render-examples::before {
-  top: 0;
-  background: linear-gradient(0deg, var(--mask));
-  animation-range: 20px 50px;
-}
-
-.render-examples::after {
-  bottom: 0;
-  background: linear-gradient(180deg, var(--mask));
-  animation-direction: reverse;
-  animation-range: entry 95%;
-}
-
-.render-example-img {
-  height: auto;
-  border-radius: var(--radius);
 }
 
 .sidebar-exit-link {

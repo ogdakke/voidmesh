@@ -1,46 +1,44 @@
 @layer components {
-  .modal {
-    --duration: 100ms;
-
-    inset: 0;
+  .modal-backdrop,
+  .modal-viewport {
     position: fixed;
-    z-index: 99999;
-    margin: auto;
-    padding: 0;
+    inset: 0;
   }
 
-  /*immediate children get normal user-select*/
-  .modal > * {
-    -webkit-user-select: none;
-    user-select: auto;
+  .modal-backdrop {
+    --duration: 100ms;
+
+    z-index: 99998;
+    background: oklch(0% 0 0 / 0.1);
+    opacity: 1;
+    transition: opacity var(--duration) ease-out;
+
+    &[data-starting-style],
+    &[data-ending-style] {
+      opacity: 0;
+    }
+  }
+
+  .modal-viewport {
+    z-index: 99999;
+    display: grid;
+    place-items: center;
+    pointer-events: none;
+  }
+
+  .modal {
+    position: relative;
+    margin: 0;
+    padding: 0;
     pointer-events: auto;
   }
 
-  .modal::backdrop {
-    background: oklch(0% 0 0 / 0.1);
-    backdrop-filter: blur(4px);
-    opacity: 0;
-    transition:
-      opacity var(--duration) ease-out,
-      overlay var(--duration) ease-out allow-discrete,
-      display var(--duration) ease-out allow-discrete;
-  }
-
-  .modal[open]::backdrop {
-    opacity: 1;
-
-    @starting-style {
-      opacity: 0;
-    }
-  }
-
-  .modal[open]:focus-visible {
+  .modal:focus-visible {
     outline: none;
   }
 
-  @starting-style {
-    .modal[open]::backdrop {
-      opacity: 0;
-    }
+  .modal > * {
+    -webkit-user-select: none;
+    user-select: auto;
   }
 }

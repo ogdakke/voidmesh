@@ -1,4 +1,4 @@
-.desktop-about-modal[open] {
+.desktop-about-modal[data-open] {
   width: 100%;
   height: 100%;
   max-width: 100%;
@@ -8,10 +8,6 @@
   background: var(--background);
   border: none;
   overflow: hidden;
-}
-
-.desktop-about-modal::backdrop {
-  backdrop-filter: none;
 }
 
 @keyframes section-fade-no-blur {
@@ -28,6 +24,7 @@
 }
 
 .desktop-about-modal .about-carousel > section {
+  padding-top: clamp(32px, 8dvh, 72px);
   animation:
     section-fade-no-blur linear both,
     scroll-fade linear both;

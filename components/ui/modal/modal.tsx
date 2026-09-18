@@ -1,45 +1,35 @@
 // oxlint-disable react/only-export-components -- compound component: sub-components are internal, only the namespace object is exported
 
+import { Dialog as BaseDialog } from "@base-ui/react/dialog";
 import clsx from "clsx";
-import {
-  useEffect,
-  useRef,
-  type ComponentProps,
-  type DialogHTMLAttributes,
-  type PropsWithChildren,
-} from "react";
+import { type ComponentProps, type ComponentPropsWithoutRef, type PropsWithChildren } from "react";
 import "./modal.css";
 
-export interface ModalProps extends DialogHTMLAttributes<HTMLDialogElement> {
+export interface ModalProps extends Omit<
+  ComponentPropsWithoutRef<typeof BaseDialog.Popup>,
+  "children"
+> {
   open: boolean;
+  onClose: () => void;
 }
 
-function Root({ open, ...props }: PropsWithChildren<ModalProps>) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    if (open) {
-      dialogRef.current?.showModal();
-    } else {
-      dialogRef.current?.close();
-    }
-  }, [open]);
+function Root({ open, onClose, children, className, ...props }: PropsWithChildren<ModalProps>) {
   return (
-    // oxlint-disable
-    <dialog
-      ref={dialogRef}
-      onClose={props.onClose}
-      onCancel={props.onCancel}
-      closedby={props.closedby || "any"}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) {
-          e.currentTarget.close();
-        }
+    <BaseDialog.Root
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) onClose();
       }}
-      {...props}
-      className={clsx("modal", props.className)}
     >
-      {props.children}
-    </dialog>
+      <BaseDialog.Portal>
+        <BaseDialog.Backdrop className="modal-backdrop" />
+        <BaseDialog.Viewport className="modal-viewport">
+          <BaseDialog.Popup {...props} className={clsx("modal", className)}>
+            {children}
+          </BaseDialog.Popup>
+        </BaseDialog.Viewport>
+      </BaseDialog.Portal>
+    </BaseDialog.Root>
   );
 }
 
@@ -54,4 +44,5 @@ function Content({ children, className, ...props }: PropsWithChildren<ComponentP
 export const Modal = {
   Root,
   Content,
+  Close: BaseDialog.Close,
 };

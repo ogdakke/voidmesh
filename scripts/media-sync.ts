@@ -27,6 +27,7 @@ async function uploadWithRetry(v: Variant): Promise<void> {
       await put(v.blobPath, v.buffer, {
         access: "public",
         addRandomSuffix: false,
+        allowOverwrite: true,
         contentType: v.contentType,
       });
       return;

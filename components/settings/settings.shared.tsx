@@ -1,4 +1,5 @@
 import { NavArrowRight } from "iconoir-react";
+import { Button } from "#ui/button/button.tsx";
 import { Checkbox } from "#ui/checkbox/index.tsx";
 import { NativeSelect, NativeSelectOption } from "#ui/native-select/index.ts";
 import { useCanvasCommands, useCanvasPreferences } from "#context/use-canvas.ts";
@@ -97,19 +98,33 @@ export function FeedbackLink({ className }: { className?: string }) {
   );
 }
 
-export function RedoOnboardingLink({ onDone }: { onDone?: () => void }) {
+function useRedoOnboarding(onDone?: () => void) {
   const { clearWorkspace } = useCanvasCommands();
 
-  const redoOnboarding = () => {
+  return () => {
     clearWorkspace();
     void resetOnboardingProgress();
     onDone?.();
   };
+}
+
+export function RedoOnboardingLink({ onDone }: { onDone?: () => void }) {
+  const redoOnboarding = useRedoOnboarding(onDone);
 
   return (
     <button type="button" onClick={redoOnboarding}>
       <span>Redo onboarding</span>
     </button>
+  );
+}
+
+export function RedoOnboardingButton({ onDone }: { onDone?: () => void }) {
+  const redoOnboarding = useRedoOnboarding(onDone);
+
+  return (
+    <Button type="button" size="sm" variant="quiet" onClick={redoOnboarding}>
+      Redo onboarding
+    </Button>
   );
 }
 
