@@ -21,7 +21,7 @@ WebGPU rendering, shader execution, composition, resource caching, and export.
 - Pan and zoom should update uniforms rather than rebuild scene data when entity/effect identity is unchanged.
 - Selection/debug flags may live in persistent instance data; transient drag state should use uniforms or bounded patches.
 - Continuous shaders, playing/external media, action-layer effects, callouts, and other dynamic overlays use the normal dynamic path.
-- Original video playback stays on external textures. Do not copy video pixels every frame unless processing requires a renderer-owned output.
+- Original video playback copies each newly decoded frame into a stable renderer-owned texture and reuses it across canvas-only renders. Processed video may use an external texture as its transient shader input, but no video path may recreate external bindings when the decoded frame is unchanged.
 - Preview LOD is screen-space and quantized. Export always uses native media dimensions and must not read a preview-LOD texture.
 - Source and processed textures are keyed by immutable asset/effect identity. Entity IDs track retain/release ownership.
 - Renderer caches and pooled textures are byte-bounded. Eviction and shutdown destroy resources and invalidate dependent bindings.

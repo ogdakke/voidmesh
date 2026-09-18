@@ -184,7 +184,8 @@ export class EntityTexturePipeline {
   ): EntityCompositionSource | null {
     const width = renderSize.width;
     const height = renderSize.height;
-    const useExternalVideoSource = entity.mediaSource.type === MediaType.video;
+    const useExternalVideoSource =
+      entity.mediaSource.type === MediaType.video && !entity.shaderParams.showOriginal;
     const contentRevision = this.#resolveContentRevision(entity);
 
     // Time-based shaders need the shader pass every canvas render. Processed videos do not:
@@ -289,7 +290,7 @@ export class EntityTexturePipeline {
           contentRevision,
           entityIds: new Set(),
         };
-        this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
+        this.#uploadEntitySourceToTexture(entity, sourceTexture, width, height);
         if (entity.mediaSource.type === MediaType.image)
           this.#onImmutableSourceUpload?.(sourceTexture, encoder);
         this.#sourceTextures.set(sourceKey, cachedSource);
@@ -300,7 +301,7 @@ export class EntityTexturePipeline {
         sourceTexture = cachedSource.texture;
         cachedSource.lastUsedFrame = this.#currentFrame;
         if (cachedSource.contentRevision !== contentRevision) {
-          this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
+          this.#uploadEntitySourceToTexture(entity, sourceTexture, width, height);
           cachedSource.contentRevision = contentRevision;
         }
       }
@@ -432,11 +433,10 @@ export class EntityTexturePipeline {
     desired: { width: number; height: number },
     needsContinuousRender: boolean,
   ): EntityCompositionSource | null {
-    if (
-      entity.textureDirty ||
-      entity.mediaSource.type !== MediaType.image ||
-      needsContinuousRender
-    ) {
+    const hasReusableSource =
+      entity.mediaSource.type === MediaType.image ||
+      (entity.mediaSource.type === MediaType.video && entity.shaderParams.showOriginal);
+    if (entity.textureDirty || !hasReusableSource || needsContinuousRender) {
       return null;
     }
 
@@ -445,8 +445,8 @@ export class EntityTexturePipeline {
       : this.#entityProcessedBindings.get(entity.id);
     if (
       !entry ||
-      entry.texture.width !== desired.width ||
-      entry.texture.height !== desired.height
+      (entity.mediaSource.type !== MediaType.video &&
+        (entry.texture.width !== desired.width || entry.texture.height !== desired.height))
     ) {
       return null;
     }
@@ -471,8 +471,9 @@ export class EntityTexturePipeline {
     output: { width: number; height: number } = { width: 0, height: 0 },
   ): { width: number; height: number } | null {
     if (entity.shaderParams.showOriginal && entity.mediaSource.type === MediaType.video) {
-      output.width = desired.width;
-      output.height = desired.height;
+      const video = entity.mediaSource.videoElement;
+      output.width = video.videoWidth || entity.originalSize.width;
+      output.height = video.videoHeight || entity.originalSize.height;
       return output;
     }
 
@@ -624,17 +625,25 @@ export class EntityTexturePipeline {
     this.#runtime.destroy();
   }
 
-  #uploadStaticEntitySourceToTexture(
+  #uploadEntitySourceToTexture(
     entity: ShaderCanvasEntity,
     texture: GPUTexture,
     width: number,
     height: number,
   ): void {
-    let source: CanvasImageSource =
-      entity.mediaSource.type === MediaType.image
-        ? entity.mediaSource.asset.imageBitmap
-        : entity.imageBitmap;
-    if (source.width !== width || source.height !== height) {
+    let source: CanvasImageSource;
+    if (entity.mediaSource.type === MediaType.video) {
+      source = entity.mediaSource.videoElement;
+    } else {
+      source =
+        entity.mediaSource.type === MediaType.image
+          ? entity.mediaSource.asset.imageBitmap
+          : entity.imageBitmap;
+    }
+    if (
+      entity.mediaSource.type !== MediaType.video &&
+      (source.width !== width || source.height !== height)
+    ) {
       const surface =
         entity.mediaSource.type === MediaType.gif
           ? this.#getGifResizeSurface(entity.id, width, height)
@@ -772,7 +781,7 @@ export class EntityTexturePipeline {
       case MediaType.svg:
         return `svg:${entity.id}:${width}x${height}`;
       case MediaType.video:
-        throw new Error("External video textures do not have source cache keys");
+        return `video:${entity.id}:${width}x${height}`;
     }
   }
 

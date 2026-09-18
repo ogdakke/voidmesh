@@ -1,5 +1,7 @@
 import {
+  DEFAULT_WLUR_PARAMS,
   WLUR_CURVES,
+  WlurPass,
   clampWlurParams,
   clampWlurQuality,
   getWlurScratchKey,
@@ -8,7 +10,7 @@ import {
   resolveWlurCurve,
   sampleWlurCurve,
 } from "#wlur";
-import { describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 
 describe("wlur helpers", () => {
   test("maps downward blur like Glur", () => {
@@ -121,3 +123,102 @@ describe("wlur helpers", () => {
     expect(getWlurScratchKey(1200, 800, 0.5)).toBe("1200x800-600x400");
   });
 });
+
+describe("WlurPass resource reuse", () => {
+  beforeAll(() => {
+    vi.stubGlobal("GPUShaderStage", { FRAGMENT: 1 });
+    vi.stubGlobal("GPUBufferUsage", { UNIFORM: 1, COPY_DST: 2 });
+    vi.stubGlobal("GPUTextureUsage", { TEXTURE_BINDING: 1, RENDER_ATTACHMENT: 2, COPY_DST: 4 });
+  });
+
+  afterAll(() => vi.unstubAllGlobals());
+
+  test("reuses stable texture views and bind groups between encodes", () => {
+    const device = createWlurDevice();
+    const pass = new WlurPass({
+      device,
+      format: "rgba16float",
+      quality: { resolutionScale: 0.5 },
+    });
+    const encoder = createWlurEncoder();
+    const input = createWlurTexture(800, 600);
+    const firstOutput = createWlurTexture(800, 600);
+    const secondOutput = createWlurTexture(800, 600);
+    const params = { ...DEFAULT_WLUR_PARAMS, radius: 20, noise: 0 };
+
+    pass.encode(encoder, input, firstOutput, 800, 600, params);
+    expect(device.createBindGroup).toHaveBeenCalledTimes(4);
+
+    pass.encode(encoder, input, firstOutput, 800, 600, params);
+    expect(device.createBindGroup).toHaveBeenCalledTimes(4);
+    expect(input.createView).toHaveBeenCalledOnce();
+    expect(firstOutput.createView).toHaveBeenCalledOnce();
+
+    pass.encode(encoder, input, secondOutput, 800, 600, params);
+    expect(device.createBindGroup).toHaveBeenCalledTimes(4);
+    expect(secondOutput.createView).toHaveBeenCalledOnce();
+
+    const nextInput = createWlurTexture(800, 600);
+    pass.encode(encoder, nextInput, secondOutput, 800, 600, params);
+    expect(device.createBindGroup).toHaveBeenCalledTimes(6);
+
+    pass.encode(encoder, input, firstOutput, 800, 600, params);
+    expect(device.createBindGroup).toHaveBeenCalledTimes(6);
+
+    pass.destroy();
+  });
+});
+
+function createWlurTexture(
+  width: number,
+  height: number,
+): GPUTexture & { createView: ReturnType<typeof vi.fn<GPUTexture["createView"]>> } {
+  return {
+    width,
+    height,
+    createView: vi.fn<GPUTexture["createView"]>(() => ({}) as GPUTextureView),
+    destroy: vi.fn<GPUTexture["destroy"]>(),
+  } as unknown as GPUTexture & {
+    createView: ReturnType<typeof vi.fn<GPUTexture["createView"]>>;
+  };
+}
+
+function createWlurDevice(): GPUDevice & {
+  createBindGroup: ReturnType<typeof vi.fn<GPUDevice["createBindGroup"]>>;
+} {
+  return {
+    queue: {
+      writeBuffer: vi.fn<GPUQueue["writeBuffer"]>(),
+      writeTexture: vi.fn<GPUQueue["writeTexture"]>(),
+    },
+    createSampler: vi.fn<GPUDevice["createSampler"]>(() => ({}) as GPUSampler),
+    createTexture: vi.fn<GPUDevice["createTexture"]>((descriptor) => {
+      const [width, height] = descriptor.size as [number, number];
+      return createWlurTexture(width, height);
+    }),
+    createShaderModule: vi.fn<GPUDevice["createShaderModule"]>(() => ({}) as GPUShaderModule),
+    createBindGroupLayout: vi.fn<GPUDevice["createBindGroupLayout"]>(
+      () => ({}) as GPUBindGroupLayout,
+    ),
+    createPipelineLayout: vi.fn<GPUDevice["createPipelineLayout"]>(() => ({}) as GPUPipelineLayout),
+    createRenderPipeline: vi.fn<GPUDevice["createRenderPipeline"]>(() => ({}) as GPURenderPipeline),
+    createBuffer: vi.fn<GPUDevice["createBuffer"]>(
+      () => ({ destroy: vi.fn<GPUBuffer["destroy"]>() }) as unknown as GPUBuffer,
+    ),
+    createBindGroup: vi.fn<GPUDevice["createBindGroup"]>(() => ({}) as GPUBindGroup),
+  } as unknown as GPUDevice & {
+    createBindGroup: ReturnType<typeof vi.fn<GPUDevice["createBindGroup"]>>;
+  };
+}
+
+function createWlurEncoder(): GPUCommandEncoder {
+  const renderPass = {
+    setPipeline: vi.fn<GPURenderPassEncoder["setPipeline"]>(),
+    setBindGroup: vi.fn<GPURenderPassEncoder["setBindGroup"]>(),
+    draw: vi.fn<GPURenderPassEncoder["draw"]>(),
+    end: vi.fn<GPURenderPassEncoder["end"]>(),
+  } as unknown as GPURenderPassEncoder;
+  return {
+    beginRenderPass: vi.fn<GPUCommandEncoder["beginRenderPass"]>(() => renderPass),
+  } as unknown as GPUCommandEncoder;
+}

@@ -321,6 +321,44 @@ describe("EntityTexturePipeline shared image sources", () => {
     pipeline.destroy();
     if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
   });
+
+  test("copies original video frames into one stable composition texture", () => {
+    const entity = createTestEntity({
+      id: "original-video",
+      mediaType: "video",
+      shaderParams: { showOriginal: true },
+    });
+    entity.textureDirty = true;
+    const sourceTexture = createTexture(200, 150);
+    const device = createDevice([sourceTexture]);
+    const pipeline = new EntityTexturePipeline({
+      device,
+      colorConfig,
+      texturePool: null,
+    });
+    const encoder = {} as GPUCommandEncoder;
+
+    expect(pipeline.renderEntityToTexture(entity, encoder)).toEqual({
+      kind: "texture",
+      texture: sourceTexture,
+    });
+    entity.textureDirty = false;
+    expect(pipeline.renderEntityToTexture(entity, encoder)).toEqual({
+      kind: "texture",
+      texture: sourceTexture,
+    });
+    entity.textureDirty = true;
+    expect(pipeline.renderEntityToTexture(entity, encoder)).toEqual({
+      kind: "texture",
+      texture: sourceTexture,
+    });
+
+    expect(device.createTexture).toHaveBeenCalledOnce();
+    expect(device.queue.copyExternalImageToTexture).toHaveBeenCalledTimes(2);
+    expect(device.importExternalTexture).not.toHaveBeenCalled();
+
+    pipeline.destroy();
+  });
 });
 
 function createTexture(width: number, height: number): GPUTexture {
@@ -345,6 +383,9 @@ function createDevice(sourceTextures: GPUTexture[]): GPUDevice {
     createShaderModule: vi.fn<GPUDevice["createShaderModule"]>(() => ({}) as GPUShaderModule),
     createPipelineLayout: vi.fn<GPUDevice["createPipelineLayout"]>(() => ({}) as GPUPipelineLayout),
     createRenderPipeline: vi.fn<GPUDevice["createRenderPipeline"]>(() => ({}) as GPURenderPipeline),
+    importExternalTexture: vi.fn<GPUDevice["importExternalTexture"]>(
+      () => ({}) as GPUExternalTexture,
+    ),
     createTexture: vi.fn<GPUDevice["createTexture"]>(() => {
       const texture = sourceTextures.shift();
       if (!texture) throw new Error("Test requested an unexpected texture allocation");
