@@ -1,6 +1,7 @@
 import { scheduler, type AnimationHandle } from "#lib/animation-scheduler.ts";
+import { boundsIntersect } from "#lib/canvas-math.ts";
 import { getCssVarValue, resolveCssColor, resolveCssVarColor } from "#lib/css.ts";
-import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
+import type { Bounds, ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
 import shaderSource from "./entity-label.wgsl?raw";
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -119,6 +120,8 @@ export class EntityLabelPass {
   #dpr = 1;
   #viewport: Viewport | null = null;
   #isAnimating = false;
+  #hasDrawnLabel = false;
+  readonly #drawnLabelBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
   readonly #uniformData = new Float32Array(UNIFORM_SIZE / 4);
 
   constructor(device: GPUDevice, canvasFormat: GPUTextureFormat, viewportUniformBuffer: GPUBuffer) {
@@ -207,6 +210,7 @@ export class EntityLabelPass {
     this.#viewport = viewport;
     this.#syncDragAnimation(isDragPhase);
     this.#isAnimating = this.#dragAnimHandle?.isActive ?? false;
+    this.#hasDrawnLabel = false;
   }
 
   /** Draw a label in the dedicated scene-overlay pass after all entity draws. */
@@ -231,6 +235,11 @@ export class EntityLabelPass {
     let worldX = entityCenterX - worldWidth / 2 + offsetX;
     let worldY =
       entity.position.y - (VERTICAL_MARGIN * dpr) / viewport.zoom - worldHeight + offsetY;
+    this.#drawnLabelBounds.x = worldX;
+    this.#drawnLabelBounds.y = worldY;
+    this.#drawnLabelBounds.width = worldWidth;
+    this.#drawnLabelBounds.height = worldHeight;
+    this.#hasDrawnLabel = true;
 
     // ── Write uniforms and draw ────────────────────────────────────────────
 
@@ -253,6 +262,19 @@ export class EntityLabelPass {
   /** Whether the drag icon animation is still in progress. */
   get isAnimating(): boolean {
     return this.#isAnimating;
+  }
+
+  intersectsBounds(bounds: Bounds): boolean {
+    return this.#hasDrawnLabel && boundsIntersect(this.#drawnLabelBounds, bounds);
+  }
+
+  getDrawnBounds(output: Bounds): boolean {
+    if (!this.#hasDrawnLabel) return false;
+    output.x = this.#drawnLabelBounds.x;
+    output.y = this.#drawnLabelBounds.y;
+    output.width = this.#drawnLabelBounds.width;
+    output.height = this.#drawnLabelBounds.height;
+    return true;
   }
 
   /**

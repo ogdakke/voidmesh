@@ -1,5 +1,7 @@
 import viewportLensDistortionShaderSource from "./viewport-lens-distortion.wgsl?raw";
+import type { WlurPixelRegion } from "#wlur";
 import type { ViewportLensDistortionConfig } from "#types/canvas.ts";
+import { getViewportLensSourceDependencyRegion } from "./viewport-lens-dependency.ts";
 export type { ViewportLensDistortionConfig } from "#types/canvas.ts";
 
 export interface ViewportLensTarget {
@@ -27,6 +29,15 @@ export class ViewportLensPass {
 
   #config: ViewportLensDistortionConfig;
   #darkTheme = false;
+  #sourceDependencyCache: {
+    width: number;
+    height: number;
+    outputX: number;
+    outputY: number;
+    outputWidth: number;
+    outputHeight: number;
+    region: WlurPixelRegion;
+  } | null = null;
   #texture: {
     width: number;
     height: number;
@@ -92,6 +103,44 @@ export class ViewportLensPass {
 
   setConfig(config: ViewportLensDistortionConfig): void {
     this.#config = { ...config };
+    this.#sourceDependencyCache = null;
+  }
+
+  getSourceDependencyRegion(
+    outputRegion: WlurPixelRegion,
+    width: number,
+    height: number,
+  ): WlurPixelRegion {
+    const cached = this.#sourceDependencyCache;
+    if (
+      cached &&
+      cached.width === width &&
+      cached.height === height &&
+      cached.outputX === outputRegion.x &&
+      cached.outputY === outputRegion.y &&
+      cached.outputWidth === outputRegion.width &&
+      cached.outputHeight === outputRegion.height
+    ) {
+      return cached.region;
+    }
+
+    const region = getViewportLensSourceDependencyRegion(
+      outputRegion,
+      width,
+      height,
+      this.#config,
+      cached?.region ?? { x: 0, y: 0, width: 0, height: 0 },
+    );
+    this.#sourceDependencyCache = {
+      width,
+      height,
+      outputX: outputRegion.x,
+      outputY: outputRegion.y,
+      outputWidth: outputRegion.width,
+      outputHeight: outputRegion.height,
+      region,
+    };
+    return region;
   }
 
   setColorScheme(isDark: boolean): boolean {

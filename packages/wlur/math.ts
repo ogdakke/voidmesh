@@ -140,6 +140,69 @@ export function getWlurWorkingDimensions(
   };
 }
 
+export interface WlurPixelRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export function getWlurEffectRegion(
+  width: number,
+  height: number,
+  params: Pick<WlurParams, "direction" | "offset" | "interpolation">,
+): WlurPixelRegion {
+  const interpolation = params.interpolation;
+  switch (params.direction) {
+    case "down": {
+      const y = Math.max(0, Math.floor(params.offset * height) - 1);
+      return { x: 0, y, width, height: height - y };
+    }
+    case "up": {
+      const edge = params.offset + (interpolation <= 0.000001 ? 0 : interpolation * 0.5);
+      return { x: 0, y: 0, width, height: Math.min(height, Math.ceil(edge * height) + 1) };
+    }
+    case "right": {
+      const x = Math.max(0, Math.floor(params.offset * width) - 1);
+      return { x, y: 0, width: width - x, height };
+    }
+    case "left": {
+      const edge = params.offset + (interpolation <= 0.000001 ? 0 : interpolation * 0.5);
+      return { x: 0, y: 0, width: Math.min(width, Math.ceil(edge * width) + 1), height };
+    }
+  }
+}
+
+/**
+ * Full-resolution source pixels that can contribute to the blurred part of Wlur.
+ * The extra texel covers linear-filter support at the edge of the fixed kernel.
+ */
+export function getWlurSourceDependencyRegion(
+  width: number,
+  height: number,
+  params: WlurParams,
+  quality: WlurQuality,
+): WlurPixelRegion {
+  const working = getWlurWorkingDimensions(width, height, quality.resolutionScale);
+  const effect = getWlurEffectRegion(working.width, working.height, params);
+  const padding = (normalizeWlurKernelSize(quality.kernelSize) - 1) / 2 + 1;
+  const x0 = Math.max(0, effect.x - padding);
+  const y0 = Math.max(0, effect.y - padding);
+  const x1 = Math.min(working.width, effect.x + effect.width + padding);
+  const y1 = Math.min(working.height, effect.y + effect.height + padding);
+
+  const sourceX0 = Math.max(0, Math.floor((x0 * width) / working.width));
+  const sourceY0 = Math.max(0, Math.floor((y0 * height) / working.height));
+  const sourceX1 = Math.min(width, Math.ceil((x1 * width) / working.width));
+  const sourceY1 = Math.min(height, Math.ceil((y1 * height) / working.height));
+  return {
+    x: sourceX0,
+    y: sourceY0,
+    width: sourceX1 - sourceX0,
+    height: sourceY1 - sourceY0,
+  };
+}
+
 export function getWlurScratchKey(width: number, height: number, resolutionScale: number): string {
   const working = getWlurWorkingDimensions(width, height, resolutionScale);
   return `${width}x${height}-${working.width}x${working.height}`;

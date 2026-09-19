@@ -11,10 +11,13 @@ export {
   clampWlurQuality,
   clampWlurTintColor,
   getWlurScratchKey,
+  getWlurEffectRegion,
+  getWlurSourceDependencyRegion,
   getWlurWorkingDimensions,
   mapWlurFactorAtPoint,
   normalizeWlurKernelSize,
   wlurDirectionToIndex,
+  type WlurPixelRegion,
 } from "./math.ts";
 export {
   DEFAULT_WLUR_CURVE,

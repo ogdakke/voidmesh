@@ -30,6 +30,7 @@ describe("ActionLayerBlurPass", () => {
       intermediateFormat: "rgba16float",
       tintColor: [0, 0, 0],
     });
+    expect(pass.sourceDependencyPaddingPx).toBe(196);
     const sourceTexture = createTexture();
     const processingPipeline = {
       encodeFullScreenBlurPyramid: vi.fn<ProcessingPipeline["encodeFullScreenBlurPyramid"]>(

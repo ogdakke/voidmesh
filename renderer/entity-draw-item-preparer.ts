@@ -68,6 +68,8 @@ interface MixedFullScenePlan {
 export interface PreparedEntityDrawItems {
   entityDrawItems: CompositionDrawItem[];
   actionLayerDrawItems: CompositionDrawItem[];
+  animatingDrawItems: CompositionDrawItem[];
+  dragVisualDrawItems: CompositionDrawItem[];
   fullSceneBatch: FullSceneBatchKey | null;
   singleSelectedDrawItem: CompositionDrawItem | null;
   singleSelectedOffsetX: number;
@@ -98,12 +100,16 @@ export class EntityDrawItemPreparer {
   #admissionVisibleEntities: readonly ShaderCanvasEntity[] = this.#visibleEntities;
   readonly #entityDrawItems: CompositionDrawItem[] = [];
   readonly #actionLayerDrawItems: CompositionDrawItem[] = [];
+  readonly #animatingDrawItems: CompositionDrawItem[] = [];
+  readonly #dragVisualDrawItems: CompositionDrawItem[] = [];
   readonly #fullScenePatches: FullSceneBatchPatch[] = [];
   readonly #fullSceneInstancePatches: FullSceneInstancePatch[] = [];
   #fullSceneEntityIndices: ReadonlyMap<string, number> = new Map();
   readonly #prepared: PreparedEntityDrawItems = {
     entityDrawItems: this.#entityDrawItems,
     actionLayerDrawItems: this.#actionLayerDrawItems,
+    animatingDrawItems: this.#animatingDrawItems,
+    dragVisualDrawItems: this.#dragVisualDrawItems,
     fullSceneBatch: null,
     singleSelectedDrawItem: null,
     singleSelectedOffsetX: 0,
@@ -168,8 +174,12 @@ export class EntityDrawItemPreparer {
 
     const entityDrawItems = this.#entityDrawItems;
     const actionLayerDrawItems = this.#actionLayerDrawItems;
+    const animatingDrawItems = this.#animatingDrawItems;
+    const dragVisualDrawItems = this.#dragVisualDrawItems;
     entityDrawItems.length = 0;
     actionLayerDrawItems.length = 0;
+    animatingDrawItems.length = 0;
+    dragVisualDrawItems.length = 0;
     if (this.#snapshotEntityVersion !== options.entityVersion) {
       this.#snapshotRepresentative = null;
       this.#snapshotEntityVersion = options.entityVersion;
@@ -338,6 +348,8 @@ export class EntityDrawItemPreparer {
         compositionOptions.visualScale = visualScale;
       }
       const drawItem = this.#compositionPass.prepareDrawItem(compositionOptions);
+      if (textureWasDirty || needsContinuousRender) animatingDrawItems.push(drawItem);
+      if (isDragVisualEntity) dragVisualDrawItems.push(drawItem);
       if (selectedEntityIds.size === 1 && isSelected) {
         this.#prepared.singleSelectedDrawItem = drawItem;
         this.#prepared.singleSelectedOffsetX = drawItem.offsetX;

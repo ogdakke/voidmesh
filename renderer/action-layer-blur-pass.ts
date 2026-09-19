@@ -132,6 +132,28 @@ export class ActionLayerBlurPass {
     };
   }
 
+  /** Maximum full-resolution source distance that can reach one output pixel. */
+  get sourceDependencyPaddingPx(): number {
+    const levels = config.actionLayer.blurLevels;
+    const offset = config.actionLayer.blurOffset;
+    let radius = 0;
+    let sourcePixelScale = 1;
+
+    for (let level = 0; level < levels; level++) {
+      radius += (2 + offset) * sourcePixelScale;
+      sourcePixelScale *= 2;
+    }
+    for (let level = levels - 1; level > 0; level--) {
+      radius += (3 + 2 * offset) * sourcePixelScale;
+      sourcePixelScale /= 2;
+    }
+
+    // The final half-resolution composite uses a smaller four-tap kernel. Use
+    // the larger legacy upsample footprint so this remains conservative.
+    radius += (3 + 2 * offset) * sourcePixelScale;
+    return Math.ceil(radius + 1);
+  }
+
   encode(options: EncodeActionLayerBlurOptions): void {
     const { encoder, processingPipeline, sourceTexture, targetView, width, height, blurIntensity } =
       options;

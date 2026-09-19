@@ -11,7 +11,11 @@ import { CanvasLensing } from "#types/enums.ts";
 import { ActionLayerBlurPass, type ActionLayerBlurPassStats } from "./action-layer-blur-pass.ts";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
 import { CanvasDebugPass } from "./canvas-debug-pass.ts";
-import { CompositionPass, type CompositionPassStats } from "./composition-pass.ts";
+import {
+  CompositionPass,
+  type CompositionDrawItem,
+  type CompositionPassStats,
+} from "./composition-pass.ts";
 import { DisintegrationPass } from "./disintegration-pass.ts";
 import { EntityDrawItemPreparer } from "./entity-draw-item-preparer.ts";
 import { EntityLabelPass } from "./entity-label-pass.ts";
@@ -31,7 +35,23 @@ import { TexturePool, type TexturePoolStats } from "./texture-pool.ts";
 import { ViewportLensPass, type ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
 import { ViewportUniforms } from "./viewport-uniforms.ts";
 import type { WlurOverlayConfig } from "./wlur-overlay.ts";
-import { WlurOverlayPass, type WlurOverlayPassStats } from "./wlur-overlay-pass.ts";
+import {
+  WLUR_BLUR_DIRTY_ACTION,
+  WLUR_BLUR_DIRTY_ANIMATED,
+  WLUR_BLUR_DIRTY_AUXILIARY,
+  WLUR_BLUR_DIRTY_CALLOUT,
+  WLUR_BLUR_DIRTY_DISINTEGRATION,
+  WLUR_BLUR_DIRTY_DRAG,
+  WLUR_BLUR_DIRTY_GLOBAL,
+  WLUR_BLUR_DIRTY_LABEL,
+  WLUR_BLUR_DIRTY_SELECTION,
+  WlurOverlayPass,
+  type WlurOverlayPassStats,
+} from "./wlur-overlay-pass.ts";
+import {
+  WlurInvalidationDebugPass,
+  type WlurInvalidationDebugColor,
+} from "./wlur-invalidation-debug-pass.ts";
 
 export type { ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
 
@@ -43,6 +63,16 @@ export interface RendererResourceStats {
   composition: CompositionPassStats;
   wlur: WlurOverlayPassStats;
 }
+
+const WLUR_INVALIDATION_DEBUG_COLORS = {
+  source: [0.05, 0.78, 1, 0.95],
+  global: [1, 0.2, 0.24, 0.9],
+  lens: [0.72, 0.38, 1, 0.9],
+  animated: [1, 0.25, 0.65, 0.9],
+  action: [1, 0.55, 0.08, 0.95],
+  drag: [1, 0.84, 0.12, 0.95],
+  label: [0.2, 0.9, 0.42, 0.95],
+} as const satisfies Record<string, WlurInvalidationDebugColor>;
 
 export class InfiniteCanvasRenderer {
   readonly canvas: HTMLCanvasElement;
@@ -97,6 +127,43 @@ export class InfiniteCanvasRenderer {
   #viewportLensPass: ViewportLensPass | null = null;
 
   #wlurOverlayPass: WlurOverlayPass | null = null;
+  #wlurInvalidationDebugPass: WlurInvalidationDebugPass | null = null;
+  #wlurInvalidationDebugEnabled = false;
+  #wlurBlurState: {
+    entityVersion: number;
+    geometryVersion: number;
+    selectionVersion: number;
+    viewportX: number;
+    viewportY: number;
+    viewportZoom: number;
+    debugMode: boolean;
+    blurIntensity: number;
+    actionActive: boolean;
+    actionEntityIds: ReadonlySet<string>;
+    actionOffsetX: number;
+    actionOffsetY: number;
+    dragActive: boolean;
+    dragEntityIds: ReadonlySet<string>;
+    dragOffsetX: number;
+    dragOffsetY: number;
+    dragScale: number;
+    dragAppliesToSelection: boolean;
+    canvasCallouts: RenderState["canvasCallouts"];
+  } | null = null;
+  readonly #wlurDependencyWorldBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #wlurOutputDependencyWorldBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #wlurItemBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #wlurItemPosition = { x: 0, y: 0 };
+  readonly #wlurItemSize = { width: 0, height: 0 };
+  readonly #wlurDebugViewportBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #wlurDebugLensBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #wlurDebugLabelBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #wlurStateChanges = {
+    global: true,
+    actionPose: true,
+    dragVisual: true,
+    canvasCallouts: true,
+  };
 
   #entityDrawItemPreparer: EntityDrawItemPreparer | null = null;
   #entityTexturePipeline: EntityTexturePipeline | null = null;
@@ -225,6 +292,17 @@ export class InfiniteCanvasRenderer {
         convertedPresents: 0,
         blurPixels: 0,
         fullBlurPixels: 0,
+        globalInvalidations: 0,
+        animatedInvalidations: 0,
+        actionInvalidations: 0,
+        dragInvalidations: 0,
+        auxiliaryInvalidations: 0,
+        lensInvalidations: 0,
+        disintegrationInvalidations: 0,
+        labelInvalidations: 0,
+        calloutInvalidations: 0,
+        selectionInvalidations: 0,
+        cacheInvalidations: 0,
       },
     };
   }
@@ -553,6 +631,8 @@ export class InfiniteCanvasRenderer {
     const {
       entityDrawItems,
       actionLayerDrawItems,
+      animatingDrawItems,
+      dragVisualDrawItems,
       fullSceneBatch,
       singleSelectedDrawItem,
       singleSelectedOffsetX,
@@ -790,6 +870,68 @@ export class InfiniteCanvasRenderer {
 
     // Final pass: WLUR progressive blur overlay (renders on top of everything)
     if (this.#wlurOverlayPass) {
+      const presentationContentDirty =
+        state.dirty ||
+        hasAnimatingContent ||
+        lensApplied ||
+        !!this.#disintegrationPass?.hasOverlays ||
+        blurIntensity > 0.01 ||
+        state.dragSelectBounds !== null;
+      const wlurStateChanges = this.#updateWlurBlurState(state);
+      const outputDependencyRegion = this.#wlurOverlayPass.getSourceDependencyRegion(
+        width,
+        height,
+        dpr,
+        renderActionBlur ? (this.#actionLayerBlurPass?.sourceDependencyPaddingPx ?? 0) : 0,
+      );
+      const sourceDependencyRegion =
+        outputDependencyRegion && viewportLensTarget
+          ? this.#viewportLensPass!.getSourceDependencyRegion(outputDependencyRegion, width, height)
+          : outputDependencyRegion;
+      const outputDependencyBounds = outputDependencyRegion
+        ? this.#setWlurDependencyWorldBounds(
+            outputDependencyRegion,
+            viewport,
+            this.#wlurOutputDependencyWorldBounds,
+          )
+        : null;
+      const dependencyBounds = sourceDependencyRegion
+        ? this.#setWlurDependencyWorldBounds(sourceDependencyRegion, viewport)
+        : null;
+      const actionLayerTouchesWlur =
+        dependencyBounds !== null &&
+        this.#drawItemsIntersectBounds(actionLayerDrawItems, dependencyBounds, viewport.zoom);
+      const animatedContentTouchesWlur =
+        dependencyBounds === null ||
+        this.#drawItemsIntersectBounds(animatingDrawItems, dependencyBounds, viewport.zoom);
+      const dragVisualTouchesWlur =
+        dependencyBounds === null ||
+        this.#drawItemsIntersectBounds(dragVisualDrawItems, dependencyBounds, viewport.zoom);
+      const actionDirty =
+        (wlurStateChanges.actionPose || this.#compositionPass.crossing.pending) &&
+        actionLayerTouchesWlur;
+      const disintegrationDirty = !!this.#disintegrationPass?.hasOverlays;
+      const labelDirty =
+        this.#entityLabelPass?.isAnimating === true &&
+        (dependencyBounds === null || this.#entityLabelPass.intersectsBounds(dependencyBounds));
+      const calloutDirty =
+        state.canvasCallouts.length > 0 &&
+        (wlurStateChanges.canvasCallouts ||
+          wlurStateChanges.actionPose ||
+          wlurStateChanges.dragVisual);
+      const selectionDirty = state.dragSelectBounds !== null || state.multiSelectBounds !== null;
+      const auxiliaryDirty = disintegrationDirty || labelDirty || calloutDirty || selectionDirty;
+      let blurDirtyMask = 0;
+      if (wlurStateChanges.global) blurDirtyMask |= WLUR_BLUR_DIRTY_GLOBAL;
+      if (animatedContentTouchesWlur) blurDirtyMask |= WLUR_BLUR_DIRTY_ANIMATED;
+      if (actionDirty) blurDirtyMask |= WLUR_BLUR_DIRTY_ACTION;
+      if (wlurStateChanges.dragVisual && dragVisualTouchesWlur)
+        blurDirtyMask |= WLUR_BLUR_DIRTY_DRAG;
+      if (auxiliaryDirty) blurDirtyMask |= WLUR_BLUR_DIRTY_AUXILIARY;
+      if (disintegrationDirty) blurDirtyMask |= WLUR_BLUR_DIRTY_DISINTEGRATION;
+      if (labelDirty) blurDirtyMask |= WLUR_BLUR_DIRTY_LABEL;
+      if (calloutDirty) blurDirtyMask |= WLUR_BLUR_DIRTY_CALLOUT;
+      if (selectionDirty) blurDirtyMask |= WLUR_BLUR_DIRTY_SELECTION;
       this.#wlurOverlayPass.encode({
         encoder,
         sourceTexture: presentationTargetTexture,
@@ -798,13 +940,21 @@ export class InfiniteCanvasRenderer {
         width,
         height,
         devicePixelRatio: dpr,
-        contentDirty:
-          state.dirty ||
-          hasAnimatingContent ||
-          lensApplied ||
-          !!this.#disintegrationPass?.hasOverlays ||
-          blurIntensity > 0.01 ||
-          state.dragSelectBounds !== null,
+        contentDirty: presentationContentDirty,
+        blurDirtyMask,
+      });
+      this.#encodeWlurInvalidationDebug({
+        encoder,
+        targetView,
+        viewport,
+        width,
+        height,
+        outputDependencyBounds,
+        lensDependencyBounds: viewportLensTarget ? dependencyBounds : null,
+        globalDirty: wlurStateChanges.global,
+        animatingDrawItems,
+        actionLayerDrawItems,
+        dragVisualDrawItems,
       });
     }
 
@@ -861,8 +1011,225 @@ export class InfiniteCanvasRenderer {
     );
   }
 
+  #updateWlurBlurState(state: RenderState): Readonly<{
+    global: boolean;
+    actionPose: boolean;
+    dragVisual: boolean;
+    canvasCallouts: boolean;
+  }> {
+    const previous = this.#wlurBlurState;
+    const actionLayer = state.actionLayer;
+    const dragVisual = state.dragVisual;
+    const changes = this.#wlurStateChanges;
+    changes.global =
+      previous === null ||
+      previous.entityVersion !== state.entityVersion ||
+      previous.geometryVersion !== state.geometryVersion ||
+      previous.selectionVersion !== state.selectionVersion ||
+      previous.viewportX !== state.viewport.offset.x ||
+      previous.viewportY !== state.viewport.offset.y ||
+      previous.viewportZoom !== state.viewport.zoom ||
+      previous.debugMode !== state.debugMode ||
+      previous.blurIntensity !== actionLayer.blurIntensity ||
+      previous.actionActive !== actionLayer.active;
+    changes.actionPose =
+      previous === null ||
+      previous.actionEntityIds !== actionLayer.entityIds ||
+      previous.actionOffsetX !== actionLayer.entityOffset.x ||
+      previous.actionOffsetY !== actionLayer.entityOffset.y;
+    changes.dragVisual =
+      previous === null ||
+      previous.dragActive !== dragVisual.active ||
+      previous.dragEntityIds !== dragVisual.entityIds ||
+      previous.dragOffsetX !== dragVisual.offset.x ||
+      previous.dragOffsetY !== dragVisual.offset.y ||
+      previous.dragScale !== dragVisual.scale ||
+      previous.dragAppliesToSelection !== dragVisual.appliesToSelection;
+    changes.canvasCallouts = previous === null || previous.canvasCallouts !== state.canvasCallouts;
+    if (previous) {
+      previous.entityVersion = state.entityVersion;
+      previous.geometryVersion = state.geometryVersion;
+      previous.selectionVersion = state.selectionVersion;
+      previous.viewportX = state.viewport.offset.x;
+      previous.viewportY = state.viewport.offset.y;
+      previous.viewportZoom = state.viewport.zoom;
+      previous.debugMode = state.debugMode;
+      previous.blurIntensity = actionLayer.blurIntensity;
+      previous.actionActive = actionLayer.active;
+      previous.actionEntityIds = actionLayer.entityIds;
+      previous.actionOffsetX = actionLayer.entityOffset.x;
+      previous.actionOffsetY = actionLayer.entityOffset.y;
+      previous.dragActive = dragVisual.active;
+      previous.dragEntityIds = dragVisual.entityIds;
+      previous.dragOffsetX = dragVisual.offset.x;
+      previous.dragOffsetY = dragVisual.offset.y;
+      previous.dragScale = dragVisual.scale;
+      previous.dragAppliesToSelection = dragVisual.appliesToSelection;
+      previous.canvasCallouts = state.canvasCallouts;
+    } else {
+      this.#wlurBlurState = {
+        entityVersion: state.entityVersion,
+        geometryVersion: state.geometryVersion,
+        selectionVersion: state.selectionVersion,
+        viewportX: state.viewport.offset.x,
+        viewportY: state.viewport.offset.y,
+        viewportZoom: state.viewport.zoom,
+        debugMode: state.debugMode,
+        blurIntensity: actionLayer.blurIntensity,
+        actionActive: actionLayer.active,
+        actionEntityIds: actionLayer.entityIds,
+        actionOffsetX: actionLayer.entityOffset.x,
+        actionOffsetY: actionLayer.entityOffset.y,
+        dragActive: dragVisual.active,
+        dragEntityIds: dragVisual.entityIds,
+        dragOffsetX: dragVisual.offset.x,
+        dragOffsetY: dragVisual.offset.y,
+        dragScale: dragVisual.scale,
+        dragAppliesToSelection: dragVisual.appliesToSelection,
+        canvasCallouts: state.canvasCallouts,
+      };
+    }
+    return changes;
+  }
+
+  #setWlurDependencyWorldBounds(
+    region: { x: number; y: number; width: number; height: number },
+    viewport: Viewport,
+    output: Bounds = this.#wlurDependencyWorldBounds,
+  ): Bounds {
+    output.x = viewport.offset.x + region.x / viewport.zoom;
+    output.y = viewport.offset.y + region.y / viewport.zoom;
+    output.width = region.width / viewport.zoom;
+    output.height = region.height / viewport.zoom;
+    return output;
+  }
+
+  #drawItemsIntersectBounds(
+    items: readonly CompositionDrawItem[],
+    bounds: Bounds,
+    viewportZoom: number,
+  ): boolean {
+    for (const item of items) {
+      if (boundsIntersect(this.#setWlurDrawItemBounds(item, viewportZoom), bounds)) return true;
+    }
+    return false;
+  }
+
+  #setWlurDrawItemBounds(item: CompositionDrawItem, viewportZoom: number): Bounds {
+    const entity = item.entity;
+    const width = entity.size.width * item.visualScale;
+    const height = entity.size.height * item.visualScale;
+    const itemPosition = this.#wlurItemPosition;
+    const itemSize = this.#wlurItemSize;
+    itemPosition.x = entity.position.x + item.offsetX + (entity.size.width - width) * 0.5;
+    itemPosition.y = entity.position.y + item.offsetY + (entity.size.height - height) * 0.5;
+    itemSize.width = width;
+    itemSize.height = height;
+    const bounds = this.#wlurItemBounds;
+    getRotatedAABB(itemPosition, itemSize, entity.rotation, bounds);
+    const borderWorld = 4 / viewportZoom;
+    bounds.x -= borderWorld;
+    bounds.y -= borderWorld;
+    bounds.width += borderWorld * 2;
+    bounds.height += borderWorld * 2;
+    return bounds;
+  }
+
+  #encodeWlurInvalidationDebug(options: {
+    encoder: GPUCommandEncoder;
+    targetView: GPUTextureView;
+    viewport: Viewport;
+    width: number;
+    height: number;
+    outputDependencyBounds: Bounds | null;
+    lensDependencyBounds: Bounds | null;
+    globalDirty: boolean;
+    animatingDrawItems: readonly CompositionDrawItem[];
+    actionLayerDrawItems: readonly CompositionDrawItem[];
+    dragVisualDrawItems: readonly CompositionDrawItem[];
+  }): void {
+    if (!this.#wlurInvalidationDebugEnabled) return;
+    const debugPass = this.#ensureWlurInvalidationDebugPass();
+    if (!debugPass) return;
+    debugPass.beginFrame();
+    if (options.outputDependencyBounds) {
+      debugPass.addBounds(options.outputDependencyBounds, WLUR_INVALIDATION_DEBUG_COLORS.source);
+    }
+    if (options.lensDependencyBounds) {
+      const lensBounds = this.#wlurDebugLensBounds;
+      lensBounds.x = options.lensDependencyBounds.x;
+      lensBounds.y = options.lensDependencyBounds.y;
+      lensBounds.width = options.lensDependencyBounds.width;
+      lensBounds.height = options.lensDependencyBounds.height;
+      const inset = 3 / options.viewport.zoom;
+      lensBounds.x += inset;
+      lensBounds.y += inset;
+      lensBounds.width -= inset * 2;
+      lensBounds.height -= inset * 2;
+      debugPass.addBounds(lensBounds, WLUR_INVALIDATION_DEBUG_COLORS.lens);
+    }
+
+    getViewportWorldBounds(
+      options.viewport,
+      options.width,
+      options.height,
+      0,
+      this.#wlurDebugViewportBounds,
+    );
+    if (options.globalDirty) {
+      debugPass.addBounds(this.#wlurDebugViewportBounds, WLUR_INVALIDATION_DEBUG_COLORS.global);
+    }
+    this.#addWlurInvalidationDrawItems(
+      debugPass,
+      options.animatingDrawItems,
+      options.viewport.zoom,
+      WLUR_INVALIDATION_DEBUG_COLORS.animated,
+    );
+    this.#addWlurInvalidationDrawItems(
+      debugPass,
+      options.actionLayerDrawItems,
+      options.viewport.zoom,
+      WLUR_INVALIDATION_DEBUG_COLORS.action,
+    );
+    this.#addWlurInvalidationDrawItems(
+      debugPass,
+      options.dragVisualDrawItems,
+      options.viewport.zoom,
+      WLUR_INVALIDATION_DEBUG_COLORS.drag,
+    );
+    if (
+      this.#entityLabelPass?.isAnimating &&
+      this.#entityLabelPass.getDrawnBounds(this.#wlurDebugLabelBounds)
+    ) {
+      debugPass.addBounds(this.#wlurDebugLabelBounds, WLUR_INVALIDATION_DEBUG_COLORS.label);
+    }
+    debugPass.encode(options.encoder, options.targetView);
+  }
+
+  #addWlurInvalidationDrawItems(
+    debugPass: WlurInvalidationDebugPass,
+    items: readonly CompositionDrawItem[],
+    viewportZoom: number,
+    color: WlurInvalidationDebugColor,
+  ): void {
+    for (const item of items) {
+      debugPass.addBounds(this.#setWlurDrawItemBounds(item, viewportZoom), color);
+    }
+  }
+
+  #ensureWlurInvalidationDebugPass(): WlurInvalidationDebugPass | null {
+    if (!this.#device || !this.#viewportUniforms) return null;
+    this.#wlurInvalidationDebugPass ??= new WlurInvalidationDebugPass(
+      this.#device,
+      this.#canvasFormat,
+      this.#viewportUniforms.buffer,
+    );
+    return this.#wlurInvalidationDebugPass;
+  }
+
   setActionLayerTint(color: [number, number, number]): void {
     this.#actionLayerBlurPass?.setTint(color);
+    this.#wlurOverlayPass?.invalidateCache();
   }
 
   setSelectionRectConfig(
@@ -870,10 +1237,16 @@ export class InfiniteCanvasRenderer {
     multiSelectBox: typeof config.multiSelectBoundingBox.light,
   ): void {
     this.#selectionRectPass?.setConfig(selectionRect, multiSelectBox);
+    this.#wlurOverlayPass?.invalidateCache();
   }
 
   setWlurOverlay(config: WlurOverlayConfig | null): void {
     this.#wlurOverlayPass?.setConfig(config);
+  }
+
+  setWlurInvalidationDebug(enabled: boolean): void {
+    this.#wlurInvalidationDebugEnabled = enabled;
+    if (enabled) this.#ensureWlurInvalidationDebugPass();
   }
 
   setViewportLensDistortion(config: ViewportLensDistortionConfig): void {
@@ -1152,6 +1525,8 @@ export class InfiniteCanvasRenderer {
     this.#canvasCalloutPass = null;
     this.#canvasDebugPass?.destroy();
     this.#canvasDebugPass = null;
+    this.#wlurInvalidationDebugPass?.destroy();
+    this.#wlurInvalidationDebugPass = null;
 
     this.#wlurOverlayPass?.destroy();
     this.#wlurOverlayPass = null;

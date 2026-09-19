@@ -5,6 +5,7 @@ import {
   clampWlurParams,
   clampWlurQuality,
   getWlurScratchKey,
+  getWlurSourceDependencyRegion,
   getWlurWorkingDimensions,
   mapWlurFactorAtPoint,
   resolveWlurCurve,
@@ -122,6 +123,17 @@ describe("wlur helpers", () => {
     });
     expect(getWlurScratchKey(1200, 800, 0.5)).toBe("1200x800-600x400");
   });
+
+  test("bounds the full-resolution source pixels that can affect Wlur", () => {
+    expect(
+      getWlurSourceDependencyRegion(
+        800,
+        600,
+        { ...DEFAULT_WLUR_PARAMS, direction: "down", offset: 0.58 },
+        { kernelSize: 45, resolutionScale: 0.5 },
+      ),
+    ).toEqual({ x: 0, y: 300, width: 800, height: 300 });
+  });
 });
 
 describe("WlurPass resource reuse", () => {
@@ -155,9 +167,13 @@ describe("WlurPass resource reuse", () => {
     expect(renderPass.setScissorRect).toHaveBeenNthCalledWith(2, 0, 89, 400, 211);
     expect(pass.getStats()).toEqual({ blurPixels: 181_200, fullBlurPixels: 240_000 });
 
+    pass.encode(encoder, input, firstOutput, 800, 600, params, { refreshBlur: false });
+    expect(beginRenderPass).toHaveBeenCalledTimes(4);
+    expect(pass.getStats()).toEqual({ blurPixels: 181_200, fullBlurPixels: 240_000 });
+
     pass.encode(encoder, input, firstOutput, 800, 600, params);
     expect(device.createBindGroup).toHaveBeenCalledTimes(3);
-    expect(beginRenderPass).toHaveBeenCalledTimes(6);
+    expect(beginRenderPass).toHaveBeenCalledTimes(7);
     expect(input.createView).toHaveBeenCalledOnce();
     expect(firstOutput.createView).toHaveBeenCalledOnce();
 

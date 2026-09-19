@@ -1,6 +1,7 @@
 import {
   clampWlurParams,
   clampWlurQuality,
+  getWlurEffectRegion,
   getWlurScratchKey,
   getWlurWorkingDimensions,
   wlurDirectionToIndex,
@@ -37,6 +38,8 @@ interface ScratchTextures {
 export interface WlurEncodeOptions {
   /** Reuse a caller-owned output view, such as the current swapchain view. */
   outputView?: GPUTextureView;
+  /** Reuse the persistent blur texture while still compositing the current input. */
+  refreshBlur?: boolean;
 }
 
 export interface WlurPassStats {
@@ -49,28 +52,6 @@ interface PixelRegion {
   y: number;
   width: number;
   height: number;
-}
-
-function getEffectRegion(width: number, height: number, params: WlurParams): PixelRegion {
-  const interpolation = params.interpolation;
-  switch (params.direction) {
-    case "down": {
-      const y = Math.max(0, Math.floor(params.offset * height) - 1);
-      return { x: 0, y, width, height: height - y };
-    }
-    case "up": {
-      const edge = params.offset + (interpolation <= 0.000001 ? 0 : interpolation * 0.5);
-      return { x: 0, y: 0, width, height: Math.min(height, Math.ceil(edge * height) + 1) };
-    }
-    case "right": {
-      const x = Math.max(0, Math.floor(params.offset * width) - 1);
-      return { x, y: 0, width: width - x, height };
-    }
-    case "left": {
-      const edge = params.offset + (interpolation <= 0.000001 ? 0 : interpolation * 0.5);
-      return { x: 0, y: 0, width: Math.min(width, Math.ceil(edge * width) + 1), height };
-    }
-  }
 }
 
 export class WlurPass {
@@ -223,7 +204,7 @@ export class WlurPass {
 
     const directionIndex = wlurDirectionToIndex(resolvedParams.direction);
     const radiusScale = usesReducedResolution ? working.scale : 1;
-    const blurYRegion = getEffectRegion(working.width, working.height, resolvedParams);
+    const blurYRegion = getWlurEffectRegion(working.width, working.height, resolvedParams);
     const halfKernel = (this.#quality.kernelSize - 1) / 2;
     const blurXRegion = {
       x: blurYRegion.x,
@@ -233,60 +214,62 @@ export class WlurPass {
         Math.min(working.height, blurYRegion.y + blurYRegion.height + halfKernel) -
         Math.max(0, blurYRegion.y - halfKernel),
     };
-    this.#blurPixels +=
-      blurXRegion.width * blurXRegion.height + blurYRegion.width * blurYRegion.height;
-    this.#fullBlurPixels += working.width * working.height * 2;
-
     const compositeTarget = resolvedParams.noise > 0.001 ? scratch.composite : outputTexture;
     const restoreThreshold = usesReducedResolution ? 0.05 : 0.001;
-    // Blur X writes directly at the working resolution. Sampling the full-size
-    // source with working-resolution texel steps fuses the old downsample pass
-    // without shrinking the blur footprint.
-    this.#writeBlurUniforms(
-      this.#blurXUniformBuffer,
-      working.width,
-      working.height,
-      working.width,
-      working.height,
-      resolvedParams.radius,
-      resolvedParams.offset,
-      resolvedParams.interpolation,
-      directionIndex,
-      radiusScale,
-    );
-    this.#encodeBlurPass(
-      encoder,
-      this.#blurXPipeline,
-      this.#blurBindGroupLayout,
-      this.#blurXUniformBuffer,
-      inputTexture,
-      scratch.blurIntermediate,
-      `${this.#label} blur X pass`,
-      blurXRegion,
-    );
+    if (options.refreshBlur !== false) {
+      this.#blurPixels +=
+        blurXRegion.width * blurXRegion.height + blurYRegion.width * blurYRegion.height;
+      this.#fullBlurPixels += working.width * working.height * 2;
 
-    this.#writeBlurUniforms(
-      this.#blurYUniformBuffer,
-      working.width,
-      working.height,
-      working.width,
-      working.height,
-      resolvedParams.radius,
-      resolvedParams.offset,
-      resolvedParams.interpolation,
-      directionIndex,
-      radiusScale,
-    );
-    this.#encodeBlurPass(
-      encoder,
-      this.#blurYPipeline,
-      this.#blurBindGroupLayout,
-      this.#blurYUniformBuffer,
-      scratch.blurIntermediate,
-      scratch.blurOutput,
-      `${this.#label} blur Y pass`,
-      blurYRegion,
-    );
+      // Blur X writes directly at the working resolution. Sampling the full-size
+      // source with working-resolution texel steps fuses the old downsample pass
+      // without shrinking the blur footprint.
+      this.#writeBlurUniforms(
+        this.#blurXUniformBuffer,
+        working.width,
+        working.height,
+        working.width,
+        working.height,
+        resolvedParams.radius,
+        resolvedParams.offset,
+        resolvedParams.interpolation,
+        directionIndex,
+        radiusScale,
+      );
+      this.#encodeBlurPass(
+        encoder,
+        this.#blurXPipeline,
+        this.#blurBindGroupLayout,
+        this.#blurXUniformBuffer,
+        inputTexture,
+        scratch.blurIntermediate,
+        `${this.#label} blur X pass`,
+        blurXRegion,
+      );
+
+      this.#writeBlurUniforms(
+        this.#blurYUniformBuffer,
+        working.width,
+        working.height,
+        working.width,
+        working.height,
+        resolvedParams.radius,
+        resolvedParams.offset,
+        resolvedParams.interpolation,
+        directionIndex,
+        radiusScale,
+      );
+      this.#encodeBlurPass(
+        encoder,
+        this.#blurYPipeline,
+        this.#blurBindGroupLayout,
+        this.#blurYUniformBuffer,
+        scratch.blurIntermediate,
+        scratch.blurOutput,
+        `${this.#label} blur Y pass`,
+        blurYRegion,
+      );
+    }
 
     this.#writeCompositeUniforms(
       width,
