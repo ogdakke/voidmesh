@@ -4,6 +4,7 @@ import {
   WlurPass,
   clampWlurParams,
   clampWlurQuality,
+  getWlurBlurRegions,
   getWlurScratchKey,
   getWlurSourceDependencyRegion,
   getWlurWorkingDimensions,
@@ -134,6 +135,22 @@ describe("wlur helpers", () => {
       ),
     ).toEqual({ x: 0, y: 300, width: 800, height: 300 });
   });
+
+  test("expands partial refreshes by each separable blur pass dependency", () => {
+    expect(
+      getWlurBlurRegions(
+        800,
+        600,
+        { ...DEFAULT_WLUR_PARAMS, radius: 20, noise: 0 },
+        { kernelSize: 63, resolutionScale: 0.5 },
+        { x: 100, y: 300, width: 100, height: 100 },
+      ),
+    ).toEqual({
+      blurX: { x: 18, y: 149, width: 114, height: 52 },
+      blurY: { x: 18, y: 118, width: 114, height: 114 },
+      partial: true,
+    });
+  });
 });
 
 describe("WlurPass resource reuse", () => {
@@ -171,9 +188,19 @@ describe("WlurPass resource reuse", () => {
     expect(beginRenderPass).toHaveBeenCalledTimes(4);
     expect(pass.getStats()).toEqual({ blurPixels: 181_200, fullBlurPixels: 240_000 });
 
+    pass.encode(encoder, input, firstOutput, 800, 600, params, {
+      refreshRegion: { x: 100, y: 300, width: 100, height: 100 },
+    });
+    expect(beginRenderPass).toHaveBeenCalledTimes(7);
+    expect(renderPass.setScissorRect).toHaveBeenNthCalledWith(3, 18, 149, 114, 52);
+    expect(renderPass.setScissorRect).toHaveBeenNthCalledWith(4, 18, 118, 114, 114);
+    expect(beginRenderPass.mock.calls.at(-3)?.[0].colorAttachments[0]?.loadOp).toBe("load");
+    expect(beginRenderPass.mock.calls.at(-2)?.[0].colorAttachments[0]?.loadOp).toBe("load");
+    expect(pass.getStats()).toEqual({ blurPixels: 200_124, fullBlurPixels: 480_000 });
+
     pass.encode(encoder, input, firstOutput, 800, 600, params);
     expect(device.createBindGroup).toHaveBeenCalledTimes(3);
-    expect(beginRenderPass).toHaveBeenCalledTimes(7);
+    expect(beginRenderPass).toHaveBeenCalledTimes(10);
     expect(input.createView).toHaveBeenCalledOnce();
     expect(firstOutput.createView).toHaveBeenCalledOnce();
 

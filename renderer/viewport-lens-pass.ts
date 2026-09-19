@@ -1,7 +1,12 @@
 import viewportLensDistortionShaderSource from "./viewport-lens-distortion.wgsl?raw";
 import type { WlurPixelRegion } from "#wlur";
 import type { ViewportLensDistortionConfig } from "#types/canvas.ts";
-import { getViewportLensSourceDependencyRegion } from "./viewport-lens-dependency.ts";
+import {
+  createViewportLensOutputInfluenceMap,
+  getViewportLensOutputInfluenceRegion,
+  getViewportLensSourceDependencyRegion,
+  type ViewportLensOutputInfluenceMap,
+} from "./viewport-lens-dependency.ts";
 export type { ViewportLensDistortionConfig } from "#types/canvas.ts";
 
 export interface ViewportLensTarget {
@@ -38,6 +43,7 @@ export class ViewportLensPass {
     outputHeight: number;
     region: WlurPixelRegion;
   } | null = null;
+  #outputInfluenceMap: ViewportLensOutputInfluenceMap | null = null;
   #texture: {
     width: number;
     height: number;
@@ -104,6 +110,7 @@ export class ViewportLensPass {
   setConfig(config: ViewportLensDistortionConfig): void {
     this.#config = { ...config };
     this.#sourceDependencyCache = null;
+    this.#outputInfluenceMap = null;
   }
 
   getSourceDependencyRegion(
@@ -111,6 +118,7 @@ export class ViewportLensPass {
     width: number,
     height: number,
   ): WlurPixelRegion {
+    this.#ensureOutputInfluenceMap(width, height);
     const cached = this.#sourceDependencyCache;
     if (
       cached &&
@@ -141,6 +149,16 @@ export class ViewportLensPass {
       region,
     };
     return region;
+  }
+
+  getOutputInfluenceRegion(
+    sourceRegion: WlurPixelRegion,
+    width: number,
+    height: number,
+    output: WlurPixelRegion,
+  ): WlurPixelRegion {
+    const influenceMap = this.#ensureOutputInfluenceMap(width, height);
+    return getViewportLensOutputInfluenceRegion(sourceRegion, influenceMap, output);
   }
 
   setColorScheme(isDark: boolean): boolean {
@@ -232,6 +250,14 @@ export class ViewportLensPass {
   #shouldApply(): boolean {
     const lens = this.#config;
     return lens.enabled && (lens.strength > 0.001 || lens.dispersion > 0.001);
+  }
+
+  #ensureOutputInfluenceMap(width: number, height: number): ViewportLensOutputInfluenceMap {
+    const cached = this.#outputInfluenceMap;
+    if (cached && cached.width === width && cached.height === height) return cached;
+    const influenceMap = createViewportLensOutputInfluenceMap(width, height, this.#config);
+    this.#outputInfluenceMap = influenceMap;
+    return influenceMap;
   }
 
   #destroyTexture(): void {

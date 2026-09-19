@@ -147,6 +147,25 @@ export interface WlurPixelRegion {
   height: number;
 }
 
+export interface WlurBlurRegions {
+  blurX: WlurPixelRegion;
+  blurY: WlurPixelRegion;
+  partial: boolean;
+}
+
+function intersectPixelRegions(a: WlurPixelRegion, b: WlurPixelRegion): WlurPixelRegion {
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.width, b.x + b.width);
+  const bottom = Math.min(a.y + a.height, b.y + b.height);
+  return {
+    x,
+    y,
+    width: Math.max(0, right - x),
+    height: Math.max(0, bottom - y),
+  };
+}
+
 export function getWlurEffectRegion(
   width: number,
   height: number,
@@ -171,6 +190,77 @@ export function getWlurEffectRegion(
       return { x: 0, y: 0, width: Math.min(width, Math.ceil(edge * width) + 1), height };
     }
   }
+}
+
+/**
+ * Scissor regions needed to refresh the separable Wlur blur after source pixels
+ * inside `refreshRegion` changed. The first pass expands horizontally because it
+ * samples the source along X. The second also expands vertically because it
+ * samples the persistent first-pass result along Y.
+ */
+export function getWlurBlurRegions(
+  width: number,
+  height: number,
+  params: WlurParams,
+  quality: WlurQuality,
+  refreshRegion?: WlurPixelRegion,
+): WlurBlurRegions {
+  const working = getWlurWorkingDimensions(width, height, quality.resolutionScale);
+  const blurY = getWlurEffectRegion(working.width, working.height, params);
+  const halfKernel = (normalizeWlurKernelSize(quality.kernelSize) - 1) / 2;
+  const blurX = {
+    x: blurY.x,
+    y: Math.max(0, blurY.y - halfKernel),
+    width: blurY.width,
+    height:
+      Math.min(working.height, blurY.y + blurY.height + halfKernel) -
+      Math.max(0, blurY.y - halfKernel),
+  };
+  if (!refreshRegion) return { blurX, blurY, partial: false };
+
+  // Blur X samples the full-resolution source through a linear sampler. Include
+  // one working texel around the mapped source change before propagating it
+  // through either kernel so fractional source coordinates cannot leave a seam.
+  const sourceFilterPadding = 1;
+  const dirtyX = Math.max(
+    0,
+    Math.floor((refreshRegion.x * working.width) / width) - sourceFilterPadding,
+  );
+  const dirtyY = Math.max(
+    0,
+    Math.floor((refreshRegion.y * working.height) / height) - sourceFilterPadding,
+  );
+  const dirtyRight = Math.min(
+    working.width,
+    Math.ceil(((refreshRegion.x + refreshRegion.width) * working.width) / width) +
+      sourceFilterPadding,
+  );
+  const dirtyBottom = Math.min(
+    working.height,
+    Math.ceil(((refreshRegion.y + refreshRegion.height) * working.height) / height) +
+      sourceFilterPadding,
+  );
+  const dirtyWidth = Math.max(0, dirtyRight - dirtyX);
+  const dirtyHeight = Math.max(0, dirtyBottom - dirtyY);
+  const partialBlurX = intersectPixelRegions(blurX, {
+    x: Math.max(0, dirtyX - halfKernel),
+    y: dirtyY,
+    width:
+      Math.min(working.width, dirtyX + dirtyWidth + halfKernel) -
+      Math.max(0, dirtyX - halfKernel),
+    height: dirtyHeight,
+  });
+  const partialBlurY = intersectPixelRegions(blurY, {
+    x: Math.max(0, dirtyX - halfKernel),
+    y: Math.max(0, dirtyY - halfKernel),
+    width:
+      Math.min(working.width, dirtyX + dirtyWidth + halfKernel) -
+      Math.max(0, dirtyX - halfKernel),
+    height:
+      Math.min(working.height, dirtyY + dirtyHeight + halfKernel) -
+      Math.max(0, dirtyY - halfKernel),
+  });
+  return { blurX: partialBlurX, blurY: partialBlurY, partial: true };
 }
 
 /**

@@ -10,6 +10,7 @@ export {
   clampWlurParams,
   clampWlurQuality,
   clampWlurTintColor,
+  getWlurBlurRegions,
   getWlurScratchKey,
   getWlurEffectRegion,
   getWlurSourceDependencyRegion,
@@ -18,6 +19,7 @@ export {
   normalizeWlurKernelSize,
   wlurDirectionToIndex,
   type WlurPixelRegion,
+  type WlurBlurRegions,
 } from "./math.ts";
 export {
   DEFAULT_WLUR_CURVE,

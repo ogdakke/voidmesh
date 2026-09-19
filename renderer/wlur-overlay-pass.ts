@@ -1,4 +1,9 @@
-import { getWlurSourceDependencyRegion, WlurPass, type WlurPixelRegion } from "#wlur";
+import {
+  getWlurSourceDependencyRegion,
+  WlurPass,
+  type WlurEncodeOptions,
+  type WlurPixelRegion,
+} from "#wlur";
 import { CopyPass } from "./copy-pass.ts";
 import {
   resolveWlurOverlayRuntimeConfig,
@@ -22,6 +27,7 @@ interface EncodeWlurOverlayOptions {
   devicePixelRatio: number;
   contentDirty: boolean;
   blurDirtyMask: number;
+  blurDirtyRegion?: WlurPixelRegion | null;
 }
 
 export const WLUR_BLUR_DIRTY_GLOBAL = 1 << 0;
@@ -59,6 +65,7 @@ export interface WlurOverlayPassStats {
   calloutInvalidations: number;
   selectionInvalidations: number;
   cacheInvalidations: number;
+  partialBlurRefreshes: number;
 }
 
 interface WlurOverlayTextures {
@@ -98,6 +105,7 @@ export class WlurOverlayPass {
   #calloutInvalidations = 0;
   #selectionInvalidations = 0;
   #cacheInvalidations = 0;
+  #partialBlurRefreshes = 0;
 
   constructor(options: WlurOverlayPassOptions) {
     this.#device = options.device;
@@ -178,6 +186,7 @@ export class WlurOverlayPass {
       calloutInvalidations: this.#calloutInvalidations,
       selectionInvalidations: this.#selectionInvalidations,
       cacheInvalidations: this.#cacheInvalidations,
+      partialBlurRefreshes: this.#partialBlurRefreshes,
     };
   }
 
@@ -206,6 +215,16 @@ export class WlurOverlayPass {
     const directPresentation = this.#canvasFormat === this.#intermediateFormat;
     const cacheChanged = !this.#cacheValid || this.#cacheKey !== cacheKey;
     const refreshBlur = !resolvedConfig.cache || cacheChanged || options.blurDirtyMask !== 0;
+    const partialDirtyMask = WLUR_BLUR_DIRTY_ACTION | WLUR_BLUR_DIRTY_DRAG;
+    const partialBlurRegion =
+      refreshBlur &&
+      resolvedConfig.cache &&
+      this.#cacheValid &&
+      !cacheChanged &&
+      options.blurDirtyRegion &&
+      (options.blurDirtyMask & ~partialDirtyMask) === 0
+        ? options.blurDirtyRegion
+        : undefined;
     const needsComposite =
       directPresentation || !resolvedConfig.cache || cacheChanged || options.contentDirty;
 
@@ -238,6 +257,10 @@ export class WlurOverlayPass {
         wlurOutput = textures.output;
       }
 
+      const wlurEncodeOptions: WlurEncodeOptions = directPresentation
+        ? { outputView: options.targetView, refreshBlur }
+        : { refreshBlur };
+      if (partialBlurRegion) wlurEncodeOptions.refreshRegion = partialBlurRegion;
       this.#wlurPass.encode(
         options.encoder,
         wlurSource,
@@ -245,9 +268,12 @@ export class WlurOverlayPass {
         options.width,
         options.height,
         resolvedConfig.params,
-        directPresentation ? { outputView: options.targetView, refreshBlur } : { refreshBlur },
+        wlurEncodeOptions,
       );
-      if (refreshBlur) this.#blurRefreshes++;
+      if (refreshBlur) {
+        this.#blurRefreshes++;
+        if (partialBlurRegion) this.#partialBlurRefreshes++;
+      }
       else this.#blurReuses++;
       this.#composites++;
 

@@ -4,6 +4,21 @@ import type { ViewportLensDistortionConfig } from "#types/canvas.ts";
 const SAMPLE_STRIDE_PX = 16;
 const MAX_AXIS_SEGMENTS = 128;
 const LINEAR_FILTER_PADDING_PX = 1;
+const INFLUENCE_STRIDE_PX = 32;
+const MAX_INFLUENCE_AXIS_SEGMENTS = 64;
+
+export interface ViewportLensOutputInfluenceMap {
+  width: number;
+  height: number;
+  columns: number;
+  rows: number;
+  tileWidth: number;
+  tileHeight: number;
+  minimumX: Int32Array;
+  minimumY: Int32Array;
+  maximumX: Int32Array;
+  maximumY: Int32Array;
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
@@ -79,6 +94,208 @@ function resolveLensSample(
   output.normalY = normalY;
 }
 
+function resolveDispersedLensSample(
+  greenU: number,
+  greenV: number,
+  edge: number,
+  normalX: number,
+  normalY: number,
+  channelOffset: number,
+  config: ViewportLensDistortionConfig,
+  aspect: number,
+  output: { u: number; v: number },
+): void {
+  const scale = 1 - edge * config.strength * 0.08 * config.scale;
+  const offset = channelOffset * edge * 0.0035 * scale;
+  output.u = clamp(greenU - (normalX * offset) / aspect, 0, 1);
+  output.v = clamp(greenV - normalY * offset, 0, 1);
+}
+
+/** Build a source-tile index of every output area that samples each tile. */
+export function createViewportLensOutputInfluenceMap(
+  width: number,
+  height: number,
+  config: ViewportLensDistortionConfig,
+): ViewportLensOutputInfluenceMap {
+  const safeWidth = Math.max(1, width);
+  const safeHeight = Math.max(1, height);
+  const xSegments = Math.min(
+    MAX_INFLUENCE_AXIS_SEGMENTS,
+    Math.max(1, Math.ceil(safeWidth / INFLUENCE_STRIDE_PX)),
+  );
+  const ySegments = Math.min(
+    MAX_INFLUENCE_AXIS_SEGMENTS,
+    Math.max(1, Math.ceil(safeHeight / INFLUENCE_STRIDE_PX)),
+  );
+  const aspect = safeWidth / safeHeight;
+  const power = lensSuperellipsePower(config, safeWidth, safeHeight);
+  const sample = { u: 0, v: 0, edge: 0, normalX: 0, normalY: 0 };
+  const columns = xSegments;
+  const rows = ySegments;
+  const tileWidth = safeWidth / columns;
+  const tileHeight = safeHeight / rows;
+  const tileCount = columns * rows;
+  const minimumX = new Int32Array(tileCount);
+  const minimumY = new Int32Array(tileCount);
+  const maximumX = new Int32Array(tileCount);
+  const maximumY = new Int32Array(tileCount);
+  minimumX.fill(0x7f_ff_ff_ff);
+  minimumY.fill(0x7f_ff_ff_ff);
+  maximumX.fill(-1);
+  maximumY.fill(-1);
+  const paddingX = tileWidth * 2 + LINEAR_FILTER_PADDING_PX;
+  const paddingY = tileHeight * 2 + LINEAR_FILTER_PADDING_PX;
+  const include = (outputU: number, outputV: number, sourceU: number, sourceV: number) => {
+    const sourceX = sourceU * safeWidth;
+    const sourceY = sourceV * safeHeight;
+    const tileX0 = clamp(Math.floor((sourceX - paddingX) / tileWidth), 0, columns - 1);
+    const tileY0 = clamp(Math.floor((sourceY - paddingY) / tileHeight), 0, rows - 1);
+    const tileX1 = clamp(Math.floor((sourceX + paddingX) / tileWidth), 0, columns - 1);
+    const tileY1 = clamp(Math.floor((sourceY + paddingY) / tileHeight), 0, rows - 1);
+    const outputX0 = Math.max(0, Math.floor(outputU * safeWidth - paddingX));
+    const outputY0 = Math.max(0, Math.floor(outputV * safeHeight - paddingY));
+    const outputX1 = Math.min(safeWidth, Math.ceil(outputU * safeWidth + paddingX));
+    const outputY1 = Math.min(safeHeight, Math.ceil(outputV * safeHeight + paddingY));
+    for (let tileY = tileY0; tileY <= tileY1; tileY++) {
+      for (let tileX = tileX0; tileX <= tileX1; tileX++) {
+        const index = tileY * columns + tileX;
+        minimumX[index] = Math.min(minimumX[index]!, outputX0);
+        minimumY[index] = Math.min(minimumY[index]!, outputY0);
+        maximumX[index] = Math.max(maximumX[index]!, outputX1);
+        maximumY[index] = Math.max(maximumY[index]!, outputY1);
+      }
+    }
+  };
+  const lensEnabled =
+    config.enabled && (config.strength > 0.001 || config.dispersion > 0.001);
+
+  for (let yIndex = 0; yIndex <= ySegments; yIndex++) {
+    const v = yIndex / ySegments;
+    for (let xIndex = 0; xIndex <= xSegments; xIndex++) {
+      const u = xIndex / xSegments;
+      if (!lensEnabled) {
+        include(u, v, u, v);
+        continue;
+      }
+      resolveLensSample(u, v, 0, config, aspect, power, sample);
+      const greenU = sample.u;
+      const greenV = sample.v;
+      const edge = sample.edge;
+      const normalU = sample.normalX / aspect;
+      const normalV = sample.normalY;
+      include(u, v, greenU, greenV);
+
+      const dispersion = config.dispersion * edge;
+      resolveDispersedLensSample(
+        greenU,
+        greenV,
+        edge,
+        sample.normalX,
+        sample.normalY,
+        dispersion,
+        config,
+        aspect,
+        sample,
+      );
+      include(u, v, sample.u, sample.v);
+      resolveDispersedLensSample(
+        greenU,
+        greenV,
+        edge,
+        sample.normalX,
+        sample.normalY,
+        -dispersion,
+        config,
+        aspect,
+        sample,
+      );
+      include(u, v, sample.u, sample.v);
+
+      if (config.reflectionIntensity > 0.001) {
+        include(
+          u,
+          v,
+          clamp(greenU - normalU * edge * 0.075, 0, 1),
+          clamp(greenV - normalV * edge * 0.075, 0, 1),
+        );
+        include(
+          u,
+          v,
+          clamp(greenU - normalU * edge * 0.15, 0, 1),
+          clamp(greenV - normalV * edge * 0.15, 0, 1),
+        );
+        include(
+          u,
+          v,
+          clamp(greenU - normalU * edge * 0.3, 0, 1),
+          clamp(greenV - normalV * edge * 0.3, 0, 1),
+        );
+      }
+    }
+  }
+
+  return {
+    width: safeWidth,
+    height: safeHeight,
+    columns,
+    rows,
+    tileWidth,
+    tileHeight,
+    minimumX,
+    minimumY,
+    maximumX,
+    maximumY,
+  };
+}
+
+export function getViewportLensOutputInfluenceRegion(
+  sourceRegion: WlurPixelRegion,
+  influenceMap: ViewportLensOutputInfluenceMap,
+  output: WlurPixelRegion,
+): WlurPixelRegion {
+  const tileX0 = clamp(
+    Math.floor(sourceRegion.x / influenceMap.tileWidth),
+    0,
+    influenceMap.columns - 1,
+  );
+  const tileY0 = clamp(
+    Math.floor(sourceRegion.y / influenceMap.tileHeight),
+    0,
+    influenceMap.rows - 1,
+  );
+  const tileX1 = clamp(
+    Math.floor((sourceRegion.x + sourceRegion.width) / influenceMap.tileWidth),
+    0,
+    influenceMap.columns - 1,
+  );
+  const tileY1 = clamp(
+    Math.floor((sourceRegion.y + sourceRegion.height) / influenceMap.tileHeight),
+    0,
+    influenceMap.rows - 1,
+  );
+  let minimumX = influenceMap.width;
+  let minimumY = influenceMap.height;
+  let maximumX = 0;
+  let maximumY = 0;
+  for (let tileY = tileY0; tileY <= tileY1; tileY++) {
+    for (let tileX = tileX0; tileX <= tileX1; tileX++) {
+      const index = tileY * influenceMap.columns + tileX;
+      minimumX = Math.min(minimumX, influenceMap.minimumX[index]!);
+      minimumY = Math.min(minimumY, influenceMap.minimumY[index]!);
+      maximumX = Math.max(maximumX, influenceMap.maximumX[index]!);
+      maximumY = Math.max(maximumY, influenceMap.maximumY[index]!);
+    }
+  }
+  if (maximumX < minimumX || maximumY < minimumY) {
+    throw new Error("Viewport lens influence map does not cover the requested source region");
+  }
+  output.x = minimumX;
+  output.y = minimumY;
+  output.width = maximumX - minimumX;
+  output.height = maximumY - minimumY;
+  return output;
+}
+
 /**
  * Maps a lens-output region back to the scene pixels sampled by the lens shader.
  * The grid follows the shader's warped RGB and reflection taps, then expands by
@@ -140,9 +357,29 @@ export function getViewportLensSourceDependencyRegion(
       include(greenU, greenV);
 
       const dispersion = config.dispersion * edge;
-      resolveLensSample(u, v, dispersion, config, aspect, power, sample);
+      resolveDispersedLensSample(
+        greenU,
+        greenV,
+        edge,
+        sample.normalX,
+        sample.normalY,
+        dispersion,
+        config,
+        aspect,
+        sample,
+      );
       include(sample.u, sample.v);
-      resolveLensSample(u, v, -dispersion, config, aspect, power, sample);
+      resolveDispersedLensSample(
+        greenU,
+        greenV,
+        edge,
+        sample.normalX,
+        sample.normalY,
+        -dispersion,
+        config,
+        aspect,
+        sample,
+      );
       include(sample.u, sample.v);
 
       if (config.reflectionIntensity > 0.001) {

@@ -27,6 +27,7 @@ vi.mock("#wlur", async (importOriginal) => {
 
 import {
   WLUR_BLUR_DIRTY_AUXILIARY,
+  WLUR_BLUR_DIRTY_ACTION,
   WLUR_BLUR_DIRTY_CALLOUT,
   WLUR_BLUR_DIRTY_LENS,
   WlurOverlayPass,
@@ -107,6 +108,7 @@ describe("WlurOverlayPass", () => {
       calloutInvalidations: 0,
       selectionInvalidations: 0,
       cacheInvalidations: 0,
+      partialBlurRefreshes: 0,
     });
 
     pass.destroy();
@@ -207,6 +209,62 @@ describe("WlurOverlayPass", () => {
       blurRefreshes: 1,
       blurReuses: 1,
       composites: 2,
+    });
+
+    pass.destroy();
+  });
+
+  test("partially refreshes a valid cache for local action changes", () => {
+    const sceneTexture = createTexture();
+    const pass = new WlurOverlayPass({
+      device: createDevice(sceneTexture),
+      canvasFormat: "rgba16float",
+      intermediateFormat: "rgba16float",
+    });
+    pass.setConfig({ enabled: true, cache: true });
+    const sceneTarget = pass.getSceneTarget(1200, 800, 2)!;
+    const encoder = createEncoder();
+    const targetTexture = createTexture();
+    const targetView = {} as GPUTextureView;
+    const blurDirtyRegion = { x: 100, y: 400, width: 240, height: 180 };
+
+    pass.encode({
+      encoder,
+      sourceTexture: sceneTarget.texture,
+      targetTexture,
+      targetView,
+      width: 1200,
+      height: 800,
+      devicePixelRatio: 2,
+      contentDirty: true,
+      blurDirtyMask: 1,
+    });
+    pass.encode({
+      encoder,
+      sourceTexture: sceneTarget.texture,
+      targetTexture,
+      targetView,
+      width: 1200,
+      height: 800,
+      devicePixelRatio: 2,
+      contentDirty: true,
+      blurDirtyMask: WLUR_BLUR_DIRTY_ACTION,
+      blurDirtyRegion,
+    });
+
+    expect(wlurMocks.encode).toHaveBeenLastCalledWith(
+      encoder,
+      sceneTexture,
+      targetTexture,
+      1200,
+      800,
+      expect.any(Object),
+      { outputView: targetView, refreshBlur: true, refreshRegion: blurDirtyRegion },
+    );
+    expect(pass.getStats()).toMatchObject({
+      blurRefreshes: 2,
+      blurReuses: 0,
+      partialBlurRefreshes: 1,
     });
 
     pass.destroy();

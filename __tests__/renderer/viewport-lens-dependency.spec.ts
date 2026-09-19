@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { getViewportLensSourceDependencyRegion } from "#renderer/viewport-lens-dependency.ts";
+import {
+  createViewportLensOutputInfluenceMap,
+  getViewportLensOutputInfluenceRegion,
+  getViewportLensSourceDependencyRegion,
+} from "#renderer/viewport-lens-dependency.ts";
 import type { ViewportLensDistortionConfig } from "#types/canvas.ts";
 
 const SUBTLE_LENS = {
@@ -41,5 +45,17 @@ describe("viewport lens source dependencies", () => {
         { x: 0, y: 0, width: 0, height: 0 },
       ),
     ).toEqual({ x: 0, y: 1397, width: 1179, height: 1126 });
+  });
+
+  test("indexes the lens outputs influenced by a local source change", () => {
+    const influenceMap = createViewportLensOutputInfluenceMap(1179, 2556, SUBTLE_LENS);
+
+    expect(
+      getViewportLensOutputInfluenceRegion(
+        { x: 200, y: 2050, width: 400, height: 250 },
+        influenceMap,
+        { x: 0, y: 0, width: 0, height: 0 },
+      ),
+    ).toEqual({ x: 0, y: 1876, width: 1179, height: 680 });
   });
 });

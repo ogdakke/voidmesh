@@ -2,12 +2,14 @@ import { hasPrismWakeEffects } from "#lib/fancy-effects.ts";
 import { config, getViewportLensDistortionConfig, type GridConfig } from "#config";
 import { logger } from "#lib/client.logger.ts";
 import { tracePerformancePhase } from "#lib/performance-tracing.ts";
+import { overlapConfig } from "#lib/config/overlap.config.ts";
 import { boundsIntersect, getRotatedAABB, getViewportWorldBounds } from "#lib/canvas-math.ts";
 import { getFrameAtTime } from "#lib/gif-decoder.ts";
 import { setGpuContext } from "./gpu-color-space.ts";
 import type { DisintegrationRenderOverlay, RenderState } from "#engine";
 import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import { CanvasLensing } from "#types/enums.ts";
+import type { WlurPixelRegion } from "#wlur";
 import { ActionLayerBlurPass, type ActionLayerBlurPassStats } from "./action-layer-blur-pass.ts";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
 import { CanvasDebugPass } from "./canvas-debug-pass.ts";
@@ -72,6 +74,7 @@ const WLUR_INVALIDATION_DEBUG_COLORS = {
   action: [1, 0.55, 0.08, 0.95],
   drag: [1, 0.84, 0.12, 0.95],
   label: [0.2, 0.9, 0.42, 0.95],
+  partial: [1, 1, 1, 0.95],
 } as const satisfies Record<string, WlurInvalidationDebugColor>;
 
 export class InfiniteCanvasRenderer {
@@ -158,6 +161,23 @@ export class InfiniteCanvasRenderer {
   readonly #wlurDebugViewportBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
   readonly #wlurDebugLensBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
   readonly #wlurDebugLabelBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #wlurDebugPartialBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #wlurCurrentDynamicSourceRegion: WlurPixelRegion = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #wlurPreviousDynamicSourceRegion: WlurPixelRegion = {
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+  };
+  readonly #wlurDynamicSourceRefreshRegion: WlurPixelRegion = {
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+  };
+  readonly #wlurDynamicOutputRegion: WlurPixelRegion = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #wlurPartialRefreshRegion: WlurPixelRegion = { x: 0, y: 0, width: 0, height: 0 };
+  #hasPreviousWlurDynamicSourceRegion = false;
   readonly #wlurStateChanges = {
     global: true,
     actionPose: true,
@@ -303,6 +323,7 @@ export class InfiniteCanvasRenderer {
         calloutInvalidations: 0,
         selectionInvalidations: 0,
         cacheInvalidations: 0,
+        partialBlurRefreshes: 0,
       },
     };
   }
@@ -898,18 +919,42 @@ export class InfiniteCanvasRenderer {
       const dependencyBounds = sourceDependencyRegion
         ? this.#setWlurDependencyWorldBounds(sourceDependencyRegion, viewport)
         : null;
-      const actionLayerTouchesWlur =
-        dependencyBounds !== null &&
-        this.#drawItemsIntersectBounds(actionLayerDrawItems, dependencyBounds, viewport.zoom);
       const animatedContentTouchesWlur =
         dependencyBounds === null ||
-        this.#drawItemsIntersectBounds(animatingDrawItems, dependencyBounds, viewport.zoom);
-      const dragVisualTouchesWlur =
-        dependencyBounds === null ||
-        this.#drawItemsIntersectBounds(dragVisualDrawItems, dependencyBounds, viewport.zoom);
+        this.#drawItemsIntersectBoundsExcludingLocal(
+          animatingDrawItems,
+          dependencyBounds,
+          viewport.zoom,
+          actionLayerDrawItems,
+          dragVisualDrawItems,
+        );
+      const dynamicSourceRefreshRegion = this.#updateWlurDynamicSourceRefreshRegion(
+        actionLayerDrawItems,
+        dragVisualDrawItems,
+        viewport,
+        width,
+        height,
+        dpr,
+      );
+      const dynamicSourceTouchesWlur =
+        dynamicSourceRefreshRegion !== null &&
+        sourceDependencyRegion !== null &&
+        this.#wlurPixelRegionsIntersect(dynamicSourceRefreshRegion, sourceDependencyRegion);
+      const animatedActionContent = this.#drawItemListsIntersect(
+        animatingDrawItems,
+        actionLayerDrawItems,
+      );
+      const animatedDragContent = this.#drawItemListsIntersect(
+        animatingDrawItems,
+        dragVisualDrawItems,
+      );
       const actionDirty =
-        (wlurStateChanges.actionPose || this.#compositionPass.crossing.pending) &&
-        actionLayerTouchesWlur;
+        (wlurStateChanges.actionPose ||
+          this.#compositionPass.crossing.pending ||
+          animatedActionContent) &&
+        dynamicSourceTouchesWlur;
+      const dragDirty =
+        (wlurStateChanges.dragVisual || animatedDragContent) && dynamicSourceTouchesWlur;
       const disintegrationDirty = !!this.#disintegrationPass?.hasOverlays;
       const labelDirty =
         this.#entityLabelPass?.isAnimating === true &&
@@ -925,13 +970,37 @@ export class InfiniteCanvasRenderer {
       if (wlurStateChanges.global) blurDirtyMask |= WLUR_BLUR_DIRTY_GLOBAL;
       if (animatedContentTouchesWlur) blurDirtyMask |= WLUR_BLUR_DIRTY_ANIMATED;
       if (actionDirty) blurDirtyMask |= WLUR_BLUR_DIRTY_ACTION;
-      if (wlurStateChanges.dragVisual && dragVisualTouchesWlur)
-        blurDirtyMask |= WLUR_BLUR_DIRTY_DRAG;
+      if (dragDirty) blurDirtyMask |= WLUR_BLUR_DIRTY_DRAG;
       if (auxiliaryDirty) blurDirtyMask |= WLUR_BLUR_DIRTY_AUXILIARY;
       if (disintegrationDirty) blurDirtyMask |= WLUR_BLUR_DIRTY_DISINTEGRATION;
       if (labelDirty) blurDirtyMask |= WLUR_BLUR_DIRTY_LABEL;
       if (calloutDirty) blurDirtyMask |= WLUR_BLUR_DIRTY_CALLOUT;
       if (selectionDirty) blurDirtyMask |= WLUR_BLUR_DIRTY_SELECTION;
+      const localDirtyMask = WLUR_BLUR_DIRTY_ACTION | WLUR_BLUR_DIRTY_DRAG;
+      let blurDirtyRegion: WlurPixelRegion | null = null;
+      if (
+        dynamicSourceRefreshRegion &&
+        outputDependencyRegion &&
+        blurDirtyMask !== 0 &&
+        (blurDirtyMask & ~localDirtyMask) === 0
+      ) {
+        const dynamicOutputRegion = viewportLensTarget
+          ? this.#viewportLensPass!.getOutputInfluenceRegion(
+              dynamicSourceRefreshRegion,
+              width,
+              height,
+              this.#wlurDynamicOutputRegion,
+            )
+          : this.#copyWlurPixelRegion(
+              dynamicSourceRefreshRegion,
+              this.#wlurDynamicOutputRegion,
+            );
+        blurDirtyRegion = this.#intersectWlurPixelRegions(
+          dynamicOutputRegion,
+          outputDependencyRegion,
+          this.#wlurPartialRefreshRegion,
+        );
+      }
       this.#wlurOverlayPass.encode({
         encoder,
         sourceTexture: presentationTargetTexture,
@@ -942,6 +1011,7 @@ export class InfiniteCanvasRenderer {
         devicePixelRatio: dpr,
         contentDirty: presentationContentDirty,
         blurDirtyMask,
+        blurDirtyRegion,
       });
       this.#encodeWlurInvalidationDebug({
         encoder,
@@ -951,6 +1021,7 @@ export class InfiniteCanvasRenderer {
         height,
         outputDependencyBounds,
         lensDependencyBounds: viewportLensTarget ? dependencyBounds : null,
+        partialRefreshRegion: blurDirtyRegion,
         globalDirty: wlurStateChanges.global,
         animatingDrawItems,
         actionLayerDrawItems,
@@ -1104,13 +1175,160 @@ export class InfiniteCanvasRenderer {
     return output;
   }
 
-  #drawItemsIntersectBounds(
+  #updateWlurDynamicSourceRefreshRegion(
+    actionItems: readonly CompositionDrawItem[],
+    dragItems: readonly CompositionDrawItem[],
+    viewport: Viewport,
+    width: number,
+    height: number,
+    devicePixelRatio: number,
+  ): WlurPixelRegion | null {
+    let minimumX = width;
+    let minimumY = height;
+    let maximumX = 0;
+    let maximumY = 0;
+    const effectPadding =
+      Math.ceil(Math.max(overlapConfig.rgbSplit, overlapConfig.wakeWidth) * devicePixelRatio) + 2;
+    const include = (item: CompositionDrawItem) => {
+      const bounds = this.#setWlurDrawItemBounds(item, viewport.zoom);
+      minimumX = Math.min(
+        minimumX,
+        Math.min(
+          width,
+          Math.max(
+            0,
+            Math.floor((bounds.x - viewport.offset.x) * viewport.zoom) - effectPadding,
+          ),
+        ),
+      );
+      minimumY = Math.min(
+        minimumY,
+        Math.min(
+          height,
+          Math.max(
+            0,
+            Math.floor((bounds.y - viewport.offset.y) * viewport.zoom) - effectPadding,
+          ),
+        ),
+      );
+      maximumX = Math.max(
+        maximumX,
+        Math.min(
+          width,
+          Math.max(
+            0,
+            Math.ceil((bounds.x + bounds.width - viewport.offset.x) * viewport.zoom) +
+              effectPadding,
+          ),
+        ),
+      );
+      maximumY = Math.max(
+        maximumY,
+        Math.min(
+          height,
+          Math.max(
+            0,
+            Math.ceil((bounds.y + bounds.height - viewport.offset.y) * viewport.zoom) +
+              effectPadding,
+          ),
+        ),
+      );
+    };
+    for (const item of actionItems) include(item);
+    for (const item of dragItems) include(item);
+
+    const current = this.#wlurCurrentDynamicSourceRegion;
+    const hasCurrent = maximumX > minimumX && maximumY > minimumY;
+    if (hasCurrent) {
+      current.x = minimumX;
+      current.y = minimumY;
+      current.width = maximumX - minimumX;
+      current.height = maximumY - minimumY;
+    }
+
+    const refresh = this.#wlurDynamicSourceRefreshRegion;
+    if (hasCurrent && this.#hasPreviousWlurDynamicSourceRegion) {
+      const previous = this.#wlurPreviousDynamicSourceRegion;
+      refresh.x = Math.min(current.x, previous.x);
+      refresh.y = Math.min(current.y, previous.y);
+      const right = Math.max(current.x + current.width, previous.x + previous.width);
+      const bottom = Math.max(current.y + current.height, previous.y + previous.height);
+      refresh.width = right - refresh.x;
+      refresh.height = bottom - refresh.y;
+    } else if (hasCurrent) {
+      this.#copyWlurPixelRegion(current, refresh);
+    } else if (this.#hasPreviousWlurDynamicSourceRegion) {
+      this.#copyWlurPixelRegion(this.#wlurPreviousDynamicSourceRegion, refresh);
+    } else return null;
+
+    if (hasCurrent) {
+      this.#copyWlurPixelRegion(current, this.#wlurPreviousDynamicSourceRegion);
+      this.#hasPreviousWlurDynamicSourceRegion = true;
+    } else this.#hasPreviousWlurDynamicSourceRegion = false;
+    return refresh;
+  }
+
+  #copyWlurPixelRegion(source: WlurPixelRegion, output: WlurPixelRegion): WlurPixelRegion {
+    output.x = source.x;
+    output.y = source.y;
+    output.width = source.width;
+    output.height = source.height;
+    return output;
+  }
+
+  #intersectWlurPixelRegions(
+    a: WlurPixelRegion,
+    b: WlurPixelRegion,
+    output: WlurPixelRegion,
+  ): WlurPixelRegion | null {
+    const x = Math.max(a.x, b.x);
+    const y = Math.max(a.y, b.y);
+    const right = Math.min(a.x + a.width, b.x + b.width);
+    const bottom = Math.min(a.y + a.height, b.y + b.height);
+    if (right <= x || bottom <= y) return null;
+    output.x = x;
+    output.y = y;
+    output.width = right - x;
+    output.height = bottom - y;
+    return output;
+  }
+
+  #wlurPixelRegionsIntersect(a: WlurPixelRegion, b: WlurPixelRegion): boolean {
+    return (
+      a.x < b.x + b.width &&
+      a.x + a.width > b.x &&
+      a.y < b.y + b.height &&
+      a.y + a.height > b.y
+    );
+  }
+
+  #drawItemsIntersectBoundsExcludingLocal(
     items: readonly CompositionDrawItem[],
     bounds: Bounds,
     viewportZoom: number,
+    actionItems: readonly CompositionDrawItem[],
+    dragItems: readonly CompositionDrawItem[],
+  ): boolean {
+    itemLoop: for (const item of items) {
+      for (const actionItem of actionItems) {
+        if (item === actionItem) continue itemLoop;
+      }
+      for (const dragItem of dragItems) {
+        if (item === dragItem) continue itemLoop;
+      }
+      if (boundsIntersect(this.#setWlurDrawItemBounds(item, viewportZoom), bounds)) return true;
+    }
+    return false;
+  }
+
+  #drawItemListsIntersect(
+    items: readonly CompositionDrawItem[],
+    candidates: readonly CompositionDrawItem[],
   ): boolean {
     for (const item of items) {
-      if (boundsIntersect(this.#setWlurDrawItemBounds(item, viewportZoom), bounds)) return true;
+      for (const candidate of candidates) {
+        if (item === candidate) return true;
+      }
     }
     return false;
   }
@@ -1143,6 +1361,7 @@ export class InfiniteCanvasRenderer {
     height: number;
     outputDependencyBounds: Bounds | null;
     lensDependencyBounds: Bounds | null;
+    partialRefreshRegion: WlurPixelRegion | null;
     globalDirty: boolean;
     animatingDrawItems: readonly CompositionDrawItem[];
     actionLayerDrawItems: readonly CompositionDrawItem[];
@@ -1167,6 +1386,16 @@ export class InfiniteCanvasRenderer {
       lensBounds.width -= inset * 2;
       lensBounds.height -= inset * 2;
       debugPass.addBounds(lensBounds, WLUR_INVALIDATION_DEBUG_COLORS.lens);
+    }
+    if (options.partialRefreshRegion) {
+      debugPass.addBounds(
+        this.#setWlurDependencyWorldBounds(
+          options.partialRefreshRegion,
+          options.viewport,
+          this.#wlurDebugPartialBounds,
+        ),
+        WLUR_INVALIDATION_DEBUG_COLORS.partial,
+      );
     }
 
     getViewportWorldBounds(
