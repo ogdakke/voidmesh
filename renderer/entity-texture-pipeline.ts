@@ -72,7 +72,6 @@ export interface EntityTextureResidencyStats {
   processedTextureAllocations: number;
   sourceUploads: number;
   externalTextureImports: number;
-  externalTextureIdentityReuses: number;
   evictions: number;
 }
 
@@ -88,7 +87,6 @@ export class EntityTexturePipeline {
   #processedTextureAllocations = 0;
   #sourceUploads = 0;
   #externalTextureImports = 0;
-  #externalTextureIdentityReuses = 0;
   #evictions = 0;
   #allowLodTransitions = false;
   #lodTransitionsRemaining = 0;
@@ -99,7 +97,6 @@ export class EntityTexturePipeline {
   readonly #residentTextureEntries = new WeakMap<GPUTexture, CachedEntityTexture>();
   readonly #lodCacheLookups = new Map<object, LodCacheLookup>();
   #entityContentRevisions = new Map<string, number>();
-  #lastExternalTextures = new Map<string, GPUExternalTexture>();
   #gifResizeSurfaces = new Map<string, GifResizeSurface>();
   #renderEntityView: EffectRenderEntity | null = null;
   #sourceBytes = 0;
@@ -257,11 +254,6 @@ export class EntityTexturePipeline {
         colorSpace: this.#colorConfig.textureColorSpace,
       });
       this.#externalTextureImports++;
-      if (this.#lastExternalTextures.get(entity.id) === externalTexture) {
-        this.#externalTextureIdentityReuses++;
-      } else {
-        this.#lastExternalTextures.set(entity.id, externalTexture);
-      }
 
       if (entity.shaderParams.showOriginal) {
         this.#releaseEntityProcessedTexture(entity.id, false);
@@ -580,7 +572,6 @@ export class EntityTexturePipeline {
       processedTextureAllocations: this.#processedTextureAllocations,
       sourceUploads: this.#sourceUploads,
       externalTextureImports: this.#externalTextureImports,
-      externalTextureIdentityReuses: this.#externalTextureIdentityReuses,
       evictions: this.#evictions,
     };
   }
@@ -592,7 +583,6 @@ export class EntityTexturePipeline {
     this.#releaseEntitySourceTexture(entityId);
 
     this.#entityContentRevisions.delete(entityId);
-    this.#lastExternalTextures.delete(entityId);
     const resizeSurface = this.#gifResizeSurfaces.get(entityId);
     if (resizeSurface) {
       resizeSurface.canvas.width = 1;
@@ -634,7 +624,6 @@ export class EntityTexturePipeline {
     }
     this.#gifResizeSurfaces.clear();
     this.#entityContentRevisions.clear();
-    this.#lastExternalTextures.clear();
 
     this.#runtime.destroy();
   }
