@@ -166,8 +166,7 @@ export function createViewportLensOutputInfluenceMap(
       }
     }
   };
-  const lensEnabled =
-    config.enabled && (config.strength > 0.001 || config.dispersion > 0.001);
+  const lensEnabled = config.enabled && (config.strength > 0.001 || config.dispersion > 0.001);
 
   for (let yIndex = 0; yIndex <= ySegments; yIndex++) {
     const v = yIndex / ySegments;

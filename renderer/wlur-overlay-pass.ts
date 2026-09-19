@@ -273,8 +273,7 @@ export class WlurOverlayPass {
       if (refreshBlur) {
         this.#blurRefreshes++;
         if (partialBlurRegion) this.#partialBlurRefreshes++;
-      }
-      else this.#blurReuses++;
+      } else this.#blurReuses++;
       this.#composites++;
 
       if (resolvedConfig.cache) {

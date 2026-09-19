@@ -991,10 +991,7 @@ export class InfiniteCanvasRenderer {
               height,
               this.#wlurDynamicOutputRegion,
             )
-          : this.#copyWlurPixelRegion(
-              dynamicSourceRefreshRegion,
-              this.#wlurDynamicOutputRegion,
-            );
+          : this.#copyWlurPixelRegion(dynamicSourceRefreshRegion, this.#wlurDynamicOutputRegion);
         blurDirtyRegion = this.#intersectWlurPixelRegions(
           dynamicOutputRegion,
           outputDependencyRegion,
@@ -1195,20 +1192,14 @@ export class InfiniteCanvasRenderer {
         minimumX,
         Math.min(
           width,
-          Math.max(
-            0,
-            Math.floor((bounds.x - viewport.offset.x) * viewport.zoom) - effectPadding,
-          ),
+          Math.max(0, Math.floor((bounds.x - viewport.offset.x) * viewport.zoom) - effectPadding),
         ),
       );
       minimumY = Math.min(
         minimumY,
         Math.min(
           height,
-          Math.max(
-            0,
-            Math.floor((bounds.y - viewport.offset.y) * viewport.zoom) - effectPadding,
-          ),
+          Math.max(0, Math.floor((bounds.y - viewport.offset.y) * viewport.zoom) - effectPadding),
         ),
       );
       maximumX = Math.max(
@@ -1295,10 +1286,7 @@ export class InfiniteCanvasRenderer {
 
   #wlurPixelRegionsIntersect(a: WlurPixelRegion, b: WlurPixelRegion): boolean {
     return (
-      a.x < b.x + b.width &&
-      a.x + a.width > b.x &&
-      a.y < b.y + b.height &&
-      a.y + a.height > b.y
+      a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
     );
   }
 

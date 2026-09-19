@@ -246,16 +246,14 @@ export function getWlurBlurRegions(
     x: Math.max(0, dirtyX - halfKernel),
     y: dirtyY,
     width:
-      Math.min(working.width, dirtyX + dirtyWidth + halfKernel) -
-      Math.max(0, dirtyX - halfKernel),
+      Math.min(working.width, dirtyX + dirtyWidth + halfKernel) - Math.max(0, dirtyX - halfKernel),
     height: dirtyHeight,
   });
   const partialBlurY = intersectPixelRegions(blurY, {
     x: Math.max(0, dirtyX - halfKernel),
     y: Math.max(0, dirtyY - halfKernel),
     width:
-      Math.min(working.width, dirtyX + dirtyWidth + halfKernel) -
-      Math.max(0, dirtyX - halfKernel),
+      Math.min(working.width, dirtyX + dirtyWidth + halfKernel) - Math.max(0, dirtyX - halfKernel),
     height:
       Math.min(working.height, dirtyY + dirtyHeight + halfKernel) -
       Math.max(0, dirtyY - halfKernel),
