@@ -43,16 +43,15 @@ fn fs_upsample(@builtin(position) frag_coord: vec4f) -> @location(0) vec4f {
   let uv = frag_coord.xy / params.resolution.xy;
   let src_resolution = params.resolution.xy * 0.5;
   let half_pixel = (1.0 + params.blur_offset) / src_resolution;
+  // Match the radial variance of the previous 8-tap Kawase kernel with four
+  // diagonal bilinear samples. sqrt(5/3) preserves its 10/3 texel^2 moment.
+  let sample_offset = half_pixel * 1.2909944487;
   var color = vec4f(0.0);
 
-  color += textureSample(src_texture, src_sampler, uv + vec2f(-half_pixel.x, -half_pixel.y));
-  color += textureSample(src_texture, src_sampler, uv + vec2f( half_pixel.x, -half_pixel.y));
-  color += textureSample(src_texture, src_sampler, uv + vec2f(-half_pixel.x,  half_pixel.y));
-  color += textureSample(src_texture, src_sampler, uv + vec2f( half_pixel.x,  half_pixel.y));
-  color += textureSample(src_texture, src_sampler, uv + vec2f(-half_pixel.x * 2.0, 0.0)) * 2.0;
-  color += textureSample(src_texture, src_sampler, uv + vec2f( half_pixel.x * 2.0, 0.0)) * 2.0;
-  color += textureSample(src_texture, src_sampler, uv + vec2f(0.0, -half_pixel.y * 2.0)) * 2.0;
-  color += textureSample(src_texture, src_sampler, uv + vec2f(0.0,  half_pixel.y * 2.0)) * 2.0;
+  color += textureSample(src_texture, src_sampler, uv + vec2f(-sample_offset.x, -sample_offset.y));
+  color += textureSample(src_texture, src_sampler, uv + vec2f( sample_offset.x, -sample_offset.y));
+  color += textureSample(src_texture, src_sampler, uv + vec2f(-sample_offset.x,  sample_offset.y));
+  color += textureSample(src_texture, src_sampler, uv + vec2f( sample_offset.x,  sample_offset.y));
 
-  return composite_blur(color / 12.0);
+  return composite_blur(color * 0.25);
 }
