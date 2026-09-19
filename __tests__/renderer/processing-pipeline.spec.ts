@@ -50,6 +50,48 @@ describe("ProcessingPipeline LOD parameters", () => {
 
     pipeline.destroy();
   });
+
+  test("scissors partial action-blur pyramid refreshes through every mip", () => {
+    const device = createProcessingDevice();
+    const pipeline = new ProcessingPipeline(device, "rgba16float", false);
+    pipeline.initialize();
+    const encoder = createProcessingEncoder();
+    const input = createProcessingTexture(800, 600);
+    const downsample = [
+      createProcessingTexture(400, 300),
+      createProcessingTexture(200, 150),
+      createProcessingTexture(100, 75),
+      createProcessingTexture(50, 37),
+    ];
+    const upsample = [
+      createProcessingTexture(400, 300),
+      createProcessingTexture(200, 150),
+      createProcessingTexture(100, 75),
+    ];
+
+    const result = pipeline.encodeFullScreenBlurPyramid(
+      encoder,
+      input,
+      800,
+      600,
+      downsample,
+      upsample,
+      { x: 100, y: 100, width: 100, height: 100 },
+    );
+
+    expect(result?.partial).toBe(true);
+    expect(result?.updatedPixels).toBeLessThan(result?.fullPixels ?? 0);
+    const renderPass = vi.mocked(encoder.beginRenderPass).mock.results[0]!
+      .value as GPURenderPassEncoder;
+    expect(renderPass.setScissorRect).toHaveBeenNthCalledWith(1, 47, 47, 56, 56);
+    expect(renderPass.setScissorRect).toHaveBeenNthCalledWith(4, 0, 0, 19, 19);
+    expect(renderPass.setScissorRect).toHaveBeenNthCalledWith(7, 0, 0, 187, 187);
+    for (const [descriptor] of vi.mocked(encoder.beginRenderPass).mock.calls) {
+      expect(descriptor.colorAttachments[0]?.loadOp).toBe("load");
+    }
+
+    pipeline.destroy();
+  });
 });
 
 function createRenderEntity(pixelScale: number): EffectRenderEntity {
@@ -107,6 +149,7 @@ function createProcessingEncoder(): GPUCommandEncoder {
     setPipeline: vi.fn<GPURenderPassEncoder["setPipeline"]>(),
     setBindGroup: vi.fn<GPURenderPassEncoder["setBindGroup"]>(),
     setViewport: vi.fn<GPURenderPassEncoder["setViewport"]>(),
+    setScissorRect: vi.fn<GPURenderPassEncoder["setScissorRect"]>(),
     draw: vi.fn<GPURenderPassEncoder["draw"]>(),
     end: vi.fn<GPURenderPassEncoder["end"]>(),
   } as unknown as GPURenderPassEncoder;

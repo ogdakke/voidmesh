@@ -12,7 +12,9 @@ describe("ActionLayerBlurPass", () => {
   afterAll(() => vi.unstubAllGlobals());
 
   test("reuses a dedicated blur pyramid while the backdrop stays unchanged", () => {
-    const mipTextures = Array.from({ length: 4 }, createTexture);
+    const mipTextures = Array.from({ length: 7 }, createTexture);
+    const downsampleMipChain = mipTextures.slice(0, 4);
+    const upsampleMipChain = mipTextures.slice(4);
     const renderPass = {
       setPipeline: vi.fn<GPURenderPassEncoder["setPipeline"]>(),
       setBindGroup: vi.fn<GPURenderPassEncoder["setBindGroup"]>(),
@@ -34,7 +36,12 @@ describe("ActionLayerBlurPass", () => {
     const sourceTexture = createTexture();
     const processingPipeline = {
       encodeFullScreenBlurPyramid: vi.fn<ProcessingPipeline["encodeFullScreenBlurPyramid"]>(
-        (_encoder, _source, _width, _height, mipChain) => mipChain[0] ?? null,
+        (_encoder, _source, _width, _height, downsample, upsample, refreshRegion) => ({
+          texture: upsample[0] ?? downsample[0]!,
+          updatedPixels: refreshRegion ? 100 : 200,
+          fullPixels: 200,
+          partial: refreshRegion !== undefined,
+        }),
       ),
     } as unknown as ProcessingPipeline;
     const options = {
@@ -55,14 +62,19 @@ describe("ActionLayerBlurPass", () => {
       sourceTexture,
       3840,
       2160,
-      mipTextures,
+      downsampleMipChain,
+      upsampleMipChain,
+      undefined,
     );
     expect(encoder.beginRenderPass).toHaveBeenCalledOnce();
     expect(pass.getStats()).toEqual({
       composites: 1,
       pyramidRefreshes: 1,
+      partialPyramidRefreshes: 0,
       pyramidReuses: 0,
-      residentBytes: 22_032_000,
+      blurPixels: 200,
+      fullBlurPixels: 200,
+      residentBytes: 43_804_800,
     });
 
     options.contentDirty = false;
@@ -73,14 +85,37 @@ describe("ActionLayerBlurPass", () => {
     expect(pass.getStats()).toEqual({
       composites: 3,
       pyramidRefreshes: 1,
+      partialPyramidRefreshes: 0,
       pyramidReuses: 2,
-      residentBytes: 22_032_000,
+      blurPixels: 200,
+      fullBlurPixels: 200,
+      residentBytes: 43_804_800,
     });
 
     options.contentDirty = true;
+    const refreshRegion = { x: 100, y: 200, width: 300, height: 400 };
+    Object.assign(options, { refreshRegion });
     pass.encode(options);
     expect(processingPipeline.encodeFullScreenBlurPyramid).toHaveBeenCalledTimes(2);
-    expect(device.createTexture).toHaveBeenCalledTimes(4);
+    expect(processingPipeline.encodeFullScreenBlurPyramid).toHaveBeenLastCalledWith(
+      encoder,
+      sourceTexture,
+      3840,
+      2160,
+      downsampleMipChain,
+      upsampleMipChain,
+      refreshRegion,
+    );
+    expect(pass.getStats()).toEqual({
+      composites: 4,
+      pyramidRefreshes: 2,
+      partialPyramidRefreshes: 1,
+      pyramidReuses: 2,
+      blurPixels: 300,
+      fullBlurPixels: 400,
+      residentBytes: 43_804_800,
+    });
+    expect(device.createTexture).toHaveBeenCalledTimes(7);
 
     pass.destroy();
     for (const texture of mipTextures) expect(texture.destroy).toHaveBeenCalledOnce();

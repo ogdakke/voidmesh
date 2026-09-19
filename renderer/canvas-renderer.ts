@@ -132,6 +132,25 @@ export class InfiniteCanvasRenderer {
   #wlurOverlayPass: WlurOverlayPass | null = null;
   #wlurInvalidationDebugPass: WlurInvalidationDebugPass | null = null;
   #wlurInvalidationDebugEnabled = false;
+  readonly #actionBlurCurrentDynamicSourceRegion: WlurPixelRegion = {
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+  };
+  readonly #actionBlurPreviousDynamicSourceRegion: WlurPixelRegion = {
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+  };
+  readonly #actionBlurDynamicSourceRefreshRegion: WlurPixelRegion = {
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+  };
+  #hasPreviousActionBlurDynamicSourceRegion = false;
   #wlurBlurState: {
     entityVersion: number;
     geometryVersion: number;
@@ -263,7 +282,10 @@ export class InfiniteCanvasRenderer {
       actionBlur: this.#actionLayerBlurPass?.getStats() ?? {
         composites: 0,
         pyramidRefreshes: 0,
+        partialPyramidRefreshes: 0,
         pyramidReuses: 0,
+        blurPixels: 0,
+        fullBlurPixels: 0,
         residentBytes: 0,
       },
       entityTextures: this.#entityTexturePipeline?.getResidencyStats() ?? {
@@ -701,11 +723,25 @@ export class InfiniteCanvasRenderer {
         break;
       }
     }
+    const actionBackdropStateChanged =
+      renderActionBlur && this.#updateActionBlurBackdropState(state);
+    const actionBackdropDynamicDirty =
+      preparedEntityDrawItems.hasBackdropAnimatingContent || hasBackdropDragVisual;
+    const actionBackdropRefreshRegion =
+      renderActionBlur && actionBackdropDynamicDirty
+        ? this.#updateActionBlurDynamicSourceRefreshRegion(
+            animatingDrawItems,
+            state.actionLayer.entityIds,
+            dragVisualDrawItems,
+            preparedEntityDrawItems.hasBackdropAnimatingContent,
+            viewport,
+            width,
+            height,
+          )
+        : null;
+    if (!actionBackdropDynamicDirty) this.#hasPreviousActionBlurDynamicSourceRegion = false;
     const actionBackdropDirty =
-      renderActionBlur &&
-      (this.#updateActionBlurBackdropState(state) ||
-        preparedEntityDrawItems.hasBackdropAnimatingContent ||
-        hasBackdropDragVisual);
+      renderActionBlur && (actionBackdropStateChanged || actionBackdropDynamicDirty);
 
     // Pass 1: Render dot grid background
     this.#gridPass.encode({ encoder, targetView: sceneTargetView, viewport, width, height });
@@ -766,6 +802,9 @@ export class InfiniteCanvasRenderer {
         height,
         blurIntensity,
         contentDirty: actionBackdropDirty,
+        refreshRegion: actionBackdropStateChanged
+          ? undefined
+          : (actionBackdropRefreshRegion ?? undefined),
       });
     }
 
@@ -773,6 +812,7 @@ export class InfiniteCanvasRenderer {
     if (blurIntensity <= 0.01) {
       this.#actionLayerBlurPass?.invalidateCache();
       this.#actionBlurBackdropState = null;
+      this.#hasPreviousActionBlurDynamicSourceRegion = false;
     }
     if (renderActionBlur)
       this.#compositionPass.restoreSharpScene(
@@ -1170,6 +1210,78 @@ export class InfiniteCanvasRenderer {
     output.width = region.width / viewport.zoom;
     output.height = region.height / viewport.zoom;
     return output;
+  }
+
+  #updateActionBlurDynamicSourceRefreshRegion(
+    animatingItems: readonly CompositionDrawItem[],
+    actionEntityIds: ReadonlySet<string>,
+    dragItems: readonly CompositionDrawItem[],
+    includeAnimatingItems: boolean,
+    viewport: Viewport,
+    width: number,
+    height: number,
+  ): WlurPixelRegion | null {
+    let minimumX = width;
+    let minimumY = height;
+    let maximumX = 0;
+    let maximumY = 0;
+    const include = (item: CompositionDrawItem) => {
+      if (actionEntityIds.has(item.entity.id)) return;
+      const bounds = this.#setWlurDrawItemBounds(item, viewport.zoom);
+      const x = Math.max(0, Math.floor((bounds.x - viewport.offset.x) * viewport.zoom));
+      const y = Math.max(0, Math.floor((bounds.y - viewport.offset.y) * viewport.zoom));
+      const right = Math.min(
+        width,
+        Math.ceil((bounds.x + bounds.width - viewport.offset.x) * viewport.zoom),
+      );
+      const bottom = Math.min(
+        height,
+        Math.ceil((bounds.y + bounds.height - viewport.offset.y) * viewport.zoom),
+      );
+      if (right <= x || bottom <= y) return;
+      minimumX = Math.min(minimumX, x);
+      minimumY = Math.min(minimumY, y);
+      maximumX = Math.max(maximumX, right);
+      maximumY = Math.max(maximumY, bottom);
+    };
+    if (includeAnimatingItems) {
+      for (const item of animatingItems) include(item);
+    }
+    for (const item of dragItems) include(item);
+
+    const current = this.#actionBlurCurrentDynamicSourceRegion;
+    const hasCurrent = maximumX > minimumX && maximumY > minimumY;
+    if (hasCurrent) {
+      current.x = minimumX;
+      current.y = minimumY;
+      current.width = maximumX - minimumX;
+      current.height = maximumY - minimumY;
+    }
+
+    const refresh = this.#actionBlurDynamicSourceRefreshRegion;
+    if (hasCurrent && this.#hasPreviousActionBlurDynamicSourceRegion) {
+      const previous = this.#actionBlurPreviousDynamicSourceRegion;
+      refresh.x = Math.min(current.x, previous.x);
+      refresh.y = Math.min(current.y, previous.y);
+      const right = Math.max(current.x + current.width, previous.x + previous.width);
+      const bottom = Math.max(current.y + current.height, previous.y + previous.height);
+      refresh.width = right - refresh.x;
+      refresh.height = bottom - refresh.y;
+    } else if (hasCurrent) {
+      this.#copyWlurPixelRegion(current, refresh);
+    } else if (this.#hasPreviousActionBlurDynamicSourceRegion) {
+      this.#copyWlurPixelRegion(this.#actionBlurPreviousDynamicSourceRegion, refresh);
+    } else {
+      return null;
+    }
+
+    if (hasCurrent) {
+      this.#copyWlurPixelRegion(current, this.#actionBlurPreviousDynamicSourceRegion);
+      this.#hasPreviousActionBlurDynamicSourceRegion = true;
+    } else {
+      this.#hasPreviousActionBlurDynamicSourceRegion = false;
+    }
+    return refresh;
   }
 
   #updateWlurDynamicSourceRefreshRegion(

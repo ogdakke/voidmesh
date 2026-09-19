@@ -1,5 +1,6 @@
 import { FancyEffects } from "#types/fancy-effects.ts";
 import { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
+import { createDefaultWlurOverlayConfig } from "#renderer/wlur-overlay.ts";
 import {
   DitheringKind,
   GlassKind,
@@ -73,6 +74,7 @@ interface BenchScenario {
   recordPerFrame?: boolean;
   resetTexturesBeforeSample?: boolean;
   overlapToggle?: boolean;
+  wlurOverlay?: boolean;
 }
 
 type BenchResourceStats = ReturnType<InfiniteCanvasRenderer["getResourceStats"]>;
@@ -578,11 +580,19 @@ const overlapMixedScenario: BenchScenario = {
   dirtyMode: "video",
   zoomStress: { ...ZOOM_STRESS_SCENARIO, imageCount: 12, videoCount: 4, entityCount: 16 },
 };
+const overlapMixedWlurScenario: BenchScenario = {
+  ...overlapMixedScenario,
+  id: "overlap-16-mixed-action-toggle-wlur",
+  label: "12 images and four external videos, action layer toggle with Wlur",
+  description: "Mixed-media action-layer and mobile Wlur cache interaction guard.",
+  wlurOverlay: true,
+};
 const allScenarios = [
   ...scenarios,
   ...manyEntityScenarios,
   overlapToggleScenario,
   overlapMixedScenario,
+  overlapMixedWlurScenario,
 ];
 
 const FLOWING_GLASS_VISUAL_TIME = 1.75;
@@ -1686,6 +1696,11 @@ function getTotalResidentBytes(resources: BenchResourceStats): number {
 
 async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
   const benchRenderer = await getRenderer();
+  benchRenderer.setWlurOverlay(
+    scenario.wlurOverlay
+      ? createDefaultWlurOverlayConfig({ tintColor: [0, 0, 0], tintAmount: 1 })
+      : null,
+  );
   const scenarioResourcesBefore = benchRenderer.getResourceStats();
   const entitySet = await createEntities(scenario);
   if (scenario.overlapToggle) {
@@ -1870,6 +1885,7 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
         benchRenderer.removeEntityTexture(entity.id);
       }
     } finally {
+      benchRenderer.setWlurOverlay(null);
       entitySet.cleanup?.();
     }
   }

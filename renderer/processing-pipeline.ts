@@ -66,6 +66,27 @@ interface BlurMixBindGroupCacheEntry {
   bindGroup: GPUBindGroup;
 }
 
+export interface ProcessingTextureRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface BlurPyramidEncodeResult {
+  texture: GPUTexture;
+  updatedPixels: number;
+  fullPixels: number;
+  partial: boolean;
+}
+
+interface BlurPyramidRefreshPlan {
+  downsample: ProcessingTextureRegion[];
+  upsample: Array<ProcessingTextureRegion | undefined>;
+  updatedPixels: number;
+  fullPixels: number;
+}
+
 type BlurInputSource =
   | { kind: "texture"; texture: GPUTexture }
   | { kind: "external"; texture: GPUExternalTexture };
@@ -185,6 +206,20 @@ export class ProcessingPipeline {
   #blurMixBindGroupCache = new Map<GPUBuffer, BlurMixBindGroupCacheEntry>();
   readonly #blurUniformData = new ArrayBuffer(config.rendering.blurUniformSize);
   readonly #blurUniformFloatView = new Float32Array(this.#blurUniformData);
+  readonly #blurPyramidRefreshPlan: BlurPyramidRefreshPlan = {
+    downsample: [],
+    upsample: [],
+    updatedPixels: 0,
+    fullPixels: 0,
+  };
+  readonly #blurRegionScratch: ProcessingTextureRegion = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #blurFinalRegionScratch: ProcessingTextureRegion = {
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+  };
+  #blurPyramidEncodeResult: BlurPyramidEncodeResult | null = null;
   #bloomUniformSets: BloomUniformSet[] = [];
   #bloomUniformCursor = 0;
   #textureCacheBudget: ByteBudgetCache;
@@ -1285,9 +1320,22 @@ export class ProcessingPipeline {
     width: number,
     height: number,
     bufferOffset: number,
-  ): void {
+    refreshRegion?: ProcessingTextureRegion,
+    upsampleMipChain: GPUTexture[] = mipChain,
+  ): BlurPyramidRefreshPlan {
     const activeLevels = Math.min(levels, mipChain.length);
-    if (activeLevels <= 0) return;
+    if (activeLevels <= 0) {
+      return { downsample: [], upsample: [], updatedPixels: 0, fullPixels: 0 };
+    }
+    const refreshPlan = this.#createBlurPyramidRefreshPlan(
+      mipChain,
+      upsampleMipChain,
+      activeLevels,
+      offset,
+      width,
+      height,
+      refreshRegion,
+    );
 
     // Write all downsample uniforms upfront
     let srcWidth = width;
@@ -1352,9 +1400,9 @@ export class ProcessingPipeline {
         readsExternalSource &&
         (!this.#blurExternalDownsampleBindGroupLayout || !this.#blurExternalDownsamplePipeline)
       ) {
-        return;
+        return refreshPlan;
       }
-      if (!readsExternalSource && !srcTexture) return;
+      if (!readsExternalSource && !srcTexture) return refreshPlan;
 
       const uniformBuffer = uniformSet.downsample[bufferOffset + i]!;
       const bindGroup = readsExternalSource
@@ -1381,7 +1429,7 @@ export class ProcessingPipeline {
         colorAttachments: [
           {
             view: this.#getTextureView(dstTexture),
-            loadOp: "clear",
+            loadOp: refreshRegion ? "load" : "clear",
             storeOp: "store",
             clearValue: { r: 0, g: 0, b: 0, a: 1 },
           },
@@ -1393,6 +1441,15 @@ export class ProcessingPipeline {
       );
       pass.setBindGroup(0, bindGroup);
       pass.setViewport(0, 0, dstTexture.width, dstTexture.height, 0, 1);
+      if (refreshRegion) {
+        const downsampleRegion = refreshPlan.downsample[i]!;
+        pass.setScissorRect(
+          downsampleRegion.x,
+          downsampleRegion.y,
+          downsampleRegion.width,
+          downsampleRegion.height,
+        );
+      }
       pass.draw(3);
       pass.end();
 
@@ -1402,8 +1459,8 @@ export class ProcessingPipeline {
     // === Upsample passes ===
     bufIdx = 0;
     for (let i = activeLevels - 1; i > 0; i--) {
-      const srcMip = mipChain[i]!;
-      const dstMip = mipChain[i - 1]!;
+      const srcMip = i === activeLevels - 1 ? mipChain[i]! : upsampleMipChain[i]!;
+      const dstMip = upsampleMipChain[i - 1]!;
 
       const bindGroup = this.#getOrCreateBlurTextureBindGroup(
         `Blur upsample bind group level ${i}`,
@@ -1417,7 +1474,7 @@ export class ProcessingPipeline {
         colorAttachments: [
           {
             view: this.#getTextureView(dstMip),
-            loadOp: "clear",
+            loadOp: refreshRegion ? "load" : "clear",
             storeOp: "store",
             clearValue: { r: 0, g: 0, b: 0, a: 1 },
           },
@@ -1427,6 +1484,15 @@ export class ProcessingPipeline {
       pass.setPipeline(this.#blurUpsamplePipeline!);
       pass.setBindGroup(0, bindGroup);
       pass.setViewport(0, 0, dstMip.width, dstMip.height, 0, 1);
+      if (refreshRegion) {
+        const upsampleRegion = refreshPlan.upsample[i - 1]!;
+        pass.setScissorRect(
+          upsampleRegion.x,
+          upsampleRegion.y,
+          upsampleRegion.width,
+          upsampleRegion.height,
+        );
+      }
       pass.draw(3);
       pass.end();
 
@@ -1449,7 +1515,7 @@ export class ProcessingPipeline {
         colorAttachments: [
           {
             view: this.#getTextureView(finalTarget),
-            loadOp: "clear",
+            loadOp: refreshRegion ? "load" : "clear",
             storeOp: "store",
             clearValue: { r: 0, g: 0, b: 0, a: 1 },
           },
@@ -1459,9 +1525,143 @@ export class ProcessingPipeline {
       pass.setPipeline(this.#blurUpsamplePipeline!);
       pass.setBindGroup(0, bindGroup);
       pass.setViewport(0, 0, finalTarget.width, finalTarget.height, 0, 1);
+      if (refreshRegion) {
+        const finalRegion = this.#scaleProcessingRegion(
+          refreshPlan.upsample[0] ?? refreshPlan.downsample[0]!,
+          2,
+          Math.ceil(3 + 2 * offset),
+          finalTarget.width,
+          finalTarget.height,
+          this.#blurFinalRegionScratch,
+        );
+        pass.setScissorRect(finalRegion.x, finalRegion.y, finalRegion.width, finalRegion.height);
+      }
       pass.draw(3);
       pass.end();
     }
+    return refreshPlan;
+  }
+
+  #createBlurPyramidRefreshPlan(
+    downsampleMipChain: GPUTexture[],
+    upsampleMipChain: GPUTexture[],
+    activeLevels: number,
+    offset: number,
+    width: number,
+    height: number,
+    refreshRegion?: ProcessingTextureRegion,
+  ): BlurPyramidRefreshPlan {
+    if (activeLevels > 1 && upsampleMipChain.length < activeLevels - 1) {
+      throw new Error("Blur pyramid upsample chain is incomplete");
+    }
+
+    const plan = this.#blurPyramidRefreshPlan;
+    const downsample = plan.downsample;
+    const upsample = plan.upsample;
+    downsample.length = activeLevels;
+    upsample.length = Math.max(0, activeLevels - 1);
+    let fullPixels = 0;
+    let updatedPixels = 0;
+    let current = this.#blurRegionScratch;
+    if (refreshRegion) {
+      this.#clampProcessingRegion(refreshRegion, width, height, current);
+    } else {
+      current.x = 0;
+      current.y = 0;
+      current.width = width;
+      current.height = height;
+    }
+    const downsamplePadding = Math.ceil(2 + offset);
+    const upsamplePadding = Math.ceil(3 + 2 * offset);
+
+    for (let i = 0; i < activeLevels; i++) {
+      const destination = downsampleMipChain[i]!;
+      const region = downsample[i] ?? { x: 0, y: 0, width: 0, height: 0 };
+      if (refreshRegion) {
+        this.#scaleProcessingRegion(
+          current,
+          0.5,
+          downsamplePadding,
+          destination.width,
+          destination.height,
+          region,
+        );
+      } else {
+        region.x = 0;
+        region.y = 0;
+        region.width = destination.width;
+        region.height = destination.height;
+      }
+      downsample[i] = region;
+      current = region;
+      fullPixels += destination.width * destination.height;
+      updatedPixels += region.width * region.height;
+    }
+
+    current = downsample[activeLevels - 1]!;
+    for (let i = activeLevels - 1; i > 0; i--) {
+      const destination = upsampleMipChain[i - 1]!;
+      const region = upsample[i - 1] ?? { x: 0, y: 0, width: 0, height: 0 };
+      if (refreshRegion) {
+        this.#scaleProcessingRegion(
+          current,
+          2,
+          upsamplePadding,
+          destination.width,
+          destination.height,
+          region,
+        );
+      } else {
+        region.x = 0;
+        region.y = 0;
+        region.width = destination.width;
+        region.height = destination.height;
+      }
+      upsample[i - 1] = region;
+      current = region;
+      fullPixels += destination.width * destination.height;
+      updatedPixels += region.width * region.height;
+    }
+
+    plan.updatedPixels = updatedPixels;
+    plan.fullPixels = fullPixels;
+    return plan;
+  }
+
+  #scaleProcessingRegion(
+    region: ProcessingTextureRegion,
+    scale: number,
+    padding: number,
+    width: number,
+    height: number,
+    output: ProcessingTextureRegion,
+  ): ProcessingTextureRegion {
+    const x = Math.max(0, Math.floor(region.x * scale) - padding);
+    const y = Math.max(0, Math.floor(region.y * scale) - padding);
+    const right = Math.min(width, Math.ceil((region.x + region.width) * scale) + padding);
+    const bottom = Math.min(height, Math.ceil((region.y + region.height) * scale) + padding);
+    output.x = x;
+    output.y = y;
+    output.width = Math.max(0, right - x);
+    output.height = Math.max(0, bottom - y);
+    return output;
+  }
+
+  #clampProcessingRegion(
+    region: ProcessingTextureRegion,
+    width: number,
+    height: number,
+    output: ProcessingTextureRegion,
+  ): ProcessingTextureRegion {
+    const x = Math.min(width, Math.max(0, Math.floor(region.x)));
+    const y = Math.min(height, Math.max(0, Math.floor(region.y)));
+    const right = Math.min(width, Math.max(x, Math.ceil(region.x + region.width)));
+    const bottom = Math.min(height, Math.max(y, Math.ceil(region.y + region.height)));
+    output.x = x;
+    output.y = y;
+    output.width = right - x;
+    output.height = bottom - y;
+    return output;
   }
 
   #getOrCreateBlurTextureBindGroup(
@@ -1797,8 +1997,10 @@ export class ProcessingPipeline {
     inputTexture: GPUTexture,
     width: number,
     height: number,
-    mipChain: GPUTexture[],
-  ): GPUTexture | null {
+    downsampleMipChain: GPUTexture[],
+    upsampleMipChain: GPUTexture[],
+    refreshRegion?: ProcessingTextureRegion,
+  ): BlurPyramidEncodeResult | null {
     if (
       !this.#blurDownsamplePipeline ||
       !this.#blurUpsamplePipeline ||
@@ -1810,26 +2012,40 @@ export class ProcessingPipeline {
       return null;
     }
 
-    if (mipChain.length === 0) return null;
+    if (downsampleMipChain.length === 0) return null;
     const uniformSet = {
       downsample: this.#blurDownsampleUniformBuffers,
       upsample: this.#blurUpsampleUniformBuffers,
       mix: this.#blurMixUniformBuffer,
     };
 
-    this.#encodeBlurPasses(
+    const work = this.#encodeBlurPasses(
       encoder,
       { kind: "texture", texture: inputTexture },
       null,
-      mipChain,
+      downsampleMipChain,
       uniformSet,
       config.actionLayer.blurLevels,
       config.actionLayer.blurOffset,
       width,
       height,
       0,
+      refreshRegion,
+      upsampleMipChain,
     );
-    return mipChain[0] ?? null;
+    const activeLevels = Math.min(config.actionLayer.blurLevels, downsampleMipChain.length);
+    const texture = activeLevels > 1 ? upsampleMipChain[0] : downsampleMipChain[0];
+    if (!texture) return null;
+    let result = this.#blurPyramidEncodeResult;
+    if (!result) {
+      result = { texture, updatedPixels: 0, fullPixels: 0, partial: false };
+      this.#blurPyramidEncodeResult = result;
+    }
+    result.texture = texture;
+    result.updatedPixels = work.updatedPixels;
+    result.fullPixels = work.fullPixels;
+    result.partial = refreshRegion !== undefined;
+    return result;
   }
 
   /**

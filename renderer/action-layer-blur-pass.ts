@@ -1,7 +1,7 @@
 import { config } from "#config";
 import { getTextureByteSize } from "#lib/textures.ts";
 import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
-import type { ProcessingPipeline } from "./processing-pipeline.ts";
+import type { ProcessingPipeline, ProcessingTextureRegion } from "./processing-pipeline.ts";
 
 interface ActionLayerBlurPassOptions {
   device: GPUDevice;
@@ -19,12 +19,16 @@ interface EncodeActionLayerBlurOptions {
   height: number;
   blurIntensity: number;
   contentDirty: boolean;
+  refreshRegion?: ProcessingTextureRegion;
 }
 
 export interface ActionLayerBlurPassStats {
   composites: number;
   pyramidRefreshes: number;
+  partialPyramidRefreshes: number;
   pyramidReuses: number;
+  blurPixels: number;
+  fullBlurPixels: number;
   residentBytes: number;
 }
 
@@ -41,14 +45,18 @@ export class ActionLayerBlurPass {
   #textures: {
     width: number;
     height: number;
-    mipChain: GPUTexture[];
+    downsampleMipChain: GPUTexture[];
+    upsampleMipChain: GPUTexture[];
     byteSize: number;
   } | null = null;
   #cacheValid = false;
   #upsampleBinding: { source: GPUTexture; bindGroup: GPUBindGroup } | null = null;
   #composites = 0;
   #pyramidRefreshes = 0;
+  #partialPyramidRefreshes = 0;
   #pyramidReuses = 0;
+  #blurPixels = 0;
+  #fullBlurPixels = 0;
 
   constructor(options: ActionLayerBlurPassOptions) {
     this.#device = options.device;
@@ -127,7 +135,10 @@ export class ActionLayerBlurPass {
     return {
       composites: this.#composites,
       pyramidRefreshes: this.#pyramidRefreshes,
+      partialPyramidRefreshes: this.#partialPyramidRefreshes,
       pyramidReuses: this.#pyramidReuses,
+      blurPixels: this.#blurPixels,
+      fullBlurPixels: this.#fullBlurPixels,
       residentBytes: this.#textures?.byteSize ?? 0,
     };
   }
@@ -178,23 +189,28 @@ export class ActionLayerBlurPass {
     this.#device.queue.writeBuffer(this.#uniformBuffer, 0, uniformData);
 
     const needsRefresh = options.contentDirty || !this.#cacheValid;
-    const cachedBlurMip = blurTextures.mipChain[0];
+    const cachedBlurMip = blurTextures.upsampleMipChain[0] ?? blurTextures.downsampleMipChain[0];
     if (!cachedBlurMip) throw new Error("Action layer blur requires at least one mip level");
     let blurMip = cachedBlurMip;
     if (needsRefresh) {
-      const refreshedBlurMip = processingPipeline.encodeFullScreenBlurPyramid(
+      const refreshed = processingPipeline.encodeFullScreenBlurPyramid(
         encoder,
         sourceTexture,
         width,
         height,
-        blurTextures.mipChain,
+        blurTextures.downsampleMipChain,
+        blurTextures.upsampleMipChain,
+        this.#cacheValid ? options.refreshRegion : undefined,
       );
-      if (!refreshedBlurMip) {
+      if (!refreshed) {
         throw new Error("Action layer blur pyramid could not be encoded");
       }
-      blurMip = refreshedBlurMip;
+      blurMip = refreshed.texture;
       this.#cacheValid = true;
       this.#pyramidRefreshes++;
+      if (refreshed.partial) this.#partialPyramidRefreshes++;
+      this.#blurPixels += refreshed.updatedPixels;
+      this.#fullBlurPixels += refreshed.fullPixels;
     } else {
       this.#pyramidReuses++;
     }
@@ -252,7 +268,8 @@ export class ActionLayerBlurPass {
 
   destroy(): void {
     if (this.#textures) {
-      for (const texture of this.#textures.mipChain) texture.destroy();
+      for (const texture of this.#textures.downsampleMipChain) texture.destroy();
+      for (const texture of this.#textures.upsampleMipChain) texture.destroy();
       this.#textures = null;
     }
     this.invalidateCache();
@@ -260,19 +277,28 @@ export class ActionLayerBlurPass {
     this.#uniformBuffer.destroy();
   }
 
-  #getOrCreateTextures(width: number, height: number): { mipChain: GPUTexture[] } {
+  #getOrCreateTextures(
+    width: number,
+    height: number,
+  ): {
+    downsampleMipChain: GPUTexture[];
+    upsampleMipChain: GPUTexture[];
+  } {
     const cached = this.#textures;
     if (cached && cached.width === width && cached.height === height) {
       return cached;
     }
 
     if (cached) {
-      for (const texture of cached.mipChain) texture.destroy();
+      for (const texture of cached.downsampleMipChain) texture.destroy();
+      for (const texture of cached.upsampleMipChain) texture.destroy();
     }
     this.invalidateCache();
     this.#upsampleBinding = null;
 
-    const mipChain: GPUTexture[] = [];
+    const downsampleMipChain: GPUTexture[] = [];
+    const upsampleMipChain: GPUTexture[] = [];
+    const mipDimensions: Array<{ width: number; height: number }> = [];
     let byteSize = 0;
     let mipWidth = width;
     let mipHeight = height;
@@ -280,9 +306,10 @@ export class ActionLayerBlurPass {
       mipWidth = Math.max(1, Math.floor(mipWidth / 2));
       mipHeight = Math.max(1, Math.floor(mipHeight / 2));
       byteSize += getTextureByteSize(mipWidth, mipHeight, this.#intermediateFormat);
-      mipChain.push(
+      mipDimensions.push({ width: mipWidth, height: mipHeight });
+      downsampleMipChain.push(
         this.#device.createTexture({
-          label: `Action layer blur mip ${level} (${mipWidth}x${mipHeight})`,
+          label: `Action layer blur downsample mip ${level} (${mipWidth}x${mipHeight})`,
           size: [mipWidth, mipHeight],
           format: this.#intermediateFormat,
           usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
@@ -290,7 +317,20 @@ export class ActionLayerBlurPass {
       );
     }
 
-    this.#textures = { width, height, mipChain, byteSize };
+    for (let level = 0; level < downsampleMipChain.length - 1; level++) {
+      const dimensions = mipDimensions[level]!;
+      byteSize += getTextureByteSize(dimensions.width, dimensions.height, this.#intermediateFormat);
+      upsampleMipChain.push(
+        this.#device.createTexture({
+          label: `Action layer blur upsample mip ${level} (${dimensions.width}x${dimensions.height})`,
+          size: [dimensions.width, dimensions.height],
+          format: this.#intermediateFormat,
+          usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+        }),
+      );
+    }
+
+    this.#textures = { width, height, downsampleMipChain, upsampleMipChain, byteSize };
     return this.#textures;
   }
 }
