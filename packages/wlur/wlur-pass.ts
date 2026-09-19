@@ -29,7 +29,6 @@ interface WlurPassOptions {
 }
 
 interface ScratchTextures {
-  scaledInput: GPUTexture;
   blurIntermediate: GPUTexture;
   blurOutput: GPUTexture;
   composite: GPUTexture;
@@ -180,30 +179,22 @@ export class WlurPass {
 
     const working = getWlurWorkingDimensions(width, height, this.#quality.resolutionScale);
     const scratch = this.#getOrCreateScratchTextures(width, height);
-    const needsScaledInput = working.width !== width || working.height !== height;
-
-    let blurInput = inputTexture;
-    let blurInputWidth = width;
-    let blurInputHeight = height;
-
-    if (needsScaledInput) {
-      this.#encodeCopyPass(encoder, inputTexture, scratch.scaledInput);
-      blurInput = scratch.scaledInput;
-      blurInputWidth = working.width;
-      blurInputHeight = working.height;
-    }
+    const usesReducedResolution = working.width !== width || working.height !== height;
 
     const directionIndex = wlurDirectionToIndex(resolvedParams.direction);
-    const radiusScale = needsScaledInput ? working.scale : 1;
+    const radiusScale = usesReducedResolution ? working.scale : 1;
 
     const compositeTarget = resolvedParams.noise > 0.001 ? scratch.composite : outputTexture;
-    const restoreThreshold = needsScaledInput ? 0.05 : 0.001;
+    const restoreThreshold = usesReducedResolution ? 0.05 : 0.001;
+    // Blur X writes directly at the working resolution. Sampling the full-size
+    // source with working-resolution texel steps fuses the old downsample pass
+    // without shrinking the blur footprint.
     this.#writeBlurUniforms(
       this.#blurXUniformBuffer,
       working.width,
       working.height,
-      blurInputWidth,
-      blurInputHeight,
+      working.width,
+      working.height,
       resolvedParams.radius,
       resolvedParams.offset,
       resolvedParams.interpolation,
@@ -215,7 +206,7 @@ export class WlurPass {
       this.#blurXPipeline,
       this.#blurBindGroupLayout,
       this.#blurXUniformBuffer,
-      blurInput,
+      inputTexture,
       scratch.blurIntermediate,
       `${this.#label} blur X pass`,
     );
@@ -553,12 +544,6 @@ export class WlurPass {
     const compositeUsage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT;
 
     const entry: ScratchTextures = {
-      scaledInput: this.#device.createTexture({
-        label: `${this.#label} scaled input ${working.width}x${working.height}`,
-        size: [working.width, working.height],
-        format: this.#format,
-        usage: workingUsage,
-      }),
       blurIntermediate: this.#device.createTexture({
         label: `${this.#label} blur intermediate ${working.width}x${working.height}`,
         size: [working.width, working.height],
@@ -585,7 +570,6 @@ export class WlurPass {
 
   #destroyScratchTextures(): void {
     for (const entry of this.#scratchTextures.values()) {
-      entry.scaledInput.destroy();
       entry.blurIntermediate.destroy();
       entry.blurOutput.destroy();
       entry.composite.destroy();
