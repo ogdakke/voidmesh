@@ -20,13 +20,20 @@ interface EncodeActionLayerBlurOptions {
   contentDirty: boolean;
 }
 
+export interface ActionLayerBlurPassStats {
+  fusedComposites: number;
+  cachedBlurRefreshes: number;
+  cachedBlits: number;
+}
+
 export class ActionLayerBlurPass {
   readonly #device: GPUDevice;
   readonly #intermediateFormat: GPUTextureFormat;
-  readonly #pipeline: GPURenderPipeline;
+  readonly #blitPipeline: GPURenderPipeline;
+  readonly #upsampleCompositePipeline: GPURenderPipeline;
   readonly #bindGroupLayout: GPUBindGroupLayout;
   readonly #uniformBuffer: GPUBuffer;
-  readonly #uniformData = new Float32Array(8);
+  readonly #uniformData = new Float32Array(12);
   readonly #sampler: GPUSampler;
 
   #tintColor: [number, number, number];
@@ -37,6 +44,10 @@ export class ActionLayerBlurPass {
   } | null = null;
   #cacheValid = false;
   #bindGroupCached: GPUBindGroup | null = null;
+  #upsampleBinding: { source: GPUTexture; bindGroup: GPUBindGroup } | null = null;
+  #fusedComposites = 0;
+  #cachedBlurRefreshes = 0;
+  #cachedBlits = 0;
 
   constructor(options: ActionLayerBlurPassOptions) {
     this.#device = options.device;
@@ -63,7 +74,7 @@ export class ActionLayerBlurPass {
 
     this.#uniformBuffer = this.#device.createBuffer({
       label: "Action layer blit uniforms",
-      size: 32,
+      size: 48,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
@@ -78,30 +89,37 @@ export class ActionLayerBlurPass {
       bindGroupLayouts: [this.#bindGroupLayout],
     });
 
-    this.#pipeline = this.#device.createRenderPipeline({
+    const blend: GPUBlendState = {
+      color: {
+        srcFactor: "src-alpha",
+        dstFactor: "one-minus-src-alpha",
+        operation: "add",
+      },
+      alpha: {
+        srcFactor: "one",
+        dstFactor: "one-minus-src-alpha",
+        operation: "add",
+      },
+    };
+    this.#blitPipeline = this.#device.createRenderPipeline({
       label: "Action layer blit pipeline",
       layout: pipelineLayout,
       vertex: { module: shaderModule, entryPoint: "vs_main" },
       fragment: {
         module: shaderModule,
         entryPoint: "fs_main",
-        targets: [
-          {
-            format: options.canvasFormat,
-            blend: {
-              color: {
-                srcFactor: "src-alpha",
-                dstFactor: "one-minus-src-alpha",
-                operation: "add",
-              },
-              alpha: {
-                srcFactor: "one",
-                dstFactor: "one-minus-src-alpha",
-                operation: "add",
-              },
-            },
-          },
-        ],
+        targets: [{ format: options.canvasFormat, blend }],
+      },
+      primitive: { topology: "triangle-list" },
+    });
+    this.#upsampleCompositePipeline = this.#device.createRenderPipeline({
+      label: "Action layer upsample composite pipeline",
+      layout: pipelineLayout,
+      vertex: { module: shaderModule, entryPoint: "vs_main" },
+      fragment: {
+        module: shaderModule,
+        entryPoint: "fs_upsample",
+        targets: [{ format: options.canvasFormat, blend }],
       },
       primitive: { topology: "triangle-list" },
     });
@@ -115,27 +133,18 @@ export class ActionLayerBlurPass {
     this.#cacheValid = false;
   }
 
+  getStats(): ActionLayerBlurPassStats {
+    return {
+      fusedComposites: this.#fusedComposites,
+      cachedBlurRefreshes: this.#cachedBlurRefreshes,
+      cachedBlits: this.#cachedBlits,
+    };
+  }
+
   encode(options: EncodeActionLayerBlurOptions): void {
     const { encoder, processingPipeline, sourceTexture, targetView, width, height, blurIntensity } =
       options;
     const blurTextures = this.#getOrCreateTextures(width, height);
-
-    // Only re-run the expensive Kawase blur pipeline when content has actually changed.
-    const blurNeedsUpdate = !this.#cacheValid || options.contentDirty;
-
-    if (blurNeedsUpdate) {
-      // The canvas texture is configured with TEXTURE_BINDING usage. Sample it
-      // directly before the later blit writes back to the canvas.
-      processingPipeline.encodeFullScreenBlur(
-        encoder,
-        sourceTexture,
-        blurTextures.output,
-        width,
-        height,
-      );
-
-      this.#cacheValid = true;
-    }
 
     // Always update uniforms (intensity may change during fade animation).
     const tintAmount = config.actionLayer.dimOpacity * blurIntensity;
@@ -143,29 +152,85 @@ export class ActionLayerBlurPass {
     const uniformData = this.#uniformData;
     uniformData[0] = tintAmount;
     uniformData[1] = blurIntensity;
-    uniformData[2] = 0;
+    uniformData[2] = config.actionLayer.blurOffset;
     uniformData[3] = 0;
     uniformData[4] = tr;
     uniformData[5] = tg;
     uniformData[6] = tb;
     uniformData[7] = 0;
+    uniformData[8] = width;
+    uniformData[9] = height;
+    uniformData[10] = 0;
+    uniformData[11] = 0;
     this.#device.queue.writeBuffer(this.#uniformBuffer, 0, uniformData);
+
+    if (options.contentDirty) {
+      const blurMip = processingPipeline.encodeFullScreenBlurPyramid(
+        encoder,
+        sourceTexture,
+        width,
+        height,
+      );
+      if (blurMip) {
+        this.#cacheValid = false;
+        if (this.#upsampleBinding?.source !== blurMip) {
+          this.#upsampleBinding = {
+            source: blurMip,
+            bindGroup: this.#createBindGroup("Action layer upsample composite bind group", blurMip),
+          };
+        }
+        this.#encodeBlit(
+          encoder,
+          targetView,
+          this.#upsampleCompositePipeline,
+          this.#upsampleBinding.bindGroup,
+          "Action layer upsample composite pass",
+        );
+        this.#fusedComposites++;
+        return;
+      }
+    }
+
+    // Cache the full-resolution result only while the backdrop is unchanged.
+    if (!this.#cacheValid) {
+      processingPipeline.encodeFullScreenBlur(
+        encoder,
+        sourceTexture,
+        blurTextures.output,
+        width,
+        height,
+      );
+      this.#cacheValid = true;
+      this.#cachedBlurRefreshes++;
+    }
 
     // Cache blit bind group (only recreate when textures change).
     if (!this.#bindGroupCached) {
-      this.#bindGroupCached = this.#device.createBindGroup({
-        label: "Action layer blit bind group",
-        layout: this.#bindGroupLayout,
-        entries: [
-          { binding: 0, resource: blurTextures.output.createView() },
-          { binding: 1, resource: this.#sampler },
-          { binding: 2, resource: { buffer: this.#uniformBuffer } },
-        ],
-      });
+      this.#bindGroupCached = this.#createBindGroup(
+        "Action layer blit bind group",
+        blurTextures.output,
+      );
     }
 
+    this.#encodeBlit(
+      encoder,
+      targetView,
+      this.#blitPipeline,
+      this.#bindGroupCached,
+      "Action layer blit pass",
+    );
+    this.#cachedBlits++;
+  }
+
+  #encodeBlit(
+    encoder: GPUCommandEncoder,
+    targetView: GPUTextureView,
+    pipeline: GPURenderPipeline,
+    bindGroup: GPUBindGroup,
+    label: string,
+  ): void {
     const blitPass = encoder.beginRenderPass({
-      label: "Action layer blit pass",
+      label,
       colorAttachments: [
         {
           view: targetView,
@@ -174,10 +239,22 @@ export class ActionLayerBlurPass {
         },
       ],
     });
-    blitPass.setPipeline(this.#pipeline);
-    blitPass.setBindGroup(0, this.#bindGroupCached);
+    blitPass.setPipeline(pipeline);
+    blitPass.setBindGroup(0, bindGroup);
     blitPass.draw(3);
     blitPass.end();
+  }
+
+  #createBindGroup(label: string, source: GPUTexture): GPUBindGroup {
+    return this.#device.createBindGroup({
+      label,
+      layout: this.#bindGroupLayout,
+      entries: [
+        { binding: 0, resource: source.createView() },
+        { binding: 1, resource: this.#sampler },
+        { binding: 2, resource: { buffer: this.#uniformBuffer } },
+      ],
+    });
   }
 
   destroy(): void {
@@ -187,6 +264,7 @@ export class ActionLayerBlurPass {
     }
     this.#cacheValid = false;
     this.#bindGroupCached = null;
+    this.#upsampleBinding = null;
     this.#uniformBuffer.destroy();
   }
 
@@ -201,6 +279,7 @@ export class ActionLayerBlurPass {
     }
     this.#cacheValid = false;
     this.#bindGroupCached = null;
+    this.#upsampleBinding = null;
 
     const output = this.#device.createTexture({
       label: `Action layer blur output (${width}x${height})`,
