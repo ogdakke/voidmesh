@@ -12,6 +12,9 @@ vi.mock("#wlur", async (importOriginal) => {
     WlurPass: class {
       initialize(): void {}
       updateConfig(): void {}
+      getStats(): { blurPixels: number; fullBlurPixels: number } {
+        return { blurPixels: 12, fullBlurPixels: 24 };
+      }
       encode(...args: unknown[]): void {
         wlurMocks.encode(...args);
       }
@@ -85,6 +88,8 @@ describe("WlurOverlayPass", () => {
       composites: 1,
       directPresents: 1,
       convertedPresents: 0,
+      blurPixels: 12,
+      fullBlurPixels: 24,
     });
 
     pass.destroy();

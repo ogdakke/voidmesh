@@ -203,6 +203,9 @@ export class InfiniteCanvasRenderer {
         opacityBufferBytes: 0,
         layerTextureBytes: 0,
         externalBindGroupCreations: 0,
+        sharpRestorePasses: 0,
+        sharpRestoreCopiedPixels: 0,
+        sharpRestoreDrawnItems: 0,
       },
       wlur: this.#wlurOverlayPass?.getStats() ?? {
         blurRefreshes: 0,
@@ -210,6 +213,8 @@ export class InfiniteCanvasRenderer {
         composites: 0,
         directPresents: 0,
         convertedPresents: 0,
+        blurPixels: 0,
+        fullBlurPixels: 0,
       },
     };
   }
@@ -650,6 +655,8 @@ export class InfiniteCanvasRenderer {
         sceneTargetTexture,
         sceneTargetView,
         entityDrawItems,
+        viewport,
+        dpr,
       );
 
     // Render final action-plane portions. Lower active material is already sharp

@@ -42,6 +42,19 @@ fn crossingIsActive(key: u32) -> u32 {
   return (contactIndex[base + key] >> 31u);
 }
 
+// During sharp reconstruction, a cover only needs to restore pixels where a
+// lifted card was drawn beneath it. The saved backdrop is bounded to this same
+// region, so fragments outside every lifted partner must remain untouched.
+fn crossingTouchesLifted(world: vec2f, range: vec2u) -> bool {
+  for (var entry = 0u; entry < range.y; entry++) {
+    let contact = contacts.items[contactIndex[range.x + entry]];
+    if (contact.pose.w >= 0.0) { continue; }
+    let local = contactLocal(world - contact.rect.xy, contact.pose.xy);
+    if (contactDistance(local, contact.rect.zw) <= 4.0 * contact.metric.x) { return true; }
+  }
+  return false;
+}
+
 // Bound the base-alpha sample's displacement. RGB red/blue offsets do not
 // affect output alpha. Retain extra pixels at the edge; never assume opacity.
 fn crossingOcclusionMargin(range: vec2u, size: vec2f) -> vec2f {

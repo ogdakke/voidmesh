@@ -1,5 +1,5 @@
 import type { ActionLayerRenderState, DragVisualRenderState } from "#engine";
-import type { ShaderCanvasEntity } from "#types/canvas.ts";
+import type { Bounds, ShaderCanvasEntity } from "#types/canvas.ts";
 import { overlapConfig, type OverlapConfig } from "#lib/config/overlap.config.ts";
 
 type CardGeometry = Pick<ShaderCanvasEntity, "position" | "size" | "rotation">;
@@ -64,6 +64,24 @@ export function cardsOverlap(a: CardGeometry, b: CardGeometry, axis?: ContactAxi
   return true;
 }
 
+function rotatedBounds(card: CardGeometry, padding = 0): Bounds {
+  const angle = (card.rotation * Math.PI) / 180;
+  const cosine = Math.abs(Math.cos(angle));
+  const sine = Math.abs(Math.sin(angle));
+  const halfWidth = card.size.width / 2 + padding;
+  const halfHeight = card.size.height / 2 + padding;
+  const extentX = halfWidth * cosine + halfHeight * sine;
+  const extentY = halfWidth * sine + halfHeight * cosine;
+  const centerX = card.position.x + card.size.width / 2;
+  const centerY = card.position.y + card.size.height / 2;
+  return {
+    x: centerX - extentX,
+    y: centerY - extentY,
+    width: extentX * 2,
+    height: extentY * 2,
+  };
+}
+
 export class OverlapCrossing {
   readonly layout: GPUBindGroupLayout;
   bindGroup: GPUBindGroup;
@@ -84,6 +102,8 @@ export class OverlapCrossing {
     minimumPassage: number;
     maximumPassage: number;
   }[] = [];
+  readonly #sharpLiftedIds = new Set<string>();
+  readonly #sharpCoverIds = new Set<string>();
   #pairCount = 0;
   #crossingCount = 0;
   #sceneIndices = new Map<string, number>();
@@ -216,6 +236,38 @@ export class OverlapCrossing {
   get hasSharpScene(): boolean {
     return this.#active && this.hasLayerSlices && this.#lift < 1;
   }
+  sharpSceneRole(id: string): "lifted" | "cover" | null {
+    if (this.#sharpLiftedIds.has(id)) return "lifted";
+    if (this.#sharpCoverIds.has(id)) return "cover";
+    return null;
+  }
+  getSharpSceneWorldBounds(padding: number): Bounds | null {
+    let minimumX = Infinity;
+    let minimumY = Infinity;
+    let maximumX = -Infinity;
+    let maximumY = -Infinity;
+    for (let i = 0; i < this.#pairCount; i++) {
+      const pair = this.#pairs[i]!;
+      const lifted = rotatedBounds(pair.lifted, padding);
+      const cover = rotatedBounds(pair.cover);
+      const left = Math.max(lifted.x, cover.x);
+      const top = Math.max(lifted.y, cover.y);
+      const right = Math.min(lifted.x + lifted.width, cover.x + cover.width);
+      const bottom = Math.min(lifted.y + lifted.height, cover.y + cover.height);
+      if (right <= left || bottom <= top) continue;
+      minimumX = Math.min(minimumX, left);
+      minimumY = Math.min(minimumY, top);
+      maximumX = Math.max(maximumX, right);
+      maximumY = Math.max(maximumY, bottom);
+    }
+    if (!Number.isFinite(minimumX)) return null;
+    return {
+      x: minimumX,
+      y: minimumY,
+      width: maximumX - minimumX,
+      height: maximumY - minimumY,
+    };
+  }
   get contactCount(): number {
     return this.#data[0]!;
   }
@@ -320,9 +372,16 @@ export class OverlapCrossing {
     this.#dragWasActive = drag?.active === true;
     const crossingCount = enabled && age < 1 ? this.#pairCount * 2 : 0;
     this.#crossingCount = crossingCount;
+    this.#sharpLiftedIds.clear();
+    this.#sharpCoverIds.clear();
     if (crossingCount > 0) {
       this.#sceneIndices.clear();
       for (let i = 0; i < entities.length; i++) this.#sceneIndices.set(entities[i]!.id, i);
+      for (let i = 0; i < this.#pairCount; i++) {
+        const pair = this.#pairs[i]!;
+        this.#sharpLiftedIds.add(pair.lifted.id);
+        this.#sharpCoverIds.add(pair.cover.id);
+      }
     }
     const count = crossingCount + this.#motionCount;
     this.#pending = count > 0;
@@ -665,5 +724,7 @@ export class OverlapCrossing {
     this.#motionContacts.length = 0;
     this.#motionCount = 0;
     this.#pairs.length = 0;
+    this.#sharpLiftedIds.clear();
+    this.#sharpCoverIds.clear();
   }
 }

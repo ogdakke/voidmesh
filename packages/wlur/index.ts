@@ -34,4 +34,4 @@ export {
   type WlurTintColor,
   type WlurWorkingDimensions,
 } from "./types.ts";
-export { WlurPass, type WlurEncodeOptions } from "./wlur-pass.ts";
+export { WlurPass, type WlurEncodeOptions, type WlurPassStats } from "./wlur-pass.ts";
