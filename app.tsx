@@ -1,6 +1,14 @@
 import { IconoirProvider } from "iconoir-react";
 import { NuqsAdapter } from "nuqs/adapters/react";
-import React, { lazy, Suspense, useEffect, useRef, useState, type PropsWithChildren } from "react";
+import React, {
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type PropsWithChildren,
+} from "react";
 import ReactDOM from "react-dom/client";
 import { logger } from "#lib/client.logger.ts";
 import { ToastProvider } from "#ui/toast/toast.tsx";
@@ -16,6 +24,10 @@ import { PostHogProvider, usePostHog } from "@posthog/react";
 import type { PostHogConfig } from "posthog-js";
 import { analytics } from "#lib/analytics.ts";
 import { PostHogAnalyticsProvider } from "#lib/analytics-posthog.ts";
+import {
+  isOverlapBenchmarkModeOpen,
+  subscribeOverlapBenchmarkMode,
+} from "#lib/overlap-benchmark-mode.ts";
 
 import "#styles/app.css";
 
@@ -28,6 +40,9 @@ const options: Partial<PostHogConfig> = {
 
 const DesktopLayout = lazy(() => import("#components/desktop-layout.tsx"));
 const MobileLayout = lazy(() => import("#components/mobile-layout.tsx"));
+const ActionLayerBenchmarkPanel = lazy(
+  () => import("#components/performance-benchmark/action-layer-benchmark-panel.tsx"),
+);
 
 export default function App() {
   const isTouch = useIsTouch();
@@ -40,6 +55,11 @@ export default function App() {
   // small(ish) screen + not touch = desktop layout
   // probably tablet or mobile = mobile layout
   const showMobileLayout = (isSmallScreen && !isTouch) || isMostProbablyTablet || isMobile;
+  const showActionLayerBenchmark = useSyncExternalStore(
+    subscribeOverlapBenchmarkMode,
+    isOverlapBenchmarkModeOpen,
+    () => false,
+  );
 
   const [isFullscreen, setIsFullscreen] = useState(false);
   const panelToggleRef = useRef<(() => void) | null>(null);
@@ -67,6 +87,11 @@ export default function App() {
       <ToastProvider>
         <PwaUpdateManager />
         <CanvasProvider>
+          {showActionLayerBenchmark && (
+            <Suspense fallback={null}>
+              <ActionLayerBenchmarkPanel />
+            </Suspense>
+          )}
           <VideoExportProvider>
             <ExportQueueProvider>
               <LayoutProvider

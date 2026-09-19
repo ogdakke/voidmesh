@@ -1,3 +1,4 @@
+import { FancyEffects } from "#types/fancy-effects.ts";
 import { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
 import {
   DitheringKind,
@@ -71,6 +72,7 @@ interface BenchScenario {
   paceWithAnimationFrame?: boolean;
   recordPerFrame?: boolean;
   resetTexturesBeforeSample?: boolean;
+  overlapToggle?: boolean;
 }
 
 type BenchResourceStats = ReturnType<InfiniteCanvasRenderer["getResourceStats"]>;
@@ -87,6 +89,8 @@ interface BenchActivityMetrics {
   fullSceneBatchRebuilds: number;
   fullSceneBatchUploadBytes: number;
   normalInstanceUploadBytes: number;
+  occlusionPasses: number;
+  opacityProofs: number;
 }
 
 interface BenchFrameSample {
@@ -111,6 +115,9 @@ interface BenchFrameSample {
   processedTextureAllocations: number;
   sourceUploads: number;
   evictions: number;
+  occlusionPasses: number;
+  opacityProofs: number;
+  layerTextureBytes: number;
 }
 
 interface BenchSample {
@@ -539,7 +546,44 @@ const manyEntityScenarios = [
   pausedMixedMediaPanScenario,
 ];
 
-const allScenarios = [...scenarios, ...manyEntityScenarios];
+const overlapToggleScenario: BenchScenario = {
+  id: "overlap-72-action-toggle",
+  label: "72 overlapping images, action layer toggle",
+  description:
+    "Repeated lift/return of six cards through overlapping stacks, including action-layer blur.",
+  kind: "multi",
+  entityCount: 72,
+  sourceSize: { width: 512, height: 512 },
+  shaderType: ShaderType.dithering,
+  params: {
+    showOriginal: true,
+    postProcess: { enabled: false },
+    adjustments: { brightness: 0.5, contrast: 0.5, saturation: 0.5, blur: 0 },
+  },
+  dirtyMode: "none",
+  overlapToggle: true,
+  frames: 240,
+  warmupFrames: 30,
+  samples: 3,
+  paceWithAnimationFrame: true,
+  synchronizeEachFrame: true,
+  recordPerFrame: true,
+};
+const overlapMixedScenario: BenchScenario = {
+  ...overlapToggleScenario,
+  id: "overlap-16-mixed-action-toggle",
+  label: "12 images and four external videos, action layer toggle",
+  description: "Mixed-media overlap and blur guard with rotating cards and repeated lift/return.",
+  entityCount: 16,
+  dirtyMode: "video",
+  zoomStress: { ...ZOOM_STRESS_SCENARIO, imageCount: 12, videoCount: 4, entityCount: 16 },
+};
+const allScenarios = [
+  ...scenarios,
+  ...manyEntityScenarios,
+  overlapToggleScenario,
+  overlapMixedScenario,
+];
 
 const FLOWING_GLASS_VISUAL_TIME = 1.75;
 const flowingGlassVisualScenario: BenchScenario = {
@@ -1376,6 +1420,7 @@ function createRenderState(
   const entitySpatialIndex = new EntitySpatialIndex();
   for (const entity of entities) entitySpatialIndex.upsert(entity);
   return {
+    fancyEffects: FancyEffects.all,
     viewport,
     entities,
     entityIndices: new Map(entities.map((entity, index) => [entity.id, index])),
@@ -1427,6 +1472,7 @@ async function runFrames(params: {
   dragSelectedEntities?: boolean;
   dragSelectEntities?: boolean;
   tweakSingleEntityParams?: boolean;
+  overlapToggle?: boolean;
 }): Promise<{
   totalMs: number;
   cpuEncodeMs: number;
@@ -1505,6 +1551,14 @@ async function runFrames(params: {
     const frameStart = performance.now();
     const cpuStart = performance.now();
     renderState.viewport = viewport;
+    if (params.overlapToggle) {
+      const phase = frameIndex % 120;
+      renderState.actionLayer.active = true;
+      renderState.actionLayer.returning = phase >= 60;
+      renderState.actionLayer.entityIds = renderState.selectedEntityIds;
+      renderState.actionLayer.entityOffset.y = -12 * Math.sin((Math.PI * phase) / 120);
+      renderState.actionLayer.blurIntensity = Math.sin((Math.PI * phase) / 120);
+    }
     if (params.dragSelectedEntities) {
       renderState.dragVisual.offset.x = index * 16;
       renderState.dragVisual.offset.y = index * -8;
@@ -1557,6 +1611,11 @@ async function runFrames(params: {
         sourceUploads:
           resources.entityTextures.sourceUploads - previousResources.entityTextures.sourceUploads,
         evictions: resources.entityTextures.evictions - previousResources.entityTextures.evictions,
+        occlusionPasses:
+          resources.composition.occlusionPasses - previousResources.composition.occlusionPasses,
+        opacityProofs:
+          resources.composition.opacityProofs - previousResources.composition.opacityProofs,
+        layerTextureBytes: resources.composition.layerTextureBytes,
       });
     }
     previousResources = resources;
@@ -1604,6 +1663,10 @@ async function runFrames(params: {
       normalInstanceUploadBytes:
         resources.composition.normalInstanceUploadBytes -
         resourcesBefore.composition.normalInstanceUploadBytes,
+      occlusionPasses:
+        resources.composition.occlusionPasses - resourcesBefore.composition.occlusionPasses,
+      opacityProofs:
+        resources.composition.opacityProofs - resourcesBefore.composition.opacityProofs,
     },
   };
 }
@@ -1616,7 +1679,8 @@ function getTotalResidentBytes(resources: BenchResourceStats): number {
   return (
     resources.entityTextures.residentBytes +
     resources.processingTextures.residentBytes +
-    resources.texturePool.residentBytes
+    resources.texturePool.residentBytes +
+    resources.composition.layerTextureBytes
   );
 }
 
@@ -1624,6 +1688,30 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
   const benchRenderer = await getRenderer();
   const scenarioResourcesBefore = benchRenderer.getResourceStats();
   const entitySet = await createEntities(scenario);
+  if (scenario.overlapToggle) {
+    entitySet.mediaCounts = {
+      image: entitySet.entities.filter((entity) => entity.mediaSource.type === MediaType.image)
+        .length,
+      video: entitySet.entities.filter((entity) => entity.mediaSource.type === MediaType.video)
+        .length,
+    };
+    entitySet.selectedEntityIds = new Set(
+      entitySet.entities.slice(0, 6).map((entity) => entity.id),
+    );
+    entitySet.getViewport = undefined;
+    entitySet.getFramePhase = undefined;
+    for (let index = 0; index < entitySet.entities.length; index++) {
+      const entity = entitySet.entities[index]!;
+      const group = index % 6;
+      const depth = Math.floor(index / 6);
+      entity.position = {
+        x: 30 + (group % 3) * 400 + depth * 8,
+        y: 40 + Math.floor(group / 3) * 330 + depth * 6,
+      };
+      entity.size = { width: 300, height: 220 };
+      entity.rotation = depth % 2 === 0 ? 0 : 4;
+    }
+  }
   let frameIndex = 0;
   gpuErrors.length = 0;
 
@@ -1633,6 +1721,7 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
       renderer: benchRenderer,
       entities: entitySet.entities,
       frameCount: scenario.warmupFrames,
+      overlapToggle: scenario.overlapToggle,
       beforeFrame: entitySet.beforeFrame,
       getViewportOffset: entitySet.getViewportOffset,
       getViewport: entitySet.getViewport,
@@ -1669,6 +1758,7 @@ async function runScenario(scenario: BenchScenario): Promise<BenchResult> {
         renderer: benchRenderer,
         entities: entitySet.entities,
         frameCount: scenario.frames,
+        overlapToggle: scenario.overlapToggle,
         beforeFrame: entitySet.beforeFrame,
         getViewportOffset: entitySet.getViewportOffset,
         getViewport: entitySet.getViewport,
@@ -1797,6 +1887,8 @@ function getResourceCounterDelta(
   | "fullSceneBatchRebuilds"
   | "fullSceneBatchUploadBytes"
   | "normalInstanceUploadBytes"
+  | "occlusionPasses"
+  | "opacityProofs"
 > {
   return {
     sourceTextureAllocations:
@@ -1813,6 +1905,8 @@ function getResourceCounterDelta(
       after.composition.fullSceneBatchUploadBytes - before.composition.fullSceneBatchUploadBytes,
     normalInstanceUploadBytes:
       after.composition.normalInstanceUploadBytes - before.composition.normalInstanceUploadBytes,
+    occlusionPasses: after.composition.occlusionPasses - before.composition.occlusionPasses,
+    opacityProofs: after.composition.opacityProofs - before.composition.opacityProofs,
   };
 }
 
@@ -1831,6 +1925,8 @@ function medianActivity(samples: readonly BenchActivityMetrics[]): BenchActivity
     fullSceneBatchRebuilds: medianField("fullSceneBatchRebuilds"),
     fullSceneBatchUploadBytes: medianField("fullSceneBatchUploadBytes"),
     normalInstanceUploadBytes: medianField("normalInstanceUploadBytes"),
+    occlusionPasses: medianField("occlusionPasses"),
+    opacityProofs: medianField("opacityProofs"),
   };
 }
 
@@ -1899,6 +1995,21 @@ async function runScenarioById(scenarioId: string): Promise<BenchResult> {
   markComplete([result]);
   console.log("[voidmesh-render-bench-scenario]", JSON.stringify(result, null, 2));
   return result;
+}
+
+/** GPU pixel guard, deliberately separate from timing samples. */
+export async function validateOverlapFastPaths() {
+  const scenario = allScenarios.find((item) => item.id === "overlap-72-action-toggle");
+  if (!scenario) throw new Error("Overlap visual guard scenario is unavailable");
+  const entitySet = await createEntities({ ...scenario, entityCount: 12 });
+  try {
+    const device = (await getRenderer()).device;
+    if (!device) throw new Error("Overlap visual guard GPU is unavailable");
+    const { runOverlapVisualGuard } = await import("./overlap-visual-guard.ts");
+    return await runOverlapVisualGuard(device, entitySet.entities);
+  } finally {
+    entitySet.cleanup?.();
+  }
 }
 
 async function captureBlobMetrics(blob: Blob): Promise<VisualMetrics> {

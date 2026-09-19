@@ -339,11 +339,13 @@ export class EntityDrawItemPreparer {
         this.#prepared.singleSelectedOffsetY = drawItem.offsetY;
       }
 
-      if (isActionLayerEntity) {
-        actionLayerDrawItems.push(drawItem);
-      } else {
+      if (isActionLayerEntity) actionLayerDrawItems.push(drawItem);
+      if (!isActionLayerEntity || this.#compositionPass.crossing.hasLayerSlices) {
         entityDrawItems.push(drawItem);
       }
+    }
+    if (actionLayerActive && this.#compositionPass.crossing.enabled) {
+      entityDrawItems.sort(this.#compareCrossingItems);
     }
     const visiblePreparationEnd = performance.now();
     this.#phaseStats.visibleEntityPreparationMs = tracePerformancePhase(
@@ -355,6 +357,17 @@ export class EntityDrawItemPreparer {
     this.#prepared.hasAnimatingContent = hasAnimatingContent;
     return this.#prepared;
   }
+
+  readonly #compareCrossingItems = (a: CompositionDrawItem, b: CompositionDrawItem): number => {
+    const ai = this.#fullSceneEntityIndices.get(a.entity.id);
+    const bi = this.#fullSceneEntityIndices.get(b.entity.id);
+    if (ai === undefined || bi === undefined)
+      throw new Error("Crossing draw item is missing its scene index");
+    return (
+      this.#compositionPass.crossing.order(ai, a.entity.id) -
+      this.#compositionPass.crossing.order(bi, b.entity.id)
+    );
+  };
 
   getPhaseStats(): Readonly<EntityPreparationPhaseStats> {
     return this.#phaseStats;

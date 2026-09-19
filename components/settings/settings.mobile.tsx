@@ -12,6 +12,8 @@ import {
   FeedbackLink,
   HapticsToggle,
   LinkItem,
+  OpenOverlapBenchmarkButton,
+  OverlapEffectToggle,
   RedoOnboardingLink,
   ShareLink,
   SnapToGridToggle,
@@ -74,7 +76,15 @@ export default function SettingsDrawer() {
           <div className="settings-drawer-switch">
             <HapticsToggle />
           </div>
+          <div className="settings-drawer-switch">
+            <OverlapEffectToggle />
+          </div>
           <hr className="divider" />
+          <div className="settings-drawer-ext-item field-label">
+            <LinkItem>
+              <OpenOverlapBenchmarkButton onOpen={() => handleOpenChange(false)} />
+            </LinkItem>
+          </div>
           <div className="settings-drawer-ext-item field-label">
             <LinkItem>
               <ShareLink />

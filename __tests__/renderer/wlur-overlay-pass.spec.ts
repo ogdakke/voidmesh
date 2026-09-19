@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 const wlurMocks = vi.hoisted(() => ({
   encode: vi.fn<(...args: unknown[]) => void>(),
@@ -12,6 +12,9 @@ vi.mock("#wlur", async (importOriginal) => {
     WlurPass: class {
       initialize(): void {}
       updateConfig(): void {}
+      getStats(): { blurPixels: number; fullBlurPixels: number } {
+        return { blurPixels: 12, fullBlurPixels: 24 };
+      }
       encode(...args: unknown[]): void {
         wlurMocks.encode(...args);
       }
@@ -36,26 +39,31 @@ describe("WlurOverlayPass", () => {
 
   afterAll(() => vi.unstubAllGlobals());
 
-  test("samples a matching-format canvas without allocating or copying an input texture", () => {
-    const outputTexture = createTexture();
-    const device = createDevice(outputTexture);
+  beforeEach(() => vi.clearAllMocks());
+
+  test("renders into a stable scene target and presents directly to a matching-format drawable", () => {
+    const sceneTexture = createTexture();
+    const device = createDevice(sceneTexture);
     const pass = new WlurOverlayPass({
       device,
       canvasFormat: "rgba16float",
       intermediateFormat: "rgba16float",
     });
     pass.setConfig({ enabled: true, cache: true });
-    const sourceTexture = createTexture();
+    const sceneTarget = pass.getSceneTarget(3840, 2160, 2);
+    const targetTexture = createTexture();
+    const targetView = {} as GPUTextureView;
     const encoder = {
       copyTextureToTexture: vi.fn<GPUCommandEncoder["copyTextureToTexture"]>(),
     } as unknown as GPUCommandEncoder;
 
+    expect(sceneTarget).not.toBeNull();
     expect(
       pass.encode({
         encoder,
-        sourceTexture,
-        targetTexture: sourceTexture,
-        targetView: {} as GPUTextureView,
+        sourceTexture: sceneTarget!.texture,
+        targetTexture,
+        targetView,
         width: 3840,
         height: 2160,
         devicePixelRatio: 2,
@@ -64,27 +72,78 @@ describe("WlurOverlayPass", () => {
     ).toBe(true);
 
     expect(device.createTexture).toHaveBeenCalledOnce();
-    expect(wlurMocks.encode.mock.calls[0]!.slice(0, 5)).toEqual([
+    expect(wlurMocks.encode).toHaveBeenCalledWith(
       encoder,
-      sourceTexture,
-      outputTexture,
+      sceneTexture,
+      targetTexture,
       3840,
       2160,
-    ]);
-    expect(encoder.copyTextureToTexture).toHaveBeenCalledOnce();
-    expect(encoder.copyTextureToTexture).toHaveBeenCalledWith(
-      { texture: outputTexture },
-      { texture: sourceTexture },
-      { width: 3840, height: 2160 },
+      expect.any(Object),
+      { outputView: targetView },
     );
+    expect(encoder.copyTextureToTexture).not.toHaveBeenCalled();
+    expect(pass.getStats()).toEqual({
+      blurRefreshes: 1,
+      blurReuses: 0,
+      composites: 1,
+      directPresents: 1,
+      convertedPresents: 0,
+      blurPixels: 12,
+      fullBlurPixels: 24,
+    });
+
+    pass.destroy();
+  });
+
+  test("keeps explicit format conversion when the canvas format differs", () => {
+    const inputTexture = createTexture();
+    const outputTexture = createTexture();
+    const device = createDevice(inputTexture, outputTexture);
+    const pass = new WlurOverlayPass({
+      device,
+      canvasFormat: "bgra8unorm",
+      intermediateFormat: "rgba16float",
+    });
+    pass.setConfig({ enabled: true, cache: true });
+    const encoder = createEncoder();
+    const sourceTexture = createTexture();
+    const targetTexture = createTexture();
+    const targetView = {} as GPUTextureView;
+
+    expect(pass.getSceneTarget(1200, 800, 2)).toBeNull();
+    expect(
+      pass.encode({
+        encoder,
+        sourceTexture,
+        targetTexture,
+        targetView,
+        width: 1200,
+        height: 800,
+        devicePixelRatio: 2,
+        contentDirty: true,
+      }),
+    ).toBe(true);
+
+    expect(wlurMocks.encode).toHaveBeenCalledWith(
+      encoder,
+      inputTexture,
+      outputTexture,
+      1200,
+      800,
+      expect.any(Object),
+      {},
+    );
+    expect(encoder.beginRenderPass).toHaveBeenCalledTimes(2);
+    expect(pass.getStats()).toMatchObject({ convertedPresents: 1, directPresents: 0 });
 
     pass.destroy();
   });
 });
 
-function createDevice(outputTexture: GPUTexture): GPUDevice & {
+function createDevice(...textures: GPUTexture[]): GPUDevice & {
   createTexture: ReturnType<typeof vi.fn<GPUDevice["createTexture"]>>;
 } {
+  let textureIndex = 0;
   return {
     createSampler: vi.fn<GPUDevice["createSampler"]>(() => ({}) as GPUSampler),
     createBindGroupLayout: vi.fn<GPUDevice["createBindGroupLayout"]>(
@@ -93,9 +152,26 @@ function createDevice(outputTexture: GPUTexture): GPUDevice & {
     createShaderModule: vi.fn<GPUDevice["createShaderModule"]>(() => ({}) as GPUShaderModule),
     createPipelineLayout: vi.fn<GPUDevice["createPipelineLayout"]>(() => ({}) as GPUPipelineLayout),
     createRenderPipeline: vi.fn<GPUDevice["createRenderPipeline"]>(() => ({}) as GPURenderPipeline),
-    createTexture: vi.fn<GPUDevice["createTexture"]>(() => outputTexture),
+    createBindGroup: vi.fn<GPUDevice["createBindGroup"]>(() => ({}) as GPUBindGroup),
+    createTexture: vi.fn<GPUDevice["createTexture"]>(() => textures[textureIndex++]!),
   } as unknown as GPUDevice & {
     createTexture: ReturnType<typeof vi.fn<GPUDevice["createTexture"]>>;
+  };
+}
+
+function createEncoder(): GPUCommandEncoder & {
+  beginRenderPass: ReturnType<typeof vi.fn<GPUCommandEncoder["beginRenderPass"]>>;
+} {
+  const renderPass = {
+    setPipeline: vi.fn<GPURenderPassEncoder["setPipeline"]>(),
+    setBindGroup: vi.fn<GPURenderPassEncoder["setBindGroup"]>(),
+    draw: vi.fn<GPURenderPassEncoder["draw"]>(),
+    end: vi.fn<GPURenderPassEncoder["end"]>(),
+  } as unknown as GPURenderPassEncoder;
+  return {
+    beginRenderPass: vi.fn<GPUCommandEncoder["beginRenderPass"]>(() => renderPass),
+  } as unknown as GPUCommandEncoder & {
+    beginRenderPass: ReturnType<typeof vi.fn<GPUCommandEncoder["beginRenderPass"]>>;
   };
 }
 
