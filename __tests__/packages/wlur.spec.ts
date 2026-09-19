@@ -145,22 +145,25 @@ describe("WlurPass resource reuse", () => {
     const firstOutput = createWlurTexture(800, 600);
     const secondOutput = createWlurTexture(800, 600);
     const params = { ...DEFAULT_WLUR_PARAMS, radius: 20, noise: 0 };
+    const beginRenderPass = vi.mocked(encoder.beginRenderPass);
 
     pass.encode(encoder, input, firstOutput, 800, 600, params);
-    expect(device.createBindGroup).toHaveBeenCalledTimes(4);
+    expect(device.createBindGroup).toHaveBeenCalledTimes(3);
+    expect(beginRenderPass).toHaveBeenCalledTimes(3);
 
     pass.encode(encoder, input, firstOutput, 800, 600, params);
-    expect(device.createBindGroup).toHaveBeenCalledTimes(4);
+    expect(device.createBindGroup).toHaveBeenCalledTimes(3);
+    expect(beginRenderPass).toHaveBeenCalledTimes(6);
     expect(input.createView).toHaveBeenCalledOnce();
     expect(firstOutput.createView).toHaveBeenCalledOnce();
 
     pass.encode(encoder, input, secondOutput, 800, 600, params);
-    expect(device.createBindGroup).toHaveBeenCalledTimes(4);
+    expect(device.createBindGroup).toHaveBeenCalledTimes(3);
     expect(secondOutput.createView).toHaveBeenCalledOnce();
 
     const nextInput = createWlurTexture(800, 600);
     pass.encode(encoder, nextInput, secondOutput, 800, 600, params);
-    expect(device.createBindGroup).toHaveBeenCalledTimes(6);
+    expect(device.createBindGroup).toHaveBeenCalledTimes(5);
 
     pass.encode(encoder, input, firstOutput, 800, 600, params);
     expect(device.createBindGroup).toHaveBeenCalledTimes(6);
