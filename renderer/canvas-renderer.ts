@@ -8,7 +8,7 @@ import { setGpuContext } from "./gpu-color-space.ts";
 import type { DisintegrationRenderOverlay, RenderState } from "#engine";
 import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import { CanvasLensing } from "#types/enums.ts";
-import { ActionLayerBlurPass } from "./action-layer-blur-pass.ts";
+import { ActionLayerBlurPass, type ActionLayerBlurPassStats } from "./action-layer-blur-pass.ts";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
 import { CanvasDebugPass } from "./canvas-debug-pass.ts";
 import { CompositionPass, type CompositionPassStats } from "./composition-pass.ts";
@@ -36,6 +36,7 @@ import { WlurOverlayPass, type WlurOverlayPassStats } from "./wlur-overlay-pass.
 export type { ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
 
 export interface RendererResourceStats {
+  actionBlur: ActionLayerBlurPassStats;
   entityTextures: EntityTextureResidencyStats;
   processingTextures: ByteBudgetCacheStats;
   texturePool: TexturePoolStats;
@@ -163,6 +164,11 @@ export class InfiniteCanvasRenderer {
   /** Snapshot of GPU texture residency and cumulative allocation churn. */
   getResourceStats(): RendererResourceStats {
     return {
+      actionBlur: this.#actionLayerBlurPass?.getStats() ?? {
+        fusedComposites: 0,
+        cachedBlurRefreshes: 0,
+        cachedBlits: 0,
+      },
       entityTextures: this.#entityTexturePipeline?.getResidencyStats() ?? {
         budgetBytes: config.rendering.entityTextureBudgetBytes,
         residentBytes: 0,

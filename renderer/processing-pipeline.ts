@@ -1277,7 +1277,7 @@ export class ProcessingPipeline {
   #encodeBlurPasses(
     encoder: GPUCommandEncoder,
     inputSource: BlurInputSource,
-    finalTarget: GPUTexture,
+    finalTarget: GPUTexture | null,
     mipChain: GPUTexture[],
     uniformSet: BlurUniformSet,
     levels: number,
@@ -1328,7 +1328,7 @@ export class ProcessingPipeline {
     }
 
     // Final upsample uniform: mip[0] -> full resolution
-    {
+    if (finalTarget) {
       const floatView = this.#blurUniformFloatView;
       floatView[0] = width; // dst_resolution.x (full res)
       floatView[1] = height; // dst_resolution.y (full res)
@@ -1434,7 +1434,7 @@ export class ProcessingPipeline {
     }
 
     // === Final upsample: mip[0] -> finalTarget (full resolution) ===
-    {
+    if (finalTarget) {
       const srcMip = mipChain[0]!;
 
       const bindGroup = this.#getOrCreateBlurTextureBindGroup(
@@ -1786,6 +1786,50 @@ export class ProcessingPipeline {
       height,
       0,
     );
+  }
+
+  /**
+   * Encode the action blur through its half-resolution mip, leaving the final
+   * full-resolution upsample to the caller so it can be fused with composition.
+   */
+  encodeFullScreenBlurPyramid(
+    encoder: GPUCommandEncoder,
+    inputTexture: GPUTexture,
+    width: number,
+    height: number,
+  ): GPUTexture | null {
+    if (
+      !this.#blurDownsamplePipeline ||
+      !this.#blurUpsamplePipeline ||
+      !this.#blurDownsampleBindGroupLayout ||
+      !this.#blurUpsampleBindGroupLayout ||
+      !this.#blurMixUniformBuffer ||
+      !this.#blurSampler
+    ) {
+      return null;
+    }
+
+    const mipChain = this.#getOrCreateBlurMipChain(width, height);
+    if (mipChain.length === 0) return null;
+    const uniformSet = {
+      downsample: this.#blurDownsampleUniformBuffers,
+      upsample: this.#blurUpsampleUniformBuffers,
+      mix: this.#blurMixUniformBuffer,
+    };
+
+    this.#encodeBlurPasses(
+      encoder,
+      { kind: "texture", texture: inputTexture },
+      null,
+      mipChain,
+      uniformSet,
+      config.actionLayer.blurLevels,
+      config.actionLayer.blurOffset,
+      width,
+      height,
+      0,
+    );
+    return mipChain[0] ?? null;
   }
 
   /**

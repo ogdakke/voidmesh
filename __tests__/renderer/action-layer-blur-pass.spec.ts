@@ -11,7 +11,7 @@ describe("ActionLayerBlurPass", () => {
 
   afterAll(() => vi.unstubAllGlobals());
 
-  test("samples the bindable scene texture without a full-resolution copy", () => {
+  test("fuses changed-scene upsampling with composition and caches static blur", () => {
     const outputTexture = createTexture();
     const renderPass = {
       setPipeline: vi.fn<GPURenderPassEncoder["setPipeline"]>(),
@@ -31,8 +31,12 @@ describe("ActionLayerBlurPass", () => {
       tintColor: [0, 0, 0],
     });
     const sourceTexture = createTexture();
+    const blurMip = createTexture();
     const processingPipeline = {
       encodeFullScreenBlur: vi.fn<ProcessingPipeline["encodeFullScreenBlur"]>(),
+      encodeFullScreenBlurPyramid: vi.fn<ProcessingPipeline["encodeFullScreenBlurPyramid"]>(
+        () => blurMip,
+      ),
     } as unknown as ProcessingPipeline;
     const options = {
       encoder,
@@ -47,6 +51,22 @@ describe("ActionLayerBlurPass", () => {
 
     pass.encode(options);
     expect(encoder.copyTextureToTexture).not.toHaveBeenCalled();
+    expect(processingPipeline.encodeFullScreenBlurPyramid).toHaveBeenCalledWith(
+      encoder,
+      sourceTexture,
+      3840,
+      2160,
+    );
+    expect(processingPipeline.encodeFullScreenBlur).not.toHaveBeenCalled();
+    expect(encoder.beginRenderPass).toHaveBeenCalledOnce();
+    expect(pass.getStats()).toEqual({
+      fusedComposites: 1,
+      cachedBlurRefreshes: 0,
+      cachedBlits: 0,
+    });
+
+    options.contentDirty = false;
+    pass.encode(options);
     expect(processingPipeline.encodeFullScreenBlur).toHaveBeenCalledWith(
       encoder,
       sourceTexture,
@@ -56,9 +76,14 @@ describe("ActionLayerBlurPass", () => {
     );
     expect(device.createTexture).toHaveBeenCalledOnce();
 
-    options.contentDirty = false;
     pass.encode(options);
     expect(processingPipeline.encodeFullScreenBlur).toHaveBeenCalledOnce();
+    expect(encoder.beginRenderPass).toHaveBeenCalledTimes(3);
+    expect(pass.getStats()).toEqual({
+      fusedComposites: 1,
+      cachedBlurRefreshes: 1,
+      cachedBlits: 2,
+    });
 
     pass.destroy();
     expect(outputTexture.destroy).toHaveBeenCalledOnce();
