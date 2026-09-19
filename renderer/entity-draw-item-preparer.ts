@@ -73,6 +73,7 @@ export interface PreparedEntityDrawItems {
   singleSelectedOffsetX: number;
   singleSelectedOffsetY: number;
   hasAnimatingContent: boolean;
+  hasBackdropAnimatingContent: boolean;
 }
 
 export interface EntityPreparationPhaseStats {
@@ -108,6 +109,7 @@ export class EntityDrawItemPreparer {
     singleSelectedOffsetX: 0,
     singleSelectedOffsetY: 0,
     hasAnimatingContent: false,
+    hasBackdropAnimatingContent: false,
   };
   #fullSceneBatchKey: FullSceneBatchKey | null = null;
   #mixedFullSceneBatchKey: FullSceneBatchKey | null = null;
@@ -179,6 +181,7 @@ export class EntityDrawItemPreparer {
     this.#fullSceneAdmissionQueried = false;
     this.#admissionVisibleEntities = this.#visibleEntities;
     let hasAnimatingContent = false;
+    let hasBackdropAnimatingContent = false;
     this.#phaseStats.batchAdmissionMs = 0;
     this.#phaseStats.spatialQueryMs = 0;
     this.#phaseStats.visibleEntityPreparationMs = 0;
@@ -208,6 +211,7 @@ export class EntityDrawItemPreparer {
       }
       this.#prepared.fullSceneBatch = fullSceneBatch;
       this.#prepared.hasAnimatingContent = false;
+      this.#prepared.hasBackdropAnimatingContent = false;
       return this.#prepared;
     }
 
@@ -251,12 +255,14 @@ export class EntityDrawItemPreparer {
     let previousDesiredHeight = 0;
     const visiblePreparationStart = performance.now();
     for (const entity of visibleEntities) {
+      const isActionLayerEntity = actionLayerActive && actionLayer.entityIds.has(entity.id);
       // Check if texture needs regeneration. Animated media is marked dirty by the
       // game loop only when the decoded frame changes.
       const textureWasDirty = !!entity.textureDirty;
       const needsContinuousRender = this.#texturePipeline.needsContinuousRenderForEntity(entity);
       if (textureWasDirty || needsContinuousRender) {
         hasAnimatingContent = true;
+        if (!isActionLayerEntity) hasBackdropAnimatingContent = true;
       }
 
       const sameProjectedSize =
@@ -302,7 +308,6 @@ export class EntityDrawItemPreparer {
       const isSelected = allEntitiesSelected || selectedEntityIds.has(entity.id);
 
       // Action layer entities are drawn AFTER blur (not in main pass) to avoid halo
-      const isActionLayerEntity = actionLayerActive && actionLayer.entityIds.has(entity.id);
       const isDragVisualEntity = dragVisual.active && dragVisual.entityIds.has(entity.id);
       const dragOffsetX =
         isDragVisualEntity && dragVisual.appliesToSelection ? dragVisual.offset.x : 0;
@@ -355,6 +360,7 @@ export class EntityDrawItemPreparer {
     );
 
     this.#prepared.hasAnimatingContent = hasAnimatingContent;
+    this.#prepared.hasBackdropAnimatingContent = hasBackdropAnimatingContent;
     return this.#prepared;
   }
 

@@ -11,8 +11,8 @@ describe("ActionLayerBlurPass", () => {
 
   afterAll(() => vi.unstubAllGlobals());
 
-  test("fuses changed-scene upsampling with composition and caches static blur", () => {
-    const outputTexture = createTexture();
+  test("reuses a dedicated blur pyramid while the backdrop stays unchanged", () => {
+    const mipTextures = Array.from({ length: 4 }, createTexture);
     const renderPass = {
       setPipeline: vi.fn<GPURenderPassEncoder["setPipeline"]>(),
       setBindGroup: vi.fn<GPURenderPassEncoder["setBindGroup"]>(),
@@ -23,7 +23,7 @@ describe("ActionLayerBlurPass", () => {
       copyTextureToTexture: vi.fn<GPUCommandEncoder["copyTextureToTexture"]>(),
       beginRenderPass: vi.fn<GPUCommandEncoder["beginRenderPass"]>(() => renderPass),
     } as unknown as GPUCommandEncoder;
-    const device = createDevice(outputTexture);
+    const device = createDevice(mipTextures);
     const pass = new ActionLayerBlurPass({
       device,
       canvasFormat: "rgba16float",
@@ -31,11 +31,9 @@ describe("ActionLayerBlurPass", () => {
       tintColor: [0, 0, 0],
     });
     const sourceTexture = createTexture();
-    const blurMip = createTexture();
     const processingPipeline = {
-      encodeFullScreenBlur: vi.fn<ProcessingPipeline["encodeFullScreenBlur"]>(),
       encodeFullScreenBlurPyramid: vi.fn<ProcessingPipeline["encodeFullScreenBlurPyramid"]>(
-        () => blurMip,
+        (_encoder, _source, _width, _height, mipChain) => mipChain[0] ?? null,
       ),
     } as unknown as ProcessingPipeline;
     const options = {
@@ -56,43 +54,42 @@ describe("ActionLayerBlurPass", () => {
       sourceTexture,
       3840,
       2160,
+      mipTextures,
     );
-    expect(processingPipeline.encodeFullScreenBlur).not.toHaveBeenCalled();
     expect(encoder.beginRenderPass).toHaveBeenCalledOnce();
     expect(pass.getStats()).toEqual({
-      fusedComposites: 1,
-      cachedBlurRefreshes: 0,
-      cachedBlits: 0,
+      composites: 1,
+      pyramidRefreshes: 1,
+      pyramidReuses: 0,
+      residentBytes: 22_032_000,
     });
 
     options.contentDirty = false;
     pass.encode(options);
-    expect(processingPipeline.encodeFullScreenBlur).toHaveBeenCalledWith(
-      encoder,
-      sourceTexture,
-      outputTexture,
-      3840,
-      2160,
-    );
-    expect(device.createTexture).toHaveBeenCalledOnce();
-
     pass.encode(options);
-    expect(processingPipeline.encodeFullScreenBlur).toHaveBeenCalledOnce();
+    expect(processingPipeline.encodeFullScreenBlurPyramid).toHaveBeenCalledOnce();
     expect(encoder.beginRenderPass).toHaveBeenCalledTimes(3);
     expect(pass.getStats()).toEqual({
-      fusedComposites: 1,
-      cachedBlurRefreshes: 1,
-      cachedBlits: 2,
+      composites: 3,
+      pyramidRefreshes: 1,
+      pyramidReuses: 2,
+      residentBytes: 22_032_000,
     });
 
+    options.contentDirty = true;
+    pass.encode(options);
+    expect(processingPipeline.encodeFullScreenBlurPyramid).toHaveBeenCalledTimes(2);
+    expect(device.createTexture).toHaveBeenCalledTimes(4);
+
     pass.destroy();
-    expect(outputTexture.destroy).toHaveBeenCalledOnce();
+    for (const texture of mipTextures) expect(texture.destroy).toHaveBeenCalledOnce();
   });
 });
 
-function createDevice(outputTexture: GPUTexture): GPUDevice & {
+function createDevice(mipTextures: GPUTexture[]): GPUDevice & {
   createTexture: ReturnType<typeof vi.fn<GPUDevice["createTexture"]>>;
 } {
+  let textureIndex = 0;
   return {
     queue: { writeBuffer: vi.fn<GPUQueue["writeBuffer"]>() },
     createShaderModule: vi.fn<GPUDevice["createShaderModule"]>(() => ({}) as GPUShaderModule),
@@ -105,7 +102,7 @@ function createDevice(outputTexture: GPUTexture): GPUDevice & {
     createSampler: vi.fn<GPUDevice["createSampler"]>(() => ({}) as GPUSampler),
     createPipelineLayout: vi.fn<GPUDevice["createPipelineLayout"]>(() => ({}) as GPUPipelineLayout),
     createRenderPipeline: vi.fn<GPUDevice["createRenderPipeline"]>(() => ({}) as GPURenderPipeline),
-    createTexture: vi.fn<GPUDevice["createTexture"]>(() => outputTexture),
+    createTexture: vi.fn<GPUDevice["createTexture"]>(() => mipTextures[textureIndex++]!),
     createBindGroup: vi.fn<GPUDevice["createBindGroup"]>(() => ({}) as GPUBindGroup),
   } as unknown as GPUDevice & {
     createTexture: ReturnType<typeof vi.fn<GPUDevice["createTexture"]>>;

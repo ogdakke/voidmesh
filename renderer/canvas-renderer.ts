@@ -66,6 +66,15 @@ export class InfiniteCanvasRenderer {
   onDeviceLost?: (reason: string) => void;
 
   #actionLayerBlurPass: ActionLayerBlurPass | null = null;
+  #actionBlurBackdropState: {
+    entityVersion: number;
+    geometryVersion: number;
+    selectionVersion: number;
+    viewportX: number;
+    viewportY: number;
+    viewportZoom: number;
+    debugMode: boolean;
+  } | null = null;
 
   // Texture pool for eliminating per-frame allocation churn
   #texturePool: TexturePool | null = null;
@@ -165,9 +174,10 @@ export class InfiniteCanvasRenderer {
   getResourceStats(): RendererResourceStats {
     return {
       actionBlur: this.#actionLayerBlurPass?.getStats() ?? {
-        fusedComposites: 0,
-        cachedBlurRefreshes: 0,
-        cachedBlits: 0,
+        composites: 0,
+        pyramidRefreshes: 0,
+        pyramidReuses: 0,
+        residentBytes: 0,
       },
       entityTextures: this.#entityTexturePipeline?.getResidencyStats() ?? {
         budgetBytes: config.rendering.entityTextureBudgetBytes,
@@ -582,6 +592,19 @@ export class InfiniteCanvasRenderer {
       this.#canvasFormat === this.#colorConfig.intermediateFormat &&
       !!this.#entityTexturePipeline &&
       !!this.#actionLayerBlurPass;
+    let hasBackdropDragVisual = false;
+    if (state.dragVisual.active) {
+      for (const entityId of state.dragVisual.entityIds) {
+        if (state.actionLayer.entityIds.has(entityId)) continue;
+        hasBackdropDragVisual = true;
+        break;
+      }
+    }
+    const actionBackdropDirty =
+      renderActionBlur &&
+      (this.#updateActionBlurBackdropState(state) ||
+        preparedEntityDrawItems.hasBackdropAnimatingContent ||
+        hasBackdropDragVisual);
 
     // Pass 1: Render dot grid background
     this.#gridPass.encode({ encoder, targetView: sceneTargetView, viewport, width, height });
@@ -641,13 +664,14 @@ export class InfiniteCanvasRenderer {
         width,
         height,
         blurIntensity,
-        contentDirty: state.dirty || hasAnimatingContent,
+        contentDirty: actionBackdropDirty,
       });
     }
 
     // Reset blur cache when action layer blur is no longer rendering
     if (blurIntensity <= 0.01) {
       this.#actionLayerBlurPass?.invalidateCache();
+      this.#actionBlurBackdropState = null;
     }
     if (renderActionBlur)
       this.#compositionPass.restoreSharpScene(
@@ -809,7 +833,32 @@ export class InfiniteCanvasRenderer {
    */
   setGridConfig(config: Partial<GridConfig>): void {
     this.#gridPass?.setConfig(config);
+    this.#actionLayerBlurPass?.invalidateCache();
     this.#wlurOverlayPass?.invalidateCache();
+  }
+
+  #updateActionBlurBackdropState(state: RenderState): boolean {
+    const previous = this.#actionBlurBackdropState;
+    const next = {
+      entityVersion: state.entityVersion,
+      geometryVersion: state.geometryVersion,
+      selectionVersion: state.selectionVersion,
+      viewportX: state.viewport.offset.x,
+      viewportY: state.viewport.offset.y,
+      viewportZoom: state.viewport.zoom,
+      debugMode: state.debugMode,
+    };
+    this.#actionBlurBackdropState = next;
+    return (
+      previous === null ||
+      previous.entityVersion !== next.entityVersion ||
+      previous.geometryVersion !== next.geometryVersion ||
+      previous.selectionVersion !== next.selectionVersion ||
+      previous.viewportX !== next.viewportX ||
+      previous.viewportY !== next.viewportY ||
+      previous.viewportZoom !== next.viewportZoom ||
+      previous.debugMode !== next.debugMode
+    );
   }
 
   setActionLayerTint(color: [number, number, number]): void {

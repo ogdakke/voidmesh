@@ -1,4 +1,5 @@
 import { config } from "#config";
+import { getTextureByteSize } from "#lib/textures.ts";
 import actionLayerBlitShaderSource from "./action-layer-blit.wgsl?raw";
 import type { ProcessingPipeline } from "./processing-pipeline.ts";
 
@@ -21,15 +22,15 @@ interface EncodeActionLayerBlurOptions {
 }
 
 export interface ActionLayerBlurPassStats {
-  fusedComposites: number;
-  cachedBlurRefreshes: number;
-  cachedBlits: number;
+  composites: number;
+  pyramidRefreshes: number;
+  pyramidReuses: number;
+  residentBytes: number;
 }
 
 export class ActionLayerBlurPass {
   readonly #device: GPUDevice;
   readonly #intermediateFormat: GPUTextureFormat;
-  readonly #blitPipeline: GPURenderPipeline;
   readonly #upsampleCompositePipeline: GPURenderPipeline;
   readonly #bindGroupLayout: GPUBindGroupLayout;
   readonly #uniformBuffer: GPUBuffer;
@@ -40,14 +41,14 @@ export class ActionLayerBlurPass {
   #textures: {
     width: number;
     height: number;
-    output: GPUTexture;
+    mipChain: GPUTexture[];
+    byteSize: number;
   } | null = null;
   #cacheValid = false;
-  #bindGroupCached: GPUBindGroup | null = null;
   #upsampleBinding: { source: GPUTexture; bindGroup: GPUBindGroup } | null = null;
-  #fusedComposites = 0;
-  #cachedBlurRefreshes = 0;
-  #cachedBlits = 0;
+  #composites = 0;
+  #pyramidRefreshes = 0;
+  #pyramidReuses = 0;
 
   constructor(options: ActionLayerBlurPassOptions) {
     this.#device = options.device;
@@ -101,17 +102,6 @@ export class ActionLayerBlurPass {
         operation: "add",
       },
     };
-    this.#blitPipeline = this.#device.createRenderPipeline({
-      label: "Action layer blit pipeline",
-      layout: pipelineLayout,
-      vertex: { module: shaderModule, entryPoint: "vs_main" },
-      fragment: {
-        module: shaderModule,
-        entryPoint: "fs_main",
-        targets: [{ format: options.canvasFormat, blend }],
-      },
-      primitive: { topology: "triangle-list" },
-    });
     this.#upsampleCompositePipeline = this.#device.createRenderPipeline({
       label: "Action layer upsample composite pipeline",
       layout: pipelineLayout,
@@ -135,9 +125,10 @@ export class ActionLayerBlurPass {
 
   getStats(): ActionLayerBlurPassStats {
     return {
-      fusedComposites: this.#fusedComposites,
-      cachedBlurRefreshes: this.#cachedBlurRefreshes,
-      cachedBlits: this.#cachedBlits,
+      composites: this.#composites,
+      pyramidRefreshes: this.#pyramidRefreshes,
+      pyramidReuses: this.#pyramidReuses,
+      residentBytes: this.#textures?.byteSize ?? 0,
     };
   }
 
@@ -164,62 +155,42 @@ export class ActionLayerBlurPass {
     uniformData[11] = 0;
     this.#device.queue.writeBuffer(this.#uniformBuffer, 0, uniformData);
 
-    if (options.contentDirty) {
-      const blurMip = processingPipeline.encodeFullScreenBlurPyramid(
+    const needsRefresh = options.contentDirty || !this.#cacheValid;
+    const cachedBlurMip = blurTextures.mipChain[0];
+    if (!cachedBlurMip) throw new Error("Action layer blur requires at least one mip level");
+    let blurMip = cachedBlurMip;
+    if (needsRefresh) {
+      const refreshedBlurMip = processingPipeline.encodeFullScreenBlurPyramid(
         encoder,
         sourceTexture,
         width,
         height,
+        blurTextures.mipChain,
       );
-      if (blurMip) {
-        this.#cacheValid = false;
-        if (this.#upsampleBinding?.source !== blurMip) {
-          this.#upsampleBinding = {
-            source: blurMip,
-            bindGroup: this.#createBindGroup("Action layer upsample composite bind group", blurMip),
-          };
-        }
-        this.#encodeBlit(
-          encoder,
-          targetView,
-          this.#upsampleCompositePipeline,
-          this.#upsampleBinding.bindGroup,
-          "Action layer upsample composite pass",
-        );
-        this.#fusedComposites++;
-        return;
+      if (!refreshedBlurMip) {
+        throw new Error("Action layer blur pyramid could not be encoded");
       }
-    }
-
-    // Cache the full-resolution result only while the backdrop is unchanged.
-    if (!this.#cacheValid) {
-      processingPipeline.encodeFullScreenBlur(
-        encoder,
-        sourceTexture,
-        blurTextures.output,
-        width,
-        height,
-      );
+      blurMip = refreshedBlurMip;
       this.#cacheValid = true;
-      this.#cachedBlurRefreshes++;
+      this.#pyramidRefreshes++;
+    } else {
+      this.#pyramidReuses++;
     }
 
-    // Cache blit bind group (only recreate when textures change).
-    if (!this.#bindGroupCached) {
-      this.#bindGroupCached = this.#createBindGroup(
-        "Action layer blit bind group",
-        blurTextures.output,
-      );
+    if (this.#upsampleBinding?.source !== blurMip) {
+      this.#upsampleBinding = {
+        source: blurMip,
+        bindGroup: this.#createBindGroup("Action layer upsample composite bind group", blurMip),
+      };
     }
-
     this.#encodeBlit(
       encoder,
       targetView,
-      this.#blitPipeline,
-      this.#bindGroupCached,
-      "Action layer blit pass",
+      this.#upsampleCompositePipeline,
+      this.#upsampleBinding.bindGroup,
+      "Action layer upsample composite pass",
     );
-    this.#cachedBlits++;
+    this.#composites++;
   }
 
   #encodeBlit(
@@ -259,36 +230,45 @@ export class ActionLayerBlurPass {
 
   destroy(): void {
     if (this.#textures) {
-      this.#textures.output.destroy();
+      for (const texture of this.#textures.mipChain) texture.destroy();
       this.#textures = null;
     }
-    this.#cacheValid = false;
-    this.#bindGroupCached = null;
+    this.invalidateCache();
     this.#upsampleBinding = null;
     this.#uniformBuffer.destroy();
   }
 
-  #getOrCreateTextures(width: number, height: number): { output: GPUTexture } {
+  #getOrCreateTextures(width: number, height: number): { mipChain: GPUTexture[] } {
     const cached = this.#textures;
     if (cached && cached.width === width && cached.height === height) {
       return cached;
     }
 
     if (cached) {
-      cached.output.destroy();
+      for (const texture of cached.mipChain) texture.destroy();
     }
-    this.#cacheValid = false;
-    this.#bindGroupCached = null;
+    this.invalidateCache();
     this.#upsampleBinding = null;
 
-    const output = this.#device.createTexture({
-      label: `Action layer blur output (${width}x${height})`,
-      size: [width, height],
-      format: this.#intermediateFormat,
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
+    const mipChain: GPUTexture[] = [];
+    let byteSize = 0;
+    let mipWidth = width;
+    let mipHeight = height;
+    for (let level = 0; level < config.actionLayer.blurLevels; level++) {
+      mipWidth = Math.max(1, Math.floor(mipWidth / 2));
+      mipHeight = Math.max(1, Math.floor(mipHeight / 2));
+      byteSize += getTextureByteSize(mipWidth, mipHeight, this.#intermediateFormat);
+      mipChain.push(
+        this.#device.createTexture({
+          label: `Action layer blur mip ${level} (${mipWidth}x${mipHeight})`,
+          size: [mipWidth, mipHeight],
+          format: this.#intermediateFormat,
+          usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+        }),
+      );
+    }
 
-    this.#textures = { width, height, output };
+    this.#textures = { width, height, mipChain, byteSize };
     return this.#textures;
   }
 }

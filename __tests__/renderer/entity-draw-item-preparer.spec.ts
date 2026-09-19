@@ -58,6 +58,26 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     scene.release();
   });
 
+  test("does not invalidate the blurred backdrop for active-entity animation", () => {
+    const scene = createScene();
+    const harness = createHarness(scene.entities);
+    const [lifted, backdrop] = scene.entities;
+    harness.options.actionLayer.active = true;
+    harness.options.actionLayer.entityIds = new Set([lifted!.id]);
+
+    lifted!.textureDirty = true;
+    let prepared = harness.preparer.prepare(harness.options);
+    expect(prepared.hasAnimatingContent).toBe(true);
+    expect(prepared.hasBackdropAnimatingContent).toBe(false);
+
+    backdrop!.textureDirty = true;
+    prepared = harness.preparer.prepare(harness.options);
+    expect(prepared.hasAnimatingContent).toBe(true);
+    expect(prepared.hasBackdropAnimatingContent).toBe(true);
+
+    scene.release();
+  });
+
   test("reuses an admitted homogeneous batch without another spatial query", () => {
     const scene = createScene();
     const harness = createHarness(scene.entities);

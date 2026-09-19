@@ -1797,6 +1797,7 @@ export class ProcessingPipeline {
     inputTexture: GPUTexture,
     width: number,
     height: number,
+    mipChain: GPUTexture[],
   ): GPUTexture | null {
     if (
       !this.#blurDownsamplePipeline ||
@@ -1809,7 +1810,6 @@ export class ProcessingPipeline {
       return null;
     }
 
-    const mipChain = this.#getOrCreateBlurMipChain(width, height);
     if (mipChain.length === 0) return null;
     const uniformSet = {
       downsample: this.#blurDownsampleUniformBuffers,
