@@ -3,6 +3,7 @@ import type { ActionLayerBenchmarkResult } from "#application/canvas/action-laye
 import { useCanvasPerformance } from "#context/use-canvas.ts";
 import { downloadBlob } from "#lib/download.ts";
 import { closeOverlapBenchmarkMode } from "#lib/overlap-benchmark-mode.ts";
+import { Button } from "#ui/button/button.tsx";
 import "./action-layer-benchmark-panel.css";
 
 function formatNumber(value: number, suffix = ""): string {
@@ -52,78 +53,61 @@ export default function ActionLayerBenchmarkPanel() {
 
   return (
     <aside className="action-benchmark" aria-label="Overlap benchmark">
-      <div className="action-benchmark__heading">Overlap benchmark</div>
-      <p className="action-benchmark__copy">
-        Long-press the exact test point once, release, then run. The selected entity or group and
-        that point are replayed 120 times through the real touch path, for about 80 seconds total.
-        Each press stays active until the overlap and blur transitions finish, then releases and
-        starts the next press.
-      </p>
       <div className="action-benchmark__actions">
-        <button
-          className="action-benchmark__button"
-          type="button"
-          disabled={running}
-          onClick={() => void run()}
-        >
-          {running ? "Running…" : "Run benchmark"}
-        </button>
-        {running && (
-          <button
-            className="action-benchmark__button action-benchmark__button--secondary"
+        {running ? (
+          <Button
             type="button"
+            size="sm"
+            variant="secondary"
             onClick={benchmark.cancelActionLayerBenchmark}
           >
             Cancel
-          </button>
-        )}
-        {result && (
-          <button
-            className="action-benchmark__button action-benchmark__button--secondary"
-            type="button"
-            onClick={() => void exportResult()}
-          >
-            Export JSON
-          </button>
-        )}
-        {!running && (
-          <button
-            className="action-benchmark__button action-benchmark__button--secondary"
-            type="button"
-            onClick={closeOverlapBenchmarkMode}
-          >
-            Close
-          </button>
+          </Button>
+        ) : (
+          <>
+            <Button type="button" size="sm" onClick={() => void run()}>
+              Run benchmark
+            </Button>
+            {result && (
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => void exportResult()}
+              >
+                Export JSON
+              </Button>
+            )}
+            <Button type="button" size="sm" variant="quiet" onClick={closeOverlapBenchmarkMode}>
+              Close
+            </Button>
+          </>
         )}
       </div>
-      {running && <p className="action-benchmark__status">Keep the app foregrounded.</p>}
+      {running && <p className="action-benchmark__status">Running. Keep foregrounded.</p>}
       {error && <p className="action-benchmark__error">{error}</p>}
       {result && (
         <div className="action-benchmark__result">
           <div className="action-benchmark__result-line">
-            <span>Toggle rendered FPS</span>
+            <span>FPS</span>
             <strong>{formatNumber(result.phases.toggling.rendered.fps)}</strong>
           </div>
           <div className="action-benchmark__result-line">
-            <span>Toggle p95 interval</span>
+            <span>p95</span>
             <strong>{formatNumber(result.phases.toggling.rendered.intervalMs.p95, " ms")}</strong>
           </div>
           <div className="action-benchmark__result-line">
-            <span>Missed 120 Hz refreshes</span>
+            <span>Missed</span>
             <strong>
               {formatNumber(result.phases.toggling.rendered.missedRefreshPercent, "%")}
             </strong>
           </div>
           <div className="action-benchmark__result-line">
-            <span>Run validity</span>
+            <span>Validity</span>
             <strong>{result.validity.accepted ? "Accepted" : "Reject"}</strong>
           </div>
-          {!result.validity.accepted && (
-            <p className="action-benchmark__error">{result.validity.reasons.join(". ")}</p>
-          )}
         </div>
       )}
-      <p className="action-benchmark__note">Recovery drift rejects unstable runs.</p>
     </aside>
   );
 }

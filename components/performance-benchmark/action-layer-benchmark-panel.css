@@ -1,91 +1,58 @@
 .action-benchmark {
   position: fixed;
   z-index: 10000;
-  top: max(12px, env(safe-area-inset-top));
-  left: max(12px, env(safe-area-inset-left));
+  top: max(var(--spacing-2), env(safe-area-inset-top));
+  left: max(var(--spacing-2), env(safe-area-inset-left));
   display: grid;
-  width: min(320px, calc(100vw - 24px));
-  gap: 10px;
-  padding: 14px;
-  border: 1px solid rgb(255 255 255 / 18%);
-  border-radius: 14px;
-  background: rgb(18 18 20 / 98%);
-  box-shadow: 0 12px 36px rgb(0 0 0 / 35%);
-  color: white;
-  font:
-    13px/1.35 system-ui,
-    sans-serif;
+  width: max-content;
+  max-width: calc(100vw - var(--spacing-4));
+  gap: var(--spacing-2);
+  box-sizing: border-box;
+  padding: var(--spacing-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--color);
+  font-size: var(--text-xs);
+  line-height: 1.35;
 }
 
-.action-benchmark__heading {
-  font-size: 15px;
-  font-weight: 650;
-}
-
-.action-benchmark__copy,
 .action-benchmark__status,
-.action-benchmark__error,
-.action-benchmark__note {
+.action-benchmark__error {
   margin: 0;
-}
-
-.action-benchmark__copy,
-.action-benchmark__note {
-  color: rgb(255 255 255 / 70%);
-}
-
-.action-benchmark__note {
-  font-size: 11px;
 }
 
 .action-benchmark__actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-}
-
-.action-benchmark__button {
-  min-height: 38px;
-  padding: 8px 12px;
-  border: 0;
-  border-radius: 9px;
-  background: white;
-  color: #111;
-  font: inherit;
-  font-weight: 600;
-}
-
-.action-benchmark__button:disabled {
-  opacity: 0.55;
-}
-
-.action-benchmark__button--secondary {
-  border: 1px solid rgb(255 255 255 / 20%);
-  background: rgb(255 255 255 / 8%);
-  color: white;
+  gap: var(--spacing-1);
 }
 
 .action-benchmark__status {
-  color: #9bd1ff;
+  color: var(--gray-1100);
 }
 
 .action-benchmark__error {
-  color: #ffaaa3;
+  max-width: 280px;
+  color: var(--destructive);
 }
 
 .action-benchmark__result {
   display: grid;
-  gap: 5px;
-  padding-top: 8px;
-  border-top: 1px solid rgb(255 255 255 / 14%);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-1) var(--spacing-3);
+  padding-top: var(--spacing-2);
+  border-top: 1px solid var(--border);
 }
 
 .action-benchmark__result-line {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--spacing-2);
+  color: var(--gray-1100);
 }
 
 .action-benchmark__result-line strong {
+  color: var(--color);
   font-variant-numeric: tabular-nums;
 }
