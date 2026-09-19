@@ -375,7 +375,7 @@ describe("CompositionPass instancing", () => {
     entities.forEach(releaseImageEntity);
   });
 
-  test("reuses an external composition bind group while the texture identity is revived", () => {
+  test("rebuilds an external composition bind group when the texture identity is revived", () => {
     const { device } = createDevice();
     const pass = createPass(device);
     const entity = createTestEntity({ id: "external-cache", mediaType: "video" });
@@ -396,11 +396,10 @@ describe("CompositionPass instancing", () => {
     const firstBindGroup = first.bindGroup;
     const revived = pass.prepareDrawItem(options);
 
-    expect(revived.bindGroup).toBe(firstBindGroup);
-    expect(device.createBindGroup).toHaveBeenCalledTimes(initialBindGroupCount + 1);
+    expect(revived.bindGroup).not.toBe(firstBindGroup);
+    expect(device.createBindGroup).toHaveBeenCalledTimes(initialBindGroupCount + 2);
     expect(pass.getStats()).toMatchObject({
-      externalBindGroupCreations: 1,
-      externalBindGroupReuses: 1,
+      externalBindGroupCreations: 2,
     });
 
     const next = pass.prepareDrawItem({
@@ -408,10 +407,9 @@ describe("CompositionPass instancing", () => {
       source: { kind: "external", texture: secondFrame },
     });
     expect(next.bindGroup).not.toBe(firstBindGroup);
-    expect(device.createBindGroup).toHaveBeenCalledTimes(initialBindGroupCount + 2);
+    expect(device.createBindGroup).toHaveBeenCalledTimes(initialBindGroupCount + 3);
     expect(pass.getStats()).toMatchObject({
-      externalBindGroupCreations: 2,
-      externalBindGroupReuses: 1,
+      externalBindGroupCreations: 3,
     });
 
     pass.destroy();
@@ -570,7 +568,6 @@ describe("CompositionPass instancing", () => {
       opacityBufferBytes: 0,
       layerTextureBytes: 0,
       externalBindGroupCreations: 0,
-      externalBindGroupReuses: 0,
     });
     expect(secondFramePass.draw).toHaveBeenCalledWith(6, 2, 0, 0);
     expect(first.textureDirty).toBe(false);

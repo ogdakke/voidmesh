@@ -348,7 +348,6 @@ describe("EntityTexturePipeline shared image sources", () => {
     expect(pipeline.getResidencyStats()).toMatchObject({
       sourceUploads: 0,
       externalTextureImports: 2,
-      externalTextureIdentityReuses: 1,
     });
 
     pipeline.destroy();
