@@ -39,6 +39,40 @@ export interface WlurEncodeOptions {
   outputView?: GPUTextureView;
 }
 
+export interface WlurPassStats {
+  blurPixels: number;
+  fullBlurPixels: number;
+}
+
+interface PixelRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+function getEffectRegion(width: number, height: number, params: WlurParams): PixelRegion {
+  const interpolation = params.interpolation;
+  switch (params.direction) {
+    case "down": {
+      const y = Math.max(0, Math.floor(params.offset * height) - 1);
+      return { x: 0, y, width, height: height - y };
+    }
+    case "up": {
+      const edge = params.offset + (interpolation <= 0.000001 ? 0 : interpolation * 0.5);
+      return { x: 0, y: 0, width, height: Math.min(height, Math.ceil(edge * height) + 1) };
+    }
+    case "right": {
+      const x = Math.max(0, Math.floor(params.offset * width) - 1);
+      return { x, y: 0, width: width - x, height };
+    }
+    case "left": {
+      const edge = params.offset + (interpolation <= 0.000001 ? 0 : interpolation * 0.5);
+      return { x: 0, y: 0, width: Math.min(width, Math.ceil(edge * width) + 1), height };
+    }
+  }
+}
+
 export class WlurPass {
   #device: GPUDevice;
   #format: GPUTextureFormat;
@@ -83,6 +117,8 @@ export class WlurPass {
   readonly #blurUniformData = new Float32Array(12);
   readonly #compositeUniformData = new Float32Array(12);
   readonly #noiseUniformData = new Float32Array(8);
+  #blurPixels = 0;
+  #fullBlurPixels = 0;
 
   constructor(options: WlurPassOptions) {
     this.#device = options.device;
@@ -135,6 +171,10 @@ export class WlurPass {
     }
   }
 
+  getStats(): WlurPassStats {
+    return { blurPixels: this.#blurPixels, fullBlurPixels: this.#fullBlurPixels };
+  }
+
   encode(
     encoder: GPUCommandEncoder,
     inputTexture: GPUTexture,
@@ -183,6 +223,19 @@ export class WlurPass {
 
     const directionIndex = wlurDirectionToIndex(resolvedParams.direction);
     const radiusScale = usesReducedResolution ? working.scale : 1;
+    const blurYRegion = getEffectRegion(working.width, working.height, resolvedParams);
+    const halfKernel = (this.#quality.kernelSize - 1) / 2;
+    const blurXRegion = {
+      x: blurYRegion.x,
+      y: Math.max(0, blurYRegion.y - halfKernel),
+      width: blurYRegion.width,
+      height:
+        Math.min(working.height, blurYRegion.y + blurYRegion.height + halfKernel) -
+        Math.max(0, blurYRegion.y - halfKernel),
+    };
+    this.#blurPixels +=
+      blurXRegion.width * blurXRegion.height + blurYRegion.width * blurYRegion.height;
+    this.#fullBlurPixels += working.width * working.height * 2;
 
     const compositeTarget = resolvedParams.noise > 0.001 ? scratch.composite : outputTexture;
     const restoreThreshold = usesReducedResolution ? 0.05 : 0.001;
@@ -209,6 +262,7 @@ export class WlurPass {
       inputTexture,
       scratch.blurIntermediate,
       `${this.#label} blur X pass`,
+      blurXRegion,
     );
 
     this.#writeBlurUniforms(
@@ -231,6 +285,7 @@ export class WlurPass {
       scratch.blurIntermediate,
       scratch.blurOutput,
       `${this.#label} blur Y pass`,
+      blurYRegion,
     );
 
     this.#writeCompositeUniforms(
@@ -737,6 +792,7 @@ export class WlurPass {
     sourceTexture: GPUTexture,
     destinationTexture: GPUTexture,
     label: string,
+    region: PixelRegion,
   ): void {
     const isBlurX = uniformBuffer === this.#blurXUniformBuffer;
     let binding = isBlurX ? this.#blurXBinding : this.#blurYBinding;
@@ -772,7 +828,10 @@ export class WlurPass {
 
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, binding.bindGroup);
-    pass.draw(3);
+    if (region.width > 0 && region.height > 0) {
+      pass.setScissorRect(region.x, region.y, region.width, region.height);
+      pass.draw(3);
+    }
     pass.end();
   }
 

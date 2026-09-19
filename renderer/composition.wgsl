@@ -152,6 +152,7 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
 fn fs_restore(input: VertexOutput) -> @location(0) vec4f {
   let paint = CrossingPaint(input.crossingSlice, entity.isSelected, entity.debugMode, vec2f(BORDER_PX) / (input.cardSize * viewport.zoom));
   if (input.actionCard != 0u) { return crossingColor(input.uv, input.world, input.contactRange, input.cardSize, input.cardPose, paint); }
+  if (!crossingTouchesLifted(input.world, input.contactRange)) { discard; }
   let alpha = crossingMaterial(input.uv, input.world, input.contactRange, input.cardSize, input.cardPose, paint, true).a;
   return vec4f(textureLoad(backdrop, vec2i(input.position.xy), 0).rgb, alpha);
 }

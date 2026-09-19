@@ -172,6 +172,7 @@ fn fs_occlusion(input: VertexOutput) {
 fn fs_restore(input: VertexOutput) -> @location(0) vec4f {
   let paint = CrossingPaint(input.crossingSlice, input.isSelected, input.debugMode, vec2f(BORDER_PX) / (input.cardSize * viewport.zoom));
   if (input.actionCard != 0u) { return crossingColor(input.uv, input.world, input.contactRange, input.cardSize, input.cardPose, paint); }
+  if (!crossingTouchesLifted(input.world, input.contactRange)) { discard; }
   if (textureOpaque[0] != 0u && all(input.uv > input.opaqueMargin) && all(input.uv < vec2f(1.0) - input.opaqueMargin)) {
     return vec4f(textureLoad(backdrop, vec2i(input.position.xy), 0).rgb, 1.0);
   }

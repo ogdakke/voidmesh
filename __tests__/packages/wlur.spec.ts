@@ -150,6 +150,10 @@ describe("WlurPass resource reuse", () => {
     pass.encode(encoder, input, firstOutput, 800, 600, params);
     expect(device.createBindGroup).toHaveBeenCalledTimes(3);
     expect(beginRenderPass).toHaveBeenCalledTimes(3);
+    const renderPass = beginRenderPass.mock.results[0]!.value as GPURenderPassEncoder;
+    expect(renderPass.setScissorRect).toHaveBeenNthCalledWith(1, 0, 58, 400, 242);
+    expect(renderPass.setScissorRect).toHaveBeenNthCalledWith(2, 0, 89, 400, 211);
+    expect(pass.getStats()).toEqual({ blurPixels: 181_200, fullBlurPixels: 240_000 });
 
     pass.encode(encoder, input, firstOutput, 800, 600, params);
     expect(device.createBindGroup).toHaveBeenCalledTimes(3);
@@ -243,6 +247,7 @@ function createWlurEncoder(): GPUCommandEncoder {
   const renderPass = {
     setPipeline: vi.fn<GPURenderPassEncoder["setPipeline"]>(),
     setBindGroup: vi.fn<GPURenderPassEncoder["setBindGroup"]>(),
+    setScissorRect: vi.fn<GPURenderPassEncoder["setScissorRect"]>(),
     draw: vi.fn<GPURenderPassEncoder["draw"]>(),
     end: vi.fn<GPURenderPassEncoder["end"]>(),
   } as unknown as GPURenderPassEncoder;

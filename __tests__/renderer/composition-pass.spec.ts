@@ -227,7 +227,23 @@ describe("CompositionPass instancing", () => {
   test("reuses backdrop targets across transitions and destroys replaced targets", () => {
     const { device } = createDevice();
     const pass = createPass(device);
-    const entities = ["active", "cover"].map((id) => createTestEntity({ id }));
+    const entities = [
+      createTestEntity({
+        id: "active",
+        position: { x: 100, y: 80 },
+        size: { width: 120, height: 80 },
+      }),
+      createTestEntity({
+        id: "cover",
+        position: { x: 160, y: 100 },
+        size: { width: 100, height: 90 },
+      }),
+      createTestEntity({
+        id: "unrelated",
+        position: { x: 900, y: 700 },
+        size: { width: 100, height: 100 },
+      }),
+    ];
     pass.crossing.update(
       entities,
       {
@@ -250,16 +266,46 @@ describe("CompositionPass instancing", () => {
     const target = { ...createTexture(), width: 512, height: 384 } as GPUTexture;
     for (let i = 0; i < 2; i++) {
       pass.beginFrame(32);
-      pass.restoreSharpScene(encoder, target, target.createView(), items);
+      pass.restoreSharpScene(
+        encoder,
+        target,
+        target.createView(),
+        items,
+        {
+          offset: { x: 0, y: 0 },
+          zoom: 1,
+        },
+        1,
+      );
     }
+    expect(copy.mock.calls[0]).toEqual([
+      { texture: target, origin: { x: 159, y: 99 } },
+      { texture: copy.mock.calls[0]![1].texture, origin: { x: 159, y: 99 } },
+      { width: 66, height: 66 },
+    ]);
     expect(copy.mock.calls[0]![1].texture).toBe(copy.mock.calls[1]![1].texture);
     const retained = copy.mock.calls[0]![1].texture;
     expect(retained.destroy).not.toHaveBeenCalled();
     const resized = { ...target, width: 640, height: 360 } as GPUTexture;
     pass.beginFrame(32);
-    pass.restoreSharpScene(encoder, resized, resized.createView(), items);
+    pass.restoreSharpScene(
+      encoder,
+      resized,
+      resized.createView(),
+      items,
+      {
+        offset: { x: 0, y: 0 },
+        zoom: 1,
+      },
+      1,
+    );
     expect(retained.destroy).toHaveBeenCalledOnce();
     expect(pass.getStats().layerTextureBytes).toBe(640 * 360 * 4);
+    expect(pass.getStats()).toMatchObject({
+      sharpRestorePasses: 3,
+      sharpRestoreCopiedPixels: 66 * 66 * 3,
+      sharpRestoreDrawnItems: 6,
+    });
     const replacement = copy.mock.calls[2]![1].texture;
     pass.destroy();
     expect(replacement.destroy).toHaveBeenCalledOnce();
@@ -568,6 +614,9 @@ describe("CompositionPass instancing", () => {
       opacityBufferBytes: 0,
       layerTextureBytes: 0,
       externalBindGroupCreations: 0,
+      sharpRestorePasses: 0,
+      sharpRestoreCopiedPixels: 0,
+      sharpRestoreDrawnItems: 0,
     });
     expect(secondFramePass.draw).toHaveBeenCalledWith(6, 2, 0, 0);
     expect(first.textureDirty).toBe(false);

@@ -326,7 +326,17 @@ async function validateSharpCrossing(
         ],
       });
       backdrop.end();
-      pass.restoreSharpScene(encoder, output, view, items);
+      pass.restoreSharpScene(
+        encoder,
+        output,
+        view,
+        items,
+        {
+          offset: { x: 0, y: 0 },
+          zoom: 1,
+        },
+        1,
+      );
       const foreground = encoder.beginRenderPass({
         colorAttachments: [{ view, loadOp: "load", storeOp: "store" }],
       });

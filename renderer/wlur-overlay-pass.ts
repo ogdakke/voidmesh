@@ -34,6 +34,8 @@ export interface WlurOverlayPassStats {
   composites: number;
   directPresents: number;
   convertedPresents: number;
+  blurPixels: number;
+  fullBlurPixels: number;
 }
 
 interface WlurOverlayTextures {
@@ -104,12 +106,15 @@ export class WlurOverlayPass {
   }
 
   getStats(): WlurOverlayPassStats {
+    const passStats = this.#wlurPass.getStats();
     return {
       blurRefreshes: this.#blurRefreshes,
       blurReuses: this.#blurReuses,
       composites: this.#composites,
       directPresents: this.#directPresents,
       convertedPresents: this.#convertedPresents,
+      blurPixels: passStats.blurPixels,
+      fullBlurPixels: passStats.fullBlurPixels,
     };
   }
 

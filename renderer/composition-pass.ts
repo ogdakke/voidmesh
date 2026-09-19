@@ -3,7 +3,7 @@ import { OpaqueTextureProof } from "./opaque-texture-proof.ts";
 import { getTextureByteSize } from "#lib/textures.ts";
 import { config } from "#config";
 import type { DragSelectMode } from "#engine";
-import { MediaType, type Bounds, type ShaderCanvasEntity } from "#types/canvas.ts";
+import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import instancedCompositionShaderSource from "./composition-instanced.wgsl?raw";
 import compositionShaderSource from "./composition.wgsl?raw";
 
@@ -108,6 +108,9 @@ export interface CompositionPassStats {
   opacityBufferBytes: number;
   layerTextureBytes: number;
   externalBindGroupCreations: number;
+  sharpRestorePasses: number;
+  sharpRestoreCopiedPixels: number;
+  sharpRestoreDrawnItems: number;
 }
 
 interface CompositionUniformState {
@@ -275,6 +278,7 @@ export class CompositionPass {
   #drawMode: "normal" | "depth" | "restore" = "normal";
   #occlusionPasses = 0;
   readonly #backdropItems: CompositionDrawItem[] = [];
+  readonly #sharpRestoreItems: CompositionDrawItem[] = [];
   readonly #occluderItems: CompositionDrawItem[] = [];
   #prepassLayout: GPUBindGroupLayout | null = null;
   #prepassInstances: { buffer: GPUBuffer; group: GPUBindGroup } | null = null;
@@ -356,6 +360,9 @@ export class CompositionPass {
   #fullSceneBatchUploadBytes = 0;
   #normalInstanceUploadBytes = 0;
   #externalBindGroupCreations = 0;
+  #sharpRestorePasses = 0;
+  #sharpRestoreCopiedPixels = 0;
+  #sharpRestoreDrawnItems = 0;
 
   // Entity composition cache (uniform buffers, bind groups, texture views).
   // Invalidated when entity composition texture or visual state changes.
@@ -739,6 +746,7 @@ export class CompositionPass {
     this.#occlusion = false;
     this.#drawMode = "normal";
     this.#backdropItems.length = 0;
+    this.#sharpRestoreItems.length = 0;
     this.#occluderItems.length = 0;
     this.#instanceWriteCursor = 0;
     if (maximumInstanceCount > 0) this.#ensureInstanceCapacity(maximumInstanceCount);
@@ -753,6 +761,9 @@ export class CompositionPass {
       opacityProofs: this.#proof?.getStats().proofs ?? 0,
       opacityBufferBytes: (this.#proof?.getStats().residentBytes ?? 0) + this.#opacityTableBytes,
       externalBindGroupCreations: this.#externalBindGroupCreations,
+      sharpRestorePasses: this.#sharpRestorePasses,
+      sharpRestoreCopiedPixels: this.#sharpRestoreCopiedPixels,
+      sharpRestoreDrawnItems: this.#sharpRestoreDrawnItems,
       layerTextureBytes:
         (this.#depth ? this.#depth.width * this.#depth.height * 4 : 0) +
         (this.#backdrop
@@ -1030,6 +1041,8 @@ export class CompositionPass {
     target: GPUTexture,
     view: GPUTextureView,
     items: readonly CompositionDrawItem[],
+    viewport: Viewport,
+    dpr: number,
   ): void {
     if (!this.crossing.hasSharpScene) {
       this.#drawMode = "normal";
@@ -1061,12 +1074,52 @@ export class CompositionPass {
     }
     this.#restorePipelines ??= this.#makePipelines("fs_restore", false);
     if (this.#occlusion) this.#restoreDepthPipelines ??= this.#makePipelines("fs_restore", true);
-    encoder.copyTextureToTexture({ texture: target }, { texture: this.#backdrop }, [
+
+    this.#sharpRestoreItems.length = 0;
+    for (const item of items) {
+      const role = this.crossing.sharpSceneRole(item.entity.id);
+      if (!role) continue;
+      this.#sharpRestoreItems.push(item);
+    }
+    const copyBounds = this.crossing.getSharpSceneWorldBounds((4 * dpr) / viewport.zoom);
+    const minimumX = Math.max(
+      0,
+      copyBounds ? Math.floor((copyBounds.x - viewport.offset.x) * viewport.zoom) - 1 : 0,
+    );
+    const minimumY = Math.max(
+      0,
+      copyBounds ? Math.floor((copyBounds.y - viewport.offset.y) * viewport.zoom) - 1 : 0,
+    );
+    const maximumX = Math.min(
       target.width,
+      copyBounds
+        ? Math.ceil((copyBounds.x + copyBounds.width - viewport.offset.x) * viewport.zoom) + 1
+        : 0,
+    );
+    const maximumY = Math.min(
       target.height,
-    ]);
+      copyBounds
+        ? Math.ceil((copyBounds.y + copyBounds.height - viewport.offset.y) * viewport.zoom) + 1
+        : 0,
+    );
+    const copyWidth = maximumX - minimumX;
+    const copyHeight = maximumY - minimumY;
+    if (this.#sharpRestoreItems.length === 0) {
+      this.#drawMode = "normal";
+      return;
+    }
+    if (copyWidth > 0 && copyHeight > 0) {
+      encoder.copyTextureToTexture(
+        { texture: target, origin: { x: minimumX, y: minimumY } },
+        { texture: this.#backdrop, origin: { x: minimumX, y: minimumY } },
+        { width: copyWidth, height: copyHeight },
+      );
+      this.#sharpRestoreCopiedPixels += copyWidth * copyHeight;
+    }
+    this.#sharpRestorePasses++;
+    this.#sharpRestoreDrawnItems += this.#sharpRestoreItems.length;
     this.#ensureInstanceCapacity(
-      this.#instanceWriteCursor + items.length * 2 + this.crossing.contactCount,
+      this.#instanceWriteCursor + this.#sharpRestoreItems.length * 2 + this.crossing.contactCount,
     );
     const pass = encoder.beginRenderPass({
       label: "Sharp lower crossing reconstruction",
@@ -1076,7 +1129,7 @@ export class CompositionPass {
         : {}),
     });
     this.#drawMode = "restore";
-    this.drawItems(pass, items, "scene");
+    this.drawItems(pass, this.#sharpRestoreItems, "scene");
     pass.end();
     this.#drawMode = "normal";
   }
