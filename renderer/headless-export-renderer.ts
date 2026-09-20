@@ -258,6 +258,8 @@ export class HeadlessExportRenderer {
   }
 
   destroy(): void {
+    this.#rgba8CopyPass.destroy();
+    this.#presentCopyPass.destroy();
     this.#entityShaderRuntime.destroy();
     this.#texturePool.destroy();
     this.#context.unconfigure();

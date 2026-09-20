@@ -1,6 +1,7 @@
 import { scheduler, type AnimationHandle } from "#lib/animation-scheduler.ts";
+import { boundsIntersect } from "#lib/canvas-math.ts";
 import { getCssVarValue, resolveCssColor, resolveCssVarColor } from "#lib/css.ts";
-import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
+import type { Bounds, ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
 import shaderSource from "./entity-label.wgsl?raw";
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -18,7 +19,12 @@ const ICON_SIZE_RATIO = 1.2;
 const MOBILE_BREAKPOINT = 768;
 const DRAG_ANIM_RESPONSE = 0.15; // seconds
 const DRAG_ANIM_DAMPING = 0.78;
-const UNIFORM_SIZE = 32; // bytes (2x vec2f + f32 + 3x f32 padding)
+const DRAG_ANIMATION_FRAME_COUNT = 32;
+const DRAG_ANIMATION_ATLAS_COLUMNS = 4;
+const DRAG_ANIMATION_ATLAS_ROWS = Math.ceil(
+  DRAG_ANIMATION_FRAME_COUNT / DRAG_ANIMATION_ATLAS_COLUMNS,
+);
+const UNIFORM_SIZE = 48; // bytes (position, size, opacity, texture size, atlas origin)
 const LABEL_FONT_FAMILY_FALLBACK =
   'ui-rounded, "Hiragino Maru Gothic ProN", Quicksand, Comfortaa, Manjari, "Arial Rounded MT", "Arial Rounded MT Bold", Calibri, source-sans-pro, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji"';
 
@@ -56,25 +62,61 @@ interface LabelCacheEntry {
   texture: GPUTexture;
   bindGroup: GPUBindGroup;
   uniformBuffer: GPUBuffer;
+  frameWidths: readonly number[];
+  textureHeight: number;
+  atlasCellWidth: number;
+  atlasCellHeight: number;
+  rasterState: LabelRasterState;
+  uniformState: LabelUniformState | null;
+}
+
+interface LabelUniformState {
+  worldX: number;
+  worldY: number;
+  worldWidth: number;
+  worldHeight: number;
   textureWidth: number;
   textureHeight: number;
-  rasterState: LabelRasterState;
+  atlasOriginX: number;
+  atlasOriginY: number;
 }
 
 interface LabelRasterState {
   name: string;
   warning: boolean;
-  dragProgress: number;
   dpr: number;
   isMobile: boolean;
   styleVersion: number;
+}
+
+interface LabelAnimationAtlas {
+  width: number;
+  height: number;
+  cellWidth: number;
+  cellHeight: number;
+  frameWidths: readonly number[];
+}
+
+interface LabelMetrics {
+  warning: boolean;
+  dpr: number;
+  font: string;
+  fontSize: number;
+  paddingX: number;
+  gap: number;
+  text: string;
+  textWidth: number;
+  iconSize: number;
+  shadowPad: number;
+  boxHeight: number;
+  canvasHeight: number;
+  capacityWidth: number;
 }
 
 function rasterStatesEqual(a: LabelRasterState, b: LabelRasterState): boolean {
   return (
     a.name === b.name &&
     a.warning === b.warning &&
-    a.dragProgress === b.dragProgress &&
     a.dpr === b.dpr &&
     a.isMobile === b.isMobile &&
     a.styleVersion === b.styleVersion
@@ -93,7 +135,7 @@ export class EntityLabelPass {
   #sampler: GPUSampler | null = null;
   #bindGroupLayout: GPUBindGroupLayout | null = null;
 
-  // Shared Canvas 2D (resized per rasterization)
+  // Shared Canvas 2D used to bake each label's complete animation atlas once.
   #canvas: OffscreenCanvas;
   #ctx: OffscreenCanvasRenderingContext2D;
 
@@ -117,6 +159,9 @@ export class EntityLabelPass {
   #dpr = 1;
   #viewport: Viewport | null = null;
   #isAnimating = false;
+  #hasDrawnLabel = false;
+  readonly #drawnLabelBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #uniformData = new Float32Array(UNIFORM_SIZE / 4);
 
   constructor(device: GPUDevice, canvasFormat: GPUTextureFormat, viewportUniformBuffer: GPUBuffer) {
     this.#device = device;
@@ -204,9 +249,10 @@ export class EntityLabelPass {
     this.#viewport = viewport;
     this.#syncDragAnimation(isDragPhase);
     this.#isAnimating = this.#dragAnimHandle?.isActive ?? false;
+    this.#hasDrawnLabel = false;
   }
 
-  /** Draw a label in the dedicated scene-overlay pass after all entity draws. */
+  /** Draw a label after all entity draws in the current composition pass. */
   drawLabel(
     pass: GPURenderPassEncoder,
     entity: ShaderCanvasEntity,
@@ -218,26 +264,66 @@ export class EntityLabelPass {
     const dpr = this.#dpr;
     const viewport = this.#viewport;
     const cached = this.#getLabelEntry(entity);
+    const frameIndex = Math.round(this.#dragIconProgress * (DRAG_ANIMATION_FRAME_COUNT - 1));
+    const textureWidth = cached.frameWidths[frameIndex]!;
+    const atlasOriginX = (frameIndex % DRAG_ANIMATION_ATLAS_COLUMNS) * cached.atlasCellWidth;
+    const atlasOriginY =
+      Math.floor(frameIndex / DRAG_ANIMATION_ATLAS_COLUMNS) * cached.atlasCellHeight;
 
     // ── Compute world-space position ───────────────────────────────────────
 
-    const worldWidth = cached.textureWidth / viewport.zoom;
+    const worldWidth = textureWidth / viewport.zoom;
     const worldHeight = cached.textureHeight / viewport.zoom;
 
     const entityCenterX = entity.position.x + entity.size.width / 2;
     let worldX = entityCenterX - worldWidth / 2 + offsetX;
     let worldY =
       entity.position.y - (VERTICAL_MARGIN * dpr) / viewport.zoom - worldHeight + offsetY;
+    this.#drawnLabelBounds.x = worldX;
+    this.#drawnLabelBounds.y = worldY;
+    this.#drawnLabelBounds.width = worldWidth;
+    this.#drawnLabelBounds.height = worldHeight;
+    this.#hasDrawnLabel = true;
 
     // ── Write uniforms and draw ────────────────────────────────────────────
 
-    const data = new Float32Array(UNIFORM_SIZE / 4);
-    data[0] = worldX;
-    data[1] = worldY;
-    data[2] = worldWidth;
-    data[3] = worldHeight;
-    data[4] = 1; // opacity
-    this.#device.queue.writeBuffer(cached.uniformBuffer, 0, data);
+    const previousUniforms = cached.uniformState;
+    if (
+      !previousUniforms ||
+      previousUniforms.worldX !== worldX ||
+      previousUniforms.worldY !== worldY ||
+      previousUniforms.worldWidth !== worldWidth ||
+      previousUniforms.worldHeight !== worldHeight ||
+      previousUniforms.textureWidth !== textureWidth ||
+      previousUniforms.textureHeight !== cached.textureHeight ||
+      previousUniforms.atlasOriginX !== atlasOriginX ||
+      previousUniforms.atlasOriginY !== atlasOriginY
+    ) {
+      const data = this.#uniformData;
+      data[0] = worldX;
+      data[1] = worldY;
+      data[2] = worldWidth;
+      data[3] = worldHeight;
+      data[4] = 1; // opacity
+      data[5] = 0;
+      data[6] = textureWidth;
+      data[7] = cached.textureHeight;
+      data[8] = atlasOriginX;
+      data[9] = atlasOriginY;
+      data[10] = 0;
+      data[11] = 0;
+      this.#device.queue.writeBuffer(cached.uniformBuffer, 0, data);
+      cached.uniformState = {
+        worldX,
+        worldY,
+        worldWidth,
+        worldHeight,
+        textureWidth,
+        textureHeight: cached.textureHeight,
+        atlasOriginX,
+        atlasOriginY,
+      };
+    }
 
     pass.setPipeline(this.#pipeline);
     pass.setBindGroup(0, cached.bindGroup);
@@ -247,6 +333,19 @@ export class EntityLabelPass {
   /** Whether the drag icon animation is still in progress. */
   get isAnimating(): boolean {
     return this.#isAnimating;
+  }
+
+  intersectsBounds(bounds: Bounds): boolean {
+    return this.#hasDrawnLabel && boundsIntersect(this.#drawnLabelBounds, bounds);
+  }
+
+  getDrawnBounds(output: Bounds): boolean {
+    if (!this.#hasDrawnLabel) return false;
+    output.x = this.#drawnLabelBounds.x;
+    output.y = this.#drawnLabelBounds.y;
+    output.width = this.#drawnLabelBounds.width;
+    output.height = this.#drawnLabelBounds.height;
+    return true;
   }
 
   /**
@@ -302,7 +401,6 @@ export class EntityLabelPass {
     return {
       name: entity.name,
       warning: entity.shaderParams.showOriginal,
-      dragProgress: this.#dragIconProgress,
       dpr: this.#dpr,
       isMobile: this.#isMobile,
       styleVersion: this.#styleVersion,
@@ -310,38 +408,33 @@ export class EntityLabelPass {
   }
 
   #rasterizeLabel(entityId: string, rasterState: LabelRasterState): LabelCacheEntry {
-    const { width, height } = this.#rasterize(rasterState);
-    let cached = this.#cache.get(entityId);
+    const atlas = this.#rasterizeAtlas(rasterState);
+    const cached = this.#cache.get(entityId);
+    cached?.texture.destroy();
+    cached?.uniformBuffer.destroy();
 
-    if (!cached || cached.textureWidth !== width || cached.textureHeight !== height) {
-      cached?.texture.destroy();
-      cached?.uniformBuffer.destroy();
-
-      cached = this.#createLabelEntry(entityId, width, height, rasterState);
-      this.#cache.set(entityId, cached);
-    } else {
-      cached.rasterState = rasterState;
-    }
+    const entry = this.#createLabelEntry(entityId, atlas, rasterState);
+    this.#cache.set(entityId, entry);
 
     this.#device.queue.copyExternalImageToTexture(
       { source: this.#canvas },
-      { texture: cached.texture },
-      [width, height],
+      { texture: entry.texture },
+      [atlas.width, atlas.height],
     );
 
-    return cached;
+    return entry;
   }
 
   #createLabelEntry(
     entityId: string,
-    width: number,
-    height: number,
+    atlas: LabelAnimationAtlas,
     rasterState: LabelRasterState,
   ): LabelCacheEntry {
     const texture = this.#device.createTexture({
       label: `Label ${entityId}`,
-      size: [width, height],
+      size: [atlas.width, atlas.height],
       format: "rgba8unorm",
+      // Safari's external-image copy path requires render-attachment eligibility.
       usage:
         GPUTextureUsage.TEXTURE_BINDING |
         GPUTextureUsage.COPY_DST |
@@ -369,54 +462,109 @@ export class EntityLabelPass {
       texture,
       bindGroup,
       uniformBuffer,
-      textureWidth: width,
-      textureHeight: height,
+      frameWidths: atlas.frameWidths,
+      textureHeight: atlas.cellHeight,
+      atlasCellWidth: atlas.cellWidth,
+      atlasCellHeight: atlas.cellHeight,
       rasterState,
+      uniformState: null,
     };
   }
 
   // ── Private: Canvas 2D rasterization ─────────────────────────────────────
 
-  #rasterize(rasterState: LabelRasterState): { width: number; height: number } {
-    const { name, warning: isWarning, dragProgress, isMobile, dpr } = rasterState;
+  #rasterizeAtlas(rasterState: LabelRasterState): LabelAnimationAtlas {
+    const metrics = this.#measureLabel(rasterState);
+    const cellWidth = metrics.capacityWidth;
+    const cellHeight = metrics.canvasHeight;
+    const width = cellWidth * DRAG_ANIMATION_ATLAS_COLUMNS;
+    const height = cellHeight * DRAG_ANIMATION_ATLAS_ROWS;
+
+    if (this.#canvas.width !== width || this.#canvas.height !== height) {
+      this.#canvas.width = width;
+      this.#canvas.height = height;
+    }
+
     const ctx = this.#ctx;
+    ctx.clearRect(0, 0, width, height);
+    ctx.font = metrics.font;
+
+    const frameWidths = new Array<number>(DRAG_ANIMATION_FRAME_COUNT);
+    for (let frame = 0; frame < DRAG_ANIMATION_FRAME_COUNT; frame++) {
+      const progress = frame / (DRAG_ANIMATION_FRAME_COUNT - 1);
+      const originX = (frame % DRAG_ANIMATION_ATLAS_COLUMNS) * cellWidth;
+      const originY = Math.floor(frame / DRAG_ANIMATION_ATLAS_COLUMNS) * cellHeight;
+      frameWidths[frame] = this.#drawLabelFrame(metrics, progress, originX, originY);
+    }
+
+    return { width, height, cellWidth, cellHeight, frameWidths };
+  }
+
+  #measureLabel(rasterState: LabelRasterState): LabelMetrics {
+    const { name, warning, isMobile, dpr } = rasterState;
     const fontSize = (isMobile ? FONT_SIZE_MOBILE : FONT_SIZE_DESKTOP) * dpr;
     const paddingX = PADDING_X * dpr;
     const paddingY = (isMobile ? PADDING_Y_MOBILE : PADDING_Y_DESKTOP) * dpr;
     const gap = GAP * dpr;
     const maxTextWidth = (isMobile ? MAX_TEXT_WIDTH_MOBILE : MAX_TEXT_WIDTH_DESKTOP) * dpr;
-    const borderRadius = fontSize;
+    const font = `${fontSize}px ${this.#fontFamily}`;
+    const ctx = this.#ctx;
+    ctx.font = font;
 
-    const fontStr = `${fontSize}px ${this.#fontFamily}`;
-    ctx.font = fontStr;
-
-    const displayText = isWarning ? `\u26A0 Original: ${name}` : name;
-    const truncated = this.#truncateText(ctx, displayText, maxTextWidth);
-
+    const displayText = warning ? `\u26A0 Original: ${name}` : name;
+    const text = this.#truncateText(ctx, displayText, maxTextWidth);
+    const textWidth = Math.min(ctx.measureText(text).width, maxTextWidth);
     const iconSize = fontSize * ICON_SIZE_RATIO;
+    const shadowPad = Math.ceil(4 * dpr);
+    const boxHeight = Math.ceil(paddingY + fontSize + paddingY);
+    const canvasHeight = boxHeight + shadowPad * 2;
+    const capacityContentWidth = iconSize + gap + textWidth;
+    const capacityBoxWidth = Math.ceil(paddingX + capacityContentWidth + paddingX);
+
+    return {
+      warning,
+      dpr,
+      font,
+      fontSize,
+      paddingX,
+      gap,
+      text,
+      textWidth,
+      iconSize,
+      shadowPad,
+      boxHeight,
+      canvasHeight,
+      capacityWidth: capacityBoxWidth + shadowPad * 2,
+    };
+  }
+
+  #drawLabelFrame(
+    metrics: LabelMetrics,
+    dragProgress: number,
+    originX: number,
+    originY: number,
+  ): number {
+    const {
+      warning: isWarning,
+      dpr,
+      fontSize,
+      paddingX,
+      gap,
+      text,
+      textWidth,
+      iconSize,
+      shadowPad,
+      boxHeight,
+    } = metrics;
+    const ctx = this.#ctx;
     const iconWidth = iconSize * dragProgress;
     const iconGap = dragProgress > 0.01 ? gap : 0;
-
-    const textMetrics = ctx.measureText(truncated);
-    const textWidth = Math.min(textMetrics.width, maxTextWidth);
-
-    const shadowPad = Math.ceil(4 * dpr);
     const contentWidth = iconWidth + iconGap + textWidth;
     const boxWidth = Math.ceil(paddingX + contentWidth + paddingX);
-    const boxHeight = Math.ceil(paddingY + fontSize + paddingY);
     const canvasWidth = boxWidth + shadowPad * 2;
-    const canvasHeight = boxHeight + shadowPad * 2;
-
-    if (this.#canvas.width !== canvasWidth || this.#canvas.height !== canvasHeight) {
-      this.#canvas.width = canvasWidth;
-      this.#canvas.height = canvasHeight;
-    }
-
-    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-    ctx.font = fontStr;
-
-    const ox = shadowPad;
-    const oy = shadowPad;
+    const borderRadius = fontSize;
+    const ox = originX + shadowPad;
+    const oy = originY + shadowPad;
     const colors = this.#colors;
 
     // Background with drop shadow
@@ -484,9 +632,9 @@ export class EntityLabelPass {
     // Text
     ctx.fillStyle = isWarning ? colors.warningText : "#ffffff";
     ctx.textBaseline = "middle";
-    ctx.fillText(truncated, textX, oy + boxHeight / 2);
+    ctx.fillText(text, textX, oy + boxHeight / 2);
 
-    return { width: canvasWidth, height: canvasHeight };
+    return canvasWidth;
   }
 
   #truncateText(ctx: OffscreenCanvasRenderingContext2D, text: string, maxWidth: number): string {

@@ -28,6 +28,56 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     renderingConfig.fullSceneBatchMinVisibleFraction = originalMinimumVisibleFraction;
   });
 
+  test("prepares crossing entities for both scene blur and sharp action composition", () => {
+    const scene = createScene();
+    const harness = createHarness(scene.entities);
+    const [lifted, cover] = scene.entities;
+    harness.options.actionLayer.active = true;
+    harness.options.actionLayer.entityIds = new Set([lifted!.id]);
+    harness.compositionPass.crossing.enabled = true;
+    harness.compositionPass.crossing.hasLayerSlices = true;
+    harness.compositionPass.crossing.order.mockImplementation((index, id) =>
+      id === lifted!.id ? 0.5 : index,
+    );
+    const before = harness.preparer.prepare(harness.options);
+    expect(before.fullSceneBatch).toBeNull();
+    expect(before.actionLayerDrawItems.map((item) => item.entity.id)).toEqual([lifted!.id]);
+    expect(before.entityDrawItems.map((item) => item.entity.id)).toEqual([lifted!.id, cover!.id]);
+    harness.compositionPass.crossing.order.mockImplementation((index, id) =>
+      id === lifted!.id ? 1.5 : index,
+    );
+    const after = harness.preparer.prepare(harness.options);
+    expect(after.entityDrawItems.map((item) => item.entity.id)).toEqual([cover!.id, lifted!.id]);
+    harness.compositionPass.crossing.hasLayerSlices = false;
+    const settled = harness.preparer.prepare(harness.options);
+    expect(settled.entityDrawItems.map((item) => item.entity.id)).toEqual([cover!.id]);
+    expect(settled.actionLayerDrawItems.map((item) => item.entity.id)).toEqual([lifted!.id]);
+    harness.compositionPass.crossing.enabled = false;
+    const normal = harness.preparer.prepare(harness.options);
+    expect(normal.actionLayerDrawItems.map((item) => item.entity.id)).toEqual([lifted!.id]);
+    scene.release();
+  });
+
+  test("does not invalidate the blurred backdrop for active-entity animation", () => {
+    const scene = createScene();
+    const harness = createHarness(scene.entities);
+    const [lifted, backdrop] = scene.entities;
+    harness.options.actionLayer.active = true;
+    harness.options.actionLayer.entityIds = new Set([lifted!.id]);
+
+    lifted!.textureDirty = true;
+    let prepared = harness.preparer.prepare(harness.options);
+    expect(prepared.hasAnimatingContent).toBe(true);
+    expect(prepared.hasBackdropAnimatingContent).toBe(false);
+
+    backdrop!.textureDirty = true;
+    prepared = harness.preparer.prepare(harness.options);
+    expect(prepared.hasAnimatingContent).toBe(true);
+    expect(prepared.hasBackdropAnimatingContent).toBe(true);
+
+    scene.release();
+  });
+
   test("reuses an admitted homogeneous batch without another spatial query", () => {
     const scene = createScene();
     const harness = createHarness(scene.entities);
@@ -539,6 +589,11 @@ function createHarness(
   let cachedKey: FullSceneBatchKey | null = null;
   let retainedKey: FullSceneBatchKey | null = null;
   const compositionPass = {
+    crossing: {
+      enabled: false,
+      hasLayerSlices: false,
+      order: vi.fn<(index: number, id: string) => number>((index) => index),
+    },
     hasFullSceneBatch: vi.fn<(key: FullSceneBatchKey) => boolean>((key) => {
       return (
         cachedKey !== null &&

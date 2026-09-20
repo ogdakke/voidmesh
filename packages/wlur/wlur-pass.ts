@@ -1,6 +1,7 @@
 import {
   clampWlurParams,
   clampWlurQuality,
+  getWlurBlurRegions,
   getWlurScratchKey,
   getWlurWorkingDimensions,
   wlurDirectionToIndex,
@@ -29,10 +30,33 @@ interface WlurPassOptions {
 }
 
 interface ScratchTextures {
-  scaledInput: GPUTexture;
   blurIntermediate: GPUTexture;
   blurOutput: GPUTexture;
   composite: GPUTexture;
+}
+
+export interface WlurEncodeOptions {
+  /** Reuse a caller-owned output view, such as the current swapchain view. */
+  outputView?: GPUTextureView;
+  /** Reuse the persistent blur texture while still compositing the current input. */
+  refreshBlur?: boolean;
+  /**
+   * Full-resolution source region changed since the previous blur. Only valid
+   * when the caller has a complete persistent blur cache.
+   */
+  refreshRegion?: PixelRegion;
+}
+
+export interface WlurPassStats {
+  blurPixels: number;
+  fullBlurPixels: number;
+}
+
+interface PixelRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 export class WlurPass {
@@ -64,6 +88,27 @@ export class WlurPass {
   #noiseUniformBuffer: GPUBuffer | null = null;
 
   #scratchTextures: Map<string, ScratchTextures> = new Map();
+  #textureViews = new WeakMap<GPUTexture, GPUTextureView>();
+  #copyBindings = new WeakMap<GPUTexture, GPUBindGroup>();
+  #blurXBinding: { source: GPUTexture; bindGroup: GPUBindGroup } | null = null;
+  #blurYBinding: { source: GPUTexture; bindGroup: GPUBindGroup } | null = null;
+  #compositeBindings = new WeakMap<
+    GPUTexture,
+    {
+      blurred: GPUTexture;
+      bindGroup: GPUBindGroup;
+    }
+  >();
+  #noiseBinding: { source: GPUTexture; bindGroup: GPUBindGroup } | null = null;
+  readonly #blurUniformData = new Float32Array(12);
+  readonly #compositeUniformData = new Float32Array(12);
+  readonly #noiseUniformData = new Float32Array(8);
+  readonly #blurXUniformCache = new Float32Array(12).fill(Number.NaN);
+  readonly #blurYUniformCache = new Float32Array(12).fill(Number.NaN);
+  readonly #compositeUniformCache = new Float32Array(12).fill(Number.NaN);
+  readonly #noiseUniformCache = new Float32Array(8).fill(Number.NaN);
+  #blurPixels = 0;
+  #fullBlurPixels = 0;
 
   constructor(options: WlurPassOptions) {
     this.#device = options.device;
@@ -116,6 +161,10 @@ export class WlurPass {
     }
   }
 
+  getStats(): WlurPassStats {
+    return { blurPixels: this.#blurPixels, fullBlurPixels: this.#fullBlurPixels };
+  }
+
   encode(
     encoder: GPUCommandEncoder,
     inputTexture: GPUTexture,
@@ -123,6 +172,7 @@ export class WlurPass {
     width: number,
     height: number,
     params: WlurParams,
+    options: WlurEncodeOptions = {},
   ): void {
     this.initialize();
 
@@ -153,73 +203,83 @@ export class WlurPass {
     this.#updateCurveTexture(baseCurve, tintCurve, mixCurve);
 
     if (resolvedParams.radius <= 0.001 && resolvedParams.noise <= 0.001) {
-      this.#encodeCopyPass(encoder, inputTexture, outputTexture);
+      this.#encodeCopyPass(encoder, inputTexture, outputTexture, options.outputView);
       return;
     }
 
     const working = getWlurWorkingDimensions(width, height, this.#quality.resolutionScale);
     const scratch = this.#getOrCreateScratchTextures(width, height);
-    const needsScaledInput = working.width !== width || working.height !== height;
-
-    let blurInput = inputTexture;
-    let blurInputWidth = width;
-    let blurInputHeight = height;
-
-    if (needsScaledInput) {
-      this.#encodeCopyPass(encoder, inputTexture, scratch.scaledInput);
-      blurInput = scratch.scaledInput;
-      blurInputWidth = working.width;
-      blurInputHeight = working.height;
-    }
+    const usesReducedResolution = working.width !== width || working.height !== height;
 
     const directionIndex = wlurDirectionToIndex(resolvedParams.direction);
-    const radiusScale = needsScaledInput ? working.scale : 1;
-
+    const radiusScale = usesReducedResolution ? working.scale : 1;
+    const blurRegions = getWlurBlurRegions(
+      width,
+      height,
+      resolvedParams,
+      this.#quality,
+      options.refreshRegion,
+    );
+    const blurXRegion = blurRegions.blurX;
+    const blurYRegion = blurRegions.blurY;
     const compositeTarget = resolvedParams.noise > 0.001 ? scratch.composite : outputTexture;
-    const restoreThreshold = needsScaledInput ? 0.05 : 0.001;
-    this.#writeBlurUniforms(
-      this.#blurXUniformBuffer,
-      working.width,
-      working.height,
-      blurInputWidth,
-      blurInputHeight,
-      resolvedParams.radius,
-      resolvedParams.offset,
-      resolvedParams.interpolation,
-      directionIndex,
-      radiusScale,
-    );
-    this.#encodeBlurPass(
-      encoder,
-      this.#blurXPipeline,
-      this.#blurBindGroupLayout,
-      this.#blurXUniformBuffer,
-      blurInput,
-      scratch.blurIntermediate,
-      `${this.#label} blur X pass`,
-    );
+    const restoreThreshold = usesReducedResolution ? 0.05 : 0.001;
+    if (options.refreshBlur !== false) {
+      this.#blurPixels +=
+        blurXRegion.width * blurXRegion.height + blurYRegion.width * blurYRegion.height;
+      this.#fullBlurPixels += working.width * working.height * 2;
 
-    this.#writeBlurUniforms(
-      this.#blurYUniformBuffer,
-      working.width,
-      working.height,
-      working.width,
-      working.height,
-      resolvedParams.radius,
-      resolvedParams.offset,
-      resolvedParams.interpolation,
-      directionIndex,
-      radiusScale,
-    );
-    this.#encodeBlurPass(
-      encoder,
-      this.#blurYPipeline,
-      this.#blurBindGroupLayout,
-      this.#blurYUniformBuffer,
-      scratch.blurIntermediate,
-      scratch.blurOutput,
-      `${this.#label} blur Y pass`,
-    );
+      // Blur X writes directly at the working resolution. Sampling the full-size
+      // source with working-resolution texel steps fuses the old downsample pass
+      // without shrinking the blur footprint.
+      this.#writeBlurUniforms(
+        this.#blurXUniformBuffer,
+        working.width,
+        working.height,
+        working.width,
+        working.height,
+        resolvedParams.radius,
+        resolvedParams.offset,
+        resolvedParams.interpolation,
+        directionIndex,
+        radiusScale,
+      );
+      this.#encodeBlurPass(
+        encoder,
+        this.#blurXPipeline,
+        this.#blurBindGroupLayout,
+        this.#blurXUniformBuffer,
+        inputTexture,
+        scratch.blurIntermediate,
+        `${this.#label} blur X pass`,
+        blurXRegion,
+        blurRegions.partial,
+      );
+
+      this.#writeBlurUniforms(
+        this.#blurYUniformBuffer,
+        working.width,
+        working.height,
+        working.width,
+        working.height,
+        resolvedParams.radius,
+        resolvedParams.offset,
+        resolvedParams.interpolation,
+        directionIndex,
+        radiusScale,
+      );
+      this.#encodeBlurPass(
+        encoder,
+        this.#blurYPipeline,
+        this.#blurBindGroupLayout,
+        this.#blurYUniformBuffer,
+        scratch.blurIntermediate,
+        scratch.blurOutput,
+        `${this.#label} blur Y pass`,
+        blurYRegion,
+        blurRegions.partial,
+      );
+    }
 
     this.#writeCompositeUniforms(
       width,
@@ -231,7 +291,13 @@ export class WlurPass {
       resolvedParams.tint?.color,
       resolvedParams.tint?.amount ?? 0,
     );
-    this.#encodeCompositePass(encoder, inputTexture, scratch.blurOutput, compositeTarget);
+    this.#encodeCompositePass(
+      encoder,
+      inputTexture,
+      scratch.blurOutput,
+      compositeTarget,
+      resolvedParams.noise <= 0.001 ? options.outputView : undefined,
+    );
 
     if (resolvedParams.noise <= 0.001) {
       return;
@@ -245,7 +311,7 @@ export class WlurPass {
       directionIndex,
       resolvedParams.noise,
     );
-    this.#encodeNoisePass(encoder, scratch.composite, outputTexture);
+    this.#encodeNoisePass(encoder, scratch.composite, outputTexture, options.outputView);
   }
 
   destroy(): void {
@@ -272,6 +338,12 @@ export class WlurPass {
     this.#noiseBindGroupLayout = null;
     this.#noisePipeline = null;
     this.#noiseUniformBuffer = null;
+    this.#textureViews = new WeakMap();
+    this.#copyBindings = new WeakMap();
+    this.#blurXBinding = null;
+    this.#blurYBinding = null;
+    this.#compositeBindings = new WeakMap();
+    this.#noiseBinding = null;
   }
 
   #createCopyPipeline(): void {
@@ -313,6 +385,8 @@ export class WlurPass {
   }
 
   #createBlurPipelines(): void {
+    this.#blurXBinding = null;
+    this.#blurYBinding = null;
     this.#blurBindGroupLayout = this.#device.createBindGroupLayout({
       label: `${this.#label} blur bind group layout`,
       entries: [
@@ -351,6 +425,8 @@ export class WlurPass {
       size: 48,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
+    this.#blurXUniformCache.fill(Number.NaN);
+    this.#blurYUniformCache.fill(Number.NaN);
 
     const blurPipelineLayout = this.#device.createPipelineLayout({
       label: `${this.#label} blur pipeline layout`,
@@ -433,6 +509,7 @@ export class WlurPass {
       size: 48,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
+    this.#compositeUniformCache.fill(Number.NaN);
 
     this.#compositePipeline = this.#device.createRenderPipeline({
       label: `${this.#label} composite pipeline`,
@@ -487,6 +564,7 @@ export class WlurPass {
       size: 32,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
+    this.#noiseUniformCache.fill(Number.NaN);
 
     this.#noisePipeline = this.#device.createRenderPipeline({
       label: `${this.#label} noise pipeline`,
@@ -518,12 +596,6 @@ export class WlurPass {
     const compositeUsage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT;
 
     const entry: ScratchTextures = {
-      scaledInput: this.#device.createTexture({
-        label: `${this.#label} scaled input ${working.width}x${working.height}`,
-        size: [working.width, working.height],
-        format: this.#format,
-        usage: workingUsage,
-      }),
       blurIntermediate: this.#device.createTexture({
         label: `${this.#label} blur intermediate ${working.width}x${working.height}`,
         size: [working.width, working.height],
@@ -550,7 +622,6 @@ export class WlurPass {
 
   #destroyScratchTextures(): void {
     for (const entry of this.#scratchTextures.values()) {
-      entry.scaledInput.destroy();
       entry.blurIntermediate.destroy();
       entry.blurOutput.destroy();
       entry.composite.destroy();
@@ -603,21 +674,24 @@ export class WlurPass {
     directionIndex: number,
     radiusScale: number,
   ): void {
-    const data = new Float32Array([
-      outputWidth,
-      outputHeight,
-      sourceWidth,
-      sourceHeight,
-      radius,
-      offset,
-      interpolation,
-      directionIndex,
-      radiusScale,
-      0,
-      0,
-      0,
-    ]);
-    this.#device.queue.writeBuffer(buffer, 0, data);
+    const data = this.#blurUniformData;
+    data[0] = outputWidth;
+    data[1] = outputHeight;
+    data[2] = sourceWidth;
+    data[3] = sourceHeight;
+    data[4] = radius;
+    data[5] = offset;
+    data[6] = interpolation;
+    data[7] = directionIndex;
+    data[8] = radiusScale;
+    data[9] = 0;
+    data[10] = 0;
+    data[11] = 0;
+    this.#writeUniformBufferIfChanged(
+      buffer,
+      data,
+      buffer === this.#blurXUniformBuffer ? this.#blurXUniformCache : this.#blurYUniformCache,
+    );
   }
 
   #writeCompositeUniforms(
@@ -630,21 +704,24 @@ export class WlurPass {
     tintColor: WlurTintColor | undefined,
     tintAmount: number,
   ): void {
-    const data = new Float32Array([
-      width,
-      height,
-      restoreThreshold,
-      0,
-      offset,
-      interpolation,
-      directionIndex,
-      0,
-      tintColor?.[0] ?? 0,
-      tintColor?.[1] ?? 0,
-      tintColor?.[2] ?? 0,
-      tintAmount,
-    ]);
-    this.#device.queue.writeBuffer(this.#compositeUniformBuffer!, 0, data);
+    const data = this.#compositeUniformData;
+    data[0] = width;
+    data[1] = height;
+    data[2] = restoreThreshold;
+    data[3] = 0;
+    data[4] = offset;
+    data[5] = interpolation;
+    data[6] = directionIndex;
+    data[7] = 0;
+    data[8] = tintColor?.[0] ?? 0;
+    data[9] = tintColor?.[1] ?? 0;
+    data[10] = tintColor?.[2] ?? 0;
+    data[11] = tintAmount;
+    this.#writeUniformBufferIfChanged(
+      this.#compositeUniformBuffer!,
+      data,
+      this.#compositeUniformCache,
+    );
   }
 
   #writeNoiseUniforms(
@@ -655,38 +732,60 @@ export class WlurPass {
     directionIndex: number,
     strength: number,
   ): void {
-    const data = new Float32Array([
-      width,
-      height,
-      strength,
-      0,
-      offset,
-      interpolation,
-      directionIndex,
-      0,
-    ]);
-    this.#device.queue.writeBuffer(this.#noiseUniformBuffer!, 0, data);
+    const data = this.#noiseUniformData;
+    data[0] = width;
+    data[1] = height;
+    data[2] = strength;
+    data[3] = 0;
+    data[4] = offset;
+    data[5] = interpolation;
+    data[6] = directionIndex;
+    data[7] = 0;
+    this.#writeUniformBufferIfChanged(this.#noiseUniformBuffer!, data, this.#noiseUniformCache);
+  }
+
+  #writeUniformBufferIfChanged(buffer: GPUBuffer, data: Float32Array, cached: Float32Array): void {
+    for (let i = 0; i < data.length; i++) {
+      if (data[i] !== cached[i]) {
+        this.#device.queue.writeBuffer(buffer, 0, data);
+        cached.set(data);
+        return;
+      }
+    }
+  }
+
+  #getTextureView(texture: GPUTexture): GPUTextureView {
+    const cached = this.#textureViews.get(texture);
+    if (cached) return cached;
+    const view = texture.createView();
+    this.#textureViews.set(texture, view);
+    return view;
   }
 
   #encodeCopyPass(
     encoder: GPUCommandEncoder,
     sourceTexture: GPUTexture,
     destinationTexture: GPUTexture,
+    destinationView?: GPUTextureView,
   ): void {
-    const bindGroup = this.#device.createBindGroup({
-      label: `${this.#label} copy bind group`,
-      layout: this.#copyBindGroupLayout!,
-      entries: [
-        { binding: 0, resource: sourceTexture.createView() },
-        { binding: 1, resource: this.#sampler! },
-      ],
-    });
+    let bindGroup = this.#copyBindings.get(sourceTexture);
+    if (!bindGroup) {
+      bindGroup = this.#device.createBindGroup({
+        label: `${this.#label} copy bind group`,
+        layout: this.#copyBindGroupLayout!,
+        entries: [
+          { binding: 0, resource: this.#getTextureView(sourceTexture) },
+          { binding: 1, resource: this.#sampler! },
+        ],
+      });
+      this.#copyBindings.set(sourceTexture, bindGroup);
+    }
 
     const pass = encoder.beginRenderPass({
       label: `${this.#label} copy pass`,
       colorAttachments: [
         {
-          view: destinationTexture.createView(),
+          view: destinationView ?? this.#getTextureView(destinationTexture),
           loadOp: "clear",
           storeOp: "store",
           clearValue: { r: 0, g: 0, b: 0, a: 0 },
@@ -708,24 +807,37 @@ export class WlurPass {
     sourceTexture: GPUTexture,
     destinationTexture: GPUTexture,
     label: string,
+    region: PixelRegion,
+    preserve: boolean,
   ): void {
-    const bindGroup = this.#device.createBindGroup({
-      label,
-      layout: bindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: uniformBuffer } },
-        { binding: 1, resource: sourceTexture.createView() },
-        { binding: 2, resource: this.#sampler! },
-        { binding: 3, resource: this.#curveTextureView! },
-      ],
-    });
+    const isBlurX = uniformBuffer === this.#blurXUniformBuffer;
+    let binding = isBlurX ? this.#blurXBinding : this.#blurYBinding;
+    if (binding?.source !== sourceTexture) {
+      binding = {
+        source: sourceTexture,
+        bindGroup: this.#device.createBindGroup({
+          label,
+          layout: bindGroupLayout,
+          entries: [
+            { binding: 0, resource: { buffer: uniformBuffer } },
+            { binding: 1, resource: this.#getTextureView(sourceTexture) },
+            { binding: 2, resource: this.#sampler! },
+            { binding: 3, resource: this.#curveTextureView! },
+          ],
+        }),
+      };
+      if (isBlurX) this.#blurXBinding = binding;
+      else this.#blurYBinding = binding;
+    }
+
+    if (region.width <= 0 || region.height <= 0) return;
 
     const pass = encoder.beginRenderPass({
       label,
       colorAttachments: [
         {
-          view: destinationTexture.createView(),
-          loadOp: "clear",
+          view: this.#getTextureView(destinationTexture),
+          loadOp: preserve ? "load" : "clear",
           storeOp: "store",
           clearValue: { r: 0, g: 0, b: 0, a: 0 },
         },
@@ -733,7 +845,8 @@ export class WlurPass {
     });
 
     pass.setPipeline(pipeline);
-    pass.setBindGroup(0, bindGroup);
+    pass.setBindGroup(0, binding.bindGroup);
+    pass.setScissorRect(region.x, region.y, region.width, region.height);
     pass.draw(3);
     pass.end();
   }
@@ -743,24 +856,32 @@ export class WlurPass {
     originalTexture: GPUTexture,
     blurredTexture: GPUTexture,
     destinationTexture: GPUTexture,
+    destinationView?: GPUTextureView,
   ): void {
-    const bindGroup = this.#device.createBindGroup({
-      label: `${this.#label} composite bind group`,
-      layout: this.#compositeBindGroupLayout!,
-      entries: [
-        { binding: 0, resource: { buffer: this.#compositeUniformBuffer! } },
-        { binding: 1, resource: originalTexture.createView() },
-        { binding: 2, resource: blurredTexture.createView() },
-        { binding: 3, resource: this.#sampler! },
-        { binding: 4, resource: this.#curveTextureView! },
-      ],
-    });
+    let binding = this.#compositeBindings.get(originalTexture);
+    if (binding?.blurred !== blurredTexture) {
+      binding = {
+        blurred: blurredTexture,
+        bindGroup: this.#device.createBindGroup({
+          label: `${this.#label} composite bind group`,
+          layout: this.#compositeBindGroupLayout!,
+          entries: [
+            { binding: 0, resource: { buffer: this.#compositeUniformBuffer! } },
+            { binding: 1, resource: this.#getTextureView(originalTexture) },
+            { binding: 2, resource: this.#getTextureView(blurredTexture) },
+            { binding: 3, resource: this.#sampler! },
+            { binding: 4, resource: this.#curveTextureView! },
+          ],
+        }),
+      };
+      this.#compositeBindings.set(originalTexture, binding);
+    }
 
     const pass = encoder.beginRenderPass({
       label: `${this.#label} composite pass`,
       colorAttachments: [
         {
-          view: destinationTexture.createView(),
+          view: destinationView ?? this.#getTextureView(destinationTexture),
           loadOp: "clear",
           storeOp: "store",
           clearValue: { r: 0, g: 0, b: 0, a: 0 },
@@ -769,7 +890,7 @@ export class WlurPass {
     });
 
     pass.setPipeline(this.#compositePipeline!);
-    pass.setBindGroup(0, bindGroup);
+    pass.setBindGroup(0, binding.bindGroup);
     pass.draw(3);
     pass.end();
   }
@@ -778,23 +899,31 @@ export class WlurPass {
     encoder: GPUCommandEncoder,
     sourceTexture: GPUTexture,
     destinationTexture: GPUTexture,
+    destinationView?: GPUTextureView,
   ): void {
-    const bindGroup = this.#device.createBindGroup({
-      label: `${this.#label} noise bind group`,
-      layout: this.#noiseBindGroupLayout!,
-      entries: [
-        { binding: 0, resource: { buffer: this.#noiseUniformBuffer! } },
-        { binding: 1, resource: sourceTexture.createView() },
-        { binding: 2, resource: this.#sampler! },
-        { binding: 3, resource: this.#curveTextureView! },
-      ],
-    });
+    let binding = this.#noiseBinding;
+    if (binding?.source !== sourceTexture) {
+      binding = {
+        source: sourceTexture,
+        bindGroup: this.#device.createBindGroup({
+          label: `${this.#label} noise bind group`,
+          layout: this.#noiseBindGroupLayout!,
+          entries: [
+            { binding: 0, resource: { buffer: this.#noiseUniformBuffer! } },
+            { binding: 1, resource: this.#getTextureView(sourceTexture) },
+            { binding: 2, resource: this.#sampler! },
+            { binding: 3, resource: this.#curveTextureView! },
+          ],
+        }),
+      };
+      this.#noiseBinding = binding;
+    }
 
     const pass = encoder.beginRenderPass({
       label: `${this.#label} noise pass`,
       colorAttachments: [
         {
-          view: destinationTexture.createView(),
+          view: destinationView ?? this.#getTextureView(destinationTexture),
           loadOp: "clear",
           storeOp: "store",
           clearValue: { r: 0, g: 0, b: 0, a: 0 },
@@ -803,7 +932,7 @@ export class WlurPass {
     });
 
     pass.setPipeline(this.#noisePipeline!);
-    pass.setBindGroup(0, bindGroup);
+    pass.setBindGroup(0, binding.bindGroup);
     pass.draw(3);
     pass.end();
   }

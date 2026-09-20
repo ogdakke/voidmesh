@@ -29,6 +29,8 @@ struct InteractionUniforms {
 @group(0) @binding(2) var entityTexture: texture_2d<f32>;
 @group(0) @binding(3) var entitySampler: sampler;
 @group(0) @binding(4) var<uniform> interaction: InteractionUniforms;
+@group(2) @binding(0) var backdrop: texture_2d<f32>;
+@group(2) @binding(1) var<storage, read> textureOpaque: array<u32>;
 
 const BORDER_PX: f32 = 2.0;
 const TAU: f32 = 6.283185307179586;
@@ -60,8 +62,15 @@ fn hasInstanceFlag(entity: EntityInstance, flag: u32) -> bool {
 struct VertexOutput {
   @builtin(position) position: vec4f,
   @location(0) uv: vec2f,
+  @location(7) @interpolate(flat) crossingSlice: u32,
+  @location(3) world: vec2f,
+  @location(4) @interpolate(flat) contactRange: vec2u,
+  @location(5) @interpolate(flat) cardSize: vec2f,
+  @location(6) @interpolate(flat) cardPose: vec2f,
   @location(1) @interpolate(flat) isSelected: u32,
   @location(2) @interpolate(flat) debugMode: u32,
+  @location(8) @interpolate(flat) actionCard: u32,
+  @location(9) @interpolate(flat) opaqueMargin: vec2f,
 }
 
 fn intersectsDragSelection(entity: EntityInstance, cosR: f32, sinR: f32) -> bool {
@@ -83,31 +92,11 @@ fn intersectsDragSelection(entity: EntityInstance, cosR: f32, sinR: f32) -> bool
   );
 }
 
-@vertex
-fn vs_main(
-  @builtin(vertex_index) vertexIndex: u32,
-  @builtin(instance_index) instanceIndex: u32,
-) -> VertexOutput {
-  var localPositions = array<vec2f, 6>(
-    vec2f(0.0, 0.0),
-    vec2f(1.0, 0.0),
-    vec2f(0.0, 1.0),
-    vec2f(1.0, 0.0),
-    vec2f(1.0, 1.0),
-    vec2f(0.0, 1.0)
-  );
-  var uvs = array<vec2f, 6>(
-    vec2f(0.0, 0.0),
-    vec2f(1.0, 0.0),
-    vec2f(0.0, 1.0),
-    vec2f(1.0, 0.0),
-    vec2f(1.0, 1.0),
-    vec2f(0.0, 1.0)
-  );
+fn compositionVertex(vertexIndex: u32, instanceIndex: u32) -> VertexOutput {
 
   let entity = entities[instanceIndex];
-  let localPos = localPositions[vertexIndex];
-  let uv = uvs[vertexIndex];
+  let localPos = crossingGrid(vertexIndex);
+  let uv = localPos;
   let scale = instanceScale(entity);
   let scaledSize = entity.size * scale;
   let scaleOffset = (entity.size - scaledSize) * 0.5;
@@ -134,6 +123,7 @@ fn vs_main(
     centered.x * sinR + centered.y * cosR,
   ) + center + entity.position + scaleOffset;
 
+  let contactWorld = worldPos;
   let m0 = viewport.matrix_row0;
   let m1 = viewport.matrix_row1;
   let m2 = viewport.matrix_row2;
@@ -143,11 +133,51 @@ fn vs_main(
   );
 
   var output: VertexOutput;
+  output.crossingSlice = vertexIndex / 6u;
   output.position = vec4f(clipPos, 0.0, 1.0);
   output.uv = expandedUV;
+  output.world = contactWorld;
+  output.contactRange = crossingRange(entity._padding);
+  output.position.z = crossingDepth(entity._padding, output.contactRange, selected);
+  output.actionCard = crossingIsActive(entity._padding);
+  output.opaqueMargin = crossingOcclusionMargin(output.contactRange, scaledSize);
+  output.cardSize = scaledSize;
+  output.cardPose = vec2f(cosR, sinR);
   output.isSelected = select(0u, 1u, selected);
   output.debugMode = select(0u, 1u, hasInstanceFlag(entity, FLAG_DEBUG));
   return output;
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instanceIndex: u32) -> VertexOutput {
+  return compositionVertex(vertexIndex, instanceIndex);
+}
+
+@vertex
+fn vs_occlusion(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instanceIndex: u32) -> VertexOutput {
+  if (textureOpaque[instanceIndex] == 0u) {
+    var output: VertexOutput;
+    output.position = vec4f(2.0, 2.0, 0.0, 1.0);
+    return output;
+  }
+  return compositionVertex(vertexIndex, instanceIndex);
+}
+
+@fragment
+fn fs_occlusion(input: VertexOutput) {
+  if (input.position.z == 0.0 || any(input.uv <= input.opaqueMargin) || any(input.uv >= vec2f(1.0) - input.opaqueMargin)) { discard; }
+}
+
+@fragment
+fn fs_restore(input: VertexOutput) -> @location(0) vec4f {
+  let paint = CrossingPaint(input.crossingSlice, input.isSelected, input.debugMode, vec2f(BORDER_PX) / (input.cardSize * viewport.zoom));
+  if (input.actionCard != 0u) { return crossingColor(input.uv, input.world, input.contactRange, input.cardSize, input.cardPose, paint); }
+  if (!crossingTouchesLifted(input.world, input.contactRange)) { discard; }
+  if (textureOpaque[0] != 0u && all(input.uv > input.opaqueMargin) && all(input.uv < vec2f(1.0) - input.opaqueMargin)) {
+    return vec4f(textureLoad(backdrop, vec2i(input.position.xy), 0).rgb, 1.0);
+  }
+  let alpha = crossingMaterial(input.uv, input.world, input.contactRange, input.cardSize, input.cardPose, paint, true).a;
+  return vec4f(textureLoad(backdrop, vec2i(input.position.xy), 0).rgb, alpha);
 }
 
 @vertex
@@ -155,26 +185,10 @@ fn vs_interactive(
   @builtin(vertex_index) vertexIndex: u32,
   @builtin(instance_index) instanceIndex: u32,
 ) -> VertexOutput {
-  var localPositions = array<vec2f, 6>(
-    vec2f(0.0, 0.0),
-    vec2f(1.0, 0.0),
-    vec2f(0.0, 1.0),
-    vec2f(1.0, 0.0),
-    vec2f(1.0, 1.0),
-    vec2f(0.0, 1.0)
-  );
-  var uvs = array<vec2f, 6>(
-    vec2f(0.0, 0.0),
-    vec2f(1.0, 0.0),
-    vec2f(0.0, 1.0),
-    vec2f(1.0, 0.0),
-    vec2f(1.0, 1.0),
-    vec2f(0.0, 1.0)
-  );
 
   let entity = entities[instanceIndex];
-  let localPos = localPositions[vertexIndex];
-  let uv = uvs[vertexIndex];
+  let localPos = crossingGrid(vertexIndex);
+  let uv = localPos;
   let rotation = instanceRotation(entity);
   let scale = instanceScale(entity);
   let cosR = cos(rotation);
@@ -216,6 +230,7 @@ fn vs_interactive(
     centered.x * sinR + centered.y * cosR,
   ) + center + entity.position + selectedOffset + scaleOffset;
 
+  let contactWorld = worldPos;
   let m0 = viewport.matrix_row0;
   let m1 = viewport.matrix_row1;
   let m2 = viewport.matrix_row2;
@@ -225,8 +240,15 @@ fn vs_interactive(
   );
 
   var output: VertexOutput;
+  output.crossingSlice = vertexIndex / 6u;
   output.position = vec4f(clipPos, 0.0, 1.0);
   output.uv = expandedUV;
+  output.world = contactWorld;
+  output.contactRange = crossingRange(entity._padding);
+  output.actionCard = crossingIsActive(entity._padding);
+  output.opaqueMargin = vec2f(0.0);
+  output.cardSize = scaledSize;
+  output.cardPose = vec2f(cosR, sinR);
   output.isSelected = select(0u, 1u, selected);
   output.debugMode = select(0u, 1u, hasInstanceFlag(entity, FLAG_DEBUG));
   return output;
@@ -234,20 +256,8 @@ fn vs_interactive(
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
-  let textureColor = textureSample(
-    entityTexture,
-    entitySampler,
-    clamp(input.uv, vec2f(0.0), vec2f(1.0)),
-  );
-  let inBorder =
-    input.uv.x < 0.0 || input.uv.x > 1.0 || input.uv.y < 0.0 || input.uv.y > 1.0;
-
-  if (input.isSelected == 1u && inBorder) {
-    if (input.debugMode == 1u) {
-      return vec4f(1.0, 0.0, 0.0, 1.0);
-    }
-    return vec4f(59.0 / 255.0, 130.0 / 255.0, 246.0 / 255.0, 1.0);
-  }
-
+  let textureColor = crossingColor(input.uv, input.world, input.contactRange, input.cardSize, input.cardPose, CrossingPaint(input.crossingSlice, input.isSelected, input.debugMode, vec2f(BORDER_PX) / (input.cardSize * viewport.zoom)));
   return textureColor;
 }
+
+// @include "overlap-crossing.wgsl"

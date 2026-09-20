@@ -10,11 +10,16 @@ export {
   clampWlurParams,
   clampWlurQuality,
   clampWlurTintColor,
+  getWlurBlurRegions,
   getWlurScratchKey,
+  getWlurEffectRegion,
+  getWlurSourceDependencyRegion,
   getWlurWorkingDimensions,
   mapWlurFactorAtPoint,
   normalizeWlurKernelSize,
   wlurDirectionToIndex,
+  type WlurPixelRegion,
+  type WlurBlurRegions,
 } from "./math.ts";
 export {
   DEFAULT_WLUR_CURVE,
@@ -34,4 +39,4 @@ export {
   type WlurTintColor,
   type WlurWorkingDimensions,
 } from "./types.ts";
-export { WlurPass } from "./wlur-pass.ts";
+export { WlurPass, type WlurEncodeOptions, type WlurPassStats } from "./wlur-pass.ts";

@@ -1,13 +1,16 @@
+import { hasPrismWakeEffects } from "#lib/fancy-effects.ts";
 import { config, getViewportLensDistortionConfig, type GridConfig } from "#config";
 import { logger } from "#lib/client.logger.ts";
 import { tracePerformancePhase } from "#lib/performance-tracing.ts";
+import { overlapConfig } from "#lib/config/overlap.config.ts";
 import { boundsIntersect, getRotatedAABB, getViewportWorldBounds } from "#lib/canvas-math.ts";
 import { getFrameAtTime } from "#lib/gif-decoder.ts";
 import { setGpuContext } from "./gpu-color-space.ts";
 import type { DisintegrationRenderOverlay, RenderState } from "#engine";
 import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import { CanvasLensing } from "#types/enums.ts";
-import { ActionLayerBlurPass } from "./action-layer-blur-pass.ts";
+import type { WlurPixelRegion } from "#wlur";
+import { ActionLayerBlurPass, type ActionLayerBlurPassStats } from "./action-layer-blur-pass.ts";
 import { CanvasCalloutPass } from "./canvas-callout-pass.ts";
 import { CanvasDebugPass } from "./canvas-debug-pass.ts";
 import {
@@ -34,16 +37,45 @@ import { TexturePool, type TexturePoolStats } from "./texture-pool.ts";
 import { ViewportLensPass, type ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
 import { ViewportUniforms } from "./viewport-uniforms.ts";
 import type { WlurOverlayConfig } from "./wlur-overlay.ts";
-import { WlurOverlayPass } from "./wlur-overlay-pass.ts";
+import {
+  WLUR_BLUR_DIRTY_ACTION,
+  WLUR_BLUR_DIRTY_ANIMATED,
+  WLUR_BLUR_DIRTY_AUXILIARY,
+  WLUR_BLUR_DIRTY_CALLOUT,
+  WLUR_BLUR_DIRTY_DISINTEGRATION,
+  WLUR_BLUR_DIRTY_DRAG,
+  WLUR_BLUR_DIRTY_GLOBAL,
+  WLUR_BLUR_DIRTY_LABEL,
+  WLUR_BLUR_DIRTY_SELECTION,
+  WlurOverlayPass,
+  type WlurOverlayPassStats,
+} from "./wlur-overlay-pass.ts";
+import {
+  WlurInvalidationDebugPass,
+  type WlurInvalidationDebugColor,
+} from "./wlur-invalidation-debug-pass.ts";
 
 export type { ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
 
 export interface RendererResourceStats {
+  actionBlur: ActionLayerBlurPassStats;
   entityTextures: EntityTextureResidencyStats;
   processingTextures: ByteBudgetCacheStats;
   texturePool: TexturePoolStats;
   composition: CompositionPassStats;
+  wlur: WlurOverlayPassStats;
 }
+
+const WLUR_INVALIDATION_DEBUG_COLORS = {
+  source: [0.05, 0.78, 1, 0.95],
+  global: [1, 0.2, 0.24, 0.9],
+  lens: [0.72, 0.38, 1, 0.9],
+  animated: [1, 0.25, 0.65, 0.9],
+  action: [1, 0.55, 0.08, 0.95],
+  drag: [1, 0.84, 0.12, 0.95],
+  label: [0.2, 0.9, 0.42, 0.95],
+  partial: [1, 1, 1, 0.95],
+} as const satisfies Record<string, WlurInvalidationDebugColor>;
 
 export class InfiniteCanvasRenderer {
   readonly canvas: HTMLCanvasElement;
@@ -67,6 +99,15 @@ export class InfiniteCanvasRenderer {
   onDeviceLost?: (reason: string) => void;
 
   #actionLayerBlurPass: ActionLayerBlurPass | null = null;
+  #actionBlurBackdropState: {
+    entityVersion: number;
+    geometryVersion: number;
+    selectionVersion: number;
+    viewportX: number;
+    viewportY: number;
+    viewportZoom: number;
+    debugMode: boolean;
+  } | null = null;
 
   // Texture pool for eliminating per-frame allocation churn
   #texturePool: TexturePool | null = null;
@@ -89,6 +130,79 @@ export class InfiniteCanvasRenderer {
   #viewportLensPass: ViewportLensPass | null = null;
 
   #wlurOverlayPass: WlurOverlayPass | null = null;
+  #wlurInvalidationDebugPass: WlurInvalidationDebugPass | null = null;
+  #wlurInvalidationDebugEnabled = false;
+  readonly #actionBlurCurrentDynamicSourceRegion: WlurPixelRegion = {
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+  };
+  readonly #actionBlurPreviousDynamicSourceRegion: WlurPixelRegion = {
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+  };
+  readonly #actionBlurDynamicSourceRefreshRegion: WlurPixelRegion = {
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+  };
+  #hasPreviousActionBlurDynamicSourceRegion = false;
+  #wlurBlurState: {
+    entityVersion: number;
+    geometryVersion: number;
+    selectionVersion: number;
+    viewportX: number;
+    viewportY: number;
+    viewportZoom: number;
+    debugMode: boolean;
+    blurIntensity: number;
+    actionActive: boolean;
+    actionEntityIds: ReadonlySet<string>;
+    actionOffsetX: number;
+    actionOffsetY: number;
+    dragActive: boolean;
+    dragEntityIds: ReadonlySet<string>;
+    dragOffsetX: number;
+    dragOffsetY: number;
+    dragScale: number;
+    dragAppliesToSelection: boolean;
+    canvasCallouts: RenderState["canvasCallouts"];
+  } | null = null;
+  readonly #wlurDependencyWorldBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #wlurOutputDependencyWorldBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #wlurItemBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #wlurItemPosition = { x: 0, y: 0 };
+  readonly #wlurItemSize = { width: 0, height: 0 };
+  readonly #wlurDebugViewportBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #wlurDebugLensBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #wlurDebugLabelBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #wlurDebugPartialBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #wlurCurrentDynamicSourceRegion: WlurPixelRegion = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #wlurPreviousDynamicSourceRegion: WlurPixelRegion = {
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+  };
+  readonly #wlurDynamicSourceRefreshRegion: WlurPixelRegion = {
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+  };
+  readonly #wlurDynamicOutputRegion: WlurPixelRegion = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #wlurPartialRefreshRegion: WlurPixelRegion = { x: 0, y: 0, width: 0, height: 0 };
+  #hasPreviousWlurDynamicSourceRegion = false;
+  readonly #wlurStateChanges = {
+    global: true,
+    actionPose: true,
+    dragVisual: true,
+    canvasCallouts: true,
+  };
 
   #entityDrawItemPreparer: EntityDrawItemPreparer | null = null;
   #entityTexturePipeline: EntityTexturePipeline | null = null;
@@ -102,6 +216,7 @@ export class InfiniteCanvasRenderer {
   #lastRenderTime = 0;
   #lastEntityCount = 0;
   #lastRenderedCount = 0;
+  #detailedFrameInstrumentation = false;
   readonly #lastPhaseStats = {
     setupMs: 0,
     prepareMs: 0,
@@ -110,6 +225,16 @@ export class InfiniteCanvasRenderer {
     visibleEntityPreparationMs: 0,
     encodeMs: 0,
     submitMs: 0,
+    frameSetupMs: 0,
+    swapchainAcquireMs: 0,
+    gridMs: 0,
+    sceneCompositionMs: 0,
+    actionBlurMs: 0,
+    sharpRestoreMs: 0,
+    actionForegroundMs: 0,
+    auxiliaryOverlaysMs: 0,
+    lensMs: 0,
+    wlurMs: 0,
   };
   #hasLastLodViewport = false;
   #lastLodZoom = 0;
@@ -162,9 +287,22 @@ export class InfiniteCanvasRenderer {
     };
   }
 
+  setDetailedFrameInstrumentation(enabled: boolean): void {
+    this.#detailedFrameInstrumentation = enabled;
+  }
+
   /** Snapshot of GPU texture residency and cumulative allocation churn. */
   getResourceStats(): RendererResourceStats {
     return {
+      actionBlur: this.#actionLayerBlurPass?.getStats() ?? {
+        composites: 0,
+        pyramidRefreshes: 0,
+        partialPyramidRefreshes: 0,
+        pyramidReuses: 0,
+        blurPixels: 0,
+        fullBlurPixels: 0,
+        residentBytes: 0,
+      },
       entityTextures: this.#entityTexturePipeline?.getResidencyStats() ?? {
         budgetBytes: config.rendering.entityTextureBudgetBytes,
         residentBytes: 0,
@@ -175,6 +313,7 @@ export class InfiniteCanvasRenderer {
         sourceTextureAllocations: 0,
         processedTextureAllocations: 0,
         sourceUploads: 0,
+        externalTextureImports: 0,
         evictions: 0,
       },
       processingTextures:
@@ -193,12 +332,42 @@ export class InfiniteCanvasRenderer {
         fullSceneBatchRebuilds: 0,
         fullSceneBatchUploadBytes: 0,
         normalInstanceUploadBytes: 0,
+        occlusionPasses: 0,
+        opacityProofs: 0,
+        opacityBufferBytes: 0,
+        layerTextureBytes: 0,
+        externalBindGroupCreations: 0,
+        sharpRestorePasses: 0,
+        sharpRestoreCopiedPixels: 0,
+        sharpRestoreDrawnItems: 0,
+      },
+      wlur: this.#wlurOverlayPass?.getStats() ?? {
+        blurRefreshes: 0,
+        blurReuses: 0,
+        composites: 0,
+        directPresents: 0,
+        convertedPresents: 0,
+        blurPixels: 0,
+        fullBlurPixels: 0,
+        globalInvalidations: 0,
+        animatedInvalidations: 0,
+        actionInvalidations: 0,
+        dragInvalidations: 0,
+        auxiliaryInvalidations: 0,
+        lensInvalidations: 0,
+        disintegrationInvalidations: 0,
+        labelInvalidations: 0,
+        calloutInvalidations: 0,
+        selectionInvalidations: 0,
+        cacheInvalidations: 0,
+        partialBlurRefreshes: 0,
       },
     };
   }
 
   hasPendingRenderWork(): boolean {
     return (
+      (this.#compositionPass?.crossing.pending ?? false) ||
       this.#lodSettleFramesRemaining > 0 ||
       this.#mixedBatchLodRefreshPending ||
       (this.#entityTexturePipeline?.hasPendingLodWork ?? false)
@@ -270,6 +439,7 @@ export class InfiniteCanvasRenderer {
       format: this.#canvasFormat,
       viewportUniformBuffer: this.#viewportUniforms.buffer,
     });
+    await this.#compositionPass.initializeOverlap();
     this.#externalTextureCopyPass = new ExternalTextureCopyPass(
       this.#device,
       this.#colorConfig.intermediateFormat,
@@ -278,6 +448,8 @@ export class InfiniteCanvasRenderer {
       device: this.#device,
       colorConfig: this.#colorConfig,
       texturePool: this.#texturePool,
+      onImmutableSourceUpload: (texture, encoder) =>
+        this.#compositionPass!.primeImmutableSource(texture, encoder),
       onEntityError: (entityId, error) => {
         if (!this.#entityErrors.has(entityId)) {
           this.#entityErrors.set(entityId, error);
@@ -376,10 +548,6 @@ export class InfiniteCanvasRenderer {
     this.#cachedCanvasHeight = initialRect.height;
   }
 
-  #drawCompositionItems(pass: GPURenderPassEncoder, items: readonly CompositionDrawItem[]): void {
-    this.#compositionPass!.drawItems(pass, items);
-  }
-
   /**
    * Render an entity's image through its shader to a texture.
    * Returns the texture, caching it for future frames.
@@ -414,6 +582,16 @@ export class InfiniteCanvasRenderer {
     this.#protectedFullSceneTextureOwners.clear();
 
     const renderStart = performance.now();
+    this.#lastPhaseStats.frameSetupMs = 0;
+    this.#lastPhaseStats.swapchainAcquireMs = 0;
+    this.#lastPhaseStats.gridMs = 0;
+    this.#lastPhaseStats.sceneCompositionMs = 0;
+    this.#lastPhaseStats.actionBlurMs = 0;
+    this.#lastPhaseStats.sharpRestoreMs = 0;
+    this.#lastPhaseStats.actionForegroundMs = 0;
+    this.#lastPhaseStats.auxiliaryOverlaysMs = 0;
+    this.#lastPhaseStats.lensMs = 0;
+    this.#lastPhaseStats.wlurMs = 0;
     const frameDt = this.#lastFrameTime > 0 ? (renderStart - this.#lastFrameTime) / 1000 : 1 / 60;
     this.#lastFrameTime = renderStart;
     const { entities, viewport, selectedEntityIds, debugMode } = state;
@@ -478,6 +656,15 @@ export class InfiniteCanvasRenderer {
 
     // Pre-process entities: render to textures and prepare bind groups
     // Uses caching to avoid per-frame allocations
+    this.#compositionPass.crossing.update(
+      entities,
+      state.actionLayer,
+      performance.now(),
+      viewport.zoom,
+      dpr,
+      state.dragVisual,
+      hasPrismWakeEffects(state.fancyEffects),
+    );
     const preparedEntityDrawItems = this.#entityDrawItemPreparer.prepare({
       entities,
       entityIndices: state.entityIndices,
@@ -509,43 +696,112 @@ export class InfiniteCanvasRenderer {
     this.#lastPhaseStats.batchAdmissionMs = preparationPhases.batchAdmissionMs;
     this.#lastPhaseStats.spatialQueryMs = preparationPhases.spatialQueryMs;
     this.#lastPhaseStats.visibleEntityPreparationMs = preparationPhases.visibleEntityPreparationMs;
+    const frameSetupStart = this.#detailedFrameInstrumentation ? performance.now() : 0;
     const {
       entityDrawItems,
       actionLayerDrawItems,
+      animatingDrawItems,
+      dragVisualDrawItems,
       fullSceneBatch,
       singleSelectedDrawItem,
       singleSelectedOffsetX,
       singleSelectedOffsetY,
     } = preparedEntityDrawItems;
-    let hasAnimatingContent = preparedEntityDrawItems.hasAnimatingContent;
+    let hasAnimatingContent =
+      preparedEntityDrawItems.hasAnimatingContent || this.#compositionPass.crossing.pending;
     this.#compositionPass.beginFrame(
       fullSceneBatch?.instanceCount ?? entityDrawItems.length + actionLayerDrawItems.length,
     );
 
+    const swapchainAcquireStart = this.#detailedFrameInstrumentation ? performance.now() : 0;
     const texture = this.#context.getCurrentTexture();
+    if (this.#detailedFrameInstrumentation) {
+      this.#lastPhaseStats.swapchainAcquireMs = performance.now() - swapchainAcquireStart;
+    }
     // Skip render if swapchain texture is invalid
     if (texture.width === 0 || texture.height === 0) {
       this.#entityTexturePipeline?.flushTextureReleases();
       return;
     }
     const targetView = texture.createView();
+    const wlurSceneTarget = this.#wlurOverlayPass?.getSceneTarget(width, height, dpr) ?? null;
+    const presentationTargetTexture = wlurSceneTarget?.texture ?? texture;
+    const presentationTargetView = wlurSceneTarget?.view ?? targetView;
     const viewportLensTarget = this.#viewportLensPass?.getTarget(width, height) ?? null;
-    const sceneTargetTexture = viewportLensTarget?.texture ?? texture;
-    const sceneTargetView = viewportLensTarget?.view ?? targetView;
+    const sceneTargetTexture = viewportLensTarget?.texture ?? presentationTargetTexture;
+    const sceneTargetView = viewportLensTarget?.view ?? presentationTargetView;
+    const overlapDepth = fullSceneBatch
+      ? undefined
+      : this.#compositionPass.prepareOcclusion(
+          encoder,
+          entityDrawItems,
+          width,
+          height,
+          viewport.zoom,
+        );
+    const blurIntensity = state.actionLayer.blurIntensity;
+    const renderActionBlur =
+      blurIntensity > 0.01 &&
+      this.#canvasFormat === this.#colorConfig.intermediateFormat &&
+      !!this.#entityTexturePipeline &&
+      !!this.#actionLayerBlurPass;
+    let hasBackdropDragVisual = false;
+    if (state.dragVisual.active) {
+      for (const entityId of state.dragVisual.entityIds) {
+        if (state.actionLayer.entityIds.has(entityId)) continue;
+        hasBackdropDragVisual = true;
+        break;
+      }
+    }
+    const actionBackdropStateChanged =
+      renderActionBlur && this.#updateActionBlurBackdropState(state);
+    const actionBackdropDynamicDirty =
+      preparedEntityDrawItems.hasBackdropAnimatingContent || hasBackdropDragVisual;
+    const actionBackdropRefreshRegion =
+      renderActionBlur && actionBackdropDynamicDirty
+        ? this.#updateActionBlurDynamicSourceRefreshRegion(
+            animatingDrawItems,
+            state.actionLayer.entityIds,
+            dragVisualDrawItems,
+            preparedEntityDrawItems.hasBackdropAnimatingContent,
+            viewport,
+            width,
+            height,
+          )
+        : null;
+    if (!actionBackdropDynamicDirty) this.#hasPreviousActionBlurDynamicSourceRegion = false;
+    const actionBackdropDirty =
+      renderActionBlur && (actionBackdropStateChanged || actionBackdropDynamicDirty);
+    if (this.#detailedFrameInstrumentation) {
+      this.#lastPhaseStats.frameSetupMs = performance.now() - frameSetupStart;
+    }
 
     // Pass 1: Render dot grid background
+    const gridStart = this.#detailedFrameInstrumentation ? performance.now() : 0;
     this.#gridPass.encode({ encoder, targetView: sceneTargetView, viewport, width, height });
+    if (this.#detailedFrameInstrumentation) {
+      this.#lastPhaseStats.gridMs = performance.now() - gridStart;
+    }
 
     // Pass 2: Render all entities. The selected entity label is a later overlay,
     // so entity z-order cannot cover it or split composition batches.
     // Update label animation state once per frame
+    const sceneCompositionStart = this.#detailedFrameInstrumentation ? performance.now() : 0;
     this.#entityLabelPass?.beginFrame(viewport, width, height, state.dragVisual.isDragPhase);
     const fullSceneSelectedEntity =
       fullSceneBatch && fullSceneBatch.singleSelectedIndex >= 0
         ? entities[fullSceneBatch.singleSelectedIndex]
         : undefined;
+    const labelEntity = fullSceneSelectedEntity ?? singleSelectedDrawItem?.entity;
+    const renderLabelInScenePass =
+      !!labelEntity &&
+      !!this.#entityLabelPass &&
+      actionLayerDrawItems.length === 0 &&
+      !renderActionBlur &&
+      !overlapDepth;
     const entityPass = encoder.beginRenderPass({
       label: "Entity composition pass",
+      ...(overlapDepth ? { depthStencilAttachment: overlapDepth } : {}),
       colorAttachments: [
         {
           view: sceneTargetView,
@@ -568,13 +824,26 @@ export class InfiniteCanvasRenderer {
         throw new Error("Prepared full-scene composition batch was invalidated before drawing");
       }
     } else {
-      this.#drawCompositionItems(entityPass, entityDrawItems);
+      if (renderActionBlur) this.#compositionPass.drawBackdropScene(entityPass, entityDrawItems);
+      else this.#compositionPass.drawItems(entityPass, entityDrawItems, "scene");
+    }
+    if (renderLabelInScenePass) {
+      this.#entityLabelPass!.drawLabel(
+        entityPass,
+        labelEntity!,
+        singleSelectedOffsetX,
+        singleSelectedOffsetY,
+      );
     }
     entityPass.end();
+    if (this.#detailedFrameInstrumentation) {
+      this.#lastPhaseStats.sceneCompositionMs = performance.now() - sceneCompositionStart;
+    }
 
     // Pass 2a: Action layer blur overlay
-    // Blur+dim everything, then re-render selected entities sharp on top
-    const blurIntensity = state.actionLayer.blurIntensity;
+    // Blur+dim the scene without active material, then reconstruct lower sharp
+    // crossing slices at their animated depth before the final foreground slices.
+    const actionBlurStart = this.#detailedFrameInstrumentation ? performance.now() : 0;
     if (
       blurIntensity > 0.01 &&
       this.#canvasFormat === this.#colorConfig.intermediateFormat &&
@@ -589,55 +858,73 @@ export class InfiniteCanvasRenderer {
         width,
         height,
         blurIntensity,
-        contentDirty: state.dirty || hasAnimatingContent,
+        contentDirty: actionBackdropDirty,
+        refreshRegion: actionBackdropStateChanged
+          ? undefined
+          : (actionBackdropRefreshRegion ?? undefined),
       });
+    }
+    if (this.#detailedFrameInstrumentation) {
+      this.#lastPhaseStats.actionBlurMs = performance.now() - actionBlurStart;
     }
 
     // Reset blur cache when action layer blur is no longer rendering
     if (blurIntensity <= 0.01) {
       this.#actionLayerBlurPass?.invalidateCache();
+      this.#actionBlurBackdropState = null;
+      this.#hasPreviousActionBlurDynamicSourceRegion = false;
     }
-
-    // Always render action layer entities on top (sharp, after blur or normally)
-    if (actionLayerDrawItems.length > 0) {
-      const sharpPass = encoder.beginRenderPass({
-        label: "Action layer sharp entity pass",
-        colorAttachments: [
-          {
-            view: sceneTargetView,
-            loadOp: "load",
-            storeOp: "store",
-          },
-        ],
-      });
-      this.#drawCompositionItems(sharpPass, actionLayerDrawItems);
-      sharpPass.end();
-    }
-
-    // Labels are scene overlays: draw after every entity phase, but before canvas
-    // callouts, selection UI, viewport lensing, and the final progressive blur.
-    const labelEntity = fullSceneSelectedEntity ?? singleSelectedDrawItem?.entity;
-    if (labelEntity && this.#entityLabelPass) {
-      const labelPass = encoder.beginRenderPass({
-        label: "Entity label overlay pass",
-        colorAttachments: [
-          {
-            view: sceneTargetView,
-            loadOp: "load",
-            storeOp: "store",
-          },
-        ],
-      });
-      this.#entityLabelPass.drawLabel(
-        labelPass,
-        labelEntity,
-        singleSelectedOffsetX,
-        singleSelectedOffsetY,
+    const sharpRestoreStart = this.#detailedFrameInstrumentation ? performance.now() : 0;
+    if (renderActionBlur)
+      this.#compositionPass.restoreSharpScene(
+        encoder,
+        sceneTargetTexture,
+        sceneTargetView,
+        entityDrawItems,
+        viewport,
+        dpr,
       );
-      labelPass.end();
+    if (this.#detailedFrameInstrumentation) {
+      this.#lastPhaseStats.sharpRestoreMs = performance.now() - sharpRestoreStart;
     }
 
-    // Evict label caches only after the overlay has consumed the selected entry.
+    // Render final action-plane portions and the selected label in one pass. Lower
+    // active material is already sharp beneath the reconstructed covers; the label
+    // remains above every entity and below later canvas overlays.
+    const actionForegroundStart = this.#detailedFrameInstrumentation ? performance.now() : 0;
+    const renderLabelInForegroundPass =
+      !!labelEntity && !!this.#entityLabelPass && !renderLabelInScenePass;
+    if (actionLayerDrawItems.length > 0 || renderLabelInForegroundPass) {
+      const foregroundPass = encoder.beginRenderPass({
+        label: "Action layer and label foreground pass",
+        colorAttachments: [
+          {
+            view: sceneTargetView,
+            loadOp: "load",
+            storeOp: "store",
+          },
+        ],
+      });
+      if (actionLayerDrawItems.length > 0) {
+        this.#compositionPass.drawItems(foregroundPass, actionLayerDrawItems, "action");
+      }
+      if (renderLabelInForegroundPass) {
+        this.#entityLabelPass!.drawLabel(
+          foregroundPass,
+          labelEntity!,
+          singleSelectedOffsetX,
+          singleSelectedOffsetY,
+        );
+      }
+      foregroundPass.end();
+    }
+    if (this.#detailedFrameInstrumentation) {
+      this.#lastPhaseStats.actionForegroundMs = performance.now() - actionForegroundStart;
+    }
+
+    // Labels have already been drawn after the final entity phase. Evict stale
+    // caches before later canvas overlays, viewport lensing, and progressive blur.
+    const auxiliaryOverlaysStart = this.#detailedFrameInstrumentation ? performance.now() : 0;
     this.#entityLabelPass?.endFrame(selectedEntityIds);
     if (this.#entityLabelPass?.isAnimating) hasAnimatingContent = true;
 
@@ -697,29 +984,157 @@ export class InfiniteCanvasRenderer {
         spatialIndex: state.entitySpatialIndex,
       });
     }
+    if (this.#detailedFrameInstrumentation) {
+      this.#lastPhaseStats.auxiliaryOverlaysMs = performance.now() - auxiliaryOverlaysStart;
+    }
 
+    const lensStart = this.#detailedFrameInstrumentation ? performance.now() : 0;
     const lensApplied = viewportLensTarget
-      ? this.#viewportLensPass!.encode(encoder, targetView, width, height)
+      ? this.#viewportLensPass!.encode(encoder, presentationTargetView, width, height)
       : false;
+    if (this.#detailedFrameInstrumentation) {
+      this.#lastPhaseStats.lensMs = performance.now() - lensStart;
+    }
 
     // Final pass: WLUR progressive blur overlay (renders on top of everything)
+    const wlurStart = this.#detailedFrameInstrumentation ? performance.now() : 0;
     if (this.#wlurOverlayPass) {
+      const presentationContentDirty =
+        state.dirty ||
+        hasAnimatingContent ||
+        lensApplied ||
+        !!this.#disintegrationPass?.hasOverlays ||
+        blurIntensity > 0.01 ||
+        state.dragSelectBounds !== null;
+      const wlurStateChanges = this.#updateWlurBlurState(state);
+      const outputDependencyRegion = this.#wlurOverlayPass.getSourceDependencyRegion(
+        width,
+        height,
+        dpr,
+        renderActionBlur ? (this.#actionLayerBlurPass?.sourceDependencyPaddingPx ?? 0) : 0,
+      );
+      const sourceDependencyRegion =
+        outputDependencyRegion && viewportLensTarget
+          ? this.#viewportLensPass!.getSourceDependencyRegion(outputDependencyRegion, width, height)
+          : outputDependencyRegion;
+      const outputDependencyBounds = outputDependencyRegion
+        ? this.#setWlurDependencyWorldBounds(
+            outputDependencyRegion,
+            viewport,
+            this.#wlurOutputDependencyWorldBounds,
+          )
+        : null;
+      const dependencyBounds = sourceDependencyRegion
+        ? this.#setWlurDependencyWorldBounds(sourceDependencyRegion, viewport)
+        : null;
+      const animatedContentTouchesWlur =
+        dependencyBounds === null ||
+        this.#drawItemsIntersectBoundsExcludingLocal(
+          animatingDrawItems,
+          dependencyBounds,
+          viewport.zoom,
+          actionLayerDrawItems,
+          dragVisualDrawItems,
+        );
+      const dynamicSourceRefreshRegion = this.#updateWlurDynamicSourceRefreshRegion(
+        actionLayerDrawItems,
+        dragVisualDrawItems,
+        viewport,
+        width,
+        height,
+        dpr,
+      );
+      const dynamicSourceTouchesWlur =
+        dynamicSourceRefreshRegion !== null &&
+        sourceDependencyRegion !== null &&
+        this.#wlurPixelRegionsIntersect(dynamicSourceRefreshRegion, sourceDependencyRegion);
+      const animatedActionContent = this.#drawItemListsIntersect(
+        animatingDrawItems,
+        actionLayerDrawItems,
+      );
+      const animatedDragContent = this.#drawItemListsIntersect(
+        animatingDrawItems,
+        dragVisualDrawItems,
+      );
+      const actionDirty =
+        (wlurStateChanges.actionPose ||
+          this.#compositionPass.crossing.pending ||
+          animatedActionContent) &&
+        dynamicSourceTouchesWlur;
+      const dragDirty =
+        (wlurStateChanges.dragVisual || animatedDragContent) && dynamicSourceTouchesWlur;
+      const disintegrationDirty = !!this.#disintegrationPass?.hasOverlays;
+      const labelDirty =
+        this.#entityLabelPass?.isAnimating === true &&
+        (dependencyBounds === null || this.#entityLabelPass.intersectsBounds(dependencyBounds));
+      const calloutDirty =
+        state.canvasCallouts.length > 0 &&
+        (wlurStateChanges.canvasCallouts ||
+          wlurStateChanges.actionPose ||
+          wlurStateChanges.dragVisual);
+      const selectionDirty = state.dragSelectBounds !== null || state.multiSelectBounds !== null;
+      const auxiliaryDirty = disintegrationDirty || labelDirty || calloutDirty || selectionDirty;
+      let blurDirtyMask = 0;
+      if (wlurStateChanges.global) blurDirtyMask |= WLUR_BLUR_DIRTY_GLOBAL;
+      if (animatedContentTouchesWlur) blurDirtyMask |= WLUR_BLUR_DIRTY_ANIMATED;
+      if (actionDirty) blurDirtyMask |= WLUR_BLUR_DIRTY_ACTION;
+      if (dragDirty) blurDirtyMask |= WLUR_BLUR_DIRTY_DRAG;
+      if (auxiliaryDirty) blurDirtyMask |= WLUR_BLUR_DIRTY_AUXILIARY;
+      if (disintegrationDirty) blurDirtyMask |= WLUR_BLUR_DIRTY_DISINTEGRATION;
+      if (labelDirty) blurDirtyMask |= WLUR_BLUR_DIRTY_LABEL;
+      if (calloutDirty) blurDirtyMask |= WLUR_BLUR_DIRTY_CALLOUT;
+      if (selectionDirty) blurDirtyMask |= WLUR_BLUR_DIRTY_SELECTION;
+      const localDirtyMask = WLUR_BLUR_DIRTY_ACTION | WLUR_BLUR_DIRTY_DRAG;
+      let blurDirtyRegion: WlurPixelRegion | null = null;
+      if (
+        dynamicSourceRefreshRegion &&
+        outputDependencyRegion &&
+        blurDirtyMask !== 0 &&
+        (blurDirtyMask & ~localDirtyMask) === 0
+      ) {
+        const dynamicOutputRegion = viewportLensTarget
+          ? this.#viewportLensPass!.getOutputInfluenceRegion(
+              dynamicSourceRefreshRegion,
+              width,
+              height,
+              this.#wlurDynamicOutputRegion,
+            )
+          : this.#copyWlurPixelRegion(dynamicSourceRefreshRegion, this.#wlurDynamicOutputRegion);
+        blurDirtyRegion = this.#intersectWlurPixelRegions(
+          dynamicOutputRegion,
+          outputDependencyRegion,
+          this.#wlurPartialRefreshRegion,
+        );
+      }
       this.#wlurOverlayPass.encode({
         encoder,
-        sourceTexture: texture,
+        sourceTexture: presentationTargetTexture,
         targetTexture: texture,
         targetView,
         width,
         height,
         devicePixelRatio: dpr,
-        contentDirty:
-          state.dirty ||
-          hasAnimatingContent ||
-          lensApplied ||
-          !!this.#disintegrationPass?.hasOverlays ||
-          blurIntensity > 0.01 ||
-          state.dragSelectBounds !== null,
+        contentDirty: presentationContentDirty,
+        blurDirtyMask,
+        blurDirtyRegion,
       });
+      this.#encodeWlurInvalidationDebug({
+        encoder,
+        targetView,
+        viewport,
+        width,
+        height,
+        outputDependencyBounds,
+        lensDependencyBounds: viewportLensTarget ? dependencyBounds : null,
+        partialRefreshRegion: blurDirtyRegion,
+        globalDirty: wlurStateChanges.global,
+        animatingDrawItems,
+        actionLayerDrawItems,
+        dragVisualDrawItems,
+      });
+    }
+    if (this.#detailedFrameInstrumentation) {
+      this.#lastPhaseStats.wlurMs = performance.now() - wlurStart;
     }
 
     const submitStart = performance.now();
@@ -730,6 +1145,7 @@ export class InfiniteCanvasRenderer {
     this.#lastPhaseStats.submitMs = tracePerformancePhase("render.submit", submitStart, submitEnd);
     this.#entityTexturePipeline?.flushTextureReleases();
     this.#entityTexturePipeline?.endFrame();
+    this.#compositionPass.endFrame();
 
     // Record frame stats for performance overlay
     const renderEnd = performance.now();
@@ -746,11 +1162,474 @@ export class InfiniteCanvasRenderer {
    */
   setGridConfig(config: Partial<GridConfig>): void {
     this.#gridPass?.setConfig(config);
+    this.#actionLayerBlurPass?.invalidateCache();
     this.#wlurOverlayPass?.invalidateCache();
+  }
+
+  #updateActionBlurBackdropState(state: RenderState): boolean {
+    const previous = this.#actionBlurBackdropState;
+    const next = {
+      entityVersion: state.entityVersion,
+      geometryVersion: state.geometryVersion,
+      selectionVersion: state.selectionVersion,
+      viewportX: state.viewport.offset.x,
+      viewportY: state.viewport.offset.y,
+      viewportZoom: state.viewport.zoom,
+      debugMode: state.debugMode,
+    };
+    this.#actionBlurBackdropState = next;
+    return (
+      previous === null ||
+      previous.entityVersion !== next.entityVersion ||
+      previous.geometryVersion !== next.geometryVersion ||
+      previous.selectionVersion !== next.selectionVersion ||
+      previous.viewportX !== next.viewportX ||
+      previous.viewportY !== next.viewportY ||
+      previous.viewportZoom !== next.viewportZoom ||
+      previous.debugMode !== next.debugMode
+    );
+  }
+
+  #updateWlurBlurState(state: RenderState): Readonly<{
+    global: boolean;
+    actionPose: boolean;
+    dragVisual: boolean;
+    canvasCallouts: boolean;
+  }> {
+    const previous = this.#wlurBlurState;
+    const actionLayer = state.actionLayer;
+    const dragVisual = state.dragVisual;
+    const changes = this.#wlurStateChanges;
+    changes.global =
+      previous === null ||
+      previous.entityVersion !== state.entityVersion ||
+      previous.geometryVersion !== state.geometryVersion ||
+      previous.selectionVersion !== state.selectionVersion ||
+      previous.viewportX !== state.viewport.offset.x ||
+      previous.viewportY !== state.viewport.offset.y ||
+      previous.viewportZoom !== state.viewport.zoom ||
+      previous.debugMode !== state.debugMode ||
+      previous.blurIntensity !== actionLayer.blurIntensity ||
+      previous.actionActive !== actionLayer.active;
+    changes.actionPose =
+      previous === null ||
+      previous.actionEntityIds !== actionLayer.entityIds ||
+      previous.actionOffsetX !== actionLayer.entityOffset.x ||
+      previous.actionOffsetY !== actionLayer.entityOffset.y;
+    changes.dragVisual =
+      previous === null ||
+      previous.dragActive !== dragVisual.active ||
+      previous.dragEntityIds !== dragVisual.entityIds ||
+      previous.dragOffsetX !== dragVisual.offset.x ||
+      previous.dragOffsetY !== dragVisual.offset.y ||
+      previous.dragScale !== dragVisual.scale ||
+      previous.dragAppliesToSelection !== dragVisual.appliesToSelection;
+    changes.canvasCallouts = previous === null || previous.canvasCallouts !== state.canvasCallouts;
+    if (previous) {
+      previous.entityVersion = state.entityVersion;
+      previous.geometryVersion = state.geometryVersion;
+      previous.selectionVersion = state.selectionVersion;
+      previous.viewportX = state.viewport.offset.x;
+      previous.viewportY = state.viewport.offset.y;
+      previous.viewportZoom = state.viewport.zoom;
+      previous.debugMode = state.debugMode;
+      previous.blurIntensity = actionLayer.blurIntensity;
+      previous.actionActive = actionLayer.active;
+      previous.actionEntityIds = actionLayer.entityIds;
+      previous.actionOffsetX = actionLayer.entityOffset.x;
+      previous.actionOffsetY = actionLayer.entityOffset.y;
+      previous.dragActive = dragVisual.active;
+      previous.dragEntityIds = dragVisual.entityIds;
+      previous.dragOffsetX = dragVisual.offset.x;
+      previous.dragOffsetY = dragVisual.offset.y;
+      previous.dragScale = dragVisual.scale;
+      previous.dragAppliesToSelection = dragVisual.appliesToSelection;
+      previous.canvasCallouts = state.canvasCallouts;
+    } else {
+      this.#wlurBlurState = {
+        entityVersion: state.entityVersion,
+        geometryVersion: state.geometryVersion,
+        selectionVersion: state.selectionVersion,
+        viewportX: state.viewport.offset.x,
+        viewportY: state.viewport.offset.y,
+        viewportZoom: state.viewport.zoom,
+        debugMode: state.debugMode,
+        blurIntensity: actionLayer.blurIntensity,
+        actionActive: actionLayer.active,
+        actionEntityIds: actionLayer.entityIds,
+        actionOffsetX: actionLayer.entityOffset.x,
+        actionOffsetY: actionLayer.entityOffset.y,
+        dragActive: dragVisual.active,
+        dragEntityIds: dragVisual.entityIds,
+        dragOffsetX: dragVisual.offset.x,
+        dragOffsetY: dragVisual.offset.y,
+        dragScale: dragVisual.scale,
+        dragAppliesToSelection: dragVisual.appliesToSelection,
+        canvasCallouts: state.canvasCallouts,
+      };
+    }
+    return changes;
+  }
+
+  #setWlurDependencyWorldBounds(
+    region: { x: number; y: number; width: number; height: number },
+    viewport: Viewport,
+    output: Bounds = this.#wlurDependencyWorldBounds,
+  ): Bounds {
+    output.x = viewport.offset.x + region.x / viewport.zoom;
+    output.y = viewport.offset.y + region.y / viewport.zoom;
+    output.width = region.width / viewport.zoom;
+    output.height = region.height / viewport.zoom;
+    return output;
+  }
+
+  #updateActionBlurDynamicSourceRefreshRegion(
+    animatingItems: readonly CompositionDrawItem[],
+    actionEntityIds: ReadonlySet<string>,
+    dragItems: readonly CompositionDrawItem[],
+    includeAnimatingItems: boolean,
+    viewport: Viewport,
+    width: number,
+    height: number,
+  ): WlurPixelRegion | null {
+    let minimumX = width;
+    let minimumY = height;
+    let maximumX = 0;
+    let maximumY = 0;
+    const include = (item: CompositionDrawItem) => {
+      if (actionEntityIds.has(item.entity.id)) return;
+      const bounds = this.#setWlurDrawItemBounds(item, viewport.zoom);
+      const x = Math.max(0, Math.floor((bounds.x - viewport.offset.x) * viewport.zoom));
+      const y = Math.max(0, Math.floor((bounds.y - viewport.offset.y) * viewport.zoom));
+      const right = Math.min(
+        width,
+        Math.ceil((bounds.x + bounds.width - viewport.offset.x) * viewport.zoom),
+      );
+      const bottom = Math.min(
+        height,
+        Math.ceil((bounds.y + bounds.height - viewport.offset.y) * viewport.zoom),
+      );
+      if (right <= x || bottom <= y) return;
+      minimumX = Math.min(minimumX, x);
+      minimumY = Math.min(minimumY, y);
+      maximumX = Math.max(maximumX, right);
+      maximumY = Math.max(maximumY, bottom);
+    };
+    if (includeAnimatingItems) {
+      for (const item of animatingItems) include(item);
+    }
+    for (const item of dragItems) include(item);
+
+    const current = this.#actionBlurCurrentDynamicSourceRegion;
+    const hasCurrent = maximumX > minimumX && maximumY > minimumY;
+    if (hasCurrent) {
+      current.x = minimumX;
+      current.y = minimumY;
+      current.width = maximumX - minimumX;
+      current.height = maximumY - minimumY;
+    }
+
+    const refresh = this.#actionBlurDynamicSourceRefreshRegion;
+    if (hasCurrent && this.#hasPreviousActionBlurDynamicSourceRegion) {
+      const previous = this.#actionBlurPreviousDynamicSourceRegion;
+      refresh.x = Math.min(current.x, previous.x);
+      refresh.y = Math.min(current.y, previous.y);
+      const right = Math.max(current.x + current.width, previous.x + previous.width);
+      const bottom = Math.max(current.y + current.height, previous.y + previous.height);
+      refresh.width = right - refresh.x;
+      refresh.height = bottom - refresh.y;
+    } else if (hasCurrent) {
+      this.#copyWlurPixelRegion(current, refresh);
+    } else if (this.#hasPreviousActionBlurDynamicSourceRegion) {
+      this.#copyWlurPixelRegion(this.#actionBlurPreviousDynamicSourceRegion, refresh);
+    } else {
+      return null;
+    }
+
+    if (hasCurrent) {
+      this.#copyWlurPixelRegion(current, this.#actionBlurPreviousDynamicSourceRegion);
+      this.#hasPreviousActionBlurDynamicSourceRegion = true;
+    } else {
+      this.#hasPreviousActionBlurDynamicSourceRegion = false;
+    }
+    return refresh;
+  }
+
+  #updateWlurDynamicSourceRefreshRegion(
+    actionItems: readonly CompositionDrawItem[],
+    dragItems: readonly CompositionDrawItem[],
+    viewport: Viewport,
+    width: number,
+    height: number,
+    devicePixelRatio: number,
+  ): WlurPixelRegion | null {
+    let minimumX = width;
+    let minimumY = height;
+    let maximumX = 0;
+    let maximumY = 0;
+    const effectPadding =
+      Math.ceil(Math.max(overlapConfig.rgbSplit, overlapConfig.wakeWidth) * devicePixelRatio) + 2;
+    const include = (item: CompositionDrawItem) => {
+      const bounds = this.#setWlurDrawItemBounds(item, viewport.zoom);
+      minimumX = Math.min(
+        minimumX,
+        Math.min(
+          width,
+          Math.max(0, Math.floor((bounds.x - viewport.offset.x) * viewport.zoom) - effectPadding),
+        ),
+      );
+      minimumY = Math.min(
+        minimumY,
+        Math.min(
+          height,
+          Math.max(0, Math.floor((bounds.y - viewport.offset.y) * viewport.zoom) - effectPadding),
+        ),
+      );
+      maximumX = Math.max(
+        maximumX,
+        Math.min(
+          width,
+          Math.max(
+            0,
+            Math.ceil((bounds.x + bounds.width - viewport.offset.x) * viewport.zoom) +
+              effectPadding,
+          ),
+        ),
+      );
+      maximumY = Math.max(
+        maximumY,
+        Math.min(
+          height,
+          Math.max(
+            0,
+            Math.ceil((bounds.y + bounds.height - viewport.offset.y) * viewport.zoom) +
+              effectPadding,
+          ),
+        ),
+      );
+    };
+    for (const item of actionItems) include(item);
+    for (const item of dragItems) include(item);
+
+    const current = this.#wlurCurrentDynamicSourceRegion;
+    const hasCurrent = maximumX > minimumX && maximumY > minimumY;
+    if (hasCurrent) {
+      current.x = minimumX;
+      current.y = minimumY;
+      current.width = maximumX - minimumX;
+      current.height = maximumY - minimumY;
+    }
+
+    const refresh = this.#wlurDynamicSourceRefreshRegion;
+    if (hasCurrent && this.#hasPreviousWlurDynamicSourceRegion) {
+      const previous = this.#wlurPreviousDynamicSourceRegion;
+      refresh.x = Math.min(current.x, previous.x);
+      refresh.y = Math.min(current.y, previous.y);
+      const right = Math.max(current.x + current.width, previous.x + previous.width);
+      const bottom = Math.max(current.y + current.height, previous.y + previous.height);
+      refresh.width = right - refresh.x;
+      refresh.height = bottom - refresh.y;
+    } else if (hasCurrent) {
+      this.#copyWlurPixelRegion(current, refresh);
+    } else if (this.#hasPreviousWlurDynamicSourceRegion) {
+      this.#copyWlurPixelRegion(this.#wlurPreviousDynamicSourceRegion, refresh);
+    } else return null;
+
+    if (hasCurrent) {
+      this.#copyWlurPixelRegion(current, this.#wlurPreviousDynamicSourceRegion);
+      this.#hasPreviousWlurDynamicSourceRegion = true;
+    } else this.#hasPreviousWlurDynamicSourceRegion = false;
+    return refresh;
+  }
+
+  #copyWlurPixelRegion(source: WlurPixelRegion, output: WlurPixelRegion): WlurPixelRegion {
+    output.x = source.x;
+    output.y = source.y;
+    output.width = source.width;
+    output.height = source.height;
+    return output;
+  }
+
+  #intersectWlurPixelRegions(
+    a: WlurPixelRegion,
+    b: WlurPixelRegion,
+    output: WlurPixelRegion,
+  ): WlurPixelRegion | null {
+    const x = Math.max(a.x, b.x);
+    const y = Math.max(a.y, b.y);
+    const right = Math.min(a.x + a.width, b.x + b.width);
+    const bottom = Math.min(a.y + a.height, b.y + b.height);
+    if (right <= x || bottom <= y) return null;
+    output.x = x;
+    output.y = y;
+    output.width = right - x;
+    output.height = bottom - y;
+    return output;
+  }
+
+  #wlurPixelRegionsIntersect(a: WlurPixelRegion, b: WlurPixelRegion): boolean {
+    return (
+      a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
+    );
+  }
+
+  #drawItemsIntersectBoundsExcludingLocal(
+    items: readonly CompositionDrawItem[],
+    bounds: Bounds,
+    viewportZoom: number,
+    actionItems: readonly CompositionDrawItem[],
+    dragItems: readonly CompositionDrawItem[],
+  ): boolean {
+    itemLoop: for (const item of items) {
+      for (const actionItem of actionItems) {
+        if (item === actionItem) continue itemLoop;
+      }
+      for (const dragItem of dragItems) {
+        if (item === dragItem) continue itemLoop;
+      }
+      if (boundsIntersect(this.#setWlurDrawItemBounds(item, viewportZoom), bounds)) return true;
+    }
+    return false;
+  }
+
+  #drawItemListsIntersect(
+    items: readonly CompositionDrawItem[],
+    candidates: readonly CompositionDrawItem[],
+  ): boolean {
+    for (const item of items) {
+      for (const candidate of candidates) {
+        if (item === candidate) return true;
+      }
+    }
+    return false;
+  }
+
+  #setWlurDrawItemBounds(item: CompositionDrawItem, viewportZoom: number): Bounds {
+    const entity = item.entity;
+    const width = entity.size.width * item.visualScale;
+    const height = entity.size.height * item.visualScale;
+    const itemPosition = this.#wlurItemPosition;
+    const itemSize = this.#wlurItemSize;
+    itemPosition.x = entity.position.x + item.offsetX + (entity.size.width - width) * 0.5;
+    itemPosition.y = entity.position.y + item.offsetY + (entity.size.height - height) * 0.5;
+    itemSize.width = width;
+    itemSize.height = height;
+    const bounds = this.#wlurItemBounds;
+    getRotatedAABB(itemPosition, itemSize, entity.rotation, bounds);
+    const borderWorld = 4 / viewportZoom;
+    bounds.x -= borderWorld;
+    bounds.y -= borderWorld;
+    bounds.width += borderWorld * 2;
+    bounds.height += borderWorld * 2;
+    return bounds;
+  }
+
+  #encodeWlurInvalidationDebug(options: {
+    encoder: GPUCommandEncoder;
+    targetView: GPUTextureView;
+    viewport: Viewport;
+    width: number;
+    height: number;
+    outputDependencyBounds: Bounds | null;
+    lensDependencyBounds: Bounds | null;
+    partialRefreshRegion: WlurPixelRegion | null;
+    globalDirty: boolean;
+    animatingDrawItems: readonly CompositionDrawItem[];
+    actionLayerDrawItems: readonly CompositionDrawItem[];
+    dragVisualDrawItems: readonly CompositionDrawItem[];
+  }): void {
+    if (!this.#wlurInvalidationDebugEnabled) return;
+    const debugPass = this.#ensureWlurInvalidationDebugPass();
+    if (!debugPass) return;
+    debugPass.beginFrame();
+    if (options.outputDependencyBounds) {
+      debugPass.addBounds(options.outputDependencyBounds, WLUR_INVALIDATION_DEBUG_COLORS.source);
+    }
+    if (options.lensDependencyBounds) {
+      const lensBounds = this.#wlurDebugLensBounds;
+      lensBounds.x = options.lensDependencyBounds.x;
+      lensBounds.y = options.lensDependencyBounds.y;
+      lensBounds.width = options.lensDependencyBounds.width;
+      lensBounds.height = options.lensDependencyBounds.height;
+      const inset = 3 / options.viewport.zoom;
+      lensBounds.x += inset;
+      lensBounds.y += inset;
+      lensBounds.width -= inset * 2;
+      lensBounds.height -= inset * 2;
+      debugPass.addBounds(lensBounds, WLUR_INVALIDATION_DEBUG_COLORS.lens);
+    }
+    if (options.partialRefreshRegion) {
+      debugPass.addBounds(
+        this.#setWlurDependencyWorldBounds(
+          options.partialRefreshRegion,
+          options.viewport,
+          this.#wlurDebugPartialBounds,
+        ),
+        WLUR_INVALIDATION_DEBUG_COLORS.partial,
+      );
+    }
+
+    getViewportWorldBounds(
+      options.viewport,
+      options.width,
+      options.height,
+      0,
+      this.#wlurDebugViewportBounds,
+    );
+    if (options.globalDirty) {
+      debugPass.addBounds(this.#wlurDebugViewportBounds, WLUR_INVALIDATION_DEBUG_COLORS.global);
+    }
+    this.#addWlurInvalidationDrawItems(
+      debugPass,
+      options.animatingDrawItems,
+      options.viewport.zoom,
+      WLUR_INVALIDATION_DEBUG_COLORS.animated,
+    );
+    this.#addWlurInvalidationDrawItems(
+      debugPass,
+      options.actionLayerDrawItems,
+      options.viewport.zoom,
+      WLUR_INVALIDATION_DEBUG_COLORS.action,
+    );
+    this.#addWlurInvalidationDrawItems(
+      debugPass,
+      options.dragVisualDrawItems,
+      options.viewport.zoom,
+      WLUR_INVALIDATION_DEBUG_COLORS.drag,
+    );
+    if (
+      this.#entityLabelPass?.isAnimating &&
+      this.#entityLabelPass.getDrawnBounds(this.#wlurDebugLabelBounds)
+    ) {
+      debugPass.addBounds(this.#wlurDebugLabelBounds, WLUR_INVALIDATION_DEBUG_COLORS.label);
+    }
+    debugPass.encode(options.encoder, options.targetView);
+  }
+
+  #addWlurInvalidationDrawItems(
+    debugPass: WlurInvalidationDebugPass,
+    items: readonly CompositionDrawItem[],
+    viewportZoom: number,
+    color: WlurInvalidationDebugColor,
+  ): void {
+    for (const item of items) {
+      debugPass.addBounds(this.#setWlurDrawItemBounds(item, viewportZoom), color);
+    }
+  }
+
+  #ensureWlurInvalidationDebugPass(): WlurInvalidationDebugPass | null {
+    if (!this.#device || !this.#viewportUniforms) return null;
+    this.#wlurInvalidationDebugPass ??= new WlurInvalidationDebugPass(
+      this.#device,
+      this.#canvasFormat,
+      this.#viewportUniforms.buffer,
+    );
+    return this.#wlurInvalidationDebugPass;
   }
 
   setActionLayerTint(color: [number, number, number]): void {
     this.#actionLayerBlurPass?.setTint(color);
+    this.#wlurOverlayPass?.invalidateCache();
   }
 
   setSelectionRectConfig(
@@ -758,10 +1637,16 @@ export class InfiniteCanvasRenderer {
     multiSelectBox: typeof config.multiSelectBoundingBox.light,
   ): void {
     this.#selectionRectPass?.setConfig(selectionRect, multiSelectBox);
+    this.#wlurOverlayPass?.invalidateCache();
   }
 
   setWlurOverlay(config: WlurOverlayConfig | null): void {
     this.#wlurOverlayPass?.setConfig(config);
+  }
+
+  setWlurInvalidationDebug(enabled: boolean): void {
+    this.#wlurInvalidationDebugEnabled = enabled;
+    if (enabled) this.#ensureWlurInvalidationDebugPass();
   }
 
   setViewportLensDistortion(config: ViewportLensDistortionConfig): void {
@@ -1040,6 +1925,8 @@ export class InfiniteCanvasRenderer {
     this.#canvasCalloutPass = null;
     this.#canvasDebugPass?.destroy();
     this.#canvasDebugPass = null;
+    this.#wlurInvalidationDebugPass?.destroy();
+    this.#wlurInvalidationDebugPass = null;
 
     this.#wlurOverlayPass?.destroy();
     this.#wlurOverlayPass = null;

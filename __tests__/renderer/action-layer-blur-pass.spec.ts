@@ -11,8 +11,10 @@ describe("ActionLayerBlurPass", () => {
 
   afterAll(() => vi.unstubAllGlobals());
 
-  test("samples the bindable scene texture without a full-resolution copy", () => {
-    const outputTexture = createTexture();
+  test("reuses a dedicated blur pyramid while the backdrop stays unchanged", () => {
+    const mipTextures = Array.from({ length: 7 }, createTexture);
+    const downsampleMipChain = mipTextures.slice(0, 4);
+    const upsampleMipChain = mipTextures.slice(4);
     const renderPass = {
       setPipeline: vi.fn<GPURenderPassEncoder["setPipeline"]>(),
       setBindGroup: vi.fn<GPURenderPassEncoder["setBindGroup"]>(),
@@ -23,16 +25,24 @@ describe("ActionLayerBlurPass", () => {
       copyTextureToTexture: vi.fn<GPUCommandEncoder["copyTextureToTexture"]>(),
       beginRenderPass: vi.fn<GPUCommandEncoder["beginRenderPass"]>(() => renderPass),
     } as unknown as GPUCommandEncoder;
-    const device = createDevice(outputTexture);
+    const device = createDevice(mipTextures);
     const pass = new ActionLayerBlurPass({
       device,
       canvasFormat: "rgba16float",
       intermediateFormat: "rgba16float",
       tintColor: [0, 0, 0],
     });
+    expect(pass.sourceDependencyPaddingPx).toBe(196);
     const sourceTexture = createTexture();
     const processingPipeline = {
-      encodeFullScreenBlur: vi.fn<ProcessingPipeline["encodeFullScreenBlur"]>(),
+      encodeFullScreenBlurPyramid: vi.fn<ProcessingPipeline["encodeFullScreenBlurPyramid"]>(
+        (_encoder, _source, _width, _height, downsample, upsample, refreshRegion) => ({
+          texture: upsample[0] ?? downsample[0]!,
+          updatedPixels: refreshRegion ? 100 : 200,
+          fullPixels: 200,
+          partial: refreshRegion !== undefined,
+        }),
+      ),
     } as unknown as ProcessingPipeline;
     const options = {
       encoder,
@@ -46,28 +56,78 @@ describe("ActionLayerBlurPass", () => {
     };
 
     pass.encode(options);
+    expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
     expect(encoder.copyTextureToTexture).not.toHaveBeenCalled();
-    expect(processingPipeline.encodeFullScreenBlur).toHaveBeenCalledWith(
+    expect(processingPipeline.encodeFullScreenBlurPyramid).toHaveBeenCalledWith(
       encoder,
       sourceTexture,
-      outputTexture,
       3840,
       2160,
+      downsampleMipChain,
+      upsampleMipChain,
+      undefined,
     );
-    expect(device.createTexture).toHaveBeenCalledOnce();
+    expect(encoder.beginRenderPass).toHaveBeenCalledOnce();
+    expect(pass.getStats()).toEqual({
+      composites: 1,
+      pyramidRefreshes: 1,
+      partialPyramidRefreshes: 0,
+      pyramidReuses: 0,
+      blurPixels: 200,
+      fullBlurPixels: 200,
+      residentBytes: 43_804_800,
+    });
 
     options.contentDirty = false;
     pass.encode(options);
-    expect(processingPipeline.encodeFullScreenBlur).toHaveBeenCalledOnce();
+    pass.encode(options);
+    expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
+    expect(processingPipeline.encodeFullScreenBlurPyramid).toHaveBeenCalledOnce();
+    expect(encoder.beginRenderPass).toHaveBeenCalledTimes(3);
+    expect(pass.getStats()).toEqual({
+      composites: 3,
+      pyramidRefreshes: 1,
+      partialPyramidRefreshes: 0,
+      pyramidReuses: 2,
+      blurPixels: 200,
+      fullBlurPixels: 200,
+      residentBytes: 43_804_800,
+    });
+
+    options.contentDirty = true;
+    const refreshRegion = { x: 100, y: 200, width: 300, height: 400 };
+    Object.assign(options, { refreshRegion });
+    pass.encode(options);
+    expect(processingPipeline.encodeFullScreenBlurPyramid).toHaveBeenCalledTimes(2);
+    expect(processingPipeline.encodeFullScreenBlurPyramid).toHaveBeenLastCalledWith(
+      encoder,
+      sourceTexture,
+      3840,
+      2160,
+      downsampleMipChain,
+      upsampleMipChain,
+      refreshRegion,
+    );
+    expect(pass.getStats()).toEqual({
+      composites: 4,
+      pyramidRefreshes: 2,
+      partialPyramidRefreshes: 1,
+      pyramidReuses: 2,
+      blurPixels: 300,
+      fullBlurPixels: 400,
+      residentBytes: 43_804_800,
+    });
+    expect(device.createTexture).toHaveBeenCalledTimes(7);
 
     pass.destroy();
-    expect(outputTexture.destroy).toHaveBeenCalledOnce();
+    for (const texture of mipTextures) expect(texture.destroy).toHaveBeenCalledOnce();
   });
 });
 
-function createDevice(outputTexture: GPUTexture): GPUDevice & {
+function createDevice(mipTextures: GPUTexture[]): GPUDevice & {
   createTexture: ReturnType<typeof vi.fn<GPUDevice["createTexture"]>>;
 } {
+  let textureIndex = 0;
   return {
     queue: { writeBuffer: vi.fn<GPUQueue["writeBuffer"]>() },
     createShaderModule: vi.fn<GPUDevice["createShaderModule"]>(() => ({}) as GPUShaderModule),
@@ -80,7 +140,7 @@ function createDevice(outputTexture: GPUTexture): GPUDevice & {
     createSampler: vi.fn<GPUDevice["createSampler"]>(() => ({}) as GPUSampler),
     createPipelineLayout: vi.fn<GPUDevice["createPipelineLayout"]>(() => ({}) as GPUPipelineLayout),
     createRenderPipeline: vi.fn<GPUDevice["createRenderPipeline"]>(() => ({}) as GPURenderPipeline),
-    createTexture: vi.fn<GPUDevice["createTexture"]>(() => outputTexture),
+    createTexture: vi.fn<GPUDevice["createTexture"]>(() => mipTextures[textureIndex++]!),
     createBindGroup: vi.fn<GPUDevice["createBindGroup"]>(() => ({}) as GPUBindGroup),
   } as unknown as GPUDevice & {
     createTexture: ReturnType<typeof vi.fn<GPUDevice["createTexture"]>>;

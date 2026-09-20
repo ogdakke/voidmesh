@@ -1,16 +1,24 @@
+import { hasDeletionEffects, resolveFancyEffectsPreference } from "#lib/fancy-effects.ts";
+import type { FancyEffects } from "#types/fancy-effects.ts";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   CanvasCommandsContext,
   CanvasInteractionContext,
   CanvasMediaContext,
+  CanvasPerformanceContext,
   CanvasRendererContext,
   DebugType,
   type CanvasCommands,
   type CanvasRendererService,
+  type CanvasPerformanceService,
   type AddEntityOptions,
 } from "./use-canvas.ts";
 import { createCanvasInteractionService } from "#application/canvas/canvas-interaction.ts";
 import { createCanvasMediaService } from "#application/canvas/canvas-media.ts";
+import {
+  createActionLayerBenchmarkService,
+  DEFAULT_ACTION_LAYER_BENCHMARK_CONFIG,
+} from "#application/canvas/action-layer-benchmark.ts";
 import {
   useQueryState,
   parseAsBoolean,
@@ -79,6 +87,7 @@ import {
 } from "#lib/media-duplication.ts";
 import { tracePerformancePhase } from "#lib/performance-tracing.ts";
 import { config, glassKindResets, glitchKindResets } from "#config";
+import { overlapConfig } from "#lib/config/overlap.config.ts";
 import { preferences } from "#lib/preferences.ts";
 import { paletteStore } from "#lib/palette-store.ts";
 import { analytics } from "#lib/analytics.ts";
@@ -108,6 +117,7 @@ const createPerfGraphRenderer = (
   format: GPUTextureFormat,
   colorSpace: PredefinedColorSpace,
 ) => new PerfGraphRenderer(canvas, device, format, colorSpace);
+const getPerformanceBenchmarkTime = () => performance.now();
 
 function formatErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
@@ -317,16 +327,24 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     canvasStore.setDebugView(import.meta.env.DEV && isCanvasDebugType ? debugType : "none");
   }, [debugType, debug, isCanvasDebugType]);
 
+  const fancyEffectsRevision = useRef(0);
+
   // Hydrate persisted preferences on mount
   useEffect(() => {
     preferences.getSnapToGrid().then((v) => canvasStore.setSnapToGrid(v));
-    preferences.getFancyDelete().then((v) => {
+    const revision = fancyEffectsRevision.current;
+    let cancelled = false;
+    preferences.getFancyEffects().then((v) => {
+      if (cancelled || revision !== fancyEffectsRevision.current) return;
       const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      canvasStore.setFancyDelete(v ?? !reduced);
+      canvasStore.setFancyEffects(resolveFancyEffectsPreference(v, reduced));
     });
     preferences.getHaptics().then((v) => canvasStore.setHaptics(v));
     preferences.getCanvasLensing().then((v) => canvasStore.setCanvasLensing(v));
     preferences.getCustomPalettes().then((palettes) => paletteStore.setPalettes(palettes));
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Helper: Build shader params from URL state
@@ -530,6 +548,108 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   // Renderer reference for cleanup
   const rendererRef = useRef<InfiniteCanvasRenderer | null>(null);
   const [rendererState, setRendererState] = useState<InfiniteCanvasRenderer | null>(null);
+  // Keep a running benchmark stable across unrelated provider renders.
+  // oxlint-disable-next-line voidmesh-react-compiler/no-manual-memoization
+  const performanceService = useMemo<CanvasPerformanceService>(() => {
+    const benchmark = createActionLayerBenchmarkService(
+      {
+        now: getPerformanceBenchmarkTime,
+        observeFrames: (observer) => perfOverlay.observeFrames(observer),
+        getSelectedEntityIds: () => canvasStore.getState().selectedEntityIds,
+        getTouchOrigin: () => {
+          const snapshot = canvasStore.getActionLayerSnapshot();
+          const hasRecordedPoint =
+            snapshot.version > 0 && (snapshot.touchOrigin.x !== 0 || snapshot.touchOrigin.y !== 0);
+          return hasRecordedPoint ? snapshot.touchOrigin : null;
+        },
+        getWorkload: () => {
+          const state = canvasStore.getState();
+          const renderer = rendererState;
+          if (!renderer?.isReady) throw new Error("The canvas renderer is not ready");
+          let visibleEntityCount = 0;
+          let imageCount = 0;
+          let svgCount = 0;
+          let videoCount = 0;
+          let playingVideoCount = 0;
+          let gifCount = 0;
+          let playingGifCount = 0;
+          for (const entity of state.entities.values()) {
+            if (renderer.isEntityVisible(entity, state.viewport)) visibleEntityCount++;
+            switch (entity.mediaSource.type) {
+              case MediaType.image:
+                imageCount++;
+                break;
+              case MediaType.svg:
+                svgCount++;
+                break;
+              case MediaType.video:
+                videoCount++;
+                if (entity.playback?.isPlaying) playingVideoCount++;
+                break;
+              case MediaType.gif:
+                gifCount++;
+                if (entity.playback?.isPlaying) playingGifCount++;
+                break;
+            }
+          }
+          return {
+            selectedEntityIds: [...state.selectedEntityIds],
+            entityCount: state.entities.size,
+            visibleEntityCount,
+            selectedEntityCount: state.selectedEntityIds.size,
+            imageCount,
+            svgCount,
+            videoCount,
+            playingVideoCount,
+            gifCount,
+            playingGifCount,
+          };
+        },
+        getEnvironment: () => ({
+          benchmarkLabel: new URLSearchParams(window.location.search).get("benchLabel"),
+          url: window.location.href,
+          userAgent: navigator.userAgent,
+          hardwareConcurrency: navigator.hardwareConcurrency || null,
+          devicePixelRatio: window.devicePixelRatio,
+          viewportCssWidth: window.innerWidth,
+          viewportCssHeight: window.innerHeight,
+          displayP3: window.matchMedia("(color-gamut: p3)").matches,
+          documentVisible: document.visibilityState === "visible",
+        }),
+        getResourceStats: () => {
+          const renderer = rendererState;
+          if (!renderer?.isReady) throw new Error("The canvas renderer is not ready");
+          return renderer.getResourceStats();
+        },
+        getActiveActionLayerEntityIds: () => {
+          const snapshot = canvasStore.getActionLayerSnapshot();
+          return snapshot.active ? snapshot.entityIds : null;
+        },
+        press: (touchOrigin, eventTime) => interaction.touchStart([touchOrigin], eventTime),
+        release: (eventTime) => interaction.touchEnd([], false, eventTime),
+        reset: () => {
+          interaction.touchEnd([], true, getPerformanceBenchmarkTime());
+          actionLayerController.cancel();
+          canvasStore.setActionLayerActive(false);
+        },
+        setDetailedFrameInstrumentation: (enabled) => {
+          rendererState?.setDetailedFrameInstrumentation(enabled);
+        },
+      },
+      {
+        ...DEFAULT_ACTION_LAYER_BENCHMARK_CONFIG,
+        longPressDelayMs: config.touch.longPressDelay,
+        activeMs:
+          Math.max(overlapConfig.transition, config.actionLayer.blurFadeInMs) +
+          1000 / DEFAULT_ACTION_LAYER_BENCHMARK_CONFIG.targetFps,
+      },
+    );
+    return {
+      runActionLayerBenchmark: () => benchmark.run(),
+      cancelActionLayerBenchmark: () => benchmark.cancel(),
+      isActionLayerBenchmarkRunning: () => benchmark.running,
+    };
+  }, [interaction, rendererState]);
   const [colorSpace, setColorSpace] = useState<ColorSpace>(ColorSpace.srgb);
   const colorSpaceRef = useRef<ColorSpace>(ColorSpace.srgb);
   useEffect(() => {
@@ -722,7 +842,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
     // Snapshot the entity's rendered texture and start dust animation overlay.
     // This copies the GPU texture so the entity can be removed immediately.
-    if (canvasStore.getState().fancyDelete) {
+    if (hasDeletionEffects(canvasStore.getState().fancyEffects)) {
       // Selected drags stay transient until touch release. The delete-zone listener
       // runs before that release, so place the overlay at the rendered drag position.
       const position = canvasStore.getEntityPositionWithTransientDrag(entity.id) ?? entity.position;
@@ -772,7 +892,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     const entityIds = new Set<string>();
     const renderer = rendererRef.current;
     const animate =
-      canvasStore.getState().fancyDelete &&
+      hasDeletionEffects(canvasStore.getState().fancyEffects) &&
       entities.length <= config.canvas.fancyDeleteMaxBatchSize;
 
     for (let index = 0; index < entities.length; index++) {
@@ -1951,9 +2071,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     preferences.setSnapToGrid(enabled);
   };
 
-  const setFancyDeletePreference = (enabled: boolean) => {
-    canvasStore.setFancyDelete(enabled);
-    preferences.setFancyDelete(enabled);
+  const setFancyEffectsPreference = (value: FancyEffects) => {
+    fancyEffectsRevision.current++;
+    canvasStore.setFancyEffects(value);
+    preferences.setFancyEffects(value);
   };
 
   const setHapticsPreference = (enabled: boolean) => {
@@ -2184,7 +2305,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     pasteEffects,
     resetSelectionToDefaults,
     setSnapToGrid: setSnapToGridPreference,
-    setFancyDelete: setFancyDeletePreference,
+    setFancyEffects: setFancyEffectsPreference,
     setHaptics: setHapticsPreference,
     setCanvasLensing: setCanvasLensingPreference,
     changeSize,
@@ -2233,7 +2354,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       pasteEffects,
       resetSelectionToDefaults,
       setSnapToGrid: setSnapToGridPreference,
-      setFancyDelete: setFancyDeletePreference,
+      setFancyEffects: setFancyEffectsPreference,
       setHaptics: setHapticsPreference,
       setCanvasLensing: setCanvasLensingPreference,
       changeSize,
@@ -2284,7 +2405,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     pasteEffects: () => commandsImplRef.current.pasteEffects(),
     resetSelectionToDefaults: () => commandsImplRef.current.resetSelectionToDefaults(),
     setSnapToGrid: (...args) => commandsImplRef.current.setSnapToGrid(...args),
-    setFancyDelete: (...args) => commandsImplRef.current.setFancyDelete(...args),
+    setFancyEffects: (...args) => commandsImplRef.current.setFancyEffects(...args),
     setHaptics: (...args) => commandsImplRef.current.setHaptics(...args),
     setCanvasLensing: (...args) => commandsImplRef.current.setCanvasLensing(...args),
     changeSize: (...args) => commandsImplRef.current.changeSize(...args),
@@ -2400,9 +2521,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     <CanvasCommandsContext.Provider value={commands}>
       <CanvasInteractionContext.Provider value={interaction}>
         <CanvasMediaContext.Provider value={media}>
-          <CanvasRendererContext.Provider value={rendererService}>
-            {children}
-          </CanvasRendererContext.Provider>
+          <CanvasPerformanceContext.Provider value={performanceService}>
+            <CanvasRendererContext.Provider value={rendererService}>
+              {children}
+            </CanvasRendererContext.Provider>
+          </CanvasPerformanceContext.Provider>
         </CanvasMediaContext.Provider>
       </CanvasInteractionContext.Provider>
     </CanvasCommandsContext.Provider>
