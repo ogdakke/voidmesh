@@ -163,6 +163,7 @@ export function createMockVideoElement(options?: {
 
   const video: Record<string, unknown> = {
     src: "",
+    srcObject: null,
     currentTime: 0,
     duration,
     videoWidth,
@@ -177,6 +178,12 @@ export function createMockVideoElement(options?: {
       this.paused = true;
     },
     load: function () {},
+    getAttribute: function (name: string) {
+      return name === "src" ? this.src : null;
+    },
+    removeAttribute: function (name: string) {
+      if (name === "src") this.src = "";
+    },
     addEventListener: () => {},
     removeEventListener: () => {},
   };

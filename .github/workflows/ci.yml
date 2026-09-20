@@ -10,6 +10,8 @@ jobs:
   checks:
     name: Checks
     runs-on: ubuntu-latest
+    env:
+      CI: true
     steps:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2

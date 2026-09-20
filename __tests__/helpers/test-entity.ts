@@ -221,6 +221,7 @@ function createMockVideoElement(options: {
 
   const video = {
     src: "blob:mock-video",
+    srcObject: null,
     currentTime: 0,
     duration: options.duration,
     videoWidth: options.videoWidth,
@@ -252,6 +253,14 @@ function createMockVideoElement(options: {
     },
 
     load: function () {},
+
+    getAttribute: function (name: string) {
+      return name === "src" ? this.src : null;
+    },
+
+    removeAttribute: function (name: string) {
+      if (name === "src") this.src = "";
+    },
 
     addEventListener: function (
       type: string,
