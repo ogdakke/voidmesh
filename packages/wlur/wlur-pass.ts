@@ -103,6 +103,10 @@ export class WlurPass {
   readonly #blurUniformData = new Float32Array(12);
   readonly #compositeUniformData = new Float32Array(12);
   readonly #noiseUniformData = new Float32Array(8);
+  readonly #blurXUniformCache = new Float32Array(12).fill(Number.NaN);
+  readonly #blurYUniformCache = new Float32Array(12).fill(Number.NaN);
+  readonly #compositeUniformCache = new Float32Array(12).fill(Number.NaN);
+  readonly #noiseUniformCache = new Float32Array(8).fill(Number.NaN);
   #blurPixels = 0;
   #fullBlurPixels = 0;
 
@@ -421,6 +425,8 @@ export class WlurPass {
       size: 48,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
+    this.#blurXUniformCache.fill(Number.NaN);
+    this.#blurYUniformCache.fill(Number.NaN);
 
     const blurPipelineLayout = this.#device.createPipelineLayout({
       label: `${this.#label} blur pipeline layout`,
@@ -503,6 +509,7 @@ export class WlurPass {
       size: 48,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
+    this.#compositeUniformCache.fill(Number.NaN);
 
     this.#compositePipeline = this.#device.createRenderPipeline({
       label: `${this.#label} composite pipeline`,
@@ -557,6 +564,7 @@ export class WlurPass {
       size: 32,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
+    this.#noiseUniformCache.fill(Number.NaN);
 
     this.#noisePipeline = this.#device.createRenderPipeline({
       label: `${this.#label} noise pipeline`,
@@ -679,7 +687,11 @@ export class WlurPass {
     data[9] = 0;
     data[10] = 0;
     data[11] = 0;
-    this.#device.queue.writeBuffer(buffer, 0, data);
+    this.#writeUniformBufferIfChanged(
+      buffer,
+      data,
+      buffer === this.#blurXUniformBuffer ? this.#blurXUniformCache : this.#blurYUniformCache,
+    );
   }
 
   #writeCompositeUniforms(
@@ -705,7 +717,11 @@ export class WlurPass {
     data[9] = tintColor?.[1] ?? 0;
     data[10] = tintColor?.[2] ?? 0;
     data[11] = tintAmount;
-    this.#device.queue.writeBuffer(this.#compositeUniformBuffer!, 0, data);
+    this.#writeUniformBufferIfChanged(
+      this.#compositeUniformBuffer!,
+      data,
+      this.#compositeUniformCache,
+    );
   }
 
   #writeNoiseUniforms(
@@ -725,7 +741,17 @@ export class WlurPass {
     data[5] = interpolation;
     data[6] = directionIndex;
     data[7] = 0;
-    this.#device.queue.writeBuffer(this.#noiseUniformBuffer!, 0, data);
+    this.#writeUniformBufferIfChanged(this.#noiseUniformBuffer!, data, this.#noiseUniformCache);
+  }
+
+  #writeUniformBufferIfChanged(buffer: GPUBuffer, data: Float32Array, cached: Float32Array): void {
+    for (let i = 0; i < data.length; i++) {
+      if (data[i] !== cached[i]) {
+        this.#device.queue.writeBuffer(buffer, 0, data);
+        cached.set(data);
+        return;
+      }
+    }
   }
 
   #getTextureView(texture: GPUTexture): GPUTextureView {

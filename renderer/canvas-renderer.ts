@@ -216,6 +216,7 @@ export class InfiniteCanvasRenderer {
   #lastRenderTime = 0;
   #lastEntityCount = 0;
   #lastRenderedCount = 0;
+  #detailedFrameInstrumentation = false;
   readonly #lastPhaseStats = {
     setupMs: 0,
     prepareMs: 0,
@@ -224,6 +225,16 @@ export class InfiniteCanvasRenderer {
     visibleEntityPreparationMs: 0,
     encodeMs: 0,
     submitMs: 0,
+    frameSetupMs: 0,
+    swapchainAcquireMs: 0,
+    gridMs: 0,
+    sceneCompositionMs: 0,
+    actionBlurMs: 0,
+    sharpRestoreMs: 0,
+    actionForegroundMs: 0,
+    auxiliaryOverlaysMs: 0,
+    lensMs: 0,
+    wlurMs: 0,
   };
   #hasLastLodViewport = false;
   #lastLodZoom = 0;
@@ -274,6 +285,10 @@ export class InfiniteCanvasRenderer {
       renderedCount: this.#lastRenderedCount,
       phases: this.#lastPhaseStats,
     };
+  }
+
+  setDetailedFrameInstrumentation(enabled: boolean): void {
+    this.#detailedFrameInstrumentation = enabled;
   }
 
   /** Snapshot of GPU texture residency and cumulative allocation churn. */
@@ -567,6 +582,16 @@ export class InfiniteCanvasRenderer {
     this.#protectedFullSceneTextureOwners.clear();
 
     const renderStart = performance.now();
+    this.#lastPhaseStats.frameSetupMs = 0;
+    this.#lastPhaseStats.swapchainAcquireMs = 0;
+    this.#lastPhaseStats.gridMs = 0;
+    this.#lastPhaseStats.sceneCompositionMs = 0;
+    this.#lastPhaseStats.actionBlurMs = 0;
+    this.#lastPhaseStats.sharpRestoreMs = 0;
+    this.#lastPhaseStats.actionForegroundMs = 0;
+    this.#lastPhaseStats.auxiliaryOverlaysMs = 0;
+    this.#lastPhaseStats.lensMs = 0;
+    this.#lastPhaseStats.wlurMs = 0;
     const frameDt = this.#lastFrameTime > 0 ? (renderStart - this.#lastFrameTime) / 1000 : 1 / 60;
     this.#lastFrameTime = renderStart;
     const { entities, viewport, selectedEntityIds, debugMode } = state;
@@ -671,6 +696,7 @@ export class InfiniteCanvasRenderer {
     this.#lastPhaseStats.batchAdmissionMs = preparationPhases.batchAdmissionMs;
     this.#lastPhaseStats.spatialQueryMs = preparationPhases.spatialQueryMs;
     this.#lastPhaseStats.visibleEntityPreparationMs = preparationPhases.visibleEntityPreparationMs;
+    const frameSetupStart = this.#detailedFrameInstrumentation ? performance.now() : 0;
     const {
       entityDrawItems,
       actionLayerDrawItems,
@@ -687,7 +713,11 @@ export class InfiniteCanvasRenderer {
       fullSceneBatch?.instanceCount ?? entityDrawItems.length + actionLayerDrawItems.length,
     );
 
+    const swapchainAcquireStart = this.#detailedFrameInstrumentation ? performance.now() : 0;
     const texture = this.#context.getCurrentTexture();
+    if (this.#detailedFrameInstrumentation) {
+      this.#lastPhaseStats.swapchainAcquireMs = performance.now() - swapchainAcquireStart;
+    }
     // Skip render if swapchain texture is invalid
     if (texture.width === 0 || texture.height === 0) {
       this.#entityTexturePipeline?.flushTextureReleases();
@@ -742,18 +772,33 @@ export class InfiniteCanvasRenderer {
     if (!actionBackdropDynamicDirty) this.#hasPreviousActionBlurDynamicSourceRegion = false;
     const actionBackdropDirty =
       renderActionBlur && (actionBackdropStateChanged || actionBackdropDynamicDirty);
+    if (this.#detailedFrameInstrumentation) {
+      this.#lastPhaseStats.frameSetupMs = performance.now() - frameSetupStart;
+    }
 
     // Pass 1: Render dot grid background
+    const gridStart = this.#detailedFrameInstrumentation ? performance.now() : 0;
     this.#gridPass.encode({ encoder, targetView: sceneTargetView, viewport, width, height });
+    if (this.#detailedFrameInstrumentation) {
+      this.#lastPhaseStats.gridMs = performance.now() - gridStart;
+    }
 
     // Pass 2: Render all entities. The selected entity label is a later overlay,
     // so entity z-order cannot cover it or split composition batches.
     // Update label animation state once per frame
+    const sceneCompositionStart = this.#detailedFrameInstrumentation ? performance.now() : 0;
     this.#entityLabelPass?.beginFrame(viewport, width, height, state.dragVisual.isDragPhase);
     const fullSceneSelectedEntity =
       fullSceneBatch && fullSceneBatch.singleSelectedIndex >= 0
         ? entities[fullSceneBatch.singleSelectedIndex]
         : undefined;
+    const labelEntity = fullSceneSelectedEntity ?? singleSelectedDrawItem?.entity;
+    const renderLabelInScenePass =
+      !!labelEntity &&
+      !!this.#entityLabelPass &&
+      actionLayerDrawItems.length === 0 &&
+      !renderActionBlur &&
+      !overlapDepth;
     const entityPass = encoder.beginRenderPass({
       label: "Entity composition pass",
       ...(overlapDepth ? { depthStencilAttachment: overlapDepth } : {}),
@@ -782,11 +827,23 @@ export class InfiniteCanvasRenderer {
       if (renderActionBlur) this.#compositionPass.drawBackdropScene(entityPass, entityDrawItems);
       else this.#compositionPass.drawItems(entityPass, entityDrawItems, "scene");
     }
+    if (renderLabelInScenePass) {
+      this.#entityLabelPass!.drawLabel(
+        entityPass,
+        labelEntity!,
+        singleSelectedOffsetX,
+        singleSelectedOffsetY,
+      );
+    }
     entityPass.end();
+    if (this.#detailedFrameInstrumentation) {
+      this.#lastPhaseStats.sceneCompositionMs = performance.now() - sceneCompositionStart;
+    }
 
     // Pass 2a: Action layer blur overlay
     // Blur+dim the scene without active material, then reconstruct lower sharp
     // crossing slices at their animated depth before the final foreground slices.
+    const actionBlurStart = this.#detailedFrameInstrumentation ? performance.now() : 0;
     if (
       blurIntensity > 0.01 &&
       this.#canvasFormat === this.#colorConfig.intermediateFormat &&
@@ -807,6 +864,9 @@ export class InfiniteCanvasRenderer {
           : (actionBackdropRefreshRegion ?? undefined),
       });
     }
+    if (this.#detailedFrameInstrumentation) {
+      this.#lastPhaseStats.actionBlurMs = performance.now() - actionBlurStart;
+    }
 
     // Reset blur cache when action layer blur is no longer rendering
     if (blurIntensity <= 0.01) {
@@ -814,6 +874,7 @@ export class InfiniteCanvasRenderer {
       this.#actionBlurBackdropState = null;
       this.#hasPreviousActionBlurDynamicSourceRegion = false;
     }
+    const sharpRestoreStart = this.#detailedFrameInstrumentation ? performance.now() : 0;
     if (renderActionBlur)
       this.#compositionPass.restoreSharpScene(
         encoder,
@@ -823,12 +884,19 @@ export class InfiniteCanvasRenderer {
         viewport,
         dpr,
       );
+    if (this.#detailedFrameInstrumentation) {
+      this.#lastPhaseStats.sharpRestoreMs = performance.now() - sharpRestoreStart;
+    }
 
-    // Render final action-plane portions. Lower active material is already sharp
-    // beneath the reconstructed covers; no active material passed through blur.
-    if (actionLayerDrawItems.length > 0) {
-      const sharpPass = encoder.beginRenderPass({
-        label: "Action layer sharp entity pass",
+    // Render final action-plane portions and the selected label in one pass. Lower
+    // active material is already sharp beneath the reconstructed covers; the label
+    // remains above every entity and below later canvas overlays.
+    const actionForegroundStart = this.#detailedFrameInstrumentation ? performance.now() : 0;
+    const renderLabelInForegroundPass =
+      !!labelEntity && !!this.#entityLabelPass && !renderLabelInScenePass;
+    if (actionLayerDrawItems.length > 0 || renderLabelInForegroundPass) {
+      const foregroundPass = encoder.beginRenderPass({
+        label: "Action layer and label foreground pass",
         colorAttachments: [
           {
             view: sceneTargetView,
@@ -837,34 +905,26 @@ export class InfiniteCanvasRenderer {
           },
         ],
       });
-      this.#compositionPass.drawItems(sharpPass, actionLayerDrawItems, "action");
-      sharpPass.end();
+      if (actionLayerDrawItems.length > 0) {
+        this.#compositionPass.drawItems(foregroundPass, actionLayerDrawItems, "action");
+      }
+      if (renderLabelInForegroundPass) {
+        this.#entityLabelPass!.drawLabel(
+          foregroundPass,
+          labelEntity!,
+          singleSelectedOffsetX,
+          singleSelectedOffsetY,
+        );
+      }
+      foregroundPass.end();
+    }
+    if (this.#detailedFrameInstrumentation) {
+      this.#lastPhaseStats.actionForegroundMs = performance.now() - actionForegroundStart;
     }
 
-    // Labels are scene overlays: draw after every entity phase, but before canvas
-    // callouts, selection UI, viewport lensing, and the final progressive blur.
-    const labelEntity = fullSceneSelectedEntity ?? singleSelectedDrawItem?.entity;
-    if (labelEntity && this.#entityLabelPass) {
-      const labelPass = encoder.beginRenderPass({
-        label: "Entity label overlay pass",
-        colorAttachments: [
-          {
-            view: sceneTargetView,
-            loadOp: "load",
-            storeOp: "store",
-          },
-        ],
-      });
-      this.#entityLabelPass.drawLabel(
-        labelPass,
-        labelEntity,
-        singleSelectedOffsetX,
-        singleSelectedOffsetY,
-      );
-      labelPass.end();
-    }
-
-    // Evict label caches only after the overlay has consumed the selected entry.
+    // Labels have already been drawn after the final entity phase. Evict stale
+    // caches before later canvas overlays, viewport lensing, and progressive blur.
+    const auxiliaryOverlaysStart = this.#detailedFrameInstrumentation ? performance.now() : 0;
     this.#entityLabelPass?.endFrame(selectedEntityIds);
     if (this.#entityLabelPass?.isAnimating) hasAnimatingContent = true;
 
@@ -924,12 +984,20 @@ export class InfiniteCanvasRenderer {
         spatialIndex: state.entitySpatialIndex,
       });
     }
+    if (this.#detailedFrameInstrumentation) {
+      this.#lastPhaseStats.auxiliaryOverlaysMs = performance.now() - auxiliaryOverlaysStart;
+    }
 
+    const lensStart = this.#detailedFrameInstrumentation ? performance.now() : 0;
     const lensApplied = viewportLensTarget
       ? this.#viewportLensPass!.encode(encoder, presentationTargetView, width, height)
       : false;
+    if (this.#detailedFrameInstrumentation) {
+      this.#lastPhaseStats.lensMs = performance.now() - lensStart;
+    }
 
     // Final pass: WLUR progressive blur overlay (renders on top of everything)
+    const wlurStart = this.#detailedFrameInstrumentation ? performance.now() : 0;
     if (this.#wlurOverlayPass) {
       const presentationContentDirty =
         state.dirty ||
@@ -1064,6 +1132,9 @@ export class InfiniteCanvasRenderer {
         actionLayerDrawItems,
         dragVisualDrawItems,
       });
+    }
+    if (this.#detailedFrameInstrumentation) {
+      this.#lastPhaseStats.wlurMs = performance.now() - wlurStart;
     }
 
     const submitStart = performance.now();

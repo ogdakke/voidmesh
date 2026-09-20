@@ -178,6 +178,7 @@ describe("WlurPass resource reuse", () => {
 
     pass.encode(encoder, input, firstOutput, 800, 600, params);
     expect(device.createBindGroup).toHaveBeenCalledTimes(3);
+    expect(device.queue.writeBuffer).toHaveBeenCalledTimes(3);
     expect(beginRenderPass).toHaveBeenCalledTimes(3);
     const renderPass = beginRenderPass.mock.results[0]!.value as GPURenderPassEncoder;
     expect(renderPass.setScissorRect).toHaveBeenNthCalledWith(1, 0, 58, 400, 242);
@@ -185,12 +186,14 @@ describe("WlurPass resource reuse", () => {
     expect(pass.getStats()).toEqual({ blurPixels: 181_200, fullBlurPixels: 240_000 });
 
     pass.encode(encoder, input, firstOutput, 800, 600, params, { refreshBlur: false });
+    expect(device.queue.writeBuffer).toHaveBeenCalledTimes(3);
     expect(beginRenderPass).toHaveBeenCalledTimes(4);
     expect(pass.getStats()).toEqual({ blurPixels: 181_200, fullBlurPixels: 240_000 });
 
     pass.encode(encoder, input, firstOutput, 800, 600, params, {
       refreshRegion: { x: 100, y: 300, width: 100, height: 100 },
     });
+    expect(device.queue.writeBuffer).toHaveBeenCalledTimes(3);
     expect(beginRenderPass).toHaveBeenCalledTimes(7);
     expect(renderPass.setScissorRect).toHaveBeenNthCalledWith(3, 18, 149, 114, 52);
     expect(renderPass.setScissorRect).toHaveBeenNthCalledWith(4, 18, 118, 114, 114);

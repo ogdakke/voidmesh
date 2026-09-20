@@ -87,6 +87,12 @@ interface BlurPyramidRefreshPlan {
   fullPixels: number;
 }
 
+interface BlurUniformCacheEntry {
+  width: number;
+  height: number;
+  offset: number;
+}
+
 type BlurInputSource =
   | { kind: "texture"; texture: GPUTexture }
   | { kind: "external"; texture: GPUExternalTexture };
@@ -204,6 +210,7 @@ export class ProcessingPipeline {
   #blurUniformCursor = 0;
   #blurTextureBindGroupCache = new Map<GPUBuffer, BlurTextureBindGroupCacheEntry>();
   #blurMixBindGroupCache = new Map<GPUBuffer, BlurMixBindGroupCacheEntry>();
+  #blurUniformCache = new WeakMap<GPUBuffer, BlurUniformCacheEntry>();
   readonly #blurUniformData = new ArrayBuffer(config.rendering.blurUniformSize);
   readonly #blurUniformFloatView = new Float32Array(this.#blurUniformData);
   readonly #blurPyramidRefreshPlan: BlurPyramidRefreshPlan = {
@@ -1341,16 +1348,11 @@ export class ProcessingPipeline {
     let srcWidth = width;
     let srcHeight = height;
     for (let i = 0; i < activeLevels; i++) {
-      const floatView = this.#blurUniformFloatView;
-      floatView[0] = srcWidth; // src_resolution.x
-      floatView[1] = srcHeight; // src_resolution.y
-      floatView[2] = offset; // per-pass offset
-      floatView[3] = 0; // padding
-
-      this.#device.queue.writeBuffer(
+      this.#writeBlurUniformsIfChanged(
         uniformSet.downsample[bufferOffset + i]!,
-        0,
-        this.#blurUniformData,
+        srcWidth,
+        srcHeight,
+        offset,
       );
 
       srcWidth = Math.max(1, Math.floor(srcWidth / 2));
@@ -1361,32 +1363,22 @@ export class ProcessingPipeline {
     let bufIdx = 0;
     for (let i = activeLevels - 1; i > 0; i--) {
       const dstMip = mipChain[i - 1]!;
-      const floatView = this.#blurUniformFloatView;
-      floatView[0] = dstMip.width; // dst_resolution.x
-      floatView[1] = dstMip.height; // dst_resolution.y
-      floatView[2] = offset; // per-pass offset
-      floatView[3] = 0; // padding
-
-      this.#device.queue.writeBuffer(
+      this.#writeBlurUniformsIfChanged(
         uniformSet.upsample[bufferOffset + bufIdx]!,
-        0,
-        this.#blurUniformData,
+        dstMip.width,
+        dstMip.height,
+        offset,
       );
       bufIdx++;
     }
 
     // Final upsample uniform: mip[0] -> full resolution
     if (finalTarget) {
-      const floatView = this.#blurUniformFloatView;
-      floatView[0] = width; // dst_resolution.x (full res)
-      floatView[1] = height; // dst_resolution.y (full res)
-      floatView[2] = offset; // per-pass offset
-      floatView[3] = 0; // padding
-
-      this.#device.queue.writeBuffer(
+      this.#writeBlurUniformsIfChanged(
         uniformSet.upsample[bufferOffset + bufIdx]!,
-        0,
-        this.#blurUniformData,
+        width,
+        height,
+        offset,
       );
     }
 
@@ -1684,6 +1676,26 @@ export class ProcessingPipeline {
     });
     this.#blurTextureBindGroupCache.set(uniformBuffer, { sourceTexture, bindGroup });
     return bindGroup;
+  }
+
+  #writeBlurUniformsIfChanged(
+    buffer: GPUBuffer,
+    width: number,
+    height: number,
+    offset: number,
+  ): void {
+    const cached = this.#blurUniformCache.get(buffer);
+    if (cached?.width === width && cached.height === height && cached.offset === offset) {
+      return;
+    }
+
+    const floatView = this.#blurUniformFloatView;
+    floatView[0] = width;
+    floatView[1] = height;
+    floatView[2] = offset;
+    floatView[3] = 0;
+    this.#device.queue.writeBuffer(buffer, 0, this.#blurUniformData);
+    this.#blurUniformCache.set(buffer, { width, height, offset });
   }
 
   #getOrCreateBlurMixBindGroup(
@@ -2330,6 +2342,7 @@ export class ProcessingPipeline {
     this.#blurUniformSets.length = 0;
     this.#blurTextureBindGroupCache.clear();
     this.#blurMixBindGroupCache.clear();
+    this.#blurUniformCache = new WeakMap();
     for (const uniforms of this.#bloomUniformSets) {
       for (const buffer of uniforms.downsample) buffer.destroy();
       for (const buffer of uniforms.upsample) buffer.destroy();

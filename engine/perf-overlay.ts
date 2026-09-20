@@ -24,6 +24,16 @@ export interface FrameStats {
     visibleEntityPreparationMs: number;
     encodeMs: number;
     submitMs: number;
+    frameSetupMs?: number;
+    swapchainAcquireMs?: number;
+    gridMs?: number;
+    sceneCompositionMs?: number;
+    actionBlurMs?: number;
+    sharpRestoreMs?: number;
+    actionForegroundMs?: number;
+    auxiliaryOverlaysMs?: number;
+    lensMs?: number;
+    wlurMs?: number;
   };
 }
 

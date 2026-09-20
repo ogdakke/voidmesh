@@ -65,6 +65,16 @@ export interface BenchmarkRenderSummary extends BenchmarkCadenceSummary {
     visibleEntityPreparation: DistributionSummary;
     encode: DistributionSummary;
     submit: DistributionSummary;
+    frameSetup: DistributionSummary;
+    swapchainAcquire: DistributionSummary;
+    grid: DistributionSummary;
+    sceneComposition: DistributionSummary;
+    actionBlur: DistributionSummary;
+    sharpRestore: DistributionSummary;
+    actionForeground: DistributionSummary;
+    auxiliaryOverlays: DistributionSummary;
+    lens: DistributionSummary;
+    wlur: DistributionSummary;
   };
   entityCount: number;
   renderedCount: number;
@@ -78,6 +88,20 @@ export interface ActionLayerBenchmarkPhaseResult {
     rafIntervalsMs: number[];
     renderedIntervalsMs: number[];
     cpuRenderMs: number[];
+    detailedPhasesMs: {
+      prepare: number[];
+      encode: number[];
+      frameSetup: number[];
+      swapchainAcquire: number[];
+      grid: number[];
+      sceneComposition: number[];
+      actionBlur: number[];
+      sharpRestore: number[];
+      actionForeground: number[];
+      auxiliaryOverlays: number[];
+      lens: number[];
+      wlur: number[];
+    };
   };
 }
 
@@ -134,6 +158,7 @@ export interface ActionLayerBenchmarkDependencies {
   press(touchOrigin: Point, eventTime: number): void;
   release(eventTime: number): void;
   reset(): void;
+  setDetailedFrameInstrumentation(enabled: boolean): void;
 }
 
 export interface ActionLayerBenchmarkService {
@@ -239,7 +264,8 @@ function summarizePhase(samples: PhaseSamples, targetFps: number): ActionLayerBe
   const phaseValues = (key: keyof NonNullable<FrameStats["phases"]>) =>
     samples.renderSamples.flatMap((sample) => {
       const phases = sample.stats.phases;
-      return phases ? [phases[key]] : [];
+      const value = phases?.[key];
+      return value === undefined ? [] : [value];
     });
   const lastStats = samples.renderSamples.at(-1)?.stats;
   return {
@@ -256,6 +282,16 @@ function summarizePhase(samples: PhaseSamples, targetFps: number): ActionLayerBe
         visibleEntityPreparation: summarizeDistribution(phaseValues("visibleEntityPreparationMs")),
         encode: summarizeDistribution(phaseValues("encodeMs")),
         submit: summarizeDistribution(phaseValues("submitMs")),
+        frameSetup: summarizeDistribution(phaseValues("frameSetupMs")),
+        swapchainAcquire: summarizeDistribution(phaseValues("swapchainAcquireMs")),
+        grid: summarizeDistribution(phaseValues("gridMs")),
+        sceneComposition: summarizeDistribution(phaseValues("sceneCompositionMs")),
+        actionBlur: summarizeDistribution(phaseValues("actionBlurMs")),
+        sharpRestore: summarizeDistribution(phaseValues("sharpRestoreMs")),
+        actionForeground: summarizeDistribution(phaseValues("actionForegroundMs")),
+        auxiliaryOverlays: summarizeDistribution(phaseValues("auxiliaryOverlaysMs")),
+        lens: summarizeDistribution(phaseValues("lensMs")),
+        wlur: summarizeDistribution(phaseValues("wlurMs")),
       },
       entityCount: lastStats?.entityCount ?? 0,
       renderedCount: lastStats?.renderedCount ?? 0,
@@ -264,6 +300,20 @@ function summarizePhase(samples: PhaseSamples, targetFps: number): ActionLayerBe
       rafIntervalsMs: intervals(samples.rafTimestamps),
       renderedIntervalsMs: intervals(renderTimestamps),
       cpuRenderMs: cpuRenderMs.map((value) => round(value)),
+      detailedPhasesMs: {
+        prepare: phaseValues("prepareMs").map((value) => round(value)),
+        encode: phaseValues("encodeMs").map((value) => round(value)),
+        frameSetup: phaseValues("frameSetupMs").map((value) => round(value)),
+        swapchainAcquire: phaseValues("swapchainAcquireMs").map((value) => round(value)),
+        grid: phaseValues("gridMs").map((value) => round(value)),
+        sceneComposition: phaseValues("sceneCompositionMs").map((value) => round(value)),
+        actionBlur: phaseValues("actionBlurMs").map((value) => round(value)),
+        sharpRestore: phaseValues("sharpRestoreMs").map((value) => round(value)),
+        actionForeground: phaseValues("actionForegroundMs").map((value) => round(value)),
+        auxiliaryOverlays: phaseValues("auxiliaryOverlaysMs").map((value) => round(value)),
+        lens: phaseValues("lensMs").map((value) => round(value)),
+        wlur: phaseValues("wlurMs").map((value) => round(value)),
+      },
     },
   };
 }
@@ -336,14 +386,7 @@ export function createActionLayerBenchmarkService(
         recovery: createPhase(0),
       };
       let activePhase: PhaseSamples | null = null;
-      const stopObserving = deps.observeFrames({
-        onAnimationFrame(timestamp) {
-          activePhase?.rafTimestamps.push(timestamp);
-        },
-        onRender(stats, timestamp) {
-          activePhase?.renderSamples.push({ timestamp, stats: copyFrameStats(stats) });
-        },
-      });
+      let stopObserving = () => {};
 
       const recordFor = async (phase: PhaseSamples, durationMs: number) => {
         phase.startedAt = deps.now();
@@ -354,6 +397,15 @@ export function createActionLayerBenchmarkService(
       };
 
       try {
+        deps.setDetailedFrameInstrumentation(true);
+        stopObserving = deps.observeFrames({
+          onAnimationFrame(timestamp) {
+            activePhase?.rafTimestamps.push(timestamp);
+          },
+          onRender(stats, timestamp) {
+            activePhase?.renderSamples.push({ timestamp, stats: copyFrameStats(stats) });
+          },
+        });
         deps.reset();
         await deps.wait(config.warmupMs, signal);
         const resourcesBefore = deps.getResourceStats();
@@ -431,6 +483,7 @@ export function createActionLayerBenchmarkService(
       } finally {
         activePhase = null;
         stopObserving();
+        deps.setDetailedFrameInstrumentation(false);
         deps.reset();
         controller = null;
       }

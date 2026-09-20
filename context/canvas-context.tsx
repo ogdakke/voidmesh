@@ -632,6 +632,9 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           actionLayerController.cancel();
           canvasStore.setActionLayerActive(false);
         },
+        setDetailedFrameInstrumentation: (enabled) => {
+          rendererState?.setDetailedFrameInstrumentation(enabled);
+        },
       },
       {
         ...DEFAULT_ACTION_LAYER_BENCHMARK_CONFIG,

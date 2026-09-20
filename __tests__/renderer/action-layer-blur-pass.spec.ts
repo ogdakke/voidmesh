@@ -56,6 +56,7 @@ describe("ActionLayerBlurPass", () => {
     };
 
     pass.encode(options);
+    expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
     expect(encoder.copyTextureToTexture).not.toHaveBeenCalled();
     expect(processingPipeline.encodeFullScreenBlurPyramid).toHaveBeenCalledWith(
       encoder,
@@ -80,6 +81,7 @@ describe("ActionLayerBlurPass", () => {
     options.contentDirty = false;
     pass.encode(options);
     pass.encode(options);
+    expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
     expect(processingPipeline.encodeFullScreenBlurPyramid).toHaveBeenCalledOnce();
     expect(encoder.beginRenderPass).toHaveBeenCalledTimes(3);
     expect(pass.getStats()).toEqual({

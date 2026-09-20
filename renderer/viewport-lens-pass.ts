@@ -31,6 +31,7 @@ export class ViewportLensPass {
   readonly #sampler: GPUSampler;
   readonly #uniformData = new ArrayBuffer(UNIFORM_BUFFER_SIZE_BYTES);
   readonly #floatView = new Float32Array(this.#uniformData);
+  readonly #uniformCache = new Float32Array(UNIFORM_BUFFER_SIZE_BYTES / 4).fill(Number.NaN);
 
   #config: ViewportLensDistortionConfig;
   #darkTheme = false;
@@ -222,7 +223,17 @@ export class ViewportLensPass {
     v[9] = lens.occlusion;
     v[10] = this.#darkTheme ? lens.vignetteDark : lens.vignetteLight;
     v[11] = 0;
-    this.#device.queue.writeBuffer(this.#uniformBuffer, 0, this.#uniformData);
+    let uniformsChanged = false;
+    for (let i = 0; i < v.length; i++) {
+      if (v[i] !== this.#uniformCache[i]) {
+        uniformsChanged = true;
+        break;
+      }
+    }
+    if (uniformsChanged) {
+      this.#device.queue.writeBuffer(this.#uniformBuffer, 0, this.#uniformData);
+      this.#uniformCache.set(v);
+    }
 
     const pass = encoder.beginRenderPass({
       label: "Viewport lens distortion pass",

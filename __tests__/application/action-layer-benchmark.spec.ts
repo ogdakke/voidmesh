@@ -28,6 +28,7 @@ describe("action-layer benchmark", () => {
     let activations = 0;
     let dismissals = 0;
     let active = false;
+    const instrumentationStates: boolean[] = [];
     const config: ActionLayerBenchmarkConfig = {
       targetFps: 120,
       warmupMs: 20,
@@ -60,6 +61,16 @@ describe("action-layer benchmark", () => {
                   visibleEntityPreparationMs: 0.3,
                   encodeMs: 1.5,
                   submitMs: 0.2,
+                  frameSetupMs: 0.1,
+                  swapchainAcquireMs: 0.1,
+                  gridMs: 0.1,
+                  sceneCompositionMs: 0.2,
+                  actionBlurMs: 0.4,
+                  sharpRestoreMs: 0.2,
+                  actionForegroundMs: 0.2,
+                  auxiliaryOverlaysMs: 0.1,
+                  lensMs: 0.1,
+                  wlurMs: 0.3,
                 },
               },
               now + 3,
@@ -110,6 +121,9 @@ describe("action-layer benchmark", () => {
         reset: () => {
           active = false;
         },
+        setDetailedFrameInstrumentation: (enabled) => {
+          instrumentationStates.push(enabled);
+        },
       },
       config,
     );
@@ -122,6 +136,11 @@ describe("action-layer benchmark", () => {
     expect(result.phases.toggling.rendered.frameCount).toBe(12);
     expect(result.phases.recovery.rendered.frameCount).toBe(4);
     expect(result.phases.toggling.rendered.cpuRenderMs.median).toBe(3);
+    expect(result.phases.toggling.rendered.phasesMs.actionBlur.mean).toBe(0.4);
+    expect(result.phases.toggling.raw.detailedPhasesMs.wlur).toHaveLength(12);
+    expect(result.phases.toggling.raw.detailedPhasesMs.encode).toHaveLength(12);
+    expect(result.phases.toggling.raw.detailedPhasesMs.actionForeground).toHaveLength(12);
+    expect(instrumentationStates).toEqual([true, false]);
     expect(result.validity.cadenceStability.stable).toBe(true);
   });
 });

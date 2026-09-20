@@ -39,10 +39,13 @@ describe("ProcessingPipeline LOD parameters", () => {
 
     pipeline.encodeFullScreenBlur(encoder, input, output, 800, 600);
     const initialBindGroups = device.createBindGroup.mock.calls.length;
+    const initialUniformWrites = vi.mocked(device.queue.writeBuffer).mock.calls.length;
     expect(initialBindGroups).toBeGreaterThan(1);
+    expect(initialUniformWrites).toBe(8);
 
     pipeline.encodeFullScreenBlur(encoder, input, output, 800, 600);
     expect(device.createBindGroup).toHaveBeenCalledTimes(initialBindGroups);
+    expect(device.queue.writeBuffer).toHaveBeenCalledTimes(initialUniformWrites);
 
     pipeline.encodeFullScreenBlur(encoder, createProcessingTexture(800, 600), output, 800, 600);
     expect(device.createBindGroup).toHaveBeenCalledTimes(initialBindGroups + 1);

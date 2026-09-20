@@ -39,6 +39,7 @@ export class ActionLayerBlurPass {
   readonly #bindGroupLayout: GPUBindGroupLayout;
   readonly #uniformBuffer: GPUBuffer;
   readonly #uniformData = new Float32Array(12);
+  readonly #uniformCache = new Float32Array(12).fill(Number.NaN);
   readonly #sampler: GPUSampler;
 
   #tintColor: [number, number, number];
@@ -186,7 +187,17 @@ export class ActionLayerBlurPass {
     uniformData[9] = height;
     uniformData[10] = 0;
     uniformData[11] = 0;
-    this.#device.queue.writeBuffer(this.#uniformBuffer, 0, uniformData);
+    let uniformsChanged = false;
+    for (let i = 0; i < uniformData.length; i++) {
+      if (uniformData[i] !== this.#uniformCache[i]) {
+        uniformsChanged = true;
+        break;
+      }
+    }
+    if (uniformsChanged) {
+      this.#device.queue.writeBuffer(this.#uniformBuffer, 0, uniformData);
+      this.#uniformCache.set(uniformData);
+    }
 
     const needsRefresh = options.contentDirty || !this.#cacheValid;
     const cachedBlurMip = blurTextures.upsampleMipChain[0] ?? blurTextures.downsampleMipChain[0];
