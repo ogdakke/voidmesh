@@ -2,10 +2,6 @@ import React, { useEffect, useRef } from "react";
 import { act, render } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { withNuqsTestingAdapter } from "nuqs/adapters/testing";
-import { CanvasProvider } from "#context/canvas-context.tsx";
-import { canvasStore } from "#engine";
-import { getViewportCenter, screenToWorld } from "#lib/canvas-math.ts";
-import { setupCanvasTest } from "../helpers/test-setup.ts";
 
 const mocks = vi.hoisted(() => ({
   addFilesToCanvas: vi.fn<(...args: unknown[]) => Promise<void>>(),
@@ -43,7 +39,16 @@ vi.mock("#lib/util.ts", async () => {
   };
 });
 
-const { useImageInput } = await import("#hooks/use-image-input.ts");
+vi.resetModules();
+const [{ useImageInput }, { CanvasProvider }, { canvasStore }, canvasMath, { setupCanvasTest }] =
+  await Promise.all([
+    import("#hooks/use-image-input.ts"),
+    import("#context/canvas-context.tsx"),
+    import("#engine"),
+    import("#lib/canvas-math.ts"),
+    import("../helpers/test-setup.ts"),
+  ]);
+const { getViewportCenter, screenToWorld } = canvasMath;
 
 type Handlers = ReturnType<typeof useImageInput>;
 
