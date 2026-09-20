@@ -26,6 +26,7 @@ WebGPU rendering, shader execution, composition, resource caching, and export.
 - Source and processed textures are keyed by immutable asset/effect identity. Entity IDs track retain/release ownership.
 - Renderer caches and pooled textures are byte-bounded. Eviction and shutdown destroy resources and invalidate dependent bindings.
 - Reuse buffers, typed arrays, bind groups, views, and scratch records in frame loops.
+- External image uploads are invalidation work, never animation work. Cache CPU-rasterized content by semantic/style/DPR identity and drive motion with uniforms or GPU-resident atlases; do not put Canvas 2D rasterization or `copyExternalImageToTexture()` in a per-frame animation path.
 
 ## Color and Layering
 
