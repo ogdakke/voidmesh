@@ -11,7 +11,7 @@ const MAX_TEXT_WIDTH_MOBILE = 230;
 const LINE_HEIGHT = 1.25;
 const ENTITY_GAP = 12;
 const SHADOW_PAD = 8;
-const UNIFORM_SIZE = 32;
+const UNIFORM_SIZE = 48; // bytes (position, size, opacity, texture size, atlas origin)
 const MOBILE_BREAKPOINT = 768;
 const FONT_FAMILY =
   'ui-rounded, "Hiragino Maru Gothic ProN", Quicksand, Comfortaa, "Arial Rounded MT", Calibri, system-ui, sans-serif';
@@ -148,6 +148,13 @@ export class CanvasCalloutPass {
       data[2] = entry.textureWidth / this.#viewport.zoom;
       data[3] = entry.textureHeight / this.#viewport.zoom;
       data[4] = 1;
+      data[5] = 0;
+      data[6] = entry.textureWidth;
+      data[7] = entry.textureHeight;
+      data[8] = 0;
+      data[9] = 0;
+      data[10] = 0;
+      data[11] = 0;
       this.#device.queue.writeBuffer(entry.uniformBuffer, 0, data);
 
       pass.setPipeline(this.#pipeline);
