@@ -23,5 +23,7 @@ export default defineConfig({
     setupFiles: ["./__tests__/setup/happydom.ts", "./__tests__/setup/testing-library.ts"],
     include: ["**/*.spec.{ts,tsx}"],
     exclude: ["**/node_modules/**", "**/.git/**", ".claude/**"],
+    fsModuleCache: true,
+    isolate: false,
   },
 });
