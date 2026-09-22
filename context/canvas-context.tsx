@@ -84,6 +84,8 @@ import { paletteStore } from "#lib/palette-store.ts";
 import { analytics } from "#lib/analytics.ts";
 import { logger } from "#lib/client.logger.ts";
 import { downloadBlob } from "#lib/download.ts";
+import { serialize as serializeWorkspace } from "#application/canvas/serialize-workspace.ts";
+import type { SerializeWorkspaceOptions } from "#application/canvas/serialize-workspace.ts";
 import { deepMerge } from "#lib/deep-merge.ts";
 import { applyShaderDefaults } from "#lib/shader-defaults.ts";
 import { extractPaletteFromImage } from "#lib/palette-extraction/index.ts";
@@ -2060,11 +2062,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  // Serialization API — lazy-loads the serialization module
-  const serializeCanvas = async (): Promise<Blob | null> => {
-    const { serialize } = await import("#application/canvas/serialize-workspace.ts");
-    return serialize();
-  };
+  // Workspace serialization starts the service-worker download before media work.
+  const serializeCanvas = (
+    filename: string,
+    options?: SerializeWorkspaceOptions,
+  ): Promise<string | null> => serializeWorkspace(filename, options);
 
   const deserializeCanvas = async (
     source: Blob | ArrayBuffer,
@@ -2291,7 +2293,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     copySelectedEntityToClipboard: () => commandsImplRef.current.copySelectedEntityToClipboard(),
     saveSelectedEntityToFile: (...args) =>
       commandsImplRef.current.saveSelectedEntityToFile(...args),
-    serializeCanvas: () => commandsImplRef.current.serializeCanvas(),
+    serializeCanvas: (...args) => commandsImplRef.current.serializeCanvas(...args),
     deserializeCanvas: (...args) => commandsImplRef.current.deserializeCanvas(...args),
     applyUrlState: (...args) => commandsImplRef.current.applyUrlState(...args),
     applyEffectsToSelection: (...args) => commandsImplRef.current.applyEffectsToSelection(...args),
@@ -2334,16 +2336,15 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       });
 
       // Serialization API — delegates through stable command wrappers for fresh access
-      (window as any).__CANVAS__.serialize = async () => {
-        const blob = await commands.serializeCanvas();
-        if (!blob) {
+      (window as any).__CANVAS__.serialize = async (filename = "canvas.vdmsh") => {
+        const savedFilename = await commands.serializeCanvas(filename);
+        if (!savedFilename) {
           console.log("[Canvas] Save already in progress, skipped");
           return null;
         }
-        const sizeMB = (blob.size / (1024 * 1024)).toFixed(2);
         const entityCount = canvasStore.getState().entities.size;
-        console.log(`[Canvas] Serialized ${entityCount} entities → ${sizeMB} MB`);
-        return blob;
+        console.log(`[Canvas] Serialized ${entityCount} entities → ${savedFilename}`);
+        return savedFilename;
       };
 
       (window as any).__CANVAS__.deserialize = async (source: Blob | ArrayBuffer) => {
@@ -2362,13 +2363,12 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       };
 
       (window as any).__CANVAS__.save = async (filename = "canvas.vdmsh") => {
-        const blob = await commands.serializeCanvas();
-        if (!blob) {
+        const savedFilename = await commands.serializeCanvas(filename);
+        if (!savedFilename) {
           console.log("[Canvas] Save already in progress, skipped");
           return;
         }
-        downloadBlob(blob, filename);
-        console.log(`[Canvas] Saved as ${filename}`);
+        console.log(`[Canvas] Saved as ${savedFilename}`);
       };
 
       (window as any).__CANVAS__.load = async () => {

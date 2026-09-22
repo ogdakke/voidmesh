@@ -2,6 +2,7 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { useRegisterSW } from "virtual:pwa-register/react";
 import { logger } from "#lib/client.logger.ts";
 import { toastManager } from "#application/notifications.ts";
+import { registerWorkspaceDownloadServiceWorker } from "#lib/download.ts";
 
 const UPDATE_TOAST_ID = "pwa-update-available";
 const UPDATE_CHECK_THROTTLE_MS = 60_000;
@@ -12,6 +13,12 @@ export function PwaUpdateManager() {
   );
   const lastUpdateCheckAtRef = useRef(0);
   const hasUpdateToastRef = useRef(false);
+
+  useEffect(() => {
+    void registerWorkspaceDownloadServiceWorker().catch((error) => {
+      logger.error("[PWA] Workspace download service worker registration failed", error);
+    });
+  }, []);
 
   const {
     needRefresh: [needRefresh, setNeedRefresh],

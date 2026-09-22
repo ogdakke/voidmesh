@@ -8,14 +8,14 @@ import type {
 } from "#lib/serialization/types.ts";
 import {
   acquireSaveHandle,
-  downloadBlob,
   openFile,
   requestWritePermission,
-  writeToHandle,
+  startWorkspaceFileWrite,
 } from "#lib/download.ts";
 import { fileHandleStore } from "#lib/files/file-handle.ts";
 import { generateFunFilename } from "#lib/files/random-filename.ts";
 import { getIsSaving } from "#application/canvas/serialize-workspace.ts";
+import type { SerializeWorkspaceOptions } from "#application/canvas/serialize-workspace.ts";
 import { logger } from "#lib/client.logger.ts";
 import { createEnum } from "#types/index.ts";
 
@@ -150,24 +150,17 @@ export async function importStudioWithToasts(
   }
 }
 
-async function serializeAndSave(
-  serializeCanvas: () => Promise<Blob | null>,
-  handle: FileSystemFileHandle,
-  name: string,
+async function streamWorkspaceSave(
+  serializeCanvas: (
+    filename: string,
+    options?: SerializeWorkspaceOptions,
+  ) => Promise<string | null>,
+  filename: string,
+  options?: SerializeWorkspaceOptions,
 ): Promise<string> {
-  const blob = await serializeCanvas();
-  if (!blob) throw new Error("Save already in progress");
-  const ok = await writeToHandle(blob, handle);
-  if (!ok) throw new Error("Failed to write to file");
-  return name;
-}
-
-async function serializeAndDownload(serializeCanvas: () => Promise<Blob | null>): Promise<string> {
-  const blob = await serializeCanvas();
-  if (!blob) throw new Error("Save already in progress");
-  const name = await generateFunFilename();
-  downloadBlob(blob, name);
-  return name;
+  const savedFilename = await serializeCanvas(filename, options);
+  if (!savedFilename) throw new Error("Save already in progress");
+  return savedFilename;
 }
 
 export function useStudioFile() {
@@ -198,19 +191,51 @@ export function useStudioFile() {
     setStatus(StudioFileStatus.saving);
 
     try {
-      // If we have an existing handle, request write permission during the user
-      // gesture (showOpenFilePicker only grants read — createWritable needs
-      // user activation to prompt for write access the first time)
-      if (fileHandleStore.hasHandle) {
-        const handle = fileHandleStore.handle!;
-        const name = fileHandleStore.name!;
-        const permitted = await requestWritePermission(handle);
+      if (activeFileHandle && fileHandleStore.supportsFileSystemAccess) {
+        const permitted = await requestWritePermission(activeFileHandle);
         if (permitted) {
-          await toastManager.promise(serializeAndSave(serializeCanvas, handle, name), {
-            loading: {
-              title: "Saving workspace...",
-              description: name,
+          logger.debug("[workspace-save] saving to opened file handle", {
+            filename: activeFileHandle.name,
+          });
+          await toastManager.promise(
+            streamWorkspaceSave(serializeCanvas, activeFileHandle.name, {
+              openOutput: () => startWorkspaceFileWrite(activeFileHandle),
+            }),
+            {
+              loading: {
+                title: "Saving workspace...",
+                description: activeFileHandle.name,
+              },
+              success: (n) => ({
+                title: "Saved",
+                description: n,
+                timeout: 2500,
+              }),
+              error: (err) => ({
+                title: "Save failed",
+                description: err instanceof Error ? err.message : "Unknown error",
+                type: ToastType.destructive,
+              }),
             },
+          );
+          return;
+        }
+        logger.debug("[workspace-save] opened file handle permission denied; requesting new target");
+        fileHandleStore.handle = null;
+      }
+
+      if (fileHandleStore.supportsFileSystemAccess) {
+        const result = await acquireSaveHandle();
+        if (!result) return;
+        logger.debug("[workspace-save] saving to newly selected file handle", {
+          filename: result.name,
+        });
+        await toastManager.promise(
+          streamWorkspaceSave(serializeCanvas, result.name, {
+            openOutput: () => startWorkspaceFileWrite(result.handle),
+          }),
+          {
+            loading: { title: "Saving workspace...", description: result.name },
             success: (n) => ({
               title: "Saved",
               description: n,
@@ -221,40 +246,15 @@ export function useStudioFile() {
               description: err instanceof Error ? err.message : "Unknown error",
               type: ToastType.destructive,
             }),
-          });
-          return;
-        }
-        // Permission denied — clear handle, fall through to picker
-        fileHandleStore.handle = null;
-      }
-
-      // No handle — need a picker (must happen during user gesture, before async work)
-      if (fileHandleStore.supportsFileSystemAccess) {
-        const result = await acquireSaveHandle();
-        if (!result) return; // User cancelled
-
-        await toastManager.promise(serializeAndSave(serializeCanvas, result.handle, result.name), {
-          loading: {
-            title: "Saving workspace...",
-            description: result.name,
           },
-          success: (n) => ({
-            title: "Saved",
-            description: n,
-            timeout: 2500,
-          }),
-          error: (err) => ({
-            title: "Save failed",
-            description: err instanceof Error ? err.message : "Unknown error",
-            type: ToastType.destructive,
-          }),
-        });
+        );
         return;
       }
 
-      // Fallback: serialize then download
-      await toastManager.promise(serializeAndDownload(serializeCanvas), {
-        loading: { title: "Saving workspace..." },
+      const name = generateFunFilename();
+      logger.debug("[workspace-save] saving through streamed browser download", { filename: name });
+      await toastManager.promise(streamWorkspaceSave(serializeCanvas, name), {
+        loading: { title: "Saving workspace...", description: name },
         success: (n) => ({
           title: "Saved",
           description: n,
@@ -278,16 +278,35 @@ export function useStudioFile() {
     setStatus(StudioFileStatus.saving);
 
     try {
-      // Picker must happen during user gesture, before any async work
+      const name = generateFunFilename();
       if (fileHandleStore.supportsFileSystemAccess) {
         const result = await acquireSaveHandle();
         if (!result) return;
-
-        await toastManager.promise(serializeAndSave(serializeCanvas, result.handle, result.name), {
-          loading: {
-            title: "Saving workspace...",
-            description: result.name,
+        logger.debug("[workspace-save] save-as selected direct file handle", {
+          filename: result.name,
+        });
+        await toastManager.promise(
+          streamWorkspaceSave(serializeCanvas, result.name, {
+            openOutput: () => startWorkspaceFileWrite(result.handle),
+          }),
+          {
+            loading: { title: "Saving workspace...", description: result.name },
+            success: (n) => ({
+              title: "Saved",
+              description: n,
+              timeout: 2500,
+            }),
+            error: (err) => ({
+              title: "Save failed",
+              description: err instanceof Error ? err.message : "Unknown error",
+              type: ToastType.destructive,
+            }),
           },
+        );
+      } else {
+        logger.debug("[workspace-save] save-as using streamed browser download", { filename: name });
+        await toastManager.promise(streamWorkspaceSave(serializeCanvas, name), {
+          loading: { title: "Saving workspace...", description: name },
           success: (n) => ({
             title: "Saved",
             description: n,
@@ -299,23 +318,7 @@ export function useStudioFile() {
             type: ToastType.destructive,
           }),
         });
-        return;
       }
-
-      // Fallback: serialize then download
-      await toastManager.promise(serializeAndDownload(serializeCanvas), {
-        loading: { title: "Saving workspace..." },
-        success: (n) => ({
-          title: "Saved",
-          description: n,
-          timeout: 2500,
-        }),
-        error: (err) => ({
-          title: "Save failed",
-          description: err instanceof Error ? err.message : "Unknown error",
-          type: ToastType.destructive,
-        }),
-      });
     } catch {
       // Error already displayed by toastManager.promise
     } finally {

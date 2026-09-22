@@ -21,6 +21,7 @@ import type { Options } from "nuqs";
 import type { PartialDeep } from "type-fest";
 import type { CanvasInteractionService } from "#application/canvas/canvas-interaction.ts";
 import type { CanvasMediaService } from "#application/canvas/canvas-media.ts";
+import type { SerializeWorkspaceOptions } from "#application/canvas/serialize-workspace.ts";
 
 export const DebugType = createEnum({
   /** load the debug image */
@@ -90,7 +91,10 @@ export interface CanvasCommands {
   changeSize: (value: number | number[]) => void;
   copySelectedEntityToClipboard: () => Promise<boolean>;
   saveSelectedEntityToFile: (options?: ImageExportOptions) => Promise<void>;
-  serializeCanvas: () => Promise<Blob | null>;
+  serializeCanvas: (
+    filename: string,
+    options?: SerializeWorkspaceOptions,
+  ) => Promise<string | null>;
   deserializeCanvas: (
     source: Blob | ArrayBuffer,
     options?: DeserializeOptions,

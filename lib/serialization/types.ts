@@ -168,12 +168,11 @@ export type CommitDecodedWorkspace = (workspace: DecodedWorkspace) => void;
 // Serialize Worker
 // ============================================================================
 
-/** Media data passed between main thread and serialization worker. */
+/** Media data passed between main thread and the streaming serialization worker. */
 export interface SerializeMediaEntry {
   path: string;
-  type: "imageBitmap" | "bytes";
-  bitmap?: ImageBitmap;
-  bytes?: Uint8Array;
+  type: "blob";
+  blob: Blob;
 }
 
 // ============================================================================

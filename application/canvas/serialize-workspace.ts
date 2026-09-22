@@ -2,8 +2,12 @@ import { canvasStore } from "#engine";
 import { config } from "#config";
 import { createPlaybackState } from "#lib/media-playback.ts";
 import type { ColorPalette, ShaderCanvasEntity, ShaderParams } from "#types/canvas.ts";
+import { startWorkspaceDownload } from "#lib/download.ts";
 import { paletteStore } from "#lib/palette-store.ts";
-import { detectVideoExtension, videoElementToBytes } from "#lib/serialization/media.ts";
+import {
+  imageExtensionFromMime,
+  videoExtensionFromMime,
+} from "#lib/serialization/media.ts";
 import type {
   SerializeMediaEntry,
   SerializedEntity,
@@ -12,6 +16,12 @@ import type {
 } from "#lib/serialization/types.ts";
 import { CURRENT_VERSION } from "#lib/serialization/version.ts";
 import { getStaticShaderParamsIdentity } from "#lib/shader-params-identity.ts";
+import { logger } from "#lib/client.logger.ts";
+
+export interface SerializeWorkspaceOptions {
+  /** Opens the direct File System Access sink after metadata preparation. */
+  openOutput?: () => Promise<MessagePort>;
+}
 
 /** Synchronous flag — prevents overlapping saves even when React state hasn't flushed yet. */
 let isSaving = false;
@@ -21,43 +31,47 @@ export function getIsSaving(): boolean {
 }
 
 /**
- * Serialize the current canvas state into a .vdmsh zip archive (Blob).
+ * Serialize the current canvas state into a streamed .vdmsh file or download.
  *
- * Heavy work (PNG encoding + zip compression) runs in a Web Worker.
- * The main thread only prepares entity metadata and collects transferable media data.
+ * ZIP compression runs in a Web Worker.
+ * The main thread only prepares entity metadata and retains source Blob references.
  * Concurrent calls are rejected (returns null) to prevent queuing redundant saves.
  */
-export async function serialize(): Promise<Blob | null> {
+export async function serialize(
+  filename: string,
+  options: SerializeWorkspaceOptions = {},
+): Promise<string | null> {
   if (isSaving) return null;
   isSaving = true;
+  let downloadPort: MessagePort | null = null;
 
   try {
+    if (!options.openOutput) {
+      downloadPort = startWorkspaceDownload(filename);
+    }
     const state = canvasStore.getState();
     const entities = Array.from(state.entities.values());
+    logger.debug("[workspace-save] preparing workspace", {
+      filename,
+      destination: options.openOutput ? "file-handle" : "download",
+      entityCount: entities.length,
+    });
 
     // Sort by zIndex for deterministic output
     entities.sort((a, b) => a.zIndex - b.zIndex);
 
-    // Prepare entity metadata and media data in parallel (main thread)
+    // Prepare only metadata and retain each source Blob. Encoding and ZIP output
+    // are streamed in the worker one media entry at a time.
     const serializedEntities: SerializedEntity[] = [];
     const mediaEntries: SerializeMediaEntry[] = [];
     const serializedImageAssets = new Set<string>();
     const compactTables = createCompactTables();
 
-    await Promise.all(
-      entities.map(async (entity) => {
-        const { serialized, media } = await prepareEntity(
-          entity,
-          serializedImageAssets,
-          compactTables,
-        );
-        serializedEntities.push(serialized);
-        if (media) mediaEntries.push(media);
-      }),
-    );
-
-    // Re-sort after parallel processing (order may have been scrambled)
-    serializedEntities.sort((a, b) => a.zIndex - b.zIndex);
+    for (const entity of entities) {
+      const { serialized, media } = prepareEntity(entity, serializedImageAssets, compactTables);
+      serializedEntities.push(serialized);
+      if (media) mediaEntries.push(media);
+    }
 
     // Collect custom/extracted palettes referenced by entities
     const referencedPalettes = collectReferencedPalettes(entities);
@@ -81,8 +95,31 @@ export async function serialize(): Promise<Blob | null> {
 
     const manifestJson = JSON.stringify(manifest, null, 2);
 
-    // Delegate PNG encoding + zip compression to worker
-    return await compressInWorker(manifestJson, mediaEntries);
+    if (!downloadPort) downloadPort = await (options.openOutput?.() ?? Promise.resolve(null));
+    if (!downloadPort) throw new Error("Workspace download service worker is not ready");
+    logger.debug("[workspace-save] starting archive worker", {
+      filename,
+      manifestBytes: new TextEncoder().encode(manifestJson).byteLength,
+      mediaEntryCount: mediaEntries.length,
+    });
+    const workerDownloadPort = downloadPort;
+    downloadPort = null;
+    await compressInWorker(manifestJson, mediaEntries, workerDownloadPort);
+    logger.debug("[workspace-save] workspace saved", { filename });
+    return filename;
+  } catch (error) {
+    logger.error("[workspace-save] workspace save failed", {
+      filename,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    if (downloadPort) {
+      downloadPort.postMessage({
+        type: "error",
+        message: error instanceof Error ? error.message : String(error),
+      });
+      downloadPort.close();
+    }
+    throw error;
   } finally {
     isSaving = false;
   }
@@ -102,37 +139,92 @@ function getSerializeWorker(): Worker {
   return serializeWorker;
 }
 
-function compressInWorker(manifest: string, mediaEntries: SerializeMediaEntry[]): Promise<Blob> {
+function compressInWorker(
+  manifest: string,
+  mediaEntries: SerializeMediaEntry[],
+  downloadPort: MessagePort,
+): Promise<void> {
   const worker = getSerializeWorker();
 
-  return new Promise<Blob>((resolve, reject) => {
+  return new Promise<void>((resolve, reject) => {
+    let mediaIndex = 0;
+    let settled = false;
+    const failWorker = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      worker.terminate();
+      if (serializeWorker === worker) serializeWorker = null;
+      reject(error);
+    };
     worker.onmessage = (e: MessageEvent) => {
-      if (e.data.type === "done") {
-        resolve(new Blob([e.data.zip.buffer as ArrayBuffer], { type: "application/vdmsh" }));
+      if (e.data.type === "log") {
+        logger.debug("[workspace-save] archive worker stage", e.data);
+      } else if (e.data.type === "ready-for-media") {
+        sendNextMedia();
+      } else if (e.data.type === "media-done") {
+        sendNextMedia();
+      } else if (e.data.type === "done") {
+        settled = true;
+        logger.debug("[workspace-save] archive worker completed", { mediaCount: mediaEntries.length });
+        worker.terminate();
+        serializeWorker = null;
+        resolve();
       } else if (e.data.type === "error") {
-        reject(new Error(e.data.message));
+        logger.error("[workspace-save] archive worker failed", e.data);
+        failWorker(new Error(e.data.message));
+      } else if (e.data.type === "fatal-error") {
+        logger.error("[workspace-save] archive worker fatal error", e.data);
+        failWorker(new Error(formatWorkerError(e.data)));
       }
     };
 
     worker.onerror = (err) => {
-      reject(new Error(`Serialization worker failed: ${err.message}`));
+      const details = {
+        message: err.message || "Unknown worker error",
+        filename: err.filename,
+        lineno: err.lineno,
+        colno: err.colno,
+        error: err.error instanceof Error ? err.error.stack || err.error.message : err.error,
+      };
+      logger.error("[workspace-save] archive worker runtime error", details);
+      failWorker(new Error(formatWorkerError(details)));
       // Worker is broken — discard so next save creates a fresh one
-      serializeWorker?.terminate();
-      serializeWorker = null;
     };
 
-    // Build transfer list for zero-copy posting
-    const transferList: Transferable[] = [];
-    for (const entry of mediaEntries) {
-      if (entry.type === "imageBitmap") {
-        transferList.push(entry.bitmap!);
+    worker.postMessage({ type: "start", manifest, downloadPort }, [downloadPort]);
+
+    function sendNextMedia(): void {
+      const entry = mediaEntries[mediaIndex++];
+      if (entry) {
+        logger.debug("[workspace-save] sending media to archive worker", {
+          path: entry.path,
+          index: mediaIndex,
+          total: mediaEntries.length,
+        });
+        worker.postMessage({ type: "media", entry });
       } else {
-        transferList.push(entry.bytes!.buffer);
+        logger.debug("[workspace-save] finishing archive worker", { mediaCount: mediaEntries.length });
+        worker.postMessage({ type: "finish" });
       }
     }
-
-    worker.postMessage({ manifest, mediaEntries }, transferList);
   });
+}
+
+function formatWorkerError(error: {
+  message?: unknown;
+  filename?: unknown;
+  lineno?: unknown;
+  colno?: unknown;
+  error?: unknown;
+  stack?: unknown;
+}): string {
+  const message = String(error.message ?? error.error ?? "Unknown worker error");
+  const location =
+    error.filename && error.lineno
+      ? ` (${String(error.filename)}:${String(error.lineno)}:${String(error.colno ?? 0)})`
+      : "";
+  const stack = error.stack ? `\n${String(error.stack)}` : "";
+  return `Serialization worker failed: ${message}${location}${stack}`;
 }
 
 interface PreparedEntity {
@@ -160,11 +252,11 @@ function createCompactTables(): CompactTables {
   };
 }
 
-async function prepareEntity(
+function prepareEntity(
   entity: ShaderCanvasEntity,
   serializedImageAssets: Set<string>,
   tables: CompactTables,
-): Promise<PreparedEntity> {
+): PreparedEntity {
   const { time, timeAutoPlay, ...staticShaderParams } = entity.shaderParams;
   const base = {
     id: entity.id,
@@ -195,24 +287,21 @@ async function prepareEntity(
   switch (entity.mediaSource.type) {
     case "image": {
       const asset = entity.mediaSource.asset;
-      const path = `media/assets/${encodeURIComponent(asset.id)}-${asset.revision}.png`;
+      const extension = imageExtensionFromMime(asset.blob.type);
+      const path = `media/assets/${encodeURIComponent(asset.id)}-${asset.revision}.${extension}`;
       const mediaFileRef = internMediaFile(path, tables);
       if (serializedImageAssets.has(path)) {
         return { serialized: { ...base, mediaType: "image", mediaFileRef } };
       }
       serializedImageAssets.add(path);
-      // Clone bitmap — transfer destroys the source, entity still needs it for rendering
-      const cloned = await createImageBitmap(asset.imageBitmap);
       return {
         serialized: { ...base, mediaType: "image", mediaFileRef },
-        media: { path, type: "imageBitmap", bitmap: cloned },
+        media: { path, type: "blob", blob: asset.blob },
       };
     }
 
     case "video": {
-      // Fetch blob URL bytes on main thread (blob URLs don't work in workers)
-      const bytes = await videoElementToBytes(entity.mediaSource.videoElement);
-      const ext = detectVideoExtension(bytes);
+      const ext = videoExtensionFromMime(entity.mediaSource.blob.type);
       const path = `media/${entity.id}.${ext}`;
       return {
         serialized: {
@@ -224,12 +313,11 @@ async function prepareEntity(
           hasAudio: entity.mediaSource.hasAudio,
           playback: serializePlayback(entity.playback),
         },
-        media: { path, type: "bytes", bytes },
+        media: { path, type: "blob", blob: entity.mediaSource.blob },
       };
     }
 
     case "gif": {
-      const bytes = new Uint8Array(await entity.mediaSource.blob.arrayBuffer());
       const path = `media/${entity.id}.gif`;
       return {
         serialized: {
@@ -240,12 +328,11 @@ async function prepareEntity(
           fps: entity.mediaSource.fps,
           playback: serializePlayback(entity.playback),
         },
-        media: { path, type: "bytes", bytes },
+        media: { path, type: "blob", blob: entity.mediaSource.blob },
       };
     }
 
     case "svg": {
-      const bytes = new Uint8Array(await entity.mediaSource.blob.arrayBuffer());
       const path = `media/${entity.id}.svg`;
       return {
         serialized: {
@@ -253,7 +340,7 @@ async function prepareEntity(
           mediaType: "svg",
           mediaFileRef: internMediaFile(path, tables),
         },
-        media: { path, type: "bytes", bytes },
+        media: { path, type: "blob", blob: entity.mediaSource.blob },
       };
     }
   }

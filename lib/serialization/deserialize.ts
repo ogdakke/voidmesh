@@ -5,7 +5,6 @@ import {
   type ShaderCanvasEntity,
   type ShaderParams,
 } from "#types/canvas.ts";
-import { unzip, type AsyncTerminable } from "fflate";
 import { config } from "#config";
 import { deepMerge } from "../deep-merge.ts";
 import { decodeGif } from "../gif-decoder.ts";
@@ -13,7 +12,7 @@ import { probeVideoAlphaMode, rasterizeSvg } from "../media-loader.ts";
 import { createAlphaHitGrid } from "../alpha-hit-testing.ts";
 import { logger } from "../client.logger.ts";
 import { disposeEntityMedia, disposeVideoElement } from "../media-resources.ts";
-import { bytesToImageBitmap, bytesToVideoElement } from "./media.ts";
+import { bytesToImageBitmap, bytesToVideoElement, MIME_BY_EXT } from "./media.ts";
 import { runMigrations } from "./migrations.ts";
 import type {
   CommitDecodedWorkspace,
@@ -29,15 +28,6 @@ import { analytics } from "#lib/analytics.ts";
 import { createImageAsset, retainImageAsset } from "#lib/media-assets.ts";
 import { registerShaderParamsIdentity } from "#lib/shader-params-identity.ts";
 
-const MIME_BY_EXT: Record<string, string> = {
-  mp4: "video/mp4",
-  webm: "video/webm",
-  mov: "video/quicktime",
-  avi: "video/x-msvideo",
-  mkv: "video/x-matroska",
-};
-
-const LARGE_WORKSPACE_PROGRESS_THRESHOLD = 1_000;
 const DESERIALIZE_TIME_BUDGET_MS = 8;
 const SHADER_PARAMS_SCHEMA_VERSION = 5;
 const VALID_SHADER_TYPES = new Set<string>(Object.values(ShaderType));
@@ -71,7 +61,16 @@ export async function deserialize(
   const errors: { entityId: string; entityName: string; error: string }[] = [];
   const startedAt = performance.now();
   let lastStage: DeserializeProgress["stage"] | null = null;
+  let ownershipTransferred = false;
+  const validEntities: ShaderCanvasEntity[] = [];
+  const imageAssets = new Map<string, MediaImageAsset>();
+  const internPool: DeserializationInternPool = {
+    shaderParams: new Map(),
+    palettes: new Map(),
+    nextShaderParamsIdentity: 1,
+  };
 
+  const fileSizeBytes = source instanceof Blob ? source.size : source.byteLength;
   const reportProgress = (progress: DeserializeProgress) => {
     throwIfAborted(signal);
     if (progress.stage !== lastStage) {
@@ -83,124 +82,50 @@ export async function deserialize(
     onProgress?.(progress);
   };
 
-  // 0. Validate input type
   if (!(source instanceof Blob) && !(source instanceof ArrayBuffer)) {
     throw new Error(
       "deserialize() expects a Blob or ArrayBuffer. Did you forget to await serialize()?",
     );
   }
 
-  const fileSizeBytes = source instanceof Blob ? source.size : source.byteLength;
+  reportProgress({ stage: "reading", fileSizeBytes });
   logger.debug("[workspace-import] deserialize start", {
     fileSizeBytes,
     sourceType: source instanceof Blob ? "blob" : "array-buffer",
   });
 
-  reportProgress({ stage: "reading", fileSizeBytes });
-
-  // 1. Unzip the archive
-  let buffer: ArrayBuffer | null = source instanceof Blob ? await source.arrayBuffer() : source;
-  throwIfAborted(signal);
-  reportProgress({ stage: "unzipping", fileSizeBytes });
-  const zipEntries = await unzipArchive(buffer, signal);
-  buffer = null;
-  throwIfAborted(signal);
-
-  // 2. Read and parse manifest
-  reportProgress({ stage: "parsing", fileSizeBytes });
-  const manifestBytes = zipEntries["manifest.json"];
-  if (!manifestBytes) {
-    throw new Error("Invalid .vdmsh file: missing manifest.json");
-  }
-
-  let manifestJson: string | null = new TextDecoder().decode(manifestBytes);
-  delete zipEntries["manifest.json"];
-  let manifest: unknown;
-  try {
-    manifest = JSON.parse(manifestJson);
-  } catch {
-    throw new Error("Invalid .vdmsh file: manifest.json is not valid JSON");
-  } finally {
-    manifestJson = null;
-  }
-
-  const validation = validateStudioManifest(manifest);
-  if (!validation) {
-    throw new Error("Invalid .vdmsh file: manifest contains missing or invalid workspace fields");
-  }
-  if (validation.duplicateEntityId) {
-    throw new Error(`Invalid .vdmsh file: duplicate entity ID "${validation.duplicateEntityId}"`);
-  }
-  manifest = validation.manifest;
-  throwIfAborted(signal);
-  logger.debug("[workspace-import] manifest parsed", {
-    version: (manifest as StudioManifest).version,
-    entityCount: (manifest as StudioManifest).entities.length,
-    paletteCount: (manifest as StudioManifest).palettes?.length ?? 0,
-  });
-
-  // 3. Run migrations if needed
-  let doc = manifest as StudioManifest;
-  const importedVersion = doc.version;
-  const mergeShaderParamDefaults = importedVersion < SHADER_PARAMS_SCHEMA_VERSION;
-  const workspaceEntityCount = doc.entities.length;
-  const videoEntityCount = validation.videoEntityCount;
+  let doc: StudioManifest | null = null;
+  let validation: ReturnType<typeof validateStudioManifest> = null;
+  let workspaceEntityCount = 0;
+  let videoEntityCount = 0;
   let videoSeekTimeoutCount = 0;
-  if (doc.version < CURRENT_VERSION) {
-    doc = runMigrations(doc);
-    warnings.push(`Migrated from v${importedVersion} to v${CURRENT_VERSION}`);
-  }
-  if (doc.version > CURRENT_VERSION) {
-    warnings.push(
-      `Document is from a newer version (v${doc.version}). Some features may not restore correctly.`,
-    );
-  }
-  if (warnings.length > 0) {
-    logger.debug("[workspace-import] manifest warnings", warnings);
-  }
+  let mergeShaderParamDefaults = false;
+  let decodedEntities: Array<ShaderCanvasEntity | undefined> = [];
+  const mediaGroups = new Map<string, Array<{ entity: ResolvedSerializedEntity; index: number }>>();
+  const seenMediaFiles = new Set<string>();
 
-  // 4. Decode entities before committing so a failed import cannot mutate the
-  //    current workspace or palette store. This function owns every successfully
-  //    decoded media reference until the commit callback adopts the batch.
-  //    Keep decoding sequential to reduce memory pressure on iOS Safari and give
-  //    cancellation/progress updates time to run.
-  const validEntities: ShaderCanvasEntity[] = [];
-  const imageAssets = new Map<string, MediaImageAsset>();
-  const internPool: DeserializationInternPool = {
-    shaderParams: new Map(),
-    palettes: new Map(),
-    nextShaderParamsIdentity: (doc.shaderParamsTable?.length ?? 0) + 1,
-  };
-  for (let index = 0; index < (doc.shaderParamsTable?.length ?? 0); index++) {
-    registerShaderParamsIdentity(doc.shaderParamsTable![index]!, index + 1);
-  }
-  let maxEntityId = 0;
-  let maxZIndex = 0;
-  let ownershipTransferred = false;
+  const processMediaFile = async (path: string, bytes: Uint8Array | null): Promise<void> => {
+    if (!doc || !validation) throw new Error("Invalid .vdmsh file: manifest.json must come first");
+    const group = mediaGroups.get(path);
+    logger.debug("[workspace-import] page media entry received", {
+      path,
+      byteLength: bytes?.byteLength ?? 0,
+      entityCount: group?.length ?? 0,
+    });
+    if (!group) return;
+    seenMediaFiles.add(path);
 
-  try {
     let lastYieldAt = performance.now();
-    for (let index = 0; index < workspaceEntityCount; index++) {
-      const rawSerialized = doc.entities[index]!;
-      const serialized = resolveSerializedEntity(rawSerialized, doc);
-      const shouldYield =
-        index > 0 && performance.now() - lastYieldAt >= DESERIALIZE_TIME_BUDGET_MS;
-      if (
-        workspaceEntityCount < LARGE_WORKSPACE_PROGRESS_THRESHOLD ||
-        index === 0 ||
-        index === workspaceEntityCount - 1 ||
-        shouldYield
-      ) {
-        reportProgress({
-          stage: "decoding",
-          entityIndex: index + 1,
-          entityCount: workspaceEntityCount,
-          entityName: serialized.name,
-          fileSizeBytes,
-        });
-      }
+    for (const { entity: serialized, index } of group) {
+      const shouldYield = index > 0 && performance.now() - lastYieldAt >= DESERIALIZE_TIME_BUDGET_MS;
+      reportProgress({
+        stage: "decoding",
+        entityIndex: index + 1,
+        entityCount: workspaceEntityCount,
+        entityName: serialized.name,
+        fileSizeBytes,
+      });
       throwIfAborted(signal);
-
       if (shouldYield) {
         await yieldToMainThread();
         lastYieldAt = performance.now();
@@ -208,6 +133,7 @@ export async function deserialize(
       }
 
       try {
+        if (!bytes) throw new Error(`Missing media file: ${serialized.mediaFile}`);
         if (serialized.mediaType === "image") {
           const cachedAsset = imageAssets.get(serialized.mediaFile);
           if (cachedAsset) {
@@ -218,18 +144,20 @@ export async function deserialize(
               internPool,
             );
             retainImageAsset(cachedAsset);
-            const entity: ShaderCanvasEntity = {
+            decodedEntities[index] = {
               ...base,
               imageBitmap: cachedAsset.imageBitmap,
               mediaSource: { type: "image", asset: cachedAsset },
             };
-            validEntities.push(entity);
-            maxEntityId = Math.max(maxEntityId, parseEntityIdNumber(entity.id));
-            maxZIndex = Math.max(maxZIndex, entity.zIndex);
             continue;
           }
+          logger.debug("[workspace-import] page decoding image", {
+            path,
+            entityIndex: index + 1,
+            byteLength: bytes.byteLength,
+          });
         }
-        const entity = await deserializeEntity(serialized, zipEntries, warnings, {
+        decodedEntities[index] = await deserializeEntity(serialized, bytes, warnings, {
           workspaceEntityCount,
           videoEntityCount,
           imageAssets,
@@ -239,39 +167,102 @@ export async function deserialize(
             videoSeekTimeoutCount++;
           },
         });
-        validEntities.push(entity);
-        maxEntityId = Math.max(maxEntityId, parseEntityIdNumber(entity.id));
-        maxZIndex = Math.max(maxZIndex, entity.zIndex);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        logger.debug("[workspace-import] page decoded entity", {
+          path,
+          entityIndex: index + 1,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         errors.push({
           entityId: serialized.id,
           entityName: serialized.name,
           error: message,
         });
         logger.warn(`[deserialize] Failed to restore "${serialized.name}": ${message}`);
-      } finally {
-        const remainingMediaUses =
-          (validation.mediaFileUseCounts.get(serialized.mediaFile) ?? 1) - 1;
-        if (
-          (serialized.mediaType === "image" && imageAssets.has(serialized.mediaFile)) ||
-          remainingMediaUses <= 0
-        ) {
-          delete zipEntries[serialized.mediaFile];
+      }
+    }
+  };
+
+  try {
+    reportProgress({ stage: "unzipping", fileSizeBytes });
+    await streamArchive(
+      source,
+      async (path, bytes) => {
+        logger.debug("[workspace-import] page received ZIP entry", {
+          path,
+          byteLength: bytes.byteLength,
+        });
+        if (path === "manifest.json") {
+          reportProgress({ stage: "parsing", fileSizeBytes });
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(new TextDecoder().decode(bytes));
+          } catch {
+            throw new Error("Invalid .vdmsh file: manifest.json is not valid JSON");
+          }
+          validation = validateStudioManifest(parsed);
+          if (!validation) {
+            throw new Error("Invalid .vdmsh file: manifest contains missing or invalid workspace fields");
+          }
+          if (validation.duplicateEntityId) {
+            throw new Error(
+              `Invalid .vdmsh file: duplicate entity ID "${validation.duplicateEntityId}"`,
+            );
+          }
+          const importedManifest = validation.manifest;
+          const importedVersion = importedManifest.version;
+          mergeShaderParamDefaults = importedVersion < SHADER_PARAMS_SCHEMA_VERSION;
+          workspaceEntityCount = importedManifest.entities.length;
+          videoEntityCount = validation.videoEntityCount;
+          const migratedDoc =
+            importedVersion < CURRENT_VERSION ? runMigrations(importedManifest) : importedManifest;
+          doc = migratedDoc;
+          if (importedVersion < CURRENT_VERSION) {
+            warnings.push(`Migrated from v${importedVersion} to v${CURRENT_VERSION}`);
+          }
+          if (migratedDoc.version > CURRENT_VERSION) {
+            warnings.push(
+              `Document is from a newer version (v${migratedDoc.version}). Some features may not restore correctly.`,
+            );
+          }
+          decodedEntities = new Array(migratedDoc.entities.length);
+          internPool.nextShaderParamsIdentity = (migratedDoc.shaderParamsTable?.length ?? 0) + 1;
+          for (let index = 0; index < (migratedDoc.shaderParamsTable?.length ?? 0); index++) {
+            registerShaderParamsIdentity(migratedDoc.shaderParamsTable![index]!, index + 1);
+          }
+          for (let index = 0; index < migratedDoc.entities.length; index++) {
+            const resolved = resolveSerializedEntity(migratedDoc.entities[index]!, migratedDoc);
+            const group = mediaGroups.get(resolved.mediaFile) ?? [];
+            group.push({ entity: resolved, index });
+            mediaGroups.set(resolved.mediaFile, group);
+          }
+          logger.debug("[workspace-import] manifest parsed", {
+            version: migratedDoc.version,
+            entityCount: workspaceEntityCount,
+            paletteCount: migratedDoc.palettes?.length ?? 0,
+          });
+          return;
         }
-        if (remainingMediaUses <= 0) {
-          validation.mediaFileUseCounts.delete(serialized.mediaFile);
-        } else {
-          validation.mediaFileUseCounts.set(serialized.mediaFile, remainingMediaUses);
-        }
-        // Drop parsed records as their runtime replacements are materialized so
-        // both object graphs do not remain live at full size.
-        (doc.entities as Array<SerializedEntity | undefined>)[index] = undefined;
+
+        await processMediaFile(path, bytes);
+        logger.debug("[workspace-import] page completed ZIP entry", { path });
+      },
+      signal,
+    );
+
+    if (!doc || !validation) throw new Error("Invalid .vdmsh file: missing manifest.json");
+    for (const [path] of mediaGroups) {
+      if (!seenMediaFiles.has(path)) await processMediaFile(path, null);
+    }
+
+    for (const entity of decodedEntities) {
+      if (entity) {
+        validEntities.push(entity);
       }
     }
 
-    // If nothing decoded at all, bail without touching the current workspace.
-    if (validEntities.length === 0 && doc.entities.length > 0) {
+    const workspace = doc as StudioManifest;
+    if (validEntities.length === 0 && workspace.entities.length > 0) {
       analytics.track("deserialization.import_summary", {
         workspaceEntityCount,
         videoEntityCount,
@@ -290,32 +281,26 @@ export async function deserialize(
       };
     }
 
-    reportProgress({
-      stage: "restoring",
-      entityCount: workspaceEntityCount,
-      fileSizeBytes,
-    });
+    let maxEntityId = 0;
+    let maxZIndex = 0;
+    for (const entity of validEntities) {
+      maxEntityId = Math.max(maxEntityId, parseEntityIdNumber(entity.id));
+      maxZIndex = Math.max(maxZIndex, entity.zIndex);
+    }
 
+    reportProgress({ stage: "restoring", entityCount: workspaceEntityCount, fileSizeBytes });
     commitWorkspace({
-      palettes: doc.palettes ?? [],
+      palettes: workspace.palettes ?? [],
       adopt: (replaceWorkspace) => {
-        if (ownershipTransferred) {
-          throw new Error("Decoded workspace has already been adopted");
-        }
-        replaceWorkspace(validEntities, doc.viewport);
+        if (ownershipTransferred) throw new Error("Decoded workspace has already been adopted");
+        replaceWorkspace(validEntities, workspace.viewport);
         ownershipTransferred = true;
         return validEntities;
       },
     });
-    if (!ownershipTransferred) {
-      throw new Error("Workspace commit returned without adopting decoded media");
-    }
+    if (!ownershipTransferred) throw new Error("Workspace commit returned without adopting decoded media");
 
-    reportProgress({
-      stage: "done",
-      entityCount: validEntities.length,
-      fileSizeBytes,
-    });
+    reportProgress({ stage: "done", entityCount: validEntities.length, fileSizeBytes });
     logger.debug("[workspace-import] deserialize complete", {
       durationMs: Math.round(performance.now() - startedAt),
       entityCount: validEntities.length,
@@ -341,9 +326,117 @@ export async function deserialize(
     };
   } finally {
     if (!ownershipTransferred) {
-      for (const entity of validEntities) disposeEntityMedia(entity);
+      const stagedEntities = new Set(validEntities);
+      for (const entity of decodedEntities) {
+        if (entity) stagedEntities.add(entity);
+      }
+      for (const entity of stagedEntities) disposeEntityMedia(entity);
     }
   }
+}
+
+async function streamArchive(
+  source: Blob | ArrayBuffer,
+  onEntry: (path: string, bytes: Uint8Array) => Promise<void>,
+  signal?: AbortSignal,
+): Promise<void> {
+  const worker = new Worker(new URL("./deserialize-worker.ts", import.meta.url), { type: "module" });
+
+  return new Promise<void>((resolve, reject) => {
+    let currentPath: string | null = null;
+    let currentChunks: Uint8Array[] = [];
+    let currentSize = 0;
+    let settled = false;
+
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      worker.terminate();
+      callback();
+    };
+    const onAbort = () => {
+      worker.postMessage({ type: "cancel" });
+      finish(() => reject(createAbortError()));
+    };
+    const fail = (error: unknown) => {
+      worker.postMessage({ type: "cancel" });
+      finish(() => reject(error instanceof Error ? error : new Error(String(error))));
+    };
+
+    worker.onmessage = (event: MessageEvent) => {
+      const message = event.data;
+      if (message.type === "worker-log") {
+        const details = message.details ?? {};
+        if (message.level === "error") {
+          logger.error("[workspace-import] worker error", message.message, details);
+          console.error("[workspace-import] worker error", message.message, details);
+        } else {
+          logger.debug("[workspace-import] worker", message.message, details);
+        }
+        return;
+      }
+      if (message.type === "error") {
+        const stage = message.stage ? ` (${String(message.stage)})` : "";
+        const error = new Error(`${String(message.message ?? "Deserialize worker failed")}${stage}`);
+        if (message.stack) error.stack = String(message.stack);
+        logger.error("[workspace-import] deserialize worker failed", error);
+        console.error("[workspace-import] deserialize worker failed", error);
+        return fail(error);
+      }
+      if (message.type === "done") {
+        return finish(resolve);
+      }
+      if (message.type === "entry-start") {
+        if (currentPath) return fail(new Error("ZIP archive emitted overlapping entries"));
+        currentPath = message.path;
+        currentChunks = [];
+        currentSize = 0;
+        worker.postMessage({ type: "ack" });
+      } else if (message.type === "entry-chunk") {
+        if (currentPath !== message.path) return fail(new Error("ZIP entry chunk path mismatch"));
+        const chunk = new Uint8Array(message.chunk);
+        currentChunks.push(chunk);
+        currentSize += chunk.byteLength;
+        worker.postMessage({ type: "ack" });
+      } else if (message.type === "entry-end") {
+        if (currentPath !== message.path) return fail(new Error("ZIP entry end path mismatch"));
+        const path = currentPath as string;
+        const bytes = concatBytes(currentChunks, currentSize);
+        currentPath = null;
+        currentChunks = [];
+        currentSize = 0;
+        worker.postMessage({ type: "ack" });
+        logger.debug("[workspace-import] dispatching ZIP entry to page", {
+          path,
+          byteLength: bytes.byteLength,
+        });
+        void onEntry(path, bytes)
+          .then(() => worker.postMessage({ type: "entry-done", path }))
+          .catch((error) => {
+            logger.error("[workspace-import] page ZIP entry failed", { path, error });
+            console.error("[workspace-import] page ZIP entry failed", path, error);
+            fail(error);
+          });
+      }
+    };
+    worker.onerror = (event) => fail(new Error(`Deserialize worker failed: ${event.message}`));
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) return onAbort();
+
+    const transfer = source instanceof ArrayBuffer ? [source] : [];
+    worker.postMessage({ type: "start", source }, transfer);
+  });
+}
+
+function concatBytes(chunks: Uint8Array[], totalSize: number): Uint8Array {
+  const bytes = new Uint8Array(totalSize);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 function createAbortError(): Error {
@@ -386,51 +479,6 @@ function createMainThreadYieldScheduler(): { yield: () => Promise<void> } {
         channel.port2.postMessage(undefined);
       }),
   };
-}
-
-function unzipArchive(
-  buffer: ArrayBuffer,
-  signal?: AbortSignal,
-): Promise<Record<string, Uint8Array>> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    let terminate: AsyncTerminable | null = null;
-    const startedAt = performance.now();
-
-    const finish = (callback: () => void) => {
-      if (settled) return;
-      settled = true;
-      signal?.removeEventListener("abort", onAbort);
-      callback();
-    };
-
-    const onAbort = () => {
-      terminate?.();
-      logger.debug("[workspace-import] unzip aborted");
-      finish(() => reject(createAbortError()));
-    };
-
-    if (signal?.aborted) {
-      reject(createAbortError());
-      return;
-    }
-
-    signal?.addEventListener("abort", onAbort, { once: true });
-    terminate = unzip(new Uint8Array(buffer), (err, entries) => {
-      finish(() => {
-        if (err) {
-          logger.debug("[workspace-import] unzip failed", err);
-          reject(err);
-          return;
-        }
-        logger.debug("[workspace-import] unzip complete", {
-          entryCount: Object.keys(entries).length,
-          durationMs: Math.round(performance.now() - startedAt),
-        });
-        resolve(entries);
-      });
-    });
-  });
 }
 
 /**
@@ -508,7 +556,7 @@ function validateShaderType(raw: string): ShaderType {
 
 async function deserializeEntity(
   serialized: ResolvedSerializedEntity,
-  zipEntries: Record<string, Uint8Array>,
+  bytes: Uint8Array,
   warnings: string[],
   analyticsContext: {
     workspaceEntityCount: number;
@@ -528,10 +576,11 @@ async function deserializeEntity(
 
   switch (serialized.mediaType) {
     case "image": {
-      const bytes = zipEntries[serialized.mediaFile];
-      if (!bytes) throw new Error(`Missing media file: ${serialized.mediaFile}`);
-      const imageBlob = new Blob([bytes.slice()]);
-      const bitmap = await bytesToImageBitmap(bytes);
+          const extension = serialized.mediaFile.split(".").pop()?.toLowerCase() ?? "png";
+          const imageBlob = new Blob([bytes as Uint8Array<ArrayBuffer>], {
+            type: MIME_BY_EXT[extension] ?? "image/png",
+          });
+      const bitmap = await bytesToImageBitmap(imageBlob);
       let asset: MediaImageAsset;
       try {
         asset = createImageAsset({
@@ -552,17 +601,14 @@ async function deserializeEntity(
     }
 
     case "video": {
-      const bytes = zipEntries[serialized.mediaFile];
-      if (!bytes) throw new Error(`Missing media file: ${serialized.mediaFile}`);
-
       const ext = serialized.mediaFile.split(".").pop() ?? "mp4";
       const mimeType = MIME_BY_EXT[ext] ?? "video/mp4";
       const container = ext.toLowerCase();
 
-      const videoBlob = new Blob([bytes.slice()], { type: mimeType });
+      const videoBlob = new Blob([bytes as Uint8Array<ArrayBuffer>], { type: mimeType });
       const savedTime = serialized.playback?.currentTime ?? 0;
       const { videoElement, initialFrame, duration, currentTime, seekApplied } =
-        await bytesToVideoElement(bytes, mimeType, savedTime);
+        await bytesToVideoElement(videoBlob, mimeType, savedTime);
       try {
         const playback = toPlaybackState(serialized.playback);
         playback.currentTime = currentTime;
@@ -626,10 +672,7 @@ async function deserializeEntity(
     }
 
     case "gif": {
-      const bytes = zipEntries[serialized.mediaFile];
-      if (!bytes) throw new Error(`Missing media file: ${serialized.mediaFile}`);
-
-      const blob = new Blob([bytes.slice()], { type: "image/gif" });
+      const blob = new Blob([bytes as Uint8Array<ArrayBuffer>], { type: "image/gif" });
       const { frames, duration, fps } = await decodeGif(blob);
       try {
         const framesWithAlpha = frames.map((frame) => ({
@@ -658,11 +701,8 @@ async function deserializeEntity(
     }
 
     case "svg": {
-      const bytes = zipEntries[serialized.mediaFile];
-      if (!bytes) throw new Error(`Missing media file: ${serialized.mediaFile}`);
-
       const text = new TextDecoder().decode(bytes);
-      const blob = new Blob([bytes.slice()], { type: "image/svg+xml" });
+      const blob = new Blob([bytes as Uint8Array<ArrayBuffer>], { type: "image/svg+xml" });
       const { bitmap } = await rasterizeSvg(text);
       try {
         return {

@@ -83,8 +83,10 @@ export default defineConfig(({ mode }) => {
         workbox: {
           cleanupOutdatedCaches: true,
           navigateFallback: "index.html",
+          navigateFallbackDenylist: [/^\/__voidmesh-download\//],
+          importScripts: ["voidmesh-download-sw.js"],
           skipWaiting: false,
-          clientsClaim: false,
+          clientsClaim: true,
           runtimeCaching: [
             {
               urlPattern: ({ request, sameOrigin }) => sameOrigin && request.mode === "navigate",

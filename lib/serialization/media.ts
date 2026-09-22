@@ -4,25 +4,56 @@ import { wait } from "../util.ts";
 
 const VIDEO_SEEK_TIMEOUT_MS = 1500;
 
-/**
- * Convert an ImageBitmap to PNG bytes via OffscreenCanvas.
- */
-export async function imageBitmapToBytes(bitmap: ImageBitmap): Promise<Uint8Array> {
-  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-  const ctx = canvas.getContext("2d")!;
-  ctx.drawImage(bitmap, 0, 0);
-  const blob = await canvas.convertToBlob({ type: "image/png" });
-  return new Uint8Array(await blob.arrayBuffer());
+export const MIME_BY_EXT: Record<string, string> = {
+  avif: "image/avif",
+  bmp: "image/bmp",
+  gif: "image/gif",
+  jpeg: "image/jpeg",
+  jpg: "image/jpeg",
+  png: "image/png",
+  svg: "image/svg+xml",
+  webp: "image/webp",
+  mp4: "video/mp4",
+  webm: "video/webm",
+  mov: "video/quicktime",
+  avi: "video/x-msvideo",
+  mkv: "video/x-matroska",
+};
+
+export function videoExtensionFromMime(mimeType: string): string {
+  const normalized = normalizeMimeType(mimeType);
+  return (
+    Object.entries(MIME_BY_EXT).find(
+      ([, mime]) => mime.startsWith("video/") && mime === normalized,
+    )?.[0] ?? "mp4"
+  );
+}
+
+export function imageExtensionFromMime(mimeType: string): string {
+  const normalized = normalizeMimeType(mimeType);
+  return (
+    Object.entries(MIME_BY_EXT).find(
+      ([, mime]) => mime.startsWith("image/") && mime === normalized,
+    )?.[0] ?? "png"
+  );
+}
+
+function normalizeMimeType(mimeType: string): string {
+  const normalized = mimeType.toLowerCase().trim();
+  return normalized === "image/jpg" ? "image/jpeg" : normalized;
 }
 
 /**
  * Convert raw bytes back to an ImageBitmap.
  */
 export async function bytesToImageBitmap(
-  bytes: Uint8Array,
+  source: Blob | Uint8Array,
   mimeType = "image/png",
 ): Promise<ImageBitmap> {
-  const blob = new Blob([bytes.slice()], { type: mimeType });
+  const blob =
+    source instanceof Blob
+      ? source
+      : new Blob([source as Uint8Array<ArrayBuffer>], { type: mimeType });
   return createImageBitmap(blob);
 }
 
@@ -70,45 +101,6 @@ export async function captureVideoFrame(
 }
 
 /**
- * Fetch the original file bytes from a video element's blob URL.
- * Works because blob URLs are alive while the entity exists.
- */
-export async function videoElementToBytes(videoElement: HTMLVideoElement): Promise<Uint8Array> {
-  const src = videoElement.src;
-  if (!src || !src.startsWith("blob:")) {
-    throw new Error("Video element has no blob URL source");
-  }
-  const response = await fetch(src);
-  const buffer = await response.arrayBuffer();
-  return new Uint8Array(buffer);
-}
-
-/**
- * Detect the MIME type of a video blob by reading its magic bytes.
- * Returns a file extension suitable for the archive.
- */
-export function detectVideoExtension(bytes: Uint8Array): string {
-  // Check for common video format magic bytes
-  if (bytes.length >= 12) {
-    // MP4/MOV: ftyp box at offset 4
-    if (
-      bytes[4] === 0x66 && // f
-      bytes[5] === 0x74 && // t
-      bytes[6] === 0x79 && // y
-      bytes[7] === 0x70 // p
-    ) {
-      return "mp4";
-    }
-    // WebM: EBML header
-    if (bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) {
-      return "webm";
-    }
-  }
-  // Default to mp4
-  return "mp4";
-}
-
-/**
  * Load a video from raw bytes, creating an HTMLVideoElement.
  * Mirrors the pattern in media-loader.ts loadVideo().
  *
@@ -117,7 +109,7 @@ export function detectVideoExtension(bytes: Uint8Array): string {
  * @param seekTime - Time in seconds to seek to before capturing the frame (default: 0)
  */
 export async function bytesToVideoElement(
-  bytes: Uint8Array,
+  source: Blob | Uint8Array,
   mimeType: string,
   seekTime = 0,
 ): Promise<{
@@ -129,7 +121,10 @@ export async function bytesToVideoElement(
   currentTime: number;
   seekApplied: boolean;
 }> {
-  const blob = new Blob([bytes.slice()], { type: mimeType });
+  const blob =
+    source instanceof Blob
+      ? source
+      : new Blob([source as Uint8Array<ArrayBuffer>], { type: mimeType });
   let video = createArchiveVideoElement(blob);
   let initialFrame: ImageBitmap | null = null;
 
