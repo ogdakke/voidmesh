@@ -68,11 +68,14 @@ interface MixedFullScenePlan {
 export interface PreparedEntityDrawItems {
   entityDrawItems: CompositionDrawItem[];
   actionLayerDrawItems: CompositionDrawItem[];
+  animatingDrawItems: CompositionDrawItem[];
+  dragVisualDrawItems: CompositionDrawItem[];
   fullSceneBatch: FullSceneBatchKey | null;
   singleSelectedDrawItem: CompositionDrawItem | null;
   singleSelectedOffsetX: number;
   singleSelectedOffsetY: number;
   hasAnimatingContent: boolean;
+  hasBackdropAnimatingContent: boolean;
 }
 
 export interface EntityPreparationPhaseStats {
@@ -97,17 +100,22 @@ export class EntityDrawItemPreparer {
   #admissionVisibleEntities: readonly ShaderCanvasEntity[] = this.#visibleEntities;
   readonly #entityDrawItems: CompositionDrawItem[] = [];
   readonly #actionLayerDrawItems: CompositionDrawItem[] = [];
+  readonly #animatingDrawItems: CompositionDrawItem[] = [];
+  readonly #dragVisualDrawItems: CompositionDrawItem[] = [];
   readonly #fullScenePatches: FullSceneBatchPatch[] = [];
   readonly #fullSceneInstancePatches: FullSceneInstancePatch[] = [];
   #fullSceneEntityIndices: ReadonlyMap<string, number> = new Map();
   readonly #prepared: PreparedEntityDrawItems = {
     entityDrawItems: this.#entityDrawItems,
     actionLayerDrawItems: this.#actionLayerDrawItems,
+    animatingDrawItems: this.#animatingDrawItems,
+    dragVisualDrawItems: this.#dragVisualDrawItems,
     fullSceneBatch: null,
     singleSelectedDrawItem: null,
     singleSelectedOffsetX: 0,
     singleSelectedOffsetY: 0,
     hasAnimatingContent: false,
+    hasBackdropAnimatingContent: false,
   };
   #fullSceneBatchKey: FullSceneBatchKey | null = null;
   #mixedFullSceneBatchKey: FullSceneBatchKey | null = null;
@@ -166,8 +174,12 @@ export class EntityDrawItemPreparer {
 
     const entityDrawItems = this.#entityDrawItems;
     const actionLayerDrawItems = this.#actionLayerDrawItems;
+    const animatingDrawItems = this.#animatingDrawItems;
+    const dragVisualDrawItems = this.#dragVisualDrawItems;
     entityDrawItems.length = 0;
     actionLayerDrawItems.length = 0;
+    animatingDrawItems.length = 0;
+    dragVisualDrawItems.length = 0;
     if (this.#snapshotEntityVersion !== options.entityVersion) {
       this.#snapshotRepresentative = null;
       this.#snapshotEntityVersion = options.entityVersion;
@@ -179,6 +191,7 @@ export class EntityDrawItemPreparer {
     this.#fullSceneAdmissionQueried = false;
     this.#admissionVisibleEntities = this.#visibleEntities;
     let hasAnimatingContent = false;
+    let hasBackdropAnimatingContent = false;
     this.#phaseStats.batchAdmissionMs = 0;
     this.#phaseStats.spatialQueryMs = 0;
     this.#phaseStats.visibleEntityPreparationMs = 0;
@@ -208,6 +221,7 @@ export class EntityDrawItemPreparer {
       }
       this.#prepared.fullSceneBatch = fullSceneBatch;
       this.#prepared.hasAnimatingContent = false;
+      this.#prepared.hasBackdropAnimatingContent = false;
       return this.#prepared;
     }
 
@@ -251,12 +265,14 @@ export class EntityDrawItemPreparer {
     let previousDesiredHeight = 0;
     const visiblePreparationStart = performance.now();
     for (const entity of visibleEntities) {
+      const isActionLayerEntity = actionLayerActive && actionLayer.entityIds.has(entity.id);
       // Check if texture needs regeneration. Animated media is marked dirty by the
       // game loop only when the decoded frame changes.
       const textureWasDirty = !!entity.textureDirty;
       const needsContinuousRender = this.#texturePipeline.needsContinuousRenderForEntity(entity);
       if (textureWasDirty || needsContinuousRender) {
         hasAnimatingContent = true;
+        if (!isActionLayerEntity) hasBackdropAnimatingContent = true;
       }
 
       const sameProjectedSize =
@@ -302,7 +318,6 @@ export class EntityDrawItemPreparer {
       const isSelected = allEntitiesSelected || selectedEntityIds.has(entity.id);
 
       // Action layer entities are drawn AFTER blur (not in main pass) to avoid halo
-      const isActionLayerEntity = actionLayerActive && actionLayer.entityIds.has(entity.id);
       const isDragVisualEntity = dragVisual.active && dragVisual.entityIds.has(entity.id);
       const dragOffsetX =
         isDragVisualEntity && dragVisual.appliesToSelection ? dragVisual.offset.x : 0;
@@ -333,17 +348,21 @@ export class EntityDrawItemPreparer {
         compositionOptions.visualScale = visualScale;
       }
       const drawItem = this.#compositionPass.prepareDrawItem(compositionOptions);
+      if (textureWasDirty || needsContinuousRender) animatingDrawItems.push(drawItem);
+      if (isDragVisualEntity) dragVisualDrawItems.push(drawItem);
       if (selectedEntityIds.size === 1 && isSelected) {
         this.#prepared.singleSelectedDrawItem = drawItem;
         this.#prepared.singleSelectedOffsetX = drawItem.offsetX;
         this.#prepared.singleSelectedOffsetY = drawItem.offsetY;
       }
 
-      if (isActionLayerEntity) {
-        actionLayerDrawItems.push(drawItem);
-      } else {
+      if (isActionLayerEntity) actionLayerDrawItems.push(drawItem);
+      if (!isActionLayerEntity || this.#compositionPass.crossing.hasLayerSlices) {
         entityDrawItems.push(drawItem);
       }
+    }
+    if (actionLayerActive && this.#compositionPass.crossing.enabled) {
+      entityDrawItems.sort(this.#compareCrossingItems);
     }
     const visiblePreparationEnd = performance.now();
     this.#phaseStats.visibleEntityPreparationMs = tracePerformancePhase(
@@ -353,8 +372,20 @@ export class EntityDrawItemPreparer {
     );
 
     this.#prepared.hasAnimatingContent = hasAnimatingContent;
+    this.#prepared.hasBackdropAnimatingContent = hasBackdropAnimatingContent;
     return this.#prepared;
   }
+
+  readonly #compareCrossingItems = (a: CompositionDrawItem, b: CompositionDrawItem): number => {
+    const ai = this.#fullSceneEntityIndices.get(a.entity.id);
+    const bi = this.#fullSceneEntityIndices.get(b.entity.id);
+    if (ai === undefined || bi === undefined)
+      throw new Error("Crossing draw item is missing its scene index");
+    return (
+      this.#compositionPass.crossing.order(ai, a.entity.id) -
+      this.#compositionPass.crossing.order(bi, b.entity.id)
+    );
+  };
 
   getPhaseStats(): Readonly<EntityPreparationPhaseStats> {
     return this.#phaseStats;

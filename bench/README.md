@@ -68,6 +68,36 @@ The paused mixed-media pan scenario guards the everyday external-video path:
 57 unique large images and four paused videos pan continuously at fixed zoom,
 with RAF cadence recorded so compositor regressions are visible.
 
+## Overlap action-layer toggles
+
+These opt-in scenarios lift and return six selected cards every 60 frames, with
+action-layer blur and transient offsets enabled:
+
+```bash
+bun run bench:render:record -- --scenario overlap-72-action-toggle --rounds 3
+bun run bench:render:record -- --scenario overlap-16-mixed-action-toggle --rounds 3
+```
+
+The stress case has six stacks of twelve unique images. The mixed-media guard
+has twelve unique images and four playing external videos, with alternating
+card rotations. Both use a 1280×720 canvas, RAF pacing, and GPU completion waits
+after each frame. Compare `endToEndP95Ms` as the primary queue-synchronized
+latency metric and `rafIntervalP95Ms` for dropped-frame cadence. Completion
+waits include browser/queue overhead, so they are not GPU timestamp measurements.
+
+Inspect individual `sampleDetails[].frameSamples[]` around frame indices modulo
+120 equal to 0 or 60. Compare uploads, allocation/eviction deltas, and normal
+instance-upload bytes alongside timings. Per-frame opacity-proof and occlusion-pass
+deltas verify that scans are staged before measured toggles and dense scenes use
+one instanced depth draw per occlusion pass. Composition layer-target bytes are
+included in reported texture residency. The effect advances with real elapsed
+time, so faster runs can contain more intermediate crossing frames.
+
+See [overlap performance notes](./overlap-performance.md) for the diagnosis and
+scaling limits. These new scenarios are absent from older refs; use recorded
+pre-edit branch baselines for overlap comparisons and an existing scenario for
+`main` A/B guards.
+
 ## Many-entity suite
 
 The opt-in many-entity suite keeps the original core suite fast while covering
@@ -252,3 +282,16 @@ http://127.0.0.1:5175/bench/render.html?visual=flowing-glass
 This renders one fixed frame with `timeAutoPlay: false` and `time = 1.75`, then
 sets `document.documentElement.dataset.benchVisualComplete = "1"` so browser
 automation can screenshot the canvas.
+
+## Overlap visual guard
+
+Separately from timing, run the development benchmark page's GPU pixel check:
+
+```js
+await import("/bench/render-bench.ts").then((module) => module.validateOverlapFastPaths());
+```
+
+It compares zero-RGB fast paths with full material calculations across rotated,
+transparent stacks and both toggle directions. It fails on GPU validation errors
+or differences exceeding one RGBA8 channel step. See [overlap performance](./overlap-performance.md)
+for main comparisons, the 8.33 ms budget, and visual checks.

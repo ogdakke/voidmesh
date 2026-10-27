@@ -15,8 +15,9 @@ struct LabelUniforms {
   size: vec2f,      // Width/height in world coordinates
   opacity: f32,
   _pad: f32,
-  _pad2: f32,
-  _pad3: f32,
+  textureSize: vec2f,
+  atlasOrigin: vec2f,
+  _pad2: vec2f,
 }
 
 @group(0) @binding(0) var<uniform> viewport: ViewportUniforms;
@@ -60,6 +61,13 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
-  let color = textureSample(labelTexture, labelSampler, input.uv);
+  let allocationSize = vec2f(textureDimensions(labelTexture));
+  let texel = clamp(
+    input.uv * label.textureSize - vec2f(0.5),
+    vec2f(0.0),
+    label.textureSize - vec2f(1.0),
+  );
+  let uv = (label.atlasOrigin + texel + vec2f(0.5)) / allocationSize;
+  let color = textureSample(labelTexture, labelSampler, uv);
   return color * label.opacity;
 }

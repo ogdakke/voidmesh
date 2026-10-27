@@ -75,10 +75,61 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 
 export function createWlurBlurShaderSource(axis: "x" | "y", kernelSize: number): string {
   const halfKernel = (kernelSize - 1) / 2;
+  const pairCount = Math.floor(halfKernel / 2);
+  const hasUnpairedTap = halfKernel % 2 === 1;
   const texelOffset =
     axis === "x"
       ? "vec2f(sample_offset / params.output_resolution.z, 0.0)"
       : "vec2f(0.0, sample_offset / params.output_resolution.w)";
+  const samplingBody =
+    axis === "x"
+      ? `
+  // The horizontal source may be higher-resolution than this render target.
+  // Preserve its exact sample positions; bilinear tap pairing is only exact
+  // when adjacent kernel taps are also adjacent source texels.
+  var accum = vec4f(0.0);
+  var weight_sum = 0.0;
+  for (var i: u32 = 0u; i < KERNEL_SIZE; i = i + 1u) {
+    let sample_offset = f32(i) - HALF_KERNEL;
+    let weight = exp(-(sample_offset * sample_offset) / (2.0 * sigma * sigma));
+    let sample_uv = clamp(in.uv + ${texelOffset}, vec2f(0.0), vec2f(1.0));
+    accum = accum + textureSampleLevel(input_texture, input_sampler, sample_uv, 0.0) * weight;
+    weight_sum = weight_sum + weight;
+  }
+`
+      : `
+  // Pair adjacent Gaussian taps into one bilinear lookup. The vertical source
+  // and target share a texel grid, so the weighted fractional lookup exactly
+  // reconstructs both samples while halving texture fetches.
+  var accum = original;
+  var weight_sum = 1.0;
+  for (var pair: u32 = 0u; pair < PAIR_COUNT; pair = pair + 1u) {
+    let first_offset = 1.0 + f32(pair * 2u);
+    let second_offset = first_offset + 1.0;
+    let first_weight = exp(-(first_offset * first_offset) / (2.0 * sigma * sigma));
+    let second_weight = exp(-(second_offset * second_offset) / (2.0 * sigma * sigma));
+    let pair_weight = first_weight + second_weight;
+    let sample_offset = first_offset + second_weight / max(pair_weight, 1e-20);
+    let positive_uv = clamp(in.uv + ${texelOffset}, vec2f(0.0), vec2f(1.0));
+    let negative_uv = clamp(in.uv - ${texelOffset}, vec2f(0.0), vec2f(1.0));
+    accum = accum + (
+      textureSampleLevel(input_texture, input_sampler, positive_uv, 0.0) +
+      textureSampleLevel(input_texture, input_sampler, negative_uv, 0.0)
+    ) * pair_weight;
+    weight_sum = weight_sum + 2.0 * pair_weight;
+  }
+  if (HAS_UNPAIRED_TAP) {
+    let sample_offset = HALF_KERNEL;
+    let weight = exp(-(sample_offset * sample_offset) / (2.0 * sigma * sigma));
+    let positive_uv = clamp(in.uv + ${texelOffset}, vec2f(0.0), vec2f(1.0));
+    let negative_uv = clamp(in.uv - ${texelOffset}, vec2f(0.0), vec2f(1.0));
+    accum = accum + (
+      textureSampleLevel(input_texture, input_sampler, positive_uv, 0.0) +
+      textureSampleLevel(input_texture, input_sampler, negative_uv, 0.0)
+    ) * weight;
+    weight_sum = weight_sum + 2.0 * weight;
+  }
+`;
 
   return `
 struct BlurParams {
@@ -98,6 +149,8 @@ ${curveSampling("input_sampler")}
 
 const KERNEL_SIZE: u32 = ${kernelSize}u;
 const HALF_KERNEL: f32 = ${halfKernel}.0;
+const PAIR_COUNT: u32 = ${pairCount}u;
+const HAS_UNPAIRED_TAP: bool = ${hasUnpairedTap};
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
@@ -115,16 +168,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   }
 
   let sigma = max(radius, 0.001);
-  var accum = vec4f(0.0);
-  var weight_sum = 0.0;
-
-  for (var i: u32 = 0u; i < KERNEL_SIZE; i = i + 1u) {
-    let sample_offset = f32(i) - HALF_KERNEL;
-    let weight = exp(-(sample_offset * sample_offset) / (2.0 * sigma * sigma));
-    let sample_uv = clamp(in.uv + ${texelOffset}, vec2f(0.0), vec2f(1.0));
-    accum = accum + textureSampleLevel(input_texture, input_sampler, sample_uv, 0.0) * weight;
-    weight_sum = weight_sum + weight;
-  }
+${samplingBody}
 
   return accum / max(weight_sum, 0.00001);
 }

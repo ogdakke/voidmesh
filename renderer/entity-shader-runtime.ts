@@ -337,6 +337,7 @@ export class EntityShaderRuntime {
 
   destroy(): void {
     this.flushTextureReleases();
+    this.#passthroughCopyPass.destroy();
     this.#shaderRegistry.destroy();
     this.#processingPipeline.destroy();
   }

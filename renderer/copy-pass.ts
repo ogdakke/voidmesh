@@ -13,6 +13,8 @@ export class CopyPass {
   #pipeline: GPURenderPipeline;
   #bindGroupLayout: GPUBindGroupLayout;
   #sampler: GPUSampler;
+  #sourceBindings = new WeakMap<GPUTexture, { view: GPUTextureView; bindGroup: GPUBindGroup }>();
+  #destinationViews = new WeakMap<GPUTexture, GPUTextureView>();
 
   constructor(device: GPUDevice, targetFormat: GPUTextureFormat = "rgba8unorm") {
     this.#device = device;
@@ -67,16 +69,35 @@ export class CopyPass {
     source: GPUTexture,
     destination: GPUTexture | GPUTextureView,
   ): void {
-    const destinationView = "createView" in destination ? destination.createView() : destination;
+    let destinationView: GPUTextureView;
+    if ("createView" in destination) {
+      const cached = this.#destinationViews.get(destination);
+      if (cached) {
+        destinationView = cached;
+      } else {
+        destinationView = destination.createView();
+        this.#destinationViews.set(destination, destinationView);
+      }
+    } else {
+      destinationView = destination;
+    }
 
-    const bindGroup = this.#device.createBindGroup({
-      label: "CopyPass bind group",
-      layout: this.#bindGroupLayout,
-      entries: [
-        { binding: 0, resource: source.createView() },
-        { binding: 1, resource: this.#sampler },
-      ],
-    });
+    let sourceBinding = this.#sourceBindings.get(source);
+    if (!sourceBinding) {
+      const view = source.createView();
+      sourceBinding = {
+        view,
+        bindGroup: this.#device.createBindGroup({
+          label: "CopyPass bind group",
+          layout: this.#bindGroupLayout,
+          entries: [
+            { binding: 0, resource: view },
+            { binding: 1, resource: this.#sampler },
+          ],
+        }),
+      };
+      this.#sourceBindings.set(source, sourceBinding);
+    }
 
     const pass = encoder.beginRenderPass({
       label: "CopyPass render pass",
@@ -91,7 +112,7 @@ export class CopyPass {
     });
 
     pass.setPipeline(this.#pipeline);
-    pass.setBindGroup(0, bindGroup);
+    pass.setBindGroup(0, sourceBinding.bindGroup);
     pass.draw(3);
     pass.end();
   }
@@ -108,5 +129,10 @@ export class CopyPass {
     this.encode(encoder, source, destination);
 
     this.#device.queue.submit([encoder.finish()]);
+  }
+
+  destroy(): void {
+    this.#sourceBindings = new WeakMap();
+    this.#destinationViews = new WeakMap();
   }
 }

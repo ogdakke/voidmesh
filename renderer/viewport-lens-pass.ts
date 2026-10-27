@@ -1,5 +1,12 @@
 import viewportLensDistortionShaderSource from "./viewport-lens-distortion.wgsl?raw";
+import type { WlurPixelRegion } from "#wlur";
 import type { ViewportLensDistortionConfig } from "#types/canvas.ts";
+import {
+  createViewportLensOutputInfluenceMap,
+  getViewportLensOutputInfluenceRegion,
+  getViewportLensSourceDependencyRegion,
+  type ViewportLensOutputInfluenceMap,
+} from "./viewport-lens-dependency.ts";
 export type { ViewportLensDistortionConfig } from "#types/canvas.ts";
 
 export interface ViewportLensTarget {
@@ -24,9 +31,20 @@ export class ViewportLensPass {
   readonly #sampler: GPUSampler;
   readonly #uniformData = new ArrayBuffer(UNIFORM_BUFFER_SIZE_BYTES);
   readonly #floatView = new Float32Array(this.#uniformData);
+  readonly #uniformCache = new Float32Array(UNIFORM_BUFFER_SIZE_BYTES / 4).fill(Number.NaN);
 
   #config: ViewportLensDistortionConfig;
   #darkTheme = false;
+  #sourceDependencyCache: {
+    width: number;
+    height: number;
+    outputX: number;
+    outputY: number;
+    outputWidth: number;
+    outputHeight: number;
+    region: WlurPixelRegion;
+  } | null = null;
+  #outputInfluenceMap: ViewportLensOutputInfluenceMap | null = null;
   #texture: {
     width: number;
     height: number;
@@ -92,6 +110,56 @@ export class ViewportLensPass {
 
   setConfig(config: ViewportLensDistortionConfig): void {
     this.#config = { ...config };
+    this.#sourceDependencyCache = null;
+    this.#outputInfluenceMap = null;
+  }
+
+  getSourceDependencyRegion(
+    outputRegion: WlurPixelRegion,
+    width: number,
+    height: number,
+  ): WlurPixelRegion {
+    this.#ensureOutputInfluenceMap(width, height);
+    const cached = this.#sourceDependencyCache;
+    if (
+      cached &&
+      cached.width === width &&
+      cached.height === height &&
+      cached.outputX === outputRegion.x &&
+      cached.outputY === outputRegion.y &&
+      cached.outputWidth === outputRegion.width &&
+      cached.outputHeight === outputRegion.height
+    ) {
+      return cached.region;
+    }
+
+    const region = getViewportLensSourceDependencyRegion(
+      outputRegion,
+      width,
+      height,
+      this.#config,
+      cached?.region ?? { x: 0, y: 0, width: 0, height: 0 },
+    );
+    this.#sourceDependencyCache = {
+      width,
+      height,
+      outputX: outputRegion.x,
+      outputY: outputRegion.y,
+      outputWidth: outputRegion.width,
+      outputHeight: outputRegion.height,
+      region,
+    };
+    return region;
+  }
+
+  getOutputInfluenceRegion(
+    sourceRegion: WlurPixelRegion,
+    width: number,
+    height: number,
+    output: WlurPixelRegion,
+  ): WlurPixelRegion {
+    const influenceMap = this.#ensureOutputInfluenceMap(width, height);
+    return getViewportLensOutputInfluenceRegion(sourceRegion, influenceMap, output);
   }
 
   setColorScheme(isDark: boolean): boolean {
@@ -155,7 +223,17 @@ export class ViewportLensPass {
     v[9] = lens.occlusion;
     v[10] = this.#darkTheme ? lens.vignetteDark : lens.vignetteLight;
     v[11] = 0;
-    this.#device.queue.writeBuffer(this.#uniformBuffer, 0, this.#uniformData);
+    let uniformsChanged = false;
+    for (let i = 0; i < v.length; i++) {
+      if (v[i] !== this.#uniformCache[i]) {
+        uniformsChanged = true;
+        break;
+      }
+    }
+    if (uniformsChanged) {
+      this.#device.queue.writeBuffer(this.#uniformBuffer, 0, this.#uniformData);
+      this.#uniformCache.set(v);
+    }
 
     const pass = encoder.beginRenderPass({
       label: "Viewport lens distortion pass",
@@ -183,6 +261,14 @@ export class ViewportLensPass {
   #shouldApply(): boolean {
     const lens = this.#config;
     return lens.enabled && (lens.strength > 0.001 || lens.dispersion > 0.001);
+  }
+
+  #ensureOutputInfluenceMap(width: number, height: number): ViewportLensOutputInfluenceMap {
+    const cached = this.#outputInfluenceMap;
+    if (cached && cached.width === width && cached.height === height) return cached;
+    const influenceMap = createViewportLensOutputInfluenceMap(width, height, this.#config);
+    this.#outputInfluenceMap = influenceMap;
+    return influenceMap;
   }
 
   #destroyTexture(): void {

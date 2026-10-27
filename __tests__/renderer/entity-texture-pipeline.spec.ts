@@ -62,10 +62,13 @@ describe("EntityTexturePipeline shared image sources", () => {
 
     const sourceTexture = createTexture(200, 150);
     const device = createDevice([sourceTexture]);
+    const onImmutableSourceUpload =
+      vi.fn<(texture: GPUTexture, encoder: GPUCommandEncoder) => void>();
     const pipeline = new EntityTexturePipeline({
       device,
       colorConfig,
       texturePool: null,
+      onImmutableSourceUpload,
     });
     const encoder = {} as GPUCommandEncoder;
 
@@ -76,6 +79,7 @@ describe("EntityTexturePipeline shared image sources", () => {
     expect(secondSource).toEqual({ kind: "texture", texture: sourceTexture });
     expect(device.createTexture).toHaveBeenCalledOnce();
     expect(device.queue.copyExternalImageToTexture).toHaveBeenCalledOnce();
+    expect(onImmutableSourceUpload).toHaveBeenCalledExactlyOnceWith(sourceTexture, encoder);
 
     pipeline.removeEntity(first.id);
     expect(sourceTexture.destroy).not.toHaveBeenCalled();
@@ -317,6 +321,37 @@ describe("EntityTexturePipeline shared image sources", () => {
     pipeline.destroy();
     if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
   });
+
+  test("keeps original video frames on the zero-copy external path", () => {
+    const entity = createTestEntity({
+      id: "original-video",
+      mediaType: "video",
+      shaderParams: { showOriginal: true },
+    });
+    entity.textureDirty = true;
+    const device = createDevice([]);
+    vi.mocked(device.importExternalTexture).mockReturnValue({} as GPUExternalTexture);
+    const pipeline = new EntityTexturePipeline({
+      device,
+      colorConfig,
+      texturePool: null,
+    });
+    const encoder = {} as GPUCommandEncoder;
+
+    expect(pipeline.renderEntityToTexture(entity, encoder)?.kind).toBe("external");
+    entity.textureDirty = false;
+    expect(pipeline.renderEntityToTexture(entity, encoder)?.kind).toBe("external");
+
+    expect(device.createTexture).not.toHaveBeenCalled();
+    expect(device.queue.copyExternalImageToTexture).not.toHaveBeenCalled();
+    expect(device.importExternalTexture).toHaveBeenCalledTimes(2);
+    expect(pipeline.getResidencyStats()).toMatchObject({
+      sourceUploads: 0,
+      externalTextureImports: 2,
+    });
+
+    pipeline.destroy();
+  });
 });
 
 function createTexture(width: number, height: number): GPUTexture {
@@ -341,6 +376,9 @@ function createDevice(sourceTextures: GPUTexture[]): GPUDevice {
     createShaderModule: vi.fn<GPUDevice["createShaderModule"]>(() => ({}) as GPUShaderModule),
     createPipelineLayout: vi.fn<GPUDevice["createPipelineLayout"]>(() => ({}) as GPUPipelineLayout),
     createRenderPipeline: vi.fn<GPUDevice["createRenderPipeline"]>(() => ({}) as GPURenderPipeline),
+    importExternalTexture: vi.fn<GPUDevice["importExternalTexture"]>(
+      () => ({}) as GPUExternalTexture,
+    ),
     createTexture: vi.fn<GPUDevice["createTexture"]>(() => {
       const texture = sourceTextures.shift();
       if (!texture) throw new Error("Test requested an unexpected texture allocation");

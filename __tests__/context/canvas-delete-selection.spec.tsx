@@ -1,3 +1,4 @@
+import { FancyEffects } from "#types/fancy-effects.ts";
 import { act } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { canvasStore } from "#engine";
@@ -35,7 +36,7 @@ describe("CanvasCommands.deleteSelection", () => {
     );
     canvasStore.addEntities(entities);
     canvasStore.replaceSelection(entities.map(({ id }) => id));
-    canvasStore.setFancyDelete(false);
+    canvasStore.setFancyEffects(FancyEffects.none);
     let notifications = 0;
     const unsubscribe = canvasStore.subscribe(() => notifications++);
 

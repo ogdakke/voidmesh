@@ -27,7 +27,7 @@ export type { ViewportAnimationOptions, ViewportStore } from "./viewport-animati
 
 export { disintegrationController } from "./disintegration-controller.ts";
 export { PerfOverlayController, perfOverlay } from "./perf-overlay.ts";
-export type { FrameStats } from "./perf-overlay.ts";
+export type { FrameStats, PerformanceFrameObserver } from "./perf-overlay.ts";
 export type { PerfGraphRendererFactory, PerfGraphRendererPort } from "./perf-overlay.ts";
 export { MomentumController } from "./momentum-controller.ts";
 export { EntityDragController } from "./entity-drag-controller.ts";

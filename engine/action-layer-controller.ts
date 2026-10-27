@@ -1,3 +1,5 @@
+import { hasPrismWakeEffects } from "#lib/fancy-effects.ts";
+import { overlapConfig } from "#lib/config/overlap.config.ts";
 import { SpringBack } from "#lib/touch-scroll/spring-back.ts";
 import { config } from "#config";
 import { canvasStore, type ActionLayerRenderState } from "./canvas-store.ts";
@@ -206,6 +208,9 @@ export class ActionLayerController {
     this.#renderOffset.x = this.#currentOffsetX;
     this.#renderOffset.y = this.#currentOffsetY;
     this.#renderState.active = this.isActive();
+    this.#renderState.returning =
+      this.#phase === ActionLayerPhase.dismissing ||
+      this.#phase === ActionLayerPhase.transitioning_to_drag;
     this.#renderState.entityIds = this.#entityIds;
     this.#renderState.blurIntensity = this.#blurIntensity;
     return this.#renderState;
@@ -221,7 +226,10 @@ export class ActionLayerController {
     this.#blurTarget = 0;
     this.#blurStartTime = performance.now();
 
-    // No spring-back needed — entity stays at current offset for drag pickup
+    // Input has transferred the visual offset into drag geometry. Clear it now
+    // so the return crossing does not apply the same translation twice.
+    this.#currentOffsetX = 0;
+    this.#currentOffsetY = 0;
     this.#dismissSpringX.reset();
     this.#dismissSpringY.reset();
     this.#dismissSpringStartTime = performance.now();
@@ -384,7 +392,17 @@ export class ActionLayerController {
           visualChanged = true;
 
           // If all animations settled, return to idle
-          if (valX === null && valY === null && this.#blurIntensity === this.#blurTarget) {
+          const overlap = overlapConfig;
+          const crossingSettled =
+            !overlap.enabled ||
+            !hasPrismWakeEffects(canvasStore.getState().fancyEffects) ||
+            elapsed >= overlap.transition;
+          if (
+            valX === null &&
+            valY === null &&
+            this.#blurIntensity === this.#blurTarget &&
+            crossingSettled
+          ) {
             this.#phase = ActionLayerPhase.idle;
             this.#entityIds = new Set();
             // Trigger one more render so the renderer re-sorts entities

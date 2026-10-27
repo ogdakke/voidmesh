@@ -1,7 +1,10 @@
+import { resolve } from "node:path";
+import wgslMinifyPlugin from "../../plugins/vite-plugin-wgsl-minify.ts";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { releaseImageAsset, retainImageAsset } from "#lib/media-assets.ts";
 import {
   CompositionPass,
+  createExternalCompositionShaderSource,
   type CompositionDrawItem,
   type FullSceneBatchKey,
   type FullSceneTextureRange,
@@ -12,11 +15,451 @@ import { createTestEntity } from "../helpers/test-entity.ts";
 
 describe("CompositionPass instancing", () => {
   beforeAll(() => {
-    vi.stubGlobal("GPUShaderStage", { VERTEX: 1, FRAGMENT: 2 });
-    vi.stubGlobal("GPUBufferUsage", { UNIFORM: 1, COPY_DST: 2, STORAGE: 4 });
+    vi.stubGlobal("GPUShaderStage", { VERTEX: 1, FRAGMENT: 2, COMPUTE: 4 });
+    vi.stubGlobal("GPUBufferUsage", { UNIFORM: 1, COPY_DST: 2, STORAGE: 4, COPY_SRC: 8 });
+    vi.stubGlobal("GPUTextureUsage", { RENDER_ATTACHMENT: 1, COPY_DST: 2, TEXTURE_BINDING: 4 });
   });
 
   afterAll(() => vi.unstubAllGlobals());
+
+  test("minifies complete composition modules before rewriting external textures", async () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const plugin = wgslMinifyPlugin();
+    if (typeof plugin.configResolved !== "function" || typeof plugin.load !== "function")
+      throw new Error("WGSL plugin hooks are unavailable");
+    Reflect.apply(plugin.configResolved, {}, [{ command: "build" }]);
+    const context = {
+      addWatchFile: vi.fn<(path: string) => void>(),
+      debug: vi.fn<(message: string) => void>(),
+      warn: vi.fn<(message: string) => void>(),
+    };
+    const modules = vi
+      .mocked(device.createShaderModule)
+      .mock.calls.map(([descriptor]) => descriptor);
+    for (const module of modules.filter(
+      (module) => module.label !== "External composition shader",
+    )) {
+      expect(module.code).toContain("fn crossingColor(");
+      const file =
+        module.label === "Composition shader" ? "composition.wgsl" : "composition-instanced.wgsl";
+      const output: unknown = await Reflect.apply(plugin.load, context, [
+        resolve("renderer", file) + "?raw",
+      ]);
+      if (typeof output !== "string") throw new Error("WGSL build returned no shader source");
+      const code: string = JSON.parse(output.slice("export default ".length));
+      expect(context.warn).not.toHaveBeenCalled();
+      // Minifying a fragment alone removes this declaration as unused.
+      expect(code).toContain("entityTexture:texture_2d<f32>");
+      const external = createExternalCompositionShaderSource(code);
+      expect(external).toContain("entityTexture: texture_external;");
+      expect(external).toContain("textureSampleBaseClampToEdge(entityTexture,");
+      expect(external).not.toMatch(/textureSample\(entityTexture,/);
+    }
+    const proof: unknown = await Reflect.apply(plugin.load, context, [
+      resolve("renderer/opaque-texture-proof.wgsl") + "?raw",
+    ]);
+    if (typeof proof !== "string") throw new Error("Opacity WGSL build returned no shader source");
+    const proofCode: string = JSON.parse(proof.slice("export default ".length));
+    expect(context.warn).not.toHaveBeenCalled();
+    expect(proofCode).toContain("proveOpacity(");
+    expect(proofCode).toContain("@compute");
+    pass.destroy();
+  });
+
+  test("exposes the viewport to fragment shading for the effected selection outline", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const layout = vi
+      .mocked(device.createBindGroupLayout)
+      .mock.calls.find(
+        ([descriptor]) => descriptor.label === "Instanced composition bind group layout",
+      )![0];
+    expect(Array.from(layout.entries).find((entry) => entry.binding === 0)?.visibility).toBe(
+      GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+    );
+    pass.destroy();
+  });
+
+  test("keeps active material out of the scene that will be blurred", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const entities = ["active", "middle", "upper"].map((id) => createTestEntity({ id }));
+    pass.crossing.update(
+      entities,
+      {
+        active: true,
+        entityIds: new Set(["active"]),
+        entityOffset: { x: 0, y: 0 },
+        blurIntensity: 1,
+      },
+      0,
+      1,
+      1,
+    );
+    pass.beginFrame(3);
+    const texture = createTexture();
+    const render = createRenderPass();
+    pass.drawBackdropScene(
+      render,
+      entities.map((entity) => prepare(pass, entity, texture)),
+    );
+    expect(render.draw).toHaveBeenCalledExactlyOnceWith(6, 2, 0, 0);
+    expect(pass.crossing.hasSharpScene).toBe(true);
+    pass.crossing.update(
+      entities,
+      {
+        active: true,
+        entityIds: new Set(["active"]),
+        entityOffset: { x: 0, y: 0 },
+        blurIntensity: 1,
+      },
+      1000,
+      1,
+      1,
+    );
+    expect(pass.crossing.hasSharpScene).toBe(false);
+    pass.destroy();
+  });
+
+  test("shares exact opacity proofs and reserves instance storage before prepass draws", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const entities = Array.from({ length: 8 }, (_, i) =>
+      createTestEntity({ id: `card-${i}`, size: { width: 300, height: 220 } }),
+    );
+    for (const entity of entities)
+      entity.shaderParams = { ...entity.shaderParams, showOriginal: true };
+    const action = {
+      active: true,
+      entityIds: new Set([entities[0]!.id]),
+      entityOffset: { x: 0, y: 0 },
+      blurIntensity: 1,
+    };
+    pass.crossing.update(entities, action, 0, 1, 1);
+    const texture = createTexture();
+    const items = entities.map((entity) => prepare(pass, entity, texture));
+    const compute = {
+      setPipeline: vi.fn<GPUComputePassEncoder["setPipeline"]>(),
+      setBindGroup: vi.fn<GPUComputePassEncoder["setBindGroup"]>(),
+      dispatchWorkgroups: vi.fn<GPUComputePassEncoder["dispatchWorkgroups"]>(),
+      end: vi.fn<GPUComputePassEncoder["end"]>(),
+    };
+    const depth = { ...createRenderPass(), end: vi.fn<GPURenderPassEncoder["end"]>() };
+    const encoder = {
+      beginComputePass: vi.fn<GPUCommandEncoder["beginComputePass"]>(
+        () => compute as unknown as GPUComputePassEncoder,
+      ),
+      beginRenderPass: vi.fn<GPUCommandEncoder["beginRenderPass"]>(
+        () => depth as unknown as GPURenderPassEncoder,
+      ),
+      copyBufferToBuffer: vi.fn<GPUCommandEncoder["copyBufferToBuffer"]>(),
+    } as unknown as GPUCommandEncoder;
+    pass.beginFrame(8);
+    const attachment = pass.prepareOcclusion(encoder, items, 200, 200, 1);
+    expect(attachment?.depthReadOnly).toBe(true);
+    expect(attachment?.depthLoadOp).toBeUndefined();
+    expect(compute.dispatchWorkgroups).toHaveBeenCalledExactlyOnceWith(4, 4);
+    expect(depth.draw).toHaveBeenCalledExactlyOnceWith(6, 7, 0, 0);
+    const allocated = device.createBuffer.mock.calls.length;
+    pass.drawItems(createRenderPass(), items, "scene");
+    pass.drawItems(createRenderPass(), [items[0]!], "action");
+    expect(device.createBuffer.mock.calls.length).toBe(allocated);
+    pass.endFrame();
+    pass.beginFrame(8);
+    pass.prepareOcclusion(encoder, items, 200, 200, 1);
+    expect(compute.dispatchWorkgroups).toHaveBeenCalledOnce();
+    expect(pass.getStats()).toMatchObject({
+      opacityProofs: 1,
+      opacityBufferBytes: 512,
+      occlusionPasses: 2,
+      layerTextureBytes: 160000,
+    });
+    pass.destroy();
+  });
+
+  test("rejects an external rewrite when the material sample cannot be converted", () => {
+    expect(() =>
+      createExternalCompositionShaderSource(
+        "@group(0) @binding(2) var entityTexture: texture_2d<f32>; fn sample(uv: vec2f) -> vec4f { return textureSampleLevel(entityTexture, entitySampler, uv, 2.0); }",
+      ),
+    ).toThrow("Failed to rewrite composition shader source");
+  });
+
+  test("does not cache opacity of mutable processed textures", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const entities = Array.from({ length: 8 }, (_, i) =>
+      createTestEntity({
+        id: `processed-${i}`,
+        size: { width: 300, height: 220 },
+        shaderParams: { showOriginal: false },
+      }),
+    );
+    pass.crossing.update(
+      entities,
+      {
+        active: true,
+        entityIds: new Set([entities[0]!.id]),
+        entityOffset: { x: 0, y: 0 },
+        blurIntensity: 1,
+      },
+      0,
+      1,
+      1,
+    );
+    pass.beginFrame(8);
+    const texture = createTexture();
+    expect(
+      pass.prepareOcclusion(
+        {} as GPUCommandEncoder,
+        entities.map((entity) => prepare(pass, entity, texture)),
+        200,
+        200,
+        1,
+      ),
+    ).toBeUndefined();
+    expect(device.createTexture).not.toHaveBeenCalled();
+    expect(device.createComputePipeline).not.toHaveBeenCalled();
+    pass.destroy();
+  });
+
+  test("reuses backdrop targets across transitions and destroys replaced targets", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const entities = [
+      createTestEntity({
+        id: "active",
+        position: { x: 100, y: 80 },
+        size: { width: 120, height: 80 },
+      }),
+      createTestEntity({
+        id: "cover",
+        position: { x: 160, y: 100 },
+        size: { width: 100, height: 90 },
+      }),
+      createTestEntity({
+        id: "unrelated",
+        position: { x: 900, y: 700 },
+        size: { width: 100, height: 100 },
+      }),
+    ];
+    pass.crossing.update(
+      entities,
+      {
+        active: true,
+        entityIds: new Set(["active"]),
+        entityOffset: { x: 0, y: 0 },
+        blurIntensity: 1,
+      },
+      0,
+      1,
+      1,
+    );
+    const texture = createTexture();
+    const items = entities.map((entity) => prepare(pass, entity, texture));
+    const copy = vi.fn<GPUCommandEncoder["copyTextureToTexture"]>();
+    const encoder = {
+      copyTextureToTexture: copy,
+      beginRenderPass: () => ({ ...createRenderPass(), end: vi.fn<GPURenderPassEncoder["end"]>() }),
+    } as unknown as GPUCommandEncoder;
+    const target = { ...createTexture(), width: 512, height: 384 } as GPUTexture;
+    for (let i = 0; i < 2; i++) {
+      pass.beginFrame(32);
+      pass.restoreSharpScene(
+        encoder,
+        target,
+        target.createView(),
+        items,
+        {
+          offset: { x: 0, y: 0 },
+          zoom: 1,
+        },
+        1,
+      );
+    }
+    expect(copy.mock.calls[0]).toEqual([
+      { texture: target, origin: { x: 159, y: 99 } },
+      { texture: copy.mock.calls[0]![1].texture, origin: { x: 159, y: 99 } },
+      { width: 66, height: 66 },
+    ]);
+    expect(copy.mock.calls[0]![1].texture).toBe(copy.mock.calls[1]![1].texture);
+    const retained = copy.mock.calls[0]![1].texture;
+    expect(retained.destroy).not.toHaveBeenCalled();
+    const resized = { ...target, width: 640, height: 360 } as GPUTexture;
+    pass.beginFrame(32);
+    pass.restoreSharpScene(
+      encoder,
+      resized,
+      resized.createView(),
+      items,
+      {
+        offset: { x: 0, y: 0 },
+        zoom: 1,
+      },
+      1,
+    );
+    expect(retained.destroy).toHaveBeenCalledOnce();
+    expect(pass.getStats().layerTextureBytes).toBe(640 * 360 * 4);
+    expect(pass.getStats()).toMatchObject({
+      sharpRestorePasses: 3,
+      sharpRestoreCopiedPixels: 66 * 66 * 3,
+      sharpRestoreDrawnItems: 6,
+    });
+    const replacement = copy.mock.calls[2]![1].texture;
+    pass.destroy();
+    expect(replacement.destroy).toHaveBeenCalledOnce();
+  });
+
+  test.each([false, true])(
+    "partitions a lifted material around every cover, including culled partners (%s)",
+    (cullMiddle) => {
+      const { device } = createDevice();
+      const pass = createPass(device);
+      const entities = ["lifted", "middle", "upper"].map((id) => createTestEntity({ id }));
+      const action = {
+        active: true,
+        entityIds: new Set(["lifted"]),
+        entityOffset: { x: 0, y: 0 },
+        blurIntensity: 0,
+      };
+      pass.crossing.update(entities, action, 0, 1, 1);
+      pass.crossing.update(entities, action, 100, 1, 1);
+      const texture = createTexture();
+      const items = entities.map((entity) => prepare(pass, entity, texture));
+      const renderPass = createRenderPass();
+      // Input arrives in the instantaneous depth order, not its resting order.
+      pass.drawItems(
+        renderPass,
+        cullMiddle ? [items[2]!, items[0]!] : [items[2]!, items[0]!, items[1]!],
+      );
+      const calls = renderPass.draw.mock.calls;
+      expect(calls.map((call) => call[2])).toEqual(cullMiddle ? [6, 12, 0, 24] : [6, 0, 12, 0, 24]);
+      // Only the lifted material is split. Covers retain their full source alpha.
+      expect(calls.every((call) => call[0] === 6 && call[1] === 1)).toBe(true);
+      const uploads = device.queue.writeBuffer.mock.calls.filter(
+        (call) => call[2] instanceof ArrayBuffer,
+      );
+      const instanceUpload = uploads.at(-1)!;
+      const keys = new Uint32Array(instanceUpload[2] as ArrayBuffer);
+      expect(calls.map((call) => keys[Number(call[3]) * 6 + 5])).toEqual(
+        (cullMiddle
+          ? ["lifted", "lifted", "upper", "lifted"]
+          : ["lifted", "middle", "lifted", "upper", "lifted"]
+        ).map((id) => pass.crossing.key(id)),
+      );
+      pass.destroy();
+      entities.forEach(releaseImageEntity);
+    },
+  );
+
+  test.each([0, 100, 200])("partitions crossing draws around the blur pass at %s ms", (now) => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const entities = ["lifted", "middle", "upper"].map((id) => createTestEntity({ id }));
+    const action = {
+      active: true,
+      entityIds: new Set(["lifted"]),
+      entityOffset: { x: 0, y: 0 },
+      blurIntensity: 1,
+    };
+    pass.crossing.update(entities, action, 0, 1, 1);
+    pass.crossing.update(entities, action, now, 1, 1);
+    const texture = createTexture();
+    const items = entities.map((entity) => prepare(pass, entity, texture));
+    const scene = createRenderPass();
+    const sharp = createRenderPass();
+    pass.beginFrame(4);
+    pass.drawItems(scene, items, "scene");
+    const buffers = device.createBuffer.mock.calls.length;
+    pass.drawItems(sharp, [items[0]!], "action");
+    expect(scene.draw.mock.calls.map((call) => call[2])).toEqual(now === 100 ? [6, 0, 12, 0] : [0]);
+    expect(sharp.draw.mock.calls.map((call) => call[2])).toEqual(
+      now === 0 ? [] : now === 100 ? [24] : [0],
+    );
+    expect(scene.draw.mock.calls.map((call) => call[1])).toEqual(
+      now === 100 ? [1, 1, 1, 1] : [now === 0 ? 3 : 2],
+    );
+    expect(device.createBuffer.mock.calls).toHaveLength(buffers);
+    pass.destroy();
+    entities.forEach(releaseImageEntity);
+  });
+
+  test("splits external video draws and returns to ordinary batching after the crossing", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const lifted = createTestEntity({ id: "video" });
+    const cover = createTestEntity({ id: "cutout" });
+    const entities = [lifted, cover];
+    const action = {
+      active: true,
+      entityIds: new Set([lifted.id]),
+      entityOffset: { x: 0, y: 0 },
+      blurIntensity: 0,
+    };
+    pass.crossing.update(entities, action, 0, 1, 1);
+    expect(pass.crossing.hasSlices).toBe(false);
+    pass.crossing.update(entities, action, 100, 1, 1);
+    const video = pass.prepareDrawItem({
+      entity: lifted,
+      source: { kind: "external", texture: {} as GPUExternalTexture },
+      isSelected: true,
+      debugMode: false,
+      positionOffsetX: 0,
+      positionOffsetY: 0,
+      visualScale: 1,
+    });
+    const image = prepare(pass, cover, createTexture());
+    const renderPass = createRenderPass();
+    pass.drawItems(renderPass, [video, image]);
+    expect(renderPass.draw.mock.calls.map((call) => call[2])).toEqual([6, 0, 12]);
+    pass.crossing.update(entities, { ...action, returning: true }, 100, 1, 1);
+    expect(pass.crossing.hasSlices).toBe(true);
+    pass.crossing.update(entities, { ...action, active: false }, 1000, 1, 1);
+    expect(pass.crossing.hasSlices).toBe(false);
+    pass.destroy();
+    entities.forEach(releaseImageEntity);
+  });
+
+  test("rebuilds an external composition bind group when the texture identity is revived", () => {
+    const { device } = createDevice();
+    const pass = createPass(device);
+    const entity = createTestEntity({ id: "external-cache", mediaType: "video" });
+    const firstFrame = {} as GPUExternalTexture;
+    const secondFrame = {} as GPUExternalTexture;
+    const options = {
+      entity,
+      source: { kind: "external" as const, texture: firstFrame },
+      isSelected: false,
+      debugMode: false,
+      positionOffsetX: 0,
+      positionOffsetY: 0,
+      visualScale: 1,
+    };
+    const initialBindGroupCount = device.createBindGroup.mock.calls.length;
+
+    const first = pass.prepareDrawItem(options);
+    const firstBindGroup = first.bindGroup;
+    const revived = pass.prepareDrawItem(options);
+
+    expect(revived.bindGroup).not.toBe(firstBindGroup);
+    expect(device.createBindGroup).toHaveBeenCalledTimes(initialBindGroupCount + 2);
+    expect(pass.getStats()).toMatchObject({
+      externalBindGroupCreations: 2,
+    });
+
+    const next = pass.prepareDrawItem({
+      ...options,
+      source: { kind: "external", texture: secondFrame },
+    });
+    expect(next.bindGroup).not.toBe(firstBindGroup);
+    expect(device.createBindGroup).toHaveBeenCalledTimes(initialBindGroupCount + 3);
+    expect(pass.getStats()).toMatchObject({
+      externalBindGroupCreations: 3,
+    });
+
+    pass.destroy();
+  });
 
   test("draws adjacent entities sharing one texture as one instance batch", () => {
     const { device, instanceBuffer } = createDevice();
@@ -31,10 +474,10 @@ describe("CompositionPass instancing", () => {
     pass.drawItems(renderPass, [first, second]);
 
     expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
-    expect(device.createBuffer).toHaveBeenCalledTimes(2);
-    expect(device.createBindGroup).toHaveBeenCalledOnce();
+    expect(device.createBuffer).toHaveBeenCalledTimes(3);
+    expect(device.createBindGroup).toHaveBeenCalledTimes(2);
     expect(renderPass.setPipeline).toHaveBeenCalledOnce();
-    expect(renderPass.setBindGroup).toHaveBeenCalledOnce();
+    expect(renderPass.setBindGroup).toHaveBeenCalledTimes(2);
     expect(renderPass.draw).toHaveBeenCalledWith(6, 2, 0, 0);
 
     const upload = device.queue.writeBuffer.mock.calls[0]![2] as ArrayBuffer;
@@ -43,7 +486,7 @@ describe("CompositionPass instancing", () => {
     expect(Array.from(floats.slice(6, 10))).toEqual([30, 40, 200, 150]);
 
     pass.destroy();
-    expect(instanceBuffer.destroy).toHaveBeenCalledTimes(2);
+    expect(instanceBuffer.destroy).toHaveBeenCalledTimes(3);
     releaseImageEntity(firstEntity);
     releaseImageEntity(secondEntity);
   });
@@ -72,7 +515,7 @@ describe("CompositionPass instancing", () => {
       [6, 4, 0, 0],
       [6, 1, 0, 4],
     ]);
-    expect(device.createBindGroup).toHaveBeenCalledTimes(2);
+    expect(device.createBindGroup).toHaveBeenCalledTimes(3);
     expect(renderPass.setPipeline).toHaveBeenCalledOnce();
 
     pass.destroy();
@@ -166,6 +609,14 @@ describe("CompositionPass instancing", () => {
       fullSceneBatchRebuilds: 1,
       fullSceneBatchUploadBytes: 48,
       normalInstanceUploadBytes: 0,
+      occlusionPasses: 0,
+      opacityProofs: 0,
+      opacityBufferBytes: 0,
+      layerTextureBytes: 0,
+      externalBindGroupCreations: 0,
+      sharpRestorePasses: 0,
+      sharpRestoreCopiedPixels: 0,
+      sharpRestoreDrawnItems: 0,
     });
     expect(secondFramePass.draw).toHaveBeenCalledWith(6, 2, 0, 0);
     expect(first.textureDirty).toBe(false);
@@ -660,6 +1111,8 @@ function releaseImageEntity(entity: ShaderCanvasEntity): void {
 
 function createTexture(): GPUTexture {
   return {
+    width: 64,
+    height: 64,
     createView: vi.fn<GPUTexture["createView"]>(() => ({}) as GPUTextureView),
   } as unknown as GPUTexture;
 }
@@ -704,6 +1157,18 @@ function createDevice(): {
     createRenderPipeline: vi.fn<GPUDevice["createRenderPipeline"]>(
       (descriptor) => ({ label: descriptor.label }) as GPURenderPipeline,
     ),
+    createComputePipeline: vi.fn<GPUDevice["createComputePipeline"]>(
+      () => ({ getBindGroupLayout: () => ({}) }) as unknown as GPUComputePipeline,
+    ),
+    createTexture: vi.fn<GPUDevice["createTexture"]>((descriptor) => {
+      const size = descriptor.size as number[];
+      return {
+        ...createTexture(),
+        width: size[0],
+        height: size[1],
+        destroy: vi.fn<GPUTexture["destroy"]>(),
+      } as unknown as GPUTexture;
+    }),
     createBuffer: vi.fn<GPUDevice["createBuffer"]>(() => instanceBuffer),
     createBindGroup: vi.fn<GPUDevice["createBindGroup"]>(() => ({}) as GPUBindGroup),
   } as unknown as GPUDevice & {

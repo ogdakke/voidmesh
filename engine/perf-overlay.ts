@@ -24,7 +24,22 @@ export interface FrameStats {
     visibleEntityPreparationMs: number;
     encodeMs: number;
     submitMs: number;
+    frameSetupMs?: number;
+    swapchainAcquireMs?: number;
+    gridMs?: number;
+    sceneCompositionMs?: number;
+    actionBlurMs?: number;
+    sharpRestoreMs?: number;
+    actionForegroundMs?: number;
+    auxiliaryOverlaysMs?: number;
+    lensMs?: number;
+    wlurMs?: number;
   };
+}
+
+export interface PerformanceFrameObserver {
+  onAnimationFrame(timestamp: number): void;
+  onRender(stats: FrameStats, timestamp: number): void;
 }
 
 export type PerfOverlayMode = "raf" | "rendered";
@@ -113,6 +128,7 @@ export class PerfOverlayController {
   #cachedEntities = "";
   #lastGraphRenderTime = 0;
   #lastTextUpdateTime = 0;
+  readonly #frameObservers = new Set<PerformanceFrameObserver>();
 
   readonly #handleToggle = (): void => {
     this.#mode = this.#mode === "raf" ? "rendered" : "raf";
@@ -228,6 +244,9 @@ export class PerfOverlayController {
   }
 
   onFrame(debugMode: boolean, timestamp = performance.now()): void {
+    if (this.#frameObservers.size > 0) {
+      for (const observer of this.#frameObservers) observer.onAnimationFrame(timestamp);
+    }
     if (!this.#element) return;
 
     this.#setVisible(debugMode);
@@ -242,6 +261,9 @@ export class PerfOverlayController {
   }
 
   onRender(stats: FrameStats, debugMode: boolean, timestamp = performance.now()): void {
+    if (this.#frameObservers.size > 0) {
+      for (const observer of this.#frameObservers) observer.onRender(stats, timestamp);
+    }
     if (!this.#element) return;
 
     this.#setVisible(debugMode);
@@ -268,6 +290,11 @@ export class PerfOverlayController {
     };
   }
 
+  observeFrames(observer: PerformanceFrameObserver): () => void {
+    this.#frameObservers.add(observer);
+    return () => this.#frameObservers.delete(observer);
+  }
+
   destroy(): void {
     this.#element?.removeEventListener("click", this.#handleToggle);
     this.#element?.removeEventListener("keydown", this.#handleKeyDown);
@@ -280,6 +307,7 @@ export class PerfOverlayController {
     this.#cpuP95Element = null;
     this.#entitiesElement = null;
     this.#graphCanvas = null;
+    this.#frameObservers.clear();
   }
 
   get #currentSeries(): FpsSeries {

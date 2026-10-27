@@ -1,9 +1,16 @@
+import {
+  hasDeletionEffects,
+  hasPrismWakeEffects,
+  withDeletionEffects,
+  withPrismWakeEffects,
+} from "#lib/fancy-effects.ts";
 import { NavArrowRight } from "iconoir-react";
 import { Button } from "#ui/button/button.tsx";
 import { Checkbox } from "#ui/checkbox/index.tsx";
 import { useCanvasCommands, useCanvasPreferences } from "#context/use-canvas.ts";
 import { resetOnboardingProgress } from "#lib/onboarding/onboarding-storage.ts";
 import { shareOrCopyUrl } from "./share.ts";
+import { openOverlapBenchmarkMode } from "#lib/overlap-benchmark-mode.ts";
 import "#components/ui/field/field.css";
 import "./settings.shared.css";
 
@@ -23,16 +30,33 @@ export function SnapToGridToggle() {
 }
 
 export function FancyDeleteToggle() {
-  const { fancyDelete } = useCanvasPreferences();
-  const { setFancyDelete } = useCanvasCommands();
+  const { fancyEffects } = useCanvasPreferences();
+  const { setFancyEffects } = useCanvasCommands();
   return (
     <Checkbox
       name="fancy_delete"
-      checked={fancyDelete}
-      onChange={(e) => setFancyDelete(e.target.checked)}
+      checked={hasDeletionEffects(fancyEffects)}
+      onChange={(event) => setFancyEffects(withDeletionEffects(fancyEffects, event.target.checked))}
       switch
     >
       Fancy deletions
+    </Checkbox>
+  );
+}
+
+export function OverlapEffectToggle() {
+  const { fancyEffects } = useCanvasPreferences();
+  const { setFancyEffects } = useCanvasCommands();
+  return (
+    <Checkbox
+      name="overlap_effect"
+      checked={hasPrismWakeEffects(fancyEffects)}
+      onChange={(event) =>
+        setFancyEffects(withPrismWakeEffects(fancyEffects, event.target.checked))
+      }
+      switch
+    >
+      Overlap effect
     </Checkbox>
   );
 }
@@ -68,6 +92,19 @@ export function FeedbackLink({ className }: { className?: string }) {
     >
       <span>Send feedback</span>
     </a>
+  );
+}
+
+export function OpenOverlapBenchmarkButton({ onOpen }: { onOpen?: () => void }) {
+  const openBenchmark = () => {
+    onOpen?.();
+    openOverlapBenchmarkMode();
+  };
+
+  return (
+    <button type="button" onClick={openBenchmark}>
+      <span>Run overlap benchmark</span>
+    </button>
   );
 }
 

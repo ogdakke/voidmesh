@@ -29,6 +29,25 @@ describe("PerfOverlayController", () => {
     controller.destroy();
   });
 
+  test("notifies benchmark observers without a mounted overlay or debug mode", () => {
+    const controller = new PerfOverlayController();
+    const animationFrames: number[] = [];
+    const renderedFrames: number[] = [];
+    const stop = controller.observeFrames({
+      onAnimationFrame: (timestamp) => animationFrames.push(timestamp),
+      onRender: (_stats, timestamp) => renderedFrames.push(timestamp),
+    });
+
+    controller.onFrame(false, 10);
+    controller.onRender(FRAME_STATS, false, 14);
+    stop();
+    controller.onFrame(false, 20);
+
+    expect(animationFrames).toEqual([10]);
+    expect(renderedFrames).toEqual([14]);
+    controller.destroy();
+  });
+
   test("calculates rendered FPS separately from rAF FPS", () => {
     const { controller, element } = createController();
     const start = 1000;

@@ -1,3 +1,4 @@
+import { FancyEffects } from "#types/fancy-effects.ts";
 import { createContext, use, useSyncExternalStore } from "react";
 import { config } from "#config";
 import { canvasStore, type ParamResult, type PreferencesSnapshot } from "#engine";
@@ -21,6 +22,7 @@ import type { Options } from "nuqs";
 import type { PartialDeep } from "type-fest";
 import type { CanvasInteractionService } from "#application/canvas/canvas-interaction.ts";
 import type { CanvasMediaService } from "#application/canvas/canvas-media.ts";
+import type { ActionLayerBenchmarkResult } from "#application/canvas/action-layer-benchmark.ts";
 
 export const DebugType = createEnum({
   /** load the debug image */
@@ -84,7 +86,7 @@ export interface CanvasCommands {
   pasteEffects: () => Promise<void>;
   resetSelectionToDefaults: () => void;
   setSnapToGrid: (enabled: boolean) => void;
-  setFancyDelete: (enabled: boolean) => void;
+  setFancyEffects: (value: FancyEffects) => void;
   setHaptics: (enabled: boolean) => void;
   setCanvasLensing: (value: CanvasLensing) => void;
   changeSize: (value: number | number[]) => void;
@@ -117,10 +119,17 @@ export interface CanvasRendererService {
   resetWlurDebugConfig: () => void;
 }
 
+export interface CanvasPerformanceService {
+  runActionLayerBenchmark: () => Promise<ActionLayerBenchmarkResult>;
+  cancelActionLayerBenchmark: () => void;
+  isActionLayerBenchmarkRunning: () => boolean;
+}
+
 const CanvasCommandsContext = createContext<CanvasCommands | null>(null);
 const CanvasRendererContext = createContext<CanvasRendererService | null>(null);
 const CanvasInteractionContext = createContext<CanvasInteractionService | null>(null);
 const CanvasMediaContext = createContext<CanvasMediaService | null>(null);
+const CanvasPerformanceContext = createContext<CanvasPerformanceService | null>(null);
 
 export function useCanvasSelector<T>(
   selector: (state: ReturnType<typeof canvasStore.getState>) => T,
@@ -160,6 +169,14 @@ export function useCanvasMedia(): CanvasMediaService {
   const context = use(CanvasMediaContext);
   if (!context) {
     throw new Error("useCanvasMedia must be used within CanvasProvider");
+  }
+  return context;
+}
+
+export function useCanvasPerformance(): CanvasPerformanceService {
+  const context = use(CanvasPerformanceContext);
+  if (!context) {
+    throw new Error("useCanvasPerformance must be used within CanvasProvider");
   }
   return context;
 }
@@ -272,11 +289,11 @@ export function useHasEntities(): boolean {
 
 export function useCanvasPreferences(): PreferencesSnapshot {
   const snapToGrid = useCanvasSelector((state) => state.snapToGrid);
-  const fancyDelete = useCanvasSelector((state) => state.fancyDelete);
+  const fancyEffects = useCanvasSelector((state) => state.fancyEffects);
   const haptics = useCanvasSelector((state) => state.haptics);
   const canvasLensing = useCanvasSelector((state) => state.canvasLensing);
   const version = useCanvasSelector((state) => state.preferencesVersion);
-  return { snapToGrid, fancyDelete, haptics, canvasLensing, version };
+  return { snapToGrid, fancyEffects, haptics, canvasLensing, version };
 }
 
 export function useHasSelection(): boolean {
@@ -295,5 +312,6 @@ export {
   CanvasCommandsContext,
   CanvasInteractionContext,
   CanvasMediaContext,
+  CanvasPerformanceContext,
   CanvasRendererContext,
 };
