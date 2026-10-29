@@ -361,7 +361,8 @@ export class EntityDrawItemPreparer {
         entityDrawItems.push(drawItem);
       }
     }
-    if (actionLayerActive && this.#compositionPass.crossing.enabled) {
+    // Without layer slices only resting entities are listed, already in z-order.
+    if (actionLayerActive && this.#compositionPass.crossing.hasLayerSlices) {
       entityDrawItems.sort(this.#compareCrossingItems);
     }
     const visiblePreparationEnd = performance.now();

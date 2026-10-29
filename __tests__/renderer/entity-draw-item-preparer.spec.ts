@@ -49,7 +49,9 @@ describe("EntityDrawItemPreparer full-scene batching", () => {
     const after = harness.preparer.prepare(harness.options);
     expect(after.entityDrawItems.map((item) => item.entity.id)).toEqual([cover!.id, lifted!.id]);
     harness.compositionPass.crossing.hasLayerSlices = false;
+    harness.compositionPass.crossing.order.mockClear();
     const settled = harness.preparer.prepare(harness.options);
+    expect(harness.compositionPass.crossing.order).not.toHaveBeenCalled();
     expect(settled.entityDrawItems.map((item) => item.entity.id)).toEqual([cover!.id]);
     expect(settled.actionLayerDrawItems.map((item) => item.entity.id)).toEqual([lifted!.id]);
     harness.compositionPass.crossing.enabled = false;
