@@ -22,7 +22,6 @@ import type { Options } from "nuqs";
 import type { PartialDeep } from "type-fest";
 import type { CanvasInteractionService } from "#application/canvas/canvas-interaction.ts";
 import type { CanvasMediaService } from "#application/canvas/canvas-media.ts";
-import type { ActionLayerBenchmarkResult } from "#application/canvas/action-layer-benchmark.ts";
 
 export const DebugType = createEnum({
   /** load the debug image */
@@ -119,17 +118,10 @@ export interface CanvasRendererService {
   resetWlurDebugConfig: () => void;
 }
 
-export interface CanvasPerformanceService {
-  runActionLayerBenchmark: () => Promise<ActionLayerBenchmarkResult>;
-  cancelActionLayerBenchmark: () => void;
-  isActionLayerBenchmarkRunning: () => boolean;
-}
-
 const CanvasCommandsContext = createContext<CanvasCommands | null>(null);
 const CanvasRendererContext = createContext<CanvasRendererService | null>(null);
 const CanvasInteractionContext = createContext<CanvasInteractionService | null>(null);
 const CanvasMediaContext = createContext<CanvasMediaService | null>(null);
-const CanvasPerformanceContext = createContext<CanvasPerformanceService | null>(null);
 
 export function useCanvasSelector<T>(
   selector: (state: ReturnType<typeof canvasStore.getState>) => T,
@@ -169,14 +161,6 @@ export function useCanvasMedia(): CanvasMediaService {
   const context = use(CanvasMediaContext);
   if (!context) {
     throw new Error("useCanvasMedia must be used within CanvasProvider");
-  }
-  return context;
-}
-
-export function useCanvasPerformance(): CanvasPerformanceService {
-  const context = use(CanvasPerformanceContext);
-  if (!context) {
-    throw new Error("useCanvasPerformance must be used within CanvasProvider");
   }
   return context;
 }
@@ -312,6 +296,5 @@ export {
   CanvasCommandsContext,
   CanvasInteractionContext,
   CanvasMediaContext,
-  CanvasPerformanceContext,
   CanvasRendererContext,
 };

@@ -10,7 +10,6 @@ import { Checkbox } from "#ui/checkbox/index.tsx";
 import { useCanvasCommands, useCanvasPreferences } from "#context/use-canvas.ts";
 import { resetOnboardingProgress } from "#lib/onboarding/onboarding-storage.ts";
 import { shareOrCopyUrl } from "./share.ts";
-import { openOverlapBenchmarkMode } from "#lib/overlap-benchmark-mode.ts";
 import "#components/ui/field/field.css";
 import "./settings.shared.css";
 
@@ -92,19 +91,6 @@ export function FeedbackLink({ className }: { className?: string }) {
     >
       <span>Send feedback</span>
     </a>
-  );
-}
-
-export function OpenOverlapBenchmarkButton({ onOpen }: { onOpen?: () => void }) {
-  const openBenchmark = () => {
-    onOpen?.();
-    openOverlapBenchmarkMode();
-  };
-
-  return (
-    <button type="button" onClick={openBenchmark}>
-      <span>Run overlap benchmark</span>
-    </button>
   );
 }
 
