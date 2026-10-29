@@ -7,7 +7,6 @@ import {
   FeedbackLink,
   LinkItem,
   OpenOverlapBenchmarkButton,
-  OverlapEffectToggle,
   RedoOnboardingButton,
   ShareLink,
   SnapToGridToggle,
@@ -49,9 +48,6 @@ export default function DesktopSettingsContent({
               </div>
               <div className="desktop-settings-row">
                 <FancyDeleteToggle />
-              </div>
-              <div className="desktop-settings-row">
-                <OverlapEffectToggle />
               </div>
             </div>
           </section>
