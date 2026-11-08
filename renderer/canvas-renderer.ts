@@ -180,6 +180,7 @@ export class InfiniteCanvasRenderer {
   readonly #wlurDebugViewportBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
   readonly #wlurDebugLensBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
   readonly #wlurDebugLabelBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #wlurLabelBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
   readonly #wlurDebugPartialBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
   readonly #wlurCurrentDynamicSourceRegion: WlurPixelRegion = { x: 0, y: 0, width: 0, height: 0 };
   readonly #wlurPreviousDynamicSourceRegion: WlurPixelRegion = {
@@ -977,6 +978,7 @@ export class InfiniteCanvasRenderer {
       const dynamicSourceRefreshRegion = this.#updateWlurDynamicSourceRefreshRegion(
         actionLayerDrawItems,
         dragVisualDrawItems,
+        fullSceneBatch ? state : null,
         viewport,
         width,
         height,
@@ -1290,9 +1292,16 @@ export class InfiniteCanvasRenderer {
     return refresh;
   }
 
+  /**
+   * Screen region whose scene pixels moved since the previous frame because of
+   * action-layer or drag motion. The full-scene batch draws drag motion through
+   * uniforms and lists no per-entity draw items, so its dragged entities are
+   * resolved from render state. The selected label follows the drag offset.
+   */
   #updateWlurDynamicSourceRefreshRegion(
     actionItems: readonly CompositionDrawItem[],
     dragItems: readonly CompositionDrawItem[],
+    fullSceneDragState: RenderState | null,
     viewport: Viewport,
     width: number,
     height: number,
@@ -1304,8 +1313,7 @@ export class InfiniteCanvasRenderer {
     let maximumY = 0;
     const effectPadding =
       Math.ceil(Math.max(overlapConfig.rgbSplit, overlapConfig.wakeWidth) * devicePixelRatio) + 2;
-    const include = (item: CompositionDrawItem) => {
-      const bounds = this.#setWlurDrawItemBounds(item, viewport.zoom);
+    const includeBounds = (bounds: Bounds) => {
       minimumX = Math.min(
         minimumX,
         Math.min(
@@ -1343,8 +1351,28 @@ export class InfiniteCanvasRenderer {
         ),
       );
     };
-    for (const item of actionItems) include(item);
-    for (const item of dragItems) include(item);
+    for (const item of actionItems) includeBounds(this.#setWlurDrawItemBounds(item, viewport.zoom));
+    for (const item of dragItems) includeBounds(this.#setWlurDrawItemBounds(item, viewport.zoom));
+    const dragVisual = fullSceneDragState?.dragVisual;
+    if (fullSceneDragState && dragVisual?.active) {
+      const { entities, entityIndices } = fullSceneDragState;
+      const offsetX = dragVisual.appliesToSelection ? dragVisual.offset.x : 0;
+      const offsetY = dragVisual.appliesToSelection ? dragVisual.offset.y : 0;
+      for (const entityId of dragVisual.entityIds) {
+        const index = entityIndices.get(entityId);
+        const entity = index === undefined ? undefined : entities[index];
+        if (!entity) continue;
+        includeBounds(
+          this.#setWlurEntityBounds(entity, offsetX, offsetY, dragVisual.scale, viewport.zoom),
+        );
+      }
+    }
+    if (
+      (dragVisual?.active || dragItems.length > 0) &&
+      this.#entityLabelPass?.getDrawnBounds(this.#wlurLabelBounds)
+    ) {
+      includeBounds(this.#wlurLabelBounds);
+    }
 
     const current = this.#wlurCurrentDynamicSourceRegion;
     const hasCurrent = maximumX > minimumX && maximumY > minimumY;
@@ -1440,13 +1468,28 @@ export class InfiniteCanvasRenderer {
   }
 
   #setWlurDrawItemBounds(item: CompositionDrawItem, viewportZoom: number): Bounds {
-    const entity = item.entity;
-    const width = entity.size.width * item.visualScale;
-    const height = entity.size.height * item.visualScale;
+    return this.#setWlurEntityBounds(
+      item.entity,
+      item.offsetX,
+      item.offsetY,
+      item.visualScale,
+      viewportZoom,
+    );
+  }
+
+  #setWlurEntityBounds(
+    entity: ShaderCanvasEntity,
+    offsetX: number,
+    offsetY: number,
+    visualScale: number,
+    viewportZoom: number,
+  ): Bounds {
+    const width = entity.size.width * visualScale;
+    const height = entity.size.height * visualScale;
     const itemPosition = this.#wlurItemPosition;
     const itemSize = this.#wlurItemSize;
-    itemPosition.x = entity.position.x + item.offsetX + (entity.size.width - width) * 0.5;
-    itemPosition.y = entity.position.y + item.offsetY + (entity.size.height - height) * 0.5;
+    itemPosition.x = entity.position.x + offsetX + (entity.size.width - width) * 0.5;
+    itemPosition.y = entity.position.y + offsetY + (entity.size.height - height) * 0.5;
     itemSize.width = width;
     itemSize.height = height;
     const bounds = this.#wlurItemBounds;
