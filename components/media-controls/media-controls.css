@@ -143,8 +143,11 @@
   color: var(--color);
   font-size: var(--text-sm);
   font-variant: tabular-nums;
+  /* Canvas label baseline; read by media-progress-canvas.tsx. */
+  --media-progress-text-y: 16px;
 
   @media screen and (max-width: 768px) {
+    --media-progress-text-y: 13px;
     font-size: 0.8rem;
     padding: 4px 0 0;
   }
@@ -227,5 +230,19 @@
 
   .media-controls__container {
     border-radius: var(--radius-button);
+    padding: var(--spacing) var(--spacing-3) var(--spacing-2) var(--spacing-2);
+  }
+
+  .controls-state {
+    padding: 4px 0 0;
+  }
+
+  .media-progress-root {
+    --media-progress-text-y: 13px;
+    font-size: 0.8rem;
+    padding: 4px 0 0;
+  }
+  .mute-button {
+    padding-top: 12px;
   }
 }
