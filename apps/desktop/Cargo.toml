@@ -1,0 +1,49 @@
+[package]
+name = "voidmesh"
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+# Rune is pre-release: pin a rev of its `dev` branch (never rewritten).
+rune = { git = "https://github.com/anomalyco/rune", rev = "a7f276c3630f85a06a0230295da4d2bd172d8d3b", features = [
+  "native-file-dialog",
+] }
+bytemuck = { version = "1.25", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = [
+  "png",
+  "jpeg",
+  "gif",
+  "webp",
+  "bmp",
+] }
+resvg = { version = "0.45", default-features = false }
+wgpu = { version = "30", default-features = false, features = [
+  "std",
+  "parking_lot",
+  "metal",
+  "wgsl",
+] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+wgpu = { version = "30", default-features = false, features = ["vulkan", "dx12"] }
+
+# Dependencies build without debug info; Rune's own release settings.
+[profile.dev.package."*"]
+debug = false
+
+[profile.release]
+codegen-units = 16
+incremental = true
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[lints.clippy]
+await_holding_lock = "deny"
+dbg_macro = "deny"
+expect_used = "warn"
+todo = "warn"
+unwrap_used = "warn"

@@ -12,6 +12,7 @@ Infinite-canvas React application with real-time WebGPU effects for images, vide
 - `context/` — React composition root connecting application, engine, and renderer.
 - `hooks/` — React adapters for context/application capabilities and DOM events.
 - `components/` — Feature UI; `components/ui/` contains domain-free primitives.
+- `apps/desktop/` — Native desktop port (Rust, Rune); a separate Cargo project with its own `AGENTS.md`.
 
 Read the nearest subsystem `AGENTS.md` before editing that area.
 
