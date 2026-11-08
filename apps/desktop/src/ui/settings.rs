@@ -287,6 +287,7 @@ fn shortcuts(l: &Look) -> Vec<El> {
         ("Snap to grid", &["G"]),
         ("Canvas lensing", &["L"]),
         ("Hide the controls", &["\\"]),
+        ("Performance overlay", &["D"]),
     ];
     ROWS.iter()
         .map(|(what, keys)| {

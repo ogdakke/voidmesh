@@ -331,6 +331,8 @@ pub struct App {
     /// A slider's value field, while typing into it (`value_target` says which).
     pub value_edit: rune::TextEdit,
     pub value_target: Option<ValueTarget>,
+    /// The debug performance overlay (`D`).
+    pub perf: crate::perf::Perf,
     pub renaming: bool,
     /// Flowing glass's Time control.
     pub time_slider: crate::ui::tick_slider::TickSlider,
@@ -406,6 +408,7 @@ impl Default for App {
             hex_edit: rune::TextEdit::new(""),
             value_edit: rune::TextEdit::new(""),
             value_target: None,
+            perf: Default::default(),
             name_edit: rune::TextEdit::new(""),
             renaming: false,
             toasts: Vec::new(),
@@ -1645,7 +1648,7 @@ impl App {
     }
 
     pub fn animating(&self) -> bool {
-        self.cam.anim.is_some() || self.zoom_to.is_some() || self.entities.iter().any(|e| (e.playing && e.asset.animated()) || e.params.animated())
+        self.cam.anim.is_some() || self.zoom_to.is_some() || self.perf.wants_frames() || self.entities.iter().any(|e| (e.playing && e.asset.animated()) || e.params.animated())
     }
 }
 

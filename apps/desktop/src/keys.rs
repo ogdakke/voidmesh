@@ -74,6 +74,7 @@ fn on_view_key(s: &mut App, e: &KeyEvent, tx: &mut Tx) -> bool {
             }
             "f" | "h" => s.fit_selection(),
             "g" => crate::prefs::set_snap(s, !s.snap),
+            "d" => s.perf.toggle(),
             "l" => crate::prefs::set_lensing(s, s.lens.next()),
             "m" => s.toggle_mute(),
             "\\" => s.bare = !s.bare,

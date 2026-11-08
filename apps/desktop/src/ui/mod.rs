@@ -70,6 +70,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if !s.bare {
         root = root.child(top_left(&l, s, insets)).child(bottom_left(&l, s)).child(bottom_right(&l, s, cx.env().scale));
     }
+    if s.perf.visible {
+        root = root.child(perf_overlay(&l, s, insets.height));
+    }
     if s.drop_hover {
         // `[data-drop-target]`: a 2 px primary outline inset into the canvas.
         root = root.child(el().key("drop").absolute(0.0, 0.0).w_full().h_full().p_all(4.0).inert().child(el().w_full().h_full().radius(16.0).border(2.0, l.primary)));
@@ -469,6 +472,49 @@ fn scrub_key(s: &mut App, id: u32, k: &rune::KeyEvent) -> bool {
         _ => return false,
     }
     true
+}
+
+/// `.infinite-canvas__perf-overlay`: FPS and the mode over a 46 pt graph of recent readings,
+/// then CPU median and p95 per frame and entities on screen of all. A click switches mode.
+fn perf_overlay(l: &Look, s: &App, top: f32) -> El {
+    const W: f32 = 184.0;
+    const GRAPH_H: f32 = 46.0;
+    const XS: TextStyle = TextStyle::new(12.0, 400.0).features("'tnum' 1");
+    const XXS: TextStyle = TextStyle::new(10.0, 400.0).features("'tnum' 1");
+    let p = &s.perf.shown;
+    let header = row()
+        .w_full()
+        .justify_between()
+        .child(text(format!("{} FPS", p.fps)).font(TextStyle::new(12.0, 700.0).features("'tnum' 1")).color(l.primary))
+        .child(text(s.perf.mode.label()).font(XS).color(l.text_muted));
+    let bar_w = (W - 12.0) / crate::perf::GRAPH_SAMPLES as f32;
+    let skip = crate::perf::GRAPH_SAMPLES - p.graph.len();
+    let graph = p.graph.iter().enumerate().fold(el().w_full().h(GRAPH_H).radius(4.0).clip_rounded(4.0).child(el().absolute(0.0, 0.0).w_full().h(1.0).fill(l.border)), |g, (i, v)| {
+        let h = (v / p.scale.max(1.0)).clamp(0.0, 1.0) * GRAPH_H;
+        g.child(el().absolute((skip + i) as f32 * bar_w, GRAPH_H - h).size(bar_w.max(1.0), h).fill(l.primary.alpha(0.7)))
+    });
+    let detail = row()
+        .w_full()
+        .justify_between()
+        .child(text(format!("CPU {:.1}ms", p.cpu_median)).font(XXS).color(l.text_muted))
+        .child(text(format!("p95 {:.1}ms", p.cpu_p95)).font(XXS).color(l.text_muted))
+        .child(text(format!("{}/{}", p.drawn, p.total)).font(XXS).color(l.text_muted).help("Entities on screen / all entities"));
+    let body = col()
+        .key("perf-overlay")
+        .role("button")
+        .label("Performance: click to switch between continuous and rendered FPS")
+        .w(W)
+        .px(6.0)
+        .py(6.0)
+        .gap(3.0)
+        .radius(6.0)
+        .cursor(rune::Cursor::Pointer)
+        .child(header)
+        .child(graph)
+        .child(detail);
+    // Pressing the overlay switches mode; `floating` keeps the press off the canvas.
+    let body = l.floating(body).on_press(|s: &mut App| s.perf.switch_mode());
+    el().key("perf-wrap").absolute(EDGE, top.max(EDGE) + BAR_GAP).child(body)
 }
 
 /// The web's media time: `S:cc` under a minute, `M:SS:cc` from one.

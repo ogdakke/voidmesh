@@ -114,6 +114,7 @@ impl Compositor<App> for Gfx {
     }
 
     fn render(&mut self, f: &mut Frame<'_, App>) {
+        let started = std::time::Instant::now();
         let (device, queue, size) = (f.device, f.queue, f.size);
         let key = f.device_key();
         if self.res.as_ref().is_none_or(|r| r.key != key) {
@@ -224,6 +225,17 @@ impl Compositor<App> for Gfx {
         self.exporter.poll(device);
 
         let cam = (state.cam.pan, state.cam.scale, state.canvas);
+        // For the performance overlay: entities on screen, of all.
+        let counts = if state.perf.visible {
+            let [_, _, w, h] = state.canvas;
+            let on = state.entities.iter().filter(|e| {
+                let r = state.cam.screen_rect(e.rect());
+                r[0] < w && r[0] + r[2] > 0.0 && r[1] < h && r[1] + r[3] > 0.0
+            });
+            (on.count(), state.entities.len())
+        } else {
+            (0, 0)
+        };
         let selected: Vec<u32> = state.selection.iter().copied().collect();
         let lens = crate::state::Lensing::preset(state.lens);
         let picked = state.picker.as_ref().map(|k| (k.oklch, crate::color::to_rgba(k.oklch)));
@@ -296,6 +308,7 @@ impl Compositor<App> for Gfx {
                 pass.draw(0..6, 0..1);
             }
         });
+        f.rt.state.perf.record(started.elapsed().as_secs_f32() * 1000.0, counts.0, counts.1);
     }
 }
 

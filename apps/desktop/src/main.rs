@@ -11,6 +11,7 @@ mod gfx;
 mod hit;
 mod keys;
 mod media;
+mod perf;
 mod clip;
 mod color;
 mod palette;
@@ -119,6 +120,12 @@ fn poll(s: &mut App, t: f64, tx: &mut Tx) -> bool {
     if s.step_camera() {
         tx.instant();
         changed = true;
+    }
+    if s.perf.refresh() {
+        changed = true;
+    }
+    if s.perf.settling() {
+        tx.wake_after(std::time::Duration::from_secs_f64(perf::REFRESH));
     }
     let before = s.toasts.len();
     let now = s.now;

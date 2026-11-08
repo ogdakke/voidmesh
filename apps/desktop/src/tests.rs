@@ -502,3 +502,20 @@ fn the_focused_playback_bar_steps_frames_and_jumps_to_the_ends() {
     assert_eq!(rt.state.entity(id).expect("gif").asset.frame_at(t(&rt)), 2, "End shows the last frame");
     assert_eq!(rt.state.selection.len(), 1, "the bar's keys left the selection alone");
 }
+
+#[test]
+fn d_shows_the_performance_overlay_and_a_click_switches_its_mode() {
+    let mut rt = canvas();
+    let d = || KeyEvent { key: Key::Text("d".into()), mods: Mods::default() };
+    rt.key(d());
+    settle(&mut rt);
+    assert!(rt.state.perf.visible && rt.state.animating(), "continuous mode keeps frames coming");
+    let (x, y) = rt.find("perf-overlay").expect("overlay");
+    click(&mut rt, x, y);
+    assert_eq!(rt.state.perf.mode, crate::perf::Mode::Rendered);
+    assert!(rt.state.selection.is_empty(), "the click stayed on the overlay");
+    assert!(!rt.state.animating(), "rendered mode draws only when asked");
+    rt.key(d());
+    settle(&mut rt);
+    assert!(!rt.state.perf.visible && rt.find("perf-overlay").is_none());
+}
