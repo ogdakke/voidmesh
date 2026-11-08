@@ -164,11 +164,11 @@ pub fn run(s: &mut App, id: &str, tx: &mut Tx) {
             "reset" => s.reset_selection(),
             "delete" => s.delete_selection(),
             "new-ws" => s.new_tab(),
-            "library" => super::library::toggle(s),
+            "library" => super::library::toggle(s, tx),
             "export-ws" => super::export_workspace(s, tx),
             "open" => super::open_any(s, tx),
             "snap" => crate::prefs::set_snap(s, !s.snap),
-            "settings" => super::settings::toggle(s),
+            "settings" => super::settings::toggle(s, tx),
             _ => {}
         }
     }

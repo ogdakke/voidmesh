@@ -2,7 +2,7 @@
 //! window like Settings. A row opens its workspace in a tab (or shows its tab); the trash asks
 //! once more, then deletes it. Esc closes it.
 
-use rune::{El, ScrollSpec, TextStyle, col, el, icon, row, text};
+use rune::{El, ScrollSpec, TextStyle, Tx, col, el, icon, row, text};
 
 use super::look::{self, Look, MEDIUM, SMALL};
 use super::widgets::{PLUS, TRASH, XMARK};
@@ -13,7 +13,9 @@ const LABEL: TextStyle = TextStyle::new(14.0, 400.0);
 const DESC: TextStyle = TextStyle::new(12.0, 400.0);
 const COLUMN: f32 = 768.0;
 
-pub fn toggle(s: &mut App) {
+/// Open or close the library, at once: a view of its own snaps in and out, as Settings does.
+pub fn toggle(s: &mut App, tx: &mut Tx) {
+    tx.instant();
     if s.library.is_some() {
         s.library = None;
     } else {
@@ -62,7 +64,7 @@ pub fn view(l: &Look, s: &App, list: &[crate::store::Meta], top: f32) -> El {
         .hover(l.hover)
         .press_scale(0.97)
         .cursor(rune::Cursor::Pointer)
-        .on_press(toggle)
+        .on_press_tx(toggle)
         .child(icon(&XMARK, 16.0).color(l.text));
     let new = l.primary_button(
         el().key("library-new")
@@ -74,7 +76,8 @@ pub fn view(l: &Look, s: &App, list: &[crate::store::Meta], top: f32) -> El {
             .center()
             .press_scale(0.97)
             .cursor(rune::Cursor::Pointer)
-            .on_press(|s: &mut App| {
+            .on_press_tx(|s: &mut App, tx: &mut Tx| {
+                tx.instant();
                 s.library = None;
                 s.new_tab();
             })
@@ -160,7 +163,8 @@ fn item(l: &Look, s: &App, m: &crate::store::Meta, now: u64) -> El {
         .center_y()
         .hover(l.hover)
         .cursor(rune::Cursor::Pointer)
-        .on_press(move |s: &mut App| {
+        .on_press_tx(move |s: &mut App, tx: &mut Tx| {
+            tx.instant();
             s.library = None;
             s.open_stored(&id, &name);
         })

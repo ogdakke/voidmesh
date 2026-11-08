@@ -579,3 +579,21 @@ fn cmd_z_with_the_colour_picker_open_takes_back_the_colour() {
     assert!(!rt.state.focus().expect("focus").params.preserve_colors);
     assert_eq!(rt.state.focus().expect("focus").params.palette, before);
 }
+
+#[test]
+fn the_workspaces_and_settings_views_snap_in_and_out() {
+    let mut rt = canvas();
+    for (open, view) in [("library-open", "library"), ("settings-open", "settings")] {
+        let (x, y) = rt.find(open).expect("opener");
+        rt.pointer_move(x, y);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(1.0 / 60.0);
+        let (_, opacity) = rt.presented(view).expect("view");
+        assert!(opacity > 0.999, "{view} shows at once, not fading in: {opacity}");
+        rt.key(KeyEvent { key: Key::Escape, mods: Mods::default() });
+        rt.frame(1.0 / 60.0);
+        assert!(rt.presented(view).is_none(), "{view} goes at once");
+        settle(&mut rt);
+    }
+}

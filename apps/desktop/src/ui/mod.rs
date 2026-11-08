@@ -317,7 +317,7 @@ fn bottom_right(l: &Look, s: &App, device_scale: f32) -> El {
         l,
         el().key("zoom").role("button").label("Zoom to 100%").px(10.0).center().hover(l.hover).press_scale(0.97).cursor(rune::Cursor::Pointer).help("Zoom to 100% (⌘0)").on_press(move |s: &mut App| s.reset_zoom(device_scale)).child(text(format!("{pct}%")).font(MONO).color(l.text)),
     );
-    let gear = pill(l, el().key("settings-open").role("button").label("Settings (⌘,)").size(28.0, 28.0).center().hover(l.hover).cursor(rune::Cursor::Pointer).help("Settings (⌘,)").on_press(settings::toggle).child(icon(&GEAR, 16.0).color(l.text)));
+    let gear = pill(l, el().key("settings-open").role("button").label("Settings (⌘,)").size(28.0, 28.0).center().hover(l.hover).cursor(rune::Cursor::Pointer).help("Settings (⌘,)").on_press_tx(settings::toggle).child(icon(&GEAR, 16.0).color(l.text)));
     let mut r = row().key("bottom-right").pin(None, None, Some(12.0), Some(12.0)).gap(8.0).center_y();
     // Only what's on shows here; Settings holds the switches.
     if s.snap {

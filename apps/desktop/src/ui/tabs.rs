@@ -68,7 +68,7 @@ pub fn strip(l: &Look, s: &App, room: f32) -> El {
         s.new_tab();
         reveal(s, tx);
     }))
-    .child(small("library-open", "Workspaces (⇧⌘O)", &STACK, |s, _| super::library::toggle(s)))
+    .child(small("library-open", "Workspaces (⇧⌘O)", &STACK, super::library::toggle))
 }
 
 fn tab(l: &Look, s: &App, i: usize, t: &crate::state::Tab) -> El {

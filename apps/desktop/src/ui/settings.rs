@@ -22,14 +22,16 @@ const KBD: TextStyle = TextStyle::new(14.0, 500.0);
 const COLUMN: f32 = 768.0;
 const ROW_H: f32 = 52.0;
 
-pub fn toggle(s: &mut App) {
+/// Open or close Settings, at once (no entrance or exit).
+pub fn toggle(s: &mut App, tx: &mut Tx) {
+    tx.instant();
     s.settings = !s.settings;
     s.library = None;
 }
 
 /// `?`: the keyboard shortcuts, as the web's help dialog shows them; again closes them.
 pub fn toggle_shortcuts(s: &mut App, tx: &mut Tx) {
-    toggle(s);
+    toggle(s, tx);
     if s.settings {
         // Under the titlebar band, where the page's own title sits.
         tx.scroll_key_to(SHORTCUTS, s.top_inset + 8.0);
@@ -53,7 +55,7 @@ pub fn view(l: &Look, s: &App, top: f32, dark: bool) -> El {
         .hover(l.hover)
         .press_scale(0.97)
         .cursor(rune::Cursor::Pointer)
-        .on_press(toggle)
+        .on_press_tx(toggle)
         .child(icon(&XMARK, 16.0).color(l.text));
     let page = col()
         .key("settings-page")

@@ -14,7 +14,7 @@ pub fn on_key(s: &mut App, e: &KeyEvent, tx: &mut Tx) -> bool {
         (Key::Command('s'), false) => crate::ui::save(s),
         (Key::Command('s'), true) => crate::ui::export_workspace(s, tx),
         (Key::Command('o'), false) => crate::ui::open_any(s, tx),
-        (Key::Command('o'), true) => crate::ui::library::toggle(s),
+        (Key::Command('o'), true) => crate::ui::library::toggle(s, tx),
         (Key::Command(c @ '1'..='9'), false) => {
             // ⌘9 is the last tab, as in browsers.
             let n = c.to_digit(10).unwrap_or(1) as usize;
@@ -36,7 +36,7 @@ fn on_view_key(s: &mut App, e: &KeyEvent, tx: &mut Tx) -> bool {
                 s.settings = false;
                 s.library = None;
             }
-            Key::Command(',') => crate::ui::settings::toggle(s),
+            Key::Command(',') => crate::ui::settings::toggle(s, tx),
             Key::Text(t) if t == "?" && s.settings => crate::ui::settings::toggle_shortcuts(s, tx),
             _ => return false,
         }
@@ -58,7 +58,7 @@ fn on_view_key(s: &mut App, e: &KeyEvent, tx: &mut Tx) -> bool {
             ('c', _) => crate::clip::copy_image(s),
             ('d', _) => s.duplicate_selection(),
             ('e', _) => crate::ui::export_panel::save_or_export(s, tx),
-            (',', _) => crate::ui::settings::toggle(s),
+            (',', _) => crate::ui::settings::toggle(s, tx),
             ('0', _) => {
                 let k = s.device_scale;
                 s.reset_zoom(k);
