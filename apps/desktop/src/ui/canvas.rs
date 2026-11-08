@@ -28,7 +28,7 @@ fn trace(s: &App, kind: &str, what: &str) {
 pub fn surface(l: &Look, s: &App) -> El {
     let mut entities: Vec<&crate::state::Entity> = s.entities.iter().collect();
     entities.sort_by_key(|e| e.z);
-    let world = entities.into_iter().fold(el().key("world").absolute(0.0, 0.0).w_full().h_full().instant_changes(), |w, e| w.child(entity(e, s.cam.screen_rect(e.rect()))));
+    let world = entities.into_iter().fold(el().key("world").absolute(0.0, 0.0).w_full().h_full().instant_changes(), |w, e| w.child(entity(e, s.cam.screen_rect(e.rect()), s.bare)));
     let mut c = el()
         .key("canvas")
         .absolute(0.0, 0.0)
@@ -69,7 +69,10 @@ pub fn surface(l: &Look, s: &App) -> El {
             true
         })
         .on_drag(canvas_drag)
-        .on_secondary_press(|s: &mut App, p: rune::PointerPress, tx: &mut Tx| super::menu::open_on_canvas(s, (p.x, p.y), tx))
+        .on_secondary_press(|s: &mut App, p: rune::PointerPress, tx: &mut Tx| match s.entity_at([p.x, p.y]) {
+            Some(id) => super::menu::open_on_entity(s, id, (p.x, p.y), tx),
+            None => super::menu::open_on_canvas(s, (p.x, p.y), tx),
+        })
         .on_drop_files(|s: &mut App, files, tx: &mut Tx| {
             let at = tx.drop_point().map(|p| s.cam.world([p.x, p.y]));
             let at = at.unwrap_or_else(|| s.cam.world([s.canvas[2] / 2.0, s.canvas[3] / 2.0]));
@@ -94,17 +97,27 @@ pub fn surface(l: &Look, s: &App) -> El {
     c
 }
 
-/// An entity at canvas rect `r`: its world rect through the camera.
-fn entity(e: &crate::state::Entity, r: [f32; 4]) -> El {
+/// The progress hairline's track and fill. Fixed rather than themed: it sits on the media, not
+/// on chrome, so it needs contrast against any frame.
+const PROGRESS_TRACK: rune::Color = rune::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.35 };
+const PROGRESS_FILL: rune::Color = rune::Color { r: 1.0, g: 1.0, b: 1.0, a: 0.9 };
+
+/// An entity at canvas rect `r`: its world rect through the camera. Animated media carry a
+/// hairline of their playback position along the bottom edge, readable at any zoom.
+fn entity(e: &crate::state::Entity, r: [f32; 4], bare: bool) -> El {
     let id = e.id;
-    el().key(format!("e{id}"))
+    let mut node = el().key(format!("e{id}"));
+    if e.asset.animated() && !bare {
+        let dur = e.asset.duration.as_secs_f64();
+        let t = if dur > 0.0 { (e.play_t / dur).clamp(0.0, 1.0) as f32 } else { 0.0 };
+        node = node.child(el().key(format!("e{id}-progress")).pin(Some(0.0), None, Some(0.0), Some(0.0)).h(2.0).fill(PROGRESS_TRACK).inert().child(el().h(2.0).w_frac(t).fill(PROGRESS_FILL)));
+    }
+    node
         .absolute(r[0], r[1])
         .size(r[2], r[3])
         .effect(gfx::ENTITY + id)
         .effect_bleed(4.0)
         .label(e.name.clone())
-        .on_drag(move |s: &mut App, d: &mut Drag, tx: &mut Tx| entity_drag(s, id, d, tx))
-        .on_secondary_press(move |s: &mut App, p: rune::PointerPress, tx: &mut Tx| super::menu::open_on_entity(s, id, (p.x, p.y), tx))
 }
 
 fn entity_drag(s: &mut App, id: u32, d: &mut Drag, tx: &mut Tx) {
@@ -132,7 +145,7 @@ fn entity_drag(s: &mut App, id: u32, d: &mut Drag, tx: &mut Tx) {
                 toggle_play = Some(id);
             }
             let ids = s.selected().map(|e| (e.id, e.pos)).collect();
-            s.drag = Some(MoveDrag { ids, before, moved: false, collapse_to, toggle_play });
+            s.drag = Some(MoveDrag { ids, before, moved: false, collapse_to, toggle_play, clear_on_click: false });
         }
         Phase::Move => {
             let scale = s.cam.scale;
@@ -202,20 +215,29 @@ fn canvas_drag(s: &mut App, d: &mut Drag, tx: &mut Tx) {
         tx.instant();
         return;
     }
-    // Empty space inside a multi-selection's box drags the group.
-    if d.phase == Phase::Down && s.selection.len() > 1
-        && let Some(b) = s.bounds(&s.selection) {
-            let r = s.cam.screen_rect(b);
-            if d.x >= r[0] && d.x <= r[0] + r[2] && d.y >= r[1] && d.y <= r[1] + r[3] {
-                let ids = s.selected().map(|e| (e.id, e.pos)).collect();
-                s.drag = Some(MoveDrag { ids, before: s.snapshot(), moved: false, collapse_to: None, toggle_play: None });
-            }
+    if d.phase == Phase::Down {
+        // Entities don't take the pointer themselves: picking is alpha-aware, so a press on a
+        // transparent region reaches whatever lies beneath it.
+        if let Some(id) = s.entity_at([d.x, d.y]) {
+            return entity_drag(s, id, d, tx);
         }
-    if s.drag.is_some() {
-        let id = s.drag.as_ref().and_then(|m| m.ids.first().map(|(id, _)| *id)).unwrap_or(0);
-        let was_click = d.phase == Phase::Up && s.drag.as_ref().is_some_and(|m| !m.moved);
+        // Empty space inside a multi-selection's box drags the group.
+        if s.selection.len() > 1
+            && let Some(b) = s.bounds(&s.selection) {
+                let r = s.cam.screen_rect(b);
+                if d.x >= r[0] && d.x <= r[0] + r[2] && d.y >= r[1] && d.y <= r[1] + r[3] {
+                    let ids = s.selected().map(|e| (e.id, e.pos)).collect();
+                    s.drag = Some(MoveDrag { ids, before: s.snapshot(), moved: false, collapse_to: None, toggle_play: None, clear_on_click: true });
+                    tx.instant();
+                    return;
+                }
+            }
+    }
+    if let Some(m) = &s.drag {
+        let id = m.ids.first().map_or(0, |(id, _)| *id);
+        let clear = d.phase == Phase::Up && !m.moved && m.clear_on_click;
         entity_drag(s, id, d, tx);
-        if was_click {
+        if clear {
             s.selection.clear();
         }
         return;

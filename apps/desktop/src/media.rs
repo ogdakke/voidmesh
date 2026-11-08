@@ -380,10 +380,10 @@ pub fn rgba_asset(id: u64, name: &str, w: u32, h: u32, rgba: Vec<u8>) -> Asset {
     }
 }
 
-/// A blank still for tests.
+/// An opaque black still for tests.
 #[cfg(test)]
 pub fn test_asset(id: u64, w: u32, h: u32) -> Asset {
-    rgba_asset(id, &format!("a{id}.png"), w, h, vec![0; (w * h * 4) as usize])
+    rgba_asset(id, &format!("a{id}.png"), w, h, [0, 0, 0, 255].repeat((w * h) as usize))
 }
 
 #[cfg(test)]

@@ -19,12 +19,12 @@ use rune::{Color, Cx, El, FileDialogOptions, TextStyle, Tx, col, el, icon, row, 
 
 use crate::state::App;
 use look::{Look, MEDIUM, SMALL};
-use widgets::{COPY, EYE, FIT, GEAR, MUTED, PAUSE, PLAY, PLUS, REDO, SAVE, SOUND, TRASH, UNDO, icon_button};
+use widgets::{FIT, GEAR, MUTED, PAUSE, PLAY, PLUS, REDO, SAVE, SOUND, TRASH, UNDO, icon_button};
 
 /// The zoom readout is mono and tabular in the web app.
-const MONO: TextStyle = TextStyle::new(13.0, 500.0).mono().features("tnum");
+const MONO: TextStyle = TextStyle::new(13.0, 500.0).mono().features("'tnum' 1");
 /// The media time label, a size under body text, with tabular digits.
-const TIME: TextStyle = TextStyle::new(12.0, 400.0).features("tnum");
+const TIME: TextStyle = TextStyle::new(12.0, 400.0).features("'tnum' 1");
 /// Room per character of a time label (12 pt tabular digits, with headroom for the colons).
 const TIME_CHAR: f32 = 7.5;
 
@@ -55,8 +55,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         }
         if s.selection.len() == 1
             && let Some(e) = s.focus().filter(|e| e.asset.animated())
+            && let Some(media) = media_controls(&l, s, e, r)
         {
-            root = root.child(media_controls(&l, e, r));
+            root = root.child(media);
         }
         // Over the playback bar it may hang across.
         if s.drag.as_ref().is_none_or(|m| !m.moved)
@@ -260,35 +261,72 @@ fn entity_bar(l: &Look, s: &App, r: [f32; 4], top: f32) -> El {
         1 => s.focus().map(|e| e.name.clone()).unwrap_or_default(),
         n => format!("{n} items selected"),
     };
+    // Only the actions with no other home on screen: playback rides on the clip, Original sits
+    // in the inspector, and Duplicate is ⌘D and in the context menu.
     let anim = s.selected().any(|e| e.asset.animated());
-    let playing = s.selected().any(|e| e.playing);
-    let mut actions = row().gap(0.0).center_y();
-    if anim {
-        actions = actions.child(icon_button(l, "bar-play", if playing { "Pause (Space)" } else { "Play (Space)" }, if playing { &PAUSE } else { &PLAY }, |s, _| s.toggle_play()));
-    }
-    let original = s.focus().is_some_and(|e| e.params.show_original);
-    let mut eye = icon_button(l, "bar-original", "Show original (O)", &EYE, |s, _| s.edit(|p| p.show_original = !p.show_original));
-    if original {
-        eye = eye.fill(l.surface).border(1.0, l.pressed_ring);
-    }
-    actions = actions
-        .child(eye)
-        .child(icon_button(l, "bar-dup", "Duplicate (⌘D)", &COPY, |s, _| s.duplicate_selection()))
+    let actions = row()
+        .gap(0.0)
+        .center_y()
         .child(icon_button(l, "bar-save", if s.selection.len() == 1 && anim { "Export… (⌘E)" } else { "Save as PNG (⌘E)" }, &SAVE, export_panel::save_or_export))
         .child(icon_button(l, "bar-delete", "Delete (⌫)", &TRASH, |s, _| s.delete_selection()));
-    let bar = l.floating(row().key("entity-bar").gap(4.0).pl(14.0).pr(4.0).h(40.0).radius(20.0).center_y().child(text(label).font(MEDIUM).color(l.text).truncate().max_w(320.0)).child(actions));
-    let y = (r[1] - 50.0).max(top.max(12.0) + 8.0);
-    el().key("entity-bar-wrap").absolute(r[0].max(12.0), y).instant_changes().child(bar)
+    let bar = l.floating(row().key("entity-bar").gap(4.0).pl(14.0).pr(4.0).h(BAR_H).radius(20.0).center_y().child(text(label).font(MEDIUM).color(l.text).truncate().max_w(320.0)).child(actions));
+    el().key("entity-bar-wrap").absolute(r[0].max(EDGE), entity_bar_y(r, top)).instant_changes().child(bar)
 }
 
-/// Playback on the clip itself: play/pause, a scrubber and the time, along its bottom edge.
-fn media_controls(l: &Look, e: &crate::state::Entity, r: [f32; 4]) -> El {
+/// Height of the floating bars that ride with the selection.
+const BAR_H: f32 = 40.0;
+/// Space between those bars and what they sit against.
+const BAR_GAP: f32 = 8.0;
+/// Floating UI keeps this far from the canvas edges.
+const EDGE: f32 = 12.0;
+/// The smallest visible clip area that holds the playback bar inside it with a usable track.
+const MEDIA_INLINE_MIN: [f32; 2] = [360.0, 160.0];
+/// The playback bar's width once it moves below a clip too small to hold it.
+const MEDIA_DOCKED_W: f32 = 300.0;
+
+/// The entity bar's top: above the selection, held below the titlebar band (`top`), where it
+/// then overlaps the selection's top edge.
+fn entity_bar_y(r: [f32; 4], top: f32) -> f32 {
+    (r[1] - BAR_H - 10.0).max(top.max(EDGE) + BAR_GAP)
+}
+
+/// Where the playback bar goes for a clip at screen rect `r`, as `(x, y, width)`; `None` when
+/// the clip is out of view. It works from the visible part of the clip: along its bottom edge
+/// when that part has room below the entity bar, else docked under the clip (and under the
+/// entity bar), so the two never overlap and neither crosses the titlebar band.
+fn media_place(r: [f32; 4], canvas: [f32; 2], top: f32) -> Option<(f32, f32, f32)> {
+    let floor = top.max(EDGE) + BAR_GAP;
+    let (left, right, bottom) = (r[0].max(0.0), (r[0] + r[2]).min(canvas[0]), r[1] + r[3]);
+    if right <= left || bottom <= top || r[1] >= canvas[1] {
+        return None;
+    }
+    let below_label = entity_bar_y(r, top) + BAR_H + BAR_GAP;
+    let vis_bottom = bottom.min(canvas[1]);
+    let room = vis_bottom - r[1].max(below_label).max(floor);
+    if right - left >= MEDIA_INLINE_MIN[0] && room >= MEDIA_INLINE_MIN[1] {
+        let w = (right - left - 24.0).min(480.0);
+        return Some((left + (right - left - w) / 2.0, vis_bottom - BAR_H - EDGE, w));
+    }
+    let max_x = (canvas[0] - MEDIA_DOCKED_W - EDGE).max(EDGE);
+    let x = if right - left >= MEDIA_DOCKED_W {
+        // A wide clip that is short on screen: centred under its visible span.
+        left + (right - left - MEDIA_DOCKED_W) / 2.0
+    } else if inspector::place(r, canvas, top).0 > r[0] {
+        // The inspector takes the right: grow left from the clip's right edge.
+        r[0] + r[2] - MEDIA_DOCKED_W
+    } else {
+        r[0]
+    };
+    let y = (bottom + BAR_GAP).max(below_label).min(canvas[1] - BAR_H - EDGE);
+    Some((x.clamp(EDGE, max_x), y, MEDIA_DOCKED_W))
+}
+
+/// Playback for the selected clip: play/pause, a scrubber and the time (`media_place`).
+fn media_controls(l: &Look, s: &App, e: &crate::state::Entity, r: [f32; 4]) -> Option<El> {
     let id = e.id;
     let dur = e.asset.duration.as_secs_f64().max(1e-3);
     let t = (e.play_t / dur) as f32;
-    let w = (r[2] - 24.0).clamp(160.0, 480.0);
-    let x = r[0] + (r[2] - w) / 2.0;
-    let y = r[1] + r[3] - 52.0;
+    let (x, y, w) = media_place(r, [s.canvas[2], s.canvas[3]], s.top_inset)?;
     let scrub = el()
         .key("scrub")
         .role("slider")
@@ -324,7 +362,7 @@ fn media_controls(l: &Look, e: &crate::state::Entity, r: [f32; 4]) -> El {
     let slot = total.len() as f32 * TIME_CHAR;
     let now = row().w(slot).justify_end().child(text(media_time(e.play_t.min(dur))).font(TIME).color(l.text_strong));
     let end = row().w(slot).child(text(total).font(TIME).color(l.text_muted));
-    let mut bar = row().key("media").absolute(x, y).w(w).h(40.0).pl(4.0).pr(12.0).gap(8.0).radius(20.0).center_y().instant_changes().child(play).child(now).child(scrub).child(end);
+    let mut bar = row().key("media").absolute(x, y).w(w).h(BAR_H).pl(4.0).pr(12.0).gap(8.0).radius(20.0).center_y().instant_changes().child(play).child(now).child(scrub).child(end);
     if e.has_audio() {
         let (label, glyph) = if e.muted { ("Unmute (M)", &MUTED) } else { ("Mute (M)", &SOUND) };
         bar = bar.pr(4.0).child(icon_button(l, "media-mute", label, glyph, move |s, _| {
@@ -333,7 +371,7 @@ fn media_controls(l: &Look, e: &crate::state::Entity, r: [f32; 4]) -> El {
             }
         }));
     }
-    l.floating(bar)
+    Some(l.floating(bar))
 }
 
 /// The web's media time: `S:cc` under a minute, `M:SS:cc` from one.
@@ -358,4 +396,94 @@ fn empty_state(l: &Look) -> El {
         .child(text("Voidmesh").font(TextStyle::new(28.0, 600.0)).color(l.text))
         .child(text("Drop images, videos, GIFs, SVGs or a .vdmsh workspace").font(look::BODY).color(l.text_muted))
         .child(text("All local, nothing gets uploaded. Saved as you go.").font(look::BODY).color(l.text_faint))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BAR_H, MEDIA_DOCKED_W, entity_bar_y, media_place};
+
+    const CANVAS: [f32; 2] = [1400.0, 900.0];
+    /// The titlebar band's height.
+    const TOP: f32 = 52.0;
+
+    fn place(r: [f32; 4]) -> (f32, f32, f32) {
+        media_place(r, CANVAS, TOP).expect("in view")
+    }
+
+    /// The playback bar starts below the entity bar and below the titlebar band.
+    fn clear_of_chrome(r: [f32; 4], y: f32) {
+        assert!(y >= TOP, "under the titlebar: y {y}");
+        assert!(y >= entity_bar_y(r, TOP) + BAR_H, "over the entity bar: y {y}");
+    }
+
+    #[test]
+    fn playback_rides_inside_a_large_clip() {
+        let r = [100.0, 200.0, 600.0, 400.0];
+        let (x, y, w) = place(r);
+        assert_eq!(w, 480.0);
+        assert!(x > r[0] && x + w < r[0] + r[2]);
+        assert!(y > r[1] && y + BAR_H < r[1] + r[3]);
+    }
+
+    #[test]
+    fn playback_docks_below_a_small_clip_at_full_width() {
+        let r = [400.0, 300.0, 120.0, 80.0];
+        let (x, y, w) = place(r);
+        assert_eq!(w, MEDIA_DOCKED_W);
+        assert!(y >= r[1] + r[3]);
+        // The inspector takes the right, so the bar grows left from the clip's right edge.
+        assert_eq!(x + w, r[0] + r[2]);
+    }
+
+    #[test]
+    fn docked_playback_stays_in_the_canvas() {
+        let (x, y, w) = place([-50.0, 880.0, 100.0, 60.0]);
+        assert!(x >= 12.0 && x + w <= CANVAS[0] - 12.0);
+        assert!(y + BAR_H <= CANVAS[1] - 12.0);
+    }
+
+    #[test]
+    fn a_clip_mostly_under_the_titlebar_docks_below_the_entity_bar() {
+        // Only a sliver shows: the entity bar is held under the band, overlapping the clip.
+        let r = [60.0, -400.0, 650.0, 540.0];
+        let (_, y, _) = place(r);
+        clear_of_chrome(r, y);
+        assert!(y >= r[1] + r[3]);
+    }
+
+    #[test]
+    fn a_clip_whose_bottom_edge_is_in_the_band_keeps_its_playback_out_of_it() {
+        let r = [120.0, -400.0, 650.0, 470.0];
+        let (_, y, _) = place(r);
+        clear_of_chrome(r, y);
+    }
+
+    #[test]
+    fn a_tall_clip_running_off_the_top_keeps_playback_inline_at_its_visible_bottom() {
+        let r = [100.0, -600.0, 800.0, 1100.0];
+        let (_, y, _) = place(r);
+        clear_of_chrome(r, y);
+        assert!(y + BAR_H <= r[1] + r[3]);
+    }
+
+    #[test]
+    fn a_clip_running_off_the_bottom_keeps_playback_on_screen() {
+        let (_, y, _) = place([100.0, 300.0, 800.0, 1200.0]);
+        assert!(y + BAR_H <= CANVAS[1] - 12.0);
+    }
+
+    #[test]
+    fn number_styles_set_figures_at_one_width() {
+        for style in [super::TIME, super::MONO, super::look::NUMBER] {
+            let w = |s: &str| rune::text::measure(s, &[], style, None).0;
+            assert_eq!(w("11:11"), w("44:44"));
+            assert_eq!(w("11:11"), w("08:63"));
+        }
+    }
+
+    #[test]
+    fn no_playback_for_a_clip_out_of_view() {
+        assert!(media_place([100.0, -600.0, 400.0, 600.0], CANVAS, TOP).is_none());
+        assert!(media_place([1500.0, 300.0, 400.0, 300.0], CANVAS, TOP).is_none());
+    }
 }

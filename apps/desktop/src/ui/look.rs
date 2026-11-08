@@ -13,7 +13,7 @@ pub const MEDIUM: TextStyle = TextStyle::new(14.0, 500.0);
 /// Select values and buttons: 16 px, 500.
 pub const LARGE: TextStyle = TextStyle::new(16.0, 500.0);
 /// Numeric readouts, tabular so they don't jitter while dragging.
-pub const NUMBER: TextStyle = TextStyle::new(14.0, 400.0).features("tnum");
+pub const NUMBER: TextStyle = TextStyle::new(14.0, 400.0).features("'tnum' 1");
 pub const SMALL: TextStyle = TextStyle::new(12.0, 500.0);
 
 pub struct Look {

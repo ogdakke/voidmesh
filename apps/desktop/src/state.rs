@@ -143,6 +143,8 @@ pub struct MoveDrag {
     pub collapse_to: Option<u32>,
     /// The press landed on the selected, single animated entity: a click toggles playback.
     pub toggle_play: Option<u32>,
+    /// The press landed on empty space inside a multi-selection's box: a click clears it.
+    pub clear_on_click: bool,
 }
 
 #[derive(Clone)]
@@ -323,6 +325,9 @@ pub struct App {
     pub time_slider: crate::ui::tick_slider::TickSlider,
     /// Sound for unmuted, playing videos, and the seek it last followed.
     pub audio: std::collections::HashMap<u32, (rune::Player, u32)>,
+    /// Each showing video's latest frame by entity and asset, as the compositor last uploaded
+    /// it: picking samples its alpha (`entity_at`).
+    pub video_frames: std::collections::HashMap<(u32, u64), crate::video::VideoFrame>,
     pub toasts: Vec<Toast>,
     pub exports: Vec<Export>,
     /// Video and GIF export: the queue and its panel.
@@ -381,6 +386,7 @@ impl Default for App {
             tab_rename: None,
             palettes: Vec::new(),
             audio: Default::default(),
+            video_frames: Default::default(),
             prefs: rune::prefs::Prefs::memory(),
             settings: false,
             bare: false,
@@ -755,6 +761,32 @@ impl App {
             })
             .map(|e| e.id)
             .collect()
+    }
+
+    /// The top-most entity at canvas point `q`, alpha-aware (`hit.rs`): transparent cells let the
+    /// point through to what's beneath. A video with no frame yet hits its whole rect.
+    pub fn entity_at(&self, q: [f32; 2]) -> Option<u32> {
+        let mut under: Vec<&Entity> = self
+            .entities
+            .iter()
+            .filter(|e| {
+                let r = self.cam.screen_rect(e.rect());
+                q[0] >= r[0] && q[0] < r[0] + r[2] && q[1] >= r[1] && q[1] < r[1] + r[3]
+            })
+            .collect();
+        under.sort_by_key(|e| std::cmp::Reverse(e.z));
+        under
+            .into_iter()
+            .find(|e| {
+                let r = self.cam.screen_rect(e.rect());
+                let (u, v) = ((q[0] - r[0]) / r[2], (q[1] - r[1]) / r[3]);
+                let a = &e.asset;
+                if a.video_path().is_some() {
+                    return self.video_frames.get(&(e.id, a.id)).is_none_or(|f| crate::hit::cell_opaque(&f.rgba, f.width, f.height, u, v));
+                }
+                a.frames.get(a.frame_at(e.play_t)).is_some_and(|f| crate::hit::cell_opaque(&f.rgba, a.width, a.height, u, v))
+            })
+            .map(|e| e.id)
     }
 
     pub fn update_marquee(&mut self) {
@@ -1469,13 +1501,23 @@ impl App {
         }
     }
 
-    /// Advance clocks by `dt`; true when a selected clip's progress moved (the view shows it).
+    /// Advance clocks by `dt`; true when the view shows the change: a selected clip's playback
+    /// bar, or an on-screen clip's progress hairline moving by a whole pixel.
     pub fn tick(&mut self, dt: f64) -> bool {
         let mut shown = false;
         for e in &mut self.entities {
             if e.playing && e.asset.animated() {
-                e.play_t = (e.play_t + dt).rem_euclid(e.asset.duration.as_secs_f64().max(1e-3));
-                shown |= self.selection.contains(&e.id);
+                let dur = e.asset.duration.as_secs_f64().max(1e-3);
+                let before = e.play_t;
+                e.play_t = (e.play_t + dt).rem_euclid(dur);
+                if self.selection.contains(&e.id) {
+                    shown = true;
+                } else if !self.bare {
+                    let r = self.cam.screen_rect(e.rect());
+                    let on_screen = r[0] < self.canvas[2] && r[0] + r[2] > 0.0 && r[1] < self.canvas[3] && r[1] + r[3] > 0.0;
+                    let px = |t: f64| (t / dur * f64::from(r[2])).floor();
+                    shown |= on_screen && px(before) != px(e.play_t);
+                }
             }
             if e.params.animated() {
                 e.fx_t += dt;
@@ -1495,6 +1537,35 @@ mod tests {
 
     fn asset(id: u64, w: u32, h: u32) -> Arc<Asset> {
         Arc::new(crate::media::test_asset(id, w, h))
+    }
+
+    /// A 10 s, two-frame GIF-like asset.
+    fn clip(id: u64, w: u32, h: u32) -> Arc<Asset> {
+        let mut a = crate::media::test_asset(id, w, h);
+        a.frames[0].delay = std::time::Duration::from_secs(5);
+        a.frames.push(crate::media::Frame { rgba: a.frames[0].rgba.clone(), ..a.frames[0] });
+        a.duration = std::time::Duration::from_secs(10);
+        Arc::new(a)
+    }
+
+    #[test]
+    fn unselected_playback_redraws_only_when_its_hairline_moves_a_pixel() {
+        let mut a = App { canvas: [0.0, 0.0, 1000.0, 800.0], ..App::default() };
+        a.place(vec![clip(1, 100, 100)], [0.0, 0.0], false);
+        a.selection.clear();
+        let id = a.entities[0].id;
+        a.entity_mut(id).expect("placed").playing = true;
+        // 100 px wide over 10 s: a pixel every 0.1 s.
+        a.cam.set(a.cam.pan, 1.0);
+        let w = a.cam.screen_rect(a.entities[0].rect())[2];
+        assert!((w - 100.0).abs() < 1e-3, "rect width {w}");
+        assert!(!a.tick(0.01), "under a pixel");
+        assert!(a.tick(0.1), "a whole pixel");
+        a.bare = true;
+        assert!(!a.tick(0.5), "hidden chrome hides the hairline");
+        a.bare = false;
+        a.cam.set([100_000.0, 0.0], 1.0);
+        assert!(!a.tick(0.5), "off screen");
     }
 
     #[test]

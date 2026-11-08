@@ -167,6 +167,7 @@ impl Compositor<App> for Gfx {
                     }
                     v.frame = v.frame.wrapping_add(1);
                     v.waiting = false;
+                    state.video_frames.insert((e.id, asset.id), f);
                 }
                 if v.decoder.error().is_some() {
                     v.waiting = false;
@@ -208,6 +209,7 @@ impl Compositor<App> for Gfx {
         }
         self.sources.retain(|_, s| s.used);
         self.videos.retain(|_, v| v.used);
+        state.video_frames.retain(|k, _| self.videos.contains_key(k));
         self.scratch.sweep();
         self.entities.retain(|_, e| e.used);
         self.animating = state.animating() || video_waiting;

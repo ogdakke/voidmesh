@@ -83,6 +83,34 @@ fn clicks_select_and_shift_click_toggles() {
 }
 
 #[test]
+fn clicks_pass_through_transparent_media() {
+    let mut rt = canvas();
+    // Over item 1 and the empty canvas to its right (x 150–350): opaque on its left half only.
+    let rgba = (0..100).flat_map(|_| (0..200).flat_map(|x| [255, 0, 0, if x < 100 { 255 } else { 0 }])).collect();
+    rt.state.place(vec![Arc::new(crate::media::rgba_asset(3, "half.png", 200, 100, rgba))], [250.0, 350.0], false);
+    let id = rt.state.entities.last().expect("placed").id;
+    rt.state.selection.clear();
+    settle(&mut rt);
+    // Past item 1, a drag from the transparent half draws a marquee (which selects by rect).
+    let pos = rt.state.entity(id).expect("top").pos;
+    drag(&mut rt, [330.0, 320.0], [340.0, 380.0]);
+    assert_eq!(rt.state.selection.iter().copied().collect::<Vec<_>>(), [id]);
+    assert_eq!(rt.state.entity(id).expect("top").pos, pos, "nothing moved");
+    rt.state.selection.clear();
+    settle(&mut rt);
+    // A right-click there gets the canvas's menu, not the entity's.
+    right_click(&mut rt, 330.0, 350.0);
+    let menu = rt.popup_menu().expect("menu open");
+    assert!(menu.find("new-ws").is_some() && menu.find("copy-image").is_none());
+    rt.resolve_popup(None).expect("dismiss");
+    settle(&mut rt);
+    click(&mut rt, 200.0, 350.0);
+    assert_eq!(rt.state.selection.iter().copied().collect::<Vec<_>>(), [id], "its opaque half takes the click");
+    click(&mut rt, 280.0, 350.0);
+    assert_eq!(rt.state.selection.iter().copied().collect::<Vec<_>>(), [1], "its transparent half passes it to item 1");
+}
+
+#[test]
 fn dragging_moves_the_selection_and_undo_puts_it_back() {
     let mut rt = canvas();
     let before = rt.state.entity(1).expect("1").pos;

@@ -8,6 +8,7 @@
 mod effects;
 mod export_video;
 mod gfx;
+mod hit;
 mod keys;
 mod media;
 mod clip;

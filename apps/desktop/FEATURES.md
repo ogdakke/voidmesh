@@ -962,7 +962,9 @@ clip). Settings are a view of their own inside the window (⌘,), never a separa
   drop point, laid out as a batch: largest first, 4 per row, 125 gap). Paste (⌘V) of images,
   files and media paths.
 - Selection: click, shift-click toggle, marquee (replace/add/subtract), group drag, ⌘A, Esc, ↑/↓
-  cycling, a click on a selected GIF or video toggles playback.
+  cycling, a click on a selected GIF or video toggles playback. Picking is top-most first and
+  alpha-aware (`hit.rs`, the web's 16 px cells): clicks on transparent regions of images, SVGs,
+  GIF frames and video frames fall through.
 - Commands: delete, duplicate (+30,+30, unique names), undo/redo (⌘Z, ⇧⌘Z, ⌘Y), reset.
 - All seven effects and their sub-kinds, palettes (13 presets, Original via k-means, user
   palettes), preserve/reverse/original (P/R/O), adjustments with the 0–60 Kawase blur mapping,
