@@ -20,12 +20,51 @@
 }
 
 /*
- * iOS tints its status bar and toolbar from CSS background colours (the edge
- * element, falling back to the document), never from canvas pixels. Keeping the
- * document itself blue while the loader is in the DOM holds the bars blue through
- * the canvas-drawn animation, and they switch to the app's colour exactly when the
- * loader hides at the end of the reveal.
+ * iOS tints its status bar and toolbar from CSS background colours, never canvas
+ * pixels: the topmost `position: fixed` element touching each edge wins, and the
+ * document background is the fallback. The app's mobile layout is fixed, so once it
+ * mounts it would win over anything page-level while the loader still covers it.
+ *
+ * These thin fixed strips sit above everything to hold the bars on the loader blue.
+ * At handoff app-loader.ts switches them to the app background ([data-handoff]),
+ * which iOS keeps, and then removes them. The document is blue too, which covers the
+ * moment before the strips paint and the area under the bars.
  */
+.app-loader-chrome {
+  &[hidden] {
+    display: none;
+  }
+
+  & > i {
+    position: fixed;
+    left: 0;
+    right: 0;
+    z-index: 1000000;
+    height: max(env(safe-area-inset-top, 0px), 6px);
+    background: var(--loader-blue);
+    pointer-events: none;
+  }
+
+  & > i:first-child {
+    top: 0;
+  }
+
+  & > i:last-child {
+    bottom: 0;
+    height: max(env(safe-area-inset-bottom, 0px), 6px);
+  }
+
+  /* Colour and size both change, so iOS re-samples before the strips go away. */
+  &[data-handoff] > i {
+    background: var(--background);
+    height: calc(max(env(safe-area-inset-top, 0px), 6px) + 1px);
+  }
+
+  &[data-handoff] > i:last-child {
+    height: calc(max(env(safe-area-inset-bottom, 0px), 6px) + 1px);
+  }
+}
+
 html:has(#app-loader:not([hidden])),
 html:has(#app-loader:not([hidden])) body {
   background: var(--loader-blue);

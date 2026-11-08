@@ -14,6 +14,9 @@ const startTime = Date.now();
 const LOADER_THEME_COLOR = "#007fff";
 
 const el = document.getElementById("app-loader") as HTMLElement | null;
+const chromeEl = document.getElementById("app-loader-chrome") as HTMLElement | null;
+/** How long the edge strips show the app colour before they are removed. */
+const CHROME_HANDOFF_MS = 250;
 const statusEl = el?.querySelector<HTMLElement>(".loader-status") ?? null;
 const canvasEl = el?.querySelector<HTMLCanvasElement>(".loader-canvas") ?? null;
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
@@ -123,6 +126,16 @@ function setThemeColor(loading: boolean) {
   }
 }
 
+/**
+ * Hands the browser bars to the app: the edge strips switch to the app background
+ * (which iOS keeps once sampled) and are removed shortly after. See app-loader.css.
+ */
+function handOffChrome() {
+  if (!chromeEl) return;
+  chromeEl.dataset.handoff = "";
+  setTimeout(() => (chromeEl.hidden = true), CHROME_HANDOFF_MS);
+}
+
 async function playExit() {
   if (!el) return;
   const exiting = nextWorkerMessage("exiting");
@@ -133,6 +146,7 @@ async function playExit() {
   await Promise.all([exited, ...el.getAnimations().map((animation) => animation.finished)]);
   el.hidden = true;
   setThemeColor(false);
+  handOffChrome();
 }
 
 /** The worker destroys its WebGPU device, then closes itself. */
@@ -150,6 +164,10 @@ function replay() {
   void el.offsetWidth;
   el.hidden = false;
   setThemeColor(true);
+  if (chromeEl) {
+    delete chromeEl.dataset.handoff;
+    chromeEl.hidden = false;
+  }
   post({ type: "replay" });
 }
 
