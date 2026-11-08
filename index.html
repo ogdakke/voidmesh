@@ -5,8 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="theme-color" content="#fff" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#000" media="(prefers-color-scheme: dark)" />
+    <!-- Loader blue while loading; app-loader.ts restores data-app-color when it hides. -->
+    <meta
+      name="theme-color"
+      content="#007fff"
+      data-app-color="#fff"
+      media="(prefers-color-scheme: light)"
+    />
+    <meta
+      name="theme-color"
+      content="#007fff"
+      data-app-color="#000"
+      media="(prefers-color-scheme: dark)"
+    />
     <link rel="canonical" href="https://voidmesh.xyz/" />
     <link rel="icon" href="/favicon.ico" sizes="32x32" />
     <link rel="icon" type="image/png" sizes="512x512" href="/favicon.webp" />

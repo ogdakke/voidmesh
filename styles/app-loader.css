@@ -14,10 +14,25 @@
  * 100vh/lvh box stops short of the bars, hence the extra bleed. html/body are
  * `overflow: hidden`, so the extra height never scrolls.
  */
-.app-loader {
-  --loader-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+:root {
   /* Brand blue (--primary) in Display P3; the worker draws the identical value. */
   --loader-blue: color(display-p3 0.098 0.486 0.996);
+}
+
+/*
+ * iOS tints its status bar and toolbar from CSS background colours (the edge
+ * element, falling back to the document), never from canvas pixels. Keeping the
+ * document itself blue while the loader is in the DOM holds the bars blue through
+ * the canvas-drawn animation, and they switch to the app's colour exactly when the
+ * loader hides at the end of the reveal.
+ */
+html:has(#app-loader:not([hidden])),
+html:has(#app-loader:not([hidden])) body {
+  background: var(--loader-blue);
+}
+
+.app-loader {
+  --loader-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
   --loader-bleed: max(160px, 25lvh);
 
   z-index: 999999;
