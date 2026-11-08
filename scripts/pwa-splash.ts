@@ -72,9 +72,13 @@ async function main() {
   const pageArg = valueOf(args, "--page") ?? "scripts/pwa-splash/splash.html";
   const keepBrowser = args.includes("--keep-browser");
 
+  const profileDir = join(tmpdir(), `voidmesh-pwa-splash-${process.pid}`);
   const server = await createServer({
     root: ROOT,
     configFile: join(ROOT, "vite.config.ts"),
+    // Own dependency cache: sharing node_modules/.vite would re-optimize deps under a
+    // running dev server and break its open pages.
+    cacheDir: join(profileDir, "vite"),
     logLevel: "warn",
     server: { host: HOST, port: 0, strictPort: false, hmr: false },
   });
@@ -83,7 +87,6 @@ async function main() {
   if (!address || typeof address === "string") throw new Error("Vite did not bind a port");
   const pageUrl = `http://${HOST}:${address.port}/${relative(ROOT, resolve(ROOT, pageArg))}`;
 
-  const profileDir = join(tmpdir(), `voidmesh-pwa-splash-${process.pid}`);
   const cdpPort = 9300 + Math.floor(Math.random() * 500);
   const chrome = Bun.spawn(
     [
