@@ -552,3 +552,30 @@ fn a_swatch_opens_its_colour_picker_as_a_popover_and_a_press_outside_closes_it()
     assert!(rt.state.picker.is_none() && rt.find("color-picker").is_none());
     assert!(!rt.state.selection.is_empty());
 }
+
+#[test]
+fn cmd_z_with_the_colour_picker_open_takes_back_the_colour() {
+    let mut rt = canvas();
+    rt.set_viewport((1200.0, 1400.0), 2.0);
+    settle(&mut rt);
+    rt.update(|s, _| s.select_only(1));
+    settle(&mut rt);
+    let before = rt.state.focus().expect("focus").params.palette.clone();
+    let (x, y) = rt.find("swatch-1").expect("swatch");
+    click(&mut rt, x, y);
+    let area = rt.presented("color-area").expect("area").0;
+    drag(&mut rt, [area[0] + 30.0, area[1] + 30.0], [area[0] + area[2] * 0.6, area[1] + area[3] * 0.4]);
+    assert_ne!(rt.state.focus().expect("focus").params.palette, before, "the drag changed the colour");
+    let cmd = |c| KeyEvent { key: Key::Command(c), mods: Mods { cmd: true, ..Mods::default() } };
+    rt.key(cmd('z'));
+    settle(&mut rt);
+    assert_eq!(rt.state.focus().expect("focus").params.palette, before);
+    assert!(rt.state.picker.is_none());
+    // The next change is a step of its own.
+    rt.key(KeyEvent { key: Key::Text("p".into()), mods: Mods::default() });
+    settle(&mut rt);
+    rt.key(cmd('z'));
+    settle(&mut rt);
+    assert!(!rt.state.focus().expect("focus").params.preserve_colors);
+    assert_eq!(rt.state.focus().expect("focus").params.palette, before);
+}

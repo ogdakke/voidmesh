@@ -155,6 +155,18 @@ pub struct Snapshot {
     palettes: Vec<Palette>,
 }
 
+impl Snapshot {
+    /// The same document: entities (media, place, name, effect) and user palettes. Selection
+    /// and playback clocks aren't steps of their own.
+    fn same_document(&self, other: &Snapshot) -> bool {
+        self.palettes == other.palettes
+            && self.entities.len() == other.entities.len()
+            && self.entities.iter().zip(&other.entities).all(|(a, b)| {
+                a.id == b.id && Arc::ptr_eq(&a.asset, &b.asset) && a.pos == b.pos && a.size == b.size && a.z == b.z && a.name == b.name && a.params == b.params
+            })
+    }
+}
+
 /// The colour picker's session: which palette colour it edits and its OKLCH working value
 /// (kept so hue survives greys). A session is one undo step.
 pub struct Picker {
@@ -484,12 +496,19 @@ impl App {
         self.redo.clear();
     }
 
-    /// Record the current state as one undo step, before a change.
+    /// Record the current state as one undo step, before a change. An open gesture or session
+    /// (a value field, the colour picker, a slider) is closed into its own step first, so the
+    /// history stays in order; the picker carries on in a new session.
     pub fn checkpoint(&mut self) {
-        // Typing in a value field is its own step, closed before any other.
-        self.commit_value();
+        self.end_sessions();
         let s = self.snapshot();
         self.push_undo(s);
+    }
+
+    /// Close whatever gesture or session is recording, as its own step.
+    fn end_sessions(&mut self) {
+        self.commit_value();
+        self.end_edit();
     }
 
     fn restore(&mut self, s: Snapshot) {
@@ -509,8 +528,10 @@ impl App {
         self.picker = None;
     }
 
+    /// Undo the last step. An open session (the colour picker's, say) is that step: it closes
+    /// and is taken back.
     pub fn undo(&mut self) -> bool {
-        self.commit_value();
+        self.end_sessions();
         let Some(s) = self.undo.pop() else { return false };
         self.revision += 1;
         let now = self.snapshot();
@@ -520,7 +541,7 @@ impl App {
     }
 
     pub fn redo(&mut self) -> bool {
-        self.commit_value();
+        self.end_sessions();
         let Some(s) = self.redo.pop() else { return false };
         self.revision += 1;
         let now = self.snapshot();
@@ -595,8 +616,14 @@ impl App {
         if colors.len() < 2 || colors == current {
             return;
         }
+        // The open picker records a session (one step however many changes); anything else
+        // is a step of its own.
         if self.editing.is_none() {
-            self.checkpoint();
+            if self.picker.is_some() {
+                self.begin_edit();
+            } else {
+                self.checkpoint();
+            }
         }
         let Some(id) = self.own_palette() else { return };
         let Some(mut p) = self.palettes.iter().find(|q| q.id == id).cloned() else { return };
@@ -613,8 +640,10 @@ impl App {
         });
     }
 
+    /// Remove colour `index`: the picker's session closes first, so the removal is its own
+    /// step, as the web's popover commits before it removes.
     pub fn remove_palette_color(&mut self, index: usize) {
-        self.picker = None;
+        self.close_picker();
         self.edit_palette(|c| {
             if c.len() > 2 && index < c.len() {
                 c.remove(index);
@@ -821,8 +850,11 @@ impl App {
         }
     }
 
+    /// Close the open session into one undo step, when it changed anything.
     pub fn end_edit(&mut self) {
-        if let Some(s) = self.editing.take() {
+        if let Some(s) = self.editing.take()
+            && !s.same_document(&self.snapshot())
+        {
             self.push_undo(s);
         }
     }
@@ -1913,6 +1945,89 @@ mod tests {
         a.prefs.set("fancyEffects", &serde_json::Value::from("deletions")).expect("set");
         crate::prefs::set_fancy_deletions(&mut a, false);
         assert_eq!(a.prefs.get::<String>("fancyEffects").as_deref(), Some("none"));
+    }
+
+    /// Two images on Black & White, the first selected, nothing in the history.
+    fn picked_app() -> App {
+        let mut a = App::default();
+        a.place(vec![asset(1, 10, 10), asset(2, 10, 10)], [0.0, 0.0], false);
+        let one = a.entities[0].id;
+        a.select_only(one);
+        a.undo.clear();
+        a
+    }
+
+    fn colours(a: &App) -> Vec<crate::effects::Rgba> {
+        a.focus().map(|e| e.params.palette.colors.clone()).expect("focus")
+    }
+
+    const RED: crate::color::Oklch = crate::color::Oklch { l: 0.6, c: 0.2, h: 30.0, a: 1.0 };
+
+    #[test]
+    fn removing_a_colour_from_the_picker_ends_its_session() {
+        let mut a = picked_app();
+        let before = colours(&a);
+        a.add_palette_color();
+        a.open_picker(2);
+        a.pick_oklch(RED);
+        a.remove_palette_color(2);
+        assert!(a.editing.is_none(), "no session left open");
+        // Later edits are their own steps.
+        a.edit(|p| p.preserve_colors = !p.preserve_colors);
+        assert!(a.undo());
+        assert!(!a.focus().expect("focus").params.preserve_colors, "the toggle undoes alone");
+        assert!(a.undo(), "the removal");
+        assert_eq!(colours(&a).len(), 3);
+        assert!(a.undo(), "the picked colour");
+        assert!(a.undo(), "the added colour");
+        assert_eq!(colours(&a), before);
+        assert!(!a.undo(), "nothing else");
+    }
+
+    #[test]
+    fn undo_with_the_picker_open_takes_back_its_colour() {
+        let mut a = picked_app();
+        let before = colours(&a);
+        a.open_picker(1);
+        a.pick_oklch(RED);
+        assert!(a.undo());
+        assert_eq!(colours(&a), before);
+        assert!(a.picker.is_none() && a.editing.is_none());
+        assert!(a.redo());
+        assert_ne!(colours(&a), before);
+        // And everything after is undoable again.
+        a.edit(|p| p.reverse_palette = true);
+        assert!(a.undo());
+        assert!(!a.focus().expect("focus").params.reverse_palette);
+    }
+
+    #[test]
+    fn a_step_taken_mid_session_keeps_the_history_in_order() {
+        let mut a = picked_app();
+        let before = colours(&a);
+        a.open_picker(1);
+        a.pick_oklch(RED);
+        let picked = colours(&a);
+        a.duplicate_selection();
+        // The picker carries on in a session of its own.
+        a.pick_oklch(crate::color::Oklch { l: 0.3, ..RED });
+        a.close_picker();
+        assert!(a.undo(), "the second colour");
+        assert!(a.undo(), "the duplicate");
+        assert_eq!(a.entities.len(), 2);
+        assert_eq!(colours(&a), picked);
+        assert!(a.undo(), "the first colour");
+        assert_eq!(colours(&a), before);
+    }
+
+    #[test]
+    fn opening_and_closing_the_picker_without_a_change_leaves_no_step() {
+        let mut a = picked_app();
+        a.open_picker(0);
+        a.close_picker();
+        a.begin_edit();
+        a.end_edit();
+        assert!(a.undo.is_empty());
     }
 
     #[test]
