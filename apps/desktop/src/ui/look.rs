@@ -66,6 +66,13 @@ pub struct Look {
     pub kbd: Color,
     /// `--destructive`: a deletion's confirm button.
     pub destructive: Color,
+    /// `--destructive-lighter`: the top of a destructive button's gradient.
+    pub destructive_lighter: Color,
+    /// `--gray-75`: value fields (the colour picker's).
+    pub input: Color,
+    /// `--checker-bg`'s two greys, under translucent colours.
+    pub checker_a: Color,
+    pub checker_b: Color,
     /// The titlebar band's tint over its blur: the canvas colour, mostly opaque.
     pub bar: Color,
 }
@@ -73,6 +80,12 @@ pub struct Look {
 impl Look {
     pub fn new(dark: bool) -> Look {
         let gray = |l: f32| oklch(l, 0.0, 0.0);
+        // An sRGB grey `#vvvvvv` as linear light.
+        let srgb = |v: u8| {
+            let c = f32::from(v) / 255.0;
+            let c = if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
+            Color { r: c, g: c, b: c, a: 1.0 }
+        };
         if dark {
             let surface = gray(0.16);
             Look {
@@ -102,6 +115,10 @@ impl Look {
                 switch_off: gray(0.4691),
                 kbd: gray(0.2967),
                 destructive: oklch(0.65, 0.29, 28.41),
+                destructive_lighter: oklch(0.69, 0.25, 24.91),
+                input: gray(0.206725),
+                checker_a: srgb(0x40),
+                checker_b: srgb(0x2a),
                 bar: Color { r: 0.0018, g: 0.0018, b: 0.0024, a: 0.72 },
             }
         } else {
@@ -133,6 +150,10 @@ impl Look {
                 switch_off: gray(0.8518),
                 kbd: gray(0.9812),
                 destructive: oklch(0.65, 0.3, 28.96),
+                destructive_lighter: oklch(0.69, 0.25, 24.91),
+                input: gray(0.971),
+                checker_a: srgb(0xe0),
+                checker_b: srgb(0xff),
                 bar: Color { r: 0.955, g: 0.955, b: 0.955, a: 0.72 },
             }
         }

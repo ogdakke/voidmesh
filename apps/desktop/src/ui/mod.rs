@@ -70,6 +70,12 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if !s.bare {
         root = root.child(top_left(&l, s, insets)).child(bottom_left(&l, s)).child(bottom_right(&l, s, cx.env().scale));
     }
+    // The colour picker's popover, under the swatch it edits.
+    if let Some(k) = &s.picker
+        && let Some(r) = cx.window_layout(&format!("swatch-{}", k.index))
+    {
+        root = root.child(palette_editor::picker(&l, s, r, [s.canvas[2], s.canvas[3]]));
+    }
     if s.perf.visible {
         root = root.child(perf_overlay(&l, s, insets.height));
     }

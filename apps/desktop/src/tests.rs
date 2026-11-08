@@ -519,3 +519,36 @@ fn d_shows_the_performance_overlay_and_a_click_switches_its_mode() {
     settle(&mut rt);
     assert!(!rt.state.perf.visible && rt.find("perf-overlay").is_none());
 }
+
+#[test]
+fn a_swatch_opens_its_colour_picker_as_a_popover_and_a_press_outside_closes_it() {
+    let mut rt = canvas();
+    // Tall enough for the inspector to show its palette.
+    rt.set_viewport((1200.0, 1400.0), 2.0);
+    settle(&mut rt);
+    rt.update(|s, _| s.select_only(1));
+    settle(&mut rt);
+    // Ten colours: more than the strip shows, so it scrolls instead of wrapping.
+    rt.update(|s, _| {
+        for _ in 0..8 {
+            s.add_palette_color();
+        }
+    });
+    settle(&mut rt);
+    let rect = |rt: &Runtime<App>, key: &str| rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).map(|e| e.rect).expect("swatch");
+    let (first, last) = (rect(&rt, "swatch-0"), rect(&rt, "swatch-9"));
+    let strip = rect(&rt, "palette-swatches");
+    assert_eq!(first[1], last[1], "one row");
+    assert!(last[0] > strip[0] + strip[2], "the last is scrolled out of the strip: {last:?} past {strip:?}");
+    let (x, y) = rt.find("swatch-1").expect("swatch");
+    click(&mut rt, x, y);
+    assert_eq!(rt.state.picker.as_ref().map(|k| k.index), Some(1));
+    let sw = rt.presented("swatch-1").expect("swatch").0;
+    let pop = rt.presented("color-picker").expect("popover").0;
+    assert!((pop[1] - (sw[1] + sw[3] + 8.0)).abs() < 1.0 || pop[1] + pop[3] <= sw[1], "under the swatch, or above it without room: {pop:?} vs {sw:?}");
+    assert!(rt.find("color-remove").is_some());
+    // A press on the canvas, away from the popover, closes it and leaves the selection alone.
+    click(&mut rt, 40.0, 1300.0);
+    assert!(rt.state.picker.is_none() && rt.find("color-picker").is_none());
+    assert!(!rt.state.selection.is_empty());
+}

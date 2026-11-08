@@ -121,7 +121,9 @@ fn style(l: &Look, q: Sel) -> El {
     c = c.child(q.slider(l, "intensity", strength, |p| p.intensity, fx::INTENSITY, |p, v| p.intensity = v));
     if q.all(|p| p.shader.uses_palette()) {
         let mixed = q.mixed(|p| p.palette.id.clone());
-        c = c.child(if mixed { row().key("palette-mixed").w_full().py(8.0).child(text("Mixed palettes").font(MEDIUM).color(l.text_muted)) } else { super::palette_editor::editor(l, s, p) });
+        // `.palette-mixed`: `--text-accent` (the text colour at 80%), `--text-sm`.
+        c = c.child(if mixed { row().key("palette-mixed").w_full().py(8.0).child(text("Mixed palettes").font(MEDIUM).color(l.text.alpha(0.8))) } else { super::palette_editor::editor(l, s, p) });
+        c = c.child(row().child(super::palette_editor::extract_button(l)));
         c = c.child(select_ids(l, "palette", Some("Palette Presets"), s.palette_options(), if mixed { "" } else { &p.palette.id }, |s, id| s.set_palette(&id)));
         c = c.child(
             row()

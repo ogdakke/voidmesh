@@ -974,9 +974,12 @@ clip). Settings are a view of their own inside the window (⌘,), never a separa
 - All seven effects and their sub-kinds, palettes (13 presets, Original via k-means, user
   palettes; new media given Original takes its own), preserve/reverse/original (P/R/O), adjustments with the 0–60 Kawase blur mapping,
   grain, bloom, chromatic aberration, flowing-glass time with the tick-slider Time control.
-- Palette editor and colour picker: rename, add, remove, delete, edit (a preset or Original forks
-  into "Custom N"; one picker session is one undo step), OKLCH area, hue, alpha and hex; Load
-  Palette… extracts 16 colours from an image. User palettes persist.
+- Palette editor and colour picker, in the web's shapes: name and count over a sideways-scrolling
+  swatch row with "+" and delete at its end; rename, add, remove, delete, edit (a preset or
+  Original forks into "Custom N"). The picker is a popover under its swatch (OKLCH area, Hue,
+  Alpha, the value, eyedropper, Remove; a press outside or Esc closes it; one session is one
+  undo step). "Extract Palette from Image" takes 16 colours from an image. User palettes
+  persist.
 - Playback: Space, ←/→ seek, an inline scrubber on the clip with `S:cc` times, M and a mute
   button for videos with sound (sound plays through Rune's audio player and leads the clock).
   The focused scrubber takes Space, `,`/`.` frame steps, arrows, Page Up/Down, Home and End.
