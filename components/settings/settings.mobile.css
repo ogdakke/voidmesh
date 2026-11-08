@@ -2,11 +2,17 @@
   filter: drop-shadow(var(--floaty-shadow));
 }
 
+/* Scrolls when the sheet is shorter than its content (e.g. phone landscape). */
+.settings-drawer-content {
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+
 .settings-drawer-inner {
   display: flex;
   flex-direction: column;
   margin-bottom: var(--spacing-2);
-  height: 100%;
+  min-height: 100%;
 }
 
 .settings-drawer-switch,

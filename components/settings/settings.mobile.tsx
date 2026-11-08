@@ -61,53 +61,55 @@ export default function SettingsDrawer() {
         )}
       ></Drawer.Trigger>
       <Drawer.Popup>
-        <div className="settings-drawer-inner">
-          <div className="settings-drawer-header">
-            <h3 className="settings-drawer-title">Settings</h3>
+        <Drawer.Content className="settings-drawer-content">
+          <div className="settings-drawer-inner">
+            <div className="settings-drawer-header">
+              <h3 className="settings-drawer-title">Settings</h3>
+            </div>
+            <CanvasLensingPreviews layout="mobile" />
+            <div className="settings-drawer-switch">
+              <SnapToGridToggle />
+            </div>
+            <div className="settings-drawer-switch">
+              <FancyDeleteToggle />
+            </div>
+            <div className="settings-drawer-switch">
+              <HapticsToggle />
+            </div>
+            <div className="settings-drawer-switch">
+              <OverlapEffectToggle />
+            </div>
+            <hr className="divider" />
+            <div className="settings-drawer-ext-item field-label">
+              <LinkItem>
+                <ShareLink />
+              </LinkItem>
+            </div>
+            <div className="settings-drawer-ext-item field-label">
+              <LinkItem>
+                <FeedbackLink className="settings-drawer-link" />
+              </LinkItem>
+            </div>
+            <hr className="divider" />
+            <div className="settings-drawer-ext-item field-label">
+              <LinkItem>
+                <RedoOnboardingLink onDone={() => handleOpenChange(false)} />
+              </LinkItem>
+            </div>
+            <WorkspaceActions
+              className="settings-drawer-workspace-actions"
+              hasEntities={hasEntities}
+              exportStudioFile={exportStudioFile}
+              importStudioFile={importAndClose}
+              clearWorkspace={clearWorkspace}
+              hasActiveWorkspaceFile={hasActiveWorkspaceFile}
+              activeWorkspaceFileName={activeWorkspaceFileName}
+              isExporting={isExporting}
+              isImporting={isImporting}
+              moreActionsPresentation="sheet"
+            />
           </div>
-          <CanvasLensingPreviews layout="mobile" />
-          <div className="settings-drawer-switch">
-            <SnapToGridToggle />
-          </div>
-          <div className="settings-drawer-switch">
-            <FancyDeleteToggle />
-          </div>
-          <div className="settings-drawer-switch">
-            <HapticsToggle />
-          </div>
-          <div className="settings-drawer-switch">
-            <OverlapEffectToggle />
-          </div>
-          <hr className="divider" />
-          <div className="settings-drawer-ext-item field-label">
-            <LinkItem>
-              <ShareLink />
-            </LinkItem>
-          </div>
-          <div className="settings-drawer-ext-item field-label">
-            <LinkItem>
-              <FeedbackLink className="settings-drawer-link" />
-            </LinkItem>
-          </div>
-          <hr className="divider" />
-          <div className="settings-drawer-ext-item field-label">
-            <LinkItem>
-              <RedoOnboardingLink onDone={() => handleOpenChange(false)} />
-            </LinkItem>
-          </div>
-          <WorkspaceActions
-            className="settings-drawer-workspace-actions"
-            hasEntities={hasEntities}
-            exportStudioFile={exportStudioFile}
-            importStudioFile={importAndClose}
-            clearWorkspace={clearWorkspace}
-            hasActiveWorkspaceFile={hasActiveWorkspaceFile}
-            activeWorkspaceFileName={activeWorkspaceFileName}
-            isExporting={isExporting}
-            isImporting={isImporting}
-            moreActionsPresentation="sheet"
-          />
-        </div>
+        </Drawer.Content>
       </Drawer.Popup>
     </Drawer.Root>
   );
