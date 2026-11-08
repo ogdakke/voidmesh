@@ -125,9 +125,41 @@
     }
   }
 
+  /* Same width as the palette column, so moving the picker onto "Extract" doesn't shift
+     the layout: a round icon button with its label as a caption underneath. */
   .mobile-palette-upload {
-    width: 10rem;
-    justify-content: flex-end;
+    width: 4.25rem;
+    height: 100%;
+    justify-content: center;
     padding: 0;
+  }
+
+  .mobile-palette-upload__button {
+    position: relative;
+    width: 2.5rem;
+    height: 2.5rem;
+    padding: 0;
+    margin: 0 0 2.5rem;
+    border-radius: 99px;
+
+    span {
+      position: absolute;
+      top: calc(100% + 0.25rem);
+      left: 50%;
+      translate: -50% 0;
+      width: 4.25rem;
+      font-size: 0.675rem;
+      line-height: 1.2;
+      text-align: center;
+      white-space: normal;
+      color: var(--gray-1100);
+    }
+  }
+
+  /* Keep the panel width fixed while the second column swaps (palette / toggle / upload /
+     nothing when mixed), so the picker never jumps sideways. */
+  .mobile-controls-container:has(> .mobile-color-knobs__picker) {
+    min-width: calc(2 * 4.25rem + var(--spacing));
+    justify-content: flex-start;
   }
 }
