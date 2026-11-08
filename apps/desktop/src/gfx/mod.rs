@@ -3,6 +3,7 @@
 //! out at the entity's screen rect from the camera). Processing runs before the UI
 //! pass, only for entities whose inputs changed.
 
+mod dust;
 mod export;
 pub mod process;
 
@@ -21,6 +22,10 @@ use process::{Pipes, Processed};
 pub const GRID: u32 = 1;
 /// The canvas lensing slot (reads its backdrop: everything on the canvas below the chrome).
 pub const LENS: u32 = 2;
+/// The deletion dust layer, over the entities (`dust.rs`).
+pub const DUST: u32 = 6;
+/// Seconds deletion dust plays.
+pub const DUST_SECONDS: f32 = dust::DISSOLVE + dust::LIFETIME;
 /// Entity slots are marked `ENTITY + id`.
 pub const ENTITY: u32 = 1 << 16;
 
@@ -83,6 +88,8 @@ struct Res {
     lens: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
     /// The colour picker's area, hue and alpha tracks.
     picker: HashMap<(wgpu::TextureFormat, u32), wgpu::RenderPipeline>,
+    /// A deleted entity's last image under the dissolve front.
+    dissolve: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
     blank: wgpu::BindGroup,
 }
 
@@ -101,6 +108,7 @@ pub struct Gfx {
     scratch: process::ScratchPool,
     entities: HashMap<u32, EntityGpu>,
     exporter: export::Exporter,
+    dust: Option<dust::Dust>,
     animating: bool,
 }
 
@@ -122,6 +130,7 @@ impl Compositor<App> for Gfx {
             self.videos.clear();
             self.scratch = Default::default();
             self.entities.clear();
+            self.dust = None;
             self.res = Some(Res::new(device, queue, key));
         }
         let Some(res) = self.res.as_mut() else { return };
@@ -139,7 +148,19 @@ impl Compositor<App> for Gfx {
         }
         let dark = f.rt.env.system_dark;
         let device_scale = f.rt.env.scale;
+        let reduced_motion = f.rt.reduced_motion;
         let state = &mut f.rt.state;
+        state.reduced_motion = reduced_motion;
+        // Deletions turning to dust take over their entity's processed texture before the
+        // sweep below would drop it; an undo that brings an entity back stops its dust.
+        let dust = self.dust.get_or_insert_with(|| dust::Dust::new(device));
+        for req in std::mem::take(&mut state.dust) {
+            if let Some(g) = self.entities.remove(&req.entity) {
+                dust.start(device, queue, f.encoder, req.entity, req.rect, g);
+            }
+        }
+        dust.overlays.retain(|o| !state.entities.iter().any(|e| e.id == o.entity));
+        let dusting = dust.step(queue, f.encoder);
         state.device_scale = device_scale;
         for e in &state.entities {
             let asset = &e.asset;
@@ -213,7 +234,7 @@ impl Compositor<App> for Gfx {
         state.video_frames.retain(|k, _| self.videos.contains_key(k));
         self.scratch.sweep();
         self.entities.retain(|_, e| e.used);
-        self.animating = state.animating() || video_waiting;
+        self.animating = state.animating() || video_waiting || dusting;
 
         // Exports read back processed textures.
         for req in std::mem::take(&mut state.exports) {
@@ -241,11 +262,15 @@ impl Compositor<App> for Gfx {
         let picked = state.picker.as_ref().map(|k| (k.oklch, crate::color::to_rgba(k.oklch)));
         for fmt in [f.format, wgpu::TextureFormat::Rgba16Float] {
             res.ensure(device, fmt);
+            if let Some(d) = self.dust.as_mut() {
+                d.pipeline(device, fmt);
+            }
         }
 
         let clear = f.rt.clear_color();
         f.ui.prepare(device, queue, &mut f.rt.text.atlas, &f.rt.instances, size);
         let entities = &self.entities;
+        let dust = self.dust.as_ref();
         f.ui.draw_with_backdrop(f.encoder, f.target, clear, &mut |phase, site: &EffectSite<'_>| {
             let EffectPhase::Draw(pass) = phase else { return };
             let i = site.instance;
@@ -293,6 +318,30 @@ impl Compositor<App> for Gfx {
                 pass.set_bind_group(0, Some(&res.blank), &[]);
                 pass.set_immediates(0, bytemuck::bytes_of(&slot));
                 pass.draw(0..6, 0..1);
+            } else if site.mark == DUST {
+                let Some(d) = dust else { return };
+                let (Some(dissolve), Some(particles)) = (res.dissolve.get(&site.format), d.get(site.format)) else { return };
+                // World to this pass's pixels, through the camera (canvas points) and the scale.
+                let (pan, s, canvas) = cam;
+                let dpr = site.scale;
+                let k = s * dpr;
+                let off = [(pan[0] + canvas[0]) * dpr - site.origin[0], (pan[1] + canvas[1]) * dpr - site.origin[1]];
+                let view = dust::View { k, srgb: base.b[0], pad: [0.0; 2], offset: off, size: [site.size[0] as f32, site.size[1] as f32] };
+                for o in &d.overlays {
+                    let p = o.progress();
+                    if p > 0.0 && p < 1.0 {
+                        let r = o.rect;
+                        let slot = Slot { rect: [r[0] * k + off[0], r[1] * k + off[1], r[2] * k, r[3] * k], a: [p, o.seed, 0.0, 0.0], ..base };
+                        pass.set_pipeline(dissolve);
+                        pass.set_bind_group(0, Some(&o.gpu.bind), &[]);
+                        pass.set_immediates(0, bytemuck::bytes_of(&slot));
+                        pass.draw(0..6, 0..1);
+                    }
+                    pass.set_pipeline(particles);
+                    pass.set_bind_group(0, Some(&o.render), &[]);
+                    pass.set_immediates(0, bytemuck::bytes_of(&view));
+                    pass.draw(0..6, 0..dust::Dust::COUNT);
+                }
             } else if site.mark >= ENTITY {
                 let id = site.mark - ENTITY;
                 let (Some(g), Some(pipe)) = (entities.get(&id), res.entity.get(&site.format)) else { return };
@@ -363,7 +412,7 @@ impl Res {
         });
         let blank_tex = process::upload(device, queue, 1, 1, &[0, 0, 0, 0]);
         let blank = composite_bind(device, &layout, &blank_tex.create_view(&Default::default()), &pipes.sampler);
-        Res { key, pipes, layout, pipeline_layout, module, entity: HashMap::new(), grid: HashMap::new(), lens: HashMap::new(), picker: HashMap::new(), blank }
+        Res { key, pipes, layout, pipeline_layout, module, entity: HashMap::new(), grid: HashMap::new(), lens: HashMap::new(), picker: HashMap::new(), dissolve: HashMap::new(), blank }
     }
 
     fn ensure(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
@@ -392,6 +441,7 @@ impl Res {
         self.entity.insert(format, make("fs_entity", blend));
         self.grid.insert(format, make("fs_grid", blend));
         self.lens.insert(format, make("fs_lens", blend));
+        self.dissolve.insert(format, make("fs_dissolve", blend));
         use crate::ui::palette_editor::{ALPHA_MARK, AREA_MARK, HUE_MARK};
         for (mark, entry) in [(AREA_MARK, "fs_area"), (HUE_MARK, "fs_hue"), (ALPHA_MARK, "fs_alpha")] {
             self.picker.insert((format, mark), make(entry, blend));

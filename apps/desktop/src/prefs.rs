@@ -8,6 +8,8 @@ use crate::state::{App, Lensing};
 
 const SNAP: &str = "snapToGrid";
 const LENSING: &str = "canvasLensing";
+/// The web's `fancyEffects`: none, all, deletions or prismWake. Desktop has the deletions part.
+const FANCY: &str = "fancyEffects";
 const PALETTES: &str = "customPalettes";
 const TABS: &str = "workspaceTabs";
 const ACTIVE: &str = "activeWorkspace";
@@ -24,6 +26,7 @@ pub fn load(s: &mut App) {
         Some("extreme") => Lensing::Extreme,
         _ => Lensing::Off,
     };
+    s.fancy_deletions = s.prefs.get::<String>(FANCY).map(|v| matches!(v.as_str(), "all" | "deletions"));
     let stored: Vec<Value> = s.prefs.get(PALETTES).unwrap_or_default();
     s.palettes = stored.iter().filter_map(crate::workspace::palette_from).collect();
     let tabs: Vec<String> = s.prefs.get(TABS).unwrap_or_default();
@@ -50,6 +53,19 @@ pub fn set_lensing(s: &mut App, l: Lensing) {
         Lensing::Extreme => "extreme",
     };
     set(s, LENSING, Value::from(id));
+}
+
+/// Fancy deletions on or off, keeping the stored value's other effect as the web does.
+pub fn set_fancy_deletions(s: &mut App, on: bool) {
+    let prism = s.prefs.get::<String>(FANCY).map_or(s.fancy_deletions(), |v| matches!(v.as_str(), "all" | "prismWake"));
+    s.fancy_deletions = Some(on);
+    let v = match (on, prism) {
+        (true, true) => "all",
+        (true, false) => "deletions",
+        (false, true) => "prismWake",
+        (false, false) => "none",
+    };
+    set(s, FANCY, Value::from(v));
 }
 
 pub fn save_palettes(s: &mut App) {

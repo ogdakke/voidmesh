@@ -39,6 +39,8 @@ pub fn surface(l: &Look, s: &App) -> El {
         .on_layout(|s: &mut App, r| s.resize_canvas(r))
         .child(el().key("grid").absolute(0.0, 0.0).w_full().h_full().effect(gfx::GRID))
         .child(world)
+        // Deletion dust, over the entities, while it plays.
+        .children((s.now < s.dust_until).then(|| el().key("dust").absolute(0.0, 0.0).w_full().h_full().effect(gfx::DUST).inert()))
         .pointer_buttons([PointerButton::Middle])
         .on_wheel(|s: &mut App, e: WheelEvent, tx: &mut Tx| {
             trace(s, "wheel", &format!("dx {:.2} dy {:.2} at {:.1},{:.1} cmd {} precise {} phase {:?} momentum {}", e.dx, e.dy, e.x, e.y, e.mods.cmd, e.precise, e.phase, e.momentum));

@@ -257,6 +257,15 @@ impl Lensing {
     }
 }
 
+/// A deletion to turn to dust (`gfx/dust.rs`): the entity and its world rect.
+pub struct DustRequest {
+    pub entity: u32,
+    pub rect: [f32; 4],
+}
+
+/// At most this many deletions at once turn to dust (the web's `fancyDeleteMaxBatchSize`).
+pub const DUST_MAX_BATCH: usize = 32;
+
 /// The slider whose value field is being typed into.
 #[derive(Clone, Copy)]
 pub struct ValueTarget {
@@ -333,6 +342,14 @@ pub struct App {
     pub value_target: Option<ValueTarget>,
     /// The debug performance overlay (`D`).
     pub perf: crate::perf::Perf,
+    /// Fancy deletions (dust), as stored; `None` follows the system's Reduce Motion.
+    pub fancy_deletions: Option<bool>,
+    /// The system asks for reduced motion (the compositor keeps this current).
+    pub reduced_motion: bool,
+    /// Deletions waiting for the compositor to turn them to dust.
+    pub dust: Vec<DustRequest>,
+    /// The dust layer shows until then (`now` seconds).
+    pub dust_until: f64,
     pub renaming: bool,
     /// Flowing glass's Time control.
     pub time_slider: crate::ui::tick_slider::TickSlider,
@@ -409,6 +426,10 @@ impl Default for App {
             value_edit: rune::TextEdit::new(""),
             value_target: None,
             perf: Default::default(),
+            fancy_deletions: None,
+            reduced_motion: false,
+            dust: Vec::new(),
+            dust_until: f64::NEG_INFINITY,
             name_edit: rune::TextEdit::new(""),
             renaming: false,
             toasts: Vec::new(),
@@ -1088,12 +1109,22 @@ impl App {
         }
     }
 
+    /// Deletions turn to dust: on unless set off, or the system asks for reduced motion.
+    pub fn fancy_deletions(&self) -> bool {
+        self.fancy_deletions.unwrap_or(!self.reduced_motion)
+    }
+
     pub fn delete_selection(&mut self) {
         if self.selection.is_empty() {
             return;
         }
         self.checkpoint();
         let sel = std::mem::take(&mut self.selection);
+        if self.fancy_deletions() && sel.len() <= DUST_MAX_BATCH {
+            let doomed = self.entities.iter().filter(|e| sel.contains(&e.id)).map(|e| DustRequest { entity: e.id, rect: e.rect() });
+            self.dust.extend(doomed);
+            self.dust_until = self.now + f64::from(crate::gfx::DUST_SECONDS) + 0.25;
+        }
         self.entities.retain(|e| !sel.contains(&e.id));
     }
 
@@ -1843,6 +1874,45 @@ mod tests {
         // With the picker closed, a late pick changes nothing.
         a.pick_rgba([0.0, 1.0, 0.0, 1.0]);
         assert_eq!(a.focus().map(|e| e.params.palette.colors[0]), Some([1.0, 0.5, 0.0, 1.0]));
+    }
+
+    #[test]
+    fn deletions_turn_to_dust_unless_off_reduced_or_too_many() {
+        let mut a = App::default();
+        a.place(vec![asset(1, 10, 10), asset(2, 10, 10)], [0.0, 0.0], false);
+        a.delete_selection();
+        assert_eq!(a.dust.iter().map(|d| d.entity).collect::<Vec<_>>(), [1, 2]);
+        assert!(a.dust_until > a.now);
+        a.dust.clear();
+        a.undo();
+        a.reduced_motion = true;
+        a.select_all();
+        a.delete_selection();
+        assert!(a.dust.is_empty(), "Reduce Motion turns it off by default");
+        a.undo();
+        crate::prefs::set_fancy_deletions(&mut a, true);
+        a.select_all();
+        a.delete_selection();
+        assert_eq!(a.dust.len(), 2, "an explicit choice wins");
+        a.dust.clear();
+        a.undo();
+        let many: Vec<_> = (10..10 + DUST_MAX_BATCH as u64).map(|i| asset(i, 10, 10)).collect();
+        a.place(many, [0.0, 0.0], false);
+        a.select_all();
+        a.delete_selection();
+        assert!(a.dust.is_empty(), "past the batch limit, deletions are plain");
+    }
+
+    #[test]
+    fn the_fancy_preference_keeps_the_webs_other_effect() {
+        let mut a = App::default();
+        crate::prefs::set_fancy_deletions(&mut a, false);
+        assert_eq!(a.prefs.get::<String>("fancyEffects").as_deref(), Some("prismWake"));
+        crate::prefs::set_fancy_deletions(&mut a, true);
+        assert_eq!(a.prefs.get::<String>("fancyEffects").as_deref(), Some("all"));
+        a.prefs.set("fancyEffects", &serde_json::Value::from("deletions")).expect("set");
+        crate::prefs::set_fancy_deletions(&mut a, false);
+        assert_eq!(a.prefs.get::<String>("fancyEffects").as_deref(), Some("none"));
     }
 
     #[test]

@@ -64,7 +64,16 @@ pub fn view(l: &Look, s: &App, top: f32, dark: bool) -> El {
         .pb(40.0)
         .child(row().w_full().pb(40.0).center_y().justify_between().child(text("Settings").font(TITLE).color(l.text)).child(close))
         .child(lensing(l, s, dark))
-        .child(group(l, vec![row_switch(l, "Snap to Grid", "snap-switch", s.snap, |s| crate::prefs::set_snap(s, !s.snap))]))
+        .child(group(
+            l,
+            vec![
+                row_switch(l, "Snap to Grid", "snap-switch", s.snap, |s| crate::prefs::set_snap(s, !s.snap)),
+                row_switch(l, "Fancy deletions", "fancy-delete-switch", s.fancy_deletions(), |s| {
+                    let on = !s.fancy_deletions();
+                    crate::prefs::set_fancy_deletions(s, on);
+                }),
+            ],
+        ))
         .child(section(l, "Palettes", palettes(l, s)))
         .child(section(l, "Keyboard shortcuts", shortcuts(l)).key(SHORTCUTS))
         .child(section(

@@ -7,6 +7,8 @@
 //   fs_alpha   the picker's alpha track: colour `c.yzw` over a checkerboard
 //   fs_lens    canvas lensing: the canvas drawn so far (the slot's backdrop) bent at its edges like
 //              a thick glass slab, with dispersion, reflection, occlusion and vignette
+//   fs_dissolve a deleted entity's last image eaten by a noisy front (deletion dust; the
+//              particles are dust.wgsl's), with a faint blue edge
 
 struct Slot {
   rect: vec4f,      // quad x, y, w, h in this pass's pixels
@@ -14,6 +16,7 @@ struct Slot {
   clip: vec4f,      // the slot's clip rectangle in window pixels
   fade: vec4u,      // the slot's packed soft edges and radii
   a: vec4f,         // entity: ring width px, image inset px (ring), selected, _
+                    // dissolve: progress 0–1, seed, _, _
                     // grid: world at window pixel 0 (xy), world units per pixel, device scale
   b: vec4f,         // x: 1 = frame blends in sRGB, y: dark theme
   c: vec4f,         // lens: strength, radius, falloff, dispersion; picker: hue, sRGB colour
@@ -74,6 +77,54 @@ fn fs_entity(in: V) -> @location(0) vec4f {
     c = c + vec4f(RING, 1.0) * ring * (1.0 - c.a);
   }
   return encode(c) * clip_alpha(in.pos.xy + s.view.zw, s.clip, s.fade);
+}
+
+// Must match dust.wgsl's, so particles leave as the front passes.
+fn hash21(p: vec2f) -> f32 {
+  let h = dot(p, vec2f(127.1, 311.7));
+  return fract(sin(h) * 43758.5453);
+}
+
+fn valueNoise(p: vec2f) -> f32 {
+  let i = floor(p);
+  let f = fract(p);
+  let u = f * f * (3.0 - 2.0 * f);
+  let a = hash21(i);
+  let b = hash21(i + vec2f(1.0, 0.0));
+  let c = hash21(i + vec2f(0.0, 1.0));
+  let d = hash21(i + vec2f(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+fn fbmNoise(p: vec2f) -> f32 {
+  var value = 0.0;
+  var amp = 0.5;
+  var pos = p;
+  for (var i = 0; i < 3; i++) {
+    value += amp * valueNoise(pos);
+    pos *= 2.0;
+    amp *= 0.5;
+  }
+  return value;
+}
+
+// The web's composition `disintegrate`: an FBM threshold mixed with a mostly horizontal sweep;
+// pixels the front (progress × 1.25) has passed are gone, those near it fade and tint blue.
+@fragment
+fn fs_dissolve(in: V) -> @location(0) vec4f {
+  let uv = in.local / s.rect.zw;
+  let tex = textureSample(img, smp, clamp(uv, vec2f(0.0), vec2f(1.0)));
+  let seed = s.a.y;
+  let threshold = mix(fbmNoise(uv * 5.0 + vec2f(seed, seed * 0.7)), uv.x * 0.8 + uv.y * 0.2, 0.35);
+  let edge = threshold - s.a.x * 1.25;
+  if (edge < 0.0) { discard; }
+  let fade = smoothstep(0.0, 0.04, edge);
+  let glow = smoothstep(0.06, 0.0, edge);
+  // Tint the straight colour, then premultiply again.
+  var rgb = select(vec3f(0.0), tex.rgb / tex.a, tex.a > 0.0);
+  rgb = vec3f(rgb.r * (1.0 - glow * 0.1), mix(rgb.g, 0.51, glow * 0.1), mix(rgb.b, 1.0, glow * 0.15));
+  let a = tex.a * fade;
+  return encode(vec4f(rgb * a, a)) * clip_alpha(in.pos.xy + s.view.zw, s.clip, s.fade);
 }
 
 fn dots(w: vec2f, spacing: f32, wpp: f32, r: f32) -> f32 {
