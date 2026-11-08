@@ -6,14 +6,26 @@
  * reduced-motion fade.
  */
 
+/*
+ * Positioned absolutely and taller than the viewport, never `fixed`: iOS tints its
+ * status and toolbar areas from fixed elements touching the screen edges and keeps
+ * that tint after they are removed. As ordinary page content the blue runs under the
+ * translucent bars instead, and the bars stay untinted once the app shows. A plain
+ * 100vh/lvh box stops short of the bars, hence the extra bleed. html/body are
+ * `overflow: hidden`, so the extra height never scrolls.
+ */
 .app-loader {
   --loader-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
   /* Brand blue (--primary) in Display P3; the worker draws the identical value. */
   --loader-blue: color(display-p3 0.098 0.486 0.996);
+  --loader-bleed: max(160px, 25lvh);
 
   z-index: 999999;
-  position: fixed;
-  inset: 0;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: calc(100lvh + var(--loader-bleed));
   overflow: clip;
   background: var(--loader-blue);
   color: white;
@@ -29,7 +41,12 @@
     background: transparent;
   }
 
-  /* With motion, the worker reveals the app; reduced motion gets a plain fade. */
+  /* With motion, the worker reveals the app. Reduced motion, and a loader without a
+   * WebGPU device ([data-static]), get a plain fade instead. */
+  &[data-static][data-state="exit"] {
+    animation: loader-fade-out 320ms var(--loader-ease-in-out) both;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     &[data-state="exit"] {
       animation: loader-fade-out 320ms var(--loader-ease-in-out) both;
