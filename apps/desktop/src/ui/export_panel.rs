@@ -17,12 +17,9 @@ static CLOSE: Icon = Icon {
     body: r#"<path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>"#,
 };
 
-/// The single selected entity, when it can export as video.
-fn exportable_focus(s: &App) -> Option<u32> {
-    if s.selection.len() != 1 {
-        return None;
-    }
-    s.focus().filter(|e| ev::exportable(&e.asset)).map(|e| e.id)
+/// The selected entities that export as video (videos and GIFs), in insertion order.
+pub fn exportable_selection(s: &App) -> Vec<u32> {
+    s.selected().filter(|e| ev::exportable(&e.asset)).map(|e| e.id).collect()
 }
 
 /// Open the panel for the selection, or close it if it's open.
@@ -32,31 +29,52 @@ pub fn toggle(s: &mut App) {
     }
 }
 
-/// Open the panel for the selection, when it can export as video.
+/// Open the panel for the selection's videos and GIFs, when it has any.
 pub fn open(s: &mut App) {
-    let Some(id) = exportable_focus(s) else { return };
+    let ids = exportable_selection(s);
+    let Some(&first) = ids.first() else { return };
     // A video's own frame rate is the starting point, as on the web.
-    if let Some(fps) = s.entity(id).and_then(|e| e.asset.video.as_ref()).and_then(|v| v.fps) {
+    if let Some(fps) = s.entity(first).and_then(|e| e.asset.video.as_ref()).and_then(|v| v.fps) {
         s.export.options.fps = (fps.round() as u32).clamp(1, ev::FPS_MAX);
     }
-    s.export.panel = Some(Panel { entity: id, advanced: false });
+    s.export.panel = Some(Panel { entities: ids, advanced: false });
 }
 
-/// The save button and ⌘E: animated media opens the export panel; stills save an image.
+/// The save button and ⌘E: a selection with videos or GIFs opens the export panel; stills save
+/// images.
 pub fn save_or_export(s: &mut App, tx: &mut Tx) {
-    if exportable_focus(s).is_some() {
-        toggle(s);
-    } else {
+    if exportable_selection(s).is_empty() {
         super::export_selected(s, tx);
+    } else {
+        toggle(s);
     }
 }
 
-/// Ask where, then queue the export.
+/// The export button's label: "Export Video", "Export GIF", or "Export n Videos/GIFs".
+fn export_label(n: usize, gif: bool) -> String {
+    match (n, gif) {
+        (1, true) => "Export GIF".into(),
+        (1, false) => "Export Video".into(),
+        (n, true) => format!("Export {n} GIFs"),
+        (n, false) => format!("Export {n} Videos"),
+    }
+}
+
+/// Ask where (a file for one clip, a folder for several), then queue the exports.
 fn start(s: &mut App, tx: &mut Tx) {
-    let Some(id) = s.export.panel.as_ref().map(|p| p.entity) else { return };
+    let Some(ids) = s.export.panel.as_ref().map(|p| p.entities.clone()) else { return };
+    if ids.len() > 1 {
+        let opts = FileDialogOptions { title: export_label(ids.len(), s.export.options.format.is_gif()), ..Default::default() };
+        return tx.open_folder(opts, move |s: &mut App, r, _| match r {
+            Ok(Some(dir)) => ev::enqueue_into(s, &ids, &dir),
+            Ok(None) => {}
+            Err(e) => s.toast(e.to_string()),
+        });
+    }
+    let Some(&id) = ids.first() else { return };
     let Some(e) = s.entity(id) else { return };
     let ext = s.export.options.format.ext();
-    let stem = e.name.rsplit_once('.').map(|(a, _)| a.to_string()).unwrap_or_else(|| e.name.clone());
+    let stem = super::stem(&e.name);
     let title = if s.export.options.format.is_gif() { "Export GIF" } else { "Export video" };
     let label = Format::LABELS[Format::ALL.iter().position(|f| *f == s.export.options.format).unwrap_or(0)];
     let opts = FileDialogOptions { title: title.into(), file_name: Some(format!("{stem}.{ext}")), ..Default::default() }.filter(label, &[ext]);
@@ -192,7 +210,12 @@ fn index<T: PartialEq>(all: &[T], v: &T) -> usize {
 /// The export panel, under the entity bar of the selection at canvas rect `sel`.
 pub fn panel(l: &Look, s: &App, sel: [f32; 4], top: f32) -> Option<El> {
     let p = s.export.panel.as_ref()?;
-    let e = s.entity(p.entity).filter(|_| s.selection.len() == 1 && s.selection.contains(&p.entity))?;
+    if p.entities != exportable_selection(s) {
+        return None;
+    }
+    // Sizes and the frame rate read from the first clip.
+    let e = s.entity(*p.entities.first()?)?;
+    let n = p.entities.len();
     let o = &s.export.options;
     let gif = o.format.is_gif();
     let fps = o.effective_fps();
@@ -203,7 +226,7 @@ pub fn panel(l: &Look, s: &App, sel: [f32; 4], top: f32) -> Option<El> {
     }
     let max_fps = if gif { ev::GIF_FPS_MAX } else { ev::FPS_MAX };
     body = body.child(slider(l, "export-fps", "Frame Rate (FPS)", fps as f32, fps.to_string(), (1.0, max_fps as f32, 1.0), |o, v| o.fps = v as u32));
-    if !gif && e.has_audio() {
+    if !gif && p.entities.iter().filter_map(|id| s.entity(*id)).any(|e| e.has_audio()) {
         body = body.child(row().child(toggle_pill(l, "export-audio", "Include Audio", o.include_audio, |o| o.include_audio = !o.include_audio)));
     }
 
@@ -247,15 +270,18 @@ pub fn panel(l: &Look, s: &App, sel: [f32; 4], top: f32) -> Option<El> {
                 adv = adv.child(row().child(toggle_pill(l, "export-bitrate-auto", "Auto Bitrate", false, |o| o.bitrate_kbps = None)));
             }
             adv = adv.child(select(l, "export-resolution", "Resolution", &Resolution::LABELS, index(&Resolution::ALL, &o.resolution), |o, i| o.resolution = Resolution::ALL[i]));
-            adv = adv.child(text(format!("{} × {}", size.0, size.1)).font(SMALL).color(l.text_faint));
+            if n == 1 {
+                adv = adv.child(text(format!("{} × {}", size.0, size.1)).font(SMALL).color(l.text_faint));
+            }
         }
         body = body.child(adv);
     }
 
+    let label = export_label(n, gif);
     let button = l.primary_button(
         el().key("export-go")
             .role("button")
-            .label(if gif { "Export GIF" } else { "Export Video" })
+            .label(label.clone())
             .focusable(true)
             .w_full()
             .h(36.0)
@@ -264,7 +290,7 @@ pub fn panel(l: &Look, s: &App, sel: [f32; 4], top: f32) -> Option<El> {
             .press_scale(0.98)
             .cursor(rune::Cursor::Pointer)
             .on_press_tx(start)
-            .child(text(if gif { "Export GIF" } else { "Export Video" }).font(MEDIUM).color(Color::WHITE)),
+            .child(text(label).font(MEDIUM).color(Color::WHITE)),
     );
     body = body.child(el().pt(4.0).w_full().child(button));
 
@@ -513,6 +539,57 @@ mod tests {
         assert!(rt.presented("export-queue-list").is_some_and(|(r, _)| r[1] + r[3] <= pill[1]), "the list opens above");
         click(&mut rt, "export-queue-clear");
         assert!(rt.state.export.jobs().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn several_clips_export_into_a_folder_and_several_stills_save_there() {
+        let still = Arc::new(crate::media::test_asset(1, 40, 30));
+        let mut rt = runtime(vec![gif(), gif(), still]);
+        assert_eq!(rt.state.selection.len(), 3);
+        cmd_e(&mut rt);
+        assert_eq!(rt.state.export.panel.as_ref().map(|p| p.entities.len()), Some(2), "the panel takes the two clips");
+        click(&mut rt, "export-format");
+        rt.resolve_popup(Some("2")).unwrap_or_else(|e| panic!("menu: {e:?}"));
+        settle(&mut rt);
+        let label = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("export-go")).and_then(|e| e.label);
+        assert_eq!(label.as_deref(), Some("Export 2 GIFs"));
+
+        let dir = std::env::temp_dir().join(format!("voidmesh-export-many-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        click(&mut rt, "export-go");
+        rt.resolve_file_dialog(Some(dir.clone())).unwrap_or_else(|e| panic!("dialog: {e:?}"));
+        settle(&mut rt);
+        let until = Instant::now() + Duration::from_secs(60);
+        loop {
+            rt.frame(1.0 / 60.0);
+            let jobs = rt.state.export.jobs();
+            if jobs.len() == 2 && jobs.iter().all(|j| !j.status.active()) {
+                assert!(jobs.iter().all(|j| j.status == Status::Completed), "{jobs:?}");
+                break;
+            }
+            assert!(Instant::now() < until, "exports didn't finish: {jobs:?}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(dir.join("clip.gif").is_file() && dir.join("clip 2.gif").is_file(), "one file each, neither overwritten");
+
+        // Saving frames from the menu: the stills and the clips' current frames, into a folder.
+        let r = rt.presented("e3").unwrap_or_else(|| panic!("still")).0;
+        let (x, y) = (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+        rt.pointer_move(x, y);
+        rt.secondary_down(x, y);
+        rt.secondary_up(x, y);
+        settle(&mut rt);
+        let menu = rt.popup_menu().unwrap_or_else(|| panic!("menu"));
+        assert!(menu.find("save-all").is_some(), "a mixed selection offers Save All");
+        rt.resolve_popup(Some("save-png")).unwrap_or_else(|e| panic!("menu: {e:?}"));
+        settle(&mut rt);
+        rt.resolve_file_dialog(Some(dir.clone())).unwrap_or_else(|e| panic!("dialog: {e:?}"));
+        settle(&mut rt);
+        let mut paths: Vec<String> = rt.state.exports.iter().filter_map(|e| e.path.as_ref()).filter_map(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).collect();
+        paths.sort();
+        assert_eq!(paths, ["a1.png", "clip 2.png", "clip.png"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -83,12 +83,19 @@ pub fn entity_menu(s: &App) -> PopupMenu {
         let animated = s.focus().is_some_and(|e| e.asset.animated());
         m = m.item(keyed("copy-image", if animated { "Copy Frame" } else { "Copy Image" }, "cmd+c"));
     }
-    let save = if s.selected().any(|e| e.asset.animated()) {
-        PopupMenu::new().item(keyed("export-video", "Export…", "cmd+e")).separator().item(item("save-png", "Save Frame (PNG)")).item(item("save-jpeg", "Save Frame (JPEG)"))
+    let clips = super::export_panel::exportable_selection(s).len();
+    let save = if clips > 0 {
+        let frames = if n == 1 { "Save Frame".to_string() } else { format!("Save {n} Frames") };
+        let export = if clips == 1 { "Export…".to_string() } else { format!("Export {clips}…") };
+        let mut sub = PopupMenu::new();
+        if clips < n {
+            sub = sub.item(item("save-all", "Save All…"));
+        }
+        sub.item(keyed("export-video", &export, "cmd+e")).separator().item(item("save-png", format!("{frames} (PNG)"))).item(item("save-jpeg", format!("{frames} (JPEG)")))
     } else {
         PopupMenu::new().item(item("save-png", "PNG")).item(item("save-jpeg", "JPEG"))
     };
-    m = m.submenu_enabled("Save as…", save, n == 1);
+    m = m.submenu("Save as…", save);
     let mut copy = PopupMenu::new();
     if n == 1 {
         copy = copy.item(keyed("copy-fx", "Copy Effects", "ctrl+cmd+c"));
@@ -150,6 +157,7 @@ pub fn run(s: &mut App, id: &str, tx: &mut Tx) {
             "save-png" => super::export_selected_as(s, tx, "png"),
             "save-jpeg" => super::export_selected_as(s, tx, "jpg"),
             "export-video" => super::export_panel::open(s),
+            "save-all" => super::save_all(s, tx),
             "copy-fx" => crate::clip::copy_effects(s, tx),
             "paste-fx" | "paste" => tx.read_clipboard(|s: &mut App, c, _| crate::clip::paste(s, c)),
             "dup" => s.duplicate_selection(),

@@ -357,9 +357,10 @@ impl Queue {
     }
 }
 
-/// An open export panel: the entity it exports and whether Advanced is unfolded.
+/// An open export panel: the entities it exports (the selection's videos and GIFs, in
+/// insertion order) and whether Advanced is unfolded.
 pub struct Panel {
-    pub entity: u32,
+    pub entities: Vec<u32>,
     pub advanced: bool,
 }
 
@@ -433,12 +434,21 @@ pub fn enqueue(s: &mut App, entity: u32, mut path: PathBuf) {
     s.export.panel = None;
 }
 
+/// Queue each of `entities` into folder `dir`, named after them.
+pub fn enqueue_into(s: &mut App, entities: &[u32], dir: &std::path::Path) {
+    let ext = s.export.options.format.ext();
+    let names: Vec<String> = entities.iter().filter_map(|id| s.entity(*id)).map(|e| crate::ui::stem(&e.name)).collect();
+    for (id, path) in entities.iter().zip(crate::ui::batch_paths(dir, &names, ext)) {
+        enqueue(s, *id, path);
+    }
+}
+
 /// Keeps the view in step with the queue: closes the panel when its entity is no longer the
 /// selection, and redraws while jobs progress. True when something changed.
 pub fn poll(s: &mut App, tx: &mut rune::Tx) -> bool {
     let mut changed = false;
     if let Some(p) = &s.export.panel
-        && !(s.selection.len() == 1 && s.selection.contains(&p.entity))
+        && p.entities != crate::ui::export_panel::exportable_selection(s)
     {
         s.export.panel = None;
         changed = true;

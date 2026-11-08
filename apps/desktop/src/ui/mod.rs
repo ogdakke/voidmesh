@@ -152,11 +152,73 @@ pub fn export_selected(s: &mut App, tx: &mut Tx) {
     export_selected_as(s, tx, "png");
 }
 
-/// Save the focused entity's rendered image; the dialog starts on `ext` (png or jpg).
-pub fn export_selected_as(s: &mut App, tx: &mut Tx, ext: &str) {
+/// A file name without its extension.
+pub fn stem(name: &str) -> String {
+    name.rsplit_once('.').map_or(name, |(a, _)| a).to_string()
+}
+
+/// Paths in folder `dir` for files named `stems` with extension `ext`, each new: a name taken
+/// on disk or earlier in the batch gets " 2", " 3"…
+pub fn batch_paths(dir: &std::path::Path, stems: &[String], ext: &str) -> Vec<std::path::PathBuf> {
+    let mut taken: Vec<std::path::PathBuf> = Vec::with_capacity(stems.len());
+    for stem in stems {
+        let mut n = 1;
+        let path = loop {
+            let name = if n == 1 { format!("{stem}.{ext}") } else { format!("{stem} {n}.{ext}") };
+            let p = dir.join(name);
+            if !p.exists() && !taken.contains(&p) {
+                break p;
+            }
+            n += 1;
+        };
+        taken.push(path);
+    }
+    taken
+}
+
+/// Several selected: their rendered images (current frames for clips) into a folder.
+fn save_selected_into(s: &mut App, tx: &mut Tx, ext: &'static str) {
+    let ids: Vec<u32> = s.selected().map(|e| e.id).collect();
+    let opts = FileDialogOptions { title: format!("Save {} images", ids.len()), ..Default::default() };
+    tx.open_folder(opts, move |s: &mut App, r, _| match r {
+        Ok(Some(dir)) => save_into(s, &ids, &dir, ext),
+        Ok(None) => {}
+        Err(e) => s.toast(e.to_string()),
+    });
+}
+
+fn save_into(s: &mut App, ids: &[u32], dir: &std::path::Path, ext: &str) {
+    let names: Vec<String> = ids.iter().filter_map(|id| s.entity(*id)).map(|e| stem(&e.name)).collect();
+    for (id, path) in ids.iter().zip(batch_paths(dir, &names, ext)) {
+        s.exports.push(crate::state::Export { entity: *id, path: Some(path) });
+    }
+}
+
+/// Save All, for a selection of stills and clips: stills as PNG, clips through the export queue
+/// with the panel's options, into one folder.
+pub fn save_all(s: &mut App, tx: &mut Tx) {
+    let clips = export_panel::exportable_selection(s);
+    let stills: Vec<u32> = s.selected().map(|e| e.id).filter(|id| !clips.contains(id)).collect();
+    let opts = FileDialogOptions { title: format!("Save {} items", clips.len() + stills.len()), ..Default::default() };
+    tx.open_folder(opts, move |s: &mut App, r, _| match r {
+        Ok(Some(dir)) => {
+            save_into(s, &stills, &dir, "png");
+            crate::export_video::enqueue_into(s, &clips, &dir);
+        }
+        Ok(None) => {}
+        Err(e) => s.toast(e.to_string()),
+    });
+}
+
+/// Save the selection's rendered images: one through a save dialog that starts on `ext` (png
+/// or jpg), several into a folder.
+pub fn export_selected_as(s: &mut App, tx: &mut Tx, ext: &'static str) {
+    if s.selection.len() > 1 {
+        return save_selected_into(s, tx, ext);
+    }
     let Some(e) = s.focus() else { return };
     let id = e.id;
-    let stem = e.name.rsplit_once('.').map(|(a, _)| a.to_string()).unwrap_or_else(|| e.name.clone());
+    let stem = stem(&e.name);
     let base = FileDialogOptions { title: "Save image".into(), file_name: Some(format!("{stem}.{ext}")), ..Default::default() };
     let opts = if ext == "png" { base.filter("PNG", &["png"]).filter("JPEG", &["jpg", "jpeg"]) } else { base.filter("JPEG", &["jpg", "jpeg"]).filter("PNG", &["png"]) };
     tx.save_file(opts, move |s: &mut App, r, _| match r {
@@ -267,7 +329,7 @@ fn entity_bar(l: &Look, s: &App, r: [f32; 4], top: f32) -> El {
     let actions = row()
         .gap(0.0)
         .center_y()
-        .child(icon_button(l, "bar-save", if s.selection.len() == 1 && anim { "Export… (⌘E)" } else { "Save as PNG (⌘E)" }, &SAVE, export_panel::save_or_export))
+        .child(icon_button(l, "bar-save", if anim { "Export… (⌘E)" } else { "Save as PNG (⌘E)" }, &SAVE, export_panel::save_or_export))
         .child(icon_button(l, "bar-delete", "Delete (⌫)", &TRASH, |s, _| s.delete_selection()));
     let bar = l.floating(row().key("entity-bar").gap(4.0).pl(14.0).pr(4.0).h(BAR_H).radius(20.0).center_y().child(text(label).font(MEDIUM).color(l.text).truncate().max_w(320.0)).child(actions));
     el().key("entity-bar-wrap").absolute(r[0].max(EDGE), entity_bar_y(r, top)).instant_changes().child(bar)
