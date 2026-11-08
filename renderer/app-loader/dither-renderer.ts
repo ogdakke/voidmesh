@@ -1,5 +1,6 @@
 import ditherShaderSource from "./dither.wgsl?raw";
 import fieldShaderSource from "./dither-field.wgsl?raw";
+import { loaderCaptionOrigin } from "./layout.ts";
 
 /**
  * WebGPU renderer for the initial loader: a white dither cloud on brand blue with a
@@ -259,8 +260,9 @@ function writeCaptionPlacement(
   slot: CaptionSlot,
   center: readonly [number, number],
 ) {
-  target[offset] = Math.round(center[0] - slot.width / 2);
-  target[offset + 1] = Math.round(center[1] - slot.height / 2);
+  const [x, y] = loaderCaptionOrigin(center, slot);
+  target[offset] = x;
+  target[offset + 1] = y;
   target[offset + 2] = slot.width;
   target[offset + 3] = slot.height;
 }

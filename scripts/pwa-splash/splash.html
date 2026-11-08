@@ -1,0 +1,29 @@
+<!doctype html>
+<!--
+  iOS PWA startup image source, rendered by scripts/pwa-splash.ts at every device size.
+  It is the loader's first paint (index.html): the brand blue plus the pixel wordmark,
+  placed by the same inline script, so the splash hands off to the page invisibly.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Voidmesh splash</title>
+    <link rel="stylesheet" href="/styles/reset.css" />
+    <link rel="stylesheet" href="/styles/app-loader.css" />
+    <style>
+      /* Chrome screenshots are sRGB-encoded, so out-of-sRGB colours would clip. Author
+       * them as Display P3 channel values in rgb() syntax: they render verbatim and the
+       * tool tags the PNG as P3. Same channels as --loader-blue in app-loader.css. */
+      .app-loader {
+        --loader-blue: rgb(25 124 254);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app-loader" class="app-loader">
+      <svg class="loader-wordmark" aria-hidden="true" shape-rendering="crispEdges"><path /></svg>
+      <!-- app-loader:first-paint -->
+    </div>
+  </body>
+</html>

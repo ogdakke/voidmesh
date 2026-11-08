@@ -7,6 +7,7 @@ import babel from "@rolldown/plugin-babel";
 import wgslMinifyPlugin from "./plugins/vite-plugin-wgsl-minify.ts";
 import imagePlugin from "./plugins/vite-plugin-image.ts";
 import { EnvAwareIcon } from "./plugins/vite-plugin-env-aware-icon.ts";
+import appLoaderPlugin from "./plugins/vite-plugin-app-loader.ts";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
@@ -42,6 +43,7 @@ export default defineConfig(({ mode }) => {
       wgslMinifyPlugin(),
       imagePlugin({ widths: [768, 1152] }),
       EnvAwareIcon.appIconVariantPlugin(iconVariant),
+      appLoaderPlugin(),
       react(),
       babel({
         presets: [reactCompilerPreset()],

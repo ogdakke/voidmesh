@@ -11,7 +11,7 @@ WebGPU rendering, shader execution, composition, resource caching, and export.
 - `texture-pool.ts`, `byte-budget-cache.ts` — Bounded temporary and persistent GPU ownership.
 - `export-service.ts`, `frame-encoder.ts`, `gif-export.ts` — Native-resolution export paths.
 - `shaders/` — Effect passes; see its child `AGENTS.md`.
-- `app-loader/` — Pre-app loading screen, booted by `index.html` before the app. Renders in a worker on an `OffscreenCanvas` with its own WebGPU device, independent of the app renderer, and destroys it on handoff.
+- `app-loader/` — Pre-app loading screen, booted by `index.html` before the app. Renders in a worker on an `OffscreenCanvas` with its own WebGPU device, independent of the app renderer, and destroys it on handoff. The first paint (blue + pixel wordmark) is `first-paint.ts`, inlined as a classic script by `plugins/vite-plugin-app-loader.ts`; it, the canvas, and the PWA splash images (`bun run pwa:splash`) must agree to the device pixel, so all placement goes through `layout.ts`. Regenerate the splash images after changing loader layout, colour, or the opening caption.
 
 ## Rendering Invariants
 

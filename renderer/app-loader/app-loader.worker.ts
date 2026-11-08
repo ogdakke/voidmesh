@@ -6,8 +6,8 @@
  */
 
 import { LoaderDitherRenderer } from "./dither-renderer.ts";
-import { layoutPixelText } from "./pixel-font.ts";
-import { loaderDitherGrid } from "./layout.ts";
+import { LINES, OPENING_LINE } from "./captions.ts";
+import { layoutLoaderCaption, loaderCenter, loaderDitherGrid, type LoaderGrid } from "./layout.ts";
 
 export type ToLoaderWorkerMessage =
   | {
@@ -27,7 +27,6 @@ export type ToLoaderWorkerMessage =
   | { type: "dispose" };
 
 export type FromLoaderWorkerMessage =
-  | { type: "painted" }
   /** No WebGPU device; the worker has closed and the loader stays static. */
   | { type: "failed" }
   /** The exit has actually begun (it may be held back after an "exit" request). */
@@ -38,11 +37,8 @@ export type FromLoaderWorkerMessage =
 type Phase = "intro" | "idle" | "exit" | "done";
 
 const INTRO_MS = 1000;
-/** The caption dithers in over this window of the intro. */
-const TEXT_IN_DELAY_MS = 250;
-const TEXT_IN_MS = 700;
-/** "voidmesh" stays fully visible at least this long before an exit may start. */
-const OPENING_MIN_VISIBLE_MS = 800;
+/** The bloomed cloud holds this long before an exit may start. */
+const BLOOM_HOLD_MS = 300;
 const EXIT_MS = 900;
 /**
  * Frame pacing. Intro and reveal run at 60 fps so the transitions stay smooth; the idle
@@ -56,50 +52,21 @@ const LOBE_SCALE = 0.85;
 const BACKGROUND = [0.098, 0.486, 0.996] as const;
 const INK = [1, 1, 1] as const;
 
-/** The first caption, held a little longer before the rotation starts. */
-const OPENING_LINE = "voidmesh";
+/** The opening line is held a little longer before the rotation starts. */
 const OPENING_HOLD_MS = 2800;
-/** Captions cycled in a random order after the opening line. Keep each under ~21 chars. */
-const LINES = [
-  "summoning shaders",
-  "dithering the void",
-  "scrying the canvas",
-  "invoking the gpu",
-  "bending photons",
-  "transmuting light",
-  "divining gradients",
-  "awakening the mesh",
-  "reading the noise",
-  "tracing sacred grids",
-  "chanting in hex",
-  "casting halftones",
-  "whispering to webgpu",
-  "the void stares back",
-];
 const LINE_HOLD_MS = 1800;
 const LINE_SWAP_MS = 450;
-/** Target caption height in CSS px; font pixels snap to whole cells. */
-const CAPTION_HEIGHT_CSS = 32;
-/** Widest share of the viewport a caption may take. */
-const CAPTION_MAX_WIDTH = 0.8;
-/** Widest line at one cell per font pixel; sizes every line consistently. */
-const WIDEST_LINE = Math.max(
-  ...[OPENING_LINE, ...LINES].map((line) => layoutPixelText(line, 1, 0).width),
-);
 
 let renderer: LoaderDitherRenderer | null = null;
 let width = 0;
 let height = 0;
 let dpr = 1;
-let cell = 2; // dither cell size in CSS px
-let cols = 0;
-let rows = 0;
+let grid: LoaderGrid | null = null;
 let reducedMotion = false;
 let phase: Phase = "intro";
 let phaseStart = 0;
 let frame = 0;
 let lastRender = 0;
-let painted = false;
 
 const lobes = new Float32Array(8);
 
@@ -122,32 +89,24 @@ function shuffle<T>(items: T[]) {
   return items;
 }
 
-/** One scale per viewport (not per line) so captions don't change size as they rotate. */
-function layoutCaption(text: string) {
-  const byHeight = Math.round(CAPTION_HEIGHT_CSS / (7 * cell));
-  const byWidth = Math.floor((cols * CAPTION_MAX_WIDTH) / WIDEST_LINE);
-  const scale = Math.max(1, Math.min(byHeight, byWidth));
-  return layoutPixelText(text, scale, 1);
-}
-
 function takeNextLine() {
   return lineOrder[lineCursor++ % lineOrder.length]!;
 }
 
 /** Replaces the current caption immediately (opening line, resize). */
 function setCaptionNow(text: string, holdMs = lineHoldMs) {
-  if (!renderer) return;
+  if (!renderer || !grid) return;
   currentLine = text;
   swapStart = -1;
   lineShownAt = performance.now();
   lineHoldMs = holdMs;
-  renderer.setNextCaption(layoutCaption(text));
+  renderer.setNextCaption(layoutLoaderCaption(text, grid));
   renderer.commitCaption();
 }
 
 /** Advances the caption rotation; returns the dissolve progress towards the next line. */
 function updateCaption(now: number) {
-  if (!renderer || reducedMotion) return 0;
+  if (!renderer || !grid || reducedMotion) return 0;
   if (swapStart >= 0) {
     const k = (now - swapStart) / LINE_SWAP_MS;
     if (k < 1) return easeInOutSine(k);
@@ -158,12 +117,13 @@ function updateCaption(now: number) {
     lineHoldMs = LINE_HOLD_MS;
     return 0;
   }
-  const leaving = phase === "exit" || phase === "done";
+  // No new line once an exit is scheduled: it would dissolve in only to dissolve out.
+  const leaving = phase === "exit" || phase === "done" || exitTimer !== undefined;
   if (!leaving && (advanceRequested || now - lineShownAt > lineHoldMs)) {
     advanceRequested = false;
     nextLine = takeNextLine();
     if (nextLine !== currentLine) {
-      renderer.setNextCaption(layoutCaption(nextLine));
+      renderer.setNextCaption(layoutLoaderCaption(nextLine, grid));
       swapStart = now;
     }
   }
@@ -180,15 +140,15 @@ const clamp01 = (t: number) => Math.min(1, Math.max(0, t));
 function timeline(now: number) {
   const t = now - phaseStart;
   if (phase === "intro") {
-    // The cloud dithers in: cells switch on in Bayer order as intensity rises. The
-    // caption follows a beat later.
+    // The wordmark is already on screen (first paint, PWA splash); the cloud dithers
+    // in around it, cells switching on in Bayer order as intensity rises.
     const k = Math.min(1, t / INTRO_MS);
     if (k >= 1) phase = "idle";
     return {
       amp: easeInOutSine(k),
       radius: 0.85 + 0.15 * easeOutCubic(k),
       reveal: 0,
-      textAmp: easeInOutSine(clamp01((t - TEXT_IN_DELAY_MS) / TEXT_IN_MS)),
+      textAmp: 1,
     };
   }
   if (phase === "exit" || phase === "done") {
@@ -198,11 +158,13 @@ function timeline(now: number) {
       self.postMessage({ type: "exited" } satisfies FromLoaderWorkerMessage);
     }
     // The caption dissolves first; then the blue opens from the centre while the
-    // cloud pushes outward, like a zoom-in.
+    // cloud pushes outward, like a zoom-in. The push eases in with the reveal: the
+    // idle cloud is at rest, so a fast start would read as a jolt.
+    const opening = easeInOutCubic(k);
     return {
       amp: 1,
-      radius: 1 + 0.12 * easeOutCubic(k),
-      reveal: easeInOutCubic(k),
+      radius: 1 + 0.12 * opening,
+      reveal: opening,
       textAmp: 1 - clamp01(k * 3),
     };
   }
@@ -222,25 +184,21 @@ function updateLobes(s: number) {
 }
 
 function configure() {
-  const grid = loaderDitherGrid(width, height, dpr);
-  cell = grid.cell;
-  cols = grid.cols;
-  rows = grid.rows;
-  renderer?.resize(cols, rows);
+  grid = loaderDitherGrid(width, height, dpr);
+  renderer?.resize(grid.cols, grid.rows);
   // Cell size may have changed; re-lay out the caption at the new scale.
   if (currentLine) setCaptionNow(currentLine);
 }
 
 function render(now: number) {
-  if (!renderer) return;
+  if (!renderer || !grid) return;
   const { amp, radius, reveal, textAmp } = timeline(now);
   const textMix = updateCaption(now);
   const s = now * 0.001;
   updateLobes(s);
   // The cloud fills an ellipse fitted to the viewport; lobes only get sqrt(aspect) of
   // that stretch so they stay cloud-shaped on wide and tall screens.
-  const cx = width / cell / 2;
-  const cy = height / cell / 2;
+  const [cx, cy] = loaderCenter({ width, height, dpr }, grid);
   const halfW = cx * 0.94;
   const halfH = cy * 0.94;
   const k = Math.sqrt(halfW / halfH);
@@ -261,10 +219,6 @@ function render(now: number) {
     textMix,
     textAmp,
   });
-  if (!painted) {
-    painted = true;
-    self.postMessage({ type: "painted" } satisfies FromLoaderWorkerMessage);
-  }
 }
 
 // Dev-only render timing, reported to the preview harness when enabled.
@@ -284,7 +238,7 @@ function reportStats(now: number, cost: number) {
     avgMs: statsTotal / statsFrames,
     maxMs: statsMax,
     fps: (statsFrames * 1000) / (now - statsSince),
-    cells: cols * rows,
+    cells: grid ? grid.cols * grid.rows : 0,
   } satisfies FromLoaderWorkerMessage);
   statsTotal = statsMax = statsFrames = 0;
   statsSince = now;
@@ -304,7 +258,7 @@ function tick(now: number) {
   if (phase === "done") cancelAnimationFrame(frame);
 }
 
-// Earliest time an exit may begin, so the opening line is readable; set per intro.
+// Earliest time an exit may begin, so the cloud has bloomed; set per intro.
 let exitReadyAt = 0;
 let exitTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -332,9 +286,8 @@ function start(nextPhase: Phase) {
   if (nextPhase === "intro") {
     clearTimeout(exitTimer);
     exitTimer = undefined;
-    // Reduced motion shows the caption at once; otherwise it finishes dithering in first.
-    const captionVisibleIn = reducedMotion ? 0 : TEXT_IN_DELAY_MS + TEXT_IN_MS;
-    exitReadyAt = performance.now() + captionVisibleIn + OPENING_MIN_VISIBLE_MS;
+    // Reduced motion shows the bloomed cloud at once.
+    exitReadyAt = performance.now() + (reducedMotion ? 0 : INTRO_MS + BLOOM_HOLD_MS);
   }
   if (nextPhase === "exit") self.postMessage({ type: "exiting" } satisfies FromLoaderWorkerMessage);
   phase = nextPhase;

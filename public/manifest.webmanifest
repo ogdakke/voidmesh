@@ -7,7 +7,7 @@
   "scope": "/",
   "display": "standalone",
   "theme_color": "#ffffff",
-  "background_color": "#fff",
+  "background_color": "#007eff",
   "description": "Edit your images and videos with shader effects in your browser",
   "icons": [
     {
