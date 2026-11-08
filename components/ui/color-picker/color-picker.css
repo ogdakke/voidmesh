@@ -290,6 +290,31 @@
   padding-bottom: var(--spacing-2);
 }
 
+/* Phone landscape (same threshold as useIsCompactLandscape): the stacked layout is taller
+   than the screen, so put the area + hue beside alpha + value input, and let the body scroll
+   as a last resort on even shorter viewports. */
+@media (orientation: landscape) and (max-height: 500px) {
+  .color-picker__drawer-body {
+    display: grid;
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    grid-template-rows: auto 1fr;
+    column-gap: var(--spacing-4);
+    align-content: start;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
+
+  .color-picker-drawer-medium {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    min-height: 0;
+  }
+
+  .color-picker__drawer-body > :not(.color-picker-drawer-medium) {
+    grid-column: 2;
+  }
+}
+
 .color-picker-remove-button {
   margin-top: var(--spacing-3);
 }
