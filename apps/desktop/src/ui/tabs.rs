@@ -37,6 +37,9 @@ pub fn reveal(s: &App, tx: &mut Tx) {
 const BUTTONS_W: f32 = 2.0 * (28.0 + 4.0);
 /// The strip's padding and gap between tabs.
 const GAP: f32 = 4.0;
+/// Room above and below the tabs inside their scroll, so the active tab's border and shadow
+/// aren't clipped: the strip is this much taller than a tab at each edge.
+pub const PAD_Y: f32 = 2.0;
 
 /// A tab's width as it lays out: its label (cut at `TAB_W`), padding and, when active, its close
 /// button; never under `TAB_MIN`.
@@ -52,7 +55,7 @@ fn tab_w(s: &App, i: usize) -> f32 {
 pub fn strip(l: &Look, s: &App, room: f32) -> El {
     let natural = (0..s.tabs.len()).map(|i| tab_w(s, i)).sum::<f32>() + GAP * (s.tabs.len() as f32 - 1.0).max(0.0);
     let width = natural.min(room - BUTTONS_W).max(TAB_MIN);
-    let tabs = s.tabs.iter().enumerate().fold(row().gap(GAP).py(2.0).center_y(), |r, (i, t)| r.child(tab(l, s, i, t)));
+    let tabs = s.tabs.iter().enumerate().fold(row().gap(GAP).py(PAD_Y).center_y(), |r, (i, t)| r.child(tab(l, s, i, t)));
     let r = row()
         .key("tabs")
         .gap(GAP)

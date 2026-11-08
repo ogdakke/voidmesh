@@ -186,7 +186,11 @@ fn top_left(l: &Look, s: &App, insets: rune::ChromeInsets) -> El {
             .on_press_tx(open_any)
             .child(row().gap(6.0).center_y().child(icon(&PLUS, 15.0).color(Color::WHITE)).child(text("Add").font(MEDIUM).color(Color::WHITE))),
     );
-    let (x, y) = if insets.height > 0.0 { (insets.leading + 12.0, (insets.height - 28.0) / 2.0) } else { (12.0, 12.0) };
+    // The row is as tall as the tab strip, whose padding keeps the active tab's shadow: centred
+    // on the band, the 28 pt pills share the traffic lights' middle, with the band's 12 pt
+    // above and below them repeated after the lights.
+    let pad = tabs::PAD_Y;
+    let (x, y) = if insets.height > 0.0 { (insets.leading + 12.0, (insets.height - 28.0) / 2.0 - pad) } else { (12.0, 12.0 - pad) };
     // The tabs take what the titlebar has left after Add and room for progress, short of the
     // window's right edge.
     let add_w = 12.0 + 15.0 + 6.0 + rune::text::measure("Add", &[], MEDIUM, None).0 + 12.0;
