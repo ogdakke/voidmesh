@@ -956,7 +956,8 @@ clip). Settings are a view of their own inside the window (⌘,), never a separa
 **Ported**
 
 - Canvas: wheel pan, ⌘-wheel and pinch zoom about the pointer, Space-drag and middle-drag pan,
-  fit (F/H), 100% (⌘0), two-level dot grid, snap to grid (G), hide the chrome (`\`).
+  fit (F/H), 100% (⌘0), two-level dot grid, snap to grid (G), hide the chrome (`\`). A window
+  resize keeps the view's centre.
 - Media: images (PNG/JPEG/WebP/BMP), animated GIF, SVG, and video (MP4/MOV/M4V, decoded with
   AVFoundation on macOS; autoplays muted and looped). File picker (⌘O) and drop (lands at the
   drop point, laid out as a batch: largest first, 4 per row, 125 gap). Paste (⌘V) of images,
@@ -965,15 +966,20 @@ clip). Settings are a view of their own inside the window (⌘,), never a separa
   cycling, a click on a selected GIF or video toggles playback. Picking is top-most first and
   alpha-aware (`hit.rs`, the web's 16 px cells): clicks on transparent regions of images, SVGs,
   GIF frames and video frames fall through.
-- Commands: delete, duplicate (+30,+30, unique names), undo/redo (⌘Z, ⇧⌘Z, ⌘Y), reset.
+- Commands: delete, duplicate (+30,+30, unique names), undo/redo (⌘Z, ⇧⌘Z, ⌘Y), reset; `?`
+  opens the keyboard shortcuts (in Settings).
+- Inspector: a multi-selection shows only the controls every selected effect has, with
+  "(Mixed)" labels, Mixed selects and checkboxes, and mixed toggles that turn on for all. Slider
+  readouts take typed values (live, clamped; ↑/↓ step; one undo step).
 - All seven effects and their sub-kinds, palettes (13 presets, Original via k-means, user
-  palettes), preserve/reverse/original (P/R/O), adjustments with the 0–60 Kawase blur mapping,
+  palettes; new media given Original takes its own), preserve/reverse/original (P/R/O), adjustments with the 0–60 Kawase blur mapping,
   grain, bloom, chromatic aberration, flowing-glass time with the tick-slider Time control.
 - Palette editor and colour picker: rename, add, remove, delete, edit (a preset or Original forks
   into "Custom N"; one picker session is one undo step), OKLCH area, hue, alpha and hex; Load
   Palette… extracts 16 colours from an image. User palettes persist.
 - Playback: Space, ←/→ seek, an inline scrubber on the clip with `S:cc` times, M and a mute
   button for videos with sound (sound plays through Rune's audio player and leads the clock).
+  The focused scrubber takes Space, `,`/`.` frame steps, arrows, Page Up/Down, Home and End.
 - Workspaces (`store.rs`): kept in the app's data folder and saved a moment after each change, and
   before switching away or quitting. Tabs in the titlebar (⌘T new, ⌘W close, ⌘1–9, ⌃Tab;
   double-click or right-click to rename), each with its own history; open tabs come back on
