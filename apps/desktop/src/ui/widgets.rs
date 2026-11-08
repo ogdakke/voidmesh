@@ -9,18 +9,21 @@ use crate::effects::{Params, Range};
 use crate::state::App;
 
 /// `.slider-root`: a 32 pt track, 10 pt radius, surface fill, the indicator up to the value, a
-/// faint 3 pt thumb line. Click or drag anywhere; a drag is one undo step.
-pub fn slider(l: &Look, key: &'static str, label: &str, value: f32, r: Range, set: fn(&mut Params, f32)) -> El {
+/// faint 3 pt thumb line. Click or drag anywhere; a drag is one undo step. When the selection
+/// disagrees (`mixed`), the label says so and the readout hides, as the web's does.
+pub fn slider(l: &Look, key: &'static str, label: &str, value: f32, mixed: bool, r: Range, set: fn(&mut Params, f32)) -> El {
     const H: f32 = 32.0;
     let t = ((value - r.min) / (r.max - r.min)).clamp(0.0, 1.0);
     let decimals = if r.step >= 1.0 { 0 } else if r.step >= 0.1 { 1 } else { 2 };
+    let shown = if mixed { format!("{label} (Mixed)") } else { label.to_string() };
+    let readout = if mixed { String::new() } else { format!("{value:.decimals$}") };
     let to_value = move |x: f32, w: f32| {
         let v = r.min + (x / w.max(1.0)).clamp(0.0, 1.0) * (r.max - r.min);
         ((v / r.step).round() * r.step).clamp(r.min, r.max)
     };
     el().key(key)
         .role("slider")
-        .label(label)
+        .label(shown.clone())
         .range_value(f64::from(value), f64::from(r.min), f64::from(r.max))
         .range_step(f64::from(r.step))
         .focusable(true)
@@ -61,13 +64,14 @@ pub fn slider(l: &Look, key: &'static str, label: &str, value: f32, r: Range, se
                 .px(12.0)
                 .center_y()
                 .justify_between()
-                .child(text(label).font(MEDIUM).color(l.text_strong))
-                .child(text(format!("{value:.decimals$}")).font(NUMBER).color(l.text_strong)),
+                .child(text(shown).font(MEDIUM).color(l.text_strong))
+                .child(text(readout).font(NUMBER).color(l.text_strong)),
         )
 }
 
-/// `.ui-toggle`: a transparent pill that fills with the surface and an inset ring when on.
-pub fn toggle(l: &Look, key: &'static str, label: &str, on: bool, flip: fn(&mut Params)) -> El {
+/// `.ui-toggle`: a transparent pill that fills with the surface and an inset ring when on. `on`
+/// is the whole selection's: a mixed one shows off, and a press turns it on everywhere.
+pub fn toggle(l: &Look, key: &'static str, label: &str, on: bool, set: fn(&mut Params, bool)) -> El {
     let mut t = el()
         .key(key)
         .role("switch")
@@ -82,7 +86,7 @@ pub fn toggle(l: &Look, key: &'static str, label: &str, on: bool, flip: fn(&mut 
         .hover(l.hover)
         .press_scale(0.97)
         .cursor(rune::Cursor::Pointer)
-        .on_press(move |s: &mut App| s.edit(flip))
+        .on_press(move |s: &mut App| s.edit(|p| set(p, !on)))
         .child(text(label).font(MEDIUM).color(if on { l.text } else { l.text_strong }));
     if on {
         t = t.fill(l.surface).border(1.0, l.pressed_ring);
@@ -111,7 +115,8 @@ pub fn button(l: &Look, key: &'static str, label: &str, press: fn(&mut App)) -> 
 }
 
 /// `.select-field`: a label over a 32 pt trigger (radius 12, the input fill, a hairline) that
-/// opens a native menu with the current option checked.
+/// opens a native menu with the current option checked. `current` past the options (a mixed
+/// selection) reads "Mixed" and checks nothing.
 pub fn select(l: &Look, key: &'static str, label: Option<&str>, options: &'static [&'static str], current: usize, pick: fn(&mut Params, usize)) -> El {
     let value = options.get(current).copied().unwrap_or("Mixed");
     let trigger = row()
@@ -184,9 +189,11 @@ pub fn select_ids(l: &Look, key: &'static str, label: Option<&str>, options: Vec
     }
 }
 
-/// `.ui-checkbox`: 18 pt, radius 4, primary fill with a tick when on.
-pub fn checkbox(l: &Look, key: String, label: String, on: bool, flip: fn(&mut Params)) -> El {
-    let mut b = el()
+/// `.ui-checkbox`: 18 pt, radius 4, primary fill with a tick when on, a dash when the selection
+/// is mixed (`None`); a press on a mixed one turns it on everywhere.
+pub fn checkbox(l: &Look, key: String, label: String, state: Option<bool>, set: fn(&mut Params, bool)) -> El {
+    let on = state == Some(true);
+    let b = el()
         .key(key)
         .role("checkbox")
         .label(label)
@@ -196,13 +203,19 @@ pub fn checkbox(l: &Look, key: String, label: String, on: bool, flip: fn(&mut Pa
         .radius(4.0)
         .center()
         .cursor(rune::Cursor::Pointer)
-        .on_press(move |s: &mut App| s.edit(flip));
-    b = if on { b.fill(l.primary).child(icon(&CHECK, 12.0).color(Color::WHITE)) } else { b.fill(l.surface).border(1.0, l.pressed_ring) };
-    b
+        .on_press(move |s: &mut App| s.edit(|p| set(p, !on)));
+    match state {
+        Some(true) => b.fill(l.primary).child(icon(&CHECK, 12.0).color(Color::WHITE)),
+        None => b.fill(l.primary).child(icon(&DASH, 12.0).color(Color::WHITE)),
+        Some(false) => b.fill(l.surface).border(1.0, l.pressed_ring),
+    }
 }
 
+/// A section's checkbox: its state (`None` when mixed) and what sets it.
+pub type SectionCheck = (Option<bool>, fn(&mut Params, bool));
+
 /// `.collapsible`: a small trigger with a chevron that turns open, and an optional checkbox.
-pub fn section(l: &Look, s: &App, id: &'static str, title: &str, enabled: Option<(bool, fn(&mut Params))>, body: El) -> El {
+pub fn section(l: &Look, s: &App, id: &'static str, title: &str, enabled: Option<SectionCheck>, body: El) -> El {
     let open = !s.folded.contains(id);
     let trigger = row()
         .key(format!("sec-{id}"))
@@ -223,8 +236,8 @@ pub fn section(l: &Look, s: &App, id: &'static str, title: &str, enabled: Option
         .child(icon(&CHEVRON_RIGHT, 12.0).color(l.text_muted).rotate(if open { std::f32::consts::FRAC_PI_2 } else { 0.0 }))
         .child(text(title).font(MEDIUM).color(l.text_muted));
     let mut header = row().w_full().center_y().justify_between().child(trigger);
-    if let Some((on, flip)) = enabled {
-        header = header.child(checkbox(l, format!("sec-{id}-on"), format!("{title} enabled"), on, flip));
+    if let Some((state, set)) = enabled {
+        header = header.child(checkbox(l, format!("sec-{id}-on"), format!("{title} enabled"), state, set));
     }
     let mut c = col().w_full().gap(8.0).child(header);
     if open {
@@ -273,5 +286,6 @@ icons! {
     GEAR = r#"<circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" stroke="currentColor" stroke-width="1.6" fill="none"/>"#;
     XMARK = r#"<path d="M6.75 6.75 17.25 17.25M17.25 6.75 6.75 17.25" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>"#;
     STACK = r#"<path d="m12 4 8 4-8 4-8-4z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/><path d="m4 12 8 4 8-4M4 16l8 4 8-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#;
+    DASH = r#"<path d="M6 12h12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" fill="none"/>"#;
     CHECK = r#"<path d="m5 12.5 4.5 4.5L19 7.5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#;
 }

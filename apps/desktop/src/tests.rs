@@ -384,3 +384,33 @@ fn question_mark_shows_the_keyboard_shortcuts_and_closes_them() {
     settle(&mut rt);
     assert!(!rt.state.settings);
 }
+
+#[test]
+fn a_mixed_selection_shows_what_it_shares_and_says_where_it_differs() {
+    let mut rt = canvas();
+    rt.state.entity_mut(1).expect("1").params.set_shader(Shader::Halftone);
+    rt.state.entity_mut(2).expect("2").params.set_shader(Shader::Glass);
+    rt.state.entity_mut(1).expect("1").params.show_original = true;
+    rt.key(KeyEvent { key: Key::Command('a'), mods: Mods { cmd: true, ..Mods::default() } });
+    settle(&mut rt);
+    let label = |rt: &Runtime<App>, key: &str| rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).map(|e| e.label.unwrap_or_default());
+    // Only controls both effects have: no glass kind, no shape (halftone), no palette (glass).
+    for key in ["glass-kind", "shape", "palette", "preserve"] {
+        assert!(label(&rt, key).is_none(), "{key} shows for a halftone and a glass");
+    }
+    assert_eq!(label(&rt, "size").as_deref(), Some("Size (Mixed)"));
+    assert_eq!(label(&rt, "scale").as_deref(), Some("Scale"));
+    // A mixed toggle reads off, and a press turns it on for both.
+    let (x, y) = rt.find("original").expect("original toggle");
+    click(&mut rt, x, y);
+    assert!(rt.state.entities.iter().all(|e| e.params.show_original));
+    // Channel Shift glitches have no Scale. The mixed Style select picks for both.
+    let (x, y) = rt.find("shader").expect("style select");
+    click(&mut rt, x, y);
+    let glitch = Shader::ALL.iter().position(|s| *s == Shader::Glitch).expect("glitch");
+    rt.resolve_popup(Some(&glitch.to_string())).expect("menu answered");
+    settle(&mut rt);
+    assert!(rt.state.entities.iter().all(|e| e.params.shader == Shader::Glitch));
+    assert!(label(&rt, "scale").is_none());
+    assert!(label(&rt, "glitch-kind").is_some());
+}
