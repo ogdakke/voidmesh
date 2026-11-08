@@ -1,0 +1,69 @@
+/*
+ * Initial app loader. The brand-blue background paints with the HTML, before any JS.
+ * renderer/app-loader/app-loader.worker.ts then draws the same blue plus a white dither cloud on the
+ * canvas ([data-painted] drops the CSS blue) with a pixel-text caption, and on exit
+ * dithers the blue open to reveal the app. CSS only owns the first paint and the
+ * reduced-motion fade.
+ */
+
+.app-loader {
+  --loader-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  /* Brand blue (--primary) in Display P3; the worker draws the identical value. */
+  --loader-blue: color(display-p3 0.098 0.486 0.996);
+
+  z-index: 999999;
+  position: fixed;
+  inset: 0;
+  overflow: clip;
+  background: var(--loader-blue);
+  color: white;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+
+  &[hidden] {
+    display: none;
+  }
+
+  &[data-painted] {
+    background: transparent;
+  }
+
+  /* With motion, the worker reveals the app; reduced motion gets a plain fade. */
+  @media (prefers-reduced-motion: reduce) {
+    &[data-state="exit"] {
+      animation: loader-fade-out 320ms var(--loader-ease-in-out) both;
+    }
+  }
+}
+
+html[data-overlay-open] .app-loader {
+  visibility: hidden;
+}
+
+/* Sized in JS to a whole number of device pixels per dither cell. */
+.loader-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+}
+
+/* The caption is drawn into the canvas; this keeps the real status for assistive tech. */
+.loader-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@keyframes loader-fade-out {
+  to {
+    opacity: 0;
+  }
+}
