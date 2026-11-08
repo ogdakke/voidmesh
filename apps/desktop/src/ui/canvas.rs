@@ -36,7 +36,7 @@ pub fn surface(l: &Look, s: &App) -> El {
         .h_full()
         .clip_soft(0.0)
         .cursor(if s.space || s.panning.is_some() { rune::Cursor::Grab } else { rune::Cursor::Default })
-        .on_layout(|s: &mut App, r| s.canvas = r)
+        .on_layout(|s: &mut App, r| s.resize_canvas(r))
         .child(el().key("grid").absolute(0.0, 0.0).w_full().h_full().effect(gfx::GRID))
         .child(world)
         .pointer_buttons([PointerButton::Middle])

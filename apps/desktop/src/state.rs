@@ -841,6 +841,25 @@ impl App {
         self.animate_to([c[0] - p[0] * s, c[1] - p[1] * s], s, 0.25);
     }
 
+    /// The canvas laid out at `r`. A resize pans by half the size change, so the view's centre
+    /// stays put (the web's `resizeSurface`); the first layout, from nothing, doesn't.
+    pub fn resize_canvas(&mut self, r: [f32; 4]) {
+        let old = self.canvas;
+        self.canvas = r;
+        if old[2] <= 0.0 || old[3] <= 0.0 || (old[2] == r[2] && old[3] == r[3]) {
+            return;
+        }
+        let d = [(r[2] - old[2]) / 2.0, (r[3] - old[3]) / 2.0];
+        let shift = |p: [f32; 2]| [p[0] + d[0], p[1] + d[1]];
+        self.cam.pan = shift(self.cam.pan);
+        if let Some(a) = self.cam.anim.as_mut() {
+            (a.from.0, a.to.0) = (shift(a.from.0), shift(a.to.0));
+        }
+        if let Some((q, _)) = self.zoom_to.as_mut() {
+            *q = shift(*q);
+        }
+    }
+
     pub fn animate_to(&mut self, pan: [f32; 2], scale: f32, dur: f64) {
         self.zoom_to = None;
         self.cam.anim = Some(CamAnim { from: (self.cam.pan, self.cam.scale), to: (pan, scale), start: self.now, dur });
@@ -1583,6 +1602,18 @@ mod tests {
         // Largest first, from the left.
         let x_of = |w: f32| a.entities.iter().find(|e| e.size[0] == w).map(|e| e.pos[0]).expect("placed");
         assert!(x_of(200.0) < x_of(100.0));
+    }
+
+    #[test]
+    fn resizing_the_window_keeps_the_view_centred() {
+        let mut a = App::default();
+        a.resize_canvas([0.0, 0.0, 1000.0, 800.0]);
+        a.cam.set([10.0, 20.0], 0.5);
+        assert_eq!(a.cam.pan, [10.0, 20.0], "the first layout doesn't pan");
+        let centre = |a: &App| a.cam.world([a.canvas[2] / 2.0, a.canvas[3] / 2.0]);
+        let before = centre(&a);
+        a.resize_canvas([0.0, 0.0, 1400.0, 600.0]);
+        assert_eq!(centre(&a), before);
     }
 
     #[test]
