@@ -466,3 +466,39 @@ fn a_slider_value_field_commits_when_focus_leaves() {
     assert!(rt.state.value_target.is_none() && rt.state.editing.is_none(), "the field closed its undo step");
     assert_eq!(rt.state.entity(1).expect("1").params.scale, 2.0);
 }
+
+#[test]
+fn the_focused_playback_bar_steps_frames_and_jumps_to_the_ends() {
+    let mut rt = canvas();
+    // A three-frame GIF, 0.1 s a frame, large enough to carry its playback bar.
+    let mut a = crate::media::test_asset(9, 500, 300);
+    a.frames[0].delay = std::time::Duration::from_millis(100);
+    for _ in 0..2 {
+        a.frames.push(crate::media::Frame { rgba: a.frames[0].rgba.clone(), ..a.frames[0] });
+    }
+    a.duration = std::time::Duration::from_millis(300);
+    rt.state.place(vec![Arc::new(a)], [600.0, 450.0], false);
+    let id = rt.state.entities.last().expect("gif").id;
+    settle(&mut rt);
+    let (x, y) = rt.find("scrub").expect("playback bar");
+    click(&mut rt, x, y);
+    let key = |rt: &mut Runtime<App>, key: Key| {
+        rt.key(KeyEvent { key, mods: Mods::default() });
+        settle(rt);
+    };
+    let t = |rt: &Runtime<App>| rt.state.entity(id).expect("gif").play_t;
+    key(&mut rt, Key::Text(" ".into()));
+    assert!(!rt.state.entity(id).expect("gif").playing, "Space on the bar pauses");
+    key(&mut rt, Key::Home);
+    assert_eq!(t(&rt), 0.0);
+    key(&mut rt, Key::Text(".".into()));
+    assert!((t(&rt) - 0.1).abs() < 1e-9, "a frame on: {}", t(&rt));
+    key(&mut rt, Key::Text(".".into()));
+    key(&mut rt, Key::Text(".".into()));
+    assert!((t(&rt) - 0.2).abs() < 1e-9, "held at the last frame: {}", t(&rt));
+    key(&mut rt, Key::Text(",".into()));
+    assert!((t(&rt) - 0.1).abs() < 1e-9, "a frame back: {}", t(&rt));
+    key(&mut rt, Key::End);
+    assert_eq!(rt.state.entity(id).expect("gif").asset.frame_at(t(&rt)), 2, "End shows the last frame");
+    assert_eq!(rt.state.selection.len(), 1, "the bar's keys left the selection alone");
+}

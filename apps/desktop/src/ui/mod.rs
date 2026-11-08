@@ -335,6 +335,16 @@ fn media_controls(l: &Look, s: &App, e: &crate::state::Entity, r: [f32; 4]) -> O
         .h(24.0)
         .center_y()
         .cursor(rune::Cursor::Pointer)
+        .range_value(e.play_t.min(dur), 0.0, dur)
+        .focusable(true)
+        .focus_ring(2.0, 2.0, l.primary)
+        .on_key(move |s: &mut App, k: &rune::KeyEvent, tx: &mut Tx| {
+            if !scrub_key(s, id, k) {
+                return false;
+            }
+            tx.instant();
+            true
+        })
         .on_drag(move |s: &mut App, d: &mut rune::Drag, tx: &mut Tx| {
             if let Some(e) = s.entity_mut(id) {
                 let dur = e.asset.duration.as_secs_f64();
@@ -372,6 +382,31 @@ fn media_controls(l: &Look, s: &App, e: &crate::state::Entity, r: [f32; 4]) -> O
         }));
     }
     Some(l.floating(bar))
+}
+
+/// Keys on the focused playback bar, as the web's: Space plays or pauses, `,` and `.` step a
+/// frame, ←/→ (and ↓/↑) seek a second (Shift: ten), Page Up/Down ten, Home and End jump to the
+/// ends. True when the key was the bar's.
+fn scrub_key(s: &mut App, id: u32, k: &rune::KeyEvent) -> bool {
+    use rune::Key;
+    let big = if k.mods.shift { 10.0 } else { 1.0 };
+    match &k.key {
+        Key::Text(t) if t == " " => {
+            if let Some(e) = s.entity_mut(id) {
+                e.playing = !e.playing;
+            }
+        }
+        Key::Text(t) if t == "." => s.step_frame(id, 1),
+        Key::Text(t) if t == "," => s.step_frame(id, -1),
+        Key::Right | Key::Up => s.seek_clip(id, big),
+        Key::Left | Key::Down => s.seek_clip(id, -big),
+        Key::PageUp => s.seek_clip(id, 10.0),
+        Key::PageDown => s.seek_clip(id, -10.0),
+        Key::Home => s.seek_clip_to(id, 0.0),
+        Key::End => s.seek_clip_to(id, f64::INFINITY),
+        _ => return false,
+    }
+    true
 }
 
 /// The web's media time: `S:cc` under a minute, `M:SS:cc` from one.

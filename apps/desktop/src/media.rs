@@ -100,6 +100,31 @@ impl Asset {
         self.frames.len() - 1
     }
 
+    /// The playhead one frame from `t` in `dir` (±1), held inside the clip: a GIF's next or
+    /// previous frame start, a video's by its frame rate (the web's `getAdjacentFrameTime`).
+    pub fn adjacent_frame(&self, t: f64, dir: i32) -> f64 {
+        const EPS: f64 = 1e-6;
+        let dur = self.duration.as_secs_f64();
+        let t = if self.frames.len() > 1 {
+            let mut starts = Vec::with_capacity(self.frames.len());
+            let mut at = 0.0;
+            for f in &self.frames {
+                starts.push(at);
+                at += f.delay.as_secs_f64();
+            }
+            if dir > 0 {
+                starts.into_iter().find(|s| *s > t + EPS).unwrap_or(t)
+            } else {
+                starts.into_iter().rev().find(|s| *s < t - EPS).unwrap_or(0.0)
+            }
+        } else {
+            let fd = 1.0 / self.video.as_ref().and_then(|v| v.fps).unwrap_or(crate::video::DEFAULT_FPS);
+            let i = t / fd;
+            if dir > 0 { (i + EPS).ceil() * fd } else { (i - EPS).floor() * fd }
+        };
+        t.clamp(0.0, dur)
+    }
+
     /// Has a timeline: an animated GIF or a video.
     pub fn animated(&self) -> bool {
         self.frames.len() > 1 || self.kind == Kind::Video

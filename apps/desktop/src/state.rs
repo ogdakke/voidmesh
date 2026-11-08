@@ -1544,6 +1544,30 @@ impl App {
         }
     }
 
+    /// The playback bar's keys, for clip `id`: a frame either way (`,` `.`), a jump to `t`
+    /// (Home, End), or a relative seek.
+    pub fn step_frame(&mut self, id: u32, dir: i32) {
+        if let Some(e) = self.entity_mut(id) {
+            let t = e.asset.adjacent_frame(e.play_t, dir);
+            e.seek_to(t);
+        }
+    }
+
+    pub fn seek_clip_to(&mut self, id: u32, t: f64) {
+        if let Some(e) = self.entity_mut(id) {
+            // The very end shows the last frame rather than wrapping to the first.
+            let end = (e.asset.duration.as_secs_f64() - 1e-4).max(0.0);
+            e.seek_to(t.clamp(0.0, end));
+        }
+    }
+
+    pub fn seek_clip(&mut self, id: u32, dt: f64) {
+        if let Some(e) = self.entity_mut(id) {
+            let d = e.asset.duration.as_secs_f64().max(1e-3);
+            e.seek_to((e.play_t + dt).rem_euclid(d));
+        }
+    }
+
     /// M: sound on or off for the selected videos that have it.
     pub fn toggle_mute(&mut self) {
         let sel = self.selection.clone();

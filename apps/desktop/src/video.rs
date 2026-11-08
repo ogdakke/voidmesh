@@ -15,7 +15,7 @@ const AHEAD: usize = 4;
 /// Slack when comparing a frame's time with the playback time.
 const EPSILON: f64 = 1e-4;
 /// Frame rate assumed for a clip that doesn't report one.
-const DEFAULT_FPS: f64 = 30.0;
+pub const DEFAULT_FPS: f64 = 30.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VideoInfo {
