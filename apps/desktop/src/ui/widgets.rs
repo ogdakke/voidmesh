@@ -2,21 +2,22 @@
 //! inside the track, a pill toggle, a select whose trigger opens a native menu, a collapsible
 //! section with an optional checkbox, round palette swatches and icon buttons.
 
-use rune::{Color, Drag, El, Icon, Phase, PopupMenu, Tx, col, el, icon, row, text};
+use rune::{Color, Drag, El, Icon, Phase, PopupMenu, Tx, col, el, icon, row, text, text_input};
 
 use super::look::{LARGE, Look, MEDIUM, NUMBER};
 use crate::effects::{Params, Range};
 use crate::state::App;
 
 /// `.slider-root`: a 32 pt track, 10 pt radius, surface fill, the indicator up to the value, a
-/// faint 3 pt thumb line. Click or drag anywhere; a drag is one undo step. When the selection
-/// disagrees (`mixed`), the label says so and the readout hides, as the web's does.
-pub fn slider(l: &Look, key: &'static str, label: &str, value: f32, mixed: bool, r: Range, set: fn(&mut Params, f32)) -> El {
+/// faint 3 pt thumb line. Click or drag anywhere; a drag is one undo step. The readout is a
+/// field to type into (`value_field`). When the selection disagrees (`mixed`), the label says
+/// so and the readout hides, as the web's does.
+#[allow(clippy::too_many_arguments)]
+pub fn slider(l: &Look, s: &App, key: &'static str, label: &str, value: f32, mixed: bool, r: Range, set: fn(&mut Params, f32)) -> El {
     const H: f32 = 32.0;
     let t = ((value - r.min) / (r.max - r.min)).clamp(0.0, 1.0);
-    let decimals = if r.step >= 1.0 { 0 } else if r.step >= 0.1 { 1 } else { 2 };
     let shown = if mixed { format!("{label} (Mixed)") } else { label.to_string() };
-    let readout = if mixed { String::new() } else { format!("{value:.decimals$}") };
+    let readout = if mixed { el() } else { value_field(l, s, key, &shown, value, r, set) };
     let to_value = move |x: f32, w: f32| {
         let v = r.min + (x / w.max(1.0)).clamp(0.0, 1.0) * (r.max - r.min);
         ((v / r.step).round() * r.step).clamp(r.min, r.max)
@@ -65,8 +66,41 @@ pub fn slider(l: &Look, key: &'static str, label: &str, value: f32, mixed: bool,
                 .center_y()
                 .justify_between()
                 .child(text(shown).font(MEDIUM).color(l.text_strong))
-                .child(text(readout).font(NUMBER).color(l.text_strong)),
+                .child(readout),
         )
+}
+
+/// The slider's readout (`.slider-value-input`): its value, and a press makes it a field. Typed
+/// numbers apply live; Return, Escape or focus leaving keep the value, clamped, as one undo
+/// step; ↑ and ↓ step it.
+fn value_field(l: &Look, s: &App, key: &'static str, label: &str, value: f32, r: Range, set: fn(&mut Params, f32)) -> El {
+    let field = format!("{key}-value");
+    if s.value_target.is_some_and(|t| t.key == key) {
+        return text_input(&s.value_edit, NUMBER)
+            .single_line()
+            .key(field)
+            .label(format!("{label} value"))
+            .on_edit(|s: &mut App| &mut s.value_edit)
+            .on_input_change(|s: &mut App, _| s.type_value())
+            .on_submit(|s: &mut App, _| s.commit_value())
+            .on_input_key(|s: &mut App, k: &rune::KeyEvent, _| {
+                match k.key {
+                    rune::Key::Escape => s.commit_value(),
+                    rune::Key::Up => s.step_value(1.0),
+                    rune::Key::Down => s.step_value(-1.0),
+                    _ => return false,
+                }
+                true
+            })
+            .w(52.0)
+            .color(l.text_strong);
+    }
+    el().key(field)
+        .role("button")
+        .label(format!("Edit {label}"))
+        .cursor(rune::Cursor::Text)
+        .on_press(move |s: &mut App| s.start_value(key, value, r, set))
+        .child(text(crate::effects::format_value(value, r)).font(NUMBER).color(l.text_strong))
 }
 
 /// `.ui-toggle`: a transparent pill that fills with the surface and an inset ring when on. `on`

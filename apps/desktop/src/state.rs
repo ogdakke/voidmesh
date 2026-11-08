@@ -257,6 +257,14 @@ impl Lensing {
     }
 }
 
+/// The slider whose value field is being typed into.
+#[derive(Clone, Copy)]
+pub struct ValueTarget {
+    pub key: &'static str,
+    pub range: crate::effects::Range,
+    pub set: fn(&mut Params, f32),
+}
+
 pub struct Toast {
     pub text: String,
     pub until: f64,
@@ -320,6 +328,9 @@ pub struct App {
     pub hex_edit: rune::TextEdit,
     /// The palette name field, while renaming.
     pub name_edit: rune::TextEdit,
+    /// A slider's value field, while typing into it (`value_target` says which).
+    pub value_edit: rune::TextEdit,
+    pub value_target: Option<ValueTarget>,
     pub renaming: bool,
     /// Flowing glass's Time control.
     pub time_slider: crate::ui::tick_slider::TickSlider,
@@ -393,6 +404,8 @@ impl Default for App {
             time_slider: Default::default(),
             picker: None,
             hex_edit: rune::TextEdit::new(""),
+            value_edit: rune::TextEdit::new(""),
+            value_target: None,
             name_edit: rune::TextEdit::new(""),
             renaming: false,
             toasts: Vec::new(),
@@ -449,6 +462,8 @@ impl App {
 
     /// Record the current state as one undo step, before a change.
     pub fn checkpoint(&mut self) {
+        // Typing in a value field is its own step, closed before any other.
+        self.commit_value();
         let s = self.snapshot();
         self.push_undo(s);
     }
@@ -471,6 +486,7 @@ impl App {
     }
 
     pub fn undo(&mut self) -> bool {
+        self.commit_value();
         let Some(s) = self.undo.pop() else { return false };
         self.revision += 1;
         let now = self.snapshot();
@@ -480,6 +496,7 @@ impl App {
     }
 
     pub fn redo(&mut self) -> bool {
+        self.commit_value();
         let Some(s) = self.redo.pop() else { return false };
         self.revision += 1;
         let now = self.snapshot();
@@ -495,6 +512,7 @@ impl App {
         if self.selection.is_empty() {
             return;
         }
+        self.commit_value();
         if self.editing.is_none() {
             self.checkpoint();
         }
@@ -708,7 +726,50 @@ impl App {
         }
     }
 
+    /// Start typing into slider `key`'s value field, its text selected (the web's readout input).
+    /// The typing is one undo step, closed by `commit_value`.
+    pub fn start_value(&mut self, key: &'static str, value: f32, range: crate::effects::Range, set: fn(&mut Params, f32)) {
+        self.commit_value();
+        self.begin_edit();
+        let text = crate::effects::format_value(value, range);
+        self.value_edit = rune::TextEdit::new(text.clone());
+        self.value_edit.set_selection(0, text.len());
+        self.value_edit.focused = true;
+        self.value_target = Some(ValueTarget { key, range, set });
+    }
+
+    /// The typed value, when it reads as a number, applied live and clamped to the range.
+    pub fn type_value(&mut self) {
+        let Some(t) = self.value_target else { return };
+        if let Ok(v) = self.value_edit.text.trim().parse::<f32>()
+            && v.is_finite()
+        {
+            self.edit_live(|p| (t.set)(p, v.clamp(t.range.min, t.range.max)));
+        }
+    }
+
+    /// ↑/↓ in the value field: a step, shown in the field.
+    pub fn step_value(&mut self, steps: f32) {
+        let Some(t) = self.value_target else { return };
+        let Ok(v) = self.value_edit.text.trim().parse::<f32>() else { return };
+        let v = (v + steps * t.range.step).clamp(t.range.min, t.range.max);
+        let text = crate::effects::format_value(v, t.range);
+        let len = text.len();
+        self.value_edit.text = text;
+        self.value_edit.set_selection(len, len);
+        self.edit_live(|p| (t.set)(p, v));
+    }
+
+    /// Enter, Escape or focus leaving: the value stays, and the typing becomes one undo step.
+    pub fn commit_value(&mut self) {
+        if self.value_target.take().is_some() {
+            self.value_edit.focused = false;
+            self.end_edit();
+        }
+    }
+
     pub fn begin_edit(&mut self) {
+        self.commit_value();
         if self.editing.is_none() && !self.selection.is_empty() {
             self.editing = Some(self.snapshot());
         }

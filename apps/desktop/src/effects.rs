@@ -330,6 +330,12 @@ impl Params {
     }
 }
 
+/// A slider value as its readout shows it: as many decimals as the step has.
+pub fn format_value(v: f32, r: Range) -> String {
+    let decimals = if r.step >= 1.0 { 0 } else if r.step >= 0.1 { 1 } else { 2 };
+    format!("{v:.decimals$}")
+}
+
 /// A slider's range, step and how it reads.
 #[derive(Clone, Copy)]
 pub struct Range {

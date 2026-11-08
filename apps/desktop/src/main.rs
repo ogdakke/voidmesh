@@ -95,6 +95,16 @@ fn poll(s: &mut App, t: f64, tx: &mut Tx) -> bool {
         changed = true;
     }
     changed |= export_video::poll(s, tx);
+    // A slider's value field that lost focus keeps what was typed. Rune reports focus through
+    // the field's model alone, so an open field keeps polling until it's seen to go.
+    if s.value_target.is_some() {
+        if s.value_edit.focused {
+            tx.wake_after(std::time::Duration::from_millis(100));
+        } else {
+            s.commit_value();
+            changed = true;
+        }
+    }
 
     if s.tick(dt) {
         changed = true;

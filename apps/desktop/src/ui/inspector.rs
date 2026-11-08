@@ -43,7 +43,7 @@ impl Sel<'_> {
     }
 
     fn slider(self, l: &Look, key: &'static str, label: &str, get: fn(&Params) -> f32, r: fx::Range, set: fn(&mut Params, f32)) -> El {
-        slider(l, key, label, get(self.p), self.mixed(get), r, set)
+        slider(l, self.s, key, label, get(self.p), self.mixed(get), r, set)
     }
 
     fn toggle(self, l: &Look, key: &'static str, label: &str, get: fn(&Params) -> bool, set: fn(&mut Params, bool)) -> El {

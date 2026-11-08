@@ -414,3 +414,55 @@ fn a_mixed_selection_shows_what_it_shares_and_says_where_it_differs() {
     assert!(label(&rt, "scale").is_none());
     assert!(label(&rt, "glitch-kind").is_some());
 }
+
+#[test]
+fn a_slider_value_takes_typing_as_one_undo_step() {
+    let mut rt = canvas();
+    click(&mut rt, 200.0, 350.0);
+    let undo = rt.state.undo.len();
+    let (x, y) = rt.find("intensity-value").expect("strength readout");
+    click(&mut rt, x, y);
+    assert!(rt.state.value_target.is_some_and(|t| t.key == "intensity"), "the readout became a field");
+    assert_eq!(rt.state.undo.len(), undo, "the press didn't drag the slider");
+    let typed = |rt: &mut Runtime<App>, t: &str| {
+        rt.key(KeyEvent { key: Key::Text(t.into()), mods: Mods::default() });
+        settle(rt);
+    };
+    // The selected text is replaced, live.
+    typed(&mut rt, "4");
+    typed(&mut rt, "2");
+    // Out of range clamps (Effect Strength runs 0–5).
+    assert_eq!(rt.state.entity(1).expect("1").params.intensity, 5.0);
+    rt.key(KeyEvent { key: Key::Backspace, mods: Mods::default() });
+    settle(&mut rt);
+    assert_eq!(rt.state.entity(1).expect("1").params.intensity, 4.0);
+    rt.key(KeyEvent { key: Key::Down, mods: Mods::default() });
+    settle(&mut rt);
+    assert!((rt.state.entity(1).expect("1").params.intensity - 3.99).abs() < 1e-4, "a step down");
+    rt.key(KeyEvent { key: Key::Escape, mods: Mods::default() });
+    settle(&mut rt);
+    assert!(rt.state.value_target.is_none());
+    assert!(!rt.state.selection.is_empty(), "Escape left the field, not the selection");
+    assert_eq!(rt.state.undo.len(), undo + 1, "one step for the typing");
+    rt.key(KeyEvent { key: Key::Command('z'), mods: Mods { cmd: true, ..Mods::default() } });
+    settle(&mut rt);
+    assert_eq!(rt.state.entity(1).expect("1").params.intensity, 1.0);
+}
+
+#[test]
+fn a_slider_value_field_commits_when_focus_leaves() {
+    let mut rt = canvas();
+    click(&mut rt, 200.0, 350.0);
+    let (x, y) = rt.find("scale-value").expect("scale readout");
+    click(&mut rt, x, y);
+    rt.key(KeyEvent { key: Key::Text("2".into()), mods: Mods::default() });
+    settle(&mut rt);
+    // Elsewhere in the inspector (its title).
+    let r = rt.presented("inspector").expect("inspector").0;
+    click(&mut rt, r[0] + 40.0, r[1] + 20.0);
+    // The field's poll sees the focus go.
+    std::thread::sleep(std::time::Duration::from_millis(120));
+    settle(&mut rt);
+    assert!(rt.state.value_target.is_none() && rt.state.editing.is_none(), "the field closed its undo step");
+    assert_eq!(rt.state.entity(1).expect("1").params.scale, 2.0);
+}
