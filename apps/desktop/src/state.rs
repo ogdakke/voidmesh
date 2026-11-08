@@ -614,13 +614,21 @@ impl App {
         crate::prefs::save_palettes(self);
     }
 
-    /// Delete a user palette; entities using it keep its colours as an unlisted copy.
+    /// Delete a user palette, one undo step.
     pub fn delete_palette(&mut self, id: &str) {
         if !self.palettes.iter().any(|p| p.id == id) {
             return;
         }
+        self.close_picker();
         self.checkpoint();
         self.palettes.retain(|p| p.id != id);
+        // As the web's: the selected entities that used it fall back to the first preset; the
+        // rest keep its colours as an unlisted copy.
+        let fallback = crate::effects::presets()[0].clone();
+        let sel = self.selection.clone();
+        for e in self.entities.iter_mut().filter(|e| sel.contains(&e.id) && e.params.palette.id == id) {
+            e.params.palette = fallback.clone();
+        }
         crate::prefs::save_palettes(self);
     }
 
@@ -1781,6 +1789,23 @@ mod tests {
         assert!(a.undo(), "the picker session was one step");
         assert!(a.palettes.is_empty());
         assert_eq!(a.entity(one).map(|e| e.params.palette.id.clone()).as_deref(), Some("blackAndWhite"));
+    }
+
+    #[test]
+    fn deleting_a_palette_moves_the_selection_using_it_to_the_first_preset() {
+        let mut a = App::default();
+        a.place(vec![asset(1, 10, 10), asset(2, 10, 10)], [0.0, 0.0], false);
+        a.add_palette_color();
+        let id = a.palettes[0].id.clone();
+        let (one, two) = (a.entities[0].id, a.entities[1].id);
+        a.select_only(one);
+        a.delete_palette(&id);
+        let pal = |a: &App, e: u32| a.entity(e).map(|e| e.params.palette.clone()).expect("entity");
+        assert_eq!(pal(&a, one).id, crate::effects::presets()[0].id);
+        assert_eq!(pal(&a, two).id, id, "unselected keep their copy");
+        assert!(a.palettes.is_empty());
+        assert!(a.undo());
+        assert_eq!((pal(&a, one).id, a.palettes.len()), (id, 1), "one undo brings both back");
     }
 
     #[test]
