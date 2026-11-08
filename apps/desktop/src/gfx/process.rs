@@ -528,8 +528,9 @@ pub fn render_size(w: u32, h: u32) -> (u32, u32) {
     (((w as f32 * k).round() as u32).max(1), ((h as f32 * k).round() as u32).max(1))
 }
 
-/// Quantized maximum dimensions for preview LOD (the web's `imageLodTiers`).
-pub const LOD_TIERS: [u32; 7] = [64, 128, 256, 512, 1024, 2048, 4096];
+/// Quantized maximum dimensions for preview LOD: the web's `imageLodTiers`, and two smaller ones
+/// for overviews, where an entity a few pixels across needn't hold a 64-pixel texture.
+pub const LOD_TIERS: [u32; 9] = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
 /// Extra physical pixels kept around the projected size before promotion (`imageLodOverscan`).
 pub const LOD_OVERSCAN: f32 = 1.25;
 
@@ -996,10 +997,11 @@ mod tests {
 
     #[test]
     fn lod_follows_the_webs_tiers() {
-        assert_eq!(lod_size((1034, 1435), 10.0), (46, 64), "a speck takes the smallest tier");
+        assert_eq!(lod_size((1034, 1435), 10.0), (12, 16), "a speck takes the smallest tier");
+        assert_eq!(lod_size((1034, 1435), 40.0), (46, 64));
         assert_eq!(lod_size((1024, 1024), 300.0), (512, 512));
         assert_eq!(lod_size((1024, 1024), 900.0), (1024, 1024), "native once the projection reaches it");
-        assert_eq!(lod_size((100, 50), 10.0), (64, 32));
+        assert_eq!(lod_size((100, 50), 10.0), (16, 8));
         assert_eq!(lod_size((40, 20), 300.0), (40, 20), "never above native");
     }
 

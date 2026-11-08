@@ -78,7 +78,7 @@ const STILL_BUDGET: std::time::Duration = std::time::Duration::from_millis(6);
 /// Materials processed between budget checks.
 const BATCH: usize = 8;
 /// Textures of materials off screen kept for when they show again.
-const UNSEEN_BUDGET: u64 = 128 * 1024 * 1024;
+const UNSEEN_BUDGET: u64 = 32 * 1024 * 1024;
 /// Frames a still's source stays unused before it's freed.
 const SOURCE_FRAMES: u64 = 4;
 /// Media of more pixels than this makes its source mips on the GPU.
