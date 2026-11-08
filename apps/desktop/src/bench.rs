@@ -558,6 +558,8 @@ pub fn scene(s: &mut App) {
 /// over its frames is the web's `msPerFrame`. CPU time per frame covers the canvas's sync,
 /// visibility, processing, encoding and submission.
 pub fn run_direct() {
+    // A GUI app's main thread runs at this class; a process started from a shell doesn't.
+    crate::gfx::process::interactive();
     let scale: f32 = std::env::var("VOIDMESH_BENCH_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
     let gpu = match rune::render::Gpu::try_with_features(rune::render::Gpu::instance(), None, wgpu::Features::IMMEDIATES) {
         Ok(g) => g,
@@ -590,6 +592,7 @@ pub fn run_direct() {
     let mut samples = Vec::new();
     let mut sample_start = Instant::now();
     let mut peak = 0u64;
+    let mut peak_extra = 0u64;
     let (mut visible, mut processed) = (0usize, 0usize);
     for k in 0..bench.total() {
         let measuring = k >= spec.warmup;
@@ -617,6 +620,7 @@ pub fn run_direct() {
         bench = b;
         let st = direct.scene.stats;
         peak = peak.max(st.resident_bytes);
+        peak_extra = peak_extra.max(st.video_bytes + st.staging_bytes);
         if measuring {
             cpu.push(ms);
             visible += st.visible;
@@ -646,6 +650,7 @@ pub fn run_direct() {
         "visibleMean": visible as f64 / n,
         "processed": processed,
         "peakResidentBytes": peak,
+        "peakVideoAndStagingBytes": peak_extra,
         "note": spec.note,
     });
     println!("voidmesh-bench {report}");

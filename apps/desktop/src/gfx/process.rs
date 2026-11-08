@@ -294,7 +294,7 @@ pub fn mip_chain(device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &
     }
 }
 
-/// An empty sampled RGBA8 texture, one level, written later (`write_via`).
+/// An empty sampled RGBA8 texture, one level, written later (a copy from a staging buffer).
 pub fn texture(device: &wgpu::Device, w: u32, h: u32) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("voidmesh frame"),
@@ -417,20 +417,29 @@ pub fn level_chain(w: u32, h: u32, rgba: &[u8], k: u32, levels: u32) -> Vec<(u32
 
 /// The calling thread at the frame's own priority: a frame waits for every helper it starts, so
 /// none may sit on an efficiency core behind the video decoders.
+pub fn interactive() {
+    qos(0x21);
+}
+
+/// The calling thread below the frame's priority (user-initiated), for work a frame takes the
+/// results of when they're ready but never waits on: video decoding.
+pub fn background() {
+    qos(0x19);
+}
+
 #[cfg(target_os = "macos")]
-fn interactive() {
-    const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
+fn qos(class: u32) {
     unsafe extern "C" {
         fn pthread_set_qos_class_self_np(qos: u32, relative: i32) -> i32;
     }
     // SAFETY: sets only the calling thread's scheduling class; it fails harmlessly if refused.
     unsafe {
-        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+        pthread_set_qos_class_self_np(class, 0);
     }
 }
 
 #[cfg(not(target_os = "macos"))]
-fn interactive() {}
+fn qos(_: u32) {}
 
 /// Run `f` over `jobs` on every core when there's enough work to pay for the threads.
 pub fn parallel<T: Sync, R: Send + Default>(jobs: &[T], work: impl Fn(&T) -> u64 + Sync, f: impl Fn(&T) -> R + Sync) -> Vec<R> {
@@ -470,29 +479,6 @@ pub fn write(queue: &wgpu::Queue, t: &wgpu::Texture, w: u32, h: u32, rgba: &[u8]
 /// queue writes a buffer the GPU isn't reading in place, where a texture write stages a new
 /// buffer each time. Rows are padded to the copy alignment when they need it.
 #[allow(clippy::too_many_arguments)]
-pub fn write_via(device: &wgpu::Device, queue: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, staging: &mut Option<wgpu::Buffer>, t: &wgpu::Texture, w: u32, h: u32, rgba: &[u8]) {
-    let row = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-    let size = u64::from(row) * u64::from(h);
-    if staging.as_ref().is_none_or(|b| b.size() != size) {
-        *staging = Some(device.create_buffer(&wgpu::BufferDescriptor { label: Some("voidmesh video"), size, usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }));
-    }
-    let Some(buf) = staging.as_ref() else { return };
-    if row == w * 4 {
-        queue.write_buffer(buf, 0, rgba);
-    } else {
-        let mut padded = vec![0u8; size as usize];
-        for (dst, src) in padded.chunks_exact_mut(row as usize).zip(rgba.chunks_exact((w * 4) as usize)) {
-            dst[..src.len()].copy_from_slice(src);
-        }
-        queue.write_buffer(buf, 0, &padded);
-    }
-    enc.copy_buffer_to_texture(
-        wgpu::TexelCopyBufferInfo { buffer: buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) } },
-        t.as_image_copy(),
-        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-    );
-}
-
 fn target(device: &wgpu::Device, w: u32, h: u32, label: &str) -> wgpu::Texture {
     target_mips(device, w, h, 1, label)
 }

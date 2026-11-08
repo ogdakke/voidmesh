@@ -73,6 +73,10 @@ const TRANSITION_COUNT: usize = 32;
 /// Frames the zoom must hold before LOD changes.
 const SETTLE_FRAMES: u32 = 2;
 /// Processing a frame takes on before it leaves the rest to the next frames.
+/// Video frame bytes uploaded a frame (one frame always goes, whatever its size): a zoom that
+/// leaves many decoders oversized for a moment spreads their uploads instead of copying them all
+/// in one frame.
+const VIDEO_BUDGET: u64 = 4 << 20;
 const FRAME_BUDGET: std::time::Duration = std::time::Duration::from_millis(2);
 const STILL_BUDGET: std::time::Duration = std::time::Duration::from_millis(6);
 /// Materials processed between budget checks.
@@ -199,11 +203,10 @@ struct VideoSource {
     /// Counts uploaded frames: part of the material key.
     frame: u64,
     tex: Option<(wgpu::Texture, wgpu::TextureView)>,
-    /// Frames pass through this buffer into `tex`: a queue write into a buffer the GPU isn't
-    /// reading lands in place, where a texture write would allocate a staging buffer a frame.
-    /// A ring of them, so a write lands in one the GPU is done reading.
-    staging: [Option<wgpu::Buffer>; 3],
-    ring: usize,
+    /// A frame newer than `tex` is waiting in `App::video_frames` for upload.
+    pending: bool,
+    /// The scene frame it last uploaded on: the stalest go first when uploads are over budget.
+    uploaded: u64,
     /// A seek is waiting for its first frame (keep drawing until it lands).
     waiting: bool,
     used: bool,
@@ -271,7 +274,13 @@ pub struct Stats {
     pub rebuilt: bool,
     /// The world was drawn again this frame (rather than reused).
     pub redrawn: bool,
+    /// GPU bytes held in the categories the web's bench counts (processed, source and pooled
+    /// textures)...
     pub resident_bytes: u64,
+    /// ...and outside them: decoded video frames' textures and upload staging buffers, which the
+    /// web keeps in the browser's own GPU process.
+    pub video_bytes: u64,
+    pub staging_bytes: u64,
     pub source_uploads: usize,
 }
 
@@ -316,8 +325,6 @@ pub struct Scene {
     /// Processed textures of their own freed this frame and last, for materials of their size.
     pool: Vec<wgpu::Texture>,
     pool_prev: Vec<wgpu::Texture>,
-    /// Large instance uploads, a ring of three by frame.
-    inst_staging: [Option<wgpu::Buffer>; 3],
     /// Instance ranges of the groups that meet the view this frame, in order.
     ranges: Vec<(u32, u32)>,
     /// The entities as last drawn, at the canvas's size, and what they were drawn for.
@@ -335,11 +342,9 @@ pub struct Scene {
     /// Source levels written to a staging buffer this frame and not kept as textures: originals
     /// copy straight from there into their atlas tiles.
     staged: HashMap<SrcKey, (wgpu::Buffer, Vec<Staged>)>,
-    /// Buffers source uploads go through, a batch each, in three rings by frame: a write lands in
-    /// a buffer no recorded or in-flight copy reads, which Rune writes in place (a buffer still
-    /// read would get a fresh copy allocated). And the bytes packed into them, reused.
-    staging: [Vec<wgpu::Buffer>; 3],
-    staging_next: usize,
+    /// Buffers uploads go through (source batches, video frames, large instance changes).
+    staging: Staging,
+    /// Bytes packed for them, reused.
     staging_bytes: Vec<u8>,
     videos: HashMap<(u32, u64), VideoSource>,
     frame: u64,
@@ -350,6 +355,85 @@ pub struct Scene {
     resting: u32,
     pub stats: Stats,
     pub video_waiting: bool,
+}
+
+/// Staging buffers, in sets: a frame takes a set the GPU is done with (or a new one when the GPU
+/// is that far behind) and its uploads take buffers from it in turn. A set comes back once the
+/// work submitted with it completes, so a queue write always lands in a buffer nothing reads:
+/// Rune writes that in place. One written while a copy from it was still in flight would be
+/// staged instead, and Rune pins a buffer staged into for good, making every later write to it
+/// allocate a new buffer.
+#[derive(Default)]
+struct Staging {
+    sets: Vec<StagingSet>,
+    /// The set this frame took, and how many of its buffers it used.
+    cur: Option<usize>,
+    next: usize,
+}
+
+struct StagingSet {
+    bufs: Vec<wgpu::Buffer>,
+    done: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    used: u64,
+}
+
+/// Frames a finished set stays unused before its buffers go.
+const STAGING_IDLE_FRAMES: u64 = 120;
+
+impl Staging {
+    /// A new frame: the last frame's set comes back once the work it was submitted with is done
+    /// (it was submitted before this one prepares), and long-unused sets go.
+    fn begin(&mut self, queue: &wgpu::Queue, frame: u64) {
+        use std::sync::atomic::Ordering;
+        if let Some(c) = self.cur.take() {
+            let done = self.sets[c].done.clone();
+            if self.next == 0 {
+                done.store(true, Ordering::Release);
+            } else {
+                queue.on_submitted_work_done(move || done.store(true, Ordering::Release));
+            }
+        }
+        self.next = 0;
+        self.sets.retain(|s| !(s.done.load(Ordering::Acquire) && frame.saturating_sub(s.used) > STAGING_IDLE_FRAMES));
+    }
+
+    /// This frame's next buffer, at least `size` bytes. Buffers persist with their set (pages
+    /// stay mapped) and grow to the largest upload they've taken, in whole MiB.
+    fn buffer(&mut self, device: &wgpu::Device, size: u64, label: &str, frame: u64) -> wgpu::Buffer {
+        use std::sync::atomic::Ordering;
+        let c = match self.cur {
+            Some(c) => c,
+            None => {
+                let c = match self.sets.iter().position(|s| s.done.load(Ordering::Acquire)) {
+                    Some(c) => c,
+                    None => {
+                        self.sets.push(StagingSet { bufs: Vec::new(), done: Default::default(), used: frame });
+                        self.sets.len() - 1
+                    }
+                };
+                self.sets[c].done.store(false, Ordering::Release);
+                self.sets[c].used = frame;
+                self.cur = Some(c);
+                c
+            }
+        };
+        let i = self.next;
+        self.next += 1;
+        let bufs = &mut self.sets[c].bufs;
+        if bufs.get(i).is_none_or(|b| b.size() < size) {
+            let b = device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size: size.next_multiple_of(1 << 20), usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+            if i < bufs.len() {
+                bufs[i] = b;
+            } else {
+                bufs.push(b);
+            }
+        }
+        bufs[i].clone()
+    }
+
+    fn bytes(&self) -> u64 {
+        self.sets.iter().flat_map(|s| &s.bufs).map(wgpu::Buffer::size).sum()
+    }
 }
 
 /// An RGBA8 texture's bytes, all its levels.
@@ -427,7 +511,6 @@ impl Scene {
             visible_mats: Vec::new(),
             own_draws: Vec::new(),
             ranges: Vec::new(),
-            inst_staging: Default::default(),
             pool: Vec::new(),
             pool_prev: Vec::new(),
             world: None,
@@ -437,8 +520,7 @@ impl Scene {
             video_idx: Vec::new(),
             sources: HashMap::new(),
             staged: HashMap::new(),
-            staging: Default::default(),
-            staging_next: 0,
+            staging: Staging::default(),
             staging_bytes: Vec::new(),
             videos: HashMap::new(),
             frame: 1,
@@ -725,8 +807,8 @@ impl Scene {
                 seek_gen: e.seek_gen,
                 frame: 0,
                 tex: None,
-                staging: Default::default(),
-                ring: 0,
+                pending: false,
+                uploaded: 0,
                 waiting: true,
                 used: true,
                 index: i as u32,
@@ -763,45 +845,109 @@ impl Scene {
             // uploaded or processed.
             let r = s.cam.screen_rect(e.rect());
             let on_screen = r[0] < s.canvas[2] && r[0] + r[2] > 0.0 && r[1] < s.canvas[3] && r[1] + r[3] > 0.0;
+            let shown = on_screen || v.tex.is_none();
             if let Some(f) = v.decoder.frame_at(e.play_t) {
-                if !on_screen && v.tex.is_some() {
+                v.pending = shown;
+                if !shown {
                     v.waiting = false;
-                    if let Some(old) = s.video_frames.insert(key, f) {
-                    crate::video::recycle(old.rgba);
                 }
-                    continue;
-                }
-                if v.tex.as_ref().is_none_or(|(t, _)| (t.width(), t.height()) != (f.width, f.height)) {
-                    let t = process::texture(device, f.width, f.height);
-                    let view = t.create_view(&Default::default());
-                    v.tex = Some((t, view));
-                }
-                if let Some((t, _)) = &v.tex {
-                    process::write_via(device, queue, enc, &mut v.staging[v.ring], t, f.width, f.height, &f.rgba);
-                    v.ring = (v.ring + 1) % v.staging.len();
-                }
-                v.frame = v.frame.wrapping_add(1);
-                v.waiting = false;
-                changed.push(i);
                 if let Some(old) = s.video_frames.insert(key, f) {
                     crate::video::recycle(old.rgba);
                 }
+            } else if !shown {
+                v.pending = false;
             }
             if v.decoder.error().is_some() {
                 v.waiting = false;
             }
-            self.video_waiting |= v.waiting;
         }
         self.videos.retain(|_, v| v.used);
         s.video_frames.retain(|k, _| self.videos.contains_key(k));
-        if std::env::var_os("VOIDMESH_TRACE_FRAME").is_some() && (restarts > 0 || !changed.is_empty()) {
-            eprintln!("videos: {restarts} restarted, {} uploaded", changed.len());
+        let (uploaded, bytes) = self.upload_videos(device, queue, enc, s);
+        for v in self.videos.values() {
+            self.video_waiting |= v.waiting || v.pending;
         }
+        if std::env::var_os("VOIDMESH_TRACE_FRAME").is_some() && (restarts > 0 || !uploaded.is_empty()) {
+            eprintln!("videos: {restarts} restarted, {} uploaded, {} KB", uploaded.len(), bytes >> 10);
+        }
+        changed.extend(uploaded);
         for i in changed {
             if i < self.slot_of.len() {
                 self.rederive(s, i, None);
             }
         }
+    }
+
+    /// Uploads waiting video frames: a seek's first frame, then the stalest, up to
+    /// `VIDEO_BUDGET` bytes a frame (and always one), the rest on the next frames. All of them
+    /// go through one staging buffer from the frame's ring, written before any copy from it is
+    /// recorded so Rune writes it in place. The entities whose frames changed, and the bytes.
+    fn upload_videos(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, s: &App) -> (Vec<usize>, u64) {
+        let mut want: Vec<((u32, u64), bool, u64)> = self.videos.iter().filter(|(_, v)| v.pending).map(|(k, v)| (*k, v.waiting, v.uploaded)).collect();
+        if want.is_empty() {
+            return (Vec::new(), 0);
+        }
+        want.sort_unstable_by_key(|(k, waiting, at)| (!waiting, *at, *k));
+        let align = u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        // (key, offset, row bytes)
+        let mut picked: Vec<((u32, u64), u64, u32)> = Vec::new();
+        let mut total = 0u64;
+        for (key, _, _) in want {
+            let Some(f) = s.video_frames.get(&key) else { continue };
+            let row = (u64::from(f.width) * 4).next_multiple_of(align);
+            let size = row * u64::from(f.height);
+            if !picked.is_empty() && total + size > VIDEO_BUDGET {
+                break;
+            }
+            picked.push((key, total, row as u32));
+            total += size;
+        }
+        if total == 0 {
+            return (Vec::new(), 0);
+        }
+        let staging = self.stage_buffer(device, total, "voidmesh video");
+        for (key, offset, row) in &picked {
+            let f = &s.video_frames[key];
+            if *row == f.width * 4 {
+                queue.write_buffer(&staging, *offset, &f.rgba);
+            } else {
+                let mut bytes = std::mem::take(&mut self.staging_bytes);
+                bytes.clear();
+                bytes.resize(*row as usize * f.height as usize, 0);
+                for (dst, src) in bytes.chunks_exact_mut(*row as usize).zip(f.rgba.chunks_exact(f.width as usize * 4)) {
+                    dst[..src.len()].copy_from_slice(src);
+                }
+                queue.write_buffer(&staging, *offset, &bytes);
+                self.staging_bytes = bytes;
+            }
+        }
+        let mut changed = Vec::with_capacity(picked.len());
+        for (key, offset, row) in picked {
+            let f = &s.video_frames[&key];
+            let Some(v) = self.videos.get_mut(&key) else { continue };
+            if v.tex.as_ref().is_none_or(|(t, _)| (t.width(), t.height()) != (f.width, f.height)) {
+                let t = process::texture(device, f.width, f.height);
+                let view = t.create_view(&Default::default());
+                v.tex = Some((t, view));
+            }
+            if let Some((t, _)) = &v.tex {
+                enc.copy_buffer_to_texture(
+                    wgpu::TexelCopyBufferInfo { buffer: &staging, layout: wgpu::TexelCopyBufferLayout { offset, bytes_per_row: Some(row), rows_per_image: Some(f.height) } },
+                    t.as_image_copy(),
+                    wgpu::Extent3d { width: f.width, height: f.height, depth_or_array_layers: 1 },
+                );
+            }
+            v.frame = v.frame.wrapping_add(1);
+            v.pending = false;
+            v.waiting = false;
+            v.uploaded = self.frame;
+            changed.push(v.index as usize);
+        }
+        (changed, total)
+    }
+
+    fn stage_buffer(&mut self, device: &wgpu::Device, size: u64, label: &str) -> wgpu::Buffer {
+        self.staging.buffer(device, size, label, self.frame)
     }
 
     // ------------------------------------------------------------------ visibility and LOD
@@ -990,18 +1136,7 @@ impl Scene {
                 }
             }
         }
-        let ring = &mut self.staging[(self.frame % 3) as usize];
-        let i = self.staging_next;
-        self.staging_next += 1;
-        if ring.get(i).is_none_or(|b| b.size() < total) {
-            let b = device.create_buffer(&wgpu::BufferDescriptor { label: Some("voidmesh sources"), size: total.next_power_of_two(), usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-            if i < ring.len() {
-                ring[i] = b;
-            } else {
-                ring.push(b);
-            }
-        }
-        let staging = ring[i].clone();
+        let staging = self.stage_buffer(device, total, "voidmesh sources");
         let t2 = t0.elapsed();
         queue.write_buffer(&staging, 0, &bytes);
         self.staging_bytes = bytes;
@@ -1392,17 +1527,12 @@ impl Scene {
             if bytes.len() < 64 * 1024 {
                 queue.write_buffer(&self.inst_buf, a as u64 * inst_size, bytes);
             } else {
-                // Large changes (a group dragged, a selection) go through a staging ring and a
+                // Large changes (a group dragged, a selection) go through a staging buffer and a
                 // GPU copy: a queue write into the buffer the last frame still reads would have
                 // Rune swap in a spare and carry all of it over.
-                let ring = &mut self.inst_staging[(self.frame % 3) as usize];
-                if ring.as_ref().is_none_or(|r| r.size() < bytes.len() as u64) {
-                    *ring = Some(device.create_buffer(&wgpu::BufferDescriptor { label: Some("voidmesh instance staging"), size: (bytes.len() as u64).next_power_of_two(), usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }));
-                }
-                if let Some(r) = ring.as_ref() {
-                    queue.write_buffer(r, 0, bytes);
-                    enc.copy_buffer_to_buffer(r, 0, &self.inst_buf, a as u64 * inst_size, bytes.len() as u64);
-                }
+                let r = self.staging.buffer(device, bytes.len() as u64, "voidmesh instance staging", self.frame);
+                queue.write_buffer(&r, 0, bytes);
+                enc.copy_buffer_to_buffer(&r, 0, &self.inst_buf, a as u64 * inst_size, bytes.len() as u64);
             }
             self.stats.instance_bytes += (b - a) as u64 * inst_size;
             self.world_dirty = true;
@@ -1480,7 +1610,7 @@ impl Scene {
     #[allow(clippy::too_many_arguments)]
     pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, s: &mut App, dpr: f32) {
         self.stats = Stats { rebuilt: false, ..Stats::default() };
-        self.staging_next = 0;
+        self.staging.begin(queue, self.frame);
         let mut t = Trace::start();
         self.sync(s);
         t.lap("sync");
@@ -1525,6 +1655,8 @@ impl Scene {
         self.pool_prev = std::mem::take(&mut self.pool);
         self.stats.materials = self.mat_index.len();
         self.stats.resident_bytes = self.resident_bytes() + self.scratch.bytes() + self.inst_buf.size() + self.mat_buf.size();
+        self.stats.video_bytes = self.videos.values().filter_map(|v| v.tex.as_ref()).map(|(t, _)| texture_bytes(t)).sum();
+        self.stats.staging_bytes = self.staging.bytes();
         t.lap("rest");
         t.finish(&self.stats);
         if t.on {

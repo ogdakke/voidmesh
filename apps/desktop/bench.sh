@@ -13,8 +13,10 @@
 # runs its renderer without React: frames submitted back to back, the GPU drained once a sample.
 # Results go to target/bench/latest.jsonl, one scenario a line, and a table compares them with the
 # web's: ms/frame (a sample's wall time over its frames), CPU p95 against the web renderer's CPU
-# p95, and peak resident GPU bytes. The web's rAF-paced scenarios report its throttled frame
-# interval as ms/frame: compare CPU there.
+# p95, and peak resident GPU bytes in the categories the web counts (processed, source and pooled
+# textures), then the desktop's decoded-video textures and upload staging, which the web keeps in
+# the browser's GPU process. The web's rAF-paced scenarios report its throttled frame interval as
+# ms/frame: compare CPU there.
 set -eu
 cd "$(dirname "$0")"
 FILTER="${1:-}"
@@ -64,9 +66,9 @@ fi
 jq -r --slurpfile d "$OUT/latest.jsonl" '
   def r: . * 1000 | round / 1000;
   (.results | map({key: (.scenario.id // .id), value: .}) | from_entries) as $web
-  | ["scenario", "web ms/frame", "desktop ms/frame", "x", "web cpu p95", "desktop cpu p95", "x", "web peak MB", "desktop peak MB"],
+  | ["scenario", "web ms/frame", "desktop ms/frame", "x", "web cpu p95", "desktop cpu p95", "x", "web peak MB", "desktop peak MB", "+video/staging MB"],
     ($d[] | . as $x | $web[$x.id] as $w | select($w != null)
       | [$x.id, ($w.msPerFrame | r), ($x.msPerFrame | r), (($w.msPerFrame / ($x.msPerFrame + 1e-9)) * 10 | round / 10),
          ($w.cpuRenderP95Ms | r), ($x.cpuP95Ms | r), (($w.cpuRenderP95Ms / ($x.cpuP95Ms + 1e-9)) * 10 | round / 10),
-         ($w.peakResidentBytes / 1048576 | round), ($x.peakResidentBytes / 1048576 | round)])
+         ($w.peakResidentBytes / 1048576 | round), ($x.peakResidentBytes / 1048576 | round), (($x.peakVideoAndStagingBytes // 0) / 1048576 | round)])
   | @tsv' "$WEB" | column -t -s "$(printf '\t')"

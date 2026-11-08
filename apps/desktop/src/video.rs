@@ -121,7 +121,10 @@ impl Decoder {
         let worker = shared.clone();
         let spawned = std::thread::Builder::new()
             .name("voidmesh-video".into())
-            .spawn(move || platform::run(&worker, &path, max_side.max(1), waker.as_deref()));
+            .spawn(move || {
+                crate::gfx::process::background();
+                platform::run(&worker, &path, max_side.max(1), waker.as_deref())
+            });
         // Detached: the worker exits on its own once `stop` is set.
         if let Err(e) = spawned {
             shared.lock().error = Some(format!("can't start the video decoder: {e}"));
