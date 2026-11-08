@@ -954,6 +954,12 @@ impl App {
             let id = self.next_id;
             self.next_id += 1;
             let animated = a.animated();
+            // Original is each entity's own: new media takes its own colours, or Black & White
+            // when it has none (video), as the web's does.
+            let mut params = self.last_params.clone();
+            if params.palette.id == crate::effects::ORIGINAL_ID {
+                params.palette = a.original_palette().unwrap_or_else(|| crate::effects::presets()[0].clone());
+            }
             self.entities.push(Entity {
                 id,
                 uid: store::new_id(),
@@ -962,7 +968,7 @@ impl App {
                 asset: a,
                 pos,
                 z: self.next_z,
-                params: self.last_params.clone(),
+                params,
                 playing: animated,
                 play_t: 0.0,
                 fx_t: 0.0,
@@ -1577,6 +1583,25 @@ mod tests {
         // Largest first, from the left.
         let x_of = |w: f32| a.entities.iter().find(|e| e.size[0] == w).map(|e| e.pos[0]).expect("placed");
         assert!(x_of(200.0) < x_of(100.0));
+    }
+
+    #[test]
+    fn new_media_after_an_original_palette_takes_its_own_original() {
+        let mut a = App::default();
+        let coloured = |id: u64, c: [f32; 4]| {
+            let mut x = crate::media::test_asset(id, 10, 10);
+            x.palette = Some(vec![c, [1.0; 4]]);
+            Arc::new(x)
+        };
+        a.place(vec![coloured(1, [1.0, 0.0, 0.0, 1.0])], [0.0, 0.0], false);
+        a.set_palette(crate::effects::ORIGINAL_ID);
+        a.place(vec![coloured(2, [0.0, 0.0, 1.0, 1.0])], [0.0, 0.0], false);
+        let second = &a.entities[1].params.palette;
+        assert_eq!(second.id, crate::effects::ORIGINAL_ID);
+        assert_eq!(Some(second.colors.clone()), a.entities[1].asset.original_palette().map(|p| p.colors));
+        // Media without an Original (video) starts on Black & White.
+        a.place(vec![asset(3, 10, 10)], [0.0, 0.0], false);
+        assert_eq!(a.entities[2].params.palette.id, crate::effects::presets()[0].id);
     }
 
     #[test]
