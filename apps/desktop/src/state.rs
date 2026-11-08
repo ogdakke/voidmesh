@@ -5,11 +5,13 @@
 //! the others are parked (`Parked`) until shown, or not read yet. The active workspace saves
 //! itself a moment after it changes (`App::autosave`), and before another tab shows.
 
-use std::collections::BTreeSet;
+use std::cell::RefCell;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::effects::{Palette, Params};
+pub use crate::entities::{Entities, Selection};
 use crate::media::{Asset, Loader};
 use crate::store::{self, Doc, Meta, Saver, Store};
 use crate::workspace::{self, Item, Progress, Viewport};
@@ -29,14 +31,16 @@ pub struct Entity {
     /// This run's handle for it, unique across tabs.
     pub id: u32,
     /// Its id in the workspace document (a UUID).
-    pub uid: String,
-    pub name: String,
+    pub uid: Arc<str>,
+    pub name: Arc<str>,
     pub asset: Arc<Asset>,
     /// Top-left, world units.
     pub pos: [f32; 2],
     pub size: [f32; 2],
     pub z: u32,
-    pub params: Params,
+    /// Shared between entities with the same effect (a workspace's params table, a group edit):
+    /// change it with `Arc::make_mut` or through `App::map_params`.
+    pub params: Arc<Params>,
     /// GIF and video playback.
     pub playing: bool,
     pub play_t: f64,
@@ -49,6 +53,31 @@ pub struct Entity {
 }
 
 impl Entity {
+    /// A new entity showing `asset` at its native size, its top-left at `pos`.
+    pub fn new(id: u32, asset: Arc<Asset>, pos: [f32; 2], z: u32, params: Arc<Params>) -> Entity {
+        let animated = asset.animated();
+        Entity {
+            id,
+            uid: store::new_id().into(),
+            name: asset.name.as_str().into(),
+            size: [asset.width as f32, asset.height as f32],
+            asset,
+            pos,
+            z,
+            params,
+            playing: animated,
+            play_t: 0.0,
+            muted: true,
+            seek_gen: 0,
+            fx_t: 0.0,
+        }
+    }
+
+    /// Playback or the effect moves on its own.
+    pub fn moving(&self) -> bool {
+        (self.playing && self.asset.animated()) || self.params.animated()
+    }
+
     pub fn rect(&self) -> [f32; 4] {
         [self.pos[0], self.pos[1], self.size[0], self.size[1]]
     }
@@ -145,12 +174,16 @@ pub struct MoveDrag {
     pub toggle_play: Option<u32>,
     /// The press landed on empty space inside a multi-selection's box: a click clears it.
     pub clear_on_click: bool,
+    /// How far the selection has moved, world units. Entities keep their positions until the
+    /// drag ends (`App::commit_drag`); the compositor and the selection's bounds add this, so a
+    /// drag of a quarter-million entities moves none of them each frame.
+    pub offset: [f32; 2],
 }
 
 #[derive(Clone)]
 pub struct Snapshot {
-    entities: Vec<Entity>,
-    selection: BTreeSet<u32>,
+    entities: Entities,
+    selection: Selection,
     /// User palettes change with the entities that use them (one step), as on the web.
     palettes: Vec<Palette>,
 }
@@ -159,11 +192,18 @@ impl Snapshot {
     /// The same document: entities (media, place, name, effect) and user palettes. Selection
     /// and playback clocks aren't steps of their own.
     fn same_document(&self, other: &Snapshot) -> bool {
-        self.palettes == other.palettes
-            && self.entities.len() == other.entities.len()
-            && self.entities.iter().zip(&other.entities).all(|(a, b)| {
-                a.id == b.id && Arc::ptr_eq(&a.asset, &b.asset) && a.pos == b.pos && a.size == b.size && a.z == b.z && a.name == b.name && a.params == b.params
-            })
+        let same = |a: &Entity, b: &Entity| {
+            a.id == b.id && Arc::ptr_eq(&a.asset, &b.asset) && a.pos == b.pos && a.size == b.size && a.z == b.z && a.name == b.name && (Arc::ptr_eq(&a.params, &b.params) || a.params == b.params)
+        };
+        self.palettes == other.palettes && self.entities.len() == other.entities.len() && {
+            let (x, y) = (self.entities.chunks(), other.entities.chunks());
+            // Chunks a change didn't touch are still shared: only the rest need comparing.
+            if x.len() == y.len() && x.iter().zip(y).all(|(a, b)| a.len() == b.len()) {
+                x.iter().zip(y).all(|(a, b)| Arc::ptr_eq(a, b) || a.iter().zip(b.iter()).all(|(a, b)| same(a, b)))
+            } else {
+                self.entities.iter().zip(other.entities.iter()).all(|(a, b)| same(a, b))
+            }
+        }
     }
 }
 
@@ -183,8 +223,8 @@ pub struct Export {
 
 /// A tab's workspace while another tab shows.
 pub struct Parked {
-    entities: Vec<Entity>,
-    selection: BTreeSet<u32>,
+    entities: Entities,
+    selection: Selection,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     cam: ([f32; 2], f32),
@@ -195,7 +235,7 @@ pub struct Parked {
 
 impl Parked {
     fn empty(cam: ([f32; 2], f32)) -> Parked {
-        Parked { entities: Vec::new(), selection: BTreeSet::new(), undo: Vec::new(), redo: Vec::new(), cam, revision: 0, persisted: 0, persisted_cam: cam }
+        Parked { entities: Entities::default(), selection: Selection::default(), undo: Vec::new(), redo: Vec::new(), cam, revision: 0, persisted: 0, persisted_cam: cam }
     }
 }
 
@@ -269,10 +309,13 @@ impl Lensing {
     }
 }
 
-/// A deletion to turn to dust (`gfx/dust.rs`): the entity and its world rect.
+/// A deletion to turn to dust (`gfx/dust.rs`): the entity as it was, its world rect, and the
+/// size its last image renders at.
 pub struct DustRequest {
     pub entity: u32,
     pub rect: [f32; 4],
+    pub last: Entity,
+    pub size: (u32, u32),
 }
 
 /// At most this many deletions at once turn to dust (the web's `fancyDeleteMaxBatchSize`).
@@ -291,9 +334,34 @@ pub struct Toast {
     pub until: f64,
 }
 
+/// Indices of the entities whose clocks move (`Entity::moving`), for the entities' revision.
+#[derive(Default)]
+pub struct Moving {
+    rev: u64,
+    pub idx: Vec<u32>,
+}
+
+/// The selection's distinct params (entities share them) and whether any of it plays, for the
+/// entities' and selection's revisions: what the inspector and menus ask every frame, from a
+/// handful of `Params` rather than every selected entity.
+#[derive(Default)]
+struct SelSets {
+    revs: (u64, u64),
+    params: Vec<Arc<Params>>,
+    animated: bool,
+}
+
+/// What the views ask of the selection every frame, for the entities' and selection's revisions.
+#[derive(Default, Clone, Copy)]
+struct SelMemo {
+    revs: (u64, u64),
+    focus: Option<u32>,
+    bounds: Option<[f32; 4]>,
+}
+
 pub struct App {
-    pub entities: Vec<Entity>,
-    pub selection: BTreeSet<u32>,
+    pub entities: Entities,
+    pub selection: Selection,
     pub cam: Camera,
     pub canvas: [f32; 4],
     pub marquee: Option<Marquee>,
@@ -389,13 +457,18 @@ pub struct App {
     /// ⌘-scroll zoom: the canvas point it pivots on and the scale it eases toward. macOS sends
     /// those scrolls in coarse whole-point steps; easing turns them into smooth motion.
     pub zoom_to: Option<([f32; 2], f32)>,
+    moving: RefCell<Moving>,
+    sel_memo: std::cell::Cell<Option<SelMemo>>,
+    sel_sets: RefCell<SelSets>,
+    /// Headless benchmarks drive the canvas frame by frame (`bench.rs`).
+    pub bench: Option<Box<crate::bench::Bench>>,
 }
 
 impl Default for App {
     fn default() -> Self {
         App {
-            entities: Vec::new(),
-            selection: BTreeSet::new(),
+            entities: Entities::default(),
+            selection: Selection::default(),
             cam: Camera { pan: HOME.0, scale: HOME.1, anim: None },
             canvas: [0.0, 0.0, 0.0, 0.0],
             marquee: None,
@@ -454,27 +527,139 @@ impl Default for App {
             top_inset: 0.0,
             last_pinch: None,
             zoom_to: None,
+            moving: RefCell::default(),
+            sel_memo: std::cell::Cell::new(None),
+            sel_sets: RefCell::default(),
+            bench: None,
         }
     }
 }
 
 impl App {
     pub fn entity(&self, id: u32) -> Option<&Entity> {
-        self.entities.iter().find(|e| e.id == id)
+        self.entities.by_id(id)
     }
 
     pub fn entity_mut(&mut self, id: u32) -> Option<&mut Entity> {
-        self.entities.iter_mut().find(|e| e.id == id)
+        self.entities.by_id_mut(id)
     }
 
     /// Selected entities in insertion order.
     pub fn selected(&self) -> impl Iterator<Item = &Entity> {
-        self.entities.iter().filter(|e| self.selection.contains(&e.id))
+        let mut at: Vec<usize> = self.selection.iter().filter_map(|id| self.entities.position(*id)).collect();
+        at.sort_unstable();
+        at.into_iter().filter_map(|i| self.entities.get(i))
+    }
+
+    /// The views ask for the focus and the selection's bounds many times a frame: worked out once
+    /// per change of the entities or the selection.
+    fn sel_memo(&self) -> SelMemo {
+        let revs = (self.entities.rev(), self.selection.rev());
+        if let Some(m) = self.sel_memo.get().filter(|m| m.revs == revs) {
+            return m;
+        }
+        let mut first: Option<usize> = None;
+        let mut b: Option<[f32; 4]> = None;
+        for id in self.selection.iter() {
+            let Some(i) = self.entities.position(*id) else { continue };
+            first = Some(first.map_or(i, |f| f.min(i)));
+            let Some(r) = self.entities.get(i).map(Entity::rect) else { continue };
+            b = Some(match b {
+                None => [r[0], r[1], r[0] + r[2], r[1] + r[3]],
+                Some(b) => [b[0].min(r[0]), b[1].min(r[1]), b[2].max(r[0] + r[2]), b[3].max(r[1] + r[3])],
+            });
+        }
+        let m = SelMemo { revs, focus: first.and_then(|i| self.entities.get(i)).map(|e| e.id), bounds: b.map(|b| [b[0], b[1], b[2] - b[0], b[3] - b[1]]) };
+        self.sel_memo.set(Some(m));
+        m
     }
 
     /// The entity the inspector shows: the first selected.
     pub fn focus(&self) -> Option<&Entity> {
-        self.selected().next()
+        self.sel_memo().focus.and_then(|id| self.entity(id))
+    }
+
+    fn sel_sets(&self) -> std::cell::Ref<'_, SelSets> {
+        let revs = (self.entities.rev(), self.selection.rev());
+        if self.sel_sets.borrow().revs != revs {
+            let mut seen: std::collections::HashSet<*const Params> = std::collections::HashSet::new();
+            let mut params = Vec::new();
+            let mut animated = false;
+            for id in self.selection.iter() {
+                let Some(e) = self.entity(*id) else { continue };
+                animated |= e.asset.animated();
+                if seen.insert(Arc::as_ptr(&e.params)) {
+                    params.push(e.params.clone());
+                }
+            }
+            *self.sel_sets.borrow_mut() = SelSets { revs, params, animated };
+        }
+        self.sel_sets.borrow()
+    }
+
+    /// Some selected entity's params pass `f`.
+    pub fn selection_any(&self, f: impl Fn(&Params) -> bool) -> bool {
+        self.sel_sets().params.iter().any(|p| f(p))
+    }
+
+    /// Every selected entity's params pass `f`.
+    pub fn selection_all(&self, f: impl Fn(&Params) -> bool) -> bool {
+        self.sel_sets().params.iter().all(|p| f(p))
+    }
+
+    /// The selection holds a clip or GIF.
+    pub fn selection_animated(&self) -> bool {
+        self.sel_sets().animated
+    }
+
+    /// The selection's world bounds, where an ongoing drag shows them.
+    pub fn selection_bounds(&self) -> Option<[f32; 4]> {
+        let [dx, dy] = self.drag_offset().unwrap_or([0.0; 2]);
+        self.sel_memo().bounds.map(|b| [b[0] + dx, b[1] + dy, b[2], b[3]])
+    }
+
+    /// An ongoing drag's offset for the selection, once it has moved.
+    pub fn drag_offset(&self) -> Option<[f32; 2]> {
+        self.drag.as_ref().filter(|m| m.moved).map(|m| m.offset)
+    }
+
+    /// End a drag: the moved entities take their new positions, one pass for all of them.
+    pub fn commit_drag(&mut self, m: &MoveDrag) {
+        let [dx, dy] = m.offset;
+        if m.ids.is_empty() || (dx == 0.0 && dy == 0.0) {
+            return;
+        }
+        let start: HashMap<u32, [f32; 2]> = m.ids.iter().copied().collect();
+        self.entities.update(|e| start.contains_key(&e.id), |e| {
+            if let Some(p) = start.get(&e.id) {
+                e.pos = [p[0] + dx, p[1] + dy];
+            }
+        });
+    }
+
+    /// Apply `f` to the params of every entity `pick` accepts. Entities that shared params share
+    /// the result, so a group edit of a quarter-million entities makes one `Params`, not that many.
+    pub fn map_params(&mut self, pick: impl Fn(&Entity) -> bool, f: impl Fn(&mut Params)) -> usize {
+        let mut made: HashMap<*const Params, Arc<Params>> = HashMap::new();
+        self.entities.update(pick, |e| {
+            let new = made.entry(Arc::as_ptr(&e.params)).or_insert_with(|| {
+                let mut p = (*e.params).clone();
+                f(&mut p);
+                Arc::new(p)
+            });
+            e.params = new.clone();
+        })
+    }
+
+    /// Entities whose clocks move (`Entity::moving`), as indices.
+    pub fn moving(&self) -> std::cell::Ref<'_, Moving> {
+        if self.moving.borrow().rev != self.entities.rev() {
+            let mut m = self.moving.borrow_mut();
+            m.idx.clear();
+            m.idx.extend(self.entities.iter().enumerate().filter(|(_, e)| e.moving()).map(|(i, _)| i as u32));
+            m.rev = self.entities.rev();
+        }
+        self.moving.borrow()
     }
 
     pub fn toast(&mut self, text: impl Into<String>) {
@@ -513,14 +698,20 @@ impl App {
 
     fn restore(&mut self, s: Snapshot) {
         // Playback clocks keep running across undo: take them from the live entities.
-        let live: Vec<(u32, bool, f64, bool, u32)> = self.entities.iter().map(|e| (e.id, e.playing, e.play_t, e.muted, e.seek_gen)).collect();
+        let live: HashMap<u32, (bool, f64, bool, u32)> = self.entities.iter().filter(|e| e.asset.animated()).map(|e| (e.id, (e.playing, e.play_t, e.muted, e.seek_gen))).collect();
         self.entities = s.entities;
-        for e in &mut self.entities {
-            if let Some((_, p, t, m, g)) = live.iter().find(|(id, ..)| *id == e.id) {
-                (e.playing, e.play_t, e.muted, e.seek_gen) = (*p, *t, *m, *g);
-            }
+        if !live.is_empty() {
+            let clock = |e: &Entity| (e.playing, e.play_t, e.muted, e.seek_gen);
+            self.entities.update(|e| live.get(&e.id).is_some_and(|l| *l != clock(e)), |e| {
+                if let Some((p, t, m, g)) = live.get(&e.id) {
+                    (e.playing, e.play_t, e.muted, e.seek_gen) = (*p, *t, *m, *g);
+                }
+            });
         }
-        self.selection = s.selection.into_iter().filter(|id| self.entity(*id).is_some()).collect();
+        self.selection = s.selection;
+        if self.selection.iter().any(|id| self.entities.position(*id).is_none()) {
+            self.selection.retain(|id| self.entities.position(*id).is_some());
+        }
         if s.palettes != self.palettes {
             self.palettes = s.palettes;
             crate::prefs::save_palettes(self);
@@ -566,11 +757,17 @@ impl App {
 
     /// Change params without an undo step (a slider mid-drag; the gesture pushes one).
     pub fn edit_live(&mut self, f: impl Fn(&mut Params)) {
-        let sel = self.selection.clone();
-        for e in self.entities.iter_mut().filter(|e| sel.contains(&e.id)) {
-            f(&mut e.params);
-        }
-        if let Some(p) = self.focus().map(|e| e.params.clone()) {
+        let sel = &self.selection;
+        let mut made: HashMap<*const Params, Arc<Params>> = HashMap::new();
+        self.entities.update(|e| sel.contains(&e.id), |e| {
+            let new = made.entry(Arc::as_ptr(&e.params)).or_insert_with(|| {
+                let mut p = (*e.params).clone();
+                f(&mut p);
+                Arc::new(p)
+            });
+            e.params = new.clone();
+        });
+        if let Some(p) = self.focus().map(|e| (*e.params).clone()) {
             self.last_params = p;
         }
     }
@@ -598,10 +795,8 @@ impl App {
             *q = p.clone();
         }
         let sel = self.selection.clone();
-        for e in self.entities.iter_mut().filter(|e| sel.contains(&e.id)) {
-            e.params.palette = p.clone();
-        }
-        if let Some(f) = self.focus().map(|e| e.params.clone()) {
+        self.map_params(|e| sel.contains(&e.id), |q| q.palette = p.clone());
+        if let Some(f) = self.focus().map(|e| (*e.params).clone()) {
             self.last_params = f;
         }
     }
@@ -661,9 +856,7 @@ impl App {
         for p in self.palettes.iter_mut().filter(|p| p.id == id) {
             (p.name, p.short_name) = (name.to_string(), name.to_string());
         }
-        for e in self.entities.iter_mut().filter(|e| e.params.palette.id == id) {
-            (e.params.palette.name, e.params.palette.short_name) = (name.to_string(), name.to_string());
-        }
+        self.map_params(|e| e.params.palette.id == id, |q| (q.palette.name, q.palette.short_name) = (name.to_string(), name.to_string()));
         crate::prefs::save_palettes(self);
     }
 
@@ -679,9 +872,7 @@ impl App {
         // rest keep its colours as an unlisted copy.
         let fallback = crate::effects::presets()[0].clone();
         let sel = self.selection.clone();
-        for e in self.entities.iter_mut().filter(|e| sel.contains(&e.id) && e.params.palette.id == id) {
-            e.params.palette = fallback.clone();
-        }
+        self.map_params(|e| sel.contains(&e.id) && e.params.palette.id == id, |q| q.palette = fallback.clone());
         crate::prefs::save_palettes(self);
     }
 
@@ -789,14 +980,20 @@ impl App {
             return;
         }
         self.checkpoint();
-        let sel = self.selection.clone();
-        for e in self.entities.iter_mut().filter(|e| sel.contains(&e.id)) {
-            let pal = shared.clone().or_else(|| e.asset.original_palette());
-            if let Some(pal) = pal {
-                e.params.palette = pal;
-            }
-        }
-        if let Some(p) = self.focus().map(|e| e.params.clone()) {
+        let sel = &self.selection;
+        // Original differs by asset: entities share a result when they shared params and asset.
+        let mut made: HashMap<(*const Params, u64), Arc<Params>> = HashMap::new();
+        self.entities.update(|e| sel.contains(&e.id), |e| {
+            let key = (Arc::as_ptr(&e.params), if shared.is_some() { 0 } else { e.asset.id });
+            let Some(pal) = shared.clone().or_else(|| e.asset.original_palette()) else { return };
+            let new = made.entry(key).or_insert_with(|| {
+                let mut p = (*e.params).clone();
+                p.palette = pal;
+                Arc::new(p)
+            });
+            e.params = new.clone();
+        });
+        if let Some(p) = self.focus().map(|e| (*e.params).clone()) {
             self.last_params = p;
         }
     }
@@ -864,7 +1061,7 @@ impl App {
     pub fn select_only(&mut self, id: u32) {
         self.selection.clear();
         self.selection.insert(id);
-        if let Some(p) = self.entity(id).map(|e| e.params.clone()) {
+        if let Some(p) = self.entity(id).map(|e| (*e.params).clone()) {
             self.last_params = p;
         }
     }
@@ -873,46 +1070,37 @@ impl App {
         self.selection = self.entities.iter().map(|e| e.id).collect();
     }
 
+
     /// Select the next (or previous) entity in insertion order and fit it.
     pub fn cycle(&mut self, step: i32) {
         if self.entities.is_empty() {
             return;
         }
         let n = self.entities.len() as i32;
-        let cur = self.focus().and_then(|f| self.entities.iter().position(|e| e.id == f.id)).map(|i| i as i32);
+        let cur = self.focus().and_then(|f| self.entities.position(f.id)).map(|i| i as i32);
         let next = match cur {
             Some(i) => (i + step).rem_euclid(n),
             None if step > 0 => 0,
             None => n - 1,
         };
-        let id = self.entities[next as usize].id;
+        let Some(id) = self.entities.get(next as usize).map(|e| e.id) else { return };
         self.select_only(id);
         self.fit_selection();
     }
 
     /// Entities whose canvas rect meets `r` (canvas points).
     pub fn hits(&self, r: [f32; 4]) -> Vec<u32> {
-        self.entities
-            .iter()
-            .filter(|e| {
-                let s = self.cam.screen_rect(e.rect());
-                s[0] < r[0] + r[2] && s[0] + s[2] > r[0] && s[1] < r[1] + r[3] && s[1] + s[3] > r[1]
-            })
-            .map(|e| e.id)
-            .collect()
+        // In world units: one transform for the query, none per entity.
+        let [x0, y0] = self.cam.world([r[0], r[1]]);
+        let [x1, y1] = self.cam.world([r[0] + r[2], r[1] + r[3]]);
+        self.entities.iter().filter(|e| e.pos[0] < x1 && e.pos[0] + e.size[0] > x0 && e.pos[1] < y1 && e.pos[1] + e.size[1] > y0).map(|e| e.id).collect()
     }
 
     /// The top-most entity at canvas point `q`, alpha-aware (`hit.rs`): transparent cells let the
     /// point through to what's beneath. A video with no frame yet hits its whole rect.
     pub fn entity_at(&self, q: [f32; 2]) -> Option<u32> {
-        let mut under: Vec<&Entity> = self
-            .entities
-            .iter()
-            .filter(|e| {
-                let r = self.cam.screen_rect(e.rect());
-                q[0] >= r[0] && q[0] < r[0] + r[2] && q[1] >= r[1] && q[1] < r[1] + r[3]
-            })
-            .collect();
+        let w = self.cam.world(q);
+        let mut under: Vec<&Entity> = self.entities.iter().filter(|e| w[0] >= e.pos[0] && w[0] < e.pos[0] + e.size[0] && w[1] >= e.pos[1] && w[1] < e.pos[1] + e.size[1]).collect();
         under.sort_by_key(|e| std::cmp::Reverse(e.z));
         under
             .into_iter()
@@ -931,17 +1119,24 @@ impl App {
     pub fn update_marquee(&mut self) {
         let Some(m) = &self.marquee else { return };
         let hit: BTreeSet<u32> = self.hits(m.rect()).into_iter().collect();
-        self.selection = match m.mode {
+        let next: BTreeSet<u32> = match m.mode {
             MarqueeMode::Replace => hit,
             MarqueeMode::Add => m.base.union(&hit).copied().collect(),
             MarqueeMode::Subtract => m.base.difference(&hit).copied().collect(),
         };
+        // A move that changes nothing keeps the selection's revision, and what's drawn from it.
+        if *self.selection != next {
+            self.selection = next.into();
+        }
     }
 
     // ------------------------------------------------------------------ camera
 
     pub fn bounds(&self, ids: &BTreeSet<u32>) -> Option<[f32; 4]> {
-        let mut it = self.entities.iter().filter(|e| ids.contains(&e.id));
+        if std::ptr::eq(ids, &*self.selection) || *ids == *self.selection {
+            return self.selection_bounds();
+        }
+        let mut it = ids.iter().filter_map(|id| self.entity(*id));
         let first = it.next()?.rect();
         let (mut x0, mut y0, mut x1, mut y1) = (first[0], first[1], first[0] + first[2], first[1] + first[3]);
         for e in it {
@@ -1111,28 +1306,13 @@ impl App {
             }
             let id = self.next_id;
             self.next_id += 1;
-            let animated = a.animated();
             // Original is each entity's own: new media takes its own colours, or Black & White
             // when it has none (video), as the web's does.
             let mut params = self.last_params.clone();
             if params.palette.id == crate::effects::ORIGINAL_ID {
                 params.palette = a.original_palette().unwrap_or_else(|| crate::effects::presets()[0].clone());
             }
-            self.entities.push(Entity {
-                id,
-                uid: store::new_id(),
-                name: a.name.clone(),
-                size: [a.width as f32, a.height as f32],
-                asset: a,
-                pos,
-                z: self.next_z,
-                params,
-                playing: animated,
-                play_t: 0.0,
-                fx_t: 0.0,
-                muted: true,
-                seek_gen: 0,
-            });
+            self.entities.push(Entity::new(id, a, pos, self.next_z, Arc::new(params)));
             self.next_z += 1;
             self.selection.insert(id);
         }
@@ -1153,7 +1333,8 @@ impl App {
         self.checkpoint();
         let sel = std::mem::take(&mut self.selection);
         if self.fancy_deletions() && sel.len() <= DUST_MAX_BATCH {
-            let doomed = self.entities.iter().filter(|e| sel.contains(&e.id)).map(|e| DustRequest { entity: e.id, rect: e.rect() });
+            let dpr = self.device_scale;
+            let doomed: Vec<DustRequest> = sel.iter().filter_map(|id| self.entity(*id)).map(|e| DustRequest { entity: e.id, rect: e.rect(), last: e.clone(), size: crate::gfx::scene::Scene::shown_size(self, e, dpr) }).collect();
             self.dust.extend(doomed);
             self.dust_until = self.now + f64::from(crate::gfx::DUST_SECONDS) + 0.25;
         }
@@ -1166,34 +1347,51 @@ impl App {
         }
         self.checkpoint();
         let copies: Vec<Entity> = self.selected().cloned().collect();
-        self.selection.clear();
+        let mut taken: std::collections::HashSet<Arc<str>> = self.entities.iter().map(|e| e.name.clone()).collect();
+        let mut next_free: HashMap<String, u32> = HashMap::new();
+        let mut sel = BTreeSet::new();
+        let mut added = Vec::with_capacity(copies.len());
         for mut e in copies {
             e.id = self.next_id;
-            e.uid = store::new_id();
+            e.uid = store::new_id().into();
             self.next_id += 1;
             e.z = self.next_z;
             self.next_z += 1;
             e.pos = [e.pos[0] + 30.0, e.pos[1] + 30.0];
-            e.name = self.unique_name(&e.name);
+            e.name = unique_name(&e.name, &taken, &mut next_free).into();
+            taken.insert(e.name.clone());
             e.seek_to(0.0);
-            self.selection.insert(e.id);
-            self.entities.push(e);
+            sel.insert(e.id);
+            added.push(e);
+        }
+        self.entities.extend(added);
+        self.selection = sel.into();
+    }
+}
+
+/// `name` with a free " N" suffix: an earlier copy's suffix is replaced, digits that belong to
+/// the name kept. `next` remembers where each stem's search left off.
+fn unique_name(name: &str, taken: &std::collections::HashSet<Arc<str>>, next: &mut HashMap<String, u32>) -> String {
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) => (s.to_string(), format!(".{e}")),
+        None => (name.to_string(), String::new()),
+    };
+    let stem = match stem.rsplit_once(' ') {
+        Some((base, n)) if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) => base.to_string(),
+        _ => stem,
+    };
+    let key = format!("{stem}\u{0}{ext}");
+    let n = next.entry(key).or_insert(2);
+    loop {
+        let candidate = format!("{stem} {n}{ext}");
+        *n += 1;
+        if !taken.contains(candidate.as_str()) {
+            return candidate;
         }
     }
+}
 
-    fn unique_name(&self, name: &str) -> String {
-        let (stem, ext) = match name.rsplit_once('.') {
-            Some((s, e)) => (s.to_string(), format!(".{e}")),
-            None => (name.to_string(), String::new()),
-        };
-        // Drop an earlier copy's " N" suffix, keeping digits that belong to the name.
-        let stem = match stem.rsplit_once(' ') {
-            Some((base, n)) if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) => base.to_string(),
-            _ => stem,
-        };
-        (2..).map(|n| format!("{stem} {n}{ext}")).find(|n| self.entities.iter().all(|e| &e.name != n)).unwrap_or_default()
-    }
-
+impl App {
     // ------------------------------------------------------------------ workspaces and tabs
 
     pub fn tab(&self) -> &Tab {
@@ -1397,6 +1595,7 @@ impl App {
             self.next_id += 1;
             entities.push(Entity { id, uid: it.uid, name: it.name, asset: it.asset, pos: it.pos, size: it.size, z: it.z, params: it.params, playing: it.playing, play_t: it.play_t, fx_t: it.fx_t, muted: it.muted, seek_gen: 0 });
         }
+        let mut entities = Entities::from(entities);
         // The workspace's palettes join the user's, as the web merges them into its store.
         let before = self.palettes.len();
         for p in ws.palettes {
@@ -1414,12 +1613,12 @@ impl App {
         if i == self.active {
             let added = std::mem::take(&mut self.entities);
             let top = entities.iter().map(|e| e.z).max().unwrap_or(0);
-            entities.extend(added.into_iter().map(|mut e| {
+            entities.extend(added.into_vec().into_iter().map(|mut e| {
                 e.z += top;
                 e
             }));
             self.entities = entities;
-            self.selection.clear();
+            self.selection = Selection::default();
             self.undo.clear();
             self.redo.clear();
             self.editing = None;
@@ -1582,6 +1781,10 @@ impl App {
     /// The Time control's state for the selection: (time, auto-playing, mixed), or None when no
     /// selected effect reads time. Time edits aren't undoable, as on the web.
     pub fn effect_time(&self) -> Option<(f64, bool, bool)> {
+        // Asked every frame: most selections have no clocked effect at all.
+        if !self.selection_any(Params::uses_time) {
+            return None;
+        }
         let timed: Vec<&Entity> = self.selected().filter(|e| e.params.uses_time()).collect();
         let first = timed.first()?;
         // The time follows the first auto-playing entity, as the web's source entity.
@@ -1594,42 +1797,34 @@ impl App {
     pub fn toggle_effect_time(&mut self) {
         let Some((_, playing, _)) = self.effect_time() else { return };
         let sel = self.selection.clone();
-        for e in self.entities.iter_mut().filter(|e| sel.contains(&e.id) && e.params.uses_time()) {
-            e.params.time_autoplay = !playing;
-        }
+        self.map_params(|e| sel.contains(&e.id) && e.params.uses_time(), |p| p.time_autoplay = !playing);
     }
 
     /// A Time gesture starts: every selected clock pauses at the shown time.
     pub fn begin_effect_time(&mut self) {
         let Some((t, ..)) = self.effect_time() else { return };
         let sel = self.selection.clone();
-        for e in self.entities.iter_mut().filter(|e| sel.contains(&e.id) && e.params.uses_time()) {
-            e.params.time_autoplay = false;
-            e.fx_t = t;
-        }
+        self.map_params(|e| sel.contains(&e.id) && e.params.uses_time(), |p| p.time_autoplay = false);
+        self.entities.update(|e| sel.contains(&e.id) && e.params.uses_time(), |e| e.fx_t = t);
     }
 
     pub fn set_effect_time(&mut self, t: f64) {
-        let sel = self.selection.clone();
-        for e in self.entities.iter_mut().filter(|e| sel.contains(&e.id) && e.params.uses_time()) {
-            e.fx_t = t;
-        }
+        let sel = &self.selection;
+        self.entities.update(|e| sel.contains(&e.id) && e.params.uses_time(), |e| e.fx_t = t);
     }
 
     /// Toggle playback of the selected animated media.
     pub fn toggle_play(&mut self) {
-        let sel = self.selection.clone();
-        for e in self.entities.iter_mut().filter(|e| sel.contains(&e.id) && e.asset.animated()) {
-            e.playing = !e.playing;
-        }
+        let sel = &self.selection;
+        self.entities.update(|e| sel.contains(&e.id) && e.asset.animated(), |e| e.playing = !e.playing);
     }
 
     pub fn seek(&mut self, dt: f64) {
-        let sel = self.selection.clone();
-        for e in self.entities.iter_mut().filter(|e| sel.contains(&e.id) && e.asset.animated()) {
+        let sel = &self.selection;
+        self.entities.update(|e| sel.contains(&e.id) && e.asset.animated(), |e| {
             let d = e.asset.duration.as_secs_f64();
             e.seek_to((e.play_t + dt).rem_euclid(d.max(1e-3)));
-        }
+        });
     }
 
     /// The playback bar's keys, for clip `id`: a frame either way (`,` `.`), a jump to `t`
@@ -1658,19 +1853,23 @@ impl App {
 
     /// M: sound on or off for the selected videos that have it.
     pub fn toggle_mute(&mut self) {
-        let sel = self.selection.clone();
-        let vids: Vec<&mut Entity> = self.entities.iter_mut().filter(|e| sel.contains(&e.id) && e.has_audio()).collect();
-        let mute = !vids.iter().all(|e| e.muted);
-        for e in vids {
-            e.muted = mute;
-        }
+        let sel = &self.selection;
+        let mute = !self.entities.iter().filter(|e| sel.contains(&e.id) && e.has_audio()).all(|e| e.muted);
+        self.entities.update(|e| sel.contains(&e.id) && e.has_audio(), |e| e.muted = mute);
     }
 
     /// Keep each audible video's sound playing in step with its clock: the sound's own clock
     /// leads while it plays (so picture follows sound), and a seek moves the sound.
     pub fn sync_audio(&mut self) {
         let mut live = std::mem::take(&mut self.audio);
-        for e in &mut self.entities {
+        // Only playing media can sound: the moving entities, not every one.
+        let playing: Vec<u32> = self.moving().idx.clone();
+        for i in playing {
+            let Some(e) = self.entities.get(i as usize) else { continue };
+            if !(e.playing && !e.muted && e.has_audio()) {
+                continue;
+            }
+            let Some(e) = self.entities.get_mut(i as usize) else { continue };
             let want = e.playing && !e.muted && e.has_audio();
             let Some(path) = e.asset.video_path().filter(|_| want) else { continue };
             let (player, followed) = live.remove(&e.id).unwrap_or_else(|| {
@@ -1693,6 +1892,8 @@ impl App {
             }
             self.audio.insert(e.id, (player, e.seek_gen));
         }
+        // Clocks moved; which entities move didn't.
+        self.moving.borrow_mut().rev = self.entities.rev();
         // The rest (paused, muted, gone) stop as they drop.
         for (p, _) in live.values() {
             p.pause();
@@ -1703,7 +1904,12 @@ impl App {
     /// bar, or an on-screen clip's progress hairline moving by a whole pixel.
     pub fn tick(&mut self, dt: f64) -> bool {
         let mut shown = false;
-        for e in &mut self.entities {
+        let moving: Vec<u32> = self.moving().idx.clone();
+        if moving.is_empty() {
+            return false;
+        }
+        for i in moving {
+            let Some(e) = self.entities.get_mut(i as usize) else { continue };
             if e.playing && e.asset.animated() {
                 let dur = e.asset.duration.as_secs_f64().max(1e-3);
                 let before = e.play_t;
@@ -1721,11 +1927,13 @@ impl App {
                 e.fx_t += dt;
             }
         }
+        // Clocks moved; which entities move didn't.
+        self.moving.borrow_mut().rev = self.entities.rev();
         shown
     }
 
     pub fn animating(&self) -> bool {
-        self.cam.anim.is_some() || self.zoom_to.is_some() || self.perf.wants_frames() || self.entities.iter().any(|e| (e.playing && e.asset.animated()) || e.params.animated())
+        self.cam.anim.is_some() || self.zoom_to.is_some() || self.perf.wants_frames() || self.bench.is_some() || !self.moving().idx.is_empty()
     }
 }
 
@@ -1833,7 +2041,7 @@ mod tests {
         a.next_id = 2;
         a.duplicate_selection();
         a.duplicate_selection();
-        let names: Vec<&str> = a.entities.iter().map(|e| e.name.as_str()).collect();
+        let names: Vec<&str> = a.entities.iter().map(|e| &*e.name).collect();
         assert_eq!(names, ["a1.png", "a1 2.png", "a1 3.png"]);
     }
 
@@ -2140,7 +2348,7 @@ mod tests {
         a.cam.set([0.0, 0.0], 1.0);
         a.place(vec![asset(1, 100, 100), asset(2, 100, 100)], [0.0, 0.0], false);
         let left = a.entity(1).expect("1").rect();
-        a.marquee = Some(Marquee { start: [left[0] + 1.0, left[1] + 1.0], end: [left[0] + 5.0, left[1] + 5.0], mode: MarqueeMode::Subtract, base: a.selection.clone() });
+        a.marquee = Some(Marquee { start: [left[0] + 1.0, left[1] + 1.0], end: [left[0] + 5.0, left[1] + 5.0], mode: MarqueeMode::Subtract, base: (*a.selection).clone() });
         a.update_marquee();
         assert_eq!(a.selection.len(), 1);
         assert!(!a.selection.contains(&1));

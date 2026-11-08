@@ -5,7 +5,9 @@
 //!     cargo run -p voidmesh --release [-- files…]
 //!     voidmesh --snap out.png --scene demo
 
+mod bench;
 mod effects;
+mod entities;
 mod eyedropper;
 mod export_video;
 mod gfx;
@@ -114,6 +116,11 @@ fn poll(s: &mut App, t: f64, tx: &mut Tx) -> bool {
         }
     }
 
+    if let Some(mut b) = s.bench.take() {
+        b.step(s);
+        s.bench = Some(b);
+        changed = true;
+    }
     if s.tick(dt) {
         changed = true;
     }
@@ -237,11 +244,25 @@ fn fonts() -> (&'static [&'static [u8]], &'static str) {
 }
 
 fn main() {
+    // Benchmark tooling (`bench.sh`): the scenario ids, or the frames one needs.
+    if std::env::var_os("VOIDMESH_BENCH_LIST").is_some() {
+        bench::ids().for_each(|id| println!("{id}"));
+        return;
+    }
+    if std::env::var_os("VOIDMESH_BENCH_DIRECT").is_some() {
+        bench::run_direct();
+        return;
+    }
+    if std::env::var_os("VOIDMESH_BENCH_FRAMES").is_some() {
+        let id = std::env::var("VOIDMESH_BENCH").unwrap_or_default();
+        println!("{}", bench::Bench::frames_needed(&id).unwrap_or(0));
+        return;
+    }
     sandbox::enter();
     let (fonts, ui) = fonts();
     let app = rune::App::new(AppSpec::<App> {
         min_size: Some((720.0, 480.0)),
-        scenes: &[("demo", demo), ("open", open_scene)],
+        scenes: &[("demo", demo), ("open", open_scene), ("bench", bench::scene)],
         fonts,
         families: (ui, "IBM Plex Mono"),
         setup: Some(setup),

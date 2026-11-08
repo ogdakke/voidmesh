@@ -1,9 +1,9 @@
-//! The canvas surface. Each entity is an effect slot the compositor paints, laid out directly at
-//! its screen rect from the camera (no element transform), so what's drawn is exactly the model. Gestures: wheel pans, ⌘-wheel or pinch zooms about
-//! the pointer, Space or middle drag pans, a drag on empty canvas draws a marquee, a drag on an
+//! The canvas surface. Every entity is drawn by the compositor in one world slot over the grid
+//! (`gfx/scene.rs`), placed through the camera directly, so what's drawn is exactly the model and
+//! a canvas of any size is one element. Gestures: wheel pans, ⌘-wheel or pinch zooms about the
+//! pointer, Space or middle drag pans, a drag on empty canvas draws a marquee, a drag on an
 //! entity moves the selection.
 
-use std::collections::BTreeSet;
 
 use rune::{Drag, El, MagnifyEvent, Phase, PointerButton, Tx, WheelEvent, el};
 
@@ -26,9 +26,7 @@ fn trace(s: &App, kind: &str, what: &str) {
 }
 
 pub fn surface(l: &Look, s: &App) -> El {
-    let mut entities: Vec<&crate::state::Entity> = s.entities.iter().collect();
-    entities.sort_by_key(|e| e.z);
-    let world = entities.into_iter().fold(el().key("world").absolute(0.0, 0.0).w_full().h_full().instant_changes(), |w, e| w.child(entity(e, s.cam.screen_rect(e.rect()), s.bare)));
+    let world = el().key("world").absolute(0.0, 0.0).w_full().h_full().effect(gfx::WORLD).inert();
     let mut c = el()
         .key("canvas")
         .absolute(0.0, 0.0)
@@ -37,7 +35,6 @@ pub fn surface(l: &Look, s: &App) -> El {
         .clip_soft(0.0)
         .cursor(if s.space || s.panning.is_some() { rune::Cursor::Grab } else { rune::Cursor::Default })
         .on_layout(|s: &mut App, r| s.resize_canvas(r))
-        .child(el().key("grid").absolute(0.0, 0.0).w_full().h_full().effect(gfx::GRID))
         .child(world)
         // Deletion dust, over the entities, while it plays.
         .children((s.now < s.dust_until).then(|| el().key("dust").absolute(0.0, 0.0).w_full().h_full().effect(gfx::DUST).inert()))
@@ -99,29 +96,6 @@ pub fn surface(l: &Look, s: &App) -> El {
     c
 }
 
-/// The progress hairline's track and fill. Fixed rather than themed: it sits on the media, not
-/// on chrome, so it needs contrast against any frame.
-const PROGRESS_TRACK: rune::Color = rune::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.35 };
-const PROGRESS_FILL: rune::Color = rune::Color { r: 1.0, g: 1.0, b: 1.0, a: 0.9 };
-
-/// An entity at canvas rect `r`: its world rect through the camera. Animated media carry a
-/// hairline of their playback position along the bottom edge, readable at any zoom.
-fn entity(e: &crate::state::Entity, r: [f32; 4], bare: bool) -> El {
-    let id = e.id;
-    let mut node = el().key(format!("e{id}"));
-    if e.asset.animated() && !bare {
-        let dur = e.asset.duration.as_secs_f64();
-        let t = if dur > 0.0 { (e.play_t / dur).clamp(0.0, 1.0) as f32 } else { 0.0 };
-        node = node.child(el().key(format!("e{id}-progress")).pin(Some(0.0), None, Some(0.0), Some(0.0)).h(2.0).fill(PROGRESS_TRACK).inert().child(el().h(2.0).w_frac(t).fill(PROGRESS_FILL)));
-    }
-    node
-        .absolute(r[0], r[1])
-        .size(r[2], r[3])
-        .effect(gfx::ENTITY + id)
-        .effect_bleed(4.0)
-        .label(e.name.clone())
-}
-
 fn entity_drag(s: &mut App, id: u32, d: &mut Drag, tx: &mut Tx) {
     if s.space || tx.button() == PointerButton::Middle {
         pan_drag(s, d);
@@ -147,7 +121,7 @@ fn entity_drag(s: &mut App, id: u32, d: &mut Drag, tx: &mut Tx) {
                 toggle_play = Some(id);
             }
             let ids = s.selected().map(|e| (e.id, e.pos)).collect();
-            s.drag = Some(MoveDrag { ids, before, moved: false, collapse_to, toggle_play, clear_on_click: false });
+            s.drag = Some(MoveDrag { ids, before, moved: false, collapse_to, toggle_play, clear_on_click: false, offset: [0.0; 2] });
         }
         Phase::Move => {
             let scale = s.cam.scale;
@@ -163,22 +137,14 @@ fn entity_drag(s: &mut App, id: u32, d: &mut Drag, tx: &mut Tx) {
                     let target = [p0[0] + delta[0], p0[1] + delta[1]].map(|v| (v / GRID).round() * GRID);
                     delta = [target[0] - p0[0], target[1] - p0[1]];
                 }
-            let moves: Vec<(u32, [f32; 2])> = m.ids.iter().map(|(id, p)| (*id, [p[0] + delta[0], p[1] + delta[1]])).collect();
-            for (id, p) in moves {
-                if let Some(e) = s.entity_mut(id) {
-                    e.pos = p;
-                }
-            }
+            m.offset = delta;
         }
         Phase::Up => {
             let Some(m) = s.drag.take() else { return };
             if d.cancelled() {
-                for (id, p) in &m.ids {
-                    if let Some(e) = s.entity_mut(*id) {
-                        e.pos = *p;
-                    }
-                }
+                // Nothing moved yet: dropping the offset puts everything back.
             } else if m.moved {
+                s.commit_drag(&m);
                 s.push_undo(m.before);
             } else if let Some(id) = m.collapse_to {
                 s.select_only(id);
@@ -229,7 +195,7 @@ fn canvas_drag(s: &mut App, d: &mut Drag, tx: &mut Tx) {
                 let r = s.cam.screen_rect(b);
                 if d.x >= r[0] && d.x <= r[0] + r[2] && d.y >= r[1] && d.y <= r[1] + r[3] {
                     let ids = s.selected().map(|e| (e.id, e.pos)).collect();
-                    s.drag = Some(MoveDrag { ids, before: s.snapshot(), moved: false, collapse_to: None, toggle_play: None, clear_on_click: true });
+                    s.drag = Some(MoveDrag { ids, before: s.snapshot(), moved: false, collapse_to: None, toggle_play: None, clear_on_click: true, offset: [0.0; 2] });
                     tx.instant();
                     return;
                 }
@@ -252,9 +218,9 @@ fn canvas_drag(s: &mut App, d: &mut Drag, tx: &mut Tx) {
                 (true, false) => MarqueeMode::Subtract,
                 (true, true) => MarqueeMode::Add,
             };
-            s.marquee = Some(crate::state::Marquee { start: [d.x, d.y], end: [d.x, d.y], mode, base: s.selection.clone() });
+            s.marquee = Some(crate::state::Marquee { start: [d.x, d.y], end: [d.x, d.y], mode, base: (*s.selection).clone() });
             if mode == MarqueeMode::Replace {
-                s.selection = BTreeSet::new();
+                s.selection = Default::default();
             }
         }
         Phase::Move => {
@@ -268,7 +234,7 @@ fn canvas_drag(s: &mut App, d: &mut Drag, tx: &mut Tx) {
         Phase::Up => {
             if d.cancelled()
                 && let Some(m) = &s.marquee {
-                    s.selection = m.base.clone();
+                    s.selection = m.base.clone().into();
                 }
             s.marquee = None;
         }

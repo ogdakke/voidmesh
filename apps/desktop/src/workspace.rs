@@ -33,13 +33,14 @@ pub fn is_workspace(path: &Path) -> bool {
 #[derive(Clone)]
 pub struct Item {
     /// Its id in the manifest: a UUID, or the web's `entity-N` in older files.
-    pub uid: String,
-    pub name: String,
+    pub uid: Arc<str>,
+    pub name: Arc<str>,
     pub asset: Arc<Asset>,
     pub pos: [f32; 2],
     pub size: [f32; 2],
     pub z: u32,
-    pub params: Params,
+    /// Shared by the items that reference one entry of the manifest's params table.
+    pub params: Arc<Params>,
     pub fx_t: f64,
     pub playing: bool,
     pub play_t: f64,
@@ -123,13 +124,25 @@ impl<R: Read + std::io::Seek> Source for ZipSource<'_, R> {
 pub fn read_zip(path: &Path, store: &dyn Store, progress: &Progress) -> Result<Workspace, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(std::io::BufReader::new(file)).map_err(|e| format!("not a workspace ({e})"))?;
+    let t = std::time::Instant::now();
+    let trace = std::env::var_os("VOIDMESH_TRACE_LOAD").is_some();
     let manifest: Value = {
         let mut f = zip.by_name("manifest.json").map_err(|_| "no manifest.json")?;
         let mut s = String::new();
         f.read_to_string(&mut s).map_err(|e| e.to_string())?;
+        if trace {
+            eprintln!("load: inflate {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+        }
         serde_json::from_str(&s).map_err(|e| format!("manifest: {e}"))?
     };
-    read_manifest(&manifest, &mut ZipSource { zip, store }, progress)
+    if trace {
+        eprintln!("load: parsed {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+    }
+    let r = read_manifest(&manifest, &mut ZipSource { zip, store }, progress);
+    if trace {
+        eprintln!("load: read {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+    }
+    r
 }
 
 pub fn read_manifest(manifest: &Value, source: &mut dyn Source, progress: &Progress) -> Result<Workspace, String> {
@@ -145,36 +158,48 @@ pub fn read_manifest(manifest: &Value, source: &mut dyn Source, progress: &Progr
         offset: [vp["offset"]["x"].as_f64().unwrap_or(0.0), vp["offset"]["y"].as_f64().unwrap_or(0.0)],
         zoom: vp["zoom"].as_f64().filter(|z| *z > 0.0).unwrap_or(1.0),
     };
-    let table = |k: &str| manifest[k].as_array().cloned().unwrap_or_default();
+    let empty = Vec::new();
+    let table = |k: &str| manifest[k].as_array().unwrap_or(&empty);
     let (params_table, media_table, originals_table) = (table("shaderParamsTable"), table("mediaFiles"), table("originalPalettes"));
     let palettes: Vec<Palette> = table("palettes").iter().filter_map(palette_from).collect();
+    let (params_table, media_table, originals_table) = (params_table.as_slice(), media_table.as_slice(), originals_table.as_slice());
     let entities = manifest["entities"].as_array().ok_or("manifest has no entities")?;
-    let assets = load_all_media(entities, &media_table, source, progress)?;
-    let mut uids = HashSet::new();
-    let mut items = Vec::new();
+    let assets = load_all_media(entities, media_table, source, progress)?;
+    let mut uids: HashSet<Arc<str>> = HashSet::with_capacity(entities.len());
+    let mut items = Vec::with_capacity(entities.len());
     let mut failed = Vec::new();
+    // Entities naming the same table entry, effect and clock setting share one `Params`.
+    let mut shared: HashMap<(u64, &str, Option<bool>), Arc<Params>> = HashMap::new();
+    let mut names: HashMap<&str, Arc<str>> = HashMap::new();
     for (i, e) in entities.iter().enumerate() {
-        let name = e["name"].as_str().unwrap_or("media").to_string();
-        let resolve = |inline: &str, r: &str, t: &[Value]| -> Option<Value> {
-            match e.get(inline) {
-                Some(v) if !v.is_null() => Some(v.clone()),
-                _ => e[r].as_u64().and_then(|i| t.get(i as usize).cloned()),
-            }
-        };
+        let name_str = e["name"].as_str().unwrap_or("media");
+        let name = names.entry(name_str).or_insert_with(|| name_str.into()).clone();
         let item = (|| -> Result<Item, String> {
-            let media_path = media_of(e, &media_table).ok_or("no media file")?;
+            let media_path = media_of(e, media_table).ok_or("no media file")?;
             let asset = assets.get(&media_path).ok_or("no media file")?.clone()?;
-            let params_json = resolve("shaderParams", "shaderParamsRef", &params_table).ok_or("no effect parameters")?;
-            let mut params = params_from(e["shaderType"].as_str().unwrap_or("dithering"), &params_json);
-            if let Some(t) = e["shaderTimeAutoPlay"].as_bool() {
-                params.time_autoplay = t;
-            }
-            let fx_t = e["shaderTime"].as_f64().or_else(|| params_json["time"].as_f64()).unwrap_or(0.0);
+            let shader = e["shaderType"].as_str().unwrap_or("dithering");
+            let autoplay = e["shaderTimeAutoPlay"].as_bool();
+            let make = |v: &Value| {
+                let mut p = params_from(shader, v);
+                if let Some(t) = autoplay {
+                    p.time_autoplay = t;
+                }
+                Arc::new(p)
+            };
+            let (params, table_time) = match e.get("shaderParams") {
+                Some(v) if !v.is_null() => (make(v), v["time"].as_f64()),
+                _ => {
+                    let r = e["shaderParamsRef"].as_u64().ok_or("no effect parameters")?;
+                    let v = params_table.get(r as usize).ok_or("no effect parameters")?;
+                    (shared.entry((r, shader, autoplay)).or_insert_with(|| make(v)).clone(), v["time"].as_f64())
+                }
+            };
+            let fx_t = e["shaderTime"].as_f64().or(table_time).unwrap_or(0.0);
             let pb = &e["playback"];
             let animated = asset.animated();
             let size = [e["size"]["width"].as_f64().unwrap_or(f64::from(asset.width)) as f32, e["size"]["height"].as_f64().unwrap_or(f64::from(asset.height)) as f32];
             Ok(Item {
-                uid: e["id"].as_str().filter(|id| !id.is_empty()).map(String::from).unwrap_or_default(),
+                uid: e["id"].as_str().filter(|id| !id.is_empty()).map(Arc::from).unwrap_or_else(|| Arc::from("")),
                 name: name.clone(),
                 pos: [e["position"]["x"].as_f64().unwrap_or(0.0) as f32, e["position"]["y"].as_f64().unwrap_or(0.0) as f32],
                 size,
@@ -191,8 +216,8 @@ pub fn read_manifest(manifest: &Value, source: &mut dyn Source, progress: &Progr
         match item {
             Ok(mut it) => {
                 // Ids are unique within a workspace; a missing or repeated one gets a new UUID.
-                if !uids.insert(it.uid.clone()) || it.uid.is_empty() {
-                    it.uid = store::new_id();
+                if it.uid.is_empty() || !uids.insert(it.uid.clone()) {
+                    it.uid = store::new_id().into();
                     uids.insert(it.uid.clone());
                 }
                 items.push(it)
@@ -446,30 +471,48 @@ pub fn manifest(workspace: Option<(&str, &str)>, items: &[Item], viewport: Viewp
         table.push(v);
         table.len() - 1
     });
+    // Per distinct `Params` and asset, not per entity: a workspace of a quarter-million
+    // entities has a handful of each.
+    let mut params_refs: HashMap<*const Params, (usize, bool)> = HashMap::new();
+    let mut asset_refs: HashMap<u64, (usize, Option<usize>)> = HashMap::new();
+    let defaults = Params::default();
+    let mut in_use: HashSet<&str> = HashSet::new();
     for it in &items {
         let a = &it.asset;
-        let mpath = store::media_path(&store::asset_hash(a)?, blob_ext(a));
-        let media_ref = media_files.iter().position(|m| *m == mpath).unwrap_or_else(|| {
-            media_files.push(mpath.clone());
-            media.push((mpath.clone(), a.clone()));
-            media_files.len() - 1
+        let (media_ref, original_ref) = match asset_refs.get(&a.id) {
+            Some(r) => *r,
+            None => {
+                let mpath = store::media_path(&store::asset_hash(a)?, blob_ext(a));
+                let media_ref = media_files.iter().position(|m| *m == mpath).unwrap_or_else(|| {
+                    media_files.push(mpath.clone());
+                    media.push((mpath.clone(), a.clone()));
+                    media_files.len() - 1
+                });
+                let original = a.original_palette().map(|p| intern(&mut originals, palette_json(&p)));
+                asset_refs.insert(a.id, (media_ref, original));
+                (media_ref, original)
+            }
+        };
+        let (params_ref, edited) = *params_refs.entry(Arc::as_ptr(&it.params)).or_insert_with(|| {
+            in_use.insert(it.params.palette.id.as_str());
+            (intern(&mut params_table, params_json(&it.params)), *it.params != defaults)
         });
         let mut e = Map::new();
-        e.insert("id".into(), json!(it.uid));
-        e.insert("name".into(), json!(it.name));
+        e.insert("id".into(), json!(&*it.uid));
+        e.insert("name".into(), json!(&*it.name));
         e.insert("position".into(), json!({ "x": it.pos[0], "y": it.pos[1] }));
         e.insert("size".into(), json!({ "width": it.size[0], "height": it.size[1] }));
         e.insert("originalSize".into(), json!({ "width": a.width, "height": a.height }));
         e.insert("zIndex".into(), json!(it.z));
         e.insert("rotation".into(), json!(0));
         e.insert("locked".into(), json!(false));
-        e.insert("edited".into(), json!(it.params != Params::default()));
+        e.insert("edited".into(), json!(edited));
         e.insert("shaderType".into(), json!(shader_id(it.params.shader)));
-        e.insert("shaderParamsRef".into(), json!(intern(&mut params_table, params_json(&it.params))));
+        e.insert("shaderParamsRef".into(), json!(params_ref));
         e.insert("shaderTime".into(), json!(it.fx_t));
         e.insert("shaderTimeAutoPlay".into(), json!(it.params.time_autoplay));
-        if let Some(p) = a.original_palette() {
-            e.insert("originalPaletteRef".into(), json!(intern(&mut originals, palette_json(&p))));
+        if let Some(r) = original_ref {
+            e.insert("originalPaletteRef".into(), json!(r));
         }
         e.insert("mediaFileRef".into(), json!(media_ref));
         let playback = json!({ "currentTime": it.play_t, "loop": true, "playbackRate": 1, "muted": it.muted, "volume": 1, "isPlaying": it.playing });
@@ -499,7 +542,7 @@ pub fn manifest(workspace: Option<(&str, &str)>, items: &[Item], viewport: Viewp
         entities.push(Value::Object(e));
     }
     // Custom palettes the entities use.
-    let used: Vec<Value> = palettes.iter().filter(|p| items.iter().any(|it| it.params.palette.id == p.id)).map(palette_json).collect();
+    let used: Vec<Value> = palettes.iter().filter(|p| in_use.contains(p.id.as_str())).map(palette_json).collect();
     let mut manifest = json!({
         "type": "studio-canvas",
         "version": VERSION,
@@ -594,7 +637,7 @@ mod tests {
     }
 
     fn item(asset: Arc<Asset>, id: u32, x: f32) -> Item {
-        Item { uid: store::new_id(), name: format!("e{id}.png"), size: [asset.width as f32, asset.height as f32], asset, pos: [x, 10.0], z: id, params: Params::default(), fx_t: 0.0, playing: false, play_t: 0.0, muted: true }
+        Item { uid: store::new_id().into(), name: format!("e{id}.png").into(), size: [asset.width as f32, asset.height as f32], asset, pos: [x, 10.0], z: id, params: Arc::default(), fx_t: 0.0, playing: false, play_t: 0.0, muted: true }
     }
 
     fn png(w: u32, h: u32, px: image::Rgba<u8>) -> Vec<u8> {
@@ -610,9 +653,10 @@ mod tests {
         a.palette = Some(vec![[0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]]);
         let a = Arc::new(a);
         let mut one = item(a.clone(), 1, 0.0);
-        one.params.set_shader(Shader::Glass);
-        one.params.set_glass_kind(2);
-        one.params.palette = crate::effects::presets()[8].clone();
+        let p = Arc::make_mut(&mut one.params);
+        p.set_shader(Shader::Glass);
+        p.set_glass_kind(2);
+        p.palette = crate::effects::presets()[8].clone();
         one.fx_t = 3.5;
         let two = item(a, 2, 200.0);
         let d = test_dir("rt");
@@ -630,7 +674,7 @@ mod tests {
         assert_eq!(ws.items[0].asset.original_bytes(), Some(&bytes[..]), "the original bytes, not a re-encode");
         assert_eq!(ws.items[0].asset.blob.get(), Some(&store::hash_bytes(&bytes)));
         let r = &ws.items[0];
-        assert_eq!((r.uid.as_str(), r.pos, r.fx_t), (one.uid.as_str(), [0.0, 10.0], 3.5));
+        assert_eq!((&*r.uid, r.pos, r.fx_t), (&*one.uid, [0.0, 10.0], 3.5));
         assert_eq!(r.params, one.params);
         assert_eq!(ws.items[1].pos, [200.0, 10.0]);
     }
@@ -662,7 +706,7 @@ mod tests {
         }
         let ws = read_zip(&path, &store, &Progress::default()).expect("read");
         let r = &ws.items[0];
-        assert_eq!(r.uid, "entity-4");
+        assert_eq!(&*r.uid, "entity-4");
         assert_eq!(r.params.shader, Shader::Halftone);
         assert_eq!((r.params.size, r.params.shape), (12.0, DotShape::Square));
         assert!(!r.params.post && r.params.grain && r.params.bloom, "the master switch off, the effects' own kept");

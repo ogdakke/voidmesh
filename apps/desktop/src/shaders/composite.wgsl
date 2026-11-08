@@ -1,7 +1,8 @@
 // Canvas drawing at rune effect slots. Prepended with rune's CLIP_WGSL.
 //
-//   fs_entity  an entity's processed texture (sRGB-encoded, premultiplied), with its selection ring
+//   fs_copy    the world texture: the grid and every entity, drawn by `gfx/scene.rs`
 //   fs_grid    the canvas background: a two-level dot grid that never gets too dense or sparse
+//              (drawn into the world texture)
 //   fs_area    the colour picker's OKLCH area at hue `c.x` (x chroma 0–0.37, y lightness)
 //   fs_hue     the picker's hue track
 //   fs_alpha   the picker's alpha track: colour `c.yzw` over a checkerboard
@@ -15,7 +16,7 @@ struct Slot {
   view: vec4f,      // pass width, height, origin x, origin y (window pixels)
   clip: vec4f,      // the slot's clip rectangle in window pixels
   fade: vec4u,      // the slot's packed soft edges and radii
-  a: vec4f,         // entity: ring width px, image inset px (ring), selected, _
+  a: vec4f,         // copy: 1 = the clip can't cut the quad
                     // dissolve: progress 0–1, seed, _, _
                     // grid: world at window pixel 0 (xy), world units per pixel, device scale
   b: vec4f,         // x: 1 = frame blends in sRGB, y: dark theme
@@ -54,29 +55,6 @@ fn encode(c: vec4f) -> vec4f {
     return vec4f(to_linear(c.rgb / c.a) * c.a, c.a);
   }
   return c;
-}
-
-const RING: vec3f = vec3f(0.231, 0.510, 0.965);
-
-@fragment
-fn fs_entity(in: V) -> @location(0) vec4f {
-  let inset = s.a.y;
-  let size = s.rect.zw - 2.0 * inset;
-  let p = in.local - inset;
-  let uv = p / size;
-  // Implicit derivatives pick the mip level for the zoom.
-  var c = textureSample(img, smp, clamp(uv, vec2f(0.0), vec2f(1.0)));
-  // Coverage of the image rect, antialiased on its edges.
-  let d = max(-p, p - size);
-  let inside = clamp(0.5 - max(d.x, d.y), 0.0, 1.0);
-  c *= inside;
-  if (s.a.z > 0.5) {
-    // The ring sits outside the image, `a.x` pixels wide.
-    let outside = max(d.x, d.y);
-    let ring = clamp(outside + 0.5, 0.0, 1.0) * clamp(s.a.x - outside + 0.5, 0.0, 1.0);
-    c = c + vec4f(RING, 1.0) * ring * (1.0 - c.a);
-  }
-  return encode(c) * clip_alpha(in.pos.xy + s.view.zw, s.clip, s.fade);
 }
 
 // Must match dust.wgsl's, so particles leave as the front passes.
@@ -131,6 +109,17 @@ fn dots(w: vec2f, spacing: f32, wpp: f32, r: f32) -> f32 {
   let cell = w / spacing;
   let d = (fract(cell + 0.5) - 0.5) * spacing / wpp;
   return smoothstep(r + 0.5, r - 0.5, length(d));
+}
+
+// The canvas's world texture (the grid and every entity, `gfx/scene.rs`), a texel a pixel,
+// under the slot's clip; `a.x` = 1 when the slot's hard-edged clip holds the whole quad.
+@fragment
+fn fs_copy(in: V) -> @location(0) vec4f {
+  let c = textureSampleLevel(img, smp, in.local / s.rect.zw, 0.0);
+  if (s.a.x > 0.5) {
+    return encode(c);
+  }
+  return encode(c) * clip_alpha(in.pos.xy + s.view.zw, s.clip, s.fade);
 }
 
 @fragment

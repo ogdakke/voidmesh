@@ -77,13 +77,13 @@ fn doc(name: &str, items: Vec<(&Arc<media::Asset>, [f32; 2], Params)>) -> Doc {
         .into_iter()
         .enumerate()
         .map(|(z, (a, pos, params))| Item {
-            uid: store::new_id(),
-            name: a.name.clone(),
+            uid: store::new_id().into(),
+            name: a.name.as_str().into(),
             asset: a.clone(),
             pos,
             size: [a.width as f32, a.height as f32],
             z: z as u32,
-            params,
+            params: Arc::new(params),
             fx_t: 0.0,
             playing: false,
             play_t: 0.0,

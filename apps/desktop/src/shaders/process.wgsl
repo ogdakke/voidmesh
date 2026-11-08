@@ -27,7 +27,9 @@ struct P {
   y: vec4f,            // glass (dispersion, flow), bloom (threshold, softness)
   adj: vec4f,          // brightness, contrast, saturation, _
   post: vec4f,         // grain size, grain intensity, chromatic offset, bloom intensity
-  blur: vec4f,         // kawase offset, _, source texel size (zw)
+  blur: vec4f,         // kawase offset, source mip level (adjust pass), source texel size (zw)
+  flow: array<vec4f, 3>, // flowing glass: the turbulence octaves' phases (8), the wave drifts (2)
+  origin: vec4f,       // this pass's output region in its target (xy); a mip pass's source region (zw)
   palette: array<vec4f, 16>,
 }
 
@@ -89,8 +91,11 @@ fn hsl_to_rgb(h: vec3f) -> vec3f {
 }
 
 @fragment
-fn fs_adjust(@builtin(position) fc: vec4f) -> @location(0) vec4f {
-  let s = tex(fc.xy / u.res);
+fn fs_adjust(@builtin(position) at: vec4f) -> @location(0) vec4f {
+  let fc = vec4f(at.xy - u.origin.xy, at.zw);
+  // The source's mip level for this pass's scale (`blur.y`): a preview LOD smaller than the
+  // media reads a filtered level rather than skipping texels.
+  let s = textureSampleLevel(src, smp, clamp(fc.xy / u.res, vec2f(0.0), vec2f(1.0)), u.blur.y);
   var c = s.rgb;
   c = clamp(c + (u.adj.x - 0.5) * 2.0, vec3f(0.0), vec3f(1.0));
   c = clamp((c - 0.5) * (u.adj.y * 2.0) + 0.5, vec3f(0.0), vec3f(1.0));
@@ -104,7 +109,8 @@ fn fs_adjust(@builtin(position) fc: vec4f) -> @location(0) vec4f {
 // ---------------------------------------------------------------- dual Kawase blur
 
 @fragment
-fn fs_down(@builtin(position) fc: vec4f) -> @location(0) vec4f {
+fn fs_down(@builtin(position) at: vec4f) -> @location(0) vec4f {
+  let fc = vec4f(at.xy - u.origin.xy, at.zw);
   let uv = fc.xy / u.res;
   let h = u.blur.zw * 0.5 * (1.0 + u.blur.x);
   var sum = tex(uv) * 4.0;
@@ -116,7 +122,8 @@ fn fs_down(@builtin(position) fc: vec4f) -> @location(0) vec4f {
 }
 
 @fragment
-fn fs_up(@builtin(position) fc: vec4f) -> @location(0) vec4f {
+fn fs_up(@builtin(position) at: vec4f) -> @location(0) vec4f {
+  let fc = vec4f(at.xy - u.origin.xy, at.zw);
   let uv = fc.xy / u.res;
   let h = u.blur.zw * 0.5 * (1.0 + u.blur.x);
   var sum = tex(uv + vec2f(-h.x * 2.0, 0.0));
@@ -133,15 +140,18 @@ fn fs_up(@builtin(position) fc: vec4f) -> @location(0) vec4f {
 // ---------------------------------------------------------------- mip chain
 
 @fragment
-fn fs_mip(@builtin(position) fc: vec4f) -> @location(0) vec4f {
-  // Sampling the level above at this texel's centre averages its 2×2 block.
-  return tex(fc.xy / u.res);
+fn fs_mip(@builtin(position) at: vec4f) -> @location(0) vec4f {
+  let fc = vec4f(at.xy - u.origin.xy, at.zw);
+  // Sampling the level above at the centre of this texel's 2×2 block averages it.
+  let above = (u.origin.zw + fc.xy * 2.0) / vec2f(textureDimensions(src, 0));
+  return textureSampleLevel(src, smp, above, 0.0);
 }
 
 // ---------------------------------------------------------------- bloom extract
 
 @fragment
-fn fs_bright(@builtin(position) fc: vec4f) -> @location(0) vec4f {
+fn fs_bright(@builtin(position) at: vec4f) -> @location(0) vec4f {
+  let fc = vec4f(at.xy - u.origin.xy, at.zw);
   let c = tex(fc.xy / u.res);
   let b = max(max(c.r, c.g), c.b);
   let knee = max(u.y.z * u.y.w, 1e-4);
@@ -534,14 +544,11 @@ fn turbulence(p0: vec2f, time: f32) -> vec2f {
   var freq = 2.0;
   var r0 = vec2f(0.6, 0.8);
   var r1 = vec2f(-0.8, 0.6);
-  let st = time * 0.07;
-  let sf = floor(st);
-  let sm = smoothstep(0.0, 1.0, fract(st));
+  // Each octave's phase (time, index and its drifting offset) is the same for every pixel: the
+  // CPU works it out once (`flowing_constants`).
   for (var i = 0u; i < 8u; i++) {
     let ry = r0.y * p.x + r1.y * p.y;
-    let key = f32(i) * 17.3;
-    let drift = mix(hash21(vec2f(key, sf)), hash21(vec2f(key, sf + 1.0)), sm) * TAU;
-    p += 0.7 * r0 * sin(freq * ry + 0.3 * time + f32(i) + drift * 0.5) / freq;
+    p += 0.7 * r0 * sin(freq * ry + u.flow[i / 4u][i % 4u]) / freq;
     let n0 = r0 * 0.6 + r1 * 0.8;
     let n1 = r0 * -0.8 + r1 * 0.6;
     r0 = n0;
@@ -562,7 +569,7 @@ fn glass_flowing(p: vec2f) -> vec4f {
 
   let yf = freq * 0.3;
   let ymod = sin(pos.y * yf) * wl * 0.15 * flow;
-  let drift = sin(time * 0.13) * wl * 0.1;
+  let drift = u.flow[2].x;
   let pp = (pos.x + ymod + drift) * freq;
   let ap = time * 0.11 + pos.x * 0.001;
   let am = 1.0 + 0.1 * sin(ap);
@@ -577,7 +584,7 @@ fn glass_flowing(p: vec2f) -> vec4f {
 
   let f2 = freq * 1.61803398;
   let ymod2 = sin(pos.y * yf * 1.61803398) * wl * 0.08 * flow;
-  let drift2 = sin(time * 0.09 + 2.7) * wl * 0.07;
+  let drift2 = u.flow[2].y;
   let sp = (pos.x + ymod2 + drift2) * f2;
   let sa = amp * 0.35;
   let dsy = cos(pos.y * yf * 1.61803398) * yf * 1.61803398 * wl * 0.08 * flow * f2;
@@ -675,9 +682,11 @@ fn glitch(p: vec2f) -> vec4f {
 }
 
 @fragment
-fn fs_effect(@builtin(position) fc: vec4f) -> @location(0) vec4f {
+fn fs_effect(@builtin(position) at: vec4f) -> @location(0) vec4f {
+  let fc = vec4f(at.xy - u.origin.xy, at.zw);
   let p = fc.xy;
-  switch (u.effect) {
+  // EFFECT_ID: `u.effect`, or the one effect a specialised pipeline compiles (`Pipes::effect`).
+  switch (EFFECT_ID) {
     case 1u: { return halftone(p); }
     case 2u: { return blobs(p); }
     case 3u: { return melt(p); }
@@ -702,7 +711,8 @@ fn grain_hash(p: vec2f) -> f32 {
 }
 
 @fragment
-fn fs_post(@builtin(position) fc: vec4f) -> @location(0) vec4f {
+fn fs_post(@builtin(position) at: vec4f) -> @location(0) vec4f {
+  let fc = vec4f(at.xy - u.origin.xy, at.zw);
   let uv = fc.xy / u.res;
   let base = tex(uv);
   var rgb = base.rgb;

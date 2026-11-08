@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::effects::Params;
-use crate::gfx::process::{self, Pipes, Processed};
+use crate::gfx::process::{self, Pipes};
 use crate::media::{Asset, Loader};
 use crate::state::App;
 use crate::video::{FrameReader, VideoFrame};
@@ -428,7 +428,7 @@ pub fn enqueue(s: &mut App, entity: u32, mut path: PathBuf) {
     if path.extension().is_none_or(|x| !x.eq_ignore_ascii_case(options.format.ext())) {
         path.set_extension(options.format.ext());
     }
-    let spec = Spec { asset: e.asset.clone(), params: e.params.clone(), fx_t: e.fx_t, options, path: path.clone() };
+    let spec = Spec { asset: e.asset.clone(), params: (*e.params).clone(), fx_t: e.fx_t, options, path: path.clone() };
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "export".into());
     s.export.start(name, spec, s.loader.clone());
     s.export.panel = None;
@@ -572,8 +572,10 @@ impl Gpu {
 
 /// Renders frames through the effect pipeline and reads them back.
 struct Renderer {
-    proc: Processed,
+    /// The render-size output: one level, export reads only that.
+    out: wgpu::Texture,
     scratch: crate::gfx::process::ScratchPool,
+    arena: crate::gfx::process::Arena,
     source: Option<(wgpu::Texture, wgpu::TextureView)>,
     readback: wgpu::Buffer,
     row: u32,
@@ -588,7 +590,7 @@ impl Renderer {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        Renderer { proc: Processed::new(&gpu.device, size), scratch: Default::default(), source: None, readback, row }
+        Renderer { out: process::target_mips(&gpu.device, size.0, size.1, 1, "voidmesh export"), scratch: Default::default(), arena: Default::default(), source: None, readback, row }
     }
 
     /// One frame: straight RGBA source pixels in, premultiplied RGBA at the render size out.
@@ -605,12 +607,14 @@ impl Renderer {
                 self.source = Some((t, view));
             }
         }
-        let Some((_, view)) = &self.source else { return Err("no source texture".into()) };
-        let (ow, oh) = self.proc.size;
+        let Some((texture, view)) = &self.source else { return Err("no source texture".into()) };
+        let (ow, oh) = (self.out.width(), self.out.height());
         let mut enc = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("voidmesh export") });
-        self.proc.run(&gpu.device, &gpu.queue, &mut enc, &gpu.pipes, &mut self.scratch, view, media, params, time);
+        let input = process::Input { texture, view, size: (w, h), levels: 1, media };
+        process::run(&gpu.device, &mut enc, &gpu.pipes, &mut self.arena, &mut self.scratch, &input, params, time, &self.out);
+        self.arena.flush(&gpu.queue);
         enc.copy_texture_to_buffer(
-            self.proc.out.as_image_copy(),
+            self.out.as_image_copy(),
             wgpu::TexelCopyBufferInfo { buffer: &self.readback, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(self.row), rows_per_image: Some(oh) } },
             wgpu::Extent3d { width: ow, height: oh, depth_or_array_layers: 1 },
         );

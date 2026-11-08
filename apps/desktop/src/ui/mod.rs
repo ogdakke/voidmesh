@@ -329,12 +329,12 @@ fn bottom_right(l: &Look, s: &App, device_scale: f32) -> El {
 /// Above the selection: its name (the web app's entity label) and what you can do to it.
 fn entity_bar(l: &Look, s: &App, r: [f32; 4], top: f32) -> El {
     let label = match s.selection.len() {
-        1 => s.focus().map(|e| e.name.clone()).unwrap_or_default(),
+        1 => s.focus().map(|e| e.name.to_string()).unwrap_or_default(),
         n => format!("{n} items selected"),
     };
     // Only the actions with no other home on screen: playback rides on the clip, Original sits
     // in the inspector, and Duplicate is ⌘D and in the context menu.
-    let anim = s.selected().any(|e| e.asset.animated());
+    let anim = s.selection_animated();
     let actions = row()
         .gap(0.0)
         .center_y()

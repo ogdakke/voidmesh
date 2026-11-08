@@ -81,9 +81,43 @@ pub struct Asset {
     pub video: Option<VideoMeta>,
     /// The original's SHA-256, once known (`store::asset_hash`).
     pub blob: OnceLock<String>,
+    /// A still's small copy (`Asset::proxy`).
+    pub proxy: OnceLock<Option<Proxy>>,
 }
 
+/// A still's mip level no larger than `PROXY_SIDE` a side, made when it's decoded. Previews at
+/// that size or smaller derive from it: the full-resolution pixels sit idle (and the system may
+/// compress them) unless a preview needs that detail.
+pub struct Proxy {
+    /// The mip level it is.
+    pub level: u32,
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+pub const PROXY_SIDE: u32 = 512;
+
 impl Asset {
+    /// A still's proxy, made on first use (decoding makes it on the loader thread); None for
+    /// animated media and stills already that small.
+    pub fn proxy(&self) -> Option<&Proxy> {
+        self.proxy
+            .get_or_init(|| {
+                let f = self.frames.first().filter(|_| self.frames.len() == 1 && self.video.is_none())?;
+                let mut level = 0;
+                while (self.width.max(self.height) >> level) > PROXY_SIDE {
+                    level += 1;
+                }
+                if level == 0 {
+                    return None;
+                }
+                let (width, height, rgba) = crate::gfx::process::level_chain(self.width, self.height, &f.rgba, level, 1).pop()?;
+                Some(Proxy { level, width, height, rgba })
+            })
+            .as_ref()
+    }
+
     /// The frame showing `t` seconds into a looping playback.
     pub fn frame_at(&self, t: f64) -> usize {
         if self.frames.len() <= 1 || self.duration.is_zero() {
@@ -328,6 +362,7 @@ pub fn decode_video(id: u64, name: String, ext: String, path: PathBuf) -> Result
         palette: None,
         video: Some(VideoMeta { fps: info.fps, has_audio: info.has_audio }),
         blob: OnceLock::new(),
+        proxy: OnceLock::new(),
     })
 }
 
@@ -350,7 +385,10 @@ pub fn decode_bytes(id: u64, name: String, ext: &str, bytes: Arc<[u8]>) -> Resul
         (Kind::Image, ext, w, h, vec![Frame { rgba: rgba.into_raw(), delay: Duration::ZERO }], Duration::ZERO)
     };
     let palette = frames.first().map(|f| crate::palette::extract(&f.rgba, width, height, ORIGINAL_COLORS));
-    Ok(Asset { id, name, kind, width, height, frames, duration, original: Original::Bytes(bytes), ext: ext.to_string(), palette, video: None, blob: OnceLock::new() })
+    let a = Asset { id, name, kind, width, height, frames, duration, original: Original::Bytes(bytes), ext: ext.to_string(), palette, video: None, blob: OnceLock::new(), proxy: OnceLock::new() };
+    // Made here, on the loader thread, rather than the first frame that shows it small.
+    a.proxy();
+    Ok(a)
 }
 
 fn fit(img: image::DynamicImage) -> image::DynamicImage {
@@ -417,6 +455,7 @@ pub fn rgba_asset(id: u64, name: &str, w: u32, h: u32, rgba: Vec<u8>) -> Asset {
         palette: None,
         video: None,
         blob: OnceLock::new(),
+        proxy: OnceLock::new(),
     }
 }
 

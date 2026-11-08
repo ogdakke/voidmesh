@@ -60,17 +60,17 @@ pub fn paste_effects(s: &mut App, text: &str) -> bool {
     }
     let n = s.selection.len();
     s.checkpoint();
-    let sel = s.selection.clone();
-    for e in s.entities.iter_mut().filter(|e| sel.contains(&e.id)) {
-        let mut p = params.clone();
-        if p.palette.id == ORIGINAL_ID
-            && let Some(own) = e.asset.original_palette()
-        {
-            p.palette = own;
-        }
-        e.params = p;
-    }
-    if let Some(p) = s.focus().map(|e| e.params.clone()) {
+    let sel = &s.selection;
+    // One `Params` for the selection, and one per asset where Original is each entity's own.
+    let pasted = std::sync::Arc::new(params.clone());
+    let mut own: std::collections::HashMap<u64, std::sync::Arc<crate::effects::Params>> = std::collections::HashMap::new();
+    s.entities.update(|e| sel.contains(&e.id), |e| {
+        e.params = match e.asset.original_palette().filter(|_| params.palette.id == ORIGINAL_ID) {
+            Some(pal) => own.entry(e.asset.id).or_insert_with(|| std::sync::Arc::new(crate::effects::Params { palette: pal, ..params.clone() })).clone(),
+            None => pasted.clone(),
+        };
+    });
+    if let Some(p) = s.focus().map(|e| (*e.params).clone()) {
         s.last_params = p;
     }
     s.toast(format!("Applied effects to {n} {}", if n == 1 { "entity" } else { "entities" }));

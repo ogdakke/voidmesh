@@ -575,7 +575,7 @@ mod tests {
         assert!(dir.join("clip.gif").is_file() && dir.join("clip 2.gif").is_file(), "one file each, neither overwritten");
 
         // Saving frames from the menu: the stills and the clips' current frames, into a folder.
-        let r = rt.presented("e3").unwrap_or_else(|| panic!("still")).0;
+        let r = rt.state.cam.screen_rect(rt.state.entity(3).unwrap_or_else(|| panic!("still")).rect());
         let (x, y) = (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
         rt.pointer_move(x, y);
         rt.secondary_down(x, y);
@@ -603,7 +603,7 @@ mod tests {
         settle(&mut rt);
 
         let mut rt = runtime(vec![gif()]);
-        let r = rt.presented("e1").unwrap_or_else(|| panic!("entity")).0;
+        let r = rt.state.cam.screen_rect(rt.state.entity(1).unwrap_or_else(|| panic!("entity")).rect());
         // Clear of the playback bar along the clip's bottom.
         let (x, y) = (r[0] + r[2] / 2.0, r[1] + 20.0);
         rt.pointer_move(x, y);

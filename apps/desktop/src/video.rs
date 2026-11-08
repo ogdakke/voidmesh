@@ -41,6 +41,29 @@ pub struct VideoFrame {
     pub rgba: Vec<u8>,
 }
 
+/// Frame buffers the canvas is done with, for the decoders' next frames: a fresh buffer every
+/// frame, at video rates, is page faults the system pays for under memory pressure.
+static FRAMES: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
+const POOLED: usize = 48;
+
+/// An empty buffer with room for `len` bytes, recycled when one is.
+fn frame_buffer(len: usize) -> Vec<u8> {
+    let mut pool = FRAMES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut v = pool.iter().position(|b| b.capacity() >= len).map(|i| pool.swap_remove(i)).unwrap_or_default();
+    drop(pool);
+    v.clear();
+    v.reserve_exact(len);
+    v
+}
+
+/// Hand a frame's pixels back for a later frame.
+pub fn recycle(v: Vec<u8>) {
+    let mut pool = FRAMES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if pool.len() < POOLED {
+        pool.push(v);
+    }
+}
+
 /// A decoded frame and the lap of the loop it belongs to (0 from the latest seek).
 struct Queued {
     lap: u64,
@@ -154,6 +177,12 @@ impl Decoder {
 
     pub fn error(&self) -> Option<String> {
         self.shared.lock().error.clone()
+    }
+
+    /// A frame due at `t` is decoded and waiting (benchmarks wait for this, untimed).
+    pub fn ready(&self, t: f64) -> bool {
+        let s = self.shared.lock();
+        s.error.is_some() || s.queue.iter().any(|q| q.frame.pts <= t + EPSILON || !self.shown)
     }
 }
 
@@ -438,10 +467,10 @@ mod platform {
         } else {
             // SAFETY: locked, a non-planar buffer spans `stride * height` bytes from `base`.
             let src = unsafe { std::slice::from_raw_parts(base, stride * height) };
-            let mut out = vec![0u8; width * height * 4];
-            for (row, dst) in src.chunks_exact(stride).zip(out.chunks_exact_mut(width * 4)) {
-                for (s, d) in row[..width * 4].as_chunks::<4>().0.iter().zip(dst.as_chunks_mut::<4>().0) {
-                    *d = [s[2], s[1], s[0], 255];
+            let mut out = super::frame_buffer(width * height * 4);
+            for row in src.chunks_exact(stride).take(height) {
+                for s in row[..width * 4].as_chunks::<4>().0 {
+                    out.extend_from_slice(&[s[2], s[1], s[0], 255]);
                 }
             }
             Ok((width as u32, height as u32, out))

@@ -207,7 +207,8 @@ impl Store for LocalStore {
             Err(e) => return Err(e.to_string()),
         };
         let mut v: Vec<Meta> = entries.filter_map(|e| e.ok()).filter_map(|e| self.read_meta(&e.file_name().to_string_lossy()).ok()).collect();
-        v.sort_by_key(|m| std::cmp::Reverse(m.updated));
+        // Most recent first; within a millisecond, the later id (UUIDv7s sort by creation).
+        v.sort_by(|a, b| (b.updated, &b.id).cmp(&(a.updated, &a.id)));
         Ok(v)
     }
 
@@ -384,7 +385,7 @@ mod tests {
     fn saves_lists_loads_and_deletes_with_shared_blobs() {
         let store = LocalStore::new(test_dir("store"));
         let a = Arc::new(crate::media::test_asset(1, 4, 4));
-        let item = |x: f32| Item { uid: new_id(), name: "a.png".into(), asset: a.clone(), pos: [x, 0.0], size: [4.0, 4.0], z: 1, params: Default::default(), fx_t: 0.0, playing: false, play_t: 0.0, muted: true };
+        let item = |x: f32| Item { uid: new_id().into(), name: "a.png".into(), asset: a.clone(), pos: [x, 0.0], size: [4.0, 4.0], z: 1, params: Default::default(), fx_t: 0.0, playing: false, play_t: 0.0, muted: true };
         let (one, two) = (item(0.0), item(10.0));
         let doc = Doc { id: new_id(), name: "First".into(), items: vec![one.clone(), two.clone()], viewport: Viewport { offset: [1.0, 2.0], zoom: 2.0 }, palettes: vec![] };
         store.save(&doc).expect("save");

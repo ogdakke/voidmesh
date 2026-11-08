@@ -24,12 +24,12 @@ impl Sel<'_> {
     /// The selection disagrees on `get`.
     fn mixed<T: PartialEq>(self, get: impl Fn(&Params) -> T) -> bool {
         let first = get(self.p);
-        self.s.selected().any(|e| get(&e.params) != first)
+        self.s.selection_any(|p| get(p) != first)
     }
 
     /// Every selected entity has `f`: the web shows a control only then.
     fn all(self, f: impl Fn(&Params) -> bool) -> bool {
-        self.s.selected().all(|e| f(&e.params))
+        self.s.selection_all(f)
     }
 
     /// What the selection agrees on, if it does.
@@ -154,7 +154,7 @@ fn post(l: &Look, q: Sel) -> El {
     let s = q.s;
     let nested = |id, title, get: fn(&Params) -> bool, set: fn(&mut Params, bool), body: El| col().w_full().pl(8.0).child(section(l, s, id, title, Some((q.check(get), set)), body));
     // A sub-effect's sliders show while any selected entity has it on.
-    let any = |get: fn(&Params) -> bool| s.selected().any(|e| get(&e.params));
+    let any = |get: fn(&Params) -> bool| s.selection_any(get);
     let mut grain = col().w_full().gap(8.0);
     if any(|p| p.grain) {
         grain = grain
@@ -227,7 +227,7 @@ pub fn time_source(s: &App) -> Source {
 pub fn panel(l: &Look, s: &App, p: &Params, sel: [f32; 4]) -> El {
     let (x, y, max_h) = place(sel, [s.canvas[2], s.canvas[3]], s.top_inset);
     let title = match s.selection.len() {
-        1 => s.focus().map(|e| e.name.clone()).unwrap_or_default(),
+        1 => s.focus().map(|e| e.name.to_string()).unwrap_or_default(),
         n => format!("{n} items selected"),
     };
     let inner = col().key("inspector-body").w_full().px(16.0).pb(16.0).child(body(l, s, p));
