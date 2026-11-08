@@ -950,23 +950,38 @@ Resize/rotate handles, layers panel, grouping, alignment/distribution, z-order c
 ## 13. Rune port status (`apps/desktop`)
 
 The desktop port treats the canvas as the app: no sidebars. Chrome floats at the corners, and the
-selection's controls ride along with it (a label bar, the inspector beside it, GIF playback on
-the clip).
+selection's controls ride along with it (a label bar, the inspector beside it, playback on the
+clip). Settings are a view of their own inside the window (⌘,), never a separate window.
 
 **Ported**
 
 - Canvas: wheel pan, ⌘-wheel and pinch zoom about the pointer, Space-drag and middle-drag pan,
-  fit (F/H), 100% (⌘0), two-level dot grid, snap to grid (G).
-- Media: images (PNG/JPEG/WebP/BMP), animated GIF, SVG. File picker (⌘O, fits) and drop (lands at
-  the drop point, laid out as a batch: largest first, 4 per row, 125 gap).
+  fit (F/H), 100% (⌘0), two-level dot grid, snap to grid (G), hide the chrome (`\`).
+- Media: images (PNG/JPEG/WebP/BMP), animated GIF, SVG, and video (MP4/MOV/M4V, decoded with
+  AVFoundation on macOS; autoplays muted and looped). File picker (⌘O) and drop (lands at the
+  drop point, laid out as a batch: largest first, 4 per row, 125 gap). Paste (⌘V) of images,
+  files and media paths.
 - Selection: click, shift-click toggle, marquee (replace/add/subtract), group drag, ⌘A, Esc, ↑/↓
-  cycling, a click on a selected GIF toggles playback.
-- Commands: delete, duplicate (+30,+30, unique names), undo/redo (⌘Z, ⇧⌘Z, ⌘Y).
-- All seven effects and their sub-kinds (error-diffusion dithering excepted), palettes (13
-  presets), preserve/reverse/original (P/R/O), adjustments with the 0–60 Kawase blur mapping,
-  grain, bloom, chromatic aberration, flowing-glass time.
-- GIF playback: Space, ←/→ seek, an inline scrubber on the clip.
-- Export: the selected entity at native resolution to PNG or JPEG (⌘E).
+  cycling, a click on a selected GIF or video toggles playback.
+- Commands: delete, duplicate (+30,+30, unique names), undo/redo (⌘Z, ⇧⌘Z, ⌘Y), reset.
+- All seven effects and their sub-kinds, palettes (13 presets, Original via k-means, user
+  palettes), preserve/reverse/original (P/R/O), adjustments with the 0–60 Kawase blur mapping,
+  grain, bloom, chromatic aberration, flowing-glass time with the tick-slider Time control.
+- Palette editor and colour picker: rename, add, remove, delete, edit (a preset or Original forks
+  into "Custom N"; one picker session is one undo step), OKLCH area, hue, alpha and hex; Load
+  Palette… extracts 16 colours from an image. User palettes persist.
+- Playback: Space, ←/→ seek, an inline scrubber on the clip with `S:cc` times, M and a mute
+  button for videos with sound (sound plays through Rune's audio player and leads the clock).
+- Workspaces: `.vdmsh` open (⌘O, drop, launch arguments) and save (⌘S, ⇧⌘S), reading every web
+  manifest version (v1–v6) and writing v6, so files go both ways. Atomic import with progress and
+  Cancel (Esc); history clears on open; the file name and an unsaved dot show in the chrome.
+- Clipboard: copy image (⌘C), copy effects (⌃⌘C), paste effects onto the selection (⌘V; user
+  palettes come along as custom palettes).
+- Context menu on entities and empty canvas, as §6.4 (native menus).
+- Export: the selected entity at native resolution to PNG or JPEG (⌘E). Videos and GIFs export
+  to MP4/MOV (H.264, audio passed through) or GIF through their effect, with fps, quality,
+  resolution, bitrate and GIF options, in a sequential, cancelable queue (macOS).
+- Preferences persist (snap, lensing, user palettes) in the app's config folder.
 - Canvas lensing (off/subtle/extreme, L), drawn as a backdrop pass under the chrome.
 - Light and dark from the system; the web app's tokens and primitives.
 
@@ -974,11 +989,20 @@ the clip).
 
 - Drag moves are undoable (one step per drag); the web app leaves them out.
 - GIFs autoplay when added, like videos do on the web.
-- Selects open native macOS menus.
+- Selects and the context menu open native macOS menus.
+- ⌘O opens media as well as workspaces; saving writes to the open file (a desktop document)
+  instead of downloading.
+- Workspace videos unpack to the app's cache folder (AVFoundation reads files).
+- Error-diffusion dithering kinds (hidden in the web UI) load, save and round-trip, but draw as
+  Bayer 8×8.
+- Media renders at its native resolution up to the GPU's texture limit (16384 px a side);
+  only larger media is downscaled to fit. SVG rasterizes at 2048 px (the web uses 1024).
+- Show Original bypasses the whole pipeline, adjustments and blur included.
 
 **Not yet**
 
-- Video (Rune's `Player` draws to a native surface the effect pipeline can't sample yet).
-- `.vdmsh` save/open, custom palettes and the colour picker, Original-palette extraction.
-- Error-diffusion dithering, context menu, copy/paste of images and effects, video/GIF export.
+- Exporting several clips at once ("Export n").
 - Delete dust, prism wake, progressive blur under the chrome, onboarding.
+- Video on platforms other than macOS.
+- Opening `.vdmsh` from Finder (double-click, Open With): Rune has no document-open hook or
+  bundle document types yet.

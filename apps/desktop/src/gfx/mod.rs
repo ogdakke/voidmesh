@@ -45,8 +45,9 @@ struct Slot {
 enum SrcKey {
     /// Stills share one upload per asset.
     Asset(u64),
-    /// Animated media keeps a texture per entity, which shows its own frame.
-    Entity(u32),
+    /// Animated media keeps a texture per entity, which shows its own frame. Keyed with the
+    /// asset too: an opened workspace reuses entity ids.
+    Entity(u32, u64),
 }
 
 struct Source {
@@ -55,6 +56,21 @@ struct Source {
     view: wgpu::TextureView,
     used: bool,
 }
+
+/// A video entity's frames: its decoder, the seek it last followed and the frame on the GPU.
+struct VideoSource {
+    decoder: crate::video::Decoder,
+    seek_gen: u32,
+    /// Counts uploaded frames: the processing key's frame.
+    frame: usize,
+    tex: Option<(wgpu::Texture, wgpu::TextureView)>,
+    /// A seek is waiting for its first frame (keep drawing until it lands).
+    waiting: bool,
+    used: bool,
+}
+
+/// Longest side video decodes at for the canvas: its own size, up to what the GPU holds.
+const VIDEO_SIDE: u32 = process::MAX_SIDE;
 
 struct Res {
     key: DeviceKey,
@@ -65,6 +81,8 @@ struct Res {
     entity: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
     grid: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
     lens: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
+    /// The colour picker's area, hue and alpha tracks.
+    picker: HashMap<(wgpu::TextureFormat, u32), wgpu::RenderPipeline>,
     blank: wgpu::BindGroup,
 }
 
@@ -78,6 +96,9 @@ struct EntityGpu {
 pub struct Gfx {
     res: Option<Res>,
     sources: HashMap<SrcKey, Source>,
+    /// By entity and asset, as `SrcKey::Entity`.
+    videos: HashMap<(u32, u64), VideoSource>,
+    scratch: process::ScratchPool,
     entities: HashMap<u32, EntityGpu>,
     exporter: export::Exporter,
     animating: bool,
@@ -97,6 +118,8 @@ impl Compositor<App> for Gfx {
         let key = f.device_key();
         if self.res.as_ref().is_none_or(|r| r.key != key) {
             self.sources.clear();
+            self.videos.clear();
+            self.scratch = Default::default();
             self.entities.clear();
             self.res = Some(Res::new(device, queue, key));
         }
@@ -106,6 +129,10 @@ impl Compositor<App> for Gfx {
         for s in self.sources.values_mut() {
             s.used = false;
         }
+        for v in self.videos.values_mut() {
+            v.used = false;
+        }
+        let mut video_waiting = false;
         for e in self.entities.values_mut() {
             e.used = false;
         }
@@ -115,8 +142,52 @@ impl Compositor<App> for Gfx {
         state.device_scale = device_scale;
         for e in &state.entities {
             let asset = &e.asset;
+            if let Some(path) = asset.video_path() {
+                let v = self.videos.entry((e.id, asset.id)).or_insert_with(|| VideoSource {
+                    decoder: crate::video::Decoder::new(path.to_path_buf(), e.play_t, VIDEO_SIDE, None),
+                    seek_gen: e.seek_gen,
+                    frame: 0,
+                    tex: None,
+                    waiting: true,
+                    used: true,
+                });
+                v.used = true;
+                if v.seek_gen != e.seek_gen {
+                    v.decoder.seek(e.play_t);
+                    v.seek_gen = e.seek_gen;
+                    v.waiting = true;
+                }
+                if let Some(f) = v.decoder.frame_at(e.play_t) {
+                    if v.tex.as_ref().is_none_or(|(t, _)| (t.width(), t.height()) != (f.width, f.height)) {
+                        let t = process::upload(device, queue, f.width, f.height, &f.rgba);
+                        let view = t.create_view(&Default::default());
+                        v.tex = Some((t, view));
+                    } else if let Some((t, _)) = &v.tex {
+                        process::write(queue, t, f.width, f.height, &f.rgba);
+                    }
+                    v.frame = v.frame.wrapping_add(1);
+                    v.waiting = false;
+                }
+                if v.decoder.error().is_some() {
+                    v.waiting = false;
+                }
+                video_waiting |= v.waiting;
+                let Some((_, view)) = &v.tex else { continue };
+                let rsize = process::render_size(asset.width, asset.height);
+                let gpu = self.entities.entry(e.id).or_insert_with(|| EntityGpu::new(device, &res.pipes, &res.layout, rsize));
+                if gpu.proc.size != rsize {
+                    *gpu = EntityGpu::new(device, &res.pipes, &res.layout, rsize);
+                }
+                gpu.used = true;
+                let k = process::key(&e.params, asset.id ^ u64::from(e.id) << 40, v.frame, e.fx_t as f32);
+                if gpu.proc.key != k {
+                    gpu.proc.run(device, queue, f.encoder, &res.pipes, &mut self.scratch, view, (asset.width, asset.height), &e.params, e.fx_t as f32);
+                    gpu.proc.key = k;
+                }
+                continue;
+            }
             let frame = asset.frame_at(e.play_t);
-            let skey = if asset.animated() { SrcKey::Entity(e.id) } else { SrcKey::Asset(asset.id) };
+            let skey = if asset.animated() { SrcKey::Entity(e.id, asset.id) } else { SrcKey::Asset(asset.id) };
             let src = self.sources.entry(skey).or_insert_with(|| new_source(device, queue, asset, frame));
             if src.frame != frame {
                 process::write(queue, &src.texture, asset.width, asset.height, &asset.frames[frame].rgba);
@@ -131,13 +202,15 @@ impl Compositor<App> for Gfx {
             gpu.used = true;
             let k = process::key(&e.params, asset.id, frame, e.fx_t as f32);
             if gpu.proc.key != k {
-                gpu.proc.run(device, queue, f.encoder, &res.pipes, &src.view, (asset.width, asset.height), &e.params, e.fx_t as f32);
+                gpu.proc.run(device, queue, f.encoder, &res.pipes, &mut self.scratch, &src.view, (asset.width, asset.height), &e.params, e.fx_t as f32);
                 gpu.proc.key = k;
             }
         }
         self.sources.retain(|_, s| s.used);
+        self.videos.retain(|_, v| v.used);
+        self.scratch.sweep();
         self.entities.retain(|_, e| e.used);
-        self.animating = state.animating();
+        self.animating = state.animating() || video_waiting;
 
         // Exports read back processed textures.
         for req in std::mem::take(&mut state.exports) {
@@ -151,6 +224,7 @@ impl Compositor<App> for Gfx {
         let cam = (state.cam.pan, state.cam.scale, state.canvas);
         let selected: Vec<u32> = state.selection.iter().copied().collect();
         let lens = crate::state::Lensing::preset(state.lens);
+        let picked = state.picker.as_ref().map(|k| (k.oklch, crate::color::to_rgba(k.oklch)));
         for fmt in [f.format, wgpu::TextureFormat::Rgba16Float] {
             res.ensure(device, fmt);
         }
@@ -196,6 +270,13 @@ impl Compositor<App> for Gfx {
                 };
                 pass.set_pipeline(pipe);
                 pass.set_bind_group(0, Some(&bind), &[]);
+                pass.set_immediates(0, bytemuck::bytes_of(&slot));
+                pass.draw(0..6, 0..1);
+            } else if let Some(pipe) = res.picker.get(&(site.format, site.mark)) {
+                let Some((o, c)) = picked else { return };
+                let slot = Slot { c: [o.h, c[0], c[1], c[2]], ..base };
+                pass.set_pipeline(pipe);
+                pass.set_bind_group(0, Some(&res.blank), &[]);
                 pass.set_immediates(0, bytemuck::bytes_of(&slot));
                 pass.draw(0..6, 0..1);
             } else if site.mark >= ENTITY {
@@ -267,7 +348,7 @@ impl Res {
         });
         let blank_tex = process::upload(device, queue, 1, 1, &[0, 0, 0, 0]);
         let blank = composite_bind(device, &layout, &blank_tex.create_view(&Default::default()), &pipes.sampler);
-        Res { key, pipes, layout, pipeline_layout, module, entity: HashMap::new(), grid: HashMap::new(), lens: HashMap::new(), blank }
+        Res { key, pipes, layout, pipeline_layout, module, entity: HashMap::new(), grid: HashMap::new(), lens: HashMap::new(), picker: HashMap::new(), blank }
     }
 
     fn ensure(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
@@ -296,5 +377,9 @@ impl Res {
         self.entity.insert(format, make("fs_entity", blend));
         self.grid.insert(format, make("fs_grid", blend));
         self.lens.insert(format, make("fs_lens", blend));
+        use crate::ui::palette_editor::{ALPHA_MARK, AREA_MARK, HUE_MARK};
+        for (mark, entry) in [(AREA_MARK, "fs_area"), (HUE_MARK, "fs_hue"), (ALPHA_MARK, "fs_alpha")] {
+            self.picker.insert((format, mark), make(entry, blend));
+        }
     }
 }

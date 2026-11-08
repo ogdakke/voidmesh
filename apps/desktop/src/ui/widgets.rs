@@ -4,8 +4,8 @@
 
 use rune::{Color, Drag, El, Icon, Phase, PopupMenu, Tx, col, el, icon, row, text};
 
-use super::look::{LARGE, Look, MEDIUM, NUMBER, SMALL};
-use crate::effects::{Params, Range, Rgba};
+use super::look::{LARGE, Look, MEDIUM, NUMBER};
+use crate::effects::{Params, Range};
 use crate::state::App;
 
 /// `.slider-root`: a 32 pt track, 10 pt radius, surface fill, the indicator up to the value, a
@@ -147,6 +147,43 @@ pub fn select(l: &Look, key: &'static str, label: Option<&str>, options: &'stati
     }
 }
 
+/// A select over options known only at run time, keyed by id: `(id, label)` pairs.
+pub fn select_ids(l: &Look, key: &'static str, label: Option<&str>, options: Vec<(String, String)>, current: &str, pick: fn(&mut App, String)) -> El {
+    let value = options.iter().find(|(id, _)| id == current).map_or_else(|| "Mixed".to_string(), |(_, t)| t.clone());
+    let current = current.to_string();
+    let trigger = row()
+        .key(key)
+        .role("combobox")
+        .label(label.map_or_else(|| value.clone(), str::to_string))
+        .focusable(true)
+        .focus_ring(2.0, -1.0, l.primary)
+        .w_full()
+        .h(34.0)
+        .pl(14.0)
+        .pr(12.0)
+        .radius(12.0)
+        .fill(l.surface)
+        .border(1.0, l.field_border)
+        .hover(l.hover)
+        .center_y()
+        .justify_between()
+        .cursor(rune::Cursor::Pointer)
+        .on_press_tx(move |_: &mut App, tx: &mut Tx| {
+            let menu = PopupMenu::picker(options.clone(), &current);
+            tx.popup_menu(menu, key, move |s: &mut App, picked, _| {
+                if let Some(id) = picked {
+                    pick(s, id.to_string());
+                }
+            });
+        })
+        .child(text(value).font(LARGE).color(l.text_value).truncate())
+        .child(icon(&CHEVRON_DOWN, 14.0).color(l.text_muted));
+    match label {
+        Some(label) => col().w_full().gap(4.0).child(text(label).font(MEDIUM).color(l.text_muted)).child(trigger),
+        None => trigger,
+    }
+}
+
 /// `.ui-checkbox`: 18 pt, radius 4, primary fill with a tick when on.
 pub fn checkbox(l: &Look, key: String, label: String, on: bool, flip: fn(&mut Params)) -> El {
     let mut b = el()
@@ -196,19 +233,6 @@ pub fn section(l: &Look, s: &App, id: &'static str, title: &str, enabled: Option
     c
 }
 
-/// The palette's colours as round swatches, background first, as `.color-palette` shows them.
-pub fn swatches(l: &Look, name: &str, colors: &[Rgba]) -> El {
-    let srgb = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
-    let row_ = colors.iter().fold(row().gap(4.0).flex_wrap(), |r, c| {
-        r.child(el().size(32.0, 32.0).radius(16.0).border(1.0, l.border).fill(Color { r: srgb(c[0]), g: srgb(c[1]), b: srgb(c[2]), a: c[3] }))
-    });
-    col()
-        .w_full()
-        .gap(4.0)
-        .child(row().w_full().justify_between().child(text(name.to_string()).font(SMALL).color(l.text_muted)).child(text(format!("{}/16", colors.len())).font(SMALL).color(l.text_faint)))
-        .child(row_)
-}
-
 /// An icon-only button (`.ui-button` md, icon only): a 32 pt circle.
 pub fn icon_button(l: &Look, key: impl Into<String>, label: &str, glyph: &'static Icon, press: impl Fn(&mut App, &mut Tx) + 'static) -> El {
     el().key(key)
@@ -246,5 +270,9 @@ icons! {
     FIT = r#"<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#;
     CHEVRON_DOWN = r#"<path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#;
     CHEVRON_RIGHT = r#"<path d="m9 6 6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#;
+    SOUND = r#"<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6M18 6.5a7.8 7.8 0 0 1 0 11" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>"#;
+    MUTED = r#"<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor"/><path d="m16 9.5 5 5m0-5-5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>"#;
+    GEAR = r#"<circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" stroke="currentColor" stroke-width="1.6" fill="none"/>"#;
+    XMARK = r#"<path d="M6.75 6.75 17.25 17.25M17.25 6.75 6.75 17.25" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>"#;
     CHECK = r#"<path d="m5 12.5 4.5 4.5L19 7.5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#;
 }

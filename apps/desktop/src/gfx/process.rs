@@ -11,8 +11,9 @@ use crate::effects::{self, DotShape, Params, Shader};
 
 /// Intermediate and processed textures hold sRGB-encoded values, as the web app's canvases do.
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-/// Longest side the pipeline renders at.
-pub const MAX_SIDE: u32 = 4096;
+/// Longest side the pipeline renders at: the GPU's own texture limit (Rune's Metal device and
+/// Apple GPUs allow 16384). Media renders at its native size up to that.
+pub const MAX_SIDE: u32 = 16384;
 const SLOT: u64 = 512;
 const SLOTS: u64 = 48;
 const BLOOM_LEVELS: u32 = 5;
@@ -188,23 +189,66 @@ pub fn key(params: &Params, source: u64, frame: usize, time: f32) -> u64 {
     source.hash(&mut h);
     frame.hash(&mut h);
     format!("{params:?}").hash(&mut h);
-    if params.animated() {
+    if params.uses_time() {
         time.to_bits().hash(&mut h);
     }
     h.finish()
 }
 
-/// One entity's GPU state: its processed texture and the scratch the pipeline renders through.
+/// The textures a run renders through: two at full size, then the blur and bloom chains. They
+/// hold nothing between runs, so entities of one size share them (`Scratch::get`), and only the
+/// processed texture stays per entity: a large image costs about one texture, not three.
+pub struct Scratch {
+    size: (u32, u32),
+    full: [wgpu::Texture; 2],
+    levels: Vec<wgpu::Texture>,
+    bloom: Vec<wgpu::Texture>,
+    /// Used since the last `sweep`.
+    used: bool,
+}
+
+/// Shared scratch by size, swept of sizes nothing processed lately.
+#[derive(Default)]
+pub struct ScratchPool(Vec<Scratch>);
+
+impl ScratchPool {
+    pub fn get(&mut self, device: &wgpu::Device, size: (u32, u32)) -> &mut Scratch {
+        let i = match self.0.iter().position(|s| s.size == size) {
+            Some(i) => i,
+            None => {
+                let (w, h) = size;
+                self.0.push(Scratch {
+                    size,
+                    full: [target(device, w, h, "voidmesh a"), target(device, w, h, "voidmesh b")],
+                    levels: (1..=8).map(|i| target(device, (w >> i).max(1), (h >> i).max(1), "voidmesh blur")).collect(),
+                    bloom: (1..=BLOOM_LEVELS).map(|i| target(device, (w >> i).max(1), (h >> i).max(1), "voidmesh bloom")).collect(),
+                    used: false,
+                });
+                self.0.len() - 1
+            }
+        };
+        let s = &mut self.0[i];
+        s.used = true;
+        s
+    }
+
+    /// Free scratch no run used since the last sweep (call once per frame, after encoding;
+    /// the GPU keeps what submitted work still reads).
+    pub fn sweep(&mut self) {
+        self.0.retain(|s| s.used);
+        for s in &mut self.0 {
+            s.used = false;
+        }
+    }
+}
+
+/// One entity's GPU state: its processed texture.
 pub struct Processed {
     pub key: u64,
     pub size: (u32, u32),
     pub out: wgpu::Texture,
     pub view: wgpu::TextureView,
     uniforms: wgpu::Buffer,
-    /// Full size (two), then blur levels, then bloom levels.
-    full: [wgpu::Texture; 2],
-    levels: Vec<wgpu::Texture>,
-    bloom: Vec<wgpu::Texture>,
 }
 
 impl Processed {
@@ -214,8 +258,6 @@ impl Processed {
         let mips = 32 - w.max(h).max(1).leading_zeros();
         let out = target_mips(device, w, h, mips, "voidmesh processed");
         let view = out.create_view(&Default::default());
-        let levels = (1..=8).map(|i| target(device, (w >> i).max(1), (h >> i).max(1), "voidmesh blur")).collect();
-        let bloom = (1..=BLOOM_LEVELS).map(|i| target(device, (w >> i).max(1), (h >> i).max(1), "voidmesh bloom")).collect();
         Processed {
             key: u64::MAX,
             size,
@@ -227,15 +269,14 @@ impl Processed {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
-            full: [target(device, w, h, "voidmesh a"), target(device, w, h, "voidmesh b")],
-            levels,
-            bloom,
         }
     }
 
-    /// Encode the whole pipeline from `source` into `self.out`.
+    /// Encode the whole pipeline from `source` into `self.out`, through `scratch` of this size.
     #[allow(clippy::too_many_arguments)]
-    pub fn run(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, source: &wgpu::TextureView, media: (u32, u32), p: &Params, time: f32) {
+    pub fn run(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, scratch: &mut ScratchPool, source: &wgpu::TextureView, media: (u32, u32), p: &Params, time: f32) {
+        let sc = scratch.get(device, self.size);
+        let (full, levels_t, bloom_t) = (&sc.full, &sc.levels, &sc.bloom);
         let base = base_uniforms(p, self.size, media, time);
         let mut slot = 0u64;
         let mut pass_to = |enc: &mut wgpu::CommandEncoder, pipe: &wgpu::RenderPipeline, input: &wgpu::TextureView, aux: &wgpu::TextureView, view: &wgpu::TextureView, size: (u32, u32), edit: &dyn Fn(&mut Uniforms)| {
@@ -278,49 +319,50 @@ impl Processed {
         let texel = |t: &wgpu::Texture| [1.0 / t.width() as f32, 1.0 / t.height() as f32];
 
         // 1. Adjustments into A.
-        pass(enc, &pipes.adjust, source, dummy, &self.full[0], &|_| {});
+        pass(enc, &pipes.adjust, source, dummy, &full[0], &|_| {});
         // 2. Blur A in place through the level chain.
-        let (levels, offset) = effects::blur_levels(p.blur * self.size.0.max(self.size.1) as f32 / media.0.max(media.1) as f32);
+        let blur = if p.show_original { 0.0 } else { p.blur };
+        let (levels, offset) = effects::blur_levels(blur * self.size.0.max(self.size.1) as f32 / media.0.max(media.1) as f32);
         if levels > 0 {
             let n = levels as usize;
-            let mut prev = view(&self.full[0]);
-            let mut prev_texel = texel(&self.full[0]);
-            for t in &self.levels[..n] {
+            let mut prev = view(&full[0]);
+            let mut prev_texel = texel(&full[0]);
+            for t in &levels_t[..n] {
                 pass(enc, &pipes.down, &prev, dummy, t, &|u| u.blur = [offset, 0.0, prev_texel[0], prev_texel[1]]);
                 prev = view(t);
                 prev_texel = texel(t);
             }
             for i in (0..n).rev() {
-                let out = if i == 0 { &self.full[0] } else { &self.levels[i - 1] };
+                let out = if i == 0 { &full[0] } else { &levels_t[i - 1] };
                 pass(enc, &pipes.up, &prev, dummy, out, &|u| u.blur = [offset, 0.0, prev_texel[0], prev_texel[1]]);
                 prev = view(out);
                 prev_texel = texel(out);
             }
         }
         // 3. The effect, A into B.
-        pass(enc, &pipes.effect, &view(&self.full[0]), &pipes.atlas, &self.full[1], &|_| {});
+        pass(enc, &pipes.effect, &view(&full[0]), &pipes.atlas, &full[1], &|_| {});
         // 4. Bloom from B through the bloom chain.
         let bloom = p.bloom && p.bloom_intensity > 0.0 && !p.show_original;
         if bloom {
-            pass(enc, &pipes.bright, &view(&self.full[1]), dummy, &self.bloom[0], &|_| {});
+            pass(enc, &pipes.bright, &view(&full[1]), dummy, &bloom_t[0], &|_| {});
             let spread = p.bloom_radius / 100.0 * 3.0;
-            let mut prev = view(&self.bloom[0]);
-            let mut prev_texel = texel(&self.bloom[0]);
-            for t in &self.bloom[1..] {
+            let mut prev = view(&bloom_t[0]);
+            let mut prev_texel = texel(&bloom_t[0]);
+            for t in &bloom_t[1..] {
                 pass(enc, &pipes.down, &prev, dummy, t, &|u| u.blur = [spread, 0.0, prev_texel[0], prev_texel[1]]);
                 prev = view(t);
                 prev_texel = texel(t);
             }
-            for i in (0..self.bloom.len() - 1).rev() {
-                let out = &self.bloom[i];
+            for i in (0..bloom_t.len() - 1).rev() {
+                let out = &bloom_t[i];
                 pass(enc, &pipes.up, &prev, dummy, out, &|u| u.blur = [spread, 0.0, prev_texel[0], prev_texel[1]]);
                 prev = view(out);
                 prev_texel = texel(out);
             }
         }
         // 5. Post into the processed texture.
-        let bloom_view = view(&self.bloom[0]);
-        pass(enc, &pipes.post, &view(&self.full[1]), if bloom { &bloom_view } else { dummy }, &self.out, &|u| {
+        let bloom_view = view(&bloom_t[0]);
+        pass(enc, &pipes.post, &view(&full[1]), if bloom { &bloom_view } else { dummy }, &self.out, &|u| {
             if !bloom {
                 u.post[3] = 0.0;
             }
@@ -372,7 +414,8 @@ fn base_uniforms(p: &Params, size: (u32, u32), media: (u32, u32), time: f32) -> 
         time,
         x,
         y: [y[0], y[1], p.bloom_threshold, p.bloom_softness],
-        adj: [p.brightness, p.contrast, p.saturation, 0.0],
+        // Show Original bypasses everything, adjustments included.
+        adj: if p.show_original { [0.5, 0.5, 0.5, 0.0] } else { [p.brightness, p.contrast, p.saturation, 0.0] },
         post: [
             p.grain_size * k,
             if post_on && p.grain { p.grain_intensity } else { 0.0 },
@@ -381,5 +424,25 @@ fn base_uniforms(p: &Params, size: (u32, u32), media: (u32, u32), time: f32) -> 
         ],
         blur: [0.0; 4],
         palette: pal,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn show_original_bypasses_adjustments_effect_and_post() {
+        let p = Params { show_original: true, brightness: 0.9, contrast: 0.1, saturation: 0.0, chroma: true, ..Params::default() };
+        let u = base_uniforms(&p, (100, 100), (100, 100), 0.0);
+        assert_eq!(u.adj, [0.5, 0.5, 0.5, 0.0], "neutral adjustments");
+        assert_eq!(u.effect, 0);
+        assert_eq!((u.post[1], u.post[2]), (0.0, 0.0), "no grain or chromatic aberration");
+    }
+
+    #[test]
+    fn media_renders_at_native_size_up_to_the_gpu_limit() {
+        assert_eq!(render_size(12_000, 8_000), (12_000, 8_000));
+        assert_eq!(render_size(32_768, 16_384), (16_384, 8_192));
     }
 }

@@ -16,7 +16,7 @@ struct Job {
     width: u32,
     height: u32,
     row: u32,
-    path: PathBuf,
+    path: Option<PathBuf>,
     loader: Loader,
     /// None until the copy has been submitted (the frame after `request`).
     state: Option<Arc<AtomicU8>>,
@@ -32,7 +32,8 @@ impl Exporter {
         !self.jobs.is_empty()
     }
 
-    pub fn request(&mut self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, texture: &wgpu::Texture, path: PathBuf, loader: Loader) {
+    /// Read `texture` back and write it to `path`, or to the clipboard as PNG when `None`.
+    pub fn request(&mut self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, texture: &wgpu::Texture, path: Option<PathBuf>, loader: Loader) {
         let (width, height) = (texture.width(), texture.height());
         let row = (width * 4).div_ceil(256) * 256;
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -73,12 +74,15 @@ impl Exporter {
                     };
                     job.buffer.unmap();
                     let (w, h, path, loader) = (job.width, job.height, job.path.clone(), job.loader.clone());
-                    std::thread::spawn(move || {
-                        let msg = match save(&path, w, h, pixels) {
+                    std::thread::spawn(move || match path {
+                        Some(path) => loader.notify(match save(&path, w, h, pixels) {
                             Ok(()) => format!("Saved {}", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
                             Err(e) => format!("Export failed: {e}"),
-                        };
-                        loader.notify(msg);
+                        }),
+                        None => match png(w, h, pixels) {
+                            Ok(bytes) => loader.to_clipboard(bytes),
+                            Err(e) => loader.notify(format!("Copy failed: {e}")),
+                        },
                     });
                     false
                 }
@@ -107,6 +111,13 @@ fn unpad(data: &[u8], w: u32, h: u32, row: u32) -> Vec<u8> {
         }
     }
     out
+}
+
+fn png(w: u32, h: u32, rgba: Vec<u8>) -> Result<Vec<u8>, String> {
+    let img = image::RgbaImage::from_raw(w, h, rgba).ok_or("bad image size")?;
+    let mut out = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    Ok(out)
 }
 
 fn save(path: &std::path::Path, w: u32, h: u32, rgba: Vec<u8>) -> Result<(), String> {

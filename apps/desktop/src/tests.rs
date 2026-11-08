@@ -2,16 +2,16 @@
 //! edits with undo, and camera gestures.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use rune::{Env, Key, KeyEvent, Mods, PhysicalInput, Runtime, WheelEvent};
 
 use crate::effects::Shader;
-use crate::media::{Asset, Frame};
+use crate::media::Asset;
+
 use crate::state::App;
 
 fn asset(id: u64, w: u32, h: u32) -> Arc<Asset> {
-    Arc::new(Asset { id, name: format!("a{id}.png"), width: w, height: h, frames: vec![Frame { rgba: vec![], delay: Duration::ZERO }], duration: Duration::ZERO })
+    Arc::new(crate::media::test_asset(id, w, h))
 }
 
 /// Two 200×100 images at 1:1, centred on (200, 350) and (900, 350): far enough apart that the
@@ -73,10 +73,12 @@ fn clicks_select_and_shift_click_toggles() {
     shift(&mut rt, true);
     click(&mut rt, 900.0, 350.0);
     assert_eq!(rt.state.selection.len(), 2);
-    click(&mut rt, 900.0, 350.0);
+    // The inspector now sits at the right edge over part of item 2; click its uncovered part.
+    click(&mut rt, 840.0, 350.0);
     assert_eq!(rt.state.selection.iter().copied().collect::<Vec<_>>(), [1]);
     shift(&mut rt, false);
-    click(&mut rt, 600.0, 700.0);
+    // Clear of the inspector, which floats beside item 1 down to the bottom chrome.
+    click(&mut rt, 700.0, 700.0);
     assert!(rt.state.selection.is_empty(), "a click on empty canvas clears");
 }
 
@@ -240,4 +242,72 @@ fn scrolls_that_arrive_mid_pinch_hold_the_pan() {
     settle(&mut rt);
     let w2 = rt.state.cam.world(q);
     assert!((w[0] - w2[0]).abs() < 0.01 && (w[1] - w2[1]).abs() < 0.01, "the point under the pointer stays: {w:?} -> {w2:?}");
+}
+
+#[test]
+fn media_time_reads_like_the_web() {
+    use crate::ui::media_time;
+    assert_eq!(media_time(0.0), "0:00");
+    assert_eq!(media_time(5.1), "5:10");
+    assert_eq!(media_time(59.99), "59:99");
+    assert_eq!(media_time(60.0), "1:00:00");
+    assert_eq!(media_time(125.05), "2:05:05");
+}
+
+fn right_click(rt: &mut Runtime<App>, x: f32, y: f32) {
+    rt.pointer_move(x, y);
+    rt.secondary_down(x, y);
+    rt.secondary_up(x, y);
+    rt.frame(1.0 / 60.0);
+}
+
+#[test]
+fn right_click_selects_and_the_menu_edits_the_selection() {
+    let mut rt = canvas();
+    right_click(&mut rt, 900.0, 350.0);
+    assert_eq!(rt.state.selection.iter().copied().collect::<Vec<_>>(), [2], "the clicked entity is selected");
+    let menu = rt.popup_menu().expect("menu open");
+    assert!(menu.find("shader:0").is_some() && menu.find("copy-image").is_some() && menu.find("dither:2").is_some_and(|i| i.is_checked()));
+    rt.resolve_popup(Some("shader:0")).expect("pick");
+    settle(&mut rt);
+    assert_eq!(rt.state.entity(2).expect("2").params.shader, Shader::Halftone);
+    let undo = rt.state.undo.len();
+    right_click(&mut rt, 900.0, 350.0);
+    rt.resolve_popup(Some("reverse")).expect("pick");
+    settle(&mut rt);
+    assert!(rt.state.entity(2).expect("2").params.reverse_palette);
+    assert_eq!(rt.state.undo.len(), undo + 1);
+    right_click(&mut rt, 900.0, 350.0);
+    rt.resolve_popup(Some("delete")).expect("pick");
+    settle(&mut rt);
+    assert!(rt.state.entity(2).is_none());
+}
+
+#[test]
+fn right_click_on_empty_canvas_offers_workspace_commands() {
+    let mut rt = canvas();
+    right_click(&mut rt, 600.0, 700.0);
+    let menu = rt.popup_menu().expect("menu open");
+    assert!(menu.find("save").is_some() && menu.find("open").is_some());
+    rt.resolve_popup(Some("snap")).expect("pick");
+    settle(&mut rt);
+    assert!(rt.state.snap);
+}
+
+#[test]
+fn the_inspector_keeps_clicks_and_drags_on_its_empty_space() {
+    let mut rt = canvas();
+    click(&mut rt, 200.0, 350.0);
+    assert_eq!(rt.state.selection.len(), 1);
+    let sel = rt.state.cam.screen_rect(rt.state.entity(1).expect("1").rect());
+    let (x, y, _) = crate::ui::inspector::place(sel, [rt.state.canvas[2], rt.state.canvas[3]], rt.state.top_inset);
+    // Its left padding, beside the header and beside a control: nothing there but the panel.
+    let spots = [[x + 6.0, y + 20.0], [x + 6.0, y + 120.0]];
+    for [x, y] in spots {
+        click(&mut rt, x, y);
+        assert_eq!(rt.state.selection.len(), 1, "a click at {x},{y} reached the canvas");
+        drag(&mut rt, [x, y], [x - 150.0, y - 40.0]);
+        assert_eq!(rt.state.selection.len(), 1, "a drag from {x},{y} drew a marquee");
+        assert!(rt.state.marquee.is_none());
+    }
 }

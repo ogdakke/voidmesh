@@ -48,6 +48,22 @@ pub struct Look {
     /// `--popover-shadow`.
     pub shadow: Color,
     pub marquee_fill: Color,
+    /// `--slider-tick-color`: the tick slider's ticks.
+    pub tick: Color,
+    /// `--slider-major-tick-color`.
+    pub tick_major: Color,
+    /// `--slider-highlight-color`: its centre pointer.
+    pub tick_highlight: Color,
+    /// `--background`: full-window pages (Settings).
+    pub background: Color,
+    /// `--gray-1300`: settings row labels.
+    pub text_label: Color,
+    /// `--gray-800`: settings row descriptions.
+    pub text_desc: Color,
+    /// `--gray-400`: a switch's track when off.
+    pub switch_off: Color,
+    /// `--gray-100`: keyboard chips (`.kbd`).
+    pub kbd: Color,
 }
 
 impl Look {
@@ -73,6 +89,14 @@ impl Look {
                 primary_lighter: oklch(0.7, 0.18, 250.78),
                 shadow: oklcha(0.0, 0.0, 0.0, 0.5),
                 marquee_fill: BRAND.alpha(0.25),
+                tick: gray(0.2967),
+                tick_major: gray(0.5191),
+                tick_highlight: gray(0.7233),
+                background: gray(0.02),
+                text_label: gray(0.8518),
+                text_desc: gray(0.5929),
+                switch_off: gray(0.4691),
+                kbd: gray(0.2967),
             }
         } else {
             let surface = gray(0.9812);
@@ -94,14 +118,26 @@ impl Look {
                 primary_lighter: oklch(0.7, 0.18, 250.78),
                 shadow: oklcha(0.0, 0.0, 0.0, 0.12),
                 marquee_fill: Color { r: 0.0, g: 0.01, b: 1.0, a: 0.15 },
+                tick: gray(0.7918),
+                tick_major: gray(0.6701),
+                tick_highlight: gray(0.5797),
+                background: gray(1.0),
+                text_label: gray(0.3536),
+                text_desc: gray(0.623),
+                switch_off: gray(0.8518),
+                kbd: gray(0.9812),
             }
         }
     }
 
     /// A floating surface over the canvas (`--floating-background`, `--floating-backdrop`). It
-    /// owns the wheel and pinches over it, so they never reach the canvas beneath.
+    /// owns the wheel, pinches, presses and drags over it, so none reach the canvas beneath: a
+    /// click on its empty space neither deselects nor starts a marquee. Controls inside keep
+    /// their own handlers (the innermost wins). `e` must not have press or drag handlers itself.
     pub fn floating(&self, e: El) -> El {
         own_gestures(e.backdrop_blur(12.0).fill(self.floating).border(1.0, self.border).shadow(8.0, 20.0, self.shadow))
+            .on_press(|_: &mut crate::state::App| {})
+            .on_drag(|_: &mut crate::state::App, _: &mut rune::Drag, _: &mut rune::Tx| {})
     }
 
     /// The primary button's fill: `--primary-lighter` falling to `--primary`.

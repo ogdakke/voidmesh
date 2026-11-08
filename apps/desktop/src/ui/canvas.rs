@@ -69,13 +69,14 @@ pub fn surface(l: &Look, s: &App) -> El {
             true
         })
         .on_drag(canvas_drag)
+        .on_secondary_press(|s: &mut App, p: rune::PointerPress, tx: &mut Tx| super::menu::open_on_canvas(s, (p.x, p.y), tx))
         .on_drop_files(|s: &mut App, files, tx: &mut Tx| {
             let at = tx.drop_point().map(|p| s.cam.world([p.x, p.y]));
             let at = at.unwrap_or_else(|| s.cam.world([s.canvas[2] / 2.0, s.canvas[3] / 2.0]));
             s.import(files.to_vec(), Some(at));
             s.drop_hover = false;
         })
-        .accepts_extensions(crate::media::EXTENSIONS)
+        .accepts_extensions(&super::accepted_extensions())
         .on_drop_hover(|s: &mut App, over, _| s.drop_hover = over);
     if s.lens != crate::state::Lensing::Off {
         // Over the media and grid, under the selection overlays and chrome, which stay sharp.
@@ -103,6 +104,7 @@ fn entity(e: &crate::state::Entity, r: [f32; 4]) -> El {
         .effect_bleed(4.0)
         .label(e.name.clone())
         .on_drag(move |s: &mut App, d: &mut Drag, tx: &mut Tx| entity_drag(s, id, d, tx))
+        .on_secondary_press(move |s: &mut App, p: rune::PointerPress, tx: &mut Tx| super::menu::open_on_entity(s, id, (p.x, p.y), tx))
 }
 
 fn entity_drag(s: &mut App, id: u32, d: &mut Drag, tx: &mut Tx) {

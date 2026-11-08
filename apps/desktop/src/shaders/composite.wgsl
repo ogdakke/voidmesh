@@ -2,6 +2,9 @@
 //
 //   fs_entity  an entity's processed texture (sRGB-encoded, premultiplied), with its selection ring
 //   fs_grid    the canvas background: a two-level dot grid that never gets too dense or sparse
+//   fs_area    the colour picker's OKLCH area at hue `c.x` (x chroma 0–0.37, y lightness)
+//   fs_hue     the picker's hue track
+//   fs_alpha   the picker's alpha track: colour `c.yzw` over a checkerboard
 //   fs_lens    canvas lensing: the canvas drawn so far (the slot's backdrop) bent at its edges like
 //              a thick glass slab, with dispersion, reflection, occlusion and vignette
 
@@ -13,7 +16,7 @@ struct Slot {
   a: vec4f,         // entity: ring width px, image inset px (ring), selected, _
                     // grid: world at window pixel 0 (xy), world units per pixel, device scale
   b: vec4f,         // x: 1 = frame blends in sRGB, y: dark theme
-  c: vec4f,         // lens: strength, radius, falloff, dispersion
+  c: vec4f,         // lens: strength, radius, falloff, dispersion; picker: hue, sRGB colour
   d: vec4f,         // lens: scale, reflection intensity, reflection focus, occlusion
   e: vec4f,         // lens: vignette, _, _, _
 }
@@ -177,4 +180,52 @@ fn fs_lens(in: V) -> @location(0) vec4f {
   let l = dot(near, vec3f(0.2126, 0.7152, 0.0722));
   color += near * refl * (l * 1.45 * (1.0 - smoothstep(0.62, 1.0, l) * 0.42));
   return vec4f(color, 1.0) * clip_alpha(in.pos.xy + s.view.zw, s.clip, s.fade);
+}
+
+// ------------------------------------------------------------------ colour picker
+
+fn oklch_linear(l: f32, c: f32, h_deg: f32) -> vec3f {
+  let h = radians(h_deg);
+  let a = c * cos(h);
+  let b = c * sin(h);
+  let l_ = l + 0.3963377774 * a + 0.2158037573 * b;
+  let m_ = l - 0.1055613458 * a - 0.0638541728 * b;
+  let s_ = l - 0.0894841775 * a - 1.291485548 * b;
+  let lms = vec3f(l_ * l_ * l_, m_ * m_ * m_, s_ * s_ * s_);
+  return vec3f(
+    4.0767416621 * lms.x - 3.3077115913 * lms.y + 0.2309699292 * lms.z,
+    -1.2684380046 * lms.x + 2.6097574011 * lms.y - 0.3413193965 * lms.z,
+    -0.0041960863 * lms.x - 0.7034186147 * lms.y + 1.707614701 * lms.z,
+  );
+}
+
+fn to_gamma(c: vec3f) -> vec3f {
+  return select(1.055 * pow(c, vec3f(1.0 / 2.4)) - 0.055, 12.92 * c, c <= vec3f(0.0031308));
+}
+
+// An opaque sRGB-encoded colour, clipped to the slot's rounded rect.
+fn picker_out(in: V, rgb: vec3f) -> vec4f {
+  return encode(vec4f(rgb, 1.0)) * clip_alpha(in.pos.xy + s.view.zw, s.clip, s.fade);
+}
+
+@fragment
+fn fs_area(in: V) -> @location(0) vec4f {
+  let uv = in.local / s.rect.zw;
+  let lin = clamp(oklch_linear(1.0 - uv.y, uv.x * 0.37, s.c.x), vec3f(0.0), vec3f(1.0));
+  return picker_out(in, to_gamma(lin));
+}
+
+@fragment
+fn fs_hue(in: V) -> @location(0) vec4f {
+  let x = in.local.x / s.rect.z;
+  let lin = clamp(oklch_linear(0.75, 0.15, x * 360.0), vec3f(0.0), vec3f(1.0));
+  return picker_out(in, to_gamma(lin));
+}
+
+@fragment
+fn fs_alpha(in: V) -> @location(0) vec4f {
+  let x = in.local.x / s.rect.z;
+  let cell = floor(in.local / max(s.rect.w * 0.5, 1.0));
+  let check = select(0.8, 1.0, (i32(cell.x) + i32(cell.y)) % 2 == 0);
+  return picker_out(in, mix(vec3f(check), s.c.yzw, x));
 }

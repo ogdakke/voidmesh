@@ -4,33 +4,41 @@
 //! with it (its label bar above, the inspector beside, playback on the GIF itself).
 
 mod canvas;
+pub mod export_panel;
 pub mod inspector;
+mod menu;
+pub mod palette_editor;
+pub mod settings;
 pub mod look;
+pub mod tick_slider;
 mod widgets;
 
 use rune::{Color, Cx, El, FileDialogOptions, TextStyle, Tx, col, el, icon, row, text};
 
 use crate::state::App;
 use look::{Look, MEDIUM, SMALL};
-use widgets::{COPY, EYE, FIT, PAUSE, PLAY, PLUS, REDO, SAVE, TRASH, UNDO, icon_button};
+use widgets::{COPY, EYE, FIT, GEAR, MUTED, PAUSE, PLAY, PLUS, REDO, SAVE, SOUND, TRASH, UNDO, icon_button};
 
 /// The zoom readout is mono and tabular in the web app.
 const MONO: TextStyle = TextStyle::new(13.0, 500.0).mono().features("tnum");
-/// The media time label, a size under body text.
+/// The media time label, a size under body text, with tabular digits.
 const TIME: TextStyle = TextStyle::new(12.0, 400.0).features("tnum");
+/// Room per character of a time label (12 pt tabular digits, with headroom for the colons).
+const TIME_CHAR: f32 = 7.5;
 
 pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     let dark = cx.system_dark();
     let l = Look::new(dark);
     let insets = cx.chrome_insets();
-    let mut root = el().key("root").on_key_up(crate::keys::on_key_up).w_full().h_full().fill(l.studio);
+    let mut root = el().key("root").on_key_up(crate::keys::on_key_up).on_paste_content(|s: &mut App, c: &rune::ClipboardContent, _: &mut Tx| crate::clip::paste(s, c)).w_full().h_full().fill(l.studio);
     root = root.child(canvas::surface(&l, s));
     if s.entities.is_empty() {
         root = root.child(empty_state(&l));
     }
     // The titlebar band: it moves the window, and floating UI keeps out of it.
     root = root.child(el().key("titlebar").absolute(0.0, 0.0).w_full().h(insets.height).window_drag().on_layout(|s: &mut App, r| s.top_inset = r[3]));
-    if let Some(sel) = s.bounds(&s.selection) {
+    // `\` hides the chrome: the canvas alone, as the web's fullscreen.
+    if let Some(sel) = s.bounds(&s.selection).filter(|_| !s.bare) {
         let r = s.cam.screen_rect(sel);
         if s.drag.as_ref().is_none_or(|m| !m.moved) && s.marquee.is_none() {
             root = root.child(entity_bar(&l, s, r, insets.height));
@@ -43,11 +51,23 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         {
             root = root.child(media_controls(&l, e, r));
         }
+        // Over the playback bar it may hang across.
+        if s.drag.as_ref().is_none_or(|m| !m.moved)
+            && s.marquee.is_none()
+            && let Some(panel) = export_panel::panel(&l, s, r, insets.height)
+        {
+            root = root.child(panel);
+        }
     }
-    root = root.child(top_left(&l, s, insets)).child(bottom_left(&l, s)).child(bottom_right(&l, s, cx.env().scale));
+    if !s.bare {
+        root = root.child(top_left(&l, s, insets)).child(bottom_left(&l, s)).child(bottom_right(&l, s, cx.env().scale));
+    }
     if s.drop_hover {
         // `[data-drop-target]`: a 2 px primary outline inset into the canvas.
         root = root.child(el().key("drop").absolute(0.0, 0.0).w_full().h_full().p_all(4.0).inert().child(el().w_full().h_full().radius(16.0).border(2.0, l.primary)));
+    }
+    if s.settings {
+        root = root.child(settings::view(&l, s, insets.height, dark)).child(el().key("titlebar-over").absolute(0.0, 0.0).w_full().h(insets.height).window_drag());
     }
     if let Some(t) = s.toasts.last() {
         root = root.child(
@@ -76,8 +96,14 @@ impl PadAll for El {
     }
 }
 
-pub fn open_media(_: &mut App, tx: &mut Tx) {
-    let opts = FileDialogOptions { title: "Add media".into(), ..Default::default() }.filter("Images", crate::media::EXTENSIONS);
+/// Everything the canvas takes: media and workspaces.
+pub fn accepted_extensions() -> Vec<&'static str> {
+    [crate::media::IMAGE_EXTENSIONS, crate::media::VIDEO_EXTENSIONS, crate::workspace::EXTENSIONS].concat()
+}
+
+/// Add and ⌘O: a workspace opens, media lands on the canvas.
+pub fn open_any(_: &mut App, tx: &mut Tx) {
+    let opts = FileDialogOptions { title: "Open".into(), ..Default::default() }.filter("Media and workspaces", &accepted_extensions());
     tx.open_file(opts, |s: &mut App, r, _| match r {
         Ok(Some(path)) => s.import(vec![path], None),
         Ok(None) => {}
@@ -85,13 +111,42 @@ pub fn open_media(_: &mut App, tx: &mut Tx) {
     });
 }
 
+/// ⌘S writes the open file (or asks where, the first time); ⇧⌘S always asks.
+pub fn save(s: &mut App, tx: &mut Tx, ask: bool) {
+    if s.entities.is_empty() {
+        return s.toast("Nothing to save");
+    }
+    if !ask && let Some(p) = s.doc.clone() {
+        return s.save_to(p);
+    }
+    let file_name = s.doc.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(crate::workspace::random_name);
+    let directory = s.doc.as_ref().and_then(|p| p.parent()).map(std::path::Path::to_path_buf);
+    let opts = FileDialogOptions { title: "Save workspace".into(), file_name: Some(file_name), directory, ..Default::default() }.filter("Voidmesh workspace", &["vdmsh"]);
+    tx.save_file(opts, |s: &mut App, r, _| match r {
+        Ok(Some(mut path)) => {
+            if path.extension().is_none() {
+                path.set_extension("vdmsh");
+            }
+            s.save_to(path);
+        }
+        Ok(None) => {}
+        Err(e) => s.toast(e.to_string()),
+    });
+}
+
 pub fn export_selected(s: &mut App, tx: &mut Tx) {
+    export_selected_as(s, tx, "png");
+}
+
+/// Save the focused entity's rendered image; the dialog starts on `ext` (png or jpg).
+pub fn export_selected_as(s: &mut App, tx: &mut Tx, ext: &str) {
     let Some(e) = s.focus() else { return };
     let id = e.id;
     let stem = e.name.rsplit_once('.').map(|(a, _)| a.to_string()).unwrap_or_else(|| e.name.clone());
-    let opts = FileDialogOptions { title: "Save image".into(), file_name: Some(format!("{stem}.png")), ..Default::default() }.filter("PNG", &["png"]).filter("JPEG", &["jpg", "jpeg"]);
+    let base = FileDialogOptions { title: "Save image".into(), file_name: Some(format!("{stem}.{ext}")), ..Default::default() };
+    let opts = if ext == "png" { base.filter("PNG", &["png"]).filter("JPEG", &["jpg", "jpeg"]) } else { base.filter("JPEG", &["jpg", "jpeg"]).filter("PNG", &["png"]) };
     tx.save_file(opts, move |s: &mut App, r, _| match r {
-        Ok(Some(path)) => s.exports.push(crate::state::Export { entity: id, path }),
+        Ok(Some(path)) => s.exports.push(crate::state::Export { entity: id, path: Some(path) }),
         Ok(None) => {}
         Err(e) => s.toast(e.to_string()),
     });
@@ -115,12 +170,25 @@ fn top_left(l: &Look, s: &App, insets: rune::ChromeInsets) -> El {
             .center()
             .press_scale(0.97)
             .cursor(rune::Cursor::Pointer)
-            .on_press_tx(open_media)
+            .on_press_tx(open_any)
             .child(row().gap(6.0).center_y().child(icon(&PLUS, 15.0).color(Color::WHITE)).child(text("Add").font(MEDIUM).color(Color::WHITE))),
     );
     let (x, y) = if insets.height > 0.0 { (insets.leading + 12.0, (insets.height - 28.0) / 2.0) } else { (12.0, 12.0) };
     let mut r = look::own_gestures(row().key("top-left")).absolute(x, y).gap(10.0).center_y().child(add).child(text("Voidmesh").font(TextStyle::new(16.0, 600.0)).color(l.text));
-    if s.pending > 0 {
+    if let Some(doc) = s.doc.as_ref().and_then(|p| p.file_stem()) {
+        let name = format!("{}{}", doc.to_string_lossy(), if s.dirty() { " •" } else { "" });
+        r = r.child(text(name).font(SMALL).color(l.text_muted).truncate().max_w(260.0).help("⌘S saves, ⇧⌘S saves as"));
+    }
+    if let Some(p) = &s.opening {
+        use std::sync::atomic::Ordering;
+        let (done, total) = (p.done.load(Ordering::Relaxed), p.total.load(Ordering::Relaxed));
+        let what = if total == 0 { "Reading workspace…".to_string() } else { format!("Importing item {} of {total}…", (done + 1).min(total)) };
+        r = r.child(text(what).font(SMALL).color(l.text_muted)).child(
+            el().key("cancel-open").role("button").label("Cancel").px(8.0).h(22.0).radius(11.0).center().hover(l.hover).cursor(rune::Cursor::Pointer).on_press(|s: &mut App| s.cancel_open()).child(text("Cancel").font(SMALL).color(l.text)),
+        );
+    } else if s.saving.is_some() {
+        r = r.child(text("Saving…").font(SMALL).color(l.text_muted));
+    } else if s.pending > 0 {
         r = r.child(text(format!("Importing {}…", s.pending)).font(SMALL).color(l.text_muted));
     }
     r
@@ -140,7 +208,11 @@ fn bottom_left(l: &Look, s: &App) -> El {
     })).child(b("redo", "Redo (⇧⌘Z)", &REDO, !s.redo.is_empty(), |s| {
         s.redo();
     })));
-    row().key("bottom-left").pin(Some(12.0), None, None, Some(12.0)).child(group)
+    let r = row().key("bottom-left").pin(Some(12.0), None, None, Some(12.0)).gap(8.0).items_end().child(group);
+    match export_panel::queue(l, s) {
+        Some(q) => r.child(q),
+        None => r,
+    }
 }
 
 fn bottom_right(l: &Look, s: &App, device_scale: f32) -> El {
@@ -162,16 +234,13 @@ fn bottom_right(l: &Look, s: &App, device_scale: f32) -> El {
         l,
         el().key("zoom").role("button").label("Zoom to 100%").px(10.0).center().hover(l.hover).press_scale(0.97).cursor(rune::Cursor::Pointer).help("Zoom to 100% (⌘0)").on_press(move |s: &mut App| s.reset_zoom(device_scale)).child(text(format!("{pct}%")).font(MONO).color(l.text)),
     );
-    let lens_on = s.lens != crate::state::Lensing::Off;
-    row()
-        .key("bottom-right")
-        .pin(None, None, Some(12.0), Some(12.0))
-        .gap(8.0)
-        .center_y()
-        .child(toggle("lens-toggle", s.lens.label(), "Canvas lensing (L)", lens_on, |s| s.lens = s.lens.next()))
-        .child(toggle("snap", "Snap", "Snap to grid (G)", s.snap, |s| s.snap = !s.snap))
-        .child(center)
-        .child(zoom)
+    let gear = pill(l, el().key("settings-open").role("button").label("Settings (⌘,)").size(28.0, 28.0).center().hover(l.hover).cursor(rune::Cursor::Pointer).help("Settings (⌘,)").on_press(settings::toggle).child(icon(&GEAR, 16.0).color(l.text)));
+    let mut r = row().key("bottom-right").pin(None, None, Some(12.0), Some(12.0)).gap(8.0).center_y();
+    // Only what's on shows here; Settings holds the switches.
+    if s.snap {
+        r = r.child(toggle("snap", "Snap", "Snap to grid (G)", true, |s| crate::prefs::set_snap(s, false)));
+    }
+    r.child(gear).child(center).child(zoom)
 }
 
 /// Above the selection: its name (the web app's entity label) and what you can do to it.
@@ -194,7 +263,7 @@ fn entity_bar(l: &Look, s: &App, r: [f32; 4], top: f32) -> El {
     actions = actions
         .child(eye)
         .child(icon_button(l, "bar-dup", "Duplicate (⌘D)", &COPY, |s, _| s.duplicate_selection()))
-        .child(icon_button(l, "bar-save", "Save as PNG (⌘E)", &SAVE, export_selected))
+        .child(icon_button(l, "bar-save", if s.selection.len() == 1 && anim { "Export… (⌘E)" } else { "Save as PNG (⌘E)" }, &SAVE, export_panel::save_or_export))
         .child(icon_button(l, "bar-delete", "Delete (⌫)", &TRASH, |s, _| s.delete_selection()));
     let bar = l.floating(row().key("entity-bar").gap(4.0).pl(14.0).pr(4.0).h(40.0).radius(20.0).center_y().child(text(label).font(MEDIUM).color(l.text).truncate().max_w(320.0)).child(actions));
     let y = (r[1] - 50.0).max(top.max(12.0) + 8.0);
@@ -209,12 +278,11 @@ fn media_controls(l: &Look, e: &crate::state::Entity, r: [f32; 4]) -> El {
     let w = (r[2] - 24.0).clamp(160.0, 480.0);
     let x = r[0] + (r[2] - w) / 2.0;
     let y = r[1] + r[3] - 52.0;
-    let track_w = w - 112.0;
     let scrub = el()
         .key("scrub")
         .role("slider")
         .label("Playback position")
-        .w(track_w)
+        .grow(1.0)
         .h(24.0)
         .center_y()
         .cursor(rune::Cursor::Pointer)
@@ -225,21 +293,46 @@ fn media_controls(l: &Look, e: &crate::state::Entity, r: [f32; 4]) -> El {
                     d.data = if e.playing { 1.0 } else { 0.0 };
                     e.playing = false;
                 }
-                e.play_t = f64::from((d.x / d.w).clamp(0.0, 0.999)) * dur;
+                e.seek_to(f64::from((d.x / d.w).clamp(0.0, 0.999)) * dur);
                 if d.phase == rune::Phase::Up {
                     e.playing = d.data > 0.5;
                 }
             }
             tx.instant();
         })
-        .child(el().w(track_w).h(4.0).radius(2.0).fill(l.indicator).child(el().h(4.0).w(track_w * t).radius(2.0).fill(l.text)));
+        .child(el().w_full().h(4.0).radius(2.0).fill(l.indicator).child(el().h(4.0).w_frac(t.clamp(0.0, 1.0)).radius(2.0).fill(l.text)));
     let play = icon_button(l, "media-play", if e.playing { "Pause" } else { "Play" }, if e.playing { &PAUSE } else { &PLAY }, move |s, _| {
         if let Some(e) = s.entity_mut(id) {
             e.playing = !e.playing;
         }
     });
-    let time = text(format!("{:.1} / {:.1}", e.play_t, dur)).font(TIME).color(l.text_strong);
-    l.floating(row().key("media").absolute(x, y).w(w).h(40.0).pl(4.0).pr(12.0).gap(8.0).radius(20.0).center_y().instant_changes().child(play).child(scrub).child(time))
+    // As the web: the current time left of the track, the duration right of it. The current
+    // time sits in a fixed, right-aligned slot as wide as the duration's text, so the bar never
+    // shifts as digits change.
+    let total = media_time(dur);
+    let slot = total.len() as f32 * TIME_CHAR;
+    let now = row().w(slot).justify_end().child(text(media_time(e.play_t.min(dur))).font(TIME).color(l.text_strong));
+    let end = row().w(slot).child(text(total).font(TIME).color(l.text_muted));
+    let mut bar = row().key("media").absolute(x, y).w(w).h(40.0).pl(4.0).pr(12.0).gap(8.0).radius(20.0).center_y().instant_changes().child(play).child(now).child(scrub).child(end);
+    if e.has_audio() {
+        let (label, glyph) = if e.muted { ("Unmute (M)", &MUTED) } else { ("Mute (M)", &SOUND) };
+        bar = bar.pr(4.0).child(icon_button(l, "media-mute", label, glyph, move |s, _| {
+            if let Some(e) = s.entity_mut(id) {
+                e.muted = !e.muted;
+            }
+        }));
+    }
+    l.floating(bar)
+}
+
+/// The web's media time: `S:cc` under a minute, `M:SS:cc` from one.
+pub fn media_time(secs: f64) -> String {
+    if !secs.is_finite() || secs < 0.0 {
+        return "0:00".into();
+    }
+    let cs = (secs * 100.0).round() as u64;
+    let (s, c) = (cs / 100, cs % 100);
+    if s < 60 { format!("{s}:{c:02}") } else { format!("{}:{:02}:{c:02}", s / 60, s % 60) }
 }
 
 fn empty_state(l: &Look) -> El {
@@ -252,6 +345,6 @@ fn empty_state(l: &Look) -> El {
         .gap(8.0)
         .inert()
         .child(text("Voidmesh").font(TextStyle::new(28.0, 600.0)).color(l.text))
-        .child(text("Drop or paste images, GIFs and SVGs for editing").font(look::BODY).color(l.text_muted))
+        .child(text("Drop images, videos, GIFs, SVGs or a .vdmsh workspace").font(look::BODY).color(l.text_muted))
         .child(text("All local, nothing gets uploaded.").font(look::BODY).color(l.text_faint))
 }

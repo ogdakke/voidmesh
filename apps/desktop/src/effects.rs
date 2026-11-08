@@ -52,7 +52,6 @@ impl DotShape {
 
 pub const SHADER_LABELS: [&str; 7] = ["Halftone", "Blobs", "Melt", "Dithering", "ASCII", "Glass", "Glitch"];
 pub const SHAPE_LABELS: [&str; 3] = ["Circle", "Square", "Vertical Rectangle"];
-pub const PALETTE_NAMES: [&str; 13] = ["Black & White", "Game Boy", "Game Boy Pocket", "Game Boy Light", "Grayscale 4", "Grayscale 8", "Midnight Ablaze", "Sepia", "Winter", "Cyberpunk", "Sunset", "CGA", "Commodore 64"];
 pub const DITHER_KINDS: [&str; 5] = ["Bayer 2x2", "Bayer 4x4", "Bayer 8x8", "White Noise", "Blue Noise"];
 pub const ASCII_KINDS: [&str; 4] = ["Standard", "Extended", "Binary", "Minimal"];
 pub const GLASS_KINDS: [&str; 3] = ["Fluted", "Frosted Voronoi", "Flowing"];
@@ -60,9 +59,13 @@ pub const GLITCH_KINDS: [&str; 4] = ["Channel Shift", "Scanline", "Block Corrupt
 
 pub type Rgba = [f32; 4];
 
+/// A palette as the web app's `ColorPalette`: presets carry their preset id, an entity's
+/// extracted palette is `original`, user palettes `cstm_…`/`ext_…`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Palette {
-    pub name: &'static str,
+    pub id: String,
+    pub name: String,
+    pub short_name: String,
     pub colors: Vec<Rgba>,
 }
 
@@ -70,35 +73,66 @@ pub fn hex(v: u32) -> Rgba {
     [((v >> 16) & 0xff) as f32 / 255.0, ((v >> 8) & 0xff) as f32 / 255.0, (v & 0xff) as f32 / 255.0, 1.0]
 }
 
-pub fn presets() -> Vec<Palette> {
-    let p = |name, c: &[u32]| Palette { name, colors: c.iter().map(|v| hex(*v)).collect() };
-    vec![
-        p("B&W", &[0x000000, 0xffffff]),
-        p("Game Boy", &[0x0f380f, 0x306230, 0x8bac0f, 0x9bbc0f]),
-        p("GB Pocket", &[0x181818, 0x4a5138, 0x8c926b, 0xc5caa4]),
-        p("GB Light", &[0x004f3a, 0x00694a, 0x009a70, 0x00b582]),
-        p("Gray 4", &[0x000000, 0x555555, 0xaaaaaa, 0xffffff]),
-        p("Gray 8", &[0x000000, 0x242424, 0x494949, 0x6d6d6d, 0x929292, 0xb6b6b6, 0xdbdbdb, 0xffffff]),
-        p("Midnight Ablaze", &[0x130208, 0x1f0510, 0x31051e, 0x460e2b, 0x7c183c, 0xd53c6a, 0xff8274]),
-        p("Sepia", &[0x352318, 0x5c3d2e, 0x8b5a3c, 0xd4a574, 0xf5deb3]),
-        p("Winter", &[0x20284e, 0x2c4a78, 0x3875a1, 0x8bcadd, 0xffffff, 0xd6e1e9, 0xa7bcc9, 0x738d9d]),
-        p("Cyberpunk", &[0x0d0221, 0x0f084b, 0x26408b, 0xff124f, 0xff00a0, 0xfe75fe]),
-        p("Sunset", &[0x1a1a2e, 0x16213e, 0xe94560, 0xff6b35, 0xf7c566]),
-        p(
-            "CGA",
-            &[
-                0x000000, 0x0000aa, 0x00aa00, 0x00aaaa, 0xaa0000, 0xaa00aa, 0xaa5500, 0xaaaaaa, 0x555555, 0x5555ff, 0x55ff55, 0x55ffff, 0xff5555, 0xff55ff, 0xffff55,
-                0xffffff,
-            ],
-        ),
-        p(
-            "C64",
-            &[
-                0x000000, 0xffffff, 0x880000, 0xaaffee, 0xcc44cc, 0x00cc55, 0x0000aa, 0xeeee77, 0xdd8855, 0x664400, 0xff7777, 0x333333, 0x777777, 0xaaff66, 0x0088ff,
-                0xbbbbbb,
-            ],
-        ),
-    ]
+pub const ORIGINAL_ID: &str = "original";
+/// What "+" adds to a palette (`config.defaults.paletteDefaults.newPaletteColor`).
+pub const NEW_COLOR: Rgba = [0.5, 0.5, 0.65, 1.0];
+
+/// The user's own palettes: made (`cstm_`) or extracted (`ext_`).
+pub fn is_user_palette(id: &str) -> bool {
+    id.starts_with("cstm_") || id.starts_with("ext_")
+}
+
+/// A fresh user palette id with `prefix` (`cstm_` or `ext_`).
+pub fn new_palette_id(prefix: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+    format!("{prefix}{t:x}{:x}", N.fetch_add(1, Ordering::Relaxed))
+}
+pub const MAX_COLORS: usize = 16;
+
+/// The 13 presets, in the web app's order (`lib/config/palettes.config.ts`).
+pub fn presets() -> &'static [Palette] {
+    static P: std::sync::LazyLock<Vec<Palette>> = std::sync::LazyLock::new(|| {
+        let p = |id: &str, name: &str, short: &str, c: &[u32]| Palette { id: id.into(), name: name.into(), short_name: short.into(), colors: c.iter().map(|v| hex(*v)).collect() };
+        vec![
+            p("blackAndWhite", "Black & White", "B&W", &[0x000000, 0xffffff]),
+            p("gameboy", "Game Boy", "GB", &[0x0f380f, 0x306230, 0x8bac0f, 0x9bbc0f]),
+            p("gameboyPocket", "Game Boy Pocket", "GB Pocket", &[0x181818, 0x4a5138, 0x8c926b, 0xc5caa4]),
+            p("gameboyLight", "Game Boy Light", "GB Light", &[0x004f3a, 0x00694a, 0x009a70, 0x00b582]),
+            p("grayscale4", "Grayscale 4", "Gray 4", &[0x000000, 0x555555, 0xaaaaaa, 0xffffff]),
+            p("grayscale8", "Grayscale 8", "Gray 8", &[0x000000, 0x242424, 0x494949, 0x6d6d6d, 0x929292, 0xb6b6b6, 0xdbdbdb, 0xffffff]),
+            p("midnightAblaze", "Midnight Ablaze", "Midnight Ablaze", &[0x130208, 0x1f0510, 0x31051e, 0x460e2b, 0x7c183c, 0xd53c6a, 0xff8274]),
+            p("sepia", "Sepia", "Sepia", &[0x352318, 0x5c3d2e, 0x8b5a3c, 0xd4a574, 0xf5deb3]),
+            p("winter", "Winter", "Winter", &[0x20284e, 0x2c4a78, 0x3875a1, 0x8bcadd, 0xffffff, 0xd6e1e9, 0xa7bcc9, 0x738d9d]),
+            p("cyberpunk", "Cyberpunk", "Cyberpunk", &[0x0d0221, 0x0f084b, 0x26408b, 0xff124f, 0xff00a0, 0xfe75fe]),
+            p("sunset", "Sunset", "Sunset", &[0x1a1a2e, 0x16213e, 0xe94560, 0xff6b35, 0xf7c566]),
+            p(
+                "cga",
+                "CGA",
+                "CGA",
+                &[
+                    0x000000, 0x0000aa, 0x00aa00, 0x00aaaa, 0xaa0000, 0xaa00aa, 0xaa5500, 0xaaaaaa, 0x555555, 0x5555ff, 0x55ff55, 0x55ffff, 0xff5555, 0xff55ff, 0xffff55,
+                    0xffffff,
+                ],
+            ),
+            p(
+                "commodore64",
+                "Commodore 64",
+                "C64",
+                &[
+                    0x000000, 0xffffff, 0x880000, 0xaaffee, 0xcc44cc, 0x00cc55, 0x0000aa, 0xeeee77, 0xdd8855, 0x664400, 0xff7777, 0x333333, 0x777777, 0xaaff66, 0x0088ff,
+                    0xbbbbbb,
+                ],
+            ),
+        ]
+    });
+    &P
+}
+
+/// An entity's Original palette from its extracted colours.
+pub fn original(colors: Vec<Rgba>) -> Palette {
+    Palette { id: ORIGINAL_ID.into(), name: "Original".into(), short_name: "Original".into(), colors }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -111,8 +145,7 @@ pub struct Params {
     pub preserve_colors: bool,
     pub reverse_palette: bool,
     pub show_original: bool,
-    /// Index into `presets()`.
-    pub palette: usize,
+    pub palette: Palette,
     pub eagerness: f32,
     pub dither_kind: u32,
     pub ascii_kind: u32,
@@ -155,7 +188,7 @@ impl Default for Params {
             preserve_colors: false,
             reverse_palette: false,
             show_original: false,
-            palette: 0,
+            palette: presets()[0].clone(),
             eagerness: 0.5,
             dither_kind: 2,
             ascii_kind: 0,
@@ -271,15 +304,19 @@ impl Params {
         (self.size, self.intensity, self.scale) = (size, intensity, 1.0);
     }
 
-    /// True when the output changes with time on its own (flowing glass).
+    /// The output depends on the effect's clock (flowing glass).
+    pub fn uses_time(&self) -> bool {
+        !self.show_original && self.shader == Shader::Glass && self.glass_kind == 2
+    }
+
+    /// True when the output changes with time on its own (flowing glass, auto-playing).
     pub fn animated(&self) -> bool {
-        !self.show_original && self.shader == Shader::Glass && self.glass_kind == 2 && self.time_autoplay
+        self.uses_time() && self.time_autoplay
     }
 
     /// Palette as the shader reads it: background first, the rest sorted by luminance.
     pub fn gpu_palette(&self) -> Vec<Rgba> {
-        let all = presets();
-        let mut colors = all.get(self.palette).unwrap_or(&all[0]).colors.clone();
+        let mut colors = self.palette.colors.clone();
         if self.reverse_palette {
             colors.reverse();
         }
@@ -288,7 +325,7 @@ impl Params {
             let rest = &mut colors[1..];
             rest.sort_by(|a, b| lum(a).total_cmp(&lum(b)));
         }
-        colors.truncate(16);
+        colors.truncate(MAX_COLORS);
         colors
     }
 }
@@ -344,7 +381,7 @@ mod tests {
 
     #[test]
     fn palette_keeps_background_first_and_sorts_the_rest() {
-        let p = Params { palette: 8, ..Params::default() }; // Winter
+        let p = Params { palette: presets()[8].clone(), ..Params::default() }; // Winter
         let c = p.gpu_palette();
         assert_eq!(c[0], hex(0x20284e));
         let lum = |c: &Rgba| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];

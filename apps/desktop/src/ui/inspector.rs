@@ -4,8 +4,9 @@
 use rune::{El, ScrollSpec, col, row, text};
 
 use super::look::{LARGE, Look};
-use super::widgets::{button, section, select, slider, swatches, toggle};
+use super::widgets::{button, section, select, select_ids, slider, toggle};
 use crate::effects::{self as fx, DotShape, Params, Shader};
+use super::tick_slider::{Hooks, Source, TickSlider, time_control};
 use crate::state::App;
 
 /// `--sidebar-width`-ish: the web inspector is 280–320 px.
@@ -18,20 +19,14 @@ pub fn body(l: &Look, s: &App, p: &Params) -> El {
         .gap(12.0)
         .child(select(l, "shader", Some("Style"), &fx::SHADER_LABELS, shader, |p, i| p.set_shader(Shader::ALL[i])))
         .child(
-            row().w_full().gap(6.0).child(toggle(l, "original", "Original", p.show_original, |p| p.show_original = !p.show_original)).child(button(l, "reset", "Reset", |s| {
-                s.edit(|p| {
-                    let shader = p.shader;
-                    *p = Params::default();
-                    p.set_shader(shader);
-                });
-            })),
+            row().w_full().gap(6.0).child(toggle(l, "original", "Original", p.show_original, |p| p.show_original = !p.show_original)).child(button(l, "reset", "Reset", App::reset_selection)),
         )
         .child(section(l, s, "adjust", "Adjustments", None, adjustments(l, p)))
-        .child(section(l, s, "style", "Style Parameters", None, style(l, p)))
+        .child(section(l, s, "style", "Style Parameters", None, style(l, s, p)))
         .child(section(l, s, "post", "Post Processing", None, post(l, s, p)))
 }
 
-fn style(l: &Look, p: &Params) -> El {
+fn style(l: &Look, s: &App, p: &Params) -> El {
     let mut c = col().w_full().gap(8.0);
     match p.shader {
         Shader::Blobs => c = c.child(slider(l, "eagerness", "Eagerness", p.eagerness, fx::UNIT, |p, v| p.eagerness = v)),
@@ -48,7 +43,6 @@ fn style(l: &Look, p: &Params) -> El {
                 }
                 _ => {
                     c = c.child(slider(l, "flow", "Flow", p.flow, fx::UNIT, |p, v| p.flow = v));
-                    c = c.child(toggle(l, "autoplay", "Animate", p.time_autoplay, |p| p.time_autoplay = !p.time_autoplay));
                 }
             }
             c = c.child(slider(l, "dispersion", "Dispersion", p.dispersion, fx::UNIT, |p, v| p.dispersion = v));
@@ -70,12 +64,9 @@ fn style(l: &Look, p: &Params) -> El {
     let strength = if p.shader == Shader::Glass { "Refraction" } else { "Effect Strength" };
     c = c.child(slider(l, "intensity", strength, p.intensity, fx::INTENSITY, |p, v| p.intensity = v));
     if p.shader.uses_palette() {
-        let mut colors = fx::presets().get(p.palette).map(|x| x.colors.clone()).unwrap_or_default();
-        if p.reverse_palette {
-            colors.reverse();
-        }
-        c = c.child(swatches(l, fx::PALETTE_NAMES.get(p.palette).copied().unwrap_or(""), &colors));
-        c = c.child(select(l, "palette", Some("Palette Presets"), &fx::PALETTE_NAMES, p.palette, |p, i| p.palette = i));
+        c = c.child(super::palette_editor::editor(l, s, p));
+        let mixed = s.selected().any(|e| e.params.palette.id != p.palette.id);
+        c = c.child(select_ids(l, "palette", Some("Palette Presets"), s.palette_options(), if mixed { "" } else { &p.palette.id }, |s, id| s.set_palette(&id)));
         c = c.child(
             row()
                 .w_full()
@@ -150,6 +141,28 @@ pub fn place(sel: [f32; 4], canvas: [f32; 2], top: f32) -> (f32, f32, f32) {
     (x, top, (canvas[1] - top - 68.0).max(120.0))
 }
 
+fn time_slider(s: &mut App) -> &mut TickSlider {
+    &mut s.time_slider
+}
+
+fn time_changed(s: &mut App, t: f64) {
+    s.set_effect_time(t);
+}
+
+fn time_committed(_: &mut App, _: f64) {}
+
+/// The Time control's callbacks; `poll` steps the slider with the same ones.
+pub const TIME_HOOKS: Hooks<App> = Hooks { access: time_slider, on_start: App::begin_effect_time, on_change: time_changed, on_commit: time_committed };
+
+/// What drives the Time control this frame.
+pub fn time_source(s: &App) -> Source {
+    match s.effect_time() {
+        None => Source::Hidden,
+        Some((t, true, false)) => Source::Driven(t),
+        Some((t, ..)) => Source::Value(t),
+    }
+}
+
 pub fn panel(l: &Look, s: &App, p: &Params, sel: [f32; 4]) -> El {
     let (x, y, max_h) = place(sel, [s.canvas[2], s.canvas[3]], s.top_inset);
     let title = match s.selection.len() {
@@ -157,8 +170,10 @@ pub fn panel(l: &Look, s: &App, p: &Params, sel: [f32; 4]) -> El {
         n => format!("{n} items selected"),
     };
     let inner = col().key("inspector-body").w_full().px(16.0).pb(16.0).child(body(l, s, p));
-    l.floating(
-        col()
+    // The inspector's footer: Flowing glass's Time, as the web's desktop time slider.
+    let time = s.effect_time().map(|(t, playing, mixed)| col().w_full().pt(4.0).child(time_control(l, mixed, playing, t, &s.time_slider, TIME_HOOKS, App::toggle_effect_time)));
+    let footer = if time.is_some() { 84.0 } else { 0.0 };
+    let mut panel = col()
             .key("inspector")
             .absolute(x, y)
             .w(WIDTH)
@@ -167,8 +182,11 @@ pub fn panel(l: &Look, s: &App, p: &Params, sel: [f32; 4]) -> El {
             .clip_rounded(16.0)
             .instant_changes()
             .child(row().w_full().h(44.0).px(16.0).center_y().child(text(title).font(LARGE).color(l.text).truncate().grow(1.0)))
-            .child(col().key("inspector-scroll").w_full().max_h(max_h - 44.0).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(16.0).child(inner)),
-    )
+            .child(col().key("inspector-scroll").w_full().max_h(max_h - 44.0 - footer).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(16.0).child(inner));
+    if let Some(t) = time {
+        panel = panel.child(t);
+    }
+    l.floating(panel)
 }
 
 #[cfg(test)]

@@ -5,8 +5,9 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::effects::Params;
+use crate::effects::{Palette, Params};
 use crate::media::{Asset, Loader};
+use crate::workspace::{self, Item, Viewport};
 
 pub const MIN_SCALE: f32 = 0.005;
 pub const MAX_SCALE: f32 = 8.0;
@@ -26,9 +27,13 @@ pub struct Entity {
     pub size: [f32; 2],
     pub z: u32,
     pub params: Params,
-    /// GIF playback.
+    /// GIF and video playback.
     pub playing: bool,
     pub play_t: f64,
+    /// Video sound; muted by default, as on the web.
+    pub muted: bool,
+    /// Bumped by a jump in `play_t` (seek, scrub) as opposed to playback moving it on.
+    pub seek_gen: u32,
     /// Flowing glass's own clock.
     pub fx_t: f64,
 }
@@ -36,6 +41,16 @@ pub struct Entity {
 impl Entity {
     pub fn rect(&self) -> [f32; 4] {
         [self.pos[0], self.pos[1], self.size[0], self.size[1]]
+    }
+
+    /// Jump the playhead (a seek, not playback).
+    pub fn seek_to(&mut self, t: f64) {
+        self.play_t = t;
+        self.seek_gen = self.seek_gen.wrapping_add(1);
+    }
+
+    pub fn has_audio(&self) -> bool {
+        self.asset.video.as_ref().is_some_and(|v| v.has_audio)
     }
 }
 
@@ -124,11 +139,22 @@ pub struct MoveDrag {
 pub struct Snapshot {
     entities: Vec<Entity>,
     selection: BTreeSet<u32>,
+    /// User palettes change with the entities that use them (one step), as on the web.
+    palettes: Vec<Palette>,
+}
+
+/// The colour picker's session: which palette colour it edits and its OKLCH working value
+/// (kept so hue survives greys). A session is one undo step.
+pub struct Picker {
+    /// The colour's index in the palette as stored (not as shown reversed).
+    pub index: usize,
+    pub oklch: crate::color::Oklch,
 }
 
 pub struct Export {
     pub entity: u32,
-    pub path: PathBuf,
+    /// A file, or the clipboard (`None`) as a PNG.
+    pub path: Option<PathBuf>,
 }
 
 /// Files imported together: where they land and how many are still decoding.
@@ -171,14 +197,6 @@ impl Lensing {
         }
     }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Lensing::Off => "Lensing",
-            Lensing::Subtle => "Lensing: Subtle",
-            Lensing::Extreme => "Lensing: Extreme",
-        }
-    }
-
     pub fn preset(self) -> Option<LensParams> {
         match self {
             Lensing::Off => None,
@@ -218,9 +236,37 @@ pub struct App {
     pub pending: usize,
     pub batches: Vec<Batch>,
     next_batch: u64,
-    next_asset: u64,
+    /// The open workspace file, once opened or saved.
+    pub doc: Option<PathBuf>,
+    /// Bumped by every undoable change; the document is dirty while it differs from `saved`.
+    pub revision: u64,
+    pub saved: u64,
+    /// A workspace being read on a worker.
+    pub opening: Option<Arc<workspace::Progress>>,
+    /// A save in flight: the revision it captures.
+    pub saving: Option<u64>,
+    /// User palettes (custom and extracted).
+    pub palettes: Vec<Palette>,
+    pub prefs: rune::prefs::Prefs,
+    /// The settings view covers the canvas.
+    pub settings: bool,
+    /// Chrome hidden (`\`): the canvas alone.
+    pub bare: bool,
+    /// The palette colour being edited.
+    pub picker: Option<Picker>,
+    /// The picker's hex field.
+    pub hex_edit: rune::TextEdit,
+    /// The palette name field, while renaming.
+    pub name_edit: rune::TextEdit,
+    pub renaming: bool,
+    /// Flowing glass's Time control.
+    pub time_slider: crate::ui::tick_slider::TickSlider,
+    /// Sound for unmuted, playing videos, and the seek it last followed.
+    pub audio: std::collections::HashMap<u32, (rune::Player, u32)>,
     pub toasts: Vec<Toast>,
     pub exports: Vec<Export>,
+    /// Video and GIF export: the queue and its panel.
+    pub export: crate::export_video::Exports,
     pub now: f64,
     pub drop_hover: bool,
     /// Inspector sections folded shut.
@@ -262,9 +308,24 @@ impl Default for App {
             pending: 0,
             batches: Vec::new(),
             next_batch: 1,
-            next_asset: 1,
+            doc: None,
+            revision: 0,
+            saved: 0,
+            opening: None,
+            saving: None,
+            palettes: Vec::new(),
+            audio: Default::default(),
+            prefs: rune::prefs::Prefs::memory(),
+            settings: false,
+            bare: false,
+            time_slider: Default::default(),
+            picker: None,
+            hex_edit: rune::TextEdit::new(""),
+            name_edit: rune::TextEdit::new(""),
+            renaming: false,
             toasts: Vec::new(),
             exports: Vec::new(),
+            export: Default::default(),
             now: 0.0,
             drop_hover: false,
             folded: BTreeSet::from(["adjust"]),
@@ -302,10 +363,11 @@ impl App {
     // ------------------------------------------------------------------ undo
 
     pub fn snapshot(&self) -> Snapshot {
-        Snapshot { entities: self.entities.clone(), selection: self.selection.clone() }
+        Snapshot { entities: self.entities.clone(), selection: self.selection.clone(), palettes: self.palettes.clone() }
     }
 
     pub fn push_undo(&mut self, s: Snapshot) {
+        self.revision += 1;
         self.undo.push(s);
         if self.undo.len() > UNDO_CAP {
             self.undo.remove(0);
@@ -321,18 +383,24 @@ impl App {
 
     fn restore(&mut self, s: Snapshot) {
         // Playback clocks keep running across undo: take them from the live entities.
-        let live: Vec<(u32, bool, f64)> = self.entities.iter().map(|e| (e.id, e.playing, e.play_t)).collect();
+        let live: Vec<(u32, bool, f64, bool, u32)> = self.entities.iter().map(|e| (e.id, e.playing, e.play_t, e.muted, e.seek_gen)).collect();
         self.entities = s.entities;
         for e in &mut self.entities {
-            if let Some((_, p, t)) = live.iter().find(|(id, ..)| *id == e.id) {
-                (e.playing, e.play_t) = (*p, *t);
+            if let Some((_, p, t, m, g)) = live.iter().find(|(id, ..)| *id == e.id) {
+                (e.playing, e.play_t, e.muted, e.seek_gen) = (*p, *t, *m, *g);
             }
         }
         self.selection = s.selection.into_iter().filter(|id| self.entity(*id).is_some()).collect();
+        if s.palettes != self.palettes {
+            self.palettes = s.palettes;
+            crate::prefs::save_palettes(self);
+        }
+        self.picker = None;
     }
 
     pub fn undo(&mut self) -> bool {
         let Some(s) = self.undo.pop() else { return false };
+        self.revision += 1;
         let now = self.snapshot();
         self.redo.push(now);
         self.restore(s);
@@ -341,6 +409,7 @@ impl App {
 
     pub fn redo(&mut self) -> bool {
         let Some(s) = self.redo.pop() else { return false };
+        self.revision += 1;
         let now = self.snapshot();
         self.undo.push(now);
         self.restore(s);
@@ -365,6 +434,202 @@ impl App {
         let sel = self.selection.clone();
         for e in self.entities.iter_mut().filter(|e| sel.contains(&e.id)) {
             f(&mut e.params);
+        }
+        if let Some(p) = self.focus().map(|e| e.params.clone()) {
+            self.last_params = p;
+        }
+    }
+
+    // ------------------------------------------------------------------ palette editing
+
+    /// The focus's palette as one the user owns: a preset or Original forks into a new
+    /// "Custom N" first, given to the whole selection. Returns its id. No undo step of its own.
+    fn own_palette(&mut self) -> Option<String> {
+        let p = self.focus()?.params.palette.clone();
+        if crate::effects::is_user_palette(&p.id) {
+            return Some(p.id);
+        }
+        let n = self.palettes.iter().filter(|q| q.name.starts_with("Custom")).count() + 1;
+        let id = crate::effects::new_palette_id("cstm_");
+        let fork = Palette { id: id.clone(), name: format!("Custom {n}"), short_name: format!("Custom {n}"), colors: p.colors };
+        self.palettes.push(fork.clone());
+        self.apply_palette(&fork);
+        Some(id)
+    }
+
+    /// Give the selection `p` and keep the stored palette in step.
+    fn apply_palette(&mut self, p: &Palette) {
+        if let Some(q) = self.palettes.iter_mut().find(|q| q.id == p.id) {
+            *q = p.clone();
+        }
+        let sel = self.selection.clone();
+        for e in self.entities.iter_mut().filter(|e| sel.contains(&e.id)) {
+            e.params.palette = p.clone();
+        }
+        if let Some(f) = self.focus().map(|e| e.params.clone()) {
+            self.last_params = f;
+        }
+    }
+
+    /// Change the selection's palette colours (forking a preset), one undo step.
+    pub fn edit_palette(&mut self, f: impl FnOnce(&mut Vec<crate::effects::Rgba>)) {
+        let Some(current) = self.focus().map(|e| e.params.palette.colors.clone()) else { return };
+        let mut colors = current.clone();
+        f(&mut colors);
+        colors.truncate(crate::effects::MAX_COLORS);
+        // Nothing changed (or too few colours left): no fork, no undo step.
+        if colors.len() < 2 || colors == current {
+            return;
+        }
+        if self.editing.is_none() {
+            self.checkpoint();
+        }
+        let Some(id) = self.own_palette() else { return };
+        let Some(mut p) = self.palettes.iter().find(|q| q.id == id).cloned() else { return };
+        p.colors = colors;
+        self.apply_palette(&p);
+        crate::prefs::save_palettes(self);
+    }
+
+    pub fn add_palette_color(&mut self) {
+        self.edit_palette(|c| {
+            if c.len() < crate::effects::MAX_COLORS {
+                c.push(crate::effects::NEW_COLOR);
+            }
+        });
+    }
+
+    pub fn remove_palette_color(&mut self, index: usize) {
+        self.picker = None;
+        self.edit_palette(|c| {
+            if c.len() > 2 && index < c.len() {
+                c.remove(index);
+            }
+        });
+    }
+
+    pub fn rename_palette(&mut self, name: &str) {
+        let name = name.trim();
+        let Some(id) = self.focus().map(|e| e.params.palette.id.clone()).filter(|id| crate::effects::is_user_palette(id)) else { return };
+        if name.is_empty() || self.palettes.iter().any(|p| p.id == id && p.name == name) {
+            return;
+        }
+        self.checkpoint();
+        for p in self.palettes.iter_mut().filter(|p| p.id == id) {
+            (p.name, p.short_name) = (name.to_string(), name.to_string());
+        }
+        for e in self.entities.iter_mut().filter(|e| e.params.palette.id == id) {
+            (e.params.palette.name, e.params.palette.short_name) = (name.to_string(), name.to_string());
+        }
+        crate::prefs::save_palettes(self);
+    }
+
+    /// Delete a user palette; entities using it keep its colours as an unlisted copy.
+    pub fn delete_palette(&mut self, id: &str) {
+        if !self.palettes.iter().any(|p| p.id == id) {
+            return;
+        }
+        self.checkpoint();
+        self.palettes.retain(|p| p.id != id);
+        crate::prefs::save_palettes(self);
+    }
+
+    /// Open the picker on palette colour `index` (as stored). The session is one undo step.
+    pub fn open_picker(&mut self, index: usize) {
+        let Some(c) = self.focus().and_then(|e| e.params.palette.colors.get(index).copied()) else { return };
+        self.close_picker();
+        self.begin_edit();
+        let oklch = crate::color::from_rgba(c, 0.0);
+        self.picker = Some(Picker { index, oklch });
+        self.hex_edit = rune::TextEdit::new(crate::color::hex(c));
+    }
+
+    /// Set the picked colour from OKLCH (the area and sliders).
+    pub fn pick_oklch(&mut self, o: crate::color::Oklch) {
+        let Some(index) = self.picker.as_ref().map(|p| p.index) else { return };
+        let rgba = crate::color::to_rgba(o);
+        self.edit_palette(|c| {
+            if let Some(x) = c.get_mut(index) {
+                *x = rgba;
+            }
+        });
+        if let Some(p) = self.picker.as_mut() {
+            p.oklch = o;
+        }
+        self.hex_edit = rune::TextEdit::new(crate::color::hex(rgba));
+    }
+
+    /// Set the picked colour from the hex field, when it parses.
+    pub fn pick_hex(&mut self) {
+        let Some((rgba, h)) = self.picker.as_ref().and_then(|p| crate::color::parse_hex(&self.hex_edit.text).map(|c| (c, p.oklch.h))) else { return };
+        let o = crate::color::from_rgba(rgba, h);
+        let Some(index) = self.picker.as_ref().map(|p| p.index) else { return };
+        self.edit_palette(|c| {
+            if let Some(x) = c.get_mut(index) {
+                *x = rgba;
+            }
+        });
+        if let Some(p) = self.picker.as_mut() {
+            p.oklch = o;
+        }
+    }
+
+    pub fn close_picker(&mut self) {
+        if self.picker.take().is_some() {
+            self.end_edit();
+        }
+    }
+
+    /// Load Palette…: extract 16 colours from an image file into a new user palette for the
+    /// selection.
+    pub fn palette_from_image(&mut self, path: &std::path::Path) {
+        let asset = match crate::media::decode_file(0, path) {
+            Ok(a) => a,
+            Err(e) => return self.toast(format!("Couldn't read {}: {e}", path.display())),
+        };
+        let Some(f) = asset.frames.first() else { return self.toast("That file has no image to take colours from") };
+        let colors = crate::palette::extract(&f.rgba, asset.width, asset.height, 16);
+        let n = self.palettes.iter().filter(|p| p.name.starts_with("Extracted")).count() + 1;
+        let p = Palette { id: crate::effects::new_palette_id("ext_"), name: format!("Extracted {n}"), short_name: format!("Extr. {n}"), colors };
+        self.checkpoint();
+        self.palettes.push(p.clone());
+        if !self.selection.is_empty() {
+            self.apply_palette(&p);
+        }
+        crate::prefs::save_palettes(self);
+    }
+
+    /// Reset: the selection's effect back to the defaults (keeping each one's style), one step.
+    pub fn reset_selection(&mut self) {
+        self.edit(|p| {
+            let shader = p.shader;
+            *p = Params::default();
+            p.set_shader(shader);
+        });
+    }
+
+    /// The palette choices: user palettes, the presets, then Original when the focus has one.
+    pub fn palette_options(&self) -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = self.palettes.iter().chain(crate::effects::presets()).map(|p| (p.id.clone(), p.name.clone())).collect();
+        if self.focus().is_some_and(|e| e.asset.palette.is_some()) {
+            v.push((crate::effects::ORIGINAL_ID.into(), "Original".into()));
+        }
+        v
+    }
+
+    /// Give the selection the palette `id`, one undo step. Original is each entity's own.
+    pub fn set_palette(&mut self, id: &str) {
+        let shared = self.palettes.iter().chain(crate::effects::presets()).find(|p| p.id == id).cloned();
+        if self.selection.is_empty() || (shared.is_none() && id != crate::effects::ORIGINAL_ID) {
+            return;
+        }
+        self.checkpoint();
+        let sel = self.selection.clone();
+        for e in self.entities.iter_mut().filter(|e| sel.contains(&e.id)) {
+            let pal = shared.clone().or_else(|| e.asset.original_palette());
+            if let Some(pal) = pal {
+                e.params.palette = pal;
+            }
         }
         if let Some(p) = self.focus().map(|e| e.params.clone()) {
             self.last_params = p;
@@ -528,14 +793,21 @@ impl App {
     /// Media to add. Dropped files land at the drop's world point; opened ones at the view's
     /// centre, and the view fits them.
     pub fn import(&mut self, paths: Vec<PathBuf>, at: Option<[f32; 2]>) {
+        // A workspace among the files opens instead (the first one); the rest is media.
+        let (ws, paths): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|p| workspace::is_workspace(p));
+        if let Some(p) = ws.into_iter().next() {
+            self.open_workspace(p);
+            return;
+        }
+        if paths.is_empty() {
+            return;
+        }
         let batch = self.next_batch;
         self.next_batch += 1;
         self.batches.push(Batch { id: batch, at, waiting: paths.len(), ready: Vec::new() });
         for p in paths {
-            let asset = self.next_asset;
-            self.next_asset += 1;
             self.pending += 1;
-            self.loader.load(asset, p, batch);
+            self.loader.load(crate::media::next_asset_id(), p, batch);
         }
     }
 
@@ -562,7 +834,7 @@ impl App {
         }
         self.checkpoint();
         let mut order: Vec<Arc<Asset>> = assets;
-        order.sort_by(|a, b| (b.width * b.height).cmp(&(a.width * a.height)));
+        order.sort_by_key(|a| std::cmp::Reverse(a.width * a.height));
         let mut slots = Vec::with_capacity(order.len());
         let (mut x, mut y, mut row_h, mut w_max) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
         for (i, a) in order.iter().enumerate() {
@@ -595,6 +867,8 @@ impl App {
                 playing: animated,
                 play_t: 0.0,
                 fx_t: 0.0,
+                muted: true,
+                seek_gen: 0,
             });
             self.next_z += 1;
             self.selection.insert(id);
@@ -627,7 +901,7 @@ impl App {
             self.next_z += 1;
             e.pos = [e.pos[0] + 30.0, e.pos[1] + 30.0];
             e.name = self.unique_name(&e.name);
-            e.play_t = 0.0;
+            e.seek_to(0.0);
             self.selection.insert(e.id);
             self.entities.push(e);
         }
@@ -646,6 +920,169 @@ impl App {
         (2..).map(|n| format!("{stem} {n}{ext}")).find(|n| self.entities.iter().all(|e| &e.name != n)).unwrap_or_default()
     }
 
+    // ------------------------------------------------------------------ workspace
+
+    pub fn dirty(&self) -> bool {
+        self.revision != self.saved && !(self.doc.is_none() && self.entities.is_empty())
+    }
+
+    /// Read a workspace on a worker; `receive_workspace` adopts it whole.
+    pub fn open_workspace(&mut self, path: PathBuf) {
+        if self.opening.is_some() {
+            return;
+        }
+        let progress = Arc::new(workspace::Progress::default());
+        self.opening = Some(progress.clone());
+        self.loader.open_workspace(path, progress);
+    }
+
+    pub fn cancel_open(&mut self) {
+        if let Some(p) = &self.opening {
+            p.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// Replace the canvas with a read workspace: its entities, view and palettes. History is
+    /// cleared, as on the web.
+    pub fn receive_workspace(&mut self, path: PathBuf, result: Result<workspace::Workspace, String>) {
+        self.opening = None;
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let ws = match result {
+            Ok(ws) => ws,
+            Err(e) if e == "cancelled" => return,
+            Err(e) => return self.toast(format!("Couldn't open {name}: {e}")),
+        };
+        if ws.items.is_empty() && !ws.failed.is_empty() {
+            return self.toast(format!("Couldn't open {name}: {}", ws.failed[0]));
+        }
+        self.entities.clear();
+        self.audio.clear();
+        self.picker = None;
+        self.selection.clear();
+        self.undo.clear();
+        self.redo.clear();
+        self.editing = None;
+        self.drag = None;
+        self.marquee = None;
+        let mut used = BTreeSet::new();
+        let max_saved = ws.items.iter().filter_map(|it| it.id).max().unwrap_or(0);
+        let mut next = max_saved + 1;
+        for it in ws.items {
+            let id = match it.id {
+                Some(id) if id > 0 && used.insert(id) => id,
+                _ => {
+                    next += 1;
+                    used.insert(next - 1);
+                    next - 1
+                }
+            };
+            self.entities.push(Entity { id, name: it.name, asset: it.asset, pos: it.pos, size: it.size, z: it.z, params: it.params, playing: it.playing, play_t: it.play_t, fx_t: it.fx_t, muted: it.muted, seek_gen: 0 });
+        }
+        self.next_id = next;
+        self.next_z = self.entities.iter().map(|e| e.z).max().unwrap_or(0) + 1;
+        // The workspace's palettes join the user's, as the web merges them into its store.
+        let before = self.palettes.len();
+        for p in ws.palettes {
+            if !self.palettes.iter().any(|q| q.id == p.id) {
+                self.palettes.push(p);
+            }
+        }
+        if self.palettes.len() != before {
+            crate::prefs::save_palettes(self);
+        }
+        self.set_viewport(ws.viewport);
+        self.doc = Some(path);
+        self.revision += 1;
+        self.saved = self.revision;
+        if !ws.failed.is_empty() {
+            let n = ws.failed.len();
+            self.toast(format!("Failed to import {n} of {} files", n + self.entities.len()));
+        }
+    }
+
+    /// The camera as the web's viewport (device pixels per world unit, world at the top-left).
+    pub fn viewport(&self) -> Viewport {
+        let s = f64::from(self.cam.scale);
+        let o = self.cam.world([self.canvas[0], self.canvas[1]]);
+        Viewport { offset: [f64::from(o[0]), f64::from(o[1])], zoom: s * f64::from(self.device_scale) }
+    }
+
+    pub fn set_viewport(&mut self, v: Viewport) {
+        let s = (v.zoom / f64::from(self.device_scale.max(0.5))) as f32;
+        let s = s.clamp(MIN_SCALE, MAX_SCALE);
+        self.cam.anim = None;
+        self.zoom_to = None;
+        self.cam.set([self.canvas[0] - v.offset[0] as f32 * s, self.canvas[1] - v.offset[1] as f32 * s], s);
+    }
+
+    pub fn items(&self) -> Vec<Item> {
+        self.entities
+            .iter()
+            .map(|e| Item { id: Some(e.id), name: e.name.clone(), asset: e.asset.clone(), pos: e.pos, size: e.size, z: e.z, params: e.params.clone(), fx_t: e.fx_t, playing: e.playing, play_t: e.play_t, muted: e.muted })
+            .collect()
+    }
+
+    /// Write the workspace to `path` on a worker.
+    pub fn save_to(&mut self, path: PathBuf) {
+        if self.saving.is_some() {
+            return;
+        }
+        self.saving = Some(self.revision);
+        self.loader.save_workspace(path, self.items(), self.viewport(), self.palettes.clone());
+    }
+
+    pub fn saved_workspace(&mut self, path: PathBuf, result: Result<(), String>) {
+        let rev = self.saving.take().unwrap_or(self.revision);
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        match result {
+            Ok(()) => {
+                self.doc = Some(path);
+                self.saved = rev;
+                self.toast(format!("Saved {name}"));
+            }
+            Err(e) => self.toast(format!("Couldn't save {name}: {e}")),
+        }
+    }
+
+    // ------------------------------------------------------------------ effect time
+
+    /// The Time control's state for the selection: (time, auto-playing, mixed), or None when no
+    /// selected effect reads time. Time edits aren't undoable, as on the web.
+    pub fn effect_time(&self) -> Option<(f64, bool, bool)> {
+        let timed: Vec<&Entity> = self.selected().filter(|e| e.params.uses_time()).collect();
+        let first = timed.first()?;
+        // The time follows the first auto-playing entity, as the web's source entity.
+        let src = timed.iter().find(|e| e.params.time_autoplay).unwrap_or(first);
+        let mixed = timed.iter().any(|e| (e.fx_t - first.fx_t).abs() > 1e-4 || e.params.time_autoplay != first.params.time_autoplay);
+        Some((src.fx_t, src.params.time_autoplay, mixed))
+    }
+
+    /// Play or pause the selection's effect clocks.
+    pub fn toggle_effect_time(&mut self) {
+        let Some((_, playing, _)) = self.effect_time() else { return };
+        let sel = self.selection.clone();
+        for e in self.entities.iter_mut().filter(|e| sel.contains(&e.id) && e.params.uses_time()) {
+            e.params.time_autoplay = !playing;
+        }
+    }
+
+    /// A Time gesture starts: every selected clock pauses at the shown time.
+    pub fn begin_effect_time(&mut self) {
+        let Some((t, ..)) = self.effect_time() else { return };
+        let sel = self.selection.clone();
+        for e in self.entities.iter_mut().filter(|e| sel.contains(&e.id) && e.params.uses_time()) {
+            e.params.time_autoplay = false;
+            e.fx_t = t;
+        }
+    }
+
+    pub fn set_effect_time(&mut self, t: f64) {
+        let sel = self.selection.clone();
+        for e in self.entities.iter_mut().filter(|e| sel.contains(&e.id) && e.params.uses_time()) {
+            e.fx_t = t;
+        }
+    }
+
     /// Toggle playback of the selected animated media.
     pub fn toggle_play(&mut self) {
         let sel = self.selection.clone();
@@ -658,7 +1095,50 @@ impl App {
         let sel = self.selection.clone();
         for e in self.entities.iter_mut().filter(|e| sel.contains(&e.id) && e.asset.animated()) {
             let d = e.asset.duration.as_secs_f64();
-            e.play_t = (e.play_t + dt).rem_euclid(d.max(1e-3));
+            e.seek_to((e.play_t + dt).rem_euclid(d.max(1e-3)));
+        }
+    }
+
+    /// M: sound on or off for the selected videos that have it.
+    pub fn toggle_mute(&mut self) {
+        let sel = self.selection.clone();
+        let vids: Vec<&mut Entity> = self.entities.iter_mut().filter(|e| sel.contains(&e.id) && e.has_audio()).collect();
+        let mute = !vids.iter().all(|e| e.muted);
+        for e in vids {
+            e.muted = mute;
+        }
+    }
+
+    /// Keep each audible video's sound playing in step with its clock: the sound's own clock
+    /// leads while it plays (so picture follows sound), and a seek moves the sound.
+    pub fn sync_audio(&mut self) {
+        let mut live = std::mem::take(&mut self.audio);
+        for e in &mut self.entities {
+            let want = e.playing && !e.muted && e.has_audio();
+            let Some(path) = e.asset.video_path().filter(|_| want) else { continue };
+            let (player, followed) = live.remove(&e.id).unwrap_or_else(|| {
+                let p = rune::Player::audio(path);
+                p.set_looping(true);
+                p.seek(e.play_t);
+                (p, e.seek_gen)
+            });
+            if followed != e.seek_gen {
+                player.seek(e.play_t);
+            }
+            if !player.is_playing() {
+                player.play();
+            }
+            if player.state() == rune::PlayerState::Playing {
+                let t = player.time();
+                if (t - e.play_t).abs() < 1.0 || (e.play_t - t).abs() > e.asset.duration.as_secs_f64() * 0.5 {
+                    e.play_t = t;
+                }
+            }
+            self.audio.insert(e.id, (player, e.seek_gen));
+        }
+        // The rest (paused, muted, gone) stop as they drop.
+        for (p, _) in live.values() {
+            p.pause();
         }
     }
 
@@ -685,11 +1165,9 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media::Frame;
-    use std::time::Duration;
 
     fn asset(id: u64, w: u32, h: u32) -> Arc<Asset> {
-        Arc::new(Asset { id, name: format!("a{id}.png"), width: w, height: h, frames: vec![Frame { rgba: vec![], delay: Duration::ZERO }], duration: Duration::ZERO })
+        Arc::new(crate::media::test_asset(id, w, h))
     }
 
     #[test]
@@ -740,6 +1218,43 @@ mod tests {
         a.cam.zoom_about(q, 1.6);
         let after = a.cam.world(q);
         assert!((before[0] - after[0]).abs() < 1e-3 && (before[1] - after[1]).abs() < 1e-3);
+    }
+
+    #[test]
+    fn editing_a_preset_forks_it_and_one_undo_takes_both_back() {
+        let mut a = App::default();
+        a.place(vec![asset(1, 10, 10), asset(2, 10, 10)], [0.0, 0.0], false);
+        let (one, two) = (a.entities[0].id, a.entities[1].id);
+        a.select_only(one);
+        a.open_picker(1);
+        a.pick_oklch(crate::color::Oklch { l: 0.6, c: 0.2, h: 30.0, a: 1.0 });
+        a.pick_oklch(crate::color::Oklch { l: 0.7, c: 0.2, h: 30.0, a: 1.0 });
+        a.close_picker();
+        let p = a.entity(one).map(|e| e.params.palette.clone()).expect("one");
+        assert!(p.id.starts_with("cstm_") && p.name == "Custom 1");
+        assert_eq!(a.palettes, vec![p.clone()]);
+        assert_eq!(a.entity(two).map(|e| e.params.palette.id.clone()).as_deref(), Some("blackAndWhite"), "only the selection changes");
+        // A user palette edits in place.
+        a.add_palette_color();
+        assert_eq!(a.palettes[0].colors.len(), 3);
+        assert_eq!(a.palettes[0].id, p.id);
+        assert!(a.undo());
+        assert!(a.undo(), "the picker session was one step");
+        assert!(a.palettes.is_empty());
+        assert_eq!(a.entity(one).map(|e| e.params.palette.id.clone()).as_deref(), Some("blackAndWhite"));
+    }
+
+    #[test]
+    fn a_palette_keeps_two_colours_and_at_most_sixteen() {
+        let mut a = App::default();
+        a.place(vec![asset(1, 10, 10)], [0.0, 0.0], false);
+        a.remove_palette_color(0);
+        assert_eq!(a.focus().map(|e| e.params.palette.colors.len()), Some(2));
+        assert!(a.palettes.is_empty() && a.undo.len() == 1, "a no-op edit forks nothing");
+        for _ in 0..20 {
+            a.add_palette_color();
+        }
+        assert_eq!(a.focus().map(|e| e.params.palette.colors.len()), Some(16));
     }
 
     #[test]
