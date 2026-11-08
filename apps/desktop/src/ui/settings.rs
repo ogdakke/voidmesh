@@ -24,6 +24,7 @@ const ROW_H: f32 = 52.0;
 
 pub fn toggle(s: &mut App) {
     s.settings = !s.settings;
+    s.library = None;
 }
 
 pub fn view(l: &Look, s: &App, top: f32, dark: bool) -> El {
@@ -53,7 +54,6 @@ pub fn view(l: &Look, s: &App, top: f32, dark: bool) -> El {
         .child(lensing(l, s, dark))
         .child(group(l, vec![row_switch(l, "Snap to Grid", "snap-switch", s.snap, |s| crate::prefs::set_snap(s, !s.snap))]))
         .child(section(l, "Palettes", palettes(l, s)))
-        .child(section(l, "Workspace", vec![workspace(l, s)]))
         .child(section(l, "Keyboard shortcuts", shortcuts(l)))
         .child(section(
             l,
@@ -242,24 +242,16 @@ fn palettes(l: &Look, s: &App) -> Vec<El> {
         .collect()
 }
 
-fn workspace(l: &Look, s: &App) -> El {
-    let (label, desc) = match &s.doc {
-        None => ("Not saved yet".to_string(), "⌘S saves it as a .vdmsh file the web app opens too.".to_string()),
-        Some(p) => {
-            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let state = if s.dirty() { "Unsaved changes" } else { "Saved" };
-            (name, format!("{state} · {}", p.parent().map(|d| d.display().to_string()).unwrap_or_default()))
-        }
-    };
-    line(l, &label, Some(&desc), el())
-}
-
 /// `.keybind-item`: the action, and its keys as `.kbd` chips.
 fn shortcuts(l: &Look) -> Vec<El> {
     const ROWS: &[(&str, &[&str])] = &[
-        ("Open a workspace or media", &["⌘", "O"]),
-        ("Save workspace", &["⌘", "S"]),
-        ("Save workspace as", &["⇧", "⌘", "S"]),
+        ("Open media or a .vdmsh file", &["⌘", "O"]),
+        ("Workspaces", &["⇧", "⌘", "O"]),
+        ("New workspace", &["⌘", "T"]),
+        ("Close workspace", &["⌘", "W"]),
+        ("Switch workspace", &["⌘", "1–9"]),
+        ("Next / previous workspace", &["⌃", "Tab"]),
+        ("Export workspace as .vdmsh", &["⇧", "⌘", "S"]),
         ("Undo", &["⌘", "Z"]),
         ("Redo", &["⇧", "⌘", "Z"]),
         ("Settings", &["⌘", ","]),

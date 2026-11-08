@@ -15,6 +15,7 @@ mod color;
 mod palette;
 mod prefs;
 mod state;
+mod store;
 #[cfg(test)]
 mod tests;
 mod ui;
@@ -36,6 +37,14 @@ fn setup(s: &mut App, waker: rune::Waker) {
         return;
     }
     s.prefs = prefs::open();
+    match store::LocalStore::open() {
+        Some(st) => {
+            let st: std::sync::Arc<dyn store::Store> = std::sync::Arc::new(st);
+            s.saver = Some(store::Saver::new(st.clone(), s.loader.clone()));
+            s.store = Some(st);
+        }
+        None => s.toast("No data folder: workspaces won't be kept"),
+    }
     prefs::load(s);
     let files: Vec<PathBuf> = args.into_iter().map(PathBuf::from).filter(|p| p.is_file()).collect();
     // A workspace among them opens; `import` routes it.
@@ -55,12 +64,15 @@ fn poll(s: &mut App, t: f64, tx: &mut Tx) -> bool {
     }
     for done in s.loader.drain_workspaces() {
         match done {
-            media::WorkspaceDone::Opened(path, r) => s.receive_workspace(path, r),
-            media::WorkspaceDone::Saved(path, r) => s.saved_workspace(path, r),
+            media::WorkspaceDone::Loaded { tab, imported, result } => s.receive_workspace(&tab, imported, result),
+            media::WorkspaceDone::Exported(path, r) => s.exported_workspace(path, r),
         }
         changed = true;
     }
-    if s.opening.is_some() {
+    if let Some(wait) = s.autosave() {
+        tx.wake_after(std::time::Duration::from_secs_f64(wait.max(0.05)));
+    }
+    if s.loading().is_some() {
         // Progress shows in the chrome while a workspace reads.
         tx.wake_after(std::time::Duration::from_millis(100));
         changed = true;
@@ -119,21 +131,7 @@ fn demo(s: &mut App) {
             px.extend_from_slice(&[(255.0 * u) as u8, (255.0 * (1.0 - d * 1.6).max(0.0)) as u8, (255.0 * v) as u8, 255]);
         }
     }
-    let mk = |id: u64, name: &str| {
-        std::sync::Arc::new(media::Asset {
-            id,
-            name: name.into(),
-            width: w,
-            height: h,
-            kind: media::Kind::Image,
-            frames: vec![media::Frame { rgba: px.clone(), delay: std::time::Duration::ZERO }],
-            duration: std::time::Duration::ZERO,
-            original: media::Original::Bytes(std::sync::Arc::from(&[][..])),
-            ext: "png".into(),
-            palette: None,
-            video: None,
-        })
-    };
+    let mk = |id: u64, name: &str| std::sync::Arc::new(media::rgba_asset(id, name, w, h, px.clone()));
     s.cam.set([40.0, 120.0], 0.5);
     s.place(vec![mk(1, "gradient.png")], [240.0, 160.0], false);
     s.place(vec![mk(2, "halftone.png")], [880.0, 160.0], false);
@@ -145,6 +143,7 @@ fn demo(s: &mut App) {
 
 /// Headless: open the files in `VOIDMESH_OPEN` (path-list) synchronously, so `--snap` can render
 /// real workspaces and media: `VOIDMESH_OPEN=a.vdmsh voidmesh --snap out.png --scene open --at 2`.
+/// Workspace media goes to a scratch store in the temp folder.
 fn open_scene(s: &mut App) {
     s.canvas = [0.0, 0.0, 1280.0, 820.0];
     s.settings = std::env::var_os("VOIDMESH_SETTINGS").is_some();
@@ -152,8 +151,10 @@ fn open_scene(s: &mut App) {
     let mut assets = Vec::new();
     for p in std::env::split_paths(&list) {
         if workspace::is_workspace(&p) {
-            let r = workspace::read(&p, &media::cache_dir(), &workspace::Progress::default());
-            s.receive_workspace(p, r);
+            let st = store::LocalStore::new(std::env::temp_dir().join("voidmesh-headless"));
+            let r = workspace::read_zip(&p, &st, &workspace::Progress::default());
+            let tab = s.tab().id.clone();
+            s.receive_workspace(&tab, true, r);
             if std::env::var_os("VOIDMESH_FIT").is_some() {
                 s.select_all();
                 if let Some(b) = s.bounds(&s.selection.clone()) {
@@ -223,6 +224,8 @@ fn main() {
     // The canvas runs under a transparent titlebar band the app draws; the traffic lights sit in
     // it, and `Cx::chrome_insets` says how much they take.
     .titlebar(rune::Titlebar::new(state::TITLEBAR))
+    // Save what changed before the app goes.
+    .on_quit(|s: &mut App, _| s.flush())
     .compositor(gfx::Gfx::default());
     app.run();
 }

@@ -288,7 +288,7 @@ fn right_click_on_empty_canvas_offers_workspace_commands() {
     let mut rt = canvas();
     right_click(&mut rt, 600.0, 700.0);
     let menu = rt.popup_menu().expect("menu open");
-    assert!(menu.find("save").is_some() && menu.find("open").is_some());
+    assert!(menu.find("new-ws").is_some() && menu.find("library").is_some() && menu.find("export-ws").is_some() && menu.find("open").is_some());
     rt.resolve_popup(Some("snap")).expect("pick");
     settle(&mut rt);
     assert!(rt.state.snap);
@@ -310,4 +310,35 @@ fn the_inspector_keeps_clicks_and_drags_on_its_empty_space() {
         assert_eq!(rt.state.selection.len(), 1, "a drag from {x},{y} drew a marquee");
         assert!(rt.state.marquee.is_none());
     }
+}
+
+#[test]
+fn many_tabs_scroll_in_the_titlebar_and_keep_their_width() {
+    let mut rt = canvas();
+    // One tab: the strip is as wide as it, "+" right after.
+    let strip = rt.presented("tabs-scroll").expect("tab strip").0;
+    let plus = rt.presented("tab-new").expect("+").0;
+    assert!((plus[0] - (strip[0] + strip[2] + 4.0)).abs() < 1.0 && strip[2] < 300.0, "{strip:?} then {plus:?}");
+    let cmd = |c| KeyEvent { key: Key::Command(c), mods: Mods { cmd: true, ..Mods::default() } };
+    for i in 0..14 {
+        rt.key(cmd('t'));
+        settle(&mut rt);
+        rt.state.place(vec![asset(100 + i, 10, 10)], [0.0, 0.0], false);
+    }
+    rt.key(cmd('1'));
+    settle(&mut rt);
+    assert_eq!((rt.state.tabs.len(), rt.state.active), (15, 0));
+    let strip = rt.presented("tabs-scroll").expect("tab strip").0;
+    let window = 1200.0;
+    let library = rt.presented("library-open").expect("library button").0;
+    assert!(strip[2] > 600.0 && library[0] + library[2] <= window - 20.0, "the strip fills the titlebar and stops short of its edge: {strip:?}, {library:?}");
+    let first = rt.state.tabs[0].id.clone();
+    let tab = rt.presented(&format!("tab-{first}")).expect("first tab").0;
+    assert!(tab[2] >= 96.0, "a tab keeps its minimum width: {}", tab[2]);
+    // ⌘9 shows the last tab, scrolled into the strip.
+    rt.key(cmd('9'));
+    settle(&mut rt);
+    assert_eq!(rt.state.active, rt.state.tabs.len() - 1);
+    let last = rt.presented(&crate::ui::tabs::active_key(&rt.state)).expect("last tab").0;
+    assert!(last[0] >= strip[0] - 0.5 && last[0] + last[2] <= strip[0] + strip[2] + 0.5, "the active tab is in view: {last:?} in {strip:?}");
 }

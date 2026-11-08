@@ -31,6 +31,7 @@ wgpu = { version = "30", default-features = false, features = [
   "metal",
   "wgsl",
 ] }
+sha2 = "0.10"
 
 # Video decoding (`video.rs`): AVAssetReader frames to CPU RGBA, the versions Rune itself uses.
 [target.'cfg(target_os = "macos")'.dependencies]

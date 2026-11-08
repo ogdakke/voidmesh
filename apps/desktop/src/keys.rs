@@ -7,12 +7,36 @@ use crate::state::App;
 pub fn on_key(s: &mut App, e: &KeyEvent, tx: &mut Tx) -> bool {
     let m = e.mods;
     tx.instant();
-    // The settings view takes the window: only closing it, and app-wide commands, apply.
-    if s.settings {
+    // Workspace commands work everywhere.
+    match (&e.key, m.shift) {
+        (Key::Command('t'), false) => s.new_tab(),
+        (Key::Command('w'), false) => s.close_tab(s.active),
+        (Key::Command('s'), false) => crate::ui::save(s),
+        (Key::Command('s'), true) => crate::ui::export_workspace(s, tx),
+        (Key::Command('o'), false) => crate::ui::open_any(s, tx),
+        (Key::Command('o'), true) => crate::ui::library::toggle(s),
+        (Key::Command(c @ '1'..='9'), false) => {
+            // ⌘9 is the last tab, as in browsers.
+            let n = c.to_digit(10).unwrap_or(1) as usize;
+            s.switch_tab(if n == 9 { s.tabs.len() - 1 } else { n - 1 });
+        }
+        (Key::Tab, shift) if m.ctrl => s.cycle_tab(if shift { -1 } else { 1 }),
+        _ => return on_view_key(s, e, tx),
+    }
+    crate::ui::tabs::reveal(s, tx);
+    true
+}
+
+fn on_view_key(s: &mut App, e: &KeyEvent, tx: &mut Tx) -> bool {
+    let m = e.mods;
+    // The settings view and the library take the window: only closing them applies.
+    if s.settings || s.library.is_some() {
         match &e.key {
-            Key::Escape | Key::Command(',') => s.settings = false,
-            Key::Command('s') => crate::ui::save(s, tx, m.shift),
-            Key::Command('o') => crate::ui::open_any(s, tx),
+            Key::Escape => {
+                s.settings = false;
+                s.library = None;
+            }
+            Key::Command(',') => crate::ui::settings::toggle(s),
             _ => return false,
         }
         return true;
@@ -33,8 +57,6 @@ pub fn on_key(s: &mut App, e: &KeyEvent, tx: &mut Tx) -> bool {
             ('c', _) => crate::clip::copy_image(s),
             ('d', _) => s.duplicate_selection(),
             ('e', _) => crate::ui::export_panel::save_or_export(s, tx),
-            ('o', _) => crate::ui::open_any(s, tx),
-            ('s', shift) => crate::ui::save(s, tx, shift),
             (',', _) => crate::ui::settings::toggle(s),
             ('0', _) => {
                 let k = s.device_scale;
@@ -62,7 +84,7 @@ pub fn on_key(s: &mut App, e: &KeyEvent, tx: &mut Tx) -> bool {
         Key::Escape => {
             if s.picker.is_some() {
                 s.close_picker();
-            } else if s.opening.is_some() {
+            } else if s.loading().is_some() {
                 s.cancel_open();
             } else {
                 s.selection.clear();

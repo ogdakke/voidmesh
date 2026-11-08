@@ -1,12 +1,16 @@
-//! `.vdmsh` workspaces, the web app's format (`lib/serialization`, manifest v6): a zip with
-//! `manifest.json` and the original media. Reads every manifest version the web app migrates
-//! (v1–v6: inline or table-referenced params, media paths and original palettes) and writes v6,
-//! so a file round-trips between the two apps.
+//! `.vdmsh` workspaces, the web app's format (`lib/serialization`): a zip with `manifest.json`
+//! and the original media. Reads every manifest version the web app migrates (v1–v7: inline or
+//! table-referenced params, media paths and original palettes) and writes v7, so a file
+//! round-trips between the two apps.
+//!
+//! v7 names media by content (`media/<sha256>.<ext>`, the original bytes), gives entities UUIDs
+//! and carries the workspace's own id and name. The app's store keeps the same manifest, unzipped,
+//! with the media in a shared blob folder (`store.rs`).
 //!
 //! World units match: a world unit is a media pixel in both. The web viewport's `zoom` counts
 //! device pixels per world unit and `offset` is the world point at the canvas's top-left.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -16,9 +20,10 @@ use serde_json::{Map, Value, json};
 
 use crate::effects::{DotShape, Palette, Params, Rgba, Shader};
 use crate::media::{self, Asset, Kind, Original};
+use crate::store::{self, Store};
 
 pub const EXTENSIONS: &[&str] = &["vdmsh", "studio", "zip"];
-const VERSION: u64 = 6;
+const VERSION: u64 = 7;
 
 pub fn is_workspace(path: &Path) -> bool {
     path.extension().is_some_and(|e| EXTENSIONS.iter().any(|x| e.eq_ignore_ascii_case(x)))
@@ -27,8 +32,8 @@ pub fn is_workspace(path: &Path) -> bool {
 /// One entity as a workspace holds it.
 #[derive(Clone)]
 pub struct Item {
-    /// The web's `entity-N` number, when it has one.
-    pub id: Option<u32>,
+    /// Its id in the manifest: a UUID, or the web's `entity-N` in older files.
+    pub uid: String,
     pub name: String,
     pub asset: Arc<Asset>,
     pub pos: [f32; 2],
@@ -49,6 +54,8 @@ pub struct Viewport {
 }
 
 pub struct Workspace {
+    /// The workspace's own name, when the file has one (v7).
+    pub name: Option<String>,
     pub items: Vec<Item>,
     pub viewport: Viewport,
     /// User palettes the entities reference.
@@ -67,10 +74,53 @@ pub struct Progress {
 
 // ---------------------------------------------------------------------------------------- read
 
-/// Read a workspace. Videos are written out to `cache` (AVFoundation reads files), keyed by
-/// content so reopening a file reuses them. Nothing is half-applied: the caller adopts the
-/// whole result or none of it.
-pub fn read(path: &Path, cache: &Path, progress: &Progress) -> Result<Workspace, String> {
+/// A media file a manifest names, held in the store.
+pub struct Fetched {
+    pub hash: String,
+    pub ext: String,
+    pub file: PathBuf,
+    /// The bytes, when reading them was how it was fetched.
+    pub bytes: Option<Arc<[u8]>>,
+}
+
+/// Where a manifest's media comes from.
+pub trait Source {
+    fn fetch(&mut self, path: &str, video: bool) -> Result<Fetched, String>;
+}
+
+/// Media already in a store, named by content.
+pub struct StoreSource<'a>(pub &'a dyn Store);
+
+impl Source for StoreSource<'_> {
+    fn fetch(&mut self, path: &str, _: bool) -> Result<Fetched, String> {
+        let (hash, ext) = store::parse_media_path(path).ok_or_else(|| format!("bad media path {path}"))?;
+        Ok(Fetched { hash: hash.into(), ext: ext.into(), file: self.0.blob_path(hash, ext)?, bytes: None })
+    }
+}
+
+/// Media in a `.vdmsh` zip, copied into the store as it's read.
+struct ZipSource<'a, R> {
+    zip: zip::ZipArchive<R>,
+    store: &'a dyn Store,
+}
+
+impl<R: Read + std::io::Seek> Source for ZipSource<'_, R> {
+    fn fetch(&mut self, path: &str, video: bool) -> Result<Fetched, String> {
+        let mut f = self.zip.by_name(path).map_err(|_| format!("missing {path}"))?;
+        let mut bytes = Vec::with_capacity(f.size() as usize);
+        f.read_to_end(&mut bytes).map_err(|err| err.to_string())?;
+        let mut ext = path.rsplit_once('.').map(|(_, x)| x.to_ascii_lowercase()).unwrap_or_default();
+        if video && !media::is_video(&ext) {
+            ext = "mp4".into();
+        }
+        let blob = self.store.put_bytes(&bytes, &ext)?;
+        Ok(Fetched { hash: blob.hash, ext, file: blob.path, bytes: Some(bytes.into()) })
+    }
+}
+
+/// Read a `.vdmsh` file, copying its media into `store`. Nothing is half-applied: the caller
+/// adopts the whole result or none of it.
+pub fn read_zip(path: &Path, store: &dyn Store, progress: &Progress) -> Result<Workspace, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(std::io::BufReader::new(file)).map_err(|e| format!("not a workspace ({e})"))?;
     let manifest: Value = {
@@ -79,6 +129,10 @@ pub fn read(path: &Path, cache: &Path, progress: &Progress) -> Result<Workspace,
         f.read_to_string(&mut s).map_err(|e| e.to_string())?;
         serde_json::from_str(&s).map_err(|e| format!("manifest: {e}"))?
     };
+    read_manifest(&manifest, &mut ZipSource { zip, store }, progress)
+}
+
+pub fn read_manifest(manifest: &Value, source: &mut dyn Source, progress: &Progress) -> Result<Workspace, String> {
     if manifest["type"] != "studio-canvas" {
         return Err("not a Voidmesh workspace".into());
     }
@@ -95,15 +149,11 @@ pub fn read(path: &Path, cache: &Path, progress: &Progress) -> Result<Workspace,
     let (params_table, media_table, originals_table) = (table("shaderParamsTable"), table("mediaFiles"), table("originalPalettes"));
     let palettes: Vec<Palette> = table("palettes").iter().filter_map(palette_from).collect();
     let entities = manifest["entities"].as_array().ok_or("manifest has no entities")?;
-    progress.total.store(entities.len(), Ordering::Relaxed);
-
-    let mut assets: HashMap<String, Arc<Asset>> = HashMap::new();
+    let assets = load_all_media(entities, &media_table, source, progress)?;
+    let mut uids = HashSet::new();
     let mut items = Vec::new();
     let mut failed = Vec::new();
     for (i, e) in entities.iter().enumerate() {
-        if progress.cancel.load(Ordering::Relaxed) {
-            return Err("cancelled".into());
-        }
         let name = e["name"].as_str().unwrap_or("media").to_string();
         let resolve = |inline: &str, r: &str, t: &[Value]| -> Option<Value> {
             match e.get(inline) {
@@ -112,15 +162,8 @@ pub fn read(path: &Path, cache: &Path, progress: &Progress) -> Result<Workspace,
             }
         };
         let item = (|| -> Result<Item, String> {
-            let media_path = resolve("mediaFile", "mediaFileRef", &media_table).and_then(|v| v.as_str().map(String::from)).ok_or("no media file")?;
-            let asset = match assets.get(&media_path) {
-                Some(a) => a.clone(),
-                None => {
-                    let a = Arc::new(load_media(&mut zip, &media_path, e, &name, cache)?);
-                    assets.insert(media_path, a.clone());
-                    a
-                }
-            };
+            let media_path = media_of(e, &media_table).ok_or("no media file")?;
+            let asset = assets.get(&media_path).ok_or("no media file")?.clone()?;
             let params_json = resolve("shaderParams", "shaderParamsRef", &params_table).ok_or("no effect parameters")?;
             let mut params = params_from(e["shaderType"].as_str().unwrap_or("dithering"), &params_json);
             if let Some(t) = e["shaderTimeAutoPlay"].as_bool() {
@@ -131,7 +174,7 @@ pub fn read(path: &Path, cache: &Path, progress: &Progress) -> Result<Workspace,
             let animated = asset.animated();
             let size = [e["size"]["width"].as_f64().unwrap_or(f64::from(asset.width)) as f32, e["size"]["height"].as_f64().unwrap_or(f64::from(asset.height)) as f32];
             Ok(Item {
-                id: e["id"].as_str().and_then(|s| s.rsplit('-').next()).and_then(|n| n.parse().ok()),
+                uid: e["id"].as_str().filter(|id| !id.is_empty()).map(String::from).unwrap_or_default(),
                 name: name.clone(),
                 pos: [e["position"]["x"].as_f64().unwrap_or(0.0) as f32, e["position"]["y"].as_f64().unwrap_or(0.0) as f32],
                 size,
@@ -146,7 +189,14 @@ pub fn read(path: &Path, cache: &Path, progress: &Progress) -> Result<Workspace,
             })
         })();
         match item {
-            Ok(it) => items.push(it),
+            Ok(mut it) => {
+                // Ids are unique within a workspace; a missing or repeated one gets a new UUID.
+                if !uids.insert(it.uid.clone()) || it.uid.is_empty() {
+                    it.uid = store::new_id();
+                    uids.insert(it.uid.clone());
+                }
+                items.push(it)
+            }
             Err(err) => failed.push(format!("{name}: {err}")),
         }
         progress.done.store(i + 1, Ordering::Relaxed);
@@ -161,37 +211,84 @@ pub fn read(path: &Path, cache: &Path, progress: &Progress) -> Result<Workspace,
         }
     }
     items.sort_by_key(|it| it.z);
-    Ok(Workspace { items, viewport, palettes, failed })
+    let name = manifest["workspace"]["name"].as_str().map(String::from);
+    Ok(Workspace { name, items, viewport, palettes, failed })
 }
 
-fn load_media<R: Read + std::io::Seek>(zip: &mut zip::ZipArchive<R>, path: &str, e: &Value, name: &str, cache: &Path) -> Result<Asset, String> {
-    let mut f = zip.by_name(path).map_err(|_| format!("missing {path}"))?;
-    let mut bytes = Vec::with_capacity(f.size() as usize);
-    f.read_to_end(&mut bytes).map_err(|err| err.to_string())?;
-    let ext = path.rsplit_once('.').map(|(_, x)| x.to_ascii_lowercase()).unwrap_or_default();
+/// A decode's result, filled by whichever worker takes it.
+type Slot<T> = std::sync::Mutex<Option<Result<T, String>>>;
+
+/// An entity's media path, inline or from the table.
+fn media_of(e: &Value, table: &[Value]) -> Option<String> {
+    match e.get("mediaFile") {
+        Some(v) if !v.is_null() => v.as_str().map(String::from),
+        _ => e["mediaFileRef"].as_u64().and_then(|i| table.get(i as usize)).and_then(|v| v.as_str().map(String::from)),
+    }
+}
+
+/// Every distinct media file the entities name, decoded. Files are fetched in order (a zip reads
+/// one entry at a time) and decoded in parallel: decoding is most of reading a large workspace.
+/// Progress counts media files.
+fn load_all_media(entities: &[Value], table: &[Value], source: &mut dyn Source, progress: &Progress) -> Result<HashMap<String, Result<Arc<Asset>, String>>, String> {
+    type Job<'a> = (String, &'a Value, Slot<Fetched>);
+    let mut seen = HashSet::new();
+    let mut jobs: Vec<Job> = Vec::new();
+    for e in entities {
+        let Some(path) = media_of(e, table) else { continue };
+        if seen.insert(path.clone()) {
+            jobs.push((path, e, std::sync::Mutex::new(None)));
+        }
+    }
+    progress.total.store(jobs.len(), Ordering::Relaxed);
+    for (path, e, slot) in &jobs {
+        if progress.cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".into());
+        }
+        let f = source.fetch(path, e["mediaType"] == "video");
+        if let Ok(mut s) = slot.lock() {
+            *s = Some(f);
+        }
+    }
+    let next = AtomicUsize::new(0);
+    let decoded: Vec<Slot<Arc<Asset>>> = jobs.iter().map(|_| std::sync::Mutex::new(None)).collect();
+    let workers = std::thread::available_parallelism().map_or(4, |n| n.get()).min(8).min(jobs.len().max(1));
+    std::thread::scope(|sc| {
+        for _ in 0..workers {
+            sc.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                if i >= jobs.len() || progress.cancel.load(Ordering::Relaxed) {
+                    return;
+                }
+                let (_, e, slot) = &jobs[i];
+                let fetched = slot.lock().ok().and_then(|mut s| s.take()).unwrap_or_else(|| Err("not read".into()));
+                let name = e["name"].as_str().unwrap_or("media");
+                let r = fetched.and_then(|f| load_media(f, e, name)).map(Arc::new);
+                if let Ok(mut d) = decoded[i].lock() {
+                    *d = Some(r);
+                }
+                progress.done.fetch_add(1, Ordering::Relaxed);
+            });
+        }
+    });
+    if progress.cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
+    }
+    Ok(jobs.into_iter().zip(decoded).map(|((path, ..), d)| (path, d.into_inner().ok().flatten().unwrap_or_else(|| Err("not decoded".into())))).collect())
+}
+
+fn load_media(f: Fetched, e: &Value, name: &str) -> Result<Asset, String> {
     let id = media::next_asset_id();
-    if e["mediaType"] == "video" {
-        let file = cache_video(cache, &bytes, &ext)?;
-        return media::decode_video(id, name.to_string(), ext, file);
-    }
-    media::decode_bytes(id, name.to_string(), &ext, bytes.into())
-}
-
-/// Write a video's bytes to the cache under a content hash; an existing copy is reused.
-fn cache_video(cache: &Path, bytes: &[u8], ext: &str) -> Result<PathBuf, String> {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    bytes.hash(&mut h);
-    let ext = if media::is_video(ext) { ext } else { "mp4" };
-    let path = cache.join(format!("{:016x}-{}.{ext}", h.finish(), bytes.len()));
-    if std::fs::metadata(&path).is_ok_and(|m| m.len() == bytes.len() as u64) {
-        return Ok(path);
-    }
-    std::fs::create_dir_all(cache).map_err(|e| e.to_string())?;
-    let tmp = path.with_extension("part");
-    std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
-    Ok(path)
+    let asset = if e["mediaType"] == "video" {
+        media::decode_video(id, name.to_string(), f.ext, f.file)?
+    } else {
+        let bytes = match f.bytes {
+            Some(b) => b,
+            None => std::fs::read(&f.file).map_err(|err| err.to_string())?.into(),
+        };
+        media::decode_bytes(id, name.to_string(), &f.ext, bytes)?
+    };
+    let _ = asset.blob.set(f.hash);
+    Ok(asset)
 }
 
 fn rgba_from(v: &Value) -> Option<Rgba> {
@@ -328,57 +425,40 @@ pub fn params_json(p: &Params) -> Value {
 
 // --------------------------------------------------------------------------------------- write
 
-/// Where an entity's media goes: one PNG per shared still asset (as the web writes it), the
-/// original bytes for GIF, SVG and video.
-fn media_path(a: &Asset, entity_id: &str) -> String {
+/// The extension an asset's original is kept under.
+pub fn blob_ext(a: &Asset) -> &str {
     match a.kind {
-        Kind::Image => format!("media/assets/asset-{}-1.png", a.id),
-        Kind::Gif => format!("media/{entity_id}.gif"),
-        Kind::Svg => format!("media/{entity_id}.svg"),
-        Kind::Video => format!("media/{entity_id}.{}", if media::is_video(&a.ext) { a.ext.as_str() } else { "mp4" }),
+        Kind::Video if !media::is_video(&a.ext) => "mp4",
+        _ => &a.ext,
     }
 }
 
-fn media_bytes(a: &Asset) -> Result<Vec<u8>, String> {
-    match (a.kind, &a.original) {
-        (Kind::Image, _) => {
-            let f = a.frames.first().ok_or("no pixels")?;
-            let mut out = Vec::new();
-            image::RgbaImage::from_raw(a.width, a.height, f.rgba.clone())
-                .ok_or("bad image size")?
-                .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
-                .map_err(|e| e.to_string())?;
-            Ok(out)
-        }
-        (_, Original::Bytes(b)) => Ok(b.to_vec()),
-        (_, Original::File(p)) => std::fs::read(p).map_err(|e| format!("{}: {e}", p.display())),
-    }
-}
+/// Each media file a manifest names, with the asset holding it.
+pub type MediaFiles = Vec<(String, Arc<Asset>)>;
 
-/// Write a workspace to `path` (through a temporary file, so a failed save leaves the old one).
-pub fn write(path: &Path, items: &[Item], viewport: Viewport, palettes: &[Palette]) -> Result<(), String> {
+/// The v7 manifest for `items`, and the media it names.
+pub fn manifest(workspace: Option<(&str, &str)>, items: &[Item], viewport: Viewport, palettes: &[Palette]) -> Result<(Value, MediaFiles), String> {
     let mut items: Vec<&Item> = items.iter().collect();
     items.sort_by_key(|it| it.z);
     let mut params_table: Vec<Value> = Vec::new();
     let mut media_files: Vec<String> = Vec::new();
     let mut originals: Vec<Value> = Vec::new();
     let mut entities = Vec::new();
-    let mut media: Vec<(String, Arc<Asset>)> = Vec::new();
+    let mut media: MediaFiles = Vec::new();
     let intern = |table: &mut Vec<Value>, v: Value| table.iter().position(|x| *x == v).unwrap_or_else(|| {
         table.push(v);
         table.len() - 1
     });
-    for (n, it) in items.iter().enumerate() {
-        let entity_id = format!("entity-{}", it.id.unwrap_or(n as u32 + 1));
-        let mpath = media_path(&it.asset, &entity_id);
+    for it in &items {
+        let a = &it.asset;
+        let mpath = store::media_path(&store::asset_hash(a)?, blob_ext(a));
         let media_ref = media_files.iter().position(|m| *m == mpath).unwrap_or_else(|| {
             media_files.push(mpath.clone());
-            media.push((mpath.clone(), it.asset.clone()));
+            media.push((mpath.clone(), a.clone()));
             media_files.len() - 1
         });
-        let a = &it.asset;
         let mut e = Map::new();
-        e.insert("id".into(), json!(entity_id));
+        e.insert("id".into(), json!(it.uid));
         e.insert("name".into(), json!(it.name));
         e.insert("position".into(), json!({ "x": it.pos[0], "y": it.pos[1] }));
         e.insert("size".into(), json!({ "width": it.size[0], "height": it.size[1] }));
@@ -432,13 +512,29 @@ pub fn write(path: &Path, items: &[Item], viewport: Viewport, palettes: &[Palett
         "shaderParamsTable": params_table,
         "mediaFiles": media_files,
     });
+    if let Some((id, name)) = workspace {
+        manifest["workspace"] = json!({ "id": id, "name": name });
+    }
     if !originals.is_empty() {
         manifest["originalPalettes"] = json!(originals);
     }
     if !used.is_empty() {
         manifest["palettes"] = json!(used);
     }
+    Ok((manifest, media))
+}
 
+fn media_bytes(a: &Asset) -> Result<Vec<u8>, String> {
+    match &a.original {
+        Original::Bytes(b) => Ok(b.to_vec()),
+        Original::File(p) => std::fs::read(p).map_err(|e| format!("{}: {e}", p.display())),
+    }
+}
+
+/// Export a workspace as a `.vdmsh` file (through a temporary file, so a failed write leaves
+/// the old one).
+pub fn write_zip(path: &Path, doc: &store::Doc) -> Result<(), String> {
+    let (manifest, media) = manifest(Some((&doc.id, &doc.name)), &doc.items, doc.viewport, &doc.palettes)?;
     let tmp = path.with_extension("vdmsh.part");
     let result = (|| -> Result<(), String> {
         let file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
@@ -479,35 +575,34 @@ fn iso_now() -> String {
     format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.000Z", rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
-/// A fun default name, as the web app's `adjective-noun-verb.vdmsh`.
+/// A fun default name, as the web app's `adjective-noun-verb`.
 pub fn random_name() -> String {
     const A: [&str; 12] = ["quiet", "velvet", "hollow", "lucid", "feral", "amber", "static", "drowsy", "sunken", "molten", "silver", "tender"];
     const N: [&str; 12] = ["moth", "signal", "harbor", "orchid", "comet", "lantern", "glacier", "ember", "meadow", "relic", "cipher", "tide"];
     const V: [&str; 12] = ["drifts", "hums", "unfolds", "flickers", "wanders", "dissolves", "blooms", "echoes", "melts", "sleeps", "glows", "turns"];
     let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()) as usize;
-    format!("{}-{}-{}.vdmsh", A[t % 12], N[(t / 12) % 12], V[(t / 144) % 12])
+    format!("{}-{}-{}", A[t % 12], N[(t / 12) % 12], V[(t / 144) % 12])
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::{Doc, LocalStore, test_dir};
 
     fn item(asset: Arc<Asset>, id: u32, x: f32) -> Item {
-        Item { id: Some(id), name: format!("e{id}.png"), size: [asset.width as f32, asset.height as f32], asset, pos: [x, 10.0], z: id, params: Params::default(), fx_t: 0.0, playing: false, play_t: 0.0, muted: true }
+        Item { uid: store::new_id(), name: format!("e{id}.png"), size: [asset.width as f32, asset.height as f32], asset, pos: [x, 10.0], z: id, params: Params::default(), fx_t: 0.0, playing: false, play_t: 0.0, muted: true }
     }
 
-    fn dir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("voidmesh-ws-{name}-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&d);
-        d
+    fn png(w: u32, h: u32, px: image::Rgba<u8>) -> Vec<u8> {
+        let mut out = Vec::new();
+        image::RgbaImage::from_pixel(w, h, px).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).expect("png");
+        out
     }
 
     #[test]
     fn round_trips_entities_params_and_shared_assets() {
-        let mut px = vec![0u8; 4 * 4 * 4];
-        px.iter_mut().enumerate().for_each(|(i, v)| *v = (i * 7 % 256) as u8);
-        let mut a = media::test_asset(7, 4, 4);
-        a.frames[0].rgba = px.clone();
+        let bytes = png(4, 4, image::Rgba([10, 20, 30, 255]));
+        let mut a = media::decode_bytes(7, "a.png".into(), "png", bytes.clone().into()).expect("png");
         a.palette = Some(vec![[0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]]);
         let a = Arc::new(a);
         let mut one = item(a.clone(), 1, 0.0);
@@ -516,31 +611,32 @@ mod tests {
         one.params.palette = crate::effects::presets()[8].clone();
         one.fx_t = 3.5;
         let two = item(a, 2, 200.0);
-        let d = dir("rt");
+        let d = test_dir("rt");
+        let store = LocalStore::new(d.join("store"));
         let path = d.join("t.vdmsh");
         let vp = Viewport { offset: [-100.0, -50.0], zoom: 2.0 };
-        write(&path, &[one.clone(), two], vp, &[]).expect("write");
-        let ws = read(&path, &d, &Progress::default()).expect("read");
+        let doc = Doc { id: store::new_id(), name: "Round trip".into(), items: vec![one.clone(), two.clone()], viewport: vp, palettes: vec![] };
+        write_zip(&path, &doc).expect("write");
+        let ws = read_zip(&path, &store, &Progress::default()).expect("read");
         assert!(ws.failed.is_empty(), "{:?}", ws.failed);
+        assert_eq!(ws.name.as_deref(), Some("Round trip"));
         assert_eq!(ws.viewport, vp);
         assert_eq!(ws.items.len(), 2);
-        assert!(Arc::ptr_eq(&ws.items[0].asset, &ws.items[1].asset), "one PNG for a shared asset");
-        assert_eq!(ws.items[0].asset.frames[0].rgba, px);
+        assert!(Arc::ptr_eq(&ws.items[0].asset, &ws.items[1].asset), "one file for a shared asset");
+        assert_eq!(ws.items[0].asset.original_bytes(), Some(&bytes[..]), "the original bytes, not a re-encode");
+        assert_eq!(ws.items[0].asset.blob.get(), Some(&store::hash_bytes(&bytes)));
         let r = &ws.items[0];
-        assert_eq!((r.id, r.pos, r.fx_t), (Some(1), [0.0, 10.0], 3.5));
+        assert_eq!((r.uid.as_str(), r.pos, r.fx_t), (one.uid.as_str(), [0.0, 10.0], 3.5));
         assert_eq!(r.params, one.params);
         assert_eq!(ws.items[1].pos, [200.0, 10.0]);
     }
 
     #[test]
     fn reads_a_v1_manifest_with_inline_params() {
-        let d = dir("v1");
+        let d = test_dir("v1");
+        let store = LocalStore::new(d.join("store"));
         let path = d.join("old.vdmsh");
-        let png = {
-            let mut out = Vec::new();
-            image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255])).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).expect("png");
-            out
-        };
+        let png = png(2, 2, image::Rgba([255, 0, 0, 255]));
         let manifest = json!({
             "type": "studio-canvas", "version": 1, "createdAt": "2025-01-01T00:00:00.000Z",
             "viewport": { "offset": { "x": 0, "y": 0 }, "zoom": 1 },
@@ -560,14 +656,15 @@ mod tests {
             z.write_all(&png).expect("write");
             z.finish().expect("finish");
         }
-        let ws = read(&path, &d, &Progress::default()).expect("read");
+        let ws = read_zip(&path, &store, &Progress::default()).expect("read");
         let r = &ws.items[0];
-        assert_eq!(r.id, Some(4));
+        assert_eq!(r.uid, "entity-4");
         assert_eq!(r.params.shader, Shader::Halftone);
         assert_eq!((r.params.size, r.params.shape), (12.0, DotShape::Square));
         assert!(!r.params.grain && !r.params.bloom, "post-processing master switch off");
         assert_eq!(r.params.dither_kind, 6);
         assert_eq!(&r.asset.frames[0].rgba[..4], &[255, 0, 0, 255]);
+        assert!(store.blob_path(&store::hash_bytes(&png), "png").is_ok(), "the media was copied into the store");
     }
 
     /// `VOIDMESH_WORKSPACES=a.vdmsh:b.vdmsh cargo test real_workspaces -- --ignored --nocapture`
@@ -575,14 +672,16 @@ mod tests {
     #[ignore = "reads files named by VOIDMESH_WORKSPACES"]
     fn real_workspaces_read_and_round_trip() {
         let Some(list) = std::env::var_os("VOIDMESH_WORKSPACES") else { return };
-        let d = dir("real");
+        let d = test_dir("real");
+        let store = LocalStore::new(d.join("store"));
         for path in std::env::split_paths(&list) {
-            let ws = read(&path, &d, &Progress::default()).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let ws = read_zip(&path, &store, &Progress::default()).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
             let kinds: Vec<String> = ws.items.iter().map(|it| format!("{:?}/{:?}", it.asset.kind, it.params.shader)).collect();
             println!("{}: {} items, {} failed {:?}, palettes {}, {kinds:?}", path.display(), ws.items.len(), ws.failed.len(), ws.failed, ws.palettes.len());
             let out = d.join("again.vdmsh");
-            write(&out, &ws.items, ws.viewport, &ws.palettes).expect("write");
-            let again = read(&out, &d, &Progress::default()).expect("reread");
+            let doc = Doc { id: store::new_id(), name: "again".into(), items: ws.items.clone(), viewport: ws.viewport, palettes: ws.palettes.clone() };
+            write_zip(&out, &doc).expect("write");
+            let again = read_zip(&out, &store, &Progress::default()).expect("reread");
             assert_eq!(again.items.len(), ws.items.len());
             for (a, b) in ws.items.iter().zip(&again.items) {
                 assert_eq!(a.params, b.params, "{}", a.name);

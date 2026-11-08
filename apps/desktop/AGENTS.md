@@ -26,7 +26,9 @@ changes.
   and labels in step with `lib/config/index.ts`.
 - UI uses the web app's tokens (`ui/look.rs`) and primitive shapes (`ui/widgets.rs`).
 - No popup windows: settings, pickers and panels live inside the main window.
-- `.vdmsh` stays compatible with the web app both ways (`workspace.rs` reads v1–v6, writes v6).
+- `.vdmsh` stays compatible with the web app both ways (`workspace.rs` reads v1–v7, writes v7).
+- Workspaces live behind the `Store` trait (`store.rs`): documents with UUIDs, media by SHA-256.
+  UI and state never touch the data folder directly; a synced store implements the same trait.
 - User palettes and undo: palettes are part of undo snapshots; preferences go through
   `prefs.rs` (tests and headless runs keep them in memory).
 - Rune is pinned to a `dev` revision in `Cargo.toml`; move it forward deliberately, with

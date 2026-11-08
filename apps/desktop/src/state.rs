@@ -1,5 +1,9 @@
 //! App state: entities on an infinite canvas, the camera, selection, undo and the commands that
 //! change them. World units are media pixels: an image enters at its native pixel size.
+//!
+//! Each tab is a workspace in the store. The active tab's workspace lives in `App`'s own fields;
+//! the others are parked (`Parked`) until shown, or not read yet. The active workspace saves
+//! itself a moment after it changes (`App::autosave`), and before another tab shows.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -7,19 +11,25 @@ use std::sync::Arc;
 
 use crate::effects::{Palette, Params};
 use crate::media::{Asset, Loader};
-use crate::workspace::{self, Item, Viewport};
+use crate::store::{self, Doc, Meta, Saver, Store};
+use crate::workspace::{self, Item, Progress, Viewport};
 
 pub const MIN_SCALE: f32 = 0.005;
 pub const MAX_SCALE: f32 = 8.0;
 /// Snap cell and layout gap, in world units.
 pub const GRID: f32 = 125.0;
 const UNDO_CAP: usize = 100;
+/// Seconds from a change to its save.
+const AUTOSAVE_DELAY: f64 = 1.0;
 /// The titlebar band's height in points: the canvas runs under it, the traffic lights sit in it.
 pub const TITLEBAR: f32 = 52.0;
 
 #[derive(Clone)]
 pub struct Entity {
+    /// This run's handle for it, unique across tabs.
     pub id: u32,
+    /// Its id in the workspace document (a UUID).
+    pub uid: String,
     pub name: String,
     pub asset: Arc<Asset>,
     /// Top-left, world units.
@@ -157,6 +167,45 @@ pub struct Export {
     pub path: Option<PathBuf>,
 }
 
+/// A tab's workspace while another tab shows.
+pub struct Parked {
+    entities: Vec<Entity>,
+    selection: BTreeSet<u32>,
+    undo: Vec<Snapshot>,
+    redo: Vec<Snapshot>,
+    cam: ([f32; 2], f32),
+    revision: u64,
+    persisted: u64,
+    persisted_cam: ([f32; 2], f32),
+}
+
+impl Parked {
+    fn empty(cam: ([f32; 2], f32)) -> Parked {
+        Parked { entities: Vec::new(), selection: BTreeSet::new(), undo: Vec::new(), redo: Vec::new(), cam, revision: 0, persisted: 0, persisted_cam: cam }
+    }
+}
+
+/// An open workspace.
+pub struct Tab {
+    pub id: String,
+    pub name: String,
+    /// The store has it (it was read from there or saved): a view change alone saves it then.
+    pub stored: bool,
+    /// Its workspace while another tab shows; None for the active tab and one not read yet.
+    pub parked: Option<Parked>,
+    /// Being read, from the store or a `.vdmsh` file.
+    pub loading: Option<Arc<Progress>>,
+}
+
+impl Tab {
+    pub fn new() -> Tab {
+        Tab { id: store::new_id(), name: workspace::random_name(), stored: false, parked: None, loading: None }
+    }
+}
+
+/// Where a new tab's camera starts.
+const HOME: ([f32; 2], f32) = ([0.0, 0.0], 0.5);
+
 /// Files imported together: where they land and how many are still decoding.
 pub struct Batch {
     pub id: u64,
@@ -236,15 +285,26 @@ pub struct App {
     pub pending: usize,
     pub batches: Vec<Batch>,
     next_batch: u64,
-    /// The open workspace file, once opened or saved.
-    pub doc: Option<PathBuf>,
-    /// Bumped by every undoable change; the document is dirty while it differs from `saved`.
+    /// Where workspaces and their media are kept; None in tests and headless runs, which keep
+    /// everything in memory.
+    pub store: Option<Arc<dyn Store>>,
+    pub saver: Option<Saver>,
+    /// Open workspaces, and which one shows.
+    pub tabs: Vec<Tab>,
+    pub active: usize,
+    /// The active workspace's revision, bumped by every undoable change, and the last one saved.
     pub revision: u64,
-    pub saved: u64,
-    /// A workspace being read on a worker.
-    pub opening: Option<Arc<workspace::Progress>>,
-    /// A save in flight: the revision it captures.
-    pub saving: Option<u64>,
+    pub persisted: u64,
+    /// The camera as last saved: moving the view saves too, without an undo step.
+    pub persisted_cam: ([f32; 2], f32),
+    /// When the pending autosave runs.
+    pub save_due: Option<f64>,
+    /// The workspace library covers the canvas, with this listing.
+    pub library: Option<Vec<Meta>>,
+    /// The library row asking to confirm its deletion.
+    pub confirm_delete: Option<String>,
+    /// The active tab's name field, while renaming.
+    pub tab_rename: Option<rune::TextEdit>,
     /// User palettes (custom and extracted).
     pub palettes: Vec<Palette>,
     pub prefs: rune::prefs::Prefs,
@@ -289,7 +349,7 @@ impl Default for App {
         App {
             entities: Vec::new(),
             selection: BTreeSet::new(),
-            cam: Camera { pan: [0.0, 0.0], scale: 0.5, anim: None },
+            cam: Camera { pan: HOME.0, scale: HOME.1, anim: None },
             canvas: [0.0, 0.0, 0.0, 0.0],
             marquee: None,
             drag: None,
@@ -308,11 +368,17 @@ impl Default for App {
             pending: 0,
             batches: Vec::new(),
             next_batch: 1,
-            doc: None,
+            store: None,
+            saver: None,
+            tabs: vec![Tab::new()],
+            active: 0,
             revision: 0,
-            saved: 0,
-            opening: None,
-            saving: None,
+            persisted: 0,
+            persisted_cam: HOME,
+            save_due: None,
+            library: None,
+            confirm_delete: None,
+            tab_rename: None,
             palettes: Vec::new(),
             audio: Default::default(),
             prefs: rune::prefs::Prefs::memory(),
@@ -796,7 +862,7 @@ impl App {
         // A workspace among the files opens instead (the first one); the rest is media.
         let (ws, paths): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|p| workspace::is_workspace(p));
         if let Some(p) = ws.into_iter().next() {
-            self.open_workspace(p);
+            self.import_workspace(p);
             return;
         }
         if paths.is_empty() {
@@ -807,7 +873,7 @@ impl App {
         self.batches.push(Batch { id: batch, at, waiting: paths.len(), ready: Vec::new() });
         for p in paths {
             self.pending += 1;
-            self.loader.load(crate::media::next_asset_id(), p, batch);
+            self.loader.load(crate::media::next_asset_id(), p, batch, self.store.clone());
         }
     }
 
@@ -858,6 +924,7 @@ impl App {
             let animated = a.animated();
             self.entities.push(Entity {
                 id,
+                uid: store::new_id(),
                 name: a.name.clone(),
                 size: [a.width as f32, a.height as f32],
                 asset: a,
@@ -896,6 +963,7 @@ impl App {
         self.selection.clear();
         for mut e in copies {
             e.id = self.next_id;
+            e.uid = store::new_id();
             self.next_id += 1;
             e.z = self.next_z;
             self.next_z += 1;
@@ -920,66 +988,209 @@ impl App {
         (2..).map(|n| format!("{stem} {n}{ext}")).find(|n| self.entities.iter().all(|e| &e.name != n)).unwrap_or_default()
     }
 
-    // ------------------------------------------------------------------ workspace
+    // ------------------------------------------------------------------ workspaces and tabs
 
-    pub fn dirty(&self) -> bool {
-        self.revision != self.saved && !(self.doc.is_none() && self.entities.is_empty())
+    pub fn tab(&self) -> &Tab {
+        &self.tabs[self.active]
     }
 
-    /// Read a workspace on a worker; `receive_workspace` adopts it whole.
-    pub fn open_workspace(&mut self, path: PathBuf) {
-        if self.opening.is_some() {
+    /// The active tab is being read.
+    pub fn loading(&self) -> Option<&Arc<Progress>> {
+        self.tab().loading.as_ref()
+    }
+
+    /// A fresh tab nothing has happened in: opening a workspace takes it over.
+    fn blank(&self) -> bool {
+        let t = self.tab();
+        !t.stored && t.loading.is_none() && self.entities.is_empty() && self.revision == 0 && self.pending == 0
+    }
+
+    fn take_state(&mut self) -> Parked {
+        self.end_edit();
+        self.picker = None;
+        self.drag = None;
+        self.marquee = None;
+        self.tab_rename = None;
+        self.save_due = None;
+        Parked {
+            entities: std::mem::take(&mut self.entities),
+            selection: std::mem::take(&mut self.selection),
+            undo: std::mem::take(&mut self.undo),
+            redo: std::mem::take(&mut self.redo),
+            cam: (self.cam.pan, self.cam.scale),
+            revision: self.revision,
+            persisted: self.persisted,
+            persisted_cam: self.persisted_cam,
+        }
+    }
+
+    fn put_state(&mut self, p: Parked) {
+        self.entities = p.entities;
+        self.selection = p.selection;
+        self.undo = p.undo;
+        self.redo = p.redo;
+        self.cam.anim = None;
+        self.zoom_to = None;
+        self.cam.set(p.cam.0, p.cam.1);
+        self.revision = p.revision;
+        self.persisted = p.persisted;
+        self.persisted_cam = p.persisted_cam;
+    }
+
+    /// Show tab `i` in place of the current one, whose state the caller has dealt with.
+    fn show_tab(&mut self, i: usize) {
+        self.active = i;
+        match self.tabs[i].parked.take() {
+            Some(p) => self.put_state(p),
+            None => {
+                self.put_state(Parked::empty(HOME));
+                if self.tabs[i].stored && self.tabs[i].loading.is_none() {
+                    self.load_tab(i);
+                }
+            }
+        }
+        crate::prefs::save_tabs(self);
+    }
+
+    /// Save the current tab and set it aside.
+    fn park(&mut self) {
+        self.persist_if_dirty();
+        let p = self.take_state();
+        self.tabs[self.active].parked = Some(p);
+    }
+
+    pub fn switch_tab(&mut self, i: usize) {
+        if i == self.active || i >= self.tabs.len() {
             return;
         }
-        let progress = Arc::new(workspace::Progress::default());
-        self.opening = Some(progress.clone());
-        self.loader.open_workspace(path, progress);
+        self.park();
+        self.show_tab(i);
     }
 
+    /// ⌃Tab and ⌃⇧Tab.
+    pub fn cycle_tab(&mut self, step: i32) {
+        let n = self.tabs.len() as i32;
+        self.switch_tab((self.active as i32 + step).rem_euclid(n) as usize);
+    }
+
+    pub fn new_tab(&mut self) {
+        if self.blank() {
+            return;
+        }
+        self.park();
+        self.tabs.push(Tab::new());
+        self.show_tab(self.tabs.len() - 1);
+    }
+
+    /// Close tab `i`, saving it first.
+    pub fn close_tab(&mut self, i: usize) {
+        if i >= self.tabs.len() {
+            return;
+        }
+        if i == self.active {
+            self.persist_if_dirty();
+        }
+        self.drop_tab(i);
+    }
+
+    /// Remove tab `i` without saving it (it's saved, gone, or failed to read).
+    fn drop_tab(&mut self, i: usize) {
+        let was_active = i == self.active;
+        if was_active {
+            self.take_state();
+            self.audio.clear();
+        }
+        self.tabs.remove(i);
+        if self.tabs.is_empty() {
+            self.tabs.push(Tab::new());
+            self.show_tab(0);
+        } else if was_active {
+            self.show_tab(i.min(self.tabs.len() - 1));
+        } else {
+            if i < self.active {
+                self.active -= 1;
+            }
+            crate::prefs::save_tabs(self);
+        }
+    }
+
+    /// Open a stored workspace: its tab if it has one, else a new tab (or the blank one).
+    pub fn open_stored(&mut self, id: &str, name: &str) {
+        if let Some(i) = self.tabs.iter().position(|t| t.id == id) {
+            return self.switch_tab(i);
+        }
+        let tab = Tab { id: id.to_string(), name: name.to_string(), stored: true, parked: None, loading: None };
+        if self.blank() {
+            self.tabs[self.active] = tab;
+            self.show_tab(self.active);
+        } else {
+            self.park();
+            self.tabs.push(tab);
+            self.show_tab(self.tabs.len() - 1);
+        }
+    }
+
+    fn load_tab(&mut self, i: usize) {
+        let Some(store) = self.store.clone() else { return };
+        let progress = Arc::new(Progress::default());
+        self.tabs[i].loading = Some(progress.clone());
+        self.loader.load_workspace(self.tabs[i].id.clone(), store, progress);
+    }
+
+    /// A `.vdmsh` file opens as a new workspace (a copy: the file isn't written back to).
+    pub fn import_workspace(&mut self, path: PathBuf) {
+        let Some(store) = self.store.clone() else { return self.toast("Workspaces can't be opened here") };
+        let name = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(workspace::random_name);
+        if self.blank() {
+            self.tabs[self.active].name = name;
+        } else {
+            self.park();
+            self.tabs.push(Tab { name, ..Tab::new() });
+            self.show_tab(self.tabs.len() - 1);
+        }
+        let progress = Arc::new(Progress::default());
+        self.tabs[self.active].loading = Some(progress.clone());
+        self.loader.import_workspace(self.tab().id.clone(), path, store, progress);
+    }
+
+    /// Stop reading a `.vdmsh` file. A stored workspace always finishes reading: a tab left
+    /// half-read would save over it.
     pub fn cancel_open(&mut self) {
-        if let Some(p) = &self.opening {
+        if let Some(p) = &self.tab().loading
+            && !self.tab().stored
+        {
             p.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
-    /// Replace the canvas with a read workspace: its entities, view and palettes. History is
-    /// cleared, as on the web.
-    pub fn receive_workspace(&mut self, path: PathBuf, result: Result<workspace::Workspace, String>) {
-        self.opening = None;
-        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    /// Take in a read workspace for tab `tab`: its entities, view and palettes. If the tab shows,
+    /// anything added to it meanwhile stays, on top.
+    pub fn receive_workspace(&mut self, tab: &str, imported: bool, result: Result<workspace::Workspace, String>) {
+        let Some(i) = self.tabs.iter().position(|t| t.id == tab) else { return };
+        self.tabs[i].loading = None;
+        let name = self.tabs[i].name.clone();
         let ws = match result {
-            Ok(ws) => ws,
-            Err(e) if e == "cancelled" => return,
-            Err(e) => return self.toast(format!("Couldn't open {name}: {e}")),
+            Ok(ws) if ws.items.is_empty() && !ws.failed.is_empty() => Err(ws.failed[0].clone()),
+            r => r,
         };
-        if ws.items.is_empty() && !ws.failed.is_empty() {
-            return self.toast(format!("Couldn't open {name}: {}", ws.failed[0]));
-        }
-        self.entities.clear();
-        self.audio.clear();
-        self.picker = None;
-        self.selection.clear();
-        self.undo.clear();
-        self.redo.clear();
-        self.editing = None;
-        self.drag = None;
-        self.marquee = None;
-        let mut used = BTreeSet::new();
-        let max_saved = ws.items.iter().filter_map(|it| it.id).max().unwrap_or(0);
-        let mut next = max_saved + 1;
-        for it in ws.items {
-            let id = match it.id {
-                Some(id) if id > 0 && used.insert(id) => id,
-                _ => {
-                    next += 1;
-                    used.insert(next - 1);
-                    next - 1
+        let ws = match ws {
+            Ok(ws) => ws,
+            Err(e) => {
+                if e != "cancelled" {
+                    self.toast(format!("Couldn't open {name}: {e}"));
                 }
-            };
-            self.entities.push(Entity { id, name: it.name, asset: it.asset, pos: it.pos, size: it.size, z: it.z, params: it.params, playing: it.playing, play_t: it.play_t, fx_t: it.fx_t, muted: it.muted, seek_gen: 0 });
+                return self.drop_tab(i);
+            }
+        };
+        if imported && let Some(n) = ws.name.clone().filter(|n| !n.trim().is_empty()) {
+            self.tabs[i].name = n;
         }
-        self.next_id = next;
-        self.next_z = self.entities.iter().map(|e| e.z).max().unwrap_or(0) + 1;
+        let mut entities = Vec::with_capacity(ws.items.len());
+        for it in ws.items {
+            let id = self.next_id;
+            self.next_id += 1;
+            entities.push(Entity { id, uid: it.uid, name: it.name, asset: it.asset, pos: it.pos, size: it.size, z: it.z, params: it.params, playing: it.playing, play_t: it.play_t, fx_t: it.fx_t, muted: it.muted, seek_gen: 0 });
+        }
         // The workspace's palettes join the user's, as the web merges them into its store.
         let before = self.palettes.len();
         for p in ws.palettes {
@@ -990,14 +1201,89 @@ impl App {
         if self.palettes.len() != before {
             crate::prefs::save_palettes(self);
         }
-        self.set_viewport(ws.viewport);
-        self.doc = Some(path);
-        self.revision += 1;
-        self.saved = self.revision;
+        let cam = self.cam_for(ws.viewport);
+        // An import isn't in the store until it saves; a stored one is as read.
+        let (revision, persisted) = if imported { (1, 0) } else { (1, 1) };
+        self.tabs[i].stored |= !imported;
+        if i == self.active {
+            let added = std::mem::take(&mut self.entities);
+            let top = entities.iter().map(|e| e.z).max().unwrap_or(0);
+            entities.extend(added.into_iter().map(|mut e| {
+                e.z += top;
+                e
+            }));
+            self.entities = entities;
+            self.selection.clear();
+            self.undo.clear();
+            self.redo.clear();
+            self.editing = None;
+            self.cam.anim = None;
+            self.zoom_to = None;
+            self.cam.set(cam.0, cam.1);
+            self.revision = revision;
+            self.persisted = persisted;
+            self.persisted_cam = cam;
+        } else {
+            self.tabs[i].parked = Some(Parked { entities, cam, revision, persisted, persisted_cam: cam, ..Parked::empty(cam) });
+        }
+        self.next_z = self.next_z.max(self.entities.iter().map(|e| e.z).max().unwrap_or(0) + 1);
         if !ws.failed.is_empty() {
             let n = ws.failed.len();
             self.toast(format!("Failed to import {n} of {} files", n + self.entities.len()));
         }
+    }
+
+    pub fn rename_tab(&mut self, name: &str) {
+        let name = name.trim();
+        self.tab_rename = None;
+        if name.is_empty() || name == self.tab().name {
+            return;
+        }
+        self.tabs[self.active].name = name.to_string();
+        self.persist();
+    }
+
+    /// Delete a stored workspace, closing its tab without saving it.
+    pub fn delete_workspace(&mut self, id: &str) {
+        self.confirm_delete = None;
+        if let Some(i) = self.tabs.iter().position(|t| t.id == id) {
+            self.drop_tab(i);
+        }
+        if let Some(saver) = &self.saver {
+            saver.delete(id.to_string());
+        }
+        if let Some(list) = &mut self.library {
+            list.retain(|m| m.id != id);
+        }
+    }
+
+    pub fn open_library(&mut self) {
+        self.settings = false;
+        self.confirm_delete = None;
+        let list = self.store.as_ref().map_or(Ok(Vec::new()), |st| st.list());
+        self.library = Some(list.unwrap_or_else(|e| {
+            self.toast(format!("Couldn't list workspaces: {e}"));
+            Vec::new()
+        }));
+    }
+
+    /// Reopen the tabs the last run had open, showing the one it showed.
+    pub fn restore_tabs(&mut self, ids: &[String], active: Option<&str>) {
+        let Some(store) = &self.store else { return };
+        let stored = store.list().unwrap_or_default();
+        let tabs: Vec<Tab> = ids.iter().filter_map(|id| stored.iter().find(|m| &m.id == id)).map(|m| Tab { id: m.id.clone(), name: m.name.clone(), stored: true, parked: None, loading: None }).collect();
+        if tabs.is_empty() {
+            return;
+        }
+        let i = active.and_then(|a| tabs.iter().position(|t| t.id == a)).unwrap_or(0);
+        self.tabs = tabs;
+        self.show_tab(i);
+    }
+
+    /// The camera that shows viewport `v`.
+    fn cam_for(&self, v: Viewport) -> ([f32; 2], f32) {
+        let s = ((v.zoom / f64::from(self.device_scale.max(0.5))) as f32).clamp(MIN_SCALE, MAX_SCALE);
+        ([self.canvas[0] - v.offset[0] as f32 * s, self.canvas[1] - v.offset[1] as f32 * s], s)
     }
 
     /// The camera as the web's viewport (device pixels per world unit, world at the top-left).
@@ -1007,40 +1293,81 @@ impl App {
         Viewport { offset: [f64::from(o[0]), f64::from(o[1])], zoom: s * f64::from(self.device_scale) }
     }
 
-    pub fn set_viewport(&mut self, v: Viewport) {
-        let s = (v.zoom / f64::from(self.device_scale.max(0.5))) as f32;
-        let s = s.clamp(MIN_SCALE, MAX_SCALE);
-        self.cam.anim = None;
-        self.zoom_to = None;
-        self.cam.set([self.canvas[0] - v.offset[0] as f32 * s, self.canvas[1] - v.offset[1] as f32 * s], s);
-    }
-
     pub fn items(&self) -> Vec<Item> {
         self.entities
             .iter()
-            .map(|e| Item { id: Some(e.id), name: e.name.clone(), asset: e.asset.clone(), pos: e.pos, size: e.size, z: e.z, params: e.params.clone(), fx_t: e.fx_t, playing: e.playing, play_t: e.play_t, muted: e.muted })
+            .map(|e| Item { uid: e.uid.clone(), name: e.name.clone(), asset: e.asset.clone(), pos: e.pos, size: e.size, z: e.z, params: e.params.clone(), fx_t: e.fx_t, playing: e.playing, play_t: e.play_t, muted: e.muted })
             .collect()
     }
 
-    /// Write the workspace to `path` on a worker.
-    pub fn save_to(&mut self, path: PathBuf) {
-        if self.saving.is_some() {
-            return;
-        }
-        self.saving = Some(self.revision);
-        self.loader.save_workspace(path, self.items(), self.viewport(), self.palettes.clone());
+    /// The active workspace as a document.
+    pub fn doc(&self) -> Doc {
+        Doc { id: self.tab().id.clone(), name: self.tab().name.clone(), items: self.items(), viewport: self.viewport(), palettes: self.palettes.clone() }
     }
 
-    pub fn saved_workspace(&mut self, path: PathBuf, result: Result<(), String>) {
-        let rev = self.saving.take().unwrap_or(self.revision);
+    /// The active workspace has changes the store doesn't.
+    pub fn needs_save(&self) -> bool {
+        let t = self.tab();
+        t.loading.is_none() && (self.revision != self.persisted || (t.stored && (self.cam.pan, self.cam.scale) != self.persisted_cam))
+    }
+
+    /// Queue a save of the active workspace.
+    fn persist(&mut self) {
+        let Some(saver) = &self.saver else { return };
+        if self.tab().loading.is_some() {
+            return;
+        }
+        saver.save(self.doc());
+        self.persisted = self.revision;
+        self.persisted_cam = (self.cam.pan, self.cam.scale);
+        self.tabs[self.active].stored = true;
+        self.save_due = None;
+    }
+
+    pub fn persist_if_dirty(&mut self) {
+        if self.needs_save() {
+            self.persist();
+        }
+    }
+
+    /// Save the active workspace once it has sat changed for a moment, waiting out gestures.
+    /// Returns how long until it's due, while one is pending.
+    pub fn autosave(&mut self) -> Option<f64> {
+        if self.saver.is_none() || !self.needs_save() {
+            self.save_due = None;
+            return None;
+        }
+        if self.drag.is_some() || self.editing.is_some() || self.cam.anim.is_some() || self.zoom_to.is_some() || self.panning.is_some() {
+            return Some(0.25);
+        }
+        let due = *self.save_due.get_or_insert(self.now + AUTOSAVE_DELAY);
+        if self.now >= due {
+            self.persist();
+            return None;
+        }
+        Some(due - self.now)
+    }
+
+    /// Quitting: save what's changed and wait for the writes.
+    pub fn flush(&mut self) {
+        self.end_edit();
+        self.persist_if_dirty();
+        crate::prefs::save_tabs(self);
+        if let Some(s) = &self.saver {
+            s.flush();
+        }
+    }
+
+    /// Write the active workspace to a `.vdmsh` file on a worker.
+    pub fn export_workspace(&mut self, path: PathBuf) {
+        self.loader.export_workspace(path, self.doc());
+    }
+
+    pub fn exported_workspace(&mut self, path: PathBuf, result: Result<(), String>) {
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         match result {
-            Ok(()) => {
-                self.doc = Some(path);
-                self.saved = rev;
-                self.toast(format!("Saved {name}"));
-            }
-            Err(e) => self.toast(format!("Couldn't save {name}: {e}")),
+            Ok(()) => self.toast(format!("Exported {name}")),
+            Err(e) => self.toast(format!("Couldn't export {name}: {e}")),
         }
     }
 
@@ -1255,6 +1582,97 @@ mod tests {
             a.add_palette_color();
         }
         assert_eq!(a.focus().map(|e| e.params.palette.colors.len()), Some(16));
+    }
+
+    fn stored_app(st: &Arc<dyn Store>) -> App {
+        let mut a = App::default();
+        a.store = Some(st.clone());
+        a.saver = Some(Saver::new(st.clone(), a.loader.clone()));
+        a
+    }
+
+    /// Wait for the workspaces being read on workers and take them in.
+    fn settle_loads(a: &mut App) {
+        for _ in 0..500 {
+            for d in a.loader.drain_workspaces() {
+                if let crate::media::WorkspaceDone::Loaded { tab, imported, result } = d {
+                    a.receive_workspace(&tab, imported, result);
+                }
+            }
+            if a.tabs.iter().all(|t| t.loading.is_none()) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("workspaces never finished reading");
+    }
+
+    #[test]
+    fn tabs_keep_their_own_workspace_and_history() {
+        let mut a = App::default();
+        a.new_tab();
+        assert_eq!(a.tabs.len(), 1, "a blank tab isn't doubled");
+        a.place(vec![asset(1, 10, 10)], [0.0, 0.0], false);
+        a.new_tab();
+        assert_eq!((a.tabs.len(), a.active), (2, 1));
+        assert!(a.entities.is_empty() && a.undo.is_empty());
+        a.place(vec![asset(2, 10, 10), asset(3, 10, 10)], [0.0, 0.0], false);
+        let second: Vec<u32> = a.entities.iter().map(|e| e.id).collect();
+        a.switch_tab(0);
+        assert_eq!(a.entities.len(), 1);
+        assert!(!second.contains(&a.entities[0].id), "ids are unique across tabs");
+        assert!(a.undo());
+        assert!(a.entities.is_empty(), "each tab undoes its own changes");
+        a.cycle_tab(1);
+        assert_eq!(a.entities.len(), 2);
+        a.close_tab(1);
+        assert_eq!((a.tabs.len(), a.active), (1, 0));
+        a.close_tab(0);
+        assert_eq!(a.tabs.len(), 1, "closing the last tab leaves a blank one");
+        assert!(a.entities.is_empty());
+    }
+
+    #[test]
+    fn workspaces_autosave_and_reopen() {
+        let st: Arc<dyn Store> = Arc::new(crate::store::LocalStore::new(crate::store::test_dir("autosave")));
+        let mut a = stored_app(&st);
+        a.place(vec![asset(1, 10, 10)], [0.0, 0.0], false);
+        let first = a.tab().id.clone();
+        assert!(a.needs_save());
+        assert!(a.autosave().is_some(), "waits a moment");
+        a.now = 2.0;
+        assert!(a.autosave().is_none());
+        assert!(!a.needs_save());
+        a.new_tab();
+        a.place(vec![asset(2, 10, 10), asset(3, 10, 10)], [0.0, 0.0], false);
+        a.rename_tab("  Second  ");
+        let second = a.tab().id.clone();
+        a.switch_tab(0);
+        // Moving the view of a stored workspace saves it too.
+        a.cam.set([40.0, 40.0], 1.0);
+        assert!(a.needs_save());
+        a.flush();
+        let names: Vec<String> = st.list().expect("list").into_iter().map(|m| m.name).collect();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"Second".to_string()));
+
+        let mut b = stored_app(&st);
+        b.restore_tabs(&[first.clone(), second.clone(), "gone".into()], Some(&second));
+        assert_eq!(b.tabs.len(), 2, "tabs whose workspace is gone are skipped");
+        assert_eq!(b.active, 1);
+        assert!(b.loading().is_some());
+        assert!(!b.needs_save(), "a workspace being read never saves");
+        settle_loads(&mut b);
+        assert_eq!(b.entities.len(), 2);
+        assert!(!b.needs_save());
+        b.switch_tab(0);
+        settle_loads(&mut b);
+        assert_eq!(b.entities.len(), 1);
+        assert_eq!((b.cam.pan, b.cam.scale), ([40.0, 40.0], 1.0), "the view comes back");
+        b.delete_workspace(&second);
+        b.flush();
+        assert_eq!(b.tabs.len(), 1);
+        assert_eq!(st.list().expect("list").len(), 1);
     }
 
     #[test]

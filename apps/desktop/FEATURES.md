@@ -972,9 +972,13 @@ clip). Settings are a view of their own inside the window (⌘,), never a separa
   Palette… extracts 16 colours from an image. User palettes persist.
 - Playback: Space, ←/→ seek, an inline scrubber on the clip with `S:cc` times, M and a mute
   button for videos with sound (sound plays through Rune's audio player and leads the clock).
-- Workspaces: `.vdmsh` open (⌘O, drop, launch arguments) and save (⌘S, ⇧⌘S), reading every web
-  manifest version (v1–v6) and writing v6, so files go both ways. Atomic import with progress and
-  Cancel (Esc); history clears on open; the file name and an unsaved dot show in the chrome.
+- Workspaces (`store.rs`): kept in the app's data folder and saved a moment after each change, and
+  before switching away or quitting. Tabs in the titlebar (⌘T new, ⌘W close, ⌘1–9, ⌃Tab;
+  double-click or right-click to rename), each with its own history; open tabs come back on
+  launch. The library (⇧⌘O) lists, opens and deletes every workspace. Media is copied into a
+  shared content-addressed blob folder on import.
+- `.vdmsh`: opening one (⌘O, drop, launch arguments) imports it as a new workspace, reading
+  every web manifest version (v1–v7) with progress and Cancel (Esc); ⇧⌘S exports v7.
 - Clipboard: copy image (⌘C), copy effects (⌃⌘C), paste effects onto the selection (⌘V; user
   palettes come along as custom palettes).
 - Context menu on entities and empty canvas, as §6.4 (native menus).
@@ -990,9 +994,8 @@ clip). Settings are a view of their own inside the window (⌘,), never a separa
 - Drag moves are undoable (one step per drag); the web app leaves them out.
 - GIFs autoplay when added, like videos do on the web.
 - Selects and the context menu open native macOS menus.
-- ⌘O opens media as well as workspaces; saving writes to the open file (a desktop document)
-  instead of downloading.
-- Workspace videos unpack to the app's cache folder (AVFoundation reads files).
+- No save step: workspaces autosave, ⌘S saves at once, and `.vdmsh` is an import/export format.
+- ⌘O opens media as well as `.vdmsh` files.
 - Error-diffusion dithering kinds (hidden in the web UI) load, save and round-trip, but draw as
   Bayer 8×8.
 - Media renders at its native resolution up to the GPU's texture limit (16384 px a side);

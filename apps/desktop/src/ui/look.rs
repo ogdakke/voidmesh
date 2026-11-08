@@ -64,6 +64,10 @@ pub struct Look {
     pub switch_off: Color,
     /// `--gray-100`: keyboard chips (`.kbd`).
     pub kbd: Color,
+    /// `--destructive`: a deletion's confirm button.
+    pub destructive: Color,
+    /// The titlebar band's tint over its blur: the canvas colour, mostly opaque.
+    pub bar: Color,
 }
 
 impl Look {
@@ -97,6 +101,8 @@ impl Look {
                 text_desc: gray(0.5929),
                 switch_off: gray(0.4691),
                 kbd: gray(0.2967),
+                destructive: oklch(0.65, 0.29, 28.41),
+                bar: Color { r: 0.0018, g: 0.0018, b: 0.0024, a: 0.72 },
             }
         } else {
             let surface = gray(0.9812);
@@ -126,6 +132,8 @@ impl Look {
                 text_desc: gray(0.623),
                 switch_off: gray(0.8518),
                 kbd: gray(0.9812),
+                destructive: oklch(0.65, 0.3, 28.96),
+                bar: Color { r: 0.955, g: 0.955, b: 0.955, a: 0.72 },
             }
         }
     }

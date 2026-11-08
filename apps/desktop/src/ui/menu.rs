@@ -101,13 +101,13 @@ pub fn entity_menu(s: &App) -> PopupMenu {
 }
 
 pub fn canvas_menu(s: &App) -> PopupMenu {
-    let mut ws = PopupMenu::new();
+    let mut ws = PopupMenu::new().item(keyed("new-ws", "New Workspace", "cmd+t")).item(keyed("library", "Workspaces…", "shift+cmd+o")).separator();
     if !s.entities.is_empty() {
-        ws = ws.item(keyed("save", "Save", "cmd+s")).item(keyed("save-as", "Save as…", "shift+cmd+s"));
+        ws = ws.item(keyed("export-ws", "Export as .vdmsh…", "shift+cmd+s"));
     }
     PopupMenu::new()
         .item(keyed("paste", "Paste", "cmd+v"))
-        .submenu("Save/Open workspace…", ws.item(keyed("open", "Open…", "cmd+o")))
+        .submenu("Workspace", ws.item(keyed("open", "Open…", "cmd+o")))
         .separator()
         .item(keyed("snap", "Snap to Grid", "g").checked(s.snap))
         .item(keyed("settings", "Settings…", "cmd+,"))
@@ -155,8 +155,9 @@ pub fn run(s: &mut App, id: &str, tx: &mut Tx) {
             "dup" => s.duplicate_selection(),
             "reset" => s.reset_selection(),
             "delete" => s.delete_selection(),
-            "save" => super::save(s, tx, false),
-            "save-as" => super::save(s, tx, true),
+            "new-ws" => s.new_tab(),
+            "library" => super::library::toggle(s),
+            "export-ws" => super::export_workspace(s, tx),
             "open" => super::open_any(s, tx),
             "snap" => crate::prefs::set_snap(s, !s.snap),
             "settings" => super::settings::toggle(s),

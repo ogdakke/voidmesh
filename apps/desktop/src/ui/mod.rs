@@ -1,16 +1,18 @@
 //! The view. The canvas fills the window and everything else floats on it, in the web app's
-//! styling: chrome at the corners (Add and the wordmark top-left, undo/redo bottom-left, view
+//! styling: chrome at the corners (Add and the workspace tabs top-left, undo/redo bottom-left, view
 //! controls and the zoom readout bottom-right), and the selection's own controls riding along
 //! with it (its label bar above, the inspector beside, playback on the GIF itself).
 
 mod canvas;
 pub mod export_panel;
 pub mod inspector;
+pub mod library;
 mod menu;
 pub mod palette_editor;
 pub mod settings;
 pub mod look;
 pub mod tick_slider;
+pub mod tabs;
 mod widgets;
 
 use rune::{Color, Cx, El, FileDialogOptions, TextStyle, Tx, col, el, icon, row, text};
@@ -35,8 +37,13 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if s.entities.is_empty() {
         root = root.child(empty_state(&l));
     }
-    // The titlebar band: it moves the window, and floating UI keeps out of it.
-    root = root.child(el().key("titlebar").absolute(0.0, 0.0).w_full().h(insets.height).window_drag().on_layout(|s: &mut App, r| s.top_inset = r[3]));
+    // The titlebar band: it moves the window, and floating UI keeps out of it. Under the chrome
+    // it's a frosted bar, so the tabs read over busy media.
+    let mut band = el().key("titlebar").absolute(0.0, 0.0).w_full().h(insets.height).window_drag().on_layout(|s: &mut App, r| s.top_inset = r[3]);
+    if !s.bare && insets.height > 0.0 {
+        band = band.backdrop_blur(16.0).fill(l.bar).child(el().absolute(0.0, insets.height - 1.0).w_full().h(1.0).fill(l.border).inert());
+    }
+    root = root.child(band);
     // `\` hides the chrome: the canvas alone, as the web's fullscreen.
     if let Some(sel) = s.bounds(&s.selection).filter(|_| !s.bare) {
         let r = s.cam.screen_rect(sel);
@@ -68,6 +75,8 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     }
     if s.settings {
         root = root.child(settings::view(&l, s, insets.height, dark)).child(el().key("titlebar-over").absolute(0.0, 0.0).w_full().h(insets.height).window_drag());
+    } else if let Some(list) = &s.library {
+        root = root.child(library::view(&l, s, list, insets.height)).child(el().key("titlebar-over").absolute(0.0, 0.0).w_full().h(insets.height).window_drag());
     }
     if let Some(t) = s.toasts.last() {
         root = root.child(
@@ -111,23 +120,27 @@ pub fn open_any(_: &mut App, tx: &mut Tx) {
     });
 }
 
-/// ⌘S writes the open file (or asks where, the first time); ⇧⌘S always asks.
-pub fn save(s: &mut App, tx: &mut Tx, ask: bool) {
+/// ⌘S: workspaces save as they change; this saves now and says so.
+pub fn save(s: &mut App) {
+    if s.saver.is_none() {
+        return s.toast("Workspaces aren't kept in this run");
+    }
+    s.persist_if_dirty();
+    s.toast("Saved. Changes save as you work");
+}
+
+/// ⇧⌘S: write the workspace to a `.vdmsh` file, which the web app opens too.
+pub fn export_workspace(s: &mut App, tx: &mut Tx) {
     if s.entities.is_empty() {
-        return s.toast("Nothing to save");
+        return s.toast("Nothing to export");
     }
-    if !ask && let Some(p) = s.doc.clone() {
-        return s.save_to(p);
-    }
-    let file_name = s.doc.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(crate::workspace::random_name);
-    let directory = s.doc.as_ref().and_then(|p| p.parent()).map(std::path::Path::to_path_buf);
-    let opts = FileDialogOptions { title: "Save workspace".into(), file_name: Some(file_name), directory, ..Default::default() }.filter("Voidmesh workspace", &["vdmsh"]);
+    let opts = FileDialogOptions { title: "Export workspace".into(), file_name: Some(format!("{}.vdmsh", s.tab().name)), ..Default::default() }.filter("Voidmesh workspace", &["vdmsh"]);
     tx.save_file(opts, |s: &mut App, r, _| match r {
         Ok(Some(mut path)) => {
             if path.extension().is_none() {
                 path.set_extension("vdmsh");
             }
-            s.save_to(path);
+            s.export_workspace(path);
         }
         Ok(None) => {}
         Err(e) => s.toast(e.to_string()),
@@ -157,7 +170,7 @@ fn pill(l: &Look, e: El) -> El {
     look::own_gestures(e).h(28.0).radius(14.0).border(1.0, l.border).fill(l.surface).shadow(4.0, 12.0, Color::BLACK.alpha(0.07))
 }
 
-/// Add and the wordmark, in the titlebar band beside the traffic lights.
+/// Add and the workspace tabs, in the titlebar band beside the traffic lights.
 fn top_left(l: &Look, s: &App, insets: rune::ChromeInsets) -> El {
     let add = l.primary_button(
         el().key("add")
@@ -174,20 +187,14 @@ fn top_left(l: &Look, s: &App, insets: rune::ChromeInsets) -> El {
             .child(row().gap(6.0).center_y().child(icon(&PLUS, 15.0).color(Color::WHITE)).child(text("Add").font(MEDIUM).color(Color::WHITE))),
     );
     let (x, y) = if insets.height > 0.0 { (insets.leading + 12.0, (insets.height - 28.0) / 2.0) } else { (12.0, 12.0) };
-    let mut r = look::own_gestures(row().key("top-left")).absolute(x, y).gap(10.0).center_y().child(add).child(text("Voidmesh").font(TextStyle::new(16.0, 600.0)).color(l.text));
-    if let Some(doc) = s.doc.as_ref().and_then(|p| p.file_stem()) {
-        let name = format!("{}{}", doc.to_string_lossy(), if s.dirty() { " •" } else { "" });
-        r = r.child(text(name).font(SMALL).color(l.text_muted).truncate().max_w(260.0).help("⌘S saves, ⇧⌘S saves as"));
-    }
-    if let Some(p) = &s.opening {
-        use std::sync::atomic::Ordering;
-        let (done, total) = (p.done.load(Ordering::Relaxed), p.total.load(Ordering::Relaxed));
-        let what = if total == 0 { "Reading workspace…".to_string() } else { format!("Importing item {} of {total}…", (done + 1).min(total)) };
-        r = r.child(text(what).font(SMALL).color(l.text_muted)).child(
-            el().key("cancel-open").role("button").label("Cancel").px(8.0).h(22.0).radius(11.0).center().hover(l.hover).cursor(rune::Cursor::Pointer).on_press(|s: &mut App| s.cancel_open()).child(text("Cancel").font(SMALL).color(l.text)),
-        );
-    } else if s.saving.is_some() {
-        r = r.child(text("Saving…").font(SMALL).color(l.text_muted));
+    // The tabs take what the titlebar has left after Add and room for progress, short of the
+    // window's right edge.
+    let add_w = 12.0 + 15.0 + 6.0 + rune::text::measure("Add", &[], MEDIUM, None).0 + 12.0;
+    let busy = if s.loading().is_some() || s.pending > 0 { 220.0 } else { 0.0 };
+    let room = s.canvas[2] - x - add_w - 10.0 - busy - 24.0;
+    let mut r = look::own_gestures(row().key("top-left")).absolute(x, y).gap(10.0).center_y().child(add).child(tabs::strip(l, s, room));
+    if let Some(p) = tabs::progress(l, s) {
+        r = r.child(p);
     } else if s.pending > 0 {
         r = r.child(text(format!("Importing {}…", s.pending)).font(SMALL).color(l.text_muted));
     }
@@ -346,5 +353,5 @@ fn empty_state(l: &Look) -> El {
         .inert()
         .child(text("Voidmesh").font(TextStyle::new(28.0, 600.0)).color(l.text))
         .child(text("Drop images, videos, GIFs, SVGs or a .vdmsh workspace").font(look::BODY).color(l.text_muted))
-        .child(text("All local, nothing gets uploaded.").font(look::BODY).color(l.text_faint))
+        .child(text("All local, nothing gets uploaded. Saved as you go.").font(look::BODY).color(l.text_faint))
 }

@@ -1,13 +1,17 @@
 //! Media decoding: files become RGBA frames on a worker thread. A still image has one frame; a GIF
 //! keeps every frame with its delay. SVG rasterizes once at a size that stays crisp when zoomed in.
 //! Video keeps only its metadata here: `video::Decoder` streams its frames while it shows.
-//! Every asset keeps its original bytes (or, for video, its file) so a workspace can save them.
+//! Every asset keeps its original bytes (or, for video, its file) so a workspace can save them;
+//! with a store, an imported file is copied into it first (`store.rs`), and a video plays from
+//! that copy.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use image::AnimationDecoder;
+
+use crate::store::Store;
 
 /// Longest side an SVG rasterizes to.
 const SVG_PX: u32 = 2048;
@@ -75,6 +79,8 @@ pub struct Asset {
     /// The Original palette's colours, from the first frame (none for video).
     pub palette: Option<Vec<crate::effects::Rgba>>,
     pub video: Option<VideoMeta>,
+    /// The original's SHA-256, once known (`store::asset_hash`).
+    pub blob: OnceLock<String>,
 }
 
 impl Asset {
@@ -106,6 +112,14 @@ impl Asset {
         }
     }
 
+    #[cfg(test)]
+    pub fn original_bytes(&self) -> Option<&[u8]> {
+        match &self.original {
+            Original::Bytes(b) => Some(b),
+            Original::File(_) => None,
+        }
+    }
+
     pub fn original_palette(&self) -> Option<crate::effects::Palette> {
         self.palette.clone().map(crate::effects::original)
     }
@@ -120,8 +134,9 @@ pub struct Decoded {
 
 /// A finished workspace job.
 pub enum WorkspaceDone {
-    Opened(PathBuf, Result<crate::workspace::Workspace, String>),
-    Saved(PathBuf, Result<(), String>),
+    /// A workspace read for tab `tab`: from the store, or (`imported`) from a `.vdmsh` file.
+    Loaded { tab: String, imported: bool, result: Result<crate::workspace::Workspace, String> },
+    Exported(PathBuf, Result<(), String>),
 }
 
 /// Decodes on worker threads and hands results to the UI thread through `inbox`.
@@ -141,12 +156,17 @@ impl Loader {
         self.waker = Some(waker);
     }
 
-    pub fn load(&self, id: u64, path: PathBuf, batch: u64) {
+    /// Decode a media file; with a store, it's copied in and the asset refers to the copy.
+    pub fn load(&self, id: u64, path: PathBuf, batch: u64, store: Option<Arc<dyn Store>>) {
         let inbox = self.inbox.clone();
         let waker = self.waker.clone();
         std::thread::spawn(move || {
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let result = Decoded { batch, result: decode_file(id, &path).map(Arc::new).map_err(|e| (name, e)) };
+            let decoded = decode_file(id, &path).and_then(|a| match &store {
+                Some(st) => ingest(st.as_ref(), a, &path),
+                None => Ok(a),
+            });
+            let result = Decoded { batch, result: decoded.map(Arc::new).map_err(|e| (name, e)) };
             if let Ok(mut q) = inbox.lock() {
                 q.push(result);
             }
@@ -156,19 +176,29 @@ impl Loader {
         });
     }
 
-    pub fn open_workspace(&self, path: PathBuf, progress: Arc<crate::workspace::Progress>) {
+    /// Read a `.vdmsh` file into tab `tab`, copying its media into the store.
+    pub fn import_workspace(&self, tab: String, path: PathBuf, store: Arc<dyn Store>, progress: Arc<crate::workspace::Progress>) {
         let this = self.clone();
         std::thread::spawn(move || {
-            let r = crate::workspace::read(&path, &cache_dir(), &progress);
-            this.finish(WorkspaceDone::Opened(path, r));
+            let result = crate::workspace::read_zip(&path, store.as_ref(), &progress);
+            this.finish(WorkspaceDone::Loaded { tab, imported: true, result });
         });
     }
 
-    pub fn save_workspace(&self, path: PathBuf, items: Vec<crate::workspace::Item>, viewport: crate::workspace::Viewport, palettes: Vec<crate::effects::Palette>) {
+    /// Read the stored workspace `tab`.
+    pub fn load_workspace(&self, tab: String, store: Arc<dyn Store>, progress: Arc<crate::workspace::Progress>) {
         let this = self.clone();
         std::thread::spawn(move || {
-            let r = crate::workspace::write(&path, &items, viewport, &palettes);
-            this.finish(WorkspaceDone::Saved(path, r));
+            let result = store.load(&tab, &progress);
+            this.finish(WorkspaceDone::Loaded { tab, imported: false, result });
+        });
+    }
+
+    pub fn export_workspace(&self, path: PathBuf, doc: crate::store::Doc) {
+        let this = self.clone();
+        std::thread::spawn(move || {
+            let r = crate::workspace::write_zip(&path, &doc);
+            this.finish(WorkspaceDone::Exported(path, r));
         });
     }
 
@@ -216,13 +246,22 @@ impl Loader {
     }
 }
 
-/// Where videos from opened workspaces are unpacked.
-pub fn cache_dir() -> PathBuf {
-    rune::dirs::AppDirs::new(APP_ID).map(|d| d.cache().join("media")).unwrap_or_else(|| std::env::temp_dir().join("voidmesh-media"))
-}
-
 /// The bundle id `install.sh` gives the app; preferences and caches live under it.
 pub const APP_ID: &str = "dev.voidmesh.desktop";
+
+/// Copy a decoded file's original into the store; a video then plays from the copy.
+fn ingest(store: &dyn Store, mut a: Asset, path: &Path) -> Result<Asset, String> {
+    let ext = crate::workspace::blob_ext(&a).to_string();
+    let blob = match &a.original {
+        Original::Bytes(b) => store.put_bytes(b, &ext)?,
+        Original::File(_) => store.put_file(path, &ext)?,
+    };
+    if let Original::File(p) = &mut a.original {
+        *p = blob.path;
+    }
+    let _ = a.blob.set(blob.hash);
+    Ok(a)
+}
 
 pub fn decode_file(id: u64, path: &Path) -> Result<Asset, String> {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "media".into());
@@ -248,6 +287,7 @@ pub fn decode_video(id: u64, name: String, ext: String, path: PathBuf) -> Result
         ext,
         palette: None,
         video: Some(VideoMeta { fps: info.fps, has_audio: info.has_audio }),
+        blob: OnceLock::new(),
     })
 }
 
@@ -263,12 +303,14 @@ pub fn decode_bytes(id: u64, name: String, ext: &str, bytes: Arc<[u8]>) -> Resul
         (kind, "gif", w, h, frames, duration)
     } else {
         let img = image::load_from_memory(&bytes).map_err(|e| format!("{name}: {e}"))?;
+        // The original is kept under its own format's extension, whatever the file was called.
+        let ext = if IMAGE_EXTENSIONS.contains(&ext) { ext } else { image::guess_format(&bytes).ok().and_then(|f| f.extensions_str().first().copied()).unwrap_or("png") };
         let rgba = fit(img).to_rgba8();
         let (w, h) = rgba.dimensions();
         (Kind::Image, ext, w, h, vec![Frame { rgba: rgba.into_raw(), delay: Duration::ZERO }], Duration::ZERO)
     };
     let palette = frames.first().map(|f| crate::palette::extract(&f.rgba, width, height, ORIGINAL_COLORS));
-    Ok(Asset { id, name, kind, width, height, frames, duration, original: Original::Bytes(bytes), ext: ext.to_string(), palette, video: None })
+    Ok(Asset { id, name, kind, width, height, frames, duration, original: Original::Bytes(bytes), ext: ext.to_string(), palette, video: None, blob: OnceLock::new() })
 }
 
 fn fit(img: image::DynamicImage) -> image::DynamicImage {
@@ -316,22 +358,32 @@ fn svg_rgba(bytes: &[u8], px: u32) -> Result<(u32, u32, Vec<u8>), String> {
     Ok((w, h, rgba))
 }
 
-/// A blank still for tests.
-#[cfg(test)]
-pub fn test_asset(id: u64, w: u32, h: u32) -> Asset {
+/// A still made in code: its pixels, with a PNG of them as its original.
+pub fn rgba_asset(id: u64, name: &str, w: u32, h: u32, rgba: Vec<u8>) -> Asset {
+    let mut png = Vec::new();
+    if let Some(img) = image::RgbaImage::from_raw(w, h, rgba.clone()) {
+        let _ = img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png);
+    }
     Asset {
         id,
-        name: format!("a{id}.png"),
+        name: name.into(),
         kind: Kind::Image,
         width: w,
         height: h,
-        frames: vec![Frame { rgba: vec![0; (w * h * 4) as usize], delay: Duration::ZERO }],
+        frames: vec![Frame { rgba, delay: Duration::ZERO }],
         duration: Duration::ZERO,
-        original: Original::Bytes(Arc::from(&[][..])),
+        original: Original::Bytes(png.into()),
         ext: "png".into(),
         palette: None,
         video: None,
+        blob: OnceLock::new(),
     }
+}
+
+/// A blank still for tests.
+#[cfg(test)]
+pub fn test_asset(id: u64, w: u32, h: u32) -> Asset {
+    rgba_asset(id, &format!("a{id}.png"), w, h, vec![0; (w * h * 4) as usize])
 }
 
 #[cfg(test)]
