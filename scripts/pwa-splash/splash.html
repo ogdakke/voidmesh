@@ -1,0 +1,21 @@
+<!doctype html>
+<!--
+  iOS PWA startup image source, rendered by scripts/pwa-splash.ts at every device size.
+  It is the loader's first paint (index.html): the brand blue plus the pixel wordmark,
+  placed by the same inline script, so the splash hands off to the page invisibly.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Voidmesh splash</title>
+    <link rel="stylesheet" href="/styles/reset.css" />
+    <link rel="stylesheet" href="/styles/app-loader.css" />
+  </head>
+  <body>
+    <div id="app-loader" class="app-loader">
+      <svg class="loader-wordmark" aria-hidden="true" shape-rendering="crispEdges"><path /></svg>
+      <!-- app-loader:first-paint -->
+    </div>
+  </body>
+</html>

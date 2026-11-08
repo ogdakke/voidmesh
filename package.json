@@ -36,7 +36,8 @@
     "format": "oxfmt .",
     "format:check": "oxfmt . --check",
     "install:hooks": "sh scripts/install-hooks.sh",
-    "media:sync": "bun run scripts/media-sync.ts"
+    "media:sync": "bun run scripts/media-sync.ts",
+    "pwa:splash": "bun run scripts/pwa-splash.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
@@ -79,6 +80,7 @@
     "oxfmt": "^0.73.0",
     "oxlint": "^1.88.0",
     "oxlint-tsgolint": "^7.0.2004",
+    "rolldown": "1.2.14",
     "sharp": "^0.35.5",
     "type-fest": "^5.10.0",
     "typescript": "^7.0.2",

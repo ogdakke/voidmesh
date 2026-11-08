@@ -1,5 +1,6 @@
 import ditherShaderSource from "./dither.wgsl?raw";
 import fieldShaderSource from "./dither-field.wgsl?raw";
+import { loaderCaptionOrigin } from "./layout.ts";
 
 /**
  * WebGPU renderer for the initial loader: a white dither cloud on brand blue with a
@@ -35,9 +36,9 @@ export interface DitherFrame {
   viewCenter: readonly [number, number];
   viewReach: number;
   reveal: number;
-  /** Display-P3, 0–1. */
+  /** sRGB, 0–1. */
   ink: Rgb;
-  /** Display-P3, 0–1. */
+  /** sRGB, 0–1. */
   background: Rgb;
   /** Caption centre, in cells. */
   textCenter: readonly [number, number];
@@ -92,7 +93,7 @@ export class LoaderDitherRenderer {
     if (!context) throw new Error("Loader dither renderer: no WebGPU canvas context");
     this.#context = context;
     const format = navigator.gpu.getPreferredCanvasFormat();
-    context.configure({ device, format, alphaMode: "premultiplied", colorSpace: "display-p3" });
+    context.configure({ device, format, alphaMode: "premultiplied", colorSpace: "srgb" });
 
     const fieldModule = device.createShaderModule({ code: fieldShaderSource });
     const ditherModule = device.createShaderModule({ code: ditherShaderSource });
@@ -259,8 +260,9 @@ function writeCaptionPlacement(
   slot: CaptionSlot,
   center: readonly [number, number],
 ) {
-  target[offset] = Math.round(center[0] - slot.width / 2);
-  target[offset + 1] = Math.round(center[1] - slot.height / 2);
+  const [x, y] = loaderCaptionOrigin(center, slot);
+  target[offset] = x;
+  target[offset + 1] = y;
   target[offset + 2] = slot.width;
   target[offset + 3] = slot.height;
 }

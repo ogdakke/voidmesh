@@ -1,11 +1,13 @@
-import { loaderDitherGrid } from "./layout.ts";
+import { fitLoaderGrid, loaderViewportGrid, readLoaderViewport } from "./layout.ts";
+import { placeLoaderWordmark } from "./wordmark.ts";
 import type { FromLoaderWorkerMessage, ToLoaderWorkerMessage } from "./app-loader.worker.ts";
 
 /**
- * Initial app loader. index.html paints a brand-blue screen before any JS runs; this
- * module (the first script) hands a canvas to app-loader.worker.ts, which dithers a
- * white cloud in on top with a rotating pixel-text caption and, on dismiss, opens the
- * blue to reveal the app. The caption is decorative; the visually hidden
+ * Initial app loader. index.html paints the brand blue and the pixel wordmark before
+ * any module runs (first-paint.ts, matching the PWA splash images); this module hands
+ * a canvas to app-loader.worker.ts, which takes over the identical frame, dithers a
+ * white cloud in around the wordmark, rotates pixel-text captions and, on dismiss,
+ * opens the blue to reveal the app. The caption is decorative; the visually hidden
  * `.loader-status` carries the real loading status for assistive tech.
  */
 
@@ -45,28 +47,17 @@ function onWorkerMessage<T extends FromLoaderWorkerMessage["type"]>(
   target.addEventListener("message", handler);
 }
 
-/** Pins the canvas to a whole number of device pixels per dither cell. */
-function sizeCanvas() {
-  if (!canvasEl) return;
-  const { width, height, dpr } = viewport();
-  const grid = loaderDitherGrid(width, height, dpr);
-  canvasEl.style.width = `${grid.cssWidth}px`;
-  canvasEl.style.height = `${grid.cssHeight}px`;
-}
-
-/** The loader covers the visible region (100svh, see app-loader.css); so does the canvas. */
-function viewport() {
-  return {
-    width: innerWidth,
-    height: el ? el.getBoundingClientRect().height : innerHeight,
-    dpr: devicePixelRatio,
-  };
+/** Pins the canvas to a whole number of device pixels per dither cell; returns the viewport. */
+function sizeCanvas(loader: HTMLElement, canvas: HTMLCanvasElement) {
+  const viewport = readLoaderViewport(loader);
+  fitLoaderGrid(canvas, loaderViewportGrid(viewport));
+  return viewport;
 }
 
 /** Boots the effect worker; it owns the canvas from here on. */
 function startWorker() {
   if (!el || !canvasEl) return null;
-  sizeCanvas();
+  const viewport = sizeCanvas(el, canvasEl);
   const instance = new Worker(new URL("./app-loader.worker.ts", import.meta.url), {
     type: "module",
     name: "app-loader",
@@ -76,13 +67,11 @@ function startWorker() {
     {
       type: "init",
       canvas,
-      ...viewport(),
+      ...viewport,
       reducedMotion: reducedMotion.matches,
     } satisfies ToLoaderWorkerMessage,
     [canvas],
   );
-  // Once the canvas paints the blue itself, drop the CSS blue so the reveal shows the app.
-  onWorkerMessage(instance, "painted", () => (el.dataset.painted = ""), true);
   // Without a WebGPU device the loader stays a static blue screen with a CSS fade exit.
   onWorkerMessage(instance, "failed", () => (el.dataset.static = ""), true);
   addEventListener("resize", onResize);
@@ -90,8 +79,10 @@ function startWorker() {
 }
 
 function onResize() {
-  sizeCanvas();
-  post({ type: "resize", ...viewport() });
+  if (!el || !canvasEl) return;
+  const viewport = sizeCanvas(el, canvasEl);
+  placeLoaderWordmark(el);
+  post({ type: "resize", ...viewport });
 }
 
 /** Resolves on `type`, or straight away once the worker has failed (it sends nothing more). */
@@ -114,6 +105,8 @@ async function playExit() {
   const exited = nextWorkerMessage("exited");
   post({ type: "exit" });
   await exiting;
+  // The canvas has been drawing the same blue and wordmark on top for a while by now;
+  // the CSS layer goes with the first reveal frame (app-loader.css).
   el.dataset.state = "exit";
   await Promise.all([exited, ...el.getAnimations().map((animation) => animation.finished)]);
   el.hidden = true;

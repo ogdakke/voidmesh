@@ -1,26 +1,34 @@
 /*
- * Initial app loader. The brand-blue background paints with the HTML, before any JS.
- * renderer/app-loader/app-loader.worker.ts then draws the same blue plus a white
- * dither cloud on the canvas ([data-painted] drops the CSS blue) with a pixel-text
- * caption, and on exit dithers the blue open to reveal the app. CSS only owns the
- * first paint and the reduced-motion fade.
+ * Initial app loader. The brand blue and the pixel wordmark (.loader-wordmark, placed
+ * by an inline script) paint with the HTML, before any module runs, matching the PWA
+ * splash images. renderer/app-loader/app-loader.worker.ts then draws the identical
+ * frame on the canvas above them, blooms a white dither cloud around the wordmark,
+ * and on exit dithers the blue open to reveal the app. CSS only owns the first paint
+ * and the reduced-motion fade.
  *
- * The loader covers the visible region only and is never `fixed`: iOS tints its
- * status bar and toolbar from fixed elements at the screen edges and keeps that tint
- * after they are removed. Left alone, the browser bars keep their normal appearance
- * (and stay translucent in the PWA).
+ * The loader is never `fixed`: iOS tints its status bar and toolbar from fixed
+ * elements at the screen edges and keeps that tint after they are removed. Left alone,
+ * the browser bars keep their normal appearance (and stay translucent in the PWA).
+ *
+ * It is absolutely positioned and runs --loader-bleed past the bottom of the visible
+ * region: in the PWA, 100svh stops short of the bottom of the screen, and the strip
+ * below would show the page instead of the blue. html/body clip overflow, so the bleed
+ * never scrolls. Layout centres on the visible region (layout.ts subtracts the bleed).
  */
 .app-loader {
   --loader-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
-  /* Brand blue (--primary) in Display P3; the worker draws the identical value. */
-  --loader-blue: color(display-p3 0.098 0.486 0.996);
+  /* Brand blue, clipped to sRGB: iOS ignores colour profiles on startup images, so the
+   * splash can only show sRGB. The worker and the splash page draw the identical value. */
+  --loader-blue: #007eff;
+  /* Read by layout.ts; keep it in px. */
+  --loader-bleed: 200px;
 
   z-index: 999999;
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
-  height: 100svh;
+  height: calc(100svh + var(--loader-bleed));
   overflow: clip;
   background: var(--loader-blue);
   color: white;
@@ -32,8 +40,13 @@
     display: none;
   }
 
-  &[data-painted] {
+  /* The canvas covers this layer until the reveal starts, then the reveal shows the app. */
+  &[data-state="exit"]:not([data-static]) {
     background: transparent;
+
+    & .loader-wordmark {
+      visibility: hidden;
+    }
   }
 
   /* With motion, the worker reveals the app. Reduced motion, and a loader without a
@@ -53,13 +66,26 @@ html[data-overlay-open] .app-loader {
   visibility: hidden;
 }
 
-/* Sized in JS to a whole number of device pixels per dither cell. */
-.loader-canvas {
+/*
+ * The canvas and the wordmark share one box, sized in JS (fitLoaderGrid): one CSS px
+ * per dither cell, scaled up to a whole number of device pixels per cell. It may
+ * overhang the viewport by up to a cell, so the reset's max-width must not apply.
+ */
+.loader-canvas,
+.loader-wordmark {
   position: absolute;
   top: 0;
   left: 0;
-  width: 100%;
-  height: 100%;
+  max-width: none;
+  transform-origin: 0 0;
+}
+
+/* The path sits on the cells the worker draws the opening caption on. */
+.loader-wordmark {
+  fill: white;
+}
+
+.loader-canvas {
   image-rendering: pixelated;
 }
 
