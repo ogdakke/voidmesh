@@ -68,6 +68,7 @@
 
     <link rel="stylesheet" href="./styles/reset.css" />
     <link rel="stylesheet" href="./styles/globals.css" />
+    <link rel="stylesheet" href="./styles/app-loader.css" />
     <style>
       :root {
         --safe-area-top: env(safe-area-inset-top, 0);
@@ -76,6 +77,7 @@
         --safe-area-right: env(safe-area-inset-right, 0);
       }
     </style>
+    <script type="module" src="./renderer/app-loader/app-loader.ts"></script>
     <script type="module" src="./app.tsx"></script>
     <script type="module" src="./components/web-components/gallery.ts"></script>
     <script type="module" src="./components/web-components/lightbox.ts"></script>
@@ -282,13 +284,9 @@
     />
   </head>
   <body>
-    <div class="app-loading-container">
-      <div id="app-loader" class="app-loading">
-        <div class="loading-spinner">
-          <img src="/favicon.webp" alt="blurry shapes on a blue background" />
-        </div>
-        <p>Loading...</p>
-      </div>
+    <div id="app-loader" class="app-loader" role="status" aria-live="polite">
+      <canvas class="loader-canvas" aria-hidden="true"></canvas>
+      <p class="loader-status">Loading…</p>
     </div>
     <div id="root">
       <noscript>

@@ -11,6 +11,7 @@ WebGPU rendering, shader execution, composition, resource caching, and export.
 - `texture-pool.ts`, `byte-budget-cache.ts` — Bounded temporary and persistent GPU ownership.
 - `export-service.ts`, `frame-encoder.ts`, `gif-export.ts` — Native-resolution export paths.
 - `shaders/` — Effect passes; see its child `AGENTS.md`.
+- `app-loader/` — Pre-app loading screen, booted by `index.html` before the app. Renders in a worker on an `OffscreenCanvas` with its own WebGPU device, independent of the app renderer, and destroys it on handoff.
 
 ## Rendering Invariants
 

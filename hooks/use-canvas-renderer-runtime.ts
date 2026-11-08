@@ -1,6 +1,6 @@
 import { config, getViewportLensDistortionConfig } from "#config";
 import { useCanvasInteraction, useCanvasRendererService } from "#context/use-canvas.ts";
-import { appLoader } from "#lib/app-loader.ts";
+import { appLoader } from "#renderer/app-loader/app-loader.ts";
 import { applyWlurOverlayDebugConfig } from "#renderer/wlur-debug.ts";
 import { createDefaultWlurOverlayConfig } from "#renderer/wlur-overlay.ts";
 import { useEffect, type RefObject } from "react";
@@ -44,7 +44,7 @@ export function useCanvasRendererRuntime({
   }, [canvasLensing, interaction, renderer]);
 
   useEffect(() => {
-    appLoader.setText("Initializing canvas...");
+    appLoader.setText("Initializing canvas…");
   }, []);
 
   useEffect(() => {
