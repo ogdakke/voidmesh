@@ -7,18 +7,21 @@
 
 import { LoaderDitherRenderer } from "./dither-renderer.ts";
 import { LINES, OPENING_LINE } from "./captions.ts";
-import { layoutLoaderCaption, loaderCenter, loaderDitherGrid, type LoaderGrid } from "./layout.ts";
+import {
+  layoutLoaderCaption,
+  loaderCenter,
+  loaderViewportGrid,
+  type LoaderGrid,
+  type LoaderViewport,
+} from "./layout.ts";
 
 export type ToLoaderWorkerMessage =
-  | {
+  | ({
       type: "init";
       canvas: OffscreenCanvas;
-      width: number;
-      height: number;
-      dpr: number;
       reducedMotion: boolean;
-    }
-  | { type: "resize"; width: number; height: number; dpr: number }
+    } & LoaderViewport)
+  | ({ type: "resize" } & LoaderViewport)
   /** Dev preview: move to the next caption now. */
   | { type: "advance" }
   | { type: "exit" }
@@ -48,8 +51,8 @@ const TRANSITION_FRAME_MS = 1000 / 60 - 2;
 const IDLE_FRAME_MS = 1000 / 30 - 2;
 /** < 1 enlarges the cloud lobes relative to the viewport. */
 const LOBE_SCALE = 0.85;
-/** Brand blue: `--primary`, oklch(61% 0.23 253), in Display P3. Matches app-loader.css. */
-const BACKGROUND = [0.098, 0.486, 0.996] as const;
+/** Brand blue clipped to sRGB, #007eff. Matches app-loader.css and the splash images. */
+const BACKGROUND = [0, 126 / 255, 1] as const;
 const INK = [1, 1, 1] as const;
 
 /** The opening line is held a little longer before the rotation starts. */
@@ -58,9 +61,7 @@ const LINE_HOLD_MS = 1800;
 const LINE_SWAP_MS = 450;
 
 let renderer: LoaderDitherRenderer | null = null;
-let width = 0;
-let height = 0;
-let dpr = 1;
+let viewport: LoaderViewport = { width: 0, height: 0, coverHeight: 0, dpr: 1 };
 let grid: LoaderGrid | null = null;
 let reducedMotion = false;
 let phase: Phase = "intro";
@@ -184,7 +185,7 @@ function updateLobes(s: number) {
 }
 
 function configure() {
-  grid = loaderDitherGrid(width, height, dpr);
+  grid = loaderViewportGrid(viewport);
   renderer?.resize(grid.cols, grid.rows);
   // Cell size may have changed; re-lay out the caption at the new scale.
   if (currentLine) setCaptionNow(currentLine);
@@ -198,7 +199,7 @@ function render(now: number) {
   updateLobes(s);
   // The cloud fills an ellipse fitted to the viewport; lobes only get sqrt(aspect) of
   // that stretch so they stay cloud-shaped on wide and tall screens.
-  const [cx, cy] = loaderCenter({ width, height, dpr }, grid);
+  const [cx, cy] = loaderCenter(viewport, grid);
   const halfW = cx * 0.94;
   const halfH = cy * 0.94;
   const k = Math.sqrt(halfW / halfH);
@@ -211,7 +212,8 @@ function render(now: number) {
     radius,
     amp,
     viewCenter: [cx, cy],
-    viewReach: Math.hypot(cx, cy),
+    // To the farthest corner, which is in the bleed below the visible region.
+    viewReach: Math.hypot(cx, Math.max(cy, grid.rows - cy)),
     reveal,
     ink: INK,
     background: BACKGROUND,
@@ -311,9 +313,7 @@ self.onmessage = (event: MessageEvent<ToLoaderWorkerMessage>) => {
   const msg = event.data;
   switch (msg.type) {
     case "init":
-      width = msg.width;
-      height = msg.height;
-      dpr = msg.dpr;
+      viewport = msg;
       reducedMotion = msg.reducedMotion;
       LoaderDitherRenderer.create(msg.canvas).then(
         (created) => {
@@ -335,9 +335,7 @@ self.onmessage = (event: MessageEvent<ToLoaderWorkerMessage>) => {
       );
       break;
     case "resize":
-      width = msg.width;
-      height = msg.height;
-      dpr = msg.dpr;
+      viewport = msg;
       configure();
       if (phase === "done" || reducedMotion) render(performance.now());
       break;

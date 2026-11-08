@@ -1,4 +1,4 @@
-import { fitLoaderGrid, loaderDitherGrid, readLoaderViewport } from "./layout.ts";
+import { fitLoaderGrid, loaderViewportGrid, readLoaderViewport } from "./layout.ts";
 import { placeLoaderWordmark } from "./wordmark.ts";
 import type { FromLoaderWorkerMessage, ToLoaderWorkerMessage } from "./app-loader.worker.ts";
 
@@ -47,23 +47,17 @@ function onWorkerMessage<T extends FromLoaderWorkerMessage["type"]>(
   target.addEventListener("message", handler);
 }
 
-/** Pins the canvas to a whole number of device pixels per dither cell. */
-function sizeCanvas() {
-  if (!canvasEl) return;
-  const { width, height, dpr } = viewport();
-  fitLoaderGrid(canvasEl, loaderDitherGrid(width, height, dpr));
-}
-
-function viewport() {
-  return el
-    ? readLoaderViewport(el)
-    : { width: innerWidth, height: innerHeight, dpr: devicePixelRatio };
+/** Pins the canvas to a whole number of device pixels per dither cell; returns the viewport. */
+function sizeCanvas(loader: HTMLElement, canvas: HTMLCanvasElement) {
+  const viewport = readLoaderViewport(loader);
+  fitLoaderGrid(canvas, loaderViewportGrid(viewport));
+  return viewport;
 }
 
 /** Boots the effect worker; it owns the canvas from here on. */
 function startWorker() {
   if (!el || !canvasEl) return null;
-  sizeCanvas();
+  const viewport = sizeCanvas(el, canvasEl);
   const instance = new Worker(new URL("./app-loader.worker.ts", import.meta.url), {
     type: "module",
     name: "app-loader",
@@ -73,7 +67,7 @@ function startWorker() {
     {
       type: "init",
       canvas,
-      ...viewport(),
+      ...viewport,
       reducedMotion: reducedMotion.matches,
     } satisfies ToLoaderWorkerMessage,
     [canvas],
@@ -85,9 +79,10 @@ function startWorker() {
 }
 
 function onResize() {
-  sizeCanvas();
-  if (el) placeLoaderWordmark(el);
-  post({ type: "resize", ...viewport() });
+  if (!el || !canvasEl) return;
+  const viewport = sizeCanvas(el, canvasEl);
+  placeLoaderWordmark(el);
+  post({ type: "resize", ...viewport });
 }
 
 /** Resolves on `type`, or straight away once the worker has failed (it sends nothing more). */

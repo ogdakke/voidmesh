@@ -5,8 +5,11 @@ import {
   loaderCaptionOrigin,
   loaderCenter,
   loaderDitherGrid,
+  loaderViewportGrid,
 } from "#renderer/app-loader/layout.ts";
 import { placeLoaderWordmark } from "#renderer/app-loader/wordmark.ts";
+
+const BLEED = 200;
 
 /** The cells the static wordmark's path fills, as "col,row". */
 function pathCells(d: string) {
@@ -19,9 +22,10 @@ function pathCells(d: string) {
 
 /** The glyph cells the worker draws for the opening caption, as "col,row". */
 function workerCells(width: number, height: number, dpr: number) {
-  const grid = loaderDitherGrid(width, height, dpr);
+  const viewport = { width, height, coverHeight: height + BLEED, dpr };
+  const grid = loaderViewportGrid(viewport);
   const caption = layoutLoaderCaption(OPENING_LINE, grid);
-  const [ox, oy] = loaderCaptionOrigin(loaderCenter({ width, height, dpr }, grid), caption);
+  const [ox, oy] = loaderCaptionOrigin(loaderCenter(viewport, grid), caption);
   const cells = new Set<string>();
   for (let row = 0; row < caption.height; row++) {
     for (let col = 0; col < caption.width; col++) {
@@ -48,22 +52,26 @@ describe("loader first-paint wordmark", () => {
     [375, 667, 2],
     [1440, 900, 2],
     [1280, 800, 1],
-  ])("fills exactly the worker's caption cells at %i×%i@%i", (width, height, dpr) => {
-    Object.defineProperty(window, "devicePixelRatio", { value: dpr, configurable: true });
-    Object.defineProperty(window, "innerWidth", { value: width, configurable: true });
-    document.body.innerHTML = `<div id="app-loader"><svg class="loader-wordmark"><path /></svg></div>`;
-    const el = document.getElementById("app-loader")!;
-    el.getBoundingClientRect = () => ({ height }) as DOMRect;
+  ])(
+    "fills exactly the worker's caption cells at %i×%i@%i, bleed included",
+    (width, height, dpr) => {
+      Object.defineProperty(window, "devicePixelRatio", { value: dpr, configurable: true });
+      Object.defineProperty(window, "innerWidth", { value: width, configurable: true });
+      document.body.innerHTML = `<div id="app-loader"><svg class="loader-wordmark"><path /></svg></div>`;
+      const el = document.getElementById("app-loader")!;
+      el.style.setProperty("--loader-bleed", `${BLEED}px`);
+      el.getBoundingClientRect = () => ({ height: height + BLEED }) as DOMRect;
 
-    placeLoaderWordmark(el);
+      placeLoaderWordmark(el);
 
-    const svg = el.querySelector("svg")!;
-    const { grid, cells } = workerCells(width, height, dpr);
-    expect(svg.getAttribute("viewBox")).toBe(`0 0 ${grid.cols} ${grid.rows}`);
-    expect(svg.style.width).toBe(`${grid.cols}px`);
-    expect(svg.style.transform).toBe(`scale(${grid.cell})`);
-    expect(pathCells(svg.querySelector("path")!.getAttribute("d")!)).toEqual(cells);
-  });
+      const svg = el.querySelector("svg")!;
+      const { grid, cells } = workerCells(width, height, dpr);
+      expect(svg.getAttribute("viewBox")).toBe(`0 0 ${grid.cols} ${grid.rows}`);
+      expect(svg.style.width).toBe(`${grid.cols}px`);
+      expect(svg.style.transform).toBe(`scale(${grid.cell})`);
+      expect(pathCells(svg.querySelector("path")!.getAttribute("d")!)).toEqual(cells);
+    },
+  );
 });
 
 describe("loader dither grid", () => {

@@ -3,8 +3,8 @@
 // carves the exit reveal.
 
 struct DitherUniforms {
-  ink: vec4f,         // rgb, Display P3
-  background: vec4f,  // rgb, Display P3
+  ink: vec4f,         // rgb, sRGB
+  background: vec4f,  // rgb, sRGB
   viewCenter: vec2f,  // viewport centre, in cells
   fieldSize: vec2f,   // field texture size, in nodes
   textAOrigin: vec2i, // current caption

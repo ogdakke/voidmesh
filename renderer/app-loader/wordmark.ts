@@ -4,7 +4,7 @@ import {
   layoutLoaderCaption,
   loaderCaptionOrigin,
   loaderCenter,
-  loaderDitherGrid,
+  loaderViewportGrid,
   readLoaderViewport,
 } from "./layout.ts";
 
@@ -18,7 +18,7 @@ export function placeLoaderWordmark(el: HTMLElement) {
   const path = svg?.querySelector("path");
   if (!svg || !path) return;
   const viewport = readLoaderViewport(el);
-  const grid = loaderDitherGrid(viewport.width, viewport.height, viewport.dpr);
+  const grid = loaderViewportGrid(viewport);
   const caption = layoutLoaderCaption(OPENING_LINE, grid);
   const [x, y] = loaderCaptionOrigin(loaderCenter(viewport, grid), caption);
 

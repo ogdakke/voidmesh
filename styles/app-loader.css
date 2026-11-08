@@ -6,22 +6,29 @@
  * and on exit dithers the blue open to reveal the app. CSS only owns the first paint
  * and the reduced-motion fade.
  *
- * The loader covers the visible region only and is never `fixed`: iOS tints its
- * status bar and toolbar from fixed elements at the screen edges and keeps that tint
- * after they are removed. Left alone, the browser bars keep their normal appearance
- * (and stay translucent in the PWA).
+ * The loader is never `fixed`: iOS tints its status bar and toolbar from fixed
+ * elements at the screen edges and keeps that tint after they are removed. Left alone,
+ * the browser bars keep their normal appearance (and stay translucent in the PWA).
+ *
+ * It is absolutely positioned and runs --loader-bleed past the bottom of the visible
+ * region: in the PWA, 100svh stops short of the bottom of the screen, and the strip
+ * below would show the page instead of the blue. html/body clip overflow, so the bleed
+ * never scrolls. Layout centres on the visible region (layout.ts subtracts the bleed).
  */
 .app-loader {
   --loader-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
-  /* Brand blue (--primary) in Display P3; the worker draws the identical value. */
-  --loader-blue: color(display-p3 0.098 0.486 0.996);
+  /* Brand blue, clipped to sRGB: iOS ignores colour profiles on startup images, so the
+   * splash can only show sRGB. The worker and the splash page draw the identical value. */
+  --loader-blue: #007eff;
+  /* Read by layout.ts; keep it in px. */
+  --loader-bleed: 200px;
 
   z-index: 999999;
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
-  height: 100svh;
+  height: calc(100svh + var(--loader-bleed));
   overflow: clip;
   background: var(--loader-blue);
   color: white;

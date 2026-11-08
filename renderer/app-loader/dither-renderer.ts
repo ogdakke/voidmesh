@@ -36,9 +36,9 @@ export interface DitherFrame {
   viewCenter: readonly [number, number];
   viewReach: number;
   reveal: number;
-  /** Display-P3, 0–1. */
+  /** sRGB, 0–1. */
   ink: Rgb;
-  /** Display-P3, 0–1. */
+  /** sRGB, 0–1. */
   background: Rgb;
   /** Caption centre, in cells. */
   textCenter: readonly [number, number];
@@ -93,7 +93,7 @@ export class LoaderDitherRenderer {
     if (!context) throw new Error("Loader dither renderer: no WebGPU canvas context");
     this.#context = context;
     const format = navigator.gpu.getPreferredCanvasFormat();
-    context.configure({ device, format, alphaMode: "premultiplied", colorSpace: "display-p3" });
+    context.configure({ device, format, alphaMode: "premultiplied", colorSpace: "srgb" });
 
     const fieldModule = device.createShaderModule({ code: fieldShaderSource });
     const ditherModule = device.createShaderModule({ code: ditherShaderSource });

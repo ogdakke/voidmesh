@@ -5,10 +5,8 @@
  *
  * The page is served by Vite with the project config (so CSS and the app-loader
  * first-paint script are processed exactly as in index.html), then captured at each
- * device's CSS viewport and pixel ratio, in both orientations. Chrome renders with an
- * sRGB profile (screenshots are sRGB-encoded either way) and the PNGs are tagged
- * Display P3, so the page should write colours as P3 channel values in rgb() syntax
- * (see splash.html): they pass through verbatim and match the P3 loader blue.
+ * device's CSS viewport and pixel ratio, in both orientations. Output is sRGB: iOS
+ * ignores colour profiles on startup images, so the page must stick to sRGB colours.
  * Writes public/assets/splash/ and rewrites the startup-image block in index.html.
  */
 
@@ -168,7 +166,7 @@ async function capture(
     );
   }
   const png = await image
-    .withIccProfile("p3")
+    .withIccProfile("srgb")
     .png({ palette: true, colours: 16, dither: 0, compressionLevel: 9, effort: 10 })
     .toBuffer();
   const hash = new Bun.CryptoHasher("sha256").update(png).digest("hex").slice(0, 8);

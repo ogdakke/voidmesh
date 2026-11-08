@@ -23,15 +23,24 @@ const WIDEST_LINE = Math.max(
 
 export interface LoaderViewport {
   width: number;
+  /** Visible region (100svh): the wordmark, cloud, and reveal centre on it. */
   height: number;
+  /** Painted height: the visible region plus the bleed below it (app-loader.css). */
+  coverHeight: number;
   dpr: number;
 }
 
 export type LoaderGrid = ReturnType<typeof loaderDitherGrid>;
 
-/** The loader covers the visible region (100svh, see app-loader.css); so does the canvas. */
 export function readLoaderViewport(el: HTMLElement): LoaderViewport {
-  return { width: innerWidth, height: el.getBoundingClientRect().height, dpr: devicePixelRatio };
+  const coverHeight = el.getBoundingClientRect().height;
+  const bleed = Number.parseFloat(getComputedStyle(el).getPropertyValue("--loader-bleed")) || 0;
+  return { width: innerWidth, height: coverHeight - bleed, coverHeight, dpr: devicePixelRatio };
+}
+
+/** The cell grid covering the whole painted area, bleed included. */
+export function loaderViewportGrid(viewport: LoaderViewport) {
+  return loaderDitherGrid(viewport.width, viewport.coverHeight, viewport.dpr);
 }
 
 /**
@@ -63,7 +72,7 @@ export function loaderDitherGrid(width: number, height: number, dpr: number) {
   return { cols, rows, cell: cellDevice / dpr };
 }
 
-/** Viewport centre in cells: the cloud, the caption, and the reveal are centred on it. */
+/** Visible-region centre in cells: the cloud, the caption, and the reveal centre on it. */
 export function loaderCenter(viewport: LoaderViewport, grid: LoaderGrid) {
   return [viewport.width / grid.cell / 2, viewport.height / grid.cell / 2] as const;
 }
