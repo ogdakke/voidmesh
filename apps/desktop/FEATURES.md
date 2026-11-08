@@ -62,7 +62,7 @@ Data flow: input → store mutation → frame loop decides whether a render is n
   - Level = `floor(log(zoom)/log 5)`. Fine spacing = `25 * 5^-level`, coarse = fine × 5. Coarse dots are always visible. Minor-only dots fade in with an eased factor `t^5`, where `t` is the fractional level, so the grid never gets too dense or too sparse at any zoom.
   - Dots are antialiased with `smoothstep(r-0.5, r+0.5, dist)` in screen pixels.
   - Colors: light theme bg `[0.98,0.98,0.98]`, dots `[0.75,0.75,0.75]`. Dark theme bg `[0.023,0.023,0.03]`, dots `[0.15,0.15,0.15]` (`DEFAULT_GRID_CONFIG(_DARK)`). The theme follows `prefers-color-scheme`.
-- **Snap to grid** (toggle with **G**, persisted): snap cell = `SNAP_GRID_SIZE = 25 × 5 = 125` world units. When on, drags snap the anchor entity's top-left to the nearest 125-multiple, with a small spring settle (response 0.1 s, damping 0.9), and newly placed media snaps too. The layout gap is also 125.
+- **Snap to grid** (toggle with **G**, persisted): snap cell = `SNAP_GRID_SIZE = 25 × 5 = 125` world units. When on, drags snap the anchor entity's top-left to the nearest 125-multiple (instantly for pointer drags; the spring settle, response 0.1 s / damping 0.9, runs only after the mobile long-press catch-up), and newly placed media snaps too. The layout gap is also 125.
 
 ### 1.5 Optional full-canvas post effects (settings)
 
@@ -161,10 +161,10 @@ There are **no** per-entity opacity, hidden, blend mode, crop or flip fields.
 
 - Pointer-down on an entity, then move → drags the target (the single entity, or the whole selection).
 - While dragging, the selection moves by a **transient offset**. Geometry is committed once on release.
-- **Drag visual**: after holding for 200 ms on desktop (100 ms on touch), the dragged entities spring-scale to **0.95** (response 0.2 s, damping 0.94). On the first movement they pop back (0.22 s, 0.4), and on release they spring back (0.3 s, 0.7). This gives a tactile "picked up" feel (`config.touch.dragVisual`).
+- **Drag visual** (touch only): after holding 100 ms, the dragged entities spring-scale to **0.95** (response 0.2 s, damping 0.94). On the first movement they pop back (0.22 s, 0.4), and on release they spring back (0.3 s, 0.7) (`config.touch.dragVisual`). Pointer drags start it with `directToDrag`, which skips the scale-down, so desktop shows no scale change.
 - Snap-to-grid: see §1.4.
 - **Drag moves are not undoable** (they bypass the undo stack). Only command-driven moves (`moveEntity` command) push undo.
-- "Prism wake / crossing" polish: when a dragged card passes over another, an RGB-split wake effect is drawn (`renderer/overlap-crossing.ts`, `lib/config/overlap.config.ts`, setting "fancy effects"). Defer it.
+- "Prism wake / crossing" polish: when the mobile long-press action layer lifts the selection through the stack, an RGB-split wake is drawn where it crosses other cards (`renderer/overlap-crossing.ts`, `lib/config/overlap.config.ts`, setting "Overlap effect", shown on mobile only). Its drag-over mode (`dragUnder`) is off in config, so pointer drags never show it.
 
 ### 3.3 Not implemented in the web app (do not port unless desired)
 
@@ -993,7 +993,16 @@ clip). Settings are a view of their own inside the window (⌘,), never a separa
 - Export: the selected entity at native resolution to PNG or JPEG (⌘E). Videos and GIFs export
   to MP4/MOV (H.264, audio passed through) or GIF through their effect, with fps, quality,
   resolution, bitrate and GIF options, in a sequential, cancelable queue (macOS).
-- Preferences persist (snap, lensing, user palettes) in the app's config folder.
+- Preferences persist (snap, lensing, fancy deletions, user palettes) in the app's config folder.
+- Fancy deletions: deleted items (up to 32 at once) dissolve under a noisy front and drift off as
+  15,000 dust particles (`gfx/dust.rs`, the web's shaders); a Settings switch, off by default
+  under Reduce Motion.
+- Several selected: stills save into a chosen folder, clips export together from the panel
+  ("Export n Videos/GIFs"), and the menu offers Save n Frames and Save All.
+- Inspector: Post Processing's master switch. Deleting a user palette moves the selection that
+  used it to Black & White. The colour picker's eyedropper samples the screen (NSColorSampler).
+- `D` toggles the performance overlay: FPS (continuous or rendered frames), a graph, compositor
+  CPU median/p95 and entities on screen.
 - Canvas lensing (off/subtle/extreme, L), drawn as a backdrop pass under the chrome.
 - Light and dark from the system; the web app's tokens and primitives.
 
@@ -1012,8 +1021,7 @@ clip). Settings are a view of their own inside the window (⌘,), never a separa
 
 **Not yet**
 
-- Exporting several clips at once ("Export n").
-- Delete dust, prism wake, progressive blur under the chrome, onboarding.
+- Progressive blur under the chrome, onboarding.
 - Video on platforms other than macOS.
 - Opening `.vdmsh` from Finder (double-click, Open With): Rune has no document-open hook or
   bundle document types yet.
