@@ -14,11 +14,14 @@ export type ToLoaderWorkerMessage =
       type: "init";
       canvas: OffscreenCanvas;
       width: number;
+      /** Canvas height in CSS px; taller than the viewport (see app-loader.css). */
       height: number;
+      /** Visible viewport height in CSS px; the cloud and caption centre on it. */
+      viewHeight: number;
       dpr: number;
       reducedMotion: boolean;
     }
-  | { type: "resize"; width: number; height: number; dpr: number }
+  | { type: "resize"; width: number; height: number; viewHeight: number; dpr: number }
   /** Dev preview: move to the next caption now. */
   | { type: "advance" }
   | { type: "exit" }
@@ -28,6 +31,8 @@ export type ToLoaderWorkerMessage =
 
 export type FromLoaderWorkerMessage =
   | { type: "painted" }
+  /** No WebGPU device; the worker has closed and the loader stays static. */
+  | { type: "failed" }
   /** The exit has actually begun (it may be held back after an "exit" request). */
   | { type: "exiting" }
   | { type: "exited" }
@@ -88,6 +93,7 @@ const WIDEST_LINE = Math.max(
 let renderer: LoaderDitherRenderer | null = null;
 let width = 0;
 let height = 0;
+let viewHeight = 0;
 let dpr = 1;
 let cell = 2; // dither cell size in CSS px
 let cols = 0;
@@ -219,8 +225,7 @@ function updateLobes(s: number) {
   lobes[7] = 0.12 * Math.sin(s * 0.95);
 }
 
-function configure(canvas?: OffscreenCanvas) {
-  if (canvas) renderer = new LoaderDitherRenderer(canvas);
+function configure() {
   const grid = loaderDitherGrid(width, height, dpr);
   cell = grid.cell;
   cols = grid.cols;
@@ -239,7 +244,7 @@ function render(now: number) {
   // The cloud fills an ellipse fitted to the viewport; lobes only get sqrt(aspect) of
   // that stretch so they stay cloud-shaped on wide and tall screens.
   const cx = width / cell / 2;
-  const cy = height / cell / 2;
+  const cy = viewHeight / cell / 2;
   const halfW = cx * 0.94;
   const halfH = cy * 0.94;
   const k = Math.sqrt(halfW / halfH);
@@ -252,7 +257,8 @@ function render(now: number) {
     radius,
     amp,
     viewCenter: [cx, cy],
-    viewReach: Math.hypot(cx, cy),
+    // Reach the farthest corner, including the part of the canvas below the viewport.
+    viewReach: Math.hypot(cx, Math.max(cy, height / cell - cy)),
     reveal,
     ink: INK,
     background: BACKGROUND,
@@ -307,7 +313,15 @@ function tick(now: number) {
 let exitReadyAt = 0;
 let exitTimer: ReturnType<typeof setTimeout> | undefined;
 
+// An exit can arrive while the WebGPU device is still being created; it is replayed
+// once the intro starts.
+let exitPending = false;
+
 function requestExit() {
+  if (!renderer) {
+    exitPending = true;
+    return;
+  }
   if (phase === "exit" || phase === "done" || exitTimer !== undefined) return;
   exitTimer = setTimeout(
     () => {
@@ -351,15 +365,32 @@ self.onmessage = (event: MessageEvent<ToLoaderWorkerMessage>) => {
     case "init":
       width = msg.width;
       height = msg.height;
+      viewHeight = msg.viewHeight;
       dpr = msg.dpr;
       reducedMotion = msg.reducedMotion;
-      configure(msg.canvas);
-      setCaptionNow(OPENING_LINE, OPENING_HOLD_MS);
-      start("intro");
+      LoaderDitherRenderer.create(msg.canvas).then(
+        (created) => {
+          renderer = created;
+          configure();
+          setCaptionNow(OPENING_LINE, OPENING_HOLD_MS);
+          start("intro");
+          if (exitPending) {
+            exitPending = false;
+            requestExit();
+          }
+        },
+        (error: unknown) => {
+          // The loader must never hold the app back: report and step aside.
+          console.error("[app-loader] WebGPU unavailable, showing a static loader", error);
+          self.postMessage({ type: "failed" } satisfies FromLoaderWorkerMessage);
+          self.close();
+        },
+      );
       break;
     case "resize":
       width = msg.width;
       height = msg.height;
+      viewHeight = msg.viewHeight;
       dpr = msg.dpr;
       configure();
       if (phase === "done" || reducedMotion) render(performance.now());

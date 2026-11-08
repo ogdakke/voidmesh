@@ -48,13 +48,20 @@ function onWorkerMessage<T extends FromLoaderWorkerMessage["type"]>(
 /** Pins the canvas to a whole number of device pixels per dither cell. */
 function sizeCanvas() {
   if (!canvasEl) return;
-  const grid = loaderDitherGrid(innerWidth, innerHeight, devicePixelRatio);
+  const { width, height, dpr } = viewport();
+  const grid = loaderDitherGrid(width, height, dpr);
   canvasEl.style.width = `${grid.cssWidth}px`;
   canvasEl.style.height = `${grid.cssHeight}px`;
 }
 
+/** The loader is taller than the viewport (see app-loader.css); the canvas covers all of it. */
 function viewport() {
-  return { width: innerWidth, height: innerHeight, dpr: devicePixelRatio };
+  return {
+    width: innerWidth,
+    height: el ? el.getBoundingClientRect().height : innerHeight,
+    viewHeight: innerHeight,
+    dpr: devicePixelRatio,
+  };
 }
 
 /** Boots the effect worker; it owns the canvas from here on. */
@@ -77,6 +84,8 @@ function startWorker() {
   );
   // Once the canvas paints the blue itself, drop the CSS blue so the reveal shows the app.
   onWorkerMessage(instance, "painted", () => (el.dataset.painted = ""), true);
+  // Without a WebGPU device the loader stays a static blue screen with a CSS fade exit.
+  onWorkerMessage(instance, "failed", () => (el.dataset.static = ""), true);
   addEventListener("resize", onResize);
   return instance;
 }
@@ -86,9 +95,13 @@ function onResize() {
   post({ type: "resize", ...viewport() });
 }
 
+/** Resolves on `type`, or straight away once the worker has failed (it sends nothing more). */
 function nextWorkerMessage(type: "exiting" | "exited") {
-  if (!worker) return Promise.resolve();
-  return new Promise<void>((resolve) => onWorkerMessage(worker, type, () => resolve(), true));
+  if (!worker || el?.hasAttribute("data-static")) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    onWorkerMessage(worker, type, () => resolve(), true);
+    onWorkerMessage(worker, "failed", () => resolve(), true);
+  });
 }
 
 /**
@@ -107,7 +120,7 @@ async function playExit() {
   el.hidden = true;
 }
 
-/** The worker releases its GL context, then closes itself. */
+/** The worker destroys its WebGPU device, then closes itself. */
 function teardown() {
   post({ type: "dispose" });
   removeEventListener("resize", onResize);

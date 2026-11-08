@@ -1,141 +1,23 @@
+import ditherShaderSource from "./dither.wgsl?raw";
+import fieldShaderSource from "./dither-field.wgsl?raw";
+
 /**
- * WebGL2 renderer for the initial loader: a white dither cloud on brand blue that, on
- * exit, opens from the centre in a dithered circle to reveal the app underneath.
+ * WebGPU renderer for the initial loader: a white dither cloud on brand blue with a
+ * pixel-text caption that, on exit, opens from the centre in a dithered circle.
  *
  * Two passes keep the GPU cost low:
- *  1. Field pass: the smooth cloud field (the expensive exp/sin math) is evaluated on
- *     a coarse node grid, one fragment per FIELD_STEP × FIELD_STEP cells.
- *  2. Dither pass: one fragment per dither cell bilinearly samples the field and
- *     thresholds it against an 8×8 Bayer matrix, then overlays the caption: pixel
- *     text (see pixel-font.ts) uploaded as a tiny texture only when it changes.
- * The output canvas is sized in cells and upscaled by CSS with
- * `image-rendering: pixelated`, so only the dither pass touches every cell.
+ *  1. Field pass (dither-field.wgsl): the smooth cloud field, the expensive exp/sin
+ *     math, evaluated once per FIELD_STEP × FIELD_STEP cells into an rgba8 texture.
+ *  2. Dither pass (dither.wgsl): one fragment per dither cell samples the field,
+ *     thresholds it against an 8×8 Bayer matrix and overlays the caption.
+ * The canvas is sized in cells and upscaled by CSS with `image-rendering: pixelated`.
+ * The loader owns its own device (the app's renderer is initialising alongside it)
+ * and destroys it on dispose.
  */
-
-/** Cells per field node along each axis; the field is smooth enough to interpolate. */
-const FIELD_STEP = 4;
-
-const VERTEX_SHADER = /* glsl */ `#version 300 es
-void main() {
-  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
-  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
-}`;
-
-const FIELD_SHADER = /* glsl */ `#version 300 es
-precision highp float;
-
-uniform float uStep;       // cells per node
-uniform vec2 uFieldCenter; // cloud centre, in cells
-uniform vec2 uFieldHalf;   // cloud ellipse half-extents, in cells
-uniform vec2 uLobeScale;   // lobe-space scale (keeps lobes round on wide/tall screens)
-uniform vec2 uLobes[4];    // lobe centres for this frame
-uniform float uTime;       // seconds
-uniform float uRadius;     // cloud envelope radius (1 = fills the ellipse)
-uniform float uAmp;        // cloud intensity
-
-out vec4 outValue;
-
-const float MAX_DENSITY = 0.78;
-
-float lobe(vec2 w, vec2 c, float s) {
-  vec2 d = w - c;
-  return exp(-dot(d, d) / s);
-}
-
-void main() {
-  // Node (i, j) sits on cell (i, j) * uStep; rows run top-down in cell space.
-  vec2 cell = floor(gl_FragCoord.xy) * uStep;
-  vec2 q = (cell - uFieldCenter) / uFieldHalf;
-  float edge = 1.0 - smoothstep(uRadius * 0.4, uRadius * 1.05, length(q));
-  if (edge <= 0.0) {
-    outValue = vec4(0.0);
-    return;
-  }
-  vec2 p = q * uLobeScale;
-  vec2 w = p + vec2(
-    0.16 * sin(p.y * 2.6 + uTime * 0.9) + 0.07 * sin(p.y * 5.3 - uTime * 1.4),
-    0.16 * sin(p.x * 2.3 - uTime * 0.7) + 0.07 * sin(p.x * 4.9 + uTime * 1.1)
-  );
-  float v = lobe(w, uLobes[0], 0.16)
-          + 0.85 * lobe(w, uLobes[1], 0.12)
-          + 0.7 * lobe(w, uLobes[2], 0.09)
-          + 0.45 * lobe(w, uLobes[3], 0.05);
-  outValue = vec4(min(MAX_DENSITY, v * 0.8) * edge * uAmp, 0.0, 0.0, 1.0);
-}`;
-
-const DITHER_SHADER = /* glsl */ `#version 300 es
-precision highp float;
-precision highp int;
-
-uniform sampler2D uField;
-uniform vec2 uFieldSize;   // field texture size, in nodes
-uniform float uStep;       // cells per node
-uniform float uRows;
-uniform vec2 uViewCenter;  // viewport centre, in cells
-uniform float uViewReach;  // centre-to-corner distance, in cells
-uniform float uReveal;     // 0 = covered, 1 = fully revealed
-uniform vec3 uInk;
-uniform vec3 uBackground;
-uniform sampler2D uTextA;  // current caption (R = glyph, G = halo)
-uniform sampler2D uTextB;  // next caption, dissolving in over uTextMix
-uniform ivec2 uTextAOrigin;
-uniform ivec2 uTextASize;
-uniform ivec2 uTextBOrigin;
-uniform ivec2 uTextBSize;
-uniform float uTextMix;    // 0 = A, 1 = B
-uniform float uTextAmp;    // caption visibility
-
-out vec4 outColor;
-
-const float REVEAL_BAND = 0.35;
-// Share of outline cells drawn; a porous outline lets the caption sit inside the cloud.
-const float OUTLINE_DENSITY = 1.0;
-
-vec2 textAt(sampler2D tex, ivec2 origin, ivec2 size, ivec2 cell) {
-  ivec2 p = cell - origin;
-  if (p.x < 0 || p.y < 0 || p.x >= size.x || p.y >= size.y) return vec2(0.0);
-  return texelFetch(tex, p, 0).rg;
-}
-
-float bayer8(ivec2 p) {
-  int x = p.x & 7;
-  int y = p.y & 7;
-  int xy = x ^ y;
-  int v = ((xy & 1) << 5) | ((y & 1) << 4) | ((xy & 2) << 2) | ((y & 2) << 1) | ((xy & 4) >> 1) | ((y & 4) >> 2);
-  return (float(v) + 0.5) / 64.0;
-}
-
-void main() {
-  ivec2 cell = ivec2(int(gl_FragCoord.x), int(uRows - gl_FragCoord.y));
-
-  // Reveal: a dithered circle opening from the centre. The band is thresholded with
-  // an offset Bayer lookup so its edge does not lock to the cloud's dither pattern.
-  float d = length(vec2(cell) - uViewCenter) / uViewReach;
-  float open = clamp((uReveal * (1.0 + REVEAL_BAND) - d) / REVEAL_BAND, 0.0, 1.0);
-  if (open > bayer8(cell + ivec2(3, 5))) {
-    outColor = vec4(0.0);
-    return;
-  }
-
-  float value = texture(uField, (vec2(cell) / uStep + 0.5) / uFieldSize).r;
-  vec3 color = value > bayer8(cell) ? uInk : uBackground;
-
-  // Caption: solid white glyphs inside a thin, dithered blue outline. The glyphs never
-  // change colour (so letters stay whole) while the porous outline lets the line sit
-  // inside the cloud. Showing and swapping lines are dithered with offset Bayer lookups.
-  if (uTextAmp > bayer8(cell + ivec2(5, 2))) {
-    vec2 text = uTextMix > bayer8(cell + ivec2(6, 1))
-      ? textAt(uTextB, uTextBOrigin, uTextBSize, cell)
-      : textAt(uTextA, uTextAOrigin, uTextASize, cell);
-    if (text.r > 0.5) color = uInk;
-    else if (text.g > 0.5 && OUTLINE_DENSITY > bayer8(cell + ivec2(1, 4))) color = uBackground;
-  }
-  outColor = vec4(color, 1.0);
-}`;
 
 type Rgb = readonly [number, number, number];
 
-/** Caption bitmap in cells: RG8, R = glyph, G = halo. */
+/** Caption bitmap in cells: RG8, R = glyph, G = outline (see pixel-font.ts). */
 export interface CaptionBitmap {
   width: number;
   height: number;
@@ -164,274 +46,221 @@ export interface DitherFrame {
   textAmp: number;
 }
 
-const FIELD_UNIFORMS = [
-  "uStep",
-  "uFieldCenter",
-  "uFieldHalf",
-  "uLobeScale",
-  "uLobes",
-  "uTime",
-  "uRadius",
-  "uAmp",
-] as const;
-
-const DITHER_UNIFORMS = [
-  "uField",
-  "uFieldSize",
-  "uStep",
-  "uRows",
-  "uViewCenter",
-  "uViewReach",
-  "uReveal",
-  "uInk",
-  "uBackground",
-  "uTextA",
-  "uTextB",
-  "uTextAOrigin",
-  "uTextASize",
-  "uTextBOrigin",
-  "uTextBSize",
-  "uTextMix",
-  "uTextAmp",
-] as const;
+/** Cells per field node along each axis; the field is smooth enough to interpolate. */
+const FIELD_STEP = 4;
+const FIELD_UNIFORM_BYTES = 80;
+const DITHER_UNIFORM_BYTES = 112;
 
 interface CaptionSlot {
-  texture: WebGLTexture;
+  texture: GPUTexture;
   width: number;
   height: number;
 }
 
-type Uniforms<T extends readonly string[]> = Record<T[number], WebGLUniformLocation | null>;
-
 export class LoaderDitherRenderer {
-  #gl: WebGL2RenderingContext;
-  #fieldProgram: WebGLProgram;
-  #ditherProgram: WebGLProgram;
-  #fieldUniforms: Uniforms<typeof FIELD_UNIFORMS>;
-  #ditherUniforms: Uniforms<typeof DITHER_UNIFORMS>;
-  #vao: WebGLVertexArrayObject;
-  #fieldTexture: WebGLTexture;
-  #fieldFramebuffer: WebGLFramebuffer;
-  #cols = 0;
-  #rows = 0;
-  #fieldCols = 0;
-  #fieldRows = 0;
+  #device: GPUDevice;
+  #context: GPUCanvasContext;
+  #canvas: OffscreenCanvas;
+  #fieldPipeline: GPURenderPipeline;
+  #ditherPipeline: GPURenderPipeline;
+  #sampler: GPUSampler;
+  #fieldUniforms: GPUBuffer;
+  #ditherUniforms: GPUBuffer;
+  #fieldData = new Float32Array(FIELD_UNIFORM_BYTES / 4);
+  #ditherData = new Float32Array(DITHER_UNIFORM_BYTES / 4);
+  #ditherInts = new Int32Array(this.#ditherData.buffer);
+  #fieldBindGroup: GPUBindGroup;
+  #ditherBindGroup: GPUBindGroup | null = null;
+  #fieldTexture: GPUTexture | null = null;
+  #fieldView: GPUTextureView | null = null;
   #textA: CaptionSlot;
   #textB: CaptionSlot;
+  #fieldCols = 1;
+  #fieldRows = 1;
 
-  constructor(canvas: OffscreenCanvas) {
-    const gl = canvas.getContext("webgl2", {
-      alpha: true,
-      premultipliedAlpha: true,
-      antialias: false,
-      depth: false,
-      stencil: false,
-      powerPreference: "low-power",
+  static async create(canvas: OffscreenCanvas) {
+    const adapter = await navigator.gpu.requestAdapter({ powerPreference: "low-power" });
+    if (!adapter) throw new Error("Loader dither renderer: no WebGPU adapter");
+    const device = await adapter.requestDevice();
+    return new LoaderDitherRenderer(canvas, device);
+  }
+
+  constructor(canvas: OffscreenCanvas, device: GPUDevice) {
+    this.#canvas = canvas;
+    this.#device = device;
+    const context = canvas.getContext("webgpu");
+    if (!context) throw new Error("Loader dither renderer: no WebGPU canvas context");
+    this.#context = context;
+    const format = navigator.gpu.getPreferredCanvasFormat();
+    context.configure({ device, format, alphaMode: "premultiplied", colorSpace: "display-p3" });
+
+    const fieldModule = device.createShaderModule({ code: fieldShaderSource });
+    const ditherModule = device.createShaderModule({ code: ditherShaderSource });
+    this.#fieldPipeline = device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module: fieldModule, entryPoint: "vs" },
+      fragment: { module: fieldModule, entryPoint: "fs", targets: [{ format: "rgba8unorm" }] },
     });
-    if (!gl) throw new Error("Loader dither renderer requires WebGL2");
-    gl.drawingBufferColorSpace = "display-p3";
-    this.#gl = gl;
-    this.#fieldProgram = linkProgram(gl, VERTEX_SHADER, FIELD_SHADER);
-    this.#ditherProgram = linkProgram(gl, VERTEX_SHADER, DITHER_SHADER);
-    this.#fieldUniforms = locate(gl, this.#fieldProgram, FIELD_UNIFORMS);
-    this.#ditherUniforms = locate(gl, this.#ditherProgram, DITHER_UNIFORMS);
-    this.#vao = gl.createVertexArray();
+    this.#ditherPipeline = device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module: ditherModule, entryPoint: "vs" },
+      fragment: { module: ditherModule, entryPoint: "fs", targets: [{ format }] },
+    });
+    this.#sampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
+    this.#fieldUniforms = device.createBuffer({
+      size: FIELD_UNIFORM_BYTES,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    this.#ditherUniforms = device.createBuffer({
+      size: DITHER_UNIFORM_BYTES,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    this.#fieldBindGroup = device.createBindGroup({
+      layout: this.#fieldPipeline.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: { buffer: this.#fieldUniforms } }],
+    });
+    this.#textA = this.#createCaption(1, 1, new Uint8Array(2));
+    this.#textB = this.#createCaption(1, 1, new Uint8Array(2));
+  }
 
-    this.#fieldTexture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, this.#fieldTexture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    this.#fieldFramebuffer = gl.createFramebuffer();
-    this.#textA = createCaptionSlot(gl);
-    this.#textB = createCaptionSlot(gl);
+  resize(cols: number, rows: number) {
+    this.#canvas.width = cols;
+    this.#canvas.height = rows;
+    // One extra node so the last cells interpolate towards a real sample.
+    this.#fieldCols = Math.ceil(cols / FIELD_STEP) + 1;
+    this.#fieldRows = Math.ceil(rows / FIELD_STEP) + 1;
+    this.#fieldTexture?.destroy();
+    this.#fieldTexture = this.#device.createTexture({
+      size: [this.#fieldCols, this.#fieldRows],
+      format: "rgba8unorm",
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    this.#fieldView = this.#fieldTexture.createView();
+    this.#ditherBindGroup = null;
   }
 
   /** Uploads the caption that dissolves in next (the B slot). */
   setNextCaption(bitmap: CaptionBitmap) {
-    const gl = this.#gl;
-    gl.bindTexture(gl.TEXTURE_2D, this.#textB.texture);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texImage2D(
-      gl.TEXTURE_2D,
-      0,
-      gl.RG8,
-      bitmap.width,
-      bitmap.height,
-      0,
-      gl.RG,
-      gl.UNSIGNED_BYTE,
-      bitmap.data,
-    );
-    this.#textB.width = bitmap.width;
-    this.#textB.height = bitmap.height;
+    this.#textB.texture.destroy();
+    this.#textB = this.#createCaption(bitmap.width, bitmap.height, bitmap.data);
+    this.#ditherBindGroup = null;
   }
 
   /** Promotes the next caption to current once its dissolve completes. */
   commitCaption() {
     [this.#textA, this.#textB] = [this.#textB, this.#textA];
-  }
-
-  resize(cols: number, rows: number) {
-    const gl = this.#gl;
-    gl.canvas.width = cols;
-    gl.canvas.height = rows;
-    this.#cols = cols;
-    this.#rows = rows;
-    // One extra node so the last cells interpolate towards a real sample.
-    this.#fieldCols = Math.ceil(cols / FIELD_STEP) + 1;
-    this.#fieldRows = Math.ceil(rows / FIELD_STEP) + 1;
-    gl.bindTexture(gl.TEXTURE_2D, this.#fieldTexture);
-    gl.texImage2D(
-      gl.TEXTURE_2D,
-      0,
-      gl.RGBA8,
-      this.#fieldCols,
-      this.#fieldRows,
-      0,
-      gl.RGBA,
-      gl.UNSIGNED_BYTE,
-      null,
-    );
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.#fieldFramebuffer);
-    gl.framebufferTexture2D(
-      gl.FRAMEBUFFER,
-      gl.COLOR_ATTACHMENT0,
-      gl.TEXTURE_2D,
-      this.#fieldTexture,
-      0,
-    );
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.#ditherBindGroup = null;
   }
 
   draw(frame: DitherFrame) {
-    const gl = this.#gl;
-    gl.bindVertexArray(this.#vao);
+    if (!this.#fieldView) return;
+    const device = this.#device;
 
-    // Pass 1: coarse cloud field.
-    const f = this.#fieldUniforms;
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.#fieldFramebuffer);
-    gl.viewport(0, 0, this.#fieldCols, this.#fieldRows);
-    gl.useProgram(this.#fieldProgram);
-    gl.uniform1f(f.uStep, FIELD_STEP);
-    gl.uniform2f(f.uFieldCenter, frame.fieldCenter[0], frame.fieldCenter[1]);
-    gl.uniform2f(f.uFieldHalf, frame.fieldHalf[0], frame.fieldHalf[1]);
-    gl.uniform2f(f.uLobeScale, frame.lobeScale[0], frame.lobeScale[1]);
-    gl.uniform2fv(f.uLobes, frame.lobes);
-    gl.uniform1f(f.uTime, frame.time);
-    gl.uniform1f(f.uRadius, frame.radius);
-    gl.uniform1f(f.uAmp, frame.amp);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    const f = this.#fieldData;
+    f.set(frame.fieldCenter, 0);
+    f.set(frame.fieldHalf, 2);
+    f.set(frame.lobeScale, 4);
+    f[6] = FIELD_STEP;
+    f[7] = frame.time;
+    f.set(frame.lobes, 8);
+    f[16] = frame.radius;
+    f[17] = frame.amp;
+    device.queue.writeBuffer(this.#fieldUniforms, 0, this.#fieldData);
 
-    // Pass 2: per-cell dither + reveal into the canvas.
-    const d = this.#ditherUniforms;
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, this.#cols, this.#rows);
-    gl.useProgram(this.#ditherProgram);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.#fieldTexture);
-    gl.uniform1i(d.uField, 0);
-    gl.uniform2f(d.uFieldSize, this.#fieldCols, this.#fieldRows);
-    gl.uniform1f(d.uStep, FIELD_STEP);
-    gl.uniform1f(d.uRows, this.#rows);
-    gl.uniform2f(d.uViewCenter, frame.viewCenter[0], frame.viewCenter[1]);
-    gl.uniform1f(d.uViewReach, frame.viewReach);
-    gl.uniform1f(d.uReveal, frame.reveal);
-    gl.uniform3f(d.uInk, frame.ink[0], frame.ink[1], frame.ink[2]);
-    gl.uniform3f(d.uBackground, frame.background[0], frame.background[1], frame.background[2]);
-    this.#bindCaption(1, this.#textA, d.uTextA, d.uTextAOrigin, d.uTextASize, frame.textCenter);
-    this.#bindCaption(2, this.#textB, d.uTextB, d.uTextBOrigin, d.uTextBSize, frame.textCenter);
-    gl.uniform1f(d.uTextMix, frame.textMix);
-    gl.uniform1f(d.uTextAmp, frame.textAmp);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
-  }
+    const d = this.#ditherData;
+    const di = this.#ditherInts;
+    d.set(frame.ink, 0);
+    d.set(frame.background, 4);
+    d.set(frame.viewCenter, 8);
+    d[10] = this.#fieldCols;
+    d[11] = this.#fieldRows;
+    writeCaptionPlacement(di, 12, this.#textA, frame.textCenter);
+    writeCaptionPlacement(di, 16, this.#textB, frame.textCenter);
+    d[20] = FIELD_STEP;
+    d[21] = frame.viewReach;
+    d[22] = frame.reveal;
+    d[23] = frame.textMix;
+    d[24] = frame.textAmp;
+    device.queue.writeBuffer(this.#ditherUniforms, 0, this.#ditherData);
 
-  #bindCaption(
-    unit: number,
-    slot: CaptionSlot,
-    sampler: WebGLUniformLocation | null,
-    origin: WebGLUniformLocation | null,
-    size: WebGLUniformLocation | null,
-    center: readonly [number, number],
-  ) {
-    const gl = this.#gl;
-    gl.activeTexture(gl.TEXTURE0 + unit);
-    gl.bindTexture(gl.TEXTURE_2D, slot.texture);
-    gl.uniform1i(sampler, unit);
-    gl.uniform2i(
-      origin,
-      Math.round(center[0] - slot.width / 2),
-      Math.round(center[1] - slot.height / 2),
-    );
-    gl.uniform2i(size, slot.width, slot.height);
+    this.#ditherBindGroup ??= device.createBindGroup({
+      layout: this.#ditherPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: this.#ditherUniforms } },
+        { binding: 1, resource: this.#fieldView },
+        { binding: 2, resource: this.#sampler },
+        { binding: 3, resource: this.#textA.texture.createView() },
+        { binding: 4, resource: this.#textB.texture.createView() },
+      ],
+    });
+
+    const encoder = device.createCommandEncoder();
+    const fieldPass = encoder.beginRenderPass({
+      colorAttachments: [
+        {
+          view: this.#fieldView,
+          loadOp: "clear",
+          storeOp: "store",
+          clearValue: [0, 0, 0, 0],
+        },
+      ],
+    });
+    fieldPass.setPipeline(this.#fieldPipeline);
+    fieldPass.setBindGroup(0, this.#fieldBindGroup);
+    fieldPass.draw(3);
+    fieldPass.end();
+
+    const ditherPass = encoder.beginRenderPass({
+      colorAttachments: [
+        {
+          view: this.#context.getCurrentTexture().createView(),
+          loadOp: "clear",
+          storeOp: "store",
+          clearValue: [0, 0, 0, 0],
+        },
+      ],
+    });
+    ditherPass.setPipeline(this.#ditherPipeline);
+    ditherPass.setBindGroup(0, this.#ditherBindGroup);
+    ditherPass.draw(3);
+    ditherPass.end();
+    device.queue.submit([encoder.finish()]);
   }
 
   dispose() {
-    const gl = this.#gl;
-    gl.deleteTexture(this.#textA.texture);
-    gl.deleteTexture(this.#textB.texture);
-    gl.deleteFramebuffer(this.#fieldFramebuffer);
-    gl.deleteTexture(this.#fieldTexture);
-    gl.deleteVertexArray(this.#vao);
-    gl.deleteProgram(this.#fieldProgram);
-    gl.deleteProgram(this.#ditherProgram);
-    gl.getExtension("WEBGL_lose_context")?.loseContext();
+    this.#fieldTexture?.destroy();
+    this.#textA.texture.destroy();
+    this.#textB.texture.destroy();
+    this.#fieldUniforms.destroy();
+    this.#ditherUniforms.destroy();
+    this.#context.unconfigure();
+    this.#device.destroy();
+  }
+
+  #createCaption(width: number, height: number, data: Uint8Array): CaptionSlot {
+    const texture = this.#device.createTexture({
+      size: [width, height],
+      format: "rg8unorm",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    this.#device.queue.writeTexture(
+      { texture },
+      data,
+      { bytesPerRow: width * 2 },
+      { width, height },
+    );
+    return { texture, width, height };
   }
 }
 
-function createCaptionSlot(gl: WebGL2RenderingContext): CaptionSlot {
-  const texture = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG8, 1, 1, 0, gl.RG, gl.UNSIGNED_BYTE, new Uint8Array(2));
-  return { texture, width: 0, height: 0 };
-}
-
-function locate<T extends readonly string[]>(
-  gl: WebGL2RenderingContext,
-  program: WebGLProgram,
-  names: T,
-): Uniforms<T> {
-  const uniforms = {} as Uniforms<T>;
-  for (const name of names) {
-    uniforms[name as T[number]] = gl.getUniformLocation(program, name);
-  }
-  return uniforms;
-}
-
-function linkProgram(gl: WebGL2RenderingContext, vertex: string, fragment: string) {
-  const program = gl.createProgram();
-  const shaders = [
-    compileShader(gl, gl.VERTEX_SHADER, vertex),
-    compileShader(gl, gl.FRAGMENT_SHADER, fragment),
-  ];
-  for (const shader of shaders) gl.attachShader(program, shader);
-  gl.linkProgram(program);
-  for (const shader of shaders) {
-    gl.detachShader(program, shader);
-    gl.deleteShader(shader);
-  }
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-    const log = gl.getProgramInfoLog(program);
-    gl.deleteProgram(program);
-    throw new Error(`Loader dither program failed to link: ${log}`);
-  }
-  return program;
-}
-
-function compileShader(gl: WebGL2RenderingContext, type: GLenum, source: string) {
-  const shader = gl.createShader(type);
-  if (!shader) throw new Error("Loader dither shader allocation failed");
-  gl.shaderSource(shader, source);
-  gl.compileShader(shader);
-  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-    const log = gl.getShaderInfoLog(shader);
-    gl.deleteShader(shader);
-    throw new Error(`Loader dither shader failed to compile: ${log}`);
-  }
-  return shader;
+function writeCaptionPlacement(
+  target: Int32Array,
+  offset: number,
+  slot: CaptionSlot,
+  center: readonly [number, number],
+) {
+  target[offset] = Math.round(center[0] - slot.width / 2);
+  target[offset + 1] = Math.round(center[1] - slot.height / 2);
+  target[offset + 2] = slot.width;
+  target[offset + 3] = slot.height;
 }
