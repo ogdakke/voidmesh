@@ -1,54 +1,63 @@
-//! The processed-texture atlas: one mipmapped 2D array texture that holds every preview-LOD
-//! material small enough for it, so the canvas composes all of them in one instanced draw.
+//! The processed-texture atlas: one 2D array texture that holds every preview material small
+//! enough for it, so the canvas composes all of them in one instanced draw.
 //!
-//! Tiles are power-of-two squares from a buddy allocator, aligned to their size: a tile's mip
-//! level `k` is exactly its region shifted by `k`, so no level ever mixes in a neighbour. The
-//! atlas starts small and doubles its side up to `MAX_SIDE`, then adds layers; growing copies
-//! what it holds, and tile coordinates (texels) stay valid.
-
-use std::collections::{BTreeSet, HashMap};
+//! Previews keep one level (LOD tiers hold them near their size on screen), so tiles needn't be
+//! power-of-two squares: each layer is cut into shelves, rows of one height class, and tiles take
+//! spans of a shelf a few pixels wider than their content. A 64×43 preview takes 64×48, not
+//! 64×64. Freed spans merge, an emptied shelf gives its rows back, and empty layers at the top go.
 
 use super::process::FORMAT;
 
-/// Largest layer side: small enough that the atlas grows in steps a few megabytes each.
-pub const MAX_SIDE: u32 = 1024;
-/// Largest tile: materials above this have a texture of their own.
+/// A layer's side.
+pub const SIDE: u32 = 1024;
+/// Largest tile side: materials above this have a texture of their own.
 pub const MAX_TILE: u32 = 512;
-/// Smallest tile.
-pub const MIN_TILE: u32 = 16;
-const START_SIDE: u32 = 512;
+/// Tile widths round up to this, heights to `HEIGHT_STEP`.
+const WIDTH_STEP: u32 = 8;
+const HEIGHT_STEP: u32 = 16;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Tile {
     pub layer: u32,
     pub x: u32,
     pub y: u32,
-    pub size: u32,
+    /// The space it holds (its content is at most this).
+    pub w: u32,
+    pub h: u32,
+}
+
+impl Tile {
+    pub fn bytes(&self) -> u64 {
+        u64::from(self.w) * u64::from(self.h) * 4
+    }
+}
+
+/// A row of one height class: the spans of it that are free.
+struct Shelf {
+    layer: u32,
+    y: u32,
+    h: u32,
+    free: Vec<(u32, u32)>,
 }
 
 pub struct Atlas {
     pub texture: wgpu::Texture,
-    /// The whole array, every level, for sampling.
+    /// The whole array, for sampling.
     pub view: wgpu::TextureView,
-    pub side: u32,
     pub layers: u32,
-    /// Free blocks by size, lowest layer first: allocation fills the bottom layers, so freed space
-    /// gathers at the top, where `trim` can drop it.
-    free: HashMap<u32, BTreeSet<(u32, u32, u32)>>,
+    shelves: Vec<Shelf>,
+    /// Each layer's rows not in a shelf: [y0, y1) spans.
+    rows: Vec<Vec<(u32, u32)>>,
     /// Bumped whenever `texture` is replaced (bind groups made from it go stale).
     pub generation: u64,
-    pub used_texels: u64,
+    pub used_bytes: u64,
 }
 
-pub fn mip_count(side: u32) -> u32 {
-    32 - side.max(1).leading_zeros()
-}
-
-fn texture(device: &wgpu::Device, side: u32, layers: u32) -> wgpu::Texture {
+fn texture(device: &wgpu::Device, layers: u32) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("voidmesh atlas"),
-        size: wgpu::Extent3d { width: side, height: side, depth_or_array_layers: layers },
-        mip_level_count: mip_count(side),
+        size: wgpu::Extent3d { width: SIDE, height: SIDE, depth_or_array_layers: layers },
+        mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: FORMAT,
@@ -61,155 +70,116 @@ fn array_view(t: &wgpu::Texture) -> wgpu::TextureView {
     t.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() })
 }
 
+/// Add [a, b) to sorted, disjoint spans, merging neighbours.
+fn give(spans: &mut Vec<(u32, u32)>, a: u32, b: u32) {
+    let i = spans.partition_point(|s| s.0 < a);
+    spans.insert(i, (a, b));
+    if i + 1 < spans.len() && spans[i].1 == spans[i + 1].0 {
+        spans[i].1 = spans[i + 1].1;
+        spans.remove(i + 1);
+    }
+    if i > 0 && spans[i - 1].1 == spans[i].0 {
+        spans[i - 1].1 = spans[i].1;
+        spans.remove(i);
+    }
+}
+
+/// Take `len` from the first span long enough: its start.
+fn take(spans: &mut Vec<(u32, u32)>, len: u32) -> Option<u32> {
+    let i = spans.iter().position(|s| s.1 - s.0 >= len)?;
+    let at = spans[i].0;
+    spans[i].0 += len;
+    if spans[i].0 == spans[i].1 {
+        spans.remove(i);
+    }
+    Some(at)
+}
+
 impl Atlas {
     pub fn new(device: &wgpu::Device) -> Atlas {
-        let t = texture(device, START_SIDE, 1);
-        let mut a = Atlas { view: array_view(&t), texture: t, side: START_SIDE, layers: 1, free: HashMap::new(), generation: 0, used_texels: 0 };
-        a.put(Tile { layer: 0, x: 0, y: 0, size: START_SIDE });
-        a
+        let t = texture(device, 1);
+        Atlas { view: array_view(&t), texture: t, layers: 1, shelves: Vec::new(), rows: vec![vec![(0, SIDE)]], generation: 0, used_bytes: 0 }
     }
 
     pub fn bytes(&self) -> u64 {
-        // A full mip chain adds a third.
-        u64::from(self.side) * u64::from(self.side) * 4 * u64::from(self.layers) * 4 / 3
+        u64::from(SIDE) * u64::from(SIDE) * 4 * u64::from(self.layers)
     }
 
-    fn put(&mut self, t: Tile) {
-        self.free.entry(t.size).or_default().insert((t.layer, t.y, t.x));
+    /// Content of `w`×`h` fits a tile.
+    pub fn fits(w: u32, h: u32) -> bool {
+        w.max(h) <= MAX_TILE
     }
 
-    fn is_free(&self, t: &Tile) -> bool {
-        self.free.get(&t.size).is_some_and(|f| f.contains(&(t.layer, t.y, t.x)))
-    }
-
-    fn unfree(&mut self, t: &Tile) -> bool {
-        self.free.get_mut(&t.size).is_some_and(|f| f.remove(&(t.layer, t.y, t.x)))
-    }
-
-    fn take_free(&mut self, size: u32) -> Option<Tile> {
-        let (layer, y, x) = self.free.get_mut(&size)?.pop_first()?;
-        Some(Tile { layer, x, y, size })
-    }
-
-    /// The tile side for content of `w`×`h`.
-    pub fn tile_side(w: u32, h: u32) -> u32 {
-        w.max(h).max(MIN_TILE).next_power_of_two()
-    }
-
-    /// A tile for content of `w`×`h`, growing the atlas when it's full. None when the content
-    /// is larger than a tile can be.
+    /// A tile for content of `w`×`h`, adding a layer when the atlas is full. None when the
+    /// content is larger than a tile can be.
     pub fn alloc(&mut self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, w: u32, h: u32) -> Option<Tile> {
-        let size = Self::tile_side(w, h);
-        if size > MAX_TILE {
+        if !Self::fits(w, h) {
             return None;
         }
+        let (tw, th) = (w.max(1).next_multiple_of(WIDTH_STEP), h.max(1).next_multiple_of(HEIGHT_STEP));
         loop {
-            // The smallest free block that fits, split down to size.
-            let mut s = size;
-            let found = loop {
-                if s > self.side {
-                    break None;
+            // A shelf of this height with room, the lowest layer first.
+            let mut best: Option<usize> = None;
+            for (i, s) in self.shelves.iter().enumerate() {
+                if s.h == th && s.free.iter().any(|f| f.1 - f.0 >= tw) && best.is_none_or(|b| self.shelves[b].layer > s.layer) {
+                    best = Some(i);
                 }
-                if let Some(t) = self.take_free(s) {
-                    break Some(t);
-                }
-                s *= 2;
-            };
-            if let Some(mut t) = found {
-                while t.size > size {
-                    let h = t.size / 2;
-                    for (dx, dy) in [(h, 0), (0, h), (h, h)] {
-                        self.put(Tile { layer: t.layer, x: t.x + dx, y: t.y + dy, size: h });
-                    }
-                    t.size = h;
-                }
-                self.used_texels += u64::from(size) * u64::from(size);
-                return Some(t);
+            }
+            if let Some(i) = best {
+                let s = &mut self.shelves[i];
+                let x = take(&mut s.free, tw)?;
+                self.used_bytes += u64::from(tw) * u64::from(th) * 4;
+                return Some(Tile { layer: s.layer, x, y: s.y, w: tw, h: th });
+            }
+            // A new shelf in the lowest layer with the rows for it.
+            if let Some(layer) = (0..self.layers).find(|l| self.rows[*l as usize].iter().any(|r| r.1 - r.0 >= th))
+                && let Some(y) = take(&mut self.rows[layer as usize], th)
+            {
+                self.shelves.push(Shelf { layer, y, h: th, free: vec![(0, SIDE)] });
+                continue;
             }
             self.grow(device, enc);
         }
     }
 
     pub fn free(&mut self, t: Tile) {
-        self.used_texels -= u64::from(t.size) * u64::from(t.size);
-        let mut t = t;
-        // Merge with the three siblings while they're all free.
-        while t.size < self.side {
-            let p = t.size * 2;
-            let (px, py) = (t.x & !(p - 1), t.y & !(p - 1));
-            let sibs = [(0, 0), (t.size, 0), (0, t.size), (t.size, t.size)].map(|(dx, dy)| Tile { layer: t.layer, x: px + dx, y: py + dy, size: t.size });
-            if !sibs.iter().all(|s| *s == t || self.is_free(s)) {
-                break;
-            }
-            for s in sibs {
-                self.unfree(&s);
-            }
-            t = Tile { layer: t.layer, x: px, y: py, size: p };
+        self.used_bytes = self.used_bytes.saturating_sub(t.bytes());
+        let Some(i) = self.shelves.iter().position(|s| s.layer == t.layer && s.y == t.y && s.h == t.h) else { return };
+        give(&mut self.shelves[i].free, t.x, t.x + t.w);
+        if self.shelves[i].free == [(0, SIDE)] {
+            let s = self.shelves.swap_remove(i);
+            give(&mut self.rows[s.layer as usize], s.y, s.y + s.h);
         }
-        self.put(t);
     }
 
-    /// Drop empty layers from the top (allocation fills from the bottom), copying what's left
-    /// into a smaller texture. True when it did.
+    /// Drop empty layers from the top (new shelves fill from the bottom), copying what's left into
+    /// a smaller texture: when two or more are empty, so a canvas at a layer's edge doesn't copy
+    /// the atlas back and forth. True when it did.
     pub fn trim(&mut self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder) -> bool {
         let mut layers = self.layers;
-        while layers > 1 && self.is_free(&Tile { layer: layers - 1, x: 0, y: 0, size: self.side }) {
+        while layers > 1 && self.rows[layers as usize - 1] == [(0, SIDE)] {
             layers -= 1;
         }
-        // Two empty layers at least, so a canvas hovering at a layer's edge doesn't copy the
-        // atlas back and forth; one stays for what comes next.
         if layers + 2 > self.layers {
             return false;
         }
-        layers += 1;
-        for layer in layers..self.layers {
-            self.unfree(&Tile { layer, x: 0, y: 0, size: self.side });
-        }
-        let t = texture(device, self.side, layers);
-        for level in 0..mip_count(self.side) {
-            let s = (self.side >> level).max(1);
-            enc.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo { texture: &self.texture, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                wgpu::TexelCopyTextureInfo { texture: &t, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                wgpu::Extent3d { width: s, height: s, depth_or_array_layers: layers },
-            );
-        }
-        self.layers = layers;
-        self.view = array_view(&t);
-        self.texture = t;
-        self.generation += 1;
+        self.replace(device, enc, layers + 1);
         true
     }
 
-    /// Double the side, or add a layer once the side is at its largest.
     fn grow(&mut self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder) {
-        let (side, layers) = if self.side < MAX_SIDE { (self.side * 2, self.layers) } else { (self.side, self.layers + 1) };
-        let t = texture(device, side, layers);
-        for level in 0..mip_count(self.side) {
-            let s = (self.side >> level).max(1);
-            enc.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo { texture: &self.texture, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                wgpu::TexelCopyTextureInfo { texture: &t, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                wgpu::Extent3d { width: s, height: s, depth_or_array_layers: self.layers },
-            );
-        }
-        if side > self.side {
-            let old = self.side;
-            for layer in 0..self.layers {
-                let root = Tile { layer, x: 0, y: 0, size: old };
-                if self.unfree(&root) {
-                    // An empty layer stays one block.
-                    self.put(Tile { layer, x: 0, y: 0, size: side });
-                } else {
-                    for (x, y) in [(old, 0), (0, old), (old, old)] {
-                        self.put(Tile { layer, x, y, size: old });
-                    }
-                }
-            }
-        } else {
-            self.put(Tile { layer: self.layers, x: 0, y: 0, size: side });
-        }
-        self.side = side;
+        self.replace(device, enc, self.layers + 1);
+    }
+
+    /// A texture of `layers` layers holding what the current one does, up to that many.
+    fn replace(&mut self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, layers: u32) {
+        let t = texture(device, layers);
+        enc.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo { texture: &self.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo { texture: &t, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::Extent3d { width: SIDE, height: SIDE, depth_or_array_layers: self.layers.min(layers) },
+        );
+        self.rows.resize_with(layers as usize, || vec![(0, SIDE)]);
         self.layers = layers;
         self.view = array_view(&t);
         self.texture = t;
@@ -227,39 +197,34 @@ mod tests {
     }
 
     #[test]
-    fn tiles_are_aligned_and_merge_back() {
+    fn tiles_pack_tightly_and_free_back_to_an_empty_layer() {
         let (d, _) = device();
         let mut a = Atlas::new(&d);
         let mut enc = d.create_command_encoder(&Default::default());
-        let tiles: Vec<Tile> = (0..20).map(|i| a.alloc(&d, &mut enc, 40 + i, 30).expect("fits")).collect();
-        for t in &tiles {
-            assert_eq!(t.size, 64);
-            assert_eq!((t.x % 64, t.y % 64), (0, 0));
-        }
-        let distinct: std::collections::HashSet<_> = tiles.iter().map(|t| (t.x, t.y)).collect();
+        let tiles: Vec<Tile> = (0..40).map(|_| a.alloc(&d, &mut enc, 64, 43).expect("fits")).collect();
+        assert!(tiles.iter().all(|t| (t.w, t.h) == (64, 48)), "rounded to the steps, not to a square");
+        let distinct: std::collections::HashSet<_> = tiles.iter().map(|t| (t.layer, t.x, t.y)).collect();
         assert_eq!(distinct.len(), tiles.len());
+        assert_eq!(a.layers, 1, "forty fit one layer");
         for t in tiles {
             a.free(t);
         }
-        assert_eq!(a.used_texels, 0);
-        assert!(a.is_free(&Tile { layer: 0, x: 0, y: 0, size: 512 }), "everything merges back to the root");
+        assert_eq!(a.used_bytes, 0);
+        assert!(a.shelves.is_empty() && a.rows[0] == [(0, SIDE)], "everything gives its rows back");
     }
 
     #[test]
-    fn a_full_atlas_grows_its_side_then_its_layers() {
+    fn a_full_atlas_adds_layers_and_trims_empty_ones() {
         let (d, _) = device();
         let mut a = Atlas::new(&d);
         let mut enc = d.create_command_encoder(&Default::default());
-        for _ in 0..4 {
-            a.alloc(&d, &mut enc, MAX_TILE, MAX_TILE).expect("fits");
+        let full: Vec<Tile> = (0..12).map(|_| a.alloc(&d, &mut enc, MAX_TILE, MAX_TILE)).collect::<Option<_>>().expect("fits");
+        assert_eq!(a.layers, 3, "four of the largest tiles a layer");
+        assert!(a.alloc(&d, &mut enc, MAX_TILE + 1, 10).is_none(), "over the largest tile");
+        for t in full.into_iter().filter(|t| t.layer > 0) {
+            a.free(t);
         }
-        assert_eq!((a.side, a.layers), (MAX_SIDE, 1));
-        a.alloc(&d, &mut enc, MAX_TILE, MAX_TILE - 100).expect("fits");
-        assert_eq!(a.layers, 2);
-        assert!(a.alloc(&d, &mut enc, MAX_TILE * 2, 10).is_none(), "over the largest tile");
-        let top = a.alloc(&d, &mut enc, 64, 64).expect("fits");
-        assert_eq!(top.layer, 1, "the bottom layer is full");
-        a.free(top);
-        assert!(!a.trim(&d, &mut enc), "the second layer still holds a tile");
+        assert!(a.trim(&d, &mut enc));
+        assert_eq!(a.layers, 2, "one empty layer stays for what comes next");
     }
 }

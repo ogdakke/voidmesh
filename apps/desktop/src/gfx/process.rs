@@ -633,7 +633,7 @@ pub struct Scratch {
 impl Scratch {
     fn bytes(&self) -> u64 {
         let px = |t: &wgpu::Texture| u64::from(t.width()) * u64::from(t.height()) * 4;
-        self.full.iter().flatten().chain(&self.levels).chain(&self.bloom).map(px).sum::<u64>() + self.out.as_ref().map_or(0, |t| px(t) * 4 / 3)
+        self.full.iter().flatten().chain(&self.levels).chain(&self.bloom).chain(&self.out).map(px).sum::<u64>()
     }
 
     pub fn out(&mut self, device: &wgpu::Device) -> &wgpu::Texture {

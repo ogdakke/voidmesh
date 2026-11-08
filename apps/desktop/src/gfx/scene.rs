@@ -132,9 +132,10 @@ enum MatKey {
 enum Tex {
     None,
     Atlas(Tile),
-    /// A texture of its own, drawn with its own bind group; `bytes` it holds (0 when it's the
-    /// source's own texture, which isn't recycled).
-    Own { bind: wgpu::BindGroup, bytes: u64, tex: wgpu::Texture },
+    /// A texture of its own, drawn with its own bind group, and the bytes it holds. A processed
+    /// one goes back to the pool when freed; a large original's source level (`recycle` false)
+    /// can't be rendered into, so it just goes.
+    Own { bind: wgpu::BindGroup, bytes: u64, tex: wgpu::Texture, recycle: bool },
 }
 
 struct Material {
@@ -351,6 +352,11 @@ pub struct Scene {
     pub video_waiting: bool,
 }
 
+/// An RGBA8 texture's bytes, all its levels.
+fn texture_bytes(t: &wgpu::Texture) -> u64 {
+    (0..t.mip_level_count()).map(|l| u64::from((t.width() >> l).max(1)) * u64::from((t.height() >> l).max(1)) * 4).sum()
+}
+
 fn storage_buffer(device: &wgpu::Device, label: &str, bytes: u64) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size: bytes.max(256), usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false })
 }
@@ -549,7 +555,7 @@ impl Scene {
     fn drop_tex(&mut self, t: Tex) {
         match t {
             Tex::Atlas(tile) => self.atlas.free(tile),
-            Tex::Own { bytes, tex, .. } if bytes > 0 => self.pool.push(tex),
+            Tex::Own { tex, recycle: true, .. } => self.pool.push(tex),
             _ => {}
         }
     }
@@ -912,7 +918,7 @@ impl Scene {
             let key = Self::source_key(m, size);
             let content = m.asset.width.max(m.asset.height) >> key.2;
             let drawn = false;
-            let texture = !m.params.show_original || atlas::Atlas::tile_side(content, content) > atlas::MAX_TILE;
+            let texture = !m.params.show_original || !atlas::Atlas::fits(content, content);
             let (asset, frame) = (m.asset.clone(), m.frame);
             if let Some(s) = self.sources.get_mut(&key).filter(|s| !drawn || s.levels > 1) {
                 s.used = self.frame;
@@ -1044,7 +1050,7 @@ impl Scene {
         for &(id, size) in batch {
             let Some(m) = self.mat(id) else { continue };
             let continuous = m.params.uses_time() || matches!(m.key, MatKey::Video { .. }) || m.asset.animated();
-            let fits = atlas::Atlas::tile_side(size.0, size.1) <= atlas::MAX_TILE;
+            let fits = atlas::Atlas::fits(size.0, size.1);
             if continuous || !fits || m.params.show_original || !process::one_pass(&m.params) {
                 rest.push((id, size));
                 continue;
@@ -1129,12 +1135,15 @@ impl Scene {
         // An original small enough for a tile is its source level, copied in; a larger one is
         // resampled to its preview size below, as any effect is, rather than kept at its source's.
         let original = params.show_original && !matches!(key, MatKey::Video { .. });
-        if original && atlas::Atlas::tile_side(src_size.0, src_size.1) > atlas::MAX_TILE {
+        if original && !atlas::Atlas::fits(src_size.0, src_size.1) {
             // A large original is its source level: drawn from it, with no copy.
             let view = src_tex.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
             let bind = self.tex_bind(device, &view);
             let gpu = GpuMat { tile: [0.0, 0.0, src_size.0 as f32, src_size.1 as f32], layer: 0, levels: 1, state: 2, flags: 1 };
-            self.finish_build(id, Tex::Own { bind, bytes: 0, tex: src_tex }, gpu, size, src_size);
+            // The material holds it now: the source map lets go, so it's counted once.
+            self.sources.remove(&skey);
+            let bytes = u64::from(src_size.0) * u64::from(src_size.1) * 4;
+            self.finish_build(id, Tex::Own { bind, bytes, tex: src_tex, recycle: false }, gpu, size, src_size);
             return;
         }
         let straight = original;
@@ -1160,7 +1169,7 @@ impl Scene {
             // texture of its own, recycled frame to frame: no copy into the atlas, and no mip
             // chain (as the web keeps none), since it's drawn again next frame anyway.
             let continuous = params.uses_time() || matches!(key, MatKey::Video { .. }) || asset.animated();
-            if !continuous && atlas::Atlas::tile_side(size.0, size.1) <= atlas::MAX_TILE {
+            if !continuous && atlas::Atlas::fits(size.0, size.1) {
                 let Some(tile) = self.atlas.alloc(device, enc, size.0, size.1) else { return };
                 let out = self.scratch.get(size).out(device).clone();
                 process::run(device, enc, pipes, &mut self.arena, &mut self.scratch, &input, &params, time, &out);
@@ -1187,8 +1196,8 @@ impl Scene {
                 process::run(device, enc, pipes, &mut self.arena, &mut self.scratch, &input, &params, time, &out);
                 let view = out.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
                 let bind = self.tex_bind(device, &view);
-                let bytes = u64::from(size.0) * u64::from(size.1) * 4 * 4 / 3;
-                (Tex::Own { bind, bytes, tex: out.clone() }, GpuMat { tile: [0.0, 0.0, size.0 as f32, size.1 as f32], layer: 0, levels: out.mip_level_count(), state: 2, flags: 0 }, size)
+                let bytes = texture_bytes(&out);
+                (Tex::Own { bind, bytes, tex: out.clone(), recycle: true }, GpuMat { tile: [0.0, 0.0, size.0 as f32, size.1 as f32], layer: 0, levels: out.mip_level_count(), state: 2, flags: 0 }, size)
             }
         };
         self.finish_build(id, tex, gpu, size, done);
@@ -1300,7 +1309,7 @@ impl Scene {
         // Textures of materials off screen are a warm cache, the least recently seen going first
         // past `UNSEEN_BUDGET`; what shows is never evicted.
         let tex_bytes = |t: &Tex| match t {
-            Tex::Atlas(t) => u64::from(t.size) * u64::from(t.size) * 4 * 4 / 3,
+            Tex::Atlas(t) => t.bytes(),
             Tex::Own { bytes, .. } => *bytes,
             Tex::None => 0,
         };
@@ -1327,7 +1336,7 @@ impl Scene {
                 break;
             }
             if let Some(s) = self.sources.remove(&k) {
-                total -= u64::from(s.size.0) * u64::from(s.size.1) * 4 * 4 / 3;
+                total -= texture_bytes(&s.tex);
             }
         }
         let mut unseen: Vec<(u64, u32)> = self.mats.iter().enumerate().filter_map(|(i, m)| m.as_ref().filter(|m| m.seen != frame && !matches!(m.tex, Tex::None)).map(|m| (m.seen, i as u32))).collect();
@@ -1339,7 +1348,7 @@ impl Scene {
             let Some(m) = self.mats[id as usize].as_mut() else { continue };
             match std::mem::replace(&mut m.tex, Tex::None) {
                 Tex::Atlas(t) => {
-                    total -= u64::from(t.size) * u64::from(t.size) * 4 * 4 / 3;
+                    total -= t.bytes();
                     self.atlas.free(t);
                 }
                 Tex::Own { bytes, .. } => total -= bytes,
@@ -1362,7 +1371,7 @@ impl Scene {
     }
 
     fn resident_bytes(&self) -> u64 {
-        let sources: u64 = self.sources.values().map(|s| u64::from(s.size.0) * u64::from(s.size.1) * 4 * 4 / 3).sum();
+        let sources: u64 = self.sources.values().map(|s| texture_bytes(&s.tex)).sum();
         let own: u64 = self.mats.iter().flatten().map(|m| if let Tex::Own { bytes, .. } = m.tex { bytes } else { 0 }).sum();
         self.atlas.bytes() + sources + own
     }
@@ -1519,15 +1528,14 @@ impl Scene {
         t.lap("rest");
         t.finish(&self.stats);
         if t.on {
-            let sources: u64 = self.sources.values().map(|s| u64::from(s.size.0) * u64::from(s.size.1) * 4 * 4 / 3).sum();
+            let sources: u64 = self.sources.values().map(|s| texture_bytes(&s.tex)).sum();
             let own: u64 = self.mats.iter().flatten().map(|m| if let Tex::Own { bytes, .. } = m.tex { bytes } else { 0 }).sum();
             let mb = |b: u64| b / 1_048_576;
             eprintln!(
-                "memory: atlas {} MB ({} layers of {}, {} MB used), sources {} MB ({}), own {} MB, scratch {} MB, buffers {} MB",
+                "memory: atlas {} MB ({} layers, {} MB used), sources {} MB ({}), own {} MB, scratch {} MB, buffers {} MB",
                 mb(self.atlas.bytes()),
                 self.atlas.layers,
-                self.atlas.side,
-                mb(self.atlas.used_texels * 4 * 4 / 3),
+                mb(self.atlas.used_bytes),
                 mb(sources),
                 self.sources.len(),
                 mb(own),
@@ -1633,7 +1641,7 @@ impl Scene {
         let mut draws = 0;
         let mut atlas_world = world;
         atlas_world.misc[1] = 0.0;
-        atlas_world.tex = [1.0 / self.atlas.side as f32, 1.0 / self.atlas.side as f32, 0.0, 0.0];
+        atlas_world.tex = [1.0 / atlas::SIDE as f32, 1.0 / atlas::SIDE as f32, 0.0, 0.0];
         let mut own_world = world;
         own_world.misc[1] = 1.0;
         let mut bound_atlas = false;
