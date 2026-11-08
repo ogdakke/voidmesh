@@ -143,8 +143,11 @@
   color: var(--color);
   font-size: var(--text-sm);
   font-variant: tabular-nums;
+  /* Canvas label baseline; read by media-progress-canvas.tsx. */
+  --media-progress-text-y: 16px;
 
   @media screen and (max-width: 768px) {
+    --media-progress-text-y: 13px;
     font-size: 0.8rem;
     padding: 4px 0 0;
   }
@@ -202,5 +205,45 @@
   svg {
     width: 20px;
     height: 20px;
+  }
+}
+
+/* Phone landscape: sit at the bottom of the canvas area, centered in the space left of the
+   control rail (auto margins absorb the free space in the rail's flex row). */
+.mobile-layout[data-orientation="landscape"] .media-controls {
+  --player-height: 50px;
+  position: relative;
+  left: auto;
+  bottom: auto;
+  flex: 0 1 420px;
+  min-width: 0;
+  align-self: flex-end;
+  margin: 0 auto;
+  transform: translateY(0) scale(1);
+
+  @starting-style {
+    transform: translateY(var(--y-in)) scale(var(--scale-in-start));
+  }
+
+  &[hidden] {
+    transform: translateY(var(--y-out)) scale(var(--scale-out-start));
+  }
+
+  .media-controls__container {
+    border-radius: var(--radius-button);
+    padding: var(--spacing) var(--spacing-3) var(--spacing-2) var(--spacing-2);
+  }
+
+  .controls-state {
+    padding: 4px 0 0;
+  }
+
+  .media-progress-root {
+    --media-progress-text-y: 13px;
+    font-size: 0.8rem;
+    padding: 4px 0 0;
+  }
+  .mute-button {
+    padding-top: 12px;
   }
 }

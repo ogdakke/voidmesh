@@ -74,3 +74,92 @@
 .mobile-color-knobs__toggle-picker {
   padding-bottom: 0;
 }
+
+/* Phone landscape: palette editor becomes a column beside the palette picker. */
+.mobile-layout[data-orientation="landscape"] {
+  .mobile-color__palette {
+    width: 4.25rem;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    justify-items: center;
+
+    /* The picker beside it already names the palette. */
+    .color-palette__label {
+      display: none;
+    }
+
+    .color-palette__count {
+      grid-column: 1;
+      grid-row: 1;
+      justify-self: center;
+    }
+
+    .color-palette__colors {
+      grid-row: 2;
+      flex-direction: column;
+      align-items: center;
+      overflow-x: hidden;
+      overflow-y: auto;
+      margin: 0;
+      padding: var(--spacing-2) 0;
+      animation: none;
+      mask-image: linear-gradient(to bottom, transparent, black 10%, black 90%, transparent);
+      -webkit-mask-image: linear-gradient(
+        to bottom,
+        transparent,
+        black 10%,
+        black 90%,
+        transparent
+      );
+    }
+
+    .color-palette__actions {
+      grid-column: 1;
+      grid-row: 3;
+      justify-self: center;
+      flex-direction: column;
+      align-items: center;
+    }
+  }
+
+  /* Same width as the palette column, so moving the picker onto "Extract" doesn't shift
+     the layout: a round icon button with its label as a caption underneath. */
+  .mobile-palette-upload {
+    width: 4.25rem;
+    height: 100%;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .mobile-palette-upload__button {
+    position: relative;
+    width: 2.5rem;
+    height: 2.5rem;
+    padding: 0;
+    margin: 0 0 2.5rem;
+    border-radius: 99px;
+
+    span {
+      position: absolute;
+      top: calc(100% + 0.25rem);
+      left: 50%;
+      translate: -50% 0;
+      width: 4.25rem;
+      font-size: 0.675rem;
+      line-height: 1.2;
+      text-align: center;
+      white-space: normal;
+      color: var(--gray-1100);
+    }
+  }
+
+  /* Keep the panel width fixed while the second column swaps (palette / toggle / upload /
+     nothing when mixed), so the picker never jumps sideways. */
+  .mobile-controls-container:has(> .mobile-color-knobs__picker) {
+    min-width: calc(2 * 4.25rem + var(--spacing));
+    justify-content: flex-start;
+  }
+}

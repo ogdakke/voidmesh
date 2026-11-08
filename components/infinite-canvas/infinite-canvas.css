@@ -358,3 +358,38 @@
   filter: drop-shadow(var(--floaty-shadow));
   will-change: transform;
 }
+
+/* Phone landscape: the right edge belongs to the control rail, so the toolbar folds into the
+   left column — Select/menu top-left, help/undo bottom-left. Padding clears notch and home bar. */
+.mobile-layout[data-orientation="landscape"] {
+  .infinite-canvas-toolrow {
+    top: 0;
+    bottom: 0;
+    width: auto;
+    grid-auto-flow: row;
+    grid-template-rows: auto 1fr;
+    justify-content: start;
+    justify-items: start;
+    padding-left: calc(env(safe-area-inset-left, 0px) + var(--spacing) * 1.5);
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + var(--spacing) * 1.5);
+  }
+
+  .infinite-canvas__controls {
+    grid-row: 1;
+    align-self: start;
+  }
+
+  .left-controls {
+    grid-row: 2;
+    align-self: end;
+    grid-auto-flow: row;
+  }
+
+  .undo-redo {
+    height: calc(8 * var(--spacing));
+
+    :where(button) {
+      width: calc(8 * var(--spacing));
+    }
+  }
+}

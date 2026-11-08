@@ -1,6 +1,5 @@
 import { toastManager } from "#application/notifications.ts";
 import { showMediaLoadFailureToasts } from "#application/canvas/media-load-notifications.ts";
-import { config } from "#config";
 import {
   addFilesToCanvas,
   addUrlsToCanvas,
@@ -12,7 +11,7 @@ import { wait } from "#lib/util.ts";
 import { useRef } from "react";
 import { useCanvasCommands, useCanvasInteraction } from "#context/use-canvas.ts";
 import { useClipboardPaste } from "./use-clipboard-paste.ts";
-import { useIsMobile } from "./use-is-mobile.ts";
+import { useViewportInsets } from "./use-viewport-insets.ts";
 import { importStudioWithToasts } from "./use-studio-file.ts";
 
 interface UseImageInputOptions {
@@ -34,8 +33,7 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
     useCanvasCommands();
   const interaction = useCanvasInteraction();
   const isLoadingRef = useRef(false);
-  const isMobile = useIsMobile();
-  const bottomInset = isMobile ? config.canvas.mobile.bottomInset : 0;
+  const insets = useViewportInsets();
 
   const getAnchor = (screenPoint?: { x: number; y: number }) => {
     const container = containerRef.current;
@@ -89,7 +87,7 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
         anchor,
         select: true,
         fitToView: shouldFitToView,
-        bottomInset,
+        insets,
         onLoadFailure: showMediaLoadFailureToasts,
       });
     }
@@ -126,7 +124,7 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
           anchor,
           select: true,
           fitToView: shouldFitToView,
-          bottomInset,
+          insets,
         });
         if (entityId) {
           entityIds.push(entityId);
@@ -143,7 +141,7 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
       // If multiple URLs were pasted, re-select all and fit-to-view together
       if (entityIds.length > 1 && shouldFitToView) {
         interaction.replaceSelection(entityIds);
-        fitEntitiesToView(entityIds, container, bottomInset);
+        fitEntitiesToView(entityIds, container, insets);
       }
     }
 
@@ -180,7 +178,7 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
       anchor,
       select: true,
       fitToView: true,
-      bottomInset,
+      insets,
       onLoadFailure: showMediaLoadFailureToasts,
     });
 
@@ -237,7 +235,7 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
           anchor: dropAnchor,
           select: true,
           fitToView: false,
-          bottomInset,
+          insets,
           onLoadFailure: showMediaLoadFailureToasts,
         });
       }
@@ -275,7 +273,7 @@ export function useImageInput({ containerRef, multipleFiles = true }: UseImageIn
                   anchor: dropAnchor,
                   select: true,
                   fitToView: false,
-                  bottomInset,
+                  insets,
                 }),
                 wait(2000),
               ]);

@@ -67,7 +67,9 @@ describe("CanvasInteractionService", () => {
     store.replaceSelection([first.id, second.id]);
 
     const metrics = { width: 1000, height: 800, dpr: 1 };
-    expect(service.fitSelection(metrics, { padding: 0.1, bottomInset: 30 })).toBe(true);
+    expect(service.fitSelection(metrics, { padding: 0.1, insets: { bottom: 30, right: 0 } })).toBe(
+      true,
+    );
     expect(gameLoop.stopMomentum).toHaveBeenCalledOnce();
     expect(animateTo).toHaveBeenCalledWith(
       calculateFitToView({
@@ -79,7 +81,7 @@ describe("CanvasInteractionService", () => {
         padding: 0.1,
         minZoom: undefined,
         maxZoom: undefined,
-        bottomInset: 30,
+        insets: { bottom: 30, right: 0 },
       }),
       expect.objectContaining({ duration: expect.any(Number), easing: expect.any(Function) }),
     );
@@ -88,7 +90,10 @@ describe("CanvasInteractionService", () => {
   it("does not animate without a selection", () => {
     const { animateTo, service } = createHarness();
     expect(
-      service.fitSelection({ width: 1000, height: 800, dpr: 1 }, { padding: 0.1, bottomInset: 0 }),
+      service.fitSelection(
+        { width: 1000, height: 800, dpr: 1 },
+        { padding: 0.1, insets: { bottom: 0, right: 0 } },
+      ),
     ).toBe(false);
     expect(animateTo).not.toHaveBeenCalled();
   });

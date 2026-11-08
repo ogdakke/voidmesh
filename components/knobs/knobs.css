@@ -193,3 +193,51 @@
 .post-process-knobs {
   height: 100%;
 }
+
+/* Vertical picker (phone landscape rail): items stack, labels stay upright. */
+.mobile-style-knobs[data-orientation="vertical"] {
+  --col-w: 4.25rem;
+  width: var(--col-w);
+  height: 100%;
+  flex-shrink: 0;
+
+  .mobile-style-knobs__window {
+    width: 100%;
+    height: 100%;
+    padding-top: 0;
+    mask-image: linear-gradient(to bottom, transparent, black 12%, black 88%, transparent);
+    -webkit-mask-image: linear-gradient(to bottom, transparent, black 12%, black 88%, transparent);
+  }
+
+  .mobile-style-knobs__options {
+    width: 100%;
+    scroll-padding-inline: 0;
+    scroll-padding-block: calc((100% - var(--item-h)) / 2);
+
+    &::before,
+    &::after {
+      width: auto;
+      height: calc((100% - var(--item-h)) / 2 - var(--gap));
+    }
+  }
+
+  .mobile-style-knobs__item {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+.mobile-layout[data-orientation="landscape"] {
+  .params-knobs,
+  .post-process-knobs {
+    display: flex;
+    flex-direction: row;
+    gap: var(--spacing);
+  }
+}
+
+:root:has(.mobile-layout[data-orientation="landscape"]) .mobile-style-knobs__floating-label {
+  bottom: auto;
+  top: calc(env(safe-area-inset-top, 0px) + var(--spacing-3));
+  transform: translateX(-50%);
+}

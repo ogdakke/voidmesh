@@ -12,6 +12,16 @@ export function useIsMobile() {
   return isNarrow && (import.meta.env.DEV || isCoarse);
 }
 
+/**
+ * Phone held sideways: too short for the bottom control stack, so mobile controls
+ * move to a right-side rail. Mirrored in CSS by `.mobile-layout[data-orientation="landscape"]`.
+ */
+export function useIsCompactLandscape() {
+  const isMobile = useIsMobile();
+  const isShortLandscape = useMediaQuery("(orientation: landscape) and (max-height: 500px)");
+  return isMobile && isShortLandscape;
+}
+
 export function useIsTouch() {
   return useMediaQuery("(any-pointer: coarse)") && navigator.maxTouchPoints > 1;
 }

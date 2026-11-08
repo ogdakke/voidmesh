@@ -29,6 +29,8 @@ import { useActionLayer } from "#hooks/use-action-layer.ts";
 import { useLayout } from "#context/use-layout.ts";
 import { useParamValue } from "#hooks/use-param-value.ts";
 import { useEntityDrag } from "#hooks/use-entity-drag.ts";
+import { useIsCompactLandscape } from "#hooks/use-is-mobile.ts";
+import { OrientationContext } from "#ui/orientation/index.ts";
 
 function MobileActionLayer() {
   const { duplicateEntities, resetSelectionToDefaults } = useCanvasCommands();
@@ -61,7 +63,7 @@ function MobileActionLayer() {
   );
 }
 
-function MobileFloat() {
+function MobileFloat({ isLandscape }: { isLandscape: boolean }) {
   const [activeItem, setActiveItem] = useState<BarItem | DebugBarItem | null>(items.at(0)!);
   const multiSelectMode = useMultiSelectMode();
   const selectedEntityIds = useSelectedEntityIds();
@@ -95,7 +97,9 @@ function MobileFloat() {
       <DeleteDropZone />
       <MediaControls hidden={hideMediaControls} />
       <div className="mobile-controls-container" hidden={hideMobileControls}>
-        <MobileControls activeItem={activeItem} />
+        <OrientationContext value={isLandscape ? "vertical" : "horizontal"}>
+          <MobileControls activeItem={activeItem} />
+        </OrientationContext>
       </div>
 
       <MobileBottomBar
@@ -129,12 +133,13 @@ function MobileFloat() {
 }
 
 export default function MobileLayout() {
+  const isLandscape = useIsCompactLandscape();
   return (
-    <div className="mobile-layout">
+    <div className="mobile-layout" data-orientation={isLandscape ? "landscape" : "portrait"}>
       <div className="content mobile-content">
         <Canvas />
       </div>
-      <MobileFloat />
+      <MobileFloat isLandscape={isLandscape} />
     </div>
   );
 }

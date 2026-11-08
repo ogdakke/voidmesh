@@ -35,6 +35,18 @@ describe("wlur overlay config", () => {
     expect(resolved?.params.tint?.color).toEqual([1, 1, 1]);
   });
 
+  test("blurs toward the edge occupied by mobile controls", () => {
+    const bottom = resolveWlurOverlayRuntimeConfig(createDefaultWlurOverlayConfig(), 1000, 1);
+    const right = resolveWlurOverlayRuntimeConfig(
+      createDefaultWlurOverlayConfig({ edge: "right" }),
+      1000,
+      1,
+    );
+
+    expect(bottom?.params.direction).toBe("down");
+    expect(right?.params.direction).toBe("right");
+  });
+
   test("preserves explicit overrides after the preset is resolved", () => {
     const resolved = resolveWlurOverlayRuntimeConfig(
       {

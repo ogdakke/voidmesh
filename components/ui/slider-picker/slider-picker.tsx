@@ -2,9 +2,34 @@ import clsx from "clsx";
 import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import "./slider-picker.css";
 import { logger } from "#lib/client.logger.ts";
+import { useOrientation, type Orientation } from "../orientation/index.ts";
 import { SliderPickerContext, useSliderPickerContext } from "./use-slider-picker.ts";
 
 const DEFAULT_THRESHOLD = Array.from({ length: 20 }, (_, i) => i / 19);
+
+/** Only the middle ~4% of the scroll axis counts as "centered". */
+const DEFAULT_ROOT_MARGIN: Record<Orientation, string> = {
+  horizontal: "0px -48% 0px -48%",
+  vertical: "-48% 0px -48% 0px",
+};
+
+/** Scroll `container` so `item` sits at its center along `orientation`. */
+function scrollItemToCenter(
+  container: HTMLElement,
+  item: HTMLElement,
+  orientation: Orientation,
+  behavior: ScrollBehavior,
+) {
+  const c = container.getBoundingClientRect();
+  const i = item.getBoundingClientRect();
+  if (orientation === "vertical") {
+    const delta = i.top + i.height / 2 - (c.top + c.height / 2);
+    container.scrollTo({ top: container.scrollTop + delta, behavior });
+  } else {
+    const delta = i.left + i.width / 2 - (c.left + c.width / 2);
+    container.scrollTo({ left: container.scrollLeft + delta, behavior });
+  }
+}
 
 export interface SliderPickerProps extends Omit<ComponentProps<"div">, "onChange"> {
   value: string;
@@ -23,9 +48,11 @@ export interface SliderPickerProps extends Omit<ComponentProps<"div">, "onChange
    */
   threshold?: number[];
   /**
-   * @default "0px -48% 0px -48%"
+   * @default "0px -48% 0px -48%" (horizontal) / "-48% 0px -48% 0px" (vertical)
    */
   rootMargin?: string;
+  /** Scroll axis. @default inherited from OrientationContext */
+  orientation?: Orientation;
 }
 
 export function SliderPicker({
@@ -38,9 +65,12 @@ export function SliderPicker({
   children,
   className,
   threshold = DEFAULT_THRESHOLD,
-  rootMargin = "0px -48% 0px -48%",
+  rootMargin: rootMarginProp,
+  orientation: orientationProp,
   ...props
 }: SliderPickerProps) {
+  const orientation = useOrientation(orientationProp);
+  const rootMargin = rootMarginProp ?? DEFAULT_ROOT_MARGIN[orientation];
   const [centeredValue, setCenteredValue] = useState(value);
   const itemRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const optionsRef = useRef<HTMLDivElement>(null);
@@ -67,15 +97,12 @@ export function SliderPicker({
       setCenteredValue(value);
       prevCenteredValueRef.current = value;
       const el = itemRefs.current.get(value);
+      const options = optionsRef.current;
       const isInitial = isInitialScrollRef.current;
-      if (el) {
+      if (el && options) {
         // Mark as programmatic scroll to prevent value commits during scroll
         isProgrammaticScrollRef.current = true;
-        el.scrollIntoView({
-          behavior: isInitial ? "instant" : "smooth",
-          inline: "center",
-          block: "nearest",
-        });
+        scrollItemToCenter(options, el, orientation, isInitial ? "instant" : "smooth");
         // Clear programmatic scroll flag after scroll completes
         // (~50ms for instant, ~500ms for smooth scroll)
         setTimeout(
@@ -91,7 +118,24 @@ export function SliderPicker({
       }
     }
     lastCommittedValueRef.current = value;
-  }, [value]);
+    // Re-runs on orientation change are no-ops (value unchanged); the axis-flip effect re-centers.
+  }, [value, orientation]);
+
+  // After an axis flip the old scroll offset is meaningless: re-center the current item.
+  const prevOrientationRef = useRef(orientation);
+  useEffect(() => {
+    if (prevOrientationRef.current === orientation) return;
+    prevOrientationRef.current = orientation;
+    const el = itemRefs.current.get(prevCenteredValueRef.current);
+    const options = optionsRef.current;
+    if (!el || !options) return;
+    isProgrammaticScrollRef.current = true;
+    scrollItemToCenter(options, el, orientation, "instant");
+    const timer = setTimeout(() => {
+      isProgrammaticScrollRef.current = false;
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [orientation]);
 
   // IntersectionObserver to detect centered item
   useEffect(() => {
@@ -273,8 +317,9 @@ export function SliderPicker({
 
   const scrollToItem = (itemValue: string) => {
     const el = itemRefs.current.get(itemValue);
-    if (el) {
-      el.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+    const options = optionsRef.current;
+    if (el && options) {
+      scrollItemToCenter(options, el, orientation, "smooth");
     } else {
       console.warn("[SliderPicker] No element found for value:", itemValue);
     }
@@ -282,9 +327,22 @@ export function SliderPicker({
 
   return (
     <SliderPickerContext.Provider
-      value={{ value, centeredValue, registerItem, unregisterItem, scrollToItem, optionsRef }}
+      value={{
+        orientation,
+        value,
+        centeredValue,
+        registerItem,
+        unregisterItem,
+        scrollToItem,
+        optionsRef,
+      }}
     >
-      <div data-slot="slider-picker" className={clsx("slider-picker", className)} {...props}>
+      <div
+        data-slot="slider-picker"
+        data-orientation={orientation}
+        className={clsx("slider-picker", className)}
+        {...props}
+      >
         {children}
       </div>
     </SliderPickerContext.Provider>
@@ -346,7 +404,10 @@ export function SliderPickerItem({
   onCheckedChange,
   ...props
 }: SliderPickerItemProps) {
-  const { centeredValue, registerItem, unregisterItem, scrollToItem } = useSliderPickerContext();
+  const { orientation, centeredValue, registerItem, unregisterItem, scrollToItem } =
+    useSliderPickerContext();
+  const [prevKey, nextKey] =
+    orientation === "vertical" ? ["ArrowUp", "ArrowDown"] : ["ArrowLeft", "ArrowRight"];
   const ref = useRef<HTMLDivElement>(null);
   const isSelected = centeredValue === itemValue;
 
@@ -376,11 +437,11 @@ export function SliderPickerItem({
       } else {
         scrollToItem(itemValue);
       }
-    } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+    } else if (e.key === prevKey || e.key === nextKey) {
       e.preventDefault();
       const current = e.currentTarget as HTMLElement;
       const sibling =
-        e.key === "ArrowRight" ? current.nextElementSibling : current.previousElementSibling;
+        e.key === nextKey ? current.nextElementSibling : current.previousElementSibling;
       if (sibling instanceof HTMLElement && sibling.dataset.value != null) {
         scrollToItem(sibling.dataset.value);
         sibling.focus();

@@ -13,6 +13,8 @@ interface UseCanvasRendererRuntimeOptions {
   darkTheme: boolean;
   canvasLensing: Parameters<typeof getViewportLensDistortionConfig>[0];
   isMobile: boolean;
+  /** Mobile controls sit on the right edge instead of the bottom. */
+  isCompactLandscape: boolean;
   isFullscreen: boolean;
 }
 
@@ -23,6 +25,7 @@ export function useCanvasRendererRuntime({
   darkTheme,
   canvasLensing,
   isMobile,
+  isCompactLandscape,
   isFullscreen,
 }: UseCanvasRendererRuntimeOptions) {
   const interaction = useCanvasInteraction();
@@ -77,6 +80,7 @@ export function useCanvasRendererRuntime({
         ? createDefaultWlurOverlayConfig({
             tintColor,
             tintAmount: darkTheme ? 1 : 0.77,
+            edge: isCompactLandscape ? "right" : "bottom",
           })
         : null;
     renderer.setWlurOverlay(
@@ -92,6 +96,7 @@ export function useCanvasRendererRuntime({
     darkTheme,
     debugMode,
     interaction,
+    isCompactLandscape,
     isFullscreen,
     isMobile,
     isReady,

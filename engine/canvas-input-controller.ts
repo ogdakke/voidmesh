@@ -3,7 +3,7 @@ import { logger } from "#lib/client.logger.ts";
 import { pointInBounds } from "#lib/canvas-math.ts";
 import { config, type TouchConfig } from "#config";
 import { VelocityTracker } from "#lib/touch-scroll/index.ts";
-import { DragTargetType, type Bounds, type Point } from "#types/canvas.ts";
+import { DragTargetType, type Bounds, type Point, type ViewportInsets } from "#types/canvas.ts";
 import { createEnum } from "#types/index.ts";
 import { canvasStore } from "./canvas-store.ts";
 import { entityDragVisual } from "./entity-drag-visual.ts";
@@ -216,6 +216,11 @@ export class CanvasInputController {
   setTouchConfig(config: Partial<TouchConfig>): void {
     this.#touchConfig = { ...this.#touchConfig, ...config };
     this.#viewport.setTouchConfig(config);
+  }
+
+  /** Screen edges covered by UI chrome, for engine-driven focus. */
+  setViewportInsets(insets: ViewportInsets): void {
+    this.#viewport.setViewportInsets(insets);
   }
 
   /** Get current touch configuration */

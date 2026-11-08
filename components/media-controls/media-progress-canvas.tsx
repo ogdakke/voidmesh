@@ -46,7 +46,6 @@ function resolveRenderConfig(root: HTMLElement): MediaProgressRenderConfig {
   const style = getComputedStyle(root);
   const fontSize = Number.parseFloat(style.fontSize) || DEFAULT_CONFIG.fontSize;
   const trackRadius = getCssVarPx("--radius-button", root) || DEFAULT_CONFIG.trackRadius;
-  const isMobile = window.matchMedia("(max-width: 768px)").matches;
 
   return {
     trackColor: resolveCssVarColor("--gray-200", root) ?? DEFAULT_CONFIG.trackColor,
@@ -55,7 +54,8 @@ function resolveRenderConfig(root: HTMLElement): MediaProgressRenderConfig {
     fontFamily: style.fontFamily || DEFAULT_CONFIG.fontFamily,
     fontWeight: style.fontWeight || DEFAULT_CONFIG.fontWeight,
     fontSize,
-    textY: isMobile ? 13 : Math.max(fontSize, 16),
+    // Label baseline comes from CSS so compact players (portrait and landscape) share one rule.
+    textY: getCssVarPx("--media-progress-text-y", root) || DEFAULT_CONFIG.textY,
     trackHeight: 8,
     trackRadius,
   };

@@ -23,6 +23,12 @@ export interface Point {
   y: number;
 }
 
+/** Screen-edge strips (CSS pixels) covered by UI chrome; fit/center math targets the rest. */
+export interface ViewportInsets {
+  bottom: number;
+  right: number;
+}
+
 /** 2D size */
 export interface Size {
   width: number;

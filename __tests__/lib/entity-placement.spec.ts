@@ -83,7 +83,7 @@ describe("entity placement", () => {
       anchor: { x: 400, y: 300 },
       select: true,
       fitToView: false,
-      bottomInset: 0,
+      insets: { bottom: 0, right: 0 },
     });
 
     expect(ids).toEqual(["one.png"]);
@@ -108,7 +108,7 @@ describe("entity placement", () => {
         anchor: { x: 600, y: 450 },
         select: true,
         fitToView: false,
-        bottomInset: 0,
+        insets: { bottom: 0, right: 0 },
       },
     );
 
@@ -136,7 +136,7 @@ describe("entity placement", () => {
       anchor: { x: 100, y: 100 },
       select: true,
       fitToView: true,
-      bottomInset: 24,
+      insets: { bottom: 24, right: 0 },
     });
 
     expect(stopMomentum).toHaveBeenCalled();
@@ -160,7 +160,7 @@ describe("entity placement", () => {
         anchor: { x: 100, y: 100 },
         select: true,
         fitToView: false,
-        bottomInset: 0,
+        insets: { bottom: 0, right: 0 },
         onLoadFailure,
       },
     );
@@ -208,7 +208,7 @@ describe("entity placement", () => {
         anchor: { x: 320, y: 240 },
         select: true,
         fitToView: false,
-        bottomInset: 0,
+        insets: { bottom: 0, right: 0 },
       },
     );
 

@@ -1,15 +1,17 @@
 import { useKeybinds } from "#context/keybind-context.ts";
-import { useCanvasPreferences } from "#context/use-canvas.ts";
+import { useCanvasInteraction, useCanvasPreferences } from "#context/use-canvas.ts";
 import { useLayout } from "#context/use-layout.ts";
 import { useCanvasContainerResize } from "#hooks/use-canvas-container-resize.ts";
 import { useCanvasRendererRuntime } from "#hooks/use-canvas-renderer-runtime.ts";
 import { useCanvasSurfaceEvents } from "#hooks/use-canvas-surface-events.ts";
 import { useImageInput } from "#hooks/use-image-input.ts";
 import { useInfiniteCanvasKeybinds } from "#hooks/use-infinite-canvas-keybinds.ts";
-import { useIsMobile } from "#hooks/use-is-mobile.ts";
+import { useIsCompactLandscape, useIsMobile } from "#hooks/use-is-mobile.ts";
 import useMediaQuery from "#hooks/use-media-query.ts";
 import { useOnboarding } from "#hooks/use-onboarding.ts";
-import { lazy, Suspense, useRef, type PropsWithChildren } from "react";
+import { useViewportInsets } from "#hooks/use-viewport-insets.ts";
+import { NO_VIEWPORT_INSETS } from "#lib/canvas-math.ts";
+import { lazy, Suspense, useEffect, useRef, type PropsWithChildren } from "react";
 import { DropZone } from "../ui/dropzone/index.tsx";
 import { CanvasOverlay } from "./canvas-overlay.tsx";
 import "./infinite-canvas.css";
@@ -23,8 +25,15 @@ export function InfiniteCanvas() {
   const { canvasLensing } = useCanvasPreferences();
   const keybindStore = useKeybinds();
   const isMobile = useIsMobile();
+  const isCompactLandscape = useIsCompactLandscape();
   const darkTheme = useMediaQuery("(prefers-color-scheme: dark)");
   const { isFullscreen } = useLayout();
+  const interaction = useCanvasInteraction();
+  const insets = useViewportInsets();
+
+  useEffect(() => {
+    interaction.setViewportInsets(isFullscreen ? NO_VIEWPORT_INSETS : insets);
+  }, [interaction, insets, isFullscreen]);
 
   const { isReady, isSupported, error } = useCanvasRendererRuntime({
     canvasRef,
@@ -33,6 +42,7 @@ export function InfiniteCanvas() {
     darkTheme,
     canvasLensing,
     isMobile,
+    isCompactLandscape,
     isFullscreen,
   });
   const keybinds = useInfiniteCanvasKeybinds(containerRef);

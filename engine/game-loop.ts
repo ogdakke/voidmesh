@@ -1,6 +1,6 @@
 import { logger } from "#lib/client.logger.ts";
 import type { TouchConfig } from "#config";
-import type { Bounds, Point } from "#types/canvas.ts";
+import type { Bounds, Point, ViewportInsets } from "#types/canvas.ts";
 import { CanvasInputController, createDefaultGameLoopDeps } from "./canvas-input-controller.ts";
 import type { DragSelectMode, GameLoopDeps, SpacePanMode } from "./canvas-input-controller.ts";
 import { FrameLoop, type CanvasRendererPort } from "./frame-loop.ts";
@@ -56,6 +56,10 @@ export class GameLoop {
 
   setTouchConfig(config: Partial<TouchConfig>): void {
     this.#input.setTouchConfig(config);
+  }
+
+  setViewportInsets(insets: ViewportInsets): void {
+    this.#input.setViewportInsets(insets);
   }
 
   getTouchConfig(): TouchConfig {

@@ -6,6 +6,7 @@ import {
   defaultRenderConfig,
   type SliderRenderConfig,
 } from "./slider-renderer.ts";
+import { useOrientation, type Orientation } from "../orientation/index.ts";
 import "./infinite-slider.css";
 
 export interface InfiniteSliderDriveHandle {
@@ -58,6 +59,9 @@ export interface InfiniteSliderProps extends ComponentProps<"div"> {
   /** Imperative handle ref for external value driving (bypasses React re-renders). */
   driveRef?: React.RefObject<InfiniteSliderDriveHandle | null>;
 
+  /** Drag axis. Vertical: drag up to increase. @default inherited from OrientationContext */
+  orientation?: Orientation;
+
   /** Accessible label for the slider. */
   ariaLabel?: string;
   /** ID of the element that labels this slider. */
@@ -84,10 +88,13 @@ export function InfiniteSlider({
   majorTickInterval = 10,
   driveRef,
   majorTickColor: majorTickColorProp,
+  orientation: orientationProp,
   ariaLabel,
   ariaLabelledBy,
   ...props
 }: InfiniteSliderProps) {
+  const orientation = useOrientation(orientationProp);
+  const isVertical = orientation === "vertical";
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<SliderEngine | null>(null);
@@ -109,6 +116,7 @@ export function InfiniteSlider({
 
   // Update visual config when props change
   useEffect(() => {
+    renderConfigRef.current.orientation = orientation;
     renderConfigRef.current.falloff = falloff;
     renderConfigRef.current.minScale = minScale;
     renderConfigRef.current.maxScale = maxScale;
@@ -116,7 +124,7 @@ export function InfiniteSlider({
     renderConfigRef.current.majorTickInterval = majorTickInterval;
     renderConfigRef.current.minTick = min != null ? Math.ceil(min / step) : null;
     renderConfigRef.current.maxTick = max != null ? Math.floor(max / step) : null;
-  }, [falloff, minScale, maxScale, tickSpacing, min, max, step, majorTickInterval]);
+  }, [orientation, falloff, minScale, maxScale, tickSpacing, min, max, step, majorTickInterval]);
 
   // Resolve CSS colors + listen for theme changes
   useEffect(() => {
@@ -290,6 +298,7 @@ export function InfiniteSlider({
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const axis = (t: Touch) => (isVertical ? t.clientY : t.clientX);
 
     const handleTouchStart = (e: TouchEvent) => {
       if (e.touches.length !== 1) return;
@@ -297,7 +306,7 @@ export function InfiniteSlider({
         e.preventDefault();
       }
       touchActiveRef.current = true;
-      engineRef.current?.handlePointerDown(e.touches[0]!.clientX);
+      engineRef.current?.handlePointerDown(axis(e.touches[0]!));
     };
 
     const handleTouchMove = (e: TouchEvent) => {
@@ -305,7 +314,7 @@ export function InfiniteSlider({
       if (e.cancelable) {
         e.preventDefault();
       }
-      engineRef.current?.handlePointerMove(e.touches[0]!.clientX);
+      engineRef.current?.handlePointerMove(axis(e.touches[0]!));
     };
 
     const handleTouchEnd = () => {
@@ -325,18 +334,18 @@ export function InfiniteSlider({
       canvas.removeEventListener("touchend", handleTouchEnd);
       canvas.removeEventListener("touchcancel", handleTouchEnd);
     };
-  }, []);
+  }, [isVertical]);
 
   // Pointer event handlers — desktop mouse only (skipped when touch is active)
   const handlePointerDown = (e: React.PointerEvent) => {
     if (touchActiveRef.current) return;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    engineRef.current?.handlePointerDown(e.clientX);
+    engineRef.current?.handlePointerDown(isVertical ? e.clientY : e.clientX);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
     if (touchActiveRef.current) return;
-    engineRef.current?.handlePointerMove(e.clientX);
+    engineRef.current?.handlePointerMove(isVertical ? e.clientY : e.clientX);
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
@@ -405,7 +414,8 @@ export function InfiniteSlider({
       aria-valuenow={value}
       aria-valuemin={min || undefined}
       aria-valuemax={max || undefined}
-      aria-orientation="horizontal"
+      aria-orientation={orientation}
+      data-orientation={orientation}
       aria-label={ariaLabel}
       aria-labelledby={ariaLabelledBy}
       onKeyDown={handleKeyDown}
