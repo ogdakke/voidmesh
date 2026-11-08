@@ -1,85 +1,26 @@
 /*
  * Initial app loader. The brand-blue background paints with the HTML, before any JS.
- * renderer/app-loader/app-loader.worker.ts then draws the same blue plus a white dither cloud on the
- * canvas ([data-painted] drops the CSS blue) with a pixel-text caption, and on exit
- * dithers the blue open to reveal the app. CSS only owns the first paint and the
- * reduced-motion fade.
- */
-
-/*
- * Positioned absolutely and taller than the viewport, never `fixed`: iOS tints its
- * status and toolbar areas from fixed elements touching the screen edges and keeps
- * that tint after they are removed. As ordinary page content the blue runs under the
- * translucent bars instead, and the bars stay untinted once the app shows. A plain
- * 100vh/lvh box stops short of the bars, hence the extra bleed. html/body are
- * `overflow: hidden`, so the extra height never scrolls.
- */
-:root {
-  /* Brand blue (--primary) in Display P3; the worker draws the identical value. */
-  --loader-blue: color(display-p3 0.098 0.486 0.996);
-}
-
-/*
- * iOS tints its status bar and toolbar from CSS background colours, never canvas
- * pixels: the topmost `position: fixed` element touching each edge wins, and the
- * document background is the fallback. The app's mobile layout is fixed, so once it
- * mounts it would win over anything page-level while the loader still covers it.
+ * renderer/app-loader/app-loader.worker.ts then draws the same blue plus a white
+ * dither cloud on the canvas ([data-painted] drops the CSS blue) with a pixel-text
+ * caption, and on exit dithers the blue open to reveal the app. CSS only owns the
+ * first paint and the reduced-motion fade.
  *
- * These thin fixed strips sit above everything to hold the bars on the loader blue.
- * At handoff app-loader.ts switches them to the app background ([data-handoff]),
- * which iOS keeps, and then removes them. The document is blue too, which covers the
- * moment before the strips paint and the area under the bars.
+ * The loader covers the visible region only and is never `fixed`: iOS tints its
+ * status bar and toolbar from fixed elements at the screen edges and keeps that tint
+ * after they are removed. Left alone, the browser bars keep their normal appearance
+ * (and stay translucent in the PWA).
  */
-.app-loader-chrome {
-  &[hidden] {
-    display: none;
-  }
-
-  & > i {
-    position: fixed;
-    left: 0;
-    right: 0;
-    z-index: 1000000;
-    height: max(env(safe-area-inset-top, 0px), 6px);
-    background: var(--loader-blue);
-    pointer-events: none;
-  }
-
-  & > i:first-child {
-    top: 0;
-  }
-
-  & > i:last-child {
-    bottom: 0;
-    height: max(env(safe-area-inset-bottom, 0px), 6px);
-  }
-
-  /* Colour and size both change, so iOS re-samples before the strips go away. */
-  &[data-handoff] > i {
-    background: var(--background);
-    height: calc(max(env(safe-area-inset-top, 0px), 6px) + 1px);
-  }
-
-  &[data-handoff] > i:last-child {
-    height: calc(max(env(safe-area-inset-bottom, 0px), 6px) + 1px);
-  }
-}
-
-html:has(#app-loader:not([hidden])),
-html:has(#app-loader:not([hidden])) body {
-  background: var(--loader-blue);
-}
-
 .app-loader {
   --loader-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
-  --loader-bleed: max(160px, 25lvh);
+  /* Brand blue (--primary) in Display P3; the worker draws the identical value. */
+  --loader-blue: color(display-p3 0.098 0.486 0.996);
 
   z-index: 999999;
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
-  height: calc(100lvh + var(--loader-bleed));
+  height: 100svh;
   overflow: clip;
   background: var(--loader-blue);
   color: white;

@@ -10,17 +10,11 @@ import type { FromLoaderWorkerMessage, ToLoaderWorkerMessage } from "./app-loade
  */
 
 const startTime = Date.now();
-/** sRGB approximation of the loader blue, for `theme-color`. Matches index.html. */
-const LOADER_THEME_COLOR = "#007fff";
 
 const el = document.getElementById("app-loader") as HTMLElement | null;
-const chromeEl = document.getElementById("app-loader-chrome") as HTMLElement | null;
-/** How long the edge strips show the app colour before they are removed. */
-const CHROME_HANDOFF_MS = 250;
 const statusEl = el?.querySelector<HTMLElement>(".loader-status") ?? null;
 const canvasEl = el?.querySelector<HTMLCanvasElement>(".loader-canvas") ?? null;
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
-const themeColorMetas = [...document.querySelectorAll<HTMLMetaElement>("meta[data-app-color]")];
 
 const isPreview = import.meta.env.DEV && new URLSearchParams(location.search).has("loader-preview");
 
@@ -60,12 +54,11 @@ function sizeCanvas() {
   canvasEl.style.height = `${grid.cssHeight}px`;
 }
 
-/** The loader is taller than the viewport (see app-loader.css); the canvas covers all of it. */
+/** The loader covers the visible region (100svh, see app-loader.css); so does the canvas. */
 function viewport() {
   return {
     width: innerWidth,
     height: el ? el.getBoundingClientRect().height : innerHeight,
-    viewHeight: innerHeight,
     dpr: devicePixelRatio,
   };
 }
@@ -115,27 +108,6 @@ function nextWorkerMessage(type: "exiting" | "exited") {
  * The worker may hold the exit back so the opening line is readable, so the CSS state
  * (which drives the reduced-motion fade) flips only once it reports "exiting".
  */
-/**
- * Browser chrome follows the loader: `theme-color` is the loader blue in index.html
- * while loading and switches to the app colour when the loader hides (the document
- * background does the same in app-loader.css, which is what iOS 26 samples).
- */
-function setThemeColor(loading: boolean) {
-  for (const meta of themeColorMetas) {
-    meta.content = loading ? LOADER_THEME_COLOR : (meta.dataset.appColor ?? meta.content);
-  }
-}
-
-/**
- * Hands the browser bars to the app: the edge strips switch to the app background
- * (which iOS keeps once sampled) and are removed shortly after. See app-loader.css.
- */
-function handOffChrome() {
-  if (!chromeEl) return;
-  chromeEl.dataset.handoff = "";
-  setTimeout(() => (chromeEl.hidden = true), CHROME_HANDOFF_MS);
-}
-
 async function playExit() {
   if (!el) return;
   const exiting = nextWorkerMessage("exiting");
@@ -145,8 +117,6 @@ async function playExit() {
   el.dataset.state = "exit";
   await Promise.all([exited, ...el.getAnimations().map((animation) => animation.finished)]);
   el.hidden = true;
-  setThemeColor(false);
-  handOffChrome();
 }
 
 /** The worker destroys its WebGPU device, then closes itself. */
@@ -163,11 +133,6 @@ function replay() {
   // Hidden → visible restarts every CSS animation in the subtree.
   void el.offsetWidth;
   el.hidden = false;
-  setThemeColor(true);
-  if (chromeEl) {
-    delete chromeEl.dataset.handoff;
-    chromeEl.hidden = false;
-  }
   post({ type: "replay" });
 }
 

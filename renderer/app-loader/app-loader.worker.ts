@@ -14,14 +14,11 @@ export type ToLoaderWorkerMessage =
       type: "init";
       canvas: OffscreenCanvas;
       width: number;
-      /** Canvas height in CSS px; taller than the viewport (see app-loader.css). */
       height: number;
-      /** Visible viewport height in CSS px; the cloud and caption centre on it. */
-      viewHeight: number;
       dpr: number;
       reducedMotion: boolean;
     }
-  | { type: "resize"; width: number; height: number; viewHeight: number; dpr: number }
+  | { type: "resize"; width: number; height: number; dpr: number }
   /** Dev preview: move to the next caption now. */
   | { type: "advance" }
   | { type: "exit" }
@@ -93,7 +90,6 @@ const WIDEST_LINE = Math.max(
 let renderer: LoaderDitherRenderer | null = null;
 let width = 0;
 let height = 0;
-let viewHeight = 0;
 let dpr = 1;
 let cell = 2; // dither cell size in CSS px
 let cols = 0;
@@ -244,7 +240,7 @@ function render(now: number) {
   // The cloud fills an ellipse fitted to the viewport; lobes only get sqrt(aspect) of
   // that stretch so they stay cloud-shaped on wide and tall screens.
   const cx = width / cell / 2;
-  const cy = viewHeight / cell / 2;
+  const cy = height / cell / 2;
   const halfW = cx * 0.94;
   const halfH = cy * 0.94;
   const k = Math.sqrt(halfW / halfH);
@@ -257,8 +253,7 @@ function render(now: number) {
     radius,
     amp,
     viewCenter: [cx, cy],
-    // Reach the farthest corner, including the part of the canvas below the viewport.
-    viewReach: Math.hypot(cx, Math.max(cy, height / cell - cy)),
+    viewReach: Math.hypot(cx, cy),
     reveal,
     ink: INK,
     background: BACKGROUND,
@@ -365,7 +360,6 @@ self.onmessage = (event: MessageEvent<ToLoaderWorkerMessage>) => {
     case "init":
       width = msg.width;
       height = msg.height;
-      viewHeight = msg.viewHeight;
       dpr = msg.dpr;
       reducedMotion = msg.reducedMotion;
       LoaderDitherRenderer.create(msg.canvas).then(
@@ -390,7 +384,6 @@ self.onmessage = (event: MessageEvent<ToLoaderWorkerMessage>) => {
     case "resize":
       width = msg.width;
       height = msg.height;
-      viewHeight = msg.viewHeight;
       dpr = msg.dpr;
       configure();
       if (phase === "done" || reducedMotion) render(performance.now());
