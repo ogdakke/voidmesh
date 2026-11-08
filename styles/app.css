@@ -164,7 +164,10 @@
         calc(env(safe-area-inset-left, 0px) + 10rem);
     }
 
+    /* Only the media controls give up width when the row is tight; the panel and rail keep
+       their size. */
     .mobile-controls-container {
+      flex-shrink: 0;
       height: auto;
       flex-direction: row;
       justify-content: flex-end;

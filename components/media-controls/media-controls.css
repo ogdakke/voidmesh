@@ -216,6 +216,7 @@
   left: auto;
   bottom: auto;
   flex: 0 1 420px;
+  min-width: 0;
   align-self: flex-end;
   margin: 0 auto;
   transform: translateY(0) scale(1);

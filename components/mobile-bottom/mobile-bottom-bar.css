@@ -236,6 +236,7 @@
 /* Phone landscape: the bar becomes a vertical rail on the right edge. */
 .mobile-layout[data-orientation="landscape"] {
   .mobile-bottom-bar-container {
+    flex-shrink: 0;
     grid-auto-flow: row;
     grid-template-columns: none;
     grid-template-rows: 1fr auto;
