@@ -1,5 +1,11 @@
-import type { Point, Size, ShaderCanvasEntity } from "#types/canvas.ts";
-import { calculateFitToView, easings, snapToGrid, SNAP_GRID_SIZE } from "#lib/canvas-math.ts";
+import type { Point, Size, ShaderCanvasEntity, ViewportInsets } from "#types/canvas.ts";
+import {
+  calculateFitToView,
+  easings,
+  NO_VIEWPORT_INSETS,
+  snapToGrid,
+  SNAP_GRID_SIZE,
+} from "#lib/canvas-math.ts";
 import { canvasStore, gameLoop, viewportAnimation } from "#engine";
 import { loadMediaFile, loadMediaFromBlob } from "#lib/media-loader.ts";
 import { config } from "#config";
@@ -20,7 +26,7 @@ export interface ImportPlacementOptions {
   anchor: Point;
   select: boolean;
   fitToView: boolean;
-  bottomInset: number;
+  insets: ViewportInsets;
   onLoadFailure?: (failures: MediaLoadFailure[]) => void;
 }
 
@@ -135,7 +141,7 @@ export function calculateLayout(
 export function fitEntitiesToView(
   entityIds: string[],
   container: HTMLElement,
-  bottomInset: number = 0,
+  insets: ViewportInsets = NO_VIEWPORT_INSETS,
 ): void {
   if (entityIds.length === 0) return;
 
@@ -167,7 +173,7 @@ export function fitEntitiesToView(
     padding: config.canvas.fitToViewPadding,
     minZoom: undefined,
     maxZoom: undefined,
-    bottomInset,
+    insets,
   });
 
   viewportAnimation.animateTo(targetViewport, {
@@ -203,7 +209,7 @@ function placeLoadedEntities(
     canvasStore.replaceSelection(entityIds);
   }
   if (options.fitToView) {
-    fitEntitiesToView(entityIds, container, options.bottomInset);
+    fitEntitiesToView(entityIds, container, options.insets);
   }
 
   return entityIds;

@@ -15,7 +15,7 @@ import {
   screenToWorld,
   zoomToPoint,
 } from "#lib/canvas-math.ts";
-import type { CanvasCallout, Point, ShaderCanvasEntity } from "#types/canvas.ts";
+import type { CanvasCallout, Point, ShaderCanvasEntity, ViewportInsets } from "#types/canvas.ts";
 
 export interface CanvasSurfaceMetrics {
   width: number;
@@ -25,7 +25,7 @@ export interface CanvasSurfaceMetrics {
 
 export interface FitSelectionOptions {
   padding: number;
-  bottomInset: number;
+  insets: ViewportInsets;
 }
 
 export interface CanvasInteractionService {
@@ -55,6 +55,8 @@ export interface CanvasInteractionService {
   initializeViewport(metrics: CanvasSurfaceMetrics): void;
   resetZoom(metrics: CanvasSurfaceMetrics): void;
   fitSelection(metrics: CanvasSurfaceMetrics, options: FitSelectionOptions): boolean;
+  /** Screen edges covered by UI chrome; used by engine-driven focus (double-tap). */
+  setViewportInsets(insets: ViewportInsets): void;
   selectAll(): void;
   clearSelection(): void;
   setMultiSelectMode(enabled: boolean): void;
@@ -174,12 +176,13 @@ export function createCanvasInteractionService({
           padding: options.padding,
           minZoom: undefined,
           maxZoom: undefined,
-          bottomInset: options.bottomInset,
+          insets: options.insets,
         }),
         config.canvas.animation.fitToViewDuration,
       );
       return true;
     },
+    setViewportInsets: (insets) => gameLoop.setViewportInsets(insets),
     selectAll: () => store.selectAll(),
     clearSelection: () => store.clearSelection(),
     setMultiSelectMode: (enabled) => store.setMultiSelectMode(enabled),

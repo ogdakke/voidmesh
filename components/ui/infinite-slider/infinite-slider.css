@@ -33,4 +33,23 @@
   .infinite-slider__canvas:active {
     cursor: grabbing;
   }
+
+  .infinite-slider[data-orientation="vertical"] {
+    --tick-h: 3rem;
+    height: 100%;
+    padding: 0;
+
+    .infinite-slider__canvas {
+      width: var(--tick-h);
+      height: 100%;
+      mask-image: linear-gradient(to bottom, transparent, black 15%, black 85%, transparent);
+      -webkit-mask-image: linear-gradient(
+        to bottom,
+        transparent,
+        black 15%,
+        black 85%,
+        transparent
+      );
+    }
+  }
 }

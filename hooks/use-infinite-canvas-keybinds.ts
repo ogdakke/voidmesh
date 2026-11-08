@@ -12,7 +12,8 @@ import { useLayout } from "#context/use-layout.ts";
 import { undo } from "#lib/undo.ts";
 import { useEffect, type RefObject } from "react";
 import { useEntityCycling } from "./use-entity-cycling.ts";
-import { useIsMobile } from "./use-is-mobile.ts";
+import { NO_VIEWPORT_INSETS } from "#lib/canvas-math.ts";
+import { useViewportInsets } from "./use-viewport-insets.ts";
 import { useMediaControlsActions } from "./use-media-controls.ts";
 import { useStudioFile } from "./use-studio-file.ts";
 
@@ -37,8 +38,7 @@ export function useInfiniteCanvasKeybinds(containerRef: RefObject<HTMLDivElement
   const { handleCycleNext, handleCyclePrevious } = useEntityCycling(containerRef);
   const { exportStudioFile, saveAsStudioFile, importStudioFile } = useStudioFile();
   const { isFullscreen, toggleFullscreen } = useLayout();
-  const isMobile = useIsMobile();
-  const bottomInset = isMobile ? config.canvas.mobile.bottomInset : 0;
+  const insets = useViewportInsets();
 
   const getMetrics = () => {
     const container = containerRef.current;
@@ -60,7 +60,7 @@ export function useInfiniteCanvasKeybinds(containerRef: RefObject<HTMLDivElement
     if (!metrics) return;
     interaction.fitSelection(metrics, {
       padding: 0.1,
-      bottomInset: isFullscreen ? 0 : bottomInset,
+      insets: isFullscreen ? NO_VIEWPORT_INSETS : insets,
     });
   };
 
@@ -69,7 +69,7 @@ export function useInfiniteCanvasKeybinds(containerRef: RefObject<HTMLDivElement
     if (!metrics) return false;
     return interaction.fitSelection(metrics, {
       padding: config.canvas.fitToViewPadding,
-      bottomInset,
+      insets,
     });
   };
 

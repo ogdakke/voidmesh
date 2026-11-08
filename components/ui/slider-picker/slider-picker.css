@@ -16,6 +16,13 @@
   scroll-behavior: smooth;
 }
 
+[data-orientation="vertical"] .slider-picker-options {
+  flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: scroll;
+  scroll-snap-type: y proximity;
+}
+
 .slider-picker-options::-webkit-scrollbar {
   display: none;
 }

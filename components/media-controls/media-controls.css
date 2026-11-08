@@ -204,3 +204,28 @@
     height: 20px;
   }
 }
+
+/* Phone landscape: sit at the bottom of the canvas area, centered in the space left of the
+   control rail (auto margins absorb the free space in the rail's flex row). */
+.mobile-layout[data-orientation="landscape"] .media-controls {
+  --player-height: 50px;
+  position: relative;
+  left: auto;
+  bottom: auto;
+  flex: 0 1 420px;
+  align-self: flex-end;
+  margin: 0 auto;
+  transform: translateY(0) scale(1);
+
+  @starting-style {
+    transform: translateY(var(--y-in)) scale(var(--scale-in-start));
+  }
+
+  &[hidden] {
+    transform: translateY(var(--y-out)) scale(var(--scale-out-start));
+  }
+
+  .media-controls__container {
+    border-radius: var(--radius-button);
+  }
+}

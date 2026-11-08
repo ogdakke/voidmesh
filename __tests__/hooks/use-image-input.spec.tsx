@@ -23,8 +23,8 @@ vi.mock("#hooks/use-clipboard-paste.ts", () => ({
   useClipboardPaste: () => {},
 }));
 
-vi.mock("#hooks/use-is-mobile.ts", () => ({
-  useIsMobile: () => false,
+vi.mock("#hooks/use-viewport-insets.ts", () => ({
+  useViewportInsets: () => ({ bottom: 0, right: 0 }),
 }));
 
 vi.mock("#hooks/use-studio-file.ts", () => ({
@@ -140,7 +140,7 @@ describe("useImageInput", () => {
         anchor: expectedAnchor,
         select: true,
         fitToView: true,
-        bottomInset: 0,
+        insets: { bottom: 0, right: 0 },
         onLoadFailure: expect.any(Function),
       },
     );
@@ -177,7 +177,7 @@ describe("useImageInput", () => {
         anchor: expectedAnchor,
         select: true,
         fitToView: false,
-        bottomInset: 0,
+        insets: { bottom: 0, right: 0 },
         onLoadFailure: expect.any(Function),
       },
     );
@@ -215,7 +215,7 @@ describe("useImageInput", () => {
         anchor: expectedAnchor,
         select: true,
         fitToView: false,
-        bottomInset: 0,
+        insets: { bottom: 0, right: 0 },
       },
     );
   });
@@ -241,7 +241,7 @@ describe("useImageInput", () => {
         anchor,
         select: true,
         fitToView: false,
-        bottomInset: 0,
+        insets: { bottom: 0, right: 0 },
         onLoadFailure: expect.any(Function),
       },
     );

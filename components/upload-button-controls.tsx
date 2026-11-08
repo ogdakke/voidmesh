@@ -1,5 +1,5 @@
 import { useCanvasCommands, useCanvasInteraction, useHasEntities } from "#context/use-canvas.ts";
-import { useIsMobile } from "#hooks/use-is-mobile.ts";
+import { useViewportInsets } from "#hooks/use-viewport-insets.ts";
 import { addFilesToCanvas } from "#application/canvas/entity-placement.ts";
 import { showMediaLoadFailureToasts } from "#application/canvas/media-load-notifications.ts";
 import { MediaImagePlus } from "iconoir-react";
@@ -27,8 +27,7 @@ export function FileUploadComponent() {
   const inputRef = useRef<HTMLInputElement>(null);
   const { addEntity } = useCanvasCommands();
   const interaction = useCanvasInteraction();
-  const isMobile = useIsMobile();
-  const bottomInset = isMobile ? config.canvas.mobile.bottomInset : 0;
+  const insets = useViewportInsets();
 
   const handleFileSelect = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -45,7 +44,7 @@ export function FileUploadComponent() {
       anchor,
       select: true,
       fitToView: true,
-      bottomInset,
+      insets,
       onLoadFailure: showMediaLoadFailureToasts,
     });
   };

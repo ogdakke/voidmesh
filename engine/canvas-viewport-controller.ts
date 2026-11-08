@@ -7,7 +7,7 @@ import {
 } from "#lib/canvas-math.ts";
 import { config, type TouchConfig } from "#config";
 import type { AnimationScheduler } from "#lib/animation-scheduler.ts";
-import type { Point, Viewport } from "#types/canvas.ts";
+import type { Point, Viewport, ViewportInsets } from "#types/canvas.ts";
 import { canvasStore } from "./canvas-store.ts";
 import { MomentumController, type MomentumDeps } from "./momentum-controller.ts";
 
@@ -23,6 +23,7 @@ export class CanvasViewportController {
   #container: HTMLElement | null = null;
   #containerRect: DOMRect = new DOMRect(0, 0, 0, 0);
   #savedViewport: { viewport: Viewport; entityId: string } | null = null;
+  #insets: ViewportInsets = { bottom: 0, right: 0 };
   readonly #panDelta: Point = { x: 0, y: 0 };
 
   constructor(scheduler: AnimationScheduler, viewportAnimation: ViewportAnimationPort) {
@@ -42,6 +43,10 @@ export class CanvasViewportController {
 
   setTouchConfig(config: Partial<TouchConfig>): void {
     this.#momentum.setTouchConfig(config);
+  }
+
+  setViewportInsets(insets: ViewportInsets): void {
+    this.#insets = { ...insets };
   }
 
   cancelInteraction(): void {
@@ -163,7 +168,7 @@ export class CanvasViewportController {
       padding: config.canvas.fitToViewPadding,
       minZoom: undefined,
       maxZoom: undefined,
-      bottomInset: config.canvas.mobile.bottomInset,
+      insets: this.#insets,
     });
 
     this.#viewportAnimation.animateTo(target, {

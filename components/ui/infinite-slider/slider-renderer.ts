@@ -6,6 +6,8 @@
  */
 
 export interface SliderRenderConfig {
+  /** Axis ticks scroll along. Vertical draws the horizontal layout transposed. @default "horizontal" */
+  orientation: "horizontal" | "vertical";
   /** Tick width in CSS pixels. @default 2 */
   tickWidth: number;
   /** Tick height in CSS pixels. @default 40 */
@@ -39,6 +41,7 @@ export interface SliderRenderConfig {
 }
 
 export const defaultRenderConfig: SliderRenderConfig = {
+  orientation: "horizontal",
   tickWidth: 2,
   tickHeight: 40,
   tickSpacing: 5,
@@ -67,6 +70,25 @@ export const defaultRenderConfig: SliderRenderConfig = {
  * @param cfg - Render configuration
  */
 export function renderSliderTicks(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  dpr: number,
+  offset: number,
+  cfg: SliderRenderConfig,
+): void {
+  if (cfg.orientation === "vertical") {
+    // Transpose (x, y) -> (y, x): the scroll axis runs top to bottom and ticks
+    // grow leftward from the right edge, mirroring the horizontal bottom anchor.
+    ctx.setTransform(0, 1, 1, 0, 0, 0);
+    renderHorizontalTicks(ctx, height, width, dpr, offset, cfg);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    return;
+  }
+  renderHorizontalTicks(ctx, width, height, dpr, offset, cfg);
+}
+
+function renderHorizontalTicks(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,

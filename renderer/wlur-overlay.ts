@@ -21,7 +21,19 @@ export interface WlurOverlayLayout {
    * Expected range: `0..1` for normal use.
    */
   tintAmount?: number;
+  /**
+   * Screen edge occupied by the mobile controls. The overlay blurs toward it.
+   *
+   * @default "bottom"
+   */
+  edge?: "bottom" | "right";
 }
+
+/** Phone landscape: controls form a right-side rail roughly the last quarter of the width. */
+const RIGHT_EDGE_OVERLAY_PARAMS = Object.freeze({
+  direction: "right",
+  offset: 0.6,
+} satisfies Partial<WlurParams>);
 
 export interface WlurOverlayConfig {
   /** Enables or disables the overlay. */
@@ -79,6 +91,7 @@ export function createDefaultWlurOverlayConfig(layout: WlurOverlayLayout = {}): 
     layout,
     params: {
       ...DEFAULT_WLUR_OVERLAY_PARAMS,
+      ...(layout.edge === "right" ? RIGHT_EDGE_OVERLAY_PARAMS : null),
       tint,
     },
     quality: DEFAULT_WLUR_OVERLAY_QUALITY,

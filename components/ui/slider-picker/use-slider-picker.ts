@@ -1,6 +1,8 @@
 import { createContext, use } from "react";
+import type { Orientation } from "../orientation/index.ts";
 
 interface SliderPickerContextValue {
+  orientation: Orientation;
   value: string;
   centeredValue: string;
   registerItem: (value: string, element: HTMLDivElement) => void;

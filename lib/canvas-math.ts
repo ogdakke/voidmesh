@@ -1,4 +1,4 @@
-import type { Point, Viewport, Bounds } from "#types/canvas.ts";
+import type { Point, Viewport, Bounds, ViewportInsets } from "#types/canvas.ts";
 import { config } from "./config/index.ts";
 
 /**
@@ -325,6 +325,8 @@ export function calculateOffsetForWorldPoint(
   };
 }
 
+export const NO_VIEWPORT_INSETS: ViewportInsets = Object.freeze({ bottom: 0, right: 0 });
+
 /**
  * Calculate viewport state to fit an entity in view with padding.
  * Zooms to fit the entity while maintaining aspect ratio and respecting zoom limits.
@@ -347,7 +349,7 @@ export function calculateFitToView({
   padding = 0.1,
   minZoom = config.canvas.minZoom,
   maxZoom = config.canvas.maxZoom,
-  bottomInset = 0,
+  insets = NO_VIEWPORT_INSETS,
 }: {
   entityPosition: Point;
   entitySize: { width: number; height: number };
@@ -357,7 +359,7 @@ export function calculateFitToView({
   padding?: number;
   minZoom?: number;
   maxZoom?: number;
-  bottomInset?: number;
+  insets?: ViewportInsets;
 }): { offset: Point; zoom: number } {
   // Calculate entity center in world coordinates
   const entityCenter: Point = {
@@ -365,11 +367,12 @@ export function calculateFitToView({
     y: entityPosition.y + entitySize.height / 2,
   };
 
-  // Effective height accounts for occluded bottom area (e.g. mobile controls)
-  const effectiveHeight = containerHeight - bottomInset;
+  // Effective area excludes edges occluded by UI (e.g. mobile controls)
+  const effectiveWidth = containerWidth - insets.right;
+  const effectiveHeight = containerHeight - insets.bottom;
 
   // Available screen space with padding (in device pixels)
-  const availableWidth = containerWidth * dpr * (1 - padding * 2);
+  const availableWidth = effectiveWidth * dpr * (1 - padding * 2);
   const availableHeight = effectiveHeight * dpr * (1 - padding * 2);
 
   // Calculate zoom to fit width and height
@@ -382,10 +385,10 @@ export function calculateFitToView({
   // Clamp to zoom limits
   zoom = clampZoom(zoom, minZoom, maxZoom);
 
-  // Calculate offset to center the entity in the visible area (above bottom inset)
+  // Calculate offset to center the entity in the visible (non-inset) area
   const offset = calculateOffsetForWorldPoint(
     entityCenter,
-    containerWidth,
+    effectiveWidth,
     effectiveHeight,
     zoom,
     dpr,

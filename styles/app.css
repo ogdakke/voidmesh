@@ -146,6 +146,49 @@
     pointer-events: auto;
   }
 
+  /* Phone landscape: controls become a right-side rail. Columns read left to right in the
+     same order the portrait stack reads top to bottom, so the tab rail sits on the edge. */
+  .mobile-layout[data-orientation="landscape"] {
+    --mobile-rail-gap: var(--spacing-2);
+
+    .mobile-float {
+      top: 0;
+      display: flex;
+      flex-direction: row;
+      justify-content: flex-end;
+      align-items: stretch;
+      gap: var(--mobile-rail-gap);
+      /* Left padding keeps bottom-centered media controls clear of the help/undo corner. */
+      padding: calc(env(safe-area-inset-top, 0px) + var(--spacing-2))
+        calc(env(safe-area-inset-right, 0px) + 5px) calc(env(safe-area-inset-bottom, 0px) + 5px)
+        calc(env(safe-area-inset-left, 0px) + 10rem);
+    }
+
+    .mobile-controls-container {
+      height: auto;
+      flex-direction: row;
+      justify-content: flex-end;
+      align-items: stretch;
+      gap: var(--spacing);
+      overflow: visible;
+      transform: translateX(0) scale(1);
+
+      @starting-style {
+        transform: translateX(var(--spacing-3)) scale(0.96);
+      }
+
+      &[hidden] {
+        transform: translateX(var(--spacing-3)) scale(0.96);
+      }
+    }
+
+    .mobile-common-knobs {
+      width: 10rem;
+      align-self: flex-end;
+      margin-top: 0;
+    }
+  }
+
   .mobile-controls {
     display: flex;
     flex-direction: column;

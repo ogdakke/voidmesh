@@ -525,6 +525,8 @@ export const config = {
     mobile: {
       /** Bottom inset: mobile controls (160) + bottom bar (48) + spacing (8) */
       bottomInset: 180,
+      /** Right inset in phone landscape: picker + slider columns + tab rail */
+      rightInset: 200,
     },
     fitToViewPadding: 0.1, // 10% padding around fit-to-view bounds
     /** Viewport animation settings */

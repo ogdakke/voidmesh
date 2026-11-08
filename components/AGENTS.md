@@ -17,6 +17,7 @@ Feature UI, layouts, canvas chrome, controls, and shader knob panels.
 - Use `useParamValue()` for shader controls.
 - Co-locate component CSS. Use `.mobile.tsx`, `.desktop.tsx`, `.shared.tsx`, and `.lib.ts` when platform separation is substantial.
 - Keep desktop sidebar, desktop context menu, and mobile controls behaviorally consistent where they expose the same action.
+- Phone landscape is `.mobile-layout[data-orientation="landscape"]` (from `useIsCompactLandscape()`): style it with that selector, not width media queries. Mobile control panels get their axis from `OrientationContext`; canvas fit/centering uses `useViewportInsets()`.
 - Canvas chrome invariant during pan must not subscribe to full viewport state.
 - Playing-media progress owns one drawing loop; notifications must not create a second RAF loop.
 - Prefer composition. Use the `vercel-composition-patterns` skill for reusable component APIs.

@@ -57,3 +57,8 @@
     transition: none;
   }
 }
+
+/* Phone landscape: no bottom bar below, so sit near the bottom edge. */
+.mobile-layout[data-orientation="landscape"] .mobile-delete-drop-zone {
+  bottom: calc(env(safe-area-inset-bottom, 0px) + var(--spacing-3));
+}

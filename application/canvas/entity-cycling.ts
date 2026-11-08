@@ -5,9 +5,9 @@
  * Performant: cached entity order, no expensive operations during rapid key presses.
  */
 import { canvasStore, viewportAnimation } from "#engine";
-import { calculateFitToView, easings } from "#lib/canvas-math.ts";
+import { calculateFitToView, easings, NO_VIEWPORT_INSETS } from "#lib/canvas-math.ts";
 import { config } from "#config";
-import type { ShaderCanvasEntity } from "#types/canvas.ts";
+import type { ShaderCanvasEntity, ViewportInsets } from "#types/canvas.ts";
 
 interface ElementRef {
   current: HTMLElement | null;
@@ -100,7 +100,7 @@ function getCycleReferenceEntity(
 function animateToEntity(
   entity: ShaderCanvasEntity,
   containerRef?: ElementRef,
-  bottomInset: number = 0,
+  insets: ViewportInsets = NO_VIEWPORT_INSETS,
 ): void {
   // Try to get container from ref, or find it in DOM
   const container = containerRef?.current ?? document.querySelector(".infinite-canvas");
@@ -119,7 +119,7 @@ function animateToEntity(
     padding: 0.15,
     minZoom: undefined,
     maxZoom: undefined,
-    bottomInset,
+    insets,
   });
 
   viewportAnimation.animateTo(targetViewport, {
@@ -142,7 +142,7 @@ function animateToEntity(
 export function cycleToNextEntity(
   containerRef?: ElementRef,
   isRepeat: boolean = false,
-  bottomInset: number = 0,
+  insets: ViewportInsets = NO_VIEWPORT_INSETS,
 ): void {
   // Only throttle held keys (repeat), allow fresh presses to interrupt
   if (isRepeat && isCycling) return;
@@ -175,7 +175,7 @@ export function cycleToNextEntity(
 
   const entity = state.entities.get(nextId);
   if (entity) {
-    animateToEntity(entity, containerRef, bottomInset);
+    animateToEntity(entity, containerRef, insets);
   } else {
     // No entity to animate to - reset flag
     isCycling = false;
@@ -193,7 +193,7 @@ export function cycleToNextEntity(
 export function cycleToPreviousEntity(
   containerRef?: ElementRef,
   isRepeat: boolean = false,
-  bottomInset: number = 0,
+  insets: ViewportInsets = NO_VIEWPORT_INSETS,
 ): void {
   // Only throttle held keys (repeat), allow fresh presses to interrupt
   if (isRepeat && isCycling) return;
@@ -226,7 +226,7 @@ export function cycleToPreviousEntity(
 
   const entity = state.entities.get(prevId);
   if (entity) {
-    animateToEntity(entity, containerRef, bottomInset);
+    animateToEntity(entity, containerRef, insets);
   } else {
     // No entity to animate to - reset flag
     isCycling = false;

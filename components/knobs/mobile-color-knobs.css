@@ -74,3 +74,60 @@
 .mobile-color-knobs__toggle-picker {
   padding-bottom: 0;
 }
+
+/* Phone landscape: palette editor becomes a column beside the palette picker. */
+.mobile-layout[data-orientation="landscape"] {
+  .mobile-color__palette {
+    width: 4.25rem;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    justify-items: center;
+
+    /* The picker beside it already names the palette. */
+    .color-palette__label {
+      display: none;
+    }
+
+    .color-palette__count {
+      grid-column: 1;
+      grid-row: 1;
+      justify-self: center;
+    }
+
+    .color-palette__colors {
+      grid-row: 2;
+      flex-direction: column;
+      align-items: center;
+      overflow-x: hidden;
+      overflow-y: auto;
+      margin: 0;
+      padding: var(--spacing-2) 0;
+      animation: none;
+      mask-image: linear-gradient(to bottom, transparent, black 10%, black 90%, transparent);
+      -webkit-mask-image: linear-gradient(
+        to bottom,
+        transparent,
+        black 10%,
+        black 90%,
+        transparent
+      );
+    }
+
+    .color-palette__actions {
+      grid-column: 1;
+      grid-row: 3;
+      justify-self: center;
+      flex-direction: column;
+      align-items: center;
+    }
+  }
+
+  .mobile-palette-upload {
+    width: 10rem;
+    justify-content: flex-end;
+    padding: 0;
+  }
+}

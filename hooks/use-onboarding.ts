@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useActionLayer } from "#hooks/use-action-layer.ts";
 import { useIsMobile } from "#hooks/use-is-mobile.ts";
+import { useViewportInsets } from "#hooks/use-viewport-insets.ts";
 import {
   buildOnboardingCallouts,
   completeOnboardingStep,
@@ -38,6 +39,7 @@ export function useOnboarding({ containerRef, ready }: UseOnboardingOptions): Us
   const { addEntity } = useCanvasCommands();
   const interaction = useCanvasInteraction();
   const isMobile = useIsMobile();
+  const insets = useViewportInsets();
   const actionLayer = useActionLayer();
   const entityCount = useCanvasSelector((state) => state.entities.size);
   const [progress, setProgress] = useState<OnboardingProgress | null>(null);
@@ -121,9 +123,10 @@ export function useOnboarding({ containerRef, ready }: UseOnboardingOptions): Us
           {
             ...entity,
             position: {
-              x: center.x - entity.size.width / 2,
-              // slide up to not show bottom callouts under mobile controls
-              y: center.y - (isMobile ? 200 : 0) - entity.size.height / 2,
+              // slide away from mobile controls so callouts are not hidden under them
+              // (world units are device pixels at the initial zoom of 1)
+              x: center.x - (insets.right / 2) * window.devicePixelRatio - entity.size.width / 2,
+              y: center.y - (insets.bottom > 0 ? 200 : 0) - entity.size.height / 2,
             },
           },
           "voidmesh",
@@ -141,7 +144,7 @@ export function useOnboarding({ containerRef, ready }: UseOnboardingOptions): Us
     return () => {
       cancelled = true;
     };
-  }, [addEntity, containerRef, entityCount, interaction, isMobile, progress, ready]);
+  }, [addEntity, containerRef, entityCount, insets, interaction, isMobile, progress, ready]);
 
   const active =
     !!progress &&
