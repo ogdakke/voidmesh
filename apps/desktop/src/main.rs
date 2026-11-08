@@ -14,6 +14,7 @@ mod clip;
 mod color;
 mod palette;
 mod prefs;
+mod sandbox;
 mod state;
 mod store;
 #[cfg(test)]
@@ -40,6 +41,7 @@ fn setup(s: &mut App, waker: rune::Waker) {
     match store::LocalStore::open() {
         Some(st) => {
             let st: std::sync::Arc<dyn store::Store> = std::sync::Arc::new(st);
+            sandbox::seed(st.as_ref());
             s.saver = Some(store::Saver::new(st.clone(), s.loader.clone()));
             s.store = Some(st);
         }
@@ -210,6 +212,7 @@ fn fonts() -> (&'static [&'static [u8]], &'static str) {
 }
 
 fn main() {
+    sandbox::enter();
     let (fonts, ui) = fonts();
     let app = rune::App::new(AppSpec::<App> {
         min_size: Some((720.0, 480.0)),

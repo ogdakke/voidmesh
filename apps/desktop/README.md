@@ -15,6 +15,9 @@ VOIDMESH_TRACE_INPUT=1 ~/Applications/Voidmesh.app/Contents/MacOS/voidmesh     #
 VOIDMESH_OPEN=work.vdmsh VOIDMESH_FIT=1 target/release/voidmesh --snap out.png --scene open --at 2   # render real files headless
 ```
 
+Runs outside the installed `.app` keep their workspaces and preferences in `target/dev-data`,
+seeded with mock workspaces, so development never touches your own. Delete it to reseed.
+
 Rune is pre-release, so `Cargo.toml` pins a revision of its `dev` branch; move it forward on
 purpose. `rust-toolchain.toml` matches that Rune revision's toolchain.
 

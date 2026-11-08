@@ -10,6 +10,9 @@ changes.
 - `cargo test` while iterating; `cargo clippy --all-targets` before handoff.
 - `cargo run --release -- <files>`; `--snap out.png --scene demo` renders headless.
 - `./install.sh` installs `~/Applications/Voidmesh.app` from Rune's own bundler.
+- Unbundled runs (`cargo run`, `target/*/voidmesh`) are sandboxed: every Rune folder roots under
+  `target/dev-data`, seeded with mock workspaces (`sandbox.rs`). Never drive the installed app or
+  point a run at the user's real folders; delete `target/dev-data` to reseed.
 - `VOIDMESH_TRACE_INPUT=1` logs canvas gestures and the camera; ask for this output before
   guessing at trackpad behavior, which headless runs can't reproduce.
 
