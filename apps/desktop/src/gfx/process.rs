@@ -342,7 +342,7 @@ impl Processed {
         // 3. The effect, A into B.
         pass(enc, &pipes.effect, &view(&full[0]), &pipes.atlas, &full[1], &|_| {});
         // 4. Bloom from B through the bloom chain.
-        let bloom = p.bloom && p.bloom_intensity > 0.0 && !p.show_original;
+        let bloom = p.post && p.bloom && p.bloom_intensity > 0.0 && !p.show_original;
         if bloom {
             pass(enc, &pipes.bright, &view(&full[1]), dummy, &bloom_t[0], &|_| {});
             let spread = p.bloom_radius / 100.0 * 3.0;
@@ -395,7 +395,7 @@ fn base_uniforms(p: &Params, size: (u32, u32), media: (u32, u32), time: f32) -> 
         _ => (0, [0.0; 4], [0.0; 4]),
     };
     let flags = u32::from(p.ascii_invert) | (u32::from(!p.preserve_colors) << 1);
-    let post_on = !p.show_original;
+    let post_on = p.post && !p.show_original;
     Uniforms {
         res: [size.0 as f32, size.1 as f32],
         scale: p.scale,

@@ -163,6 +163,9 @@ pub struct Params {
     pub contrast: f32,
     pub saturation: f32,
     pub blur: f32,
+    /// Post Processing's master switch (`postProcess.enabled`): off skips grain, bloom and
+    /// chromatic aberration while keeping their own switches.
+    pub post: bool,
     pub grain: bool,
     pub grain_size: f32,
     pub grain_intensity: f32,
@@ -206,6 +209,7 @@ impl Default for Params {
             contrast: 0.5,
             saturation: 0.5,
             blur: 0.0,
+            post: true,
             grain: true,
             grain_size: 1.0,
             grain_intensity: 0.12,
@@ -259,6 +263,7 @@ impl Params {
             Shader::Glass => {
                 self.intensity = 1.0;
                 self.scale = 1.0;
+                self.post = true;
                 self.chroma = true;
                 self.chroma_offset = 6.0;
                 self.glass_angle = 0.0;

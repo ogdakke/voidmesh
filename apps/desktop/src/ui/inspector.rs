@@ -66,7 +66,7 @@ pub fn body(l: &Look, s: &App, p: &Params) -> El {
         .child(row().w_full().gap(6.0).child(q.toggle(l, "original", "Original", |p| p.show_original, |p, v| p.show_original = v)).child(button(l, "reset", "Reset", App::reset_selection)))
         .child(section(l, s, "adjust", "Adjustments", None, adjustments(l, q)))
         .child(section(l, s, "style", "Style Parameters", None, style(l, q)))
-        .child(section(l, s, "post", "Post Processing", None, post(l, q)))
+        .child(section(l, s, "post", "Post Processing", Some((q.check(|p| p.post), |p, v| p.post = v)), post(l, q)))
 }
 
 /// Whether `p`'s effect has a Scale (the web's `paramVisibilityRules`): not for Channel Shift

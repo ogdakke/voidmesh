@@ -358,16 +358,13 @@ pub fn params_from(shader: &str, v: &Value) -> Params {
     p.saturation = f(&a["saturation"], p.saturation);
     p.blur = f(&a["blur"], p.blur);
     let pp = &v["postProcess"];
-    let master = b(&pp["enabled"], true);
+    p.post = b(&pp["enabled"], true);
     let (gr, bl, ca) = (&pp["grain"], &pp["bloom"], &pp["chromaticAberration"]);
     // A null effect is off; an absent one keeps the default.
-    let on = |k: &str, d: bool| {
-        master
-            && match pp.get(k) {
-                Some(Value::Null) => false,
-                Some(x) => b(&x["enabled"], d),
-                None => d,
-            }
+    let on = |k: &str, d: bool| match pp.get(k) {
+        Some(Value::Null) => false,
+        Some(x) => b(&x["enabled"], d),
+        None => d,
     };
     p.grain = on("grain", p.grain);
     p.grain_size = f(&gr["size"], p.grain_size);
@@ -414,7 +411,7 @@ pub fn params_json(p: &Params) -> Value {
         "glitch": { "kind": id(&GLITCH_IDS, p.glitch_kind), "angle": p.glitch_angle },
         "palette": palette_json(&p.palette),
         "postProcess": {
-            "enabled": true,
+            "enabled": p.post,
             "grain": { "enabled": p.grain, "size": p.grain_size, "intensity": p.grain_intensity },
             "bloom": { "enabled": p.bloom, "threshold": p.bloom_threshold, "intensity": p.bloom_intensity, "filterRadius": p.bloom_radius, "softness": p.bloom_softness },
             "chromaticAberration": { "enabled": p.chroma, "offset": p.chroma_offset },
@@ -589,6 +586,13 @@ mod tests {
     use super::*;
     use crate::store::{Doc, LocalStore, test_dir};
 
+    #[test]
+    fn the_post_processing_master_switch_round_trips() {
+        let p = Params { post: false, ..Params::default() };
+        let back = params_from("dithering", &params_json(&p));
+        assert!(!back.post && back.grain && back.bloom);
+    }
+
     fn item(asset: Arc<Asset>, id: u32, x: f32) -> Item {
         Item { uid: store::new_id(), name: format!("e{id}.png"), size: [asset.width as f32, asset.height as f32], asset, pos: [x, 10.0], z: id, params: Params::default(), fx_t: 0.0, playing: false, play_t: 0.0, muted: true }
     }
@@ -661,7 +665,7 @@ mod tests {
         assert_eq!(r.uid, "entity-4");
         assert_eq!(r.params.shader, Shader::Halftone);
         assert_eq!((r.params.size, r.params.shape), (12.0, DotShape::Square));
-        assert!(!r.params.grain && !r.params.bloom, "post-processing master switch off");
+        assert!(!r.params.post && r.params.grain && r.params.bloom, "the master switch off, the effects' own kept");
         assert_eq!(r.params.dither_kind, 6);
         assert_eq!(&r.asset.frames[0].rgba[..4], &[255, 0, 0, 255]);
         assert!(store.blob_path(&store::hash_bytes(&png), "png").is_ok(), "the media was copied into the store");
