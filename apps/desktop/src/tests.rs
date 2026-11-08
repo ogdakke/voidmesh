@@ -370,3 +370,17 @@ fn many_tabs_scroll_in_the_titlebar_and_keep_their_width() {
     let last = rt.presented(&crate::ui::tabs::active_key(&rt.state)).expect("last tab").0;
     assert!(last[0] >= strip[0] - 0.5 && last[0] + last[2] <= strip[0] + strip[2] + 0.5, "the active tab is in view: {last:?} in {strip:?}");
 }
+
+#[test]
+fn question_mark_shows_the_keyboard_shortcuts_and_closes_them() {
+    let mut rt = canvas();
+    let question = || KeyEvent { key: Key::Text("?".into()), mods: Mods { shift: true, ..Mods::default() } };
+    rt.key(question());
+    settle(&mut rt);
+    assert!(rt.state.settings);
+    let section = rt.presented("settings-shortcuts").expect("shortcuts").0;
+    assert!(section[1] >= 0.0 && section[1] < 100.0, "the shortcuts open at the top: {section:?}");
+    rt.key(question());
+    settle(&mut rt);
+    assert!(!rt.state.settings);
+}

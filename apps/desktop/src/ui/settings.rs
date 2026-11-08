@@ -27,6 +27,18 @@ pub fn toggle(s: &mut App) {
     s.library = None;
 }
 
+/// `?`: the keyboard shortcuts, as the web's help dialog shows them; again closes them.
+pub fn toggle_shortcuts(s: &mut App, tx: &mut Tx) {
+    toggle(s);
+    if s.settings {
+        // Under the titlebar band, where the page's own title sits.
+        tx.scroll_key_to(SHORTCUTS, s.top_inset + 8.0);
+    }
+}
+
+/// The shortcuts section's key.
+const SHORTCUTS: &str = "settings-shortcuts";
+
 pub fn view(l: &Look, s: &App, top: f32, dark: bool) -> El {
     let close = el()
         .key("settings-close")
@@ -54,7 +66,7 @@ pub fn view(l: &Look, s: &App, top: f32, dark: bool) -> El {
         .child(lensing(l, s, dark))
         .child(group(l, vec![row_switch(l, "Snap to Grid", "snap-switch", s.snap, |s| crate::prefs::set_snap(s, !s.snap))]))
         .child(section(l, "Palettes", palettes(l, s)))
-        .child(section(l, "Keyboard shortcuts", shortcuts(l)))
+        .child(section(l, "Keyboard shortcuts", shortcuts(l)).key(SHORTCUTS))
         .child(section(
             l,
             "Voidmesh",
@@ -255,6 +267,7 @@ fn shortcuts(l: &Look) -> Vec<El> {
         ("Undo", &["⌘", "Z"]),
         ("Redo", &["⇧", "⌘", "Z"]),
         ("Settings", &["⌘", ","]),
+        ("Keyboard shortcuts", &["?"]),
         ("Copy image", &["⌘", "C"]),
         ("Copy effects", &["⌃", "⌘", "C"]),
         ("Paste media, or effects onto the selection", &["⌘", "V"]),

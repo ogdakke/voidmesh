@@ -37,6 +37,7 @@ fn on_view_key(s: &mut App, e: &KeyEvent, tx: &mut Tx) -> bool {
                 s.library = None;
             }
             Key::Command(',') => crate::ui::settings::toggle(s),
+            Key::Text(t) if t == "?" && s.settings => crate::ui::settings::toggle_shortcuts(s, tx),
             _ => return false,
         }
         return true;
@@ -76,6 +77,7 @@ fn on_view_key(s: &mut App, e: &KeyEvent, tx: &mut Tx) -> bool {
             "l" => crate::prefs::set_lensing(s, s.lens.next()),
             "m" => s.toggle_mute(),
             "\\" => s.bare = !s.bare,
+            "?" => crate::ui::settings::toggle_shortcuts(s, tx),
             "o" => s.edit(|p| p.show_original = !p.show_original),
             "p" => s.edit(|p| p.preserve_colors = !p.preserve_colors),
             "r" => s.edit(|p| p.reverse_palette = !p.reverse_palette),
