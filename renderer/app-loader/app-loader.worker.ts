@@ -28,12 +28,19 @@ export type ToLoaderWorkerMessage =
 
 export type FromLoaderWorkerMessage =
   | { type: "painted" }
+  /** The exit has actually begun (it may be held back after an "exit" request). */
+  | { type: "exiting" }
   | { type: "exited" }
   | { type: "stats"; avgMs: number; maxMs: number; fps: number; cells: number };
 
 type Phase = "intro" | "idle" | "exit" | "done";
 
 const INTRO_MS = 1000;
+/** The caption dithers in over this window of the intro. */
+const TEXT_IN_DELAY_MS = 250;
+const TEXT_IN_MS = 700;
+/** "voidmesh" stays fully visible at least this long before an exit may start. */
+const OPENING_MIN_VISIBLE_MS = 800;
 const EXIT_MS = 900;
 /**
  * Frame pacing. Intro and reveal run at 60 fps so the transitions stay smooth; the idle
@@ -179,7 +186,7 @@ function timeline(now: number) {
       amp: easeInOutSine(k),
       radius: 0.85 + 0.15 * easeOutCubic(k),
       reveal: 0,
-      textAmp: easeInOutSine(clamp01((t - 250) / 700)),
+      textAmp: easeInOutSine(clamp01((t - TEXT_IN_DELAY_MS) / TEXT_IN_MS)),
     };
   }
   if (phase === "exit" || phase === "done") {
@@ -296,8 +303,31 @@ function tick(now: number) {
   if (phase === "done") cancelAnimationFrame(frame);
 }
 
+// Earliest time an exit may begin, so the opening line is readable; set per intro.
+let exitReadyAt = 0;
+let exitTimer: ReturnType<typeof setTimeout> | undefined;
+
+function requestExit() {
+  if (phase === "exit" || phase === "done" || exitTimer !== undefined) return;
+  exitTimer = setTimeout(
+    () => {
+      exitTimer = undefined;
+      start("exit");
+    },
+    Math.max(0, exitReadyAt - performance.now()),
+  );
+}
+
 function start(nextPhase: Phase) {
   cancelAnimationFrame(frame);
+  if (nextPhase === "intro") {
+    clearTimeout(exitTimer);
+    exitTimer = undefined;
+    // Reduced motion shows the caption at once; otherwise it finishes dithering in first.
+    const captionVisibleIn = reducedMotion ? 0 : TEXT_IN_DELAY_MS + TEXT_IN_MS;
+    exitReadyAt = performance.now() + captionVisibleIn + OPENING_MIN_VISIBLE_MS;
+  }
+  if (nextPhase === "exit") self.postMessage({ type: "exiting" } satisfies FromLoaderWorkerMessage);
   phase = nextPhase;
   phaseStart = performance.now();
   lastRender = 0;
@@ -338,7 +368,7 @@ self.onmessage = (event: MessageEvent<ToLoaderWorkerMessage>) => {
       advanceRequested = true;
       break;
     case "exit":
-      if (phase !== "exit" && phase !== "done") start("exit");
+      requestExit();
       break;
     case "replay":
       setCaptionNow(OPENING_LINE, OPENING_HOLD_MS);
@@ -346,6 +376,7 @@ self.onmessage = (event: MessageEvent<ToLoaderWorkerMessage>) => {
       break;
     case "dispose":
       cancelAnimationFrame(frame);
+      clearTimeout(exitTimer);
       renderer?.dispose();
       renderer = null;
       self.close();

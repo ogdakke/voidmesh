@@ -9,7 +9,6 @@ import type { FromLoaderWorkerMessage, ToLoaderWorkerMessage } from "./app-loade
  * `.loader-status` carries the real loading status for assistive tech.
  */
 
-const MIN_DISPLAY_MS = 800;
 const startTime = Date.now();
 
 const el = document.getElementById("app-loader") as HTMLElement | null;
@@ -87,13 +86,22 @@ function onResize() {
   post({ type: "resize", ...viewport() });
 }
 
-/** Plays the exit: the worker dithers the blue open; resolves once the app is visible. */
+function nextWorkerMessage(type: "exiting" | "exited") {
+  if (!worker) return Promise.resolve();
+  return new Promise<void>((resolve) => onWorkerMessage(worker, type, () => resolve(), true));
+}
+
+/**
+ * Plays the exit: the worker dithers the blue open; resolves once the app is visible.
+ * The worker may hold the exit back so the opening line is readable, so the CSS state
+ * (which drives the reduced-motion fade) flips only once it reports "exiting".
+ */
 async function playExit() {
   if (!el) return;
-  const exited = worker
-    ? new Promise<void>((resolve) => onWorkerMessage(worker, "exited", () => resolve(), true))
-    : Promise.resolve();
+  const exiting = nextWorkerMessage("exiting");
+  const exited = nextWorkerMessage("exited");
   post({ type: "exit" });
+  await exiting;
   el.dataset.state = "exit";
   await Promise.all([exited, ...el.getAnimations().map((animation) => animation.finished)]);
   el.hidden = true;
@@ -121,11 +129,11 @@ export const appLoader = {
   setText(text: string) {
     if (statusEl && statusEl.textContent !== text) statusEl.textContent = text;
   },
+  /** Starts the handoff; the worker holds it until the opening line has been readable. */
   dismiss() {
     if (!el || dismissed || isPreview) return;
     dismissed = true;
-    const remaining = MIN_DISPLAY_MS - (Date.now() - startTime);
-    setTimeout(() => void playExit().then(teardown), Math.max(0, remaining));
+    void playExit().then(teardown);
   },
   startTime,
 } as const;
