@@ -308,6 +308,7 @@ icons! {
     PLUS = r#"<path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>"#;
     UNDO = r#"<path d="M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#;
     REDO = r#"<path d="m15 14 5-5-5-5M20 9H9.5a5.5 5.5 0 0 0 0 11H13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#;
+    EYEDROPPER = r#"<path d="M4 20l2-2M6 18v-2.5l8-8 2.5 2.5-8 8H6zM13 6.5l1.8-1.8a2.12 2.12 0 0 1 3 3L16 9.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#;
     PLAY = r#"<path d="M7 4.5v15l12-7.5z" fill="currentColor"/>"#;
     PAUSE = r#"<path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor"/>"#;
     SAVE = r#"<path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#;

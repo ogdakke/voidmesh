@@ -34,8 +34,18 @@ wgpu = { version = "30", default-features = false, features = [
 sha2 = "0.10"
 
 # Video decoding (`video.rs`): AVAssetReader frames to CPU RGBA, the versions Rune itself uses.
+# The colour picker's eyedropper (`eyedropper.rs`) is AppKit's NSColorSampler.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
+block2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "block2",
+  "objc2-core-foundation",
+  "NSColor",
+  "NSColorSampler",
+  "NSColorSpace",
+] }
 objc2-foundation = { version = "0.3", default-features = false, features = [
   "std",
   "NSArray",

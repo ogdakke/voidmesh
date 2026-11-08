@@ -6,6 +6,7 @@
 //!     voidmesh --snap out.png --scene demo
 
 mod effects;
+mod eyedropper;
 mod export_video;
 mod gfx;
 mod hit;
@@ -88,6 +89,12 @@ fn poll(s: &mut App, t: f64, tx: &mut Tx) -> bool {
                 s.toast("Image copied to clipboard");
             }
             None => s.toast("Copy failed"),
+        }
+        changed = true;
+    }
+    for c in s.loader.drain_sampled() {
+        if let Some(c) = c {
+            s.pick_rgba(c);
         }
         changed = true;
     }

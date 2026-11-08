@@ -8,7 +8,7 @@
 use rune::{Color, Drag, El, FileDialogOptions, Phase, Tx, col, el, icon, row, text, text_input};
 
 use super::look::{Look, MEDIUM, NUMBER, SMALL};
-use super::widgets::{PLUS, TRASH, icon_button};
+use super::widgets::{EYEDROPPER, PLUS, TRASH, icon_button};
 use crate::color::{MAX_CHROMA, Oklch};
 use crate::effects::{MAX_COLORS, Params, Rgba, is_user_palette};
 use crate::state::App;
@@ -201,6 +201,9 @@ fn picker(l: &Look, s: &App, o: Oklch, removable: bool, index: usize) -> El {
         .border(1.0, l.field_border)
         .color(l.text);
     let mut foot = row().w_full().gap(6.0).center_y().child(hex);
+    if crate::eyedropper::AVAILABLE {
+        foot = foot.child(icon_button(l, "color-eyedropper", "Pick a colour from the screen", &EYEDROPPER, |s, _| crate::eyedropper::sample(&s.loader)));
+    }
     if removable {
         foot = foot.child(icon_button(l, "color-remove", "Remove colour", &TRASH, move |s, _| s.remove_palette_color(index)));
     }

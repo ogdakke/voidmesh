@@ -660,6 +660,20 @@ impl App {
         self.hex_edit = rune::TextEdit::new(crate::color::hex(rgba));
     }
 
+    /// The eyedropper (`eyedropper.rs`) picked `rgba` (sRGB) for the open picker.
+    pub fn pick_rgba(&mut self, rgba: crate::effects::Rgba) {
+        let Some((index, h)) = self.picker.as_ref().map(|p| (p.index, p.oklch.h)) else { return };
+        self.edit_palette(|c| {
+            if let Some(x) = c.get_mut(index) {
+                *x = rgba;
+            }
+        });
+        if let Some(p) = self.picker.as_mut() {
+            p.oklch = crate::color::from_rgba(rgba, h);
+        }
+        self.hex_edit = rune::TextEdit::new(crate::color::hex(rgba));
+    }
+
     /// Set the picked colour from the hex field, when it parses.
     pub fn pick_hex(&mut self) {
         let Some((rgba, h)) = self.picker.as_ref().and_then(|p| crate::color::parse_hex(&self.hex_edit.text).map(|c| (c, p.oklch.h))) else { return };
@@ -1809,6 +1823,26 @@ mod tests {
         assert!(a.palettes.is_empty());
         assert!(a.undo());
         assert_eq!((pal(&a, one).id, a.palettes.len()), (id, 1), "one undo brings both back");
+    }
+
+    #[test]
+    fn an_eyedropper_pick_lands_in_the_open_picker_session() {
+        let mut a = App::default();
+        a.place(vec![asset(1, 10, 10)], [0.0, 0.0], false);
+        let undo = a.undo.len();
+        a.open_picker(0);
+        a.loader.sampled(Some([1.0, 0.5, 0.0, 1.0]));
+        a.loader.sampled(None);
+        for c in a.loader.drain_sampled().into_iter().flatten() {
+            a.pick_rgba(c);
+        }
+        assert_eq!(a.focus().map(|e| e.params.palette.colors[0]), Some([1.0, 0.5, 0.0, 1.0]));
+        assert_eq!(a.hex_edit.text, crate::color::hex([1.0, 0.5, 0.0, 1.0]));
+        a.close_picker();
+        assert_eq!(a.undo.len(), undo + 1, "the session is one step");
+        // With the picker closed, a late pick changes nothing.
+        a.pick_rgba([0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(a.focus().map(|e| e.params.palette.colors[0]), Some([1.0, 0.5, 0.0, 1.0]));
     }
 
     #[test]

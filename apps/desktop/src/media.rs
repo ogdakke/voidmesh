@@ -173,6 +173,8 @@ pub struct Loader {
     clipboard: Arc<Mutex<Vec<Vec<u8>>>>,
     /// Messages from other workers (exports) for the next poll to show.
     notices: Arc<Mutex<Vec<String>>>,
+    /// The eyedropper's answers: a colour, or `None` when it was cancelled.
+    sampled: Arc<Mutex<Vec<Option<crate::effects::Rgba>>>>,
     waker: Option<rune::Waker>,
 }
 
@@ -260,6 +262,19 @@ impl Loader {
         if let Some(w) = &self.waker {
             w();
         }
+    }
+
+    pub fn sampled(&self, c: Option<crate::effects::Rgba>) {
+        if let Ok(mut q) = self.sampled.lock() {
+            q.push(c);
+        }
+        if let Some(w) = &self.waker {
+            w();
+        }
+    }
+
+    pub fn drain_sampled(&self) -> Vec<Option<crate::effects::Rgba>> {
+        self.sampled.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default()
     }
 
     pub fn drain_notices(&self) -> Vec<String> {
