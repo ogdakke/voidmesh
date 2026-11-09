@@ -62,6 +62,8 @@ pub const WORLD_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 /// Instances per visibility group.
 const GROUP: usize = 256;
+/// Materials in a group up to which a partly visible group marks them all (`visibility`).
+const GROUP_MATS: usize = 4;
 /// Persistent texture budget: atlas, own textures and sources (the web's `entityTextureBudgetBytes`).
 const BUDGET: u64 = 512 * 1024 * 1024;
 /// Pixels of new materials processed in one frame, and how many.
@@ -1111,8 +1113,20 @@ impl Scene {
                 _ => self.ranges.push((a, z)),
             }
             let inside = b[0] >= vx0 && b[2] <= vx1 && b[1] >= vy0 && b[3] <= vy1;
-            if inside {
-                visible += ((gi + 1) * GROUP).min(self.insts.len()) - gi * GROUP;
+            // A group of a few materials (shared media) partly in view: its visible instances
+            // counted, its materials marked at the group's largest side, rather than an instance
+            // at a time. Many materials (unique photos) still go an instance at a time, so the
+            // ones off screen aren't processed.
+            let partly = if inside || g.mats.len() > GROUP_MATS {
+                None
+            } else {
+                Some(self.insts[gi * GROUP..((gi + 1) * GROUP).min(self.insts.len())].iter().filter(|i| {
+                    let r = i.rect;
+                    !(r[0] > vx1 || r[0] + r[2] < vx0 || r[1] > vy1 || r[1] + r[3] < vy0)
+                }).count())
+            };
+            if inside || partly.is_some_and(|n| n > 0) {
+                visible += partly.unwrap_or(((gi + 1) * GROUP).min(self.insts.len()) - gi * GROUP);
                 for &(m, side) in &g.mats {
                     if let Some(Some(mat)) = self.mats.get_mut(m as usize) {
                         if mat.seen != frame {
@@ -1123,6 +1137,9 @@ impl Scene {
                         mat.want = mat.want.max(side);
                     }
                 }
+                continue;
+            }
+            if partly.is_some() {
                 continue;
             }
             for i in &self.insts[gi * GROUP..((gi + 1) * GROUP).min(self.insts.len())] {
