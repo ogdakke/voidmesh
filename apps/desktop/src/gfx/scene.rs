@@ -93,7 +93,7 @@ const SOURCE_FRAMES: u64 = 4;
 const GPU_MIPS_PIXELS: u64 = 1024 * 1024;
 /// Bytes of source levels queued with the workers or waiting to be placed (one level always
 /// goes): what they hold in buffers of their own until the GPU has copied them.
-const SOURCE_BYTES: u64 = 32 << 20;
+const SOURCE_BYTES: u64 = 16 << 20;
 /// Frames a finished source level waits for a frame that wants it.
 const BUILT_FRAMES: u64 = 30;
 
@@ -490,7 +490,7 @@ struct StagingSet {
 const STAGING_IDLE_FRAMES: u64 = 120;
 /// Bytes of buffers a set keeps for the next frame that takes it: enough for a frame's steady
 /// uploads (video frames, a few batches). A burst's other buffers go once the GPU is done with them.
-const STAGING_KEEP: u64 = 8 << 20;
+const STAGING_KEEP: u64 = 4 << 20;
 
 impl Staging {
     /// A new frame: the last frame's set comes back once the work it was submitted with is done
@@ -924,7 +924,14 @@ impl Scene {
             let Some(e) = s.entities.get(i) else { continue };
             let Some(path) = e.asset.video_path() else { continue };
             let key = (e.id, e.asset.id);
-            let want = decode_side((e.asset.width, e.asset.height), e.size[0].max(e.size[1]) * s.cam.scale * dpr);
+            let r = s.cam.screen_rect(e.rect());
+            let on_screen = r[0] < s.canvas[2] && r[0] + r[2] > 0.0 && r[1] < s.canvas[3] && r[1] + r[3] > 0.0;
+            // Off screen, a decoder never grows (a zoom into one corner leaves the rest projected
+            // large but unseen): a new one starts at the smallest size.
+            let mut want = decode_side((e.asset.width, e.asset.height), e.size[0].max(e.size[1]) * s.cam.scale * dpr);
+            if !on_screen {
+                want = want.min(self.videos.get(&key).map_or(128, |v| v.side));
+            }
             let frame = self.frame;
             let v = self.videos.entry(key).or_insert_with(|| VideoSource {
                 decoder: crate::video::Decoder::new(path.to_path_buf(), e.play_t, want, None),
@@ -969,8 +976,6 @@ impl Scene {
             }
             // Off screen, frames are taken (playback stays in step, picking reads them) but not
             // uploaded or processed.
-            let r = s.cam.screen_rect(e.rect());
-            let on_screen = r[0] < s.canvas[2] && r[0] + r[2] > 0.0 && r[1] < s.canvas[3] && r[1] + r[3] > 0.0;
             let shown = on_screen || v.tex.is_none();
             if let Some(f) = v.decoder.frame_at(e.play_t) {
                 v.pending = shown;
@@ -1260,7 +1265,7 @@ impl Scene {
             // The source level nearest this size, as `run` reads it.
             // The smallest source level still as large as the output.
             let lod = ((src.size.0.max(src.size.1) as f32 / size.0.max(size.1) as f32).log2()).clamp(0.0, (src.levels.max(1) - 1) as f32);
-            let view = src.tex.create_view(&wgpu::TextureViewDescriptor { base_mip_level: lod.floor() as u32, mip_level_count: Some(1), ..Default::default() });
+            let view = if src.levels == 1 { src.view.clone() } else { src.tex.create_view(&wgpu::TextureViewDescriptor { base_mip_level: lod.floor() as u32, mip_level_count: Some(1), ..Default::default() }) };
             let Some(tile) = self.atlas.alloc(device, enc, size.0, size.1) else {
                 rest.push((id, size));
                 continue;
