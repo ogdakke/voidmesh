@@ -421,7 +421,7 @@ struct SourceWorkers {
 type LevelPool = Arc<std::sync::Mutex<Vec<wgpu::Buffer>>>;
 
 /// Bytes of level buffers pooled.
-const LEVEL_POOL: u64 = 2 << 20;
+const LEVEL_POOL: u64 = 4 << 20;
 
 fn pool_levels(pool: &LevelPool, bufs: Vec<wgpu::Buffer>) {
     let mut p = pool.lock().unwrap_or_else(std::sync::PoisonError::into_inner);

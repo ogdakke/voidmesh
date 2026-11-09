@@ -56,7 +56,7 @@ pub struct Atlas {
 }
 
 /// Calls an empty top layer stays before `trim` drops it.
-const TRIM_FRAMES: u32 = 8;
+const TRIM_FRAMES: u32 = 30;
 
 /// The atlas's texture of `layers` layers: a 1×1 stand-in while it has none (nothing to sample,
 /// but bind groups need a texture).
