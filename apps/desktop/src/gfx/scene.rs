@@ -79,6 +79,9 @@ const SETTLE_FRAMES: u32 = 2;
 const VIDEO_BUDGET: u64 = 4 << 20;
 const FRAME_BUDGET: std::time::Duration = std::time::Duration::from_millis(2);
 const STILL_BUDGET: std::time::Duration = std::time::Duration::from_millis(6);
+/// Bytes a frame stages for sources: past it, the rest wait for the next frames (as past the
+/// time budget). Copying them is the frame's CPU, and what's staged is held until the GPU's done.
+const STAGE_BUDGET: u64 = 16 << 20;
 /// Materials processed between budget checks.
 const BATCH: usize = 8;
 /// Textures of materials off screen kept for when they show again.
@@ -369,6 +372,8 @@ struct Staging {
     /// The set this frame took, and how many of its buffers it used.
     cur: Option<usize>,
     next: usize,
+    /// Bytes asked for this frame.
+    frame_bytes: u64,
 }
 
 struct StagingSet {
@@ -379,6 +384,9 @@ struct StagingSet {
 
 /// Frames a finished set stays unused before its buffers go.
 const STAGING_IDLE_FRAMES: u64 = 120;
+/// Bytes of buffers a set keeps for the next frame that takes it: enough for a frame's steady
+/// uploads (video frames, a few batches). A burst's other buffers go once the GPU is done with them.
+const STAGING_KEEP: u64 = 8 << 20;
 
 impl Staging {
     /// A new frame: the last frame's set comes back once the work it was submitted with is done
@@ -386,6 +394,12 @@ impl Staging {
     fn begin(&mut self, queue: &wgpu::Queue, frame: u64) {
         use std::sync::atomic::Ordering;
         if let Some(c) = self.cur.take() {
+            // Dropping a handle here is safe: the frame's command buffers hold what they read.
+            let mut kept = 0;
+            self.sets[c].bufs.retain(|b| {
+                kept += b.size();
+                kept <= STAGING_KEEP
+            });
             let done = self.sets[c].done.clone();
             if self.next == 0 {
                 done.store(true, Ordering::Release);
@@ -394,11 +408,14 @@ impl Staging {
             }
         }
         self.next = 0;
+        self.frame_bytes = 0;
         self.sets.retain(|s| !(s.done.load(Ordering::Acquire) && frame.saturating_sub(s.used) > STAGING_IDLE_FRAMES));
     }
 
     /// This frame's next buffer, at least `size` bytes. Buffers persist with their set (pages
-    /// stay mapped) and grow to the largest upload they've taken, in whole MiB.
+    /// stay mapped) and grow to the largest upload they've taken, in 64 KiB steps (a frame can take
+    /// many small batches, a buffer each: a copy recorded from a buffer makes Rune stage any
+    /// further write into it).
     fn buffer(&mut self, device: &wgpu::Device, size: u64, label: &str, frame: u64) -> wgpu::Buffer {
         use std::sync::atomic::Ordering;
         let c = match self.cur {
@@ -419,9 +436,10 @@ impl Staging {
         };
         let i = self.next;
         self.next += 1;
+        self.frame_bytes += size;
         let bufs = &mut self.sets[c].bufs;
         if bufs.get(i).is_none_or(|b| b.size() < size) {
-            let b = device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size: size.next_multiple_of(1 << 20), usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+            let b = device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size: size.next_multiple_of(64 << 10), usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
             if i < bufs.len() {
                 bufs[i] = b;
             } else {
@@ -1407,8 +1425,9 @@ impl Scene {
         if chosen.is_empty() {
             return;
         }
-        // A frame takes on at most `FRAME_BUDGET` of processing: in batches (sources are built and
-        // uploaded a batch at a time), the rest left for the next frames. Always one batch.
+        // A frame takes on at most `FRAME_BUDGET` of processing and `STAGE_BUDGET` of uploads: in
+        // batches (sources are built and uploaded a batch at a time), the rest left for the next
+        // frames. Always one batch.
         let started = std::time::Instant::now();
         let mut left = chosen.as_slice();
         while !left.is_empty() {
@@ -1421,7 +1440,7 @@ impl Scene {
             left = rest;
             // A still camera has no gesture to keep smooth: it takes on more.
             let budget = if self.resting >= SETTLE_FRAMES { STILL_BUDGET } else { FRAME_BUDGET };
-            if started.elapsed() > budget {
+            if started.elapsed() > budget || self.staging.frame_bytes > STAGE_BUDGET {
                 self.stats.pending += left.len();
                 break;
             }
