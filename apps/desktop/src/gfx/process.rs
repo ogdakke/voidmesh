@@ -3,6 +3,7 @@
 //! per material (asset, frame and params), whatever number of entities show it, and only when
 //! those inputs change; pan and zoom just redraw the cached result.
 
+use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -17,7 +18,6 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// Longest side the pipeline renders at: the GPU's own texture limit (Rune's Metal device and
 /// Apple GPUs allow 16384). Media renders at its native size up to that.
 pub const MAX_SIDE: u32 = 16384;
-const SLOT: u64 = 512;
 const BLOOM_LEVELS: u32 = 5;
 
 #[repr(C)]
@@ -44,11 +44,10 @@ pub struct Uniforms {
     flow: [[f32; 4]; 3],
     /// This pass's output region in its target (xy), a mip pass's source region (zw).
     origin: [f32; 4],
-    palette: [[f32; 4]; 16],
 }
 
 const UNIFORM_SIZE: u64 = std::mem::size_of::<Uniforms>() as u64;
-const _: () = assert!(UNIFORM_SIZE == 448 && UNIFORM_SIZE <= SLOT);
+const _: () = assert!(UNIFORM_SIZE == 192);
 
 /// Pipelines and shared bindings for every entity's processing.
 pub struct Pipes {
@@ -71,7 +70,14 @@ pub struct Pipes {
     blank: wgpu::Texture,
     atlas: wgpu::TextureView,
     dummy: wgpu::TextureView,
+    queue: wgpu::Queue,
+    /// Palette buffers by their colours (`palette`), and the one for passes that use none.
+    palettes: std::sync::Mutex<HashMap<[u32; 64], wgpu::Buffer>>,
+    no_palette: wgpu::Buffer,
 }
+
+/// Palette buffers kept before the cache starts over (those in use stay alive while used).
+const PALETTES: usize = 256;
 
 impl Pipes {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Pipes {
@@ -85,18 +91,20 @@ impl Pipes {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("voidmesh process"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: true, min_binding_size: wgpu::BufferSize::new(UNIFORM_SIZE) },
-                    count: None,
-                },
                 tex_entry(1),
                 wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
                 tex_entry(3),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: wgpu::BufferSize::new(256) },
+                    count: None,
+                },
             ],
         });
-        let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
+        // The uniforms go as immediates (inline bytes, up to Metal's 4 KB): no buffer to fill a
+        // frame, which Rune would stage and copy since the frames in flight read it.
+        let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&layout)], immediate_size: UNIFORM_SIZE as u32 });
         let pipe = |entry: &str| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(entry),
@@ -145,7 +153,27 @@ impl Pipes {
             dummy,
             device: device.clone(),
             pipeline_layout: pl.clone(),
+            queue: queue.clone(),
+            palettes: Default::default(),
+            no_palette: palette_buffer(device, queue, &[[0.0; 4]; 16]),
         }
+    }
+
+    /// `p`'s palette as a buffer, made once for those colours: written when it's made, before
+    /// anything reads it, and never again.
+    pub fn palette(&self, p: &Params) -> wgpu::Buffer {
+        let colours = palette(p);
+        let key: [u32; 64] = bytemuck::cast(colours);
+        let mut cache = self.palettes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(b) = cache.get(&key) {
+            return b.clone();
+        }
+        if cache.len() >= PALETTES {
+            cache.clear();
+        }
+        let b = palette_buffer(&self.device, &self.queue, &colours);
+        cache.insert(key, b.clone());
+        b
     }
 
     /// The effect pass for effect `id` (`Shader::gpu_id`) and its sub-kind (dither pattern,
@@ -247,7 +275,21 @@ pub fn upload_mips(device: &wgpu::Device, queue: &wgpu::Queue, w: u32, h: u32, l
 /// A mipmapped source from its base level alone, its chain made by `fs_mip` passes on the GPU:
 /// for large media, where a few passes beat a CPU pass over millions of pixels.
 #[allow(clippy::too_many_arguments)]
-pub fn upload_gpu_mips(device: &wgpu::Device, queue: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, arena: &mut Arena, w: u32, h: u32, rgba: &[u8]) -> wgpu::Texture {
+/// A processing pass's bind group: its source, sampler and auxiliary texture.
+fn process_bind(device: &wgpu::Device, pipes: &Pipes, src: &wgpu::TextureView, aux: &wgpu::TextureView, pal: &wgpu::Buffer) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &pipes.layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(src) },
+            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&pipes.sampler) },
+            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(aux) },
+            wgpu::BindGroupEntry { binding: 4, resource: pal.as_entire_binding() },
+        ],
+    })
+}
+
+pub fn upload_gpu_mips(device: &wgpu::Device, queue: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, w: u32, h: u32, rgba: &[u8]) -> wgpu::Texture {
     let t = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("voidmesh source"),
         size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
@@ -259,29 +301,19 @@ pub fn upload_gpu_mips(device: &wgpu::Device, queue: &wgpu::Queue, enc: &mut wgp
         view_formats: &[],
     });
     write(queue, &t, w, h, rgba);
-    mip_chain(device, enc, pipes, arena, &t);
+    mip_chain(device, enc, pipes, &t);
     t
 }
 
 /// Levels 1… of `t`, each a box filter of the one above.
-pub fn mip_chain(device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, arena: &mut Arena, t: &wgpu::Texture) {
+pub fn mip_chain(device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, t: &wgpu::Texture) {
     let mip_view = |level: u32| t.create_view(&wgpu::TextureViewDescriptor { base_mip_level: level, mip_level_count: Some(1), ..Default::default() });
     let (w, h) = (t.width(), t.height());
     for level in 1..t.mip_level_count() {
         let mut u = Uniforms::zeroed();
         u.res = [(w >> level).max(1) as f32, (h >> level).max(1) as f32];
-        let (buffer, offset) = arena.slot(device, &u);
         let src = mip_view(level - 1);
-        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &pipes.layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &buffer, offset: 0, size: wgpu::BufferSize::new(UNIFORM_SIZE) }) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&src) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&pipes.sampler) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&pipes.dummy) },
-            ],
-        });
+        let bind = process_bind(device, pipes, &src, &pipes.dummy, &pipes.no_palette);
         let view = mip_view(level);
         let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("voidmesh mips"),
@@ -289,7 +321,8 @@ pub fn mip_chain(device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &
             ..Default::default()
         });
         rp.set_pipeline(&pipes.mip);
-        rp.set_bind_group(0, Some(&bind), &[offset]);
+        rp.set_bind_group(0, Some(&bind), &[]);
+        rp.set_immediates(0, bytemuck::bytes_of(&u));
         rp.draw(0..3, 0..1);
     }
 }
@@ -559,51 +592,6 @@ pub fn params_hash(p: &Params) -> u64 {
     h.finish()
 }
 
-/// This frame's uniform blocks: each pass takes a slot, and the blocks reach their buffers in
-/// one write per buffer before the frame's commands run. Any number of processing runs can
-/// share a frame; the buffers stay for the next.
-#[derive(Default)]
-pub struct Arena {
-    bufs: Vec<wgpu::Buffer>,
-    staged: Vec<Vec<u8>>,
-    cur: usize,
-}
-
-const ARENA_SLOTS: u64 = 1024;
-
-impl Arena {
-    fn slot(&mut self, device: &wgpu::Device, u: &Uniforms) -> (wgpu::Buffer, u32) {
-        if self.staged.get(self.cur).is_some_and(|s| s.len() as u64 >= SLOT * ARENA_SLOTS) {
-            self.cur += 1;
-        }
-        if self.cur == self.bufs.len() {
-            self.bufs.push(device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("voidmesh process uniforms"),
-                size: SLOT * ARENA_SLOTS,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }));
-            self.staged.push(Vec::new());
-        }
-        let st = &mut self.staged[self.cur];
-        let offset = st.len() as u32;
-        st.extend_from_slice(bytemuck::bytes_of(u));
-        st.resize(st.len() + SLOT as usize - std::mem::size_of::<Uniforms>(), 0);
-        (self.bufs[self.cur].clone(), offset)
-    }
-
-    /// Write what this frame staged; call once after encoding, before the frame submits.
-    pub fn flush(&mut self, queue: &wgpu::Queue) {
-        for (buf, st) in self.bufs.iter().zip(&mut self.staged) {
-            if !st.is_empty() {
-                queue.write_buffer(buf, 0, st);
-                st.clear();
-            }
-        }
-        self.cur = 0;
-    }
-}
-
 /// The textures a run renders through: two at full size, then the blur and bloom chains (made
 /// when a run needs them). They hold nothing between runs, so runs of one size share them.
 pub struct Scratch {
@@ -709,23 +697,9 @@ pub fn one_pass(p: &Params) -> bool {
 /// `layer`: one pass for all of them, then a pass a mip level below. No scratch textures and no
 /// copies, where processing each alone takes passes and copies a material.
 #[allow(clippy::too_many_arguments)]
-pub fn run_tiles(device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, arena: &mut Arena, atlas: &wgpu::Texture, layer: u32, levels: u32, jobs: &[Tiled<'_>]) {
+pub fn run_tiles(device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, atlas: &wgpu::Texture, layer: u32, levels: u32, jobs: &[Tiled<'_>]) {
     let view = |level: u32| {
         atlas.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2), base_mip_level: level, mip_level_count: Some(1), base_array_layer: layer, array_layer_count: Some(1), ..Default::default() })
-    };
-    let bind = |arena: &mut Arena, u: &Uniforms, src: &wgpu::TextureView, aux: &wgpu::TextureView| {
-        let (buffer, offset) = arena.slot(device, u);
-        let g = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &pipes.layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &buffer, offset: 0, size: wgpu::BufferSize::new(UNIFORM_SIZE) }) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(src) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&pipes.sampler) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(aux) },
-            ],
-        });
-        (g, offset)
     };
     for level in 0..levels {
         let target = view(level);
@@ -741,12 +715,13 @@ pub fn run_tiles(device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &
             let mut u = base_uniforms(j.params, (w, h), j.media, j.time);
             u.res = [lw as f32, lh as f32];
             u.origin = [lx as f32, ly as f32, (x >> level.saturating_sub(1)) as f32, (y >> level.saturating_sub(1)) as f32];
-            let (g, offset) = match &above {
-                None => bind(arena, &u, &j.src, &pipes.atlas),
-                Some(a) => bind(arena, &u, a, &pipes.dummy),
+            let g = match &above {
+                None => process_bind(device, pipes, &j.src, &pipes.atlas, &pipes.palette(j.params)),
+                Some(a) => process_bind(device, pipes, a, &pipes.dummy, &pipes.no_palette),
             };
             rp.set_pipeline(if level == 0 { pipes.effect(u.effect, u.kind) } else { &pipes.mip });
-            rp.set_bind_group(0, Some(&g), &[offset]);
+            rp.set_bind_group(0, Some(&g), &[]);
+            rp.set_immediates(0, bytemuck::bytes_of(&u));
             rp.set_viewport(lx as f32, ly as f32, lw as f32, lh as f32, 0.0, 1.0);
             rp.set_scissor_rect(lx, ly, lw, lh);
             rp.draw(0..3, 0..1);
@@ -770,7 +745,7 @@ pub struct Input<'a> {
 /// one-pass effect renders only those (the rest is cleared). Passes that read their neighbours'
 /// output (adjustments, blur, post) always render everything.
 #[allow(clippy::too_many_arguments)]
-pub fn run(device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, arena: &mut Arena, scratch: &mut ScratchPool, input: &Input<'_>, p: &Params, time: f32, out: &wgpu::Texture, clip: Option<&[[u32; 4]]>) {
+pub fn run(device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, scratch: &mut ScratchPool, input: &Input<'_>, p: &Params, time: f32, out: &wgpu::Texture, clip: Option<&[[u32; 4]]>) {
     let size = (out.width(), out.height());
     let sc = scratch.get(size);
     let (w, h) = size;
@@ -796,21 +771,12 @@ pub fn run(device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes,
     let full = [0, 1].map(|i| sc.full[i].clone().unwrap_or_else(|| pipes.blank.clone()));
     let (full, levels_t, bloom_t) = (&full, &sc.levels, &sc.bloom);
     let base = base_uniforms(p, size, input.media, time);
-    let mut pass_to = |enc: &mut wgpu::CommandEncoder, pipe: &wgpu::RenderPipeline, src: &wgpu::TextureView, aux: &wgpu::TextureView, view: &wgpu::TextureView, size: (u32, u32), scissor: Option<&[[u32; 4]]>, edit: &dyn Fn(&mut Uniforms)| {
+    let pal = pipes.palette(p);
+    let pass_to = |enc: &mut wgpu::CommandEncoder, pipe: &wgpu::RenderPipeline, src: &wgpu::TextureView, aux: &wgpu::TextureView, view: &wgpu::TextureView, size: (u32, u32), scissor: Option<&[[u32; 4]]>, edit: &dyn Fn(&mut Uniforms)| {
         let mut u = base;
         u.res = [size.0 as f32, size.1 as f32];
         edit(&mut u);
-        let (buffer, offset) = arena.slot(device, &u);
-        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &pipes.layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &buffer, offset: 0, size: wgpu::BufferSize::new(UNIFORM_SIZE) }) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(src) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&pipes.sampler) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(aux) },
-            ],
-        });
+        let bind = process_bind(device, pipes, src, aux, &pal);
         let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("voidmesh process"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -822,7 +788,8 @@ pub fn run(device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes,
             ..Default::default()
         });
         rp.set_pipeline(pipe);
-        rp.set_bind_group(0, Some(&bind), &[offset]);
+        rp.set_bind_group(0, Some(&bind), &[]);
+        rp.set_immediates(0, bytemuck::bytes_of(&u));
         match scissor {
             Some(rects) => {
                 for &[x, y, w, h] in rects {
@@ -836,7 +803,7 @@ pub fn run(device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes,
     let mip_view = |t: &wgpu::Texture, level: u32| t.create_view(&wgpu::TextureViewDescriptor { base_mip_level: level, mip_level_count: Some(1), ..Default::default() });
     // The next pass's scissor (the effect's, when clipped).
     let scissor_next = std::cell::Cell::new(None);
-    let mut pass = |enc: &mut wgpu::CommandEncoder, pipe: &wgpu::RenderPipeline, src: &wgpu::TextureView, aux: &wgpu::TextureView, out: &wgpu::Texture, edit: &dyn Fn(&mut Uniforms)| {
+    let pass = |enc: &mut wgpu::CommandEncoder, pipe: &wgpu::RenderPipeline, src: &wgpu::TextureView, aux: &wgpu::TextureView, out: &wgpu::Texture, edit: &dyn Fn(&mut Uniforms)| {
         pass_to(enc, pipe, src, aux, &mip_view(out, 0), (out.width(), out.height()), scissor_next.take(), edit);
     };
     let dummy = &pipes.dummy;
@@ -899,7 +866,6 @@ pub fn run(device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes,
             }
         });
     }
-    drop(pass);
     // 6. The mip chain, each level a box filter of the one above.
     for level in 1..out.mip_level_count() {
         let src = mip_view(out, level - 1);
@@ -932,14 +898,29 @@ fn flowing_constants(time: f32, wl: f32) -> [[f32; 4]; 3] {
     [[ph[0], ph[1], ph[2], ph[3]], [ph[4], ph[5], ph[6], ph[7]], [d1, d2, 0.0, 0.0]]
 }
 
+fn palette_colours(p: &Params) -> Vec<[f32; 4]> {
+    if p.shader.uses_palette() { p.gpu_palette() } else { vec![[0.0, 0.0, 0.0, 1.0], [1.0; 4]] }
+}
+
+/// `p`'s palette, padded to the shader's sixteen colours.
+fn palette(p: &Params) -> [[f32; 4]; 16] {
+    let mut pal = [[0.0f32; 4]; 16];
+    for (i, c) in palette_colours(p).iter().enumerate().take(16) {
+        pal[i] = *c;
+    }
+    pal
+}
+
+fn palette_buffer(device: &wgpu::Device, queue: &wgpu::Queue, colours: &[[f32; 4]; 16]) -> wgpu::Buffer {
+    let b = device.create_buffer(&wgpu::BufferDescriptor { label: Some("voidmesh palette"), size: 256, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+    queue.write_buffer(&b, 0, bytemuck::cast_slice(colours));
+    b
+}
+
 fn base_uniforms(p: &Params, size: (u32, u32), media: (u32, u32), time: f32) -> Uniforms {
     // Spatial params are in media pixels; scale them to the render size.
     let k = size.0.max(size.1) as f32 / media.0.max(media.1).max(1) as f32;
-    let palette = if p.shader.uses_palette() { p.gpu_palette() } else { vec![[0.0, 0.0, 0.0, 1.0], [1.0; 4]] };
-    let mut pal = [[0.0f32; 4]; 16];
-    for (i, c) in palette.iter().enumerate().take(16) {
-        pal[i] = *c;
-    }
+    let palette = palette_colours(p);
     let shader = if p.show_original { 0 } else { p.shader.gpu_id() };
     let (kind, x, y) = match p.shader {
         Shader::Dithering => (p.dither_kind, [0.0; 4], [0.0; 4]),
@@ -980,7 +961,6 @@ fn base_uniforms(p: &Params, size: (u32, u32), media: (u32, u32), time: f32) -> 
         blur: [0.0; 4],
         flow: if p.uses_time() { flowing_constants(time, (p.size * k).max(1.0)) } else { [[0.0; 4]; 3] },
         origin: [0.0; 4],
-        palette: pal,
     }
 }
 

@@ -30,10 +30,12 @@ struct P {
   blur: vec4f,         // kawase offset, source mip level (adjust pass), source texel size (zw)
   flow: array<vec4f, 3>, // flowing glass: the turbulence octaves' phases (8), the wave drifts (2)
   origin: vec4f,       // this pass's output region in its target (xy); a mip pass's source region (zw)
-  palette: array<vec4f, 16>,
 }
 
-@group(0) @binding(0) var<uniform> u: P;
+var<immediate> u: P;
+// The effect's palette: a buffer per palette, made once (`Pipes::palette`).
+struct Pal { c: array<vec4f, 16> }
+@group(0) @binding(4) var<uniform> pal: Pal;
 @group(0) @binding(1) var src: texture_2d<f32>;
 @group(0) @binding(2) var smp: sampler;
 // The ASCII glyph atlas in the effect pass, the bloom texture in the post pass.
@@ -170,22 +172,22 @@ fn intensity_curve(v: f32) -> f32 {
 
 // The palette colour (skipping the background at 0) whose luminance is closest.
 fn palette_by_luminance(lum_target: f32) -> vec3f {
-  var best = u.palette[1].rgb;
+  var best = pal.c[1].rgb;
   var bd = 1e10;
   for (var i = 1u; i < u.pcount; i++) {
-    let d = abs(luminance(u.palette[i].rgb) - lum_target);
-    if (d < bd) { bd = d; best = u.palette[i].rgb; }
+    let d = abs(luminance(pal.c[i].rgb) - lum_target);
+    if (d < bd) { bd = d; best = pal.c[i].rgb; }
   }
   return best;
 }
 
 fn palette_nearest(c: vec3f) -> vec3f {
-  var best = u.palette[0].rgb;
+  var best = pal.c[0].rgb;
   var bd = 1e10;
   for (var i = 0u; i < u.pcount; i++) {
-    let d = c - u.palette[i].rgb;
+    let d = c - pal.c[i].rgb;
     let dd = dot(d, d);
-    if (dd < bd) { bd = dd; best = u.palette[i].rgb; }
+    if (dd < bd) { bd = dd; best = pal.c[i].rgb; }
   }
   return best;
 }
@@ -194,12 +196,12 @@ fn palette_nearest(c: vec3f) -> vec3f {
 fn shape_color(source: vec4f) -> vec4f {
   if (u.preserve == 1u) { return vec4f(source.rgb, 1.0); }
   if (u.pcount > 2u) { return vec4f(palette_by_luminance(luminance(source.rgb)), 1.0); }
-  return u.palette[1];
+  return pal.c[1];
 }
 
 // Background under a shape, then the shape over it with coverage `a` (premultiplied out).
 fn over_background(shape: vec4f, a: f32, source_alpha: f32) -> vec4f {
-  let bg = u.palette[0];
+  let bg = pal.c[0];
   let bg_a = bg.a * smoothstep(0.95, 1.0, source_alpha);
   return vec4f(mix(bg.rgb * bg_a, shape.rgb * shape.a, a), mix(bg_a, shape.a, a));
 }
@@ -382,14 +384,14 @@ fn dithering(p: vec2f) -> vec4f {
   if (u.pcount > 2u) {
     let c = vec3f(intensity_curve(s.r), intensity_curve(s.g), intensity_curve(s.b));
     let l = luminance(c);
-    var lo = u.palette[0];
-    var hi = u.palette[0];
+    var lo = pal.c[0];
+    var hi = pal.c[0];
     var lo_l = -0.01;
     var hi_l = 1.01;
     for (var i = 0u; i < u.pcount; i++) {
-      let pl = luminance(u.palette[i].rgb);
-      if (pl <= l && pl > lo_l) { lo_l = pl; lo = u.palette[i]; }
-      if (pl >= l && pl < hi_l) { hi_l = pl; hi = u.palette[i]; }
+      let pl = luminance(pal.c[i].rgb);
+      if (pl <= l && pl > lo_l) { lo_l = pl; lo = pal.c[i]; }
+      if (pl >= l && pl < hi_l) { hi_l = pl; hi = pal.c[i]; }
     }
     var f = 0.0;
     if (hi_l > lo_l) { f = (l - lo_l) / (hi_l - lo_l); }
@@ -397,7 +399,7 @@ fn dithering(p: vec2f) -> vec4f {
     return premul(vec4f(o.rgb, o.a * coverage));
   }
   let g = intensity_curve(luminance(s.rgb));
-  let o = mix(u.palette[0], u.palette[1], step(t, g));
+  let o = mix(pal.c[0], pal.c[1], step(t, g));
   return premul(vec4f(o.rgb, o.a * coverage));
 }
 
@@ -452,7 +454,7 @@ fn ascii(p: vec2f) -> vec4f {
   let a = glyph_alpha(glyph_index(b), fract(p / u.cell));
   var fg = shape_color(s);
   if (u.preserve == 1u) { fg = s; }
-  let bg = u.palette[0];
+  let bg = pal.c[0];
   let bg_a = bg.a * smoothstep(0.95, 1.0, s.a);
   let fg_a = select(fg.a * s.a, s.a, u.preserve == 1u);
   return vec4f(mix(bg.rgb * bg_a, fg.rgb * fg_a, a), mix(bg_a, fg_a, a));

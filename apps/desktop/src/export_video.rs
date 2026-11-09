@@ -560,6 +560,8 @@ impl Gpu {
             .map_err(|e| format!("no GPU for export: {e}"))?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("voidmesh export"),
+            // Processing passes take their uniforms as immediates, as on the canvas.
+            required_features: wgpu::Features::IMMEDIATES,
             // The adapter's own limits: media renders up to the GPU's texture size, as on the canvas.
             required_limits: adapter.limits(),
             ..Default::default()
@@ -575,7 +577,6 @@ struct Renderer {
     /// The render-size output: one level, export reads only that.
     out: wgpu::Texture,
     scratch: crate::gfx::process::ScratchPool,
-    arena: crate::gfx::process::Arena,
     source: Option<(wgpu::Texture, wgpu::TextureView)>,
     readback: wgpu::Buffer,
     row: u32,
@@ -590,7 +591,7 @@ impl Renderer {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        Renderer { out: process::target_mips(&gpu.device, size.0, size.1, 1, "voidmesh export"), scratch: Default::default(), arena: Default::default(), source: None, readback, row }
+        Renderer { out: process::target_mips(&gpu.device, size.0, size.1, 1, "voidmesh export"), scratch: Default::default(), source: None, readback, row }
     }
 
     /// One frame: straight RGBA source pixels in, premultiplied RGBA at the render size out.
@@ -611,8 +612,7 @@ impl Renderer {
         let (ow, oh) = (self.out.width(), self.out.height());
         let mut enc = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("voidmesh export") });
         let input = process::Input { texture, view, size: (w, h), levels: 1, media };
-        process::run(&gpu.device, &mut enc, &gpu.pipes, &mut self.arena, &mut self.scratch, &input, params, time, &self.out, None);
-        self.arena.flush(&gpu.queue);
+        process::run(&gpu.device, &mut enc, &gpu.pipes, &mut self.scratch, &input, params, time, &self.out, None);
         enc.copy_texture_to_buffer(
             self.out.as_image_copy(),
             wgpu::TexelCopyBufferInfo { buffer: &self.readback, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(self.row), rows_per_image: Some(oh) } },

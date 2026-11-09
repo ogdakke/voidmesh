@@ -22,7 +22,7 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 
 use super::atlas::{self, Atlas, Tile};
-use super::process::{self, Arena, Input, Pipes, ScratchPool};
+use super::process::{self, Input, Pipes, ScratchPool};
 use crate::effects::Params;
 use crate::entities::Chunk;
 use crate::media::Asset;
@@ -311,7 +311,6 @@ pub struct Scene {
     inst_buf: wgpu::Buffer,
     mat_buf: wgpu::Buffer,
     bind: Option<wgpu::BindGroup>,
-    arena: Arena,
     scratch: ScratchPool,
 
     built_layout: u64,
@@ -622,7 +621,6 @@ impl Scene {
             inst_buf: storage_buffer(device, "voidmesh instances", 0),
             mat_buf: storage_buffer(device, "voidmesh materials", 0),
             bind: None,
-            arena: Arena::default(),
             scratch: ScratchPool::default(),
             built_layout: 0,
             chunks: Vec::new(),
@@ -1269,7 +1267,7 @@ impl Scene {
                 .filter(|j| j.2.layer == layer)
                 .map(|j| process::Tiled { src: j.3.clone(), params: &j.4, time: j.5, media: j.6, at: [j.2.x, j.2.y, j.1.0, j.1.1] })
                 .collect();
-            process::run_tiles(device, enc, pipes, &mut self.arena, &self.atlas.texture, layer, levels, &tiled);
+            process::run_tiles(device, enc, pipes, &self.atlas.texture, layer, levels, &tiled);
         }
         for (id, size, tile, ..) in jobs {
             let gpu = GpuMat { tile: [tile.x as f32, tile.y as f32, size.0 as f32, size.1 as f32], layer: tile.layer, levels, state: 1, flags: 0 };
@@ -1356,7 +1354,7 @@ impl Scene {
             if !continuous && atlas::Atlas::fits(size.0, size.1) {
                 let Some(tile) = self.atlas.alloc(device, enc, size.0, size.1) else { return };
                 let out = self.scratch.get(size).out(device).clone();
-                process::run(device, enc, pipes, &mut self.arena, &mut self.scratch, &input, &params, time, &out, None);
+                process::run(device, enc, pipes, &mut self.scratch, &input, &params, time, &out, None);
                 let levels = out.mip_level_count();
                 for j in 0..levels {
                     let (lw, lh) = ((size.0 >> j).max(1), (size.1 >> j).max(1));
@@ -1397,7 +1395,7 @@ impl Scene {
                     }
                     None => None,
                 };
-                process::run(device, enc, pipes, &mut self.arena, &mut self.scratch, &input, &params, time, &out, clip.as_deref());
+                process::run(device, enc, pipes, &mut self.scratch, &input, &params, time, &out, clip.as_deref());
                 let view = out.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
                 let bind = self.tex_bind(device, &view);
                 let bytes = texture_bytes(&out);
@@ -1829,7 +1827,6 @@ impl Scene {
         self.upload(device, queue, enc);
         t.lap("upload");
         self.collect_own(view);
-        self.arena.flush(queue);
         self.scratch.sweep();
         // What wasn't reused in two frames goes.
         self.pool_prev = std::mem::take(&mut self.pool);
@@ -2009,21 +2006,20 @@ impl Scene {
         if e.asset.video_path().is_some() {
             let (t, v) = self.videos.get(&(e.id, e.asset.id)).and_then(|v| v.tex.as_ref())?;
             let input = Input { texture: t, view: v, size: (t.width(), t.height()), levels: 1, media };
-            process::run(device, enc, pipes, &mut self.arena, &mut self.scratch, &input, &e.params, e.fx_t as f32, &out.out, None);
+            process::run(device, enc, pipes, &mut self.scratch, &input, &e.params, e.fx_t as f32, &out.out, None);
         } else {
             let frame = e.asset.frame_at(e.play_t);
             let key = (e.asset.id, frame as u32, 0);
             if !self.sources.contains_key(&key) {
                 let f = e.asset.frames.get(frame)?;
-                let tex = process::upload_gpu_mips(device, queue, enc, pipes, &mut self.arena, e.asset.width, e.asset.height, &f.rgba);
+                let tex = process::upload_gpu_mips(device, queue, enc, pipes, e.asset.width, e.asset.height, &f.rgba);
                 let view = tex.create_view(&Default::default());
                 self.sources.insert(key, Source { levels: tex.mip_level_count(), tex, view, size: media, used: self.frame, animated: e.asset.animated() });
             }
             let src = self.sources.get(&key)?;
             let input = Input { texture: &src.tex, view: &src.view, size: src.size, levels: src.levels, media };
-            process::run(device, enc, pipes, &mut self.arena, &mut self.scratch, &input, &e.params, e.fx_t as f32, &out.out, None);
+            process::run(device, enc, pipes, &mut self.scratch, &input, &e.params, e.fx_t as f32, &out.out, None);
         }
-        self.arena.flush(queue);
         Some(out)
     }
 
