@@ -766,7 +766,11 @@ pub struct Input<'a> {
 /// Encode the whole pipeline from `input` into level 0 of `out` (its size is the render size),
 /// then `out`'s mip chain.
 #[allow(clippy::too_many_arguments)]
-pub fn run(device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, arena: &mut Arena, scratch: &mut ScratchPool, input: &Input<'_>, p: &Params, time: f32, out: &wgpu::Texture) {
+/// `clip`: the output regions anything shows of (x, y, w, h each), when the rest is hidden: a
+/// one-pass effect renders only those (the rest is cleared). Passes that read their neighbours'
+/// output (adjustments, blur, post) always render everything.
+#[allow(clippy::too_many_arguments)]
+pub fn run(device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, arena: &mut Arena, scratch: &mut ScratchPool, input: &Input<'_>, p: &Params, time: f32, out: &wgpu::Texture, clip: Option<&[[u32; 4]]>) {
     let size = (out.width(), out.height());
     let sc = scratch.get(size);
     let (w, h) = size;
@@ -792,7 +796,7 @@ pub fn run(device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes,
     let full = [0, 1].map(|i| sc.full[i].clone().unwrap_or_else(|| pipes.blank.clone()));
     let (full, levels_t, bloom_t) = (&full, &sc.levels, &sc.bloom);
     let base = base_uniforms(p, size, input.media, time);
-    let mut pass_to = |enc: &mut wgpu::CommandEncoder, pipe: &wgpu::RenderPipeline, src: &wgpu::TextureView, aux: &wgpu::TextureView, view: &wgpu::TextureView, size: (u32, u32), edit: &dyn Fn(&mut Uniforms)| {
+    let mut pass_to = |enc: &mut wgpu::CommandEncoder, pipe: &wgpu::RenderPipeline, src: &wgpu::TextureView, aux: &wgpu::TextureView, view: &wgpu::TextureView, size: (u32, u32), scissor: Option<&[[u32; 4]]>, edit: &dyn Fn(&mut Uniforms)| {
         let mut u = base;
         u.res = [size.0 as f32, size.1 as f32];
         edit(&mut u);
@@ -819,11 +823,21 @@ pub fn run(device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes,
         });
         rp.set_pipeline(pipe);
         rp.set_bind_group(0, Some(&bind), &[offset]);
-        rp.draw(0..3, 0..1);
+        match scissor {
+            Some(rects) => {
+                for &[x, y, w, h] in rects {
+                    rp.set_scissor_rect(x, y, w, h);
+                    rp.draw(0..3, 0..1);
+                }
+            }
+            None => rp.draw(0..3, 0..1),
+        }
     };
     let mip_view = |t: &wgpu::Texture, level: u32| t.create_view(&wgpu::TextureViewDescriptor { base_mip_level: level, mip_level_count: Some(1), ..Default::default() });
+    // The next pass's scissor (the effect's, when clipped).
+    let scissor_next = std::cell::Cell::new(None);
     let mut pass = |enc: &mut wgpu::CommandEncoder, pipe: &wgpu::RenderPipeline, src: &wgpu::TextureView, aux: &wgpu::TextureView, out: &wgpu::Texture, edit: &dyn Fn(&mut Uniforms)| {
-        pass_to(enc, pipe, src, aux, &mip_view(out, 0), (out.width(), out.height()), edit);
+        pass_to(enc, pipe, src, aux, &mip_view(out, 0), (out.width(), out.height()), scissor_next.take(), edit);
     };
     let dummy = &pipes.dummy;
     let view = |t: &wgpu::Texture| t.create_view(&Default::default());
@@ -856,6 +870,7 @@ pub fn run(device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes,
     // 3. The effect, A into B, or straight into the output when nothing follows it.
     let effect_in = if direct { src_level } else { view(&full[0]) };
     let effect_out = if no_post { out } else { &full[1] };
+    scissor_next.set(clip.filter(|_| direct && no_post && out.mip_level_count() == 1));
     pass(enc, pipes.effect(base.effect, base.kind), &effect_in, &pipes.atlas, effect_out, &|_| {});
     // 4. Bloom from B through the bloom chain.
     if bloom {
@@ -889,7 +904,7 @@ pub fn run(device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes,
     for level in 1..out.mip_level_count() {
         let src = mip_view(out, level - 1);
         let size = ((w >> level).max(1), (h >> level).max(1));
-        pass_to(enc, &pipes.mip, &src, dummy, &mip_view(out, level), size, &|_| {});
+        pass_to(enc, &pipes.mip, &src, dummy, &mip_view(out, level), size, None, &|_| {});
     }
 }
 

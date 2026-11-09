@@ -611,7 +611,7 @@ impl Renderer {
         let (ow, oh) = (self.out.width(), self.out.height());
         let mut enc = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("voidmesh export") });
         let input = process::Input { texture, view, size: (w, h), levels: 1, media };
-        process::run(&gpu.device, &mut enc, &gpu.pipes, &mut self.arena, &mut self.scratch, &input, params, time, &self.out);
+        process::run(&gpu.device, &mut enc, &gpu.pipes, &mut self.arena, &mut self.scratch, &input, params, time, &self.out, None);
         self.arena.flush(&gpu.queue);
         enc.copy_texture_to_buffer(
             self.out.as_image_copy(),

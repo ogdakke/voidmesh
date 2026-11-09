@@ -96,6 +96,10 @@ const GPU_MIPS_PIXELS: u64 = 1024 * 1024;
 const SOURCE_BYTES: u64 = 16 << 20;
 /// Frames a finished source level waits for a frame that wants it.
 const BUILT_FRAMES: u64 = 30;
+/// Output pixels processed around a clipped region (`occlusion`), for the drawn edge's filtering.
+const CLIP_MARGIN: u32 = 2;
+/// Visible instances past which `occlusion` isn't worked out (each is tested against those above).
+const OCCLUSION_INSTANCES: usize = 1024;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable, Default, PartialEq)]
@@ -356,6 +360,10 @@ pub struct Scene {
     /// Source levels are built off the frame (`SourceWorkers`): queued, and done (with the frame
     /// they arrived on) waiting for a frame to place them.
     workers: Option<SourceWorkers>,
+    /// Continuous materials' regions anything shows of this frame (0–1, x0 y0 x1 y1; empty when
+    /// all of it is hidden), from `occlusion`; and which assets are opaque, by id.
+    clips: HashMap<u32, [f32; 4]>,
+    opaque_assets: HashMap<u64, bool>,
     building: HashMap<SrcKey, u64>,
     built: HashMap<SrcKey, (u64, Prepared)>,
     built_tx: std::sync::mpsc::Sender<(SrcKey, Option<Prepared>)>,
@@ -645,6 +653,8 @@ impl Scene {
             staged: HashMap::new(),
             staging: Staging::default(),
             workers: None,
+            clips: HashMap::new(),
+            opaque_assets: HashMap::new(),
             building: Default::default(),
             built: HashMap::new(),
             built_tx,
@@ -1346,7 +1356,7 @@ impl Scene {
             if !continuous && atlas::Atlas::fits(size.0, size.1) {
                 let Some(tile) = self.atlas.alloc(device, enc, size.0, size.1) else { return };
                 let out = self.scratch.get(size).out(device).clone();
-                process::run(device, enc, pipes, &mut self.arena, &mut self.scratch, &input, &params, time, &out);
+                process::run(device, enc, pipes, &mut self.arena, &mut self.scratch, &input, &params, time, &out, None);
                 let levels = out.mip_level_count();
                 for j in 0..levels {
                     let (lw, lh) = ((size.0 >> j).max(1), (size.1 >> j).max(1));
@@ -1367,7 +1377,27 @@ impl Scene {
                         None => process::target_mips(device, size.0, size.1, levels, "voidmesh material"),
                     },
                 };
-                process::run(device, enc, pipes, &mut self.arena, &mut self.scratch, &input, &params, time, &out);
+                // Only the part that shows (`occlusion`), with a margin for filtering; nothing
+                // when it's all hidden.
+                let clip = match self.clips.get(&id) {
+                    Some(c) if c[2] <= c[0] || c[3] <= c[1] => {
+                        self.pool.push(out);
+                        return;
+                    }
+                    Some(c) => {
+                        let (fw, fh) = (size.0 as f32, size.1 as f32);
+                        let x0 = ((c[0] * fw).floor() as u32).saturating_sub(CLIP_MARGIN);
+                        let y0 = ((c[1] * fh).floor() as u32).saturating_sub(CLIP_MARGIN);
+                        let x1 = (((c[2] * fw).ceil() as u32) + CLIP_MARGIN).min(size.0);
+                        let y1 = (((c[3] * fh).ceil() as u32) + CLIP_MARGIN).min(size.1);
+                        // The edges too: an occluder's edge lying on this one's is partly
+                        // transparent where it's anti-aliased, and shows this one through.
+                        let (w, h, m) = (size.0, size.1, CLIP_MARGIN.min(size.0).min(size.1));
+                        (x1 > x0 && y1 > y0).then(|| vec![[x0, y0, x1 - x0, y1 - y0], [0, 0, w, m], [0, h - m, w, m], [0, 0, m, h], [w - m, 0, m, h]])
+                    }
+                    None => None,
+                };
+                process::run(device, enc, pipes, &mut self.arena, &mut self.scratch, &input, &params, time, &out, clip.as_deref());
                 let view = out.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
                 let bind = self.tex_bind(device, &view);
                 let bytes = texture_bytes(&out);
@@ -1634,6 +1664,110 @@ impl Scene {
         }
     }
 
+    /// Every pixel of `a` is opaque (videos are), from its proxy or its frame when that's as
+    /// small: once an asset.
+    fn asset_opaque(cache: &mut HashMap<u64, bool>, a: &Asset) -> bool {
+        *cache.entry(a.id).or_insert_with(|| {
+            if a.video.is_some() {
+                return true;
+            }
+            if a.frames.len() != 1 {
+                return false;
+            }
+            let px: &[u8] = match a.proxy() {
+                Some(p) => &p.rgba,
+                None if a.width.max(a.height) <= crate::media::PROXY_SIDE => &a.frames[0].rgba,
+                None => return false,
+            };
+            px.chunks_exact(4).all(|c| c[3] == 255)
+        })
+    }
+
+    /// For the continuous one-pass materials visible this frame (processed again every frame),
+    /// the part of each that shows: clipped to the view and shrunk by the opaque instances above
+    /// it that cover a whole side, so a stack of overlapping entities processes what's seen of
+    /// each rather than all of every one. An occluder is opaque media shown as it is or through
+    /// an effect that keeps its alpha.
+    fn occlusion(&mut self, view: [f32; 4], settled: bool) {
+        self.clips.clear();
+        let target = |m: &Material| (m.params.uses_time() || matches!(m.key, MatKey::Video { .. })) && process::one_pass(&m.params);
+        if !settled || !self.visible_mats.iter().any(|id| self.mat(*id).is_some_and(target)) {
+            return;
+        }
+        let [vx0, vy0, vx1, vy1] = view;
+        let mut vis: Vec<u32> = Vec::new();
+        for (gi, g) in self.groups.iter().enumerate() {
+            let b = g.bounds;
+            if b[0] > vx1 || b[2] < vx0 || b[1] > vy1 || b[3] < vy0 {
+                continue;
+            }
+            for slot in gi * GROUP..((gi + 1) * GROUP).min(self.insts.len()) {
+                let r = self.insts[slot].rect;
+                if !(r[0] > vx1 || r[0] + r[2] < vx0 || r[1] > vy1 || r[1] + r[3] < vy0) {
+                    vis.push(slot as u32);
+                }
+            }
+        }
+        if vis.len() > OCCLUSION_INSTANCES {
+            return;
+        }
+        let mut occluder = HashMap::new();
+        for &slot in &vis {
+            let i = &self.insts[slot as usize];
+            let Some(m) = self.mats.get(i.mat as usize).and_then(Option::as_ref) else { continue };
+            let opaque = i.progress == 0.0
+                && (m.params.show_original || matches!(m.params.shader, crate::effects::Shader::Glass | crate::effects::Shader::Glitch))
+                && Self::asset_opaque(&mut self.opaque_assets, &m.asset);
+            occluder.insert(slot, opaque);
+        }
+        for (k, &slot) in vis.iter().enumerate() {
+            let i = self.insts[slot as usize];
+            if !self.mat(i.mat).is_some_and(target) {
+                continue;
+            }
+            let r = i.rect;
+            let mut v = [r[0].max(vx0), r[1].max(vy0), (r[0] + r[2]).min(vx1), (r[1] + r[3]).min(vy1)];
+            for &o in &vis[k + 1..] {
+                if v[0] >= v[2] || v[1] >= v[3] {
+                    break;
+                }
+                if !occluder.get(&o).copied().unwrap_or(false) {
+                    continue;
+                }
+                let q = self.insts[o as usize].rect;
+                let q = [q[0], q[1], q[0] + q[2], q[1] + q[3]];
+                if q[0] >= v[2] || q[2] <= v[0] || q[1] >= v[3] || q[3] <= v[1] {
+                    continue;
+                }
+                let (full_x, full_y) = (q[0] <= v[0] && q[2] >= v[2], q[1] <= v[1] && q[3] >= v[3]);
+                if full_x && full_y {
+                    v[2] = v[0];
+                } else if full_y && q[0] <= v[0] {
+                    v[0] = q[2];
+                } else if full_y && q[2] >= v[2] {
+                    v[2] = q[0];
+                } else if full_x && q[1] <= v[1] {
+                    v[1] = q[3];
+                } else if full_x && q[3] >= v[3] {
+                    v[3] = q[1];
+                }
+            }
+            let uv = if v[0] >= v[2] || v[1] >= v[3] {
+                [0.0; 4]
+            } else {
+                [(v[0] - r[0]) / r[2], (v[1] - r[1]) / r[3], (v[2] - r[0]) / r[2], (v[3] - r[1]) / r[3]]
+            };
+            self.clips
+                .entry(i.mat)
+                .and_modify(|c| {
+                    if uv[2] > uv[0] {
+                        *c = if c[2] > c[0] { [c[0].min(uv[0]), c[1].min(uv[1]), c[2].max(uv[2]), c[3].max(uv[3])] } else { uv };
+                    }
+                })
+                .or_insert(uv);
+        }
+    }
+
     /// Instances whose material draws from its own texture, visible this frame, in z order.
     fn collect_own(&mut self, view: [f32; 4]) {
         self.own_draws.clear();
@@ -1684,6 +1818,7 @@ impl Scene {
             self.last_scale = s.cam.scale;
         }
         self.visibility(view);
+        self.occlusion(view, s.drag_offset().is_none());
         t.lap("visibility");
         self.schedule(device, queue, enc, pipes, s.cam.scale * dpr);
         t.lap("process");
@@ -1874,7 +2009,7 @@ impl Scene {
         if e.asset.video_path().is_some() {
             let (t, v) = self.videos.get(&(e.id, e.asset.id)).and_then(|v| v.tex.as_ref())?;
             let input = Input { texture: t, view: v, size: (t.width(), t.height()), levels: 1, media };
-            process::run(device, enc, pipes, &mut self.arena, &mut self.scratch, &input, &e.params, e.fx_t as f32, &out.out);
+            process::run(device, enc, pipes, &mut self.arena, &mut self.scratch, &input, &e.params, e.fx_t as f32, &out.out, None);
         } else {
             let frame = e.asset.frame_at(e.play_t);
             let key = (e.asset.id, frame as u32, 0);
@@ -1886,7 +2021,7 @@ impl Scene {
             }
             let src = self.sources.get(&key)?;
             let input = Input { texture: &src.tex, view: &src.view, size: src.size, levels: src.levels, media };
-            process::run(device, enc, pipes, &mut self.arena, &mut self.scratch, &input, &e.params, e.fx_t as f32, &out.out);
+            process::run(device, enc, pipes, &mut self.arena, &mut self.scratch, &input, &e.params, e.fx_t as f32, &out.out, None);
         }
         self.arena.flush(queue);
         Some(out)
