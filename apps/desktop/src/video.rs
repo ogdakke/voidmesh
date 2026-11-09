@@ -70,7 +70,7 @@ pub fn recycle_gpu(buf: wgpu::Buffer) {
     }
 }
 
-const GPU_POOLED: usize = 16;
+const GPU_POOLED: usize = 4;
 
 /// Bytes the pool of uploaded frames' buffers holds.
 pub fn gpu_pool_bytes() -> u64 {

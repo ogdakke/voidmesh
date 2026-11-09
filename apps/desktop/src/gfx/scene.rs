@@ -421,7 +421,7 @@ struct SourceWorkers {
 type LevelPool = Arc<std::sync::Mutex<Vec<wgpu::Buffer>>>;
 
 /// Bytes of level buffers pooled.
-const LEVEL_POOL: u64 = 4 << 20;
+const LEVEL_POOL: u64 = 2 << 20;
 
 fn pool_levels(pool: &LevelPool, bufs: Vec<wgpu::Buffer>) {
     let mut p = pool.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1532,7 +1532,15 @@ impl Scene {
             let media = (m.asset.width, m.asset.height);
             let continuous = m.params.uses_time() || matches!(m.key, MatKey::Video { .. });
             let projected = m.want * px_per_world;
-            let desired = if continuous { process::screen_size(media, projected) } else { process::lod_size(media, projected) };
+            let desired = if continuous {
+                process::screen_size(media, projected)
+            } else {
+                let tier = process::lod_size(media, projected);
+                // A large original draws from its source level, chosen by what it shows: sized by
+                // its projection (as `source_key` reads a size, overscan and all) rather than its
+                // tier, a 900-pixel photo reads the 1024 level, not the 2048 one four times larger.
+                if m.params.show_original && !atlas::Atlas::fits(tier.0, tier.1) { process::screen_size(media, projected * process::LOD_OVERSCAN) } else { tier }
+            };
             if m.size == desired {
                 continue;
             }
