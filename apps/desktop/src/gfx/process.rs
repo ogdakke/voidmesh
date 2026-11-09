@@ -331,13 +331,36 @@ pub fn half_rgba(pw: usize, ph: usize, src: &[u8]) -> (usize, usize, Vec<u8>) {
     let (nw, nh) = ((pw / 2).max(1), (ph / 2).max(1));
     let mut dst = vec![0u8; nw * nh * 4];
     let sy = usize::from(ph > 1);
-    for (y, out) in dst.chunks_exact_mut(nw * 4).enumerate() {
-        let r0 = &src[(y * 2) * pw * 4..][..pw * 4];
-        let r1 = &src[(y * 2 + sy).min(ph - 1) * pw * 4..][..pw * 4];
-        half_row(r0, r1, pw, out);
+    let rows = |y0: usize, band: &mut [u8]| {
+        for (dy, out) in band.chunks_exact_mut(nw * 4).enumerate() {
+            let y = y0 + dy;
+            let r0 = &src[(y * 2) * pw * 4..][..pw * 4];
+            let r1 = &src[(y * 2 + sy).min(ph - 1) * pw * 4..][..pw * 4];
+            half_row(r0, r1, pw, out);
+        }
+    };
+    // A large image (a photo zoomed into, halved from its full size) in bands across the cores:
+    // one job's levels would otherwise keep a frame waiting on one core.
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    if nw * nh >= HALF_BAND_PIXELS && threads > 1 {
+        let band_rows = nh.div_ceil(threads);
+        std::thread::scope(|sc| {
+            for (i, band) in dst.chunks_mut(band_rows * nw * 4).enumerate() {
+                let rows = &rows;
+                sc.spawn(move || {
+                    interactive();
+                    rows(i * band_rows, band);
+                });
+            }
+        });
+    } else {
+        rows(0, &mut dst);
     }
     (nw, nh, dst)
 }
+
+/// Output pixels from which a halving splits across threads.
+const HALF_BAND_PIXELS: usize = 256 * 1024;
 
 /// One output row from two input rows of `pw` pixels: four pixels a step with NEON.
 #[cfg(target_arch = "aarch64")]
@@ -405,10 +428,13 @@ pub fn level_chain(w: u32, h: u32, rgba: &[u8], k: u32, levels: u32) -> Vec<(u32
             (pw, ph) = (nw, nh);
             cur = Some(dst);
         }
+        let last = level + 1 == k + levels || (pw == 1 && ph == 1);
         if level >= k {
-            out.push((pw as u32, ph as u32, cur.clone().unwrap_or_else(|| rgba.to_vec())));
+            // The last level moves out; one the chain still halves from is copied.
+            let px = if last { cur.take() } else { cur.clone() };
+            out.push((pw as u32, ph as u32, px.unwrap_or_else(|| rgba.to_vec())));
         }
-        if pw == 1 && ph == 1 && level >= k {
+        if last && level >= k {
             break;
         }
     }
@@ -441,11 +467,16 @@ fn qos(class: u32) {
 #[cfg(not(target_os = "macos"))]
 fn qos(_: u32) {}
 
+/// Pixels of work (`parallel`'s estimate) from which threads pay for their start: below it, the
+/// work is about a millisecond on the calling thread, and new threads can take longer than that
+/// to be scheduled.
+const PARALLEL_PIXELS: u64 = 4 * 1024 * 1024;
+
 /// Run `f` over `jobs` on every core when there's enough work to pay for the threads.
 pub fn parallel<T: Sync, R: Send + Default>(jobs: &[T], work: impl Fn(&T) -> u64 + Sync, f: impl Fn(&T) -> R + Sync) -> Vec<R> {
     let total: u64 = jobs.iter().map(&work).sum();
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(jobs.len()).max(1);
-    if threads == 1 || total < 512 * 1024 {
+    if threads == 1 || total < PARALLEL_PIXELS {
         return jobs.iter().map(&f).collect();
     }
     let next = std::sync::atomic::AtomicUsize::new(0);

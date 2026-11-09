@@ -77,8 +77,9 @@ const SETTLE_FRAMES: u32 = 2;
 /// leaves many decoders oversized for a moment spreads their uploads instead of copying them all
 /// in one frame.
 const VIDEO_BUDGET: u64 = 4 << 20;
+/// Processing a frame takes on, still or moving: a backlog (a canvas opened, a zoom's new tier)
+/// spreads over frames that each stay quick.
 const FRAME_BUDGET: std::time::Duration = std::time::Duration::from_millis(2);
-const STILL_BUDGET: std::time::Duration = std::time::Duration::from_millis(6);
 /// Bytes a frame stages for sources: past it, the rest wait for the next frames (as past the
 /// time budget). Copying them is the frame's CPU, and what's staged is held until the GPU's done.
 const STAGE_BUDGET: u64 = 16 << 20;
@@ -90,6 +91,14 @@ const UNSEEN_BUDGET: u64 = 32 * 1024 * 1024;
 const SOURCE_FRAMES: u64 = 4;
 /// Media of more pixels than this makes its source mips on the GPU.
 const GPU_MIPS_PIXELS: u64 = 1024 * 1024;
+/// Source levels built from more full-size pixels than this (no proxy covers them) are built off
+/// the frame: idle full-size pixels may be compressed by the system, and reading them back is
+/// several milliseconds a photo. The material keeps its current level of detail meanwhile.
+const OFF_FRAME_PIXELS: u64 = 1024 * 1024;
+/// Off-frame builds at once.
+const OFF_FRAME_JOBS: usize = 4;
+/// Frames a finished off-frame build waits for a frame that wants it.
+const BUILT_FRAMES: u64 = 30;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable, Default, PartialEq)]
@@ -347,18 +356,25 @@ pub struct Scene {
     staged: HashMap<SrcKey, (wgpu::Buffer, Vec<Staged>)>,
     /// Buffers uploads go through (source batches, video frames, large instance changes).
     staging: Staging,
+    /// Source levels built off the frame from full-size pixels: in progress, and done (with the
+    /// frame they arrived on) waiting for a frame to stage them.
+    building: std::collections::HashSet<SrcKey>,
+    built: HashMap<SrcKey, (u64, Levels)>,
+    built_tx: std::sync::mpsc::Sender<(SrcKey, Levels)>,
+    built_rx: std::sync::mpsc::Receiver<(SrcKey, Levels)>,
     /// Bytes packed for them, reused.
     staging_bytes: Vec<u8>,
     videos: HashMap<(u32, u64), VideoSource>,
     frame: u64,
     last_scale: f32,
-    /// Frames the zoom has held (LOD changes wait for it), and the whole camera (pan too).
+    /// Frames the zoom has held (LOD changes wait for it).
     still: u32,
-    last_pan: [f32; 2],
-    resting: u32,
     pub stats: Stats,
     pub video_waiting: bool,
 }
+
+/// A source's levels as built on the CPU: size and pixels each.
+type Levels = Vec<(u32, u32, Vec<u8>)>;
 
 /// Staging buffers, in sets: a frame takes a set the GPU is done with (or a new one when the GPU
 /// is that far behind) and its uploads take buffers from it in turn. A set comes back once the
@@ -465,6 +481,7 @@ fn storage_buffer(device: &wgpu::Device, label: &str, bytes: u64) -> wgpu::Buffe
 
 impl Scene {
     pub fn new(device: &wgpu::Device, _pipes: &Pipes) -> Scene {
+        let (built_tx, built_rx) = std::sync::mpsc::channel();
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("voidmesh world"),
             source: wgpu::ShaderSource::Wgsl(format!("{}\n{}", rune::render::CLIP_WGSL, include_str!("world.wgsl")).into()),
@@ -539,13 +556,15 @@ impl Scene {
             sources: HashMap::new(),
             staged: HashMap::new(),
             staging: Staging::default(),
+            building: Default::default(),
+            built: HashMap::new(),
+            built_tx,
+            built_rx,
             staging_bytes: Vec::new(),
             videos: HashMap::new(),
             frame: 1,
             last_scale: 0.0,
             still: 0,
-            last_pan: [f32::NAN; 2],
-            resting: 0,
             stats: Stats::default(),
             video_waiting: false,
         }
@@ -1102,13 +1121,63 @@ impl Scene {
         // Large media at full size goes up as its one level and makes its mips on the GPU; the
         // rest builds its levels on the CPU, all of them through the one staging write.
         let large = |j: &Job| j.key.2 == 0 && u64::from(j.asset.width) * u64::from(j.asset.height) > GPU_MIPS_PIXELS;
+        // Levels built off the frame and back; those still to read many full-size pixels go there.
+        while let Ok((key, levels)) = self.built_rx.try_recv() {
+            self.building.remove(&key);
+            if !levels.is_empty() {
+                self.built.insert(key, (self.frame, levels));
+            }
+        }
+        let frame = self.frame;
+        self.built.retain(|_, (at, _)| frame - *at < BUILT_FRAMES);
+        // Large media's full frame is read off the frame too (copied there, then packed from
+        // that warm copy).
+        let off_frame = |j: &Job| {
+            u64::from(j.asset.width) * u64::from(j.asset.height) > OFF_FRAME_PIXELS && (large(j) || j.asset.proxy().is_none_or(|p| p.level > j.key.2 || j.frame != 0))
+        };
+        let mut ready: Vec<Option<Levels>> = Vec::with_capacity(jobs.len());
+        let mut kept: Vec<Job> = Vec::with_capacity(jobs.len());
+        for j in jobs {
+            if let Some((_, levels)) = self.built.remove(&j.key) {
+                ready.push(Some(levels));
+                kept.push(j);
+            } else if off_frame(&j) {
+                if !self.building.contains(&j.key) && self.building.len() < OFF_FRAME_JOBS {
+                    self.building.insert(j.key);
+                    let (tx, key, frame, asset, whole) = (self.built_tx.clone(), j.key, j.frame, j.asset.clone(), large(&j));
+                    let spawned = std::thread::Builder::new().name("voidmesh-source".into()).spawn(move || {
+                        process::background();
+                        let levels = asset.frames.get(frame).map_or_else(Vec::new, |f| {
+                            if whole { vec![(asset.width, asset.height, f.rgba.clone())] } else { process::level_chain(asset.width, asset.height, &f.rgba, key.2, 1) }
+                        });
+                        let _ = tx.send((key, levels));
+                    });
+                    if spawned.is_err() {
+                        self.building.remove(&key);
+                    }
+                }
+            } else {
+                ready.push(None);
+                kept.push(j);
+            }
+        }
+        let jobs = kept;
+        if jobs.is_empty() {
+            return;
+        }
         let cpu: Vec<&Job> = jobs.iter().collect();
+        let todo: Vec<(&Job, bool)> = cpu.iter().zip(&ready).map(|(j, r)| (*j, r.is_none())).collect();
         let t0 = std::time::Instant::now();
-        let built = process::parallel(
-            &cpu,
-            |j| if large(j) { 0 } else { u64::from(j.asset.width) * u64::from(j.asset.height) },
-            |j| {
-                let Some(base) = j.asset.frames.get(j.frame) else { return Vec::new() };
+        let mut built = process::parallel(
+            &todo,
+            // The pixels it reads: the proxy's when that serves it.
+            |(j, todo)| match j.asset.proxy().filter(|p| p.level <= j.key.2 && j.frame == 0) {
+                _ if large(j) || !todo => 0,
+                Some(p) => u64::from(p.width) * u64::from(p.height),
+                None => u64::from(j.asset.width) * u64::from(j.asset.height),
+            },
+            |&(j, todo)| {
+                let Some(base) = j.asset.frames.get(j.frame).filter(|_| todo) else { return Vec::new() };
                 if large(j) {
                     return vec![(j.asset.width, j.asset.height, Vec::new())];
                 }
@@ -1122,6 +1191,11 @@ impl Scene {
                 }
             },
         );
+        for (b, r) in built.iter_mut().zip(ready) {
+            if let Some(levels) = r {
+                *b = levels;
+            }
+        }
         // Pack every level, rows padded to the copy alignment.
         let align = u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
         let mut total = 0u64;
@@ -1438,9 +1512,7 @@ impl Scene {
                 self.build(device, enc, pipes, id, size);
             }
             left = rest;
-            // A still camera has no gesture to keep smooth: it takes on more.
-            let budget = if self.resting >= SETTLE_FRAMES { STILL_BUDGET } else { FRAME_BUDGET };
-            if started.elapsed() > budget || self.staging.frame_bytes > STAGE_BUDGET {
+            if started.elapsed() > FRAME_BUDGET || self.staging.frame_bytes > STAGE_BUDGET {
                 self.stats.pending += left.len();
                 break;
             }
@@ -1542,17 +1614,13 @@ impl Scene {
             grew = true;
         }
         if let Some((a, b)) = self.dirty.take() {
+            // Through a staging buffer and a GPU copy, as material changes: the frames in flight
+            // still read this buffer, and a queue write into it would be staged by Rune (an
+            // allocation a write, and the buffer pinned to that path for good).
             let bytes: &[u8] = bytemuck::cast_slice(&self.insts[a..b]);
-            if bytes.len() < 64 * 1024 {
-                queue.write_buffer(&self.inst_buf, a as u64 * inst_size, bytes);
-            } else {
-                // Large changes (a group dragged, a selection) go through a staging buffer and a
-                // GPU copy: a queue write into the buffer the last frame still reads would have
-                // Rune swap in a spare and carry all of it over.
-                let r = self.staging.buffer(device, bytes.len() as u64, "voidmesh instance staging", self.frame);
-                queue.write_buffer(&r, 0, bytes);
-                enc.copy_buffer_to_buffer(&r, 0, &self.inst_buf, a as u64 * inst_size, bytes.len() as u64);
-            }
+            let r = self.staging.buffer(device, bytes.len() as u64, "voidmesh instance staging", self.frame);
+            queue.write_buffer(&r, 0, bytes);
+            enc.copy_buffer_to_buffer(&r, 0, &self.inst_buf, a as u64 * inst_size, bytes.len() as u64);
             self.stats.instance_bytes += (b - a) as u64 * inst_size;
             self.world_dirty = true;
         }
@@ -1564,10 +1632,11 @@ impl Scene {
             grew = true;
         }
         if !self.mat_dirty.is_empty() {
-            let all: Vec<GpuMat> = self.mats.iter().map(|m| m.as_ref().map_or(GpuMat::default(), |m| m.gpu)).collect();
             self.mat_dirty.sort_unstable();
             self.mat_dirty.dedup();
-            // Coalesced runs of changed entries.
+            // Coalesced runs of changed entries, packed into one staging write, each copied into
+            // place.
+            let mut runs: Vec<(usize, usize)> = Vec::new();
             let mut i = 0;
             while i < self.mat_dirty.len() {
                 let start = self.mat_dirty[i] as usize;
@@ -1576,8 +1645,24 @@ impl Scene {
                     i += 1;
                     end = self.mat_dirty[i] as usize + 1;
                 }
-                queue.write_buffer(&self.mat_buf, start as u64 * mat_size, bytemuck::cast_slice(&all[start..end.min(all.len())]));
+                runs.push((start, end.min(self.mats.len())));
                 i += 1;
+            }
+            let mut bytes = std::mem::take(&mut self.staging_bytes);
+            bytes.clear();
+            for (a, b) in &runs {
+                for m in &self.mats[*a..*b] {
+                    bytes.extend_from_slice(bytemuck::bytes_of(&m.as_ref().map_or(GpuMat::default(), |m| m.gpu)));
+                }
+            }
+            let r = self.staging.buffer(device, bytes.len() as u64, "voidmesh material staging", self.frame);
+            queue.write_buffer(&r, 0, &bytes);
+            self.staging_bytes = bytes;
+            let mut at = 0;
+            for (a, b) in runs {
+                let len = (b - a) as u64 * mat_size;
+                enc.copy_buffer_to_buffer(&r, at, &self.mat_buf, a as u64 * mat_size, len);
+                at += len;
             }
             self.mat_dirty.clear();
             self.world_dirty = true;
@@ -1644,12 +1729,6 @@ impl Scene {
         // A dragged selection shows what lies off by the drag too.
         if let Some([dx, dy]) = s.drag_offset() {
             view = [view[0].min(view[0] - dx), view[1].min(view[1] - dy), view[2].max(view[2] - dx), view[3].max(view[3] - dy)];
-        }
-        if s.cam.scale == self.last_scale && s.cam.pan == self.last_pan {
-            self.resting = self.resting.saturating_add(1);
-        } else {
-            self.resting = 0;
-            self.last_pan = s.cam.pan;
         }
         if s.cam.scale == self.last_scale {
             self.still = self.still.saturating_add(1);
@@ -1777,7 +1856,7 @@ impl Scene {
 
     /// True while there's processing left that later frames will do.
     pub fn pending(&self) -> bool {
-        self.stats.pending > 0
+        self.stats.pending > 0 || !self.building.is_empty() || !self.built.is_empty()
     }
 
     /// Draw every entity into `pass`.
