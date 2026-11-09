@@ -13,8 +13,10 @@
 //!   materials in it, so a frame tests a few thousand boxes to learn which materials show and how
 //!   large, and the vertex shader culls the rest.
 //! - **Budgets.** New materials and LOD changes are processed under per-frame pixel budgets, LOD
-//!   changes wait for the zoom to settle (the web's `lodSettleFrames`), and textures are freed
-//!   with their last instance or, unseen, past a byte budget.
+//!   changes wait for the zoom to settle (the web's `lodSettleFrames`) unless the zoom has left a
+//!   texture magnified or minified past its tiers, and textures are freed with their last
+//!   instance or, unseen, past a byte budget. Nothing is drawn from a texture processed for less
+//!   of it than shows (`Material::region`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -72,8 +74,15 @@ const COLD_COUNT: usize = 4096;
 /// Pixels and count of LOD changes in one settled frame.
 const TRANSITION_PIXELS: u64 = 8 * 1024 * 1024;
 const TRANSITION_COUNT: usize = 32;
-/// Frames the zoom must hold before LOD changes.
+/// Frames the zoom must hold before LOD changes...
 const SETTLE_FRAMES: u32 = 2;
+/// ...but for what a zoom in progress leaves magnified, or minified past `MINIFIED`: this many
+/// and pixels of those a frame.
+const ZOOM_COUNT: usize = 8;
+const ZOOM_PIXELS: u64 = 2 * 1024 * 1024;
+/// Minification past the largest a settled level shows at (a tier is chosen with
+/// `LOD_OVERSCAN` to spare, and tiers double).
+const MINIFIED: f32 = process::LOD_OVERSCAN * 2.0;
 /// Processing a frame takes on before it leaves the rest to the next frames.
 /// Video frame bytes uploaded a frame (one frame always goes, whatever its size): a zoom that
 /// leaves many decoders oversized for a moment spreads their uploads instead of copying them all
@@ -176,6 +185,16 @@ struct Material {
     /// The frame it was last in the view ahead (`prefetch`).
     ahead: u64,
     gpu: GpuMat,
+    /// The part of its texture processed (0–1, x0 y0 x1 y1): all of it but for a continuous
+    /// material clipped to what showed (`occlusion`).
+    region: [f32; 4],
+}
+
+const FULL: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+
+/// `a` holds `b` (an empty `b` is held by anything).
+fn holds(a: [f32; 4], b: [f32; 4]) -> bool {
+    b[2] <= b[0] || b[3] <= b[1] || (a[0] <= b[0] && a[1] <= b[1] && a[2] >= b[2] && a[3] >= b[3])
 }
 
 /// A material `build_tiles` processes: its id, size, tile, source view, params, time and media size.
@@ -228,6 +247,8 @@ struct VideoSource {
     /// A seek is waiting for its first frame (keep drawing until it lands).
     waiting: bool,
     used: bool,
+    /// Its entity plays: its material is processed again with every new frame.
+    playing: bool,
     /// Where its entity was last seen.
     index: u32,
     /// The longest side it decodes at, and a different one the view has wanted since a frame.
@@ -302,7 +323,20 @@ pub struct Stats {
     pub source_uploads: usize,
     /// Visible materials with nothing processed to show yet (drawn as placeholders).
     pub unready: usize,
+    /// Visible materials drawn from a texture processed for less of them than shows: the rest
+    /// of what's drawn is whatever the texture held before.
+    pub stale: usize,
+    /// Visible materials drawn magnified past `SOFT` (below their native size): a zoom's
+    /// sharper level not processed yet.
+    pub soft: usize,
+    /// Visible materials drawn minified past `MINIFIED` (one level sampled, they shimmer).
+    pub minified: usize,
+    /// Visible materials whose level changed this frame (a still's look changes with its level).
+    pub swaps: usize,
 }
+
+/// Magnification past which a visible material counts as `Stats::soft`.
+const SOFT: f32 = 1.5;
 
 pub struct Scene {
     layout: wgpu::BindGroupLayout,
@@ -802,6 +836,7 @@ impl Scene {
                     want: 0.0,
                     ahead: 0,
                     gpu: GpuMat::default(),
+                    region: FULL,
                 };
                 let id = match self.free_mats.pop() {
                     Some(id) => {
@@ -1024,9 +1059,11 @@ impl Scene {
                 uploaded: 0,
                 waiting: true,
                 used: true,
+                playing: e.playing,
                 index: i as u32,
             });
             v.used = true;
+            v.playing = e.playing;
             v.index = i as u32;
             // A new decode size once the view has wanted it a moment: soon for more detail, later
             // for less, so a zoom doesn't restart decoders on every tier it passes.
@@ -1486,10 +1523,19 @@ impl Scene {
                     None => None,
                 };
                 process::run(device, enc, pipes, &mut self.scratch, &input, &params, time, &out, clip.as_deref());
+                let region = clip.as_ref().map_or(FULL, |c| {
+                    let (w, h) = (size.0 as f32, size.1 as f32);
+                    [c[0][0] as f32 / w, c[0][1] as f32 / h, (c[0][0] + c[0][2]) as f32 / w, (c[0][1] + c[0][3]) as f32 / h]
+                });
                 let view = out.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
                 let bind = self.tex_bind(device, &view);
                 let bytes = texture_bytes(&out);
-                (Tex::Own { bind, bytes, tex: out.clone(), recycle: true }, GpuMat { tile: [0.0, 0.0, size.0 as f32, size.1 as f32], layer: 0, levels: out.mip_level_count(), state: 2, flags: 0 }, size)
+                let gpu = GpuMat { tile: [0.0, 0.0, size.0 as f32, size.1 as f32], layer: 0, levels: out.mip_level_count(), state: 2, flags: 0 };
+                self.finish_build(id, Tex::Own { bind, bytes, tex: out, recycle: true }, gpu, size, size);
+                if let Some(Some(m)) = self.mats.get_mut(id as usize) {
+                    m.region = region;
+                }
+                return;
             }
         };
         self.finish_build(id, tex, gpu, size, done);
@@ -1505,7 +1551,14 @@ impl Scene {
                 self.mat_dirty.push(id);
             }
             m.gpu = gpu;
+            // A level change of what showed before: its look changes (a continuous material's
+            // changes every frame anyway).
+            let continuous = m.params.uses_time() || matches!(m.key, MatKey::Video { .. }) || m.asset.animated();
+            if !continuous && m.size != (0, 0) && m.size != size && m.seen == self.frame {
+                self.stats.swaps += 1;
+            }
             m.size = size;
+            m.region = FULL;
             self.drop_tex(old);
         }
         self.stats.processed += 1;
@@ -1520,6 +1573,9 @@ impl Scene {
 
     fn schedule(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, px_per_world: f32) {
         let settled = self.still >= SETTLE_FRAMES;
+        // Shown with less of it processed than shows (a clip a frame passed by): processed again
+        // now, whatever the budgets, as drawing it would show what its texture held before.
+        let mut forced: Vec<(u32, (u32, u32))> = Vec::new();
         let mut cold: Vec<(u32, (u32, u32))> = Vec::new();
         let mut moves: Vec<(u32, (u32, u32))> = Vec::new();
         let visible_count = self.visible_mats.len();
@@ -1529,6 +1585,7 @@ impl Scene {
             if ahead && m.size != (0, 0) {
                 continue;
             }
+            let lacking = !ahead && !matches!(m.tex, Tex::None) && !holds(m.region, self.clips.get(&id).copied().unwrap_or(FULL));
             let media = (m.asset.width, m.asset.height);
             let continuous = m.params.uses_time() || matches!(m.key, MatKey::Video { .. });
             let projected = m.want * px_per_world;
@@ -1541,20 +1598,30 @@ impl Scene {
                 // tier, a 900-pixel photo reads the 1024 level, not the 2048 one four times larger.
                 if m.params.show_original && !atlas::Atlas::fits(tier.0, tier.1) { process::screen_size(media, projected * process::LOD_OVERSCAN) } else { tier }
             };
-            if m.size == desired {
+            if lacking {
+                forced.push((id, desired));
+            } else if m.size == desired {
                 continue;
-            }
-            if m.size == (0, 0) {
+            } else if m.size == (0, 0) {
                 cold.push((id, desired));
-            } else {
+            } else if settled || {
+                // A zoom in progress changes levels only where the texture is magnified, or
+                // minified past any level a still settles at (sampled from one level, it shimmers):
+                // within those, it waits for the zoom to settle, as on the web.
+                let content = m.gpu.tile[2].max(m.gpu.tile[3]);
+                projected > content || (desired.0 < m.size.0 && content > projected * MINIFIED)
+            } {
                 moves.push((id, desired));
+            } else {
+                self.stats.pending += 1;
             }
         }
-        let mut chosen: Vec<(u32, (u32, u32))> = Vec::new();
+        let mut chosen = forced;
+        let must = chosen.len();
         let mut px = 0u64;
         for (id, size) in cold {
             let cost = u64::from(size.0) * u64::from(size.1);
-            if chosen.len() >= COLD_COUNT || (px + cost > COLD_PIXELS && !chosen.is_empty()) {
+            if chosen.len() - must >= COLD_COUNT || (px + cost > COLD_PIXELS && chosen.len() > must) {
                 self.stats.pending += 1;
                 continue;
             }
@@ -1562,50 +1629,62 @@ impl Scene {
             chosen.push((id, size));
         }
         let first = chosen.len();
-        if settled {
-            let (mut n, mut px) = (0, 0u64);
-            // Promotions first: a texture too small for its size shows most.
-            moves.sort_by_key(|(id, size)| std::cmp::Reverse(i64::from(size.0) - self.mat(*id).map_or(0, |m| i64::from(m.size.0))));
-            for (id, size) in moves {
-                let cost = u64::from(size.0) * u64::from(size.1);
-                if n >= TRANSITION_COUNT || (px + cost > TRANSITION_PIXELS && n > 0) {
-                    self.stats.pending += 1;
-                    continue;
-                }
-                n += 1;
-                px += cost;
-                chosen.push((id, size));
+        let (mut n, mut px) = (0, 0u64);
+        // Promotions first, the blurriest first (the screen pixels a texture falls short by): a
+        // large photo magnified shows it before a thumbnail does.
+        let short = |id: u32| self.mat(id).map_or(0, |m| (m.want * px_per_world - m.gpu.tile[2].max(m.gpu.tile[3])) as i64);
+        moves.sort_by_cached_key(|(id, size)| std::cmp::Reverse((i64::from(size.0) - self.mat(*id).map_or(0, |m| i64::from(m.size.0))).signum() * short(*id).max(1)));
+        let (count, pixels) = if settled { (TRANSITION_COUNT, TRANSITION_PIXELS) } else { (ZOOM_COUNT, ZOOM_PIXELS) };
+        for (id, size) in moves {
+            let cost = u64::from(size.0) * u64::from(size.1);
+            if n >= count || (px + cost > pixels && n > 0) {
+                self.stats.pending += 1;
+                continue;
             }
-        } else {
-            self.stats.pending += moves.len();
+            n += 1;
+            px += cost;
+            chosen.push((id, size));
         }
         if chosen.is_empty() {
             return;
         }
         // A frame takes on at most `FRAME_BUDGET` of processing and `STAGE_BUDGET` of uploads: in
         // batches (sources are built and uploaded a batch at a time), the rest left for the next
-        // frames. Always one batch.
+        // frames. Always one batch, and what's forced.
         let started = std::time::Instant::now();
         let mut left = chosen.as_slice();
         // Media showing for the first time (a placeholder on screen) gets `FIRST_BUDGET`; LOD
         // changes, which only sharpen what shows, `FRAME_BUDGET`.
         let mut done = 0;
-        let budget = |done: usize| if done < first { FIRST_BUDGET } else { FRAME_BUDGET };
+        let over = |done: usize| done >= must && started.elapsed() > if done < first { FIRST_BUDGET } else { FRAME_BUDGET };
         while !left.is_empty() {
             let (batch, rest) = left.split_at(left.len().min(BATCH));
             self.prepare_sources(device, queue, enc, batch);
             let rest_of_batch = self.build_tiles(device, enc, pipes, batch);
             // Processed a material at a time (several passes each): the budget holds between them.
-            for (id, size) in rest_of_batch {
-                if started.elapsed() > budget(done) {
+            for (id, mut size) in rest_of_batch {
+                let at = done + batch.iter().position(|b| b.0 == id).unwrap_or(0);
+                if over(at) {
                     self.stats.pending += 1;
                     continue;
+                }
+                // Forced while its new size's source is still being built: processed at the size
+                // it showed at, from the source that read, rather than left showing a stale part.
+                if at < must
+                    && let Some(m) = self.mat(id)
+                    && matches!(m.key, MatKey::Image { .. })
+                    && !self.sources.contains_key(&Self::source_key(m, size))
+                {
+                    let shown = (m.gpu.tile[2] as u32, m.gpu.tile[3] as u32);
+                    if self.sources.contains_key(&Self::source_key(m, shown)) {
+                        size = shown;
+                    }
                 }
                 self.build(device, enc, pipes, id, size);
             }
             done += batch.len();
             left = rest;
-            if started.elapsed() > budget(done) || self.staging.frame_bytes > STAGE_BUDGET {
+            if over(done) || (done >= must && self.staging.frame_bytes > STAGE_BUDGET) {
                 self.stats.pending += left.len();
                 break;
             }
@@ -1858,14 +1937,22 @@ impl Scene {
         }
     }
 
-    /// For the continuous one-pass materials visible this frame (processed again every frame),
-    /// the part of each that shows: clipped to the view and shrunk by the opaque instances above
-    /// it that cover a whole side, so a stack of overlapping entities processes what's seen of
-    /// each rather than all of every one. An occluder is opaque media shown as it is or through
-    /// an effect that keeps its alpha.
+    /// For the one-pass materials visible this frame that are processed again every frame
+    /// (flowing glass playing, a playing video), the part of each that shows: clipped to the view
+    /// and shrunk by the opaque instances above it that cover a whole side, so a stack of
+    /// overlapping entities processes what's seen of each rather than all of every one. An
+    /// occluder is opaque media shown as it is or through an effect that keeps its alpha. A
+    /// material that holds still isn't clipped: the next pan would show what it left out.
     fn occlusion(&mut self, view: [f32; 4], settled: bool) {
         self.clips.clear();
-        let target = |m: &Material| (m.params.uses_time() || matches!(m.key, MatKey::Video { .. })) && process::one_pass(&m.params);
+        let videos = &self.videos;
+        let target = |m: &Material| {
+            let moving = match m.key {
+                MatKey::Video { entity, asset, .. } => videos.get(&(entity, asset)).is_some_and(|v| v.playing),
+                MatKey::Image { .. } => m.params.animated(),
+            };
+            moving && process::one_pass(&m.params)
+        };
         if !settled || !self.visible_mats.iter().any(|id| self.mat(*id).is_some_and(target)) {
             return;
         }
@@ -1941,6 +2028,34 @@ impl Scene {
                 })
                 .or_insert(uv);
         }
+    }
+
+    /// What this frame draws of the visible materials that it shouldn't (`Stats::stale`, `soft`,
+    /// `minified`).
+    fn fidelity(&mut self, px_per_world: f32) {
+        let (mut stale, mut soft, mut minified) = (0, 0, 0);
+        for &id in &self.visible_mats {
+            let Some(m) = self.mat(id) else { continue };
+            if matches!(m.tex, Tex::None) {
+                continue;
+            }
+            if !holds(m.region, self.clips.get(&id).copied().unwrap_or(FULL)) {
+                stale += 1;
+            }
+            let content = m.gpu.tile[2].max(m.gpu.tile[3]);
+            let native = process::render_size(m.asset.width, m.asset.height);
+            let projected = m.want * px_per_world;
+            if content < native.0.max(native.1) as f32 && projected > content * SOFT {
+                soft += 1;
+            }
+            // Past the smallest tier: a speck's tier is larger than it shows by design.
+            if content > process::LOD_TIERS[0] as f32 && content > projected * MINIFIED {
+                minified += 1;
+            }
+        }
+        self.stats.stale = stale;
+        self.stats.soft = soft;
+        self.stats.minified = minified;
     }
 
     /// Instances whose material draws from its own texture, visible this frame, in z order.
@@ -2020,6 +2135,7 @@ impl Scene {
             + s.video_frames.values().filter_map(|f| f.gpu.as_ref()).map(|g| g.buf.size()).sum::<u64>()
             + crate::video::gpu_pool_bytes();
         self.stats.unready = self.visible_mats.iter().filter(|id| self.mat(**id).is_some_and(|m| matches!(m.tex, Tex::None))).count();
+        self.fidelity(s.cam.scale * dpr);
         self.stats.staging_bytes = self.staging.bytes()
             + self.building.values().sum::<u64>()
             + self.built.values().map(|(_, p)| p.buf.size()).sum::<u64>()

@@ -42,6 +42,8 @@ enum Layout {
     WorldGrid,
     /// The zoom-stress world grid of images and videos.
     Stress { paused: bool },
+    /// A few large photos side by side under different effects (`gallery_params`).
+    Gallery,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -55,6 +57,9 @@ enum View {
     ZoomRange(f32, f32),
     Stress,
     PausedPan,
+    /// Out to the whole gallery and into a corner of it and back, holding at each end, past
+    /// photos half off screen.
+    Gallery,
 }
 
 #[derive(Clone, Copy)]
@@ -116,6 +121,33 @@ const fn many(id: &'static str, count: usize, unique: usize, src: u32, display: 
 }
 
 const OVERVIEW: f32 = 0.18;
+/// Frames in a cycle of `View::Gallery`.
+const GALLERY_CYCLE: usize = 104;
+
+/// `Layout::Gallery`'s looks, a photo each: stills, continuous materials (flowing glass playing
+/// and paused) and originals.
+fn gallery_params(i: usize) -> Params {
+    let glass = Look::FlowingGlass { size: 28.0, intensity: 3.0, scale: 1.35, dispersion: 0.45, flow: 0.65 };
+    match i % 8 {
+        0 => params(Look::Dither4),
+        1 => params(Look::Dither8),
+        2 => params(glass),
+        3 => {
+            let mut p = params(glass);
+            p.time_autoplay = false;
+            p
+        }
+        4 => params(Look::Original),
+        5 => params(Look::Glitch),
+        6 => {
+            let mut p = params(Look::Dither4);
+            p.set_shader(Shader::Ascii);
+            (p.size, p.scale, p.preserve_colors) = (1.0, 1.0, true);
+            p
+        }
+        _ => params(Look::Defaults),
+    }
+}
 
 /// The web's scenarios, in its order.
 const SPECS: &[Spec] = &[
@@ -153,6 +185,8 @@ const SPECS: &[Spec] = &[
     Spec { id: "many-2048-unique-photos-mixed-overview-zoom", count: 2048, unique: 2048, src: (384, 256), display: Some((240.0, 160.0)), layout: Layout::WorldGrid, look: Look::Dither4, mixed: true, view: View::ZoomRange(0.02, 0.25), frames: 60, warmup: 8, samples: 3, ..BASE },
     Spec { id: "zoom-61-unique-mixed-round-trip", count: 61, unique: 61, src: (2048, 1365), layout: Layout::Stress { paused: false }, view: View::Stress, frames: 120, warmup: 4, samples: 3, reset: true, ..BASE },
     Spec { id: "zoom-61-unique-mixed-processed-round-trip", count: 61, unique: 61, src: (2048, 1365), layout: Layout::Stress { paused: false }, look: Look::Defaults, view: View::Stress, frames: 120, warmup: 4, samples: 3, reset: true, ..BASE },
+    // Desktop only: what a zoom shows of a few large photos under different effects.
+    Spec { id: "zoom-8-gallery-effects-round-trip", count: 8, unique: 8, src: (2048, 1365), display: Some((420.0, 280.0)), layout: Layout::Gallery, view: View::Gallery, frames: GALLERY_CYCLE, warmup: 4, samples: 3, ..BASE },
     Spec { id: "pan-61-unique-mixed-paused-videos", count: 61, unique: 61, src: (2048, 1365), layout: Layout::Stress { paused: true }, view: View::PausedPan, frames: 240, warmup: 30, samples: 5, ..BASE },
 ];
 
@@ -291,6 +325,7 @@ fn position(spec: &Spec, i: usize, d: (f32, f32)) -> [f32; 2] {
             [(i % cols) as f32 * (d.0 + gap), (i / cols) as f32 * (d.1 + gap)]
         }
         Layout::Stress { .. } => [(i % 8) as f32 * 680.0, (i / 8) as f32 * 480.0],
+        Layout::Gallery => [(i % 4) as f32 * (d.0 + 8.0), (i / 4) as f32 * (d.1 + 8.0)],
     }
 }
 
@@ -338,6 +373,29 @@ fn viewport(spec: &Spec, d: (f32, f32), k: usize, j: usize) -> ([f32; 2], f32) {
             // The target: entity 29's centre.
             let t = [(29 % 8) as f32 * 680.0 + 210.0, (29 / 8) as f32 * 480.0 + 140.0];
             ([t[0] - CANVAS.0 / (2.0 * zoom), t[1] - CANVAS.1 / (2.0 * zoom)], zoom)
+        }
+        View::Gallery => {
+            // Hold, in, hold, out: frames of a cycle.
+            let i = j % GALLERY_CYCLE;
+            let ease = |from: f32, to: f32, t: f32| {
+                let t = t.clamp(0.0, 1.0);
+                let e = t * t * (3.0 - 2.0 * t);
+                (from.ln() + (to.ln() - from.ln()) * e).exp()
+            };
+            let (overview, detail) = (0.3, 2.4);
+            let (zoom, t) = match i {
+                i if i < 12 => (overview, 0.0),
+                i if i < 52 => (ease(overview, detail, (i - 12 + 1) as f32 / 40.0), (i - 12 + 1) as f32 / 40.0),
+                i if i < 64 => (detail, 1.0),
+                i => (ease(detail, overview, (i - 64 + 1) as f32 / 40.0), 1.0 - (i - 64 + 1) as f32 / 40.0),
+            };
+            // From the gallery's centre towards the seam of photos 1, 2, 5 and 6.
+            let (w, h) = (4.0 * (d.0 + 8.0), 2.0 * (d.1 + 8.0));
+            let from = [w / 2.0, h / 2.0];
+            let to = [d.0 * 1.6, d.1 * 0.9];
+            let t = t * t * (3.0 - 2.0 * t);
+            let c = [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t];
+            ([c[0] - CANVAS.0 / (2.0 * zoom), c[1] - CANVAS.1 / (2.0 * zoom)], zoom)
         }
         View::PausedPan => {
             let p = (j % spec.frames) as f32 / spec.frames as f32;
@@ -533,7 +591,13 @@ pub fn scene(s: &mut App) {
             (shared[i % shared.len()].clone(), d)
         };
         let pos = position(&spec, i, d);
-        let params = if spec.mixed { mixed[((i * 4) / spec.count).min(3)].clone() } else { look.clone() };
+        let params = if spec.layout == Layout::Gallery {
+            Arc::new(gallery_params(i))
+        } else if spec.mixed {
+            mixed[((i * 4) / spec.count).min(3)].clone()
+        } else {
+            look.clone()
+        };
         let id = i as u32 + 1;
         let mut e = Entity::new(id, asset, pos, id, params);
         e.size = [d.0, d.1];
@@ -599,6 +663,7 @@ pub fn run_direct() {
     let mut peak_extra = 0u64;
     let mut peak_total = 0u64;
     let (mut visible, mut processed, mut unready) = (0usize, 0usize, 0usize);
+    let (mut stale, mut stale_frames, mut soft, mut minified, mut swaps) = (0usize, 0usize, 0usize, 0usize, 0usize);
     for k in 0..bench.total() {
         let measuring = k >= spec.warmup;
         if measuring && (k - spec.warmup).is_multiple_of(spec.frames) {
@@ -650,6 +715,11 @@ pub fn run_direct() {
             visible += st.visible;
             processed += st.processed;
             unready += st.unready;
+            stale += st.stale;
+            stale_frames += usize::from(st.stale > 0);
+            soft += st.soft;
+            minified += st.minified;
+            swaps += st.swaps;
             if (k + 1 - spec.warmup).is_multiple_of(spec.frames) {
                 drain();
                 samples.push(sample_start.elapsed().as_secs_f64() * 1000.0 / spec.frames as f64);
@@ -675,6 +745,11 @@ pub fn run_direct() {
         "visibleMean": visible as f64 / n,
         "processed": processed,
         "visibleUnreadyMean": unready as f64 / n,
+        "visibleStaleMean": stale as f64 / n,
+        "staleFrames": stale_frames,
+        "visibleSoftMean": soft as f64 / n,
+        "visibleMinifiedMean": minified as f64 / n,
+        "swaps": swaps,
         "peakResidentBytes": peak,
         "peakVideoAndStagingBytes": peak_extra,
         "peakTotalBytes": peak_total,
