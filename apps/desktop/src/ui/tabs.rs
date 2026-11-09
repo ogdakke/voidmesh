@@ -37,9 +37,15 @@ pub fn reveal(s: &App, tx: &mut Tx) {
 const BUTTONS_W: f32 = 2.0 * (28.0 + 4.0);
 /// The strip's padding and gap between tabs.
 const GAP: f32 = 4.0;
-/// Room above and below the tabs inside their scroll, so the active tab's border and shadow
-/// aren't clipped: the strip is this much taller than a tab at each edge.
-pub const PAD_Y: f32 = 2.0;
+/// The active tab's drop shadow: offset down by `SHADOW_Y`, CSS blur `SHADOW_BLUR`.
+const SHADOW_Y: f32 = 4.0;
+const SHADOW_BLUR: f32 = 12.0;
+/// Room above and below the tabs inside their scroll, so the active tab's shadow isn't clipped:
+/// the strip is this much taller than a tab at each edge, as far as the shadow reaches below.
+pub const PAD_Y: f32 = SHADOW_Y + SHADOW_BLUR;
+/// Room at the scroll's sides for the shadow's blur. The viewport's negative margins of the same
+/// amount keep the tabs where they would sit without it.
+const PAD_X: f32 = SHADOW_BLUR;
 
 /// A tab's width as it lays out: its label (cut at `TAB_W`), padding and, when active, its close
 /// button; never under `TAB_MIN`.
@@ -54,13 +60,13 @@ fn tab_w(s: &App, i: usize) -> f32 {
 /// The tabs, then "+" and the library, in `room` points: past that the tabs scroll.
 pub fn strip(l: &Look, s: &App, room: f32) -> El {
     let natural = (0..s.tabs.len()).map(|i| tab_w(s, i)).sum::<f32>() + GAP * (s.tabs.len() as f32 - 1.0).max(0.0);
-    let width = natural.min(room - BUTTONS_W).max(TAB_MIN);
-    let tabs = s.tabs.iter().enumerate().fold(row().gap(GAP).py(PAD_Y).center_y(), |r, (i, t)| r.child(tab(l, s, i, t)));
+    let width = natural.min(room - BUTTONS_W).max(TAB_MIN) + 2.0 * PAD_X;
+    let tabs = s.tabs.iter().enumerate().fold(row().gap(GAP).py(PAD_Y).px(PAD_X).center_y(), |r, (i, t)| r.child(tab(l, s, i, t)));
     let r = row()
         .key("tabs")
         .gap(GAP)
         .center_y()
-        .child(row().key("tabs-scroll").w(width).min_w(width).scroll_x().scroll_edge_fade(24.0).scroll_margin(24.0).child(tabs));
+        .child(row().key("tabs-scroll").w(width).min_w(width).mx(-PAD_X).scroll_x().scroll_edge_fade(24.0).scroll_margin(24.0).child(tabs));
     let small = |key: &'static str, label: &'static str, glyph: &'static rune::Icon, press: fn(&mut App, &mut Tx)| {
         el().key(key).role("button").label(label).help(label).size(28.0, 28.0).radius(14.0).center().hover(l.hover).press_scale(0.97).cursor(rune::Cursor::Pointer).on_press_tx(press).child(icon(glyph, 15.0).color(l.text_muted))
     };
@@ -133,7 +139,7 @@ fn tab(l: &Look, s: &App, i: usize, t: &crate::state::Tab) -> El {
         })
         .child(text(label).font(MEDIUM).color(if active { l.text } else { l.text_muted }).truncate().max_w(TAB_W).grow(1.0));
     if active {
-        e = look::own_gestures(e).fill(l.surface).border(1.0, l.border).shadow(4.0, 12.0, Color::BLACK.alpha(0.07)).child(
+        e = look::own_gestures(e).fill(l.surface).border(1.0, l.border).shadow(SHADOW_Y, SHADOW_BLUR, Color::BLACK.alpha(0.07)).child(
             el().key("tab-close")
                 .role("button")
                 .label("Close workspace (⌘W)")
