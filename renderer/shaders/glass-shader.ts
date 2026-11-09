@@ -204,6 +204,9 @@ export class GlassShader extends ShaderPass {
 
   writeVariantUniforms(entity: EffectRenderEntity): void {
     const glassKind = entity.shaderParams.glass?.kind ?? GlassKind.frostedVoronoi;
+    // Fluted and flowing: offset 11 = render pixels per media pixel (their wave fields work in
+    // media pixels so a preview LOD looks like the native export).
+    this.ctx.floatView[11] = entity.pixelScale;
 
     if (glassKind === GlassKind.fluted) {
       // Fluted: offset 5 = caustic, offset 6 = dispersion, offset 7 = angle

@@ -13,7 +13,7 @@ struct Uniforms {
   _unused: u32,
   _pad0: u32,
   _pad1: u32,
-  _pad2: u32,
+  pixelScale: f32,        // Render pixels per media pixel (offset 44)
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -170,14 +170,18 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   let pixelPos = fragCoord.xy;
   let uv = pixelPos / uniforms.resolution;
 
-  let wavelength = max(uniforms.cellSize, 1.0);
+  // The wave field is evaluated in media pixels, not render pixels: its gradient sets the
+  // refraction (in UV) and its curvature the caustics, so evaluated per render pixel both would
+  // grow as the preview LOD shrinks, and a preview would not look like the native export.
+  let pixelScale = uniforms.pixelScale;
+  let wavelength = max(uniforms.cellSize, 1.0) / pixelScale;
   let freq = TAU / wavelength;
   let amplitude = uniforms.scale;
   let flow = uniforms.flow;
 
   // --- Turbulence: warp position for animated fluid motion ---
   let warpedUV = turbulence(uv, uniforms.time);
-  let warpedPos = warpedUV * uniforms.resolution;
+  let warpedPos = warpedUV * uniforms.resolution / pixelScale;
 
   // --- Step 1: Evaluate wave field (using warped position) ---
   let field = waveField(warpedPos, freq, wavelength, amplitude, flow, uniforms.time);
