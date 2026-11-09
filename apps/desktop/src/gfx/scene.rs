@@ -118,7 +118,7 @@ const SELECTED: u32 = 1;
 const HAIRLINE: u32 = 2;
 
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable, Default)]
+#[derive(Clone, Copy, Pod, Zeroable, Default, PartialEq)]
 struct GpuMat {
     tile: [f32; 4],
     layer: u32,
@@ -755,6 +755,34 @@ impl Scene {
         }
     }
 
+    /// Material `id` moved on to `e`'s next time or frame (flowing glass, video), when only `e`
+    /// shows it and nothing shows the next yet: the same material, processed again and its
+    /// texture showing until then, rather than a new material and the old one freed every frame
+    /// (an instance and a material record to upload each, and a placeholder for an instant).
+    /// True when it did.
+    fn rekey_in_place(&mut self, id: u32, e: &Entity) -> bool {
+        let key = self.key_of(e);
+        if self.mat_index.contains_key(&key) {
+            return false;
+        }
+        let Some(Some(m)) = self.mats.get_mut(id as usize) else { return false };
+        let moved_on = match (m.key, key) {
+            (MatKey::Image { asset: a0, params: p0, .. }, MatKey::Image { asset: a1, params: p1, .. }) => a0 == a1 && p0 == p1,
+            (MatKey::Video { entity: e0, asset: a0, params: p0, .. }, MatKey::Video { entity: e1, asset: a1, params: p1, .. }) => e0 == e1 && a0 == a1 && p0 == p1,
+            _ => false,
+        };
+        if m.refs != 1 || !moved_on {
+            return false;
+        }
+        let old = std::mem::replace(&mut m.key, key);
+        m.frame = e.asset.frame_at(e.play_t);
+        m.time = e.fx_t as f32;
+        m.size = (0, 0);
+        self.mat_index.remove(&old);
+        self.mat_index.insert(key, id);
+        true
+    }
+
     /// The material showing what `e` shows, made if new; counts a reference.
     fn retain_mat(&mut self, e: &Entity) -> u32 {
         let key = self.key_of(e);
@@ -909,7 +937,7 @@ impl Scene {
                 && o.asset.frame_at(o.play_t) == e.asset.frame_at(e.play_t)
                 && (!e.params.uses_time() || o.fx_t == e.fx_t)
         });
-        let mat = if same {
+        let mat = if same || self.rekey_in_place(cur.mat, e) {
             cur.mat
         } else {
             let m = self.retain_mat(e);
@@ -1471,11 +1499,15 @@ impl Scene {
     fn finish_build(&mut self, id: u32, tex: Tex, gpu: GpuMat, size: (u32, u32), done: (u32, u32)) {
         if let Some(m) = self.mats[id as usize].as_mut() {
             let old = std::mem::replace(&mut m.tex, tex);
+            // Its GPU record changes only when where it's drawn from does (a texture of its own
+            // drawn again isn't a change): no upload for that.
+            if m.gpu != gpu {
+                self.mat_dirty.push(id);
+            }
             m.gpu = gpu;
             m.size = size;
             self.drop_tex(old);
         }
-        self.mat_dirty.push(id);
         self.stats.processed += 1;
         self.world_dirty = true;
         self.stats.processed_pixels += u64::from(done.0) * u64::from(done.1);
