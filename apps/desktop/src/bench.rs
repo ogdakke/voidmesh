@@ -596,6 +596,7 @@ pub fn run_direct() {
     let mut sample_start = Instant::now();
     let mut peak = 0u64;
     let mut peak_extra = 0u64;
+    let mut peak_total = 0u64;
     let (mut visible, mut processed) = (0usize, 0usize);
     for k in 0..bench.total() {
         let measuring = k >= spec.warmup;
@@ -632,6 +633,7 @@ pub fn run_direct() {
         let st = direct.scene.stats;
         peak = peak.max(st.resident_bytes);
         peak_extra = peak_extra.max(st.video_bytes + st.staging_bytes);
+        peak_total = peak_total.max(st.resident_bytes + st.video_bytes + st.staging_bytes);
         if measuring {
             cpu.push(ms);
             visible += st.visible;
@@ -662,6 +664,7 @@ pub fn run_direct() {
         "processed": processed,
         "peakResidentBytes": peak,
         "peakVideoAndStagingBytes": peak_extra,
+        "peakTotalBytes": peak_total,
         "note": spec.note,
     });
     println!("voidmesh-bench {report}");
