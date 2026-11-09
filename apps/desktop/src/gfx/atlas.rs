@@ -53,10 +53,13 @@ pub struct Atlas {
     pub used_bytes: u64,
 }
 
+/// The atlas's texture of `layers` layers: a 1×1 stand-in while it has none (nothing to sample,
+/// but bind groups need a texture).
 fn texture(device: &wgpu::Device, layers: u32) -> wgpu::Texture {
+    let side = if layers == 0 { 1 } else { SIDE };
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("voidmesh atlas"),
-        size: wgpu::Extent3d { width: SIDE, height: SIDE, depth_or_array_layers: layers },
+        size: wgpu::Extent3d { width: side, height: side, depth_or_array_layers: layers.max(1) },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -96,9 +99,11 @@ fn take(spans: &mut Vec<(u32, u32)>, len: u32) -> Option<u32> {
 }
 
 impl Atlas {
+    /// An atlas of no layers: the first comes with the first tile (a canvas of originals too
+    /// large for tiles needs none).
     pub fn new(device: &wgpu::Device) -> Atlas {
-        let t = texture(device, 1);
-        Atlas { view: array_view(&t), texture: t, layers: 1, shelves: Vec::new(), rows: vec![vec![(0, SIDE)]], generation: 0, used_bytes: 0 }
+        let t = texture(device, 0);
+        Atlas { view: array_view(&t), texture: t, layers: 0, shelves: Vec::new(), rows: Vec::new(), generation: 0, used_bytes: 0 }
     }
 
     pub fn bytes(&self) -> u64 {
@@ -174,11 +179,13 @@ impl Atlas {
     /// A texture of `layers` layers holding what the current one does, up to that many.
     fn replace(&mut self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, layers: u32) {
         let t = texture(device, layers);
-        enc.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo { texture: &self.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            wgpu::TexelCopyTextureInfo { texture: &t, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            wgpu::Extent3d { width: SIDE, height: SIDE, depth_or_array_layers: self.layers.min(layers) },
-        );
+        if self.layers.min(layers) > 0 {
+            enc.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo { texture: &self.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyTextureInfo { texture: &t, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::Extent3d { width: SIDE, height: SIDE, depth_or_array_layers: self.layers.min(layers) },
+            );
+        }
         self.rows.resize_with(layers as usize, || vec![(0, SIDE)]);
         self.layers = layers;
         self.view = array_view(&t);
