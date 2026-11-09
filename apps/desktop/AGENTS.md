@@ -29,7 +29,8 @@ changes.
   those differently from layout, and the media drifts away from the UI and the pointer.
 - Processed textures are materials keyed by asset, frame and params (never by entity), made at
   a preview LOD and shared by every entity showing them; export renders the native size. Effects
-  run in media pixels, as the web app's do: spatial params scale by render size over native size.
+  work in media pixels (`Uniforms::k`, render over native size), so a preview at any LOD looks
+  like the export seen at its size; `gfx/process.rs` tests measure it.
 - Canvases reach hundreds of thousands of entities: `Entities` is copy-on-write chunks (snapshots
   are cheap, the compositor diffs chunks by identity), `Selection` carries a revision, and
   per-entity work happens only where something changed. A drag moves the selection by an offset

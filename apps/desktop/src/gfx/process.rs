@@ -44,10 +44,13 @@ pub struct Uniforms {
     flow: [[f32; 4]; 3],
     /// This pass's output region in its target (xy), a mip pass's source region (zw).
     origin: [f32; 4],
+    /// Render pixels per media pixel (x): effects work out what they shape in media pixels, so a
+    /// preview at any LOD is the native render at its size.
+    k: [f32; 4],
 }
 
 const UNIFORM_SIZE: u64 = std::mem::size_of::<Uniforms>() as u64;
-const _: () = assert!(UNIFORM_SIZE == 192);
+const _: () = assert!(UNIFORM_SIZE == 208);
 
 /// Pipelines and shared bindings for every entity's processing.
 pub struct Pipes {
@@ -963,6 +966,7 @@ fn base_uniforms(p: &Params, size: (u32, u32), media: (u32, u32), time: f32) -> 
         blur: [0.0; 4],
         flow: if p.uses_time() { flowing_constants(time, (p.size * k).max(1.0)) } else { [[0.0; 4]; 3] },
         origin: [0.0; 4],
+        k: [k, 0.0, 0.0, 0.0],
     }
 }
 
@@ -1041,6 +1045,124 @@ mod tests {
         let big = mips_rgba(1034, 1435, &vec![7u8; 1034 * 1435 * 4]);
         assert_eq!(big.len() as u32, levels_for(1034, 1435) - 1);
         assert_eq!(big.last().map(Vec::len), Some(4));
+    }
+
+    /// A photo-like test image: smooth colour fields, soft blobs and fine detail, defined in
+    /// media pixels so its levels are the same picture.
+    fn scene_rgba(w: u32, h: u32) -> Vec<u8> {
+        let mut px = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
+                let blob = (-((u - 0.4).powi(2) + (v - 0.45).powi(2)) * 18.0).exp();
+                let fine = ((x as f32 * 0.35).sin() * (y as f32 * 0.21).cos()) * 0.12;
+                let stripes = ((u * 40.0 + v * 9.0).sin() * 0.5 + 0.5) * 0.25;
+                let r = (0.15 + 0.7 * blob + stripes + fine).clamp(0.0, 1.0);
+                let g = (0.1 + 0.5 * u * (1.0 - blob) + fine).clamp(0.0, 1.0);
+                let b = (0.2 + 0.6 * v * v + 0.3 * (u * 13.0).cos().abs() * (1.0 - blob)).clamp(0.0, 1.0);
+                px.extend_from_slice(&[(r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, 255]);
+            }
+        }
+        px
+    }
+
+    fn read_level(device: &wgpu::Device, queue: &wgpu::Queue, t: &wgpu::Texture, level: u32) -> Vec<u8> {
+        let (w, h) = ((t.width() >> level).max(1), (t.height() >> level).max(1));
+        let row = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let buf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: u64::from(row * h), usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+        let mut enc = device.create_command_encoder(&Default::default());
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo { texture: t, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: None } },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        queue.submit([enc.finish()]);
+        buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        let data = buf.slice(..).get_mapped_range().expect("mapped");
+        data.chunks_exact(row as usize).flat_map(|r| r[..(w * 4) as usize].to_vec()).collect()
+    }
+
+    /// How far a preview at each level below native strays from the native render seen at that
+    /// size (its box-filtered mip): the mean absolute difference of RGB, 0–255, levels 1–3.
+    fn preview_error(p: &Params, time: f32) -> [f32; 3] {
+        let g = rune::render::Gpu::try_with_features(rune::render::Gpu::instance(), None, wgpu::Features::IMMEDIATES).expect("a GPU");
+        let (device, queue) = (&g.device, &g.queue);
+        let pipes = Pipes::new(device, queue);
+        let (w, h) = (2048u32, 1366u32);
+        let mut scratch = ScratchPool::default();
+        let mut enc = device.create_command_encoder(&Default::default());
+        let src = upload_gpu_mips(device, queue, &mut enc, &pipes, w, h, &scene_rgba(w, h));
+        let view = src.create_view(&Default::default());
+        let input = Input { texture: &src, view: &view, size: (w, h), levels: src.mip_level_count(), media: (w, h) };
+        let native = target_mips(device, w, h, levels_for(w, h), "native");
+        run(device, &mut enc, &pipes, &mut scratch, &input, p, time, &native, None);
+        let previews: Vec<wgpu::Texture> = (1..=3)
+            .map(|l| {
+                let t = target_mips(device, (w >> l).max(1), (h >> l).max(1), 1, "preview");
+                run(device, &mut enc, &pipes, &mut scratch, &input, p, time, &t, None);
+                t
+            })
+            .collect();
+        queue.submit([enc.finish()]);
+        std::array::from_fn(|i| {
+            let (a, b) = (read_level(device, queue, &native, i as u32 + 1), read_level(device, queue, &previews[i], 0));
+            let sum: u64 = a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0).map(|(a, b)| (0..3).map(|c| u64::from(a[c].abs_diff(b[c]))).sum::<u64>()).sum();
+            sum as f32 / (a.len() / 4 * 3) as f32
+        })
+    }
+
+    fn look(shader: Shader, kind: u32) -> Params {
+        let mut p = Params::default();
+        p.set_shader(shader);
+        (p.post, p.brightness, p.contrast, p.saturation, p.blur) = (false, 0.5, 0.5, 0.5, 0.0);
+        match shader {
+            Shader::Glass => p.set_glass_kind(kind),
+            Shader::Glitch => p.glitch_kind = kind,
+            _ => {}
+        }
+        p
+    }
+
+    /// Glass bends the picture by its waves' slopes: worked out per render pixel, a quarter-size
+    /// preview bent it four times as far as the export (an error of 14–41 here).
+    #[test]
+    fn glass_previews_look_like_the_export_at_their_size() {
+        let mut strong = look(Shader::Glass, 2);
+        (strong.size, strong.intensity, strong.scale, strong.dispersion, strong.flow) = (28.0, 4.0, 2.0, 0.6, 0.8);
+        for (name, p, most) in [("flowing", look(Shader::Glass, 2), 6.0), ("flowing, strong", strong, 8.0), ("fluted", look(Shader::Glass, 0), 3.0)] {
+            let e = preview_error(&p, 3.0);
+            assert!(e.iter().all(|e| *e < most), "{name} glass previews at 1/2, 1/4, 1/8 stray {e:?} from the export");
+        }
+    }
+
+    #[test]
+    #[ignore = "a measurement, not a check: cargo test --release -- --ignored preview_error_table --nocapture"]
+    fn preview_error_table() {
+        let looks = [
+            ("original", { Params { show_original: true, ..Params::default() } }),
+            ("glass fluted", look(Shader::Glass, 0)),
+            ("glass frosted", look(Shader::Glass, 1)),
+            ("glass flowing", look(Shader::Glass, 2)),
+            ("flowing strong", {
+                let mut p = look(Shader::Glass, 2);
+                (p.size, p.intensity, p.scale, p.dispersion, p.flow) = (28.0, 4.0, 2.0, 0.6, 0.8);
+                p
+            }),
+            ("dithering", look(Shader::Dithering, 0)),
+            ("halftone", look(Shader::Halftone, 0)),
+            ("ascii", look(Shader::Ascii, 0)),
+            ("blobs", look(Shader::Blobs, 0)),
+            ("melt", look(Shader::Melt, 0)),
+            ("glitch 0", look(Shader::Glitch, 0)),
+            ("glitch 1", look(Shader::Glitch, 1)),
+            ("glitch 2", look(Shader::Glitch, 2)),
+            ("glitch 3", look(Shader::Glitch, 3)),
+        ];
+        for (name, p) in looks {
+            let e = preview_error(&p, 3.0);
+            eprintln!("{name:>14}: 1/2 {:6.2}   1/4 {:6.2}   1/8 {:6.2}", e[0], e[1], e[2]);
+        }
     }
 
     #[test]

@@ -30,6 +30,7 @@ struct P {
   blur: vec4f,         // kawase offset, source mip level (adjust pass), source texel size (zw)
   flow: array<vec4f, 3>, // flowing glass: the turbulence octaves' phases (8), the wave drifts (2)
   origin: vec4f,       // this pass's output region in its target (xy); a mip pass's source region (zw)
+  k: vec4f,            // render pixels per media pixel (x)
 }
 
 var<immediate> u: P;
@@ -485,7 +486,8 @@ fn glass_fluted(p: vec2f) -> vec4f {
   let edge = tanh(2.0 * sin(phase));
   let refr = -edge * u.intensity * u.scale * 0.015;
   let s = split_sample(uv, vec2f(refr * ca, refr * sa));
-  let jac = 1.0 + 2.0 * cos(phase) * (1.0 - edge * edge) * freq * u.intensity * u.scale * 0.5;
+  // The caustic from the ridges' slope per media pixel, as the native render has it.
+  let jac = 1.0 + 2.0 * cos(phase) * (1.0 - edge * edge) * freq * u.k.x * u.intensity * u.scale * 0.5;
   let caustic = mix(1.0, clamp(1.0 / sqrt(jac * jac + 0.04), 0.7, 5.0), u.x.y);
   let fresnel = pow(1.0 - abs(ridge), 5.0) * 0.003 * u.scale;
   return premul(vec4f(clamp(s.rgb * caustic + fresnel, vec3f(0.0), vec3f(1.0)), s.a));
@@ -562,16 +564,19 @@ fn turbulence(p0: vec2f, time: f32) -> vec2f {
 
 fn glass_flowing(p: vec2f) -> vec4f {
   let uv = p / u.res;
-  let wl = max(u.cell, 1.0);
+  // The wave field in media pixels: its slopes set the refraction (in uv) and its curvature
+  // the caustics, so worked out per render pixel they'd grow as the preview shrinks.
+  let k = u.k.x;
+  let wl = max(u.cell, 1.0) / k;
   let freq = TAU / wl;
   let amp = u.scale;
   let flow = u.y.y;
   let time = u.time;
-  let pos = turbulence(uv, time) * u.res;
+  let pos = turbulence(uv, time) * u.res / k;
 
   let yf = freq * 0.3;
   let ymod = sin(pos.y * yf) * wl * 0.15 * flow;
-  let drift = u.flow[2].x;
+  let drift = u.flow[2].x / k;
   let pp = (pos.x + ymod + drift) * freq;
   let ap = time * 0.11 + pos.x * 0.001;
   let am = 1.0 + 0.1 * sin(ap);
@@ -586,7 +591,7 @@ fn glass_flowing(p: vec2f) -> vec4f {
 
   let f2 = freq * 1.61803398;
   let ymod2 = sin(pos.y * yf * 1.61803398) * wl * 0.08 * flow;
-  let drift2 = u.flow[2].y;
+  let drift2 = u.flow[2].y / k;
   let sp = (pos.x + ymod2 + drift2) * f2;
   let sa = amp * 0.35;
   let dsy = cos(pos.y * yf * 1.61803398) * yf * 1.61803398 * wl * 0.08 * flow * f2;
