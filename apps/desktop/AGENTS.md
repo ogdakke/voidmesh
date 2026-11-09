@@ -34,6 +34,9 @@ changes.
   are cheap, the compositor diffs chunks by identity), `Selection` carries a revision, and
   per-entity work happens only where something changed. A drag moves the selection by an offset
   and commits positions once it ends.
+- The frame never waits on bulk work: uploads go through the scene's staging sets (Rune pins a
+  buffer queue-written while the GPU reads it, and allocates on every later write), and source
+  levels read from full-size pixels are built off the frame.
 - `effects.rs` mirrors the web app's `ShaderParams`, defaults and per-shader resets; keep ranges
   and labels in step with `lib/config/index.ts`.
 - UI uses the web app's tokens (`ui/look.rs`) and primitive shapes (`ui/widgets.rs`).
