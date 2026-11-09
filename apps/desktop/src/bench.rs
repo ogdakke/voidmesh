@@ -553,10 +553,11 @@ pub fn scene(s: &mut App) {
 }
 
 /// The compositor alone, as the web's bench drives its renderer: `VOIDMESH_BENCH=<id>
-/// voidmesh` with `VOIDMESH_BENCH_DIRECT=1`. Frames are encoded and submitted back to back
-/// without waiting on the GPU, which is drained at the end of each sample: a sample's wall time
-/// over its frames is the web's `msPerFrame`. CPU time per frame covers the canvas's sync,
-/// visibility, processing, encoding and submission.
+/// voidmesh` with `VOIDMESH_BENCH_DIRECT=1`. Frames are encoded and submitted back to back, up
+/// to three in flight (as a swapchain's drawables allow), and the GPU is drained at the end of
+/// each sample: a sample's wall time over its frames is the web's `msPerFrame`. CPU time per frame
+/// covers the canvas's sync, visibility, processing, encoding and submission, not waiting for
+/// the GPU.
 pub fn run_direct() {
     // A GUI app's main thread runs at this class; a process started from a shell doesn't.
     crate::gfx::process::interactive();
@@ -587,6 +588,8 @@ pub fn run_direct() {
     let drain = || {
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
     };
+    const IN_FLIGHT: usize = 8;
+    let mut in_flight = std::collections::VecDeque::with_capacity(IN_FLIGHT + 1);
     let spec = bench.spec;
     let mut cpu = Vec::new();
     let mut samples = Vec::new();
@@ -610,10 +613,18 @@ pub fn run_direct() {
             std::thread::sleep(Duration::from_micros(200));
         }
         sample_start += wait.elapsed();
+        // At most `IN_FLIGHT` frames queued, as a swapchain's drawables allow: a GPU-bound frame
+        // waits here, in the sample's wall time but not in the frame's CPU time, rather than in
+        // whichever call finds Metal's queue full.
+        if in_flight.len() >= IN_FLIGHT
+            && let Some(i) = in_flight.pop_front()
+        {
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: Some(i), timeout: None });
+        }
         let t0 = Instant::now();
         let mut enc = device.create_command_encoder(&Default::default());
         direct.frame(device, queue, &mut enc, &view, format, size, &mut s, scale);
-        queue.submit([enc.finish()]);
+        in_flight.push_back(queue.submit([enc.finish()]));
         let _ = device.poll(wgpu::PollType::Poll);
         let ms = t0.elapsed().as_secs_f64() * 1000.0;
         let Some(b) = s.bench.take() else { return };

@@ -10,7 +10,8 @@
 #                                    on every frame, instead of the compositor alone
 #
 # By default each scenario runs the compositor alone (`bench::run_direct`), as the web's bench
-# runs its renderer without React: frames submitted back to back, the GPU drained once a sample.
+# runs its renderer without React: frames submitted back to back (three in flight at most, as a
+# swapchain allows), the GPU drained once a sample.
 # Results go to target/bench/latest.jsonl, one scenario a line, and a table compares them with the
 # web's: ms/frame (a sample's wall time over its frames), CPU p95 against the web renderer's CPU
 # p95, and peak resident GPU bytes in the categories the web counts (processed, source and pooled
