@@ -12,7 +12,7 @@ struct Uniforms {
   _unused: u32,
   _pad0: u32,
   _pad1: u32,
-  _pad2: u32,
+  pixelScale: f32,        // Render pixels per media pixel (offset 44)
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -99,7 +99,8 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   let causticK = uniforms.intensity * curvature * 0.5;
   let sechSq = 1.0 - edgeSlope * edgeSlope;
   let causticDeriv = sharpness * cos(phase) * sechSq;
-  let jacobian = 1.0 + causticDeriv * frequency * causticK;
+  // The ridge slope per media pixel (the native render's), so the caustics hold at any preview LOD.
+  let jacobian = 1.0 + causticDeriv * frequency * uniforms.pixelScale * causticK;
   // Smooth reciprocal: sqrt(j² + ε) avoids the hard floor clamp for softer caustic transitions
   let smoothJ = sqrt(jacobian * jacobian + 0.04);
   let rawCaustic = clamp(1.0 / smoothJ, 0.7, 5.0);
