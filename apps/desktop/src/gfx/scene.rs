@@ -1769,6 +1769,23 @@ impl Scene {
             if b[0] > a[2] || b[2] < a[0] || b[1] > a[3] || b[3] < a[1] {
                 continue;
             }
+            // A few materials (shared media): marked at the group's largest side, as `visibility`
+            // does, rather than an instance at a time.
+            if g.mats.len() <= GROUP_MATS {
+                for &(m, side) in &g.mats {
+                    let Some(Some(mat)) = self.mats.get_mut(m as usize) else { continue };
+                    if mat.seen == frame {
+                        continue;
+                    }
+                    if mat.ahead != frame {
+                        mat.ahead = frame;
+                        mat.want = 0.0;
+                        self.ahead_mats.push(m);
+                    }
+                    mat.want = mat.want.max(side);
+                }
+                continue;
+            }
             for i in &self.insts[gi * GROUP..((gi + 1) * GROUP).min(self.insts.len())] {
                 let r = i.rect;
                 let (x1, y1) = (r[0] + r[2], r[1] + r[3]);
