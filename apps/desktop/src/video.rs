@@ -38,7 +38,76 @@ pub struct VideoFrame {
     pub pts: f64,
     pub width: u32,
     pub height: u32,
+    /// Its pixels, unless the decoder uploads them (`gpu`), when this is empty.
     pub rgba: Vec<u8>,
+    pub gpu: Option<GpuFrame>,
+}
+
+/// A decoded frame's pixels in a GPU buffer of their own, rows at the copy alignment: written by
+/// the decoder's thread, so the frame drawing it only records a copy.
+#[derive(Clone, Debug)]
+pub struct GpuFrame {
+    pub buf: wgpu::Buffer,
+    pub row: u32,
+}
+
+/// Frame buffers the GPU is done with (`recycle_gpu`), for uploading decoders' next frames: a new
+/// buffer a frame, from every decoder, is kernel calls the frame's own GPU work waits behind.
+static GPU_FRAMES: Mutex<Vec<wgpu::Buffer>> = Mutex::new(Vec::new());
+
+fn gpu_frame_buffer(size: u64) -> Option<wgpu::Buffer> {
+    let mut pool = GPU_FRAMES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let i = pool.iter().position(|b| b.size() == size)?;
+    Some(pool.swap_remove(i))
+}
+
+/// Hand an uploaded frame's buffer back once nothing reads it any more: after the GPU has run
+/// every copy from it, or a queue write into it would be staged (and the buffer pinned to that).
+pub fn recycle_gpu(buf: wgpu::Buffer) {
+    let mut pool = GPU_FRAMES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if pool.len() < GPU_POOLED {
+        pool.push(buf);
+    }
+}
+
+const GPU_POOLED: usize = 16;
+
+/// Bytes the pool of uploaded frames' buffers holds.
+pub fn gpu_pool_bytes() -> u64 {
+    GPU_FRAMES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().map(wgpu::Buffer::size).sum()
+}
+
+/// Where an uploading decoder writes its frames.
+#[derive(Clone)]
+pub struct Upload {
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+}
+
+impl Upload {
+    /// `frame`'s pixels moved into a buffer of their own (its CPU buffer recycled).
+    fn frame(&self, mut frame: VideoFrame, padded: &mut Vec<u8>) -> VideoFrame {
+        let src_row = frame.width as usize * 4;
+        let row = (frame.width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        if frame.rgba.len() < src_row * frame.height as usize {
+            return frame;
+        }
+        let size = u64::from(row) * u64::from(frame.height);
+        let buf = gpu_frame_buffer(size).unwrap_or_else(|| self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("voidmesh video frame"), size, usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }));
+        if row as usize == src_row {
+            self.queue.write_buffer(&buf, 0, &frame.rgba);
+        } else {
+            padded.clear();
+            padded.resize(row as usize * frame.height as usize, 0);
+            for (dst, r) in padded.chunks_exact_mut(row as usize).zip(frame.rgba.chunks_exact(src_row)) {
+                dst[..src_row].copy_from_slice(r);
+            }
+            self.queue.write_buffer(&buf, 0, padded);
+        }
+        recycle(std::mem::take(&mut frame.rgba));
+        frame.gpu = Some(GpuFrame { buf, row });
+        frame
+    }
 }
 
 /// Frame buffers the canvas is done with, for the decoders' next frames: a fresh buffer every
@@ -58,6 +127,9 @@ fn frame_buffer(len: usize) -> Vec<u8> {
 
 /// Hand a frame's pixels back for a later frame.
 pub fn recycle(v: Vec<u8>) {
+    if v.capacity() == 0 {
+        return;
+    }
     let mut pool = FRAMES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if pool.len() < POOLED {
         pool.push(v);
@@ -111,9 +183,19 @@ pub struct Decoder {
 }
 
 impl Decoder {
-    /// Starts decoding from `start` seconds. `waker` is called (from the worker) whenever a new
-    /// frame becomes available, or decoding fails.
+    /// Starts decoding from `start` seconds, its frames' pixels kept. `waker` is called (from the
+    /// worker) whenever a new frame becomes available, or decoding fails.
+    #[cfg(test)]
     pub fn new(path: PathBuf, start: f64, max_side: u32, waker: Option<rune::Waker>) -> Decoder {
+        Self::start(path, start, max_side, waker, None)
+    }
+
+    /// As `new`, its frames' pixels uploaded by the worker (`VideoFrame::gpu`) rather than kept.
+    pub fn uploading(path: PathBuf, start: f64, max_side: u32, upload: Upload) -> Decoder {
+        Self::start(path, start, max_side, None, Some(upload))
+    }
+
+    fn start(path: PathBuf, start: f64, max_side: u32, waker: Option<rune::Waker>, upload: Option<Upload>) -> Decoder {
         let shared = Arc::new(Shared {
             state: Mutex::new(State { seek: Some(start.max(0.0)), ..State::default() }),
             wake: Condvar::new(),
@@ -123,7 +205,7 @@ impl Decoder {
             .name("voidmesh-video".into())
             .spawn(move || {
                 crate::gfx::process::background();
-                platform::run(&worker, &path, max_side.max(1), waker.as_deref())
+                platform::run(&worker, &path, max_side.max(1), waker.as_deref(), upload.as_ref())
             });
         // Detached: the worker exits on its own once `stop` is set.
         if let Err(e) = spawned {
@@ -278,7 +360,7 @@ mod platform {
         Err(UNSUPPORTED.into())
     }
 
-    pub(super) fn run(shared: &Shared, _path: &Path, _max_side: u32, waker: Option<&(dyn Fn() + Send + Sync)>) {
+    pub(super) fn run(shared: &Shared, _path: &Path, _max_side: u32, waker: Option<&(dyn Fn() + Send + Sync)>, _upload: Option<&Upload>) {
         fail(shared, UNSUPPORTED.into(), waker);
     }
 
@@ -449,7 +531,7 @@ mod platform {
             let (pts, image) = unsafe { (seconds(sample.presentation_time_stamp()), sample.image_buffer()) };
             let image = image.ok_or("a video sample had no image")?;
             let (width, height, rgba) = rgba(&image)?;
-            Ok(Some(VideoFrame { pts, width, height, rgba }))
+            Ok(Some(VideoFrame { pts, width, height, rgba, gpu: None }))
         }
     }
 
@@ -504,7 +586,8 @@ mod platform {
         }
     }
 
-    pub(super) fn run(shared: &Shared, path: &Path, max_side: u32, waker: Option<&(dyn Fn() + Send + Sync)>) {
+    pub(super) fn run(shared: &Shared, path: &Path, max_side: u32, waker: Option<&(dyn Fn() + Send + Sync)>, upload: Option<&Upload>) {
+        let mut padded = Vec::new();
         let clip = match autoreleasepool(|_| open(path)) {
             Ok(clip) => clip,
             Err(e) => return fail(shared, e, waker),
@@ -545,6 +628,10 @@ mod platform {
                             if frame.pts < min_pts {
                                 continue;
                             }
+                            let frame = match upload {
+                                Some(u) => u.frame(frame, &mut padded),
+                                None => frame,
+                            };
                             pass_frames += 1;
                             if push(shared, generation, lap, frame)
                                 && let Some(wake) = waker

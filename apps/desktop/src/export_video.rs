@@ -1472,7 +1472,7 @@ mod tests {
     }
 
     fn frame(pts: f64) -> VideoFrame {
-        VideoFrame { pts, width: 1, height: 1, rgba: vec![(pts * 10.0) as u8, 0, 0, 255] }
+        VideoFrame { pts, width: 1, height: 1, rgba: vec![(pts * 10.0) as u8, 0, 0, 255], gpu: None }
     }
 
     #[test]

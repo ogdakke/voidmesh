@@ -914,6 +914,7 @@ impl Scene {
     fn update_videos(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, s: &mut App, dpr: f32) {
         self.video_waiting = false;
         let found: Vec<usize> = self.video_idx.iter().map(|i| *i as usize).collect();
+        let upload = crate::video::Upload { device: device.clone(), queue: queue.clone() };
         for v in self.videos.values_mut() {
             v.used = false;
         }
@@ -934,7 +935,7 @@ impl Scene {
             }
             let frame = self.frame;
             let v = self.videos.entry(key).or_insert_with(|| VideoSource {
-                decoder: crate::video::Decoder::new(path.to_path_buf(), e.play_t, want, None),
+                decoder: crate::video::Decoder::uploading(path.to_path_buf(), e.play_t, want, upload.clone()),
                 side: want,
                 wants: None,
                 seek_gen: e.seek_gen,
@@ -963,7 +964,7 @@ impl Scene {
                 let hold = if want > v.side { 4 } else { 12 };
                 if frame - since >= hold && restarts < 2 {
                     restarts += 1;
-                    v.decoder = crate::video::Decoder::new(path.to_path_buf(), e.play_t, want, None);
+                    v.decoder = crate::video::Decoder::uploading(path.to_path_buf(), e.play_t, want, upload.clone());
                     v.side = want;
                     v.wants = None;
                     v.waiting = true;
@@ -984,6 +985,10 @@ impl Scene {
                 }
                 if let Some(old) = s.video_frames.insert(key, f) {
                     crate::video::recycle(old.rgba);
+                    // Its last copy was recorded on an earlier frame, so submitted already.
+                    if let Some(g) = old.gpu {
+                        queue.on_submitted_work_done(move || crate::video::recycle_gpu(g.buf));
+                    }
                 }
             } else if !shown {
                 v.pending = false;
@@ -994,7 +999,7 @@ impl Scene {
         }
         self.videos.retain(|_, v| v.used);
         s.video_frames.retain(|k, _| self.videos.contains_key(k));
-        let (uploaded, bytes) = self.upload_videos(device, queue, enc, s);
+        let (uploaded, bytes) = self.upload_videos(device, enc, s);
         for v in self.videos.values() {
             self.video_waiting |= v.waiting || v.pending;
         }
@@ -1009,52 +1014,25 @@ impl Scene {
         }
     }
 
-    /// Uploads waiting video frames: a seek's first frame, then the stalest, up to
-    /// `VIDEO_BUDGET` bytes a frame (and always one), the rest on the next frames. All of them
-    /// go through one staging buffer from the frame's ring, written before any copy from it is
-    /// recorded so Rune writes it in place. The entities whose frames changed, and the bytes.
-    fn upload_videos(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, s: &App) -> (Vec<usize>, u64) {
+    /// Copies waiting video frames into their textures: a seek's first frame, then the stalest,
+    /// up to `VIDEO_BUDGET` bytes a frame (and always one), the rest on the next frames. The
+    /// entities whose frames changed, and the bytes.
+    fn upload_videos(&mut self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, s: &App) -> (Vec<usize>, u64) {
         let mut want: Vec<((u32, u64), bool, u64)> = self.videos.iter().filter(|(_, v)| v.pending).map(|(k, v)| (*k, v.waiting, v.uploaded)).collect();
         if want.is_empty() {
             return (Vec::new(), 0);
         }
         want.sort_unstable_by_key(|(k, waiting, at)| (!waiting, *at, *k));
-        let align = u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-        // (key, offset, row bytes)
-        let mut picked: Vec<((u32, u64), u64, u32)> = Vec::new();
+        let mut changed = Vec::new();
         let mut total = 0u64;
         for (key, _, _) in want {
+            // Frames arrive in buffers of their own (`Decoder::uploading`): a copy each.
             let Some(f) = s.video_frames.get(&key) else { continue };
-            let row = (u64::from(f.width) * 4).next_multiple_of(align);
-            let size = row * u64::from(f.height);
-            if !picked.is_empty() && total + size > VIDEO_BUDGET {
+            let Some(g) = &f.gpu else { continue };
+            if !changed.is_empty() && total + g.buf.size() > VIDEO_BUDGET {
                 break;
             }
-            picked.push((key, total, row as u32));
-            total += size;
-        }
-        if total == 0 {
-            return (Vec::new(), 0);
-        }
-        let staging = self.stage_buffer(device, total, "voidmesh video");
-        for (key, offset, row) in &picked {
-            let f = &s.video_frames[key];
-            if *row == f.width * 4 {
-                queue.write_buffer(&staging, *offset, &f.rgba);
-            } else {
-                let mut bytes = std::mem::take(&mut self.staging_bytes);
-                bytes.clear();
-                bytes.resize(*row as usize * f.height as usize, 0);
-                for (dst, src) in bytes.chunks_exact_mut(*row as usize).zip(f.rgba.chunks_exact(f.width as usize * 4)) {
-                    dst[..src.len()].copy_from_slice(src);
-                }
-                queue.write_buffer(&staging, *offset, &bytes);
-                self.staging_bytes = bytes;
-            }
-        }
-        let mut changed = Vec::with_capacity(picked.len());
-        for (key, offset, row) in picked {
-            let f = &s.video_frames[&key];
+            total += g.buf.size();
             let Some(v) = self.videos.get_mut(&key) else { continue };
             if v.tex.as_ref().is_none_or(|(t, _)| (t.width(), t.height()) != (f.width, f.height)) {
                 let t = process::texture(device, f.width, f.height);
@@ -1063,7 +1041,7 @@ impl Scene {
             }
             if let Some((t, _)) = &v.tex {
                 enc.copy_buffer_to_texture(
-                    wgpu::TexelCopyBufferInfo { buffer: &staging, layout: wgpu::TexelCopyBufferLayout { offset, bytes_per_row: Some(row), rows_per_image: Some(f.height) } },
+                    wgpu::TexelCopyBufferInfo { buffer: &g.buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(g.row), rows_per_image: Some(f.height) } },
                     t.as_image_copy(),
                     wgpu::Extent3d { width: f.width, height: f.height, depth_or_array_layers: 1 },
                 );
@@ -1075,10 +1053,6 @@ impl Scene {
             changed.push(v.index as usize);
         }
         (changed, total)
-    }
-
-    fn stage_buffer(&mut self, device: &wgpu::Device, size: u64, label: &str) -> wgpu::Buffer {
-        self.staging.buffer(device, size, label, self.frame)
     }
 
     // ------------------------------------------------------------------ visibility and LOD
@@ -1726,7 +1700,9 @@ impl Scene {
         self.pool_prev = std::mem::take(&mut self.pool);
         self.stats.materials = self.mat_index.len();
         self.stats.resident_bytes = self.resident_bytes() + self.scratch.bytes() + self.inst_buf.size() + self.mat_buf.size();
-        self.stats.video_bytes = self.videos.values().filter_map(|v| v.tex.as_ref()).map(|(t, _)| texture_bytes(t)).sum();
+        self.stats.video_bytes = self.videos.values().filter_map(|v| v.tex.as_ref()).map(|(t, _)| texture_bytes(t)).sum::<u64>()
+            + s.video_frames.values().filter_map(|f| f.gpu.as_ref()).map(|g| g.buf.size()).sum::<u64>()
+            + crate::video::gpu_pool_bytes();
         self.stats.staging_bytes = self.staging.bytes() + self.building.values().sum::<u64>() + self.built.values().map(|(_, p)| p.buf.size()).sum::<u64>();
         t.lap("rest");
         t.finish(&self.stats);

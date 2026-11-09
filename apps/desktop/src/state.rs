@@ -1109,7 +1109,8 @@ impl App {
                 let (u, v) = ((q[0] - r[0]) / r[2], (q[1] - r[1]) / r[3]);
                 let a = &e.asset;
                 if a.video_path().is_some() {
-                    return self.video_frames.get(&(e.id, a.id)).is_none_or(|f| crate::hit::cell_opaque(&f.rgba, f.width, f.height, u, v));
+                    // Decoded video is opaque; frames uploaded by their decoder keep no pixels here.
+                    return self.video_frames.get(&(e.id, a.id)).is_none_or(|f| f.gpu.is_some() || crate::hit::cell_opaque(&f.rgba, f.width, f.height, u, v));
                 }
                 a.frames.get(a.frame_at(e.play_t)).is_some_and(|f| crate::hit::cell_opaque(&f.rgba, a.width, a.height, u, v))
             })
