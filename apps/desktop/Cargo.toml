@@ -1,0 +1,119 @@
+[package]
+name = "voidmesh"
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+# Rune is pre-release: pin a rev of its `dev` branch (never rewritten).
+rune = { git = "https://github.com/anomalyco/rune", rev = "a7f276c3630f85a06a0230295da4d2bd172d8d3b", features = [
+  "native-file-dialog",
+] }
+bytemuck = { version = "1.25", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = [
+  "png",
+  "jpeg",
+  "gif",
+  "webp",
+  "bmp",
+] }
+resvg = { version = "0.45", default-features = false }
+serde_json = "1"
+# `.vdmsh` workspaces are zips (the web app writes deflate).
+zip = { version = "7.2", default-features = false, features = ["deflate-flate2"] }
+# Video/GIF export (`export_video.rs`): GIF encoding, and blocking on the headless device request.
+gif = "0.14"
+pollster = "1"
+wgpu = { version = "30", default-features = false, features = [
+  "std",
+  "parking_lot",
+  "metal",
+  "wgsl",
+] }
+sha2 = "0.10"
+
+# Video decoding (`video.rs`): AVAssetReader frames to CPU RGBA, the versions Rune itself uses.
+# The colour picker's eyedropper (`eyedropper.rs`) is AppKit's NSColorSampler.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "block2",
+  "objc2-core-foundation",
+  "NSColor",
+  "NSColorSampler",
+  "NSColorSpace",
+] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSArray",
+  "NSDictionary",
+  "NSError",
+  "NSObject",
+  "NSString",
+  "NSURL",
+  "NSValue",
+] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "CFCGTypes",
+  "CFDictionary",
+  "CFNumber",
+  "CFString",
+] }
+objc2-core-media = { version = "0.3", default-features = false, features = [
+  "std",
+  "CMFormatDescription",
+  "CMSampleBuffer",
+  "CMTime",
+  "CMTimeRange",
+  "objc2-core-video",
+] }
+objc2-core-video = { version = "0.3", default-features = false, features = [
+  "std",
+  "CVBase",
+  "CVBuffer",
+  "CVImageBuffer",
+  "CVPixelBuffer",
+  "CVPixelBufferPool",
+  "CVReturn",
+] }
+objc2-av-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "AVAsset",
+  "AVAssetReader",
+  "AVAssetReaderOutput",
+  "AVAssetTrack",
+  "AVAssetWriter",
+  "AVAssetWriterInput",
+  "AVMediaFormat",
+  "AVVideoComposition",
+  "AVVideoSettings",
+  "objc2-core-foundation",
+  "objc2-core-media",
+  "objc2-core-video",
+] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+wgpu = { version = "30", default-features = false, features = ["vulkan", "dx12"] }
+
+# Dependencies build without debug info; Rune's own release settings.
+[profile.dev.package."*"]
+debug = false
+
+[profile.release]
+codegen-units = 16
+incremental = true
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[lints.clippy]
+await_holding_lock = "deny"
+dbg_macro = "deny"
+expect_used = "warn"
+todo = "warn"
+unwrap_used = "warn"

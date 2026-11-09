@@ -49,6 +49,14 @@ const migrations: Record<number, Migration> = {
     doc.version = 6;
     return doc;
   },
+
+  // Version 6 -> 7: Media is named by content (`media/<sha256>.<ext>`, original bytes in any
+  // image format) and the manifest may carry its workspace's id and name. Paths stay opaque to
+  // readers, so older documents need no rewrite.
+  6: (doc) => {
+    doc.version = 7;
+    return doc;
+  },
 };
 
 /**
