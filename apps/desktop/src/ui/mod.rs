@@ -33,9 +33,13 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     let l = Look::new(dark);
     let insets = cx.chrome_insets();
     let mut root = el().key("root").on_key_up(crate::keys::on_key_up).on_paste_content(|s: &mut App, c: &rune::ClipboardContent, _: &mut Tx| crate::clip::paste(s, c)).w_full().h_full().fill(l.studio);
-    root = root.child(canvas::surface(&l, s));
+    // Under the colour picker everything is inert: Rune paints hover on every element under
+    // the pointer, not only the topmost, so the controls beneath the popover would light up.
+    // (Not a modal: that would pull keyboard focus into the popover, away from the shortcuts.)
+    let behind = |e: El| if s.picker.is_some() { e.inert() } else { e };
+    root = root.child(behind(canvas::surface(&l, s)));
     if s.entities.is_empty() {
-        root = root.child(empty_state(&l));
+        root = root.child(behind(empty_state(&l)));
     }
     // The titlebar band: it moves the window, and floating UI keeps out of it. Under the chrome
     // it's a frosted bar, so the tabs read over busy media.
@@ -48,27 +52,27 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if let Some(sel) = s.bounds(&s.selection).filter(|_| !s.bare) {
         let r = s.cam.screen_rect(sel);
         if s.drag.as_ref().is_none_or(|m| !m.moved) && s.marquee.is_none() {
-            root = root.child(entity_bar(&l, s, r, insets.height));
+            root = root.child(behind(entity_bar(&l, s, r, insets.height)));
             if let Some(p) = s.focus().map(|e| e.params.clone()) {
-                root = root.child(inspector::panel(&l, s, &p, r));
+                root = root.child(behind(inspector::panel(&l, s, &p, r)));
             }
         }
         if s.selection.len() == 1
             && let Some(e) = s.focus().filter(|e| e.asset.animated())
             && let Some(media) = media_controls(&l, s, e, r)
         {
-            root = root.child(media);
+            root = root.child(behind(media));
         }
         // Over the playback bar it may hang across.
         if s.drag.as_ref().is_none_or(|m| !m.moved)
             && s.marquee.is_none()
             && let Some(panel) = export_panel::panel(&l, s, r, insets.height)
         {
-            root = root.child(panel);
+            root = root.child(behind(panel));
         }
     }
     if !s.bare {
-        root = root.child(top_left(&l, s, insets)).child(bottom_left(&l, s)).child(bottom_right(&l, s, cx.env().scale));
+        root = root.child(behind(top_left(&l, s, insets))).child(behind(bottom_left(&l, s))).child(behind(bottom_right(&l, s, cx.env().scale)));
     }
     // The colour picker's popover, under the swatch it edits.
     if let Some(k) = &s.picker

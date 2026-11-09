@@ -596,3 +596,33 @@ fn the_workspaces_and_settings_views_snap_in_and_out() {
         settle(&mut rt);
     }
 }
+
+#[test]
+fn the_colour_picker_takes_the_hover_from_the_inspector_under_it() {
+    let mut rt = canvas();
+    rt.set_viewport((1200.0, 1400.0), 2.0);
+    settle(&mut rt);
+    rt.update(|s, _| s.select_only(1));
+    settle(&mut rt);
+    let (x, y) = rt.find("swatch-1").expect("swatch");
+    click(&mut rt, x, y);
+    let pop = rt.presented("color-picker").expect("popover").0;
+    let inspector = rt.presented("inspector").expect("inspector").0;
+    let ids = |rt: &Runtime<App>, key: &str| rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).map(|e| e.path).expect("element");
+    let (popup, inspector_path) = (ids(&rt, "color-picker"), ids(&rt, "inspector"));
+    assert!(pop[0] < inspector[0] + inspector[2], "the popover overlaps the inspector: {pop:?} {inspector:?}");
+    for i in 0..12 {
+        for j in 0..12 {
+            let px = pop[0] + pop[2] * (i as f32 + 0.5) / 12.0;
+            let py = pop[1] + pop[3] * (j as f32 + 0.5) / 12.0;
+            rt.pointer_move(px, py);
+            settle(&mut rt);
+            let under: Vec<_> = rt.elements().into_iter().filter(|e| e.hover > 0.0 && !e.path.starts_with(&popup) && e.path.starts_with(&inspector_path)).map(|e| e.key).collect();
+            assert!(under.is_empty(), "at ({px}, {py}) the inspector under the popover shows hover: {under:?}");
+        }
+    }
+    // Escape still closes it.
+    rt.key(KeyEvent { key: Key::Escape, mods: Mods::default() });
+    settle(&mut rt);
+    assert!(rt.state.picker.is_none());
+}
