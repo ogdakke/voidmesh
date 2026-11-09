@@ -467,36 +467,6 @@ fn qos(class: u32) {
 #[cfg(not(target_os = "macos"))]
 fn qos(_: u32) {}
 
-/// Pixels of work (`parallel`'s estimate) from which threads pay for their start: below it, the
-/// work is about a millisecond on the calling thread, and new threads can take longer than that
-/// to be scheduled.
-const PARALLEL_PIXELS: u64 = 4 * 1024 * 1024;
-
-/// Run `f` over `jobs` on every core when there's enough work to pay for the threads.
-pub fn parallel<T: Sync, R: Send + Default>(jobs: &[T], work: impl Fn(&T) -> u64 + Sync, f: impl Fn(&T) -> R + Sync) -> Vec<R> {
-    let total: u64 = jobs.iter().map(&work).sum();
-    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(jobs.len()).max(1);
-    if threads == 1 || total < PARALLEL_PIXELS {
-        return jobs.iter().map(&f).collect();
-    }
-    let next = std::sync::atomic::AtomicUsize::new(0);
-    let slots: Vec<std::sync::Mutex<R>> = jobs.iter().map(|_| Default::default()).collect();
-    std::thread::scope(|sc| {
-        for _ in 0..threads {
-            sc.spawn(|| loop {
-                interactive();
-                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let Some(job) = jobs.get(i) else { return };
-                let r = f(job);
-                if let Ok(mut s) = slots[i].lock() {
-                    *s = r;
-                }
-            });
-        }
-    });
-    slots.into_iter().map(|s| s.into_inner().unwrap_or_default()).collect()
-}
-
 pub fn write(queue: &wgpu::Queue, t: &wgpu::Texture, w: u32, h: u32, rgba: &[u8]) {
     queue.write_texture(
         t.as_image_copy(),

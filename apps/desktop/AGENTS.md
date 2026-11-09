@@ -36,7 +36,7 @@ changes.
   and commits positions once it ends.
 - The frame never waits on bulk work: uploads go through the scene's staging sets (Rune pins a
   buffer queue-written while the GPU reads it, and allocates on every later write), and source
-  levels read from full-size pixels are built off the frame.
+  levels are built and written by the scene's source workers; the frame records copies.
 - `effects.rs` mirrors the web app's `ShaderParams`, defaults and per-shader resets; keep ranges
   and labels in step with `lib/config/index.ts`.
 - UI uses the web app's tokens (`ui/look.rs`) and primitive shapes (`ui/widgets.rs`).

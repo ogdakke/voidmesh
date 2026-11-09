@@ -91,13 +91,10 @@ const UNSEEN_BUDGET: u64 = 32 * 1024 * 1024;
 const SOURCE_FRAMES: u64 = 4;
 /// Media of more pixels than this makes its source mips on the GPU.
 const GPU_MIPS_PIXELS: u64 = 1024 * 1024;
-/// Source levels built from more full-size pixels than this (no proxy covers them) are built off
-/// the frame: idle full-size pixels may be compressed by the system, and reading them back is
-/// several milliseconds a photo. The material keeps its current level of detail meanwhile.
-const OFF_FRAME_PIXELS: u64 = 1024 * 1024;
-/// Off-frame builds at once.
-const OFF_FRAME_JOBS: usize = 4;
-/// Frames a finished off-frame build waits for a frame that wants it.
+/// Bytes of source levels queued with the workers or waiting to be placed (one level always
+/// goes): what they hold in buffers of their own until the GPU has copied them.
+const SOURCE_BYTES: u64 = 32 << 20;
+/// Frames a finished source level waits for a frame that wants it.
 const BUILT_FRAMES: u64 = 30;
 
 #[repr(C)]
@@ -356,12 +353,13 @@ pub struct Scene {
     staged: HashMap<SrcKey, (wgpu::Buffer, Vec<Staged>)>,
     /// Buffers uploads go through (source batches, video frames, large instance changes).
     staging: Staging,
-    /// Source levels built off the frame from full-size pixels: in progress, and done (with the
-    /// frame they arrived on) waiting for a frame to stage them.
-    building: std::collections::HashSet<SrcKey>,
-    built: HashMap<SrcKey, (u64, Levels)>,
-    built_tx: std::sync::mpsc::Sender<(SrcKey, Levels)>,
-    built_rx: std::sync::mpsc::Receiver<(SrcKey, Levels)>,
+    /// Source levels are built off the frame (`SourceWorkers`): queued, and done (with the frame
+    /// they arrived on) waiting for a frame to place them.
+    workers: Option<SourceWorkers>,
+    building: HashMap<SrcKey, u64>,
+    built: HashMap<SrcKey, (u64, Prepared)>,
+    built_tx: std::sync::mpsc::Sender<(SrcKey, Option<Prepared>)>,
+    built_rx: std::sync::mpsc::Receiver<(SrcKey, Option<Prepared>)>,
     /// Bytes packed for them, reused.
     staging_bytes: Vec<u8>,
     videos: HashMap<(u32, u64), VideoSource>,
@@ -373,8 +371,98 @@ pub struct Scene {
     pub video_waiting: bool,
 }
 
-/// A source's levels as built on the CPU: size and pixels each.
-type Levels = Vec<(u32, u32, Vec<u8>)>;
+/// A source level built off the frame, in a buffer of its own (rows at the copy alignment),
+/// written before anything reads it.
+struct Prepared {
+    buf: wgpu::Buffer,
+    w: u32,
+    h: u32,
+    row: u32,
+}
+
+struct SourceWork {
+    key: SrcKey,
+    asset: Arc<Asset>,
+    frame: usize,
+}
+
+/// Threads that build source levels: from the proxy when it serves the level, else from the
+/// full-size frame (large media's whole frame as it is, for GPU mips). The frame only records
+/// the copies: building and writing a level reads pixels the system may have compressed, and
+/// copies them, which a frame of many new photos would otherwise spend milliseconds on.
+struct SourceWorkers {
+    tx: std::sync::mpsc::Sender<SourceWork>,
+}
+
+impl SourceWorkers {
+    fn start(device: &wgpu::Device, queue: &wgpu::Queue, done: std::sync::mpsc::Sender<(SrcKey, Option<Prepared>)>) -> SourceWorkers {
+        let (tx, rx) = std::sync::mpsc::channel::<SourceWork>();
+        let rx = Arc::new(std::sync::Mutex::new(rx));
+        let threads = std::thread::available_parallelism().map_or(2, |n| n.get() / 2).clamp(2, 4);
+        for _ in 0..threads {
+            let (rx, done, device, queue) = (rx.clone(), done.clone(), device.clone(), queue.clone());
+            // A thread that can't start leaves the others; none starting is out of memory.
+            let _ = std::thread::Builder::new().name("voidmesh-source".into()).spawn(move || {
+                process::interactive();
+                let mut padded = Vec::new();
+                loop {
+                    let work = match rx.lock() {
+                        Ok(rx) => rx.recv(),
+                        Err(_) => return,
+                    };
+                    let Ok(work) = work else { return };
+                    let prepared = Self::build(&device, &queue, &work, &mut padded);
+                    if done.send((work.key, prepared)).is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+        SourceWorkers { tx }
+    }
+
+    fn send(&self, work: SourceWork) -> bool {
+        self.tx.send(work).is_ok()
+    }
+
+    fn build(device: &wgpu::Device, queue: &wgpu::Queue, work: &SourceWork, padded: &mut Vec<u8>) -> Option<Prepared> {
+        let a = &work.asset;
+        let f = a.frames.get(work.frame)?;
+        let level = work.key.2;
+        let large = level == 0 && u64::from(a.width) * u64::from(a.height) > GPU_MIPS_PIXELS;
+        let proxy = a.proxy().filter(|p| p.level <= level && work.frame == 0);
+        let built;
+        let (w, h, px): (u32, u32, &[u8]) = match proxy {
+            _ if large || level == 0 => (a.width, a.height, &f.rgba),
+            Some(p) if p.level == level => (p.width, p.height, &p.rgba),
+            Some(p) => {
+                built = process::level_chain(p.width, p.height, &p.rgba, level - p.level, 1).pop()?;
+                (built.0, built.1, &built.2)
+            }
+            None => {
+                built = process::level_chain(a.width, a.height, &f.rgba, level, 1).pop()?;
+                (built.0, built.1, &built.2)
+            }
+        };
+        let src_row = w as usize * 4;
+        let row = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        if px.len() < src_row * h as usize {
+            return None;
+        }
+        let buf = device.create_buffer(&wgpu::BufferDescriptor { label: Some("voidmesh source level"), size: u64::from(row) * u64::from(h), usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        if row as usize == src_row {
+            queue.write_buffer(&buf, 0, &px[..src_row * h as usize]);
+        } else {
+            padded.clear();
+            padded.resize(row as usize * h as usize, 0);
+            for (dst, r) in padded.chunks_exact_mut(row as usize).zip(px.chunks_exact(src_row)) {
+                dst[..src_row].copy_from_slice(r);
+            }
+            queue.write_buffer(&buf, 0, padded);
+        }
+        Some(Prepared { buf, w, h, row })
+    }
+}
 
 /// Staging buffers, in sets: a frame takes a set the GPU is done with (or a new one when the GPU
 /// is that far behind) and its uploads take buffers from it in turn. A set comes back once the
@@ -556,6 +644,7 @@ impl Scene {
             sources: HashMap::new(),
             staged: HashMap::new(),
             staging: Staging::default(),
+            workers: None,
             building: Default::default(),
             built: HashMap::new(),
             built_tx,
@@ -1081,190 +1170,69 @@ impl Scene {
     /// level its preview needs. Their levels are built on every core at once, packed into one
     /// buffer written once, and copied out on the GPU; an original small enough for the atlas is
     /// copied from there straight into its tile, with no source texture kept.
-    fn prepare_sources(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, chosen: &[(u32, (u32, u32))]) {
-        struct Job {
-            key: SrcKey,
-            asset: Arc<Asset>,
-            frame: usize,
-            /// Kept as a texture (processing reads it, or an original draws from it).
-            texture: bool,
-            /// An original drawn from it: its whole mip chain. Processing reads its top level
-            /// alone (sources are prepared at one to two times their output's size).
-            drawn: bool,
+    fn prepare_sources(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, chosen: &[(u32, (u32, u32))]) {
+        // Levels the workers finished.
+        while let Ok((key, prepared)) = self.built_rx.try_recv() {
+            self.building.remove(&key);
+            if let Some(p) = prepared {
+                self.built.insert(key, (self.frame, p));
+            }
         }
-        let mut jobs: Vec<Job> = Vec::new();
+        let frame = self.frame;
+        self.built.retain(|_, (at, _)| frame - *at < BUILT_FRAMES);
         for &(id, size) in chosen {
             let Some(m) = self.mats.get(id as usize).and_then(Option::as_ref) else { continue };
             if matches!(m.key, MatKey::Video { .. }) {
                 continue;
             }
             let key = Self::source_key(m, size);
-            let content = m.asset.width.max(m.asset.height) >> key.2;
-            let drawn = false;
-            let texture = !m.params.show_original || !atlas::Atlas::fits(content, content);
-            let (asset, frame) = (m.asset.clone(), m.frame);
-            if let Some(s) = self.sources.get_mut(&key).filter(|s| !drawn || s.levels > 1) {
-                s.used = self.frame;
+            if let Some(s) = self.sources.get_mut(&key) {
+                s.used = frame;
                 continue;
             }
-            match jobs.iter_mut().find(|j| j.key == key) {
-                Some(j) => {
-                    j.texture |= texture;
-                    j.drawn |= drawn;
-                }
-                None => jobs.push(Job { key, asset, frame, texture, drawn }),
+            if self.staged.contains_key(&key) {
+                continue;
             }
-        }
-        if jobs.is_empty() {
-            return;
-        }
-        // Large media at full size goes up as its one level and makes its mips on the GPU; the
-        // rest builds its levels on the CPU, all of them through the one staging write.
-        let large = |j: &Job| j.key.2 == 0 && u64::from(j.asset.width) * u64::from(j.asset.height) > GPU_MIPS_PIXELS;
-        // Levels built off the frame and back; those still to read many full-size pixels go there.
-        while let Ok((key, levels)) = self.built_rx.try_recv() {
-            self.building.remove(&key);
-            if !levels.is_empty() {
-                self.built.insert(key, (self.frame, levels));
-            }
-        }
-        let frame = self.frame;
-        self.built.retain(|_, (at, _)| frame - *at < BUILT_FRAMES);
-        // Large media's full frame is read off the frame too (copied there, then packed from
-        // that warm copy).
-        let off_frame = |j: &Job| {
-            u64::from(j.asset.width) * u64::from(j.asset.height) > OFF_FRAME_PIXELS && (large(j) || j.asset.proxy().is_none_or(|p| p.level > j.key.2 || j.frame != 0))
-        };
-        let mut ready: Vec<Option<Levels>> = Vec::with_capacity(jobs.len());
-        let mut kept: Vec<Job> = Vec::with_capacity(jobs.len());
-        for j in jobs {
-            if let Some((_, levels)) = self.built.remove(&j.key) {
-                ready.push(Some(levels));
-                kept.push(j);
-            } else if off_frame(&j) {
-                if !self.building.contains(&j.key) && self.building.len() < OFF_FRAME_JOBS {
-                    self.building.insert(j.key);
-                    let (tx, key, frame, asset, whole) = (self.built_tx.clone(), j.key, j.frame, j.asset.clone(), large(&j));
-                    let spawned = std::thread::Builder::new().name("voidmesh-source".into()).spawn(move || {
-                        process::background();
-                        let levels = asset.frames.get(frame).map_or_else(Vec::new, |f| {
-                            if whole { vec![(asset.width, asset.height, f.rgba.clone())] } else { process::level_chain(asset.width, asset.height, &f.rgba, key.2, 1) }
-                        });
-                        let _ = tx.send((key, levels));
-                    });
-                    if spawned.is_err() {
-                        self.building.remove(&key);
+            let content = m.asset.width.max(m.asset.height) >> key.2;
+            // Kept as a texture when processing reads it, or an original too large for a tile
+            // draws from it; an original that fits copies straight into its tile.
+            let texture = !m.params.show_original || !atlas::Atlas::fits(content, content);
+            let large = key.2 == 0 && u64::from(m.asset.width) * u64::from(m.asset.height) > GPU_MIPS_PIXELS;
+            let Some((_, p)) = self.built.remove(&key) else {
+                let bytes = u64::from((m.asset.width >> key.2).max(1)) * u64::from((m.asset.height >> key.2).max(1)) * 4;
+                let held: u64 = self.building.values().sum::<u64>() + self.built.values().map(|(_, p)| p.buf.size()).sum::<u64>();
+                if !self.building.contains_key(&key) && (held == 0 || held + bytes <= SOURCE_BYTES) {
+                    let workers = self.workers.get_or_insert_with(|| SourceWorkers::start(device, queue, self.built_tx.clone()));
+                    if workers.send(SourceWork { key, asset: m.asset.clone(), frame: m.frame }) {
+                        self.building.insert(key, bytes);
                     }
                 }
-            } else {
-                ready.push(None);
-                kept.push(j);
-            }
-        }
-        let jobs = kept;
-        if jobs.is_empty() {
-            return;
-        }
-        let cpu: Vec<&Job> = jobs.iter().collect();
-        let todo: Vec<(&Job, bool)> = cpu.iter().zip(&ready).map(|(j, r)| (*j, r.is_none())).collect();
-        let t0 = std::time::Instant::now();
-        let mut built = process::parallel(
-            &todo,
-            // The pixels it reads: the proxy's when that serves it.
-            |(j, todo)| match j.asset.proxy().filter(|p| p.level <= j.key.2 && j.frame == 0) {
-                _ if large(j) || !todo => 0,
-                Some(p) => u64::from(p.width) * u64::from(p.height),
-                None => u64::from(j.asset.width) * u64::from(j.asset.height),
-            },
-            |&(j, todo)| {
-                let Some(base) = j.asset.frames.get(j.frame).filter(|_| todo) else { return Vec::new() };
-                if large(j) {
-                    return vec![(j.asset.width, j.asset.height, Vec::new())];
-                }
-                let (w, h) = (j.asset.width >> j.key.2, j.asset.height >> j.key.2);
-                let all = process::levels_for(w.max(1), h.max(1));
-                let levels = if j.drawn { all } else if j.texture { 1 } else { all.min(process::PREVIEW_LEVELS) };
-                // From the proxy when it's at least this level's size: the full-size pixels stay idle.
-                match j.asset.proxy().filter(|p| p.level <= j.key.2 && j.frame == 0) {
-                    Some(p) => process::level_chain(p.width, p.height, &p.rgba, j.key.2 - p.level, levels),
-                    None => process::level_chain(j.asset.width, j.asset.height, &base.rgba, j.key.2, levels),
-                }
-            },
-        );
-        for (b, r) in built.iter_mut().zip(ready) {
-            if let Some(levels) = r {
-                *b = levels;
-            }
-        }
-        // Pack every level, rows padded to the copy alignment.
-        let align = u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-        let mut total = 0u64;
-        let mut places: Vec<Vec<Staged>> = Vec::with_capacity(built.len());
-        for levels in &built {
-            let mut v = Vec::with_capacity(levels.len());
-            for (w, h, _) in levels {
-                let row = (u64::from(*w) * 4).next_multiple_of(align);
-                v.push(Staged { offset: total, row: row as u32, w: *w, h: *h });
-                total += row * u64::from(*h);
-            }
-            places.push(v);
-        }
-        if total == 0 {
-            return;
-        }
-        let t1 = t0.elapsed();
-        // Reused frame to frame: fresh pages for every upload are page faults under pressure.
-        let mut bytes = std::mem::take(&mut self.staging_bytes);
-        bytes.clear();
-        bytes.resize(total as usize, 0);
-        for ((levels, place), j) in built.iter().zip(&places).zip(&cpu) {
-            for ((w, _, px), st) in levels.iter().zip(place) {
-                // Large media's level 0 is its frame as decoded, not a copy.
-                let px: &[u8] = if px.is_empty() { j.asset.frames.get(j.frame).map_or(&[][..], |f| f.rgba.as_slice()) } else { px };
-                let src_row = *w as usize * 4;
-                for (y, row) in px.chunks_exact(src_row).enumerate() {
-                    let at = st.offset as usize + y * st.row as usize;
-                    bytes[at..at + src_row].copy_from_slice(row);
-                }
-            }
-        }
-        let staging = self.stage_buffer(device, total, "voidmesh sources");
-        let t2 = t0.elapsed();
-        queue.write_buffer(&staging, 0, &bytes);
-        self.staging_bytes = bytes;
-        if std::env::var_os("VOIDMESH_TRACE_FRAME").is_some() {
-            eprintln!("sources: {} jobs ({} large), build {:.2} pack {:.2} write {:.2} ms, {} MB", cpu.len(), cpu.iter().filter(|j| large(j)).count(), t1.as_secs_f64() * 1e3, (t2 - t1).as_secs_f64() * 1e3, (t0.elapsed() - t2).as_secs_f64() * 1e3, total / 1_000_000);
-        }
-        for (j, place) in cpu.iter().zip(places) {
+                continue;
+            };
             self.stats.source_uploads += 1;
-            if !j.texture && !large(j) {
-                self.staged.insert(j.key, (staging.clone(), place));
+            self.staging.frame_bytes += p.buf.size();
+            let place = Staged { offset: 0, row: p.row, w: p.w, h: p.h };
+            if !texture && !large {
+                self.staged.insert(key, (p.buf, vec![place]));
                 continue;
             }
-            let Some(first) = place.first().copied() else { continue };
-            let gpu_mips = large(j) && j.drawn;
             let tex = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("voidmesh source"),
-                size: wgpu::Extent3d { width: first.w, height: first.h, depth_or_array_layers: 1 },
-                mip_level_count: if gpu_mips { process::levels_for(first.w, first.h) } else { place.len() as u32 },
+                size: wgpu::Extent3d { width: p.w, height: p.h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: process::FORMAT,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC | if gpu_mips { wgpu::TextureUsages::RENDER_ATTACHMENT } else { wgpu::TextureUsages::empty() },
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
-            for (level, st) in place.iter().enumerate() {
-                enc.copy_buffer_to_texture(
-                    wgpu::TexelCopyBufferInfo { buffer: &staging, layout: wgpu::TexelCopyBufferLayout { offset: st.offset, bytes_per_row: Some(st.row), rows_per_image: Some(st.h) } },
-                    wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: level as u32, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                    wgpu::Extent3d { width: st.w, height: st.h, depth_or_array_layers: 1 },
-                );
-            }
-            if gpu_mips {
-                process::mip_chain(device, enc, pipes, &mut self.arena, &tex);
-            }
+            enc.copy_buffer_to_texture(
+                wgpu::TexelCopyBufferInfo { buffer: &p.buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(p.row), rows_per_image: Some(p.h) } },
+                tex.as_image_copy(),
+                wgpu::Extent3d { width: p.w, height: p.h, depth_or_array_layers: 1 },
+            );
             let view = tex.create_view(&Default::default());
-            self.sources.insert(j.key, Source { levels: tex.mip_level_count(), tex, view, size: (first.w, first.h), used: self.frame, animated: j.asset.animated() });
+            self.sources.insert(key, Source { levels: 1, tex, view, size: (p.w, p.h), used: frame, animated: m.asset.animated() });
         }
     }
 
@@ -1506,7 +1474,7 @@ impl Scene {
         let mut left = chosen.as_slice();
         while !left.is_empty() {
             let (batch, rest) = left.split_at(left.len().min(BATCH));
-            self.prepare_sources(device, queue, enc, pipes, batch);
+            self.prepare_sources(device, queue, enc, batch);
             let rest_of_batch = self.build_tiles(device, enc, pipes, batch);
             for (id, size) in rest_of_batch {
                 self.build(device, enc, pipes, id, size);
@@ -1754,7 +1722,7 @@ impl Scene {
         self.stats.materials = self.mat_index.len();
         self.stats.resident_bytes = self.resident_bytes() + self.scratch.bytes() + self.inst_buf.size() + self.mat_buf.size();
         self.stats.video_bytes = self.videos.values().filter_map(|v| v.tex.as_ref()).map(|(t, _)| texture_bytes(t)).sum();
-        self.stats.staging_bytes = self.staging.bytes();
+        self.stats.staging_bytes = self.staging.bytes() + self.building.values().sum::<u64>() + self.built.values().map(|(_, p)| p.buf.size()).sum::<u64>();
         t.lap("rest");
         t.finish(&self.stats);
         if t.on {
