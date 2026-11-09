@@ -127,19 +127,16 @@ fn fs_grid(in: V) -> @location(0) vec4f {
   let p = in.pos.xy + s.view.zw;
   let wpp = s.a.z;
   let w = s.a.xy + p * wpp;
-  let zoom = 1.0 / wpp;
-  let lv = log(zoom) / log(5.0);
-  let level = floor(lv);
-  let t = lv - level;
-  let fine = 25.0 * pow(5.0, -level);
-  let r = 1.5 * s.a.w * 0.5;
-  let coarse = dots(w, fine * 5.0, wpp, r);
-  let minor = dots(w, fine, wpp, r) * pow(t, 5.0);
+  // The level's spacing, the minor dots' weight and the dot radius are the same for every pixel:
+  // `grid_into` works them out. The grid fills the world texture, so no clip applies.
+  let fine = s.c.x;
+  let coarse = dots(w, fine * 5.0, wpp, s.c.z);
+  let minor = dots(w, fine, wpp, s.c.z) * s.c.y;
   let dark = s.b.y > 0.5;
   let bg = select(vec3f(0.98), vec3f(0.023, 0.023, 0.03), dark);
   let dot = select(vec3f(0.75), vec3f(0.15), dark);
   let c = mix(bg, dot, max(coarse, minor));
-  return encode(vec4f(c, 1.0)) * clip_alpha(p, s.clip, s.fade);
+  return encode(vec4f(c, 1.0));
 }
 
 // ---------------------------------------------------------------- lens

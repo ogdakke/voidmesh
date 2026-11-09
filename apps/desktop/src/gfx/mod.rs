@@ -290,6 +290,11 @@ fn grid_into(res: &Res, pass: &mut wgpu::RenderPass<'_>, size: (u32, u32), pan: 
     let Some(pipe) = res.grid.get(&scene::WORLD_FORMAT) else { return };
     let (w, h) = (size.0 as f32, size.1 as f32);
     let wpp = 1.0 / (dpr * scale);
+    // Two levels of dots five times apart, the finer fading in as the zoom nears the next level.
+    let lv = (1.0 / wpp).ln() / 5f32.ln();
+    let level = lv.floor();
+    let fine = 25.0 * 5f32.powf(-level);
+    let minor = (lv - level).powi(5);
     let slot = Slot {
         rect: [0.0, 0.0, w, h],
         view: [w, h, 0.0, 0.0],
@@ -297,7 +302,7 @@ fn grid_into(res: &Res, pass: &mut wgpu::RenderPass<'_>, size: (u32, u32), pan: 
         fade: [0; 4],
         a: [-pan[0] / scale, -pan[1] / scale, wpp, dpr],
         b: [1.0, if dark { 1.0 } else { 0.0 }, 0.0, 0.0],
-        c: [0.0; 4],
+        c: [fine, minor, 1.5 * dpr * 0.5, 0.0],
         d: [0.0; 4],
         e: [0.0; 4],
     };
