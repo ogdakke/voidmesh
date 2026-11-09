@@ -560,7 +560,9 @@ pub const LOD_OVERSCAN: f32 = 1.25;
 pub fn lod_size(media: (u32, u32), projected: f32) -> (u32, u32) {
     let native = render_size(media.0, media.1);
     let max = native.0.max(native.1);
-    let projected = projected * LOD_OVERSCAN;
+    // The margin a zoom grows into, except at the smallest tier: a thumbnail a few pixels across
+    // gains nothing seen from twice the pixels.
+    let projected = if projected <= LOD_TIERS[0] as f32 { projected } else { projected * LOD_OVERSCAN };
     if projected >= max as f32 {
         return native;
     }

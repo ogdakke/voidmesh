@@ -51,7 +51,12 @@ pub struct Atlas {
     /// Bumped whenever `texture` is replaced (bind groups made from it go stale).
     pub generation: u64,
     pub used_bytes: u64,
+    /// Calls `trim` has found an empty layer on top.
+    empty_for: u32,
 }
+
+/// Calls an empty top layer stays before `trim` drops it.
+const TRIM_FRAMES: u32 = 30;
 
 /// The atlas's texture of `layers` layers: a 1×1 stand-in while it has none (nothing to sample,
 /// but bind groups need a texture).
@@ -103,7 +108,7 @@ impl Atlas {
     /// large for tiles needs none).
     pub fn new(device: &wgpu::Device) -> Atlas {
         let t = texture(device, 0);
-        Atlas { view: array_view(&t), texture: t, layers: 0, shelves: Vec::new(), rows: Vec::new(), generation: 0, used_bytes: 0 }
+        Atlas { view: array_view(&t), texture: t, layers: 0, shelves: Vec::new(), rows: Vec::new(), generation: 0, used_bytes: 0, empty_for: 0 }
     }
 
     pub fn bytes(&self) -> u64 {
@@ -158,17 +163,23 @@ impl Atlas {
     }
 
     /// Drop empty layers from the top (new shelves fill from the bottom), copying what's left into
-    /// a smaller texture: when two or more are empty, so a canvas at a layer's edge doesn't copy
-    /// the atlas back and forth. True when it did.
+    /// a smaller texture, once the top one has stayed empty `TRIM_FRAMES` calls: a canvas at a
+    /// layer's edge doesn't copy the atlas back and forth. True when it did.
     pub fn trim(&mut self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder) -> bool {
         let mut layers = self.layers;
         while layers > 1 && self.rows[layers as usize - 1] == [(0, SIDE)] {
             layers -= 1;
         }
-        if layers + 2 > self.layers {
+        if layers == self.layers {
+            self.empty_for = 0;
             return false;
         }
-        self.replace(device, enc, layers + 1);
+        self.empty_for += 1;
+        if self.empty_for < TRIM_FRAMES {
+            return false;
+        }
+        self.empty_for = 0;
+        self.replace(device, enc, layers);
         true
     }
 
@@ -231,7 +242,7 @@ mod tests {
         for t in full.into_iter().filter(|t| t.layer > 0) {
             a.free(t);
         }
-        assert!(a.trim(&d, &mut enc));
-        assert_eq!(a.layers, 2, "one empty layer stays for what comes next");
+        assert!((0..TRIM_FRAMES).map(|_| a.trim(&d, &mut enc)).last() == Some(true), "dropped once empty a while");
+        assert_eq!(a.layers, 1, "the empty layers go");
     }
 }

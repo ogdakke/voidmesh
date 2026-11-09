@@ -95,7 +95,7 @@ const SOURCE_FRAMES: u64 = 4;
 const GPU_MIPS_PIXELS: u64 = 1024 * 1024;
 /// Bytes of source levels queued with the workers or waiting to be placed (one level always
 /// goes): what they hold in buffers of their own until the GPU has copied them.
-const SOURCE_BYTES: u64 = 16 << 20;
+const SOURCE_BYTES: u64 = 6 << 20;
 /// Frames a finished source level waits for a frame that wants it.
 const BUILT_FRAMES: u64 = 30;
 /// Output pixels processed around a clipped region (`occlusion`), for the drawn edge's filtering.
