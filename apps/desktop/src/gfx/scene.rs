@@ -82,6 +82,7 @@ const VIDEO_BUDGET: u64 = 4 << 20;
 /// Processing a frame takes on, still or moving: a backlog (a canvas opened, a zoom's new tier)
 /// spreads over frames that each stay quick.
 const FRAME_BUDGET: std::time::Duration = std::time::Duration::from_millis(2);
+const FIRST_BUDGET: std::time::Duration = std::time::Duration::from_millis(4);
 /// Bytes a frame stages for sources: past it, the rest wait for the next frames (as past the
 /// time budget). Copying them is the frame's CPU, and what's staged is held until the GPU's done.
 const STAGE_BUDGET: u64 = 16 << 20;
@@ -1520,6 +1521,7 @@ impl Scene {
             px += cost;
             chosen.push((id, size));
         }
+        let first = chosen.len();
         if settled {
             let (mut n, mut px) = (0, 0u64);
             // Promotions first: a texture too small for its size shows most.
@@ -1545,15 +1547,25 @@ impl Scene {
         // frames. Always one batch.
         let started = std::time::Instant::now();
         let mut left = chosen.as_slice();
+        // Media showing for the first time (a placeholder on screen) gets `FIRST_BUDGET`; LOD
+        // changes, which only sharpen what shows, `FRAME_BUDGET`.
+        let mut done = 0;
+        let budget = |done: usize| if done < first { FIRST_BUDGET } else { FRAME_BUDGET };
         while !left.is_empty() {
             let (batch, rest) = left.split_at(left.len().min(BATCH));
             self.prepare_sources(device, queue, enc, batch);
             let rest_of_batch = self.build_tiles(device, enc, pipes, batch);
+            // Processed a material at a time (several passes each): the budget holds between them.
             for (id, size) in rest_of_batch {
+                if started.elapsed() > budget(done) {
+                    self.stats.pending += 1;
+                    continue;
+                }
                 self.build(device, enc, pipes, id, size);
             }
+            done += batch.len();
             left = rest;
-            if started.elapsed() > FRAME_BUDGET || self.staging.frame_bytes > STAGE_BUDGET {
+            if started.elapsed() > budget(done) || self.staging.frame_bytes > STAGE_BUDGET {
                 self.stats.pending += left.len();
                 break;
             }
