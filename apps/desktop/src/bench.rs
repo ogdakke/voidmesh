@@ -554,10 +554,11 @@ pub fn scene(s: &mut App) {
 
 /// The compositor alone, as the web's bench drives its renderer: `VOIDMESH_BENCH=<id>
 /// voidmesh` with `VOIDMESH_BENCH_DIRECT=1`. Frames are encoded and submitted back to back, up
-/// to three in flight (as a swapchain's drawables allow), and the GPU is drained at the end of
-/// each sample: a sample's wall time over its frames is the web's `msPerFrame`. CPU time per frame
-/// covers the canvas's sync, visibility, processing, encoding and submission, not waiting for
-/// the GPU.
+/// to eight in flight (as a swapchain holds frames back), with the source levels a frame queued
+/// finished before the next, and the GPU is drained at the end of each sample: a sample's wall
+/// time over its frames is the web's `msPerFrame`. CPU time per frame covers the canvas's sync,
+/// visibility, processing, encoding and submission, as the web renderer's render does: not
+/// waiting for the GPU or other threads, nor retiring completed work between frames.
 pub fn run_direct() {
     // A GUI app's main thread runs at this class; a process started from a shell doesn't.
     crate::gfx::process::interactive();
@@ -634,8 +635,10 @@ pub fn run_direct() {
         let mut enc = device.create_command_encoder(&Default::default());
         direct.frame(device, queue, &mut enc, &view, format, size, &mut s, scale);
         in_flight.push_back(queue.submit([enc.finish()]));
-        let _ = device.poll(wgpu::PollType::Poll);
         let ms = t0.elapsed().as_secs_f64() * 1000.0;
+        // Completed work retired between frames, as the browser's event loop does outside the
+        // web renderer's timed render.
+        let _ = device.poll(wgpu::PollType::Poll);
         let Some(b) = s.bench.take() else { return };
         bench = b;
         let st = direct.scene.stats;
