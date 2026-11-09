@@ -1677,7 +1677,7 @@ impl Scene {
                 None if a.width.max(a.height) <= crate::media::PROXY_SIDE => &a.frames[0].rgba,
                 None => return false,
             };
-            px.chunks_exact(4).all(|c| c[3] == 255)
+            px.as_chunks::<4>().0.iter().all(|c| c[3] == 255)
         })
     }
 

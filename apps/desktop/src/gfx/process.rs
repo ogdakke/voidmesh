@@ -740,7 +740,7 @@ pub struct Input<'a> {
 
 /// Encode the whole pipeline from `input` into level 0 of `out` (its size is the render size),
 /// then `out`'s mip chain.
-#[allow(clippy::too_many_arguments)]
+///
 /// `clip`: the output regions anything shows of (x, y, w, h each), when the rest is hidden: a
 /// one-pass effect renders only those (the rest is cleared). Passes that read their neighbours'
 /// output (adjustments, blur, post) always render everything.
