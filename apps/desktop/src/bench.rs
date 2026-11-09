@@ -597,7 +597,7 @@ pub fn run_direct() {
     let mut peak = 0u64;
     let mut peak_extra = 0u64;
     let mut peak_total = 0u64;
-    let (mut visible, mut processed) = (0usize, 0usize);
+    let (mut visible, mut processed, mut unready) = (0usize, 0usize, 0usize);
     for k in 0..bench.total() {
         let measuring = k >= spec.warmup;
         if measuring && (k - spec.warmup).is_multiple_of(spec.frames) {
@@ -614,6 +614,14 @@ pub fn run_direct() {
             std::thread::sleep(Duration::from_micros(200));
         }
         sample_start += wait.elapsed();
+        // Source levels the last frame queued are finished before this one, as the web's
+        // renderer uploads its sources within the frame: the wait counts in the sample's wall
+        // time (not the frame's CPU time, the work being on other threads), so media the bench
+        // pans or zooms onto is shown rather than left a placeholder for being fast.
+        let built = Instant::now();
+        while !direct.scene.sources_idle() && built.elapsed() < Duration::from_millis(250) {
+            std::thread::sleep(Duration::from_micros(50));
+        }
         // At most `IN_FLIGHT` frames queued, as a swapchain's drawables allow: a GPU-bound frame
         // waits here, in the sample's wall time but not in the frame's CPU time, rather than in
         // whichever call finds Metal's queue full.
@@ -638,6 +646,7 @@ pub fn run_direct() {
             cpu.push(ms);
             visible += st.visible;
             processed += st.processed;
+            unready += st.unready;
             if (k + 1 - spec.warmup).is_multiple_of(spec.frames) {
                 drain();
                 samples.push(sample_start.elapsed().as_secs_f64() * 1000.0 / spec.frames as f64);
@@ -662,6 +671,7 @@ pub fn run_direct() {
         "cpuP95Ms": p(cpu.clone(), 0.95),
         "visibleMean": visible as f64 / n,
         "processed": processed,
+        "visibleUnreadyMean": unready as f64 / n,
         "peakResidentBytes": peak,
         "peakVideoAndStagingBytes": peak_extra,
         "peakTotalBytes": peak_total,

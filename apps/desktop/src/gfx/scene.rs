@@ -88,14 +88,14 @@ const STAGE_BUDGET: u64 = 16 << 20;
 /// Materials processed between budget checks.
 const BATCH: usize = 8;
 /// Textures of materials off screen kept for when they show again.
-const UNSEEN_BUDGET: u64 = 32 * 1024 * 1024;
+const UNSEEN_BUDGET: u64 = 24 * 1024 * 1024;
 /// Frames a still's source stays unused before it's freed.
 const SOURCE_FRAMES: u64 = 4;
 /// Media of more pixels than this makes its source mips on the GPU.
 const GPU_MIPS_PIXELS: u64 = 1024 * 1024;
 /// Bytes of source levels queued with the workers or waiting to be placed (one level always
 /// goes): what they hold in buffers of their own until the GPU has copied them.
-const SOURCE_BYTES: u64 = 6 << 20;
+const SOURCE_BYTES: u64 = 12 << 20;
 /// Frames a finished source level waits for a frame that wants it.
 const BUILT_FRAMES: u64 = 30;
 /// Output pixels processed around a clipped region (`occlusion`), for the drawn edge's filtering.
@@ -172,6 +172,8 @@ struct Material {
     seen: u64,
     /// The largest world side of a visible instance this frame.
     want: f32,
+    /// The frame it was last in the view ahead (`prefetch`).
+    ahead: u64,
     gpu: GpuMat,
 }
 
@@ -297,6 +299,8 @@ pub struct Stats {
     pub video_bytes: u64,
     pub staging_bytes: u64,
     pub source_uploads: usize,
+    /// Visible materials with nothing processed to show yet (drawn as placeholders).
+    pub unready: usize,
 }
 
 pub struct Scene {
@@ -334,6 +338,10 @@ pub struct Scene {
     hashes: HashMap<*const Params, (Arc<Params>, u64)>,
     /// Materials visible this frame.
     visible_mats: Vec<u32>,
+    /// Materials not visible but in the view the camera is moving into (`prefetch`), and the
+    /// last frame's view it's extrapolated from.
+    ahead_mats: Vec<u32>,
+    last_view: Option<[f32; 4]>,
     /// Instances drawn from their own textures this frame, in z order.
     own_draws: Vec<u32>,
     /// Processed textures of their own freed this frame and last, for materials of their size.
@@ -361,6 +369,9 @@ pub struct Scene {
     /// Source levels are built off the frame (`SourceWorkers`): queued, and done (with the frame
     /// they arrived on) waiting for a frame to place them.
     workers: Option<SourceWorkers>,
+    /// Level buffers copied from this frame, pooled once the GPU has run the copies.
+    level_pool: LevelPool,
+    retired: Vec<wgpu::Buffer>,
     /// Continuous materials' regions anything shows of this frame (0–1, x0 y0 x1 y1; empty when
     /// all of it is hidden), from `occlusion`; and which assets are opaque, by id.
     clips: HashMap<u32, [f32; 4]>,
@@ -403,13 +414,32 @@ struct SourceWorkers {
     tx: std::sync::mpsc::Sender<SourceWork>,
 }
 
+/// Source level buffers the GPU is done with, for the workers' next levels of their size: a new
+/// buffer a level is a kernel call and fresh pages to fault in, which a pan of new photos paid
+/// for each one.
+type LevelPool = Arc<std::sync::Mutex<Vec<wgpu::Buffer>>>;
+
+/// Bytes of level buffers pooled.
+const LEVEL_POOL: u64 = 4 << 20;
+
+fn pool_levels(pool: &LevelPool, bufs: Vec<wgpu::Buffer>) {
+    let mut p = pool.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut bytes: u64 = p.iter().map(wgpu::Buffer::size).sum();
+    for b in bufs {
+        if bytes + b.size() <= LEVEL_POOL {
+            bytes += b.size();
+            p.push(b);
+        }
+    }
+}
+
 impl SourceWorkers {
-    fn start(device: &wgpu::Device, queue: &wgpu::Queue, done: std::sync::mpsc::Sender<(SrcKey, Option<Prepared>)>) -> SourceWorkers {
+    fn start(device: &wgpu::Device, queue: &wgpu::Queue, done: std::sync::mpsc::Sender<(SrcKey, Option<Prepared>)>, pool: LevelPool) -> SourceWorkers {
         let (tx, rx) = std::sync::mpsc::channel::<SourceWork>();
         let rx = Arc::new(std::sync::Mutex::new(rx));
-        let threads = std::thread::available_parallelism().map_or(2, |n| n.get() / 2).clamp(2, 4);
+        let threads = std::thread::available_parallelism().map_or(2, |n| n.get().saturating_sub(2)).clamp(2, 6);
         for _ in 0..threads {
-            let (rx, done, device, queue) = (rx.clone(), done.clone(), device.clone(), queue.clone());
+            let (rx, done, device, queue, pool) = (rx.clone(), done.clone(), device.clone(), queue.clone(), pool.clone());
             // A thread that can't start leaves the others; none starting is out of memory.
             let _ = std::thread::Builder::new().name("voidmesh-source".into()).spawn(move || {
                 process::interactive();
@@ -420,7 +450,7 @@ impl SourceWorkers {
                         Err(_) => return,
                     };
                     let Ok(work) = work else { return };
-                    let prepared = Self::build(&device, &queue, &work, &mut padded);
+                    let prepared = Self::build(&device, &queue, &pool, &work, &mut padded);
                     if done.send((work.key, prepared)).is_err() {
                         return;
                     }
@@ -434,7 +464,7 @@ impl SourceWorkers {
         self.tx.send(work).is_ok()
     }
 
-    fn build(device: &wgpu::Device, queue: &wgpu::Queue, work: &SourceWork, padded: &mut Vec<u8>) -> Option<Prepared> {
+    fn build(device: &wgpu::Device, queue: &wgpu::Queue, pool: &LevelPool, work: &SourceWork, padded: &mut Vec<u8>) -> Option<Prepared> {
         let a = &work.asset;
         let f = a.frames.get(work.frame)?;
         let level = work.key.2;
@@ -458,7 +488,12 @@ impl SourceWorkers {
         if px.len() < src_row * h as usize {
             return None;
         }
-        let buf = device.create_buffer(&wgpu::BufferDescriptor { label: Some("voidmesh source level"), size: u64::from(row) * u64::from(h), usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let size = u64::from(row) * u64::from(h);
+        let pooled = {
+            let mut p = pool.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            p.iter().position(|b| b.size() == size).map(|i| p.swap_remove(i))
+        };
+        let buf = pooled.unwrap_or_else(|| device.create_buffer(&wgpu::BufferDescriptor { label: Some("voidmesh source level"), size, usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }));
         if row as usize == src_row {
             queue.write_buffer(&buf, 0, &px[..src_row * h as usize]);
         } else {
@@ -640,6 +675,8 @@ impl Scene {
             mat_dirty: Vec::new(),
             hashes: HashMap::new(),
             visible_mats: Vec::new(),
+            ahead_mats: Vec::new(),
+            last_view: None,
             own_draws: Vec::new(),
             ranges: Vec::new(),
             pool: Vec::new(),
@@ -653,6 +690,8 @@ impl Scene {
             staged: HashMap::new(),
             staging: Staging::default(),
             workers: None,
+            level_pool: Default::default(),
+            retired: Vec::new(),
             clips: HashMap::new(),
             opaque_assets: HashMap::new(),
             building: Default::default(),
@@ -732,6 +771,7 @@ impl Scene {
                     tex: Tex::None,
                     seen: 0,
                     want: 0.0,
+                    ahead: 0,
                     gpu: GpuMat::default(),
                 };
                 let id = match self.free_mats.pop() {
@@ -1183,7 +1223,9 @@ impl Scene {
             }
         }
         let frame = self.frame;
-        self.built.retain(|_, (at, _)| frame - *at < BUILT_FRAMES);
+        let expired: Vec<SrcKey> = self.built.iter().filter(|(_, (at, _))| frame - *at >= BUILT_FRAMES).map(|(k, _)| *k).collect();
+        let idle: Vec<wgpu::Buffer> = expired.into_iter().filter_map(|k| self.built.remove(&k)).map(|(_, p)| p.buf).collect();
+        pool_levels(&self.level_pool, idle);
         for &(id, size) in chosen {
             let Some(m) = self.mats.get(id as usize).and_then(Option::as_ref) else { continue };
             if matches!(m.key, MatKey::Video { .. }) {
@@ -1203,10 +1245,11 @@ impl Scene {
             let texture = !m.params.show_original || !atlas::Atlas::fits(content, content);
             let large = key.2 == 0 && u64::from(m.asset.width) * u64::from(m.asset.height) > GPU_MIPS_PIXELS;
             let Some((_, p)) = self.built.remove(&key) else {
-                let bytes = u64::from((m.asset.width >> key.2).max(1)) * u64::from((m.asset.height >> key.2).max(1)) * 4;
+                // As its buffer holds it: rows at the copy alignment.
+                let bytes = u64::from(((m.asset.width >> key.2).max(1) * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)) * u64::from((m.asset.height >> key.2).max(1));
                 let held: u64 = self.building.values().sum::<u64>() + self.built.values().map(|(_, p)| p.buf.size()).sum::<u64>();
                 if !self.building.contains_key(&key) && (held == 0 || held + bytes <= SOURCE_BYTES) {
-                    let workers = self.workers.get_or_insert_with(|| SourceWorkers::start(device, queue, self.built_tx.clone()));
+                    let workers = self.workers.get_or_insert_with(|| SourceWorkers::start(device, queue, self.built_tx.clone(), self.level_pool.clone()));
                     if workers.send(SourceWork { key, asset: m.asset.clone(), frame: m.frame }) {
                         self.building.insert(key, bytes);
                     }
@@ -1235,6 +1278,7 @@ impl Scene {
                 tex.as_image_copy(),
                 wgpu::Extent3d { width: p.w, height: p.h, depth_or_array_layers: 1 },
             );
+            self.retired.push(p.buf);
             let view = tex.create_view(&Default::default());
             self.sources.insert(key, Source { levels: 1, tex, view, size: (p.w, p.h), used: frame, animated: m.asset.animated() });
         }
@@ -1445,8 +1489,13 @@ impl Scene {
         let settled = self.still >= SETTLE_FRAMES;
         let mut cold: Vec<(u32, (u32, u32))> = Vec::new();
         let mut moves: Vec<(u32, (u32, u32))> = Vec::new();
-        for &id in &self.visible_mats {
+        let visible_count = self.visible_mats.len();
+        for (k, &id) in self.visible_mats.iter().chain(&self.ahead_mats).enumerate() {
+            let ahead = k >= visible_count;
             let Some(m) = self.mat(id) else { continue };
+            if ahead && m.size != (0, 0) {
+                continue;
+            }
             let media = (m.asset.width, m.asset.height);
             let continuous = m.params.uses_time() || matches!(m.key, MatKey::Video { .. });
             let projected = m.want * px_per_world;
@@ -1518,7 +1567,7 @@ impl Scene {
         // Sources only feed processing: an animated frame's goes once a frame passes without it,
         // a still's after a couple of seconds unused.
         self.sources.retain(|_, s| if s.animated { s.used == frame } else { frame - s.used < SOURCE_FRAMES });
-        self.staged.clear();
+        self.retired.extend(self.staged.drain().map(|(_, (b, _))| b));
         // Params hashes are kept by `Arc`: drop those no entity or material holds any more (a
         // slider drag makes a new one a frame).
         if frame.is_multiple_of(60) {
@@ -1698,6 +1747,48 @@ impl Scene {
         })
     }
 
+    /// The materials the camera is about to show: in the view extrapolated by its last move (at
+    /// most a view's size), not visible yet. They're processed after the visible ones, so media
+    /// arriving in a pan or zoom is ready when it shows rather than a frame or two after (its
+    /// source is built off the frame).
+    fn prefetch(&mut self, view: [f32; 4]) {
+        self.ahead_mats.clear();
+        let last = self.last_view.replace(view);
+        let Some(last) = last else { return };
+        let (w, h) = (view[2] - view[0], view[3] - view[1]);
+        let d: [f32; 4] = std::array::from_fn(|i| (view[i] - last[i]).clamp(-w.max(h), w.max(h)));
+        if d.iter().all(|v| *v == 0.0) {
+            return;
+        }
+        // This view and the next together: what's in them and not visible is ahead.
+        let next: [f32; 4] = std::array::from_fn(|i| view[i] + d[i]);
+        let a = [view[0].min(next[0]), view[1].min(next[1]), view[2].max(next[2]), view[3].max(next[3])];
+        let frame = self.frame;
+        for (gi, g) in self.groups.iter().enumerate() {
+            let b = g.bounds;
+            if b[0] > a[2] || b[2] < a[0] || b[1] > a[3] || b[3] < a[1] {
+                continue;
+            }
+            for i in &self.insts[gi * GROUP..((gi + 1) * GROUP).min(self.insts.len())] {
+                let r = i.rect;
+                let (x1, y1) = (r[0] + r[2], r[1] + r[3]);
+                if r[0] > a[2] || x1 < a[0] || r[1] > a[3] || y1 < a[1] {
+                    continue;
+                }
+                let Some(Some(m)) = self.mats.get_mut(i.mat as usize) else { continue };
+                if m.seen == frame {
+                    continue;
+                }
+                if m.ahead != frame {
+                    m.ahead = frame;
+                    m.want = 0.0;
+                    self.ahead_mats.push(i.mat);
+                }
+                m.want = m.want.max(r[2].max(r[3]));
+            }
+        }
+    }
+
     /// For the continuous one-pass materials visible this frame (processed again every frame),
     /// the part of each that shows: clipped to the view and shrunk by the opaque instances above
     /// it that cover a whole side, so a stack of overlapping entities processes what's seen of
@@ -1811,6 +1902,12 @@ impl Scene {
     pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, s: &mut App, dpr: f32) {
         self.stats = Stats { rebuilt: false, ..Stats::default() };
         self.staging.begin(queue, self.frame);
+        // Copies from these were recorded on the last frame, submitted before this one prepares.
+        let retired = std::mem::take(&mut self.retired);
+        if !retired.is_empty() {
+            let pool = self.level_pool.clone();
+            queue.on_submitted_work_done(move || pool_levels(&pool, retired));
+        }
         let mut t = Trace::start();
         self.sync(s);
         t.lap("sync");
@@ -1833,6 +1930,7 @@ impl Scene {
             self.last_scale = s.cam.scale;
         }
         self.visibility(view);
+        self.prefetch(view);
         self.occlusion(view, s.drag_offset().is_none());
         t.lap("visibility");
         self.schedule(device, queue, enc, pipes, s.cam.scale * dpr);
@@ -1852,7 +1950,11 @@ impl Scene {
         self.stats.video_bytes = self.videos.values().filter_map(|v| v.tex.as_ref()).map(|(t, _)| texture_bytes(t)).sum::<u64>()
             + s.video_frames.values().filter_map(|f| f.gpu.as_ref()).map(|g| g.buf.size()).sum::<u64>()
             + crate::video::gpu_pool_bytes();
-        self.stats.staging_bytes = self.staging.bytes() + self.building.values().sum::<u64>() + self.built.values().map(|(_, p)| p.buf.size()).sum::<u64>();
+        self.stats.unready = self.visible_mats.iter().filter(|id| self.mat(**id).is_some_and(|m| matches!(m.tex, Tex::None))).count();
+        self.stats.staging_bytes = self.staging.bytes()
+            + self.building.values().sum::<u64>()
+            + self.built.values().map(|(_, p)| p.buf.size()).sum::<u64>()
+            + self.level_pool.lock().map_or(0, |p| p.iter().map(wgpu::Buffer::size).sum::<u64>());
         t.lap("rest");
         t.finish(&self.stats);
         if t.on {
@@ -1950,6 +2052,17 @@ impl Scene {
     /// Every playing video has the frame due now decoded (or failed).
     pub fn videos_ready(&self, s: &App) -> bool {
         self.videos.iter().all(|((id, _), v)| s.entity(*id).is_none_or(|e| !e.playing || v.decoder.ready(e.play_t)))
+    }
+
+    /// Source levels queued with the workers: none left to finish.
+    pub fn sources_idle(&mut self) -> bool {
+        while let Ok((key, prepared)) = self.built_rx.try_recv() {
+            self.building.remove(&key);
+            if let Some(p) = prepared {
+                self.built.insert(key, (self.frame, p));
+            }
+        }
+        self.building.is_empty()
     }
 
     /// True while there's processing left that later frames will do.
