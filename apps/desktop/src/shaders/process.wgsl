@@ -150,6 +150,26 @@ fn fs_mip(@builtin(position) at: vec4f) -> @location(0) vec4f {
   return textureSampleLevel(src, smp, above, 0.0);
 }
 
+// A region of the source (origin.zw, blur.xy texels) box-filtered into this draw's region of the
+// target (origin.xy, res): each output pixel the mean of an 8×8 grid of bilinear taps over its
+// footprint (`process::shrink`).
+@fragment
+fn fs_shrink(@builtin(position) at: vec4f) -> @location(0) vec4f {
+  let dims = vec2f(textureDimensions(src, 0));
+  let r = u.blur.xy / u.res;
+  let base = u.origin.zw + (at.xy - u.origin.xy - 0.5) * r;
+  let lo = u.origin.zw + 0.5;
+  let hi = u.origin.zw + u.blur.xy - 0.5;
+  var acc = vec4f(0.0);
+  for (var j = 0u; j < 8u; j++) {
+    for (var i = 0u; i < 8u; i++) {
+      let p = clamp(base + (vec2f(f32(i), f32(j)) + 0.5) / 8.0 * r, lo, hi);
+      acc += textureSampleLevel(src, smp, p / dims, 0.0);
+    }
+  }
+  return acc / 64.0;
+}
+
 // ---------------------------------------------------------------- bloom extract
 
 @fragment

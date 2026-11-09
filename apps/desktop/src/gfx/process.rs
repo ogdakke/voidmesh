@@ -68,6 +68,7 @@ pub struct Pipes {
     pipeline_layout: wgpu::PipelineLayout,
     post: wgpu::RenderPipeline,
     mip: wgpu::RenderPipeline,
+    shrink: wgpu::RenderPipeline,
     pub sampler: wgpu::Sampler,
     /// A 1×1 texture standing in for scratch a run doesn't use.
     blank: wgpu::Texture,
@@ -150,6 +151,7 @@ impl Pipes {
             general: pipe("fs_effect"),
             post: pipe("fs_post"),
             mip: pipe("fs_mip"),
+            shrink: pipe("fs_shrink"),
             sampler,
             blank,
             atlas,
@@ -306,6 +308,33 @@ pub fn upload_gpu_mips(device: &wgpu::Device, queue: &wgpu::Queue, enc: &mut wgp
     write(queue, &t, w, h, rgba);
     mip_chain(device, enc, pipes, &t);
     t
+}
+
+/// Regions of textures box-filtered down into regions of `target` in one pass: each job is
+/// (index into `srcs` (one layer, one level each), source rect, target rect), rects x, y, w, h.
+/// Processed textures' small stand-ins, made on the GPU from them.
+pub fn shrink(device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, target: &wgpu::TextureView, srcs: &[wgpu::TextureView], jobs: &[(usize, [u32; 4], [u32; 4])]) {
+    let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("voidmesh shrink"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: target, resolve_target: None, depth_slice: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })],
+        ..Default::default()
+    });
+    rp.set_pipeline(&pipes.shrink);
+    let mut bound = usize::MAX;
+    for &(i, src, dst) in jobs {
+        if i != bound {
+            rp.set_bind_group(0, Some(&process_bind(device, pipes, &srcs[i], &pipes.dummy, &pipes.no_palette)), &[]);
+            bound = i;
+        }
+        let mut u = Uniforms::zeroed();
+        u.res = [dst[2] as f32, dst[3] as f32];
+        u.origin = [dst[0] as f32, dst[1] as f32, src[0] as f32, src[1] as f32];
+        u.blur = [src[2] as f32, src[3] as f32, 0.0, 0.0];
+        rp.set_immediates(0, bytemuck::bytes_of(&u));
+        rp.set_viewport(dst[0] as f32, dst[1] as f32, dst[2] as f32, dst[3] as f32, 0.0, 1.0);
+        rp.set_scissor_rect(dst[0], dst[1], dst[2], dst[3]);
+        rp.draw(0..3, 0..1);
+    }
 }
 
 /// Levels 1… of `t`, each a box filter of the one above.

@@ -99,6 +99,22 @@ const STAGE_BUDGET: u64 = 16 << 20;
 const BATCH: usize = 8;
 /// Textures of materials off screen kept for when they show again.
 const UNSEEN_BUDGET: u64 = 24 * 1024 * 1024;
+/// A floor's longest side (`Material::floor`), and bytes of floors made in all: past it, new
+/// materials go without (dormant ones' floors go first, past `DORMANT_BUDGET`).
+const FLOOR: f32 = 64.0;
+const FLOOR_BYTES: u64 = 48 * 1024 * 1024;
+/// The side of the sheet floors are shrunk into before their tiles (a multiple of `FLOOR`).
+const FLOOR_SHEET: u32 = 1024;
+const DORMANT_BUDGET: u64 = 16 * 1024 * 1024;
+/// Floors made in a frame, and the time they take on past the frame's other processing.
+const FLOOR_COUNT: usize = 16;
+/// Frames a queued floor waits for its source before it goes without.
+const FLOOR_WAIT: u64 = 600;
+const FLOOR_TIME: std::time::Duration = std::time::Duration::from_millis(1);
+/// Longest a canvas just switched to or opened keeps the last one showing while what it shows
+/// is processed and its floors made (`Scene::world`): past it, what's ready shows (a source that
+/// can't be built must not keep the canvas from showing at all).
+const HOLD: std::time::Duration = std::time::Duration::from_millis(1200);
 /// Frames a still's source stays unused before it's freed.
 const SOURCE_FRAMES: u64 = 4;
 /// Media of more pixels than this makes its source mips on the GPU.
@@ -184,10 +200,28 @@ struct Material {
     want: f32,
     /// The frame it was last in the view ahead (`prefetch`).
     ahead: u64,
+    /// Where its texture (`tex`) is drawn from.
     gpu: GpuMat,
     /// The part of its texture processed (0–1, x0 y0 x1 y1): all of it but for a continuous
     /// material clipped to what showed (`occlusion`).
     region: [f32; 4],
+    /// A small stand-in of it in the atlas (`FLOOR` a side), drawn when its texture isn't there
+    /// or doesn't hold what shows: what's seen is never a blank while it has one.
+    floor: Option<(Tile, GpuMat)>,
+    /// In `floor_queue`: a floor is coming from its source.
+    queued: bool,
+    /// What the canvas draws of it: `gpu`, its floor, or nothing (`drawn_for`).
+    drawn: GpuMat,
+}
+
+/// What a material draws: its texture while that's there and `usable` (holds what shows), else its
+/// floor, else what texture it has.
+fn drawn_for(m: &Material, usable: bool) -> GpuMat {
+    match m.floor {
+        _ if m.gpu.state != 0 && usable => m.gpu,
+        Some((_, g)) => g,
+        None => m.gpu,
+    }
 }
 
 const FULL: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
@@ -199,6 +233,10 @@ fn holds(a: [f32; 4], b: [f32; 4]) -> bool {
 
 /// A material `build_tiles` processes: its id, size, tile, source view, params, time and media size.
 type TileJob = (u32, (u32, u32), Tile, wgpu::TextureView, Arc<Params>, f32, (u32, u32));
+
+/// A floor `floors_from_textures` makes: material, source (an index into its views), source
+/// rect, tile, size and flags.
+type FloorPlan = (u32, usize, [u32; 4], Tile, (u32, u32), u32);
 
 /// A source: asset, frame, and the mip level its largest level is.
 type SrcKey = (u64, u32, u32);
@@ -379,6 +417,17 @@ pub struct Scene {
     last_view: Option<[f32; 4]>,
     /// Instances drawn from their own textures this frame, in z order.
     own_draws: Vec<u32>,
+    /// Materials to make floors of from their sources (`build_floors`), with the frame each was
+    /// queued on: urgent ones (showing, their texture clipped) at the front, then those never
+    /// processed, made only in frames with nothing else to do (or while a canvas is held).
+    floor_queue: std::collections::VecDeque<(u32, u64, bool)>,
+    /// Bytes of floors held, and the sheet floors made from textures are shrunk into.
+    floor_bytes: u64,
+    floor_sheet: Option<wgpu::Texture>,
+    /// The canvas shown (`App::canvas_epoch`), and since when one just switched to has kept the
+    /// last one's world showing.
+    epoch: u64,
+    hold: Option<std::time::Instant>,
     /// Processed textures of their own freed this frame and last, for materials of their size.
     pool: Vec<wgpu::Texture>,
     pool_prev: Vec<wgpu::Texture>,
@@ -713,6 +762,11 @@ impl Scene {
             ahead_mats: Vec::new(),
             last_view: None,
             own_draws: Vec::new(),
+            floor_queue: Default::default(),
+            floor_bytes: 0,
+            floor_sheet: None,
+            epoch: 0,
+            hold: None,
             ranges: Vec::new(),
             pool: Vec::new(),
             pool_prev: Vec::new(),
@@ -837,6 +891,9 @@ impl Scene {
                     ahead: 0,
                     gpu: GpuMat::default(),
                     region: FULL,
+                    floor: None,
+                    queued: true,
+                    drawn: GpuMat::default(),
                 };
                 let id = match self.free_mats.pop() {
                     Some(id) => {
@@ -850,6 +907,7 @@ impl Scene {
                 };
                 self.mat_index.insert(key, id);
                 self.mat_dirty.push(id);
+                self.floor_queue.push_back((id, self.frame, false));
                 id
             }
         };
@@ -859,17 +917,39 @@ impl Scene {
         id
     }
 
+    /// One reference fewer. A material none shows any more stays, dormant, with what it holds
+    /// (it shows again when an entity does: a tab switched back to, an undone delete), until
+    /// `evict` lets it go.
     fn release_mat(&mut self, id: u32) {
         let Some(m) = self.mats.get_mut(id as usize).and_then(Option::as_mut) else { return };
         m.refs = m.refs.saturating_sub(1);
-        if m.refs > 0 {
-            return;
+        if m.refs == 0 && matches!(m.tex, Tex::None) && m.floor.is_none() {
+            self.free_mat(id);
         }
-        let Some(m) = self.mats[id as usize].take() else { return };
+    }
+
+    /// Let material `id` go, with all it holds.
+    fn free_mat(&mut self, id: u32) {
+        let Some(m) = self.mats.get_mut(id as usize).and_then(Option::take) else { return };
         self.drop_tex(m.tex);
+        if let Some((tile, _)) = m.floor {
+            self.floor_bytes -= tile.bytes();
+            self.atlas.free(tile);
+        }
         self.mat_index.remove(&m.key);
         self.free_mats.push(id);
         self.mat_dirty.push(id);
+    }
+
+    /// Material `id` draws what `drawn_for` says now.
+    fn redraw(&mut self, id: u32, usable: bool) {
+        let Some(Some(m)) = self.mats.get_mut(id as usize) else { return };
+        let d = drawn_for(m, usable);
+        if m.drawn != d {
+            m.drawn = d;
+            self.mat_dirty.push(id);
+            self.world_dirty = true;
+        }
     }
 
     /// Free a material's texture: an atlas tile back to the atlas, a processed texture of its own
@@ -1403,8 +1483,21 @@ impl Scene {
         rest
     }
 
-    /// Process material `id` at `size`, replacing what it had.
+    /// Process material `id` at `size`, replacing what it had. A texture clipped to what shows
+    /// can't make its floor when it goes (`floor_from_texture`): that one comes from its source.
     fn build(&mut self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, id: u32, size: (u32, u32)) {
+        self.build_texture(device, enc, pipes, id, size);
+        if let Some(Some(m)) = self.mats.get_mut(id as usize)
+            && m.region != FULL
+            && m.floor.is_none()
+            && !m.queued
+        {
+            m.queued = true;
+            self.floor_queue.push_front((id, self.frame, true));
+        }
+    }
+
+    fn build_texture(&mut self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, id: u32, size: (u32, u32)) {
         let Some(m) = self.mats.get(id as usize).and_then(Option::as_ref) else { return };
         let (asset, params, time, key, skey) = (m.asset.clone(), m.params.clone(), m.time, m.key, Self::source_key(m, size));
         let media = (asset.width, asset.height);
@@ -1541,15 +1634,195 @@ impl Scene {
         self.finish_build(id, tex, gpu, size, done);
     }
 
+    /// The floors of materials `ids` from their textures, as those go: box-filtered down on the
+    /// GPU (`process::shrink`), all of them in a pass a sheet (`FLOOR_SHEET`), then copied into
+    /// their tiles. For each that has none, or a smaller one than its texture makes; not from a
+    /// texture clipped to what showed (that floor comes from the source, `build`).
+    fn floors_from_textures(&mut self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, ids: &[u32]) {
+        let mut plans: Vec<FloorPlan> = Vec::new();
+        let mut srcs: Vec<wgpu::TextureView> = Vec::new();
+        let mut layers: HashMap<u32, usize> = HashMap::new();
+        let mut bytes = self.floor_bytes;
+        for &id in ids {
+            let Some(m) = self.mat(id) else { continue };
+            if m.gpu.state == 0 || m.region != FULL {
+                continue;
+            }
+            let (w, h) = (m.gpu.tile[2] as u32, m.gpu.tile[3] as u32);
+            let k = (FLOOR / w.max(h).max(1) as f32).min(1.0);
+            let size = (((w as f32 * k).round() as u32).max(1), ((h as f32 * k).round() as u32).max(1));
+            if m.floor.is_some_and(|(_, g)| g.tile[2].max(g.tile[3]) >= size.0.max(size.1) as f32) {
+                continue;
+            }
+            let add = u64::from(size.0) * u64::from(size.1) * 4;
+            if bytes + add > FLOOR_BYTES {
+                continue;
+            }
+            let (src, rect, flags) = match &m.tex {
+                Tex::Atlas(t) => {
+                    let layer = t.layer;
+                    let atlas = &self.atlas.texture;
+                    let i = *layers.entry(layer).or_insert_with(|| {
+                        srcs.push(atlas.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2), base_array_layer: layer, array_layer_count: Some(1), base_mip_level: 0, mip_level_count: Some(1), ..Default::default() }));
+                        srcs.len() - 1
+                    });
+                    (i, [m.gpu.tile[0] as u32, m.gpu.tile[1] as u32, w, h], m.gpu.flags)
+                }
+                Tex::Own { tex, .. } => {
+                    srcs.push(tex.create_view(&wgpu::TextureViewDescriptor { base_mip_level: 0, mip_level_count: Some(1), ..Default::default() }));
+                    (srcs.len() - 1, [0, 0, w, h], m.gpu.flags)
+                }
+                Tex::None => continue,
+            };
+            let Some(tile) = self.atlas.alloc(device, enc, size.0, size.1) else { continue };
+            bytes += add;
+            plans.push((id, src, rect, tile, size, flags));
+        }
+        if plans.is_empty() {
+            return;
+        }
+        plans.sort_by_key(|p| p.1);
+        let sheet = self.floor_sheet.get_or_insert_with(|| process::target_mips(device, FLOOR_SHEET, FLOOR_SHEET, 1, "voidmesh floor sheet")).clone();
+        let sheet_view = sheet.create_view(&Default::default());
+        // Cells of `FLOOR` a side, a sheet's worth a pass.
+        let cell = FLOOR as u32;
+        let per_row = FLOOR_SHEET / cell;
+        for chunk in plans.chunks((per_row * per_row) as usize) {
+            let at = |i: usize| ((i as u32 % per_row) * cell, (i as u32 / per_row) * cell);
+            let jobs: Vec<(usize, [u32; 4], [u32; 4])> = chunk.iter().enumerate().map(|(i, p)| (p.1, p.2, [at(i).0, at(i).1, p.4.0, p.4.1])).collect();
+            process::shrink(device, enc, pipes, &sheet_view, &srcs, &jobs);
+            for (i, &(id, _, _, tile, size, flags)) in chunk.iter().enumerate() {
+                let (x, y) = at(i);
+                enc.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo { texture: &sheet, mip_level: 0, origin: wgpu::Origin3d { x, y, z: 0 }, aspect: wgpu::TextureAspect::All },
+                    wgpu::TexelCopyTextureInfo { texture: &self.atlas.texture, mip_level: 0, origin: wgpu::Origin3d { x: tile.x, y: tile.y, z: tile.layer }, aspect: wgpu::TextureAspect::All },
+                    wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+                );
+                let gpu = GpuMat { tile: [tile.x as f32, tile.y as f32, size.0 as f32, size.1 as f32], layer: tile.layer, levels: 1, state: 1, flags };
+                self.set_floor(id, tile, gpu);
+            }
+        }
+    }
+
+    /// Material `id`'s floor is `tile` now (the one it had goes).
+    fn set_floor(&mut self, id: u32, tile: Tile, gpu: GpuMat) {
+        let Some(Some(m)) = self.mats.get_mut(id as usize) else { return };
+        let old = m.floor.replace((tile, gpu));
+        m.queued = false;
+        if let Some((t, _)) = old {
+            self.floor_bytes -= t.bytes();
+            self.atlas.free(t);
+        }
+        self.floor_bytes += tile.bytes();
+        self.redraw(id, true);
+    }
+
+    /// Make the floors of queued materials (`Material::floor`) with the frame's spare time: at
+    /// most `FLOOR_COUNT` and `FLOOR_TIME`, each from its source at the floor's size (built off
+    /// the frame like any other; one still being built waits at the back of the queue). Past
+    /// `FLOOR_BYTES`, the rest go without, and one whose source hasn't come in `FLOOR_WAIT`
+    /// frames is dropped (so the queue always drains and the canvas goes idle).
+    fn build_floors(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, idle: bool) {
+        let started = std::time::Instant::now();
+        let (mut made, mut tries) = (0, 0);
+        let mut later = Vec::new();
+        // While a canvas just switched to is held, nothing of it shows yet: four times as many.
+        let k = if self.hold.is_some() { 4 } else { 1 };
+        while made < FLOOR_COUNT * k && tries < FLOOR_COUNT * 4 * k && started.elapsed() < FLOOR_TIME * k as u32 {
+            let Some(&(id, since, urgent)) = self.floor_queue.front() else { break };
+            if !urgent && !idle && self.hold.is_none() {
+                break;
+            }
+            self.floor_queue.pop_front();
+            let Some(m) = self.mat(id) else { continue };
+            // Made, or none shows it any more (it goes as it is).
+            if m.floor.is_some() || m.refs == 0 {
+                if let Some(Some(m)) = self.mats.get_mut(id as usize) {
+                    m.queued = false;
+                }
+                continue;
+            }
+            let size = process::lod_size((m.asset.width, m.asset.height), FLOOR / process::LOD_OVERSCAN);
+            if self.floor_bytes + u64::from(size.0) * u64::from(size.1) * 4 > FLOOR_BYTES {
+                for (id, ..) in std::mem::take(&mut self.floor_queue) {
+                    if let Some(Some(m)) = self.mats.get_mut(id as usize) {
+                        m.queued = false;
+                    }
+                }
+                break;
+            }
+            tries += 1;
+            self.prepare_sources(device, queue, enc, &[(id, size)]);
+            if self.build_floor(device, enc, pipes, id, size) {
+                made += 1;
+            } else if self.frame - since < FLOOR_WAIT {
+                later.push((id, since, urgent));
+            } else if let Some(Some(m)) = self.mats.get_mut(id as usize) {
+                m.queued = false;
+            }
+        }
+        // Those waiting for their sources go back where they were.
+        for e in later.into_iter().rev() {
+            if e.2 {
+                self.floor_queue.push_front(e);
+            } else {
+                self.floor_queue.push_back(e);
+            }
+        }
+    }
+
+    /// Process material `id` at `size` into its floor from its source: false while the source
+    /// isn't there yet.
+    fn build_floor(&mut self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, id: u32, size: (u32, u32)) -> bool {
+        self.make_floor(device, enc, pipes, id, size).map(|(tile, gpu)| self.set_floor(id, tile, gpu)).is_some()
+    }
+
+    fn make_floor(&mut self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes, id: u32, size: (u32, u32)) -> Option<(Tile, GpuMat)> {
+        let m = self.mat(id)?;
+        let (asset, params, time, key, skey) = (m.asset.clone(), m.params.clone(), m.time, m.key, Self::source_key(m, size));
+        let floor = if params.show_original && matches!(key, MatKey::Image { .. }) && !self.sources.contains_key(&skey) {
+            // An original small enough for a tile waits in the staging buffer: its level is the floor.
+            let (staging, place) = self.staged.get(&skey).cloned()?;
+            let st = *place.first()?;
+            let tile = self.atlas.alloc(device, enc, st.w, st.h)?;
+            enc.copy_buffer_to_texture(
+                wgpu::TexelCopyBufferInfo { buffer: &staging, layout: wgpu::TexelCopyBufferLayout { offset: st.offset, bytes_per_row: Some(st.row), rows_per_image: Some(st.h) } },
+                wgpu::TexelCopyTextureInfo { texture: &self.atlas.texture, mip_level: 0, origin: wgpu::Origin3d { x: tile.x, y: tile.y, z: tile.layer }, aspect: wgpu::TextureAspect::All },
+                wgpu::Extent3d { width: st.w, height: st.h, depth_or_array_layers: 1 },
+            );
+            (tile, GpuMat { tile: [tile.x as f32, tile.y as f32, st.w as f32, st.h as f32], layer: tile.layer, levels: 1, state: 1, flags: 1 })
+        } else {
+            let (tex, view, src_size, levels) = match key {
+                MatKey::Video { entity, asset: a, .. } => {
+                    let (t, v) = self.videos.get(&(entity, a)).and_then(|v| v.tex.as_ref())?;
+                    (t.clone(), v.clone(), (t.width(), t.height()), 1)
+                }
+                MatKey::Image { .. } => {
+                    let s = self.sources.get_mut(&skey)?;
+                    s.used = self.frame;
+                    (s.tex.clone(), s.view.clone(), s.size, s.levels)
+                }
+            };
+            let tile = self.atlas.alloc(device, enc, size.0, size.1)?;
+            let out = self.scratch.get(size).out(device).clone();
+            let input = Input { texture: &tex, view: &view, size: src_size, levels, media: (asset.width, asset.height) };
+            process::run(device, enc, pipes, &mut self.scratch, &input, &params, time, &out, None);
+            enc.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo { texture: &out, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyTextureInfo { texture: &self.atlas.texture, mip_level: 0, origin: wgpu::Origin3d { x: tile.x, y: tile.y, z: tile.layer }, aspect: wgpu::TextureAspect::All },
+                wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+            );
+            (tile, GpuMat { tile: [tile.x as f32, tile.y as f32, size.0 as f32, size.1 as f32], layer: tile.layer, levels: 1, state: 1, flags: 0 })
+        };
+        Some(floor)
+    }
+
     /// Material `id` built for `size` into `tex` (`done` its content): the old texture goes.
     fn finish_build(&mut self, id: u32, tex: Tex, gpu: GpuMat, size: (u32, u32), done: (u32, u32)) {
         if let Some(m) = self.mats[id as usize].as_mut() {
             let old = std::mem::replace(&mut m.tex, tex);
             // Its GPU record changes only when where it's drawn from does (a texture of its own
-            // drawn again isn't a change): no upload for that.
-            if m.gpu != gpu {
-                self.mat_dirty.push(id);
-            }
+            // drawn again isn't a change): no upload for that (`redraw`).
             m.gpu = gpu;
             // A level change of what showed before: its look changes (a continuous material's
             // changes every frame anyway).
@@ -1561,6 +1834,7 @@ impl Scene {
             m.region = FULL;
             self.drop_tex(old);
         }
+        self.redraw(id, true);
         self.stats.processed += 1;
         self.world_dirty = true;
         self.stats.processed_pixels += u64::from(done.0) * u64::from(done.1);
@@ -1693,7 +1967,7 @@ impl Scene {
 
     /// Free what's past the budget: sources nothing processed lately, then textures of materials
     /// no one has seen for longest.
-    fn evict(&mut self) {
+    fn evict(&mut self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipes) {
         let frame = self.frame;
         // Sources only feed processing: an animated frame's goes once a frame passes without it,
         // a still's after a couple of seconds unused.
@@ -1705,7 +1979,8 @@ impl Scene {
             self.hashes.retain(|_, (p, _)| Arc::strong_count(p) > 1);
         }
         // Textures of materials off screen are a warm cache, the least recently seen going first
-        // past `UNSEEN_BUDGET`; what shows is never evicted.
+        // past `UNSEEN_BUDGET`, down to their floors (made from them as they go); what shows is
+        // never evicted.
         let tex_bytes = |t: &Tex| match t {
             Tex::Atlas(t) => t.bytes(),
             Tex::Own { bytes, .. } => *bytes,
@@ -1715,12 +1990,28 @@ impl Scene {
         let mut cached: u64 = unseen.iter().map(|u| u.2).sum();
         if cached > UNSEEN_BUDGET {
             unseen.sort_unstable();
+            let mut going = Vec::new();
             for &(_, id, bytes) in &unseen {
                 if cached <= UNSEEN_BUDGET {
                     break;
                 }
-                self.unload(id);
+                going.push(id);
                 cached -= bytes;
+            }
+            self.floors_from_textures(device, enc, pipes, &going);
+            for id in going {
+                self.unload(id);
+            }
+        }
+        // Dormant materials (none shows them) past `DORMANT_BUDGET` of floors go, the least
+        // recently seen first, and those holding nothing at all.
+        let mut dormant: Vec<(u64, u32, u64)> = self.mats.iter().enumerate().filter_map(|(i, m)| m.as_ref().filter(|m| m.refs == 0).map(|m| (m.seen, i as u32, m.floor.map_or(0, |(t, _)| t.bytes()) + tex_bytes(&m.tex)))).collect();
+        let mut held: u64 = dormant.iter().map(|d| d.2).sum();
+        dormant.sort_unstable();
+        for (_, id, bytes) in dormant {
+            if bytes == 0 || held > DORMANT_BUDGET {
+                self.free_mat(id);
+                held -= bytes;
             }
         }
         let mut total = self.resident_bytes();
@@ -1737,35 +2028,31 @@ impl Scene {
                 total -= texture_bytes(&s.tex);
             }
         }
-        let mut unseen: Vec<(u64, u32)> = self.mats.iter().enumerate().filter_map(|(i, m)| m.as_ref().filter(|m| m.seen != frame && !matches!(m.tex, Tex::None)).map(|m| (m.seen, i as u32))).collect();
+        let mut unseen: Vec<(u64, u32, u64)> = self.mats.iter().enumerate().filter_map(|(i, m)| m.as_ref().filter(|m| m.seen != frame && !matches!(m.tex, Tex::None)).map(|m| (m.seen, i as u32, tex_bytes(&m.tex)))).collect();
         unseen.sort_unstable();
-        for (_, id) in unseen {
+        let mut going = Vec::new();
+        for (_, id, bytes) in unseen {
             if total <= BUDGET {
                 break;
             }
-            let Some(m) = self.mats[id as usize].as_mut() else { continue };
-            match std::mem::replace(&mut m.tex, Tex::None) {
-                Tex::Atlas(t) => {
-                    total -= t.bytes();
-                    self.atlas.free(t);
-                }
-                Tex::Own { bytes, .. } => total -= bytes,
-                Tex::None => {}
-            }
-            m.size = (0, 0);
-            m.gpu = GpuMat::default();
-            self.mat_dirty.push(id);
+            going.push(id);
+            total -= bytes;
+        }
+        self.floors_from_textures(device, enc, pipes, &going);
+        for id in going {
+            self.unload(id);
         }
     }
 
-    /// Free material `id`'s texture; it's processed again when it next shows.
+    /// Free material `id`'s texture, down to its floor; it's processed again when it next shows.
     fn unload(&mut self, id: u32) {
         let Some(m) = self.mats.get_mut(id as usize).and_then(Option::as_mut) else { return };
         let old = std::mem::replace(&mut m.tex, Tex::None);
         m.size = (0, 0);
         m.gpu = GpuMat::default();
+        m.region = FULL;
         self.drop_tex(old);
-        self.mat_dirty.push(id);
+        self.redraw(id, true);
     }
 
     fn resident_bytes(&self) -> u64 {
@@ -1824,7 +2111,7 @@ impl Scene {
             bytes.clear();
             for (a, b) in &runs {
                 for m in &self.mats[*a..*b] {
-                    bytes.extend_from_slice(bytemuck::bytes_of(&m.as_ref().map_or(GpuMat::default(), |m| m.gpu)));
+                    bytes.extend_from_slice(bytemuck::bytes_of(&m.as_ref().map_or(GpuMat::default(), |m| m.drawn)));
                 }
             }
             let r = self.staging.buffer(device, bytes.len() as u64, "voidmesh material staging", self.frame);
@@ -2036,13 +2323,14 @@ impl Scene {
         let (mut stale, mut soft, mut minified) = (0, 0, 0);
         for &id in &self.visible_mats {
             let Some(m) = self.mat(id) else { continue };
-            if matches!(m.tex, Tex::None) {
+            if m.drawn.state == 0 {
                 continue;
             }
-            if !holds(m.region, self.clips.get(&id).copied().unwrap_or(FULL)) {
+            // Its texture drawn, short of what shows.
+            if m.drawn == m.gpu && !holds(m.region, self.clips.get(&id).copied().unwrap_or(FULL)) {
                 stale += 1;
             }
-            let content = m.gpu.tile[2].max(m.gpu.tile[3]);
+            let content = m.drawn.tile[2].max(m.drawn.tile[3]);
             let native = process::render_size(m.asset.width, m.asset.height);
             let projected = m.want * px_per_world;
             if content < native.0.max(native.1) as f32 && projected > content * SOFT {
@@ -2061,7 +2349,7 @@ impl Scene {
     /// Instances whose material draws from its own texture, visible this frame, in z order.
     fn collect_own(&mut self, view: [f32; 4]) {
         self.own_draws.clear();
-        let own = |m: u32, mats: &[Option<Material>]| mats.get(m as usize).and_then(Option::as_ref).is_some_and(|m| m.gpu.state == 2);
+        let own = |m: u32, mats: &[Option<Material>]| mats.get(m as usize).and_then(Option::as_ref).is_some_and(|m| m.drawn.state == 2);
         if !self.visible_mats.iter().any(|m| own(*m, &self.mats)) {
             return;
         }
@@ -2093,6 +2381,12 @@ impl Scene {
             queue.on_submitted_work_done(move || pool_levels(&pool, retired));
         }
         let mut t = Trace::start();
+        // A canvas switched to or opened: the last one's world shows until what this one shows
+        // is ready (`world`), up to `HOLD`.
+        if s.canvas_epoch != self.epoch {
+            self.epoch = s.canvas_epoch;
+            self.hold = Some(std::time::Instant::now());
+        }
         self.sync(s);
         t.lap("sync");
         self.update_videos(device, queue, enc, s, dpr);
@@ -2118,8 +2412,16 @@ impl Scene {
         self.occlusion(view, s.drag_offset().is_none());
         t.lap("visibility");
         self.schedule(device, queue, enc, pipes, s.cam.scale * dpr);
+        let idle = self.stats.processed == 0 && self.stats.pending == 0;
+        self.build_floors(device, queue, enc, pipes, idle);
         t.lap("process");
-        self.evict();
+        self.evict(device, enc, pipes);
+        // What shows draws its texture where that holds what shows, else its floor.
+        for i in 0..self.visible_mats.len() {
+            let id = self.visible_mats[i];
+            let usable = self.mat(id).is_some_and(|m| holds(m.region, self.clips.get(&id).copied().unwrap_or(FULL)));
+            self.redraw(id, usable);
+        }
         if self.atlas.trim(device, enc) {
             self.world_dirty = true;
         }
@@ -2134,7 +2436,15 @@ impl Scene {
         self.stats.video_bytes = self.videos.values().filter_map(|v| v.tex.as_ref()).map(|(t, _)| texture_bytes(t)).sum::<u64>()
             + s.video_frames.values().filter_map(|f| f.gpu.as_ref()).map(|g| g.buf.size()).sum::<u64>()
             + crate::video::gpu_pool_bytes();
-        self.stats.unready = self.visible_mats.iter().filter(|id| self.mat(**id).is_some_and(|m| matches!(m.tex, Tex::None))).count();
+        self.stats.unready = self.visible_mats.iter().filter(|id| self.mat(**id).is_some_and(|m| m.drawn.state == 0)).count();
+        // Held until what shows is ready and every material has its floor (a pan or zoom right
+        // after shows no blank either).
+        if let Some(since) = self.hold
+            && ((self.stats.unready == 0 && self.floor_queue.is_empty() && !s.canvas_loading()) || since.elapsed() > HOLD)
+        {
+            self.hold = None;
+            self.world_dirty = true;
+        }
         self.fidelity(s.cam.scale * dpr);
         self.stats.staging_bytes = self.staging.bytes()
             + self.building.values().sum::<u64>()
@@ -2184,6 +2494,9 @@ impl Scene {
             self.world = Some((t, v));
             self.world_gen += 1;
             self.world_dirty = true;
+        } else if self.hold.is_some() {
+            // The last canvas's world, while the one switched to gets what it shows ready.
+            return self.world.as_ref().map(|(_, v)| v);
         }
         if self.world_dirty || self.world_for != Some(key) {
             self.ensure_pipeline(device, WORLD_FORMAT);
@@ -2222,14 +2535,8 @@ impl Scene {
 
     /// Process everything again from fresh sources (benchmarks' forced reprocessing).
     pub fn invalidate(&mut self) {
-        for (id, m) in self.mats.iter_mut().enumerate() {
-            let Some(m) = m else { continue };
-            if let Tex::Atlas(t) = std::mem::replace(&mut m.tex, Tex::None) {
-                self.atlas.free(t);
-            }
-            m.size = (0, 0);
-            m.gpu = GpuMat::default();
-            self.mat_dirty.push(id as u32);
+        for id in 0..self.mats.len() as u32 {
+            self.unload(id);
         }
         self.sources.clear();
     }
@@ -2252,7 +2559,7 @@ impl Scene {
 
     /// True while there's processing left that later frames will do.
     pub fn pending(&self) -> bool {
-        self.stats.pending > 0 || !self.building.is_empty() || !self.built.is_empty()
+        self.stats.pending > 0 || !self.building.is_empty() || !self.built.is_empty() || !self.floor_queue.is_empty() || self.hold.is_some()
     }
 
     /// Draw every entity into `pass`.
@@ -2344,5 +2651,132 @@ impl Scene {
         let (w, h) = process::lod_size((e.asset.width, e.asset.height), projected);
         let k = (atlas::MAX_TILE as f32 / w.max(h) as f32).min(1.0);
         (((w as f32 * k) as u32).max(1), ((h as f32 * k) as u32).max(1))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use crate::effects::{Params, Shader};
+    use crate::state::{App, Entity};
+
+    /// A canvas of `n` photos of `w`×`h` in a row, `look`s in turn, each 400 world units wide.
+    fn photos(first: u32, n: u32, (w, h): (u32, u32)) -> Vec<Entity> {
+        let looks: Vec<Arc<Params>> = [Shader::Dithering, Shader::Halftone, Shader::Glass]
+            .into_iter()
+            .map(|sh| {
+                let mut p = Params::default();
+                p.set_shader(sh);
+                p.post = false;
+                Arc::new(p)
+            })
+            .collect();
+        (0..n)
+            .map(|i| {
+                let id = first + i;
+                let a = Arc::new(crate::media::test_asset(crate::media::next_asset_id(), w, h));
+                let mut e = Entity::new(id, a, [i as f32 * 440.0, 0.0], id, looks[i as usize % looks.len()].clone());
+                e.size = [400.0, 400.0 * h as f32 / w as f32];
+                e
+            })
+            .collect()
+    }
+
+    struct Rig {
+        gpu: rune::render::Gpu,
+        direct: crate::gfx::Direct,
+        target: wgpu::Texture,
+    }
+
+    impl Rig {
+        fn new() -> Rig {
+            let gpu = rune::render::Gpu::try_with_features(rune::render::Gpu::instance(), None, wgpu::Features::IMMEDIATES).expect("a GPU");
+            let direct = crate::gfx::Direct::new(&gpu.device, &gpu.queue);
+            let target = super::super::process::target_mips(&gpu.device, 800, 600, 1, "test");
+            Rig { gpu, direct, target }
+        }
+
+        /// One frame, as the app runs them: source levels build on their threads meanwhile.
+        fn frame(&mut self, s: &mut App) -> super::Stats {
+            let (device, queue) = (&self.gpu.device, &self.gpu.queue);
+            let mut enc = device.create_command_encoder(&Default::default());
+            let view = self.target.create_view(&Default::default());
+            self.direct.frame(device, queue, &mut enc, &view, super::super::process::FORMAT, (800, 600), s, 1.0);
+            queue.submit([enc.finish()]);
+            let _ = device.poll(wgpu::PollType::wait_indefinitely());
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            self.direct.scene.stats
+        }
+
+        /// Frames until nothing's left to do.
+        fn settle(&mut self, s: &mut App) {
+            for _ in 0..2000 {
+                self.frame(s);
+                if !self.direct.scene.pending() {
+                    return;
+                }
+            }
+            panic!("the scene never settled");
+        }
+    }
+
+    fn canvas(entities: Vec<Entity>) -> App {
+        let mut s = App::default();
+        s.canvas = [0.0, 0.0, 800.0, 600.0];
+        s.bare = true;
+        s.entities = entities.into();
+        s
+    }
+
+    #[test]
+    fn a_canvas_switched_to_never_draws_its_media_blank() {
+        let mut rig = Rig::new();
+        let mut s = canvas(photos(1, 3, (1600, 1200)));
+        s.cam.set([0.0, 0.0], 0.6);
+        rig.settle(&mut s);
+        // Another canvas, of media never seen.
+        s.entities = photos(100, 3, (1600, 1200)).into();
+        s.canvas_epoch += 1;
+        let mut drawn = false;
+        for _ in 0..2000 {
+            let st = rig.frame(&mut s);
+            assert!(!(st.redrawn && st.unready > 0), "the canvas drew {} of its media blank", st.unready);
+            drawn |= st.redrawn;
+            if drawn && !rig.direct.scene.pending() {
+                return;
+            }
+        }
+        panic!("the canvas switched to never showed");
+    }
+
+    #[test]
+    fn media_zoomed_out_onto_shows_at_once() {
+        let mut rig = Rig::new();
+        let mut s = canvas(photos(1, 8, (3000, 2000)));
+        // Close on each in turn: their large textures, off screen, pass the unseen budget and go.
+        for i in 0..8 {
+            let (x, y, k) = (i as f32 * 440.0 + 200.0, 133.0, 4.0);
+            s.cam.set([400.0 - x * k, 300.0 - y * k], k);
+            rig.settle(&mut s);
+        }
+        // All of them, at once: each draws something on the first frame.
+        s.cam.set([0.0, 0.0], 0.2);
+        let st = rig.frame(&mut s);
+        assert_eq!(st.visible, 8);
+        assert_eq!(st.unready, 0, "media drawn blank when zoomed out onto");
+        assert_eq!(st.stale, 0);
+    }
+
+    #[test]
+    fn media_never_seen_shows_at_once_once_the_canvas_is_idle() {
+        let mut rig = Rig::new();
+        let mut s = canvas(photos(1, 8, (1600, 1200)));
+        s.cam.set([0.0, 0.0], 1.0);
+        rig.settle(&mut s);
+        s.cam.set([0.0, 0.0], 0.2);
+        let st = rig.frame(&mut s);
+        assert_eq!(st.visible, 8);
+        assert_eq!(st.unready, 0, "media never seen drawn blank");
     }
 }

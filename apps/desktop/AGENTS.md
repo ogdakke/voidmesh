@@ -31,6 +31,8 @@ changes.
   a preview LOD and shared by every entity showing them; export renders the native size. Effects
   work in media pixels (`Uniforms::k`, render over native size), so a preview at any LOD looks
   like the export seen at its size; `gfx/process.rs` tests measure it.
+- Media never draws blank: a material falls back to its floor (`Material::floor`), and a canvas
+  switched to keeps the last one showing until its media is ready (`App::canvas_epoch`).
 - Canvases reach hundreds of thousands of entities: `Entities` is copy-on-write chunks (snapshots
   are cheap, the compositor diffs chunks by identity), `Selection` carries a revision, and
   per-entity work happens only where something changed. A drag moves the selection by an offset

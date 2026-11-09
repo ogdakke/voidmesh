@@ -391,6 +391,9 @@ pub struct App {
     /// Open workspaces, and which one shows.
     pub tabs: Vec<Tab>,
     pub active: usize,
+    /// Bumped whenever the canvas shows another workspace (a tab switched to, a workspace read
+    /// into the one showing): the compositor holds the last one until this one's media is ready.
+    pub canvas_epoch: u64,
     /// The active workspace's revision, bumped by every undoable change, and the last one saved.
     pub revision: u64,
     pub persisted: u64,
@@ -492,6 +495,7 @@ impl Default for App {
             saver: None,
             tabs: vec![Tab::new()],
             active: 0,
+            canvas_epoch: 0,
             revision: 0,
             persisted: 0,
             persisted_cam: HOME,
@@ -1430,6 +1434,7 @@ impl App {
     }
 
     fn put_state(&mut self, p: Parked) {
+        self.canvas_epoch += 1;
         self.entities = p.entities;
         self.selection = p.selection;
         self.undo = p.undo;
@@ -1440,6 +1445,11 @@ impl App {
         self.revision = p.revision;
         self.persisted = p.persisted;
         self.persisted_cam = p.persisted_cam;
+    }
+
+    /// The workspace showing is still being read.
+    pub fn canvas_loading(&self) -> bool {
+        self.tab().loading.is_some()
     }
 
     /// Show tab `i` in place of the current one, whose state the caller has dealt with.
@@ -1619,6 +1629,7 @@ impl App {
                 e
             }));
             self.entities = entities;
+            self.canvas_epoch += 1;
             self.selection = Selection::default();
             self.undo.clear();
             self.redo.clear();

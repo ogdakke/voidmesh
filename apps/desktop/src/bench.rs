@@ -58,8 +58,8 @@ enum View {
     Stress,
     PausedPan,
     /// Out to the whole gallery and into a corner of it and back, holding at each end, past
-    /// photos half off screen.
-    Gallery,
+    /// photos half off screen: frames zooming in, holding, and zooming out.
+    Gallery { zoom_in: usize, hold: usize, zoom_out: usize, onto: Onto },
 }
 
 #[derive(Clone, Copy)]
@@ -121,8 +121,15 @@ const fn many(id: &'static str, count: usize, unique: usize, src: u32, display: 
 }
 
 const OVERVIEW: f32 = 0.18;
-/// Frames in a cycle of `View::Gallery`.
-const GALLERY_CYCLE: usize = 104;
+
+/// Where `View::Gallery` zooms into.
+#[derive(Clone, Copy, PartialEq)]
+enum Onto {
+    /// The corner photos 1, 2, 5 and 6 meet at.
+    Seam,
+    /// The middle of photo 5, filling the view.
+    Photo,
+}
 
 /// `Layout::Gallery`'s looks, a photo each: stills, continuous materials (flowing glass playing
 /// and paused) and originals.
@@ -186,7 +193,9 @@ const SPECS: &[Spec] = &[
     Spec { id: "zoom-61-unique-mixed-round-trip", count: 61, unique: 61, src: (2048, 1365), layout: Layout::Stress { paused: false }, view: View::Stress, frames: 120, warmup: 4, samples: 3, reset: true, ..BASE },
     Spec { id: "zoom-61-unique-mixed-processed-round-trip", count: 61, unique: 61, src: (2048, 1365), layout: Layout::Stress { paused: false }, look: Look::Defaults, view: View::Stress, frames: 120, warmup: 4, samples: 3, reset: true, ..BASE },
     // Desktop only: what a zoom shows of a few large photos under different effects.
-    Spec { id: "zoom-8-gallery-effects-round-trip", count: 8, unique: 8, src: (2048, 1365), display: Some((420.0, 280.0)), layout: Layout::Gallery, view: View::Gallery, frames: GALLERY_CYCLE, warmup: 4, samples: 3, ..BASE },
+    Spec { id: "zoom-8-gallery-effects-round-trip", count: 8, unique: 8, src: (2048, 1365), display: Some((420.0, 280.0)), layout: Layout::Gallery, view: View::Gallery { zoom_in: 40, hold: 12, zoom_out: 40, onto: Onto::Seam }, frames: 12 + 40 + 12 + 40, warmup: 4, samples: 3, ..BASE },
+    // Onto one photo, a moment there (the rest off screen), then out at once.
+    Spec { id: "zoom-8-gallery-quick-out", count: 8, unique: 8, src: (4096, 2731), display: Some((420.0, 280.0)), layout: Layout::Gallery, view: View::Gallery { zoom_in: 30, hold: 60, zoom_out: 6, onto: Onto::Photo }, frames: 12 + 30 + 60 + 6, warmup: 4, samples: 3, ..BASE },
     Spec { id: "pan-61-unique-mixed-paused-videos", count: 61, unique: 61, src: (2048, 1365), layout: Layout::Stress { paused: true }, view: View::PausedPan, frames: 240, warmup: 30, samples: 5, ..BASE },
 ];
 
@@ -374,25 +383,35 @@ fn viewport(spec: &Spec, d: (f32, f32), k: usize, j: usize) -> ([f32; 2], f32) {
             let t = [(29 % 8) as f32 * 680.0 + 210.0, (29 / 8) as f32 * 480.0 + 140.0];
             ([t[0] - CANVAS.0 / (2.0 * zoom), t[1] - CANVAS.1 / (2.0 * zoom)], zoom)
         }
-        View::Gallery => {
+        View::Gallery { zoom_in, hold, zoom_out, onto } => {
             // Hold, in, hold, out: frames of a cycle.
-            let i = j % GALLERY_CYCLE;
+            let i = j % spec.frames;
             let ease = |from: f32, to: f32, t: f32| {
                 let t = t.clamp(0.0, 1.0);
                 let e = t * t * (3.0 - 2.0 * t);
                 (from.ln() + (to.ln() - from.ln()) * e).exp()
             };
-            let (overview, detail) = (0.3, 2.4);
+            // Onto a photo: close enough that it fills the view.
+            let (overview, detail) = (0.3, if onto == Onto::Photo { 8.0 } else { 2.4 });
+            let (a, b, c) = (12, 12 + zoom_in, 12 + zoom_in + hold);
             let (zoom, t) = match i {
-                i if i < 12 => (overview, 0.0),
-                i if i < 52 => (ease(overview, detail, (i - 12 + 1) as f32 / 40.0), (i - 12 + 1) as f32 / 40.0),
-                i if i < 64 => (detail, 1.0),
-                i => (ease(detail, overview, (i - 64 + 1) as f32 / 40.0), 1.0 - (i - 64 + 1) as f32 / 40.0),
+                i if i < a => (overview, 0.0),
+                i if i < b => {
+                    let t = (i - a + 1) as f32 / zoom_in as f32;
+                    (ease(overview, detail, t), t)
+                }
+                i if i < c => (detail, 1.0),
+                i => {
+                    let t = (i - c + 1) as f32 / zoom_out as f32;
+                    (ease(detail, overview, t), 1.0 - t.min(1.0))
+                }
             };
-            // From the gallery's centre towards the seam of photos 1, 2, 5 and 6.
             let (w, h) = (4.0 * (d.0 + 8.0), 2.0 * (d.1 + 8.0));
             let from = [w / 2.0, h / 2.0];
-            let to = [d.0 * 1.6, d.1 * 0.9];
+            let to = match onto {
+                Onto::Seam => [d.0 * 1.6, d.1 * 0.9],
+                Onto::Photo => [(d.0 + 8.0) + d.0 / 2.0, (d.1 + 8.0) + d.1 / 2.0],
+            };
             let t = t * t * (3.0 - 2.0 * t);
             let c = [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t];
             ([c[0] - CANVAS.0 / (2.0 * zoom), c[1] - CANVAS.1 / (2.0 * zoom)], zoom)
@@ -663,6 +682,8 @@ pub fn run_direct() {
     let mut peak_extra = 0u64;
     let mut peak_total = 0u64;
     let (mut visible, mut processed, mut unready) = (0usize, 0usize, 0usize);
+    let live = std::env::var_os("VOIDMESH_BENCH_ASYNC").is_some();
+    let mut unready_frames = 0usize;
     let (mut stale, mut stale_frames, mut soft, mut minified, mut swaps) = (0usize, 0usize, 0usize, 0usize, 0usize);
     for k in 0..bench.total() {
         let measuring = k >= spec.warmup;
@@ -684,8 +705,10 @@ pub fn run_direct() {
         // renderer uploads its sources within the frame: the wait counts in the sample's wall
         // time (not the frame's CPU time, the work being on other threads), so media the bench
         // pans or zooms onto is shown rather than left a placeholder for being fast.
+        // `VOIDMESH_BENCH_ASYNC=1` doesn't wait, as the app doesn't: what shows before its source
+        // is built counts as unready.
         let built = Instant::now();
-        while !direct.scene.sources_idle() && built.elapsed() < Duration::from_millis(250) {
+        while !live && !direct.scene.sources_idle() && built.elapsed() < Duration::from_millis(250) {
             std::thread::sleep(Duration::from_micros(50));
         }
         // At most `IN_FLIGHT` frames queued, as a swapchain's drawables allow: a GPU-bound frame
@@ -715,6 +738,7 @@ pub fn run_direct() {
             visible += st.visible;
             processed += st.processed;
             unready += st.unready;
+            unready_frames += usize::from(st.unready > 0);
             stale += st.stale;
             stale_frames += usize::from(st.stale > 0);
             soft += st.soft;
@@ -745,6 +769,7 @@ pub fn run_direct() {
         "visibleMean": visible as f64 / n,
         "processed": processed,
         "visibleUnreadyMean": unready as f64 / n,
+        "unreadyFrames": unready_frames,
         "visibleStaleMean": stale as f64 / n,
         "staleFrames": stale_frames,
         "visibleSoftMean": soft as f64 / n,
