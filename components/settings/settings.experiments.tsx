@@ -13,6 +13,7 @@ const FLAGS: ExperimentFlag[] = [
   { param: "hz120", label: "120 Hz mode" },
   { param: "nowlur", label: "Skip glass blur" },
   { param: "nop3", label: "8-bit sRGB canvas" },
+  { param: "noscroller", label: "Skip touch scroller" },
 ];
 
 // Flags are read once at module load across the app, so changing one reloads.

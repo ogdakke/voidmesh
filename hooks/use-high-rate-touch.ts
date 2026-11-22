@@ -55,8 +55,10 @@ export function useHighRateTouch(controllerRef: RefObject<HTMLDivElement | null>
       interaction.touchStart(readPoints(event.touches), event.timeStamp);
     };
     const onTouchMove = (event: TouchEvent) => {
+      const start = performance.now();
       countHud("touchmove");
       interaction.touchMove(readPoints(event.touches), event.timeStamp);
+      countHud("touchMs", performance.now() - start);
     };
     // iOS swallows the touch that stops a scroller's momentum (no touchstart),
     // so the engine would miss every touch until native momentum died out. The

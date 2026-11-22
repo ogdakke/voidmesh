@@ -11,7 +11,7 @@ import useMediaQuery from "#hooks/use-media-query.ts";
 import { useOnboarding } from "#hooks/use-onboarding.ts";
 import { useViewportInsets } from "#hooks/use-viewport-insets.ts";
 import { NO_VIEWPORT_INSETS } from "#lib/canvas-math.ts";
-import { highRefreshEnabled } from "#lib/high-refresh.ts";
+import { diagnosticNoScroller, highRefreshEnabled } from "#lib/high-refresh.ts";
 import { lazy, Suspense, useEffect, useRef, type PropsWithChildren } from "react";
 import { DropZone } from "../ui/dropzone/index.tsx";
 import { CanvasOverlay } from "./canvas-overlay.tsx";
@@ -89,7 +89,9 @@ export function InfiniteCanvas() {
               onContextMenu={surface.handleContextMenu}
               className="infinite-canvas__canvas"
             />
-            {highRefreshEnabled && isMobile ? <HighRateTouchController /> : null}
+            {highRefreshEnabled && isMobile && !diagnosticNoScroller ? (
+              <HighRateTouchController />
+            ) : null}
           </CanvasWrapper>
         ) : (
           <div className="infinite-canvas-error">

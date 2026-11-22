@@ -1,5 +1,6 @@
 // Temporary on-device readout for the ?hz120 experiment. Counters accumulate
 // and the readout refreshes once a second.
+const KNOWN_FLAGS = new Set(["hz120", "nowlur", "nop3", "noscroller"]);
 const counts = new Map<string, number>();
 let element: HTMLElement | null = null;
 let interval: ReturnType<typeof setInterval> | null = null;
@@ -38,13 +39,15 @@ export function startHud(): void {
     const avgTick = ticks > 0 ? (counts.get("tickMs") ?? 0) / ticks : 0;
     if (element) {
       element.textContent =
-        `${[...new URLSearchParams(location.search).keys()].join(" ") || "hz120"}\n` +
+        `${[...new URLSearchParams(location.search).keys()].filter((key) => KNOWN_FLAGS.has(key)).join(" ")}\n` +
         `ticks/s    ${rate("ticks")}\n` +
         `coalesced  ${rate("coalesced")}/s\n` +
         `main rAF   ${rate("mainRaf")}/s\n` +
         `touchmove  ${rate("touchmove")}/s\n` +
         `scroll Δ   ${rate("scrollDelta")}/s\n` +
         `tick cpu   ${avgTick.toFixed(1)} ms\n` +
+        `touch cpu  ${avg("touchMs", "touchmove")} ms/event\n` +
+        `js busy    ${((((counts.get("tickMs") ?? 0) + (counts.get("touchMs") ?? 0)) / (seconds * 1000)) * 100).toFixed(0)}%\n` +
         `tick gap   ${ticks > 0 ? ((counts.get("gapMs") ?? 0) / ticks).toFixed(1) : "0"} ms, ` +
         `${rate("longGaps")} >12ms/s\n` +
         `gpu done   ${avg("gpuMs", "gpuSamples")} ms`;

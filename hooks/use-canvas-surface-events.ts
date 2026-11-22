@@ -1,5 +1,6 @@
 import { isUserTypingInInput } from "#context/keybind-context.ts";
 import { useCanvasInteraction } from "#context/use-canvas.ts";
+import { countHud } from "#lib/high-refresh-hud.ts";
 import { useEffect, useEffectEvent, useRef, useState, type RefObject } from "react";
 
 interface UseCanvasSurfaceEventsOptions {
@@ -68,7 +69,10 @@ export function useCanvasSurfaceEvents({
   };
 
   const handleTouchMove = (event: React.TouchEvent) => {
+    const start = performance.now();
+    countHud("touchmove");
     interaction.touchMove(getTouchPoints(event.touches), event.timeStamp);
+    countHud("touchMs", performance.now() - start);
   };
 
   const handleTouchEnd = (event: React.TouchEvent) => {
