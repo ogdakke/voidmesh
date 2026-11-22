@@ -1,7 +1,7 @@
 /* Sits inside the canvas container (absolute, never fixed to screen edges). */
 .hz-debug__chip {
   position: absolute;
-  top: 50%;
+  bottom: 232px;
   right: 8px;
   z-index: 1010;
   min-width: 44px;
@@ -24,7 +24,7 @@
 }
 
 .hz-debug__chip--copy {
-  top: calc(50% + 52px);
+  bottom: 180px;
 
   &[data-state="copied"] {
     border-color: #4ade80;
@@ -40,12 +40,14 @@
 .hz-debug__sheet {
   position: absolute;
   inset-inline: 12px;
-  bottom: 12px;
+  top: 120px;
   z-index: 1011;
-  max-height: 70%;
-  overflow-y: auto;
+  max-height: calc(100% - 360px);
+  min-height: 0;
+  overflow: hidden auto;
   overscroll-behavior: contain;
-  padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+  padding: 12px;
+  box-sizing: border-box;
   border-radius: 20px;
   background: color-mix(in srgb, var(--studio-background) 92%, white);
   color: inherit;
@@ -80,6 +82,7 @@
 
 .hz-debug__list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   margin: 0;
   padding: 0;
@@ -91,7 +94,9 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  box-sizing: border-box;
   width: 100%;
+  min-width: 0;
   min-height: 64px;
   padding: 10px 14px;
   border: 0;
