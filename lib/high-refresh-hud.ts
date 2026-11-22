@@ -2,7 +2,9 @@
 // and the readout refreshes once a second.
 const KNOWN_FLAGS = new Set(["hz120", "nowlur", "nop3", "noscroller"]);
 const counts = new Map<string, number>();
-let element: HTMLElement | null = null;
+let element: HTMLElement | null = null; // readout body
+let root: HTMLElement | null = null;
+let copyButton: HTMLButtonElement | null = null;
 let interval: ReturnType<typeof setInterval> | null = null;
 let rafId = 0;
 let lastActiveText: string | null = null;
@@ -13,11 +15,23 @@ export function countHud(name: string, amount = 1): void {
 
 export function startHud(): void {
   if (element) return;
+  root = document.createElement("div");
+  root.style.cssText =
+    "position:absolute;left:8px;bottom:8px;z-index:99999;background:#0008;color:#fff;" +
+    "font:11px/1.3 monospace;pointer-events:none;border-radius:6px;overflow:hidden";
+  // Only the header takes taps; the rest of the readout stays click-through.
+  copyButton = document.createElement("button");
+  copyButton.type = "button";
+  copyButton.textContent = "tap to copy";
+  copyButton.style.cssText =
+    "display:block;width:100%;min-height:36px;padding:4px 6px;border:0;margin:0;text-align:left;" +
+    "font:inherit;color:#8cf;background:#fff2;pointer-events:auto;touch-action:manipulation;" +
+    "-webkit-tap-highlight-color:transparent";
+  copyButton.addEventListener("click", () => void copyHudReport());
   element = document.createElement("pre");
-  element.style.cssText =
-    "position:absolute;left:8px;bottom:8px;z-index:99999;margin:0;padding:4px 6px;" +
-    "font:11px/1.3 monospace;color:#fff;background:#0008;pointer-events:none;white-space:pre";
-  document.body.append(element);
+  element.style.cssText = "margin:0;padding:4px 6px;font:inherit;white-space:pre";
+  root.append(copyButton, element);
+  document.body.append(root);
 
   const countRaf = (): void => {
     countHud("mainRaf");
@@ -62,19 +76,49 @@ export function startHud(): void {
 export function stopHud(): void {
   if (interval !== null) clearInterval(interval);
   cancelAnimationFrame(rafId);
-  element?.remove();
+  root?.remove();
+  root = null;
+  copyButton = null;
   element = null;
   interval = null;
   counts.clear();
 }
 
-/**
- * The latest readout plus the last second that had touch or GPU activity, so a
- * copy made after tapping a button still includes the interaction being measured.
- */
-export function getHudReport(): string | null {
+function buildReport(): string | null {
   if (!element?.textContent) return null;
-  return lastActiveText
+  const params = new URLSearchParams(location.search);
+  const flags = [...KNOWN_FLAGS].filter((flag) => params.has(flag));
+  const readout = lastActiveText
     ? `now:\n${element.textContent}\n\nlast active second:\n${lastActiveText}`
     : element.textContent;
+  return [
+    `flags: ${flags.length > 0 ? flags.join(", ") : "none"}`,
+    `dpr: ${window.devicePixelRatio}  viewport: ${window.innerWidth}x${window.innerHeight}`,
+    `ua: ${navigator.userAgent}`,
+    readout,
+  ].join("\n");
+}
+
+/**
+ * Copies flags, device info, the latest readout and the last second that had
+ * touch or GPU activity, so a copy made after tapping still includes the
+ * interaction being measured. Returns whether the clipboard write succeeded.
+ */
+export async function copyHudReport(): Promise<boolean> {
+  const report = buildReport() ?? "readout: off (enable 120 Hz mode)";
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(report);
+    copied = true;
+  } catch {
+    copied = false;
+  }
+  if (copyButton) {
+    const button = copyButton;
+    button.textContent = copied ? "copied ✓" : "copy failed";
+    setTimeout(() => {
+      if (button.isConnected) button.textContent = "tap to copy";
+    }, 1200);
+  }
+  return copied;
 }

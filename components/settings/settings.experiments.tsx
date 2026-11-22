@@ -1,5 +1,5 @@
 import { toastManager } from "#application/notifications.ts";
-import { getHudReport } from "#lib/high-refresh-hud.ts";
+import { copyHudReport } from "#lib/high-refresh-hud.ts";
 import { Checkbox } from "#ui/checkbox/index.tsx";
 import "#components/ui/field/field.css";
 
@@ -45,25 +45,10 @@ export function ExperimentFlagToggles({ rowClassName }: { rowClassName: string }
   );
 }
 
-function buildReport(): string {
-  const params = new URLSearchParams(window.location.search);
-  const flags = FLAGS.filter((flag) => params.has(flag.param)).map((flag) => flag.param);
-  return [
-    `flags: ${flags.length > 0 ? flags.join(", ") : "none"}`,
-    `dpr: ${window.devicePixelRatio}  viewport: ${window.innerWidth}x${window.innerHeight}`,
-    `ua: ${navigator.userAgent}`,
-    getHudReport() ?? "readout: off (enable 120 Hz mode)",
-  ].join("\n");
-}
-
 export function CopyReadingsButton() {
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(buildReport());
-      toastManager.add({ title: "Readings copied" });
-    } catch {
-      toastManager.add({ title: "Copy failed", description: "Clipboard access was denied" });
-    }
+    if (await copyHudReport()) toastManager.add({ title: "Readings copied" });
+    else toastManager.add({ title: "Copy failed", description: "Clipboard access was denied" });
   };
   return (
     <button type="button" onClick={copy}>
