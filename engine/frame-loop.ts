@@ -1,5 +1,7 @@
 import type { AnimationScheduler } from "#lib/animation-scheduler.ts";
 import type { FrameSource } from "#lib/frame-source.ts";
+import { highRefreshEnabled } from "#lib/high-refresh.ts";
+import { countHud } from "#lib/high-refresh-hud.ts";
 import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import {
   canvasStore,
@@ -177,6 +179,7 @@ export class FrameLoop {
       try {
         this.#renderer.render(renderState);
         this.#firstFrameRendered = true;
+        if (highRefreshEnabled) this.#probeGpuLatency(this.#renderer.device);
         this.#deps.perf.onRender(this.#renderer.getFrameStats(), debugMode);
       } catch (error) {
         this.#callbacks.onRenderError(error);
@@ -193,6 +196,18 @@ export class FrameLoop {
     // 12. Schedule next frame
     this.#deps.frameSource.schedule(this.#tick);
   };
+
+  // Experiment readout: submit-to-completion time for every 8th rendered frame
+  // separates a GPU-bound frame from a main-thread stall.
+  #gpuProbeFrame = 0;
+  #probeGpuLatency(device: GPUDevice | null): void {
+    if (!device || ++this.#gpuProbeFrame % 8 !== 0) return;
+    const start = performance.now();
+    void device.queue.onSubmittedWorkDone().then(() => {
+      countHud("gpuMs", performance.now() - start);
+      countHud("gpuSamples");
+    });
+  }
 
   #refreshActiveEntities(): void {
     const state = canvasStore.getState();

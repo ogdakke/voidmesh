@@ -20,6 +20,10 @@ function onPulse(): void {
     countHud("coalesced");
     return;
   }
+  if (lastPulse > 0) {
+    countHud("gapMs", start - lastPulse);
+    if (start - lastPulse > 12) countHud("longGaps");
+  }
   lastPulse = start;
   countHud("ticks");
 

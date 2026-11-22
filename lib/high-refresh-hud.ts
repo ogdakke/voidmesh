@@ -29,6 +29,10 @@ export function startHud(): void {
     const seconds = (now - last) / 1000;
     last = now;
     const rate = (name: string) => ((counts.get(name) ?? 0) / seconds).toFixed(0);
+    const avg = (total: string, samples: string) => {
+      const n = counts.get(samples) ?? 0;
+      return n > 0 ? ((counts.get(total) ?? 0) / n).toFixed(1) : "-";
+    };
     const ticks = counts.get("ticks") ?? 0;
     const avgTick = ticks > 0 ? (counts.get("tickMs") ?? 0) / ticks : 0;
     if (element) {
@@ -39,7 +43,10 @@ export function startHud(): void {
         `main rAF   ${rate("mainRaf")}/s\n` +
         `touchmove  ${rate("touchmove")}/s\n` +
         `scroll Δ   ${rate("scrollDelta")}/s\n` +
-        `tick cpu   ${avgTick.toFixed(1)} ms`;
+        `tick cpu   ${avgTick.toFixed(1)} ms\n` +
+        `tick gap   ${ticks > 0 ? ((counts.get("gapMs") ?? 0) / ticks).toFixed(1) : "0"} ms, ` +
+        `${rate("longGaps")} >12ms/s\n` +
+        `gpu done   ${avg("gpuMs", "gpuSamples")} ms`;
     }
     counts.clear();
   }, 1000);
