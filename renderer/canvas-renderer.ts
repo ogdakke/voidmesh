@@ -1,4 +1,4 @@
-import { getDrawSurface, type DrawSurface } from "#lib/high-refresh.ts";
+import { diagnosticSkipWlur, getDrawSurface, type DrawSurface } from "#lib/high-refresh.ts";
 import { hasPrismWakeEffects } from "#lib/fancy-effects.ts";
 import { config, getViewportLensDistortionConfig, type GridConfig } from "#config";
 import { logger } from "#lib/client.logger.ts";
@@ -466,11 +466,13 @@ export class InfiniteCanvasRenderer {
       format: this.#canvasFormat,
       initialConfig: getViewportLensDistortionConfig(CanvasLensing.off),
     });
-    this.#wlurOverlayPass = new WlurOverlayPass({
-      device: this.#device,
-      canvasFormat: this.#canvasFormat,
-      intermediateFormat: this.#colorConfig.intermediateFormat,
-    });
+    if (!diagnosticSkipWlur) {
+      this.#wlurOverlayPass = new WlurOverlayPass({
+        device: this.#device,
+        canvasFormat: this.#canvasFormat,
+        intermediateFormat: this.#colorConfig.intermediateFormat,
+      });
+    }
 
     // Initialize export service with callbacks into renderer
     this.#exportService = new ExportService(

@@ -23,3 +23,7 @@ export function getDrawSurface(canvas: HTMLCanvasElement): DrawSurface {
   }
   return surface;
 }
+
+// Diagnostic: ?nowlur skips the full-screen glass blur overlay so its GPU cost
+// can be measured in isolation. Remove with the rest of the experiment.
+export const diagnosticSkipWlur = new URLSearchParams(globalThis.location?.search).has("nowlur");
