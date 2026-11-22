@@ -16,6 +16,7 @@ import { lazy, Suspense, useEffect, useRef, type PropsWithChildren } from "react
 import { DropZone } from "../ui/dropzone/index.tsx";
 import { CanvasOverlay } from "./canvas-overlay.tsx";
 import { HighRateTouchController } from "./high-rate-touch-controller.tsx";
+import { HighRefreshDebugPanel } from "./high-refresh-debug-panel.tsx";
 import "./infinite-canvas.css";
 
 const CanvasContextMenu = lazy(() => import("./canvas-context-menu.tsx"));
@@ -103,6 +104,7 @@ export function InfiniteCanvas() {
           centerSelection={keybinds.centerSelection}
           resetZoom={keybinds.resetZoom}
         />
+        {import.meta.env.DEV ? <HighRefreshDebugPanel /> : null}
       </div>
     </DropZone>
   );
