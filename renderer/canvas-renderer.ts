@@ -1,3 +1,10 @@
+import {
+  diagnosticMinUsage,
+  diagnosticOpaque,
+  diagnosticSkipWlur,
+  getDrawSurface,
+  type DrawSurface,
+} from "#lib/high-refresh.ts";
 import { hasPrismWakeEffects } from "#lib/fancy-effects.ts";
 import { config, getViewportLensDistortionConfig, type GridConfig } from "#config";
 import { logger } from "#lib/client.logger.ts";
@@ -234,8 +241,12 @@ export class InfiniteCanvasRenderer {
   readonly #visibilityViewportBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
   readonly #visibilityEntityBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
 
+  /** Surface the WebGPU context renders into; offscreen under ?hz120. */
+  readonly #surface: DrawSurface;
+
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
+    this.#surface = getDrawSurface(canvas);
   }
 
   get isReady(): boolean {
@@ -393,7 +404,7 @@ export class InfiniteCanvasRenderer {
       logger.warn("[WebGPU] Uncaptured error:", (event as GPUUncapturedErrorEvent).error);
     });
 
-    this.#context = this.canvas.getContext("webgpu");
+    this.#context = this.#surface.getContext("webgpu");
     if (!this.#context) {
       throw new Error("WebGPU context not available");
     }
@@ -407,12 +418,13 @@ export class InfiniteCanvasRenderer {
       device: this.#device,
       format: this.#canvasFormat,
       colorSpace: this.#colorConfig.canvasColorSpace,
-      alphaMode: "premultiplied",
-      usage:
-        GPUTextureUsage.RENDER_ATTACHMENT |
-        GPUTextureUsage.COPY_SRC |
-        GPUTextureUsage.COPY_DST |
-        GPUTextureUsage.TEXTURE_BINDING,
+      alphaMode: diagnosticOpaque ? "opaque" : "premultiplied",
+      usage: diagnosticMinUsage
+        ? GPUTextureUsage.RENDER_ATTACHMENT
+        : GPUTextureUsage.RENDER_ATTACHMENT |
+          GPUTextureUsage.COPY_SRC |
+          GPUTextureUsage.COPY_DST |
+          GPUTextureUsage.TEXTURE_BINDING,
     });
 
     // Initialize texture pool
@@ -461,11 +473,13 @@ export class InfiniteCanvasRenderer {
       format: this.#canvasFormat,
       initialConfig: getViewportLensDistortionConfig(CanvasLensing.off),
     });
-    this.#wlurOverlayPass = new WlurOverlayPass({
-      device: this.#device,
-      canvasFormat: this.#canvasFormat,
-      intermediateFormat: this.#colorConfig.intermediateFormat,
-    });
+    if (!diagnosticSkipWlur) {
+      this.#wlurOverlayPass = new WlurOverlayPass({
+        device: this.#device,
+        canvasFormat: this.#canvasFormat,
+        intermediateFormat: this.#colorConfig.intermediateFormat,
+      });
+    }
 
     // Initialize export service with callbacks into renderer
     this.#exportService = new ExportService(
@@ -583,9 +597,9 @@ export class InfiniteCanvasRenderer {
     }
 
     // Update canvas dimensions if changed
-    if (this.canvas.width !== width || this.canvas.height !== height) {
-      this.canvas.width = width;
-      this.canvas.height = height;
+    if (this.#surface.width !== width || this.#surface.height !== height) {
+      this.#surface.width = width;
+      this.#surface.height = height;
     }
 
     this.#viewportUniforms.update(viewport, width, height);

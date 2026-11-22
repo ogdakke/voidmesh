@@ -1,5 +1,7 @@
 import { useEffect, useEffectEvent, useLayoutEffect, useRef } from "react";
 import { getCssVarPx, resolveCssVarColor } from "#lib/css.ts";
+import { cancelDisplayFrame, requestDisplayFrame } from "#lib/display-clock.ts";
+import { getDrawSurface } from "#lib/high-refresh.ts";
 import { formatMediaTimeParts } from "#lib/time-format.ts";
 import {
   captureMediaControlSnapshot,
@@ -135,7 +137,7 @@ export function MediaProgressCanvas({
   function draw() {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
+    const ctx = getDrawSurface(canvas).getContext("2d");
     if (!ctx) return;
 
     const { width, height } = sizeRef.current;
@@ -162,7 +164,7 @@ export function MediaProgressCanvas({
 
   function stopLoop() {
     if (rafRef.current == null) return;
-    cancelAnimationFrame(rafRef.current);
+    cancelDisplayFrame(rafRef.current);
     rafRef.current = null;
   }
 
@@ -171,12 +173,12 @@ export function MediaProgressCanvas({
     const tick = () => {
       draw();
       if (source.getIsPlaying() || isDraggingRef.current || isScrubAnimating()) {
-        rafRef.current = requestAnimationFrame(tick);
+        rafRef.current = requestDisplayFrame(tick);
       } else {
         rafRef.current = null;
       }
     };
-    rafRef.current = requestAnimationFrame(tick);
+    rafRef.current = requestDisplayFrame(tick);
   }
 
   function seekFromClientX(clientX: number) {
@@ -227,9 +229,10 @@ export function MediaProgressCanvas({
       if (rect.width <= 0 || rect.height <= 0) return;
       configRef.current = resolveRenderConfig(root);
       sizeRef.current = { width: rect.width, height: rect.height };
-      canvas.width = Math.max(1, Math.round(rect.width * dpr));
-      canvas.height = Math.max(1, Math.round(rect.height * dpr));
-      const ctx = canvas.getContext("2d");
+      const surface = getDrawSurface(canvas);
+      surface.width = Math.max(1, Math.round(rect.width * dpr));
+      surface.height = Math.max(1, Math.round(rect.height * dpr));
+      const ctx = surface.getContext("2d");
       ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
       drawEffect();
     };

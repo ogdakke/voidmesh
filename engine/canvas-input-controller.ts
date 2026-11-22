@@ -12,6 +12,8 @@ import { disintegrationController } from "./disintegration-controller.ts";
 import { perfOverlay } from "./perf-overlay.ts";
 import { viewportAnimation } from "./viewport-animation.ts";
 import { scheduler } from "#lib/animation-scheduler.ts";
+import { createRafFrameSource, createDisplayClockFrameSource } from "#lib/frame-source.ts";
+import { highRefreshEnabled } from "#lib/high-refresh.ts";
 import { haptic } from "#lib/haptic.ts";
 import { OnboardingStepId } from "#lib/onboarding/onboarding.ts";
 import { completeOnboardingStepFromEvent } from "#lib/onboarding/onboarding-runtime.ts";
@@ -30,6 +32,7 @@ const POINTER_CLICK_THRESHOLD = 5;
 
 export function createDefaultGameLoopDeps() {
   return {
+    frameSource: highRefreshEnabled ? createDisplayClockFrameSource() : createRafFrameSource(),
     scheduler,
     viewportAnimation,
     actionLayer: actionLayerController,

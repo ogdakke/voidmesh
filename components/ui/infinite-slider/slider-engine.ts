@@ -7,6 +7,7 @@
  * Reuses the touch-scroll library from app/lib/touch-scroll/.
  */
 
+import { cancelDisplayFrame, requestDisplayFrame } from "#lib/display-clock.ts";
 import {
   DecelerationRate,
   Scroller,
@@ -390,7 +391,7 @@ export class SliderEngine {
 
   #startAnimationLoop(): void {
     if (this.#rafId !== null) return;
-    this.#rafId = requestAnimationFrame((now) => {
+    this.#rafId = requestDisplayFrame((now) => {
       this.#rafId = null;
       this.#tick(now);
       if (this.#phase !== "idle") {
@@ -485,7 +486,7 @@ export class SliderEngine {
     this.#scroller.reset();
     this.#springBack.reset();
     if (this.#rafId !== null) {
-      cancelAnimationFrame(this.#rafId);
+      cancelDisplayFrame(this.#rafId);
       this.#rafId = null;
     }
     if (this.#wheelSnapTimer !== null) {

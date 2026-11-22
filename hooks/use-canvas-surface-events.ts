@@ -1,5 +1,7 @@
 import { isUserTypingInInput } from "#context/keybind-context.ts";
 import { useCanvasInteraction } from "#context/use-canvas.ts";
+import { setDisplayBoostTouching } from "#lib/display-boost.ts";
+import { countHud } from "#lib/high-refresh-hud.ts";
 import { useEffect, useEffectEvent, useRef, useState, type RefObject } from "react";
 
 interface UseCanvasSurfaceEventsOptions {
@@ -63,20 +65,26 @@ export function useCanvasSurfaceEvents({
   };
 
   const handleTouchStart = (event: React.TouchEvent) => {
+    setDisplayBoostTouching(true);
     containerRef.current?.focus();
     interaction.touchStart(getTouchPoints(event.touches), event.timeStamp);
   };
 
   const handleTouchMove = (event: React.TouchEvent) => {
+    const start = performance.now();
+    countHud("touchmove");
     interaction.touchMove(getTouchPoints(event.touches), event.timeStamp);
+    countHud("touchMs", performance.now() - start);
   };
 
   const handleTouchEnd = (event: React.TouchEvent) => {
     interaction.touchEnd(getTouchPoints(event.touches), false, event.timeStamp);
+    if (event.touches.length === 0) setDisplayBoostTouching(false);
   };
 
   const handleTouchCancel = (event: React.TouchEvent) => {
     interaction.touchEnd(getTouchPoints(event.touches), true, event.timeStamp);
+    if (event.touches.length === 0) setDisplayBoostTouching(false);
   };
 
   const handleContextMenu = (event: React.MouseEvent) => {

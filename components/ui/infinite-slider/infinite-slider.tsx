@@ -1,5 +1,6 @@
 import { useEffect, useEffectEvent, useRef, type ComponentProps } from "react";
 import { resolveCssVarColor } from "#lib/css.ts";
+import { getDrawSurface } from "#lib/high-refresh.ts";
 import { SliderEngine } from "./slider-engine.ts";
 import {
   renderSliderTicks,
@@ -158,7 +159,7 @@ export function InfiniteSlider({
       const engine = engineRef.current;
       const canvas = canvasRef.current;
       if (engine && canvas) {
-        const ctx = canvas.getContext("2d");
+        const ctx = getDrawSurface(canvas).getContext("2d");
         if (ctx) {
           renderSliderTicks(
             ctx,
@@ -184,7 +185,7 @@ export function InfiniteSlider({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const ctx = canvas.getContext("2d");
+    const ctx = getDrawSurface(canvas).getContext("2d");
     if (!ctx) return;
 
     const engine = new SliderEngine({
@@ -249,13 +250,14 @@ export function InfiniteSlider({
     const resizeCanvas = () => {
       const dpr = window.devicePixelRatio || 1;
       const rect = canvas.getBoundingClientRect();
-      canvas.width = rect.width * dpr;
-      canvas.height = rect.height * dpr;
+      const surface = getDrawSurface(canvas);
+      surface.width = rect.width * dpr;
+      surface.height = rect.height * dpr;
 
       // Re-render at current offset
       const engine = engineRef.current;
       if (engine) {
-        const ctx = canvas.getContext("2d");
+        const ctx = getDrawSurface(canvas).getContext("2d");
         if (ctx) {
           renderSliderTicks(
             ctx,

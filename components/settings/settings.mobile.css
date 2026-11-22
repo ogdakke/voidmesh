@@ -37,6 +37,16 @@
   margin: var(--spacing-1) 0 var(--spacing-4);
 }
 
+.settings-drawer-section-title {
+  margin: 0;
+  padding: 0 var(--spacing-2);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--gray-700);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .settings-drawer-workspace-actions {
   padding: var(--spacing-2);
   margin-top: auto;

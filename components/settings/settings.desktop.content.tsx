@@ -2,6 +2,7 @@ import { Button } from "#ui/button/button.tsx";
 import { Modal } from "#ui/modal/modal.tsx";
 import { Xmark } from "iconoir-react";
 import { CanvasLensingPreviews } from "./canvas-lensing-previews.tsx";
+import { CopyReadingsButton, ExperimentFlagToggles } from "./settings.experiments.tsx";
 import {
   FancyDeleteToggle,
   FeedbackLink,
@@ -39,6 +40,19 @@ export default function DesktopSettingsContent({
       <div className="desktop-settings-content">
         <main className="desktop-settings-main">
           <h1>Settings</h1>
+          {import.meta.env.DEV ? (
+            <section className="desktop-settings-section" aria-label="Flags">
+              <h2>Flags</h2>
+              <div className="desktop-settings-group">
+                <ExperimentFlagToggles rowClassName="desktop-settings-row" />
+                <div className="desktop-settings-action field-label">
+                  <LinkItem>
+                    <CopyReadingsButton />
+                  </LinkItem>
+                </div>
+              </div>
+            </section>
+          ) : null}
           <section className="desktop-settings-section" aria-label="Canvas settings">
             <CanvasLensingPreviews />
             <div className="desktop-settings-group">

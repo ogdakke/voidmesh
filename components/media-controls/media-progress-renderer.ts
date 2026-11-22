@@ -1,3 +1,4 @@
+import type { Draw2DContext } from "#lib/high-refresh.ts";
 import type { MediaTimeParts } from "#lib/time-format.ts";
 
 export interface MediaProgressFrame {
@@ -33,7 +34,7 @@ function clamp01(value: number): number {
 }
 
 function drawRoundRect(
-  ctx: CanvasRenderingContext2D,
+  ctx: Draw2DContext,
   x: number,
   y: number,
   width: number,
@@ -45,13 +46,13 @@ function drawRoundRect(
   ctx.fill();
 }
 
-function setFont(ctx: CanvasRenderingContext2D, cfg: MediaProgressRenderConfig, scale = 1): void {
+function setFont(ctx: Draw2DContext, cfg: MediaProgressRenderConfig, scale = 1): void {
   const font = `${cfg.fontWeight} ${cfg.fontSize * scale}px ${cfg.fontFamily}`;
   if (ctx.font !== font) ctx.font = font;
 }
 
 function drawTimeLabels(
-  ctx: CanvasRenderingContext2D,
+  ctx: Draw2DContext,
   cfg: MediaProgressRenderConfig,
   current: MediaTimeParts,
   duration: MediaTimeParts,
@@ -79,7 +80,7 @@ function drawTimeLabels(
 }
 
 export function renderMediaProgress(
-  ctx: CanvasRenderingContext2D,
+  ctx: Draw2DContext,
   width: number,
   height: number,
   frame: MediaProgressFrame,

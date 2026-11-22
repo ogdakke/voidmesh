@@ -1,4 +1,8 @@
 import type { AnimationScheduler } from "#lib/animation-scheduler.ts";
+import type { FrameSource } from "#lib/frame-source.ts";
+import { keepDisplayBoosted } from "#lib/display-boost.ts";
+import { highRefreshEnabled } from "#lib/high-refresh.ts";
+import { countHud } from "#lib/high-refresh-hud.ts";
 import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import {
   canvasStore,
@@ -35,6 +39,7 @@ export interface CanvasRendererPort {
 }
 
 interface FrameLoopDeps {
+  frameSource: FrameSource;
   scheduler: AnimationScheduler;
   perf: {
     setRenderer(
@@ -66,7 +71,6 @@ export class FrameLoop {
   readonly #callbacks: FrameLoopCallbacks;
   #renderer: CanvasRendererPort | null = null;
   #running = false;
-  #animationFrameId: number | null = null;
   #videoFrameTrackers = new Map<string, VideoFrameTracker>();
   #videoFrameTrackerGeneration = 0;
   #firstFrameRendered = false;
@@ -104,10 +108,7 @@ export class FrameLoop {
     this.#running = false;
     this.#lastFrameTime = null;
     this.#clearVideoFrameTrackers();
-    if (this.#animationFrameId !== null) {
-      cancelAnimationFrame(this.#animationFrameId);
-      this.#animationFrameId = null;
-    }
+    this.#deps.frameSource.cancel();
   }
 
   #tick = (): void => {
@@ -178,12 +179,17 @@ export class FrameLoop {
 
       try {
         this.#renderer.render(renderState);
+        countHud("renders");
+        keepDisplayBoosted();
         this.#firstFrameRendered = true;
+        if (highRefreshEnabled) this.#probeGpuLatency(this.#renderer.device);
         this.#deps.perf.onRender(this.#renderer.getFrameStats(), debugMode);
       } catch (error) {
         this.#callbacks.onRenderError(error);
       }
     }
+
+    if (!needsRender) countHud("skippedTicks");
 
     // 10. Clear dirty flags
     canvasStore.clearDirtyFlags();
@@ -193,8 +199,20 @@ export class FrameLoop {
     this.#callbacks.onAfterFrame();
 
     // 12. Schedule next frame
-    this.#animationFrameId = requestAnimationFrame(this.#tick);
+    this.#deps.frameSource.schedule(this.#tick);
   };
+
+  // Experiment readout: submit-to-completion time for every 8th rendered frame
+  // separates a GPU-bound frame from a main-thread stall.
+  #gpuProbeFrame = 0;
+  #probeGpuLatency(device: GPUDevice | null): void {
+    if (!device || ++this.#gpuProbeFrame % 8 !== 0) return;
+    const start = performance.now();
+    void device.queue.onSubmittedWorkDone().then(() => {
+      countHud("gpuMs", performance.now() - start);
+      countHud("gpuSamples");
+    });
+  }
 
   #refreshActiveEntities(): void {
     const state = canvasStore.getState();
