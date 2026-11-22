@@ -60,3 +60,8 @@ export function stopHud(): void {
   interval = null;
   counts.clear();
 }
+
+/** The most recent readout text, or null when the HUD is not running. */
+export function getHudText(): string | null {
+  return element?.textContent || null;
+}

@@ -23,6 +23,20 @@
   }
 }
 
+.hz-debug__chip--copy {
+  top: calc(50% + 52px);
+
+  &[data-state="copied"] {
+    border-color: #4ade80;
+    color: #4ade80;
+  }
+
+  &[data-state="failed"] {
+    border-color: #f87171;
+    color: #f87171;
+  }
+}
+
 .hz-debug__sheet {
   position: absolute;
   inset-inline: 12px;

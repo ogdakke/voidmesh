@@ -1,3 +1,4 @@
+import { getHudText } from "#lib/high-refresh-hud.ts";
 import { useState } from "react";
 import "./high-refresh-debug-panel.css";
 
@@ -32,10 +33,31 @@ function applyFlags(enabled: Set<string>): void {
   window.location.assign(url);
 }
 
+function buildReport(enabled: Set<string>): string {
+  const flags = enabled.size > 0 ? [...enabled].join(", ") : "none";
+  return [
+    `flags: ${flags}`,
+    `dpr: ${window.devicePixelRatio}  viewport: ${window.innerWidth}x${window.innerHeight}`,
+    `ua: ${navigator.userAgent}`,
+    getHudText() ?? "readout: off (enable 120 Hz mode)",
+  ].join("\n");
+}
+
 /** Dev-only sheet for toggling the ?hz120 experiment flags on a phone. */
 export function HighRefreshDebugPanel() {
   const [open, setOpen] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const enabled = readFlags();
+
+  const copyReadings = async () => {
+    try {
+      await navigator.clipboard.writeText(buildReport(enabled));
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    }
+    setTimeout(() => setCopyState("idle"), 1500);
+  };
 
   const toggle = (param: string) => {
     const next = new Set(enabled);
@@ -56,6 +78,15 @@ export function HighRefreshDebugPanel() {
         onClick={() => setOpen((value) => !value)}
       >
         Hz
+      </button>
+      <button
+        type="button"
+        className="hz-debug__chip hz-debug__chip--copy"
+        data-state={copyState}
+        aria-label="Copy readings"
+        onClick={copyReadings}
+      >
+        {copyState === "copied" ? "Copied" : copyState === "failed" ? "Failed" : "Copy"}
       </button>
       {open ? (
         <section id="hz-debug-sheet" className="hz-debug__sheet" aria-label="Experiment flags">
