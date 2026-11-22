@@ -58,11 +58,27 @@ export function useHighRateTouch(controllerRef: RefObject<HTMLDivElement | null>
       countHud("touchmove");
       interaction.touchMove(readPoints(event.touches), event.timeStamp);
     };
+    // iOS swallows the touch that stops a scroller's momentum (no touchstart),
+    // so the engine would miss every touch until native momentum died out. The
+    // engine has its own momentum, so freeze the scroller once all fingers lift.
+    let thawTimer: ReturnType<typeof setTimeout> | null = null;
+    const freeze = () => {
+      controller.classList.add("infinite-canvas__touch-controller--frozen");
+      controller.scrollTop = controller.scrollTop;
+      controller.scrollLeft = controller.scrollLeft;
+      if (thawTimer !== null) clearTimeout(thawTimer);
+      thawTimer = setTimeout(() => {
+        thawTimer = null;
+        controller.classList.remove("infinite-canvas__touch-controller--frozen");
+      }, 50);
+    };
     const onTouchEnd = (event: TouchEvent) => {
       interaction.touchEnd(readPoints(event.touches), false, event.timeStamp);
+      if (event.touches.length === 0) freeze();
     };
     const onTouchCancel = (event: TouchEvent) => {
       interaction.touchEnd(readPoints(event.touches), true, event.timeStamp);
+      if (event.touches.length === 0) freeze();
     };
     const onScroll = () => countHud("scrollDelta");
 
@@ -73,6 +89,7 @@ export function useHighRateTouch(controllerRef: RefObject<HTMLDivElement | null>
     controller.addEventListener("touchcancel", onTouchCancel, options);
     controller.addEventListener("scroll", onScroll, options);
     return () => {
+      if (thawTimer !== null) clearTimeout(thawTimer);
       controller.removeEventListener("touchstart", onTouchStart);
       controller.removeEventListener("touchmove", onTouchMove);
       controller.removeEventListener("touchend", onTouchEnd);
