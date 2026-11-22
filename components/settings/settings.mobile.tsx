@@ -67,6 +67,20 @@ export default function SettingsDrawer() {
             <div className="settings-drawer-header">
               <h3 className="settings-drawer-title">Settings</h3>
             </div>
+            {import.meta.env.DEV ? (
+              <section className="settings-drawer-flags" aria-labelledby="settings-flags-title">
+                <h4 id="settings-flags-title" className="settings-drawer-section-title">
+                  Flags
+                </h4>
+                <ExperimentFlagToggles rowClassName="settings-drawer-switch" />
+                <div className="settings-drawer-ext-item field-label">
+                  <LinkItem>
+                    <CopyReadingsButton />
+                  </LinkItem>
+                </div>
+                <hr className="divider" />
+              </section>
+            ) : null}
             <CanvasLensingPreviews layout="mobile" />
             <div className="settings-drawer-switch">
               <SnapToGridToggle />
@@ -80,17 +94,6 @@ export default function SettingsDrawer() {
             <div className="settings-drawer-switch">
               <OverlapEffectToggle />
             </div>
-            {import.meta.env.DEV ? (
-              <>
-                <hr className="divider" />
-                <ExperimentFlagToggles rowClassName="settings-drawer-switch" />
-                <div className="settings-drawer-ext-item field-label">
-                  <LinkItem>
-                    <CopyReadingsButton />
-                  </LinkItem>
-                </div>
-              </>
-            ) : null}
             <hr className="divider" />
             <div className="settings-drawer-ext-item field-label">
               <LinkItem>

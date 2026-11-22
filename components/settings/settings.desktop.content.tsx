@@ -40,6 +40,19 @@ export default function DesktopSettingsContent({
       <div className="desktop-settings-content">
         <main className="desktop-settings-main">
           <h1>Settings</h1>
+          {import.meta.env.DEV ? (
+            <section className="desktop-settings-section" aria-label="Flags">
+              <h2>Flags</h2>
+              <div className="desktop-settings-group">
+                <ExperimentFlagToggles rowClassName="desktop-settings-row" />
+                <div className="desktop-settings-action field-label">
+                  <LinkItem>
+                    <CopyReadingsButton />
+                  </LinkItem>
+                </div>
+              </div>
+            </section>
+          ) : null}
           <section className="desktop-settings-section" aria-label="Canvas settings">
             <CanvasLensingPreviews />
             <div className="desktop-settings-group">
@@ -66,19 +79,6 @@ export default function DesktopSettingsContent({
               </div>
             </div>
           </section>
-          {import.meta.env.DEV ? (
-            <section className="desktop-settings-section" aria-label="Experiments">
-              <h2>Experiments</h2>
-              <div className="desktop-settings-group">
-                <ExperimentFlagToggles rowClassName="desktop-settings-row" />
-                <div className="desktop-settings-action field-label">
-                  <LinkItem>
-                    <CopyReadingsButton />
-                  </LinkItem>
-                </div>
-              </div>
-            </section>
-          ) : null}
           <section className="desktop-settings-section" aria-labelledby="onboarding-settings-title">
             <h2 id="onboarding-settings-title">Onboarding</h2>
             <div className="desktop-settings-group">

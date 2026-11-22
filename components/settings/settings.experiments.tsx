@@ -19,7 +19,8 @@ function setFlag(param: string, enabled: boolean): void {
   const url = new URL(window.location.href);
   if (enabled) url.searchParams.set(param, "");
   else url.searchParams.delete(param);
-  window.location.assign(url);
+  // Keeps the #settings hash, so the drawer is still open after the reload.
+  window.location.replace(url);
 }
 
 export function ExperimentFlagToggles({ rowClassName }: { rowClassName: string }) {
