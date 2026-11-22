@@ -16,6 +16,28 @@ let copyButton: HTMLButtonElement | null = null;
 let interval: ReturnType<typeof setInterval> | null = null;
 let rafId = 0;
 let lastActiveText: string | null = null;
+let diagnosticStyle: HTMLStyleElement | null = null;
+
+// Diagnostics for page compositing around the canvas. ?nobackdrop removes every
+// backdrop-filter; ?nochrome hides all UI except the canvas and this readout
+// (remove the param from the URL to get the UI back).
+function applyCompositingDiagnostics(): void {
+  const params = new URLSearchParams(location.search);
+  const rules: string[] = [];
+  if (params.has("nobackdrop")) {
+    rules.push("* { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }");
+  }
+  if (params.has("nochrome")) {
+    rules.push(
+      "body * { visibility: hidden !important; }",
+      "body canvas, [data-hz-hud], [data-hz-hud] * { visibility: visible !important; }",
+    );
+  }
+  if (rules.length === 0) return;
+  diagnosticStyle = document.createElement("style");
+  diagnosticStyle.textContent = rules.join("\n");
+  document.head.append(diagnosticStyle);
+}
 
 export function countHud(name: string, amount = 1): void {
   if (element) counts.set(name, (counts.get(name) ?? 0) + amount);
@@ -23,7 +45,9 @@ export function countHud(name: string, amount = 1): void {
 
 export function startHud(): void {
   if (element) return;
+  applyCompositingDiagnostics();
   root = document.createElement("div");
+  root.dataset.hzHud = "";
   root.style.cssText =
     "position:absolute;left:8px;bottom:8px;z-index:99999;background:#0008;color:#fff;" +
     "font:11px/1.3 monospace;pointer-events:none;border-radius:6px;overflow:hidden";
@@ -85,6 +109,8 @@ export function startHud(): void {
 export function stopHud(): void {
   if (interval !== null) clearInterval(interval);
   cancelAnimationFrame(rafId);
+  diagnosticStyle?.remove();
+  diagnosticStyle = null;
   root?.remove();
   root = null;
   copyButton = null;
