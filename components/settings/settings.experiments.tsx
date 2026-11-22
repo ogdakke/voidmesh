@@ -1,25 +1,8 @@
 import { toastManager } from "#application/notifications.ts";
+import { EXPERIMENT_FLAGS } from "#lib/high-refresh.ts";
 import { copyHudReport } from "#lib/high-refresh-hud.ts";
 import { Checkbox } from "#ui/checkbox/index.tsx";
 import "#components/ui/field/field.css";
-
-interface ExperimentFlag {
-  param: string;
-  label: string;
-}
-
-// Add a flag here and read the same query param where it takes effect.
-const FLAGS: ExperimentFlag[] = [
-  { param: "hz120", label: "120 Hz mode" },
-  { param: "nowlur", label: "Skip glass blur" },
-  { param: "nop3", label: "8-bit sRGB canvas" },
-  { param: "noscroller", label: "Skip touch scroller" },
-  { param: "mainclock", label: "Main-thread clock" },
-  { param: "nobackdrop", label: "No backdrop blur" },
-  { param: "nochrome", label: "Hide all UI (edit URL to undo)" },
-  { param: "opaque", label: "Opaque canvas" },
-  { param: "minusage", label: "Minimal canvas usage" },
-];
 
 // Flags are read once at module load across the app, so changing one reloads.
 function setFlag(param: string, enabled: boolean): void {
@@ -34,7 +17,7 @@ export function ExperimentFlagToggles({ rowClassName }: { rowClassName: string }
   const params = new URLSearchParams(window.location.search);
   return (
     <>
-      {FLAGS.map((flag) => (
+      {EXPERIMENT_FLAGS.map((flag) => (
         <div key={flag.param} className={rowClassName}>
           <Checkbox
             name={`experiment_${flag.param}`}
