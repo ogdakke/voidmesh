@@ -16,6 +16,7 @@ let style: HTMLStyleElement | null = null;
 let stopTimer: ReturnType<typeof setTimeout> | null = null;
 let moveTimer: ReturnType<typeof setTimeout> | null = null;
 let down = false;
+let touching = false;
 
 function start(): void {
   style = document.createElement("style");
@@ -54,9 +55,22 @@ function stop(): void {
   stopTimer = null;
 }
 
+/**
+ * A background smooth-scroll makes WebKit throttle touch delivery (touchmove
+ * fell from ~60-80/s to ~16/s while panning), and a finger on the screen
+ * already raises the display rate, so the boost stays off while touching.
+ */
+export function setDisplayBoostTouching(isTouching: boolean): void {
+  touching = isTouching;
+  if (isTouching) {
+    if (stopTimer !== null) clearTimeout(stopTimer);
+    stop();
+  }
+}
+
 /** Call whenever a frame is rendered; the boost lapses shortly after calls stop. */
 export function keepDisplayBoosted(): void {
-  if (!highRefreshEnabled || diagnosticNoBoost) return;
+  if (!highRefreshEnabled || diagnosticNoBoost || touching) return;
   if (!scroller) start();
   if (stopTimer !== null) clearTimeout(stopTimer);
   stopTimer = setTimeout(stop, HOLD_MS);
