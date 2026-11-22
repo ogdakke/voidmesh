@@ -19,6 +19,7 @@ export class GameLoop {
     this.#input = new CanvasInputController(this.#deps);
     this.#frameLoop = new FrameLoop(
       {
+        frameSource: this.#deps.frameSource,
         scheduler: this.#deps.scheduler,
         perf: this.#deps.perf,
       },

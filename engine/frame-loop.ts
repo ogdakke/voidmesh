@@ -1,4 +1,5 @@
 import type { AnimationScheduler } from "#lib/animation-scheduler.ts";
+import type { FrameSource } from "#lib/frame-source.ts";
 import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import {
   canvasStore,
@@ -35,6 +36,7 @@ export interface CanvasRendererPort {
 }
 
 interface FrameLoopDeps {
+  frameSource: FrameSource;
   scheduler: AnimationScheduler;
   perf: {
     setRenderer(
@@ -66,7 +68,6 @@ export class FrameLoop {
   readonly #callbacks: FrameLoopCallbacks;
   #renderer: CanvasRendererPort | null = null;
   #running = false;
-  #animationFrameId: number | null = null;
   #videoFrameTrackers = new Map<string, VideoFrameTracker>();
   #videoFrameTrackerGeneration = 0;
   #firstFrameRendered = false;
@@ -104,10 +105,7 @@ export class FrameLoop {
     this.#running = false;
     this.#lastFrameTime = null;
     this.#clearVideoFrameTrackers();
-    if (this.#animationFrameId !== null) {
-      cancelAnimationFrame(this.#animationFrameId);
-      this.#animationFrameId = null;
-    }
+    this.#deps.frameSource.cancel();
   }
 
   #tick = (): void => {
@@ -193,7 +191,7 @@ export class FrameLoop {
     this.#callbacks.onAfterFrame();
 
     // 12. Schedule next frame
-    this.#animationFrameId = requestAnimationFrame(this.#tick);
+    this.#deps.frameSource.schedule(this.#tick);
   };
 
   #refreshActiveEntities(): void {

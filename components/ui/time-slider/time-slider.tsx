@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { cancelDisplayFrame, requestDisplayFrame } from "#lib/display-clock.ts";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
 import {
   InfiniteSlider,
@@ -17,7 +18,7 @@ export interface TimeSliderProps extends InfiniteSliderProps {
 
 /**
  * Slider for shader time that drives the InfiniteSlider imperatively
- * at 60fps during autoplay — zero React re-renders while playing.
+ * at the display rate during autoplay — zero React re-renders while playing.
  */
 export function TimeSlider({
   entity,
@@ -30,18 +31,18 @@ export function TimeSlider({
 }: TimeSliderProps) {
   const driveRef = useRef<InfiniteSliderDriveHandle | null>(null);
 
-  // Drive slider at 60fps via rAF — no React re-renders.
+  // Drive slider every display frame — no React re-renders.
   // Reads entity.shaderParams.time directly (mutated in-place by shader).
   useEffect(() => {
     if (!isAutoPlaying || !entity) return;
     let rafId: number;
     const tick = () => {
       driveRef.current?.driveValue(entity.shaderParams.time ?? 0);
-      rafId = requestAnimationFrame(tick);
+      rafId = requestDisplayFrame(tick);
     };
-    rafId = requestAnimationFrame(tick);
+    rafId = requestDisplayFrame(tick);
     return () => {
-      cancelAnimationFrame(rafId);
+      cancelDisplayFrame(rafId);
     };
   }, [isAutoPlaying, entity]);
 

@@ -5,6 +5,8 @@
  * Uses exponential scale falloff matching the existing TickSlider visual.
  */
 
+import type { Draw2DContext } from "#lib/high-refresh.ts";
+
 export interface SliderRenderConfig {
   /** Axis ticks scroll along. Vertical draws the horizontal layout transposed. @default "horizontal" */
   orientation: "horizontal" | "vertical";
@@ -70,7 +72,7 @@ export const defaultRenderConfig: SliderRenderConfig = {
  * @param cfg - Render configuration
  */
 export function renderSliderTicks(
-  ctx: CanvasRenderingContext2D,
+  ctx: Draw2DContext,
   width: number,
   height: number,
   dpr: number,
@@ -89,7 +91,7 @@ export function renderSliderTicks(
 }
 
 function renderHorizontalTicks(
-  ctx: CanvasRenderingContext2D,
+  ctx: Draw2DContext,
   width: number,
   height: number,
   dpr: number,
