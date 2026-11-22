@@ -1,4 +1,10 @@
-import { diagnosticSkipWlur, getDrawSurface, type DrawSurface } from "#lib/high-refresh.ts";
+import {
+  diagnosticMinUsage,
+  diagnosticOpaque,
+  diagnosticSkipWlur,
+  getDrawSurface,
+  type DrawSurface,
+} from "#lib/high-refresh.ts";
 import { hasPrismWakeEffects } from "#lib/fancy-effects.ts";
 import { config, getViewportLensDistortionConfig, type GridConfig } from "#config";
 import { logger } from "#lib/client.logger.ts";
@@ -412,12 +418,13 @@ export class InfiniteCanvasRenderer {
       device: this.#device,
       format: this.#canvasFormat,
       colorSpace: this.#colorConfig.canvasColorSpace,
-      alphaMode: "premultiplied",
-      usage:
-        GPUTextureUsage.RENDER_ATTACHMENT |
-        GPUTextureUsage.COPY_SRC |
-        GPUTextureUsage.COPY_DST |
-        GPUTextureUsage.TEXTURE_BINDING,
+      alphaMode: diagnosticOpaque ? "opaque" : "premultiplied",
+      usage: diagnosticMinUsage
+        ? GPUTextureUsage.RENDER_ATTACHMENT
+        : GPUTextureUsage.RENDER_ATTACHMENT |
+          GPUTextureUsage.COPY_SRC |
+          GPUTextureUsage.COPY_DST |
+          GPUTextureUsage.TEXTURE_BINDING,
     });
 
     // Initialize texture pool

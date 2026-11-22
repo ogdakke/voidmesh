@@ -1,6 +1,6 @@
 // Temporary on-device readout for the ?hz120 experiment. Counters accumulate
 // and the readout refreshes once a second.
-const KNOWN_FLAGS = new Set(["hz120", "nowlur", "nop3", "noscroller"]);
+const KNOWN_FLAGS = new Set(["hz120", "nowlur", "nop3", "noscroller", "opaque", "minusage"]);
 const counts = new Map<string, number>();
 let element: HTMLElement | null = null; // readout body
 let root: HTMLElement | null = null;

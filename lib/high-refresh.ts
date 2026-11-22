@@ -37,3 +37,9 @@ export const diagnosticSkipP3 = new URLSearchParams(globalThis.location?.search)
 export const diagnosticNoScroller = new URLSearchParams(globalThis.location?.search).has(
   "noscroller",
 );
+
+// Diagnostics for the canvas configuration: ?opaque uses alphaMode "opaque"
+// instead of "premultiplied"; ?minusage requests only RENDER_ATTACHMENT. Either
+// may let the compositor present the canvas without a blend or copy.
+export const diagnosticOpaque = new URLSearchParams(globalThis.location?.search).has("opaque");
+export const diagnosticMinUsage = new URLSearchParams(globalThis.location?.search).has("minusage");
