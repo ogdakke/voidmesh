@@ -14,6 +14,7 @@ const FLAGS: ExperimentFlag[] = [
   { param: "nowlur", label: "Skip glass blur" },
   { param: "nop3", label: "8-bit sRGB canvas" },
   { param: "noscroller", label: "Skip touch scroller" },
+  { param: "mainclock", label: "Main-thread clock" },
   { param: "opaque", label: "Opaque canvas" },
   { param: "minusage", label: "Minimal canvas usage" },
 ];

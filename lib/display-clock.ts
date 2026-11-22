@@ -1,4 +1,4 @@
-import { highRefreshEnabled } from "./high-refresh.ts";
+import { diagnosticMainClock, highRefreshEnabled } from "./high-refresh.ts";
 import { countHud, startHud, stopHud } from "./high-refresh-hud.ts";
 
 // iOS Safari caps requestAnimationFrame at 60 Hz on ProMotion displays, in
@@ -12,6 +12,8 @@ const subscribers = new Set<() => void>();
 const pending = new Map<number, FrameRequestCallback>();
 let nextId = 1;
 let worker: Worker | null = null;
+let mainTimer: ReturnType<typeof setTimeout> | null = null;
+let clockRunning = false;
 let lastPulse = 0;
 
 function onPulse(): void {
@@ -37,21 +39,43 @@ function onPulse(): void {
   releaseWorkerIfIdle();
 }
 
-function acquireWorker(): void {
-  if (worker) return;
-  worker = new Worker(new URL("./frame-pulse.worker.ts", import.meta.url), { type: "module" });
-  worker.onmessage = onPulse;
-  worker.onerror = (event) => {
-    throw new Error(`Frame pulse worker failed: ${event.message}`);
+function startMainTimer(): void {
+  const interval = 1000 / TARGET_HZ;
+  let next = performance.now();
+  const pulse = (): void => {
+    onPulse();
+    if (!clockRunning) return;
+    const now = performance.now();
+    // Keep the cadence; after a stall, skip missed slots instead of bursting.
+    next = Math.max(next + interval, now - interval);
+    mainTimer = setTimeout(pulse, Math.max(0, next - now));
   };
-  worker.postMessage({ intervalMs: 1000 / TARGET_HZ });
+  pulse();
+}
+
+function acquireWorker(): void {
+  if (clockRunning) return;
+  clockRunning = true;
+  if (diagnosticMainClock) {
+    startMainTimer();
+  } else {
+    worker = new Worker(new URL("./frame-pulse.worker.ts", import.meta.url), { type: "module" });
+    worker.onmessage = onPulse;
+    worker.onerror = (event) => {
+      throw new Error(`Frame pulse worker failed: ${event.message}`);
+    };
+    worker.postMessage({ intervalMs: 1000 / TARGET_HZ });
+  }
   startHud();
 }
 
 function releaseWorkerIfIdle(): void {
-  if (!worker || subscribers.size > 0 || pending.size > 0) return;
-  worker.terminate();
+  if (!clockRunning || subscribers.size > 0 || pending.size > 0) return;
+  clockRunning = false;
+  worker?.terminate();
   worker = null;
+  if (mainTimer !== null) clearTimeout(mainTimer);
+  mainTimer = null;
   stopHud();
 }
 

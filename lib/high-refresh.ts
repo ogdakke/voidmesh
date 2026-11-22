@@ -43,3 +43,10 @@ export const diagnosticNoScroller = new URLSearchParams(globalThis.location?.sea
 // may let the compositor present the canvas without a blend or copy.
 export const diagnosticOpaque = new URLSearchParams(globalThis.location?.search).has("opaque");
 export const diagnosticMinUsage = new URLSearchParams(globalThis.location?.search).has("minusage");
+
+// Diagnostic: ?mainclock paces the display clock with a main-thread timer
+// instead of worker messages, to test whether worker message delivery is what
+// aligns ticks to the 60 Hz rendering update.
+export const diagnosticMainClock = new URLSearchParams(globalThis.location?.search).has(
+  "mainclock",
+);
