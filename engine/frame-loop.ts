@@ -178,6 +178,7 @@ export class FrameLoop {
 
       try {
         this.#renderer.render(renderState);
+        countHud("renders");
         this.#firstFrameRendered = true;
         if (highRefreshEnabled) this.#probeGpuLatency(this.#renderer.device);
         this.#deps.perf.onRender(this.#renderer.getFrameStats(), debugMode);
@@ -185,6 +186,8 @@ export class FrameLoop {
         this.#callbacks.onRenderError(error);
       }
     }
+
+    if (!needsRender) countHud("skippedTicks");
 
     // 10. Clear dirty flags
     canvasStore.clearDirtyFlags();

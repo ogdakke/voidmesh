@@ -63,6 +63,7 @@ export function startHud(): void {
       element.textContent =
         `${[...new URLSearchParams(location.search).keys()].filter((key) => KNOWN_FLAGS.has(key)).join(" ")}\n` +
         `ticks/s    ${rate("ticks")}\n` +
+        `renders/s  ${rate("renders")}  (skipped ${rate("skippedTicks")}/s)\n` +
         `coalesced  ${rate("coalesced")}/s\n` +
         `main rAF   ${rate("mainRaf")}/s\n` +
         `touchmove  ${rate("touchmove")}/s\n` +
