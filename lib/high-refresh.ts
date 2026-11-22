@@ -32,12 +32,6 @@ export const diagnosticSkipWlur = new URLSearchParams(globalThis.location?.searc
 // + display-p3, to measure the presentation cost of the wide-gamut surface.
 export const diagnosticSkipP3 = new URLSearchParams(globalThis.location?.search).has("nop3");
 
-// Diagnostic: ?noscroller keeps ?hz120 but routes touches through the normal
-// canvas handlers instead of the hidden scroll area, for an A/B comparison.
-export const diagnosticNoScroller = new URLSearchParams(globalThis.location?.search).has(
-  "noscroller",
-);
-
 // Diagnostics for the canvas configuration: ?opaque uses alphaMode "opaque"
 // instead of "premultiplied"; ?minusage requests only RENDER_ATTACHMENT. Either
 // may let the compositor present the canvas without a blend or copy.
@@ -55,7 +49,7 @@ export const diagnosticMainClock = new URLSearchParams(globalThis.location?.sear
 export const EXPERIMENT_FLAGS = [
   { param: "hz120", label: "120 Hz mode" },
   { param: "mainclock", label: "Main-thread clock" },
-  { param: "noscroller", label: "Skip touch scroller" },
+  { param: "noboost", label: "Skip display boost" },
   { param: "nowlur", label: "Skip glass blur" },
   { param: "nop3", label: "8-bit sRGB canvas" },
   { param: "opaque", label: "Opaque canvas" },
@@ -63,3 +57,7 @@ export const EXPERIMENT_FLAGS = [
   { param: "nobackdrop", label: "No backdrop blur" },
   { param: "nochrome", label: "Hide all UI (edit URL to undo)" },
 ] as const;
+
+// Diagnostic: ?noboost keeps ?hz120 but disables the background scroller that
+// holds the display at its full refresh rate, for an A/B comparison.
+export const diagnosticNoBoost = new URLSearchParams(globalThis.location?.search).has("noboost");

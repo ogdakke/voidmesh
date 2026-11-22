@@ -1,3 +1,4 @@
+import { keepDisplayBoosted } from "./display-boost.ts";
 import { diagnosticMainClock, highRefreshEnabled } from "./high-refresh.ts";
 import { countHud, startHud, stopHud } from "./high-refresh-hud.ts";
 
@@ -33,6 +34,7 @@ function onPulse(): void {
   if (pending.size > 0) {
     const callbacks = [...pending.values()];
     pending.clear();
+    keepDisplayBoosted();
     for (const callback of callbacks) callback(start);
   }
   countHud("tickMs", performance.now() - start);

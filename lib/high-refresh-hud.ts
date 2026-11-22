@@ -84,7 +84,7 @@ export function startHud(): void {
         `coalesced  ${rate("coalesced")}/s\n` +
         `main rAF   ${rate("mainRaf")}/s\n` +
         `touchmove  ${rate("touchmove")}/s\n` +
-        `scroll Δ   ${rate("scrollDelta")}/s\n` +
+        `boost scroll ${rate("scrollDelta")}/s\n` +
         `tick cpu   ${avgTick.toFixed(1)} ms\n` +
         `touch cpu  ${avg("touchMs", "touchmove")} ms/event\n` +
         `js busy    ${((((counts.get("tickMs") ?? 0) + (counts.get("touchMs") ?? 0)) / (seconds * 1000)) * 100).toFixed(0)}%\n` +

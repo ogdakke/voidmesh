@@ -33,29 +33,6 @@
   }
 }
 
-.infinite-canvas__touch-controller {
-  position: absolute;
-  inset: 0;
-  overflow: scroll;
-  overscroll-behavior: none;
-  touch-action: pan-x pan-y;
-  scrollbar-width: none;
-
-  &::-webkit-scrollbar {
-    display: none;
-  }
-}
-
-/* Briefly non-scrollable after release so native momentum cannot swallow the next touch. */
-.infinite-canvas__touch-controller--frozen {
-  overflow: hidden;
-}
-
-.infinite-canvas__touch-controller-extent {
-  width: 200000px;
-  height: 200000px;
-}
-
 .infinite-canvas__canvas {
   display: block;
   width: 100%;

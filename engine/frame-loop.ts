@@ -1,5 +1,6 @@
 import type { AnimationScheduler } from "#lib/animation-scheduler.ts";
 import type { FrameSource } from "#lib/frame-source.ts";
+import { keepDisplayBoosted } from "#lib/display-boost.ts";
 import { highRefreshEnabled } from "#lib/high-refresh.ts";
 import { countHud } from "#lib/high-refresh-hud.ts";
 import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
@@ -179,6 +180,7 @@ export class FrameLoop {
       try {
         this.#renderer.render(renderState);
         countHud("renders");
+        keepDisplayBoosted();
         this.#firstFrameRendered = true;
         if (highRefreshEnabled) this.#probeGpuLatency(this.#renderer.device);
         this.#deps.perf.onRender(this.#renderer.getFrameStats(), debugMode);
