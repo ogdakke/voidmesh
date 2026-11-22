@@ -64,8 +64,11 @@ export function useHighRateTouch(controllerRef: RefObject<HTMLDivElement | null>
     let thawTimer: ReturnType<typeof setTimeout> | null = null;
     const freeze = () => {
       controller.classList.add("infinite-canvas__touch-controller--frozen");
-      controller.scrollTop = controller.scrollTop;
-      controller.scrollLeft = controller.scrollLeft;
+      controller.scrollTo({
+        top: controller.scrollTop,
+        left: controller.scrollLeft,
+        behavior: "instant",
+      });
       if (thawTimer !== null) clearTimeout(thawTimer);
       thawTimer = setTimeout(() => {
         thawTimer = null;
