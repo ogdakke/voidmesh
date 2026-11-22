@@ -4,6 +4,7 @@ const counts = new Map<string, number>();
 let element: HTMLElement | null = null;
 let interval: ReturnType<typeof setInterval> | null = null;
 let rafId = 0;
+let lastActiveText: string | null = null;
 
 export function countHud(name: string, amount = 1): void {
   if (element) counts.set(name, (counts.get(name) ?? 0) + amount);
@@ -48,6 +49,9 @@ export function startHud(): void {
         `${rate("longGaps")} >12ms/s\n` +
         `gpu done   ${avg("gpuMs", "gpuSamples")} ms`;
     }
+    if (element && ((counts.get("touchmove") ?? 0) > 0 || (counts.get("gpuSamples") ?? 0) > 0)) {
+      lastActiveText = element.textContent;
+    }
     counts.clear();
   }, 1000);
 }
@@ -61,7 +65,13 @@ export function stopHud(): void {
   counts.clear();
 }
 
-/** The most recent readout text, or null when the HUD is not running. */
-export function getHudText(): string | null {
-  return element?.textContent || null;
+/**
+ * The latest readout plus the last second that had touch or GPU activity, so a
+ * copy made after tapping a button still includes the interaction being measured.
+ */
+export function getHudReport(): string | null {
+  if (!element?.textContent) return null;
+  return lastActiveText
+    ? `now:\n${element.textContent}\n\nlast active second:\n${lastActiveText}`
+    : element.textContent;
 }

@@ -7,6 +7,7 @@ import { MoreVert } from "iconoir-react";
 import { useState } from "react";
 import "./settings.mobile.css";
 import { CanvasLensingPreviews } from "./canvas-lensing-previews.tsx";
+import { CopyReadingsButton, ExperimentFlagToggles } from "./settings.experiments.tsx";
 import {
   FancyDeleteToggle,
   FeedbackLink,
@@ -79,6 +80,17 @@ export default function SettingsDrawer() {
             <div className="settings-drawer-switch">
               <OverlapEffectToggle />
             </div>
+            {import.meta.env.DEV ? (
+              <>
+                <hr className="divider" />
+                <ExperimentFlagToggles rowClassName="settings-drawer-switch" />
+                <div className="settings-drawer-ext-item field-label">
+                  <LinkItem>
+                    <CopyReadingsButton />
+                  </LinkItem>
+                </div>
+              </>
+            ) : null}
             <hr className="divider" />
             <div className="settings-drawer-ext-item field-label">
               <LinkItem>
