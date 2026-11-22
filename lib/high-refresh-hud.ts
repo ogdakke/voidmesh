@@ -38,7 +38,7 @@ export function startHud(): void {
     const avgTick = ticks > 0 ? (counts.get("tickMs") ?? 0) / ticks : 0;
     if (element) {
       element.textContent =
-        `hz120\n` +
+        `${[...new URLSearchParams(location.search).keys()].join(" ") || "hz120"}\n` +
         `ticks/s    ${rate("ticks")}\n` +
         `coalesced  ${rate("coalesced")}/s\n` +
         `main rAF   ${rate("mainRaf")}/s\n` +

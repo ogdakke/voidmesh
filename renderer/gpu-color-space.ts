@@ -1,3 +1,5 @@
+import { diagnosticSkipP3 } from "#lib/high-refresh.ts";
+
 /**
  * GPU color space capability detection and context storage.
  * Probes whether the device supports Display P3 canvas output (rgba16float + display-p3).
@@ -53,6 +55,7 @@ export function detectGpuColorConfig(device: GPUDevice): GpuColorConfig {
   let supportsP3Canvas = false;
 
   try {
+    if (diagnosticSkipP3) throw new Error("P3 canvas skipped by ?nop3");
     const testCanvas = new OffscreenCanvas(1, 1);
     const testCtx = testCanvas.getContext("webgpu");
 

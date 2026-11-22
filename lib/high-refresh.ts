@@ -27,3 +27,7 @@ export function getDrawSurface(canvas: HTMLCanvasElement): DrawSurface {
 // Diagnostic: ?nowlur skips the full-screen glass blur overlay so its GPU cost
 // can be measured in isolation. Remove with the rest of the experiment.
 export const diagnosticSkipWlur = new URLSearchParams(globalThis.location?.search).has("nowlur");
+
+// Diagnostic: ?nop3 configures the canvas as 8-bit sRGB instead of rgba16float
+// + display-p3, to measure the presentation cost of the wide-gamut surface.
+export const diagnosticSkipP3 = new URLSearchParams(globalThis.location?.search).has("nop3");
