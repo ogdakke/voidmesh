@@ -187,6 +187,66 @@ ${samplingBody}
 }
 
 /**
+ * Fine layer of the hybrid Kawase blur: a separable variable Gaussian at full resolution,
+ * rendered only into a band texture covering the shallow part of the ramp. Sigma (in screen
+ * pixels) follows the same linear-in-ramp radius as the pyramid's depth mapping and is capped
+ * at the crossover, so the kernel only needs to cover the capped sigma.
+ */
+export function createWlurFineBlurShaderSource(axis: "x" | "y", kernelSize: number): string {
+  const halfKernel = (kernelSize - 1) / 2;
+  // X reads the full-screen source at band-mapped uv; Y reads the band intermediate directly.
+  const sampleBase = axis === "x" ? "screen_uv" : "in.uv";
+  const step = axis === "x" ? "vec2f(params.source.x, 0.0)" : "vec2f(0.0, params.source.y)";
+  return `
+struct FineParams {
+  // Band in screen uv: xy origin, zw size.
+  band: vec4f,
+  // xy: source texel size in source uv, z: sigma cap (px), w: sigma at full ramp (px)
+  source: vec4f,
+  // x: offset, y: interpolation, z: direction
+  effect: vec4f,
+}
+
+@group(0) @binding(0) var<uniform> params: FineParams;
+@group(0) @binding(1) var input_texture: texture_2d<f32>;
+@group(0) @binding(2) var input_sampler: sampler;
+@group(0) @binding(3) var curve_texture: texture_2d<f32>;
+
+${fullscreenVertex}
+${mapFactor}
+${curveSampling("input_sampler")}
+
+const KERNEL_SIZE: u32 = ${kernelSize}u;
+const HALF_KERNEL: f32 = ${halfKernel}.0;
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+  let screen_uv = params.band.xy + in.uv * params.band.zw;
+  let base_uv = ${sampleBase};
+  let original = textureSampleLevel(input_texture, input_sampler, base_uv, 0.0);
+  let raw_factor = map_factor(screen_uv, params.effect.x, params.effect.y, params.effect.z);
+  if (raw_factor <= 0.000001) {
+    return original;
+  }
+  let sigma = min(sample_curve(curve_texture, raw_factor, 0.0) * params.source.w, params.source.z);
+  if (sigma <= 0.05) {
+    return original;
+  }
+
+  var accum = vec4f(0.0);
+  var weight_sum = 0.0;
+  for (var i: u32 = 0u; i < KERNEL_SIZE; i = i + 1u) {
+    let offset = f32(i) - HALF_KERNEL;
+    let weight = exp(-(offset * offset) / (2.0 * sigma * sigma));
+    accum = accum + textureSampleLevel(input_texture, input_sampler, base_uv + ${step} * offset, 0.0) * weight;
+    weight_sum = weight_sum + weight;
+  }
+  return accum / max(weight_sum, 0.00001);
+}
+`;
+}
+
+/**
  * Pyramid downsample with the 13-tap anti-aliased filter (Jimenez 2014, as in bloom). The
  * classic 5-tap Kawase downsample is too weak a low-pass: fine patterns such as halftone or
  * ASCII alias into coarse grids by the second or third level, and the variable blend shows
@@ -286,8 +346,11 @@ struct CompositeParams {
   resolution: vec4f,
   effect: vec4f,
   tint: vec4f,
-  // x: Kawase pyramid depth at full ramp; 0 for the Gaussian path.
+  // x: Kawase pyramid depth at full ramp (0 = Gaussian path), y: fine/pyramid crossover depth
+  // (0 = no fine layer).
   kawase: vec4f,
+  // Fine layer band in screen uv: xy origin, zw size.
+  fine_band: vec4f,
 }
 
 @group(0) @binding(0) var<uniform> params: CompositeParams;
@@ -295,6 +358,7 @@ struct CompositeParams {
 @group(0) @binding(2) var blurred_texture: texture_2d<f32>;
 @group(0) @binding(3) var tex_sampler: sampler;
 @group(0) @binding(4) var curve_texture: texture_2d<f32>;
+@group(0) @binding(5) var fine_texture: texture_2d<f32>;
 
 ${fullscreenVertex}
 ${mapFactor}
@@ -316,9 +380,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 
   var blurred = textureSampleLevel(blurred_texture, tex_sampler, in.uv, 0.0);
   if (params.kawase.x > 0.0) {
-    // The pyramid's finest level is half resolution; below level 1 fade from the original.
     let level = kawase_depth(sample_curve(curve_texture, raw_factor, 0.0), params.kawase.x);
-    blurred = mix(original, blurred, clamp(level, 0.0, 1.0));
+    if (params.kawase.y > 0.0) {
+      // Hybrid: a real full-resolution Gaussian covers the shallow depths, where crossfading
+      // pyramid levels turns fine patterns into alternating haze; the pyramid takes over over
+      // one level past the crossover, where content is already smooth.
+      let band_uv = (in.uv - params.fine_band.xy) / params.fine_band.zw;
+      let fine = textureSampleLevel(fine_texture, tex_sampler, band_uv, 0.0);
+      blurred = mix(fine, blurred, clamp(level - params.kawase.y, 0.0, 1.0));
+    } else {
+      // The pyramid's finest level is half resolution; below level 1 fade from the original.
+      blurred = mix(original, blurred, clamp(level, 0.0, 1.0));
+    }
   }
   let tint_factor = sample_curve(curve_texture, raw_factor, 1.0);
   let tint_strength = clamp(tint_factor * params.tint.a, 0.0, 1.0);

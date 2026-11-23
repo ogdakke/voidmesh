@@ -64,6 +64,7 @@ export const DEFAULT_WLUR_OVERLAY_PARAMS = Object.freeze({
   // Kawase mode only (debug toggle for now); see WlurQuality.algorithm.
   levels: 5,
   spread: 1,
+  fineDepth: 2,
   curve: WLUR_CURVES.easeIn,
   mixCurve: WLUR_CURVES.easeIn,
   tint: {

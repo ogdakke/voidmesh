@@ -116,6 +116,14 @@ export interface WlurParams {
    */
   spread?: number;
   /**
+   * Kawase only: depth up to which a full-resolution Gaussian renders the blur instead of the
+   * pyramid; the pyramid takes over across the next level. `0` uses the pyramid throughout.
+   *
+   * Range: `[0, 4]`. Crossfading shallow pyramid levels turns fine patterns (halftone, text)
+   * into alternating haze, so the shallow part of the ramp needs a real Gaussian.
+   */
+  fineDepth?: number;
+  /**
    * Optional tint applied to the blurred region.
    *
    * The tint follows the same directional falloff as the blur.
@@ -201,6 +209,7 @@ export const DEFAULT_WLUR_PARAMS = Object.freeze({
   curve: DEFAULT_WLUR_CURVE,
   levels: 4,
   spread: 1,
+  fineDepth: 2,
 } satisfies WlurParams);
 
 export const DEFAULT_WLUR_QUALITY = Object.freeze({

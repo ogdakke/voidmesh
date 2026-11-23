@@ -41,7 +41,8 @@ type WlurDebugSetting =
         | "kernelSize"
         | "resolutionScale"
         | "levels"
-        | "spread";
+        | "spread"
+        | "fineDepth";
       label: string;
       shortLabel: string;
       kind: "number";
@@ -84,6 +85,15 @@ const WLUR_DEBUG_SETTINGS = [
     shortLabel: "Lvls",
     kind: "number",
     range: { min: 0, max: 8 },
+    precision: 2,
+    displayRaw: true,
+  },
+  {
+    value: "fineDepth",
+    label: "Fine Gaussian depth",
+    shortLabel: "Fine",
+    kind: "number",
+    range: { min: 0, max: 4 },
     precision: 2,
     displayRaw: true,
   },
@@ -168,6 +178,7 @@ const MODE_SPECIFIC_SETTINGS: Partial<Record<WlurDebugSetting["value"], WlurAlgo
   resolutionScale: "gaussian",
   levels: "kawase",
   spread: "kawase",
+  fineDepth: "kawase",
 };
 
 function getVisibleWlurDebugSettings(algorithm: WlurAlgorithm): readonly WlurDebugSetting[] {

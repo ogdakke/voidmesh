@@ -10,7 +10,7 @@ import {
   type WlurTintColor,
   type WlurWorkingDimensions,
 } from "./types.ts";
-import { resolveWlurCurve } from "./curve.ts";
+import { createWlurCurveLut, resolveWlurCurve } from "./curve.ts";
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
@@ -39,6 +39,72 @@ export function clampWlurQuality(quality?: Partial<WlurQuality>): WlurQuality {
     ),
     algorithm: quality?.algorithm === "kawase" ? "kawase" : "gaussian",
   };
+}
+
+/** Full-resolution sigma cap of the hybrid fine layer, in screen pixels. */
+export function getWlurFineSigmaCap(fineDepth: number): number {
+  return 2 ** (fineDepth + 1) - 1;
+}
+
+/**
+ * Odd Gaussian kernel covering ±2.5σ of the fine layer's capped sigma. Sized for the next whole
+ * depth so dragging a fractional depth reuses at most four compiled pipelines.
+ */
+export function getWlurFineKernelSize(fineDepth: number): number {
+  const cap = getWlurFineSigmaCap(Math.ceil(fineDepth));
+  return Math.min(MAX_WLUR_KERNEL_SIZE, 2 * Math.ceil(2.5 * cap) + 1);
+}
+
+/** Band textures grow in these steps so tuning the ramp does not reallocate every frame. */
+const WLUR_FINE_BAND_STEP_PX = 64;
+
+/**
+ * Screen-pixel band the hybrid fine layer must cover: from the ramp start to where the depth
+ * passes `fineDepth + 1` (after which the pyramid alone is shown), padded by the kernel and
+ * rounded up to a band step. `null` when the fine layer is off.
+ */
+export function getWlurFineBand(
+  width: number,
+  height: number,
+  params: WlurParams,
+): WlurPixelRegion | null {
+  const fineDepth = params.fineDepth ?? 0;
+  if (fineDepth <= 0) return null;
+
+  const levels = params.levels ?? DEFAULT_WLUR_PARAMS.levels;
+  // Curve value where the composite has fully switched to the pyramid.
+  const handoff = (2 ** (fineDepth + 1) - 1) / Math.max(2 ** levels - 1, 1e-6);
+  let rawEnd = 1;
+  if (handoff < 1) {
+    const lut = createWlurCurveLut(params.curve, 256);
+    const index = lut.findIndex((value) => value >= handoff);
+    // Two samples of margin cover the GPU's coarser, 8-bit curve texture.
+    rawEnd = index < 0 ? 1 : Math.min(1, (index + 2) / 255);
+  }
+
+  const vertical = params.direction === "down" || params.direction === "up";
+  const extent = vertical ? height : width;
+  const growsForward = params.direction === "down" || params.direction === "right";
+  const start = growsForward
+    ? params.offset
+    : params.offset + (0.5 - rawEnd) * params.interpolation;
+  const end = growsForward
+    ? params.offset + rawEnd * params.interpolation
+    : params.offset + 0.5 * params.interpolation;
+
+  const pad = (getWlurFineKernelSize(fineDepth) - 1) / 2 + 2;
+  let from = clamp(Math.floor(Math.min(start, end) * extent) - pad, 0, extent);
+  const to = clamp(Math.ceil(Math.max(start, end) * extent) + pad, 0, extent);
+  const size = Math.min(
+    extent,
+    Math.max(
+      WLUR_FINE_BAND_STEP_PX,
+      Math.ceil((to - from) / WLUR_FINE_BAND_STEP_PX) * WLUR_FINE_BAND_STEP_PX,
+    ),
+  );
+  from = Math.min(from, extent - size);
+
+  return vertical ? { x: 0, y: from, width, height: size } : { x: from, y: 0, width: size, height };
 }
 
 /** Number of pyramid textures needed for a Kawase blur reaching `levels`. */
@@ -90,6 +156,7 @@ export function clampWlurParams(params?: Partial<WlurParams>): WlurParams {
     noise: Math.max(0, params?.noise ?? DEFAULT_WLUR_PARAMS.noise),
     levels: clamp(params?.levels ?? DEFAULT_WLUR_PARAMS.levels, 0, MAX_WLUR_KAWASE_LEVELS),
     spread: clamp(params?.spread ?? DEFAULT_WLUR_PARAMS.spread, 0, 4),
+    fineDepth: clamp(params?.fineDepth ?? DEFAULT_WLUR_PARAMS.fineDepth, 0, 4),
     ...(tint ? { tint } : {}),
   };
 }
