@@ -28,6 +28,15 @@ fn sample_curve(curve_texture: texture_2d<f32>, factor: f32, row: f32) -> f32 {
 }
 `;
 
+// Kawase radius doubles per level, so a linear depth ramp would grow the radius exponentially.
+// Mapping the curve factor through log2 makes the radius grow linearly with it, like the
+// Gaussian's radius, with levels setting the depth (and so radius) at full ramp.
+const kawaseDepth = `
+fn kawase_depth(factor: f32, levels: f32) -> f32 {
+  return log2(1.0 + factor * (exp2(levels) - 1.0));
+}
+`;
+
 const mapFactor = `
 fn map_factor(uv: vec2f, offset: f32, interpolation: f32, direction: f32) -> f32 {
   if (interpolation <= 0.000001) {
@@ -234,12 +243,13 @@ struct KawaseUpParams {
 ${fullscreenVertex}
 ${mapFactor}
 ${curveSampling("input_sampler")}
+${kawaseDepth}
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   let detail = textureSampleLevel(detail_texture, input_sampler, in.uv, 0.0);
   let raw_factor = map_factor(in.uv, params.effect.x, params.effect.y, params.effect.z);
-  let depth = sample_curve(curve_texture, raw_factor, 0.0) * params.config.x;
+  let depth = kawase_depth(sample_curve(curve_texture, raw_factor, 0.0), params.config.x);
   let weight = clamp(depth - params.effect.w, 0.0, 1.0);
   if (weight <= 0.0) {
     return detail;
@@ -275,6 +285,7 @@ struct CompositeParams {
 ${fullscreenVertex}
 ${mapFactor}
 ${curveSampling("tex_sampler")}
+${kawaseDepth}
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
@@ -292,7 +303,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   var blurred = textureSampleLevel(blurred_texture, tex_sampler, in.uv, 0.0);
   if (params.kawase.x > 0.0) {
     // The pyramid's finest level is half resolution; below level 1 fade from the original.
-    let level = sample_curve(curve_texture, raw_factor, 0.0) * params.kawase.x;
+    let level = kawase_depth(sample_curve(curve_texture, raw_factor, 0.0), params.kawase.x);
     blurred = mix(original, blurred, clamp(level, 0.0, 1.0));
   }
   let tint_factor = sample_curve(curve_texture, raw_factor, 1.0);
