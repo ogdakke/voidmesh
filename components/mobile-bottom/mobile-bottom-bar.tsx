@@ -68,6 +68,7 @@ function BottomBarRoot<T extends string>({
   return (
     <BottomBarProvider items={items} onChange={onChange} value={value}>
       <div className="mobile-bottom-bar">
+        <span className="bottom-bar-indicator" aria-hidden />
         {typeof children === "function" ? children(items) : children}
       </div>
     </BottomBarProvider>

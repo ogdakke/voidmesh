@@ -1,153 +1,146 @@
+/* Floating tab bar: no surface of its own. The canvas WLUR overlay already blurs and tints
+   the strip behind it, so icons sit directly on that and get a soft halo for contrast. One
+   shared indicator glides between cells instead of each item fading its own pill in. */
 .mobile-bottom-bar {
+  --bar-gap: 4px;
+  --bar-icon: color-mix(in oklch, var(--gray-1000) 72%, transparent);
+  --bar-icon-active: var(--gray-1000);
+  --bar-halo: light-dark(rgb(255 255 255 / 0.7), rgb(0 0 0 / 0.6));
+  --bar-glide: 380ms
+    linear(
+      0,
+      0.157 4.8%,
+      0.488 11.1%,
+      0.766 17.8%,
+      0.943 25.4%,
+      1.024 33.3%,
+      1.04 39.7%,
+      1.03 47.6%,
+      1.006 61.9%,
+      0.998 77.8%,
+      1
+    );
+  --active-index: 0;
+  --item-count: 1;
+
   position: relative;
-  background: linear-gradient(to top, var(--background), var(--gray-100) 50%, var(--background));
   display: grid;
-  grid-auto-flow: column;
-  justify-items: center;
-  border-radius: var(--radius-button);
-  overflow: clip;
-  border: 1px solid var(--border-75);
+  /* Explicit tracks: an absolutely positioned grid child only resolves explicit lines. */
+  grid-template-columns: repeat(var(--item-count), 1fr);
   height: 100%;
   padding: 4px;
-  filter: drop-shadow(0px 1px 2px #00000010);
-  gap: 4px;
+  gap: var(--bar-gap);
 
-  @media (prefers-color-scheme: dark) {
-    background: color-mix(in oklch, var(--gray-50) 88%, transparent);
-    backdrop-filter: blur(5px);
-    border: none;
-    filter: none;
-    box-shadow: 0px 0px 3px 1px #000000 inset;
+  /* Index and count come from DOM order, so the indicator follows render order regardless
+     of how items are declared. */
+  &:has(> .bottom-bar-item:nth-child(2 of .bottom-bar-item)) {
+    --item-count: 2;
+  }
+  &:has(> .bottom-bar-item:nth-child(3 of .bottom-bar-item)) {
+    --item-count: 3;
+  }
+  &:has(> .bottom-bar-item:nth-child(4 of .bottom-bar-item)) {
+    --item-count: 4;
+  }
+  &:has(> .bottom-bar-item:nth-child(5 of .bottom-bar-item)) {
+    --item-count: 5;
+  }
+  &:has(> .bottom-bar-item:nth-child(6 of .bottom-bar-item)) {
+    --item-count: 6;
+  }
+  &:has(> .bottom-bar-item:nth-child(2 of .bottom-bar-item)[data-active]) {
+    --active-index: 1;
+  }
+  &:has(> .bottom-bar-item:nth-child(3 of .bottom-bar-item)[data-active]) {
+    --active-index: 2;
+  }
+  &:has(> .bottom-bar-item:nth-child(4 of .bottom-bar-item)[data-active]) {
+    --active-index: 3;
+  }
+  &:has(> .bottom-bar-item:nth-child(5 of .bottom-bar-item)[data-active]) {
+    --active-index: 4;
+  }
+  &:has(> .bottom-bar-item:nth-child(6 of .bottom-bar-item)[data-active]) {
+    --active-index: 5;
+  }
+}
 
-    &::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      border-radius: inherit;
-      padding: 2px;
-      background: linear-gradient(to top, #4040402b 10%, transparent);
-      -webkit-mask:
-        linear-gradient(#fff 0 0) content-box,
-        linear-gradient(#fff 0 0);
-      -webkit-mask-composite: xor;
-      mask:
-        linear-gradient(#fff 0 0) content-box,
-        linear-gradient(#fff 0 0);
-      mask-composite: exclude;
-      pointer-events: none;
-      box-shadow: 0px 0px 0px 0.5px #3e3e3e24 inset;
-    }
+.bottom-bar-indicator {
+  /* Absolutely positioned grid child: its containing block is the first grid cell. */
+  position: absolute;
+  grid-area: 1 / 1 / 2 / 2;
+  inset: 0;
+  border-radius: 999px;
+  pointer-events: none;
+  translate: calc(var(--active-index) * (100% + var(--bar-gap))) 0;
+  transition:
+    translate var(--bar-glide),
+    opacity 0.15s ease-out,
+    scale 0.2s ease-out;
+
+  background: light-dark(rgb(255 255 255 / 0.55), rgb(255 255 255 / 0.1));
+  backdrop-filter: blur(8px) saturate(1.4);
+  -webkit-backdrop-filter: blur(8px) saturate(1.4);
+  box-shadow:
+    inset 0 0.5px 0 light-dark(rgb(255 255 255 / 0.9), rgb(255 255 255 / 0.14)),
+    inset 0 0 0 0.5px light-dark(rgb(0 0 0 / 0.06), rgb(255 255 255 / 0.06)),
+    0 2px 10px light-dark(rgb(0 0 0 / 0.08), rgb(0 0 0 / 0.35));
+
+  /* Hidden while nothing selectable is active (no selection, multi-select, fullscreen). */
+  .mobile-bottom-bar:not(:has(> .bottom-bar-item[data-active]:not([aria-disabled="true"]))) & {
+    opacity: 0;
+    scale: 0.8;
+  }
+
+  .mobile-bottom-bar:has(> .bottom-bar-item[data-active]:active:not([aria-disabled="true"])) & {
+    scale: 1.05;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: opacity 0.15s ease-out;
   }
 }
 
 .bottom-bar-item {
   position: relative;
-  color: var(--gray-1000);
+  color: var(--bar-icon);
   width: 100%;
   display: flex;
   justify-content: center;
   align-items: center;
-  /* NOTE: this has to be pixel-perfect, otherwise the non-pill corners calculate wrong radius, possibly due to box-shadow */
-  --pill: 22px;
-  border-radius: var(--radius-lg);
-  transition: color 0.1s ease-out;
+  border-radius: 999px;
+  transition: color 0.15s ease-out;
+  -webkit-tap-highlight-color: transparent;
 
   :where(svg) {
     height: 1.5rem;
     width: 1.5rem;
     z-index: 1;
-    transform: scale(0.92);
-    transition: transform 0.2s ease-out;
+    scale: 0.92;
+    filter: drop-shadow(0 0 4px var(--bar-halo));
+    transition: scale 0.2s ease-out;
   }
 
-  &:is(
-      [data-active]:not([aria-disabled="true"]),
-      :focus-visible,
-      :active:not([aria-disabled="true"])
-    )
+  &[data-active]:not([aria-disabled="true"]) {
+    color: var(--bar-icon-active);
+
     svg {
-    transform: scale(1);
-  }
-
-  &::before {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    content: "";
-    border-radius: inherit;
-    z-index: 0;
-    transition:
-      transform 0.2s ease-out,
-      opacity 0.1s ease-out;
-    opacity: 0;
-    transform: scale(0.72);
-
-    background: var(--gray-200);
-    box-shadow: 0px 0px 3px 1px #2c2c2c1a inset;
-
-    @media (prefers-color-scheme: dark) {
-      background: color-mix(in oklch, var(--gray-100) 40%, transparent);
-      box-shadow:
-        0px 0px 3px 1px #000000 inset,
-        0px 4px 40px 1px #d1d1d11a;
+      scale: 1;
     }
   }
 
-  &:is(
-      [data-active]:not([aria-disabled="true"]),
-      :focus-visible:not([aria-disabled="true"])
-    )::before {
-    opacity: 1;
-    transform: scale(1);
-
-    @starting-style {
-      transform: scale(0.72);
-      opacity: 0.7;
-    }
-  }
-
-  &:active:not([aria-disabled="true"])::before,
   &:active:not([aria-disabled="true"]) svg {
-    transform: scale(1.05);
+    scale: 1.08;
   }
 
   &[aria-disabled="true"] {
     cursor: not-allowed;
-    color: var(--gray-400);
-
-    @media (prefers-color-scheme: dark) {
-      color: var(--gray-100);
-
-      &:focus-visible {
-        color: var(--gray-200);
-      }
-    }
-  }
-
-  &:first-child {
-    border-radius: var(--pill) var(--radius-lg) var(--radius-lg) var(--pill);
-    &::before {
-      border-radius: var(--pill) var(--radius-lg) var(--radius-lg) var(--pill);
-    }
-    svg {
-      margin-inline: 2px -2px;
-    }
-  }
-
-  &:last-child {
-    border-radius: var(--radius-lg) var(--pill) var(--pill) var(--radius-lg);
-    &::before {
-      border-radius: var(--radius-lg) var(--pill) var(--pill) var(--radius-lg);
-    }
-    svg {
-      margin-inline: -2px 2px;
-    }
+    color: color-mix(in oklch, var(--gray-1000) 32%, transparent);
   }
 
   &:focus-visible {
     outline: 2px solid var(--primary);
-    outline-offset: 2px;
+    outline-offset: -2px;
   }
 }
 
@@ -162,74 +155,39 @@
 }
 
 .mobile-fullscreen-btn {
-  --in-dur: 150ms;
-  --out-dur: 120ms;
-  --start-scale: 0.92;
+  --start-scale: 0.88;
   position: relative;
-  background: linear-gradient(to top, var(--background), var(--gray-100) 50%, var(--background));
-  color: var(--gray-1000);
+  color: color-mix(in oklch, var(--gray-1000) 72%, transparent);
   width: 100%;
   display: grid;
   justify-content: center;
   align-items: center;
-  border-radius: var(--radius-button);
-  opacity: 1;
-  scale: 1;
+  border-radius: 999px;
   height: inherit;
   aspect-ratio: 1;
-  filter: drop-shadow(0px 1px 2px #00000010);
-  border: 1px solid var(--border-75);
-
-  transition:
-    opacity var(--in-dur) ease-out,
-    scale var(--in-dur) ease-out;
-
-  @media (prefers-color-scheme: dark) {
-    background: color-mix(in oklch, var(--gray-50) 88%, transparent);
-    backdrop-filter: blur(5px);
-    border: none;
-    filter: none;
-    box-shadow: 0px 0px 3px 1px #000000 inset;
-
-    &::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      border-radius: inherit;
-      padding: 2px;
-      background: linear-gradient(to top, #4040402b 10%, transparent);
-      -webkit-mask:
-        linear-gradient(#fff 0 0) content-box,
-        linear-gradient(#fff 0 0);
-      -webkit-mask-composite: xor;
-      mask:
-        linear-gradient(#fff 0 0) content-box,
-        linear-gradient(#fff 0 0);
-      mask-composite: exclude;
-      pointer-events: none;
-      box-shadow: 0px 0px 0px 0.5px #3e3e3e24 inset;
-    }
-  }
+  scale: 1;
+  transition: scale 150ms ease-out;
+  -webkit-tap-highlight-color: transparent;
 
   :where(svg) {
     --icon-crossfade-dur: 250ms;
     height: 1.5rem;
     width: 1.5rem;
     grid-area: 1 / 1;
+    filter: drop-shadow(0 0 4px light-dark(rgb(255 255 255 / 0.7), rgb(0 0 0 / 0.6)));
   }
 
   &:active {
     scale: var(--start-scale);
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    --in-dur: 0ms;
-    --out-dur: 0ms;
-    transition: none;
+  &:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
   }
 
-  @media (prefers-color-scheme: dark) {
-    box-shadow: none;
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
   }
 }
 
@@ -248,33 +206,17 @@
   }
 
   .mobile-bottom-bar {
-    grid-auto-flow: row;
-    align-items: center;
+    grid-template-columns: none;
+    grid-template-rows: repeat(var(--item-count), 1fr);
     width: 100%;
+  }
+
+  .bottom-bar-indicator {
+    translate: 0 calc(var(--active-index) * (100% + var(--bar-gap)));
   }
 
   .bottom-bar-item {
     height: 100%;
-
-    &:first-child {
-      &,
-      &::before {
-        border-radius: var(--pill) var(--pill) var(--radius-lg) var(--radius-lg);
-      }
-      svg {
-        margin: 2px 0 -2px;
-      }
-    }
-
-    &:last-child {
-      &,
-      &::before {
-        border-radius: var(--radius-lg) var(--radius-lg) var(--pill) var(--pill);
-      }
-      svg {
-        margin: -2px 0 2px;
-      }
-    }
   }
 
   .mobile-fullscreen-btn {
