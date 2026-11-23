@@ -216,7 +216,6 @@ ${fullscreenVertex}
 ${mapFactor}
 ${curveSampling("input_sampler")}
 
-const KERNEL_SIZE: u32 = ${kernelSize}u;
 const HALF_KERNEL: f32 = ${halfKernel}.0;
 
 @fragment
@@ -233,10 +232,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     return original;
   }
 
+  // Only walk the taps this pixel's sigma reaches (±2.5σ): most of the band sits near the top
+  // of the ramp where sigma is small, so the full kernel would be mostly zero-weight taps.
+  let reach = min(HALF_KERNEL, ceil(2.5 * sigma));
   var accum = vec4f(0.0);
   var weight_sum = 0.0;
-  for (var i: u32 = 0u; i < KERNEL_SIZE; i = i + 1u) {
-    let offset = f32(i) - HALF_KERNEL;
+  for (var offset = -reach; offset <= reach; offset = offset + 1.0) {
     let weight = exp(-(offset * offset) / (2.0 * sigma * sigma));
     accum = accum + textureSampleLevel(input_texture, input_sampler, base_uv + ${step} * offset, 0.0) * weight;
     weight_sum = weight_sum + weight;
