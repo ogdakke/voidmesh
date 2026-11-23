@@ -48,14 +48,14 @@ export function getWlurKawaseLevelCount(levels: number): number {
 
 /**
  * Conservative full-resolution reach of a Kawase pyramid: how far a source pixel can move the
- * blurred output. Each downsample reads `1 + spread` source texels plus bilinear support; each
- * upsample reads about 1.3 × (1 + spread) texels of the coarser level plus bilinear support.
+ * blurred output. Each downsample reads 2 source texels plus bilinear support; each upsample
+ * reads about 1.3 × (1 + spread) texels of the coarser level plus bilinear support.
  */
 export function getWlurKawaseReachPx(levels: number, spread: number): number {
   const count = getWlurKawaseLevelCount(levels);
   let reach = 0;
   for (let level = 1; level <= count; level++) {
-    reach += (2 + spread) * 2 ** (level - 1);
+    reach += 3 * 2 ** (level - 1);
   }
   for (let level = 1; level < count; level++) {
     reach += (1.3 * (1 + spread) + 1) * 2 ** (level + 1);

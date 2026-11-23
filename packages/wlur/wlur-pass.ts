@@ -891,7 +891,6 @@ export class WlurPass {
         const data = this.#kawaseUniformData.fill(0);
         data[2] = sourceWidth;
         data[3] = sourceHeight;
-        data[4] = spread;
         this.#flushKawaseUniforms(buffer);
         this.#encodeKawasePass(
           encoder,

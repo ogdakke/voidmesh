@@ -109,9 +109,10 @@ export interface WlurParams {
    */
   levels?: number;
   /**
-   * Kawase only: extra sample offset per pass, in source texels.
+   * Kawase only: extra upsample tap offset, in texels of the coarser level.
    *
-   * Range: `[0, 4]`. Higher values widen each level at the cost of smoothness.
+   * Range: `[0, 4]`. Higher values widen each level at the cost of smoothness. The downsample
+   * is a fixed anti-aliased filter.
    */
   spread?: number;
   /**

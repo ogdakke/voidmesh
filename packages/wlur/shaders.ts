@@ -187,15 +187,17 @@ ${samplingBody}
 }
 
 /**
- * Dual Kawase downsample: five bilinear taps (centre ×4, diagonals ×1) at `1 + spread` source
- * texels. Writes the next, half-resolution pyramid level.
+ * Pyramid downsample with the 13-tap anti-aliased filter (Jimenez 2014, as in bloom). The
+ * classic 5-tap Kawase downsample is too weak a low-pass: fine patterns such as halftone or
+ * ASCII alias into coarse grids by the second or third level, and the variable blend shows
+ * shallow levels directly near the top of the ramp, where that aliasing read as a second band.
  */
 export function createWlurKawaseDownShaderSource(): string {
   return `
 struct KawaseDownParams {
   // xy: unused, zw: source resolution
   resolution: vec4f,
-  // x: spread
+  // unused; spread applies to the upsample only
   config: vec4f,
 }
 
@@ -205,15 +207,27 @@ struct KawaseDownParams {
 
 ${fullscreenVertex}
 
+fn tap(uv: vec2f, offset: vec2f) -> vec4f {
+  return textureSampleLevel(source_texture, source_sampler, uv + offset / params.resolution.zw, 0.0);
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-  let half_pixel = (1.0 + params.config.x) / params.resolution.zw;
-  var color = textureSampleLevel(source_texture, source_sampler, in.uv, 0.0) * 4.0;
-  color += textureSampleLevel(source_texture, source_sampler, in.uv + vec2f(-half_pixel.x, -half_pixel.y), 0.0);
-  color += textureSampleLevel(source_texture, source_sampler, in.uv + vec2f(half_pixel.x, -half_pixel.y), 0.0);
-  color += textureSampleLevel(source_texture, source_sampler, in.uv + vec2f(-half_pixel.x, half_pixel.y), 0.0);
-  color += textureSampleLevel(source_texture, source_sampler, in.uv + vec2f(half_pixel.x, half_pixel.y), 0.0);
-  return color / 8.0;
+  let uv = in.uv;
+  let a = tap(uv, vec2f(-2.0, -2.0));
+  let b = tap(uv, vec2f(0.0, -2.0));
+  let c = tap(uv, vec2f(2.0, -2.0));
+  let d = tap(uv, vec2f(-2.0, 0.0));
+  let e = tap(uv, vec2f(0.0, 0.0));
+  let f = tap(uv, vec2f(2.0, 0.0));
+  let g = tap(uv, vec2f(-2.0, 2.0));
+  let h = tap(uv, vec2f(0.0, 2.0));
+  let i = tap(uv, vec2f(2.0, 2.0));
+  let j = tap(uv, vec2f(-1.0, -1.0));
+  let k = tap(uv, vec2f(1.0, -1.0));
+  let l = tap(uv, vec2f(-1.0, 1.0));
+  let m = tap(uv, vec2f(1.0, 1.0));
+  return e * 0.125 + (a + c + g + i) * 0.03125 + (b + d + f + h) * 0.0625 + (j + k + l + m) * 0.125;
 }
 `;
 }
