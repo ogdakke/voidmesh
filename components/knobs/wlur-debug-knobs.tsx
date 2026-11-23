@@ -1,8 +1,11 @@
 import { createPortal } from "react-dom";
 import { useEffect, useRef, useState } from "react";
 import { config } from "#config";
+import { toastManager } from "#application/notifications.ts";
+import { logger } from "#lib/client.logger.ts";
 import { useCanvasRendererService } from "#context/use-canvas.ts";
 import { WLUR_DEBUG_CURVE_OPTIONS, type WlurOverlayDebugConfig } from "#renderer/wlur-debug.ts";
+import { Button } from "#ui/button/button.tsx";
 import { InfiniteSlider } from "#ui/infinite-slider/index.ts";
 import {
   SliderPicker,
@@ -10,6 +13,7 @@ import {
   SliderPickerOptions,
   SliderPickerWindow,
 } from "#ui/slider-picker/index.ts";
+import useMediaQuery from "#hooks/use-media-query.ts";
 import "./knobs.css";
 
 type WlurDebugSetting =
@@ -40,6 +44,18 @@ type WlurDebugSetting =
       label: string;
       shortLabel: string;
       kind: "curve";
+    }
+  | {
+      value: "tintColor";
+      label: string;
+      shortLabel: string;
+      kind: "color";
+    }
+  | {
+      value: "copy";
+      label: string;
+      shortLabel: string;
+      kind: "copy";
     };
 
 const WLUR_DEBUG_SETTINGS = [
@@ -106,6 +122,8 @@ const WLUR_DEBUG_SETTINGS = [
   { value: "blurCurve", label: "Blur Ease", shortLabel: "Blur", kind: "curve" },
   { value: "mixCurve", label: "Mix Ease", shortLabel: "Mix", kind: "curve" },
   { value: "tintCurve", label: "Tint Ease", shortLabel: "Tint", kind: "curve" },
+  { value: "tintColor", label: "Tint Color", shortLabel: "Color", kind: "color" },
+  { value: "copy", label: "Copy values", shortLabel: "Copy", kind: "copy" },
 ] as const satisfies readonly WlurDebugSetting[];
 
 function toUiValue(actual: number, min: number, max: number): number {
@@ -122,6 +140,14 @@ function formatSettingButtonValue(
   setting: WlurDebugSetting,
   configValue: WlurOverlayDebugConfig,
 ): string {
+  if (setting.kind === "copy") {
+    return "JSON";
+  }
+
+  if (setting.kind === "color") {
+    return configValue.tintColor ? "Set" : "Auto";
+  }
+
   if (setting.kind === "boolean") {
     return configValue[setting.value] ? "On" : "Off";
   }
@@ -145,6 +171,14 @@ function formatFloatingValue(
   setting: WlurDebugSetting,
   configValue: WlurOverlayDebugConfig,
 ): string {
+  if (setting.kind === "copy") {
+    return setting.label;
+  }
+
+  if (setting.kind === "color") {
+    return `${setting.label}: ${configValue.tintColor ?? "Theme"}`;
+  }
+
   if (setting.kind === "boolean") {
     return `${setting.label}: ${configValue[setting.value] ? "On" : "Off"}`;
   }
@@ -161,6 +195,16 @@ function formatFloatingValue(
   return `${setting.label}: ${formatted}`;
 }
 
+async function copyWlurDebugConfig(configValue: WlurOverlayDebugConfig) {
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(configValue, null, 2));
+    toastManager.add({ type: "primary", title: "Blur values copied" });
+  } catch (error) {
+    logger.error("Failed to copy blur values:", error);
+    toastManager.add({ type: "destructive", title: "Could not copy blur values" });
+  }
+}
+
 const TOGGLE_OPTIONS = [
   { value: "off", label: "Off", shortLabel: "Off" },
   { value: "on", label: "On", shortLabel: "On" },
@@ -168,6 +212,7 @@ const TOGGLE_OPTIONS = [
 
 export default function WlurDebugKnobs() {
   const { wlurDebugConfig, setWlurDebugConfig } = useCanvasRendererService();
+  const isDarkTheme = useMediaQuery("(prefers-color-scheme: dark)");
   const [selectedSetting, setSelectedSetting] = useState<WlurDebugSetting>(
     WLUR_DEBUG_SETTINGS.find((setting) => setting.value === "radius")!,
   );
@@ -286,7 +331,31 @@ export default function WlurDebugKnobs() {
         </SliderPickerWindow>
       </SliderPicker>
 
-      {selectedSetting.kind === "number" ? (
+      {selectedSetting.kind === "color" ? (
+        <div className="wlur-debug-row">
+          <input
+            type="color"
+            className="wlur-debug-color"
+            aria-label="Blur tint color"
+            value={wlurDebugConfig.tintColor ?? (isDarkTheme ? "#000000" : "#ffffff")}
+            onChange={(e) => {
+              setWlurDebugConfig({ tintColor: e.target.value });
+              showFloatingLabel(`Tint Color: ${e.target.value}`);
+            }}
+          />
+          <Button
+            variant="secondary"
+            disabled={wlurDebugConfig.tintColor === null}
+            onClick={() => setWlurDebugConfig({ tintColor: null })}
+          >
+            Theme
+          </Button>
+        </div>
+      ) : selectedSetting.kind === "copy" ? (
+        <div className="wlur-debug-row">
+          <Button onClick={() => void copyWlurDebugConfig(wlurDebugConfig)}>Copy values</Button>
+        </div>
+      ) : selectedSetting.kind === "number" ? (
         <InfiniteSlider
           value={currentNumericValue}
           min={0}

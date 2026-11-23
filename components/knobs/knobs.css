@@ -241,3 +241,22 @@
   top: calc(env(safe-area-inset-top, 0px) + var(--spacing-3));
   transform: translateX(-50%);
 }
+
+/* Wlur debug: color and copy rows take the slider's slot under the setting picker. */
+.wlur-debug-row {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2);
+}
+
+.wlur-debug-color {
+  inline-size: 3rem;
+  block-size: 2.5rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+  background: none;
+}

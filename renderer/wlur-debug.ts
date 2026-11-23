@@ -26,6 +26,8 @@ export interface WlurOverlayDebugConfig {
   interpolation: number;
   noise: number;
   tintAmount: number;
+  /** `#rrggbb` written straight into canvas colour values; `null` follows the theme. */
+  tintColor: string | null;
   kernelSize: number;
   resolutionScale: number;
   blurCurve: WlurDebugCurvePreset;
@@ -42,6 +44,7 @@ export function createDefaultWlurOverlayDebugConfig(): WlurOverlayDebugConfig {
     interpolation: DEFAULT_WLUR_OVERLAY_PARAMS.interpolation,
     noise: DEFAULT_WLUR_OVERLAY_PARAMS.noise,
     tintAmount: 0.77,
+    tintColor: null,
     kernelSize: DEFAULT_WLUR_OVERLAY_QUALITY.kernelSize,
     resolutionScale: DEFAULT_WLUR_OVERLAY_QUALITY.resolutionScale,
     blurCurve: "overlayQuickFade",
@@ -64,6 +67,16 @@ export function getWlurDebugCurvePreset(
   return WLUR_CURVES.linear;
 }
 
+function parseHexTintColor(hex: string): WlurTintColor | null {
+  const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  if (!match) return null;
+  return [
+    parseInt(match[1]!, 16) / 255,
+    parseInt(match[2]!, 16) / 255,
+    parseInt(match[3]!, 16) / 255,
+  ];
+}
+
 export function applyWlurOverlayDebugConfig(
   baseConfig: WlurOverlayConfig,
   debugConfig: WlurOverlayDebugConfig,
@@ -82,7 +95,7 @@ export function applyWlurOverlayDebugConfig(
       curve: getWlurDebugCurvePreset(debugConfig.blurCurve),
       mixCurve: getWlurDebugCurvePreset(debugConfig.mixCurve),
       tint: {
-        color: tintColor,
+        color: (debugConfig.tintColor && parseHexTintColor(debugConfig.tintColor)) || tintColor,
         amount: debugConfig.tintAmount,
         curve: getWlurDebugCurvePreset(debugConfig.tintCurve),
       },
