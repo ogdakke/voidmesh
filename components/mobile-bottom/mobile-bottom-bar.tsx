@@ -59,17 +59,21 @@ function BottomBarRoot<T extends string>({
   children,
   onChange,
   value,
+  trailing,
 }: {
   items: readonly T[];
   children: ReactNode | ((items: readonly T[]) => ReactNode);
   onChange?: (item: string | null) => void;
   value?: string | null;
+  /** Rendered as the last cell; the indicator can slide onto it via `data-active`. */
+  trailing?: ReactNode;
 }) {
   return (
     <BottomBarProvider items={items} onChange={onChange} value={value}>
       <div className="mobile-bottom-bar">
         <span className="bottom-bar-indicator" aria-hidden />
         {typeof children === "function" ? children(items) : children}
+        {trailing}
       </div>
     </BottomBarProvider>
   );
@@ -91,21 +95,27 @@ export function MobileBottomBar<T extends string>({
   const { haptics } = useCanvasPreferences();
   return (
     <div className="mobile-bottom-bar-container">
-      <BottomBarRoot items={items} onChange={onChange} value={value}>
+      <BottomBarRoot
+        items={items}
+        onChange={onChange}
+        value={value}
+        trailing={
+          <button
+            className="mobile-fullscreen-btn icon-crossfade"
+            data-active={isFullscreen ? true : undefined}
+            onClick={() => {
+              haptic({ wantsHaptic: haptics });
+              toggleFullscreen();
+            }}
+            aria-label={`Toggle fullscreen ${isFullscreen ? "off" : "on"}`}
+          >
+            <Reduce className={isFullscreen ? "icon-visible" : "icon-hidden"} />
+            <Enlarge className={isFullscreen ? "icon-hidden" : "icon-visible"} />
+          </button>
+        }
+      >
         {typeof children === "function" ? children(items) : children}
       </BottomBarRoot>
-      <button
-        className={"mobile-fullscreen-btn icon-crossfade"}
-        data-active={isFullscreen ? true : undefined}
-        onClick={() => {
-          haptic({ wantsHaptic: haptics });
-          toggleFullscreen();
-        }}
-        aria-label={`Toggle fullscreen ${isFullscreen ? "off" : "on"}`}
-      >
-        <Reduce className={isFullscreen ? "icon-visible" : "icon-hidden"} />
-        <Enlarge className={isFullscreen ? "icon-hidden" : "icon-visible"} />
-      </button>
     </div>
   );
 }

@@ -1,6 +1,8 @@
 /* Floating tab bar: no surface of its own. The canvas WLUR overlay already blurs and tints
    the strip behind it, so icons sit directly on that and get a soft halo for contrast. One
-   shared indicator glides between cells instead of each item fading its own pill in. */
+   shared indicator glides between cells instead of each item fading its own pill in. The
+   fullscreen toggle is the last cell: while it is active the indicator sits on it and the
+   tabs blur out. */
 .mobile-bottom-bar {
   --bar-gap: 4px;
   --bar-icon: color-mix(in oklch, var(--gray-1000) 72%, transparent);
@@ -20,49 +22,63 @@
       0.998 77.8%,
       1
     );
+  --bar-fade-in: 260ms ease-out;
+  --bar-fade-out: 180ms ease-in;
   --active-index: 0;
+  /* Tabs plus the trailing fullscreen cell. */
   --item-count: 1;
+  --track-count: 2;
 
   position: relative;
   display: grid;
   /* Explicit tracks: an absolutely positioned grid child only resolves explicit lines. */
-  grid-template-columns: repeat(var(--item-count), 1fr);
+  grid-template-columns: repeat(var(--track-count), 1fr);
   height: 100%;
   padding: 4px;
   gap: var(--bar-gap);
 
   /* Index and count come from DOM order, so the indicator follows render order regardless
      of how items are declared. */
-  &:has(> .bottom-bar-item:nth-child(2 of .bottom-bar-item)) {
+  &:where(:has(> .bottom-bar-item:nth-child(2 of .bottom-bar-item))) {
     --item-count: 2;
+    --track-count: 3;
   }
-  &:has(> .bottom-bar-item:nth-child(3 of .bottom-bar-item)) {
+  &:where(:has(> .bottom-bar-item:nth-child(3 of .bottom-bar-item))) {
     --item-count: 3;
+    --track-count: 4;
   }
-  &:has(> .bottom-bar-item:nth-child(4 of .bottom-bar-item)) {
+  &:where(:has(> .bottom-bar-item:nth-child(4 of .bottom-bar-item))) {
     --item-count: 4;
+    --track-count: 5;
   }
-  &:has(> .bottom-bar-item:nth-child(5 of .bottom-bar-item)) {
+  &:where(:has(> .bottom-bar-item:nth-child(5 of .bottom-bar-item))) {
     --item-count: 5;
+    --track-count: 6;
   }
-  &:has(> .bottom-bar-item:nth-child(6 of .bottom-bar-item)) {
+  &:where(:has(> .bottom-bar-item:nth-child(6 of .bottom-bar-item))) {
     --item-count: 6;
+    --track-count: 7;
   }
-  &:has(> .bottom-bar-item:nth-child(2 of .bottom-bar-item)[data-active]) {
+  &:where(:has(> .bottom-bar-item:nth-child(2 of .bottom-bar-item)[data-active])) {
     --active-index: 1;
   }
-  &:has(> .bottom-bar-item:nth-child(3 of .bottom-bar-item)[data-active]) {
+  &:where(:has(> .bottom-bar-item:nth-child(3 of .bottom-bar-item)[data-active])) {
     --active-index: 2;
   }
-  &:has(> .bottom-bar-item:nth-child(4 of .bottom-bar-item)[data-active]) {
+  &:where(:has(> .bottom-bar-item:nth-child(4 of .bottom-bar-item)[data-active])) {
     --active-index: 3;
   }
-  &:has(> .bottom-bar-item:nth-child(5 of .bottom-bar-item)[data-active]) {
+  &:where(:has(> .bottom-bar-item:nth-child(5 of .bottom-bar-item)[data-active])) {
     --active-index: 4;
   }
-  &:has(> .bottom-bar-item:nth-child(6 of .bottom-bar-item)[data-active]) {
+  &:where(:has(> .bottom-bar-item:nth-child(6 of .bottom-bar-item)[data-active])) {
     --active-index: 5;
   }
+}
+
+/* The tab-index rules above are wrapped in :where(), so this one wins. */
+.mobile-bottom-bar:has(> .mobile-fullscreen-btn[data-active]) {
+  --active-index: var(--item-count);
 }
 
 .bottom-bar-indicator {
@@ -86,13 +102,23 @@
     inset 0 0 0 0.5px light-dark(rgb(0 0 0 / 0.06), rgb(255 255 255 / 0.06)),
     0 2px 10px light-dark(rgb(0 0 0 / 0.08), rgb(0 0 0 / 0.35));
 
-  /* Hidden while nothing selectable is active (no selection, multi-select, fullscreen). */
-  .mobile-bottom-bar:not(:has(> .bottom-bar-item[data-active]:not([aria-disabled="true"]))) & {
+  /* Hidden while nothing selectable is active (no selection, multi-select). */
+  .mobile-bottom-bar:not(
+      :has(
+        > .bottom-bar-item[data-active]:not([aria-disabled="true"]),
+        > .mobile-fullscreen-btn[data-active]
+      )
+    )
+    & {
     opacity: 0;
     scale: 0.8;
   }
 
-  .mobile-bottom-bar:has(> .bottom-bar-item[data-active]:active:not([aria-disabled="true"])) & {
+  .mobile-bottom-bar:has(
+      > .bottom-bar-item[data-active]:active:not([aria-disabled="true"]),
+      > .mobile-fullscreen-btn[data-active]:active
+    )
+    & {
     scale: 1.05;
   }
 
@@ -101,15 +127,12 @@
   }
 }
 
-.bottom-bar-item {
+.bottom-bar-item,
+.mobile-fullscreen-btn {
   position: relative;
   color: var(--bar-icon);
   width: 100%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
   border-radius: 999px;
-  transition: color 0.15s ease-out;
   -webkit-tap-highlight-color: transparent;
 
   :where(svg) {
@@ -133,73 +156,81 @@
     scale: 1.08;
   }
 
+  &:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
+  }
+}
+
+.bottom-bar-item {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  opacity: 1;
+  filter: blur(0);
+  scale: 1;
+  transition:
+    color 0.15s ease-out,
+    opacity var(--bar-fade-in),
+    filter var(--bar-fade-in),
+    scale var(--bar-fade-in);
+
   &[aria-disabled="true"] {
     cursor: not-allowed;
     color: color-mix(in oklch, var(--gray-1000) 32%, transparent);
   }
 
-  &:focus-visible {
-    outline: 2px solid var(--primary);
-    outline-offset: -2px;
+  /* Fullscreen: tabs blur out so only the active fullscreen toggle remains. */
+  .mobile-bottom-bar:has(> .mobile-fullscreen-btn[data-active]) > & {
+    opacity: 0;
+    filter: blur(6px);
+    scale: 0.85;
+    pointer-events: none;
+    transition:
+      color 0.15s ease-out,
+      opacity var(--bar-fade-out),
+      filter var(--bar-fade-out),
+      scale var(--bar-fade-out);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    filter: none;
+    scale: 1;
+    transition: opacity 0.15s ease-out;
+
+    .mobile-bottom-bar:has(> .mobile-fullscreen-btn[data-active]) > & {
+      filter: none;
+      scale: 1;
+      transition: opacity 0.15s ease-out;
+    }
+  }
+}
+
+.mobile-fullscreen-btn {
+  display: grid;
+  justify-content: center;
+  align-items: center;
+  /* The crossfade owns the svg filter, so the halo lives on the button. */
+  filter: drop-shadow(0 0 4px var(--bar-halo));
+
+  /* Hand filter and transition back to .icon-crossfade (layered) for the icon swap. */
+  & svg {
+    --icon-crossfade-dur: 250ms;
+    grid-area: 1 / 1;
+    filter: revert-layer;
+    transition: revert-layer;
   }
 }
 
 .mobile-bottom-bar-container {
-  display: grid;
-  grid-auto-flow: column;
-  align-items: center;
-  grid-template-columns: 1fr auto;
   margin: 0 var(--spacing-2) 5px;
-  gap: var(--spacing-2);
   height: var(--bottom-bar-height, 56px);
-}
-
-.mobile-fullscreen-btn {
-  --start-scale: 0.88;
-  position: relative;
-  color: color-mix(in oklch, var(--gray-1000) 72%, transparent);
-  width: 100%;
-  display: grid;
-  justify-content: center;
-  align-items: center;
-  border-radius: 999px;
-  height: inherit;
-  aspect-ratio: 1;
-  scale: 1;
-  transition: scale 150ms ease-out;
-  -webkit-tap-highlight-color: transparent;
-
-  :where(svg) {
-    --icon-crossfade-dur: 250ms;
-    height: 1.5rem;
-    width: 1.5rem;
-    grid-area: 1 / 1;
-    filter: drop-shadow(0 0 4px light-dark(rgb(255 255 255 / 0.7), rgb(0 0 0 / 0.6)));
-  }
-
-  &:active {
-    scale: var(--start-scale);
-  }
-
-  &:focus-visible {
-    outline: 2px solid var(--primary);
-    outline-offset: -2px;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    transition: none;
-  }
 }
 
 /* Phone landscape: the bar becomes a vertical rail on the right edge. */
 .mobile-layout[data-orientation="landscape"] {
   .mobile-bottom-bar-container {
     flex-shrink: 0;
-    grid-auto-flow: row;
-    grid-template-columns: none;
-    grid-template-rows: 1fr auto;
-    justify-items: center;
-    align-items: stretch;
     margin: 0;
     height: auto;
     width: var(--bottom-bar-height, 56px);
@@ -207,7 +238,7 @@
 
   .mobile-bottom-bar {
     grid-template-columns: none;
-    grid-template-rows: repeat(var(--item-count), 1fr);
+    grid-template-rows: repeat(var(--track-count), 1fr);
     width: 100%;
   }
 
@@ -215,12 +246,8 @@
     translate: 0 calc(var(--active-index) * (100% + var(--bar-gap)));
   }
 
-  .bottom-bar-item {
-    height: 100%;
-  }
-
+  .bottom-bar-item,
   .mobile-fullscreen-btn {
-    width: 100%;
-    height: auto;
+    height: 100%;
   }
 }
