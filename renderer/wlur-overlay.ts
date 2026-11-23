@@ -110,7 +110,7 @@ export function createMobileWlurOverlayConfig({
     // Mirrors `--studio-background` (styles/variables.css): the canvas is transparent over it,
     // and iOS Safari tints its toolbar from it, so the blur must fade to the same colour.
     tintColor: darkTheme ? [6 / 255, 6 / 255, 8 / 255] : [250 / 255, 250 / 255, 250 / 255],
-    tintAmount: darkTheme ? 1.5 : 0.77,
+    tintAmount: darkTheme ? 1.5 : 1.41,
     edge,
   });
 }
