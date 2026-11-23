@@ -74,6 +74,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 `;
 }
 
+// Blur taps are not clamped: the sampler mirrors past the texture edge, so taps beyond the
+// viewport read content reflected inward instead of piling weight onto the outermost row.
 export function createWlurBlurShaderSource(axis: "x" | "y", kernelSize: number): string {
   const halfKernel = (kernelSize - 1) / 2;
   const pairCount = Math.floor(halfKernel / 2);
@@ -93,7 +95,7 @@ export function createWlurBlurShaderSource(axis: "x" | "y", kernelSize: number):
   for (var i: u32 = 0u; i < KERNEL_SIZE; i = i + 1u) {
     let sample_offset = f32(i) - HALF_KERNEL;
     let weight = exp(-(sample_offset * sample_offset) / (2.0 * sigma * sigma));
-    let sample_uv = clamp(in.uv + ${texelOffset}, vec2f(0.0), vec2f(1.0));
+    let sample_uv = in.uv + ${texelOffset};
     accum = accum + textureSampleLevel(input_texture, input_sampler, sample_uv, 0.0) * weight;
     weight_sum = weight_sum + weight;
   }
@@ -111,8 +113,8 @@ export function createWlurBlurShaderSource(axis: "x" | "y", kernelSize: number):
     let second_weight = exp(-(second_offset * second_offset) / (2.0 * sigma * sigma));
     let pair_weight = first_weight + second_weight;
     let sample_offset = first_offset + second_weight / max(pair_weight, 1e-20);
-    let positive_uv = clamp(in.uv + ${texelOffset}, vec2f(0.0), vec2f(1.0));
-    let negative_uv = clamp(in.uv - ${texelOffset}, vec2f(0.0), vec2f(1.0));
+    let positive_uv = in.uv + ${texelOffset};
+    let negative_uv = in.uv - ${texelOffset};
     accum = accum + (
       textureSampleLevel(input_texture, input_sampler, positive_uv, 0.0) +
       textureSampleLevel(input_texture, input_sampler, negative_uv, 0.0)
@@ -122,8 +124,8 @@ export function createWlurBlurShaderSource(axis: "x" | "y", kernelSize: number):
   if (HAS_UNPAIRED_TAP) {
     let sample_offset = HALF_KERNEL;
     let weight = exp(-(sample_offset * sample_offset) / (2.0 * sigma * sigma));
-    let positive_uv = clamp(in.uv + ${texelOffset}, vec2f(0.0), vec2f(1.0));
-    let negative_uv = clamp(in.uv - ${texelOffset}, vec2f(0.0), vec2f(1.0));
+    let positive_uv = in.uv + ${texelOffset};
+    let negative_uv = in.uv - ${texelOffset};
     accum = accum + (
       textureSampleLevel(input_texture, input_sampler, positive_uv, 0.0) +
       textureSampleLevel(input_texture, input_sampler, negative_uv, 0.0)

@@ -129,8 +129,11 @@ export class WlurPass {
       label: `${this.#label} sampler`,
       magFilter: "linear",
       minFilter: "linear",
-      addressModeU: "clamp-to-edge",
-      addressModeV: "clamp-to-edge",
+      // Mirror, not clamp: with clamp-to-edge every out-of-bounds blur tap re-reads the edge
+      // row, so a 1px sliver at the viewport edge (background, a selection border) floods the
+      // blur and snaps as content moves across it. Other passes only sample inside [0, 1].
+      addressModeU: "mirror-repeat",
+      addressModeV: "mirror-repeat",
     });
     this.#curveTexture = this.#device.createTexture({
       label: `${this.#label} curve LUT`,
