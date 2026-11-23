@@ -381,6 +381,9 @@ export class WlurOverlayPass {
       params.tint?.color.join(",") ?? "",
       params.tint?.amount ?? "",
       params.tint?.curve?.join(",") ?? "",
+      params.fill?.amount ?? "",
+      params.fill?.radius ?? "",
+      params.fill?.curve?.join(",") ?? "",
     ].join("|");
   }
 }

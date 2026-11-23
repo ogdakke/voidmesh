@@ -60,13 +60,19 @@ export const DEFAULT_WLUR_OVERLAY_PARAMS = Object.freeze({
   interpolation: 0.65,
   direction: "down",
   radius: 130,
-  noise: 0,
-  curve: WLUR_CURVES.overlayQuickFade,
+  noise: 0.42,
+  curve: WLUR_CURVES.easeIn,
   mixCurve: WLUR_CURVES.overlayEdgeHold,
   tint: {
-    curve: WLUR_CURVES.overlayQuickFade,
+    curve: WLUR_CURVES.easeInOut,
     amount: 0.77,
     color: [0, 0, 0],
+  },
+  // Off until tuned (amount 0 skips its passes); radius and curve are the debug panel's start.
+  fill: {
+    amount: 0,
+    radius: 260,
+    curve: WLUR_CURVES.overlayQuickFade,
   },
 } satisfies WlurParams);
 
@@ -81,7 +87,7 @@ export function createDefaultWlurOverlayConfig(layout: WlurOverlayLayout = {}): 
       ? {
           color: layout.tintColor,
           amount: layout.tintAmount ?? 1,
-          curve: WLUR_CURVES.overlayQuickFade,
+          curve: WLUR_CURVES.easeInOut,
         }
       : undefined;
 

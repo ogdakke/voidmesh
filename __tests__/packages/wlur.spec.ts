@@ -136,6 +136,35 @@ describe("wlur helpers", () => {
     ).toEqual({ x: 0, y: 300, width: 800, height: 300 });
   });
 
+  test("clamps blur fill amount and radius", () => {
+    expect(clampWlurParams({ fill: { amount: 2, radius: -4 } }).fill).toEqual({
+      amount: 1,
+      radius: 0,
+    });
+    expect(clampWlurParams({}).fill).toBeUndefined();
+  });
+
+  test("widens the source dependency region while blur fill is active", () => {
+    const quality = { kernelSize: 45, resolutionScale: 0.5 };
+    const base = { ...DEFAULT_WLUR_PARAMS, direction: "down" as const, offset: 0.58 };
+    const withoutFill = getWlurSourceDependencyRegion(800, 600, base, quality);
+    const withFill = getWlurSourceDependencyRegion(
+      800,
+      600,
+      { ...base, fill: { amount: 0.5, radius: 200 } },
+      quality,
+    );
+    const disabledFill = getWlurSourceDependencyRegion(
+      800,
+      600,
+      { ...base, fill: { amount: 0, radius: 200 } },
+      quality,
+    );
+
+    expect(withFill.y).toBeLessThan(withoutFill.y);
+    expect(disabledFill).toEqual(withoutFill);
+  });
+
   test("expands partial refreshes by each separable blur pass dependency", () => {
     expect(
       getWlurBlurRegions(
@@ -217,6 +246,55 @@ describe("WlurPass resource reuse", () => {
 
     pass.encode(encoder, input, firstOutput, 800, 600, params);
     expect(device.createBindGroup).toHaveBeenCalledTimes(6);
+
+    pass.destroy();
+  });
+
+  test("adds full-frame fill blur passes at half the working resolution only when fill is on", () => {
+    const device = createWlurDevice();
+    const pass = new WlurPass({ device, format: "rgba16float", quality: { resolutionScale: 0.5 } });
+    const encoder = createWlurEncoder();
+    const input = createWlurTexture(800, 600);
+    const output = createWlurTexture(800, 600);
+    const beginRenderPass = vi.mocked(encoder.beginRenderPass);
+    const base = { ...DEFAULT_WLUR_PARAMS, radius: 20, noise: 0 };
+
+    pass.encode(encoder, input, output, 800, 600, { ...base, fill: { amount: 0, radius: 200 } });
+    expect(beginRenderPass).toHaveBeenCalledTimes(3);
+
+    pass.encode(encoder, input, output, 800, 600, { ...base, fill: { amount: 0.6, radius: 200 } });
+    expect(beginRenderPass).toHaveBeenCalledTimes(3 + 5);
+    const labels = beginRenderPass.mock.calls.slice(3).map((call) => call[0].label);
+    expect(labels).toEqual([
+      "Wlur blur X pass",
+      "Wlur blur Y pass",
+      "Wlur fill X pass",
+      "Wlur fill Y pass",
+      "Wlur composite pass",
+    ]);
+    const fillSizes = vi
+      .mocked(device.createTexture)
+      .mock.calls.map((call) => call[0])
+      .filter((descriptor) => descriptor.label?.includes("fill"))
+      .map((descriptor) => descriptor.size);
+    expect(fillSizes).toEqual([
+      [200, 150],
+      [200, 150],
+    ]);
+
+    // A reused blur cache still renders the fill once, then reuses it too.
+    pass.encode(
+      encoder,
+      input,
+      output,
+      800,
+      600,
+      { ...base, fill: { amount: 0.6, radius: 200 } },
+      {
+        refreshBlur: false,
+      },
+    );
+    expect(beginRenderPass).toHaveBeenCalledTimes(3 + 5 + 1);
 
     pass.destroy();
   });

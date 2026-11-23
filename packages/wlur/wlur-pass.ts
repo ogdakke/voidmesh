@@ -5,6 +5,7 @@ import {
   getWlurScratchKey,
   getWlurWorkingDimensions,
   wlurDirectionToIndex,
+  WLUR_FILL_RESOLUTION_FACTOR,
 } from "./math.ts";
 import { createPackedWlurCurveRows, getWlurCurveKey, resolveWlurCurve } from "./curve.ts";
 import {
@@ -33,6 +34,8 @@ interface ScratchTextures {
   blurIntermediate: GPUTexture;
   blurOutput: GPUTexture;
   composite: GPUTexture;
+  /** Blur fill layer at half the working resolution; created on first use. */
+  fill: { intermediate: GPUTexture; output: GPUTexture } | null;
 }
 
 export interface WlurEncodeOptions {
@@ -78,6 +81,8 @@ export class WlurPass {
   #blurYPipeline: GPURenderPipeline | null = null;
   #blurXUniformBuffer: GPUBuffer | null = null;
   #blurYUniformBuffer: GPUBuffer | null = null;
+  #fillXUniformBuffer: GPUBuffer | null = null;
+  #fillYUniformBuffer: GPUBuffer | null = null;
 
   #compositeBindGroupLayout: GPUBindGroupLayout | null = null;
   #compositePipeline: GPURenderPipeline | null = null;
@@ -90,22 +95,22 @@ export class WlurPass {
   #scratchTextures: Map<string, ScratchTextures> = new Map();
   #textureViews = new WeakMap<GPUTexture, GPUTextureView>();
   #copyBindings = new WeakMap<GPUTexture, GPUBindGroup>();
-  #blurXBinding: { source: GPUTexture; bindGroup: GPUBindGroup } | null = null;
-  #blurYBinding: { source: GPUTexture; bindGroup: GPUBindGroup } | null = null;
+  /** One cached bind group per blur uniform buffer (blur X/Y, fill X/Y). */
+  #blurBindings = new Map<GPUBuffer, { source: GPUTexture; bindGroup: GPUBindGroup }>();
   #compositeBindings = new WeakMap<
     GPUTexture,
     {
       blurred: GPUTexture;
+      fill: GPUTexture;
       bindGroup: GPUBindGroup;
     }
   >();
   #noiseBinding: { source: GPUTexture; bindGroup: GPUBindGroup } | null = null;
   readonly #blurUniformData = new Float32Array(12);
-  readonly #compositeUniformData = new Float32Array(12);
+  readonly #compositeUniformData = new Float32Array(16);
   readonly #noiseUniformData = new Float32Array(8);
-  readonly #blurXUniformCache = new Float32Array(12).fill(Number.NaN);
-  readonly #blurYUniformCache = new Float32Array(12).fill(Number.NaN);
-  readonly #compositeUniformCache = new Float32Array(12).fill(Number.NaN);
+  readonly #blurUniformCaches = new Map<GPUBuffer, Float32Array>();
+  readonly #compositeUniformCache = new Float32Array(16).fill(Number.NaN);
   readonly #noiseUniformCache = new Float32Array(8).fill(Number.NaN);
   #blurPixels = 0;
   #fullBlurPixels = 0;
@@ -129,7 +134,7 @@ export class WlurPass {
     });
     this.#curveTexture = this.#device.createTexture({
       label: `${this.#label} curve LUT`,
-      size: [WLUR_CURVE_LUT_SIZE, 3],
+      size: [WLUR_CURVE_LUT_SIZE, 4],
       format: "rgba8unorm",
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
     });
@@ -186,6 +191,8 @@ export class WlurPass {
       !this.#blurYPipeline ||
       !this.#blurXUniformBuffer ||
       !this.#blurYUniformBuffer ||
+      !this.#fillXUniformBuffer ||
+      !this.#fillYUniformBuffer ||
       !this.#compositePipeline ||
       !this.#compositeBindGroupLayout ||
       !this.#compositeUniformBuffer ||
@@ -200,9 +207,16 @@ export class WlurPass {
     const baseCurve = resolveWlurCurve(resolvedParams.curve);
     const tintCurve = resolveWlurCurve(resolvedParams.tint?.curve ?? resolvedParams.curve);
     const mixCurve = resolveWlurCurve(resolvedParams.mixCurve ?? resolvedParams.curve);
-    this.#updateCurveTexture(baseCurve, tintCurve, mixCurve);
+    const fillCurve = resolveWlurCurve(resolvedParams.fill?.curve ?? resolvedParams.curve);
+    this.#updateCurveTexture(baseCurve, tintCurve, mixCurve, fillCurve);
+    const fill =
+      resolvedParams.fill &&
+      resolvedParams.fill.amount > 0.001 &&
+      resolvedParams.fill.radius > 0.001
+        ? resolvedParams.fill
+        : null;
 
-    if (resolvedParams.radius <= 0.001 && resolvedParams.noise <= 0.001) {
+    if (resolvedParams.radius <= 0.001 && resolvedParams.noise <= 0.001 && !fill) {
       this.#encodeCopyPass(encoder, inputTexture, outputTexture, options.outputView);
       return;
     }
@@ -281,6 +295,21 @@ export class WlurPass {
       );
     }
 
+    let fillTexture = scratch.blurOutput;
+    if (fill) {
+      const fillCreated = scratch.fill === null;
+      const fillTextures = this.#getOrCreateFillTextures(scratch, width, height);
+      fillTexture = fillTextures.output;
+      // A fresh fill texture is empty, so render it even when the caller reuses the blur cache.
+      if (options.refreshBlur !== false || fillCreated) {
+        this.#encodeFillPasses(encoder, inputTexture, fillTextures, width, height, fill.radius, {
+          offset: resolvedParams.offset,
+          interpolation: resolvedParams.interpolation,
+          directionIndex,
+        });
+      }
+    }
+
     this.#writeCompositeUniforms(
       width,
       height,
@@ -290,11 +319,13 @@ export class WlurPass {
       restoreThreshold,
       resolvedParams.tint?.color,
       resolvedParams.tint?.amount ?? 0,
+      fill?.amount ?? 0,
     );
     this.#encodeCompositePass(
       encoder,
       inputTexture,
       scratch.blurOutput,
+      fillTexture,
       compositeTarget,
       resolvedParams.noise <= 0.001 ? options.outputView : undefined,
     );
@@ -318,6 +349,8 @@ export class WlurPass {
     this.#destroyScratchTextures();
     this.#blurXUniformBuffer?.destroy();
     this.#blurYUniformBuffer?.destroy();
+    this.#fillXUniformBuffer?.destroy();
+    this.#fillYUniformBuffer?.destroy();
     this.#compositeUniformBuffer?.destroy();
     this.#noiseUniformBuffer?.destroy();
     this.#curveTexture?.destroy();
@@ -332,6 +365,8 @@ export class WlurPass {
     this.#blurYPipeline = null;
     this.#blurXUniformBuffer = null;
     this.#blurYUniformBuffer = null;
+    this.#fillXUniformBuffer = null;
+    this.#fillYUniformBuffer = null;
     this.#compositeBindGroupLayout = null;
     this.#compositePipeline = null;
     this.#compositeUniformBuffer = null;
@@ -340,8 +375,8 @@ export class WlurPass {
     this.#noiseUniformBuffer = null;
     this.#textureViews = new WeakMap();
     this.#copyBindings = new WeakMap();
-    this.#blurXBinding = null;
-    this.#blurYBinding = null;
+    this.#blurBindings.clear();
+    this.#blurUniformCaches.clear();
     this.#compositeBindings = new WeakMap();
     this.#noiseBinding = null;
   }
@@ -385,8 +420,8 @@ export class WlurPass {
   }
 
   #createBlurPipelines(): void {
-    this.#blurXBinding = null;
-    this.#blurYBinding = null;
+    this.#blurBindings.clear();
+    this.#blurUniformCaches.clear();
     this.#blurBindGroupLayout = this.#device.createBindGroupLayout({
       label: `${this.#label} blur bind group layout`,
       entries: [
@@ -415,18 +450,18 @@ export class WlurPass {
 
     this.#blurXUniformBuffer?.destroy();
     this.#blurYUniformBuffer?.destroy();
-    this.#blurXUniformBuffer = this.#device.createBuffer({
-      label: `${this.#label} blur X uniforms`,
-      size: 48,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    this.#blurYUniformBuffer = this.#device.createBuffer({
-      label: `${this.#label} blur Y uniforms`,
-      size: 48,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    this.#blurXUniformCache.fill(Number.NaN);
-    this.#blurYUniformCache.fill(Number.NaN);
+    this.#fillXUniformBuffer?.destroy();
+    this.#fillYUniformBuffer?.destroy();
+    const createBlurUniformBuffer = (name: string) =>
+      this.#device.createBuffer({
+        label: `${this.#label} ${name} uniforms`,
+        size: 48,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+    this.#blurXUniformBuffer = createBlurUniformBuffer("blur X");
+    this.#blurYUniformBuffer = createBlurUniformBuffer("blur Y");
+    this.#fillXUniformBuffer = createBlurUniformBuffer("fill X");
+    this.#fillYUniformBuffer = createBlurUniformBuffer("fill Y");
 
     const blurPipelineLayout = this.#device.createPipelineLayout({
       label: `${this.#label} blur pipeline layout`,
@@ -501,12 +536,17 @@ export class WlurPass {
           visibility: GPUShaderStage.FRAGMENT,
           texture: { sampleType: "float" },
         },
+        {
+          binding: 5,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: "float" },
+        },
       ],
     });
 
     this.#compositeUniformBuffer = this.#device.createBuffer({
       label: `${this.#label} composite uniforms`,
-      size: 48,
+      size: 64,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     this.#compositeUniformCache.fill(Number.NaN);
@@ -614,6 +654,7 @@ export class WlurPass {
         format: this.#format,
         usage: compositeUsage,
       }),
+      fill: null,
     };
 
     this.#scratchTextures.set(key, entry);
@@ -625,14 +666,107 @@ export class WlurPass {
       entry.blurIntermediate.destroy();
       entry.blurOutput.destroy();
       entry.composite.destroy();
+      entry.fill?.intermediate.destroy();
+      entry.fill?.output.destroy();
     }
     this.#scratchTextures.clear();
+  }
+
+  #getFillDimensions(width: number, height: number) {
+    return getWlurWorkingDimensions(
+      width,
+      height,
+      this.#quality.resolutionScale * WLUR_FILL_RESOLUTION_FACTOR,
+    );
+  }
+
+  #getOrCreateFillTextures(
+    scratch: ScratchTextures,
+    width: number,
+    height: number,
+  ): NonNullable<ScratchTextures["fill"]> {
+    if (scratch.fill) return scratch.fill;
+    const dims = this.#getFillDimensions(width, height);
+    const usage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT;
+    scratch.fill = {
+      intermediate: this.#device.createTexture({
+        label: `${this.#label} fill intermediate ${dims.width}x${dims.height}`,
+        size: [dims.width, dims.height],
+        format: this.#format,
+        usage,
+      }),
+      output: this.#device.createTexture({
+        label: `${this.#label} fill output ${dims.width}x${dims.height}`,
+        size: [dims.width, dims.height],
+        format: this.#format,
+        usage,
+      }),
+    };
+    return scratch.fill;
+  }
+
+  #encodeFillPasses(
+    encoder: GPUCommandEncoder,
+    inputTexture: GPUTexture,
+    fillTextures: NonNullable<ScratchTextures["fill"]>,
+    width: number,
+    height: number,
+    radius: number,
+    ramp: { offset: number; interpolation: number; directionIndex: number },
+  ): void {
+    const dims = this.#getFillDimensions(width, height);
+    const region = { x: 0, y: 0, width: dims.width, height: dims.height };
+    this.#blurPixels += dims.width * dims.height * 2;
+    this.#fullBlurPixels += dims.width * dims.height * 2;
+
+    for (const [uniformBuffer, pipeline, source, target, axis] of [
+      [
+        this.#fillXUniformBuffer!,
+        this.#blurXPipeline!,
+        inputTexture,
+        fillTextures.intermediate,
+        "X",
+      ],
+      [
+        this.#fillYUniformBuffer!,
+        this.#blurYPipeline!,
+        fillTextures.intermediate,
+        fillTextures.output,
+        "Y",
+      ],
+    ] as const) {
+      this.#writeBlurUniforms(
+        uniformBuffer,
+        dims.width,
+        dims.height,
+        dims.width,
+        dims.height,
+        radius,
+        ramp.offset,
+        ramp.interpolation,
+        ramp.directionIndex,
+        dims.scale,
+        true,
+      );
+      this.#encodeBlurPass(
+        encoder,
+        pipeline,
+        this.#blurBindGroupLayout!,
+        uniformBuffer,
+        source,
+        target,
+        `${this.#label} fill ${axis} pass`,
+        region,
+        false,
+      );
+    }
   }
 
   #updateCurveTexture(
     baseCurve: WlurCurveInput | undefined,
     tintCurve: WlurCurveInput | undefined,
     mixCurve: WlurCurveInput | undefined,
+    fillCurve: WlurCurveInput | undefined,
   ): void {
     if (!this.#curveTexture) return;
 
@@ -640,22 +774,23 @@ export class WlurPass {
       getWlurCurveKey(baseCurve),
       getWlurCurveKey(tintCurve),
       getWlurCurveKey(mixCurve),
+      getWlurCurveKey(fillCurve),
     ].join("|");
     if (key === this.#curveTextureKey) {
       return;
     }
 
-    const data = createPackedWlurCurveRows([baseCurve, tintCurve, mixCurve] as const);
+    const data = createPackedWlurCurveRows([baseCurve, tintCurve, mixCurve, fillCurve] as const);
     this.#device.queue.writeTexture(
       { texture: this.#curveTexture },
       data,
       {
         bytesPerRow: WLUR_CURVE_LUT_SIZE * 4,
-        rowsPerImage: 3,
+        rowsPerImage: 4,
       },
       {
         width: WLUR_CURVE_LUT_SIZE,
-        height: 3,
+        height: 4,
         depthOrArrayLayers: 1,
       },
     );
@@ -673,6 +808,7 @@ export class WlurPass {
     interpolation: number,
     directionIndex: number,
     radiusScale: number,
+    constantRadius = false,
   ): void {
     const data = this.#blurUniformData;
     data[0] = outputWidth;
@@ -684,14 +820,15 @@ export class WlurPass {
     data[6] = interpolation;
     data[7] = directionIndex;
     data[8] = radiusScale;
-    data[9] = 0;
+    data[9] = constantRadius ? 1 : 0;
     data[10] = 0;
     data[11] = 0;
-    this.#writeUniformBufferIfChanged(
-      buffer,
-      data,
-      buffer === this.#blurXUniformBuffer ? this.#blurXUniformCache : this.#blurYUniformCache,
-    );
+    let cache = this.#blurUniformCaches.get(buffer);
+    if (!cache) {
+      cache = new Float32Array(12).fill(Number.NaN);
+      this.#blurUniformCaches.set(buffer, cache);
+    }
+    this.#writeUniformBufferIfChanged(buffer, data, cache);
   }
 
   #writeCompositeUniforms(
@@ -703,6 +840,7 @@ export class WlurPass {
     restoreThreshold: number,
     tintColor: WlurTintColor | undefined,
     tintAmount: number,
+    fillAmount: number,
   ): void {
     const data = this.#compositeUniformData;
     data[0] = width;
@@ -717,6 +855,10 @@ export class WlurPass {
     data[9] = tintColor?.[1] ?? 0;
     data[10] = tintColor?.[2] ?? 0;
     data[11] = tintAmount;
+    data[12] = fillAmount;
+    data[13] = 0;
+    data[14] = 0;
+    data[15] = 0;
     this.#writeUniformBufferIfChanged(
       this.#compositeUniformBuffer!,
       data,
@@ -810,8 +952,7 @@ export class WlurPass {
     region: PixelRegion,
     preserve: boolean,
   ): void {
-    const isBlurX = uniformBuffer === this.#blurXUniformBuffer;
-    let binding = isBlurX ? this.#blurXBinding : this.#blurYBinding;
+    let binding = this.#blurBindings.get(uniformBuffer);
     if (binding?.source !== sourceTexture) {
       binding = {
         source: sourceTexture,
@@ -826,8 +967,7 @@ export class WlurPass {
           ],
         }),
       };
-      if (isBlurX) this.#blurXBinding = binding;
-      else this.#blurYBinding = binding;
+      this.#blurBindings.set(uniformBuffer, binding);
     }
 
     if (region.width <= 0 || region.height <= 0) return;
@@ -855,13 +995,15 @@ export class WlurPass {
     encoder: GPUCommandEncoder,
     originalTexture: GPUTexture,
     blurredTexture: GPUTexture,
+    fillTexture: GPUTexture,
     destinationTexture: GPUTexture,
     destinationView?: GPUTextureView,
   ): void {
     let binding = this.#compositeBindings.get(originalTexture);
-    if (binding?.blurred !== blurredTexture) {
+    if (binding?.blurred !== blurredTexture || binding.fill !== fillTexture) {
       binding = {
         blurred: blurredTexture,
+        fill: fillTexture,
         bindGroup: this.#device.createBindGroup({
           label: `${this.#label} composite bind group`,
           layout: this.#compositeBindGroupLayout!,
@@ -871,6 +1013,7 @@ export class WlurPass {
             { binding: 2, resource: this.#getTextureView(blurredTexture) },
             { binding: 3, resource: this.#sampler! },
             { binding: 4, resource: this.#curveTextureView! },
+            { binding: 5, resource: this.#getTextureView(fillTexture) },
           ],
         }),
       };
