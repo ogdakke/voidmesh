@@ -37,9 +37,7 @@ type WlurDebugSetting =
         | "noise"
         | "tintAmount"
         | "kernelSize"
-        | "resolutionScale"
-        | "fillAmount"
-        | "fillRadius";
+        | "resolutionScale";
       label: string;
       shortLabel: string;
       kind: "number";
@@ -48,7 +46,7 @@ type WlurDebugSetting =
       displayRaw?: boolean;
     }
   | {
-      value: "blurCurve" | "mixCurve" | "tintCurve" | "fillCurve";
+      value: "blurCurve" | "mixCurve" | "tintCurve";
       label: string;
       shortLabel: string;
       kind: "curve";
@@ -130,24 +128,6 @@ const WLUR_DEBUG_SETTINGS = [
   { value: "blurCurve", label: "Blur Ease", shortLabel: "Blur", kind: "curve" },
   { value: "mixCurve", label: "Mix Ease", shortLabel: "Mix", kind: "curve" },
   { value: "tintCurve", label: "Tint Ease", shortLabel: "Tint", kind: "curve" },
-  {
-    value: "fillAmount",
-    label: "Fill",
-    shortLabel: "Fill",
-    kind: "number",
-    range: { min: 0, max: 1 },
-    precision: 2,
-  },
-  {
-    value: "fillRadius",
-    label: "Fill Radius",
-    shortLabel: "F.Rad",
-    kind: "number",
-    range: { min: 0, max: 400 },
-    precision: 0,
-    displayRaw: true,
-  },
-  { value: "fillCurve", label: "Fill Ease", shortLabel: "F.Ease", kind: "curve" },
   { value: "tintColor", label: "Tint Color", shortLabel: "Color", kind: "color" },
   { value: "copy", label: "Copy values", shortLabel: "Copy", kind: "copy" },
 ] as const satisfies readonly WlurDebugSetting[];

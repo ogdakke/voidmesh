@@ -46,34 +46,6 @@ export interface WlurTint {
   curve?: WlurCurveInput;
 }
 
-/**
- * Blur fill: a broad, constant-radius blur of the same source laid over the variable blur.
- *
- * Colour from the source washes across the blurred region while the narrower variable blur
- * keeps more structure, instead of one large radius muddying everything.
- */
-export interface WlurFill {
-  /**
-   * Fill opacity once the effect has fully ramped in.
-   *
-   * Range: `[0, 1]`. `0` disables the fill and its passes.
-   */
-  amount: number;
-  /**
-   * Constant fill blur radius, in full-resolution pixels.
-   *
-   * The fill renders at half the working resolution, so each kernel tap reaches twice as far
-   * as the variable blur's.
-   */
-  radius: number;
-  /**
-   * Optional curve for fill opacity along the ramp.
-   *
-   * When omitted, the fill follows the main wlur curve.
-   */
-  curve?: WlurCurveInput;
-}
-
 export interface WlurParams {
   /**
    * Maximum blur radius once the effect has fully ramped in.
@@ -127,8 +99,6 @@ export interface WlurParams {
    * The tint follows the same directional falloff as the blur.
    */
   tint?: WlurTint;
-  /** Optional blur fill layered over the variable blur, before tint. */
-  fill?: WlurFill;
 }
 
 export interface WlurQuality {

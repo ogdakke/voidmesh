@@ -54,14 +54,6 @@ export function clampWlurParams(params?: Partial<WlurParams>): WlurParams {
           ...(rawTint.curve !== undefined ? { curve: resolveWlurCurve(rawTint.curve) } : {}),
         }
       : undefined;
-  const rawFill = params?.fill;
-  const fill = rawFill
-    ? {
-        amount: clamp(rawFill.amount, 0, 1),
-        radius: Math.max(0, rawFill.radius),
-        ...(rawFill.curve !== undefined ? { curve: resolveWlurCurve(rawFill.curve) } : {}),
-      }
-    : undefined;
 
   return {
     radius: Math.max(0, params?.radius ?? DEFAULT_WLUR_PARAMS.radius),
@@ -72,7 +64,6 @@ export function clampWlurParams(params?: Partial<WlurParams>): WlurParams {
     direction: resolvedDirection,
     noise: Math.max(0, params?.noise ?? DEFAULT_WLUR_PARAMS.noise),
     ...(tint ? { tint } : {}),
-    ...(fill ? { fill } : {}),
   };
 }
 
@@ -274,9 +265,6 @@ export function getWlurBlurRegions(
  * Full-resolution source pixels that can contribute to the blurred part of Wlur.
  * The extra texel covers linear-filter support at the edge of the fixed kernel.
  */
-/** Blur fill renders at this fraction of the working resolution so its taps reach further. */
-export const WLUR_FILL_RESOLUTION_FACTOR = 0.5;
-
 export function getWlurSourceDependencyRegion(
   width: number,
   height: number,
@@ -285,12 +273,7 @@ export function getWlurSourceDependencyRegion(
 ): WlurPixelRegion {
   const working = getWlurWorkingDimensions(width, height, quality.resolutionScale);
   const effect = getWlurEffectRegion(working.width, working.height, params);
-  const blurPadding = (normalizeWlurKernelSize(quality.kernelSize) - 1) / 2 + 1;
-  // The fill blur runs on a coarser grid, so the same kernel reaches further in working texels.
-  const fillActive = (params.fill?.amount ?? 0) > 0.001 && (params.fill?.radius ?? 0) > 0.001;
-  const padding = fillActive
-    ? Math.ceil(blurPadding / WLUR_FILL_RESOLUTION_FACTOR) + 1
-    : blurPadding;
+  const padding = (normalizeWlurKernelSize(quality.kernelSize) - 1) / 2 + 1;
   const x0 = Math.max(0, effect.x - padding);
   const y0 = Math.max(0, effect.y - padding);
   const x1 = Math.min(working.width, effect.x + effect.width + padding);

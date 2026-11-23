@@ -59,26 +59,20 @@ export const DEFAULT_WLUR_OVERLAY_PARAMS = Object.freeze({
   offset: 0.58,
   interpolation: 0.65,
   direction: "down",
-  radius: 130,
-  noise: 0.42,
+  radius: 160,
+  noise: 0.45,
   curve: WLUR_CURVES.easeIn,
-  mixCurve: WLUR_CURVES.overlayEdgeHold,
+  mixCurve: WLUR_CURVES.easeIn,
   tint: {
     curve: WLUR_CURVES.easeInOut,
     amount: 0.77,
     color: [0, 0, 0],
   },
-  // Off until tuned (amount 0 skips its passes); radius and curve are the debug panel's start.
-  fill: {
-    amount: 0,
-    radius: 260,
-    curve: WLUR_CURVES.overlayQuickFade,
-  },
 } satisfies WlurParams);
 
 export const DEFAULT_WLUR_OVERLAY_QUALITY = Object.freeze({
-  kernelSize: 45,
-  resolutionScale: 0.5,
+  kernelSize: 101,
+  resolutionScale: 0.54,
 } satisfies WlurQuality);
 
 export function createDefaultWlurOverlayConfig(layout: WlurOverlayLayout = {}): WlurOverlayConfig {

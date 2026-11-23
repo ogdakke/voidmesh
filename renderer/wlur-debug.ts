@@ -34,9 +34,6 @@ export interface WlurOverlayDebugConfig {
   blurCurve: WlurDebugCurvePreset;
   mixCurve: WlurDebugCurvePreset;
   tintCurve: WlurDebugCurvePreset;
-  fillAmount: number;
-  fillRadius: number;
-  fillCurve: WlurDebugCurvePreset;
 }
 
 /** Debug edits layered over the live overlay config; absent keys follow production. */
@@ -88,7 +85,6 @@ export function resolveWlurOverlayDebugConfig(
   const curve = params.curve ?? WLUR_CURVES.linear;
   const mixCurve = params.mixCurve ?? curve;
   const tint = params.tint ?? DEFAULT_WLUR_OVERLAY_PARAMS.tint;
-  const fill = params.fill ?? DEFAULT_WLUR_OVERLAY_PARAMS.fill;
 
   return {
     enabled: baseConfig.enabled !== false,
@@ -104,9 +100,6 @@ export function resolveWlurOverlayDebugConfig(
     blurCurve: findWlurDebugCurvePreset(curve),
     mixCurve: findWlurDebugCurvePreset(mixCurve),
     tintCurve: findWlurDebugCurvePreset(tint.curve ?? curve),
-    fillAmount: fill.amount,
-    fillRadius: fill.radius,
-    fillCurve: findWlurDebugCurvePreset(fill.curve ?? curve),
     ...overrides,
   };
 }
@@ -132,11 +125,6 @@ export function applyWlurOverlayDebugConfig(
         color: hexToTintColor(debugConfig.tintColor),
         amount: debugConfig.tintAmount,
         curve: getWlurDebugCurvePreset(debugConfig.tintCurve),
-      },
-      fill: {
-        amount: debugConfig.fillAmount,
-        radius: debugConfig.fillRadius,
-        curve: getWlurDebugCurvePreset(debugConfig.fillCurve),
       },
     },
     quality: {

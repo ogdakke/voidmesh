@@ -35,7 +35,6 @@ export {
   type WlurParams,
   type WlurPassConfig,
   type WlurQuality,
-  type WlurFill,
   type WlurTint,
   type WlurTintColor,
   type WlurWorkingDimensions,

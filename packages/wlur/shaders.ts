@@ -18,8 +18,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 
 const curveSampling = (samplerName: string) => `
 const CURVE_LUT_SIZE: f32 = ${WLUR_CURVE_LUT_SIZE}.0;
-// Rows: 0 blur, 1 tint, 2 mix, 3 fill.
-const CURVE_TEXTURE_ROWS: f32 = 4.0;
+const CURVE_TEXTURE_ROWS: f32 = 3.0;
 
 fn sample_curve(curve_texture: texture_2d<f32>, factor: f32, row: f32) -> f32 {
   let clamped_factor = clamp(factor, 0.0, 1.0);
@@ -164,8 +163,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     return original;
   }
 
-  // config.y > 0.5: constant radius across the effect region (blur fill layer).
-  let factor = select(sample_curve(curve_texture, raw_factor, 0.0), 1.0, params.config.y > 0.5);
+  let factor = sample_curve(curve_texture, raw_factor, 0.0);
   let radius = factor * params.effect.x * params.config.x;
   if (radius <= 0.001) {
     return original;
@@ -185,8 +183,6 @@ struct CompositeParams {
   resolution: vec4f,
   effect: vec4f,
   tint: vec4f,
-  // x: fill amount; 0 leaves the variable blur untouched.
-  fill: vec4f,
 }
 
 @group(0) @binding(0) var<uniform> params: CompositeParams;
@@ -194,7 +190,6 @@ struct CompositeParams {
 @group(0) @binding(2) var blurred_texture: texture_2d<f32>;
 @group(0) @binding(3) var tex_sampler: sampler;
 @group(0) @binding(4) var curve_texture: texture_2d<f32>;
-@group(0) @binding(5) var fill_texture: texture_2d<f32>;
 
 ${fullscreenVertex}
 ${mapFactor}
@@ -213,12 +208,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     return original;
   }
 
-  var blurred = textureSampleLevel(blurred_texture, tex_sampler, in.uv, 0.0);
-  if (params.fill.x > 0.000001) {
-    let fill_strength = clamp(sample_curve(curve_texture, raw_factor, 3.0) * params.fill.x, 0.0, 1.0);
-    let fill = textureSampleLevel(fill_texture, tex_sampler, in.uv, 0.0);
-    blurred = mix(blurred, fill, fill_strength);
-  }
+  let blurred = textureSampleLevel(blurred_texture, tex_sampler, in.uv, 0.0);
   let tint_factor = sample_curve(curve_texture, raw_factor, 1.0);
   let tint_strength = clamp(tint_factor * params.tint.a, 0.0, 1.0);
   let tinted_blur = vec4f(
