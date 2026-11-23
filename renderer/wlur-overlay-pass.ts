@@ -204,6 +204,7 @@ export class WlurOverlayPass {
     const qualityKey = [
       resolvedConfig.quality.kernelSize,
       resolvedConfig.quality.resolutionScale,
+      resolvedConfig.quality.algorithm,
     ].join("|");
     if (qualityKey !== this.#lastQualityKey) {
       this.#wlurPass.updateConfig({ quality: resolvedConfig.quality });
@@ -371,6 +372,9 @@ export class WlurOverlayPass {
       height,
       quality.kernelSize,
       quality.resolutionScale,
+      quality.algorithm,
+      params.levels,
+      params.spread,
       params.radius,
       params.offset,
       params.interpolation,

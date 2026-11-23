@@ -1,6 +1,7 @@
 import {
   DEFAULT_WLUR_PARAMS,
   DEFAULT_WLUR_QUALITY,
+  MAX_WLUR_KAWASE_LEVELS,
   MAX_WLUR_KERNEL_SIZE,
   MIN_WLUR_KERNEL_SIZE,
   type WlurDirection,
@@ -36,7 +37,31 @@ export function clampWlurQuality(quality?: Partial<WlurQuality>): WlurQuality {
       0.1,
       1,
     ),
+    algorithm: quality?.algorithm === "kawase" ? "kawase" : "gaussian",
   };
+}
+
+/** Number of pyramid textures needed for a Kawase blur reaching `levels`. */
+export function getWlurKawaseLevelCount(levels: number): number {
+  return clamp(Math.ceil(levels), 1, MAX_WLUR_KAWASE_LEVELS);
+}
+
+/**
+ * Conservative full-resolution reach of a Kawase pyramid: how far a source pixel can move the
+ * blurred output. Each downsample reads `1 + spread` source texels plus bilinear support; each
+ * upsample reads about 1.3 × (1 + spread) texels of the coarser level plus bilinear support.
+ */
+export function getWlurKawaseReachPx(levels: number, spread: number): number {
+  const count = getWlurKawaseLevelCount(levels);
+  let reach = 0;
+  for (let level = 1; level <= count; level++) {
+    reach += (2 + spread) * 2 ** (level - 1);
+  }
+  for (let level = 1; level < count; level++) {
+    reach += (1.3 * (1 + spread) + 1) * 2 ** (level + 1);
+  }
+  // Composite samples the half-resolution result bilinearly.
+  return Math.ceil(reach + 2);
 }
 
 export function clampWlurParams(params?: Partial<WlurParams>): WlurParams {
@@ -63,6 +88,8 @@ export function clampWlurParams(params?: Partial<WlurParams>): WlurParams {
     interpolation: clamp(params?.interpolation ?? DEFAULT_WLUR_PARAMS.interpolation, 0, 1),
     direction: resolvedDirection,
     noise: Math.max(0, params?.noise ?? DEFAULT_WLUR_PARAMS.noise),
+    levels: clamp(params?.levels ?? DEFAULT_WLUR_PARAMS.levels, 0, MAX_WLUR_KAWASE_LEVELS),
+    spread: clamp(params?.spread ?? DEFAULT_WLUR_PARAMS.spread, 0, 4),
     ...(tint ? { tint } : {}),
   };
 }
@@ -271,6 +298,20 @@ export function getWlurSourceDependencyRegion(
   params: WlurParams,
   quality: WlurQuality,
 ): WlurPixelRegion {
+  if (quality.algorithm === "kawase") {
+    // The pyramid runs at full resolution scale, so pad the full-size effect region directly.
+    const effect = getWlurEffectRegion(width, height, params);
+    const reach = getWlurKawaseReachPx(
+      params.levels ?? DEFAULT_WLUR_PARAMS.levels,
+      params.spread ?? DEFAULT_WLUR_PARAMS.spread,
+    );
+    const x0 = Math.max(0, effect.x - reach);
+    const y0 = Math.max(0, effect.y - reach);
+    const x1 = Math.min(width, effect.x + effect.width + reach);
+    const y1 = Math.min(height, effect.y + effect.height + reach);
+    return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+  }
+
   const working = getWlurWorkingDimensions(width, height, quality.resolutionScale);
   const effect = getWlurEffectRegion(working.width, working.height, params);
   const padding = (normalizeWlurKernelSize(quality.kernelSize) - 1) / 2 + 1;

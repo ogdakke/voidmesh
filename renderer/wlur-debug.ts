@@ -1,4 +1,4 @@
-import { WLUR_CURVES, type WlurCurve, type WlurTintColor } from "#wlur";
+import { WLUR_CURVES, type WlurAlgorithm, type WlurCurve, type WlurTintColor } from "#wlur";
 import {
   DEFAULT_WLUR_OVERLAY_PARAMS,
   DEFAULT_WLUR_OVERLAY_QUALITY,
@@ -18,6 +18,11 @@ export const WLUR_DEBUG_CURVE_OPTIONS = [
 
 export type WlurDebugCurvePreset = (typeof WLUR_DEBUG_CURVE_OPTIONS)[number]["value"];
 
+export const WLUR_DEBUG_ALGORITHM_OPTIONS = [
+  { value: "gaussian", label: "Gaussian", shortLabel: "Gauss" },
+  { value: "kawase", label: "Dual Kawase", shortLabel: "Kawase" },
+] as const satisfies readonly { value: WlurAlgorithm; label: string; shortLabel: string }[];
+
 /** Every tunable overlay value, in the units the debug panel edits. */
 export interface WlurOverlayDebugConfig {
   enabled: boolean;
@@ -34,6 +39,11 @@ export interface WlurOverlayDebugConfig {
   blurCurve: WlurDebugCurvePreset;
   mixCurve: WlurDebugCurvePreset;
   tintCurve: WlurDebugCurvePreset;
+  algorithm: WlurAlgorithm;
+  /** Kawase pyramid depth at full ramp. */
+  levels: number;
+  /** Kawase per-pass sample offset. */
+  spread: number;
 }
 
 /** Debug edits layered over the live overlay config; absent keys follow production. */
@@ -100,6 +110,9 @@ export function resolveWlurOverlayDebugConfig(
     blurCurve: findWlurDebugCurvePreset(curve),
     mixCurve: findWlurDebugCurvePreset(mixCurve),
     tintCurve: findWlurDebugCurvePreset(tint.curve ?? curve),
+    algorithm: quality.algorithm,
+    levels: params.levels,
+    spread: params.spread,
     ...overrides,
   };
 }
@@ -121,6 +134,8 @@ export function applyWlurOverlayDebugConfig(
       noise: debugConfig.noise,
       curve: getWlurDebugCurvePreset(debugConfig.blurCurve),
       mixCurve: getWlurDebugCurvePreset(debugConfig.mixCurve),
+      levels: debugConfig.levels,
+      spread: debugConfig.spread,
       tint: {
         color: hexToTintColor(debugConfig.tintColor),
         amount: debugConfig.tintAmount,
@@ -131,6 +146,7 @@ export function applyWlurOverlayDebugConfig(
       ...baseConfig.quality,
       kernelSize: debugConfig.kernelSize,
       resolutionScale: debugConfig.resolutionScale,
+      algorithm: debugConfig.algorithm,
     },
   };
 }

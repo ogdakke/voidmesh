@@ -177,12 +177,93 @@ ${samplingBody}
 `;
 }
 
+/**
+ * Dual Kawase downsample: five bilinear taps (centre ×4, diagonals ×1) at `1 + spread` source
+ * texels. Writes the next, half-resolution pyramid level.
+ */
+export function createWlurKawaseDownShaderSource(): string {
+  return `
+struct KawaseDownParams {
+  // xy: unused, zw: source resolution
+  resolution: vec4f,
+  // x: spread
+  config: vec4f,
+}
+
+@group(0) @binding(0) var<uniform> params: KawaseDownParams;
+@group(0) @binding(1) var source_texture: texture_2d<f32>;
+@group(0) @binding(2) var source_sampler: sampler;
+
+${fullscreenVertex}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+  let half_pixel = (1.0 + params.config.x) / params.resolution.zw;
+  var color = textureSampleLevel(source_texture, source_sampler, in.uv, 0.0) * 4.0;
+  color += textureSampleLevel(source_texture, source_sampler, in.uv + vec2f(-half_pixel.x, -half_pixel.y), 0.0);
+  color += textureSampleLevel(source_texture, source_sampler, in.uv + vec2f(half_pixel.x, -half_pixel.y), 0.0);
+  color += textureSampleLevel(source_texture, source_sampler, in.uv + vec2f(-half_pixel.x, half_pixel.y), 0.0);
+  color += textureSampleLevel(source_texture, source_sampler, in.uv + vec2f(half_pixel.x, half_pixel.y), 0.0);
+  return color / 8.0;
+}
+`;
+}
+
+/**
+ * Dual Kawase upsample with a variable-blur blend. Upsamples the coarser level with four
+ * diagonal bilinear taps, then mixes toward this level's sharper downsample by how far the
+ * ramp's target depth exceeds this level, so each pixel only accumulates the levels it needs.
+ */
+export function createWlurKawaseUpShaderSource(): string {
+  return `
+struct KawaseUpParams {
+  // xy: unused, zw: coarser source resolution
+  resolution: vec4f,
+  // x: offset, y: interpolation, z: direction, w: this level's index (>= 1)
+  effect: vec4f,
+  // x: depth at full ramp, y: spread
+  config: vec4f,
+}
+
+@group(0) @binding(0) var<uniform> params: KawaseUpParams;
+@group(0) @binding(1) var source_texture: texture_2d<f32>;
+@group(0) @binding(2) var detail_texture: texture_2d<f32>;
+@group(0) @binding(3) var input_sampler: sampler;
+@group(0) @binding(4) var curve_texture: texture_2d<f32>;
+
+${fullscreenVertex}
+${mapFactor}
+${curveSampling("input_sampler")}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+  let detail = textureSampleLevel(detail_texture, input_sampler, in.uv, 0.0);
+  let raw_factor = map_factor(in.uv, params.effect.x, params.effect.y, params.effect.z);
+  let depth = sample_curve(curve_texture, raw_factor, 0.0) * params.config.x;
+  let weight = clamp(depth - params.effect.w, 0.0, 1.0);
+  if (weight <= 0.0) {
+    return detail;
+  }
+
+  // sqrt(5/3) keeps the radial variance of the classic 8-tap Kawase upsample.
+  let sample_offset = (1.0 + params.config.y) / params.resolution.zw * 1.2909944487;
+  var color = textureSampleLevel(source_texture, input_sampler, in.uv + vec2f(-sample_offset.x, -sample_offset.y), 0.0);
+  color += textureSampleLevel(source_texture, input_sampler, in.uv + vec2f(sample_offset.x, -sample_offset.y), 0.0);
+  color += textureSampleLevel(source_texture, input_sampler, in.uv + vec2f(-sample_offset.x, sample_offset.y), 0.0);
+  color += textureSampleLevel(source_texture, input_sampler, in.uv + vec2f(sample_offset.x, sample_offset.y), 0.0);
+  return mix(detail, color * 0.25, weight);
+}
+`;
+}
+
 export function createWlurCompositeShaderSource(): string {
   return `
 struct CompositeParams {
   resolution: vec4f,
   effect: vec4f,
   tint: vec4f,
+  // x: Kawase pyramid depth at full ramp; 0 for the Gaussian path.
+  kawase: vec4f,
 }
 
 @group(0) @binding(0) var<uniform> params: CompositeParams;
@@ -208,7 +289,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     return original;
   }
 
-  let blurred = textureSampleLevel(blurred_texture, tex_sampler, in.uv, 0.0);
+  var blurred = textureSampleLevel(blurred_texture, tex_sampler, in.uv, 0.0);
+  if (params.kawase.x > 0.0) {
+    // The pyramid's finest level is half resolution; below level 1 fade from the original.
+    let level = sample_curve(curve_texture, raw_factor, 0.0) * params.kawase.x;
+    blurred = mix(original, blurred, clamp(level, 0.0, 1.0));
+  }
   let tint_factor = sample_curve(curve_texture, raw_factor, 1.0);
   let tint_strength = clamp(tint_factor * params.tint.a, 0.0, 1.0);
   let tinted_blur = vec4f(

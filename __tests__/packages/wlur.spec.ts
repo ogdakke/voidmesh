@@ -5,6 +5,7 @@ import {
   clampWlurParams,
   clampWlurQuality,
   getWlurBlurRegions,
+  getWlurKawaseReachPx,
   getWlurScratchKey,
   getWlurSourceDependencyRegion,
   getWlurWorkingDimensions,
@@ -136,6 +137,31 @@ describe("wlur helpers", () => {
     ).toEqual({ x: 0, y: 300, width: 800, height: 300 });
   });
 
+  test("pads the Kawase dependency region by the pyramid's reach", () => {
+    const params = {
+      ...DEFAULT_WLUR_PARAMS,
+      direction: "down" as const,
+      offset: 0.5,
+      levels: 3,
+      spread: 1,
+    };
+    const region = getWlurSourceDependencyRegion(800, 600, params, {
+      kernelSize: 45,
+      resolutionScale: 1,
+      algorithm: "kawase",
+    });
+    const reach = getWlurKawaseReachPx(3, 1);
+
+    expect(reach).toBeGreaterThan(0);
+    expect(region).toEqual({
+      x: 0,
+      y: Math.max(0, 299 - reach),
+      width: 800,
+      height: 600 - Math.max(0, 299 - reach),
+    });
+    expect(clampWlurQuality({ algorithm: "bogus" as never }).algorithm).toBe("gaussian");
+  });
+
   test("expands partial refreshes by each separable blur pass dependency", () => {
     expect(
       getWlurBlurRegions(
@@ -217,6 +243,42 @@ describe("WlurPass resource reuse", () => {
 
     pass.encode(encoder, input, firstOutput, 800, 600, params);
     expect(device.createBindGroup).toHaveBeenCalledTimes(6);
+
+    pass.destroy();
+  });
+
+  test("runs a dual Kawase pyramid down to the ramp's depth and reuses it with the blur cache", () => {
+    const device = createWlurDevice();
+    const pass = new WlurPass({ device, format: "rgba16float", quality: { algorithm: "kawase" } });
+    const encoder = createWlurEncoder();
+    const input = createWlurTexture(800, 600);
+    const output = createWlurTexture(800, 600);
+    const beginRenderPass = vi.mocked(encoder.beginRenderPass);
+    const params = { ...DEFAULT_WLUR_PARAMS, levels: 2.5, spread: 1, noise: 0 };
+
+    pass.encode(encoder, input, output, 800, 600, params);
+    expect(beginRenderPass.mock.calls.map((call) => call[0].label)).toEqual([
+      "Wlur Kawase down 1",
+      "Wlur Kawase down 2",
+      "Wlur Kawase down 3",
+      "Wlur Kawase up 2",
+      "Wlur Kawase up 1",
+      "Wlur composite pass",
+    ]);
+    const pyramidSizes = vi
+      .mocked(device.createTexture)
+      .mock.calls.map((call) => call[0])
+      .filter((descriptor) => descriptor.label?.includes("Kawase down"))
+      .map((descriptor) => descriptor.size);
+    expect(pyramidSizes).toEqual([
+      [400, 300],
+      [200, 150],
+      [100, 75],
+    ]);
+
+    pass.encode(encoder, input, output, 800, 600, params, { refreshBlur: false });
+    expect(beginRenderPass).toHaveBeenCalledTimes(7);
+    expect(beginRenderPass.mock.calls.at(-1)?.[0].label).toBe("Wlur composite pass");
 
     pass.destroy();
   });

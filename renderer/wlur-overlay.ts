@@ -61,6 +61,9 @@ export const DEFAULT_WLUR_OVERLAY_PARAMS = Object.freeze({
   direction: "down",
   radius: 160,
   noise: 0.45,
+  // Kawase mode only (debug toggle for now); see WlurQuality.algorithm.
+  levels: 5,
+  spread: 1,
   curve: WLUR_CURVES.easeIn,
   mixCurve: WLUR_CURVES.easeIn,
   tint: {
@@ -73,6 +76,7 @@ export const DEFAULT_WLUR_OVERLAY_PARAMS = Object.freeze({
 export const DEFAULT_WLUR_OVERLAY_QUALITY = Object.freeze({
   kernelSize: 101,
   resolutionScale: 0.54,
+  algorithm: "gaussian",
 } satisfies WlurQuality);
 
 export function createDefaultWlurOverlayConfig(layout: WlurOverlayLayout = {}): WlurOverlayConfig {

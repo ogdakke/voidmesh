@@ -1,6 +1,7 @@
 import {
   clampWlurParams,
   clampWlurQuality,
+  getWlurKawaseLevelCount,
   getWlurBlurRegions,
   getWlurScratchKey,
   getWlurWorkingDimensions,
@@ -11,6 +12,8 @@ import {
   createWlurBlurShaderSource,
   createWlurCompositeShaderSource,
   createWlurCopyShaderSource,
+  createWlurKawaseDownShaderSource,
+  createWlurKawaseUpShaderSource,
   createWlurNoiseShaderSource,
 } from "./shaders.ts";
 import {
@@ -27,6 +30,15 @@ interface WlurPassOptions {
   format: GPUTextureFormat;
   quality?: Partial<WlurQuality>;
   label?: string;
+}
+
+interface KawaseTextures {
+  key: string;
+  /** Pyramid levels 1..N (index 0 = half resolution). */
+  down: GPUTexture[];
+  /** Blended upsamples for levels 1..N-1 (index 0 = half resolution). */
+  up: GPUTexture[];
+  composite: GPUTexture;
 }
 
 interface ScratchTextures {
@@ -100,12 +112,29 @@ export class WlurPass {
     }
   >();
   #noiseBinding: { source: GPUTexture; bindGroup: GPUBindGroup } | null = null;
+
+  #kawaseDownBindGroupLayout: GPUBindGroupLayout | null = null;
+  #kawaseDownPipeline: GPURenderPipeline | null = null;
+  #kawaseUpBindGroupLayout: GPUBindGroupLayout | null = null;
+  #kawaseUpPipeline: GPURenderPipeline | null = null;
+  #kawaseTextures: KawaseTextures | null = null;
+  /** Result of the last pyramid run; reused while the caller keeps the blur cache. */
+  #kawaseOutput: GPUTexture | null = null;
+  /** Each pass in one encoder needs its own uniforms, so buffers are per level. */
+  #kawaseDownBuffers: GPUBuffer[] = [];
+  #kawaseUpBuffers: GPUBuffer[] = [];
+  #kawaseBindings = new Map<
+    GPUBuffer,
+    { source: GPUTexture; detail: GPUTexture | null; bindGroup: GPUBindGroup }
+  >();
+  readonly #kawaseUniformData = new Float32Array(12);
+  readonly #kawaseUniformCaches = new Map<GPUBuffer, Float32Array>();
   readonly #blurUniformData = new Float32Array(12);
-  readonly #compositeUniformData = new Float32Array(12);
+  readonly #compositeUniformData = new Float32Array(16);
   readonly #noiseUniformData = new Float32Array(8);
   readonly #blurXUniformCache = new Float32Array(12).fill(Number.NaN);
   readonly #blurYUniformCache = new Float32Array(12).fill(Number.NaN);
-  readonly #compositeUniformCache = new Float32Array(12).fill(Number.NaN);
+  readonly #compositeUniformCache = new Float32Array(16).fill(Number.NaN);
   readonly #noiseUniformCache = new Float32Array(8).fill(Number.NaN);
   #blurPixels = 0;
   #fullBlurPixels = 0;
@@ -143,6 +172,7 @@ export class WlurPass {
     this.#createBlurPipelines();
     this.#createCompositePipeline();
     this.#createNoisePipeline();
+    this.#createKawasePipelines();
   }
 
   updateConfig(config: WlurPassConfig = {}): void {
@@ -152,11 +182,15 @@ export class WlurPass {
     });
     const kernelChanged = nextQuality.kernelSize !== this.#quality.kernelSize;
     const scaleChanged = nextQuality.resolutionScale !== this.#quality.resolutionScale;
+    const algorithmChanged = nextQuality.algorithm !== this.#quality.algorithm;
 
     this.#quality = nextQuality;
 
-    if (scaleChanged) {
+    if (scaleChanged || algorithmChanged) {
       this.#destroyScratchTextures();
+    }
+    if (algorithmChanged) {
+      this.#destroyKawaseTextures();
     }
 
     if (kernelChanged && this.#sampler) {
@@ -204,6 +238,19 @@ export class WlurPass {
     const tintCurve = resolveWlurCurve(resolvedParams.tint?.curve ?? resolvedParams.curve);
     const mixCurve = resolveWlurCurve(resolvedParams.mixCurve ?? resolvedParams.curve);
     this.#updateCurveTexture(baseCurve, tintCurve, mixCurve);
+
+    if (this.#quality.algorithm === "kawase") {
+      this.#encodeKawase(
+        encoder,
+        inputTexture,
+        outputTexture,
+        width,
+        height,
+        resolvedParams,
+        options,
+      );
+      return;
+    }
 
     if (resolvedParams.radius <= 0.001 && resolvedParams.noise <= 0.001) {
       this.#encodeCopyPass(encoder, inputTexture, outputTexture, options.outputView);
@@ -293,6 +340,7 @@ export class WlurPass {
       restoreThreshold,
       resolvedParams.tint?.color,
       resolvedParams.tint?.amount ?? 0,
+      0,
     );
     this.#encodeCompositePass(
       encoder,
@@ -319,6 +367,16 @@ export class WlurPass {
 
   destroy(): void {
     this.#destroyScratchTextures();
+    this.#destroyKawaseTextures();
+    for (const buffer of [...this.#kawaseDownBuffers, ...this.#kawaseUpBuffers]) buffer.destroy();
+    this.#kawaseDownBuffers = [];
+    this.#kawaseUpBuffers = [];
+    this.#kawaseBindings.clear();
+    this.#kawaseUniformCaches.clear();
+    this.#kawaseDownBindGroupLayout = null;
+    this.#kawaseDownPipeline = null;
+    this.#kawaseUpBindGroupLayout = null;
+    this.#kawaseUpPipeline = null;
     this.#blurXUniformBuffer?.destroy();
     this.#blurYUniformBuffer?.destroy();
     this.#compositeUniformBuffer?.destroy();
@@ -509,7 +567,7 @@ export class WlurPass {
 
     this.#compositeUniformBuffer = this.#device.createBuffer({
       label: `${this.#label} composite uniforms`,
-      size: 48,
+      size: 64,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     this.#compositeUniformCache.fill(Number.NaN);
@@ -623,6 +681,298 @@ export class WlurPass {
     return entry;
   }
 
+  #createKawasePipelines(): void {
+    const fragmentTexture = (binding: number): GPUBindGroupLayoutEntry => ({
+      binding,
+      visibility: GPUShaderStage.FRAGMENT,
+      texture: { sampleType: "float" },
+    });
+    const uniformEntry: GPUBindGroupLayoutEntry = {
+      binding: 0,
+      visibility: GPUShaderStage.FRAGMENT,
+      buffer: { type: "uniform" },
+    };
+
+    this.#kawaseDownBindGroupLayout = this.#device.createBindGroupLayout({
+      label: `${this.#label} Kawase down bind group layout`,
+      entries: [
+        uniformEntry,
+        fragmentTexture(1),
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+      ],
+    });
+    this.#kawaseUpBindGroupLayout = this.#device.createBindGroupLayout({
+      label: `${this.#label} Kawase up bind group layout`,
+      entries: [
+        uniformEntry,
+        fragmentTexture(1),
+        fragmentTexture(2),
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+        fragmentTexture(4),
+      ],
+    });
+
+    const createPipeline = (name: string, code: string, layout: GPUBindGroupLayout) => {
+      const module = this.#device.createShaderModule({ label: `${this.#label} ${name}`, code });
+      return this.#device.createRenderPipeline({
+        label: `${this.#label} ${name} pipeline`,
+        layout: this.#device.createPipelineLayout({
+          label: `${this.#label} ${name} pipeline layout`,
+          bindGroupLayouts: [layout],
+        }),
+        vertex: { module, entryPoint: "vs_main" },
+        fragment: { module, entryPoint: "fs_main", targets: [{ format: this.#format }] },
+        primitive: { topology: "triangle-list" },
+      });
+    };
+    this.#kawaseDownPipeline = createPipeline(
+      "Kawase down",
+      createWlurKawaseDownShaderSource(),
+      this.#kawaseDownBindGroupLayout,
+    );
+    this.#kawaseUpPipeline = createPipeline(
+      "Kawase up",
+      createWlurKawaseUpShaderSource(),
+      this.#kawaseUpBindGroupLayout,
+    );
+  }
+
+  #getOrCreateKawaseTextures(width: number, height: number, levelCount: number): KawaseTextures {
+    const key = `${width}x${height}-${levelCount}`;
+    if (this.#kawaseTextures?.key === key) return this.#kawaseTextures;
+    this.#destroyKawaseTextures();
+
+    const usage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT;
+    const create = (label: string, w: number, h: number) =>
+      this.#device.createTexture({
+        label: `${this.#label} ${label} ${w}x${h}`,
+        size: [w, h],
+        format: this.#format,
+        usage,
+      });
+    const down: GPUTexture[] = [];
+    const up: GPUTexture[] = [];
+    let w = width;
+    let h = height;
+    for (let level = 1; level <= levelCount; level++) {
+      w = Math.max(1, Math.ceil(w / 2));
+      h = Math.max(1, Math.ceil(h / 2));
+      down.push(create(`Kawase down ${level}`, w, h));
+      if (level < levelCount) up.push(create(`Kawase up ${level}`, w, h));
+    }
+
+    this.#kawaseTextures = {
+      key,
+      down,
+      up,
+      composite: create("Kawase composite", width, height),
+    };
+    return this.#kawaseTextures;
+  }
+
+  #destroyKawaseTextures(): void {
+    if (!this.#kawaseTextures) return;
+    for (const texture of this.#kawaseTextures.down) texture.destroy();
+    for (const texture of this.#kawaseTextures.up) texture.destroy();
+    this.#kawaseTextures.composite.destroy();
+    this.#kawaseTextures = null;
+    this.#kawaseOutput = null;
+    this.#kawaseBindings.clear();
+  }
+
+  #getKawaseBuffer(buffers: GPUBuffer[], index: number, name: string): GPUBuffer {
+    let buffer = buffers[index];
+    if (!buffer) {
+      buffer = this.#device.createBuffer({
+        label: `${this.#label} Kawase ${name} ${index + 1} uniforms`,
+        size: 48,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      buffers[index] = buffer;
+    }
+    return buffer;
+  }
+
+  /** Fill `#kawaseUniformData` first; this uploads it if it changed for `buffer`. */
+  #flushKawaseUniforms(buffer: GPUBuffer): void {
+    const data = this.#kawaseUniformData;
+    let cache = this.#kawaseUniformCaches.get(buffer);
+    if (!cache) {
+      cache = new Float32Array(12).fill(Number.NaN);
+      this.#kawaseUniformCaches.set(buffer, cache);
+    }
+    this.#writeUniformBufferIfChanged(buffer, data, cache);
+  }
+
+  #encodeKawasePass(
+    encoder: GPUCommandEncoder,
+    label: string,
+    pipeline: GPURenderPipeline,
+    layout: GPUBindGroupLayout,
+    uniformBuffer: GPUBuffer,
+    source: GPUTexture,
+    detail: GPUTexture | null,
+    destination: GPUTexture,
+  ): void {
+    let binding = this.#kawaseBindings.get(uniformBuffer);
+    if (binding?.source !== source || binding.detail !== detail) {
+      const entries: GPUBindGroupEntry[] = detail
+        ? [
+            { binding: 0, resource: { buffer: uniformBuffer } },
+            { binding: 1, resource: this.#getTextureView(source) },
+            { binding: 2, resource: this.#getTextureView(detail) },
+            { binding: 3, resource: this.#sampler! },
+            { binding: 4, resource: this.#curveTextureView! },
+          ]
+        : [
+            { binding: 0, resource: { buffer: uniformBuffer } },
+            { binding: 1, resource: this.#getTextureView(source) },
+            { binding: 2, resource: this.#sampler! },
+          ];
+      binding = {
+        source,
+        detail,
+        bindGroup: this.#device.createBindGroup({ label, layout, entries }),
+      };
+      this.#kawaseBindings.set(uniformBuffer, binding);
+    }
+
+    const pass = encoder.beginRenderPass({
+      label,
+      colorAttachments: [
+        {
+          view: this.#getTextureView(destination),
+          loadOp: "clear",
+          storeOp: "store",
+          clearValue: { r: 0, g: 0, b: 0, a: 0 },
+        },
+      ],
+    });
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, binding.bindGroup);
+    pass.draw(3);
+    pass.end();
+  }
+
+  /**
+   * Dual Kawase variable blur. Downsamples to the deepest level the ramp needs, then upsamples
+   * back to half resolution, blending each level toward its sharper downsample by the ramp's
+   * target depth. The composite fades from the original below level 1, so the top of the ramp
+   * keeps full-resolution detail instead of a uniformly scaled working texture.
+   */
+  #encodeKawase(
+    encoder: GPUCommandEncoder,
+    inputTexture: GPUTexture,
+    outputTexture: GPUTexture,
+    width: number,
+    height: number,
+    params: WlurParams,
+    options: WlurEncodeOptions,
+  ): void {
+    const levels = params.levels ?? 0;
+    if (levels <= 0.001 && params.noise <= 0.001) {
+      this.#encodeCopyPass(encoder, inputTexture, outputTexture, options.outputView);
+      return;
+    }
+
+    const levelCount = getWlurKawaseLevelCount(levels);
+    const textures = this.#getOrCreateKawaseTextures(width, height, levelCount);
+    const directionIndex = wlurDirectionToIndex(params.direction);
+    const spread = params.spread ?? 0;
+
+    // Partial refresh is not supported: the pyramid is cheap, so a refresh rebuilds it whole.
+    if (options.refreshBlur !== false || !this.#kawaseOutput) {
+      let source = inputTexture;
+      let sourceWidth = width;
+      let sourceHeight = height;
+      for (let level = 1; level <= levelCount; level++) {
+        const destination = textures.down[level - 1]!;
+        const buffer = this.#getKawaseBuffer(this.#kawaseDownBuffers, level - 1, "down");
+        const data = this.#kawaseUniformData.fill(0);
+        data[2] = sourceWidth;
+        data[3] = sourceHeight;
+        data[4] = spread;
+        this.#flushKawaseUniforms(buffer);
+        this.#encodeKawasePass(
+          encoder,
+          `${this.#label} Kawase down ${level}`,
+          this.#kawaseDownPipeline!,
+          this.#kawaseDownBindGroupLayout!,
+          buffer,
+          source,
+          null,
+          destination,
+        );
+        this.#blurPixels += destination.width * destination.height;
+        this.#fullBlurPixels += destination.width * destination.height;
+        source = destination;
+        sourceWidth = destination.width;
+        sourceHeight = destination.height;
+      }
+
+      for (let level = levelCount - 1; level >= 1; level--) {
+        const coarser = level === levelCount - 1 ? textures.down[level]! : textures.up[level]!;
+        const destination = textures.up[level - 1]!;
+        const buffer = this.#getKawaseBuffer(this.#kawaseUpBuffers, level - 1, "up");
+        const data = this.#kawaseUniformData.fill(0);
+        data[2] = coarser.width;
+        data[3] = coarser.height;
+        data[4] = params.offset;
+        data[5] = params.interpolation;
+        data[6] = directionIndex;
+        data[7] = level;
+        data[8] = levels;
+        data[9] = spread;
+        this.#flushKawaseUniforms(buffer);
+        this.#encodeKawasePass(
+          encoder,
+          `${this.#label} Kawase up ${level}`,
+          this.#kawaseUpPipeline!,
+          this.#kawaseUpBindGroupLayout!,
+          buffer,
+          coarser,
+          textures.down[level - 1]!,
+          destination,
+        );
+        this.#blurPixels += destination.width * destination.height;
+        this.#fullBlurPixels += destination.width * destination.height;
+      }
+
+      this.#kawaseOutput = levelCount > 1 ? textures.up[0]! : textures.down[0]!;
+    }
+
+    const hasNoise = params.noise > 0.001;
+    this.#writeCompositeUniforms(
+      width,
+      height,
+      params.offset,
+      params.interpolation,
+      directionIndex,
+      0.001,
+      params.tint?.color,
+      params.tint?.amount ?? 0,
+      Math.max(levels, 0.001),
+    );
+    this.#encodeCompositePass(
+      encoder,
+      inputTexture,
+      this.#kawaseOutput,
+      hasNoise ? textures.composite : outputTexture,
+      hasNoise ? undefined : options.outputView,
+    );
+    if (!hasNoise) return;
+
+    this.#writeNoiseUniforms(
+      width,
+      height,
+      params.offset,
+      params.interpolation,
+      directionIndex,
+      params.noise,
+    );
+    this.#encodeNoisePass(encoder, textures.composite, outputTexture, options.outputView);
+  }
+
   #destroyScratchTextures(): void {
     for (const entry of this.#scratchTextures.values()) {
       entry.blurIntermediate.destroy();
@@ -706,6 +1056,7 @@ export class WlurPass {
     restoreThreshold: number,
     tintColor: WlurTintColor | undefined,
     tintAmount: number,
+    kawaseLevels: number,
   ): void {
     const data = this.#compositeUniformData;
     data[0] = width;
@@ -720,6 +1071,10 @@ export class WlurPass {
     data[9] = tintColor?.[1] ?? 0;
     data[10] = tintColor?.[2] ?? 0;
     data[11] = tintAmount;
+    data[12] = kawaseLevels;
+    data[13] = 0;
+    data[14] = 0;
+    data[15] = 0;
     this.#writeUniformBufferIfChanged(
       this.#compositeUniformBuffer!,
       data,
