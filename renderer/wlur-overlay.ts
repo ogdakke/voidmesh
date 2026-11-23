@@ -62,9 +62,9 @@ export const DEFAULT_WLUR_OVERLAY_PARAMS = Object.freeze({
   radius: 130,
   noise: 0,
   curve: WLUR_CURVES.overlayQuickFade,
-  mixCurve: WLUR_CURVES.overlaySoftMix,
+  mixCurve: WLUR_CURVES.overlayEdgeHold,
   tint: {
-    curve: WLUR_CURVES.easeIn,
+    curve: WLUR_CURVES.overlayQuickFade,
     amount: 0.77,
     color: [0, 0, 0],
   },
@@ -81,7 +81,7 @@ export function createDefaultWlurOverlayConfig(layout: WlurOverlayLayout = {}): 
       ? {
           color: layout.tintColor,
           amount: layout.tintAmount ?? 1,
-          curve: WLUR_CURVES.easeIn,
+          curve: WLUR_CURVES.overlayQuickFade,
         }
       : undefined;
 
@@ -110,7 +110,7 @@ export function createMobileWlurOverlayConfig({
     // Mirrors `--studio-background` (styles/variables.css): the canvas is transparent over it,
     // and iOS Safari tints its toolbar from it, so the blur must fade to the same colour.
     tintColor: darkTheme ? [6 / 255, 6 / 255, 8 / 255] : [250 / 255, 250 / 255, 250 / 255],
-    tintAmount: darkTheme ? 1 : 0.77,
+    tintAmount: darkTheme ? 1.5 : 0.77,
     edge,
   });
 }
