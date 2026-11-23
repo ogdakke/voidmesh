@@ -4,7 +4,13 @@ import { config } from "#config";
 import { toastManager } from "#application/notifications.ts";
 import { logger } from "#lib/client.logger.ts";
 import { useCanvasRendererService } from "#context/use-canvas.ts";
-import { WLUR_DEBUG_CURVE_OPTIONS, type WlurOverlayDebugConfig } from "#renderer/wlur-debug.ts";
+import {
+  WLUR_DEBUG_CURVE_OPTIONS,
+  resolveWlurOverlayDebugConfig,
+  type WlurOverlayDebugConfig,
+} from "#renderer/wlur-debug.ts";
+import { createMobileWlurOverlayConfig } from "#renderer/wlur-overlay.ts";
+import { useIsCompactLandscape } from "#hooks/use-is-mobile.ts";
 import { Button } from "#ui/button/button.tsx";
 import { InfiniteSlider } from "#ui/infinite-slider/index.ts";
 import {
@@ -145,7 +151,7 @@ function formatSettingButtonValue(
   }
 
   if (setting.kind === "color") {
-    return configValue.tintColor ? "Set" : "Auto";
+    return configValue.tintColor.slice(1, 4).toUpperCase();
   }
 
   if (setting.kind === "boolean") {
@@ -176,7 +182,7 @@ function formatFloatingValue(
   }
 
   if (setting.kind === "color") {
-    return `${setting.label}: ${configValue.tintColor ?? "Theme"}`;
+    return `${setting.label}: ${configValue.tintColor}`;
   }
 
   if (setting.kind === "boolean") {
@@ -211,8 +217,19 @@ const TOGGLE_OPTIONS = [
 ] as const;
 
 export default function WlurDebugKnobs() {
-  const { wlurDebugConfig, setWlurDebugConfig } = useCanvasRendererService();
+  const { wlurDebugOverrides, setWlurDebugConfig, resetWlurDebugConfig } =
+    useCanvasRendererService();
   const isDarkTheme = useMediaQuery("(prefers-color-scheme: dark)");
+  const isCompactLandscape = useIsCompactLandscape();
+  // Same base the renderer uses, so untouched values are exactly what production renders.
+  const wlurDebugConfig = resolveWlurOverlayDebugConfig(
+    createMobileWlurOverlayConfig({
+      darkTheme: isDarkTheme,
+      edge: isCompactLandscape ? "right" : "bottom",
+    }),
+    wlurDebugOverrides,
+  );
+  const hasOverrides = Object.keys(wlurDebugOverrides).length > 0;
   const [selectedSetting, setSelectedSetting] = useState<WlurDebugSetting>(
     WLUR_DEBUG_SETTINGS.find((setting) => setting.value === "radius")!,
   );
@@ -337,7 +354,7 @@ export default function WlurDebugKnobs() {
             type="color"
             className="wlur-debug-color"
             aria-label="Blur tint color"
-            value={wlurDebugConfig.tintColor ?? (isDarkTheme ? "#000000" : "#ffffff")}
+            value={wlurDebugConfig.tintColor}
             onChange={(e) => {
               setWlurDebugConfig({ tintColor: e.target.value });
               showFloatingLabel(`Tint Color: ${e.target.value}`);
@@ -345,8 +362,8 @@ export default function WlurDebugKnobs() {
           />
           <Button
             variant="secondary"
-            disabled={wlurDebugConfig.tintColor === null}
-            onClick={() => setWlurDebugConfig({ tintColor: null })}
+            disabled={wlurDebugOverrides.tintColor === undefined}
+            onClick={() => setWlurDebugConfig({ tintColor: undefined })}
           >
             Theme
           </Button>
@@ -354,6 +371,9 @@ export default function WlurDebugKnobs() {
       ) : selectedSetting.kind === "copy" ? (
         <div className="wlur-debug-row">
           <Button onClick={() => void copyWlurDebugConfig(wlurDebugConfig)}>Copy values</Button>
+          <Button variant="secondary" disabled={!hasOverrides} onClick={resetWlurDebugConfig}>
+            Reset
+          </Button>
         </div>
       ) : selectedSetting.kind === "number" ? (
         <InfiniteSlider
