@@ -3,6 +3,7 @@ import {
   WLUR_CURVES,
   clampWlurParams,
   clampWlurQuality,
+  type WlurCurve,
   type WlurParams,
   type WlurQuality,
   type WlurTintColor,
@@ -64,7 +65,7 @@ export const DEFAULT_WLUR_OVERLAY_PARAMS = Object.freeze({
   // Kawase (hybrid) settings; radius, kernelSize and resolutionScale apply to Gaussian only.
   levels: 6.64,
   spread: 0.12,
-  fineDepth: 3.24,
+  fineDepth: 2,
   fade: 0.05,
   curve: WLUR_CURVES.easeIn,
   mixCurve: WLUR_CURVES.easeIn,
@@ -106,10 +107,10 @@ export function createDefaultWlurOverlayConfig(layout: WlurOverlayLayout = {}): 
 
 export type MobileWlurMode = "browser" | "pwa";
 
+/** What differs per display mode; everything else (blur shape, Kawase depth, fade) is shared. */
 interface MobileWlurPreset {
   tintAmount: { dark: number; light: number };
-  /** Overrides on top of `DEFAULT_WLUR_OVERLAY_PARAMS`. */
-  params?: Partial<WlurParams>;
+  tintCurve: WlurCurve;
 }
 
 /**
@@ -118,9 +119,8 @@ interface MobileWlurPreset {
  * toolbar, so the strip the blur and tint must cover differs and is tuned separately.
  */
 export const MOBILE_WLUR_PRESETS: Readonly<Record<MobileWlurMode, MobileWlurPreset>> = {
-  browser: { tintAmount: { dark: 1.5, light: 1.41 } },
-  // Starts as the browser values until tuned on device in the installed app.
-  pwa: { tintAmount: { dark: 1.5, light: 1.41 } },
+  browser: { tintAmount: { dark: 1.5, light: 1.41 }, tintCurve: WLUR_CURVES.easeInOut },
+  pwa: { tintAmount: { dark: 1.5, light: 0.96 }, tintCurve: WLUR_CURVES.easeIn },
 };
 
 /** The overlay the mobile layout renders behind its controls. */
@@ -141,7 +141,10 @@ export function createMobileWlurOverlayConfig({
     tintAmount: darkTheme ? preset.tintAmount.dark : preset.tintAmount.light,
     edge,
   });
-  return preset.params ? { ...config, params: { ...config.params, ...preset.params } } : config;
+  const tint = config.params?.tint;
+  return tint
+    ? { ...config, params: { ...config.params, tint: { ...tint, curve: preset.tintCurve } } }
+    : config;
 }
 
 export function resolveWlurOverlayRuntimeConfig(
