@@ -11,7 +11,8 @@ import {
   type WlurOverlayDebugConfig,
 } from "#renderer/wlur-debug.ts";
 import type { WlurAlgorithm } from "#wlur";
-import { createMobileWlurOverlayConfig } from "#renderer/wlur-overlay.ts";
+import { createMobileWlurOverlayConfig, type MobileWlurMode } from "#renderer/wlur-overlay.ts";
+import { useIsStandalone } from "#hooks/use-is-standalone.ts";
 import { useIsCompactLandscape } from "#hooks/use-is-mobile.ts";
 import { Button } from "#ui/button/button.tsx";
 import { InfiniteSlider } from "#ui/infinite-slider/index.ts";
@@ -271,9 +272,10 @@ function formatFloatingValue(
   return `${setting.label}: ${formatted}`;
 }
 
-async function copyWlurDebugConfig(configValue: WlurOverlayDebugConfig) {
+async function copyWlurDebugConfig(configValue: WlurOverlayDebugConfig, mode: MobileWlurMode) {
   try {
-    await navigator.clipboard.writeText(JSON.stringify(configValue, null, 2));
+    // `mode` says which preset (browser tab or installed app) these values belong to.
+    await navigator.clipboard.writeText(JSON.stringify({ mode, ...configValue }, null, 2));
     toastManager.add({ type: "primary", title: "Blur values copied" });
   } catch (error) {
     logger.error("Failed to copy blur values:", error);
@@ -291,11 +293,13 @@ export default function WlurDebugKnobs() {
     useCanvasRendererService();
   const isDarkTheme = useMediaQuery("(prefers-color-scheme: dark)");
   const isCompactLandscape = useIsCompactLandscape();
+  const mode = useIsStandalone() ? "pwa" : "browser";
   // Same base the renderer uses, so untouched values are exactly what production renders.
   const wlurDebugConfig = resolveWlurOverlayDebugConfig(
     createMobileWlurOverlayConfig({
       darkTheme: isDarkTheme,
       edge: isCompactLandscape ? "right" : "bottom",
+      mode,
     }),
     wlurDebugOverrides,
   );
@@ -451,7 +455,9 @@ export default function WlurDebugKnobs() {
         </div>
       ) : selectedSetting.kind === "copy" ? (
         <div className="wlur-debug-row">
-          <Button onClick={() => void copyWlurDebugConfig(wlurDebugConfig)}>Copy values</Button>
+          <Button onClick={() => void copyWlurDebugConfig(wlurDebugConfig, mode)}>
+            Copy values
+          </Button>
           <Button variant="secondary" disabled={!hasOverrides} onClick={resetWlurDebugConfig}>
             Reset
           </Button>

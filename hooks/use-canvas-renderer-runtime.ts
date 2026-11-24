@@ -16,6 +16,8 @@ interface UseCanvasRendererRuntimeOptions {
   /** Mobile controls sit on the right edge instead of the bottom. */
   isCompactLandscape: boolean;
   isFullscreen: boolean;
+  /** Installed home-screen app: selects the PWA overlay preset. */
+  isStandalone: boolean;
 }
 
 export function useCanvasRendererRuntime({
@@ -27,6 +29,7 @@ export function useCanvasRendererRuntime({
   isMobile,
   isCompactLandscape,
   isFullscreen,
+  isStandalone,
 }: UseCanvasRendererRuntimeOptions) {
   const interaction = useCanvasInteraction();
   const { registerRenderer, debugMode, wlurDebugOverrides } = useCanvasRendererService();
@@ -79,6 +82,7 @@ export function useCanvasRendererRuntime({
         ? createMobileWlurOverlayConfig({
             darkTheme,
             edge: isCompactLandscape ? "right" : "bottom",
+            mode: isStandalone ? "pwa" : "browser",
           })
         : null;
     renderer.setWlurOverlay(
@@ -95,6 +99,7 @@ export function useCanvasRendererRuntime({
     isCompactLandscape,
     isFullscreen,
     isMobile,
+    isStandalone,
     isReady,
     registerRenderer,
     renderer,

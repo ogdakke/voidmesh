@@ -103,21 +103,44 @@ export function createDefaultWlurOverlayConfig(layout: WlurOverlayLayout = {}): 
   };
 }
 
+export type MobileWlurMode = "browser" | "pwa";
+
+interface MobileWlurPreset {
+  tintAmount: { dark: number; light: number };
+  /** Overrides on top of `DEFAULT_WLUR_OVERLAY_PARAMS`. */
+  params?: Partial<WlurParams>;
+}
+
+/**
+ * Per display-mode overlay presets. In a browser tab Safari's toolbar sits below the canvas;
+ * as a home-screen app the canvas runs under the home indicator (bottom safe area) with no
+ * toolbar, so the strip the blur and tint must cover differs and is tuned separately.
+ */
+export const MOBILE_WLUR_PRESETS: Readonly<Record<MobileWlurMode, MobileWlurPreset>> = {
+  browser: { tintAmount: { dark: 1.5, light: 1.41 } },
+  // Starts as the browser values until tuned on device in the installed app.
+  pwa: { tintAmount: { dark: 1.5, light: 1.41 } },
+};
+
 /** The overlay the mobile layout renders behind its controls. */
 export function createMobileWlurOverlayConfig({
   darkTheme,
   edge,
+  mode,
 }: {
   darkTheme: boolean;
   edge: NonNullable<WlurOverlayLayout["edge"]>;
+  mode: MobileWlurMode;
 }): WlurOverlayConfig {
-  return createDefaultWlurOverlayConfig({
+  const preset = MOBILE_WLUR_PRESETS[mode];
+  const config = createDefaultWlurOverlayConfig({
     // Mirrors `--studio-background` (styles/variables.css): the canvas is transparent over it,
     // and iOS Safari tints its toolbar from it, so the blur must fade to the same colour.
     tintColor: darkTheme ? [6 / 255, 6 / 255, 8 / 255] : [250 / 255, 250 / 255, 250 / 255],
-    tintAmount: darkTheme ? 1.5 : 1.41,
+    tintAmount: darkTheme ? preset.tintAmount.dark : preset.tintAmount.light,
     edge,
   });
+  return preset.params ? { ...config, params: { ...config.params, ...preset.params } } : config;
 }
 
 export function resolveWlurOverlayRuntimeConfig(
