@@ -89,6 +89,14 @@
     }
   }
 
+  /* The inner buttons are presentational (tabIndex -1) but still take focus on tap, and the
+     button primitive's :focus-visible/:active styles (primary border, 2px outline) outrank the
+     unselected look above, so the tapped option kept a blue ring once the selection moved on. */
+  &:not([data-selected]) .ui-button[data-variant]:is(:focus, :focus-visible, :active) {
+    border-color: transparent;
+    outline: none;
+  }
+
   &:not([data-checked])[data-toggleable][data-selected],
   &:not([data-checked])[data-toggleable] {
     .ui-button {
