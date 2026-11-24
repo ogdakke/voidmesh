@@ -64,7 +64,9 @@
       border-color 0ms ease-out;
   }
 
-  :where(:focus-visible button) {
+  /* Only the selected item shows focus: a tapped item keeps focus after the selection
+     scrolls away, and Safari can then match it as focus-visible, ringing an unselected option. */
+  &[data-selected]:focus-visible :where(button) {
     outline: 2px solid var(--primary);
     outline-offset: 1px;
   }
