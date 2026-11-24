@@ -1,18 +1,17 @@
 /* Floating tab bar: no surface of its own. The canvas WLUR overlay already blurs and tints
-   the strip behind it, so icons sit directly on that and get a soft halo for contrast. One
+   the strip behind it, so icons sit directly on that, near full-strength for contrast. One
    shared indicator glides between cells instead of each item fading its own pill in. The
    fullscreen toggle is the last cell: while it is active the indicator sits on it and the
    tabs blur out. */
 .mobile-bottom-bar {
   --bar-gap: 4px;
-  --bar-icon: color-mix(in oklch, var(--gray-1000) 90%, transparent);
-  --bar-icon-active: var(--gray-1000);
-  /* The tinted blur behind the bar can be any shade (mid-grey over dark video in light mode),
-     so icons carry their own contrast: a tight outline in the opposite tone, plus a soft glow. */
-  --bar-halo: light-dark(rgb(255 255 255 / 0.85), rgb(0 0 0 / 0.75));
-  --bar-glow: light-dark(rgb(255 255 255 / 0.45), rgb(0 0 0 / 0.4));
-  --bar-icon-outline: drop-shadow(0 0 0.6px var(--bar-halo)) drop-shadow(0 0 0.6px var(--bar-halo))
-    drop-shadow(0 0 5px var(--bar-glow));
+  /* The tinted blur behind the bar can be mid-grey (dark video in light mode), and the theme's
+     --gray-1000 is itself mid-grey (L 0.52 light / 0.67 dark), so icons use near-black /
+     near-white ink of their own. No filters or resting scale on icons: Safari rasterises
+     filtered, scaled-down SVGs at low resolution, which smeared them. */
+  --bar-ink: light-dark(oklch(0.18 0 0), oklch(0.97 0 0));
+  --bar-icon: color-mix(in oklch, var(--bar-ink) 85%, transparent);
+  --bar-icon-active: var(--bar-ink);
   --bar-glide: 380ms
     linear(
       0,
@@ -155,27 +154,17 @@
     height: 1.5rem;
     width: 1.5rem;
     z-index: 1;
-    scale: 0.92;
-    filter: var(--bar-icon-outline);
     transition: scale 0.2s ease-out;
   }
 
   &[data-active]:not([aria-disabled="true"]),
   &[data-drag-target]:not([aria-disabled="true"]) {
     color: var(--bar-icon-active);
-
-    svg {
-      scale: 1;
-    }
   }
 
   /* While scrubbing, only the cell under the pill reads as selected. */
   .mobile-bottom-bar[data-dragging] > &[data-active]:not([data-drag-target]) {
     color: var(--bar-icon);
-
-    svg {
-      scale: 0.92;
-    }
   }
 
   &:active:not([aria-disabled="true"]) svg {
@@ -193,7 +182,8 @@
   justify-content: center;
   align-items: center;
   opacity: 1;
-  filter: blur(0);
+  /* No resting filter: only the fullscreen fade-out blurs the tabs. */
+  filter: none;
   scale: 1;
   transition:
     color 0.15s ease-out,
@@ -203,7 +193,7 @@
 
   &[aria-disabled="true"] {
     cursor: not-allowed;
-    color: color-mix(in oklch, var(--gray-1000) 45%, transparent);
+    color: color-mix(in oklch, var(--bar-ink) 40%, transparent);
   }
 
   /* Fullscreen: tabs blur out so only the active fullscreen toggle remains. */
@@ -236,8 +226,6 @@
   display: grid;
   justify-content: center;
   align-items: center;
-  /* The crossfade owns the svg filter, so the halo lives on the button. */
-  filter: var(--bar-icon-outline);
 
   /* Hand filter and transition back to .icon-crossfade (layered) for the icon swap. */
   & svg {
