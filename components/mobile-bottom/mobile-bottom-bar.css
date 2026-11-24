@@ -31,6 +31,8 @@
 
   position: relative;
   display: grid;
+  /* The bar owns horizontal drags (pill scrubbing); don't let them pan the page or canvas. */
+  touch-action: none;
   /* Explicit tracks: an absolutely positioned grid child only resolves explicit lines. */
   grid-template-columns: repeat(var(--track-count), 1fr);
   height: 100%;
@@ -114,12 +116,18 @@
     scale: 0.8;
   }
 
-  .mobile-bottom-bar:has(
-      > .bottom-bar-item[data-active]:active:not([aria-disabled="true"]),
-      > .mobile-fullscreen-btn[data-active]:active
-    )
-    & {
-    scale: 1.05;
+  /* Pressing lifts the pill; dragging lifts it further and has it trail the finger. */
+  .mobile-bottom-bar[data-pressed] > & {
+    scale: 1.06;
+  }
+
+  .mobile-bottom-bar[data-dragging] > & {
+    translate: var(--drag-offset) 0;
+    scale: 1.12;
+    transition:
+      translate 90ms ease-out,
+      opacity 0.15s ease-out,
+      scale 0.2s ease-out;
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -144,11 +152,21 @@
     transition: scale 0.2s ease-out;
   }
 
-  &[data-active]:not([aria-disabled="true"]) {
+  &[data-active]:not([aria-disabled="true"]),
+  &[data-drag-target]:not([aria-disabled="true"]) {
     color: var(--bar-icon-active);
 
     svg {
       scale: 1;
+    }
+  }
+
+  /* While scrubbing, only the cell under the pill reads as selected. */
+  .mobile-bottom-bar[data-dragging] > &[data-active]:not([data-drag-target]) {
+    color: var(--bar-icon);
+
+    svg {
+      scale: 0.92;
     }
   }
 
@@ -244,6 +262,10 @@
 
   .bottom-bar-indicator {
     translate: 0 calc(var(--active-index) * (100% + var(--bar-gap)));
+  }
+
+  .mobile-bottom-bar[data-dragging] > .bottom-bar-indicator {
+    translate: 0 var(--drag-offset);
   }
 
   .bottom-bar-item,

@@ -1,8 +1,10 @@
 import {
   createContext,
   use,
+  useRef,
   useState,
   type ComponentProps,
+  type PointerEvent,
   type PropsWithChildren,
   type ReactNode,
 } from "react";
@@ -12,6 +14,125 @@ import { Enlarge, Reduce } from "iconoir-react";
 import { useLayout } from "#context/use-layout.ts";
 import { useCanvasPreferences } from "#context/use-canvas.ts";
 import { haptic } from "#lib/haptic.ts";
+import {
+  BOTTOM_BAR_DRAG_THRESHOLD_PX,
+  getBottomBarCellAt,
+  getBottomBarPillOffset,
+} from "./mobile-bottom-bar.lib.ts";
+
+interface BottomBarDragState {
+  pointerId: number;
+  vertical: boolean;
+  /** Pointer position on the drag axis at press. */
+  origin: number;
+  /** Viewport position of the first cell on the drag axis. */
+  firstCellStart: number;
+  cellStarts: number[];
+  cellSize: number;
+  items: HTMLButtonElement[];
+  dragging: boolean;
+  target: number;
+}
+
+/**
+ * Drag the selection pill across the bar: pressing lifts it, moving past a small threshold
+ * makes it follow the finger (the cell under it lights up, with a haptic tick per cell), and
+ * only releasing selects. Plain taps keep their normal click behaviour, because the pointer is
+ * only captured once a drag starts.
+ */
+function useBottomBarDrag(haptics: boolean) {
+  const dragRef = useRef<BottomBarDragState | null>(null);
+
+  const finish = (bar: HTMLElement) => {
+    const state = dragRef.current;
+    dragRef.current = null;
+    delete bar.dataset.pressed;
+    delete bar.dataset.dragging;
+    bar.style.removeProperty("--drag-offset");
+    for (const item of state?.items ?? []) delete item.dataset.dragTarget;
+  };
+
+  const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
+    const bar = event.currentTarget;
+    // In fullscreen the pill rests on the toggle and the tabs are hidden.
+    if (bar.querySelector(":scope > .mobile-fullscreen-btn[data-active]")) return;
+    const items = Array.from(bar.querySelectorAll<HTMLButtonElement>(":scope > .bottom-bar-item"));
+    if (!items.some((item) => item.getAttribute("aria-disabled") !== "true")) return;
+
+    const vertical = bar.closest('[data-orientation="landscape"]') !== null;
+    const rects = items.map((item) => item.getBoundingClientRect());
+    const firstCellStart = vertical ? rects[0]!.top : rects[0]!.left;
+    dragRef.current = {
+      pointerId: event.pointerId,
+      vertical,
+      origin: vertical ? event.clientY : event.clientX,
+      firstCellStart,
+      cellStarts: rects.map((rect) => (vertical ? rect.top : rect.left) - firstCellStart),
+      cellSize: vertical ? rects[0]!.height : rects[0]!.width,
+      items,
+      dragging: false,
+      target: -1,
+    };
+    bar.dataset.pressed = "";
+  };
+
+  const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    const state = dragRef.current;
+    if (!state || event.pointerId !== state.pointerId) return;
+    const bar = event.currentTarget;
+    const position = state.vertical ? event.clientY : event.clientX;
+
+    if (!state.dragging) {
+      if (Math.abs(position - state.origin) < BOTTOM_BAR_DRAG_THRESHOLD_PX) return;
+      state.dragging = true;
+      bar.setPointerCapture(event.pointerId);
+      bar.dataset.dragging = "";
+    }
+
+    const offset = getBottomBarPillOffset(
+      position - state.firstCellStart,
+      state.cellStarts,
+      state.cellSize,
+    );
+    bar.style.setProperty("--drag-offset", `${offset}px`);
+
+    const target = getBottomBarCellAt(offset, state.cellStarts);
+    if (target === state.target) return;
+    if (state.target !== -1) haptic({ wantsHaptic: haptics });
+    state.items[state.target]?.removeAttribute("data-drag-target");
+    state.items[target]?.setAttribute("data-drag-target", "");
+    state.target = target;
+  };
+
+  const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
+    const state = dragRef.current;
+    if (!state || event.pointerId !== state.pointerId) return;
+    const bar = event.currentTarget;
+    if (!state.dragging) {
+      finish(bar);
+      return;
+    }
+
+    const item = state.items[state.target];
+    if (
+      item &&
+      item.getAttribute("aria-disabled") !== "true" &&
+      !item.hasAttribute("data-active")
+    ) {
+      item.click();
+    }
+    // Release the pill a frame later, once the new selection has rendered, so it springs from
+    // the finger straight to the chosen cell instead of starting back towards the old one.
+    requestAnimationFrame(() => finish(bar));
+  };
+
+  const onPointerCancel = (event: PointerEvent<HTMLDivElement>) => {
+    if (dragRef.current?.pointerId === event.pointerId) finish(event.currentTarget);
+  };
+
+  return { onPointerDown, onPointerMove, onPointerUp, onPointerCancel };
+}
 
 interface BottomBarContextValue<T extends string> {
   items: T[];
@@ -68,9 +189,11 @@ function BottomBarRoot<T extends string>({
   /** Rendered as the last cell; the indicator can slide onto it via `data-active`. */
   trailing?: ReactNode;
 }) {
+  const { haptics } = useCanvasPreferences();
+  const drag = useBottomBarDrag(haptics);
   return (
     <BottomBarProvider items={items} onChange={onChange} value={value}>
-      <div className="mobile-bottom-bar">
+      <div className="mobile-bottom-bar" {...drag}>
         <span className="bottom-bar-indicator" aria-hidden />
         {typeof children === "function" ? children(items) : children}
         {trailing}
