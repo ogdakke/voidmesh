@@ -5,9 +5,14 @@
    tabs blur out. */
 .mobile-bottom-bar {
   --bar-gap: 4px;
-  --bar-icon: color-mix(in oklch, var(--gray-1000) 72%, transparent);
+  --bar-icon: color-mix(in oklch, var(--gray-1000) 90%, transparent);
   --bar-icon-active: var(--gray-1000);
-  --bar-halo: light-dark(rgb(255 255 255 / 0.7), rgb(0 0 0 / 0.6));
+  /* The tinted blur behind the bar can be any shade (mid-grey over dark video in light mode),
+     so icons carry their own contrast: a tight outline in the opposite tone, plus a soft glow. */
+  --bar-halo: light-dark(rgb(255 255 255 / 0.85), rgb(0 0 0 / 0.75));
+  --bar-glow: light-dark(rgb(255 255 255 / 0.45), rgb(0 0 0 / 0.4));
+  --bar-icon-outline: drop-shadow(0 0 0.6px var(--bar-halo)) drop-shadow(0 0 0.6px var(--bar-halo))
+    drop-shadow(0 0 5px var(--bar-glow));
   --bar-glide: 380ms
     linear(
       0,
@@ -151,7 +156,7 @@
     width: 1.5rem;
     z-index: 1;
     scale: 0.92;
-    filter: drop-shadow(0 0 4px var(--bar-halo));
+    filter: var(--bar-icon-outline);
     transition: scale 0.2s ease-out;
   }
 
@@ -198,7 +203,7 @@
 
   &[aria-disabled="true"] {
     cursor: not-allowed;
-    color: color-mix(in oklch, var(--gray-1000) 32%, transparent);
+    color: color-mix(in oklch, var(--gray-1000) 45%, transparent);
   }
 
   /* Fullscreen: tabs blur out so only the active fullscreen toggle remains. */
@@ -232,7 +237,7 @@
   justify-content: center;
   align-items: center;
   /* The crossfade owns the svg filter, so the halo lives on the button. */
-  filter: drop-shadow(0 0 4px var(--bar-halo));
+  filter: var(--bar-icon-outline);
 
   /* Hand filter and transition back to .icon-crossfade (layered) for the icon swap. */
   & svg {
