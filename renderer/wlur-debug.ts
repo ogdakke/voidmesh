@@ -46,6 +46,8 @@ export interface WlurOverlayDebugConfig {
   spread: number;
   /** Kawase depth up to which a full-resolution Gaussian renders the shallow blur. */
   fineDepth: number;
+  /** Kawase: share of the mix curve over which the original crossfades into the blur. */
+  fade: number;
 }
 
 /** Debug edits layered over the live overlay config; absent keys follow production. */
@@ -116,6 +118,7 @@ export function resolveWlurOverlayDebugConfig(
     levels: params.levels,
     spread: params.spread,
     fineDepth: params.fineDepth,
+    fade: params.fade,
     ...overrides,
   };
 }
@@ -140,6 +143,7 @@ export function applyWlurOverlayDebugConfig(
       levels: debugConfig.levels,
       spread: debugConfig.spread,
       fineDepth: debugConfig.fineDepth,
+      fade: debugConfig.fade,
       tint: {
         color: hexToTintColor(debugConfig.tintColor),
         amount: debugConfig.tintAmount,

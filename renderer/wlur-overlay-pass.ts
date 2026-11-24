@@ -376,6 +376,7 @@ export class WlurOverlayPass {
       params.levels,
       params.spread,
       params.fineDepth,
+      params.fade,
       params.radius,
       params.offset,
       params.interpolation,

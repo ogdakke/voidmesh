@@ -157,6 +157,7 @@ export function clampWlurParams(params?: Partial<WlurParams>): WlurParams {
     levels: clamp(params?.levels ?? DEFAULT_WLUR_PARAMS.levels, 0, MAX_WLUR_KAWASE_LEVELS),
     spread: clamp(params?.spread ?? DEFAULT_WLUR_PARAMS.spread, 0, 4),
     fineDepth: clamp(params?.fineDepth ?? DEFAULT_WLUR_PARAMS.fineDepth, 0, 4),
+    fade: clamp(params?.fade ?? DEFAULT_WLUR_PARAMS.fade, 0.001, 1),
     ...(tint ? { tint } : {}),
   };
 }

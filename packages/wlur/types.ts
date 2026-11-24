@@ -124,6 +124,14 @@ export interface WlurParams {
    */
   fineDepth?: number;
   /**
+   * Kawase only: how much of the mix curve the original image takes to crossfade into the
+   * blur. Small values switch almost immediately, which leaves a hard top edge on fine
+   * patterns; larger values let the mix curve shape a gradual fade.
+   *
+   * Range: `[0.001, 1]`.
+   */
+  fade?: number;
+  /**
    * Optional tint applied to the blurred region.
    *
    * The tint follows the same directional falloff as the blur.
@@ -210,6 +218,7 @@ export const DEFAULT_WLUR_PARAMS = Object.freeze({
   levels: 4,
   spread: 1,
   fineDepth: 2,
+  fade: 0.05,
 } satisfies WlurParams);
 
 export const DEFAULT_WLUR_QUALITY = Object.freeze({

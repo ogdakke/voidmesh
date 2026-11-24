@@ -22,6 +22,7 @@ import {
   createWlurNoiseShaderSource,
 } from "./shaders.ts";
 import {
+  DEFAULT_WLUR_PARAMS,
   WLUR_CURVE_LUT_SIZE,
   type WlurCurveInput,
   type WlurParams,
@@ -994,7 +995,9 @@ export class WlurPass {
       params.offset,
       params.interpolation,
       directionIndex,
-      0.001,
+      // Crossfade original → blur over this much of the mix curve (Gaussian scale < 1 gets
+      // 0.05 for free); near zero switches abruptly and fine patterns show a hard top edge.
+      params.fade ?? DEFAULT_WLUR_PARAMS.fade,
       params.tint?.color,
       params.tint?.amount ?? 0,
       Math.max(levels, 0.001),

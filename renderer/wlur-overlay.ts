@@ -65,6 +65,7 @@ export const DEFAULT_WLUR_OVERLAY_PARAMS = Object.freeze({
   levels: 6.64,
   spread: 0.12,
   fineDepth: 3.24,
+  fade: 0.05,
   curve: WLUR_CURVES.easeIn,
   mixCurve: WLUR_CURVES.easeIn,
   tint: {

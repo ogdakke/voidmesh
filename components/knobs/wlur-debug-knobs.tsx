@@ -43,7 +43,8 @@ type WlurDebugSetting =
         | "resolutionScale"
         | "levels"
         | "spread"
-        | "fineDepth";
+        | "fineDepth"
+        | "fade";
       label: string;
       shortLabel: string;
       kind: "number";
@@ -96,6 +97,15 @@ const WLUR_DEBUG_SETTINGS = [
     kind: "number",
     range: { min: 0, max: 4 },
     precision: 2,
+    displayRaw: true,
+  },
+  {
+    value: "fade",
+    label: "Fade into blur",
+    shortLabel: "Fade",
+    kind: "number",
+    range: { min: 0.001, max: 1 },
+    precision: 3,
     displayRaw: true,
   },
   {
@@ -180,6 +190,7 @@ const MODE_SPECIFIC_SETTINGS: Partial<Record<WlurDebugSetting["value"], WlurAlgo
   levels: "kawase",
   spread: "kawase",
   fineDepth: "kawase",
+  fade: "kawase",
 };
 
 function getVisibleWlurDebugSettings(algorithm: WlurAlgorithm): readonly WlurDebugSetting[] {
@@ -228,7 +239,8 @@ function formatSettingButtonValue(
 
   const value = configValue[setting.value];
   if (setting.displayRaw) {
-    return setting.precision > 0 ? value.toFixed(1) : `${Math.round(value)}`;
+    if (setting.precision === 0) return `${Math.round(value)}`;
+    return value.toFixed(value < 1 ? 2 : 1);
   }
 
   return `${Math.round(((value - setting.range.min) / (setting.range.max - setting.range.min)) * 100)}`;
