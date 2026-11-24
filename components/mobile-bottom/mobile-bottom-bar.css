@@ -1,17 +1,24 @@
 /* Floating tab bar: no surface of its own. The canvas WLUR overlay already blurs and tints
-   the strip behind it, so icons sit directly on that, near full-strength for contrast. One
+   the strip behind it, so icons sit directly on that. One
    shared indicator glides between cells instead of each item fading its own pill in. The
    fullscreen toggle is the last cell: while it is active the indicator sits on it and the
    tabs blur out. */
 .mobile-bottom-bar {
   --bar-gap: 4px;
-  /* The tinted blur behind the bar can be mid-grey (dark video in light mode), and the theme's
-     --gray-1000 is itself mid-grey (L 0.52 light / 0.67 dark), so icons use near-black /
-     near-white ink of their own. No filters or resting scale on icons: Safari rasterises
-     filtered, scaled-down SVGs at low resolution, which smeared them. */
-  --bar-ink: light-dark(oklch(0.18 0 0), oklch(0.97 0 0));
-  --bar-icon: color-mix(in oklch, var(--bar-ink) 85%, transparent);
-  --bar-icon-active: var(--bar-ink);
+  /* Light mode: over dark video the tinted blur is mid-grey and the theme's --gray-1000 is
+     itself mid-grey (L 0.52), so icons use near-black ink with no filters or resting scale
+     (Safari rasterises filtered, scaled-down SVGs at low resolution, which smeared them).
+     Dark mode keeps the original look: --gray-1000 with a soft dark halo (below). */
+  --bar-light-ink: oklch(0.18 0 0);
+  --bar-icon: light-dark(
+    color-mix(in oklch, var(--bar-light-ink) 85%, transparent),
+    color-mix(in oklch, var(--gray-1000) 72%, transparent)
+  );
+  --bar-icon-active: light-dark(var(--bar-light-ink), var(--gray-1000));
+  --bar-icon-disabled: light-dark(
+    color-mix(in oklch, var(--bar-light-ink) 40%, transparent),
+    color-mix(in oklch, var(--gray-1000) 32%, transparent)
+  );
   --bar-glide: 380ms
     linear(
       0,
@@ -167,6 +174,22 @@
     color: var(--bar-icon);
   }
 
+  @media (prefers-color-scheme: dark) {
+    :where(svg) {
+      scale: 0.92;
+      filter: drop-shadow(0 0 4px rgb(0 0 0 / 0.6));
+    }
+
+    &[data-active]:not([aria-disabled="true"]) svg,
+    &[data-drag-target]:not([aria-disabled="true"]) svg {
+      scale: 1;
+    }
+
+    .mobile-bottom-bar[data-dragging] > &[data-active]:not([data-drag-target]) svg {
+      scale: 0.92;
+    }
+  }
+
   &:active:not([aria-disabled="true"]) svg {
     scale: 1.08;
   }
@@ -193,7 +216,7 @@
 
   &[aria-disabled="true"] {
     cursor: not-allowed;
-    color: color-mix(in oklch, var(--bar-ink) 40%, transparent);
+    color: var(--bar-icon-disabled);
   }
 
   /* Fullscreen: tabs blur out so only the active fullscreen toggle remains. */
@@ -226,6 +249,11 @@
   display: grid;
   justify-content: center;
   align-items: center;
+
+  /* The crossfade owns the svg filter, so the dark-mode halo lives on the button. */
+  @media (prefers-color-scheme: dark) {
+    filter: drop-shadow(0 0 4px rgb(0 0 0 / 0.6));
+  }
 
   /* Hand filter and transition back to .icon-crossfade (layered) for the icon swap. */
   & svg {
