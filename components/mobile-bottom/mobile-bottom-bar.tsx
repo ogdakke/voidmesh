@@ -14,31 +14,25 @@ import { Enlarge, Reduce } from "iconoir-react";
 import { useLayout } from "#context/use-layout.ts";
 import { useCanvasPreferences } from "#context/use-canvas.ts";
 import { haptic } from "#lib/haptic.ts";
-import {
-  BOTTOM_BAR_DRAG_THRESHOLD_PX,
-  getBottomBarCellAt,
-  getBottomBarPillOffset,
-} from "./mobile-bottom-bar.lib.ts";
+import { getBottomBarCellAt, getBottomBarPillOffset } from "./mobile-bottom-bar.lib.ts";
 
 interface BottomBarDragState {
   pointerId: number;
   vertical: boolean;
-  /** Pointer position on the drag axis at press. */
-  origin: number;
   /** Viewport position of the first cell on the drag axis. */
   firstCellStart: number;
   cellStarts: number[];
   cellSize: number;
   items: HTMLButtonElement[];
-  dragging: boolean;
   target: number;
 }
 
 /**
- * Drag the selection pill across the bar: pressing lifts it, moving past a small threshold
- * makes it follow the finger (the cell under it lights up, with a haptic tick per cell), and
- * only releasing selects. Plain taps keep their normal click behaviour, because the pointer is
- * only captured once a drag starts.
+ * Scrub the selection pill across the bar. While the finger is down nothing is decided: the
+ * pill lifts and sits under the finger, tracking it 1:1 (only the initial catch-up is eased),
+ * and the cell under it merely lights up. Releasing settles: the pill springs to the nearest
+ * cell and that cell is selected, or back to the current one if the nearest is disabled. A tap
+ * is the same gesture without movement. Keyboard activation still goes through the buttons.
  */
 function useBottomBarDrag(haptics: boolean) {
   const dragRef = useRef<BottomBarDragState | null>(null);
@@ -46,10 +40,24 @@ function useBottomBarDrag(haptics: boolean) {
   const finish = (bar: HTMLElement) => {
     const state = dragRef.current;
     dragRef.current = null;
-    delete bar.dataset.pressed;
     delete bar.dataset.dragging;
+    delete bar.dataset.catching;
     bar.style.removeProperty("--drag-offset");
     for (const item of state?.items ?? []) delete item.dataset.dragTarget;
+  };
+
+  const track = (bar: HTMLElement, state: BottomBarDragState, position: number) => {
+    const offset = getBottomBarPillOffset(
+      position - state.firstCellStart,
+      state.cellStarts,
+      state.cellSize,
+    );
+    bar.style.setProperty("--drag-offset", `${offset}px`);
+    const target = getBottomBarCellAt(offset, state.cellStarts);
+    if (target === state.target) return;
+    state.items[state.target]?.removeAttribute("data-drag-target");
+    state.items[target]?.setAttribute("data-drag-target", "");
+    state.target = target;
   };
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
@@ -58,72 +66,53 @@ function useBottomBarDrag(haptics: boolean) {
     // In fullscreen the pill rests on the toggle and the tabs are hidden.
     if (bar.querySelector(":scope > .mobile-fullscreen-btn[data-active]")) return;
     const items = Array.from(bar.querySelectorAll<HTMLButtonElement>(":scope > .bottom-bar-item"));
+    // Presses on the fullscreen toggle keep their own click behaviour.
+    if (!items.some((item) => item.contains(event.target as Node))) return;
     if (!items.some((item) => item.getAttribute("aria-disabled") !== "true")) return;
 
     const vertical = bar.closest('[data-orientation="landscape"]') !== null;
     const rects = items.map((item) => item.getBoundingClientRect());
     const firstCellStart = vertical ? rects[0]!.top : rects[0]!.left;
-    dragRef.current = {
+    const state: BottomBarDragState = {
       pointerId: event.pointerId,
       vertical,
-      origin: vertical ? event.clientY : event.clientX,
       firstCellStart,
       cellStarts: rects.map((rect) => (vertical ? rect.top : rect.left) - firstCellStart),
       cellSize: vertical ? rects[0]!.height : rects[0]!.width,
       items,
-      dragging: false,
       target: -1,
     };
-    bar.dataset.pressed = "";
+    dragRef.current = state;
+    bar.setPointerCapture(event.pointerId);
+    bar.dataset.dragging = "";
+    bar.dataset.catching = "";
+    track(bar, state, vertical ? event.clientY : event.clientX);
   };
 
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     const state = dragRef.current;
     if (!state || event.pointerId !== state.pointerId) return;
     const bar = event.currentTarget;
-    const position = state.vertical ? event.clientY : event.clientX;
-
-    if (!state.dragging) {
-      if (Math.abs(position - state.origin) < BOTTOM_BAR_DRAG_THRESHOLD_PX) return;
-      state.dragging = true;
-      bar.setPointerCapture(event.pointerId);
-      bar.dataset.dragging = "";
-    }
-
-    const offset = getBottomBarPillOffset(
-      position - state.firstCellStart,
-      state.cellStarts,
-      state.cellSize,
-    );
-    bar.style.setProperty("--drag-offset", `${offset}px`);
-
-    const target = getBottomBarCellAt(offset, state.cellStarts);
-    if (target === state.target) return;
-    if (state.target !== -1) haptic({ wantsHaptic: haptics });
-    state.items[state.target]?.removeAttribute("data-drag-target");
-    state.items[target]?.setAttribute("data-drag-target", "");
-    state.target = target;
+    // Once the finger moves the pill follows it exactly; easing would make it chase.
+    delete bar.dataset.catching;
+    track(bar, state, state.vertical ? event.clientY : event.clientX);
   };
 
   const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
     const state = dragRef.current;
     if (!state || event.pointerId !== state.pointerId) return;
     const bar = event.currentTarget;
-    if (!state.dragging) {
-      finish(bar);
-      return;
-    }
-
     const item = state.items[state.target];
     if (
       item &&
       item.getAttribute("aria-disabled") !== "true" &&
       !item.hasAttribute("data-active")
     ) {
+      haptic({ wantsHaptic: haptics });
       item.click();
     }
-    // Release the pill a frame later, once the new selection has rendered, so it springs from
-    // the finger straight to the chosen cell instead of starting back towards the old one.
+    // Settle a frame later, once the selection has rendered, so the pill springs from the
+    // finger straight to the chosen cell instead of starting back towards the old one.
     requestAnimationFrame(() => finish(bar));
   };
 

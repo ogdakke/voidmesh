@@ -1,6 +1,3 @@
-/** Pointer movement (px) before a press on the tab bar becomes a pill drag. */
-export const BOTTOM_BAR_DRAG_THRESHOLD_PX = 6;
-
 /**
  * Pill offset from the first cell for a pointer at `pointer` (same axis and origin as
  * `cellStarts`): centred under the finger, clamped to the first and last cells.

@@ -116,16 +116,19 @@
     scale: 0.8;
   }
 
-  /* Pressing lifts the pill; dragging lifts it further and has it trail the finger. */
-  .mobile-bottom-bar[data-pressed] > & {
-    scale: 1.06;
-  }
-
+  /* While the finger is down the pill is lifted and sits exactly under it: no easing on the
+     position, which would make it chase the finger. Only the initial catch-up is eased. */
   .mobile-bottom-bar[data-dragging] > & {
     translate: var(--drag-offset) 0;
     scale: 1.12;
     transition:
-      translate 90ms ease-out,
+      opacity 0.15s ease-out,
+      scale 0.2s ease-out;
+  }
+
+  .mobile-bottom-bar[data-dragging][data-catching] > & {
+    transition:
+      translate 160ms ease-out,
       opacity 0.15s ease-out,
       scale 0.2s ease-out;
   }
