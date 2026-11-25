@@ -482,7 +482,9 @@ describe("paramVisibilityRules", () => {
     test("classic halftone exposes shape/scale/palette and hides print knobs", () => {
       const entity = createTestEntity({
         shaderType: ShaderType.halftone,
-        shaderParams: { halftone: { kind: HalftoneKind.classic } },
+        shaderParams: {
+          halftone: { ...config.defaults.shaderParams.halftone, kind: HalftoneKind.classic },
+        },
       });
       canvasStore.addEntity(entity);
       canvasStore.replaceSelection([entity.id]);
@@ -497,7 +499,9 @@ describe("paramVisibilityRules", () => {
     test("print halftone exposes print knobs and hides classic-only params", () => {
       const entity = createTestEntity({
         shaderType: ShaderType.halftone,
-        shaderParams: { halftone: { kind: HalftoneKind.riso } },
+        shaderParams: {
+          halftone: { ...config.defaults.shaderParams.halftone, kind: HalftoneKind.riso },
+        },
       });
       canvasStore.addEntity(entity);
       canvasStore.replaceSelection([entity.id]);
