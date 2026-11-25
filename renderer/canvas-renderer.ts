@@ -662,6 +662,7 @@ export class InfiniteCanvasRenderer {
       hasCanvasCallouts: state.canvasCallouts.length > 0,
       debugMode,
     });
+    this.#entityTexturePipeline?.flushSourceUploads();
     const prepareEnd = performance.now();
     this.#lastPhaseStats.prepareMs = tracePerformancePhase(
       "render.prepare",

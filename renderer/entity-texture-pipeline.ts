@@ -55,6 +55,25 @@ interface GifResizeSurface {
   context: OffscreenCanvasRenderingContext2D;
 }
 
+interface StagedSourceUpload {
+  source: CanvasImageSource;
+  texture: GPUTexture;
+  width: number;
+  height: number;
+  x: number;
+  y: number;
+}
+
+interface SourceUploadStage {
+  surface: GifResizeSurface | null;
+  pending: StagedSourceUpload[];
+}
+
+/** Largest tier side that is staged; larger tiers are few per frame and upload directly. */
+const STAGED_UPLOAD_MAX_SIDE = 512;
+/** Staging surface side limit (16 MiB); a batch that outgrows it flushes in parts. */
+const STAGE_MAX_SIDE = 2048;
+
 interface LodCacheLookup {
   width: number;
   height: number;
@@ -101,6 +120,9 @@ export class EntityTexturePipeline {
   #assetCacheEntryCounts = new WeakMap<object, number>();
   #entityContentRevisions = new Map<string, number>();
   #gifResizeSurfaces = new Map<string, GifResizeSurface>();
+  #stagingSourceUploads = false;
+  readonly #opaqueStage: SourceUploadStage = { surface: null, pending: [] };
+  readonly #alphaStage: SourceUploadStage = { surface: null, pending: [] };
   #renderEntityView: EffectRenderEntity | null = null;
   #sourceBytes = 0;
   #processedBytes = 0;
@@ -468,6 +490,7 @@ export class EntityTexturePipeline {
 
   beginFrame(allowLodTransitions: boolean): void {
     this.#runtime.beginFrame();
+    this.#stagingSourceUploads = true;
     this.#allowLodTransitions = allowLodTransitions;
     this.#lodTransitionPixelsRemaining = config.rendering.lodTransitionPixelBudget;
     this.#lodTransitionsUsed = 0;
@@ -563,6 +586,8 @@ export class EntityTexturePipeline {
   }
 
   endFrame(): void {
+    // Normally already flushed before submission; this keeps a missed flush from leaking.
+    this.flushSourceUploads();
     this.#runtime.endFrame();
     this.#evictToBudget();
     this.#currentFrame++;
@@ -632,6 +657,13 @@ export class EntityTexturePipeline {
       canvas.height = 1;
     }
     this.#gifResizeSurfaces.clear();
+    for (const stage of [this.#opaqueStage, this.#alphaStage]) {
+      stage.pending.length = 0;
+      if (!stage.surface) continue;
+      stage.surface.canvas.width = 1;
+      stage.surface.canvas.height = 1;
+      stage.surface = null;
+    }
     this.#entityContentRevisions.clear();
 
     this.#runtime.destroy();
@@ -648,6 +680,24 @@ export class EntityTexturePipeline {
         ? entity.mediaSource.asset.imageBitmap
         : entity.imageBitmap;
     if (source.width !== width || source.height !== height) {
+      if (
+        this.#stagingSourceUploads &&
+        entity.mediaSource.type !== MediaType.gif &&
+        width <= STAGED_UPLOAD_MAX_SIDE &&
+        height <= STAGED_UPLOAD_MAX_SIDE
+      ) {
+        const alpha = getSourceAlphaMode(entity) !== "none";
+        (alpha ? this.#alphaStage : this.#opaqueStage).pending.push({
+          source,
+          texture,
+          width,
+          height,
+          x: 0,
+          y: 0,
+        });
+        this.#sourceUploads++;
+        return;
+      }
       const surface =
         entity.mediaSource.type === MediaType.gif
           ? this.#getGifResizeSurface(entity.id, width, height)
@@ -661,6 +711,72 @@ export class EntityTexturePipeline {
       [width, height],
     );
     this.#sourceUploads++;
+  }
+
+  /**
+   * Resize and upload the small static sources admitted since `beginFrame`. Must run before
+   * the frame's commands are submitted; uploads requested outside a frame are immediate.
+   */
+  flushSourceUploads(): void {
+    this.#stagingSourceUploads = false;
+    this.#flushStage(this.#opaqueStage, false);
+    this.#flushStage(this.#alphaStage, true);
+  }
+
+  /**
+   * Shelf-pack the pending sources into one surface, draw them all, then copy each region
+   * out. A canvas is flushed and snapshotted when it is copied from, so one surface per
+   * upload pays that once per texture; staging pays it once per batch.
+   */
+  #flushStage(stage: SourceUploadStage, alpha: boolean): void {
+    const { pending } = stage;
+    let start = 0;
+    while (start < pending.length) {
+      let end = start;
+      let x = 0;
+      let y = 0;
+      let rowHeight = 0;
+      let usedWidth = 0;
+      for (; end < pending.length; end++) {
+        const item = pending[end]!;
+        if (x + item.width > STAGE_MAX_SIDE) {
+          y += rowHeight;
+          x = 0;
+          rowHeight = 0;
+        }
+        if (y + item.height > STAGE_MAX_SIDE) break;
+        item.x = x;
+        item.y = y;
+        x += item.width;
+        usedWidth = Math.max(usedWidth, x);
+        rowHeight = Math.max(rowHeight, item.height);
+      }
+      const usedHeight = y + rowHeight;
+
+      stage.surface ??= createResizeSurface(usedWidth, usedHeight, alpha);
+      const { canvas, context } = stage.surface;
+      if (canvas.width < usedWidth || canvas.height < usedHeight) {
+        // Resizing clears the surface.
+        canvas.width = Math.max(canvas.width, usedWidth);
+        canvas.height = Math.max(canvas.height, usedHeight);
+      } else if (alpha) {
+        context.clearRect(0, 0, usedWidth, usedHeight);
+      }
+      for (let index = start; index < end; index++) {
+        const item = pending[index]!;
+        context.drawImage(item.source, item.x, item.y, item.width, item.height);
+      }
+      for (let index = start; index < end; index++) {
+        const item = pending[index]!;
+        this.#device.queue.copyExternalImageToTexture(
+          { source: canvas, origin: [item.x, item.y] },
+          { texture: item.texture, colorSpace: this.#colorConfig.textureColorSpace },
+          [item.width, item.height],
+        );
+      }
+      start = end;
+    }
+    pending.length = 0;
   }
 
   #getGifResizeSurface(entityId: string, width: number, height: number): GifResizeSurface {
