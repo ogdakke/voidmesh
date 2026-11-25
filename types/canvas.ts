@@ -292,6 +292,37 @@ export const SHAPE_OPTIONS = [
   { label: "Vertical Rectangle", value: Shape.rect_v },
 ];
 
+/** Halftone screen subtypes: classic single-colour dots or simulated print screens */
+export const HalftoneKind = createEnum({
+  classic: "classic",
+  newsprint: "newsprint",
+  cmyk: "cmyk",
+  riso: "riso",
+});
+/** Halftone screen subtype */
+export type HalftoneKind = typeof HalftoneKind.infer;
+
+export const HALFTONE_KIND_OPTIONS = [
+  { value: HalftoneKind.classic, label: "Classic" },
+  { value: HalftoneKind.newsprint, label: "Newsprint" },
+  { value: HalftoneKind.cmyk, label: "CMYK" },
+  { value: HalftoneKind.riso, label: "Riso" },
+];
+
+/** Parameters for the halftone shader */
+export interface HalftoneParams {
+  /** Screen subtype */
+  kind: HalftoneKind;
+  /** Print kinds: base screen angle in degrees (0-360), plate angles are relative to it */
+  angle: number;
+  /** Print kinds: midtone dot gain / ink spread (0-1) */
+  dotGain: number;
+  /** Print kinds: paper age, fibre texture and ink absorption (0-1) */
+  paper: number;
+  /** Print kinds: plate registration error (0-1) */
+  misregistration: number;
+}
+
 /** Parameters for the blobs shader */
 export interface BlobsParams {
   /** Controls how eagerly adjacent dots merge (0.0 - 1.0, higher = more merging) */
@@ -358,6 +389,8 @@ export interface ShaderParams {
   scale: number;
   /** Effect intensity (0.0 - 5.0). Reusable across shaders. */
   intensity: number;
+  /** Parameters for the halftone shader (only used when shaderType is 'halftone') */
+  halftone?: HalftoneParams;
   /** Parameters for the blobs shader (only used when shaderType is 'blobs') */
   blobs?: BlobsParams;
   /** Parameters for the dithering shader (only used when shaderType is 'dithering') */

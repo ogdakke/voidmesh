@@ -8,6 +8,7 @@ import {
   AsciiKind,
   GlassKind,
   GlitchKind,
+  HalftoneKind,
   Shape,
 } from "#types/canvas.ts";
 import {
@@ -50,7 +51,10 @@ import {
   GlitchIcon,
   GlitchPixelSmearIcon,
   GlitchScanlineIcon,
+  HalftoneCmykIcon,
   HalftoneIcon,
+  HalftoneNewsprintIcon,
+  HalftoneRisoIcon,
   MeltIcon,
   ShapeCircleIcon,
   ShapeSquareIcon,
@@ -644,6 +648,137 @@ function MobileGlitchStyleKnobs() {
 }
 
 // ============================================================================
+// Halftone Kind Items
+// ============================================================================
+
+const HALFTONE_ITEMS: MobileStyleItem<HalftoneKind>[] = [
+  {
+    value: HalftoneKind.classic,
+    label: "Classic",
+    shortLabel: "Classic",
+    icon: () => <HalftoneIcon className="knob-icon" />,
+  },
+  {
+    value: HalftoneKind.newsprint,
+    label: "Newsprint",
+    shortLabel: "News",
+    icon: () => <HalftoneNewsprintIcon className="knob-icon" />,
+  },
+  {
+    value: HalftoneKind.cmyk,
+    label: "CMYK",
+    shortLabel: "CMYK",
+    icon: () => <HalftoneCmykIcon className="knob-icon" />,
+  },
+  {
+    value: HalftoneKind.riso,
+    label: "Riso",
+    shortLabel: "Riso",
+    icon: () => <HalftoneRisoIcon className="knob-icon" />,
+  },
+];
+
+// ============================================================================
+// Mobile Halftone Style Knobs
+// ============================================================================
+
+function MobileHalftoneStyleKnobs() {
+  const { changeHalftoneKind } = useCanvasCommands();
+  const halftoneKind = useParamValue("halftone.kind", config.defaults.shaderParams.halftone.kind);
+
+  // Floating label state
+  const [floatingLabel, setFloatingLabel] = useState<string | null>(null);
+  const floatingLabelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showFloatingLabel = (text: string) => {
+    if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
+    setFloatingLabel(text);
+    floatingLabelTimeoutRef.current = setTimeout(
+      () => setFloatingLabel(null),
+      config.ui.floatingParamLabelHideTimeoutMs,
+    );
+  };
+
+  useEffect(
+    () => () => {
+      if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
+    },
+    [],
+  );
+
+  const handleValueChange = (value: string) => {
+    changeHalftoneKind(value);
+    const item = HALFTONE_ITEMS.find((i) => i.value === value);
+    if (item) showFloatingLabel(item.label);
+  };
+
+  const handleInteractionStart = () => {
+    undo.beginTransaction();
+    if (halftoneKind.isMixed) {
+      showFloatingLabel("Mixed");
+    } else {
+      const item = HALFTONE_ITEMS.find((i) => i.value === halftoneKind.value);
+      if (item) showFloatingLabel(item.label);
+    }
+  };
+
+  const handleValueCommit = () => {
+    undo.commitTransaction();
+  };
+
+  if (!halftoneKind.isSupported) return null;
+
+  return (
+    <>
+      {floatingLabel &&
+        createPortal(
+          <div className="mobile-style-knobs__floating-label" data-visible>
+            {floatingLabel}
+          </div>,
+          document.body,
+        )}
+
+      <SliderPicker
+        value={halftoneKind.isMixed ? "" : halftoneKind.value}
+        onValueChange={handleValueChange}
+        onInteractionStart={handleInteractionStart}
+        onValueCommit={handleValueCommit}
+        className="mobile-style-knobs"
+      >
+        <SliderPickerWindow className="mobile-style-knobs__window">
+          <SliderPickerOptions
+            className="mobile-style-knobs__options"
+            aria-label="Halftone screen selection"
+          >
+            {halftoneKind.isMixed && (
+              <SliderPickerMixedItem className="mobile-style-knobs__item">
+                <button type="button" className="ui-button" tabIndex={-1}>
+                  <QuestionMark />
+                </button>
+                <span className="mobile-style-knobs__label">Mixed</span>
+              </SliderPickerMixedItem>
+            )}
+            {HALFTONE_ITEMS.map((item) => (
+              <SliderPickerItem
+                key={item.value}
+                value={item.value}
+                className="mobile-style-knobs__item"
+              >
+                <button type="button" className="ui-button" tabIndex={-1}>
+                  {item.icon()}
+                </button>
+                <span className="mobile-style-knobs__label">{item.shortLabel}</span>
+              </SliderPickerItem>
+            ))}
+          </SliderPickerOptions>
+          <div className="mobile-style-knobs__highlight" aria-hidden="true" />
+        </SliderPickerWindow>
+      </SliderPicker>
+    </>
+  );
+}
+
+// ============================================================================
 // Mobile Shape Style Knobs
 // ============================================================================
 
@@ -882,6 +1017,7 @@ export function MobileStyleKnobs() {
       <MobileAsciiStyleKnobs />
       <MobileGlassStyleKnobs />
       <MobileGlitchStyleKnobs />
+      <MobileHalftoneStyleKnobs />
       <MobileShapeStyleKnobs key={selectedShaderType} />
     </>
   );

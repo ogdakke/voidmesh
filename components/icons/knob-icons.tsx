@@ -322,6 +322,39 @@ export function GlitchPixelSmearIcon(props: IconProps) {
   );
 }
 
+export function HalftoneNewsprintIcon(props: IconProps) {
+  return (
+    <KnobSvg {...props}>
+      <rect x="3" y="4" width="18" height="16" rx="2.5" />
+      <circle fill="currentColor" stroke="none" cx="7" cy="8.5" r="1.1" />
+      <circle fill="currentColor" stroke="none" cx="10" cy="8.5" r="0.8" />
+      <circle fill="currentColor" stroke="none" cx="8.5" cy="10" r="0.95" />
+      <circle fill="currentColor" stroke="none" cx="7" cy="11.5" r="0.8" />
+      <circle fill="currentColor" stroke="none" cx="10" cy="11.5" r="0.55" />
+      <path d="M13.5 8h4M13.5 12h4M6.5 15.75h11" />
+    </KnobSvg>
+  );
+}
+
+export function HalftoneCmykIcon(props: IconProps) {
+  return (
+    <KnobSvg {...props}>
+      <circle cx="12" cy="8.25" r="5" />
+      <circle cx="8.25" cy="14.75" r="5" />
+      <circle cx="15.75" cy="14.75" r="5" />
+    </KnobSvg>
+  );
+}
+
+export function HalftoneRisoIcon(props: IconProps) {
+  return (
+    <KnobSvg {...props}>
+      <circle cx="9.5" cy="10" r="6" />
+      <circle fill="currentColor" stroke="none" cx="14.5" cy="14" r="6.5" opacity="0.4" />
+    </KnobSvg>
+  );
+}
+
 export function ShapeCircleIcon(props: IconProps) {
   return (
     <KnobSvg {...props}>
@@ -377,6 +410,35 @@ export function AngleIcon(props: IconProps) {
   return (
     <KnobSvg {...props}>
       <path d="M4 20h16M4 20 15 6M10 20a6 6 0 0 0-2.2-4.65" />
+    </KnobSvg>
+  );
+}
+
+export function DotGainIcon(props: IconProps) {
+  return (
+    <KnobSvg {...props}>
+      <circle fill="currentColor" stroke="none" cx="12" cy="12" r="3.5" />
+      <circle cx="12" cy="12" r="8.5" strokeDasharray="2 3" />
+    </KnobSvg>
+  );
+}
+
+export function PaperIcon(props: IconProps) {
+  return (
+    <KnobSvg {...props}>
+      <path d="M14.5 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7.5Z" />
+      <path d="M14.5 3v4.5H19" />
+      <path d="M8.5 12.5c1.5-.75 2.5.75 4 0s2-.5 3 0M8.5 16.5c1-.5 2 .5 3.5 0s2.5-.25 3.5 0" />
+    </KnobSvg>
+  );
+}
+
+export function MisregistrationIcon(props: IconProps) {
+  return (
+    <KnobSvg {...props}>
+      <circle cx="9.5" cy="9.5" r="4.5" />
+      <path d="M9.5 2.5v4M9.5 12.5v4M2.5 9.5h4M12.5 9.5h4" />
+      <circle cx="15" cy="15" r="4.5" strokeDasharray="1.5 2.5" />
     </KnobSvg>
   );
 }

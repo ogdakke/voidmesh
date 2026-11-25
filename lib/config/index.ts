@@ -13,6 +13,7 @@ import {
   type ViewportLensDistortionConfig,
   GlassKind,
   GlitchKind,
+  HalftoneKind,
 } from "#types/canvas.ts";
 import type { PartialDeep } from "type-fest";
 import type { easings } from "../canvas-math";
@@ -61,6 +62,7 @@ export const shaderFeatures: Record<ShaderType, ShaderFeature> = {
       "preserveColors",
       "reversePalette",
       "showOriginal",
+      "halftone",
       "palette",
       "adjustments",
       "postProcess",
@@ -163,7 +165,7 @@ export const shaderDefaults: Record<ShaderType, ShaderDefaultsConfig> = {
   },
   halftone: {
     resetParams: { size: 10, shape: Shape.circle, scale: 1.0, adjustments: { blur: 0 } },
-    mergeParams: {},
+    mergeParams: { halftone: { kind: HalftoneKind.classic } },
   },
   blobs: {
     resetParams: {
@@ -237,6 +239,40 @@ export const glitchKindResets: Record<GlitchKind, PartialDeep<ShaderParams>> = {
   [GlitchKind.scanline]: { size: 3, intensity: 1, scale: 1 },
 };
 
+/**
+ * Per-halftone-kind param resets applied when switching halftone sub-types.
+ * Every kind must specify all tunable params (size, intensity, print knobs)
+ * to ensure clean resets when switching between kinds. Print kinds turn bloom
+ * off because it blows out the paper white.
+ */
+export const halftoneKindResets: Record<HalftoneKind, PartialDeep<ShaderParams>> = {
+  [HalftoneKind.classic]: { size: 10, intensity: 1, scale: 1 },
+  [HalftoneKind.newsprint]: {
+    size: 6,
+    intensity: 1,
+    halftone: { angle: 0, dotGain: 0.35, paper: 0.8, misregistration: 0 },
+    postProcess: { bloom: { enabled: false } },
+  },
+  [HalftoneKind.cmyk]: {
+    size: 8,
+    intensity: 1,
+    halftone: { angle: 0, dotGain: 0.3, paper: 0.3, misregistration: 0.25 },
+    postProcess: { bloom: { enabled: false } },
+  },
+  [HalftoneKind.riso]: {
+    size: 8,
+    intensity: 1,
+    halftone: { angle: 0, dotGain: 0.3, paper: 0.5, misregistration: 0.5 },
+    postProcess: { bloom: { enabled: false } },
+  },
+};
+
+/** Whether a halftone kind simulates a print screen (fixed inks on paper). */
+export function isPrintHalftone(params: ShaderParams): boolean {
+  const kind = params.halftone?.kind;
+  return kind !== undefined && kind !== HalftoneKind.classic;
+}
+
 /** Error diffusion algorithms do NOT support scale parameter */
 export const errorDiffusionAlgorithms: readonly DitheringKind[] = [
   DitheringKind.floydSteinberg,
@@ -297,6 +333,18 @@ export function getCommonFeatures(shaderTypes: ShaderType[]): {
 export const paramVisibilityRules: Partial<
   Record<ShaderType, { param: ParamPaths; isVisible: (params: ShaderParams) => boolean }[]>
 > = {
+  halftone: [
+    // Print kinds use fixed inks on paper and their own dot shape.
+    { param: "shape", isVisible: (p) => !isPrintHalftone(p) },
+    { param: "scale", isVisible: (p) => !isPrintHalftone(p) },
+    { param: "preserveColors", isVisible: (p) => !isPrintHalftone(p) },
+    { param: "reversePalette", isVisible: (p) => !isPrintHalftone(p) },
+    { param: "palette", isVisible: (p) => !isPrintHalftone(p) },
+    { param: "halftone.angle", isVisible: isPrintHalftone },
+    { param: "halftone.dotGain", isVisible: isPrintHalftone },
+    { param: "halftone.paper", isVisible: isPrintHalftone },
+    { param: "halftone.misregistration", isVisible: isPrintHalftone },
+  ],
   dithering: [
     {
       param: "scale",
@@ -611,6 +659,13 @@ export const config = {
       scale: 1.0,
       intensity: 1.0,
       blobs: { eagerness: 0.5 },
+      halftone: {
+        kind: HalftoneKind.classic,
+        angle: 0,
+        dotGain: 0.3,
+        paper: 0.3,
+        misregistration: 0.25,
+      },
       dithering: { kind: DitheringKind.bayer8x8 },
       ascii: { kind: AsciiKind.standard, invert: false },
       glass: {
@@ -701,6 +756,9 @@ export const config = {
     angle: { min: 0, max: 360, step: 1, default: 0 },
     caustic: { min: 0, max: 2, step: 0.01, default: 1 },
     frostiness: { min: 0, max: 1, step: 0.01, default: 0.8 },
+    dotGain: { min: 0, max: 1, step: 0.01, default: 0.3 },
+    paper: { min: 0, max: 1, step: 0.01, default: 0.3 },
+    misregistration: { min: 0, max: 1, step: 0.01, default: 0.25 },
     highlight: { min: 0, max: 1, step: 0.01, default: 0.1 },
     dispersion: { min: 0, max: 1, step: 0.01, default: 0.6 },
     flow: { min: 0, max: 1, step: 0.01, default: 0.5 },

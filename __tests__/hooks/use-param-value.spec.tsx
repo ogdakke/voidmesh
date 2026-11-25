@@ -9,7 +9,7 @@ import { canvasStore } from "#engine";
 import { createTestEntity } from "../helpers/test-entity.ts";
 import { createAllProvidersWrapper } from "../helpers/render-with-providers.tsx";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
-import { ShaderType, DitheringKind, GlassKind } from "#types/canvas.ts";
+import { ShaderType, DitheringKind, GlassKind, HalftoneKind } from "#types/canvas.ts";
 import { config } from "#config";
 
 let cleanup: () => void;
@@ -475,6 +475,40 @@ describe("paramVisibilityRules", () => {
 
       expect(canvasStore.getParamResult("glass.angle", 0).isSupported).toBe(false);
       expect(canvasStore.getParamResult("glass.frostiness", 0.8).isSupported).toBe(false);
+    });
+  });
+
+  describe("halftone print kinds", () => {
+    test("classic halftone exposes shape/scale/palette and hides print knobs", () => {
+      const entity = createTestEntity({
+        shaderType: ShaderType.halftone,
+        shaderParams: { halftone: { kind: HalftoneKind.classic } },
+      });
+      canvasStore.addEntity(entity);
+      canvasStore.replaceSelection([entity.id]);
+
+      expect(canvasStore.getParamResult("shape", null).isSupported).toBe(true);
+      expect(canvasStore.getParamResult("scale", 1).isSupported).toBe(true);
+      expect(canvasStore.getParamResult("palette", null).isSupported).toBe(true);
+      expect(canvasStore.getParamResult("halftone.dotGain", 0).isSupported).toBe(false);
+      expect(canvasStore.getParamResult("halftone.kind", null).isSupported).toBe(true);
+    });
+
+    test("print halftone exposes print knobs and hides classic-only params", () => {
+      const entity = createTestEntity({
+        shaderType: ShaderType.halftone,
+        shaderParams: { halftone: { kind: HalftoneKind.riso } },
+      });
+      canvasStore.addEntity(entity);
+      canvasStore.replaceSelection([entity.id]);
+
+      expect(canvasStore.getParamResult("halftone.angle", 0).isSupported).toBe(true);
+      expect(canvasStore.getParamResult("halftone.dotGain", 0).isSupported).toBe(true);
+      expect(canvasStore.getParamResult("halftone.paper", 0).isSupported).toBe(true);
+      expect(canvasStore.getParamResult("halftone.misregistration", 0).isSupported).toBe(true);
+      expect(canvasStore.getParamResult("shape", null).isSupported).toBe(false);
+      expect(canvasStore.getParamResult("scale", 1).isSupported).toBe(false);
+      expect(canvasStore.getParamResult("palette", null).isSupported).toBe(false);
     });
   });
 });

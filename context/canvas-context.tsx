@@ -36,6 +36,7 @@ import {
   AsciiKind,
   GlassKind,
   GlitchKind,
+  HalftoneKind,
   MediaType,
   isGifEntity,
 } from "#types/canvas.ts";
@@ -81,7 +82,7 @@ import {
   resetDuplicatedMediaPlayback,
 } from "#lib/media-duplication.ts";
 import { tracePerformancePhase } from "#lib/performance-tracing.ts";
-import { config, glassKindResets, glitchKindResets } from "#config";
+import { config, glassKindResets, glitchKindResets, halftoneKindResets } from "#config";
 import { preferences } from "#lib/preferences.ts";
 import { paletteStore } from "#lib/palette-store.ts";
 import { analytics } from "#lib/analytics.ts";
@@ -241,6 +242,14 @@ const shaderUrlParams = {
     config.defaults.shaderParams.glitch.kind,
   ),
   glitchAngle: parseAsFloat.withDefault(config.defaults.shaderParams.glitch.angle),
+  // Halftone shader params
+  halftoneKind: parseAsStringLiteral(Object.values(HalftoneKind)).withDefault(
+    config.defaults.shaderParams.halftone.kind,
+  ),
+  halftoneAngle: parseAsFloat.withDefault(config.defaults.shaderParams.halftone.angle),
+  dotGain: parseAsFloat.withDefault(config.defaults.shaderParams.halftone.dotGain),
+  paper: parseAsFloat.withDefault(config.defaults.shaderParams.halftone.paper),
+  misregistration: parseAsFloat.withDefault(config.defaults.shaderParams.halftone.misregistration),
 };
 
 /**
@@ -398,6 +407,13 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         kind: currentRenderState.glitchKind,
         angle: currentRenderState.glitchAngle,
       },
+      halftone: {
+        kind: currentRenderState.halftoneKind,
+        angle: currentRenderState.halftoneAngle,
+        dotGain: currentRenderState.dotGain,
+        paper: currentRenderState.paper,
+        misregistration: currentRenderState.misregistration,
+      },
       palette: palette ?? config.defaults.shaderParams.palette,
       postProcess,
     };
@@ -451,6 +467,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
             asciiInvert: null,
             glitchKind: null,
             glitchAngle: null,
+            halftoneKind: null,
+            halftoneAngle: null,
+            dotGain: null,
+            paper: null,
+            misregistration: null,
           };
           const nextKey = JSON.stringify(clearedState);
           if (nextKey !== lastSyncedRenderStateRef.current) {
@@ -501,6 +522,16 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         asciiInvert: entity.shaderParams.ascii?.invert ?? config.defaults.shaderParams.ascii.invert,
         glitchKind: entity.shaderParams.glitch?.kind ?? config.defaults.shaderParams.glitch.kind,
         glitchAngle: entity.shaderParams.glitch?.angle ?? config.defaults.shaderParams.glitch.angle,
+        halftoneKind:
+          entity.shaderParams.halftone?.kind ?? config.defaults.shaderParams.halftone.kind,
+        halftoneAngle:
+          entity.shaderParams.halftone?.angle ?? config.defaults.shaderParams.halftone.angle,
+        dotGain:
+          entity.shaderParams.halftone?.dotGain ?? config.defaults.shaderParams.halftone.dotGain,
+        paper: entity.shaderParams.halftone?.paper ?? config.defaults.shaderParams.halftone.paper,
+        misregistration:
+          entity.shaderParams.halftone?.misregistration ??
+          config.defaults.shaderParams.halftone.misregistration,
         preset: paletteParams.preset,
         ppEnabled: pp?.enabled ?? ppDefaults.enabled,
         ppGrainEnabled: pp?.grain?.enabled ?? ppDefaults.grain!.enabled,
@@ -1266,6 +1297,13 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  const changeHalftoneKind = (value: string | null) => {
+    if (!value) return;
+    const kind = value as HalftoneKind;
+    const reset = halftoneKindResets[kind];
+    updateSelectedEntityParams({ ...reset, halftone: { ...reset.halftone, kind } });
+  };
+
   const setShowOriginal = (value: boolean) => {
     updateSelectedEntityParams({ showOriginal: value });
   };
@@ -1548,6 +1586,23 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         angle:
           shaderUrlParams.glitchAngle.parse(parsedParams.glitchAngle ?? "") ??
           config.defaults.shaderParams.glitch.angle,
+      },
+      halftone: {
+        kind:
+          shaderUrlParams.halftoneKind.parse(parsedParams.halftoneKind ?? "") ??
+          config.defaults.shaderParams.halftone.kind,
+        angle:
+          shaderUrlParams.halftoneAngle.parse(parsedParams.halftoneAngle ?? "") ??
+          config.defaults.shaderParams.halftone.angle,
+        dotGain:
+          shaderUrlParams.dotGain.parse(parsedParams.dotGain ?? "") ??
+          config.defaults.shaderParams.halftone.dotGain,
+        paper:
+          shaderUrlParams.paper.parse(parsedParams.paper ?? "") ??
+          config.defaults.shaderParams.halftone.paper,
+        misregistration:
+          shaderUrlParams.misregistration.parse(parsedParams.misregistration ?? "") ??
+          config.defaults.shaderParams.halftone.misregistration,
       },
       palette: palette ?? config.defaults.shaderParams.palette,
       postProcess,
@@ -2182,6 +2237,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setAsciiInvert,
     changeGlassKind,
     changeGlitchKind,
+    changeHalftoneKind,
     changePalette,
     renamePalette,
     uploadPalette,
@@ -2231,6 +2287,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       setAsciiInvert,
       changeGlassKind,
       changeGlitchKind,
+      changeHalftoneKind,
       changePalette,
       renamePalette,
       uploadPalette,
@@ -2282,6 +2339,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setAsciiInvert: (...args) => commandsImplRef.current.setAsciiInvert(...args),
     changeGlassKind: (...args) => commandsImplRef.current.changeGlassKind(...args),
     changeGlitchKind: (...args) => commandsImplRef.current.changeGlitchKind(...args),
+    changeHalftoneKind: (...args) => commandsImplRef.current.changeHalftoneKind(...args),
     changePalette: (...args) => commandsImplRef.current.changePalette(...args),
     renamePalette: (...args) => commandsImplRef.current.renamePalette(...args),
     uploadPalette: (...args) => commandsImplRef.current.uploadPalette(...args),
