@@ -14,6 +14,9 @@ vi.mock("#lib/preferences.ts", () => ({
   },
 }));
 
+// Tests share workers (isolate: false): reload onboarding-storage so it binds to the mock above
+// rather than a real preferences module another file already loaded.
+vi.resetModules();
 const {
   getOnboardingProgress,
   markOnboardingStepCompleted,

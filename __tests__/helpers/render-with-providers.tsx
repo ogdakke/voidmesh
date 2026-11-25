@@ -27,19 +27,21 @@ export interface RenderWithProvidersOptions extends Omit<RenderOptions, "wrapper
   /**
    * Skip specific providers for isolated testing
    */
-  skip?: {
-    nuqs?: boolean;
-    iconoir?: boolean;
-    toast?: boolean;
-    canvas?: boolean;
-    videoExport?: boolean;
-    exportQueue?: boolean;
-    keybind?: boolean;
-  };
+  skip?:
+    | {
+        nuqs?: boolean;
+        iconoir?: boolean;
+        toast?: boolean;
+        canvas?: boolean;
+        videoExport?: boolean;
+        exportQueue?: boolean;
+        keybind?: boolean;
+      }
+    | undefined;
   /**
    * Options for nuqs testing adapter
    */
-  nuqsOptions?: NuqsTestingOptions;
+  nuqsOptions?: NuqsTestingOptions | undefined;
 }
 
 /**
@@ -52,7 +54,7 @@ export function createAllProvidersWrapper(options: RenderWithProvidersOptions = 
   // Note: hasMemory was causing "Cannot update component while rendering" warnings
   const NuqsTestingWrapper = withNuqsTestingAdapter({
     searchParams: nuqsOptions.searchParams ?? {},
-    onUrlUpdate: nuqsOptions.onUrlUpdate,
+    ...(nuqsOptions.onUrlUpdate && { onUrlUpdate: nuqsOptions.onUrlUpdate }),
   });
 
   return function AllProviders({ children }: { children: ReactNode }) {
@@ -134,7 +136,7 @@ export function renderWithProviders(
 function createMinimalProvidersWrapper(nuqsOptions: NuqsTestingOptions = {}) {
   const NuqsTestingWrapper = withNuqsTestingAdapter({
     searchParams: nuqsOptions.searchParams ?? {},
-    onUrlUpdate: nuqsOptions.onUrlUpdate,
+    ...(nuqsOptions.onUrlUpdate && { onUrlUpdate: nuqsOptions.onUrlUpdate }),
   });
 
   return function MinimalProviders({ children }: { children: ReactNode }) {

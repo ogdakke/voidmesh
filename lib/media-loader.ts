@@ -443,7 +443,7 @@ export function createImageEntityData(
   blob: Blob,
   position: Point = { x: 0, y: 0 },
   filename?: string,
-): Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string } {
+): Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string | undefined } {
   const alphaHitGrid = createMediaAlphaHitGrid(bitmap);
   const asset = createImageAsset({ imageBitmap: bitmap, blob, alphaHitGrid });
   return {
@@ -489,7 +489,7 @@ export function createGifEntityData(
   blob: Blob,
   position: Point = { x: 0, y: 0 },
   filename?: string,
-): Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string } {
+): Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string | undefined } {
   const { frames, width, height, duration, fps } = gifResult;
   const framesWithAlpha = withGifAlphaHitGrids(frames);
 
@@ -594,7 +594,7 @@ export function createSvgEntityData(
   blob: Blob,
   position: Point = { x: 0, y: 0 },
   filename?: string,
-): Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string } {
+): Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string | undefined } {
   const { bitmap, width, height } = rasterResult;
   const alphaHitGrid = createMediaAlphaHitGrid(bitmap);
   return {
@@ -622,7 +622,7 @@ export function createVideoEntityData(
   blob: Blob,
   position: Point = { x: 0, y: 0 },
   filename?: string,
-): Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string } {
+): Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string | undefined } {
   const { videoElement, initialFrame, width, height, duration, fps, hasAudio, alphaMode } =
     videoResult;
 
@@ -658,7 +658,9 @@ export function createVideoEntityData(
 export async function loadMediaFile(
   file: File,
   position: Point = { x: 0, y: 0 },
-): Promise<(Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string }) | null> {
+): Promise<
+  (Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string | undefined }) | null
+> {
   if (isVideoFile(file)) {
     const videoResult = await loadVideo(file);
     return createVideoEntityData(videoResult, file, position, file.name);
@@ -714,7 +716,9 @@ export async function loadMediaFromBlob(
   mimeType: string,
   position: Point = { x: 0, y: 0 },
   filename?: string,
-): Promise<(Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string }) | null> {
+): Promise<
+  (Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string | undefined }) | null
+> {
   if (isVideoMimeType(mimeType)) {
     const videoResult = await loadVideo(blob);
     return createVideoEntityData(videoResult, blob, position, filename);

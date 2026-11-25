@@ -166,8 +166,6 @@ export class CanvasViewportController {
       containerHeight: this.#container.clientHeight,
       dpr,
       padding: config.canvas.fitToViewPadding,
-      minZoom: undefined,
-      maxZoom: undefined,
       insets: this.#insets,
     });
 

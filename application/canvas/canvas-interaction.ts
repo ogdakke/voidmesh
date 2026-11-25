@@ -174,8 +174,6 @@ export function createCanvasInteractionService({
           containerHeight: metrics.height,
           dpr: metrics.dpr,
           padding: options.padding,
-          minZoom: undefined,
-          maxZoom: undefined,
           insets: options.insets,
         }),
         config.canvas.animation.fitToViewDuration,

@@ -17,7 +17,7 @@ export interface TweenConfig {
   easing?: EasingFunction;
   tag?: string;
   onUpdate: (value: number) => void;
-  onComplete?: () => void;
+  onComplete?: (() => void) | undefined;
 }
 
 // ── Spring2D ───────────────────────────────────────────────────────────────
@@ -36,7 +36,7 @@ export interface SpringConfig {
   /** Damping ratio (0–1, where 1 = critical damping). Must be < 1. */
   damping: number;
   /** Sleep threshold in value units. Scalar springs default tighter than 2D motion springs. */
-  settleThreshold?: number;
+  settleThreshold?: number | undefined;
   tag?: string;
   onUpdate: (value: number) => void;
   onComplete?: () => void;
@@ -54,7 +54,7 @@ export interface Spring2DConfig {
   /** Damping ratio (0–1, where 1 = critical). Must be < 1. */
   damping: number;
   /** Sleep threshold: spring settles when offset+velocity drop below this (default 0.01) */
-  settleThreshold?: number;
+  settleThreshold?: number | undefined;
   tag?: string;
   /** Called each step with the delta to apply (scalars, no allocation) */
   onUpdate: (dx: number, dy: number) => void;

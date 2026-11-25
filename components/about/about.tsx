@@ -8,7 +8,7 @@ export function AboutSection({ children, id }: { children?: ReactNode; id?: stri
     <section className="about-section" id={id}>
       <div className="about-hero">
         <h1>
-          <img src="/favicon.webp" alt="" width={32} height={32} className="about-logo" />
+          <img src="/logo.svg" alt="" width={32} height={32} className="about-logo" />
           Voidmesh
         </h1>
         <p className="about-tagline">

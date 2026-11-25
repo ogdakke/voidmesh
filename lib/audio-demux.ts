@@ -23,7 +23,7 @@ export interface DemuxedAudio {
   /** Number of audio channels */
   numberOfChannels: number;
   /** Codec-specific description bytes (e.g. AudioSpecificConfig for AAC) */
-  description?: Uint8Array;
+  description?: Uint8Array | undefined;
 }
 
 /**

@@ -115,9 +115,9 @@ export const ColorPicker = {
 export interface ColorPickerPresetProps extends Pick<ColorPickerRootProps, "colorSpace"> {
   value: string;
   onChange: (color: string) => void;
-  onRemove?: () => void;
-  onChangeStart?: () => void;
-  onChangeEnd?: () => void;
+  onRemove?: (() => void) | undefined;
+  onChangeStart?: (() => void) | undefined;
+  onChangeEnd?: (() => void) | undefined;
   label?: string;
   isDisabled?: boolean;
 }

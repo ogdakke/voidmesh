@@ -227,7 +227,7 @@ export function MobileColorKnobs() {
           >
             {paletteParam.isMixed && (
               <SliderPickerMixedItem className="mobile-style-knobs__item">
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   <QuestionMark />
                 </button>
                 <span className="mobile-style-knobs__label">Mixed</span>
@@ -277,11 +277,14 @@ export function MobileColorKnobs() {
         </SliderPickerWindow>
       </SliderPicker>
 
-      {/* Conditional content: Upload, toggle picker, or ColorPalette editor */}
+      {/* Conditional content: Upload, toggle picker, or ColorPalette editor.
+          Each toggle gets its own picker instance: reusing one and re-targeting its value made
+          iOS Safari leave the old selected button's blue paint around the newly unselected one. */}
       {isUploadMode ? (
         <PaletteUpload onUpload={uploadPalette} variant="mobile" />
       ) : isPreserveColorsSelected ? (
         <BooleanSliderPicker
+          key="preserveColors"
           value={!!preserveColors.value}
           isMixed={preserveColors.isMixed}
           onValueChange={(v) => updateSelectedEntityParams({ preserveColors: v })}
@@ -289,6 +292,7 @@ export function MobileColorKnobs() {
         />
       ) : isReversePaletteSelected ? (
         <BooleanSliderPicker
+          key="reversePalette"
           value={!!reversePalette.value}
           isMixed={reversePalette.isMixed}
           onValueChange={(v) => updateSelectedEntityParams({ reversePalette: v })}
@@ -348,20 +352,20 @@ function BooleanSliderPicker({
         <SliderPickerOptions className="mobile-style-knobs__options" aria-label={ariaLabel}>
           {isMixed && (
             <SliderPickerMixedItem className="mobile-style-knobs__item">
-              <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+              <button type="button" className="ui-button" tabIndex={-1}>
                 <QuestionMark />
               </button>
               <span className="mobile-style-knobs__label">Mixed</span>
             </SliderPickerMixedItem>
           )}
           <SliderPickerItem value="on" className="mobile-style-knobs__item">
-            <button type="button" tabIndex={-1} className="ui-button" data-variant="primary">
+            <button type="button" tabIndex={-1} className="ui-button">
               On
             </button>
             <span className="mobile-style-knobs__label">On</span>
           </SliderPickerItem>
           <SliderPickerItem value="off" className="mobile-style-knobs__item">
-            <button type="button" tabIndex={-1} className="ui-button" data-variant="primary">
+            <button type="button" tabIndex={-1} className="ui-button">
               Off
             </button>
             <span className="mobile-style-knobs__label">Off</span>

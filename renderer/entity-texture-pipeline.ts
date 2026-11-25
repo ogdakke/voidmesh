@@ -24,7 +24,7 @@ export interface EntityTexturePipelineOptions {
   colorConfig: GpuColorConfig;
   texturePool: TexturePool | null;
   textureBudgetBytes?: number;
-  onEntityError?: (entityId: string, error: string) => void;
+  onEntityError?: ((entityId: string, error: string) => void) | undefined;
   onTextureEvicted?: (entityIds: ReadonlySet<string>) => void;
   onImmutableSourceUpload?: (texture: GPUTexture, encoder: GPUCommandEncoder) => void;
 }
@@ -106,8 +106,10 @@ export class EntityTexturePipeline {
   readonly #colorConfig: GpuColorConfig;
   readonly #runtime: EntityShaderRuntime;
   readonly #textureBudgetBytes: number;
-  readonly #onTextureEvicted?: (entityIds: ReadonlySet<string>) => void;
-  readonly #onImmutableSourceUpload?: (texture: GPUTexture, encoder: GPUCommandEncoder) => void;
+  readonly #onTextureEvicted: ((entityIds: ReadonlySet<string>) => void) | undefined;
+  readonly #onImmutableSourceUpload:
+    | ((texture: GPUTexture, encoder: GPUCommandEncoder) => void)
+    | undefined;
   #currentFrame = 0;
   #sourceTextureAllocations = 0;
   #processedTextureAllocations = 0;

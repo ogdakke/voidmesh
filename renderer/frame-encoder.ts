@@ -22,9 +22,9 @@ export interface FrameEncoderOptions {
   fps: number;
   duration: number;
   format: "mp4" | "mov";
-  quality?: QualityPreset;
+  quality?: QualityPreset | undefined;
   /** Explicit bitrate in bps. Overrides auto-calculation. */
-  bitrate?: number;
+  bitrate?: number | undefined;
   audioData?: DemuxedAudio | null;
 }
 

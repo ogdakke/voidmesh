@@ -12,7 +12,7 @@ export interface SliderProps extends SliderRootProps<number> {
   showValue?: boolean;
   label?: string;
   thumbLabels?: string[];
-  onInteractionStart?: () => void;
+  onInteractionStart?: (() => void) | undefined;
 }
 
 function SliderValueInput({
@@ -30,7 +30,7 @@ function SliderValueInput({
   step: number;
   onValueChange: (value: number) => void;
   onValueCommitted: (value: number) => void;
-  onInteractionStart?: () => void;
+  onInteractionStart?: (() => void) | undefined;
 }) {
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState("");

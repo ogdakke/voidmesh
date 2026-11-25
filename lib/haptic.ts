@@ -21,20 +21,18 @@
 
 import type { ThunkSync } from "#types/index.ts";
 
-export const supportsHaptic: ThunkSync<boolean> = () =>
-  typeof window !== "undefined" ? window.matchMedia("(pointer: coarse)").matches : false;
-
 /**
- * Type guard to check if navigator supports vibrate API
+ * Haptics need a coarse pointer and the Vibration API. iOS WebKit has no
+ * `navigator.vibrate`, so iOS reports no haptic support.
  */
-function hasVibrate(nav: Navigator): nav is Navigator {
-  return "vibrate" in nav && typeof nav.vibrate === "function";
-}
+export const supportsHaptic: ThunkSync<boolean> = () =>
+  typeof window !== "undefined" &&
+  "vibrate" in navigator &&
+  typeof navigator.vibrate === "function" &&
+  window.matchMedia("(pointer: coarse)").matches;
 
 /**
- * Trigger haptic feedback on mobile devices.
- *
- * Uses Vibration API on Android/modern browsers, and iOS checkbox trick on iOS.
+ * Trigger haptic feedback via the Vibration API on supporting touch devices.
  *
  * <Button onClick={haptic}>Haptic</Button>
  */
@@ -44,27 +42,6 @@ export function haptic({
 }: { pattern?: VibratePattern; wantsHaptic?: boolean } = {}) {
   try {
     if (wantsHaptic === false || !supportsHaptic()) return;
-
-    if (hasVibrate(navigator)) {
-      navigator.vibrate(pattern ?? 50);
-      return;
-    }
-
-    // iOS haptic trick via checkbox switch element
-    const label = document.createElement("label");
-    label.ariaHidden = "true";
-    label.style.display = "none";
-
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.setAttribute("switch", "");
-    label.appendChild(input);
-
-    try {
-      document.head.appendChild(label);
-      label.click();
-    } finally {
-      document.head.removeChild(label);
-    }
+    navigator.vibrate(pattern ?? 50);
   } catch {}
 }

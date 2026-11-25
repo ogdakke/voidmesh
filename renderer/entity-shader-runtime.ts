@@ -26,7 +26,7 @@ export interface EntityShaderRuntimeOptions {
   device: GPUDevice;
   colorConfig: GpuColorConfig;
   texturePool: TexturePool | null;
-  onEntityError?: (entityId: string, error: string) => void;
+  onEntityError?: ((entityId: string, error: string) => void) | undefined;
 }
 
 export type EntityShaderSource =
@@ -55,7 +55,7 @@ export class EntityShaderRuntime {
   }> = [];
   #shaderContext: ShaderContext;
   #initialized = false;
-  #onEntityError?: (entityId: string, error: string) => void;
+  #onEntityError: ((entityId: string, error: string) => void) | undefined;
 
   constructor(options: EntityShaderRuntimeOptions) {
     this.#device = options.device;
@@ -134,9 +134,9 @@ export class EntityShaderRuntime {
     width: number;
     height: number;
     respectShowOriginal: boolean;
-    sourceAlphaMode?: MediaAlphaMode;
+    sourceAlphaMode?: MediaAlphaMode | undefined;
     /** The part of the output that shows; passes may skip the rest. */
-    outputRegion?: ShaderOutputRegion | null;
+    outputRegion?: ShaderOutputRegion | null | undefined;
   }): void {
     const { entity, source, outputTexture, encoder, width, height } = params;
 

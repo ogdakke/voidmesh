@@ -117,8 +117,6 @@ function animateToEntity(
     containerHeight: (container as HTMLElement).clientHeight,
     dpr: window.devicePixelRatio,
     padding: 0.15,
-    minZoom: undefined,
-    maxZoom: undefined,
     insets,
   });
 

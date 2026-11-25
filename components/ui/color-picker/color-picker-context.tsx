@@ -14,11 +14,11 @@ export interface ColorPickerRootProps {
   /** CSS color string, e.g. "color(display-p3 0.5 0.3 0.8 / 0.5)" or "#ff0000" */
   value: string;
   onChange: (css: string) => void;
-  onChangeStart?: () => void;
-  onChangeEnd?: () => void;
-  disabled?: boolean;
+  onChangeStart?: (() => void) | undefined;
+  onChangeEnd?: (() => void) | undefined;
+  disabled?: boolean | undefined;
   /** Picker capability hint used to enable Display P3-specific UI/output */
-  colorSpace?: ColorSpace;
+  colorSpace?: ColorSpace | undefined;
 }
 
 export function Root({

@@ -19,6 +19,8 @@ Read the nearest subsystem `AGENTS.md` before editing that area.
 
 React 19 with Compiler, Vite 8, WebGPU, strict TypeScript, Bun, oxlint.
 
+The Bun version is pinned once in `package.json#packageManager`; CI (`bun-version-file`) and Vercel (`installCommand` in `vercel.json`) both read it. Bump it there only.
+
 Cross-module imports use the `#...` aliases in `package.json#imports`. Do not bypass module boundaries with relative cross-subsystem imports. Only `engine/index.ts` and `types/index.ts` are barrel exports.
 
 ## Required Conventions
@@ -26,6 +28,7 @@ Cross-module imports use the `#...` aliases in `package.json#imports`. Do not by
 - Use `createEnum()` from `types/index.ts`; never use TypeScript `enum`.
 - Use native `#` private fields, not the `private` keyword.
 - Never use `typeof import("...").Type`; write a normal type import or local type alias.
+- `exactOptionalPropertyTypes` is on: declare `prop?: T | undefined` when callers pass through possibly-undefined values; for external APIs, omit the key with a conditional spread instead of passing `undefined`.
 - Do not add `"use client"` or `"use server"`; this is a SPA.
 - Do not import package internals. Use the public API and `opensrc path <package>` when source inspection is needed.
 - Do not add fallback behavior unless it is necessary and the reason is documented.

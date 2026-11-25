@@ -15,6 +15,10 @@ export default defineConfig(({ mode }) => {
 
   return {
     publicDir: resolve(import.meta.dirname, "public"),
+    // Vercel only exposes VITE_-prefixed vars to the client; preview builds gate debug tooling.
+    define: {
+      "import.meta.env.VITE_VERCEL_ENV": JSON.stringify(env.VERCEL_ENV ?? ""),
+    },
     appType: "spa",
     server: {
       allowedHosts: true,
@@ -23,7 +27,7 @@ export default defineConfig(({ mode }) => {
       },
       proxy: {
         "/m/": {
-          target: env.ASSET_URL,
+          ...(env.ASSET_URL !== undefined && { target: env.ASSET_URL }),
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/m\//, "/media/"),
         },
@@ -32,7 +36,7 @@ export default defineConfig(({ mode }) => {
     preview: {
       proxy: {
         "/m/": {
-          target: env.ASSET_URL,
+          ...(env.ASSET_URL !== undefined && { target: env.ASSET_URL }),
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/m\//, "/media/"),
         },
@@ -62,6 +66,8 @@ export default defineConfig(({ mode }) => {
           "favicon-64x64.png",
           "favicon.png",
           "favicon.webp",
+          "logo.svg",
+          "onboarding-starter.webp",
           "apple-touch-icon.png",
           "assets/app-icons/local/favicon-16x16.png",
           "assets/app-icons/local/favicon-32x32.png",

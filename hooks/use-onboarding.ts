@@ -104,7 +104,7 @@ export function useOnboarding({ containerRef, ready }: UseOnboardingOptions): Us
 
     const start = async () => {
       try {
-        const response = await fetch("/favicon.webp");
+        const response = await fetch("/onboarding-starter.webp");
         const blob = await response.blob();
         const center = interaction.getViewportLayoutCenter({
           width: container.clientWidth,
@@ -115,7 +115,7 @@ export function useOnboarding({ containerRef, ready }: UseOnboardingOptions): Us
           blob,
           blob.type || "image/webp",
           center,
-          "favicon.webp",
+          "onboarding-starter.webp",
         );
         if (!entity || cancelled) return;
 

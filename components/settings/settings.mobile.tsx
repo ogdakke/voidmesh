@@ -7,7 +7,10 @@ import { MoreVert } from "iconoir-react";
 import { useState } from "react";
 import "./settings.mobile.css";
 import { CanvasLensingPreviews } from "./canvas-lensing-previews.tsx";
+import { isPreviewBuild } from "#lib/build-env.ts";
+import { supportsHaptic } from "#lib/haptic.ts";
 import {
+  DebugModeToggle,
   FancyDeleteToggle,
   FeedbackLink,
   HapticsToggle,
@@ -73,12 +76,19 @@ export default function SettingsDrawer() {
             <div className="settings-drawer-switch">
               <FancyDeleteToggle />
             </div>
-            <div className="settings-drawer-switch">
-              <HapticsToggle />
-            </div>
+            {supportsHaptic() && (
+              <div className="settings-drawer-switch">
+                <HapticsToggle />
+              </div>
+            )}
             <div className="settings-drawer-switch">
               <OverlapEffectToggle />
             </div>
+            {isPreviewBuild && (
+              <div className="settings-drawer-switch">
+                <DebugModeToggle />
+              </div>
+            )}
             <hr className="divider" />
             <div className="settings-drawer-ext-item field-label">
               <LinkItem>

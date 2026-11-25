@@ -1,7 +1,7 @@
 import { useParamValue, type ParamResult } from "#hooks/use-param-value.ts";
 import { useCanvasCommands, useSelectedShaderType } from "#context/use-canvas.ts";
 import { type ParamPaths, type ShaderParams, type ShaderType } from "#types/canvas.ts";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   SliderPicker,
@@ -15,7 +15,27 @@ import { InfiniteSlider } from "../ui/infinite-slider/index.ts";
 import { TimeSlider } from "../ui/time-slider/time-slider.tsx";
 import { getEffectiveDefault } from "#lib/get-effective-default.ts";
 import { config } from "#config";
-import { PauseSolid, PlaySolid } from "iconoir-react";
+import {
+  Droplet,
+  Flash,
+  PauseSolid,
+  PlaySolid,
+  ScaleFrameEnlarge,
+  SnowFlake,
+  Sparks,
+  SunLight,
+  Wind,
+} from "iconoir-react";
+import {
+  AngleIcon,
+  BlurIcon,
+  CausticIcon,
+  ContrastIcon,
+  DispersionIcon,
+  EagernessIcon,
+  RefractionIcon,
+  SizeIcon,
+} from "#components/icons/knob-icons.tsx";
 import type { PartialDeep } from "type-fest";
 import { useTimeControl } from "#hooks/use-time-control.ts";
 
@@ -149,8 +169,31 @@ const AllSlideyParamsInOrder = [
 
 type SlideyParam = (typeof AllSlideyParamsInOrder)[number];
 
+/** Picker icon per param; time renders its own play/pause toggle. */
+const paramIcons: Record<
+  Exclude<SlideyParam["value"], "time">,
+  (shaderType: ShaderType) => ReactNode
+> = {
+  size: () => <SizeIcon className="knob-icon" />,
+  intensity: (s) =>
+    s === "glass" ? <RefractionIcon className="knob-icon" /> : <Flash className="knob-icon" />,
+  scale: () => <ScaleFrameEnlarge className="knob-icon" />,
+  "blobs.eagerness": () => <EagernessIcon className="knob-icon" />,
+  "glass.angle": () => <AngleIcon className="knob-icon" />,
+  "glitch.angle": () => <AngleIcon className="knob-icon" />,
+  "glass.caustic": () => <CausticIcon className="knob-icon" />,
+  "glass.frostiness": () => <SnowFlake className="knob-icon" />,
+  "glass.highlight": () => <Sparks className="knob-icon" />,
+  "glass.dispersion": () => <DispersionIcon className="knob-icon" />,
+  "glass.flow": () => <Wind className="knob-icon" />,
+  "adjustments.brightness": () => <SunLight className="knob-icon" />,
+  "adjustments.contrast": () => <ContrastIcon className="knob-icon" />,
+  "adjustments.saturation": () => <Droplet className="knob-icon" />,
+  "adjustments.blur": () => <BlurIcon className="knob-icon" />,
+};
+
 // ---------------------------------------------------------------------------
-// ActiveParamSlider — single slider instance for all non-time params
+// ActiveParamSlider — slider for the selected non-time param
 // ---------------------------------------------------------------------------
 
 interface ActiveParamSliderProps {
@@ -291,9 +334,11 @@ export function ParamsKnobs() {
         />
       )}
 
-      {/* Single InfiniteSlider for all non-time params — no mount/unmount when switching */}
+      {/* One slider per param: a shared instance kept coasting after a param switch and wrote
+          the previous param's momentum into the newly selected one. */}
       {selectedKnob.value !== "time" && paramValues[selectedKnob.value] && (
         <ActiveParamSlider
+          key={selectedKnob.value}
           param={selectedKnob}
           paramResult={paramValues[selectedKnob.value]!}
           shaderType={selectedShaderType}
@@ -355,7 +400,6 @@ function ShaderMobileSelect({
                     type="button"
                     tabIndex={-1}
                     className="ui-button mobile-style-knobs__time-toggle icon-crossfade"
-                    data-variant="primary"
                     aria-label={isTimeAutoPlaying ? "Pause" : "Play"}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -384,7 +428,7 @@ function ShaderMobileSelect({
                 value={param.value}
                 className="mobile-style-knobs__item"
               >
-                <button type="button" tabIndex={-1} className="ui-button" data-variant="primary">
+                <button type="button" tabIndex={-1} className="ui-button">
                   {isMixed
                     ? "M"
                     : hasChanged && currentValue != null
@@ -394,7 +438,7 @@ function ShaderMobileSelect({
                           param.range.max,
                           "displayRaw" in param,
                         )
-                      : label.at(0)?.toUpperCase()}
+                      : paramIcons[param.value](shaderType)}
                 </button>
                 <span className="mobile-style-knobs__label">{label}</span>
               </SliderPickerItem>

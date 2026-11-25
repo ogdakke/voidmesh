@@ -51,7 +51,7 @@ interface DeserializationInternPool {
 type ResolvedSerializedEntity = SerializedEntity & {
   mediaFile: string;
   shaderParams: ShaderParams;
-  originalPalette?: ColorPalette;
+  originalPalette?: ColorPalette | undefined;
   compactShaderParamsIdentity?: number;
 };
 
