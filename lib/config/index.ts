@@ -353,9 +353,7 @@ export function getCommonFeatures(shaderTypes: ShaderType[]): {
 export const paramVisibilityRules: Partial<
   Record<ShaderType, { param: ParamPaths; isVisible: (params: ShaderParams) => boolean }[]>
 > = {
-  print: [
-    { param: "palette", isVisible: usesPaletteInks },
-  ],
+  print: [{ param: "palette", isVisible: usesPaletteInks }],
   dithering: [
     {
       param: "scale",
