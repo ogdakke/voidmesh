@@ -277,11 +277,14 @@ export function MobileColorKnobs() {
         </SliderPickerWindow>
       </SliderPicker>
 
-      {/* Conditional content: Upload, toggle picker, or ColorPalette editor */}
+      {/* Conditional content: Upload, toggle picker, or ColorPalette editor.
+          Each toggle gets its own picker instance: reusing one and re-targeting its value made
+          iOS Safari leave the old selected button's blue paint around the newly unselected one. */}
       {isUploadMode ? (
         <PaletteUpload onUpload={uploadPalette} variant="mobile" />
       ) : isPreserveColorsSelected ? (
         <BooleanSliderPicker
+          key="preserveColors"
           value={!!preserveColors.value}
           isMixed={preserveColors.isMixed}
           onValueChange={(v) => updateSelectedEntityParams({ preserveColors: v })}
@@ -289,6 +292,7 @@ export function MobileColorKnobs() {
         />
       ) : isReversePaletteSelected ? (
         <BooleanSliderPicker
+          key="reversePalette"
           value={!!reversePalette.value}
           isMixed={reversePalette.isMixed}
           onValueChange={(v) => updateSelectedEntityParams({ reversePalette: v })}
