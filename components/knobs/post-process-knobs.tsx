@@ -2,7 +2,7 @@ import { useCanvasCommands } from "#context/use-canvas.ts";
 import { useParamValue } from "#hooks/use-param-value.ts";
 import { config } from "#config";
 import { undo } from "#lib/undo.ts";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   SliderPicker,
@@ -13,6 +13,15 @@ import {
 import "./knobs.css";
 import type { ParamPaths } from "#types/canvas.ts";
 import { InfiniteSlider } from "../ui/infinite-slider";
+import {
+  BloomIntensityIcon,
+  BloomSoftnessIcon,
+  BloomSpreadIcon,
+  BloomThresholdIcon,
+  ChromaticAberrationIcon,
+  GrainIntensityIcon,
+  GrainSizeIcon,
+} from "#components/icons/knob-icons.tsx";
 
 const ppDefaults = config.defaults.shaderParams.postProcess!;
 
@@ -107,6 +116,18 @@ const PostProcessParamsInOrder = [
   max: number;
   defaultValue: number;
 }[];
+
+type PostProcessParamValue = (typeof PostProcessParamsInOrder)[number]["value"];
+
+const postProcessIcons: Record<PostProcessParamValue, () => ReactNode> = {
+  "postProcess.grain.size": () => <GrainSizeIcon className="knob-icon" />,
+  "postProcess.grain.intensity": () => <GrainIntensityIcon className="knob-icon" />,
+  "postProcess.bloom.threshold": () => <BloomThresholdIcon className="knob-icon" />,
+  "postProcess.bloom.intensity": () => <BloomIntensityIcon className="knob-icon" />,
+  "postProcess.bloom.filterRadius": () => <BloomSpreadIcon className="knob-icon" />,
+  "postProcess.bloom.softness": () => <BloomSoftnessIcon className="knob-icon" />,
+  "postProcess.chromaticAberration.offset": () => <ChromaticAberrationIcon className="knob-icon" />,
+};
 
 type PostProcessParam = (typeof PostProcessParamsInOrder)[number];
 
@@ -342,7 +363,7 @@ export function PostProcessMobileKnobs() {
                       ? "M"
                       : hasChanged
                         ? formatParamValue(currentValue, param.min, param.max)
-                        : param.label.at(0)?.toUpperCase()}
+                        : postProcessIcons[param.value]()}
                   </button>
                   <span className="mobile-style-knobs__label">{param.label}</span>
                 </SliderPickerItem>
