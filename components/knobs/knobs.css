@@ -140,6 +140,14 @@
   }
 }
 
+/* Knob picker icons (components/icons/knob-icons.tsx and the iconoir glyphs used beside them)
+   are drawn for 22px inside the 40px option button. */
+.knob-icon {
+  width: 1.375rem;
+  height: 1.375rem;
+  flex: none;
+}
+
 .mobile-style-knobs__time-toggle {
   display: grid;
   place-items: center;
