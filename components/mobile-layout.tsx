@@ -12,23 +12,17 @@ import { Canvas } from "./canvas";
 import { MediaControls } from "./media-controls/media-controls.tsx";
 import { MobileControls } from "./mobile-controls.tsx";
 import { BottomBarItem, MobileBottomBar } from "./mobile-bottom/mobile-bottom-bar.tsx";
-import { resolveActiveBarItem } from "./mobile-bottom/mobile-bottom-bar.lib.ts";
-import { debugBarItem, items, type BarItem, type DebugBarItem } from "./mobile-bottom/bar-items.ts";
+import { useMobileBarItems, type MobileBarItem } from "./mobile-bottom/use-mobile-bar-items.ts";
+import { debugBarItem, items } from "./mobile-bottom/bar-items.ts";
 import { DeleteDropZone } from "./delete-drop-zone/delete-drop-zone.tsx";
 import { ActionLayer } from "./action-layer/action-layer.tsx";
 import { CopyPasteDrawer } from "./action-layer/copy-paste-drawer.tsx";
 import { IonDuplicateOutline } from "./icons/duplicate.tsx";
 import { MaterialSymbolsResetImage } from "./icons/reset-image.tsx";
 import { MobileExportDrawer } from "./export-knobs/export-knobs.mobile.tsx";
-import {
-  useCanvasCommands,
-  useDebugMode,
-  useMultiSelectMode,
-  useSelectedEntityIds,
-} from "#context/use-canvas.ts";
+import { useCanvasCommands, useDebugMode, useMultiSelectMode } from "#context/use-canvas.ts";
 import { useActionLayer } from "#hooks/use-action-layer.ts";
 import { useLayout } from "#context/use-layout.ts";
-import { useParamValue } from "#hooks/use-param-value.ts";
 import { useEntityDrag } from "#hooks/use-entity-drag.ts";
 import { useIsCompactLandscape } from "#hooks/use-is-mobile.ts";
 import { OrientationContext } from "#ui/orientation/index.ts";
@@ -65,40 +59,14 @@ function MobileActionLayer() {
 }
 
 function MobileFloat({ isLandscape }: { isLandscape: boolean }) {
-  const [selectedItem, setSelectedItem] = useState<BarItem | DebugBarItem | null>(items.at(0)!);
   const multiSelectMode = useMultiSelectMode();
-  const selectedEntityIds = useSelectedEntityIds();
   const { entityDragActive } = useEntityDrag();
   const { isFullscreen } = useLayout();
   const { active: actionLayerActive } = useActionLayer();
   const debugMode = useDebugMode();
-  const palette = useParamValue("palette", null);
-  const bottomBarDisabled = multiSelectMode || selectedEntityIds.size === 0 || isFullscreen;
+  const { activeItem, disabledByItem, setActiveItem } = useMobileBarItems();
   const hideMobileControls = isFullscreen || actionLayerActive || entityDragActive;
   const hideMediaControls = hideMobileControls || multiSelectMode;
-
-  const propsMapByItem: Record<BarItem, { disabled: boolean }> = {
-    "adjustments and post-processing": {
-      disabled: bottomBarDisabled,
-    },
-    colors: {
-      disabled: bottomBarDisabled || !palette.isSupported,
-    },
-    parameters: {
-      disabled: bottomBarDisabled,
-    },
-    style: {
-      disabled: bottomBarDisabled,
-    },
-  };
-  const debugItemDisabled = !debugMode || isFullscreen;
-  // Derived, not reset in state: an item can become disabled from outside the bar
-  // (selection change, effect change), and its panel would otherwise render nothing.
-  const activeItem = resolveActiveBarItem<BarItem | DebugBarItem>(
-    selectedItem,
-    debugMode ? [...items, debugBarItem] : items,
-    (item) => (item === debugBarItem ? debugItemDisabled : propsMapByItem[item].disabled),
-  );
 
   return (
     <div className="mobile-float" data-fullscreen={isFullscreen || undefined}>
@@ -113,26 +81,26 @@ function MobileFloat({ isLandscape }: { isLandscape: boolean }) {
 
       <MobileBottomBar
         items={items}
-        onChange={(item) => setSelectedItem(item as BarItem | DebugBarItem | null)}
+        onChange={(item) => setActiveItem(item as MobileBarItem | null)}
         value={activeItem}
       >
-        <BottomBarItem label="style" {...propsMapByItem["style"]}>
+        <BottomBarItem label="style" disabled={disabledByItem["style"]}>
           <Component />
         </BottomBarItem>
-        <BottomBarItem label="parameters" {...propsMapByItem["parameters"]}>
+        <BottomBarItem label="parameters" disabled={disabledByItem["parameters"]}>
           <ControlSlider style={{ marginInline: "1px -1px" }} />
         </BottomBarItem>
-        <BottomBarItem label="colors" {...propsMapByItem["colors"]}>
+        <BottomBarItem label="colors" disabled={disabledByItem["colors"]}>
           <Palette />
         </BottomBarItem>
         <BottomBarItem
           label="adjustments and post-processing"
-          {...propsMapByItem["adjustments and post-processing"]}
+          disabled={disabledByItem["adjustments and post-processing"]}
         >
           <ColorFilter />
         </BottomBarItem>
         {debugMode && (
-          <BottomBarItem label={debugBarItem} disabled={debugItemDisabled}>
+          <BottomBarItem label={debugBarItem} disabled={disabledByItem[debugBarItem]}>
             <Settings />
           </BottomBarItem>
         )}
