@@ -1709,12 +1709,8 @@ export class InfiniteCanvasRenderer {
     const pipeline = this.#entityTexturePipeline;
     if (pipeline?.isProcessedTexturePartial(entityId)) {
       // Only what showed last frame was processed; the snapshot needs the whole entity.
-      const processed = pipeline.getProcessedEntityTexture(entityId)!;
       const encoder = this.#device.createCommandEncoder();
-      pipeline.renderEntityToTexture(entity, encoder, {
-        width: processed.width,
-        height: processed.height,
-      });
+      pipeline.completePartialProcessedTexture(entity, encoder);
       this.#device.queue.submit([encoder.finish()]);
     }
     const renderedTexture =

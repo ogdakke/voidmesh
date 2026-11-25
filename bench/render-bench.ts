@@ -81,6 +81,8 @@ interface BenchScenario {
   opaqueSource?: boolean | undefined;
   /** Fixed viewport in place of the default one at the origin. */
   viewport?: Viewport | undefined;
+  /** Zoom from `min` to `max` and back over each sample, about the canvas centre. */
+  zoomRoundTrip?: { min: number; max: number } | undefined;
 }
 
 type BenchResourceStats = ReturnType<InfiniteCanvasRenderer["getResourceStats"]>;
@@ -260,6 +262,7 @@ declare global {
     __collectVoidmeshRenderBenchMetadata?: () => Promise<BenchMetadata>;
     __validateVoidmeshStagedSourceUploads?: typeof validateStagedSourceUploads;
     __validateVoidmeshContinuousCulling?: typeof validateContinuousCulling;
+    __compareVoidmeshContinuousOutputSizing?: typeof compareContinuousOutputSizing;
   }
 }
 
@@ -626,6 +629,14 @@ const hiddenFlowingGlassScenarios: BenchScenario[] = [
     description:
       "Flowing glass on a 4K image zoomed to 3x, so most of the entity is outside the viewport.",
     viewport: { offset: { x: 500, y: 250 }, zoom: 3 },
+  }),
+  deriveScenario("multi-25-flowing-glass-continuous", {
+    id: "multi-25-flowing-glass-zoom-continuous",
+    label: "25 1024px entities, flowing glass, zoom round trip",
+    description:
+      "Zooms the 25 flowing-glass entities in and out, so screen-sized outputs are reallocated as they grow.",
+    zoomRoundTrip: { min: 0.6, max: 2 },
+    frames: 120,
   }),
 ];
 
@@ -1045,7 +1056,21 @@ async function createEntities(scenario: BenchScenario): Promise<BenchEntitySet> 
     }
     releaseOwnedImageAssets(ownedAssets);
 
-    const { viewport } = scenario;
+    const { viewport, zoomRoundTrip } = scenario;
+    const getZoomedViewport = zoomRoundTrip
+      ? (_frameIndex: number, sampleFrameIndex: number): Viewport => {
+          const progress = sampleFrameIndex / Math.max(1, scenario.frames - 1);
+          const roundTrip = 1 - Math.abs(progress * 2 - 1);
+          const zoom = zoomRoundTrip.min + (zoomRoundTrip.max - zoomRoundTrip.min) * roundTrip;
+          return {
+            offset: {
+              x: CANVAS_WIDTH / 2 - CANVAS_WIDTH / 2 / zoom,
+              y: CANVAS_HEIGHT / 2 - CANVAS_HEIGHT / 2 / zoom,
+            },
+            zoom,
+          };
+        }
+      : undefined;
     return {
       entities,
       beforeFrame:
@@ -1054,7 +1079,7 @@ async function createEntities(scenario: BenchScenario): Promise<BenchEntitySet> 
               for (const entity of entities) entity.textureDirty = true;
             }
           : undefined,
-      getViewport: viewport ? () => viewport : undefined,
+      getViewport: getZoomedViewport ?? (viewport ? () => viewport : undefined),
       cleanup: () => disposeBenchEntities(entities),
     };
   } catch (error) {
@@ -2354,6 +2379,113 @@ export async function validateContinuousCulling() {
   return result;
 }
 
+/**
+ * Renders flowing glass with its output at the LOD tier and at screen size, at the same
+ * shader time, and reports how far the two frames are apart, with both as PNG. Unlike
+ * culling this is not expected to be identical: the effect is evaluated on fewer pixels.
+ */
+export async function compareContinuousOutputSizing() {
+  const benchRenderer = await getRenderer();
+  const device = benchRenderer.device;
+  if (!device) throw new Error("Output sizing comparison GPU is unavailable");
+  const cases: Array<{ scenario: BenchScenario; viewport: Viewport }> = [
+    { scenario: hiddenFlowingGlassScenarios[0]!, viewport: { offset: { x: 0, y: 0 }, zoom: 1 } },
+    {
+      scenario: hiddenFlowingGlassScenarios[1]!,
+      viewport: { offset: { x: 141, y: 79 }, zoom: 1 },
+    },
+  ];
+  const readback = new OffscreenCanvas(canvas.width, canvas.height);
+  const context = readback.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("Output sizing readback context is unavailable");
+  const followedScreen = config.rendering.continuousOutputFollowsScreen;
+  const toDataUrl = async (): Promise<string> => {
+    const blob = await readback.convertToBlob({ type: "image/png" });
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.addEventListener("load", () => resolve(reader.result as string));
+      reader.addEventListener("error", () => reject(reader.error ?? new Error("PNG read failed")));
+      reader.readAsDataURL(blob);
+    });
+  };
+  const results: Array<{
+    id: string;
+    devicePixelRatio: number;
+    tierProcessedBytes: number;
+    screenProcessedBytes: number;
+    meanAbsDifference: number;
+    p99Difference: number;
+    maxDifference: number;
+    tierPng: string;
+    screenPng: string;
+  }> = [];
+
+  try {
+    for (const { scenario, viewport } of cases) {
+      const entitySet = await createEntities(scenario);
+      try {
+        const capture = async (followScreen: boolean) => {
+          config.rendering.continuousOutputFollowsScreen = followScreen;
+          for (let frame = 0; frame < 14; frame += 1) {
+            for (const entity of entitySet.entities) {
+              entity.shaderParams.time = CULLING_GUARD_TIME;
+            }
+            benchRenderer.render(createRenderState(entitySet.entities, true, viewport));
+          }
+          context.clearRect(0, 0, readback.width, readback.height);
+          context.drawImage(canvas, 0, 0);
+          const pixels = context.getImageData(0, 0, readback.width, readback.height).data;
+          const png = await toDataUrl();
+          await device.queue.onSubmittedWorkDone();
+          const processedBytes = benchRenderer.getResourceStats().entityTextures.processedBytes;
+          return { pixels, png, processedBytes };
+        };
+        const tier = await capture(false);
+        const screen = await capture(true);
+        const histogram = new Uint32Array(256);
+        let sum = 0;
+        let maxDifference = 0;
+        for (let index = 0; index < tier.pixels.length; index += 1) {
+          const difference = Math.abs(tier.pixels[index]! - screen.pixels[index]!);
+          histogram[difference]! += 1;
+          sum += difference;
+          if (difference > maxDifference) maxDifference = difference;
+        }
+        let p99Difference = 0;
+        let seen = 0;
+        for (let value = 0; value < 256; value += 1) {
+          seen += histogram[value]!;
+          if (seen >= tier.pixels.length * 0.99) {
+            p99Difference = value;
+            break;
+          }
+        }
+        results.push({
+          id: scenario.id,
+          devicePixelRatio: window.devicePixelRatio,
+          tierProcessedBytes: tier.processedBytes,
+          screenProcessedBytes: screen.processedBytes,
+          meanAbsDifference: sum / tier.pixels.length,
+          p99Difference,
+          maxDifference,
+          tierPng: tier.png,
+          screenPng: screen.png,
+        });
+      } finally {
+        config.rendering.continuousOutputFollowsScreen = followedScreen;
+        try {
+          for (const entity of entitySet.entities) benchRenderer.removeEntityTexture(entity.id);
+        } finally {
+          entitySet.cleanup?.();
+        }
+      }
+    }
+  } finally {
+    config.rendering.continuousOutputFollowsScreen = followedScreen;
+  }
+  return { cases: results };
+}
+
 async function readTextureBytes(device: GPUDevice, texture: GPUTexture): Promise<Uint8Array> {
   const bytesPerRow = Math.ceil((texture.width * 4) / 256) * 256;
   const buffer = device.createBuffer({
@@ -2505,8 +2637,13 @@ window.__captureVoidmeshRenderBenchVisual = captureFlowingGlassVisual;
 window.__collectVoidmeshRenderBenchMetadata = collectBenchMetadata;
 window.__validateVoidmeshStagedSourceUploads = validateStagedSourceUploads;
 window.__validateVoidmeshContinuousCulling = validateContinuousCulling;
+window.__compareVoidmeshContinuousOutputSizing = compareContinuousOutputSizing;
 
 const searchParams = new URLSearchParams(window.location.search);
+// `?screenSizedContinuous=1` sizes continuous effect output to the screen, not its LOD tier.
+if (searchParams.get("screenSizedContinuous") === "1") {
+  config.rendering.continuousOutputFollowsScreen = true;
+}
 const scenarioId = searchParams.get("scenario");
 if (searchParams.get("visual") === "flowing-glass") {
   void captureFlowingGlassVisual();

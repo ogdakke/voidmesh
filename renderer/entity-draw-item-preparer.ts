@@ -29,7 +29,7 @@ import {
   toOutputRegion,
   type WorldRect,
 } from "./processing-visibility.ts";
-import { getEntityRenderSize } from "./entity-render-size.ts";
+import { getContinuousOutputSize, getEntityRenderSize } from "./entity-render-size.ts";
 
 /** Screen pixels kept around an occluder's edge and added around what shows. */
 const OCCLUSION_MARGIN_PX = 2;
@@ -125,6 +125,7 @@ export class EntityDrawItemPreparer {
   readonly #compositionPass: CompositionPass;
   readonly #desiredRenderSize = { width: 0, height: 0 };
   readonly #resolvedRenderSize = { width: 0, height: 0 };
+  readonly #continuousOutputSize = { width: 0, height: 0 };
   readonly #viewportBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
   readonly #exactViewportBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
   /** What shows of each culled continuous entity this frame, by entity. */
@@ -341,6 +342,15 @@ export class EntityDrawItemPreparer {
         );
         if (!renderSize) continue;
         const shown = this.#shownRects.get(entity);
+        const outputSize =
+          needsContinuousRender && config.rendering.continuousOutputFollowsScreen
+            ? getContinuousOutputSize(
+                entity,
+                viewport,
+                devicePixelRatio,
+                this.#continuousOutputSize,
+              )
+            : renderSize;
         compositionSource = this.#texturePipeline.renderEntityToTexture(
           entity,
           encoder,
@@ -352,13 +362,14 @@ export class EntityDrawItemPreparer {
                 entity.position.y,
                 entity.size.width,
                 entity.size.height,
-                renderSize.width,
-                renderSize.height,
+                outputSize.width,
+                outputSize.height,
                 OCCLUSION_MARGIN_PX / viewport.zoom,
                 OUTPUT_REGION_PAD_TEXELS,
                 this.#outputRegion,
               )
             : null,
+          outputSize === renderSize ? null : outputSize,
         );
       }
       if (!compositionSource) continue;

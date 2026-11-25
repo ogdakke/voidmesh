@@ -1,4 +1,4 @@
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -90,6 +90,8 @@ interface CliOptions {
   videoUrl: string | null;
   stagedUploadGuard: boolean;
   cullingGuard: boolean;
+  outputSizeVisual: boolean;
+  screenSizedContinuous: boolean;
   rounds: number;
 }
 
@@ -145,6 +147,35 @@ async function main(): Promise<void> {
 
     try {
       await pageClient.send("Runtime.enable");
+      if (options.outputSizeVisual) {
+        const { guard } = await runBenchInPage(
+          pageClient,
+          null,
+          options.suite,
+          1,
+          "__compareVoidmeshContinuousOutputSizing",
+        );
+        const { cases } = guard as {
+          cases: Array<
+            Record<string, unknown> & { id: string; tierPng: string; screenPng: string }
+          >;
+        };
+        const directory = join(options.outDir, "output-size-visual");
+        await mkdir(directory, { recursive: true });
+        for (const { tierPng, screenPng, ...metrics } of cases) {
+          for (const [name, png] of [
+            ["tier", tierPng],
+            ["screen", screenPng],
+          ] as const) {
+            await writeFile(
+              join(directory, `${metrics.id}-${name}.png`),
+              Buffer.from(png.slice(png.indexOf(",") + 1), "base64"),
+            );
+          }
+          console.log("Continuous output sizing:", JSON.stringify(metrics));
+        }
+        return;
+      }
       if (options.cullingGuard) {
         const { guard } = await runBenchInPage(
           pageClient,
@@ -245,6 +276,8 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
     videoUrl: process.env.BENCH_VIDEO_URL ?? null,
     stagedUploadGuard: false,
     cullingGuard: false,
+    outputSizeVisual: false,
+    screenSizedContinuous: false,
     rounds: Number(process.env.BENCH_ROUNDS ?? 1),
   };
 
@@ -278,6 +311,10 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
       options.stagedUploadGuard = true;
     } else if (arg === "--culling-guard") {
       options.cullingGuard = true;
+    } else if (arg === "--output-size-visual") {
+      options.outputSizeVisual = true;
+    } else if (arg === "--screen-sized-continuous") {
+      options.screenSizedContinuous = true;
     } else if (arg === "--video-url") {
       options.videoUrl = readArgValue(argv, ++index, arg);
     } else if (arg === "--cpu-profile") {
@@ -351,11 +388,10 @@ function readArgValue(argv: string[], index: number, flag: string): string {
 
 function createBenchPageUrl(options: CliOptions): string {
   const pageUrl = options.url ?? `http://${HOST}:${options.port}/bench/render.html`;
-  if (!options.disableImmediates && !options.videoUrl) return pageUrl;
-
   const url = new URL(pageUrl);
   if (options.disableImmediates) url.searchParams.set("shaderImmediates", "0");
   if (options.videoUrl) url.searchParams.set("videoUrl", options.videoUrl);
+  if (options.screenSizedContinuous) url.searchParams.set("screenSizedContinuous", "1");
   return url.toString();
 }
 

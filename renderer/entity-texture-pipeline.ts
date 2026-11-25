@@ -212,15 +212,19 @@ export class EntityTexturePipeline {
   /**
    * Render an entity's image through its shader to a texture.
    * Returns the texture, caching it for future frames.
+   *
+   * `renderSize` is the size of the source and, unless `continuousOutputSize` is given for
+   * an effect processed again every frame, of the processed output too.
    */
   renderEntityToTexture(
     entity: ShaderCanvasEntity,
     encoder: GPUCommandEncoder,
     renderSize: { width: number; height: number } = entity.originalSize,
     outputRegion: ShaderOutputRegion | null = null,
+    continuousOutputSize: { width: number; height: number } | null = null,
   ): EntityCompositionSource | null {
-    const width = renderSize.width;
-    const height = renderSize.height;
+    const sourceWidth = renderSize.width;
+    const sourceHeight = renderSize.height;
     const useExternalVideoSource = entity.mediaSource.type === MediaType.video;
     const contentRevision = this.#resolveContentRevision(entity);
 
@@ -229,14 +233,21 @@ export class EntityTexturePipeline {
     // renders can safely reuse the cached processed texture instead of re-running the shader.
     const needsContinuousShaderRender =
       !entity.shaderParams.showOriginal && this.#runtime.needsContinuousRender(entity);
+    // The processed output's size. Only a continuous effect may differ from its source:
+    // every other output is cached and found again by the size the source has.
+    const outputSize = needsContinuousShaderRender
+      ? (continuousOutputSize ?? renderSize)
+      : renderSize;
+    const width = outputSize.width;
+    const height = outputSize.height;
 
     if (!entity.textureDirty) {
       if (entity.shaderParams.showOriginal && !useExternalVideoSource) {
         const currentSource = this.#entitySourceBindings.get(entity.id);
         if (
           currentSource &&
-          currentSource.width === width &&
-          currentSource.height === height &&
+          currentSource.width === sourceWidth &&
+          currentSource.height === sourceHeight &&
           currentSource.contentRevision === contentRevision
         ) {
           currentSource.lastUsedFrame = this.#currentFrame;
@@ -308,12 +319,12 @@ export class EntityTexturePipeline {
       GPUTextureUsage.RENDER_ATTACHMENT;
 
     if (!shaderSource) {
-      const sourceKey = this.#getSourceCacheKey(entity, width, height);
+      const sourceKey = this.#getSourceCacheKey(entity, sourceWidth, sourceHeight);
       let cachedSource = this.#sourceTextures.get(sourceKey);
       if (!cachedSource) {
         sourceTexture = this.#device.createTexture({
           label: `Source ${sourceKey}`,
-          size: [width, height],
+          size: [sourceWidth, sourceHeight],
           format: "rgba8unorm",
           usage: sourceUsage,
         });
@@ -322,15 +333,15 @@ export class EntityTexturePipeline {
           key: sourceKey,
           texture: sourceTexture,
           compositionSource: { kind: "texture", texture: sourceTexture },
-          width,
-          height,
-          byteSize: getTextureByteSize(width, height, "rgba8unorm"),
+          width: sourceWidth,
+          height: sourceHeight,
+          byteSize: getTextureByteSize(sourceWidth, sourceHeight, "rgba8unorm"),
           lastUsedFrame: this.#currentFrame,
           contentRevision,
           asset: getSharedImageAsset(entity),
           entityIds: new Set(),
         };
-        this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
+        this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, sourceWidth, sourceHeight);
         if (entity.mediaSource.type === MediaType.image)
           this.#onImmutableSourceUpload?.(sourceTexture, encoder);
         this.#sourceTextures.set(sourceKey, cachedSource);
@@ -342,7 +353,7 @@ export class EntityTexturePipeline {
         sourceTexture = cachedSource.texture;
         cachedSource.lastUsedFrame = this.#currentFrame;
         if (cachedSource.contentRevision !== contentRevision) {
-          this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
+          this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, sourceWidth, sourceHeight);
           cachedSource.contentRevision = contentRevision;
         }
       }
@@ -480,6 +491,21 @@ export class EntityTexturePipeline {
     return this.#isProcessedPartial(entityId);
   }
 
+  /** Process the whole of a partial texture again, at the sizes it and its source have. */
+  completePartialProcessedTexture(entity: ShaderCanvasEntity, encoder: GPUCommandEncoder): void {
+    const processed = this.#entityProcessedBindings.get(entity.id);
+    if (!processed?.partial) return;
+    const outputSize = { width: processed.texture.width, height: processed.texture.height };
+    const source = this.#entitySourceBindings.get(entity.id);
+    this.renderEntityToTexture(
+      entity,
+      encoder,
+      source ? { width: source.width, height: source.height } : outputSize,
+      null,
+      outputSize,
+    );
+  }
+
   #isProcessedPartial(entityId: string): boolean {
     return this.#entityProcessedBindings.get(entityId)?.partial ?? false;
   }
@@ -549,9 +575,18 @@ export class EntityTexturePipeline {
       return output;
     }
 
-    const currentEntry = entity.shaderParams.showOriginal
-      ? this.#entitySourceBindings.get(entity.id)
-      : this.#entityProcessedBindings.get(entity.id);
+    // A continuous effect's output follows the screen, so its LOD tier is that of its source;
+    // over a video there is no source texture and the tier decides nothing.
+    const continuous = this.needsContinuousRenderForEntity(entity);
+    if (continuous && entity.mediaSource.type === MediaType.video) {
+      output.width = desired.width;
+      output.height = desired.height;
+      return output;
+    }
+    const currentEntry =
+      entity.shaderParams.showOriginal || continuous
+        ? this.#entitySourceBindings.get(entity.id)
+        : this.#entityProcessedBindings.get(entity.id);
     const current = currentEntry?.texture;
     if (current?.width === desired.width && current.height === desired.height) {
       output.width = desired.width;

@@ -508,6 +508,13 @@ export const config = {
      * viewport and not under an opaque entity. Off processes the whole texture each frame.
      */
     cullHiddenContinuousProcessing: true,
+    /**
+     * Size the output of a continuously animated effect to what it covers on screen, in
+     * coarse steps, in place of its LOD tier. A tier leaves room for a cached result to
+     * survive a zoom; an output processed again every frame has no use for that room.
+     * Off until its look is signed off: the effect is evaluated on fewer pixels.
+     */
+    continuousOutputFollowsScreen: false as boolean,
     /** Maximum target pixels admitted per settled frame (one oversized item may progress). */
     lodTransitionPixelBudget: 2 * 1024 * 1024,
     /** Minimum visible fraction required when admitting or rebuilding a full-scene batch. */

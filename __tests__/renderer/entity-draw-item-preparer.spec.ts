@@ -769,6 +769,15 @@ function createScene(): { entities: ShaderCanvasEntity[]; release: () => void } 
 }
 
 describe("EntityDrawItemPreparer continuous processing culling", () => {
+  const rendering = config.rendering as unknown as { continuousOutputFollowsScreen: boolean };
+  // Regions below are worked out against the 400 px render size the harness resolves.
+  beforeAll(() => {
+    rendering.continuousOutputFollowsScreen = false;
+  });
+  afterAll(() => {
+    rendering.continuousOutputFollowsScreen = false;
+  });
+
   function createGlassScene(positions: Array<{ x: number; y: number }>) {
     const entities = positions.map((position, index) => {
       const entity = createTestEntity({
@@ -799,6 +808,7 @@ describe("EntityDrawItemPreparer continuous processing culling", () => {
       string,
       { x: number; y: number; width: number; height: number } | null
     >();
+    const outputSizes = new Map<string, { width: number; height: number } | null>();
     const pipeline = harness.texturePipeline as unknown as Record<string, unknown>;
     pipeline.needsContinuousRenderForEntity = () => true;
     pipeline.getReusableStaticCompositionSource = () => null;
@@ -809,14 +819,17 @@ describe("EntityDrawItemPreparer continuous processing culling", () => {
       _encoder: unknown,
       _size: unknown,
       region: { x: number; y: number; width: number; height: number } | null,
+      outputSize: { width: number; height: number } | null,
     ) => {
       regions.set(entity.id, region ? { ...region } : null);
+      outputSizes.set(entity.id, outputSize ? { ...outputSize } : null);
       return { kind: "texture", texture: harness.texture };
     };
     return {
       entities,
       harness,
       regions,
+      outputSizes,
       release: () => {
         for (const entity of entities) {
           if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
@@ -882,5 +895,24 @@ describe("EntityDrawItemPreparer continuous processing culling", () => {
     scene.harness.preparer.prepare(scene.harness.options);
     expect(scene.regions.get("glass-0")).toBeNull();
     scene.release();
+  });
+
+  test("sizes a continuous output to the screen and maps the shown region into it", () => {
+    const scene = createGlassScene([{ x: 0, y: 0 }]);
+    scene.entities[0]!.originalSize = { width: 2000, height: 2000 };
+    scene.harness.options.width = 100;
+    rendering.continuousOutputFollowsScreen = true;
+    try {
+      // 200 world units at zoom 0.5 and DPR 2 cover 200 device pixels: 32 px steps give 224.
+      scene.harness.options.viewport = { offset: { x: 0, y: 0 }, zoom: 0.5 };
+      scene.harness.options.devicePixelRatio = 2;
+      scene.harness.preparer.prepare(scene.harness.options);
+      expect(scene.outputSizes.get("glass-0")).toEqual({ width: 224, height: 224 });
+      // The viewport shows all 200 world units across (100 px / 0.5), so nothing is clipped.
+      expect(scene.regions.get("glass-0")).toEqual({ x: 0, y: 0, width: 224, height: 224 });
+    } finally {
+      rendering.continuousOutputFollowsScreen = false;
+      scene.release();
+    }
   });
 });
