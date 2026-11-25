@@ -1,3 +1,4 @@
+import { config } from "#config";
 import { FancyEffects } from "#types/fancy-effects.ts";
 import { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
 import { EntityTexturePipeline } from "#renderer/entity-texture-pipeline.ts";
@@ -76,6 +77,10 @@ interface BenchScenario {
   resetTexturesBeforeSample?: boolean;
   overlapToggle?: boolean;
   wlurOverlay?: boolean;
+  /** Sources that cannot carry alpha (JPEG), so the renderer knows they hide what is under them. */
+  opaqueSource?: boolean;
+  /** Fixed viewport in place of the default one at the origin. */
+  viewport?: Viewport;
 }
 
 type BenchResourceStats = ReturnType<InfiniteCanvasRenderer["getResourceStats"]>;
@@ -252,6 +257,7 @@ declare global {
     __runVoidmeshManyEntityBench?: () => Promise<BenchResult[]>;
     __collectVoidmeshRenderBenchMetadata?: () => Promise<BenchMetadata>;
     __validateVoidmeshStagedSourceUploads?: typeof validateStagedSourceUploads;
+    __validateVoidmeshContinuousCulling?: typeof validateContinuousCulling;
   }
 }
 
@@ -589,8 +595,33 @@ const overlapMixedWlurScenario: BenchScenario = {
   description: "Mixed-media action-layer and mobile Wlur cache interaction guard.",
   wlurOverlay: true,
 };
+function deriveScenario(baseId: string, overrides: Partial<BenchScenario>): BenchScenario {
+  const base = scenarios.find((scenario) => scenario.id === baseId);
+  if (!base) throw new Error(`Unknown base scenario ${baseId}`);
+  return { ...base, ...overrides };
+}
+
+/** Flowing glass where part of each entity is hidden, by the viewport or by opaque neighbours. */
+const hiddenFlowingGlassScenarios: BenchScenario[] = [
+  deriveScenario("multi-25-flowing-glass-continuous", {
+    id: "multi-25-flowing-glass-opaque-continuous",
+    label: "25 opaque 1024px entities, flowing glass continuous",
+    description:
+      "The 25 overlapping flowing-glass entities from JPEG sources, so each hides part of the ones under it.",
+    opaqueSource: true,
+  }),
+  deriveScenario("image-flowing-glass-4k-continuous", {
+    id: "image-flowing-glass-4k-zoomed-continuous",
+    label: "4K image zoomed in, flowing glass continuous",
+    description:
+      "Flowing glass on a 4K image zoomed to 3x, so most of the entity is outside the viewport.",
+    viewport: { offset: { x: 500, y: 250 }, zoom: 3 },
+  }),
+];
+
 const allScenarios = [
   ...scenarios,
+  ...hiddenFlowingGlassScenarios,
   ...manyEntityScenarios,
   overlapToggleScenario,
   overlapMixedScenario,
@@ -979,7 +1010,7 @@ async function createEntities(scenario: BenchScenario): Promise<BenchEntitySet> 
   const count = scenario.kind === "multi" ? (scenario.entityCount ?? 25) : 1;
   const assets = await createSyntheticImageAssets({
     count,
-    blobType: "image/png",
+    blobType: scenario.opaqueSource ? "image/jpeg" : "image/png",
     createBitmap: (index) => createSyntheticBitmap(scenario.sourceSize, index + 1),
   });
   const ownedAssets = [...assets];
@@ -1003,6 +1034,7 @@ async function createEntities(scenario: BenchScenario): Promise<BenchEntitySet> 
     }
     releaseOwnedImageAssets(ownedAssets);
 
+    const { viewport } = scenario;
     return {
       entities,
       beforeFrame:
@@ -1011,6 +1043,7 @@ async function createEntities(scenario: BenchScenario): Promise<BenchEntitySet> 
               for (const entity of entities) entity.textureDirty = true;
             }
           : undefined,
+      getViewport: viewport ? () => viewport : undefined,
       cleanup: () => disposeBenchEntities(entities),
     };
   } catch (error) {
@@ -2200,6 +2233,114 @@ export async function validateStagedSourceUploads() {
   }
 }
 
+const CULLING_GUARD_TIME = 1.75;
+
+/**
+ * Renders flowing glass with hidden parts culled and with the whole texture processed, at
+ * the same shader time, and compares the canvas. The first viewport of each case leaves a
+ * different part of every entity processed, so stale texels would show at the second.
+ */
+export async function validateContinuousCulling() {
+  const benchRenderer = await getRenderer();
+  const device = benchRenderer.device;
+  if (!device) throw new Error("Culling guard GPU is unavailable");
+  const cases: Array<{ scenario: BenchScenario; viewports: Viewport[] }> = [
+    {
+      scenario: hiddenFlowingGlassScenarios[0]!,
+      viewports: [
+        { offset: { x: 310, y: 170 }, zoom: 1.7 },
+        { offset: { x: 0, y: 0 }, zoom: 1 },
+        { offset: { x: -37.5, y: 61.25 }, zoom: 0.8 },
+      ],
+    },
+    {
+      scenario: hiddenFlowingGlassScenarios[1]!,
+      viewports: [
+        { offset: { x: 100, y: 60 }, zoom: 2 },
+        { offset: { x: 500, y: 250 }, zoom: 3 },
+        { offset: { x: 820.4, y: 410.7 }, zoom: 2.5 },
+      ],
+    },
+  ];
+  const readback = new OffscreenCanvas(canvas.width, canvas.height);
+  const context = readback.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("Culling guard readback context is unavailable");
+  const cullingWasEnabled = config.rendering.cullHiddenContinuousProcessing;
+  const results: Array<{
+    id: string;
+    viewport: Viewport;
+    differingBytes: number;
+    maxDifference: number;
+    culledTexelFraction: number;
+  }> = [];
+
+  try {
+    for (const { scenario, viewports } of cases) {
+      const entitySet = await createEntities(scenario);
+      try {
+        const capture = async (viewport: Viewport, culled: boolean): Promise<Uint8ClampedArray> => {
+          config.rendering.cullHiddenContinuousProcessing = culled;
+          // Two frames: sources and processed textures exist by the second.
+          for (let frame = 0; frame < 2; frame += 1) {
+            for (const entity of entitySet.entities) {
+              entity.shaderParams.time = CULLING_GUARD_TIME;
+            }
+            benchRenderer.render(createRenderState(entitySet.entities, true, viewport));
+          }
+          context.clearRect(0, 0, readback.width, readback.height);
+          context.drawImage(canvas, 0, 0);
+          const pixels = context.getImageData(0, 0, readback.width, readback.height).data;
+          await device.queue.onSubmittedWorkDone();
+          return pixels;
+        };
+        // Settle LOD admission so both modes draw from the same textures.
+        for (const viewport of viewports) {
+          for (let frame = 0; frame < 12; frame += 1) await capture(viewport, false);
+        }
+        for (const viewport of viewports) {
+          const full = await capture(viewport, false);
+          const before = benchRenderer.getResourceStats().entityTextures;
+          const culled = await capture(viewport, true);
+          const after = benchRenderer.getResourceStats().entityTextures;
+          const texels = after.continuousTexels - before.continuousTexels;
+          const processed = after.continuousTexelsProcessed - before.continuousTexelsProcessed;
+          let differingBytes = 0;
+          let maxDifference = 0;
+          for (let index = 0; index < full.length; index += 1) {
+            const difference = Math.abs(full[index]! - culled[index]!);
+            if (difference === 0) continue;
+            differingBytes += 1;
+            if (difference > maxDifference) maxDifference = difference;
+          }
+          results.push({
+            id: scenario.id,
+            viewport,
+            differingBytes,
+            maxDifference,
+            culledTexelFraction: texels > 0 ? 1 - processed / texels : 0,
+          });
+        }
+      } finally {
+        config.rendering.cullHiddenContinuousProcessing = cullingWasEnabled;
+        try {
+          for (const entity of entitySet.entities) benchRenderer.removeEntityTexture(entity.id);
+        } finally {
+          entitySet.cleanup?.();
+        }
+      }
+    }
+  } finally {
+    config.rendering.cullHiddenContinuousProcessing = cullingWasEnabled;
+  }
+  const result = {
+    cases: results,
+    maxDifference: Math.max(0, ...results.map((entry) => entry.maxDifference)),
+    minCulledTexelFraction: Math.min(1, ...results.map((entry) => entry.culledTexelFraction)),
+  };
+  console.log("[voidmesh-continuous-culling-guard]", JSON.stringify(result));
+  return result;
+}
+
 async function readTextureBytes(device: GPUDevice, texture: GPUTexture): Promise<Uint8Array> {
   const bytesPerRow = Math.ceil((texture.width * 4) / 256) * 256;
   const buffer = device.createBuffer({
@@ -2350,6 +2491,7 @@ window.__runVoidmeshRenderBenchScenario = runScenarioById;
 window.__captureVoidmeshRenderBenchVisual = captureFlowingGlassVisual;
 window.__collectVoidmeshRenderBenchMetadata = collectBenchMetadata;
 window.__validateVoidmeshStagedSourceUploads = validateStagedSourceUploads;
+window.__validateVoidmeshContinuousCulling = validateContinuousCulling;
 
 const searchParams = new URLSearchParams(window.location.search);
 const scenarioId = searchParams.get("scenario");

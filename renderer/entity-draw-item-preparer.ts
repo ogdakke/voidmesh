@@ -4,7 +4,14 @@ import { getViewportWorldBounds } from "#lib/canvas-math.ts";
 import type { EntitySpatialIndex } from "#lib/entity-spatial-index.ts";
 import { tracePerformancePhase } from "#lib/performance-tracing.ts";
 import { haveEquivalentShaderParams } from "#lib/shader-params-identity.ts";
-import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
+import {
+  GlassKind,
+  MediaType,
+  ShaderType,
+  type Bounds,
+  type ShaderCanvasEntity,
+  type Viewport,
+} from "#types/canvas.ts";
 import type {
   CompositionDrawItem,
   CompositionPass,
@@ -14,8 +21,31 @@ import type {
   FullSceneTextureRange,
   PrepareCompositionItemOptions,
 } from "./composition-pass.ts";
+import type { ShaderOutputRegion } from "./effect-render-entity.ts";
 import type { EntityTexturePipeline } from "./entity-texture-pipeline.ts";
+import {
+  isEmptyRect,
+  subtractCoveringRect,
+  toOutputRegion,
+  type WorldRect,
+} from "./processing-visibility.ts";
 import { getEntityRenderSize } from "./entity-render-size.ts";
+
+/** Screen pixels kept around an occluder's edge and added around what shows. */
+const OCCLUSION_MARGIN_PX = 2;
+/** Texels added around an output region for bilinear filtering at its edge. */
+const OUTPUT_REGION_PAD_TEXELS = 2;
+/** Visible entities past which occlusion is not worked out (each is tested against those above). */
+const OCCLUSION_MAX_ENTITIES = 1024;
+
+function isFlowingGlass(entity: ShaderCanvasEntity): boolean {
+  return (
+    entity.shaderType === ShaderType.glass &&
+    entity.shaderParams.glass?.kind === GlassKind.flowing &&
+    !entity.shaderParams.showOriginal &&
+    !(entity.shaderParams.postProcess?.enabled ?? false)
+  );
+}
 
 type MixedFullSceneBatchMode = "reuse" | "refresh" | "disabled";
 
@@ -96,6 +126,12 @@ export class EntityDrawItemPreparer {
   readonly #desiredRenderSize = { width: 0, height: 0 };
   readonly #resolvedRenderSize = { width: 0, height: 0 };
   readonly #viewportBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  readonly #exactViewportBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+  /** What shows of each culled continuous entity this frame, by entity. */
+  readonly #shownRects = new Map<ShaderCanvasEntity, WorldRect>();
+  readonly #shownRectPool: WorldRect[] = [];
+  readonly #coverRect: WorldRect = { x0: 0, y0: 0, x1: 0, y1: 0 };
+  readonly #outputRegion: ShaderOutputRegion = { x: 0, y: 0, width: 0, height: 0 };
   readonly #visibleEntities: ShaderCanvasEntity[] = [];
   #admissionVisibleEntities: readonly ShaderCanvasEntity[] = this.#visibleEntities;
   readonly #entityDrawItems: CompositionDrawItem[] = [];
@@ -264,6 +300,7 @@ export class EntityDrawItemPreparer {
     let previousDesiredWidth = 0;
     let previousDesiredHeight = 0;
     const visiblePreparationStart = performance.now();
+    this.#prepareShownRects(visibleEntities, options);
     for (const entity of visibleEntities) {
       const isActionLayerEntity = actionLayerActive && actionLayer.entityIds.has(entity.id);
       // Check if texture needs regeneration. Animated media is marked dirty by the
@@ -303,10 +340,25 @@ export class EntityDrawItemPreparer {
           this.#resolvedRenderSize,
         );
         if (!renderSize) continue;
+        const shown = this.#shownRects.get(entity);
         compositionSource = this.#texturePipeline.renderEntityToTexture(
           entity,
           encoder,
           renderSize,
+          shown
+            ? toOutputRegion(
+                shown,
+                entity.position.x,
+                entity.position.y,
+                entity.size.width,
+                entity.size.height,
+                renderSize.width,
+                renderSize.height,
+                OCCLUSION_MARGIN_PX / viewport.zoom,
+                OUTPUT_REGION_PAD_TEXELS,
+                this.#outputRegion,
+              )
+            : null,
         );
       }
       if (!compositionSource) continue;
@@ -375,6 +427,97 @@ export class EntityDrawItemPreparer {
     this.#prepared.hasAnimatingContent = hasAnimatingContent;
     this.#prepared.hasBackdropAnimatingContent = hasBackdropAnimatingContent;
     return this.#prepared;
+  }
+
+  /**
+   * For each continuous one-pass entity in view, work out the rectangle of it that shows:
+   * clipped to the viewport and shrunk by opaque entities drawn above it. Such an entity
+   * is processed again every frame, so processing what is hidden is pure waste. Skipped
+   * while anything moves entities off their resting place or changes the draw order.
+   */
+  #prepareShownRects(
+    visibleEntities: readonly ShaderCanvasEntity[],
+    options: PrepareEntityDrawItemsOptions,
+  ): void {
+    for (const rect of this.#shownRects.values()) this.#shownRectPool.push(rect);
+    this.#shownRects.clear();
+    const crossing = this.#compositionPass.crossing;
+    if (
+      !config.rendering.cullHiddenContinuousProcessing ||
+      options.actionLayer.active ||
+      options.dragVisual.active ||
+      options.debugMode ||
+      crossing.pending ||
+      crossing.hasLayerSlices ||
+      visibleEntities.length > OCCLUSION_MAX_ENTITIES
+    ) {
+      return;
+    }
+
+    const { viewport } = options;
+    const view = getViewportWorldBounds(
+      viewport,
+      options.width,
+      options.height,
+      0,
+      this.#exactViewportBounds,
+    );
+    const inset = OCCLUSION_MARGIN_PX / viewport.zoom;
+    const cover = this.#coverRect;
+    for (let index = 0; index < visibleEntities.length; index++) {
+      const entity = visibleEntities[index]!;
+      if (!this.#isCullableContinuousEntity(entity)) continue;
+
+      const shown = this.#shownRectPool.pop() ?? { x0: 0, y0: 0, x1: 0, y1: 0 };
+      shown.x0 = Math.max(entity.position.x, view.x);
+      shown.y0 = Math.max(entity.position.y, view.y);
+      shown.x1 = Math.min(entity.position.x + entity.size.width, view.x + view.width);
+      shown.y1 = Math.min(entity.position.y + entity.size.height, view.y + view.height);
+      for (let above = index + 1; above < visibleEntities.length; above++) {
+        if (isEmptyRect(shown)) break;
+        const occluder = visibleEntities[above]!;
+        if (!this.#isOpaqueOccluder(occluder)) continue;
+        // Inset past the occluder's anti-aliased edge, which shows what is under it.
+        cover.x0 = occluder.position.x + inset;
+        cover.y0 = occluder.position.y + inset;
+        cover.x1 = occluder.position.x + occluder.size.width - inset;
+        cover.y1 = occluder.position.y + occluder.size.height - inset;
+        subtractCoveringRect(shown, cover);
+      }
+      this.#shownRects.set(entity, shown);
+    }
+  }
+
+  /** Flowing glass is one pass from its source, so a scissor leaves what shows unchanged. */
+  #isCullableContinuousEntity(entity: ShaderCanvasEntity): boolean {
+    return (
+      entity.rotation === 0 &&
+      isFlowingGlass(entity) &&
+      this.#texturePipeline.needsContinuousRenderForEntity(entity)
+    );
+  }
+
+  /**
+   * An entity that hides everything under its rectangle: unrotated, from a source that
+   * cannot carry alpha, shown as it is or through an effect that keeps its alpha, and
+   * already holding the texture it draws from.
+   */
+  #isOpaqueOccluder(entity: ShaderCanvasEntity): boolean {
+    if (entity.rotation !== 0) return false;
+    const source = entity.mediaSource;
+    const alphaMode =
+      source.type === MediaType.image
+        ? source.asset.alphaMode
+        : source.type === MediaType.video
+          ? source.alphaMode
+          : null;
+    if (alphaMode !== "none") return false;
+    if (entity.shaderParams.showOriginal) {
+      return source.type === MediaType.video
+        ? source.videoElement.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+        : this.#texturePipeline.hasDisplayedTexture(entity);
+    }
+    return isFlowingGlass(entity) && this.#texturePipeline.hasDisplayedTexture(entity);
   }
 
   readonly #compareCrossingItems = (a: CompositionDrawItem, b: CompositionDrawItem): number => {

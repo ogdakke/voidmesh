@@ -503,6 +503,11 @@ export const config = {
     coldLodTransitionsPerFrame: 16,
     /** A cold upload costs at least its source pixels over this, since the resize reads them all. */
     coldLodSourcePixelDivisor: 32,
+    /**
+     * Process a continuously animated one-pass effect only where it shows: inside the
+     * viewport and not under an opaque entity. Off processes the whole texture each frame.
+     */
+    cullHiddenContinuousProcessing: true,
     /** Maximum target pixels admitted per settled frame (one oversized item may progress). */
     lodTransitionPixelBudget: 2 * 1024 * 1024,
     /** Minimum visible fraction required when admitting or rebuilding a full-scene batch. */

@@ -1,6 +1,6 @@
 import type { ShaderType } from "#types/canvas.ts";
 import type { TexturePool } from "../texture-pool.ts";
-import type { EffectRenderEntity } from "../effect-render-entity.ts";
+import type { EffectRenderEntity, ShaderOutputRegion } from "../effect-render-entity.ts";
 import type { ExternalTextureSource, ShaderPass } from "./shader-pass.ts";
 
 export class ShaderRegistry {
@@ -31,10 +31,11 @@ export class ShaderRegistry {
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,
+    outputRegion?: ShaderOutputRegion | null,
   ): void {
     const pass = this.#passes.get(entity.shaderType);
     if (!pass) throw new Error(`Shader pass not registered: ${entity.shaderType}`);
-    pass.execute(entity, sourceTexture, outputTexture, encoder);
+    pass.execute(entity, sourceTexture, outputTexture, encoder, outputRegion);
   }
 
   applyShaderExternal(
@@ -42,10 +43,11 @@ export class ShaderRegistry {
     source: ExternalTextureSource,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,
+    outputRegion?: ShaderOutputRegion | null,
   ): void {
     const pass = this.#passes.get(entity.shaderType);
     if (!pass) throw new Error(`Shader pass not registered: ${entity.shaderType}`);
-    pass.executeExternal(entity, source, outputTexture, encoder);
+    pass.executeExternal(entity, source, outputTexture, encoder, outputRegion);
   }
 
   removeEntity(entityId: string): void {

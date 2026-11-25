@@ -8,7 +8,7 @@ import {
   type ShaderCanvasEntity,
 } from "#types/canvas.ts";
 import type { CopyPass } from "./copy-pass.ts";
-import type { EffectRenderEntity } from "./effect-render-entity.ts";
+import type { EffectRenderEntity, ShaderOutputRegion } from "./effect-render-entity.ts";
 import { getEntityRenderPixelScale } from "./entity-render-size.ts";
 import { EntityShaderRuntime, type EntityShaderSource } from "./entity-shader-runtime.ts";
 import type { GpuColorConfig } from "./gpu-color-space.ts";
@@ -48,6 +48,8 @@ interface CachedSourceTexture extends CachedEntityTexture {
 
 interface CachedProcessedTexture extends CachedEntityTexture {
   entityIds: Set<string>;
+  /** Last rendered with an output region: only what showed that frame is valid. */
+  partial: boolean;
 }
 
 interface GifResizeSurface {
@@ -92,6 +94,9 @@ export interface EntityTextureResidencyStats {
   sourceTextureAllocations: number;
   processedTextureAllocations: number;
   sourceUploads: number;
+  /** Texels of continuously re-rendered effect output, and how many of them were processed. */
+  continuousTexels: number;
+  continuousTexelsProcessed: number;
   externalTextureImports: number;
   evictions: number;
 }
@@ -107,6 +112,8 @@ export class EntityTexturePipeline {
   #sourceTextureAllocations = 0;
   #processedTextureAllocations = 0;
   #sourceUploads = 0;
+  #continuousTexels = 0;
+  #continuousTexelsProcessed = 0;
   #externalTextureImports = 0;
   #evictions = 0;
   #allowLodTransitions = false;
@@ -208,6 +215,7 @@ export class EntityTexturePipeline {
     entity: ShaderCanvasEntity,
     encoder: GPUCommandEncoder,
     renderSize: { width: number; height: number } = entity.originalSize,
+    outputRegion: ShaderOutputRegion | null = null,
   ): EntityCompositionSource | null {
     const width = renderSize.width;
     const height = renderSize.height;
@@ -238,7 +246,8 @@ export class EntityTexturePipeline {
           currentProcessed &&
           currentProcessed.texture.width === width &&
           currentProcessed.texture.height === height &&
-          currentProcessed.contentRevision === contentRevision
+          currentProcessed.contentRevision === contentRevision &&
+          !currentProcessed.partial
         ) {
           currentProcessed.lastUsedFrame = this.#currentFrame;
           return currentProcessed.compositionSource;
@@ -262,6 +271,7 @@ export class EntityTexturePipeline {
       !needsContinuousShaderRender &&
       cachedTexture &&
       cachedTexture.contentRevision === contentRevision &&
+      !cachedTexture.partial &&
       (!entity.textureDirty || canReuseDirtyTexture)
     ) {
       cachedTexture.lastUsedFrame = this.#currentFrame;
@@ -404,6 +414,15 @@ export class EntityTexturePipeline {
       createdOutputTexture = true;
     }
 
+    // Only an entity re-rendered every frame may hold a partial texture: a cached one is
+    // reused while what shows of it changes.
+    const partial = needsContinuousShaderRender && outputRegion !== null;
+    if (needsContinuousShaderRender) {
+      this.#continuousTexels += width * height;
+      this.#continuousTexelsProcessed += partial
+        ? outputRegion.width * outputRegion.height
+        : width * height;
+    }
     this.#runtime.encode({
       entity: this.#getRenderEntityView(entity, width, height),
       source: shaderSource,
@@ -413,6 +432,7 @@ export class EntityTexturePipeline {
       height,
       respectShowOriginal: true,
       sourceAlphaMode: getSourceAlphaMode(entity),
+      outputRegion: partial ? outputRegion : null,
     });
 
     // Cache and return (source texture stays in the shared source cache)
@@ -427,6 +447,7 @@ export class EntityTexturePipeline {
       lastUsedFrame: this.#currentFrame,
       contentRevision,
       asset: needsContinuousShaderRender ? null : getSharedImageAsset(entity),
+      partial,
       entityIds: cachedTexture?.entityIds ?? recycledTexture?.entityIds ?? new Set(),
     };
     if (!processedKeyWasCached) this.#countAssetCacheEntry(processedEntry.asset, 1);
@@ -450,6 +471,22 @@ export class EntityTexturePipeline {
 
   getProcessedEntityTexture(entityId: string): GPUTexture | null {
     return this.#entityProcessedBindings.get(entityId)?.texture ?? null;
+  }
+
+  /** The entity's processed texture holds only what showed when it was last rendered. */
+  isProcessedTexturePartial(entityId: string): boolean {
+    return this.#isProcessedPartial(entityId);
+  }
+
+  #isProcessedPartial(entityId: string): boolean {
+    return this.#entityProcessedBindings.get(entityId)?.partial ?? false;
+  }
+
+  /** The entity already has the texture it is displayed from, so it draws this frame. */
+  hasDisplayedTexture(entity: ShaderCanvasEntity): boolean {
+    return entity.shaderParams.showOriginal
+      ? this.#entitySourceBindings.has(entity.id)
+      : this.#entityProcessedBindings.has(entity.id);
   }
 
   getSourceEntityTexture(entityId: string): GPUTexture | null {
@@ -479,7 +516,8 @@ export class EntityTexturePipeline {
     if (
       !entry ||
       entry.texture.width !== desired.width ||
-      entry.texture.height !== desired.height
+      entry.texture.height !== desired.height ||
+      (!entity.shaderParams.showOriginal && this.#isProcessedPartial(entity.id))
     ) {
       return null;
     }
@@ -604,6 +642,8 @@ export class EntityTexturePipeline {
       sourceTextureAllocations: this.#sourceTextureAllocations,
       processedTextureAllocations: this.#processedTextureAllocations,
       sourceUploads: this.#sourceUploads,
+      continuousTexels: this.#continuousTexels,
+      continuousTexelsProcessed: this.#continuousTexelsProcessed,
       externalTextureImports: this.#externalTextureImports,
       evictions: this.#evictions,
     };

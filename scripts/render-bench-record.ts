@@ -89,6 +89,7 @@ interface CliOptions {
   cpuProfile: boolean;
   videoUrl: string | null;
   stagedUploadGuard: boolean;
+  cullingGuard: boolean;
   rounds: number;
 }
 
@@ -144,8 +145,33 @@ async function main(): Promise<void> {
 
     try {
       await pageClient.send("Runtime.enable");
+      if (options.cullingGuard) {
+        const { guard } = await runBenchInPage(
+          pageClient,
+          null,
+          options.suite,
+          1,
+          "__validateVoidmeshContinuousCulling",
+        );
+        console.log("Continuous culling guard:", JSON.stringify(guard, null, 2));
+        // Culled processing runs the same shader on the same texels, so what shows must be
+        // identical, and the guard must actually have culled something in every case.
+        const result = guard as
+          | { maxDifference?: number; minCulledTexelFraction?: number }
+          | undefined;
+        if (result?.maxDifference !== 0 || !((result.minCulledTexelFraction ?? 0) > 0)) {
+          process.exitCode = 1;
+        }
+        return;
+      }
       if (options.stagedUploadGuard) {
-        const { guard } = await runBenchInPage(pageClient, null, options.suite, 1, true);
+        const { guard } = await runBenchInPage(
+          pageClient,
+          null,
+          options.suite,
+          1,
+          "__validateVoidmeshStagedSourceUploads",
+        );
         console.log("Staged upload guard:", JSON.stringify(guard));
         // The resample lands on a different surface offset when staged, which rounds a few
         // channel values one step apart; anything larger is a wrong region or stale pixels.
@@ -218,6 +244,7 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
     cpuProfile: process.env.BENCH_CPU_PROFILE === "1",
     videoUrl: process.env.BENCH_VIDEO_URL ?? null,
     stagedUploadGuard: false,
+    cullingGuard: false,
     rounds: Number(process.env.BENCH_ROUNDS ?? 1),
   };
 
@@ -249,6 +276,8 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
       options.disableImmediates = true;
     } else if (arg === "--staged-upload-guard") {
       options.stagedUploadGuard = true;
+    } else if (arg === "--culling-guard") {
+      options.cullingGuard = true;
     } else if (arg === "--video-url") {
       options.videoUrl = readArgValue(argv, ++index, arg);
     } else if (arg === "--cpu-profile") {
@@ -426,7 +455,7 @@ async function runBenchInPage(
   scenario: string | null,
   suite: CliOptions["suite"],
   rounds: number,
-  guard = false,
+  guard: string | null = null,
 ): Promise<{
   metadata: unknown;
   rounds: Array<{ index: number; results: unknown }>;
@@ -455,12 +484,9 @@ async function runBenchInPage(
         poll();
       });
       const metadata = await window.__collectVoidmeshRenderBenchMetadata();
-      if (${JSON.stringify(guard)}) {
-        return {
-          metadata,
-          rounds: [],
-          guard: await window.__validateVoidmeshStagedSourceUploads(),
-        };
+      const guard = ${JSON.stringify(guard)};
+      if (guard) {
+        return { metadata, rounds: [], guard: await window[guard]() };
       }
       const scenario = ${JSON.stringify(scenario)};
       const suite = ${JSON.stringify(suite)};
