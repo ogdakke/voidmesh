@@ -241,7 +241,7 @@ function MobileDitheringStyleKnobs() {
           >
             {ditheringKind.isMixed && (
               <SliderPickerMixedItem className="mobile-style-knobs__item">
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   <QuestionMark />
                 </button>
                 <span className="mobile-style-knobs__label">Mixed</span>
@@ -253,7 +253,7 @@ function MobileDitheringStyleKnobs() {
                 value={item.value}
                 className="mobile-style-knobs__item"
               >
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   {item.icon()}
                 </button>
                 <span className="mobile-style-knobs__label">{item.shortLabel}</span>
@@ -345,7 +345,7 @@ function MobileAsciiStyleKnobs() {
           >
             {asciiKind.isMixed && (
               <SliderPickerMixedItem className="mobile-style-knobs__item">
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   <QuestionMark />
                 </button>
                 <span className="mobile-style-knobs__label">Mixed</span>
@@ -357,7 +357,7 @@ function MobileAsciiStyleKnobs() {
                 value={item.value}
                 className="mobile-style-knobs__item"
               >
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   {item.icon()}
                 </button>
                 <span className="mobile-style-knobs__label">{item.shortLabel}</span>
@@ -470,7 +470,7 @@ function MobileGlassStyleKnobs() {
           >
             {glassKind.isMixed && (
               <SliderPickerMixedItem className="mobile-style-knobs__item">
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   <QuestionMark />
                 </button>
                 <span className="mobile-style-knobs__label">Mixed</span>
@@ -482,7 +482,7 @@ function MobileGlassStyleKnobs() {
                 value={item.value}
                 className="mobile-style-knobs__item"
               >
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   {item.icon()}
                 </button>
                 <span className="mobile-style-knobs__label">{item.shortLabel}</span>
@@ -601,7 +601,7 @@ function MobileGlitchStyleKnobs() {
           >
             {glitchKind.isMixed && (
               <SliderPickerMixedItem className="mobile-style-knobs__item">
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   <QuestionMark />
                 </button>
                 <span className="mobile-style-knobs__label">Mixed</span>
@@ -613,7 +613,7 @@ function MobileGlitchStyleKnobs() {
                 value={item.value}
                 className="mobile-style-knobs__item"
               >
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   {item.icon()}
                 </button>
                 <span className="mobile-style-knobs__label">{item.shortLabel}</span>
@@ -702,7 +702,7 @@ function MobileShapeStyleKnobs() {
           <SliderPickerOptions className="mobile-style-knobs__options" aria-label="Shape selection">
             {shape.isMixed && (
               <SliderPickerMixedItem className="mobile-style-knobs__item">
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   <QuestionMark />
                 </button>
                 <span className="mobile-style-knobs__label">Mixed</span>
@@ -714,7 +714,7 @@ function MobileShapeStyleKnobs() {
                 value={item.value}
                 className="mobile-style-knobs__item"
               >
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   {item.icon()}
                 </button>
                 <span className="mobile-style-knobs__label">{item.shortLabel}</span>
@@ -834,7 +834,7 @@ export function MobileStyleKnobs() {
                 checked={showOriginalChecked}
                 onCheckedChange={handleShowOriginalToggle}
               >
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   <QuestionMark />
                 </button>
                 <span className="mobile-style-knobs__label">Mixed</span>
@@ -848,7 +848,7 @@ export function MobileStyleKnobs() {
                 checked={showOriginalChecked}
                 onCheckedChange={handleShowOriginalToggle}
               >
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   {shaderIconMap[shader.value]()}
                 </button>
                 <span className="mobile-style-knobs__label">{shader.label}</span>

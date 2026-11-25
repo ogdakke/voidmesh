@@ -71,7 +71,12 @@
     outline-offset: 1px;
   }
 
-  :where([data-variant="primary"]) {
+  /* Option buttons carry no variant: the primary look belongs to the selected option only, so an
+     unselected option never inherits the primary variant's blue border/ring. Variant buttons
+     (palette thumbnails) keep their own styling. */
+  &:where([data-selected]) :where(.ui-button:not([data-variant])) {
+    border-color: var(--primary);
+    color: #fff;
     background: linear-gradient(180deg, var(--primary-lighter), var(--primary));
     box-shadow:
       inset 0 0 1px 1px hsla(0, 0%, 100%, 0.08),
@@ -89,10 +94,9 @@
     }
   }
 
-  /* The inner buttons are presentational (tabIndex -1) but still take focus on tap, and the
-     button primitive's :focus-visible/:active styles (primary border, 2px outline) outrank the
-     unselected look above, so the tapped option kept a blue ring once the selection moved on. */
-  &:not([data-selected]) .ui-button[data-variant]:is(:focus, :focus-visible, :active) {
+  /* The inner buttons are presentational (tabIndex -1) but still take focus on tap; keep the
+     button primitive's focus outline off unselected options. */
+  &:not([data-selected]) .ui-button:is(:focus, :focus-visible, :active) {
     border-color: transparent;
     outline: none;
   }

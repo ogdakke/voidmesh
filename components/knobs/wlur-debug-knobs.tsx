@@ -434,7 +434,7 @@ export default function WlurDebugKnobs() {
                 value={setting.value}
                 className="mobile-style-knobs__item"
               >
-                <button type="button" tabIndex={-1} className="ui-button" data-variant="primary">
+                <button type="button" tabIndex={-1} className="ui-button">
                   {formatSettingButtonValue(setting, wlurDebugConfig)}
                 </button>
                 <span className="mobile-style-knobs__label">{setting.shortLabel}</span>
@@ -530,7 +530,7 @@ export default function WlurDebugKnobs() {
                   value={option.value}
                   className="mobile-style-knobs__item"
                 >
-                  <button type="button" tabIndex={-1} className="ui-button" data-variant="primary">
+                  <button type="button" tabIndex={-1} className="ui-button">
                     {option.shortLabel}
                   </button>
                   <span className="mobile-style-knobs__label">{option.label}</span>

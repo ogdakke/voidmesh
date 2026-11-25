@@ -355,7 +355,6 @@ function ShaderMobileSelect({
                     type="button"
                     tabIndex={-1}
                     className="ui-button mobile-style-knobs__time-toggle icon-crossfade"
-                    data-variant="primary"
                     aria-label={isTimeAutoPlaying ? "Pause" : "Play"}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -384,7 +383,7 @@ function ShaderMobileSelect({
                 value={param.value}
                 className="mobile-style-knobs__item"
               >
-                <button type="button" tabIndex={-1} className="ui-button" data-variant="primary">
+                <button type="button" tabIndex={-1} className="ui-button">
                   {isMixed
                     ? "M"
                     : hasChanged && currentValue != null
