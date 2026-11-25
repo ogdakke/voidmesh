@@ -19,7 +19,6 @@ import {
   createWlurFineBlurShaderSource,
   createWlurKawaseDownShaderSource,
   createWlurKawaseUpShaderSource,
-  createWlurNoiseShaderSource,
 } from "./shaders.ts";
 import {
   DEFAULT_WLUR_PARAMS,
@@ -50,13 +49,11 @@ interface KawaseTextures {
   down: GPUTexture[];
   /** Blended upsamples for levels 1..N-1 (index 0 = half resolution). */
   up: GPUTexture[];
-  composite: GPUTexture;
 }
 
 interface ScratchTextures {
   blurIntermediate: GPUTexture;
   blurOutput: GPUTexture;
-  composite: GPUTexture;
 }
 
 export interface WlurEncodeOptions {
@@ -107,10 +104,6 @@ export class WlurPass {
   #compositePipeline: GPURenderPipeline | null = null;
   #compositeUniformBuffer: GPUBuffer | null = null;
 
-  #noiseBindGroupLayout: GPUBindGroupLayout | null = null;
-  #noisePipeline: GPURenderPipeline | null = null;
-  #noiseUniformBuffer: GPUBuffer | null = null;
-
   #scratchTextures: Map<string, ScratchTextures> = new Map();
   #textureViews = new WeakMap<GPUTexture, GPUTextureView>();
   #copyBindings = new WeakMap<GPUTexture, GPUBindGroup>();
@@ -124,7 +117,6 @@ export class WlurPass {
       bindGroup: GPUBindGroup;
     }
   >();
-  #noiseBinding: { source: GPUTexture; bindGroup: GPUBindGroup } | null = null;
 
   #kawaseDownBindGroupLayout: GPUBindGroupLayout | null = null;
   #kawaseDownPipeline: GPURenderPipeline | null = null;
@@ -152,11 +144,9 @@ export class WlurPass {
   readonly #kawaseUniformCaches = new Map<GPUBuffer, Float32Array>();
   readonly #blurUniformData = new Float32Array(12);
   readonly #compositeUniformData = new Float32Array(20);
-  readonly #noiseUniformData = new Float32Array(8);
   readonly #blurXUniformCache = new Float32Array(12).fill(Number.NaN);
   readonly #blurYUniformCache = new Float32Array(12).fill(Number.NaN);
   readonly #compositeUniformCache = new Float32Array(20).fill(Number.NaN);
-  readonly #noiseUniformCache = new Float32Array(8).fill(Number.NaN);
   #blurPixels = 0;
   #fullBlurPixels = 0;
 
@@ -192,7 +182,6 @@ export class WlurPass {
     this.#createCopyPipeline();
     this.#createBlurPipelines();
     this.#createCompositePipeline();
-    this.#createNoisePipeline();
     this.#createKawasePipelines();
   }
 
@@ -247,10 +236,7 @@ export class WlurPass {
       !this.#blurYUniformBuffer ||
       !this.#compositePipeline ||
       !this.#compositeBindGroupLayout ||
-      !this.#compositeUniformBuffer ||
-      !this.#noisePipeline ||
-      !this.#noiseBindGroupLayout ||
-      !this.#noiseUniformBuffer
+      !this.#compositeUniformBuffer
     ) {
       return;
     }
@@ -294,7 +280,6 @@ export class WlurPass {
     );
     const blurXRegion = blurRegions.blurX;
     const blurYRegion = blurRegions.blurY;
-    const compositeTarget = resolvedParams.noise > 0.001 ? scratch.composite : outputTexture;
     const restoreThreshold = usesReducedResolution ? 0.05 : 0.001;
     if (options.refreshBlur !== false) {
       this.#blurPixels +=
@@ -362,6 +347,7 @@ export class WlurPass {
       restoreThreshold,
       resolvedParams.tint?.color,
       resolvedParams.tint?.amount ?? 0,
+      resolvedParams.noise,
       0,
     );
     this.#encodeCompositePass(
@@ -370,23 +356,9 @@ export class WlurPass {
       scratch.blurOutput,
       // Unused outside Kawase hybrid mode; any texture satisfies the binding.
       scratch.blurOutput,
-      compositeTarget,
-      resolvedParams.noise <= 0.001 ? options.outputView : undefined,
+      outputTexture,
+      options.outputView,
     );
-
-    if (resolvedParams.noise <= 0.001) {
-      return;
-    }
-
-    this.#writeNoiseUniforms(
-      width,
-      height,
-      resolvedParams.offset,
-      resolvedParams.interpolation,
-      directionIndex,
-      resolvedParams.noise,
-    );
-    this.#encodeNoisePass(encoder, scratch.composite, outputTexture, options.outputView);
   }
 
   destroy(): void {
@@ -412,7 +384,6 @@ export class WlurPass {
     this.#blurXUniformBuffer?.destroy();
     this.#blurYUniformBuffer?.destroy();
     this.#compositeUniformBuffer?.destroy();
-    this.#noiseUniformBuffer?.destroy();
     this.#curveTexture?.destroy();
     this.#sampler = null;
     this.#curveTexture = null;
@@ -428,15 +399,11 @@ export class WlurPass {
     this.#compositeBindGroupLayout = null;
     this.#compositePipeline = null;
     this.#compositeUniformBuffer = null;
-    this.#noiseBindGroupLayout = null;
-    this.#noisePipeline = null;
-    this.#noiseUniformBuffer = null;
     this.#textureViews = new WeakMap();
     this.#copyBindings = new WeakMap();
     this.#blurXBinding = null;
     this.#blurYBinding = null;
     this.#compositeBindings = new WeakMap();
-    this.#noiseBinding = null;
   }
 
   #createCopyPipeline(): void {
@@ -625,61 +592,6 @@ export class WlurPass {
     });
   }
 
-  #createNoisePipeline(): void {
-    const shaderModule = this.#device.createShaderModule({
-      label: `${this.#label} noise shader`,
-      code: createWlurNoiseShaderSource(),
-    });
-
-    this.#noiseBindGroupLayout = this.#device.createBindGroupLayout({
-      label: `${this.#label} noise bind group layout`,
-      entries: [
-        {
-          binding: 0,
-          visibility: GPUShaderStage.FRAGMENT,
-          buffer: { type: "uniform" },
-        },
-        {
-          binding: 1,
-          visibility: GPUShaderStage.FRAGMENT,
-          texture: { sampleType: "float" },
-        },
-        {
-          binding: 2,
-          visibility: GPUShaderStage.FRAGMENT,
-          sampler: { type: "filtering" },
-        },
-        {
-          binding: 3,
-          visibility: GPUShaderStage.FRAGMENT,
-          texture: { sampleType: "float" },
-        },
-      ],
-    });
-
-    this.#noiseUniformBuffer = this.#device.createBuffer({
-      label: `${this.#label} noise uniforms`,
-      size: 32,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    this.#noiseUniformCache.fill(Number.NaN);
-
-    this.#noisePipeline = this.#device.createRenderPipeline({
-      label: `${this.#label} noise pipeline`,
-      layout: this.#device.createPipelineLayout({
-        label: `${this.#label} noise pipeline layout`,
-        bindGroupLayouts: [this.#noiseBindGroupLayout],
-      }),
-      vertex: { module: shaderModule, entryPoint: "vs_main" },
-      fragment: {
-        module: shaderModule,
-        entryPoint: "fs_main",
-        targets: [{ format: this.#format }],
-      },
-      primitive: { topology: "triangle-list" },
-    });
-  }
-
   #getOrCreateScratchTextures(width: number, height: number): ScratchTextures {
     const key = getWlurScratchKey(width, height, this.#quality.resolutionScale);
     const cached = this.#scratchTextures.get(key);
@@ -691,7 +603,6 @@ export class WlurPass {
 
     const working = getWlurWorkingDimensions(width, height, this.#quality.resolutionScale);
     const workingUsage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT;
-    const compositeUsage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT;
 
     const entry: ScratchTextures = {
       blurIntermediate: this.#device.createTexture({
@@ -705,12 +616,6 @@ export class WlurPass {
         size: [working.width, working.height],
         format: this.#format,
         usage: workingUsage,
-      }),
-      composite: this.#device.createTexture({
-        label: `${this.#label} composite ${width}x${height}`,
-        size: [width, height],
-        format: this.#format,
-        usage: compositeUsage,
       }),
     };
 
@@ -802,7 +707,6 @@ export class WlurPass {
       key,
       down,
       up,
-      composite: create("Kawase composite", width, height),
     };
     return this.#kawaseTextures;
   }
@@ -811,7 +715,6 @@ export class WlurPass {
     if (!this.#kawaseTextures) return;
     for (const texture of this.#kawaseTextures.down) texture.destroy();
     for (const texture of this.#kawaseTextures.up) texture.destroy();
-    this.#kawaseTextures.composite.destroy();
     this.#kawaseTextures = null;
     this.#kawaseOutput = null;
     this.#kawaseBindings.clear();
@@ -988,7 +891,6 @@ export class WlurPass {
       options.refreshBlur !== false,
     );
 
-    const hasNoise = params.noise > 0.001;
     this.#writeCompositeUniforms(
       width,
       height,
@@ -1000,6 +902,7 @@ export class WlurPass {
       params.fade ?? DEFAULT_WLUR_PARAMS.fade,
       params.tint?.color,
       params.tint?.amount ?? 0,
+      params.noise,
       Math.max(levels, 0.001),
       fine ? fineDepth : 0,
       fine ? fine.bandUv : undefined,
@@ -1009,20 +912,9 @@ export class WlurPass {
       inputTexture,
       this.#kawaseOutput,
       fine?.textures.output ?? this.#kawaseOutput,
-      hasNoise ? textures.composite : outputTexture,
-      hasNoise ? undefined : options.outputView,
+      outputTexture,
+      options.outputView,
     );
-    if (!hasNoise) return;
-
-    this.#writeNoiseUniforms(
-      width,
-      height,
-      params.offset,
-      params.interpolation,
-      directionIndex,
-      params.noise,
-    );
-    this.#encodeNoisePass(encoder, textures.composite, outputTexture, options.outputView);
   }
 
   #getFinePipelines(kernelSize: number): { x: GPURenderPipeline; y: GPURenderPipeline } {
@@ -1215,7 +1107,6 @@ export class WlurPass {
     for (const entry of this.#scratchTextures.values()) {
       entry.blurIntermediate.destroy();
       entry.blurOutput.destroy();
-      entry.composite.destroy();
     }
     this.#scratchTextures.clear();
   }
@@ -1294,6 +1185,7 @@ export class WlurPass {
     restoreThreshold: number,
     tintColor: WlurTintColor | undefined,
     tintAmount: number,
+    noise: number,
     kawaseLevels: number,
     fineDepth = 0,
     fineBand: readonly [number, number, number, number] = [0, 0, 1, 1],
@@ -1302,7 +1194,7 @@ export class WlurPass {
     data[0] = width;
     data[1] = height;
     data[2] = restoreThreshold;
-    data[3] = 0;
+    data[3] = noise > 0.001 ? noise : 0;
     data[4] = offset;
     data[5] = interpolation;
     data[6] = directionIndex;
@@ -1324,26 +1216,6 @@ export class WlurPass {
       data,
       this.#compositeUniformCache,
     );
-  }
-
-  #writeNoiseUniforms(
-    width: number,
-    height: number,
-    offset: number,
-    interpolation: number,
-    directionIndex: number,
-    strength: number,
-  ): void {
-    const data = this.#noiseUniformData;
-    data[0] = width;
-    data[1] = height;
-    data[2] = strength;
-    data[3] = 0;
-    data[4] = offset;
-    data[5] = interpolation;
-    data[6] = directionIndex;
-    data[7] = 0;
-    this.#writeUniformBufferIfChanged(this.#noiseUniformBuffer!, data, this.#noiseUniformCache);
   }
 
   #writeUniformBufferIfChanged(buffer: GPUBuffer, data: Float32Array, cached: Float32Array): void {
@@ -1495,48 +1367,6 @@ export class WlurPass {
     });
 
     pass.setPipeline(this.#compositePipeline!);
-    pass.setBindGroup(0, binding.bindGroup);
-    pass.draw(3);
-    pass.end();
-  }
-
-  #encodeNoisePass(
-    encoder: GPUCommandEncoder,
-    sourceTexture: GPUTexture,
-    destinationTexture: GPUTexture,
-    destinationView?: GPUTextureView,
-  ): void {
-    let binding = this.#noiseBinding;
-    if (binding?.source !== sourceTexture) {
-      binding = {
-        source: sourceTexture,
-        bindGroup: this.#device.createBindGroup({
-          label: `${this.#label} noise bind group`,
-          layout: this.#noiseBindGroupLayout!,
-          entries: [
-            { binding: 0, resource: { buffer: this.#noiseUniformBuffer! } },
-            { binding: 1, resource: this.#getTextureView(sourceTexture) },
-            { binding: 2, resource: this.#sampler! },
-            { binding: 3, resource: this.#curveTextureView! },
-          ],
-        }),
-      };
-      this.#noiseBinding = binding;
-    }
-
-    const pass = encoder.beginRenderPass({
-      label: `${this.#label} noise pass`,
-      colorAttachments: [
-        {
-          view: destinationView ?? this.#getTextureView(destinationTexture),
-          loadOp: "clear",
-          storeOp: "store",
-          clearValue: { r: 0, g: 0, b: 0, a: 0 },
-        },
-      ],
-    });
-
-    pass.setPipeline(this.#noisePipeline!);
     pass.setBindGroup(0, binding.bindGroup);
     pass.draw(3);
     pass.end();

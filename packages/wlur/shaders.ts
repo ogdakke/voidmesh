@@ -68,6 +68,37 @@ fn map_factor(uv: vec2f, offset: f32, interpolation: f32, direction: f32) -> f32
 }
 `;
 
+// Film grain over the blurred region, in the composite pass so it costs no extra full-frame pass
+// or intermediate texture. Reads params.resolution (xy: size, w: strength) and the blur curve.
+const noiseOverlay = `
+fn overlay(base: f32, blend: f32) -> f32 {
+  return select(2.0 * base * blend, 1.0 - 2.0 * (1.0 - base) * (1.0 - blend), base > 0.5);
+}
+
+fn rand(st: vec2f) -> f32 {
+  return fract(sin(dot(st, vec2f(12.9898, 78.233))) * 43758.5453123);
+}
+
+fn apply_noise(color: vec4f, uv: vec2f, raw_factor: f32) -> vec4f {
+  let factor = sample_curve(curve_texture, raw_factor, 0.0);
+  let strength = min(factor * params.resolution.w, params.resolution.w);
+  if (strength <= 0.0) {
+    return color;
+  }
+
+  let noise_coord = floor(uv * params.resolution.xy * 10.0);
+  let white = rand(noise_coord) * 0.5 + 0.5;
+  let next_color = vec4f(
+    overlay(color.r, white),
+    overlay(color.g, white),
+    overlay(color.b, white),
+    color.a,
+  );
+
+  return mix(color, next_color, strength);
+}
+`;
+
 export function createWlurCopyShaderSource(): string {
   return `
 @group(0) @binding(0) var input_texture: texture_2d<f32>;
@@ -344,6 +375,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 export function createWlurCompositeShaderSource(): string {
   return `
 struct CompositeParams {
+  // xy: output size, z: crossfade threshold, w: grain strength (0 = off)
   resolution: vec4f,
   effect: vec4f,
   tint: vec4f,
@@ -366,6 +398,8 @@ ${mapFactor}
 ${curveSampling("tex_sampler")}
 ${kawaseDepth}
 
+${noiseOverlay}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   let original = textureSampleLevel(original_texture, tex_sampler, in.uv, 0.0);
@@ -373,20 +407,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   if (raw_factor <= 0.000001) {
     return original;
   }
+  return apply_noise(composite(in.uv, original, raw_factor), in.uv, raw_factor);
+}
 
+fn composite(uv: vec2f, original: vec4f, raw_factor: f32) -> vec4f {
   let mix_factor = sample_curve(curve_texture, raw_factor, 2.0);
   if (mix_factor <= 0.000001) {
     return original;
   }
 
-  var blurred = textureSampleLevel(blurred_texture, tex_sampler, in.uv, 0.0);
+  var blurred = textureSampleLevel(blurred_texture, tex_sampler, uv, 0.0);
   if (params.kawase.x > 0.0) {
     let level = kawase_depth(sample_curve(curve_texture, raw_factor, 0.0), params.kawase.x);
     if (params.kawase.y > 0.0) {
       // Hybrid: a real full-resolution Gaussian covers the shallow depths, where crossfading
       // pyramid levels turns fine patterns into alternating haze; the pyramid takes over over
       // one level past the crossover, where content is already smooth.
-      let band_uv = (in.uv - params.fine_band.xy) / params.fine_band.zw;
+      let band_uv = (uv - params.fine_band.xy) / params.fine_band.zw;
       let fine = textureSampleLevel(fine_texture, tex_sampler, band_uv, 0.0);
       blurred = mix(fine, blurred, clamp(level - params.kawase.y, 0.0, 1.0));
     } else {
@@ -407,58 +444,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   );
   let blend = select(0.0, threshold_blend, mix_factor > 0.0);
   return mix(original, tinted_blur, blend);
-}
-`;
-}
-
-export function createWlurNoiseShaderSource(): string {
-  return `
-struct NoiseParams {
-  resolution: vec4f,
-  effect: vec4f,
-}
-
-@group(0) @binding(0) var<uniform> params: NoiseParams;
-@group(0) @binding(1) var input_texture: texture_2d<f32>;
-@group(0) @binding(2) var input_sampler: sampler;
-@group(0) @binding(3) var curve_texture: texture_2d<f32>;
-
-${fullscreenVertex}
-${mapFactor}
-${curveSampling("input_sampler")}
-
-fn overlay(base: f32, blend: f32) -> f32 {
-  return select(2.0 * base * blend, 1.0 - 2.0 * (1.0 - base) * (1.0 - blend), base > 0.5);
-}
-
-fn rand(st: vec2f) -> f32 {
-  return fract(sin(dot(st, vec2f(12.9898, 78.233))) * 43758.5453123);
-}
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-  let color = textureSampleLevel(input_texture, input_sampler, in.uv, 0.0);
-  let raw_factor = map_factor(in.uv, params.effect.x, params.effect.y, params.effect.z);
-  if (raw_factor <= 0.000001) {
-    return color;
-  }
-  let factor = sample_curve(curve_texture, raw_factor, 0.0);
-  let strength = min(factor * params.resolution.z, params.resolution.z);
-
-  if (strength <= 0.0) {
-    return color;
-  }
-
-  let noise_coord = floor(in.uv * params.resolution.xy * 10.0);
-  let white = rand(noise_coord) * 0.5 + 0.5;
-  let next_color = vec4f(
-    overlay(color.r, white),
-    overlay(color.g, white),
-    overlay(color.b, white),
-    color.a,
-  );
-
-  return mix(color, next_color, strength);
 }
 `;
 }

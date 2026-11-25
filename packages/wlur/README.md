@@ -40,8 +40,7 @@ The `gaussian` pass shape is:
 
 1. horizontal blur (sampling the full-size source at working-resolution steps)
 2. vertical blur
-3. composite back over the original
-4. optional noise pass
+3. composite back over the original, with optional grain
 
 The `kawase` pass shape is:
 
@@ -50,8 +49,7 @@ The `kawase` pass shape is:
    ramp's target depth `log2(1 + f × (2^levels − 1))`, so the radius grows linearly along the ramp
 3. a full-resolution variable Gaussian over the band of the ramp shallower than `fineDepth + 1`
    (crossfading shallow pyramid levels turns fine patterns into alternating haze)
-4. composite: fine layer below `fineDepth`, pyramid one level past it
-5. optional noise pass
+4. composite: fine layer below `fineDepth`, pyramid one level past it, with optional grain
 
 The Kawase mode does not support partial refresh; a refresh rebuilds the pyramid.
 
