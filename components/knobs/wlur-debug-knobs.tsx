@@ -1,8 +1,20 @@
 import { createPortal } from "react-dom";
 import { useEffect, useRef, useState } from "react";
 import { config } from "#config";
+import { toastManager } from "#application/notifications.ts";
+import { logger } from "#lib/client.logger.ts";
 import { useCanvasRendererService } from "#context/use-canvas.ts";
-import { WLUR_DEBUG_CURVE_OPTIONS, type WlurOverlayDebugConfig } from "#renderer/wlur-debug.ts";
+import {
+  WLUR_DEBUG_ALGORITHM_OPTIONS,
+  WLUR_DEBUG_CURVE_OPTIONS,
+  resolveWlurOverlayDebugConfig,
+  type WlurOverlayDebugConfig,
+} from "#renderer/wlur-debug.ts";
+import type { WlurAlgorithm } from "#wlur";
+import { createMobileWlurOverlayConfig, type MobileWlurMode } from "#renderer/wlur-overlay.ts";
+import { useIsStandalone } from "#hooks/use-is-standalone.ts";
+import { useIsCompactLandscape } from "#hooks/use-is-mobile.ts";
+import { Button } from "#ui/button/button.tsx";
 import { InfiniteSlider } from "#ui/infinite-slider/index.ts";
 import {
   SliderPicker,
@@ -10,6 +22,7 @@ import {
   SliderPickerOptions,
   SliderPickerWindow,
 } from "#ui/slider-picker/index.ts";
+import useMediaQuery from "#hooks/use-media-query.ts";
 import "./knobs.css";
 
 type WlurDebugSetting =
@@ -27,7 +40,11 @@ type WlurDebugSetting =
         | "noise"
         | "tintAmount"
         | "kernelSize"
-        | "resolutionScale";
+        | "resolutionScale"
+        | "levels"
+        | "spread"
+        | "fineDepth"
+        | "fade";
       label: string;
       shortLabel: string;
       kind: "number";
@@ -40,11 +57,66 @@ type WlurDebugSetting =
       label: string;
       shortLabel: string;
       kind: "curve";
+    }
+  | {
+      value: "algorithm";
+      label: string;
+      shortLabel: string;
+      kind: "algorithm";
+    }
+  | {
+      value: "tintColor";
+      label: string;
+      shortLabel: string;
+      kind: "color";
+    }
+  | {
+      value: "copy";
+      label: string;
+      shortLabel: string;
+      kind: "copy";
     };
 
 const WLUR_DEBUG_SETTINGS = [
   { value: "enabled", label: "Enabled", shortLabel: "On", kind: "boolean" },
   { value: "cache", label: "Cache", shortLabel: "Cache", kind: "boolean" },
+  { value: "algorithm", label: "Algorithm", shortLabel: "Algo", kind: "algorithm" },
+  {
+    value: "levels",
+    label: "Kawase Levels",
+    shortLabel: "Lvls",
+    kind: "number",
+    range: { min: 0, max: 8 },
+    precision: 2,
+    displayRaw: true,
+  },
+  {
+    value: "fineDepth",
+    label: "Fine Gaussian depth",
+    shortLabel: "Fine",
+    kind: "number",
+    range: { min: 0, max: 4 },
+    precision: 2,
+    displayRaw: true,
+  },
+  {
+    value: "fade",
+    label: "Fade into blur",
+    shortLabel: "Fade",
+    kind: "number",
+    range: { min: 0.001, max: 1 },
+    precision: 3,
+    displayRaw: true,
+  },
+  {
+    value: "spread",
+    label: "Kawase Spread",
+    shortLabel: "Sprd",
+    kind: "number",
+    range: { min: 0, max: 4 },
+    precision: 2,
+    displayRaw: true,
+  },
   {
     value: "radius",
     label: "Radius",
@@ -106,7 +178,27 @@ const WLUR_DEBUG_SETTINGS = [
   { value: "blurCurve", label: "Blur Ease", shortLabel: "Blur", kind: "curve" },
   { value: "mixCurve", label: "Mix Ease", shortLabel: "Mix", kind: "curve" },
   { value: "tintCurve", label: "Tint Ease", shortLabel: "Tint", kind: "curve" },
+  { value: "tintColor", label: "Tint Color", shortLabel: "Color", kind: "color" },
+  { value: "copy", label: "Copy values", shortLabel: "Copy", kind: "copy" },
 ] as const satisfies readonly WlurDebugSetting[];
+
+/** Settings that only affect one algorithm; everything else applies to both. */
+const MODE_SPECIFIC_SETTINGS: Partial<Record<WlurDebugSetting["value"], WlurAlgorithm>> = {
+  radius: "gaussian",
+  kernelSize: "gaussian",
+  resolutionScale: "gaussian",
+  levels: "kawase",
+  spread: "kawase",
+  fineDepth: "kawase",
+  fade: "kawase",
+};
+
+function getVisibleWlurDebugSettings(algorithm: WlurAlgorithm): readonly WlurDebugSetting[] {
+  return WLUR_DEBUG_SETTINGS.filter((setting) => {
+    const mode = MODE_SPECIFIC_SETTINGS[setting.value];
+    return mode === undefined || mode === algorithm;
+  });
+}
 
 function toUiValue(actual: number, min: number, max: number): number {
   return Math.round(((actual - min) / (max - min)) * 100);
@@ -122,8 +214,20 @@ function formatSettingButtonValue(
   setting: WlurDebugSetting,
   configValue: WlurOverlayDebugConfig,
 ): string {
+  if (setting.kind === "copy") {
+    return "JSON";
+  }
+
+  if (setting.kind === "color") {
+    return configValue.tintColor.slice(1, 4).toUpperCase();
+  }
+
   if (setting.kind === "boolean") {
     return configValue[setting.value] ? "On" : "Off";
+  }
+
+  if (setting.kind === "algorithm") {
+    return configValue.algorithm === "kawase" ? "Kaw" : "Gau";
   }
 
   if (setting.kind === "curve") {
@@ -135,7 +239,8 @@ function formatSettingButtonValue(
 
   const value = configValue[setting.value];
   if (setting.displayRaw) {
-    return `${Math.round(value)}`;
+    if (setting.precision === 0) return `${Math.round(value)}`;
+    return value.toFixed(value < 1 ? 2 : 1);
   }
 
   return `${Math.round(((value - setting.range.min) / (setting.range.max - setting.range.min)) * 100)}`;
@@ -145,8 +250,23 @@ function formatFloatingValue(
   setting: WlurDebugSetting,
   configValue: WlurOverlayDebugConfig,
 ): string {
+  if (setting.kind === "copy") {
+    return setting.label;
+  }
+
+  if (setting.kind === "color") {
+    return `${setting.label}: ${configValue.tintColor}`;
+  }
+
   if (setting.kind === "boolean") {
     return `${setting.label}: ${configValue[setting.value] ? "On" : "Off"}`;
+  }
+
+  if (setting.kind === "algorithm") {
+    const option = WLUR_DEBUG_ALGORITHM_OPTIONS.find(
+      (entry) => entry.value === configValue.algorithm,
+    );
+    return `${setting.label}: ${option?.label ?? configValue.algorithm}`;
   }
 
   if (setting.kind === "curve") {
@@ -157,8 +277,22 @@ function formatFloatingValue(
   }
 
   const value = configValue[setting.value];
-  const formatted = setting.displayRaw ? `${Math.round(value)}` : value.toFixed(setting.precision);
+  const formatted =
+    setting.displayRaw && setting.precision === 0
+      ? `${Math.round(value)}`
+      : value.toFixed(setting.precision);
   return `${setting.label}: ${formatted}`;
+}
+
+async function copyWlurDebugConfig(configValue: WlurOverlayDebugConfig, mode: MobileWlurMode) {
+  try {
+    // `mode` says which preset (browser tab or installed app) these values belong to.
+    await navigator.clipboard.writeText(JSON.stringify({ mode, ...configValue }, null, 2));
+    toastManager.add({ type: "primary", title: "Blur values copied" });
+  } catch (error) {
+    logger.error("Failed to copy blur values:", error);
+    toastManager.add({ type: "destructive", title: "Could not copy blur values" });
+  }
 }
 
 const TOGGLE_OPTIONS = [
@@ -167,10 +301,29 @@ const TOGGLE_OPTIONS = [
 ] as const;
 
 export default function WlurDebugKnobs() {
-  const { wlurDebugConfig, setWlurDebugConfig } = useCanvasRendererService();
-  const [selectedSetting, setSelectedSetting] = useState<WlurDebugSetting>(
+  const { wlurDebugOverrides, setWlurDebugConfig, resetWlurDebugConfig } =
+    useCanvasRendererService();
+  const isDarkTheme = useMediaQuery("(prefers-color-scheme: dark)");
+  const isCompactLandscape = useIsCompactLandscape();
+  const mode = useIsStandalone() ? "pwa" : "browser";
+  // Same base the renderer uses, so untouched values are exactly what production renders.
+  const wlurDebugConfig = resolveWlurOverlayDebugConfig(
+    createMobileWlurOverlayConfig({
+      darkTheme: isDarkTheme,
+      edge: isCompactLandscape ? "right" : "bottom",
+      mode,
+    }),
+    wlurDebugOverrides,
+  );
+  const hasOverrides = Object.keys(wlurDebugOverrides).length > 0;
+  const visibleSettings = getVisibleWlurDebugSettings(wlurDebugConfig.algorithm);
+  const [pickedSetting, setSelectedSetting] = useState<WlurDebugSetting>(
     WLUR_DEBUG_SETTINGS.find((setting) => setting.value === "radius")!,
   );
+  // A setting hidden by an algorithm switch falls back to the algorithm picker itself.
+  const selectedSetting = visibleSettings.includes(pickedSetting)
+    ? pickedSetting
+    : WLUR_DEBUG_SETTINGS.find((setting) => setting.value === "algorithm")!;
   const [floatingLabel, setFloatingLabel] = useState<string | null>(null);
   const floatingLabelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -211,7 +364,7 @@ export default function WlurDebugKnobs() {
     }
     setWlurDebugConfig({ [selectedSetting.value]: nextValue });
     showFloatingLabel(
-      `${selectedSetting.label}: ${selectedSetting.displayRaw ? Math.round(nextValue) : nextValue.toFixed(selectedSetting.precision)}`,
+      `${selectedSetting.label}: ${selectedSetting.displayRaw && selectedSetting.precision === 0 ? Math.round(nextValue) : nextValue.toFixed(selectedSetting.precision)}`,
     );
   };
   const currentNumericValue =
@@ -230,10 +383,16 @@ export default function WlurDebugKnobs() {
         : "off"
       : selectedSetting.kind === "curve"
         ? wlurDebugConfig[selectedSetting.value]
-        : null;
+        : selectedSetting.kind === "algorithm"
+          ? wlurDebugConfig.algorithm
+          : null;
 
   const enumOptions =
-    selectedSetting.kind === "boolean" ? TOGGLE_OPTIONS : WLUR_DEBUG_CURVE_OPTIONS;
+    selectedSetting.kind === "boolean"
+      ? TOGGLE_OPTIONS
+      : selectedSetting.kind === "algorithm"
+        ? WLUR_DEBUG_ALGORITHM_OPTIONS
+        : WLUR_DEBUG_CURVE_OPTIONS;
 
   return (
     <div className="params-knobs">
@@ -248,7 +407,7 @@ export default function WlurDebugKnobs() {
       <SliderPicker
         value={selectedSetting.value}
         onValueChange={(value) => {
-          const nextSetting = WLUR_DEBUG_SETTINGS.find((entry) => entry.value === value);
+          const nextSetting = visibleSettings.find((entry) => entry.value === value);
           if (!nextSetting) return;
           setSelectedSetting(nextSetting);
           showFloatingLabel(formatFloatingValue(nextSetting, wlurDebugConfig));
@@ -269,13 +428,13 @@ export default function WlurDebugKnobs() {
             className="mobile-style-knobs__options"
             aria-label="Canvas blur debug control"
           >
-            {WLUR_DEBUG_SETTINGS.map((setting) => (
+            {visibleSettings.map((setting) => (
               <SliderPickerItem
                 key={setting.value}
                 value={setting.value}
                 className="mobile-style-knobs__item"
               >
-                <button type="button" tabIndex={-1} className="ui-button" data-variant="primary">
+                <button type="button" tabIndex={-1} className="ui-button">
                   {formatSettingButtonValue(setting, wlurDebugConfig)}
                 </button>
                 <span className="mobile-style-knobs__label">{setting.shortLabel}</span>
@@ -286,7 +445,36 @@ export default function WlurDebugKnobs() {
         </SliderPickerWindow>
       </SliderPicker>
 
-      {selectedSetting.kind === "number" ? (
+      {selectedSetting.kind === "color" ? (
+        <div className="wlur-debug-row">
+          <input
+            type="color"
+            className="wlur-debug-color"
+            aria-label="Blur tint color"
+            value={wlurDebugConfig.tintColor}
+            onChange={(e) => {
+              setWlurDebugConfig({ tintColor: e.target.value });
+              showFloatingLabel(`Tint Color: ${e.target.value}`);
+            }}
+          />
+          <Button
+            variant="secondary"
+            disabled={wlurDebugOverrides.tintColor === undefined}
+            onClick={() => setWlurDebugConfig({ tintColor: undefined })}
+          >
+            Theme
+          </Button>
+        </div>
+      ) : selectedSetting.kind === "copy" ? (
+        <div className="wlur-debug-row">
+          <Button onClick={() => void copyWlurDebugConfig(wlurDebugConfig, mode)}>
+            Copy values
+          </Button>
+          <Button variant="secondary" disabled={!hasOverrides} onClick={resetWlurDebugConfig}>
+            Reset
+          </Button>
+        </div>
+      ) : selectedSetting.kind === "number" ? (
         <InfiniteSlider
           value={currentNumericValue}
           min={0}
@@ -304,6 +492,14 @@ export default function WlurDebugKnobs() {
               const enabled = value === "on";
               setWlurDebugConfig({ [selectedSetting.value]: enabled });
               showFloatingLabel(`${selectedSetting.label}: ${enabled ? "On" : "Off"}`);
+              return;
+            }
+
+            if (selectedSetting.kind === "algorithm") {
+              const algorithm = WLUR_DEBUG_ALGORITHM_OPTIONS.find((entry) => entry.value === value);
+              if (!algorithm) return;
+              setWlurDebugConfig({ algorithm: algorithm.value });
+              showFloatingLabel(`${selectedSetting.label}: ${algorithm.label}`);
               return;
             }
 
@@ -334,7 +530,7 @@ export default function WlurDebugKnobs() {
                   value={option.value}
                   className="mobile-style-knobs__item"
                 >
-                  <button type="button" tabIndex={-1} className="ui-button" data-variant="primary">
+                  <button type="button" tabIndex={-1} className="ui-button">
                     {option.shortLabel}
                   </button>
                   <span className="mobile-style-knobs__label">{option.label}</span>

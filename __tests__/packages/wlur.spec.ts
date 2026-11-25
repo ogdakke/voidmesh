@@ -5,6 +5,8 @@ import {
   clampWlurParams,
   clampWlurQuality,
   getWlurBlurRegions,
+  getWlurFineBand,
+  getWlurKawaseReachPx,
   getWlurScratchKey,
   getWlurSourceDependencyRegion,
   getWlurWorkingDimensions,
@@ -136,6 +138,31 @@ describe("wlur helpers", () => {
     ).toEqual({ x: 0, y: 300, width: 800, height: 300 });
   });
 
+  test("pads the Kawase dependency region by the pyramid's reach", () => {
+    const params = {
+      ...DEFAULT_WLUR_PARAMS,
+      direction: "down" as const,
+      offset: 0.5,
+      levels: 3,
+      spread: 1,
+    };
+    const region = getWlurSourceDependencyRegion(800, 600, params, {
+      kernelSize: 45,
+      resolutionScale: 1,
+      algorithm: "kawase",
+    });
+    const reach = getWlurKawaseReachPx(3, 1);
+
+    expect(reach).toBeGreaterThan(0);
+    expect(region).toEqual({
+      x: 0,
+      y: Math.max(0, 299 - reach),
+      width: 800,
+      height: 600 - Math.max(0, 299 - reach),
+    });
+    expect(clampWlurQuality({ algorithm: "bogus" as never }).algorithm).toBe("gaussian");
+  });
+
   test("expands partial refreshes by each separable blur pass dependency", () => {
     expect(
       getWlurBlurRegions(
@@ -219,6 +246,101 @@ describe("WlurPass resource reuse", () => {
     expect(device.createBindGroup).toHaveBeenCalledTimes(6);
 
     pass.destroy();
+  });
+
+  test("runs a dual Kawase pyramid down to the ramp's depth and reuses it with the blur cache", () => {
+    const device = createWlurDevice();
+    const pass = new WlurPass({ device, format: "rgba16float", quality: { algorithm: "kawase" } });
+    const encoder = createWlurEncoder();
+    const input = createWlurTexture(800, 600);
+    const output = createWlurTexture(800, 600);
+    const beginRenderPass = vi.mocked(encoder.beginRenderPass);
+    const params = { ...DEFAULT_WLUR_PARAMS, levels: 2.5, spread: 1, noise: 0, fineDepth: 0 };
+
+    pass.encode(encoder, input, output, 800, 600, params);
+    expect(beginRenderPass.mock.calls.map((call) => call[0].label)).toEqual([
+      "Wlur Kawase down 1",
+      "Wlur Kawase down 2",
+      "Wlur Kawase down 3",
+      "Wlur Kawase up 2",
+      "Wlur Kawase up 1",
+      "Wlur composite pass",
+    ]);
+    const pyramidSizes = vi
+      .mocked(device.createTexture)
+      .mock.calls.map((call) => call[0])
+      .filter((descriptor) => descriptor.label?.includes("Kawase down"))
+      .map((descriptor) => descriptor.size);
+    expect(pyramidSizes).toEqual([
+      [400, 300],
+      [200, 150],
+      [100, 75],
+    ]);
+
+    pass.encode(encoder, input, output, 800, 600, params, { refreshBlur: false });
+    expect(beginRenderPass).toHaveBeenCalledTimes(7);
+    expect(beginRenderPass.mock.calls.at(-1)?.[0].label).toBe("Wlur composite pass");
+
+    pass.destroy();
+  });
+
+  test("adds a full-resolution fine Gaussian over the shallow band in hybrid Kawase mode", () => {
+    const device = createWlurDevice();
+    const pass = new WlurPass({ device, format: "rgba16float", quality: { algorithm: "kawase" } });
+    const encoder = createWlurEncoder();
+    const input = createWlurTexture(800, 600);
+    const output = createWlurTexture(800, 600);
+    const beginRenderPass = vi.mocked(encoder.beginRenderPass);
+    const params = {
+      ...DEFAULT_WLUR_PARAMS,
+      curve: WLUR_CURVES.linear,
+      direction: "down" as const,
+      offset: 0.5,
+      interpolation: 0.5,
+      levels: 5,
+      fineDepth: 2,
+      noise: 0,
+    };
+
+    pass.encode(encoder, input, output, 800, 600, params);
+    const labels = beginRenderPass.mock.calls.map((call) => call[0].label);
+    expect(labels.slice(-3)).toEqual([
+      "Wlur fine X pass",
+      "Wlur fine Y pass",
+      "Wlur composite pass",
+    ]);
+    const fineSizes = vi
+      .mocked(device.createTexture)
+      .mock.calls.map((call) => call[0])
+      .filter((descriptor) => descriptor.label?.includes("fine"))
+      .map((descriptor) => descriptor.size);
+    // Band from the ramp start to the pyramid handoff, padded by the kernel, in 64px steps.
+    expect(fineSizes).toEqual([
+      [800, 128],
+      [800, 128],
+    ]);
+
+    pass.destroy();
+  });
+
+  test("bounds the hybrid fine band to the shallow part of the ramp", () => {
+    const base = {
+      ...DEFAULT_WLUR_PARAMS,
+      curve: WLUR_CURVES.linear,
+      offset: 0.5,
+      interpolation: 0.5,
+      levels: 5,
+      fineDepth: 2,
+    };
+    expect(getWlurFineBand(800, 600, { ...base, direction: "down" })).toEqual({
+      x: 0,
+      y: 280,
+      width: 800,
+      height: 128,
+    });
+    expect(getWlurFineBand(800, 600, { ...base, fineDepth: 0 })).toBeNull();
+    // Shallow pyramids never hand off, so the band covers the whole ramp.
+    expect(getWlurFineBand(800, 600, { ...base, levels: 2 })!.height).toBeGreaterThan(300);
   });
 
   test("renders the final composite into a caller-owned output view", () => {

@@ -2,7 +2,9 @@ import { Button } from "#ui/button/button.tsx";
 import { Modal } from "#ui/modal/modal.tsx";
 import { Xmark } from "iconoir-react";
 import { CanvasLensingPreviews } from "./canvas-lensing-previews.tsx";
+import { isPreviewBuild } from "#lib/build-env.ts";
 import {
+  DebugModeToggle,
   FancyDeleteToggle,
   FeedbackLink,
   LinkItem,
@@ -48,6 +50,11 @@ export default function DesktopSettingsContent({
               <div className="desktop-settings-row">
                 <FancyDeleteToggle />
               </div>
+              {isPreviewBuild && (
+                <div className="desktop-settings-row">
+                  <DebugModeToggle />
+                </div>
+              )}
             </div>
           </section>
           <section className="desktop-settings-section" aria-labelledby="voidmesh-settings-title">

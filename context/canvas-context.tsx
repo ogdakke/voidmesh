@@ -92,10 +92,7 @@ import { extractPaletteFromImage } from "#lib/palette-extraction/index.ts";
 import { completeOnboardingStarterDeletionFromEvent } from "#lib/onboarding/onboarding-runtime.ts";
 import { CanvasLensing, ColorSpace } from "#types/enums.ts";
 import type { PartialDeep } from "type-fest";
-import {
-  createDefaultWlurOverlayDebugConfig,
-  type WlurOverlayDebugConfig,
-} from "#renderer/wlur-debug.ts";
+import { type WlurOverlayDebugOverrides } from "#renderer/wlur-debug.ts";
 
 // --- Resource ownership for undo/redo cleanup ---
 // Tracks which undo command "owns" cleanup rights for each entity's media resources.
@@ -296,9 +293,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   const isCanvasDebugType =
     debugType === DebugType.alpha || debugType === DebugType.spatial || debugType === DebugType.all;
   const debug = debugType !== null && (import.meta.env.DEV || !isCanvasDebugType);
-  const [wlurDebugConfig, setWlurDebugConfigState] = useState<WlurOverlayDebugConfig>(() =>
-    createDefaultWlurOverlayDebugConfig(),
-  );
+  const [wlurDebugOverrides, setWlurDebugOverrides] = useState<WlurOverlayDebugOverrides>({});
   // URL params for selected entity shader settings (for shareable configurations)
   const [renderState, setRenderState] = useQueryStates(shaderUrlParams);
   const renderStateRef = useRef(renderState);
@@ -2010,13 +2005,17 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
   // Stable identities keep the memoized renderer-service boundary independent of URL rerenders.
   // oxlint-disable-next-line voidmesh-react-compiler/no-manual-memoization
-  const setWlurDebugConfig = useCallback((updates: Partial<WlurOverlayDebugConfig>) => {
-    setWlurDebugConfigState((prev) => ({ ...prev, ...updates }));
+  const setWlurDebugConfig = useCallback((updates: WlurOverlayDebugOverrides) => {
+    setWlurDebugOverrides((prev) =>
+      Object.fromEntries(
+        Object.entries({ ...prev, ...updates }).filter(([, value]) => value !== undefined),
+      ),
+    );
   }, []);
 
   // oxlint-disable-next-line voidmesh-react-compiler/no-manual-memoization
   const resetWlurDebugConfig = useCallback(() => {
-    setWlurDebugConfigState(createDefaultWlurOverlayDebugConfig());
+    setWlurDebugOverrides({});
   }, []);
 
   // Export functions
@@ -2317,7 +2316,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       renderer: rendererState,
       colorSpace,
       debugMode: debug,
-      wlurDebugConfig,
+      wlurDebugOverrides,
       setWlurDebugConfig,
       resetWlurDebugConfig,
     }),
@@ -2328,7 +2327,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       rendererState,
       resetWlurDebugConfig,
       setWlurDebugConfig,
-      wlurDebugConfig,
+      wlurDebugOverrides,
     ],
   );
 

@@ -575,9 +575,28 @@ export class SliderEngine {
 
   // ── Cleanup ─────────────────────────────────────────────────────────
 
+  /**
+   * Tears the engine down. An interaction still in flight (drag, momentum, snap, or a pending
+   * debounced change/commit) is settled at the current value first, so a caller that opened a
+   * transaction in onInteractionStart always sees the matching onValueCommit.
+   */
   destroy(): void {
+    const commitPending = this.#interactionStarted || this.#commitTimer !== null;
     this.#stopAnimation();
-    if (this.#changeTimer !== null) clearTimeout(this.#changeTimer);
-    if (this.#commitTimer !== null) clearTimeout(this.#commitTimer);
+    this.#pointerActive = false;
+
+    if (this.#changeTimer !== null) {
+      clearTimeout(this.#changeTimer);
+      this.#changeTimer = null;
+      this.#onValueChange?.(this.getValue());
+    }
+    if (this.#commitTimer !== null) {
+      clearTimeout(this.#commitTimer);
+      this.#commitTimer = null;
+    }
+    if (commitPending) {
+      this.#interactionStarted = false;
+      this.#onValueCommit?.(this.getValue());
+    }
   }
 }

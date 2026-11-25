@@ -95,6 +95,7 @@
     rgb(100% 100% 100%) 100%;
   --mask: var(--mask-light);
 
+  /* Mirrored as the mobile WLUR tint in renderer/wlur-overlay.ts; keep in sync. */
   --studio-background: light-dark(#fafafa, #060608);
   --content-radius: var(--radius-xl);
   --mobile-controls-h: 180px;

@@ -337,7 +337,7 @@ export function PostProcessMobileKnobs() {
                   onCheckedChange={(checked) => handleToggle(param.effect, checked)}
                   className="mobile-style-knobs__item"
                 >
-                  <button type="button" tabIndex={-1} className="ui-button" data-variant="primary">
+                  <button type="button" tabIndex={-1} className="ui-button">
                     {isMixed
                       ? "M"
                       : hasChanged

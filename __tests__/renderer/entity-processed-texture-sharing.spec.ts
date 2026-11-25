@@ -1,7 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
-import { releaseImageAsset, retainImageAsset } from "#lib/media-assets.ts";
-import { createTestEntity } from "../helpers/test-entity.ts";
 
 const runtimeEncode = vi.hoisted(() => vi.fn<() => void>());
 const offscreenCanvasConstructor = vi.hoisted(() =>
@@ -24,7 +22,16 @@ vi.mock("#renderer/entity-shader-runtime.ts", () => ({
   },
 }));
 
-const { EntityTexturePipeline } = await import("#renderer/entity-texture-pipeline.ts");
+// Tests share workers (isolate: false): a pipeline another file already loaded would keep the
+// real shader runtime, so reload it under the mock above. media-assets and the entity helper come
+// from the same fresh registry so assets are retained in the instance the pipeline reads.
+vi.resetModules();
+const [{ EntityTexturePipeline }, { releaseImageAsset, retainImageAsset }, { createTestEntity }] =
+  await Promise.all([
+    import("#renderer/entity-texture-pipeline.ts"),
+    import("#lib/media-assets.ts"),
+    import("../helpers/test-entity.ts"),
+  ]);
 
 describe("EntityTexturePipeline processed image sharing", () => {
   beforeAll(() => {
