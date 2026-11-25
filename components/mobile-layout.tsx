@@ -12,6 +12,7 @@ import { Canvas } from "./canvas";
 import { MediaControls } from "./media-controls/media-controls.tsx";
 import { MobileControls } from "./mobile-controls.tsx";
 import { BottomBarItem, MobileBottomBar } from "./mobile-bottom/mobile-bottom-bar.tsx";
+import { resolveActiveBarItem } from "./mobile-bottom/mobile-bottom-bar.lib.ts";
 import { debugBarItem, items, type BarItem, type DebugBarItem } from "./mobile-bottom/bar-items.ts";
 import { DeleteDropZone } from "./delete-drop-zone/delete-drop-zone.tsx";
 import { ActionLayer } from "./action-layer/action-layer.tsx";
@@ -64,7 +65,7 @@ function MobileActionLayer() {
 }
 
 function MobileFloat({ isLandscape }: { isLandscape: boolean }) {
-  const [activeItem, setActiveItem] = useState<BarItem | DebugBarItem | null>(items.at(0)!);
+  const [selectedItem, setSelectedItem] = useState<BarItem | DebugBarItem | null>(items.at(0)!);
   const multiSelectMode = useMultiSelectMode();
   const selectedEntityIds = useSelectedEntityIds();
   const { entityDragActive } = useEntityDrag();
@@ -90,6 +91,14 @@ function MobileFloat({ isLandscape }: { isLandscape: boolean }) {
       disabled: bottomBarDisabled,
     },
   };
+  const debugItemDisabled = !debugMode || isFullscreen;
+  // Derived, not reset in state: an item can become disabled from outside the bar
+  // (selection change, effect change), and its panel would otherwise render nothing.
+  const activeItem = resolveActiveBarItem<BarItem | DebugBarItem>(
+    selectedItem,
+    debugMode ? [...items, debugBarItem] : items,
+    (item) => (item === debugBarItem ? debugItemDisabled : propsMapByItem[item].disabled),
+  );
 
   return (
     <div className="mobile-float" data-fullscreen={isFullscreen || undefined}>
@@ -104,7 +113,7 @@ function MobileFloat({ isLandscape }: { isLandscape: boolean }) {
 
       <MobileBottomBar
         items={items}
-        onChange={(item) => setActiveItem(item as BarItem | DebugBarItem | null)}
+        onChange={(item) => setSelectedItem(item as BarItem | DebugBarItem | null)}
         value={activeItem}
       >
         <BottomBarItem label="style" {...propsMapByItem["style"]}>
@@ -123,7 +132,7 @@ function MobileFloat({ isLandscape }: { isLandscape: boolean }) {
           <ColorFilter />
         </BottomBarItem>
         {debugMode && (
-          <BottomBarItem label={debugBarItem} disabled={isFullscreen}>
+          <BottomBarItem label={debugBarItem} disabled={debugItemDisabled}>
             <Settings />
           </BottomBarItem>
         )}
