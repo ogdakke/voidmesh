@@ -543,8 +543,9 @@ export class InfiniteCanvasRenderer {
   renderEntityToTexture(
     entity: ShaderCanvasEntity,
     encoder: GPUCommandEncoder,
+    renderSize?: { width: number; height: number },
   ): EntityCompositionSource | null {
-    return this.#entityTexturePipeline?.renderEntityToTexture(entity, encoder) ?? null;
+    return this.#entityTexturePipeline?.renderEntityToTexture(entity, encoder, renderSize) ?? null;
   }
 
   /**

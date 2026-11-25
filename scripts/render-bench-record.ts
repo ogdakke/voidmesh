@@ -91,6 +91,7 @@ interface CliOptions {
   stagedUploadGuard: boolean;
   cullingGuard: boolean;
   outputSizeVisual: boolean;
+  lodConsistency: boolean;
   screenSizedContinuous: boolean;
   rounds: number;
 }
@@ -147,6 +148,28 @@ async function main(): Promise<void> {
 
     try {
       await pageClient.send("Runtime.enable");
+      if (options.lodConsistency) {
+        const { guard } = await runBenchInPage(
+          pageClient,
+          null,
+          options.suite,
+          1,
+          "__measureVoidmeshLodConsistency",
+        );
+        const { rows } = guard as {
+          rows: Array<{ name: string; half: number; quarter: number; eighth: number }>;
+        };
+        console.log("LOD consistency (mean RGB difference from the native render, 0-255):");
+        for (const row of rows) {
+          const cells = [row.half, row.quarter, row.eighth].map((value) =>
+            value.toFixed(2).padStart(7),
+          );
+          console.log(
+            `${row.name.padStart(26)}: 1/2 ${cells[0]}  1/4 ${cells[1]}  1/8 ${cells[2]}`,
+          );
+        }
+        return;
+      }
       if (options.outputSizeVisual) {
         const { guard } = await runBenchInPage(
           pageClient,
@@ -277,6 +300,7 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
     stagedUploadGuard: false,
     cullingGuard: false,
     outputSizeVisual: false,
+    lodConsistency: false,
     screenSizedContinuous: false,
     rounds: Number(process.env.BENCH_ROUNDS ?? 1),
   };
@@ -313,6 +337,8 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
       options.cullingGuard = true;
     } else if (arg === "--output-size-visual") {
       options.outputSizeVisual = true;
+    } else if (arg === "--lod-consistency") {
+      options.lodConsistency = true;
     } else if (arg === "--screen-sized-continuous") {
       options.screenSizedContinuous = true;
     } else if (arg === "--video-url") {

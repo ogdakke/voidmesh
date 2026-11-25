@@ -40,6 +40,12 @@ interface CachedEntityTexture {
   asset: object | null;
 }
 
+/**
+ * Pixel ratio past which a texture is far from the size it shows at: three times in length,
+ * which only tiers two apart reach (one tier is two times, and sizes round).
+ */
+const LOD_FAR_PIXEL_RATIO = 9;
+
 interface CachedSourceTexture extends CachedEntityTexture {
   width: number;
   height: number;
@@ -389,7 +395,12 @@ export class EntityTexturePipeline {
         this.#countAssetCacheEntry(previousCached.asset, -1);
         recycledTexture = previousCached;
       } else {
-        this.#releaseEntityProcessedTexture(entity.id, canRecyclePrevious && !!cachedTexture);
+        // A continuous output is keyed by its entity and size, so nothing can find the old
+        // one again after a resize: destroy it now, not when the byte budget runs out.
+        this.#releaseEntityProcessedTexture(
+          entity.id,
+          needsContinuousShaderRender || (canRecyclePrevious && !!cachedTexture),
+        );
       }
       cachedTexture = this.#processedTextures.get(processedKey);
     }
@@ -631,8 +642,17 @@ export class EntityTexturePipeline {
       entity.mediaSource.type === MediaType.image &&
       (currentEntry?.entityIds.size ?? 0) > 1 &&
       pixelCost < currentPixelCount;
+    // A zoom in progress leaves LOD alone, except for what it has taken two tiers or more
+    // from the size it shows at: magnified that far it is plainly soft, minified that far it
+    // shimmers, and either would hold until the zoom stops.
+    const farFromScreen =
+      pixelCost >= currentPixelCount * LOD_FAR_PIXEL_RATIO ||
+      currentPixelCount >= pixelCost * LOD_FAR_PIXEL_RATIO;
     if (
-      !this.#tryAdmitLodTransition(pixelCost, allowAnimatedDemotion || allowSharedImageDemotion)
+      !this.#tryAdmitLodTransition(
+        pixelCost,
+        allowAnimatedDemotion || allowSharedImageDemotion || farFromScreen,
+      )
     ) {
       this.#pendingLodWork = true;
       output.width = current.width;

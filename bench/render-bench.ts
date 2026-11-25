@@ -263,6 +263,7 @@ declare global {
     __validateVoidmeshStagedSourceUploads?: typeof validateStagedSourceUploads;
     __validateVoidmeshContinuousCulling?: typeof validateContinuousCulling;
     __compareVoidmeshContinuousOutputSizing?: typeof compareContinuousOutputSizing;
+    __measureVoidmeshLodConsistency?: typeof measureLodConsistency;
   }
 }
 
@@ -2395,6 +2396,11 @@ export async function compareContinuousOutputSizing() {
       viewport: { offset: { x: 141, y: 79 }, zoom: 1 },
     },
   ];
+  // The renderer sizes the canvas from a ResizeObserver, which reports between tasks: render
+  // once and wait, so every capture below is taken at the size the canvas settles on.
+  benchRenderer.render(createRenderState([], true));
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  benchRenderer.render(createRenderState([], true));
   const readback = new OffscreenCanvas(canvas.width, canvas.height);
   const context = readback.getContext("2d", { willReadFrequently: true });
   if (!context) throw new Error("Output sizing readback context is unavailable");
@@ -2411,6 +2417,7 @@ export async function compareContinuousOutputSizing() {
   const results: Array<{
     id: string;
     devicePixelRatio: number;
+    canvasSize: Size;
     tierProcessedBytes: number;
     screenProcessedBytes: number;
     meanAbsDifference: number;
@@ -2431,6 +2438,9 @@ export async function compareContinuousOutputSizing() {
               entity.shaderParams.time = CULLING_GUARD_TIME;
             }
             benchRenderer.render(createRenderState(entitySet.entities, true, viewport));
+          }
+          if (canvas.width !== readback.width || canvas.height !== readback.height) {
+            throw new Error("The canvas changed size during the output sizing comparison");
           }
           context.clearRect(0, 0, readback.width, readback.height);
           context.drawImage(canvas, 0, 0);
@@ -2463,6 +2473,7 @@ export async function compareContinuousOutputSizing() {
         results.push({
           id: scenario.id,
           devicePixelRatio: window.devicePixelRatio,
+          canvasSize: { width: readback.width, height: readback.height },
           tierProcessedBytes: tier.processedBytes,
           screenProcessedBytes: screen.processedBytes,
           meanAbsDifference: sum / tier.pixels.length,
@@ -2484,6 +2495,194 @@ export async function compareContinuousOutputSizing() {
     config.rendering.continuousOutputFollowsScreen = followedScreen;
   }
   return { cases: results };
+}
+
+const LOD_CONSISTENCY_SOURCE: Size = { width: 2048, height: 1280 };
+const LOD_CONSISTENCY_LEVELS = [1, 2, 3] as const;
+
+/**
+ * How far each effect's preview at 1/2, 1/4 and 1/8 size strays from its native render seen
+ * at that size (the native render box-filtered down): mean absolute difference of the stored
+ * RGB, 0-255. An effect that keeps its look across LOD tiers scores low at every level.
+ */
+export async function measureLodConsistency() {
+  const benchRenderer = await getRenderer();
+  const device = benchRenderer.device;
+  if (!device) throw new Error("LOD consistency GPU is unavailable");
+  const neutral: Partial<ShaderParams> = {
+    postProcess: { ...config.defaults.shaderParams.postProcess, enabled: false },
+    adjustments: { brightness: 0.5, contrast: 0.5, saturation: 0.5, blur: 0 },
+    time: 3,
+    timeAutoPlay: false,
+  };
+  const defaults = config.defaults.shaderParams;
+  const glass = (kind: GlassKind): Partial<ShaderParams> => ({
+    ...neutral,
+    glass: { ...defaults.glass!, kind },
+  });
+  const looks: Array<{ name: string; shaderType: ShaderType; params: Partial<ShaderParams> }> = [
+    {
+      name: "original",
+      shaderType: ShaderType.dithering,
+      params: { ...neutral, showOriginal: true },
+    },
+    { name: "glass fluted", shaderType: ShaderType.glass, params: glass(GlassKind.fluted) },
+    {
+      name: "glass frosted",
+      shaderType: ShaderType.glass,
+      params: glass(GlassKind.frostedVoronoi),
+    },
+    { name: "glass flowing", shaderType: ShaderType.glass, params: glass(GlassKind.flowing) },
+    {
+      name: "glass flowing, strong",
+      shaderType: ShaderType.glass,
+      params: { ...glass(GlassKind.flowing), size: 28, intensity: 4, scale: 2 },
+    },
+    { name: "dithering", shaderType: ShaderType.dithering, params: neutral },
+    { name: "halftone", shaderType: ShaderType.halftone, params: neutral },
+    { name: "ascii", shaderType: ShaderType.ascii, params: neutral },
+    { name: "blobs", shaderType: ShaderType.blobs, params: neutral },
+    { name: "melt", shaderType: ShaderType.melt, params: neutral },
+    { name: "glitch", shaderType: ShaderType.glitch, params: neutral },
+    {
+      name: "dithering + post-process",
+      shaderType: ShaderType.dithering,
+      params: { ...neutral, postProcess: { ...defaults.postProcess, enabled: true } },
+    },
+  ];
+  const { width, height } = LOD_CONSISTENCY_SOURCE;
+  const assets = await createSyntheticImageAssets({
+    count: looks.length,
+    blobType: "image/jpeg",
+    createBitmap: () => createSyntheticBitmap(LOD_CONSISTENCY_SOURCE, 7),
+  });
+  const entities: ShaderCanvasEntity[] = [];
+  const rows: Array<{ name: string; half: number; quarter: number; eighth: number }> = [];
+  try {
+    for (let index = 0; index < looks.length; index += 1) {
+      const look = looks[index]!;
+      entities.push(
+        createEntity({
+          id: `lod-consistency-${index}`,
+          name: look.name,
+          asset: assets[index]!,
+          size: LOD_CONSISTENCY_SOURCE,
+          shaderType: look.shaderType,
+          params: resolveBenchShaderParams(look.params),
+        }),
+      );
+    }
+    releaseOwnedImageAssets(assets);
+
+    for (let index = 0; index < looks.length; index += 1) {
+      const entity = entities[index]!;
+      const render = async (size: Size): Promise<Float32Array> => {
+        entity.textureDirty = true;
+        const encoder = device.createCommandEncoder();
+        const source = benchRenderer.renderEntityToTexture(entity, encoder, size);
+        device.queue.submit([encoder.finish()]);
+        if (source?.kind !== "texture") throw new Error(`No texture for ${looks[index]!.name}`);
+        return readTextureRgb(device, source.texture);
+      };
+      const native = await render(LOD_CONSISTENCY_SOURCE);
+      const errors: number[] = [];
+      for (const level of LOD_CONSISTENCY_LEVELS) {
+        const size = { width: width >> level, height: height >> level };
+        const preview = await render(size);
+        errors.push(meanDifferenceFromBoxFiltered(native, width, preview, size, 1 << level));
+      }
+      rows.push({
+        name: looks[index]!.name,
+        half: errors[0]!,
+        quarter: errors[1]!,
+        eighth: errors[2]!,
+      });
+      benchRenderer.removeEntityTexture(entity.id);
+    }
+  } finally {
+    releaseOwnedImageAssets(assets);
+    disposeBenchEntities(entities);
+  }
+  return { source: LOD_CONSISTENCY_SOURCE, rows };
+}
+
+/** Mean absolute difference, 0-255, between `preview` and `native` averaged over `block`² texels. */
+function meanDifferenceFromBoxFiltered(
+  native: Float32Array,
+  nativeWidth: number,
+  preview: Float32Array,
+  previewSize: Size,
+  block: number,
+): number {
+  let sum = 0;
+  const scale = 1 / (block * block);
+  for (let y = 0; y < previewSize.height; y += 1) {
+    for (let x = 0; x < previewSize.width; x += 1) {
+      for (let channel = 0; channel < 3; channel += 1) {
+        let total = 0;
+        for (let by = 0; by < block; by += 1) {
+          const row = ((y * block + by) * nativeWidth + x * block) * 3 + channel;
+          for (let bx = 0; bx < block; bx += 1) total += native[row + bx * 3]!;
+        }
+        sum += Math.abs(total * scale - preview[(y * previewSize.width + x) * 3 + channel]!);
+      }
+    }
+  }
+  return (sum / (previewSize.width * previewSize.height * 3)) * 255;
+}
+
+function halfToFloat(half: number): number {
+  const exponent = (half >> 10) & 0x1f;
+  const fraction = half & 0x3ff;
+  const sign = half & 0x8000 ? -1 : 1;
+  if (exponent === 0) return sign * 2 ** -14 * (fraction / 1024);
+  if (exponent === 31) return fraction ? Number.NaN : sign * Number.POSITIVE_INFINITY;
+  return sign * 2 ** (exponent - 15) * (1 + fraction / 1024);
+}
+
+/** A texture's RGB as 0..1 floats (values outside are clamped), from 8-bit or half-float RGBA. */
+async function readTextureRgb(device: GPUDevice, texture: GPUTexture): Promise<Float32Array> {
+  const isHalfFloat = texture.format === "rgba16float";
+  if (!isHalfFloat && texture.format !== "rgba8unorm") {
+    throw new Error(`Cannot read back ${texture.format}`);
+  }
+  const bytesPerTexel = isHalfFloat ? 8 : 4;
+  const bytesPerRow = Math.ceil((texture.width * bytesPerTexel) / 256) * 256;
+  const buffer = device.createBuffer({
+    size: bytesPerRow * texture.height,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
+  const encoder = device.createCommandEncoder();
+  encoder.copyTextureToBuffer({ texture }, { buffer, bytesPerRow }, [
+    texture.width,
+    texture.height,
+  ]);
+  device.queue.submit([encoder.finish()]);
+  await buffer.mapAsync(GPUMapMode.READ);
+  const mapped = buffer.getMappedRange();
+  const rgb = new Float32Array(texture.width * texture.height * 3);
+  for (let y = 0; y < texture.height; y += 1) {
+    const out = y * texture.width * 3;
+    if (isHalfFloat) {
+      const row = new Uint16Array(mapped, y * bytesPerRow, texture.width * 4);
+      for (let x = 0; x < texture.width; x += 1) {
+        for (let channel = 0; channel < 3; channel += 1) {
+          const value = halfToFloat(row[x * 4 + channel]!);
+          rgb[out + x * 3 + channel] = Math.min(1, Math.max(0, value));
+        }
+      }
+    } else {
+      const row = new Uint8Array(mapped, y * bytesPerRow, texture.width * 4);
+      for (let x = 0; x < texture.width; x += 1) {
+        for (let channel = 0; channel < 3; channel += 1) {
+          rgb[out + x * 3 + channel] = row[x * 4 + channel]! / 255;
+        }
+      }
+    }
+  }
+  buffer.unmap();
+  buffer.destroy();
+  return rgb;
 }
 
 async function readTextureBytes(device: GPUDevice, texture: GPUTexture): Promise<Uint8Array> {
@@ -2638,6 +2837,7 @@ window.__collectVoidmeshRenderBenchMetadata = collectBenchMetadata;
 window.__validateVoidmeshStagedSourceUploads = validateStagedSourceUploads;
 window.__validateVoidmeshContinuousCulling = validateContinuousCulling;
 window.__compareVoidmeshContinuousOutputSizing = compareContinuousOutputSizing;
+window.__measureVoidmeshLodConsistency = measureLodConsistency;
 
 const searchParams = new URLSearchParams(window.location.search);
 // `?screenSizedContinuous=1` sizes continuous effect output to the screen, not its LOD tier.

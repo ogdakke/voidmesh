@@ -189,6 +189,17 @@ describe("EntityTexturePipeline shared image sources", () => {
     });
     expect(pipeline.hasPendingLodWork).toBe(true);
 
+    // Two tiers from the size on screen is plainly soft or shimmering: that moves mid-zoom.
+    pipeline.beginFrame(false);
+    expect(pipeline.resolveRenderSize(entities[0]!, { width: 50, height: 38 })).toEqual({
+      width: 50,
+      height: 38,
+    });
+    expect(pipeline.resolveRenderSize(entities[1]!, { width: 800, height: 600 })).toEqual({
+      width: 800,
+      height: 600,
+    });
+
     pipeline.beginFrame(true);
     const resolved = entities.map((entity) =>
       pipeline.resolveRenderSize(entity, { width: 100, height: 75 }),
