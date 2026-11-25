@@ -101,8 +101,6 @@ export class EntityTexturePipeline {
   #assetCacheEntryCounts = new WeakMap<object, number>();
   #entityContentRevisions = new Map<string, number>();
   #gifResizeSurfaces = new Map<string, GifResizeSurface>();
-  #opaqueResizeSurface: GifResizeSurface | null = null;
-  #alphaResizeSurface: GifResizeSurface | null = null;
   #renderEntityView: EffectRenderEntity | null = null;
   #sourceBytes = 0;
   #processedBytes = 0;
@@ -634,13 +632,6 @@ export class EntityTexturePipeline {
       canvas.height = 1;
     }
     this.#gifResizeSurfaces.clear();
-    for (const surface of [this.#opaqueResizeSurface, this.#alphaResizeSurface]) {
-      if (!surface) continue;
-      surface.canvas.width = 1;
-      surface.canvas.height = 1;
-    }
-    this.#opaqueResizeSurface = null;
-    this.#alphaResizeSurface = null;
     this.#entityContentRevisions.clear();
 
     this.#runtime.destroy();
@@ -660,7 +651,7 @@ export class EntityTexturePipeline {
       const surface =
         entity.mediaSource.type === MediaType.gif
           ? this.#getGifResizeSurface(entity.id, width, height)
-          : this.#getStaticResizeSurface(width, height, getSourceAlphaMode(entity) !== "none");
+          : createResizeSurface(width, height, getSourceAlphaMode(entity) !== "none");
       surface.context.drawImage(source, 0, 0, width, height);
       source = surface.canvas;
     }
@@ -670,33 +661,6 @@ export class EntityTexturePipeline {
       [width, height],
     );
     this.#sourceUploads++;
-  }
-
-  /**
-   * Small static tiers arrive many per frame while a canvas fills, so they share one
-   * grow-only surface per alpha mode and are copied out of its top-left corner. Larger
-   * tiers are rare and get a surface of their own rather than pinning its memory.
-   */
-  #getStaticResizeSurface(width: number, height: number, alpha: boolean): GifResizeSurface {
-    if (width > SHARED_RESIZE_SURFACE_MAX || height > SHARED_RESIZE_SURFACE_MAX) {
-      return createResizeSurface(width, height, alpha);
-    }
-    let surface = alpha ? this.#alphaResizeSurface : this.#opaqueResizeSurface;
-    if (!surface) {
-      surface = createResizeSurface(width, height, alpha);
-      // Each draw replaces its region, so an earlier, larger image cannot show through.
-      surface.context.globalCompositeOperation = "copy";
-      if (alpha) this.#alphaResizeSurface = surface;
-      else this.#opaqueResizeSurface = surface;
-      return surface;
-    }
-    const { canvas } = surface;
-    if (canvas.width < width || canvas.height < height) {
-      canvas.width = Math.max(canvas.width, width);
-      canvas.height = Math.max(canvas.height, height);
-      surface.context.globalCompositeOperation = "copy";
-    }
-    return surface;
   }
 
   #getGifResizeSurface(entityId: string, width: number, height: number): GifResizeSurface {
@@ -979,9 +943,6 @@ export class EntityTexturePipeline {
     }
   }
 }
-
-/** Largest tier side served by the shared resize surfaces (4 MiB each at most). */
-const SHARED_RESIZE_SURFACE_MAX = 1024;
 
 function createResizeSurface(width: number, height: number, alpha: boolean): GifResizeSurface {
   const canvas = new OffscreenCanvas(width, height);
