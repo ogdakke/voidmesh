@@ -11,7 +11,7 @@ import type {
   PrepareFullSceneBatchOptions,
   PrepareMixedFullSceneBatchOptions,
 } from "#renderer/composition-pass.ts";
-import type { ShaderCanvasEntity, Viewport } from "#types/canvas.ts";
+import { GlassKind, ShaderType, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import { createTestEntity } from "../helpers/test-entity.ts";
 
 const renderingConfig = config.rendering as unknown as {
@@ -767,3 +767,152 @@ function createScene(): { entities: ShaderCanvasEntity[]; release: () => void } 
     },
   };
 }
+
+describe("EntityDrawItemPreparer continuous processing culling", () => {
+  const rendering = config.rendering as unknown as { continuousOutputFollowsScreen: boolean };
+  // Regions below are worked out against the 400 px render size the harness resolves.
+  beforeAll(() => {
+    rendering.continuousOutputFollowsScreen = false;
+  });
+  afterAll(() => {
+    rendering.continuousOutputFollowsScreen = false;
+  });
+
+  function createGlassScene(positions: Array<{ x: number; y: number }>) {
+    const entities = positions.map((position, index) => {
+      const entity = createTestEntity({
+        id: `glass-${index}`,
+        shaderType: ShaderType.glass,
+        position,
+        size: { width: 200, height: 200 },
+        zIndex: index,
+        shaderParams: {
+          glass: {
+            kind: GlassKind.flowing,
+            angle: 0,
+            caustic: 1,
+            frostiness: 0.8,
+            highlight: 0.1,
+            dispersion: 0.6,
+            flow: 0.5,
+          },
+          postProcess: { enabled: false },
+        },
+      });
+      if (entity.mediaSource.type !== "image") throw new Error("Expected image entity");
+      entity.mediaSource.asset.alphaMode = "none";
+      return entity;
+    });
+    const harness = createHarness(entities);
+    const regions = new Map<
+      string,
+      { x: number; y: number; width: number; height: number } | null
+    >();
+    const outputSizes = new Map<string, { width: number; height: number } | null>();
+    const pipeline = harness.texturePipeline as unknown as Record<string, unknown>;
+    pipeline.needsContinuousRenderForEntity = () => true;
+    pipeline.getReusableStaticCompositionSource = () => null;
+    pipeline.hasDisplayedTexture = () => true;
+    pipeline.resolveRenderSize = () => ({ width: 400, height: 400 });
+    pipeline.renderEntityToTexture = (
+      entity: ShaderCanvasEntity,
+      _encoder: unknown,
+      _size: unknown,
+      region: { x: number; y: number; width: number; height: number } | null,
+      outputSize: { width: number; height: number } | null,
+    ) => {
+      regions.set(entity.id, region ? { ...region } : null);
+      outputSizes.set(entity.id, outputSize ? { ...outputSize } : null);
+      return { kind: "texture", texture: harness.texture };
+    };
+    return {
+      entities,
+      harness,
+      regions,
+      outputSizes,
+      release: () => {
+        for (const entity of entities) {
+          if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
+        }
+      },
+    };
+  }
+
+  test("processes only what the viewport and opaque entities above leave showing", () => {
+    // The second entity covers the right half of the first; the viewport cuts its own right side.
+    const scene = createGlassScene([
+      { x: 0, y: 0 },
+      { x: 100, y: -10 },
+    ]);
+    scene.entities[1]!.size = { width: 200, height: 220 };
+    scene.harness.options.width = 250;
+    scene.harness.preparer.prepare(scene.harness.options);
+
+    // Shown x 0..102 (2px occluder inset) plus 2px margin and 2 texels, at 2 texels per unit.
+    expect(scene.regions.get("glass-0")).toEqual({ x: 0, y: 0, width: 210, height: 400 });
+    // Shown x 100..250 of 100..300, grown the same way; texture is 400 wide for 200 units.
+    // Its top 10 units are above the viewport: 400 texels over 220 units, less margin and pad.
+    expect(scene.regions.get("glass-1")).toEqual({ x: 0, y: 12, width: 306, height: 388 });
+    scene.release();
+  });
+
+  test("keeps the whole entity under covers that carry alpha, are rotated or are not drawn yet", () => {
+    for (const disqualify of [
+      (cover: ShaderCanvasEntity) => {
+        if (cover.mediaSource.type === "image") cover.mediaSource.asset.alphaMode = "unknown";
+      },
+      (cover: ShaderCanvasEntity) => {
+        cover.rotation = 5;
+      },
+      (_cover: ShaderCanvasEntity, pipeline: Record<string, unknown>) => {
+        pipeline.hasDisplayedTexture = () => false;
+      },
+    ]) {
+      const scene = createGlassScene([
+        { x: 0, y: 0 },
+        { x: 100, y: -10 },
+      ]);
+      scene.entities[1]!.size = { width: 200, height: 220 };
+      disqualify(scene.entities[1]!, scene.harness.texturePipeline as never);
+      scene.harness.preparer.prepare(scene.harness.options);
+      expect(scene.regions.get("glass-0")).toEqual({ x: 0, y: 0, width: 400, height: 400 });
+      scene.release();
+    }
+  });
+
+  test("processes whole entities while a drag or the action layer displaces them", () => {
+    const scene = createGlassScene([
+      { x: 0, y: 0 },
+      { x: 100, y: -10 },
+    ]);
+    scene.entities[1]!.size = { width: 200, height: 220 };
+    scene.harness.options.dragVisual.active = true;
+    scene.harness.preparer.prepare(scene.harness.options);
+    expect(scene.regions.get("glass-0")).toBeNull();
+
+    scene.harness.options.dragVisual.active = false;
+    scene.harness.options.actionLayer.active = true;
+    scene.harness.preparer.prepare(scene.harness.options);
+    expect(scene.regions.get("glass-0")).toBeNull();
+    scene.release();
+  });
+
+  test("sizes a continuous output to the screen and maps the shown region into it", () => {
+    const scene = createGlassScene([{ x: 0, y: 0 }]);
+    scene.entities[0]!.originalSize = { width: 2000, height: 2000 };
+    scene.harness.options.width = 100;
+    rendering.continuousOutputFollowsScreen = true;
+    try {
+      // 200 world units at zoom 0.5 and DPR 2 cover 200 device pixels: 32 px steps give 224.
+      scene.harness.options.viewport = { offset: { x: 0, y: 0 }, zoom: 0.5 };
+      scene.harness.options.devicePixelRatio = 2;
+      scene.harness.preparer.prepare(scene.harness.options);
+      expect(scene.outputSizes.get("glass-0")).toEqual({ width: 224, height: 224 });
+      // The viewport shows all 200 world units across (100 px / 0.5), so nothing is clipped.
+      expect(scene.regions.get("glass-0")).toEqual({ x: 0, y: 0, width: 224, height: 224 });
+    } finally {
+      rendering.continuousOutputFollowsScreen = false;
+      scene.release();
+    }
+  });
+});

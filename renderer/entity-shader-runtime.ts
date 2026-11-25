@@ -3,7 +3,11 @@ import { isErrorDiffusion, ShaderType } from "#types/canvas.ts";
 import type { MediaAlphaMode, RGBA } from "#types/canvas.ts";
 import { AlphaMaskPass } from "./alpha-mask-pass.ts";
 import { CopyPass } from "./copy-pass.ts";
-import type { EffectRenderEntity, EffectShaderSettings } from "./effect-render-entity.ts";
+import type {
+  EffectRenderEntity,
+  EffectShaderSettings,
+  ShaderOutputRegion,
+} from "./effect-render-entity.ts";
 import type { GpuColorConfig } from "./gpu-color-space.ts";
 import { ProcessingPipeline } from "./processing-pipeline.ts";
 import { AsciiShader } from "./shaders/ascii-shader.ts";
@@ -131,6 +135,8 @@ export class EntityShaderRuntime {
     height: number;
     respectShowOriginal: boolean;
     sourceAlphaMode?: MediaAlphaMode | undefined;
+    /** The part of the output that shows; passes may skip the rest. */
+    outputRegion?: ShaderOutputRegion | null | undefined;
   }): void {
     const { entity, source, outputTexture, encoder, width, height } = params;
 
@@ -145,6 +151,8 @@ export class EntityShaderRuntime {
     const needsBlur = this.#processingPipeline.needsBlur(entity);
     const needsAdjustments = this.#processingPipeline.needsAdjustments(entity);
     const postProcessEnabled = entity.shaderParams.postProcess?.enabled ?? false;
+    // Post-processing reads neighbours of each pixel, so it needs the whole effect output.
+    const outputRegion = postProcessEnabled ? null : (params.outputRegion ?? null);
     const preProcessUsage =
       GPUTextureUsage.TEXTURE_BINDING |
       GPUTextureUsage.RENDER_ATTACHMENT |
@@ -238,6 +246,7 @@ export class EntityShaderRuntime {
         shaderSource,
         mainShaderOutputTexture,
         encoder,
+        outputRegion,
       );
     } else {
       this.#shaderRegistry.applyShader(
@@ -245,6 +254,7 @@ export class EntityShaderRuntime {
         shaderSource.texture,
         mainShaderOutputTexture,
         encoder,
+        outputRegion,
       );
     }
 
@@ -269,7 +279,13 @@ export class EntityShaderRuntime {
     }
 
     if (alphaMaskIntermediateTexture) {
-      this.#alphaMaskPass.encode(encoder, alphaMaskIntermediateTexture, source, outputTexture);
+      this.#alphaMaskPass.encode(
+        encoder,
+        alphaMaskIntermediateTexture,
+        source,
+        outputTexture,
+        outputRegion,
+      );
       this.#releaseTexture(alphaMaskIntermediateTexture, width, height, alphaMaskUsage);
     }
   }

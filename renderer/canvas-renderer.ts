@@ -299,6 +299,8 @@ export class InfiniteCanvasRenderer {
         sourceTextureAllocations: 0,
         processedTextureAllocations: 0,
         sourceUploads: 0,
+        continuousTexels: 0,
+        continuousTexelsProcessed: 0,
         externalTextureImports: 0,
         evictions: 0,
       },
@@ -662,6 +664,7 @@ export class InfiniteCanvasRenderer {
       hasCanvasCallouts: state.canvasCallouts.length > 0,
       debugMode,
     });
+    this.#entityTexturePipeline?.flushSourceUploads();
     const prepareEnd = performance.now();
     this.#lastPhaseStats.prepareMs = tracePerformancePhase(
       "render.prepare",
@@ -1703,8 +1706,15 @@ export class InfiniteCanvasRenderer {
       this.#protectedFullSceneTextureOwners.add(fullSceneSource.ownerEntityId);
     }
 
+    const pipeline = this.#entityTexturePipeline;
+    if (pipeline?.isProcessedTexturePartial(entityId)) {
+      // Only what showed last frame was processed; the snapshot needs the whole entity.
+      const encoder = this.#device.createCommandEncoder();
+      pipeline.completePartialProcessedTexture(entity, encoder);
+      this.#device.queue.submit([encoder.finish()]);
+    }
     const renderedTexture =
-      this.#entityTexturePipeline?.getProcessedEntityTexture(entityId) ??
+      pipeline?.getProcessedEntityTexture(entityId) ??
       (fullSceneSource?.kind === "processed" ? fullSceneSource.texture : null);
     if (renderedTexture) {
       const snapshotTexture = this.#device.createTexture({

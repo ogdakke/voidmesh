@@ -207,7 +207,7 @@ describe("EntityTexturePipeline shared image sources", () => {
 
   test("bounds cold visible source uploads during viewport motion", () => {
     const entities = Array.from(
-      { length: config.rendering.lodTransitionsPerFrame + 1 },
+      { length: config.rendering.coldLodTransitionsPerFrame + 1 },
       (_, index) =>
         createTestEntity({
           id: `cold-lod-${index}`,
@@ -225,13 +225,13 @@ describe("EntityTexturePipeline shared image sources", () => {
       pipeline.resolveRenderSize(entity, { width: 100, height: 75 }),
     );
 
-    expect(resolved.slice(0, config.rendering.lodTransitionsPerFrame)).toEqual(
-      Array.from({ length: config.rendering.lodTransitionsPerFrame }, () => ({
+    expect(resolved.slice(0, config.rendering.coldLodTransitionsPerFrame)).toEqual(
+      Array.from({ length: config.rendering.coldLodTransitionsPerFrame }, () => ({
         width: 100,
         height: 75,
       })),
     );
-    expect(resolved[config.rendering.lodTransitionsPerFrame]).toBeNull();
+    expect(resolved[config.rendering.coldLodTransitionsPerFrame]).toBeNull();
     expect(pipeline.hasPendingLodWork).toBe(true);
 
     for (const entity of entities) {

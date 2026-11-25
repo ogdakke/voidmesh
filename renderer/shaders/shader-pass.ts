@@ -2,7 +2,11 @@ import type { RGBA } from "#types/canvas.ts";
 import { ColorSpace } from "#types/enums.ts";
 import { sortPaletteByLuminance } from "#lib/color-utils.ts";
 import type { TexturePool } from "../texture-pool.ts";
-import type { EffectRenderEntity, EffectShaderSettings } from "../effect-render-entity.ts";
+import type {
+  EffectRenderEntity,
+  EffectShaderSettings,
+  ShaderOutputRegion,
+} from "../effect-render-entity.ts";
 
 export interface ShaderContext {
   device: GPUDevice;
@@ -357,6 +361,7 @@ export abstract class ShaderPass {
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,
+    _outputRegion?: ShaderOutputRegion | null,
   ): void {
     if (!this.pipeline) return;
 
@@ -386,6 +391,7 @@ export abstract class ShaderPass {
     source: ExternalTextureSource,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,
+    _outputRegion?: ShaderOutputRegion | null,
   ): void {
     if (!this.externalPipeline) return;
 

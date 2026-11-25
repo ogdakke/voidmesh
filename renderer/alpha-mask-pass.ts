@@ -1,4 +1,5 @@
 import alphaMaskExternalShaderSource from "./alpha-mask-external.wgsl?raw";
+import type { ShaderOutputRegion } from "./effect-render-entity.ts";
 import alphaMaskShaderSource from "./alpha-mask.wgsl?raw";
 import type { ExternalTextureSource } from "./shaders/shader-pass.ts";
 
@@ -119,7 +120,9 @@ export class AlphaMaskPass {
     effectTexture: GPUTexture,
     maskSource: AlphaMaskSource,
     outputTexture: GPUTexture,
+    outputRegion?: ShaderOutputRegion | null,
   ): void {
+    if (outputRegion && (outputRegion.width === 0 || outputRegion.height === 0)) return;
     const bindGroup =
       maskSource.kind === "external"
         ? this.#device.createBindGroup({
@@ -158,6 +161,9 @@ export class AlphaMaskPass {
 
     pass.setPipeline(maskSource.kind === "external" ? this.#externalPipeline : this.#pipeline);
     pass.setBindGroup(0, bindGroup);
+    if (outputRegion) {
+      pass.setScissorRect(outputRegion.x, outputRegion.y, outputRegion.width, outputRegion.height);
+    }
     pass.draw(3);
     pass.end();
   }

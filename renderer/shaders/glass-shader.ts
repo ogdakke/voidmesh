@@ -1,5 +1,9 @@
 import { GlassKind } from "#types/canvas.ts";
-import type { EffectRenderEntity, EffectShaderSettings } from "../effect-render-entity.ts";
+import type {
+  EffectRenderEntity,
+  EffectShaderSettings,
+  ShaderOutputRegion,
+} from "../effect-render-entity.ts";
 import glassFlowingSource from "../glass-flowing.wgsl?raw";
 import glassFlutedSource from "../glass-fluted.wgsl?raw";
 import glassFrostedSource from "../glass-frosted.wgsl?raw";
@@ -37,6 +41,13 @@ function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
     if (a[index] !== b[index]) return false;
   }
   return true;
+}
+
+function setOutputScissor(
+  pass: GPURenderPassEncoder,
+  region: ShaderOutputRegion | null | undefined,
+): void {
+  if (region) pass.setScissorRect(region.x, region.y, region.width, region.height);
 }
 
 export class GlassShader extends ShaderPass {
@@ -231,13 +242,14 @@ export class GlassShader extends ShaderPass {
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,
+    outputRegion?: ShaderOutputRegion | null,
   ): void {
     const glassKind = entity.shaderParams.glass?.kind ?? GlassKind.frostedVoronoi;
 
     if (glassKind === GlassKind.fluted) {
       this.#executeFluted(entity, sourceTexture, outputTexture, encoder);
     } else if (glassKind === GlassKind.flowing) {
-      this.#executeFlowing(entity, sourceTexture, outputTexture, encoder);
+      this.#executeFlowing(entity, sourceTexture, outputTexture, encoder, outputRegion);
     } else {
       super.execute(entity, sourceTexture, outputTexture, encoder);
     }
@@ -248,6 +260,7 @@ export class GlassShader extends ShaderPass {
     source: ExternalTextureSource,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,
+    outputRegion?: ShaderOutputRegion | null,
   ): void {
     const glassKind = entity.shaderParams.glass?.kind ?? GlassKind.frostedVoronoi;
 
@@ -270,6 +283,7 @@ export class GlassShader extends ShaderPass {
         pipeline,
         "GlassShader external flowing render pass",
         this.#externalFlowingImmediatePipeline ? "flowingImmediate" : "uniform",
+        outputRegion,
       );
       this.#advanceFlowingTime(entity);
     } else {
@@ -285,8 +299,11 @@ export class GlassShader extends ShaderPass {
     pipeline: GPURenderPipeline | null,
     label: string,
     mode: "uniform" | "flowingImmediate" = "uniform",
+    outputRegion?: ShaderOutputRegion | null,
   ): void {
     if (!pipeline) return;
+    // Nothing of it shows: skip the pass (the caller still advances its time).
+    if (outputRegion && (outputRegion.width === 0 || outputRegion.height === 0)) return;
 
     const uniformBuffer =
       mode === "flowingImmediate"
@@ -309,6 +326,7 @@ export class GlassShader extends ShaderPass {
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, bindGroup);
     if (mode === "flowingImmediate") this.#setFlowingTimeImmediate(pass, entity);
+    setOutputScissor(pass, outputRegion);
     pass.draw(3);
     pass.end();
   }
@@ -347,9 +365,16 @@ export class GlassShader extends ShaderPass {
     sourceTexture: GPUTexture,
     outputTexture: GPUTexture,
     encoder: GPUCommandEncoder,
+    outputRegion?: ShaderOutputRegion | null,
   ): void {
     const pipeline = this.#flowingImmediatePipeline ?? this.#flowingPipeline;
     if (!pipeline) return;
+    // Nothing of it shows: skip the pass but keep its time moving, so it is where it
+    // would have been when it comes back into view.
+    if (outputRegion && (outputRegion.width === 0 || outputRegion.height === 0)) {
+      this.#advanceFlowingTime(entity);
+      return;
+    }
 
     const useImmediates = pipeline === this.#flowingImmediatePipeline;
     const uniformBuffer = useImmediates
@@ -372,6 +397,7 @@ export class GlassShader extends ShaderPass {
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, bindGroup);
     if (useImmediates) this.#setFlowingTimeImmediate(pass, entity);
+    setOutputScissor(pass, outputRegion);
     pass.draw(3);
     pass.end();
 

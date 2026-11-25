@@ -499,6 +499,22 @@ export const config = {
     lodSettleFrames: 2,
     /** Maximum source/processed dimension changes admitted in one settled frame. */
     lodTransitionsPerFrame: 4,
+    /** Maximum cold (nothing resident yet) entities admitted per frame, within the pixel budget. */
+    coldLodTransitionsPerFrame: 16,
+    /** A cold upload costs at least its source pixels over this, since the resize reads them all. */
+    coldLodSourcePixelDivisor: 32,
+    /**
+     * Process a continuously animated one-pass effect only where it shows: inside the
+     * viewport and not under an opaque entity. Off processes the whole texture each frame.
+     */
+    cullHiddenContinuousProcessing: true,
+    /**
+     * Size the output of a continuously animated effect to what it covers on screen, in
+     * coarse steps, in place of its LOD tier. A tier leaves room for a cached result to
+     * survive a zoom; an output processed again every frame has no use for that room.
+     * Off until its look is signed off: the effect is evaluated on fewer pixels.
+     */
+    continuousOutputFollowsScreen: false as boolean,
     /** Maximum target pixels admitted per settled frame (one oversized item may progress). */
     lodTransitionPixelBudget: 2 * 1024 * 1024,
     /** Minimum visible fraction required when admitting or rebuilding a full-scene batch. */

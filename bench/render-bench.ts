@@ -1,5 +1,7 @@
+import { config } from "#config";
 import { FancyEffects } from "#types/fancy-effects.ts";
 import { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
+import { EntityTexturePipeline } from "#renderer/entity-texture-pipeline.ts";
 import { createDefaultWlurOverlayConfig } from "#renderer/wlur-overlay.ts";
 import {
   DitheringKind,
@@ -75,6 +77,12 @@ interface BenchScenario {
   resetTexturesBeforeSample?: boolean | undefined;
   overlapToggle?: boolean | undefined;
   wlurOverlay?: boolean | undefined;
+  /** Sources that cannot carry alpha (JPEG), so the renderer knows they hide what is under them. */
+  opaqueSource?: boolean | undefined;
+  /** Fixed viewport in place of the default one at the origin. */
+  viewport?: Viewport | undefined;
+  /** Zoom from `min` to `max` and back over each sample, about the canvas centre. */
+  zoomRoundTrip?: { min: number; max: number } | undefined;
 }
 
 type BenchResourceStats = ReturnType<InfiniteCanvasRenderer["getResourceStats"]>;
@@ -252,6 +260,9 @@ declare global {
     __runVoidmeshRenderBench?: () => Promise<BenchResult[]>;
     __runVoidmeshManyEntityBench?: () => Promise<BenchResult[]>;
     __collectVoidmeshRenderBenchMetadata?: () => Promise<BenchMetadata>;
+    __validateVoidmeshStagedSourceUploads?: typeof validateStagedSourceUploads;
+    __validateVoidmeshContinuousCulling?: typeof validateContinuousCulling;
+    __compareVoidmeshContinuousOutputSizing?: typeof compareContinuousOutputSizing;
   }
 }
 
@@ -597,8 +608,41 @@ const overlapWlurScenario: BenchScenario = {
     "Image-only Wlur cost guard; runs where external video import is unavailable (software WebGPU).",
   wlurOverlay: true,
 };
+function deriveScenario(baseId: string, overrides: Partial<BenchScenario>): BenchScenario {
+  const base = scenarios.find((scenario) => scenario.id === baseId);
+  if (!base) throw new Error(`Unknown base scenario ${baseId}`);
+  return { ...base, ...overrides };
+}
+
+/** Flowing glass where part of each entity is hidden, by the viewport or by opaque neighbours. */
+const hiddenFlowingGlassScenarios: BenchScenario[] = [
+  deriveScenario("multi-25-flowing-glass-continuous", {
+    id: "multi-25-flowing-glass-opaque-continuous",
+    label: "25 opaque 1024px entities, flowing glass continuous",
+    description:
+      "The 25 overlapping flowing-glass entities from JPEG sources, so each hides part of the ones under it.",
+    opaqueSource: true,
+  }),
+  deriveScenario("image-flowing-glass-4k-continuous", {
+    id: "image-flowing-glass-4k-zoomed-continuous",
+    label: "4K image zoomed in, flowing glass continuous",
+    description:
+      "Flowing glass on a 4K image zoomed to 3x, so most of the entity is outside the viewport.",
+    viewport: { offset: { x: 500, y: 250 }, zoom: 3 },
+  }),
+  deriveScenario("multi-25-flowing-glass-continuous", {
+    id: "multi-25-flowing-glass-zoom-continuous",
+    label: "25 1024px entities, flowing glass, zoom round trip",
+    description:
+      "Zooms the 25 flowing-glass entities in and out, so screen-sized outputs are reallocated as they grow.",
+    zoomRoundTrip: { min: 0.6, max: 2 },
+    frames: 120,
+  }),
+];
+
 const allScenarios = [
   ...scenarios,
+  ...hiddenFlowingGlassScenarios,
   ...manyEntityScenarios,
   overlapToggleScenario,
   overlapWlurScenario,
@@ -798,6 +842,11 @@ async function createSyntheticVideo(
   drawFrame: (frameIndex: number) => void;
   cleanup: () => void;
 }> {
+  // `?videoUrl=` swaps the canvas-captured stream for a decoded file, so external-texture
+  // imports are measured on the frames a real video produces.
+  const fileUrl = new URLSearchParams(window.location.search).get("videoUrl");
+  if (fileUrl) return createFileVideo(fileUrl, seed);
+
   const sourceCanvas = document.createElement("canvas");
   sourceCanvas.width = size.width;
   sourceCanvas.height = size.height;
@@ -860,6 +909,36 @@ async function createSyntheticVideo(
     drawFrame,
     cleanup,
   };
+}
+
+async function createFileVideo(
+  url: string,
+  seed: number,
+): Promise<{
+  video: HTMLVideoElement;
+  drawFrame: (frameIndex: number) => void;
+  cleanup: () => void;
+}> {
+  const video = document.createElement("video");
+  video.muted = true;
+  video.playsInline = true;
+  video.loop = true;
+  video.src = url;
+  const cleanup = (): void => {
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+  };
+  try {
+    await video.play();
+    await waitForVideoMetadata(video);
+    // Stagger the copies so they do not all present the same frame.
+    video.currentTime = (seed * 0.37) % Math.max(0.1, video.duration - 1);
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+  return { video, drawFrame: () => {}, cleanup };
 }
 
 async function waitForVideoMetadata(video: HTMLVideoElement): Promise<void> {
@@ -953,7 +1032,7 @@ async function createEntities(scenario: BenchScenario): Promise<BenchEntitySet> 
   const count = scenario.kind === "multi" ? (scenario.entityCount ?? 25) : 1;
   const assets = await createSyntheticImageAssets({
     count,
-    blobType: "image/png",
+    blobType: scenario.opaqueSource ? "image/jpeg" : "image/png",
     createBitmap: (index) => createSyntheticBitmap(scenario.sourceSize, index + 1),
   });
   const ownedAssets = [...assets];
@@ -977,6 +1056,21 @@ async function createEntities(scenario: BenchScenario): Promise<BenchEntitySet> 
     }
     releaseOwnedImageAssets(ownedAssets);
 
+    const { viewport, zoomRoundTrip } = scenario;
+    const getZoomedViewport = zoomRoundTrip
+      ? (_frameIndex: number, sampleFrameIndex: number): Viewport => {
+          const progress = sampleFrameIndex / Math.max(1, scenario.frames - 1);
+          const roundTrip = 1 - Math.abs(progress * 2 - 1);
+          const zoom = zoomRoundTrip.min + (zoomRoundTrip.max - zoomRoundTrip.min) * roundTrip;
+          return {
+            offset: {
+              x: CANVAS_WIDTH / 2 - CANVAS_WIDTH / 2 / zoom,
+              y: CANVAS_HEIGHT / 2 - CANVAS_HEIGHT / 2 / zoom,
+            },
+            zoom,
+          };
+        }
+      : undefined;
     return {
       entities,
       beforeFrame:
@@ -985,6 +1079,7 @@ async function createEntities(scenario: BenchScenario): Promise<BenchEntitySet> 
               for (const entity of entities) entity.textureDirty = true;
             }
           : undefined,
+      getViewport: getZoomedViewport ?? (viewport ? () => viewport : undefined),
       cleanup: () => disposeBenchEntities(entities),
     };
   } catch (error) {
@@ -2041,6 +2136,382 @@ export async function validateOverlapFastPaths() {
   }
 }
 
+/**
+ * GPU pixel guard for staged source uploads: the same sources uploaded one surface each
+ * (outside a frame) and staged together (inside one) must produce the same textures, to within
+ * one rounding step per channel.
+ */
+export async function validateStagedSourceUploads() {
+  const renderer = await getRenderer();
+  const device = renderer.device;
+  if (!device) throw new Error("Staged upload guard GPU is unavailable");
+  const params = resolveBenchShaderParams({ showOriginal: true });
+  const sourceSizes: Size[] = [
+    { width: 640, height: 480 },
+    { width: 512, height: 512 },
+    { width: 768, height: 512 },
+    { width: 333, height: 777 },
+  ];
+  // Two frames: the second is smaller, so stale pixels from the first would show.
+  const frames: Size[][] = [
+    [
+      { width: 300, height: 225 },
+      { width: 128, height: 128 },
+      { width: 511, height: 341 },
+      { width: 64, height: 149 },
+    ],
+    [
+      { width: 37, height: 28 },
+      { width: 96, height: 96 },
+      { width: 200, height: 133 },
+      { width: 21, height: 49 },
+    ],
+  ];
+  const perFrame = 40;
+  const entities: ShaderCanvasEntity[] = [];
+  const renderSizes: Size[] = [];
+  const pipelines: EntityTexturePipeline[] = [];
+  try {
+    for (const blobType of ["image/png", "image/jpeg"]) {
+      const assets = await createSyntheticImageAssets({
+        count: perFrame * frames.length,
+        blobType,
+        createBitmap: (index) =>
+          createSyntheticBitmap(sourceSizes[index % sourceSizes.length]!, index + 1),
+      });
+      for (let index = 0; index < assets.length; index += 1) {
+        const size = sourceSizes[index % sourceSizes.length]!;
+        entities.push(
+          createEntity({
+            id: `staged-guard-${blobType}-${index}`,
+            name: "Staged upload guard",
+            asset: assets[index]!,
+            size,
+            shaderType: ShaderType.dithering,
+            params,
+          }),
+        );
+        const frame = frames[Math.floor(index / perFrame)]!;
+        renderSizes.push(frame[index % frame.length]!);
+      }
+      releaseOwnedImageAssets(assets);
+    }
+
+    const createPipeline = (): EntityTexturePipeline => {
+      const pipeline = new EntityTexturePipeline({
+        device,
+        colorConfig: renderer.colorConfig,
+        texturePool: null,
+      });
+      pipelines.push(pipeline);
+      return pipeline;
+    };
+    const direct = createPipeline();
+    const staged = createPipeline();
+    const frameOf = (index: number): number => Math.floor((index % (perFrame * 2)) / perFrame);
+
+    const directEncoder = device.createCommandEncoder();
+    for (let index = 0; index < entities.length; index += 1) {
+      direct.renderEntityToTexture(entities[index]!, directEncoder, renderSizes[index]!);
+    }
+    device.queue.submit([directEncoder.finish()]);
+
+    for (let frame = 0; frame < frames.length; frame += 1) {
+      const encoder = device.createCommandEncoder();
+      staged.beginFrame(true);
+      for (let index = 0; index < entities.length; index += 1) {
+        if (frameOf(index) !== frame) continue;
+        entities[index]!.textureDirty = true;
+        staged.renderEntityToTexture(entities[index]!, encoder, renderSizes[index]!);
+      }
+      staged.flushSourceUploads();
+      device.queue.submit([encoder.finish()]);
+      staged.endFrame();
+    }
+
+    let mismatchedTextures = 0;
+    let mismatchedBytes = 0;
+    let maxDifference = 0;
+    let comparedBytes = 0;
+    for (let index = 0; index < entities.length; index += 1) {
+      const id = entities[index]!.id;
+      const a = direct.getSourceEntityTexture(id);
+      const b = staged.getSourceEntityTexture(id);
+      if (!a || !b) throw new Error(`Staged upload guard is missing a texture for ${id}`);
+      if (a.width !== b.width || a.height !== b.height) {
+        throw new Error(`Staged upload guard size mismatch for ${id}`);
+      }
+      const [bytesA, bytesB] = await Promise.all([
+        readTextureBytes(device, a),
+        readTextureBytes(device, b),
+      ]);
+      let different = 0;
+      for (let offset = 0; offset < bytesA.length; offset += 1) {
+        const difference = Math.abs(bytesA[offset]! - bytesB[offset]!);
+        if (difference === 0) continue;
+        different += 1;
+        if (difference > maxDifference) maxDifference = difference;
+      }
+      comparedBytes += bytesA.length;
+      mismatchedBytes += different;
+      if (different > 0) mismatchedTextures += 1;
+    }
+    const result = {
+      textures: entities.length,
+      comparedBytes,
+      mismatchedTextures,
+      mismatchedBytes,
+      maxDifference,
+    };
+    console.log("[voidmesh-staged-upload-guard]", JSON.stringify(result));
+    return result;
+  } finally {
+    for (const pipeline of pipelines) pipeline.destroy();
+    disposeBenchEntities(entities);
+  }
+}
+
+const CULLING_GUARD_TIME = 1.75;
+
+/**
+ * Renders flowing glass with hidden parts culled and with the whole texture processed, at
+ * the same shader time, and compares the canvas. The first viewport of each case leaves a
+ * different part of every entity processed, so stale texels would show at the second.
+ */
+export async function validateContinuousCulling() {
+  const benchRenderer = await getRenderer();
+  const device = benchRenderer.device;
+  if (!device) throw new Error("Culling guard GPU is unavailable");
+  const cases: Array<{ scenario: BenchScenario; viewports: Viewport[] }> = [
+    {
+      scenario: hiddenFlowingGlassScenarios[0]!,
+      viewports: [
+        { offset: { x: 310, y: 170 }, zoom: 1.7 },
+        { offset: { x: 0, y: 0 }, zoom: 1 },
+        { offset: { x: -37.5, y: 61.25 }, zoom: 0.8 },
+      ],
+    },
+    {
+      scenario: hiddenFlowingGlassScenarios[1]!,
+      viewports: [
+        { offset: { x: 100, y: 60 }, zoom: 2 },
+        { offset: { x: 500, y: 250 }, zoom: 3 },
+        { offset: { x: 820.4, y: 410.7 }, zoom: 2.5 },
+      ],
+    },
+  ];
+  const readback = new OffscreenCanvas(canvas.width, canvas.height);
+  const context = readback.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("Culling guard readback context is unavailable");
+  const cullingWasEnabled = config.rendering.cullHiddenContinuousProcessing;
+  const results: Array<{
+    id: string;
+    viewport: Viewport;
+    differingBytes: number;
+    maxDifference: number;
+    culledTexelFraction: number;
+  }> = [];
+
+  try {
+    for (const { scenario, viewports } of cases) {
+      const entitySet = await createEntities(scenario);
+      try {
+        const capture = async (viewport: Viewport, culled: boolean): Promise<Uint8ClampedArray> => {
+          config.rendering.cullHiddenContinuousProcessing = culled;
+          // Two frames: sources and processed textures exist by the second.
+          for (let frame = 0; frame < 2; frame += 1) {
+            for (const entity of entitySet.entities) {
+              entity.shaderParams.time = CULLING_GUARD_TIME;
+            }
+            benchRenderer.render(createRenderState(entitySet.entities, true, viewport));
+          }
+          context.clearRect(0, 0, readback.width, readback.height);
+          context.drawImage(canvas, 0, 0);
+          const pixels = context.getImageData(0, 0, readback.width, readback.height).data;
+          await device.queue.onSubmittedWorkDone();
+          return pixels;
+        };
+        // Settle LOD admission so both modes draw from the same textures.
+        for (const viewport of viewports) {
+          for (let frame = 0; frame < 12; frame += 1) await capture(viewport, false);
+        }
+        for (const viewport of viewports) {
+          const full = await capture(viewport, false);
+          const before = benchRenderer.getResourceStats().entityTextures;
+          const culled = await capture(viewport, true);
+          const after = benchRenderer.getResourceStats().entityTextures;
+          const texels = after.continuousTexels - before.continuousTexels;
+          const processed = after.continuousTexelsProcessed - before.continuousTexelsProcessed;
+          let differingBytes = 0;
+          let maxDifference = 0;
+          for (let index = 0; index < full.length; index += 1) {
+            const difference = Math.abs(full[index]! - culled[index]!);
+            if (difference === 0) continue;
+            differingBytes += 1;
+            if (difference > maxDifference) maxDifference = difference;
+          }
+          results.push({
+            id: scenario.id,
+            viewport,
+            differingBytes,
+            maxDifference,
+            culledTexelFraction: texels > 0 ? 1 - processed / texels : 0,
+          });
+        }
+      } finally {
+        config.rendering.cullHiddenContinuousProcessing = cullingWasEnabled;
+        try {
+          for (const entity of entitySet.entities) benchRenderer.removeEntityTexture(entity.id);
+        } finally {
+          entitySet.cleanup?.();
+        }
+      }
+    }
+  } finally {
+    config.rendering.cullHiddenContinuousProcessing = cullingWasEnabled;
+  }
+  const result = {
+    cases: results,
+    maxDifference: Math.max(0, ...results.map((entry) => entry.maxDifference)),
+    minCulledTexelFraction: Math.min(1, ...results.map((entry) => entry.culledTexelFraction)),
+  };
+  console.log("[voidmesh-continuous-culling-guard]", JSON.stringify(result));
+  return result;
+}
+
+/**
+ * Renders flowing glass with its output at the LOD tier and at screen size, at the same
+ * shader time, and reports how far the two frames are apart, with both as PNG. Unlike
+ * culling this is not expected to be identical: the effect is evaluated on fewer pixels.
+ */
+export async function compareContinuousOutputSizing() {
+  const benchRenderer = await getRenderer();
+  const device = benchRenderer.device;
+  if (!device) throw new Error("Output sizing comparison GPU is unavailable");
+  const cases: Array<{ scenario: BenchScenario; viewport: Viewport }> = [
+    { scenario: hiddenFlowingGlassScenarios[0]!, viewport: { offset: { x: 0, y: 0 }, zoom: 1 } },
+    {
+      scenario: hiddenFlowingGlassScenarios[1]!,
+      viewport: { offset: { x: 141, y: 79 }, zoom: 1 },
+    },
+  ];
+  const readback = new OffscreenCanvas(canvas.width, canvas.height);
+  const context = readback.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("Output sizing readback context is unavailable");
+  const followedScreen = config.rendering.continuousOutputFollowsScreen;
+  const toDataUrl = async (): Promise<string> => {
+    const blob = await readback.convertToBlob({ type: "image/png" });
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.addEventListener("load", () => resolve(reader.result as string));
+      reader.addEventListener("error", () => reject(reader.error ?? new Error("PNG read failed")));
+      reader.readAsDataURL(blob);
+    });
+  };
+  const results: Array<{
+    id: string;
+    devicePixelRatio: number;
+    tierProcessedBytes: number;
+    screenProcessedBytes: number;
+    meanAbsDifference: number;
+    p99Difference: number;
+    maxDifference: number;
+    tierPng: string;
+    screenPng: string;
+  }> = [];
+
+  try {
+    for (const { scenario, viewport } of cases) {
+      const entitySet = await createEntities(scenario);
+      try {
+        const capture = async (followScreen: boolean) => {
+          config.rendering.continuousOutputFollowsScreen = followScreen;
+          for (let frame = 0; frame < 14; frame += 1) {
+            for (const entity of entitySet.entities) {
+              entity.shaderParams.time = CULLING_GUARD_TIME;
+            }
+            benchRenderer.render(createRenderState(entitySet.entities, true, viewport));
+          }
+          context.clearRect(0, 0, readback.width, readback.height);
+          context.drawImage(canvas, 0, 0);
+          const pixels = context.getImageData(0, 0, readback.width, readback.height).data;
+          const png = await toDataUrl();
+          await device.queue.onSubmittedWorkDone();
+          const processedBytes = benchRenderer.getResourceStats().entityTextures.processedBytes;
+          return { pixels, png, processedBytes };
+        };
+        const tier = await capture(false);
+        const screen = await capture(true);
+        const histogram = new Uint32Array(256);
+        let sum = 0;
+        let maxDifference = 0;
+        for (let index = 0; index < tier.pixels.length; index += 1) {
+          const difference = Math.abs(tier.pixels[index]! - screen.pixels[index]!);
+          histogram[difference]! += 1;
+          sum += difference;
+          if (difference > maxDifference) maxDifference = difference;
+        }
+        let p99Difference = 0;
+        let seen = 0;
+        for (let value = 0; value < 256; value += 1) {
+          seen += histogram[value]!;
+          if (seen >= tier.pixels.length * 0.99) {
+            p99Difference = value;
+            break;
+          }
+        }
+        results.push({
+          id: scenario.id,
+          devicePixelRatio: window.devicePixelRatio,
+          tierProcessedBytes: tier.processedBytes,
+          screenProcessedBytes: screen.processedBytes,
+          meanAbsDifference: sum / tier.pixels.length,
+          p99Difference,
+          maxDifference,
+          tierPng: tier.png,
+          screenPng: screen.png,
+        });
+      } finally {
+        config.rendering.continuousOutputFollowsScreen = followedScreen;
+        try {
+          for (const entity of entitySet.entities) benchRenderer.removeEntityTexture(entity.id);
+        } finally {
+          entitySet.cleanup?.();
+        }
+      }
+    }
+  } finally {
+    config.rendering.continuousOutputFollowsScreen = followedScreen;
+  }
+  return { cases: results };
+}
+
+async function readTextureBytes(device: GPUDevice, texture: GPUTexture): Promise<Uint8Array> {
+  const bytesPerRow = Math.ceil((texture.width * 4) / 256) * 256;
+  const buffer = device.createBuffer({
+    size: bytesPerRow * texture.height,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
+  const encoder = device.createCommandEncoder();
+  encoder.copyTextureToBuffer({ texture }, { buffer, bytesPerRow }, [
+    texture.width,
+    texture.height,
+  ]);
+  device.queue.submit([encoder.finish()]);
+  await buffer.mapAsync(GPUMapMode.READ);
+  const mapped = new Uint8Array(buffer.getMappedRange());
+  const bytes = new Uint8Array(texture.width * texture.height * 4);
+  for (let row = 0; row < texture.height; row += 1) {
+    bytes.set(
+      mapped.subarray(row * bytesPerRow, row * bytesPerRow + texture.width * 4),
+      row * texture.width * 4,
+    );
+  }
+  buffer.unmap();
+  buffer.destroy();
+  return bytes;
+}
+
 async function captureBlobMetrics(blob: Blob): Promise<VisualMetrics> {
   const bitmap = await createImageBitmap(blob);
   const offscreen = new OffscreenCanvas(bitmap.width, bitmap.height);
@@ -2164,8 +2635,15 @@ window.__runVoidmeshManyEntityBench = runManyEntitySuite;
 window.__runVoidmeshRenderBenchScenario = runScenarioById;
 window.__captureVoidmeshRenderBenchVisual = captureFlowingGlassVisual;
 window.__collectVoidmeshRenderBenchMetadata = collectBenchMetadata;
+window.__validateVoidmeshStagedSourceUploads = validateStagedSourceUploads;
+window.__validateVoidmeshContinuousCulling = validateContinuousCulling;
+window.__compareVoidmeshContinuousOutputSizing = compareContinuousOutputSizing;
 
 const searchParams = new URLSearchParams(window.location.search);
+// `?screenSizedContinuous=1` sizes continuous effect output to the screen, not its LOD tier.
+if (searchParams.get("screenSizedContinuous") === "1") {
+  config.rendering.continuousOutputFollowsScreen = true;
+}
 const scenarioId = searchParams.get("scenario");
 if (searchParams.get("visual") === "flowing-glass") {
   void captureFlowingGlassVisual();

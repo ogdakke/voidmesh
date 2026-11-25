@@ -1,4 +1,4 @@
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -86,6 +86,12 @@ interface CliOptions {
   keepBrowser: boolean;
   url: string | null;
   disableImmediates: boolean;
+  cpuProfile: boolean;
+  videoUrl: string | null;
+  stagedUploadGuard: boolean;
+  cullingGuard: boolean;
+  outputSizeVisual: boolean;
+  screenSizedContinuous: boolean;
   rounds: number;
 }
 
@@ -141,12 +147,88 @@ async function main(): Promise<void> {
 
     try {
       await pageClient.send("Runtime.enable");
+      if (options.outputSizeVisual) {
+        const { guard } = await runBenchInPage(
+          pageClient,
+          null,
+          options.suite,
+          1,
+          "__compareVoidmeshContinuousOutputSizing",
+        );
+        const { cases } = guard as {
+          cases: Array<
+            Record<string, unknown> & { id: string; tierPng: string; screenPng: string }
+          >;
+        };
+        const directory = join(options.outDir, "output-size-visual");
+        await mkdir(directory, { recursive: true });
+        for (const { tierPng, screenPng, ...metrics } of cases) {
+          for (const [name, png] of [
+            ["tier", tierPng],
+            ["screen", screenPng],
+          ] as const) {
+            await writeFile(
+              join(directory, `${metrics.id}-${name}.png`),
+              Buffer.from(png.slice(png.indexOf(",") + 1), "base64"),
+            );
+          }
+          console.log("Continuous output sizing:", JSON.stringify(metrics));
+        }
+        return;
+      }
+      if (options.cullingGuard) {
+        const { guard } = await runBenchInPage(
+          pageClient,
+          null,
+          options.suite,
+          1,
+          "__validateVoidmeshContinuousCulling",
+        );
+        console.log("Continuous culling guard:", JSON.stringify(guard, null, 2));
+        // Culled processing runs the same shader on the same texels, so what shows must be
+        // identical, and the guard must actually have culled something in every case.
+        const result = guard as
+          | { maxDifference?: number; minCulledTexelFraction?: number }
+          | undefined;
+        if (result?.maxDifference !== 0 || !((result.minCulledTexelFraction ?? 0) > 0)) {
+          process.exitCode = 1;
+        }
+        return;
+      }
+      if (options.stagedUploadGuard) {
+        const { guard } = await runBenchInPage(
+          pageClient,
+          null,
+          options.suite,
+          1,
+          "__validateVoidmeshStagedSourceUploads",
+        );
+        console.log("Staged upload guard:", JSON.stringify(guard));
+        // The resample lands on a different surface offset when staged, which rounds a few
+        // channel values one step apart; anything larger is a wrong region or stale pixels.
+        const maxDifference = (guard as { maxDifference?: number } | undefined)?.maxDifference;
+        if (maxDifference === undefined || maxDifference > 1) process.exitCode = 1;
+        return;
+      }
+      if (options.cpuProfile) {
+        await pageClient.send("Profiler.enable");
+        await pageClient.send("Profiler.setSamplingInterval", { interval: 100 });
+        await pageClient.send("Profiler.start");
+      }
       const payload = await runBenchInPage(
         pageClient,
         options.scenario,
         options.suite,
         options.rounds,
       );
+      if (options.cpuProfile) {
+        const { profile } = (await pageClient.send("Profiler.stop")) as { profile: CpuProfile };
+        await mkdir(options.outDir, { recursive: true });
+        const profilePath = join(options.outDir, "latest.cpuprofile");
+        await Bun.write(profilePath, JSON.stringify(profile));
+        console.log(`Wrote ${profilePath}`);
+        console.table(summarizeCpuProfile(profile, 40));
+      }
       const repo = await collectRepoState();
       const rounds = extractRounds(payload);
       const results = rounds.at(-1)?.results ?? [];
@@ -190,6 +272,12 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
     keepBrowser: process.env.BENCH_KEEP_BROWSER === "1",
     url: process.env.BENCH_URL ?? null,
     disableImmediates: process.env.BENCH_DISABLE_IMMEDIATES === "1",
+    cpuProfile: process.env.BENCH_CPU_PROFILE === "1",
+    videoUrl: process.env.BENCH_VIDEO_URL ?? null,
+    stagedUploadGuard: false,
+    cullingGuard: false,
+    outputSizeVisual: false,
+    screenSizedContinuous: false,
     rounds: Number(process.env.BENCH_ROUNDS ?? 1),
   };
 
@@ -219,6 +307,18 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
       options.keepBrowser = true;
     } else if (arg === "--disable-immediates") {
       options.disableImmediates = true;
+    } else if (arg === "--staged-upload-guard") {
+      options.stagedUploadGuard = true;
+    } else if (arg === "--culling-guard") {
+      options.cullingGuard = true;
+    } else if (arg === "--output-size-visual") {
+      options.outputSizeVisual = true;
+    } else if (arg === "--screen-sized-continuous") {
+      options.screenSizedContinuous = true;
+    } else if (arg === "--video-url") {
+      options.videoUrl = readArgValue(argv, ++index, arg);
+    } else if (arg === "--cpu-profile") {
+      options.cpuProfile = true;
     } else if (arg === "--rounds") {
       options.rounds = Number(readArgValue(argv, ++index, arg));
     } else {
@@ -239,6 +339,47 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
   return options;
 }
 
+interface CpuProfile {
+  nodes: Array<{
+    id: number;
+    callFrame: { functionName: string; url: string; lineNumber: number };
+  }>;
+  samples?: number[];
+  timeDeltas?: number[];
+}
+
+/** Top self-time functions of a whole-run CPU profile, for orientation before reading the raw file. */
+function summarizeCpuProfile(
+  profile: CpuProfile,
+  limit: number,
+): Array<{ selfMs: number; function: string; location: string }> {
+  const labels = new Map<number, { function: string; location: string }>();
+  for (const node of profile.nodes) {
+    const { functionName, url, lineNumber } = node.callFrame;
+    labels.set(node.id, {
+      function: functionName || "(anonymous)",
+      location: url
+        ? `${url.replace(/^https?:\/\/[^/]+\//, "").replace(/\?.*$/, "")}:${lineNumber + 1}`
+        : "",
+    });
+  }
+  const totals = new Map<string, { selfMs: number; function: string; location: string }>();
+  const samples = profile.samples ?? [];
+  const deltas = profile.timeDeltas ?? [];
+  for (let index = 0; index < samples.length; index += 1) {
+    const label = labels.get(samples[index]!);
+    if (!label) continue;
+    const key = `${label.function}@${label.location}`;
+    const entry = totals.get(key) ?? { selfMs: 0, ...label };
+    entry.selfMs += (deltas[index] ?? 0) / 1000;
+    totals.set(key, entry);
+  }
+  return [...totals.values()]
+    .sort((a, b) => b.selfMs - a.selfMs)
+    .slice(0, limit)
+    .map((entry) => ({ ...entry, selfMs: Math.round(entry.selfMs * 10) / 10 }));
+}
+
 function readArgValue(argv: string[], index: number, flag: string): string {
   const value = argv[index];
   if (!value) throw new Error(`${flag} requires a value`);
@@ -247,10 +388,10 @@ function readArgValue(argv: string[], index: number, flag: string): string {
 
 function createBenchPageUrl(options: CliOptions): string {
   const pageUrl = options.url ?? `http://${HOST}:${options.port}/bench/render.html`;
-  if (!options.disableImmediates) return pageUrl;
-
   const url = new URL(pageUrl);
-  url.searchParams.set("shaderImmediates", "0");
+  if (options.disableImmediates) url.searchParams.set("shaderImmediates", "0");
+  if (options.videoUrl) url.searchParams.set("videoUrl", options.videoUrl);
+  if (options.screenSizedContinuous) url.searchParams.set("screenSizedContinuous", "1");
   return url.toString();
 }
 
@@ -350,7 +491,12 @@ async function runBenchInPage(
   scenario: string | null,
   suite: CliOptions["suite"],
   rounds: number,
-): Promise<{ metadata: unknown; rounds: Array<{ index: number; results: unknown }> }> {
+  guard: string | null = null,
+): Promise<{
+  metadata: unknown;
+  rounds: Array<{ index: number; results: unknown }>;
+  guard?: unknown;
+}> {
   const expression = `
     (async () => {
       await new Promise((resolve, reject) => {
@@ -374,6 +520,10 @@ async function runBenchInPage(
         poll();
       });
       const metadata = await window.__collectVoidmeshRenderBenchMetadata();
+      const guard = ${JSON.stringify(guard)};
+      if (guard) {
+        return { metadata, rounds: [], guard: await window[guard]() };
+      }
       const scenario = ${JSON.stringify(scenario)};
       const suite = ${JSON.stringify(suite)};
       const roundCount = ${JSON.stringify(rounds)};
@@ -418,6 +568,7 @@ async function runBenchInPage(
   return response.result.value as {
     metadata: unknown;
     rounds: Array<{ index: number; results: unknown }>;
+    guard?: unknown;
   };
 }
 
