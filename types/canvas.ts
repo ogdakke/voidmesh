@@ -133,13 +133,13 @@ const ERROR_DIFFUSION_KINDS: readonly DitheringKind[] = [
 
 export const SHADER_TYPE_OPTIONS = [
   { value: ShaderType.halftone, label: "Halftone" },
+  { value: ShaderType.print, label: "Print" },
   { value: ShaderType.blobs, label: "Blobs" },
   { value: ShaderType.melt, label: "Melt" },
   { value: ShaderType.dithering, label: "Dithering" },
   { value: ShaderType.ascii, label: "ASCII" },
   { value: ShaderType.glass, label: "Glass" },
   { value: ShaderType.glitch, label: "Glitch" },
-  { value: ShaderType.print, label: "Print" },
 ];
 
 /** ASCII character set types */
