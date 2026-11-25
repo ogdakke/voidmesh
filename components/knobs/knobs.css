@@ -21,6 +21,11 @@
   height: 100%;
 
   scroll-padding-inline: calc((100% - var(--item-w)) / 2);
+
+  /* iOS Safari mis-invalidates repaints inside this scroller once it has scrolled: an option
+     deselected at a non-zero scroll offset kept its old selected (blue) border painted around
+     it. Giving the scroller its own compositing layer makes it repaint in the right place. */
+  transform: translateZ(0);
 }
 
 /* Spacer elements to center first/last items in the scroll container.
@@ -64,12 +69,19 @@
       border-color 0ms ease-out;
   }
 
-  :where(:focus-visible button) {
+  /* Only the selected item shows focus: a tapped item can keep focus after the selection
+     scrolls away. */
+  &[data-selected]:focus-visible :where(button) {
     outline: 2px solid var(--primary);
     outline-offset: 1px;
   }
 
-  :where([data-variant="primary"]) {
+  /* Option buttons carry no variant: the primary look belongs to the selected option only, so an
+     unselected option never inherits the primary variant's blue border/ring. Variant buttons
+     (palette thumbnails) keep their own styling. */
+  &:where([data-selected]) :where(.ui-button:not([data-variant])) {
+    border-color: var(--primary);
+    color: #fff;
     background: linear-gradient(180deg, var(--primary-lighter), var(--primary));
     box-shadow:
       inset 0 0 1px 1px hsla(0, 0%, 100%, 0.08),
@@ -85,6 +97,13 @@
       color: var(--color);
       filter: drop-shadow(0 1px 3px #00000013);
     }
+  }
+
+  /* The inner buttons are presentational (tabIndex -1) but still take focus on tap; keep the
+     button primitive's focus outline off unselected options. */
+  &:not([data-selected]) .ui-button:is(:focus, :focus-visible, :active) {
+    border-color: transparent;
+    outline: none;
   }
 
   &:not([data-checked])[data-toggleable][data-selected],
@@ -119,6 +138,14 @@
       color: var(--gray-800);
     }
   }
+}
+
+/* Knob picker icons (components/icons/knob-icons.tsx and the iconoir glyphs used beside them)
+   are drawn for 22px inside the 40px option button. */
+.knob-icon {
+  width: 1.375rem;
+  height: 1.375rem;
+  flex: none;
 }
 
 .mobile-style-knobs__time-toggle {
@@ -240,4 +267,23 @@
   bottom: auto;
   top: calc(env(safe-area-inset-top, 0px) + var(--spacing-3));
   transform: translateX(-50%);
+}
+
+/* Wlur debug: color and copy rows take the slider's slot under the setting picker. */
+.wlur-debug-row {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2);
+}
+
+.wlur-debug-color {
+  inline-size: 3rem;
+  block-size: 2.5rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+  background: none;
 }

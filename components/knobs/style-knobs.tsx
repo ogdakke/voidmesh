@@ -29,19 +29,47 @@ import {
 import "./knobs.css";
 import { undo } from "#lib/undo.ts";
 import { QuestionMark } from "iconoir-react";
+import {
+  AsciiBinaryIcon,
+  AsciiExtendedIcon,
+  AsciiIcon,
+  AsciiMinimalIcon,
+  AsciiStandardIcon,
+  Bayer2x2Icon,
+  Bayer4x4Icon,
+  Bayer8x8Icon,
+  BlobsIcon,
+  BlueNoiseIcon,
+  DitheringIcon,
+  GlassFlowingIcon,
+  GlassFlutedIcon,
+  GlassFrostedIcon,
+  GlassIcon,
+  GlitchBlockCorruptIcon,
+  GlitchChannelShiftIcon,
+  GlitchIcon,
+  GlitchPixelSmearIcon,
+  GlitchScanlineIcon,
+  HalftoneIcon,
+  MeltIcon,
+  ShapeCircleIcon,
+  ShapeSquareIcon,
+  ShapeVerticalRectIcon,
+  WhiteNoiseIcon,
+} from "#components/icons/knob-icons.tsx";
 
 // ============================================================================
 // Shader Type Picker (top row)
 // ============================================================================
 
 const shaderIconMap: Record<ShaderType, () => ReactNode> = {
-  [ShaderType.ascii]: () => <span>A</span>,
-  [ShaderType.blobs]: () => <span>B</span>,
-  [ShaderType.dithering]: () => <span>D</span>,
-  [ShaderType.halftone]: () => <span>H</span>,
-  [ShaderType.melt]: () => <span>M</span>,
-  [ShaderType.glass]: () => <span>G</span>,
-  [ShaderType.glitch]: () => <span>X</span>,
+  [ShaderType.ascii]: () => <AsciiIcon className="knob-icon" />,
+  [ShaderType.blobs]: () => <BlobsIcon className="knob-icon" />,
+  [ShaderType.dithering]: () => <DitheringIcon className="knob-icon" />,
+  [ShaderType.halftone]: () => <HalftoneIcon className="knob-icon" />,
+  [ShaderType.melt]: () => <MeltIcon className="knob-icon" />,
+  [ShaderType.glass]: () => <GlassIcon className="knob-icon" />,
+  [ShaderType.glitch]: () => <GlitchIcon className="knob-icon" />,
 };
 
 // ============================================================================
@@ -64,31 +92,31 @@ const DITHERING_ITEMS: MobileStyleItem<DitheringKind>[] = [
     value: DitheringKind.bayer2x2,
     label: "Bayer 2×2",
     shortLabel: "2×2",
-    icon: () => <span>B</span>,
+    icon: () => <Bayer2x2Icon className="knob-icon" />,
   },
   {
     value: DitheringKind.bayer4x4,
     label: "Bayer 4×4",
     shortLabel: "4×4",
-    icon: () => <span>B</span>,
+    icon: () => <Bayer4x4Icon className="knob-icon" />,
   },
   {
     value: DitheringKind.bayer8x8,
     label: "Bayer 8×8",
     shortLabel: "8×8",
-    icon: () => <span>B</span>,
+    icon: () => <Bayer8x8Icon className="knob-icon" />,
   },
   {
     value: DitheringKind.whiteNoise,
     label: "White Noise",
     shortLabel: "White",
-    icon: () => <span>W</span>,
+    icon: () => <WhiteNoiseIcon className="knob-icon" />,
   },
   {
     value: DitheringKind.blueNoise,
     label: "Blue Noise",
     shortLabel: "Blue",
-    icon: () => <span>B</span>,
+    icon: () => <BlueNoiseIcon className="knob-icon" />,
   },
 ];
 
@@ -101,25 +129,25 @@ const ASCII_ITEMS: MobileStyleItem<AsciiKind>[] = [
     value: AsciiKind.standard,
     label: "Standard Characters",
     shortLabel: "Standard",
-    icon: () => <span>S</span>,
+    icon: () => <AsciiStandardIcon className="knob-icon" />,
   },
   {
     value: AsciiKind.extended,
     label: "Extended Characters",
     shortLabel: "Extended",
-    icon: () => <span>E</span>,
+    icon: () => <AsciiExtendedIcon className="knob-icon" />,
   },
   {
     value: AsciiKind.binary,
     label: "Binary Characters",
     shortLabel: "Binary",
-    icon: () => <span>B</span>,
+    icon: () => <AsciiBinaryIcon className="knob-icon" />,
   },
   {
     value: AsciiKind.minimal,
     label: "Minimal Characters",
     shortLabel: "Minimal",
-    icon: () => <span>M</span>,
+    icon: () => <AsciiMinimalIcon className="knob-icon" />,
   },
 ];
 
@@ -132,31 +160,19 @@ const SHAPE_ITEMS: MobileStyleItem<Shape>[] = [
     value: Shape.circle,
     label: "Circle",
     shortLabel: "Circle",
-    icon: () => (
-      <svg viewBox="0 0 24 24" width="16" height="16">
-        <circle cx="12" cy="12" r="8" fill="currentColor" />
-      </svg>
-    ),
+    icon: () => <ShapeCircleIcon className="knob-icon" />,
   },
   {
     value: Shape.square,
     label: "Square",
     shortLabel: "Square",
-    icon: () => (
-      <svg viewBox="0 0 24 24" width="16" height="16">
-        <rect x="4" y="4" width="16" height="16" fill="currentColor" />
-      </svg>
-    ),
+    icon: () => <ShapeSquareIcon className="knob-icon" />,
   },
   {
     value: Shape.rect_v,
     label: "Vertical Rectangle",
     shortLabel: "Vert",
-    icon: () => (
-      <svg viewBox="0 0 24 24" width="16" height="16">
-        <rect x="8" y="3" width="8" height="18" fill="currentColor" />
-      </svg>
-    ),
+    icon: () => <ShapeVerticalRectIcon className="knob-icon" />,
   },
 ];
 
@@ -241,7 +257,7 @@ function MobileDitheringStyleKnobs() {
           >
             {ditheringKind.isMixed && (
               <SliderPickerMixedItem className="mobile-style-knobs__item">
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   <QuestionMark />
                 </button>
                 <span className="mobile-style-knobs__label">Mixed</span>
@@ -253,7 +269,7 @@ function MobileDitheringStyleKnobs() {
                 value={item.value}
                 className="mobile-style-knobs__item"
               >
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   {item.icon()}
                 </button>
                 <span className="mobile-style-knobs__label">{item.shortLabel}</span>
@@ -345,7 +361,7 @@ function MobileAsciiStyleKnobs() {
           >
             {asciiKind.isMixed && (
               <SliderPickerMixedItem className="mobile-style-knobs__item">
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   <QuestionMark />
                 </button>
                 <span className="mobile-style-knobs__label">Mixed</span>
@@ -357,7 +373,7 @@ function MobileAsciiStyleKnobs() {
                 value={item.value}
                 className="mobile-style-knobs__item"
               >
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   {item.icon()}
                 </button>
                 <span className="mobile-style-knobs__label">{item.shortLabel}</span>
@@ -380,19 +396,19 @@ const GLASS_ITEMS: MobileStyleItem<GlassKind>[] = [
     value: GlassKind.fluted,
     label: "Fluted Glass",
     shortLabel: "Fluted",
-    icon: () => <span>F</span>,
+    icon: () => <GlassFlutedIcon className="knob-icon" />,
   },
   {
     value: GlassKind.frostedVoronoi,
     label: "Frosted Glass",
     shortLabel: "Frosted",
-    icon: () => <span>V</span>,
+    icon: () => <GlassFrostedIcon className="knob-icon" />,
   },
   {
     value: GlassKind.flowing,
     label: "Flowing Glass",
     shortLabel: "Flowing",
-    icon: () => <span>F</span>,
+    icon: () => <GlassFlowingIcon className="knob-icon" />,
   },
 ];
 
@@ -470,7 +486,7 @@ function MobileGlassStyleKnobs() {
           >
             {glassKind.isMixed && (
               <SliderPickerMixedItem className="mobile-style-knobs__item">
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   <QuestionMark />
                 </button>
                 <span className="mobile-style-knobs__label">Mixed</span>
@@ -482,7 +498,7 @@ function MobileGlassStyleKnobs() {
                 value={item.value}
                 className="mobile-style-knobs__item"
               >
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   {item.icon()}
                 </button>
                 <span className="mobile-style-knobs__label">{item.shortLabel}</span>
@@ -505,25 +521,25 @@ const GLITCH_ITEMS: MobileStyleItem<GlitchKind>[] = [
     value: GlitchKind.channelShift,
     label: "Channel Shift",
     shortLabel: "Channel",
-    icon: () => <span>C</span>,
+    icon: () => <GlitchChannelShiftIcon className="knob-icon" />,
   },
   {
     value: GlitchKind.scanline,
     label: "Scanline",
     shortLabel: "Scan",
-    icon: () => <span>S</span>,
+    icon: () => <GlitchScanlineIcon className="knob-icon" />,
   },
   {
     value: GlitchKind.blockCorrupt,
     label: "Block Corrupt",
     shortLabel: "Block",
-    icon: () => <span>B</span>,
+    icon: () => <GlitchBlockCorruptIcon className="knob-icon" />,
   },
   {
     value: GlitchKind.pixelSmear,
     label: "Pixel Smear",
     shortLabel: "Smear",
-    icon: () => <span>P</span>,
+    icon: () => <GlitchPixelSmearIcon className="knob-icon" />,
   },
 ];
 
@@ -601,7 +617,7 @@ function MobileGlitchStyleKnobs() {
           >
             {glitchKind.isMixed && (
               <SliderPickerMixedItem className="mobile-style-knobs__item">
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   <QuestionMark />
                 </button>
                 <span className="mobile-style-knobs__label">Mixed</span>
@@ -613,7 +629,7 @@ function MobileGlitchStyleKnobs() {
                 value={item.value}
                 className="mobile-style-knobs__item"
               >
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   {item.icon()}
                 </button>
                 <span className="mobile-style-knobs__label">{item.shortLabel}</span>
@@ -702,7 +718,7 @@ function MobileShapeStyleKnobs() {
           <SliderPickerOptions className="mobile-style-knobs__options" aria-label="Shape selection">
             {shape.isMixed && (
               <SliderPickerMixedItem className="mobile-style-knobs__item">
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   <QuestionMark />
                 </button>
                 <span className="mobile-style-knobs__label">Mixed</span>
@@ -714,7 +730,7 @@ function MobileShapeStyleKnobs() {
                 value={item.value}
                 className="mobile-style-knobs__item"
               >
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   {item.icon()}
                 </button>
                 <span className="mobile-style-knobs__label">{item.shortLabel}</span>
@@ -834,7 +850,7 @@ export function MobileStyleKnobs() {
                 checked={showOriginalChecked}
                 onCheckedChange={handleShowOriginalToggle}
               >
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   <QuestionMark />
                 </button>
                 <span className="mobile-style-knobs__label">Mixed</span>
@@ -848,7 +864,7 @@ export function MobileStyleKnobs() {
                 checked={showOriginalChecked}
                 onCheckedChange={handleShowOriginalToggle}
               >
-                <button type="button" className="ui-button" data-variant="primary" tabIndex={-1}>
+                <button type="button" className="ui-button" tabIndex={-1}>
                   {shaderIconMap[shader.value]()}
                 </button>
                 <span className="mobile-style-knobs__label">{shader.label}</span>
@@ -859,12 +875,14 @@ export function MobileStyleKnobs() {
         </SliderPickerWindow>
       </SliderPicker>
 
-      {/* Shader-specific style picker - only one will render based on selected shader */}
+      {/* Shader-specific style picker - only one will render based on selected shader.
+          Shape is shared by several shaders; keying it per shader mounts a fresh picker on a
+          shader switch, so it jumps to the value instead of scrolling the old list. */}
       <MobileDitheringStyleKnobs />
       <MobileAsciiStyleKnobs />
       <MobileGlassStyleKnobs />
       <MobileGlitchStyleKnobs />
-      <MobileShapeStyleKnobs />
+      <MobileShapeStyleKnobs key={selectedShaderType} />
     </>
   );
 }

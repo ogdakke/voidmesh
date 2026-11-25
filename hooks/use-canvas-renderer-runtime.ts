@@ -2,7 +2,7 @@ import { config, getViewportLensDistortionConfig } from "#config";
 import { useCanvasInteraction, useCanvasRendererService } from "#context/use-canvas.ts";
 import { appLoader } from "#renderer/app-loader/app-loader.ts";
 import { applyWlurOverlayDebugConfig } from "#renderer/wlur-debug.ts";
-import { createDefaultWlurOverlayConfig } from "#renderer/wlur-overlay.ts";
+import { createMobileWlurOverlayConfig } from "#renderer/wlur-overlay.ts";
 import { useEffect, type RefObject } from "react";
 import { useCanvasRenderer } from "./use-canvas-renderer.ts";
 
@@ -16,6 +16,8 @@ interface UseCanvasRendererRuntimeOptions {
   /** Mobile controls sit on the right edge instead of the bottom. */
   isCompactLandscape: boolean;
   isFullscreen: boolean;
+  /** Installed home-screen app: selects the PWA overlay preset. */
+  isStandalone: boolean;
 }
 
 export function useCanvasRendererRuntime({
@@ -27,9 +29,10 @@ export function useCanvasRendererRuntime({
   isMobile,
   isCompactLandscape,
   isFullscreen,
+  isStandalone,
 }: UseCanvasRendererRuntimeOptions) {
   const interaction = useCanvasInteraction();
-  const { registerRenderer, debugMode, wlurDebugConfig } = useCanvasRendererService();
+  const { registerRenderer, debugMode, wlurDebugOverrides } = useCanvasRendererService();
   const rendererState = useCanvasRenderer(canvasRef);
   const { renderer, isReady, isSupported } = rendererState;
 
@@ -74,19 +77,16 @@ export function useCanvasRendererRuntime({
       darkTheme ? config.multiSelectBoundingBox.dark : config.multiSelectBoundingBox.light,
     );
 
-    const tintColor = darkTheme ? ([0, 0, 0] as const) : ([1, 1, 1] as const);
     const overlay =
       isMobile && !isFullscreen
-        ? createDefaultWlurOverlayConfig({
-            tintColor,
-            tintAmount: darkTheme ? 1 : 0.77,
+        ? createMobileWlurOverlayConfig({
+            darkTheme,
             edge: isCompactLandscape ? "right" : "bottom",
+            mode: isStandalone ? "pwa" : "browser",
           })
         : null;
     renderer.setWlurOverlay(
-      overlay && debugMode
-        ? applyWlurOverlayDebugConfig(overlay, wlurDebugConfig, tintColor)
-        : overlay,
+      overlay && debugMode ? applyWlurOverlayDebugConfig(overlay, wlurDebugOverrides) : overlay,
     );
 
     registerRenderer(renderer);
@@ -99,10 +99,11 @@ export function useCanvasRendererRuntime({
     isCompactLandscape,
     isFullscreen,
     isMobile,
+    isStandalone,
     isReady,
     registerRenderer,
     renderer,
-    wlurDebugConfig,
+    wlurDebugOverrides,
   ]);
 
   return rendererState;

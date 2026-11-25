@@ -7,7 +7,13 @@ import {
 import { NavArrowRight } from "iconoir-react";
 import { Button } from "#ui/button/button.tsx";
 import { Checkbox } from "#ui/checkbox/index.tsx";
-import { useCanvasCommands, useCanvasPreferences } from "#context/use-canvas.ts";
+import {
+  DebugType,
+  useCanvasCommands,
+  useCanvasPreferences,
+  useDebugMode,
+} from "#context/use-canvas.ts";
+import { isPreviewBuild } from "#lib/build-env.ts";
 import { resetOnboardingProgress } from "#lib/onboarding/onboarding-storage.ts";
 import { shareOrCopyUrl } from "./share.ts";
 import "#components/ui/field/field.css";
@@ -71,6 +77,23 @@ export function HapticsToggle() {
       switch
     >
       Haptic feedback
+    </Checkbox>
+  );
+}
+
+/** Debug mode (perf overlay, Wlur tuning panel). Only offered in dev and preview builds. */
+export function DebugModeToggle() {
+  const debugMode = useDebugMode();
+  const { setDebugType } = useCanvasCommands();
+  if (!isPreviewBuild) return null;
+  return (
+    <Checkbox
+      name="debug-mode"
+      checked={debugMode}
+      onChange={(e) => setDebugType(e.target.checked ? DebugType.default : null)}
+      switch
+    >
+      Debug mode
     </Checkbox>
   );
 }

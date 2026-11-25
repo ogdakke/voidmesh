@@ -16,7 +16,9 @@ describe("wlur overlay config", () => {
     expect(resolved!.params.offset).toBeLessThanOrEqual(1);
     expect(resolved!.params.interpolation).toBeGreaterThanOrEqual(0);
     expect(resolved!.params.interpolation).toBeLessThanOrEqual(1);
-    expect(sampleWlurCurve(resolved!.params.mixCurve, 0.5)).toBeLessThan(0.5);
+    const mixMidpoint = sampleWlurCurve(resolved!.params.mixCurve, 0.5);
+    expect(mixMidpoint).toBeGreaterThanOrEqual(0);
+    expect(mixMidpoint).toBeLessThanOrEqual(1);
     expect(resolved!.quality.kernelSize % 2).toBe(1);
     expect(resolved!.quality.resolutionScale).toBeGreaterThan(0);
     expect(resolved!.quality.resolutionScale).toBeLessThanOrEqual(1);

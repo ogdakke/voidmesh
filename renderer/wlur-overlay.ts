@@ -3,6 +3,7 @@ import {
   WLUR_CURVES,
   clampWlurParams,
   clampWlurQuality,
+  type WlurCurve,
   type WlurParams,
   type WlurQuality,
   type WlurTintColor,
@@ -59,20 +60,26 @@ export const DEFAULT_WLUR_OVERLAY_PARAMS = Object.freeze({
   offset: 0.58,
   interpolation: 0.65,
   direction: "down",
-  radius: 130,
-  noise: 0,
-  curve: WLUR_CURVES.overlayQuickFade,
-  mixCurve: WLUR_CURVES.overlaySoftMix,
+  radius: 160,
+  noise: 0.45,
+  // Kawase (hybrid) settings; radius, kernelSize and resolutionScale apply to Gaussian only.
+  levels: 6.64,
+  spread: 0.12,
+  fineDepth: 2,
+  fade: 0.05,
+  curve: WLUR_CURVES.easeIn,
+  mixCurve: WLUR_CURVES.easeIn,
   tint: {
-    curve: WLUR_CURVES.easeIn,
+    curve: WLUR_CURVES.easeInOut,
     amount: 0.77,
     color: [0, 0, 0],
   },
 } satisfies WlurParams);
 
 export const DEFAULT_WLUR_OVERLAY_QUALITY = Object.freeze({
-  kernelSize: 45,
-  resolutionScale: 0.5,
+  kernelSize: 101,
+  resolutionScale: 0.54,
+  algorithm: "kawase",
 } satisfies WlurQuality);
 
 export function createDefaultWlurOverlayConfig(layout: WlurOverlayLayout = {}): WlurOverlayConfig {
@@ -81,7 +88,7 @@ export function createDefaultWlurOverlayConfig(layout: WlurOverlayLayout = {}): 
       ? {
           color: layout.tintColor,
           amount: layout.tintAmount ?? 1,
-          curve: WLUR_CURVES.easeIn,
+          curve: WLUR_CURVES.easeInOut,
         }
       : undefined;
 
@@ -96,6 +103,48 @@ export function createDefaultWlurOverlayConfig(layout: WlurOverlayLayout = {}): 
     },
     quality: DEFAULT_WLUR_OVERLAY_QUALITY,
   };
+}
+
+export type MobileWlurMode = "browser" | "pwa";
+
+/** What differs per display mode; everything else (blur shape, Kawase depth, fade) is shared. */
+interface MobileWlurPreset {
+  tintAmount: { dark: number; light: number };
+  tintCurve: WlurCurve;
+}
+
+/**
+ * Per display-mode overlay presets. In a browser tab Safari's toolbar sits below the canvas;
+ * as a home-screen app the canvas runs under the home indicator (bottom safe area) with no
+ * toolbar, so the strip the blur and tint must cover differs and is tuned separately.
+ */
+export const MOBILE_WLUR_PRESETS: Readonly<Record<MobileWlurMode, MobileWlurPreset>> = {
+  browser: { tintAmount: { dark: 1.5, light: 1.41 }, tintCurve: WLUR_CURVES.easeInOut },
+  pwa: { tintAmount: { dark: 1.5, light: 0.96 }, tintCurve: WLUR_CURVES.easeIn },
+};
+
+/** The overlay the mobile layout renders behind its controls. */
+export function createMobileWlurOverlayConfig({
+  darkTheme,
+  edge,
+  mode,
+}: {
+  darkTheme: boolean;
+  edge: NonNullable<WlurOverlayLayout["edge"]>;
+  mode: MobileWlurMode;
+}): WlurOverlayConfig {
+  const preset = MOBILE_WLUR_PRESETS[mode];
+  const config = createDefaultWlurOverlayConfig({
+    // Mirrors `--studio-background` (styles/variables.css): the canvas is transparent over it,
+    // and iOS Safari tints its toolbar from it, so the blur must fade to the same colour.
+    tintColor: darkTheme ? [6 / 255, 6 / 255, 8 / 255] : [250 / 255, 250 / 255, 250 / 255],
+    tintAmount: darkTheme ? preset.tintAmount.dark : preset.tintAmount.light,
+    edge,
+  });
+  const tint = config.params?.tint;
+  return tint
+    ? { ...config, params: { ...config.params, tint: { ...tint, curve: preset.tintCurve } } }
+    : config;
 }
 
 export function resolveWlurOverlayRuntimeConfig(

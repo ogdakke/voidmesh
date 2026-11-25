@@ -1,6 +1,15 @@
 export type WlurDirection = "down" | "up" | "right" | "left";
 
 /**
+ * Blur algorithm.
+ *
+ * - `gaussian`: separable variable-radius Gaussian at one working resolution.
+ * - `kawase`: dual Kawase pyramid; each level halves resolution and roughly doubles the radius,
+ *   so small radii stay sharp while large radii stay cheap.
+ */
+export type WlurAlgorithm = "gaussian" | "kawase";
+
+/**
  * CSS-compatible cubic-bezier control points.
  *
  * This matches the common `cubic-bezier(x1, y1, x2, y2)` shape used by CSS easing tools.
@@ -94,6 +103,35 @@ export interface WlurParams {
    */
   noise: number;
   /**
+   * Kawase only: pyramid depth reached at full ramp. Fractional values blend between levels.
+   *
+   * Range: `[0, 8]`. Each level roughly doubles the blur radius.
+   */
+  levels?: number;
+  /**
+   * Kawase only: extra upsample tap offset, in texels of the coarser level.
+   *
+   * Range: `[0, 4]`. Higher values widen each level at the cost of smoothness. The downsample
+   * is a fixed anti-aliased filter.
+   */
+  spread?: number;
+  /**
+   * Kawase only: depth up to which a full-resolution Gaussian renders the blur instead of the
+   * pyramid; the pyramid takes over across the next level. `0` uses the pyramid throughout.
+   *
+   * Range: `[0, 4]`. Crossfading shallow pyramid levels turns fine patterns (halftone, text)
+   * into alternating haze, so the shallow part of the ramp needs a real Gaussian.
+   */
+  fineDepth?: number;
+  /**
+   * Kawase only: how much of the mix curve the original image takes to crossfade into the
+   * blur. Small values switch almost immediately, which leaves a hard top edge on fine
+   * patterns; larger values let the mix curve shape a gradual fade.
+   *
+   * Range: `[0.001, 1]`.
+   */
+  fade?: number;
+  /**
    * Optional tint applied to the blurred region.
    *
    * The tint follows the same directional falloff as the blur.
@@ -116,6 +154,12 @@ export interface WlurQuality {
    * Lower values are cheaper and softer; `1` keeps full resolution.
    */
   resolutionScale: number;
+  /**
+   * Blur algorithm. `kernelSize` and `resolutionScale` apply to `gaussian` only.
+   *
+   * @default "gaussian"
+   */
+  algorithm?: WlurAlgorithm;
 }
 
 export interface WlurPassConfig {
@@ -136,6 +180,8 @@ export interface WlurWorkingDimensions {
 export const MIN_WLUR_KERNEL_SIZE = 3;
 /** Maximum allowed odd kernel size. */
 export const MAX_WLUR_KERNEL_SIZE = 127;
+/** Maximum Kawase pyramid depth. */
+export const MAX_WLUR_KAWASE_LEVELS = 8;
 /** Number of pre-sampled curve points uploaded to the GPU. */
 export const WLUR_CURVE_LUT_SIZE = 64;
 
@@ -169,9 +215,14 @@ export const DEFAULT_WLUR_PARAMS = Object.freeze({
   direction: "down",
   noise: 0.1,
   curve: DEFAULT_WLUR_CURVE,
+  levels: 4,
+  spread: 1,
+  fineDepth: 2,
+  fade: 0.05,
 } satisfies WlurParams);
 
 export const DEFAULT_WLUR_QUALITY = Object.freeze({
   kernelSize: 63,
   resolutionScale: 1,
+  algorithm: "gaussian",
 } satisfies WlurQuality);

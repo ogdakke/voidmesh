@@ -589,10 +589,19 @@ const overlapMixedWlurScenario: BenchScenario = {
   description: "Mixed-media action-layer and mobile Wlur cache interaction guard.",
   wlurOverlay: true,
 };
+const overlapWlurScenario: BenchScenario = {
+  ...overlapToggleScenario,
+  id: "overlap-72-action-toggle-wlur",
+  label: "72 overlapping images, action layer toggle with Wlur",
+  description:
+    "Image-only Wlur cost guard; runs where external video import is unavailable (software WebGPU).",
+  wlurOverlay: true,
+};
 const allScenarios = [
   ...scenarios,
   ...manyEntityScenarios,
   overlapToggleScenario,
+  overlapWlurScenario,
   overlapMixedScenario,
   overlapMixedWlurScenario,
 ];

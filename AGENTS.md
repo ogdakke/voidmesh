@@ -19,6 +19,8 @@ Read the nearest subsystem `AGENTS.md` before editing that area.
 
 React 19 with Compiler, Vite 8, WebGPU, strict TypeScript, Bun, oxlint.
 
+The Bun version is pinned once in `package.json#packageManager`; CI (`bun-version-file`) and Vercel (`installCommand` in `vercel.json`) both read it. Bump it there only.
+
 Cross-module imports use the `#...` aliases in `package.json#imports`. Do not bypass module boundaries with relative cross-subsystem imports. Only `engine/index.ts` and `types/index.ts` are barrel exports.
 
 ## Required Conventions

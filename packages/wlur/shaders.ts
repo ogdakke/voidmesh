@@ -28,6 +28,15 @@ fn sample_curve(curve_texture: texture_2d<f32>, factor: f32, row: f32) -> f32 {
 }
 `;
 
+// Kawase radius doubles per level, so a linear depth ramp would grow the radius exponentially.
+// Mapping the curve factor through log2 makes the radius grow linearly with it, like the
+// Gaussian's radius, with levels setting the depth (and so radius) at full ramp.
+const kawaseDepth = `
+fn kawase_depth(factor: f32, levels: f32) -> f32 {
+  return log2(1.0 + factor * (exp2(levels) - 1.0));
+}
+`;
+
 const mapFactor = `
 fn map_factor(uv: vec2f, offset: f32, interpolation: f32, direction: f32) -> f32 {
   if (interpolation <= 0.000001) {
@@ -59,6 +68,37 @@ fn map_factor(uv: vec2f, offset: f32, interpolation: f32, direction: f32) -> f32
 }
 `;
 
+// Film grain over the blurred region, in the composite pass so it costs no extra full-frame pass
+// or intermediate texture. Reads params.resolution (xy: size, w: strength) and the blur curve.
+const noiseOverlay = `
+fn overlay(base: f32, blend: f32) -> f32 {
+  return select(2.0 * base * blend, 1.0 - 2.0 * (1.0 - base) * (1.0 - blend), base > 0.5);
+}
+
+fn rand(st: vec2f) -> f32 {
+  return fract(sin(dot(st, vec2f(12.9898, 78.233))) * 43758.5453123);
+}
+
+fn apply_noise(color: vec4f, uv: vec2f, raw_factor: f32) -> vec4f {
+  let factor = sample_curve(curve_texture, raw_factor, 0.0);
+  let strength = min(factor * params.resolution.w, params.resolution.w);
+  if (strength <= 0.0) {
+    return color;
+  }
+
+  let noise_coord = floor(uv * params.resolution.xy * 10.0);
+  let white = rand(noise_coord) * 0.5 + 0.5;
+  let next_color = vec4f(
+    overlay(color.r, white),
+    overlay(color.g, white),
+    overlay(color.b, white),
+    color.a,
+  );
+
+  return mix(color, next_color, strength);
+}
+`;
+
 export function createWlurCopyShaderSource(): string {
   return `
 @group(0) @binding(0) var input_texture: texture_2d<f32>;
@@ -73,6 +113,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 `;
 }
 
+// Blur taps are not clamped: the sampler mirrors past the texture edge, so taps beyond the
+// viewport read content reflected inward instead of piling weight onto the outermost row.
 export function createWlurBlurShaderSource(axis: "x" | "y", kernelSize: number): string {
   const halfKernel = (kernelSize - 1) / 2;
   const pairCount = Math.floor(halfKernel / 2);
@@ -92,7 +134,7 @@ export function createWlurBlurShaderSource(axis: "x" | "y", kernelSize: number):
   for (var i: u32 = 0u; i < KERNEL_SIZE; i = i + 1u) {
     let sample_offset = f32(i) - HALF_KERNEL;
     let weight = exp(-(sample_offset * sample_offset) / (2.0 * sigma * sigma));
-    let sample_uv = clamp(in.uv + ${texelOffset}, vec2f(0.0), vec2f(1.0));
+    let sample_uv = in.uv + ${texelOffset};
     accum = accum + textureSampleLevel(input_texture, input_sampler, sample_uv, 0.0) * weight;
     weight_sum = weight_sum + weight;
   }
@@ -110,8 +152,8 @@ export function createWlurBlurShaderSource(axis: "x" | "y", kernelSize: number):
     let second_weight = exp(-(second_offset * second_offset) / (2.0 * sigma * sigma));
     let pair_weight = first_weight + second_weight;
     let sample_offset = first_offset + second_weight / max(pair_weight, 1e-20);
-    let positive_uv = clamp(in.uv + ${texelOffset}, vec2f(0.0), vec2f(1.0));
-    let negative_uv = clamp(in.uv - ${texelOffset}, vec2f(0.0), vec2f(1.0));
+    let positive_uv = in.uv + ${texelOffset};
+    let negative_uv = in.uv - ${texelOffset};
     accum = accum + (
       textureSampleLevel(input_texture, input_sampler, positive_uv, 0.0) +
       textureSampleLevel(input_texture, input_sampler, negative_uv, 0.0)
@@ -121,8 +163,8 @@ export function createWlurBlurShaderSource(axis: "x" | "y", kernelSize: number):
   if (HAS_UNPAIRED_TAP) {
     let sample_offset = HALF_KERNEL;
     let weight = exp(-(sample_offset * sample_offset) / (2.0 * sigma * sigma));
-    let positive_uv = clamp(in.uv + ${texelOffset}, vec2f(0.0), vec2f(1.0));
-    let negative_uv = clamp(in.uv - ${texelOffset}, vec2f(0.0), vec2f(1.0));
+    let positive_uv = in.uv + ${texelOffset};
+    let negative_uv = in.uv - ${texelOffset};
     accum = accum + (
       textureSampleLevel(input_texture, input_sampler, positive_uv, 0.0) +
       textureSampleLevel(input_texture, input_sampler, negative_uv, 0.0)
@@ -175,12 +217,173 @@ ${samplingBody}
 `;
 }
 
+/**
+ * Fine layer of the hybrid Kawase blur: a separable variable Gaussian at full resolution,
+ * rendered only into a band texture covering the shallow part of the ramp. Sigma (in screen
+ * pixels) follows the same linear-in-ramp radius as the pyramid's depth mapping and is capped
+ * at the crossover, so the kernel only needs to cover the capped sigma.
+ */
+export function createWlurFineBlurShaderSource(axis: "x" | "y", kernelSize: number): string {
+  const halfKernel = (kernelSize - 1) / 2;
+  // X reads the full-screen source at band-mapped uv; Y reads the band intermediate directly.
+  const sampleBase = axis === "x" ? "screen_uv" : "in.uv";
+  const step = axis === "x" ? "vec2f(params.source.x, 0.0)" : "vec2f(0.0, params.source.y)";
+  return `
+struct FineParams {
+  // Band in screen uv: xy origin, zw size.
+  band: vec4f,
+  // xy: source texel size in source uv, z: sigma cap (px), w: sigma at full ramp (px)
+  source: vec4f,
+  // x: offset, y: interpolation, z: direction
+  effect: vec4f,
+}
+
+@group(0) @binding(0) var<uniform> params: FineParams;
+@group(0) @binding(1) var input_texture: texture_2d<f32>;
+@group(0) @binding(2) var input_sampler: sampler;
+@group(0) @binding(3) var curve_texture: texture_2d<f32>;
+
+${fullscreenVertex}
+${mapFactor}
+${curveSampling("input_sampler")}
+
+const HALF_KERNEL: f32 = ${halfKernel}.0;
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+  let screen_uv = params.band.xy + in.uv * params.band.zw;
+  let base_uv = ${sampleBase};
+  let original = textureSampleLevel(input_texture, input_sampler, base_uv, 0.0);
+  let raw_factor = map_factor(screen_uv, params.effect.x, params.effect.y, params.effect.z);
+  if (raw_factor <= 0.000001) {
+    return original;
+  }
+  let sigma = min(sample_curve(curve_texture, raw_factor, 0.0) * params.source.w, params.source.z);
+  if (sigma <= 0.05) {
+    return original;
+  }
+
+  // Only walk the taps this pixel's sigma reaches (±2.5σ): most of the band sits near the top
+  // of the ramp where sigma is small, so the full kernel would be mostly zero-weight taps.
+  let reach = min(HALF_KERNEL, ceil(2.5 * sigma));
+  var accum = vec4f(0.0);
+  var weight_sum = 0.0;
+  for (var offset = -reach; offset <= reach; offset = offset + 1.0) {
+    let weight = exp(-(offset * offset) / (2.0 * sigma * sigma));
+    accum = accum + textureSampleLevel(input_texture, input_sampler, base_uv + ${step} * offset, 0.0) * weight;
+    weight_sum = weight_sum + weight;
+  }
+  return accum / max(weight_sum, 0.00001);
+}
+`;
+}
+
+/**
+ * Pyramid downsample with the 13-tap anti-aliased filter (Jimenez 2014, as in bloom). The
+ * classic 5-tap Kawase downsample is too weak a low-pass: fine patterns such as halftone or
+ * ASCII alias into coarse grids by the second or third level, and the variable blend shows
+ * shallow levels directly near the top of the ramp, where that aliasing read as a second band.
+ */
+export function createWlurKawaseDownShaderSource(): string {
+  return `
+struct KawaseDownParams {
+  // xy: unused, zw: source resolution
+  resolution: vec4f,
+  // unused; spread applies to the upsample only
+  config: vec4f,
+}
+
+@group(0) @binding(0) var<uniform> params: KawaseDownParams;
+@group(0) @binding(1) var source_texture: texture_2d<f32>;
+@group(0) @binding(2) var source_sampler: sampler;
+
+${fullscreenVertex}
+
+fn tap(uv: vec2f, offset: vec2f) -> vec4f {
+  return textureSampleLevel(source_texture, source_sampler, uv + offset / params.resolution.zw, 0.0);
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+  let uv = in.uv;
+  let a = tap(uv, vec2f(-2.0, -2.0));
+  let b = tap(uv, vec2f(0.0, -2.0));
+  let c = tap(uv, vec2f(2.0, -2.0));
+  let d = tap(uv, vec2f(-2.0, 0.0));
+  let e = tap(uv, vec2f(0.0, 0.0));
+  let f = tap(uv, vec2f(2.0, 0.0));
+  let g = tap(uv, vec2f(-2.0, 2.0));
+  let h = tap(uv, vec2f(0.0, 2.0));
+  let i = tap(uv, vec2f(2.0, 2.0));
+  let j = tap(uv, vec2f(-1.0, -1.0));
+  let k = tap(uv, vec2f(1.0, -1.0));
+  let l = tap(uv, vec2f(-1.0, 1.0));
+  let m = tap(uv, vec2f(1.0, 1.0));
+  return e * 0.125 + (a + c + g + i) * 0.03125 + (b + d + f + h) * 0.0625 + (j + k + l + m) * 0.125;
+}
+`;
+}
+
+/**
+ * Dual Kawase upsample with a variable-blur blend. Upsamples the coarser level with four
+ * diagonal bilinear taps, then mixes toward this level's sharper downsample by how far the
+ * ramp's target depth exceeds this level, so each pixel only accumulates the levels it needs.
+ */
+export function createWlurKawaseUpShaderSource(): string {
+  return `
+struct KawaseUpParams {
+  // xy: unused, zw: coarser source resolution
+  resolution: vec4f,
+  // x: offset, y: interpolation, z: direction, w: this level's index (>= 1)
+  effect: vec4f,
+  // x: depth at full ramp, y: spread
+  config: vec4f,
+}
+
+@group(0) @binding(0) var<uniform> params: KawaseUpParams;
+@group(0) @binding(1) var source_texture: texture_2d<f32>;
+@group(0) @binding(2) var detail_texture: texture_2d<f32>;
+@group(0) @binding(3) var input_sampler: sampler;
+@group(0) @binding(4) var curve_texture: texture_2d<f32>;
+
+${fullscreenVertex}
+${mapFactor}
+${curveSampling("input_sampler")}
+${kawaseDepth}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+  let detail = textureSampleLevel(detail_texture, input_sampler, in.uv, 0.0);
+  let raw_factor = map_factor(in.uv, params.effect.x, params.effect.y, params.effect.z);
+  let depth = kawase_depth(sample_curve(curve_texture, raw_factor, 0.0), params.config.x);
+  let weight = clamp(depth - params.effect.w, 0.0, 1.0);
+  if (weight <= 0.0) {
+    return detail;
+  }
+
+  // sqrt(5/3) keeps the radial variance of the classic 8-tap Kawase upsample.
+  let sample_offset = (1.0 + params.config.y) / params.resolution.zw * 1.2909944487;
+  var color = textureSampleLevel(source_texture, input_sampler, in.uv + vec2f(-sample_offset.x, -sample_offset.y), 0.0);
+  color += textureSampleLevel(source_texture, input_sampler, in.uv + vec2f(sample_offset.x, -sample_offset.y), 0.0);
+  color += textureSampleLevel(source_texture, input_sampler, in.uv + vec2f(-sample_offset.x, sample_offset.y), 0.0);
+  color += textureSampleLevel(source_texture, input_sampler, in.uv + vec2f(sample_offset.x, sample_offset.y), 0.0);
+  return mix(detail, color * 0.25, weight);
+}
+`;
+}
+
 export function createWlurCompositeShaderSource(): string {
   return `
 struct CompositeParams {
+  // xy: output size, z: crossfade threshold, w: grain strength (0 = off)
   resolution: vec4f,
   effect: vec4f,
   tint: vec4f,
+  // x: Kawase pyramid depth at full ramp (0 = Gaussian path), y: fine/pyramid crossover depth
+  // (0 = no fine layer).
+  kawase: vec4f,
+  // Fine layer band in screen uv: xy origin, zw size.
+  fine_band: vec4f,
 }
 
 @group(0) @binding(0) var<uniform> params: CompositeParams;
@@ -188,10 +391,14 @@ struct CompositeParams {
 @group(0) @binding(2) var blurred_texture: texture_2d<f32>;
 @group(0) @binding(3) var tex_sampler: sampler;
 @group(0) @binding(4) var curve_texture: texture_2d<f32>;
+@group(0) @binding(5) var fine_texture: texture_2d<f32>;
 
 ${fullscreenVertex}
 ${mapFactor}
 ${curveSampling("tex_sampler")}
+${kawaseDepth}
+
+${noiseOverlay}
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
@@ -200,13 +407,30 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   if (raw_factor <= 0.000001) {
     return original;
   }
+  return apply_noise(composite(in.uv, original, raw_factor), in.uv, raw_factor);
+}
 
+fn composite(uv: vec2f, original: vec4f, raw_factor: f32) -> vec4f {
   let mix_factor = sample_curve(curve_texture, raw_factor, 2.0);
   if (mix_factor <= 0.000001) {
     return original;
   }
 
-  let blurred = textureSampleLevel(blurred_texture, tex_sampler, in.uv, 0.0);
+  var blurred = textureSampleLevel(blurred_texture, tex_sampler, uv, 0.0);
+  if (params.kawase.x > 0.0) {
+    let level = kawase_depth(sample_curve(curve_texture, raw_factor, 0.0), params.kawase.x);
+    if (params.kawase.y > 0.0) {
+      // Hybrid: a real full-resolution Gaussian covers the shallow depths, where crossfading
+      // pyramid levels turns fine patterns into alternating haze; the pyramid takes over over
+      // one level past the crossover, where content is already smooth.
+      let band_uv = (uv - params.fine_band.xy) / params.fine_band.zw;
+      let fine = textureSampleLevel(fine_texture, tex_sampler, band_uv, 0.0);
+      blurred = mix(fine, blurred, clamp(level - params.kawase.y, 0.0, 1.0));
+    } else {
+      // The pyramid's finest level is half resolution; below level 1 fade from the original.
+      blurred = mix(original, blurred, clamp(level, 0.0, 1.0));
+    }
+  }
   let tint_factor = sample_curve(curve_texture, raw_factor, 1.0);
   let tint_strength = clamp(tint_factor * params.tint.a, 0.0, 1.0);
   let tinted_blur = vec4f(
@@ -220,58 +444,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   );
   let blend = select(0.0, threshold_blend, mix_factor > 0.0);
   return mix(original, tinted_blur, blend);
-}
-`;
-}
-
-export function createWlurNoiseShaderSource(): string {
-  return `
-struct NoiseParams {
-  resolution: vec4f,
-  effect: vec4f,
-}
-
-@group(0) @binding(0) var<uniform> params: NoiseParams;
-@group(0) @binding(1) var input_texture: texture_2d<f32>;
-@group(0) @binding(2) var input_sampler: sampler;
-@group(0) @binding(3) var curve_texture: texture_2d<f32>;
-
-${fullscreenVertex}
-${mapFactor}
-${curveSampling("input_sampler")}
-
-fn overlay(base: f32, blend: f32) -> f32 {
-  return select(2.0 * base * blend, 1.0 - 2.0 * (1.0 - base) * (1.0 - blend), base > 0.5);
-}
-
-fn rand(st: vec2f) -> f32 {
-  return fract(sin(dot(st, vec2f(12.9898, 78.233))) * 43758.5453123);
-}
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-  let color = textureSampleLevel(input_texture, input_sampler, in.uv, 0.0);
-  let raw_factor = map_factor(in.uv, params.effect.x, params.effect.y, params.effect.z);
-  if (raw_factor <= 0.000001) {
-    return color;
-  }
-  let factor = sample_curve(curve_texture, raw_factor, 0.0);
-  let strength = min(factor * params.resolution.z, params.resolution.z);
-
-  if (strength <= 0.0) {
-    return color;
-  }
-
-  let noise_coord = floor(in.uv * params.resolution.xy * 10.0);
-  let white = rand(noise_coord) * 0.5 + 0.5;
-  let next_color = vec4f(
-    overlay(color.r, white),
-    overlay(color.g, white),
-    overlay(color.b, white),
-    color.a,
-  );
-
-  return mix(color, next_color, strength);
 }
 `;
 }

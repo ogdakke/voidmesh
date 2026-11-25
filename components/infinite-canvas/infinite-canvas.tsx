@@ -8,6 +8,7 @@ import { useImageInput } from "#hooks/use-image-input.ts";
 import { useInfiniteCanvasKeybinds } from "#hooks/use-infinite-canvas-keybinds.ts";
 import { useIsCompactLandscape, useIsMobile } from "#hooks/use-is-mobile.ts";
 import useMediaQuery from "#hooks/use-media-query.ts";
+import { useIsStandalone } from "#hooks/use-is-standalone.ts";
 import { useOnboarding } from "#hooks/use-onboarding.ts";
 import { useViewportInsets } from "#hooks/use-viewport-insets.ts";
 import { NO_VIEWPORT_INSETS } from "#lib/canvas-math.ts";
@@ -27,6 +28,7 @@ export function InfiniteCanvas() {
   const isMobile = useIsMobile();
   const isCompactLandscape = useIsCompactLandscape();
   const darkTheme = useMediaQuery("(prefers-color-scheme: dark)");
+  const isStandalone = useIsStandalone();
   const { isFullscreen } = useLayout();
   const interaction = useCanvasInteraction();
   const insets = useViewportInsets();
@@ -44,6 +46,7 @@ export function InfiniteCanvas() {
     isMobile,
     isCompactLandscape,
     isFullscreen,
+    isStandalone,
   });
   const keybinds = useInfiniteCanvasKeybinds(containerRef);
   const surface = useCanvasSurfaceEvents({

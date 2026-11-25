@@ -15,6 +15,10 @@ export default defineConfig(({ mode }) => {
 
   return {
     publicDir: resolve(import.meta.dirname, "public"),
+    // Vercel only exposes VITE_-prefixed vars to the client; preview builds gate debug tooling.
+    define: {
+      "import.meta.env.VITE_VERCEL_ENV": JSON.stringify(env.VERCEL_ENV ?? ""),
+    },
     appType: "spa",
     server: {
       allowedHosts: true,
