@@ -250,7 +250,7 @@ export const halftoneKindResets: Record<HalftoneKind, PartialDeep<ShaderParams>>
   [HalftoneKind.newsprint]: {
     size: 6,
     intensity: 1,
-    halftone: { angle: 0, dotGain: 0.35, paper: 0.8, misregistration: 0 },
+    halftone: { angle: 0, dotGain: 0.5, paper: 0.8, misregistration: 0 },
     postProcess: { bloom: { enabled: false } },
   },
   [HalftoneKind.cmyk]: {
@@ -262,7 +262,7 @@ export const halftoneKindResets: Record<HalftoneKind, PartialDeep<ShaderParams>>
   [HalftoneKind.riso]: {
     size: 8,
     intensity: 1,
-    halftone: { angle: 0, dotGain: 0.3, paper: 0.5, misregistration: 0.5 },
+    halftone: { angle: 0, dotGain: 0.15, paper: 0.5, misregistration: 0.5 },
     postProcess: { bloom: { enabled: false } },
   },
 };

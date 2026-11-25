@@ -178,14 +178,14 @@ fn sourceAt(pixel: vec2f) -> vec4f {
 // Ink transmittance (solid ink printed on white paper) per kind and plate.
 fn inkColor(plate: u32) -> vec3f {
   if (uniforms.kind == KIND_NEWSPRINT) {
-    return vec3f(0.12, 0.11, 0.115);
+    return vec3f(0.08, 0.085, 0.08);
   }
   if (uniforms.kind == KIND_CMYK) {
     var inks = array<vec3f, 4>(
       vec3f(0.0, 0.682, 0.937),   // cyan
       vec3f(0.925, 0.0, 0.549),   // magenta
       vec3f(1.0, 0.949, 0.0),     // yellow
-      vec3f(0.137, 0.122, 0.125), // black
+      vec3f(0.094, 0.102, 0.11),  // black
     );
     return inks[plate];
   }
@@ -281,10 +281,11 @@ fn coverageThreshold(t: f32) -> f32 {
 }
 
 // Ink coverage of one plate at a pixel.
-fn plateInk(pixel: vec2f, plate: u32, dotGain: f32, rough: f32, misreg: f32, pixelScale: f32) -> f32 {
+fn plateInk(pixel: vec2f, plate: u32, dotGain: f32, paper: f32, misreg: f32, pixelScale: f32) -> f32 {
   let cell = max(uniforms.cellSize, 1.0);
   let theta = radians(uniforms.angle + plateAngle(plate));
-  let shiftScale = select(0.45, 0.9, uniforms.kind == KIND_RISO);
+  // Up to ~0.7 screen pitch on offset presses, ~2.5 pitch on riso drums.
+  let shiftScale = select(0.8, 1.9, uniforms.kind == KIND_RISO);
   let shift = plateShift(plate) * misreg * cell * shiftScale;
 
   // Screen space of this plate (registration error moves the printed plate).
@@ -308,17 +309,21 @@ fn plateInk(pixel: vec2f, plate: u32, dotGain: f32, rough: f32, misreg: f32, pix
   let t11 = plateValue(separate(unpremultiply(s11), s11.a), plate);
   var t = mix(mix(t00, t10, f.x), mix(t01, t11, f.x), f.y);
 
-  // Mechanical dot gain peaks in the midtones.
-  t = clamp(t + dotGain * 0.9 * t * (1.0 - t), 0.0, 1.0);
+  // Mechanical dot gain peaks in the midtones (+20% at 50% for dotGain 0.5); shadows plug.
+  t = clamp(t + dotGain * 1.6 * t * (1.0 - t), 0.0, 1.0);
 
   // Cosine spot: round dots in highlights, checkerboard at 50%, round holes in shadows.
   let local = (fract(q) - 0.5) * 2.0;
   let spot = 0.5 - 0.25 * (cos(PI * local.x) + cos(PI * local.y));
 
-  // Paper fibres make dot edges ragged by roughly a pixel, independent of screen size.
+  // Paper texture perturbs the threshold: long fibres shift local tone, finer tooth makes
+  // edges ragged (~0.05 pitch on coated stock, ~0.2 pitch on newsprint).
   let authored = pixel / pixelScale;
-  let edgeNoise = valueNoise(authored * 0.9 + f32(plate) * 31.7) - 0.5;
-  let d = spot - coverageThreshold(t) + edgeNoise * rough * (1.6 / cell) * pixelScale;
+  let seed = f32(plate) * 31.7;
+  let fibreTone = fbm(authored * vec2f(0.035, 0.12) + seed) - 0.5;
+  let tooth = (valueNoise(q * 2.6 + seed) - 0.5) * 0.6 + (valueNoise(authored * 0.8 + seed) - 0.5) * 0.4;
+  let edgeNoise = tooth * (0.05 + 0.25 * paper) + fibreTone * 0.12 * paper;
+  let d = spot - coverageThreshold(t) + edgeNoise;
   let fw = max(fwidth(spot), 1e-4);
   var ink = clamp(0.5 - d / fw, 0.0, 1.0);
   // Keep pure white unprinted and solids solid regardless of edge noise.
@@ -335,21 +340,22 @@ fn printHalftone(pixel: vec2f) -> vec4f {
   let pixelScale = max(uniforms.scale, 1e-3);
   let authored = pixel / pixelScale;
 
-  // Paper: clean coated white through to aged newsprint, with fibre texture.
-  let paperTint = mix(vec3f(0.975, 0.972, 0.962), vec3f(0.905, 0.875, 0.80), paper);
-  let fibre = fbm(authored * vec2f(0.09, 0.35)) - 0.5;
-  let speck = smoothstep(0.92, 1.0, valueNoise(authored * 0.6 + 7.3));
-  var color = paperTint * (1.0 + fibre * 0.09 * paper) * (1.0 - speck * 0.12 * paper);
+  // Paper is never pure white: magazine stock (~#f4f1e6) through to aged newsprint (~#e4dccb).
+  let paperTint = mix(vec3f(0.957, 0.945, 0.902), vec3f(0.894, 0.863, 0.796), paper);
+  let fibre = fbm(authored * vec2f(0.05, 0.2)) - 0.5;
+  let speck = smoothstep(0.93, 1.0, valueNoise(authored * 0.45 + 7.3));
+  var color = paperTint * (1.0 + fibre * 0.08 * paper) * (1.0 - speck * 0.5 * paper * paper);
 
-  // Ink absorbs unevenly into rougher paper.
-  let mottle = fbm(authored * 0.08 + 3.1);
-  let rough = 0.4 + paper * 1.6;
+  // Ink absorbs unevenly into rougher paper; riso drums also leave a grainy stipple in solids.
+  let mottle = fbm(authored * 0.06 + 3.1);
+  let grain = select(0.0, 0.18 + 0.25 * paper, uniforms.kind == KIND_RISO);
 
   // The plate count depends only on uniforms, so sampling and derivatives stay in uniform control flow.
   let count = plateCount();
   for (var plate = 0u; plate < count; plate++) {
-    let ink = plateInk(pixel, plate, dotGain, rough, misreg, pixelScale);
-    let density = ink * (1.0 - paper * 0.22 * mottle);
+    let ink = plateInk(pixel, plate, dotGain, paper, misreg, pixelScale);
+    let voids = grain * smoothstep(0.4, 0.8, valueNoise(authored * 0.9 + 11.0 + f32(plate) * 13.1));
+    let density = ink * (1.0 - paper * 0.22 * mottle) * (1.0 - voids);
     color *= mix(vec3f(1.0), inkColor(plate), density);
   }
 
