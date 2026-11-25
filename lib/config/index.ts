@@ -499,6 +499,10 @@ export const config = {
     lodSettleFrames: 2,
     /** Maximum source/processed dimension changes admitted in one settled frame. */
     lodTransitionsPerFrame: 4,
+    /** Maximum cold (nothing resident yet) entities admitted per frame, within the pixel budget. */
+    coldLodTransitionsPerFrame: 16,
+    /** A cold upload costs at least its source pixels over this, since the resize reads them all. */
+    coldLodSourcePixelDivisor: 32,
     /** Maximum target pixels admitted per settled frame (one oversized item may progress). */
     lodTransitionPixelBudget: 2 * 1024 * 1024,
     /** Minimum visible fraction required when admitting or rebuilding a full-scene batch. */

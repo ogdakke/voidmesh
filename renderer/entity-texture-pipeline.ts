@@ -36,6 +36,8 @@ interface CachedEntityTexture {
   byteSize: number;
   lastUsedFrame: number;
   contentRevision: number;
+  /** Shared image asset this entry was made from; null for entity-owned textures. */
+  asset: object | null;
 }
 
 interface CachedSourceTexture extends CachedEntityTexture {
@@ -89,13 +91,14 @@ export class EntityTexturePipeline {
   #externalTextureImports = 0;
   #evictions = 0;
   #allowLodTransitions = false;
-  #lodTransitionsRemaining = 0;
   #lodTransitionPixelsRemaining = 0;
   #lodTransitionsUsed = 0;
   #pendingLodWork = false;
   #textureCacheRevision = 0;
   readonly #residentTextureEntries = new WeakMap<GPUTexture, CachedEntityTexture>();
   readonly #lodCacheLookups = new Map<object, LodCacheLookup>();
+  /** Resident source + processed entries per shared image asset, so cold assets skip key lookups. */
+  #assetCacheEntryCounts = new WeakMap<object, number>();
   #entityContentRevisions = new Map<string, number>();
   #gifResizeSurfaces = new Map<string, GifResizeSurface>();
   #renderEntityView: EffectRenderEntity | null = null;
@@ -290,12 +293,14 @@ export class EntityTexturePipeline {
           byteSize: getTextureByteSize(width, height, "rgba8unorm"),
           lastUsedFrame: this.#currentFrame,
           contentRevision,
+          asset: getSharedImageAsset(entity),
           entityIds: new Set(),
         };
         this.#uploadStaticEntitySourceToTexture(entity, sourceTexture, width, height);
         if (entity.mediaSource.type === MediaType.image)
           this.#onImmutableSourceUpload?.(sourceTexture, encoder);
         this.#sourceTextures.set(sourceKey, cachedSource);
+        this.#countAssetCacheEntry(cachedSource.asset, 1);
         this.#residentTextureEntries.set(sourceTexture, cachedSource);
         this.#sourceBytes += cachedSource.byteSize;
         this.#textureCacheRevision++;
@@ -336,6 +341,7 @@ export class EntityTexturePipeline {
         previousCached.entityIds.delete(entity.id);
         this.#entityProcessedBindings.delete(entity.id);
         this.#processedTextures.delete(previousProcessedKey);
+        this.#countAssetCacheEntry(previousCached.asset, -1);
         recycledTexture = previousCached;
       } else {
         this.#releaseEntityProcessedTexture(entity.id, canRecyclePrevious && !!cachedTexture);
@@ -398,8 +404,10 @@ export class EntityTexturePipeline {
       byteSize: getTextureByteSize(width, height, this.#colorConfig.intermediateFormat),
       lastUsedFrame: this.#currentFrame,
       contentRevision,
+      asset: needsContinuousShaderRender ? null : getSharedImageAsset(entity),
       entityIds: cachedTexture?.entityIds ?? recycledTexture?.entityIds ?? new Set(),
     };
+    if (!processedKeyWasCached) this.#countAssetCacheEntry(processedEntry.asset, 1);
     this.#processedTextures.set(processedKey, processedEntry);
     this.#residentTextureEntries.set(outputTexture, processedEntry);
     if (!processedKeyWasCached) this.#textureCacheRevision++;
@@ -461,7 +469,6 @@ export class EntityTexturePipeline {
   beginFrame(allowLodTransitions: boolean): void {
     this.#runtime.beginFrame();
     this.#allowLodTransitions = allowLodTransitions;
-    this.#lodTransitionsRemaining = config.rendering.lodTransitionsPerFrame;
     this.#lodTransitionPixelsRemaining = config.rendering.lodTransitionPixelBudget;
     this.#lodTransitionsUsed = 0;
     this.#pendingLodWork = false;
@@ -499,6 +506,7 @@ export class EntityTexturePipeline {
     if (
       lookupToken &&
       canReuseSharedTier &&
+      (current || this.#assetCacheEntryCounts.has(lookupToken)) &&
       this.#hasCachedRenderSizeMemoized(entity, desired.width, desired.height, lookupToken)
     ) {
       output.width = desired.width;
@@ -509,7 +517,7 @@ export class EntityTexturePipeline {
     if (!current) {
       // Cold visible entities are real upload/shader work. Keep that work under the
       // transition budget even during viewport motion so pan/zoom frames do not spike.
-      if (!this.#tryAdmitLodTransition(desired.width * desired.height, true)) {
+      if (!this.#tryAdmitColdTransition(entity, desired.width * desired.height)) {
         this.#pendingLodWork = true;
         return null;
       }
@@ -617,6 +625,7 @@ export class EntityTexturePipeline {
     this.#sourceTextures.clear();
     this.#entitySourceBindings.clear();
     this.#sourceBytes = 0;
+    this.#assetCacheEntryCounts = new WeakMap();
 
     for (const { canvas } of this.#gifResizeSurfaces.values()) {
       canvas.width = 1;
@@ -750,15 +759,32 @@ export class EntityTexturePipeline {
     return isCached;
   }
 
-  #tryAdmitLodTransition(pixelCost: number, allowDuringViewportMotion: boolean): boolean {
+  /**
+   * Cold entities show nothing until admitted, so they get a larger per-frame count than
+   * re-tiering visible ones. The resize reads every source pixel, so a large original
+   * shown small is charged for a share of its source size as well.
+   */
+  #tryAdmitColdTransition(entity: ShaderCanvasEntity, pixelCost: number): boolean {
+    const sourcePixels = entity.originalSize.width * entity.originalSize.height;
+    return this.#tryAdmitLodTransition(
+      Math.max(pixelCost, sourcePixels / config.rendering.coldLodSourcePixelDivisor),
+      true,
+      config.rendering.coldLodTransitionsPerFrame,
+    );
+  }
+
+  #tryAdmitLodTransition(
+    pixelCost: number,
+    allowDuringViewportMotion: boolean,
+    maxTransitions: number = config.rendering.lodTransitionsPerFrame,
+  ): boolean {
     const withinPixelBudget = pixelCost <= this.#lodTransitionPixelsRemaining;
     const canAdmit =
       (this.#allowLodTransitions || allowDuringViewportMotion) &&
-      this.#lodTransitionsRemaining > 0 &&
+      this.#lodTransitionsUsed < maxTransitions &&
       (withinPixelBudget || this.#lodTransitionsUsed === 0);
     if (!canAdmit) return false;
 
-    this.#lodTransitionsRemaining--;
     this.#lodTransitionsUsed++;
     this.#lodTransitionPixelsRemaining = Math.max(
       0,
@@ -826,6 +852,7 @@ export class EntityTexturePipeline {
       cachedProcessed.texture.destroy();
       this.#residentTextureEntries.delete(cachedProcessed.texture);
       this.#processedTextures.delete(cachedProcessed.key);
+      this.#countAssetCacheEntry(cachedProcessed.asset, -1);
       this.#processedBytes -= cachedProcessed.byteSize;
     }
   }
@@ -855,8 +882,16 @@ export class EntityTexturePipeline {
       cachedSource.texture.destroy();
       this.#residentTextureEntries.delete(cachedSource.texture);
       this.#sourceTextures.delete(cachedSource.key);
+      this.#countAssetCacheEntry(cachedSource.asset, -1);
       this.#sourceBytes -= cachedSource.byteSize;
     }
+  }
+
+  #countAssetCacheEntry(asset: object | null, delta: 1 | -1): void {
+    if (!asset) return;
+    const count = (this.#assetCacheEntryCounts.get(asset) ?? 0) + delta;
+    if (count > 0) this.#assetCacheEntryCounts.set(asset, count);
+    else this.#assetCacheEntryCounts.delete(asset);
   }
 
   #evictToBudget(): void {
@@ -887,6 +922,7 @@ export class EntityTexturePipeline {
       residentBytes -= candidate.cached.byteSize;
       this.#evictions++;
       this.#textureCacheRevision++;
+      this.#countAssetCacheEntry(candidate.cached.asset, -1);
 
       if (candidate.kind === "processed") {
         this.#processedTextures.delete(candidate.key);
