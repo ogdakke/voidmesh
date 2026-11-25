@@ -150,7 +150,7 @@ const AllSlideyParamsInOrder = [
 type SlideyParam = (typeof AllSlideyParamsInOrder)[number];
 
 // ---------------------------------------------------------------------------
-// ActiveParamSlider — single slider instance for all non-time params
+// ActiveParamSlider — slider for the selected non-time param
 // ---------------------------------------------------------------------------
 
 interface ActiveParamSliderProps {
@@ -291,9 +291,11 @@ export function ParamsKnobs() {
         />
       )}
 
-      {/* Single InfiniteSlider for all non-time params — no mount/unmount when switching */}
+      {/* One slider per param: a shared instance kept coasting after a param switch and wrote
+          the previous param's momentum into the newly selected one. */}
       {selectedKnob.value !== "time" && paramValues[selectedKnob.value] && (
         <ActiveParamSlider
+          key={selectedKnob.value}
           param={selectedKnob}
           paramResult={paramValues[selectedKnob.value]!}
           shaderType={selectedShaderType}
