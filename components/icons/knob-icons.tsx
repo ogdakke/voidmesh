@@ -322,7 +322,7 @@ export function GlitchPixelSmearIcon(props: IconProps) {
   );
 }
 
-export function HalftoneNewsprintIcon(props: IconProps) {
+export function PrintNewsprintIcon(props: IconProps) {
   return (
     <KnobSvg {...props}>
       <rect x="3" y="4" width="18" height="16" rx="2.5" />
@@ -336,7 +336,7 @@ export function HalftoneNewsprintIcon(props: IconProps) {
   );
 }
 
-export function HalftoneCmykIcon(props: IconProps) {
+export function PrintIcon(props: IconProps) {
   return (
     <KnobSvg {...props}>
       <circle cx="12" cy="8.25" r="5" />
@@ -346,7 +346,18 @@ export function HalftoneCmykIcon(props: IconProps) {
   );
 }
 
-export function HalftoneRisoIcon(props: IconProps) {
+export function PrintCmykIcon(props: IconProps) {
+  return (
+    <KnobSvg {...props}>
+      <circle cx="8.5" cy="8.5" r="4.5" />
+      <circle cx="15.5" cy="8.5" r="4.5" />
+      <circle cx="8.5" cy="15.5" r="4.5" />
+      <circle fill="currentColor" stroke="none" cx="15.5" cy="15.5" r="4.5" />
+    </KnobSvg>
+  );
+}
+
+export function PrintRisoIcon(props: IconProps) {
   return (
     <KnobSvg {...props}>
       <circle cx="9.5" cy="10" r="6" />

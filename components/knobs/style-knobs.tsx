@@ -8,7 +8,7 @@ import {
   AsciiKind,
   GlassKind,
   GlitchKind,
-  HalftoneKind,
+  PrintKind,
   Shape,
 } from "#types/canvas.ts";
 import {
@@ -51,11 +51,12 @@ import {
   GlitchIcon,
   GlitchPixelSmearIcon,
   GlitchScanlineIcon,
-  HalftoneCmykIcon,
   HalftoneIcon,
-  HalftoneNewsprintIcon,
-  HalftoneRisoIcon,
   MeltIcon,
+  PrintCmykIcon,
+  PrintIcon,
+  PrintNewsprintIcon,
+  PrintRisoIcon,
   ShapeCircleIcon,
   ShapeSquareIcon,
   ShapeVerticalRectIcon,
@@ -74,6 +75,7 @@ const shaderIconMap: Record<ShaderType, () => ReactNode> = {
   [ShaderType.melt]: () => <MeltIcon className="knob-icon" />,
   [ShaderType.glass]: () => <GlassIcon className="knob-icon" />,
   [ShaderType.glitch]: () => <GlitchIcon className="knob-icon" />,
+  [ShaderType.print]: () => <PrintIcon className="knob-icon" />,
 };
 
 // ============================================================================
@@ -648,43 +650,37 @@ function MobileGlitchStyleKnobs() {
 }
 
 // ============================================================================
-// Halftone Kind Items
+// Print Kind Items
 // ============================================================================
 
-const HALFTONE_ITEMS: MobileStyleItem<HalftoneKind>[] = [
+const PRINT_ITEMS: MobileStyleItem<PrintKind>[] = [
   {
-    value: HalftoneKind.classic,
-    label: "Classic",
-    shortLabel: "Classic",
-    icon: () => <HalftoneIcon className="knob-icon" />,
-  },
-  {
-    value: HalftoneKind.newsprint,
+    value: PrintKind.newsprint,
     label: "Newsprint",
     shortLabel: "News",
-    icon: () => <HalftoneNewsprintIcon className="knob-icon" />,
+    icon: () => <PrintNewsprintIcon className="knob-icon" />,
   },
   {
-    value: HalftoneKind.cmyk,
+    value: PrintKind.cmyk,
     label: "CMYK",
     shortLabel: "CMYK",
-    icon: () => <HalftoneCmykIcon className="knob-icon" />,
+    icon: () => <PrintCmykIcon className="knob-icon" />,
   },
   {
-    value: HalftoneKind.riso,
+    value: PrintKind.riso,
     label: "Riso",
     shortLabel: "Riso",
-    icon: () => <HalftoneRisoIcon className="knob-icon" />,
+    icon: () => <PrintRisoIcon className="knob-icon" />,
   },
 ];
 
 // ============================================================================
-// Mobile Halftone Style Knobs
+// Mobile Print Style Knobs
 // ============================================================================
 
-function MobileHalftoneStyleKnobs() {
-  const { changeHalftoneKind } = useCanvasCommands();
-  const halftoneKind = useParamValue("halftone.kind", config.defaults.shaderParams.halftone.kind);
+function MobilePrintStyleKnobs() {
+  const { changePrintKind } = useCanvasCommands();
+  const printKind = useParamValue("print.kind", config.defaults.shaderParams.print.kind);
 
   // Floating label state
   const [floatingLabel, setFloatingLabel] = useState<string | null>(null);
@@ -707,17 +703,17 @@ function MobileHalftoneStyleKnobs() {
   );
 
   const handleValueChange = (value: string) => {
-    changeHalftoneKind(value);
-    const item = HALFTONE_ITEMS.find((i) => i.value === value);
+    changePrintKind(value);
+    const item = PRINT_ITEMS.find((i) => i.value === value);
     if (item) showFloatingLabel(item.label);
   };
 
   const handleInteractionStart = () => {
     undo.beginTransaction();
-    if (halftoneKind.isMixed) {
+    if (printKind.isMixed) {
       showFloatingLabel("Mixed");
     } else {
-      const item = HALFTONE_ITEMS.find((i) => i.value === halftoneKind.value);
+      const item = PRINT_ITEMS.find((i) => i.value === printKind.value);
       if (item) showFloatingLabel(item.label);
     }
   };
@@ -726,7 +722,7 @@ function MobileHalftoneStyleKnobs() {
     undo.commitTransaction();
   };
 
-  if (!halftoneKind.isSupported) return null;
+  if (!printKind.isSupported) return null;
 
   return (
     <>
@@ -739,7 +735,7 @@ function MobileHalftoneStyleKnobs() {
         )}
 
       <SliderPicker
-        value={halftoneKind.isMixed ? "" : halftoneKind.value}
+        value={printKind.isMixed ? "" : printKind.value}
         onValueChange={handleValueChange}
         onInteractionStart={handleInteractionStart}
         onValueCommit={handleValueCommit}
@@ -748,9 +744,9 @@ function MobileHalftoneStyleKnobs() {
         <SliderPickerWindow className="mobile-style-knobs__window">
           <SliderPickerOptions
             className="mobile-style-knobs__options"
-            aria-label="Halftone screen selection"
+            aria-label="Print type selection"
           >
-            {halftoneKind.isMixed && (
+            {printKind.isMixed && (
               <SliderPickerMixedItem className="mobile-style-knobs__item">
                 <button type="button" className="ui-button" tabIndex={-1}>
                   <QuestionMark />
@@ -758,7 +754,7 @@ function MobileHalftoneStyleKnobs() {
                 <span className="mobile-style-knobs__label">Mixed</span>
               </SliderPickerMixedItem>
             )}
-            {HALFTONE_ITEMS.map((item) => (
+            {PRINT_ITEMS.map((item) => (
               <SliderPickerItem
                 key={item.value}
                 value={item.value}
@@ -1017,7 +1013,7 @@ export function MobileStyleKnobs() {
       <MobileAsciiStyleKnobs />
       <MobileGlassStyleKnobs />
       <MobileGlitchStyleKnobs />
-      <MobileHalftoneStyleKnobs />
+      <MobilePrintStyleKnobs />
       <MobileShapeStyleKnobs key={selectedShaderType} />
     </>
   );

@@ -80,6 +80,7 @@ export const ShaderType = createEnum({
   ascii: "ascii",
   glass: "glass",
   glitch: "glitch",
+  print: "print",
 });
 /** Shader types available for entity processing */
 export type ShaderType = typeof ShaderType.infer;
@@ -138,6 +139,7 @@ export const SHADER_TYPE_OPTIONS = [
   { value: ShaderType.ascii, label: "ASCII" },
   { value: ShaderType.glass, label: "Glass" },
   { value: ShaderType.glitch, label: "Glitch" },
+  { value: ShaderType.print, label: "Print" },
 ];
 
 /** ASCII character set types */
@@ -292,34 +294,32 @@ export const SHAPE_OPTIONS = [
   { label: "Vertical Rectangle", value: Shape.rect_v },
 ];
 
-/** Halftone screen subtypes: classic single-colour dots or simulated print screens */
-export const HalftoneKind = createEnum({
-  classic: "classic",
+/** Print effect subtypes: simulated press screens on paper */
+export const PrintKind = createEnum({
   newsprint: "newsprint",
   cmyk: "cmyk",
   riso: "riso",
 });
-/** Halftone screen subtype */
-export type HalftoneKind = typeof HalftoneKind.infer;
+/** Print effect subtype */
+export type PrintKind = typeof PrintKind.infer;
 
-export const HALFTONE_KIND_OPTIONS = [
-  { value: HalftoneKind.classic, label: "Classic" },
-  { value: HalftoneKind.newsprint, label: "Newsprint" },
-  { value: HalftoneKind.cmyk, label: "CMYK" },
-  { value: HalftoneKind.riso, label: "Riso" },
+export const PRINT_KIND_OPTIONS = [
+  { value: PrintKind.newsprint, label: "Newsprint" },
+  { value: PrintKind.cmyk, label: "CMYK" },
+  { value: PrintKind.riso, label: "Riso" },
 ];
 
-/** Parameters for the halftone shader */
-export interface HalftoneParams {
+/** Parameters for the print shader */
+export interface PrintParams {
   /** Screen subtype */
-  kind: HalftoneKind;
-  /** Print kinds: base screen angle in degrees (0-360), plate angles are relative to it */
+  kind: PrintKind;
+  /** Base screen angle in degrees (0-360), plate angles are relative to it */
   angle: number;
-  /** Print kinds: midtone dot gain / ink spread (0-1) */
+  /** Midtone dot gain / ink spread (0-1) */
   dotGain: number;
-  /** Print kinds: paper age, fibre texture and ink absorption (0-1) */
+  /** Paper age, fibre texture and ink absorption (0-1) */
   paper: number;
-  /** Print kinds: plate registration error (0-1) */
+  /** Plate registration error (0-1) */
   misregistration: number;
 }
 
@@ -389,8 +389,8 @@ export interface ShaderParams {
   scale: number;
   /** Effect intensity (0.0 - 5.0). Reusable across shaders. */
   intensity: number;
-  /** Parameters for the halftone shader (only used when shaderType is 'halftone') */
-  halftone?: HalftoneParams;
+  /** Parameters for the print shader (only used when shaderType is 'print') */
+  print?: PrintParams;
   /** Parameters for the blobs shader (only used when shaderType is 'blobs') */
   blobs?: BlobsParams;
   /** Parameters for the dithering shader (only used when shaderType is 'dithering') */

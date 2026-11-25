@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { config } from "#config";
 import { DitheringShader } from "#renderer/shaders/dithering-shader.ts";
 import { HalftoneShader } from "#renderer/shaders/halftone-shader.ts";
-import { HalftoneKind } from "#types/canvas.ts";
+import { PrintKind, ShaderType } from "#types/canvas.ts";
 import { ShaderPass, type ShaderContext } from "#renderer/shaders/shader-pass.ts";
 import type { EffectRenderEntity } from "#renderer/effect-render-entity.ts";
 import { createTestEntity } from "../helpers/test-entity.ts";
@@ -71,13 +71,14 @@ describe("ShaderPass", () => {
     expect(context.floatView[4]).toBe(10);
   });
 
-  test("halftone print kinds pack kind, angle and print knobs after palette metadata", () => {
+  test("print packs kind, angle and print knobs after palette metadata", () => {
     const context = createContext(vi.fn<GPUDevice["createBuffer"]>());
     const pass = new HalftoneShader(context);
-    const entity = createRenderEntity("halftone-print", 0.5);
+    const entity = createRenderEntity("print", 0.5);
+    entity.shaderType = ShaderType.print;
     entity.shaderParams.scale = 2;
-    entity.shaderParams.halftone = {
-      kind: HalftoneKind.cmyk,
+    entity.shaderParams.print = {
+      kind: PrintKind.cmyk,
       angle: 30,
       dotGain: 1,
       paper: 0.5,
@@ -89,15 +90,17 @@ describe("ShaderPass", () => {
     expect(context.floatView[7]).toBe(30);
     expect(context.uintView[9]).toBe(2);
     expect(context.uintView[11]).toBe(255 | (128 << 8));
-    // Print kinds hide scale; the slot carries pixel scale for LOD-stable paper texture.
+    // Print hides scale; the slot carries pixel scale for LOD-stable paper texture.
     expect(context.floatView[2]).toBe(0.5);
   });
 
-  test("classic halftone keeps scale and writes kind 0", () => {
+  test("halftone keeps scale and writes kind 0 even with stale print params", () => {
     const context = createContext(vi.fn<GPUDevice["createBuffer"]>());
     const pass = new HalftoneShader(context);
     const entity = createRenderEntity("halftone-classic", 0.5);
+    entity.shaderType = ShaderType.halftone;
     entity.shaderParams.scale = 2;
+    entity.shaderParams.print = { ...config.defaults.shaderParams.print, kind: PrintKind.riso };
 
     pass.writeUniforms(entity);
 

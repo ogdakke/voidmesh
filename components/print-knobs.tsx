@@ -1,4 +1,4 @@
-import { HalftoneKind, HALFTONE_KIND_OPTIONS, type HalftoneParams } from "#types/canvas.ts";
+import { PrintKind, PRINT_KIND_OPTIONS, type PrintParams } from "#types/canvas.ts";
 import { useCanvasCommands, useSelectionState } from "#context/use-canvas.ts";
 import { useParamValue } from "#hooks/use-param-value.ts";
 import { config } from "#config";
@@ -10,7 +10,7 @@ import { Slider } from "./ui/slider/index.tsx";
 
 const SIDE_OFFSET = 4;
 
-type PrintKnob = Exclude<keyof HalftoneParams, "kind">;
+type PrintKnob = Exclude<keyof PrintParams, "kind">;
 
 const PRINT_SLIDERS: {
   key: PrintKnob;
@@ -25,24 +25,21 @@ const PRINT_SLIDERS: {
 
 function PrintSlider({ knob }: { knob: (typeof PRINT_SLIDERS)[number] }) {
   const { updateSelectedEntityParams } = useCanvasCommands();
-  const param = useParamValue(
-    `halftone.${knob.key}`,
-    config.defaults.shaderParams.halftone[knob.key],
-  );
+  const param = useParamValue(`print.${knob.key}`, config.defaults.shaderParams.print[knob.key]);
 
   if (!param.isSupported) return null;
 
   return (
     <div className="sidebar-row">
       <Slider
-        name={`halftone-${knob.key}`}
+        name={`print-${knob.key}`}
         label={param.isMixed ? `${knob.label} (Mixed)` : knob.label}
         min={knob.range.min}
         max={knob.range.max}
         step={knob.range.step}
         value={param.value}
         onValueChange={(value: number) =>
-          updateSelectedEntityParams({ halftone: { [knob.key]: value } })
+          updateSelectedEntityParams({ print: { [knob.key]: value } })
         }
         onInteractionStart={() => undo.beginTransaction()}
         onValueCommitted={() => undo.commitTransaction()}
@@ -53,23 +50,23 @@ function PrintSlider({ knob }: { knob: (typeof PRINT_SLIDERS)[number] }) {
 }
 
 // ============ SIDEBAR VERSION ============
-export function HalftoneParamsControl() {
-  const { changeHalftoneKind } = useCanvasCommands();
-  const halftoneKind = useParamValue("halftone.kind", config.defaults.shaderParams.halftone.kind);
+export function PrintParamsControl() {
+  const { changePrintKind } = useCanvasCommands();
+  const printKind = useParamValue("print.kind", config.defaults.shaderParams.print.kind);
 
-  if (!halftoneKind.isSupported) return null;
+  if (!printKind.isSupported) return null;
 
   return (
     <>
       <div className="sidebar-row">
         <Select
-          name="halftone-kind"
-          label="Screen"
-          value={halftoneKind.isMixed ? "Mixed" : halftoneKind.value}
-          onValueChange={changeHalftoneKind}
-          items={HALFTONE_KIND_OPTIONS}
+          name="print-kind"
+          label="Print Type"
+          value={printKind.isMixed ? "Mixed" : printKind.value}
+          onValueChange={changePrintKind}
+          items={PRINT_KIND_OPTIONS}
         >
-          {HALFTONE_KIND_OPTIONS.map((option) => (
+          {PRINT_KIND_OPTIONS.map((option) => (
             <SelectItem key={option.value} value={option.value}>
               {option.label}
             </SelectItem>
@@ -84,31 +81,31 @@ export function HalftoneParamsControl() {
 }
 
 // ============ CONTEXT MENU VERSION ============
-export function HalftoneMenuKnobs() {
-  const { changeHalftoneKind } = useCanvasCommands();
+export function PrintMenuKnobs() {
+  const { changePrintKind } = useCanvasCommands();
   const selectionState = useSelectionState();
   const isMultiple = selectionState.isMultiple;
-  const halftoneKind = useParamValue("halftone.kind", config.defaults.shaderParams.halftone.kind);
+  const printKind = useParamValue("print.kind", config.defaults.shaderParams.print.kind);
 
-  if (!halftoneKind.isSupported) return null;
+  if (!printKind.isSupported) return null;
 
   return (
     <ContextMenu.SubmenuRoot>
       <ContextMenu.SubmenuTrigger className="menu-submenu-trigger">
-        Halftone Screen
+        Print Type
         <NavArrowRight />
       </ContextMenu.SubmenuTrigger>
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="menu-positioner" sideOffset={SIDE_OFFSET}>
           <ContextMenu.Popup className="menu-submenu-popup">
-            {isMultiple && halftoneKind.isMixed && (
+            {isMultiple && printKind.isMixed && (
               <ContextMenu.Group>
                 <ContextMenu.GroupLabel className="menu-group-label">
-                  Selection screens
+                  Selection print types
                 </ContextMenu.GroupLabel>
-                {[...halftoneKind.values].map((kind) => (
+                {[...printKind.values].map((kind) => (
                   <ContextMenu.Item key={kind} className="menu-item" disabled>
-                    {HALFTONE_KIND_OPTIONS.find((o) => o.value === kind)?.label ?? kind}
+                    {PRINT_KIND_OPTIONS.find((o) => o.value === kind)?.label ?? kind}
                   </ContextMenu.Item>
                 ))}
                 <ContextMenu.Separator className="menu-separator" />
@@ -116,16 +113,14 @@ export function HalftoneMenuKnobs() {
             )}
 
             <ContextMenu.RadioGroup
-              value={
-                halftoneKind.isMixed ? undefined : (halftoneKind.value ?? HalftoneKind.classic)
-              }
+              value={printKind.isMixed ? undefined : (printKind.value ?? PrintKind.cmyk)}
             >
-              {HALFTONE_KIND_OPTIONS.map((option) => (
+              {PRINT_KIND_OPTIONS.map((option) => (
                 <ContextMenu.RadioItem
                   key={option.value}
                   value={option.value}
                   className="menu-radio-item"
-                  onClick={() => changeHalftoneKind(option.value)}
+                  onClick={() => changePrintKind(option.value)}
                 >
                   <ContextMenu.RadioItemIndicator className="menu-radio-indicator">
                     <Circle fill="currentColor" />

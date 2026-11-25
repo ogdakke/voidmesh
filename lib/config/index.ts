@@ -13,7 +13,7 @@ import {
   type ViewportLensDistortionConfig,
   GlassKind,
   GlitchKind,
-  HalftoneKind,
+  PrintKind,
 } from "#types/canvas.ts";
 import type { PartialDeep } from "type-fest";
 import type { easings } from "../canvas-math";
@@ -62,7 +62,6 @@ export const shaderFeatures: Record<ShaderType, ShaderFeature> = {
       "preserveColors",
       "reversePalette",
       "showOriginal",
-      "halftone",
       "palette",
       "adjustments",
       "postProcess",
@@ -143,6 +142,20 @@ export const shaderFeatures: Record<ShaderType, ShaderFeature> = {
     ] as const,
     colorMode: "palette",
   },
+  print: {
+    // Palette (paper + spot inks) is only visible for riso — see paramVisibilityRules.
+    params: [
+      "size",
+      "intensity",
+      "reversePalette",
+      "showOriginal",
+      "print",
+      "palette",
+      "adjustments",
+      "postProcess",
+    ] as const,
+    colorMode: "palette",
+  },
 };
 
 // ============================================================================
@@ -165,7 +178,7 @@ export const shaderDefaults: Record<ShaderType, ShaderDefaultsConfig> = {
   },
   halftone: {
     resetParams: { size: 10, shape: Shape.circle, scale: 1.0, adjustments: { blur: 0 } },
-    mergeParams: { halftone: { kind: HalftoneKind.classic } },
+    mergeParams: {},
   },
   blobs: {
     resetParams: {
@@ -214,6 +227,18 @@ export const shaderDefaults: Record<ShaderType, ShaderDefaultsConfig> = {
       glitch: { kind: GlitchKind.channelShift, angle: 0 },
     },
   },
+  print: {
+    // Bloom blows out the paper white.
+    resetParams: {
+      size: 8,
+      intensity: 1,
+      adjustments: { blur: 0 },
+      postProcess: { bloom: { enabled: false } },
+    },
+    mergeParams: {
+      print: { kind: PrintKind.cmyk, angle: 0, dotGain: 0.3, paper: 0.3, misregistration: 0.25 },
+    },
+  },
 };
 
 /**
@@ -240,45 +265,33 @@ export const glitchKindResets: Record<GlitchKind, PartialDeep<ShaderParams>> = {
 };
 
 /**
- * Per-halftone-kind param resets applied when switching halftone sub-types.
+ * Per-print-kind param resets applied when switching print sub-types.
  * Every kind must specify all tunable params (size, intensity, print knobs)
- * to ensure clean resets when switching between kinds. Print kinds turn bloom
- * off because it blows out the paper white.
+ * to ensure clean resets when switching between kinds.
  */
-export const halftoneKindResets: Record<HalftoneKind, PartialDeep<ShaderParams>> = {
-  [HalftoneKind.classic]: { size: 10, intensity: 1, scale: 1 },
-  [HalftoneKind.newsprint]: {
+export const printKindResets: Record<PrintKind, PartialDeep<ShaderParams>> = {
+  [PrintKind.newsprint]: {
     size: 6,
     intensity: 1,
-    halftone: { angle: 0, dotGain: 0.5, paper: 0.8, misregistration: 0 },
-    postProcess: { bloom: { enabled: false } },
+    print: { angle: 0, dotGain: 0.5, paper: 0.8, misregistration: 0 },
   },
-  [HalftoneKind.cmyk]: {
+  [PrintKind.cmyk]: {
     size: 8,
     intensity: 1,
-    halftone: { angle: 0, dotGain: 0.3, paper: 0.3, misregistration: 0.25 },
-    postProcess: { bloom: { enabled: false } },
+    print: { angle: 0, dotGain: 0.3, paper: 0.3, misregistration: 0.25 },
   },
-  [HalftoneKind.riso]: {
+  [PrintKind.riso]: {
     size: 8,
     intensity: 1,
-    halftone: { angle: 0, dotGain: 0.15, paper: 0.5, misregistration: 0.5 },
-    postProcess: { bloom: { enabled: false } },
+    print: { angle: 0, dotGain: 0.15, paper: 0.5, misregistration: 0.5 },
     palette: palettes.risoPinkBlue,
     reversePalette: false,
   },
 };
 
-/** Whether a halftone kind simulates a print screen (inks on paper). */
-export function isPrintHalftone(params: ShaderParams): boolean {
-  const kind = params.halftone?.kind;
-  return kind !== undefined && kind !== HalftoneKind.classic;
-}
-
-/** Print kinds with fixed process inks (riso takes paper and inks from the palette). */
-function isFixedInkHalftone(params: ShaderParams): boolean {
-  const kind = params.halftone?.kind;
-  return kind === HalftoneKind.cmyk || kind === HalftoneKind.newsprint;
+/** Riso takes paper and spot inks from the palette; other print kinds use fixed process inks. */
+function usesPaletteInks(params: ShaderParams): boolean {
+  return params.print?.kind === PrintKind.riso;
 }
 
 /** Error diffusion algorithms do NOT support scale parameter */
@@ -341,17 +354,9 @@ export function getCommonFeatures(shaderTypes: ShaderType[]): {
 export const paramVisibilityRules: Partial<
   Record<ShaderType, { param: ParamPaths; isVisible: (params: ShaderParams) => boolean }[]>
 > = {
-  halftone: [
-    // Print kinds use their own dot shape; CMYK and newsprint also use fixed process inks.
-    { param: "shape", isVisible: (p) => !isPrintHalftone(p) },
-    { param: "scale", isVisible: (p) => !isPrintHalftone(p) },
-    { param: "preserveColors", isVisible: (p) => !isPrintHalftone(p) },
-    { param: "reversePalette", isVisible: (p) => !isFixedInkHalftone(p) },
-    { param: "palette", isVisible: (p) => !isFixedInkHalftone(p) },
-    { param: "halftone.angle", isVisible: isPrintHalftone },
-    { param: "halftone.dotGain", isVisible: isPrintHalftone },
-    { param: "halftone.paper", isVisible: isPrintHalftone },
-    { param: "halftone.misregistration", isVisible: isPrintHalftone },
+  print: [
+    { param: "palette", isVisible: usesPaletteInks },
+    { param: "reversePalette", isVisible: usesPaletteInks },
   ],
   dithering: [
     {
@@ -667,8 +672,8 @@ export const config = {
       scale: 1.0,
       intensity: 1.0,
       blobs: { eagerness: 0.5 },
-      halftone: {
-        kind: HalftoneKind.classic,
+      print: {
+        kind: PrintKind.cmyk,
         angle: 0,
         dotGain: 0.3,
         paper: 0.3,

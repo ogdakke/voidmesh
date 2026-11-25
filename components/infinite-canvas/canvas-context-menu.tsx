@@ -37,7 +37,7 @@ import { AsciiMenuKnobs } from "../ascii-knobs.tsx";
 import { DitheringMenuKnobs } from "../dithering-knobs.tsx";
 import { GlassMenuKnobs } from "../glass-knobs.tsx";
 import { GlitchMenuKnobs } from "../glitch-knobs.tsx";
-import { HalftoneMenuKnobs } from "../halftone-knobs.tsx";
+import { PrintMenuKnobs } from "../print-knobs.tsx";
 import { ShapeMenuKnobs } from "../shape-knobs.tsx";
 import { buildPaletteList } from "#application/canvas/palettes.ts";
 import { usePaletteStore } from "#lib/palette-store.ts";
@@ -437,8 +437,8 @@ function CanvasContextMenuItems({
 
       <ContextMenu.Separator className="menu-separator" />
 
-      {/* Halftone Screen (only for halftone - auto-hides via isSupported) */}
-      <HalftoneMenuKnobs />
+      {/* Print Type (only for print - auto-hides via isSupported) */}
+      <PrintMenuKnobs />
 
       {/* Shape (only for halftone/melt/blobs - auto-hides via isSupported) */}
       <ShapeMenuKnobs />

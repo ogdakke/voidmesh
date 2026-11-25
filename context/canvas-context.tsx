@@ -36,7 +36,7 @@ import {
   AsciiKind,
   GlassKind,
   GlitchKind,
-  HalftoneKind,
+  PrintKind,
   MediaType,
   isGifEntity,
 } from "#types/canvas.ts";
@@ -82,7 +82,7 @@ import {
   resetDuplicatedMediaPlayback,
 } from "#lib/media-duplication.ts";
 import { tracePerformancePhase } from "#lib/performance-tracing.ts";
-import { config, glassKindResets, glitchKindResets, halftoneKindResets } from "#config";
+import { config, glassKindResets, glitchKindResets, printKindResets } from "#config";
 import { preferences } from "#lib/preferences.ts";
 import { paletteStore } from "#lib/palette-store.ts";
 import { analytics } from "#lib/analytics.ts";
@@ -242,14 +242,14 @@ const shaderUrlParams = {
     config.defaults.shaderParams.glitch.kind,
   ),
   glitchAngle: parseAsFloat.withDefault(config.defaults.shaderParams.glitch.angle),
-  // Halftone shader params
-  halftoneKind: parseAsStringLiteral(Object.values(HalftoneKind)).withDefault(
-    config.defaults.shaderParams.halftone.kind,
+  // Print shader params
+  printKind: parseAsStringLiteral(Object.values(PrintKind)).withDefault(
+    config.defaults.shaderParams.print.kind,
   ),
-  halftoneAngle: parseAsFloat.withDefault(config.defaults.shaderParams.halftone.angle),
-  dotGain: parseAsFloat.withDefault(config.defaults.shaderParams.halftone.dotGain),
-  paper: parseAsFloat.withDefault(config.defaults.shaderParams.halftone.paper),
-  misregistration: parseAsFloat.withDefault(config.defaults.shaderParams.halftone.misregistration),
+  printAngle: parseAsFloat.withDefault(config.defaults.shaderParams.print.angle),
+  dotGain: parseAsFloat.withDefault(config.defaults.shaderParams.print.dotGain),
+  paper: parseAsFloat.withDefault(config.defaults.shaderParams.print.paper),
+  misregistration: parseAsFloat.withDefault(config.defaults.shaderParams.print.misregistration),
 };
 
 /**
@@ -407,9 +407,9 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         kind: currentRenderState.glitchKind,
         angle: currentRenderState.glitchAngle,
       },
-      halftone: {
-        kind: currentRenderState.halftoneKind,
-        angle: currentRenderState.halftoneAngle,
+      print: {
+        kind: currentRenderState.printKind,
+        angle: currentRenderState.printAngle,
         dotGain: currentRenderState.dotGain,
         paper: currentRenderState.paper,
         misregistration: currentRenderState.misregistration,
@@ -467,8 +467,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
             asciiInvert: null,
             glitchKind: null,
             glitchAngle: null,
-            halftoneKind: null,
-            halftoneAngle: null,
+            printKind: null,
+            printAngle: null,
             dotGain: null,
             paper: null,
             misregistration: null,
@@ -522,16 +522,13 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         asciiInvert: entity.shaderParams.ascii?.invert ?? config.defaults.shaderParams.ascii.invert,
         glitchKind: entity.shaderParams.glitch?.kind ?? config.defaults.shaderParams.glitch.kind,
         glitchAngle: entity.shaderParams.glitch?.angle ?? config.defaults.shaderParams.glitch.angle,
-        halftoneKind:
-          entity.shaderParams.halftone?.kind ?? config.defaults.shaderParams.halftone.kind,
-        halftoneAngle:
-          entity.shaderParams.halftone?.angle ?? config.defaults.shaderParams.halftone.angle,
-        dotGain:
-          entity.shaderParams.halftone?.dotGain ?? config.defaults.shaderParams.halftone.dotGain,
-        paper: entity.shaderParams.halftone?.paper ?? config.defaults.shaderParams.halftone.paper,
+        printKind: entity.shaderParams.print?.kind ?? config.defaults.shaderParams.print.kind,
+        printAngle: entity.shaderParams.print?.angle ?? config.defaults.shaderParams.print.angle,
+        dotGain: entity.shaderParams.print?.dotGain ?? config.defaults.shaderParams.print.dotGain,
+        paper: entity.shaderParams.print?.paper ?? config.defaults.shaderParams.print.paper,
         misregistration:
-          entity.shaderParams.halftone?.misregistration ??
-          config.defaults.shaderParams.halftone.misregistration,
+          entity.shaderParams.print?.misregistration ??
+          config.defaults.shaderParams.print.misregistration,
         preset: paletteParams.preset,
         ppEnabled: pp?.enabled ?? ppDefaults.enabled,
         ppGrainEnabled: pp?.grain?.enabled ?? ppDefaults.grain!.enabled,
@@ -1297,11 +1294,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     });
   };
 
-  const changeHalftoneKind = (value: string | null) => {
+  const changePrintKind = (value: string | null) => {
     if (!value) return;
-    const kind = value as HalftoneKind;
-    const reset = halftoneKindResets[kind];
-    updateSelectedEntityParams({ ...reset, halftone: { ...reset.halftone, kind } });
+    const kind = value as PrintKind;
+    const reset = printKindResets[kind];
+    updateSelectedEntityParams({ ...reset, print: { ...reset.print, kind } });
   };
 
   const setShowOriginal = (value: boolean) => {
@@ -1587,22 +1584,22 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           shaderUrlParams.glitchAngle.parse(parsedParams.glitchAngle ?? "") ??
           config.defaults.shaderParams.glitch.angle,
       },
-      halftone: {
+      print: {
         kind:
-          shaderUrlParams.halftoneKind.parse(parsedParams.halftoneKind ?? "") ??
-          config.defaults.shaderParams.halftone.kind,
+          shaderUrlParams.printKind.parse(parsedParams.printKind ?? "") ??
+          config.defaults.shaderParams.print.kind,
         angle:
-          shaderUrlParams.halftoneAngle.parse(parsedParams.halftoneAngle ?? "") ??
-          config.defaults.shaderParams.halftone.angle,
+          shaderUrlParams.printAngle.parse(parsedParams.printAngle ?? "") ??
+          config.defaults.shaderParams.print.angle,
         dotGain:
           shaderUrlParams.dotGain.parse(parsedParams.dotGain ?? "") ??
-          config.defaults.shaderParams.halftone.dotGain,
+          config.defaults.shaderParams.print.dotGain,
         paper:
           shaderUrlParams.paper.parse(parsedParams.paper ?? "") ??
-          config.defaults.shaderParams.halftone.paper,
+          config.defaults.shaderParams.print.paper,
         misregistration:
           shaderUrlParams.misregistration.parse(parsedParams.misregistration ?? "") ??
-          config.defaults.shaderParams.halftone.misregistration,
+          config.defaults.shaderParams.print.misregistration,
       },
       palette: palette ?? config.defaults.shaderParams.palette,
       postProcess,
@@ -2237,7 +2234,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setAsciiInvert,
     changeGlassKind,
     changeGlitchKind,
-    changeHalftoneKind,
+    changePrintKind,
     changePalette,
     renamePalette,
     uploadPalette,
@@ -2287,7 +2284,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       setAsciiInvert,
       changeGlassKind,
       changeGlitchKind,
-      changeHalftoneKind,
+      changePrintKind,
       changePalette,
       renamePalette,
       uploadPalette,
@@ -2339,7 +2336,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setAsciiInvert: (...args) => commandsImplRef.current.setAsciiInvert(...args),
     changeGlassKind: (...args) => commandsImplRef.current.changeGlassKind(...args),
     changeGlitchKind: (...args) => commandsImplRef.current.changeGlitchKind(...args),
-    changeHalftoneKind: (...args) => commandsImplRef.current.changeHalftoneKind(...args),
+    changePrintKind: (...args) => commandsImplRef.current.changePrintKind(...args),
     changePalette: (...args) => commandsImplRef.current.changePalette(...args),
     renamePalette: (...args) => commandsImplRef.current.renamePalette(...args),
     uploadPalette: (...args) => commandsImplRef.current.uploadPalette(...args),

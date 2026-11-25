@@ -31,7 +31,7 @@ import { AdjustmentsKnobs } from "./adjustments-knobs.tsx";
 import { AsciiKnobs } from "./ascii-knobs.tsx";
 import { DitheringKnobs } from "./dithering-knobs.tsx";
 import { ShapeKnobs } from "./shape-knobs.tsx";
-import { HalftoneParamsControl } from "./halftone-knobs.tsx";
+import { PrintParamsControl } from "./print-knobs.tsx";
 import { DesktopExportKnobs } from "./export-knobs/export-knobs.desktop.tsx";
 import { ExportQueuePanel } from "./export-queue-panel.tsx";
 import { DesktopTimeSlider } from "./desktop-time-slider/desktop-time-slider.tsx";
@@ -146,7 +146,7 @@ function SelectedSidebarSections() {
           <BlobParams />
           <GlassParamsControl />
           <GlitchParamsControl />
-          <HalftoneParamsControl />
+          <PrintParamsControl />
           <DitheringKnobs />
           <AsciiKnobs />
           <EffectParams />
