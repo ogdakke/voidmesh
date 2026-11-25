@@ -86,6 +86,7 @@ interface CliOptions {
   keepBrowser: boolean;
   url: string | null;
   disableImmediates: boolean;
+  cpuProfile: boolean;
   rounds: number;
 }
 
@@ -141,12 +142,25 @@ async function main(): Promise<void> {
 
     try {
       await pageClient.send("Runtime.enable");
+      if (options.cpuProfile) {
+        await pageClient.send("Profiler.enable");
+        await pageClient.send("Profiler.setSamplingInterval", { interval: 100 });
+        await pageClient.send("Profiler.start");
+      }
       const payload = await runBenchInPage(
         pageClient,
         options.scenario,
         options.suite,
         options.rounds,
       );
+      if (options.cpuProfile) {
+        const { profile } = (await pageClient.send("Profiler.stop")) as { profile: CpuProfile };
+        await mkdir(options.outDir, { recursive: true });
+        const profilePath = join(options.outDir, "latest.cpuprofile");
+        await Bun.write(profilePath, JSON.stringify(profile));
+        console.log(`Wrote ${profilePath}`);
+        console.table(summarizeCpuProfile(profile, 40));
+      }
       const repo = await collectRepoState();
       const rounds = extractRounds(payload);
       const results = rounds.at(-1)?.results ?? [];
@@ -190,6 +204,7 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
     keepBrowser: process.env.BENCH_KEEP_BROWSER === "1",
     url: process.env.BENCH_URL ?? null,
     disableImmediates: process.env.BENCH_DISABLE_IMMEDIATES === "1",
+    cpuProfile: process.env.BENCH_CPU_PROFILE === "1",
     rounds: Number(process.env.BENCH_ROUNDS ?? 1),
   };
 
@@ -219,6 +234,8 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
       options.keepBrowser = true;
     } else if (arg === "--disable-immediates") {
       options.disableImmediates = true;
+    } else if (arg === "--cpu-profile") {
+      options.cpuProfile = true;
     } else if (arg === "--rounds") {
       options.rounds = Number(readArgValue(argv, ++index, arg));
     } else {
@@ -237,6 +254,47 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
   }
 
   return options;
+}
+
+interface CpuProfile {
+  nodes: Array<{
+    id: number;
+    callFrame: { functionName: string; url: string; lineNumber: number };
+  }>;
+  samples?: number[];
+  timeDeltas?: number[];
+}
+
+/** Top self-time functions of a whole-run CPU profile, for orientation before reading the raw file. */
+function summarizeCpuProfile(
+  profile: CpuProfile,
+  limit: number,
+): Array<{ selfMs: number; function: string; location: string }> {
+  const labels = new Map<number, { function: string; location: string }>();
+  for (const node of profile.nodes) {
+    const { functionName, url, lineNumber } = node.callFrame;
+    labels.set(node.id, {
+      function: functionName || "(anonymous)",
+      location: url
+        ? `${url.replace(/^https?:\/\/[^/]+\//, "").replace(/\?.*$/, "")}:${lineNumber + 1}`
+        : "",
+    });
+  }
+  const totals = new Map<string, { selfMs: number; function: string; location: string }>();
+  const samples = profile.samples ?? [];
+  const deltas = profile.timeDeltas ?? [];
+  for (let index = 0; index < samples.length; index += 1) {
+    const label = labels.get(samples[index]!);
+    if (!label) continue;
+    const key = `${label.function}@${label.location}`;
+    const entry = totals.get(key) ?? { selfMs: 0, ...label };
+    entry.selfMs += (deltas[index] ?? 0) / 1000;
+    totals.set(key, entry);
+  }
+  return [...totals.values()]
+    .sort((a, b) => b.selfMs - a.selfMs)
+    .slice(0, limit)
+    .map((entry) => ({ ...entry, selfMs: Math.round(entry.selfMs * 10) / 10 }));
 }
 
 function readArgValue(argv: string[], index: number, flag: string): string {
