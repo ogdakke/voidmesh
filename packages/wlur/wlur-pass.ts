@@ -5,6 +5,9 @@ import {
   getWlurFineKernelSize,
   getWlurFineSigmaCap,
   getWlurKawaseLevelCount,
+  getWlurKawaseLevelSizes,
+  getWlurKawaseRegions,
+  type WlurKawaseRegions,
   type WlurPixelRegion,
   getWlurBlurRegions,
   getWlurScratchKey,
@@ -149,6 +152,8 @@ export class WlurPass {
   #fineTextures: FineTextures | null = null;
   #fineBandKey = "";
   #fineBand: WlurPixelRegion | null = null;
+  #kawaseRegionsKey = "";
+  #kawaseRegions: WlurKawaseRegions | null = null;
   readonly #kawaseUniformCaches = new Map<GPUBuffer, Float32Array>();
   readonly #blurUniformData = new Float32Array(12);
   readonly #compositeUniformData = new Float32Array(20);
@@ -400,6 +405,8 @@ export class WlurPass {
     this.#finePipelines.clear();
     this.#fineBandKey = "";
     this.#fineBand = null;
+    this.#kawaseRegionsKey = "";
+    this.#kawaseRegions = null;
     for (const buffer of [...this.#kawaseDownBuffers, ...this.#kawaseUpBuffers]) buffer.destroy();
     this.#kawaseDownBuffers = [];
     this.#kawaseUpBuffers = [];
@@ -789,13 +796,10 @@ export class WlurPass {
       });
     const down: GPUTexture[] = [];
     const up: GPUTexture[] = [];
-    let w = width;
-    let h = height;
-    for (let level = 1; level <= levelCount; level++) {
-      w = Math.max(1, Math.ceil(w / 2));
-      h = Math.max(1, Math.ceil(h / 2));
-      down.push(create(`Kawase down ${level}`, w, h));
-      if (level < levelCount) up.push(create(`Kawase up ${level}`, w, h));
+    for (const [index, size] of getWlurKawaseLevelSizes(width, height, levelCount).entries()) {
+      const level = index + 1;
+      down.push(create(`Kawase down ${level}`, size.width, size.height));
+      if (level < levelCount) up.push(create(`Kawase up ${level}`, size.width, size.height));
     }
 
     this.#kawaseTextures = {
@@ -850,6 +854,7 @@ export class WlurPass {
     source: GPUTexture,
     detail: GPUTexture | null,
     destination: GPUTexture,
+    region: WlurPixelRegion,
   ): void {
     let binding = this.#kawaseBindings.get(uniformBuffer);
     if (binding?.source !== source || binding.detail !== detail) {
@@ -887,8 +892,31 @@ export class WlurPass {
     });
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, binding.bindGroup);
+    pass.setScissorRect(region.x, region.y, region.width, region.height);
     pass.draw(3);
     pass.end();
+  }
+
+  #getKawaseRegions(
+    width: number,
+    height: number,
+    levelCount: number,
+    params: WlurParams,
+  ): WlurKawaseRegions {
+    const key = [
+      width,
+      height,
+      levelCount,
+      params.direction,
+      params.offset,
+      params.interpolation,
+      params.spread,
+    ].join("|");
+    if (key !== this.#kawaseRegionsKey || !this.#kawaseRegions) {
+      this.#kawaseRegionsKey = key;
+      this.#kawaseRegions = getWlurKawaseRegions(width, height, levelCount, params);
+    }
+    return this.#kawaseRegions;
   }
 
   /**
@@ -917,13 +945,16 @@ export class WlurPass {
     const directionIndex = wlurDirectionToIndex(params.direction);
     const spread = params.spread ?? 0;
 
-    // Partial refresh is not supported: the pyramid is cheap, so a refresh rebuilds it whole.
+    // Partial refresh is not supported: a refresh rebuilds the pyramid, but each pass is
+    // scissored to the texels the composite can reach from the effect region.
     if (options.refreshBlur !== false || !this.#kawaseOutput) {
+      const regions = this.#getKawaseRegions(width, height, levelCount, params);
       let source = inputTexture;
       let sourceWidth = width;
       let sourceHeight = height;
       for (let level = 1; level <= levelCount; level++) {
         const destination = textures.down[level - 1]!;
+        const downRegion = regions.down[level - 1]!;
         const buffer = this.#getKawaseBuffer(this.#kawaseDownBuffers, level - 1, "down");
         const data = this.#kawaseUniformData.fill(0);
         data[2] = sourceWidth;
@@ -938,8 +969,9 @@ export class WlurPass {
           source,
           null,
           destination,
+          downRegion,
         );
-        this.#blurPixels += destination.width * destination.height;
+        this.#blurPixels += downRegion.width * downRegion.height;
         this.#fullBlurPixels += destination.width * destination.height;
         source = destination;
         sourceWidth = destination.width;
@@ -949,6 +981,7 @@ export class WlurPass {
       for (let level = levelCount - 1; level >= 1; level--) {
         const coarser = level === levelCount - 1 ? textures.down[level]! : textures.up[level]!;
         const destination = textures.up[level - 1]!;
+        const upRegion = regions.up[level - 1]!;
         const buffer = this.#getKawaseBuffer(this.#kawaseUpBuffers, level - 1, "up");
         const data = this.#kawaseUniformData.fill(0);
         data[2] = coarser.width;
@@ -969,8 +1002,9 @@ export class WlurPass {
           coarser,
           textures.down[level - 1]!,
           destination,
+          upRegion,
         );
-        this.#blurPixels += destination.width * destination.height;
+        this.#blurPixels += upRegion.width * upRegion.height;
         this.#fullBlurPixels += destination.width * destination.height;
       }
 

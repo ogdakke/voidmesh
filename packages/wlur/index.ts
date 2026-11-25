@@ -17,7 +17,9 @@ export {
   getWlurFineKernelSize,
   getWlurFineSigmaCap,
   getWlurKawaseLevelCount,
+  getWlurKawaseLevelSizes,
   getWlurKawaseReachPx,
+  getWlurKawaseRegions,
   getWlurSourceDependencyRegion,
   getWlurWorkingDimensions,
   mapWlurFactorAtPoint,
@@ -25,6 +27,7 @@ export {
   wlurDirectionToIndex,
   type WlurPixelRegion,
   type WlurBlurRegions,
+  type WlurKawaseRegions,
 } from "./math.ts";
 export {
   DEFAULT_WLUR_CURVE,

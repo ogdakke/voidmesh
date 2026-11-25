@@ -130,6 +130,145 @@ export function getWlurKawaseReachPx(levels: number, spread: number): number {
   return Math.ceil(reach + 2);
 }
 
+/** Pyramid level sizes for a Kawase blur: level `i + 1` is `sizes[i]`, each half the previous. */
+export function getWlurKawaseLevelSizes(
+  width: number,
+  height: number,
+  levelCount: number,
+): { width: number; height: number }[] {
+  const sizes: { width: number; height: number }[] = [];
+  let w = width;
+  let h = height;
+  for (let level = 1; level <= levelCount; level++) {
+    w = Math.max(1, Math.ceil(w / 2));
+    h = Math.max(1, Math.ceil(h / 2));
+    sizes.push({ width: w, height: h });
+  }
+  return sizes;
+}
+
+export interface WlurKawaseRegions {
+  /** Scissor of each downsample pass; `down[i]` writes pyramid level `i + 1`. */
+  down: WlurPixelRegion[];
+  /** Scissor of each upsample pass; `up[i]` writes the level `i + 1` upsample. */
+  up: WlurPixelRegion[];
+}
+
+/**
+ * Slack, in texels, on each side of a bilinear footprint. GPUs resolve sample positions to a
+ * fixed sub-texel grid (8 bits on common hardware), so a tap computed exactly on a texel
+ * boundary may land just across it.
+ */
+const WLUR_KAWASE_SAMPLE_SLACK = 1 / 16;
+/** Down taps reach this many source texels from the fragment (13-tap filter). */
+const WLUR_KAWASE_DOWN_REACH = 2;
+/** Matches the upsample shader's diagonal tap scale, sqrt(5/3). */
+const WLUR_KAWASE_UP_TAP_SCALE = 1.2909944487;
+
+/**
+ * Scissor regions that limit every Kawase pyramid pass to the texels the composite can read.
+ *
+ * The composite only samples the pyramid where the ramp factor is non-zero (the effect
+ * region), so walking the dependency chain back from there — composite → upsamples → their
+ * detail and coarser inputs → downsamples — gives each pass the interval along the ramp axis
+ * whose texels can reach the output. Texels outside it are never sampled, so limiting the
+ * passes leaves the rendered result unchanged. Intervals are sample-uv ranges; a pass's
+ * scissor covers their bilinear footprint plus sub-texel slack, and mirrored taps past an edge
+ * fold back inside the range.
+ */
+export function getWlurKawaseRegions(
+  width: number,
+  height: number,
+  levelCount: number,
+  params: Pick<WlurParams, "direction" | "offset" | "interpolation" | "spread">,
+): WlurKawaseRegions {
+  const sizes = getWlurKawaseLevelSizes(width, height, levelCount);
+  const vertical = params.direction === "down" || params.direction === "up";
+  const axisSize = (size: { width: number; height: number }) =>
+    vertical ? size.height : size.width;
+
+  type Interval = [number, number] | null;
+  const union = (a: Interval, b: Interval): Interval =>
+    !a ? b : !b ? a : [Math.min(a[0], b[0]), Math.max(a[1], b[1])];
+  // Mirror addressing reads [0, -lo] for lo < 0 and [2 - hi, 1] for hi > 1.
+  const fold = ([lo, hi]: [number, number]): [number, number] => {
+    let from = lo;
+    let to = hi;
+    if (from < 0) {
+      to = Math.max(to, -from);
+      from = 0;
+    }
+    if (to > 1) {
+      from = Math.min(from, 2 - to);
+      to = 1;
+    }
+    return [Math.max(0, from), Math.min(1, to)];
+  };
+  /** Texel span `[a, b)` of a texture of `n` texels that bilinear samples in `uv` can touch. */
+  const texels = (uv: Interval, n: number): [number, number] => {
+    if (!uv) return [0, 0];
+    const [lo, hi] = fold(uv);
+    // Bilinear taps read texels floor(t) and floor(t) + 1 for t = uv × n − 0.5.
+    return [
+      Math.max(0, Math.floor(lo * n - 0.5 - WLUR_KAWASE_SAMPLE_SLACK)),
+      Math.min(n, Math.floor(hi * n - 0.5 + WLUR_KAWASE_SAMPLE_SLACK) + 2),
+    ];
+  };
+  /** Sample-uv range of the fragment centres in texel span `[a, b)`, widened by `reach` uv. */
+  const centres = ([a, b]: [number, number], n: number, reach: number): Interval =>
+    b <= a ? null : [(a + 0.5) / n - reach, (b - 0.5) / n + reach];
+  const toRegion = ([a, b]: [number, number], size: { width: number; height: number }) =>
+    vertical
+      ? { x: 0, y: a, width: size.width, height: b - a }
+      : { x: a, y: 0, width: b - a, height: size.height };
+
+  // The composite samples the pyramid output at full-resolution pixel centres in the effect region.
+  const effect = getWlurEffectRegion(width, height, params);
+  const effectFrom = vertical ? effect.y : effect.x;
+  const effectSize = vertical ? effect.height : effect.width;
+  const fullSize = vertical ? height : width;
+  const output: Interval =
+    effectSize > 0
+      ? [(effectFrom + 0.5) / fullSize, (effectFrom + effectSize - 0.5) / fullSize]
+      : null;
+
+  const needDown: Interval[] = Array.from({ length: levelCount }, () => null);
+  const needUp: Interval[] = Array.from({ length: Math.max(0, levelCount - 1) }, () => null);
+  if (levelCount > 1) needUp[0] = output;
+  else needDown[0] = output;
+
+  const upTap = (1 + (params.spread ?? 0)) * WLUR_KAWASE_UP_TAP_SCALE;
+  const up: WlurPixelRegion[] = [];
+  for (let level = 1; level < levelCount; level++) {
+    const size = sizes[level - 1]!;
+    const n = axisSize(size);
+    const span = texels(needUp[level - 1] ?? null, n);
+    up.push(toRegion(span, size));
+    needDown[level - 1] = union(needDown[level - 1] ?? null, centres(span, n, 0));
+    const coarserSize = axisSize(sizes[level]!);
+    const coarser = centres(span, n, upTap / coarserSize);
+    if (level === levelCount - 1) needDown[level] = union(needDown[level] ?? null, coarser);
+    else needUp[level] = union(needUp[level] ?? null, coarser);
+  }
+
+  const down: WlurPixelRegion[] = [];
+  for (let level = levelCount; level >= 1; level--) {
+    const size = sizes[level - 1]!;
+    const n = axisSize(size);
+    const span = texels(needDown[level - 1] ?? null, n);
+    down[level - 1] = toRegion(span, size);
+    if (level > 1) {
+      const sourceSize = axisSize(sizes[level - 2]!);
+      needDown[level - 2] = union(
+        needDown[level - 2] ?? null,
+        centres(span, n, WLUR_KAWASE_DOWN_REACH / sourceSize),
+      );
+    }
+  }
+
+  return { down, up };
+}
+
 export function clampWlurParams(params?: Partial<WlurParams>): WlurParams {
   const direction = params?.direction;
   const resolvedDirection: WlurDirection =
