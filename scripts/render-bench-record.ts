@@ -88,6 +88,7 @@ interface CliOptions {
   disableImmediates: boolean;
   cpuProfile: boolean;
   videoUrl: string | null;
+  stagedUploadGuard: boolean;
   rounds: number;
 }
 
@@ -143,6 +144,13 @@ async function main(): Promise<void> {
 
     try {
       await pageClient.send("Runtime.enable");
+      if (options.stagedUploadGuard) {
+        const { guard } = await runBenchInPage(pageClient, null, options.suite, 1, true);
+        console.log("Staged upload guard:", JSON.stringify(guard));
+        const mismatched = (guard as { mismatchedBytes?: number } | undefined)?.mismatchedBytes;
+        if (mismatched !== 0) process.exitCode = 1;
+        return;
+      }
       if (options.cpuProfile) {
         await pageClient.send("Profiler.enable");
         await pageClient.send("Profiler.setSamplingInterval", { interval: 100 });
@@ -207,6 +215,7 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
     disableImmediates: process.env.BENCH_DISABLE_IMMEDIATES === "1",
     cpuProfile: process.env.BENCH_CPU_PROFILE === "1",
     videoUrl: process.env.BENCH_VIDEO_URL ?? null,
+    stagedUploadGuard: false,
     rounds: Number(process.env.BENCH_ROUNDS ?? 1),
   };
 
@@ -236,6 +245,8 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
       options.keepBrowser = true;
     } else if (arg === "--disable-immediates") {
       options.disableImmediates = true;
+    } else if (arg === "--staged-upload-guard") {
+      options.stagedUploadGuard = true;
     } else if (arg === "--video-url") {
       options.videoUrl = readArgValue(argv, ++index, arg);
     } else if (arg === "--cpu-profile") {
@@ -413,7 +424,12 @@ async function runBenchInPage(
   scenario: string | null,
   suite: CliOptions["suite"],
   rounds: number,
-): Promise<{ metadata: unknown; rounds: Array<{ index: number; results: unknown }> }> {
+  guard = false,
+): Promise<{
+  metadata: unknown;
+  rounds: Array<{ index: number; results: unknown }>;
+  guard?: unknown;
+}> {
   const expression = `
     (async () => {
       await new Promise((resolve, reject) => {
@@ -437,6 +453,13 @@ async function runBenchInPage(
         poll();
       });
       const metadata = await window.__collectVoidmeshRenderBenchMetadata();
+      if (${JSON.stringify(guard)}) {
+        return {
+          metadata,
+          rounds: [],
+          guard: await window.__validateVoidmeshStagedSourceUploads(),
+        };
+      }
       const scenario = ${JSON.stringify(scenario)};
       const suite = ${JSON.stringify(suite)};
       const roundCount = ${JSON.stringify(rounds)};
@@ -481,6 +504,7 @@ async function runBenchInPage(
   return response.result.value as {
     metadata: unknown;
     rounds: Array<{ index: number; results: unknown }>;
+    guard?: unknown;
   };
 }
 

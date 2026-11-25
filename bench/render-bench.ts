@@ -1,5 +1,6 @@
 import { FancyEffects } from "#types/fancy-effects.ts";
 import { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
+import { EntityTexturePipeline } from "#renderer/entity-texture-pipeline.ts";
 import { createDefaultWlurOverlayConfig } from "#renderer/wlur-overlay.ts";
 import {
   DitheringKind,
@@ -250,6 +251,7 @@ declare global {
     __runVoidmeshRenderBench?: () => Promise<BenchResult[]>;
     __runVoidmeshManyEntityBench?: () => Promise<BenchResult[]>;
     __collectVoidmeshRenderBenchMetadata?: () => Promise<BenchMetadata>;
+    __validateVoidmeshStagedSourceUploads?: typeof validateStagedSourceUploads;
   }
 }
 
@@ -2063,6 +2065,166 @@ export async function validateOverlapFastPaths() {
   }
 }
 
+/**
+ * GPU pixel guard for staged source uploads: the same sources uploaded one surface each
+ * (outside a frame) and staged together (inside one) must produce identical textures.
+ */
+export async function validateStagedSourceUploads() {
+  const renderer = await getRenderer();
+  const device = renderer.device;
+  if (!device) throw new Error("Staged upload guard GPU is unavailable");
+  const params = resolveBenchShaderParams({ showOriginal: true });
+  const sourceSizes: Size[] = [
+    { width: 640, height: 480 },
+    { width: 512, height: 512 },
+    { width: 768, height: 512 },
+    { width: 333, height: 777 },
+  ];
+  // Two frames: the second is smaller, so stale pixels from the first would show.
+  const frames: Size[][] = [
+    [
+      { width: 300, height: 225 },
+      { width: 128, height: 128 },
+      { width: 511, height: 341 },
+      { width: 64, height: 149 },
+    ],
+    [
+      { width: 37, height: 28 },
+      { width: 96, height: 96 },
+      { width: 200, height: 133 },
+      { width: 21, height: 49 },
+    ],
+  ];
+  const perFrame = 40;
+  const entities: ShaderCanvasEntity[] = [];
+  const renderSizes: Size[] = [];
+  const pipelines: EntityTexturePipeline[] = [];
+  try {
+    for (const blobType of ["image/png", "image/jpeg"]) {
+      const assets = await createSyntheticImageAssets({
+        count: perFrame * frames.length,
+        blobType,
+        createBitmap: (index) =>
+          createSyntheticBitmap(sourceSizes[index % sourceSizes.length]!, index + 1),
+      });
+      for (let index = 0; index < assets.length; index += 1) {
+        const size = sourceSizes[index % sourceSizes.length]!;
+        entities.push(
+          createEntity({
+            id: `staged-guard-${blobType}-${index}`,
+            name: "Staged upload guard",
+            asset: assets[index]!,
+            size,
+            shaderType: ShaderType.dithering,
+            params,
+          }),
+        );
+        const frame = frames[Math.floor(index / perFrame)]!;
+        renderSizes.push(frame[index % frame.length]!);
+      }
+      releaseOwnedImageAssets(assets);
+    }
+
+    const createPipeline = (): EntityTexturePipeline => {
+      const pipeline = new EntityTexturePipeline({
+        device,
+        colorConfig: renderer.colorConfig,
+        texturePool: null,
+      });
+      pipelines.push(pipeline);
+      return pipeline;
+    };
+    const direct = createPipeline();
+    const staged = createPipeline();
+    const frameOf = (index: number): number => Math.floor((index % (perFrame * 2)) / perFrame);
+
+    const directEncoder = device.createCommandEncoder();
+    for (let index = 0; index < entities.length; index += 1) {
+      direct.renderEntityToTexture(entities[index]!, directEncoder, renderSizes[index]!);
+    }
+    device.queue.submit([directEncoder.finish()]);
+
+    for (let frame = 0; frame < frames.length; frame += 1) {
+      const encoder = device.createCommandEncoder();
+      staged.beginFrame(true);
+      for (let index = 0; index < entities.length; index += 1) {
+        if (frameOf(index) !== frame) continue;
+        entities[index]!.textureDirty = true;
+        staged.renderEntityToTexture(entities[index]!, encoder, renderSizes[index]!);
+      }
+      staged.flushSourceUploads();
+      device.queue.submit([encoder.finish()]);
+      staged.endFrame();
+    }
+
+    let mismatchedTextures = 0;
+    let mismatchedBytes = 0;
+    let maxDifference = 0;
+    let comparedBytes = 0;
+    for (let index = 0; index < entities.length; index += 1) {
+      const id = entities[index]!.id;
+      const a = direct.getSourceEntityTexture(id);
+      const b = staged.getSourceEntityTexture(id);
+      if (!a || !b) throw new Error(`Staged upload guard is missing a texture for ${id}`);
+      if (a.width !== b.width || a.height !== b.height) {
+        throw new Error(`Staged upload guard size mismatch for ${id}`);
+      }
+      const [bytesA, bytesB] = await Promise.all([
+        readTextureBytes(device, a),
+        readTextureBytes(device, b),
+      ]);
+      let different = 0;
+      for (let offset = 0; offset < bytesA.length; offset += 1) {
+        const difference = Math.abs(bytesA[offset]! - bytesB[offset]!);
+        if (difference === 0) continue;
+        different += 1;
+        if (difference > maxDifference) maxDifference = difference;
+      }
+      comparedBytes += bytesA.length;
+      mismatchedBytes += different;
+      if (different > 0) mismatchedTextures += 1;
+    }
+    const result = {
+      textures: entities.length,
+      comparedBytes,
+      mismatchedTextures,
+      mismatchedBytes,
+      maxDifference,
+    };
+    console.log("[voidmesh-staged-upload-guard]", JSON.stringify(result));
+    return result;
+  } finally {
+    for (const pipeline of pipelines) pipeline.destroy();
+    disposeBenchEntities(entities);
+  }
+}
+
+async function readTextureBytes(device: GPUDevice, texture: GPUTexture): Promise<Uint8Array> {
+  const bytesPerRow = Math.ceil((texture.width * 4) / 256) * 256;
+  const buffer = device.createBuffer({
+    size: bytesPerRow * texture.height,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
+  const encoder = device.createCommandEncoder();
+  encoder.copyTextureToBuffer({ texture }, { buffer, bytesPerRow }, [
+    texture.width,
+    texture.height,
+  ]);
+  device.queue.submit([encoder.finish()]);
+  await buffer.mapAsync(GPUMapMode.READ);
+  const mapped = new Uint8Array(buffer.getMappedRange());
+  const bytes = new Uint8Array(texture.width * texture.height * 4);
+  for (let row = 0; row < texture.height; row += 1) {
+    bytes.set(
+      mapped.subarray(row * bytesPerRow, row * bytesPerRow + texture.width * 4),
+      row * texture.width * 4,
+    );
+  }
+  buffer.unmap();
+  buffer.destroy();
+  return bytes;
+}
+
 async function captureBlobMetrics(blob: Blob): Promise<VisualMetrics> {
   const bitmap = await createImageBitmap(blob);
   const offscreen = new OffscreenCanvas(bitmap.width, bitmap.height);
@@ -2186,6 +2348,7 @@ window.__runVoidmeshManyEntityBench = runManyEntitySuite;
 window.__runVoidmeshRenderBenchScenario = runScenarioById;
 window.__captureVoidmeshRenderBenchVisual = captureFlowingGlassVisual;
 window.__collectVoidmeshRenderBenchMetadata = collectBenchMetadata;
+window.__validateVoidmeshStagedSourceUploads = validateStagedSourceUploads;
 
 const searchParams = new URLSearchParams(window.location.search);
 const scenarioId = searchParams.get("scenario");
