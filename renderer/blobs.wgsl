@@ -18,13 +18,6 @@ struct Uniforms {
 @group(0) @binding(1) var sourceTexture: texture_2d<f32>;
 @group(0) @binding(2) var sourceSampler: sampler;
 
-// Polynomial smooth minimum (quadratic variant from iquilezles.org/articles/smin/)
-// k controls blend region: higher k = wider blend = more merging
-fn smin(a: f32, b: f32, k: f32) -> f32 {
-  let h = max(k - abs(a - b), 0.0) / k;
-  return min(a, b) - h * h * k * 0.25;
-}
-
 // Calculate brightness using color-space-appropriate luminance coefficients
 fn luminance(c: vec3f) -> f32 {
   let coeffs = select(vec3f(0.2126, 0.7152, 0.0722), vec3f(0.2290, 0.6917, 0.0793), uniforms.is_p3 != 0u);
@@ -75,30 +68,27 @@ fn sdDot(pos: vec2f, center: vec2f, radius: f32) -> f32 {
   }
 }
 
-// Get horizontal offset for staggered grid (every other row offset by 0.5)
-fn getRowOffset(row: f32) -> f32 {
-  return select(0.0, 0.5, u32(row) % 2u == 1u);
+// Hexagonal grid: rows are cellSize * sqrt(3)/2 apart and odd rows shift by half a cell,
+// so all six nearest neighbours are exactly cellSize apart.
+const ROW_HEIGHT_RATIO = 0.8660254;
+
+fn rowOffset(row: i32) -> f32 {
+  return f32(row & 1) * 0.5;
 }
 
-// Get cell index accounting for stagger offset
-// Uses proper hexagonal spacing: rowHeight = cellSize * sqrt(3)/2
-// This makes all 6 nearest neighbors exactly cellSize apart
-fn getCellIndex(pos: vec2f) -> vec2f {
-  let rowHeight = uniforms.cellSize * 0.866;
-  let row = floor(pos.y / rowHeight);
-  let rowOffset = getRowOffset(row);
-  let adjustedX = pos.x - rowOffset * uniforms.cellSize;
-  return vec2f(floor(adjustedX / uniforms.cellSize), row);
-}
-
-// Get cell center from cell index
-fn getCellCenter(cellIdx: vec2f) -> vec2f {
-  let rowHeight = uniforms.cellSize * 0.866;
-  let rowOffset = getRowOffset(cellIdx.y);
+fn cellCenter(col: i32, row: i32) -> vec2f {
+  let rowHeight = uniforms.cellSize * ROW_HEIGHT_RATIO;
   return vec2f(
-    (cellIdx.x + 0.5 + rowOffset) * uniforms.cellSize,
-    (cellIdx.y + 0.5) * rowHeight
+    (f32(col) + 0.5 + rowOffset(row)) * uniforms.cellSize,
+    (f32(row) + 0.5) * rowHeight
   );
+}
+
+// Farthest a dot's edge reaches from its centre, relative to its radius.
+fn shapeReach() -> f32 {
+  if (uniforms.shape == 1u) { return 1.4142136; }
+  if (uniforms.shape == 2u) { return 1.0440307; }
+  return 1.0;
 }
 
 // Vertex shader - generates a fullscreen triangle
@@ -112,82 +102,69 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> @builtin(position) vec4f 
   return vec4f(positions[vertexIndex], 0.0, 1.0);
 }
 
-// Fragment shader - computes metaball-style blobs with smooth blending
+// Fragment shader - metaball-style blobs.
+//
+// Every dot within reach of the pixel contributes to one field, and the set of dots
+// is chosen from the pixel position alone (not from the pixel's own cell). Each dot's
+// contribution falls to zero before the reach boundary and the field is a plain sum, so
+// the result is continuous across cell borders and independent of evaluation order.
 @fragment
 fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   let pixelPos = fragCoord.xy;
-  let currentCell = getCellIndex(pixelPos);
+  let cellSize = uniforms.cellSize;
+  let rowHeight = cellSize * ROW_HEIGHT_RATIO;
 
-  // Max radius with scale applied
-  let maxRadius = uniforms.cellSize * 0.75 * uniforms.scale;
-  let k = uniforms.eagerness * uniforms.cellSize * 1.5;
-  // Conservative influence bound used to skip neighbor cells that cannot affect this pixel.
-  let maxInfluence = maxRadius + k + 2.0;
-  let neighborReachX = select(1, 2, maxInfluence > uniforms.cellSize * 1.05);
-  let neighborReachY = select(1, 2, maxInfluence > (uniforms.cellSize * 0.866) * 1.05);
+  let maxRadius = cellSize * 0.75 * uniforms.scale;
+  // Width of the merge falloff outside a dot's edge.
+  let k = uniforms.eagerness * cellSize * 1.5;
+  let merging = k > 0.5;
+  // Reach covers every dot whose shape or falloff touches the pixel, plus the nearest
+  // centre (at most cellSize / sqrt(3) away) so colour selection always sees it.
+  let reach = maxRadius * shapeReach() + max(select(0.0, k, merging), cellSize * 0.6) + 2.0;
 
-  let currentCenter = getCellCenter(currentCell);
-  let currentSampleUV = clamp(currentCenter / uniforms.resolution, vec2f(0.0), vec2f(1.0));
-  let currentSourceColor = textureSampleLevel(sourceTexture, sourceSampler, currentSampleUV, 0.0);
-  let currentColor = currentSourceColor.rgb;
-  let currentAlpha = currentSourceColor.a;
-  let currentRadius = sqrt(blobAmount(currentSourceColor)) * maxRadius;
+  let rowMin = i32(ceil((pixelPos.y - reach) / rowHeight - 0.5));
+  let rowMax = i32(floor((pixelPos.y + reach) / rowHeight - 0.5));
 
-  // Initialize with current cell's distance
-  var minDist = sdDot(pixelPos, currentCenter, currentRadius);
+  var field = 0.0;
+  var minDist = 1e10;
+  var closestDist = 1e10;
+  var closestColor = vec3f(0.0);
+  var closestAlpha = 0.0;
 
-  // Track closest individual dot for hard color selection (Voronoi-style)
-  var closestDist = minDist;
-  var closestColor = currentColor;
-  var closestAlpha = currentAlpha;
+  for (var row = rowMin; row <= rowMax; row++) {
+    let offset = rowOffset(row);
+    let colMin = i32(ceil((pixelPos.x - reach) / cellSize - 0.5 - offset));
+    let colMax = i32(floor((pixelPos.x + reach) / cellSize - 0.5 - offset));
+    for (var col = colMin; col <= colMax; col++) {
+      let center = cellCenter(col, row);
+      let sampleUV = clamp(center / uniforms.resolution, vec2f(0.0), vec2f(1.0));
+      let sourceColor = textureSampleLevel(sourceTexture, sourceSampler, sampleUV, 0.0);
+      let radius = sqrt(blobAmount(sourceColor)) * maxRadius;
+      let dist = sdDot(pixelPos, center, radius);
 
-  // Process neighboring cells. We skip cells whose maximum possible influence
-  // cannot reach the current pixel, which cuts a lot of unnecessary samples.
-  for (var i: u32 = 0u; i < 25u; i++) {
-    let dy = i32(i / 5u) - 2;
-    let dx = i32(i % 5u) - 2;
-    if (dx == 0 && dy == 0) { continue; }
-    if (abs(dx) > neighborReachX || abs(dy) > neighborReachY) { continue; }
+      // Hard colour selection from the closest dot edge (Voronoi-style, no blending).
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestColor = sourceColor.rgb;
+        closestAlpha = sourceColor.a;
+      }
 
-    let neighborCell = currentCell + vec2f(f32(dx), f32(dy));
-    let neighborCenter = getCellCenter(neighborCell);
-    if (
-      neighborCenter.x < 0.0 || neighborCenter.y < 0.0 ||
-      neighborCenter.x > uniforms.resolution.x || neighborCenter.y > uniforms.resolution.y
-    ) {
-      continue;
-    }
-
-    let delta = abs(pixelPos - neighborCenter);
-    if (delta.x > maxInfluence || delta.y > maxInfluence) { continue; }
-
-    let sampleUV = clamp(neighborCenter / uniforms.resolution, vec2f(0.0), vec2f(1.0));
-    let sourceColor = textureSampleLevel(sourceTexture, sourceSampler, sampleUV, 0.0);
-    let neighborRadius = sqrt(blobAmount(sourceColor)) * maxRadius;
-    if (neighborRadius <= 0.5) { continue; }
-    let neighborColor = sourceColor.rgb;
-
-    let dist = sdDot(pixelPos, neighborCenter, neighborRadius);
-
-    // Track closest individual dot for color (hard selection, no blending)
-    if (dist < closestDist) {
-      closestDist = dist;
-      closestColor = neighborColor;
-      closestAlpha = sourceColor.a;
-    }
-
-    // Merge all dots: smin for gooey bridges, min as fallback when eagerness=0
-    if (k > 0.001) {
-      minDist = smin(minDist, dist, k);
-    } else {
       minDist = min(minDist, dist);
+
+      // Falloff width scales with dot size so empty or tiny dots cannot grow blobs
+      // out of the background; a lone dot's boundary stays exactly at dist = 0.
+      let width = k * saturate(radius / (0.25 * cellSize));
+      if (width > 0.0) {
+        let t = max(1.0 - dist / width, 0.0);
+        field += t * t;
+      }
     }
   }
 
-  // Anti-aliased alpha from signed distance field (fwidth for pixel-perfect sharpness)
-  let aa = fwidth(minDist);
-  let alpha = smoothstep(aa, -aa, minDist);
-
+  // Signed coverage: positive inside. Without merging this is the plain union of dots.
+  let coverage = select(-minDist, field - 1.0, merging);
+  let aa = max(fwidth(coverage), 1e-4);
+  let alpha = smoothstep(-aa, aa, coverage);
   // Use palette[0] as background
   let bgColor = uniforms.palette[0];
   let bgAlpha = bgColor.a * smoothstep(0.95, 1.0, closestAlpha);
