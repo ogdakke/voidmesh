@@ -87,6 +87,7 @@ interface CliOptions {
   url: string | null;
   disableImmediates: boolean;
   cpuProfile: boolean;
+  videoUrl: string | null;
   rounds: number;
 }
 
@@ -205,6 +206,7 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
     url: process.env.BENCH_URL ?? null,
     disableImmediates: process.env.BENCH_DISABLE_IMMEDIATES === "1",
     cpuProfile: process.env.BENCH_CPU_PROFILE === "1",
+    videoUrl: process.env.BENCH_VIDEO_URL ?? null,
     rounds: Number(process.env.BENCH_ROUNDS ?? 1),
   };
 
@@ -234,6 +236,8 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
       options.keepBrowser = true;
     } else if (arg === "--disable-immediates") {
       options.disableImmediates = true;
+    } else if (arg === "--video-url") {
+      options.videoUrl = readArgValue(argv, ++index, arg);
     } else if (arg === "--cpu-profile") {
       options.cpuProfile = true;
     } else if (arg === "--rounds") {
@@ -305,10 +309,11 @@ function readArgValue(argv: string[], index: number, flag: string): string {
 
 function createBenchPageUrl(options: CliOptions): string {
   const pageUrl = options.url ?? `http://${HOST}:${options.port}/bench/render.html`;
-  if (!options.disableImmediates) return pageUrl;
+  if (!options.disableImmediates && !options.videoUrl) return pageUrl;
 
   const url = new URL(pageUrl);
-  url.searchParams.set("shaderImmediates", "0");
+  if (options.disableImmediates) url.searchParams.set("shaderImmediates", "0");
+  if (options.videoUrl) url.searchParams.set("videoUrl", options.videoUrl);
   return url.toString();
 }
 

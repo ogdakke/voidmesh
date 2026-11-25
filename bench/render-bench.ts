@@ -787,6 +787,11 @@ async function createSyntheticVideo(
   drawFrame: (frameIndex: number) => void;
   cleanup: () => void;
 }> {
+  // `?videoUrl=` swaps the canvas-captured stream for a decoded file, so external-texture
+  // imports are measured on the frames a real video produces.
+  const fileUrl = new URLSearchParams(window.location.search).get("videoUrl");
+  if (fileUrl) return createFileVideo(fileUrl, seed);
+
   const sourceCanvas = document.createElement("canvas");
   sourceCanvas.width = size.width;
   sourceCanvas.height = size.height;
@@ -849,6 +854,36 @@ async function createSyntheticVideo(
     drawFrame,
     cleanup,
   };
+}
+
+async function createFileVideo(
+  url: string,
+  seed: number,
+): Promise<{
+  video: HTMLVideoElement;
+  drawFrame: (frameIndex: number) => void;
+  cleanup: () => void;
+}> {
+  const video = document.createElement("video");
+  video.muted = true;
+  video.playsInline = true;
+  video.loop = true;
+  video.src = url;
+  const cleanup = (): void => {
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+  };
+  try {
+    await video.play();
+    await waitForVideoMetadata(video);
+    // Stagger the copies so they do not all present the same frame.
+    video.currentTime = (seed * 0.37) % Math.max(0.1, video.duration - 1);
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+  return { video, drawFrame: () => {}, cleanup };
 }
 
 async function waitForVideoMetadata(video: HTMLVideoElement): Promise<void> {
