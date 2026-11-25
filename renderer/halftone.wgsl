@@ -189,15 +189,14 @@ fn inkColor(plate: u32) -> vec3f {
     );
     return inks[plate];
   }
-  // Riso: fluorescent pink + medium blue
-  var riso = array<vec3f, 2>(vec3f(1.0, 0.282, 0.69), vec3f(0.0, 0.47, 0.75));
-  return riso[min(plate, 1u)];
+  // Riso: palette[0] is the paper, palette[1..3] are the spot inks.
+  return uniforms.palette[min(plate + 1u, 15u)].rgb;
 }
 
 fn plateCount() -> u32 {
   if (uniforms.kind == KIND_NEWSPRINT) { return 1u; }
   if (uniforms.kind == KIND_CMYK) { return 4u; }
-  return 2u;
+  return clamp(uniforms.paletteCount, 2u, 4u) - 1u;
 }
 
 // Screen angle offsets (degrees). CMYK uses the classic C15/M75/Y0/K45 rosette.
@@ -207,8 +206,8 @@ fn plateAngle(plate: u32) -> f32 {
     var angles = array<f32, 4>(15.0, 75.0, 0.0, 45.0);
     return angles[plate];
   }
-  var riso = array<f32, 2>(15.0, 75.0);
-  return riso[min(plate, 1u)];
+  var riso = array<f32, 3>(15.0, 75.0, 0.0);
+  return riso[min(plate, 2u)];
 }
 
 // Fixed registration error direction per plate, scaled by the misregistration knob.
@@ -221,8 +220,9 @@ fn plateShift(plate: u32) -> vec2f {
   );
   if (uniforms.kind == KIND_NEWSPRINT) { return vec2f(0.0); }
   if (uniforms.kind == KIND_CMYK) { return dirs[plate]; }
-  // Riso drums drift more; keep one plate anchored.
-  return select(vec2f(0.0), vec2f(-1.1, 0.75), plate == 1u);
+  // Riso drums drift more; keep the first plate anchored.
+  var riso = array<vec2f, 3>(vec2f(0.0), vec2f(-1.1, 0.75), vec2f(0.9, 0.6));
+  return riso[min(plate, 2u)];
 }
 
 // Separate an unpremultiplied colour into plate coverages (0..1).
@@ -244,23 +244,75 @@ fn separate(rgbIn: vec3f, alpha: f32) -> vec4f {
     cmy *= min(1.0, max(2.8 - black, 0.0) / max(total, 1e-3));
     return vec4f(cmy, black) * alpha;
   }
-  // Riso: least-squares fit of two ink densities to the target density.
-  let d1 = -log(max(inkColor(0u), vec3f(0.02)));
-  let d2 = -log(max(inkColor(1u), vec3f(0.02)));
-  let dt = -log(max(rgb, vec3f(0.02)));
-  let a11 = dot(d1, d1);
-  let a12 = dot(d1, d2);
-  let a22 = dot(d2, d2);
-  let b1 = dot(d1, dt);
-  let b2 = dot(d2, dt);
-  let det = max(a11 * a22 - a12 * a12, 1e-4);
-  var w = vec2f((b1 * a22 - b2 * a12) / det, (a11 * b2 - a12 * b1) / det);
-  // Project negatives onto the single-ink solution.
-  if (w.x < 0.0) { w = vec2f(0.0, b2 / a22); }
-  if (w.y < 0.0) { w = vec2f(b1 / a11, 0.0); }
-  // Density to area coverage for a flat ink (Murray-Davies).
-  let cov = clamp(1.0 - exp(-w * 1.6), vec2f(0.0), vec2f(1.0));
-  return vec4f(cov, 0.0, 0.0) * alpha;
+  // Riso: least-squares fit of up to three ink densities (relative to the paper) to the target.
+  let paperColor = max(uniforms.palette[0].rgb, vec3f(0.05));
+  let dt = -log(clamp(rgb / paperColor, vec3f(0.02), vec3f(1.0)));
+  let d1 = inkDensity(0u, paperColor);
+  let d2 = inkDensity(1u, paperColor);
+  let d3 = inkDensity(2u, paperColor);
+  let count = plateCount();
+  var w = vec3f(0.0);
+  if (count == 1u) {
+    w.x = max(dot(d1, dt) / max(dot(d1, d1), 1e-4), 0.0);
+  } else if (count == 2u) {
+    w = vec3f(solveTwoInks(d1, d2, dt), 0.0);
+  } else {
+    w = solveThreeInks(d1, d2, d3, dt);
+  }
+  // Ink density to area coverage for a flat ink.
+  let cov = clamp(1.0 - exp(-w * 1.6), vec3f(0.0), vec3f(1.0));
+  return vec4f(cov, 0.0) * alpha;
+}
+
+fn inkDensity(plate: u32, paperColor: vec3f) -> vec3f {
+  return -log(clamp(inkColor(plate) / paperColor, vec3f(0.02), vec3f(1.0)));
+}
+
+// Non-negative least squares for two inks: fall back to the single best ink when one goes negative.
+fn solveTwoInks(da: vec3f, db: vec3f, dt: vec3f) -> vec2f {
+  let a11 = max(dot(da, da), 1e-4);
+  let a12 = dot(da, db);
+  let a22 = max(dot(db, db), 1e-4);
+  let b1 = dot(da, dt);
+  let b2 = dot(db, dt);
+  let det = a11 * a22 - a12 * a12;
+  var w = vec2f((b1 * a22 - b2 * a12), (a11 * b2 - a12 * b1)) / max(det, 1e-4);
+  if (det < 1e-4 || w.x < 0.0 || w.y < 0.0) {
+    let onlyA = max(b1 / a11, 0.0);
+    let onlyB = max(b2 / a22, 0.0);
+    let errA = length(da * onlyA - dt);
+    let errB = length(db * onlyB - dt);
+    w = select(vec2f(0.0, onlyB), vec2f(onlyA, 0.0), errA <= errB);
+  }
+  return w;
+}
+
+fn residual(da: vec3f, db: vec3f, w: vec2f, dt: vec3f) -> f32 {
+  return length(da * w.x + db * w.y - dt);
+}
+
+// Three inks: exact solve when all coverages are non-negative, else the best two-ink pair.
+fn solveThreeInks(d1: vec3f, d2: vec3f, d3: vec3f, dt: vec3f) -> vec3f {
+  let m = mat3x3f(d1, d2, d3);
+  let det = determinant(m);
+  if (abs(det) > 1e-4) {
+    let inv = mat3x3f(cross(d2, d3), cross(d3, d1), cross(d1, d2));
+    let w = transpose(inv) * dt / det;
+    if (all(w >= vec3f(0.0))) {
+      return w;
+    }
+  }
+  let w12 = solveTwoInks(d1, d2, dt);
+  let w13 = solveTwoInks(d1, d3, dt);
+  let w23 = solveTwoInks(d2, d3, dt);
+  let e12 = residual(d1, d2, w12, dt);
+  let e13 = residual(d1, d3, w13, dt);
+  let e23 = residual(d2, d3, w23, dt);
+  var best = vec3f(w12, 0.0);
+  var bestErr = e12;
+  if (e13 < bestErr) { best = vec3f(w13.x, 0.0, w13.y); bestErr = e13; }
+  if (e23 < bestErr) { best = vec3f(0.0, w23); }
+  return best;
 }
 
 fn plateValue(sep: vec4f, plate: u32) -> f32 {
@@ -341,7 +393,11 @@ fn printHalftone(pixel: vec2f) -> vec4f {
   let authored = pixel / pixelScale;
 
   // Paper is never pure white: magazine stock (~#f4f1e6) through to aged newsprint (~#e4dccb).
-  let paperTint = mix(vec3f(0.957, 0.945, 0.902), vec3f(0.894, 0.863, 0.796), paper);
+  let cleanStock = vec3f(0.957, 0.945, 0.902);
+  let agedStock = vec3f(0.894, 0.863, 0.796);
+  // Riso prints on the palette's paper colour; the paper knob ages it by the same ratio.
+  let paperBase = select(cleanStock, uniforms.palette[0].rgb, uniforms.kind == KIND_RISO);
+  let paperTint = paperBase * mix(vec3f(1.0), agedStock / cleanStock, paper);
   let fibre = fbm(authored * vec2f(0.05, 0.2)) - 0.5;
   let speck = smoothstep(0.93, 1.0, valueNoise(authored * 0.45 + 7.3));
   var color = paperTint * (1.0 + fibre * 0.08 * paper) * (1.0 - speck * 0.5 * paper * paper);

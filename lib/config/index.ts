@@ -264,13 +264,21 @@ export const halftoneKindResets: Record<HalftoneKind, PartialDeep<ShaderParams>>
     intensity: 1,
     halftone: { angle: 0, dotGain: 0.15, paper: 0.5, misregistration: 0.5 },
     postProcess: { bloom: { enabled: false } },
+    palette: palettes.risoPinkBlue,
+    reversePalette: false,
   },
 };
 
-/** Whether a halftone kind simulates a print screen (fixed inks on paper). */
+/** Whether a halftone kind simulates a print screen (inks on paper). */
 export function isPrintHalftone(params: ShaderParams): boolean {
   const kind = params.halftone?.kind;
   return kind !== undefined && kind !== HalftoneKind.classic;
+}
+
+/** Print kinds with fixed process inks (riso takes paper and inks from the palette). */
+function isFixedInkHalftone(params: ShaderParams): boolean {
+  const kind = params.halftone?.kind;
+  return kind === HalftoneKind.cmyk || kind === HalftoneKind.newsprint;
 }
 
 /** Error diffusion algorithms do NOT support scale parameter */
@@ -334,12 +342,12 @@ export const paramVisibilityRules: Partial<
   Record<ShaderType, { param: ParamPaths; isVisible: (params: ShaderParams) => boolean }[]>
 > = {
   halftone: [
-    // Print kinds use fixed inks on paper and their own dot shape.
+    // Print kinds use their own dot shape; CMYK and newsprint also use fixed process inks.
     { param: "shape", isVisible: (p) => !isPrintHalftone(p) },
     { param: "scale", isVisible: (p) => !isPrintHalftone(p) },
     { param: "preserveColors", isVisible: (p) => !isPrintHalftone(p) },
-    { param: "reversePalette", isVisible: (p) => !isPrintHalftone(p) },
-    { param: "palette", isVisible: (p) => !isPrintHalftone(p) },
+    { param: "reversePalette", isVisible: (p) => !isFixedInkHalftone(p) },
+    { param: "palette", isVisible: (p) => !isFixedInkHalftone(p) },
     { param: "halftone.angle", isVisible: isPrintHalftone },
     { param: "halftone.dotGain", isVisible: isPrintHalftone },
     { param: "halftone.paper", isVisible: isPrintHalftone },

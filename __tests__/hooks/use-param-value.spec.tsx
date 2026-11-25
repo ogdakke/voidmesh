@@ -512,7 +512,22 @@ describe("paramVisibilityRules", () => {
       expect(canvasStore.getParamResult("halftone.misregistration", 0).isSupported).toBe(true);
       expect(canvasStore.getParamResult("shape", null).isSupported).toBe(false);
       expect(canvasStore.getParamResult("scale", 1).isSupported).toBe(false);
+      // Riso takes paper and inks from the palette.
+      expect(canvasStore.getParamResult("palette", null).isSupported).toBe(true);
+    });
+
+    test("fixed-ink print kinds hide the palette", () => {
+      const entity = createTestEntity({
+        shaderType: ShaderType.halftone,
+        shaderParams: {
+          halftone: { ...config.defaults.shaderParams.halftone, kind: HalftoneKind.cmyk },
+        },
+      });
+      canvasStore.addEntity(entity);
+      canvasStore.replaceSelection([entity.id]);
+
       expect(canvasStore.getParamResult("palette", null).isSupported).toBe(false);
+      expect(canvasStore.getParamResult("reversePalette", false).isSupported).toBe(false);
     });
   });
 });
