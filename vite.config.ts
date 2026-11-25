@@ -66,6 +66,8 @@ export default defineConfig(({ mode }) => {
           "favicon-64x64.png",
           "favicon.png",
           "favicon.webp",
+          "logo.svg",
+          "onboarding-starter.webp",
           "apple-touch-icon.png",
           "assets/app-icons/local/favicon-16x16.png",
           "assets/app-icons/local/favicon-32x32.png",

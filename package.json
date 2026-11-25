@@ -37,7 +37,8 @@
     "format:check": "oxfmt . --check",
     "install:hooks": "sh scripts/install-hooks.sh",
     "media:sync": "bun run scripts/media-sync.ts",
-    "pwa:splash": "bun run scripts/pwa-splash.ts"
+    "pwa:splash": "bun run scripts/pwa-splash.ts",
+    "icons": "bun run scripts/app-icons.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

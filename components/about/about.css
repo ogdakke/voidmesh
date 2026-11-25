@@ -107,12 +107,10 @@
   }
 
   .about-logo {
-    border-radius: 50%;
     height: calc(8 * var(--spacing));
     width: calc(8 * var(--spacing));
     min-height: unset;
     margin: 0;
-    object-fit: cover;
   }
 
   .about-tagline {
