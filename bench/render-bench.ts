@@ -1,4 +1,6 @@
-import { config } from "#config";
+import { config, glassKindResets, shaderDefaults } from "#config";
+import { deepMerge } from "#lib/deep-merge.ts";
+import type { PartialDeep } from "type-fest";
 import { FancyEffects } from "#types/fancy-effects.ts";
 import { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
 import { EntityTexturePipeline } from "#renderer/entity-texture-pipeline.ts";
@@ -2515,40 +2517,57 @@ export async function measureLodConsistency() {
     time: 3,
     timeAutoPlay: false,
   };
-  const defaults = config.defaults.shaderParams;
-  const glass = (kind: GlassKind): Partial<ShaderParams> => ({
-    ...neutral,
-    glass: { ...defaults.glass!, kind },
-  });
-  const looks: Array<{ name: string; shaderType: ShaderType; params: Partial<ShaderParams> }> = [
-    {
-      name: "original",
-      shaderType: ShaderType.dithering,
-      params: { ...neutral, showOriginal: true },
-    },
-    { name: "glass fluted", shaderType: ShaderType.glass, params: glass(GlassKind.fluted) },
-    {
-      name: "glass frosted",
-      shaderType: ShaderType.glass,
-      params: glass(GlassKind.frostedVoronoi),
-    },
-    { name: "glass flowing", shaderType: ShaderType.glass, params: glass(GlassKind.flowing) },
-    {
-      name: "glass flowing, strong",
-      shaderType: ShaderType.glass,
-      params: { ...glass(GlassKind.flowing), size: 28, intensity: 4, scale: 2 },
-    },
-    { name: "dithering", shaderType: ShaderType.dithering, params: neutral },
-    { name: "halftone", shaderType: ShaderType.halftone, params: neutral },
-    { name: "ascii", shaderType: ShaderType.ascii, params: neutral },
-    { name: "blobs", shaderType: ShaderType.blobs, params: neutral },
-    { name: "melt", shaderType: ShaderType.melt, params: neutral },
-    { name: "glitch", shaderType: ShaderType.glitch, params: neutral },
-    {
-      name: "dithering + post-process",
-      shaderType: ShaderType.dithering,
-      params: { ...neutral, postProcess: { ...defaults.postProcess, enabled: true } },
-    },
+  // Each look is the one the app gives an entity switched to that effect, without blur or
+  // post-processing unless the row says so: sizes near one pixel say little about LOD.
+  const look = (
+    name: string,
+    shaderType: ShaderType,
+    ...overrides: Array<PartialDeep<ShaderParams>>
+  ): { name: string; shaderType: ShaderType; params: Partial<ShaderParams> } => {
+    let params = deepMerge<ShaderParams, PartialDeep<ShaderParams>>(
+      structuredClone(config.defaults.shaderParams),
+      shaderDefaults[shaderType].resetParams,
+    );
+    for (const override of [...overrides, neutral as PartialDeep<ShaderParams>]) {
+      params = deepMerge<ShaderParams, PartialDeep<ShaderParams>>(params, override);
+    }
+    return { name, shaderType, params };
+  };
+  const glassLook = (name: string, kind: GlassKind, ...more: Array<PartialDeep<ShaderParams>>) =>
+    look(name, ShaderType.glass, { glass: { kind } }, glassKindResets[kind], ...more);
+  const withBlur = (name: string, kind: GlassKind) => {
+    const blurred = glassLook(name, kind);
+    const blur = glassKindResets[kind].adjustments?.blur ?? 0;
+    blurred.params = { ...blurred.params, adjustments: { ...neutral.adjustments!, blur } };
+    return blurred;
+  };
+  const withPost = (name: string, shaderType: ShaderType) => {
+    const posted = look(name, shaderType);
+    posted.params = {
+      ...posted.params,
+      postProcess: { ...config.defaults.shaderParams.postProcess, enabled: true },
+    };
+    return posted;
+  };
+  const original = look("original", ShaderType.dithering);
+  original.params = { ...original.params, showOriginal: true };
+  const looks = [
+    original,
+    glassLook("glass fluted", GlassKind.fluted),
+    withBlur("glass fluted + blur", GlassKind.fluted),
+    glassLook("glass frosted", GlassKind.frostedVoronoi),
+    withBlur("glass frosted + blur", GlassKind.frostedVoronoi),
+    glassLook("glass flowing", GlassKind.flowing),
+    glassLook("glass flowing, fine", GlassKind.flowing, { size: 12 }),
+    look("dithering 1px", ShaderType.dithering),
+    look("dithering 4px", ShaderType.dithering, { size: 4 }),
+    look("halftone", ShaderType.halftone),
+    look("ascii", ShaderType.ascii),
+    look("blobs", ShaderType.blobs),
+    look("melt", ShaderType.melt),
+    look("glitch", ShaderType.glitch),
+    withPost("halftone + post-process", ShaderType.halftone),
+    withPost("glitch + post-process", ShaderType.glitch),
   ];
   const { width, height } = LOD_CONSISTENCY_SOURCE;
   const assets = await createSyntheticImageAssets({
@@ -2843,6 +2862,10 @@ const searchParams = new URLSearchParams(window.location.search);
 // `?screenSizedContinuous=1` sizes continuous effect output to the screen, not its LOD tier.
 if (searchParams.get("screenSizedContinuous") === "1") {
   config.rendering.continuousOutputFollowsScreen = true;
+}
+// `?tierSizedContinuous=1` is its opposite, for comparing against the LOD tier in one build.
+if (searchParams.get("tierSizedContinuous") === "1") {
+  config.rendering.continuousOutputFollowsScreen = false;
 }
 const scenarioId = searchParams.get("scenario");
 if (searchParams.get("visual") === "flowing-glass") {

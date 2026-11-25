@@ -50,8 +50,8 @@ describe("getContinuousOutputSize", () => {
     const entity = createTestEntity({ size: { width: 282, height: 282 } });
     entity.originalSize = { width: 1024, height: 1024 };
 
-    // 564 device pixels: steps of 64 (an eighth of 512) give 576, where the tier is 1024.
-    expect(getContinuousOutputSize(entity, at(1), 2)).toEqual({ width: 576, height: 576 });
+    // 564 device pixels: steps of 128 (a quarter of 512) give 640, where the tier is 1024.
+    expect(getContinuousOutputSize(entity, at(1), 2)).toEqual({ width: 640, height: 640 });
     expect(getEntityRenderSize(entity, at(1), 2)).toEqual({ width: 1024, height: 1024 });
     // Small projections move in 32 px steps.
     expect(getContinuousOutputSize(entity, at(0.25), 1)).toEqual({ width: 96, height: 96 });

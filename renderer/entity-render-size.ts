@@ -15,11 +15,11 @@ export function getEntityRenderPixelScale(
 /** Smallest step between continuous output sizes, in device pixels. */
 const CONTINUOUS_OUTPUT_MIN_STEP = 32;
 /** A step is this fraction of the projected size's power of two, so a zoom reallocates rarely. */
-const CONTINUOUS_OUTPUT_STEP_DIVISOR = 8;
+const CONTINUOUS_OUTPUT_STEP_DIVISOR = 4;
 
 /**
  * Output size for an effect processed again every frame: the entity's projection in device
- * pixels, rounded up to a step of 32 px or an eighth of its power of two, and never above
+ * pixels, rounded up to a step of 32 px or a quarter of its power of two, and never above
  * the media's own size. Unlike `getEntityRenderSize` it keeps no zoom margin, since the next
  * frame processes it again at the size it then has.
  */

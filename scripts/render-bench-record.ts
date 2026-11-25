@@ -93,6 +93,7 @@ interface CliOptions {
   outputSizeVisual: boolean;
   lodConsistency: boolean;
   screenSizedContinuous: boolean;
+  tierSizedContinuous: boolean;
   rounds: number;
 }
 
@@ -302,6 +303,7 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
     outputSizeVisual: false,
     lodConsistency: false,
     screenSizedContinuous: false,
+    tierSizedContinuous: false,
     rounds: Number(process.env.BENCH_ROUNDS ?? 1),
   };
 
@@ -339,6 +341,8 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
       options.outputSizeVisual = true;
     } else if (arg === "--lod-consistency") {
       options.lodConsistency = true;
+    } else if (arg === "--tier-sized-continuous") {
+      options.tierSizedContinuous = true;
     } else if (arg === "--screen-sized-continuous") {
       options.screenSizedContinuous = true;
     } else if (arg === "--video-url") {
@@ -418,6 +422,7 @@ function createBenchPageUrl(options: CliOptions): string {
   if (options.disableImmediates) url.searchParams.set("shaderImmediates", "0");
   if (options.videoUrl) url.searchParams.set("videoUrl", options.videoUrl);
   if (options.screenSizedContinuous) url.searchParams.set("screenSizedContinuous", "1");
+  if (options.tierSizedContinuous) url.searchParams.set("tierSizedContinuous", "1");
   return url.toString();
 }
 

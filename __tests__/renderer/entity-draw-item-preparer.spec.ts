@@ -775,7 +775,7 @@ describe("EntityDrawItemPreparer continuous processing culling", () => {
     rendering.continuousOutputFollowsScreen = false;
   });
   afterAll(() => {
-    rendering.continuousOutputFollowsScreen = false;
+    rendering.continuousOutputFollowsScreen = true;
   });
 
   function createGlassScene(positions: Array<{ x: number; y: number }>) {
