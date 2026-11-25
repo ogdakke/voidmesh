@@ -143,11 +143,11 @@ export const shaderFeatures: Record<ShaderType, ShaderFeature> = {
     colorMode: "palette",
   },
   print: {
-    // Palette (paper + spot inks) is only visible for riso — see paramVisibilityRules.
+    // Palette is only visible for riso (see paramVisibilityRules). The lightest colour is the
+    // paper, so reversing the palette has no meaning here.
     params: [
       "size",
       "intensity",
-      "reversePalette",
       "showOriginal",
       "print",
       "palette",
@@ -285,7 +285,6 @@ export const printKindResets: Record<PrintKind, PartialDeep<ShaderParams>> = {
     intensity: 1,
     print: { angle: 0, dotGain: 0.15, paper: 0.5, misregistration: 0.5 },
     palette: palettes.risoPinkBlue,
-    reversePalette: false,
   },
 };
 
@@ -356,7 +355,6 @@ export const paramVisibilityRules: Partial<
 > = {
   print: [
     { param: "palette", isVisible: usesPaletteInks },
-    { param: "reversePalette", isVisible: usesPaletteInks },
   ],
   dithering: [
     {

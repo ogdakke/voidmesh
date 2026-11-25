@@ -508,7 +508,8 @@ describe("paramVisibilityRules", () => {
       canvasStore.replaceSelection([entity.id]);
 
       expect(canvasStore.getParamResult("palette", null).isSupported).toBe(true);
-      expect(canvasStore.getParamResult("reversePalette", false).isSupported).toBe(true);
+      // The lightest colour is always the paper, so palette order does not matter.
+      expect(canvasStore.getParamResult("reversePalette", false).isSupported).toBe(false);
     });
 
     test("halftone does not expose print knobs", () => {

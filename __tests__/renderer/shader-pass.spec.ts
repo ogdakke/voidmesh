@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { config } from "#config";
 import { DitheringShader } from "#renderer/shaders/dithering-shader.ts";
-import { HalftoneShader } from "#renderer/shaders/halftone-shader.ts";
+import { arrangeRisoPalette, HalftoneShader } from "#renderer/shaders/halftone-shader.ts";
 import { PrintKind, ShaderType } from "#types/canvas.ts";
 import { ShaderPass, type ShaderContext } from "#renderer/shaders/shader-pass.ts";
 import type { EffectRenderEntity } from "#renderer/effect-render-entity.ts";
@@ -203,3 +203,37 @@ function createContext(createBuffer: GPUDevice["createBuffer"]): ShaderContext {
     supportsImmediates: false,
   };
 }
+
+describe("arrangeRisoPalette", () => {
+  const pack = (colors: number[][]) => {
+    const f = new Float32Array(64);
+    colors.forEach((c, i) => f.set([...c, 1], i * 4));
+    return f;
+  };
+  const colorAt = (f: Float32Array, i: number) => Array.from(f.slice(i * 4, i * 4 + 3));
+
+  test("uses the lightest colour as paper even when the palette starts dark", () => {
+    const f = pack([
+      [0, 0, 0],
+      [1, 1, 1],
+    ]);
+    expect(arrangeRisoPalette(f, 2)).toBe(2);
+    expect(colorAt(f, 0)).toEqual([1, 1, 1]);
+    expect(colorAt(f, 1)).toEqual([0, 0, 0]);
+  });
+
+  test("keeps at most three inks, preferring distinct ones over near duplicates", () => {
+    const f = pack([
+      [0.05, 0.05, 0.1],
+      [0.06, 0.05, 0.1],
+      [1, 0.2, 0.3],
+      [0.95, 0.95, 0.9],
+      [0.1, 0.6, 0.55],
+    ]);
+    expect(arrangeRisoPalette(f, 5)).toBe(4);
+    expect(colorAt(f, 0)).toEqual([0.95, 0.95, 0.9].map(Math.fround));
+    const inks = [1, 2, 3].map((i) => colorAt(f, i)[0]);
+    expect(inks).toContain(Math.fround(1));
+    expect(inks).toContain(Math.fround(0.1));
+  });
+});
