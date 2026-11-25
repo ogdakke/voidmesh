@@ -84,7 +84,7 @@ export class VideoEncoderSession {
           type: chunk.type === "key" ? "key" : "delta",
           timestamp: chunk.timestamp / 1_000_000,
           duration: (chunk.duration ?? this.#frameDurationUs) / 1_000_000,
-          meta: metadata,
+          ...(metadata !== undefined && { meta: metadata }),
         });
       },
       error: (error) => {
@@ -103,7 +103,7 @@ export class VideoEncoderSession {
       framerate: options.fps,
       hardwareAcceleration: options.hardwareAcceleration,
       latencyMode: options.latencyMode,
-      avc: options.codec.startsWith("avc") ? { format: "avc" } : undefined,
+      ...(options.codec.startsWith("avc") && { avc: { format: "avc" } }),
     } satisfies VideoEncoderConfig);
   }
 
@@ -225,7 +225,9 @@ export async function muxEncodedVideo(options: MuxEncodedVideoOptions): Promise<
               codec: audioData.codec,
               sampleRate: audioData.sampleRate,
               numberOfChannels: audioData.numberOfChannels,
-              description: audioData.description,
+              ...(audioData.description !== undefined && {
+                description: audioData.description,
+              }),
             },
           });
           firstAudioPacket = false;

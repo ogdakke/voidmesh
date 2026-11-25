@@ -39,7 +39,7 @@ function makeEntityInput(size: { width: number; height: number }) {
 function createAddEntityRecorder() {
   const added: Array<{
     entity: Omit<ShaderCanvasEntity, "id" | "zIndex" | "name">;
-    filename?: string;
+    filename?: string | undefined;
   }> = [];
 
   const addEntity = (

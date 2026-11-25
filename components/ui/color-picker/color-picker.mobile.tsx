@@ -5,7 +5,7 @@ import { Field } from "#ui/field/field.tsx";
 import { Drawer } from "../drawer";
 
 interface MobilePresetProps {
-  onRemove?: () => void;
+  onRemove?: (() => void) | undefined;
 }
 
 export default function MobilePreset({ onRemove }: MobilePresetProps) {

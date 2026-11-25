@@ -18,7 +18,7 @@ interface ColorPalettePresetsProps {
   /** Callback when a preset is selected */
   onSelectPalette: (palette: ColorPalette) => void;
   /** Original palette extracted from the current entity's image (if any) */
-  originalPalette?: ColorPalette;
+  originalPalette?: ColorPalette | undefined;
   /** User-created palettes (custom + extracted from uploads) */
   customPalettes?: ColorPalette[];
   /** Whether multiple entities have different palettes */

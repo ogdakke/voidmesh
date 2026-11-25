@@ -28,6 +28,7 @@ Cross-module imports use the `#...` aliases in `package.json#imports`. Do not by
 - Use `createEnum()` from `types/index.ts`; never use TypeScript `enum`.
 - Use native `#` private fields, not the `private` keyword.
 - Never use `typeof import("...").Type`; write a normal type import or local type alias.
+- `exactOptionalPropertyTypes` is on: declare `prop?: T | undefined` when callers pass through possibly-undefined values; for external APIs, omit the key with a conditional spread instead of passing `undefined`.
 - Do not add `"use client"` or `"use server"`; this is a SPA.
 - Do not import package internals. Use the public API and `opensrc path <package>` when source inspection is needed.
 - Do not add fallback behavior unless it is necessary and the reason is documented.

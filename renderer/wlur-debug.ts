@@ -53,6 +53,11 @@ export interface WlurOverlayDebugConfig {
 /** Debug edits layered over the live overlay config; absent keys follow production. */
 export type WlurOverlayDebugOverrides = Partial<WlurOverlayDebugConfig>;
 
+/** Override edits; an `undefined` value clears that override back to production. */
+export type WlurOverlayDebugUpdates = {
+  [K in keyof WlurOverlayDebugConfig]?: WlurOverlayDebugConfig[K] | undefined;
+};
+
 function getWlurDebugCurvePreset(preset: WlurDebugCurvePreset): WlurCurve {
   return WLUR_CURVES[preset];
 }

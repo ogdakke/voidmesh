@@ -10,8 +10,8 @@ export interface TimeSliderProps extends InfiniteSliderProps {
   entity: ShaderCanvasEntity | null;
   isAutoPlaying: boolean;
   entityTime: number;
-  onInteractionStart?: () => void;
-  onValueChange?: (value: number) => void;
+  onInteractionStart?: (() => void) | undefined;
+  onValueChange?: ((value: number) => void) | undefined;
   onValueCommit?: () => void;
 }
 

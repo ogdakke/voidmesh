@@ -74,6 +74,7 @@ import {
 } from "#lib/media-loader.ts";
 import { disposeEntityMedia, disposeMediaSource } from "#lib/media-resources.ts";
 import { Command, undo } from "#lib/undo.ts";
+import { omitUndefined } from "#lib/util.ts";
 import {
   createDuplicatePlaybackState,
   createUniqueEntityNameAllocator,
@@ -92,7 +93,10 @@ import { extractPaletteFromImage } from "#lib/palette-extraction/index.ts";
 import { completeOnboardingStarterDeletionFromEvent } from "#lib/onboarding/onboarding-runtime.ts";
 import { CanvasLensing, ColorSpace } from "#types/enums.ts";
 import type { PartialDeep } from "type-fest";
-import { type WlurOverlayDebugOverrides } from "#renderer/wlur-debug.ts";
+import {
+  type WlurOverlayDebugOverrides,
+  type WlurOverlayDebugUpdates,
+} from "#renderer/wlur-debug.ts";
 
 // --- Resource ownership for undo/redo cleanup ---
 // Tracks which undo command "owns" cleanup rights for each entity's media resources.
@@ -515,7 +519,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       const nextKey = JSON.stringify(nextState);
       if (nextKey === lastSyncedRenderStateRef.current) return;
       lastSyncedRenderStateRef.current = nextKey;
-      setRenderState(nextState).catch((e) => logger.error(e));
+      setRenderState(omitUndefined(nextState)).catch((e) => logger.error(e));
     };
 
     syncSelectionToUrl();
@@ -2005,7 +2009,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
   // Stable identities keep the memoized renderer-service boundary independent of URL rerenders.
   // oxlint-disable-next-line voidmesh-react-compiler/no-manual-memoization
-  const setWlurDebugConfig = useCallback((updates: WlurOverlayDebugOverrides) => {
+  const setWlurDebugConfig = useCallback((updates: WlurOverlayDebugUpdates) => {
     setWlurDebugOverrides((prev) =>
       Object.fromEntries(
         Object.entries({ ...prev, ...updates }).filter(([, value]) => value !== undefined),

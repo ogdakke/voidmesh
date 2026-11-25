@@ -5,7 +5,7 @@ import { Fragment, type ComponentProps, type PropsWithChildren } from "react";
 export interface KeybindProps extends ComponentProps<"div"> {
   keybindId: string;
   /** @default "" */
-  separator?: string;
+  separator?: string | undefined;
 }
 
 export function Keybind({ keybindId, separator, ...props }: PropsWithChildren<KeybindProps>) {
@@ -21,7 +21,7 @@ export function Keybind({ keybindId, separator, ...props }: PropsWithChildren<Ke
 }
 
 interface RenderKeybindProps {
-  separator?: string;
+  separator?: string | undefined;
   symbols: string[];
 }
 

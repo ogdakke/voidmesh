@@ -79,8 +79,6 @@ describe("CanvasInteractionService", () => {
         containerHeight: metrics.height,
         dpr: metrics.dpr,
         padding: 0.1,
-        minZoom: undefined,
-        maxZoom: undefined,
         insets: { bottom: 30, right: 0 },
       }),
       expect.objectContaining({ duration: expect.any(Number), easing: expect.any(Function) }),

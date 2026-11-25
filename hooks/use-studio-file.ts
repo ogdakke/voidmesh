@@ -57,7 +57,7 @@ export async function importStudioWithToasts(
 
   const updateToast = (updates: {
     title?: string;
-    description?: string;
+    description?: string | undefined;
     timeout?: number;
     type?: (typeof ToastType)[keyof typeof ToastType];
     showAction?: boolean;

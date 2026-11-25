@@ -4,7 +4,7 @@ import { usePickerClose } from "./use-color-picker";
 import { Field } from "#ui/field/field.tsx";
 
 interface DesktopPresetProps {
-  onRemove?: () => void;
+  onRemove?: (() => void) | undefined;
 }
 
 export default function DesktopPreset({ onRemove }: DesktopPresetProps) {

@@ -27,7 +27,7 @@ export default defineConfig(({ mode }) => {
       },
       proxy: {
         "/m/": {
-          target: env.ASSET_URL,
+          ...(env.ASSET_URL !== undefined && { target: env.ASSET_URL }),
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/m\//, "/media/"),
         },
@@ -36,7 +36,7 @@ export default defineConfig(({ mode }) => {
     preview: {
       proxy: {
         "/m/": {
-          target: env.ASSET_URL,
+          ...(env.ASSET_URL !== undefined && { target: env.ASSET_URL }),
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/m\//, "/media/"),
         },

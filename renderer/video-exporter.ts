@@ -48,7 +48,7 @@ export interface VideoExportOptions {
   /** Advanced encoding options */
   advanced?: {
     /** Explicit bitrate in bps. Overrides auto-calculation. */
-    bitrate?: number;
+    bitrate?: number | undefined;
     /** Target resolution. Default: 'original' */
     resolution?: ResolutionPreset | { width: number; height: number };
     /** GIF dither algorithm. Default: 'floyd_steinberg' */

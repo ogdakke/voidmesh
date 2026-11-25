@@ -2,7 +2,7 @@ import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import type { RegisterSWOptions } from "vite-plugin-pwa/types";
 
 type MockPwaState = {
-  registration?: ServiceWorkerRegistration;
+  registration?: ServiceWorkerRegistration | undefined;
   error?: unknown;
   updateServiceWorker: (reloadPage?: boolean) => Promise<void>;
   setNeedRefresh: Dispatch<SetStateAction<boolean>>;

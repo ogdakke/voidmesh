@@ -17,11 +17,11 @@ export interface InfiniteSliderProps extends ComponentProps<"div"> {
   /** Current value. @default 0 */
   value?: number;
   /** Called when the derived integer value changes during scroll. */
-  onValueChange?: (value: number) => void;
+  onValueChange?: ((value: number) => void) | undefined;
   /** Called when scroll settles on a final value. */
-  onValueCommit?: (value: number) => void;
+  onValueCommit?: ((value: number) => void) | undefined;
   /** Called when user starts interacting. */
-  onInteractionStart?: () => void;
+  onInteractionStart?: (() => void) | undefined;
   /** Debounce for onValueChange in ms. @default 0 */
   changeDelay?: number;
   /** Debounce for onValueCommit in ms. @default 150 */
@@ -37,7 +37,7 @@ export interface InfiniteSliderProps extends ComponentProps<"div"> {
   /** Pixels between tick centers. @default 5 */
   tickSpacing?: number;
   /** Pixels of drag per step. Defaults to tickSpacing. */
-  pixelsPerStep?: number;
+  pixelsPerStep?: number | undefined;
 
   /** Exponential falloff rate. @default 0.06 */
   falloff?: number;

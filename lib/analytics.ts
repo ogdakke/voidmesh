@@ -86,7 +86,7 @@ export const analytics = new Analytics();
 // -- Test utilities --
 
 export interface MockAnalyticsProvider extends AnalyticsProvider {
-  calls: Array<{ event: string; properties?: Record<string, unknown> }>;
+  calls: Array<{ event: string; properties?: Record<string, unknown> | undefined }>;
   clear(): void;
 }
 

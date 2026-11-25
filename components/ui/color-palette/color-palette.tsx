@@ -20,9 +20,9 @@ interface ColorPaletteProps extends ComponentProps<"div"> {
   /** Callback when palette colors change */
   onValueChange: (palette: ColorPaletteType) => void;
   /** Callback to delete the entire palette (only for user-created palettes) */
-  onDelete?: () => void;
+  onDelete?: (() => void) | undefined;
   /** Callback to rename the palette (only for user-created palettes) */
-  onRename?: (name: string) => void;
+  onRename?: ((name: string) => void) | undefined;
   /** Whether the delete button should be shown (true for user-created palettes) */
   canDelete?: boolean;
   /** Whether the palette name can be edited */
@@ -186,7 +186,7 @@ function PaletteNameLabel({
 }: {
   name: string;
   canRename: boolean;
-  onRename?: (name: string) => void;
+  onRename?: ((name: string) => void) | undefined;
 }) {
   const [draftName, setDraftName] = useState(name);
   const skipBlurCommitRef = useRef(false);
@@ -250,8 +250,8 @@ function PaletteManagementDrawer({
   onDelete,
 }: {
   palette: ColorPaletteType;
-  onRename?: (name: string) => void;
-  onDelete?: () => void;
+  onRename?: ((name: string) => void) | undefined;
+  onDelete?: (() => void) | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const [draftName, setDraftName] = useState(palette.name);

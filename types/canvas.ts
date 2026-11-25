@@ -184,7 +184,7 @@ export const MAX_PALETTE_COLORS = 16;
 /** A color palette for dithering */
 export interface ColorPalette {
   /** Palette ID - preset ID, "custom" for custom palettes, or undefined */
-  id?: string;
+  id?: string | undefined;
   /** Display name for the palette */
   name: string;
   shortName: string;
@@ -369,7 +369,7 @@ export interface ShaderParams {
   /** Parameters for the glitch shader (only used when shaderType is 'glitch') */
   glitch?: GlitchParams;
   /** Color palette for multi-color effects (used by all shaders) */
-  palette?: ColorPalette;
+  palette?: ColorPalette | undefined;
   /** Post-processing effects (grain, bloom, chromatic aberration) */
   postProcess?: PostProcessParams;
   /** Image/video adjustments (brightness, contrast, saturation) - applied before shaders */
@@ -421,7 +421,7 @@ export interface MediaImageAsset {
   /** Original source data for lossless duplication */
   blob: Blob;
   /** Derived alpha occupancy grid for pointer hit testing */
-  alphaHitGrid?: AlphaHitGrid;
+  alphaHitGrid?: AlphaHitGrid | undefined;
 }
 
 export type MediaSourceImage = {
@@ -504,10 +504,10 @@ type ShaderCanvasEntityBase = {
   /** Original media dimensions (for aspect ratio preservation) */
   originalSize: Size;
   /** Video playback state (only for video entities) */
-  playback?: PlaybackState;
+  playback?: PlaybackState | undefined;
 
   /** Original palette extracted from source image (images only) */
-  originalPalette?: ColorPalette;
+  originalPalette?: ColorPalette | undefined;
 
   /** Shader type to apply */
   shaderType: ShaderType;
@@ -515,7 +515,7 @@ type ShaderCanvasEntityBase = {
   shaderParams: ShaderParams;
 
   /** Cached processed texture (managed by renderer) */
-  texture?: GPUTexture;
+  texture?: GPUTexture | undefined;
   /** True when shader params changed and texture needs re-render */
   textureDirty?: boolean;
   /** Whether entity is currently selected */

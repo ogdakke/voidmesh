@@ -59,22 +59,22 @@ interface BenchScenario {
   description: string;
   kind: ScenarioKind;
   sourceSize: Size;
-  entityCount?: number;
+  entityCount?: number | undefined;
   shaderType: ShaderType;
   params: Partial<ShaderParams>;
   dirtyMode: DirtyMode;
   frames: number;
   warmupFrames: number;
   samples: number;
-  manyEntity?: ManyEntityScenarioConfig;
-  zoomStress?: ZoomStressScenarioConfig;
-  pausedVideoPan?: boolean;
-  synchronizeEachFrame?: boolean;
-  paceWithAnimationFrame?: boolean;
-  recordPerFrame?: boolean;
-  resetTexturesBeforeSample?: boolean;
-  overlapToggle?: boolean;
-  wlurOverlay?: boolean;
+  manyEntity?: ManyEntityScenarioConfig | undefined;
+  zoomStress?: ZoomStressScenarioConfig | undefined;
+  pausedVideoPan?: boolean | undefined;
+  synchronizeEachFrame?: boolean | undefined;
+  paceWithAnimationFrame?: boolean | undefined;
+  recordPerFrame?: boolean | undefined;
+  resetTexturesBeforeSample?: boolean | undefined;
+  overlapToggle?: boolean | undefined;
+  wlurOverlay?: boolean | undefined;
 }
 
 type BenchResourceStats = ReturnType<InfiniteCanvasRenderer["getResourceStats"]>;
@@ -187,7 +187,7 @@ interface BenchResult {
   peakResidentBytes: number;
   resources: BenchResourceStats;
   activity: BenchActivityMetrics;
-  mediaCounts?: { image: number; video: number };
+  mediaCounts?: { image: number; video: number } | undefined;
 }
 
 interface VisualMetrics {
@@ -227,18 +227,20 @@ interface BenchMetadata {
 
 interface BenchEntitySet {
   entities: ShaderCanvasEntity[];
-  selectedEntityIds?: ReadonlySet<string>;
-  debugMode?: boolean;
-  dragSelectedEntities?: boolean;
-  dragSelectEntities?: boolean;
-  tweakSingleEntityParams?: boolean;
-  beforeFrame?: (frameIndex: number) => void;
-  getViewportOffset?: (frameIndex: number) => { x: number; y: number };
-  getViewport?: (frameIndex: number, sampleFrameIndex: number) => Viewport;
-  getFramePhase?: (frameIndex: number, sampleFrameIndex: number) => ZoomStressPhase | null;
-  decodedAssetEstimateBytes?: number;
-  mediaCounts?: { image: number; video: number };
-  cleanup?: () => void;
+  selectedEntityIds?: ReadonlySet<string> | undefined;
+  debugMode?: boolean | undefined;
+  dragSelectedEntities?: boolean | undefined;
+  dragSelectEntities?: boolean | undefined;
+  tweakSingleEntityParams?: boolean | undefined;
+  beforeFrame?: ((frameIndex: number) => void) | undefined;
+  getViewportOffset?: ((frameIndex: number) => { x: number; y: number }) | undefined;
+  getViewport?: ((frameIndex: number, sampleFrameIndex: number) => Viewport) | undefined;
+  getFramePhase?:
+    | ((frameIndex: number, sampleFrameIndex: number) => ZoomStressPhase | null)
+    | undefined;
+  decodedAssetEstimateBytes?: number | undefined;
+  mediaCounts?: { image: number; video: number } | undefined;
+  cleanup?: (() => void) | undefined;
 }
 
 declare global {
@@ -1478,20 +1480,22 @@ async function runFrames(params: {
   renderer: InfiniteCanvasRenderer;
   entities: ShaderCanvasEntity[];
   frameCount: number;
-  beforeFrame?: (frameIndex: number) => void;
-  getViewportOffset?: (frameIndex: number) => { x: number; y: number };
-  getViewport?: (frameIndex: number, sampleFrameIndex: number) => Viewport;
-  getFramePhase?: (frameIndex: number, sampleFrameIndex: number) => ZoomStressPhase | null;
+  beforeFrame?: ((frameIndex: number) => void) | undefined;
+  getViewportOffset?: ((frameIndex: number) => { x: number; y: number }) | undefined;
+  getViewport?: ((frameIndex: number, sampleFrameIndex: number) => Viewport) | undefined;
+  getFramePhase?:
+    | ((frameIndex: number, sampleFrameIndex: number) => ZoomStressPhase | null)
+    | undefined;
   startFrameIndex: number;
-  synchronizeEachFrame?: boolean;
-  paceWithAnimationFrame?: boolean;
-  recordPerFrame?: boolean;
-  selectedEntityIds?: ReadonlySet<string>;
-  debugMode?: boolean;
-  dragSelectedEntities?: boolean;
-  dragSelectEntities?: boolean;
-  tweakSingleEntityParams?: boolean;
-  overlapToggle?: boolean;
+  synchronizeEachFrame?: boolean | undefined;
+  paceWithAnimationFrame?: boolean | undefined;
+  recordPerFrame?: boolean | undefined;
+  selectedEntityIds?: ReadonlySet<string> | undefined;
+  debugMode?: boolean | undefined;
+  dragSelectedEntities?: boolean | undefined;
+  dragSelectEntities?: boolean | undefined;
+  tweakSingleEntityParams?: boolean | undefined;
+  overlapToggle?: boolean | undefined;
 }): Promise<{
   totalMs: number;
   cpuEncodeMs: number;

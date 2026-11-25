@@ -11,9 +11,11 @@ import { loadMediaFile, loadMediaFromBlob } from "#lib/media-loader.ts";
 import { config } from "#config";
 import { logger } from "#lib/client.logger.ts";
 
-type EntityData = Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & { name?: string };
+type EntityData = Omit<ShaderCanvasEntity, "id" | "zIndex" | "name"> & {
+  name?: string | undefined;
+};
 type AddEntityFn = (entity: EntityData, filename?: string) => string;
-type LoadedEntity = { data: EntityData; filename?: string };
+type LoadedEntity = { data: EntityData; filename?: string | undefined };
 
 interface LayoutOptions {
   gap: number;
@@ -171,8 +173,6 @@ export function fitEntitiesToView(
     containerHeight: container.clientHeight,
     dpr: window.devicePixelRatio,
     padding: config.canvas.fitToViewPadding,
-    minZoom: undefined,
-    maxZoom: undefined,
     insets,
   });
 

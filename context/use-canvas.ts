@@ -16,7 +16,7 @@ import { createEnum } from "#types/index.ts";
 import type { CanvasLensing, ColorSpace } from "#types/enums.ts";
 import type { InfiniteCanvasRenderer } from "#renderer/canvas-renderer.ts";
 import type { ImageExportOptions } from "#renderer/export-formats.ts";
-import type { WlurOverlayDebugOverrides } from "#renderer/wlur-debug.ts";
+import type { WlurOverlayDebugOverrides, WlurOverlayDebugUpdates } from "#renderer/wlur-debug.ts";
 import type { DeserializeOptions, DeserializeResult } from "#lib/serialization/types.ts";
 import type { Options } from "nuqs";
 import type { PartialDeep } from "type-fest";
@@ -116,7 +116,7 @@ export interface CanvasRendererService {
   /** Debug edits over the live overlay; resolve with `resolveWlurOverlayDebugConfig`. */
   wlurDebugOverrides: WlurOverlayDebugOverrides;
   /** Merges overrides; an `undefined` value drops that key back to production. */
-  setWlurDebugConfig: (updates: WlurOverlayDebugOverrides) => void;
+  setWlurDebugConfig: (updates: WlurOverlayDebugUpdates) => void;
   resetWlurDebugConfig: () => void;
 }
 

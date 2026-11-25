@@ -136,7 +136,7 @@ export interface WlurParams {
    *
    * The tint follows the same directional falloff as the blur.
    */
-  tint?: WlurTint;
+  tint?: WlurTint | undefined;
 }
 
 export interface WlurQuality {
