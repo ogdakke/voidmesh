@@ -21,6 +21,11 @@
   height: 100%;
 
   scroll-padding-inline: calc((100% - var(--item-w)) / 2);
+
+  /* iOS Safari mis-invalidates repaints inside this scroller once it has scrolled: an option
+     deselected at a non-zero scroll offset kept its old selected (blue) border painted around
+     it. Giving the scroller its own compositing layer makes it repaint in the right place. */
+  transform: translateZ(0);
 }
 
 /* Spacer elements to center first/last items in the scroll container.
@@ -64,8 +69,8 @@
       border-color 0ms ease-out;
   }
 
-  /* Only the selected item shows focus: a tapped item keeps focus after the selection
-     scrolls away, and Safari can then match it as focus-visible, ringing an unselected option. */
+  /* Only the selected item shows focus: a tapped item can keep focus after the selection
+     scrolls away. */
   &[data-selected]:focus-visible :where(button) {
     outline: 2px solid var(--primary);
     outline-offset: 1px;
