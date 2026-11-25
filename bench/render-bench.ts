@@ -2067,7 +2067,8 @@ export async function validateOverlapFastPaths() {
 
 /**
  * GPU pixel guard for staged source uploads: the same sources uploaded one surface each
- * (outside a frame) and staged together (inside one) must produce identical textures.
+ * (outside a frame) and staged together (inside one) must produce the same textures, to within
+ * one rounding step per channel.
  */
 export async function validateStagedSourceUploads() {
   const renderer = await getRenderer();

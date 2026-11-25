@@ -147,8 +147,10 @@ async function main(): Promise<void> {
       if (options.stagedUploadGuard) {
         const { guard } = await runBenchInPage(pageClient, null, options.suite, 1, true);
         console.log("Staged upload guard:", JSON.stringify(guard));
-        const mismatched = (guard as { mismatchedBytes?: number } | undefined)?.mismatchedBytes;
-        if (mismatched !== 0) process.exitCode = 1;
+        // The resample lands on a different surface offset when staged, which rounds a few
+        // channel values one step apart; anything larger is a wrong region or stale pixels.
+        const maxDifference = (guard as { maxDifference?: number } | undefined)?.maxDifference;
+        if (maxDifference === undefined || maxDifference > 1) process.exitCode = 1;
         return;
       }
       if (options.cpuProfile) {
