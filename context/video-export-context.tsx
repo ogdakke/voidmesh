@@ -22,7 +22,7 @@ export interface ExportOptionsState {
   includeAudio: boolean;
   advanced: {
     resolution: ResolutionPreset;
-    bitrate?: number;
+    bitrate?: number | undefined;
     gifMaxWidth: number;
     gifDither: GifDitherMode;
   };

@@ -10,8 +10,8 @@ const imageAssetLifetimes = new WeakMap<MediaImageAsset, ImageAssetLifetime>();
 export interface CreateImageAssetOptions {
   imageBitmap: ImageBitmap;
   blob: Blob;
-  alphaHitGrid?: AlphaHitGrid;
-  id?: string;
+  alphaHitGrid?: AlphaHitGrid | undefined;
+  id?: string | undefined;
   revision?: number;
   alphaMode?: MediaAlphaMode;
 }

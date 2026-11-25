@@ -64,7 +64,11 @@ async function getExistingBlobs(): Promise<Map<string, number>> {
   let cursor: string | undefined;
 
   do {
-    const result = await list({ prefix: `${BLOB_PREFIX}/`, cursor, limit: 1000 });
+    const result = await list({
+      prefix: `${BLOB_PREFIX}/`,
+      limit: 1000,
+      ...(cursor !== undefined && { cursor }),
+    });
     for (const blob of result.blobs) {
       existing.set(blob.pathname, blob.size);
     }

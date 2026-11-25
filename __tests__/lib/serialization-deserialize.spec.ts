@@ -96,7 +96,11 @@ describe("deserialize workspace", () => {
     const { mock, cleanup: nextCleanupAnalytics } = provideMockAnalytics();
     cleanupAnalytics = nextCleanupAnalytics;
     const stages: string[] = [];
-    const progressEvents: Array<{ stage: string; entityIndex?: number; entityName?: string }> = [];
+    const progressEvents: Array<{
+      stage: string;
+      entityIndex?: number | undefined;
+      entityName?: string | undefined;
+    }> = [];
 
     const result = await deserializeIntoCanvas(createImageWorkspace(), {
       onProgress: (progress) => {

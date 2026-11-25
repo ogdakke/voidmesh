@@ -49,7 +49,7 @@ export type ToWorkerMessage =
       codec: string;
       sampleRate: number;
       numberOfChannels: number;
-      description?: Uint8Array;
+      description?: Uint8Array | undefined;
     }
   | { type: "finish" }
   | { type: "cancel" };

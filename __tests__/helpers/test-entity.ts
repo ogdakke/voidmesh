@@ -30,7 +30,7 @@ export function resetEntityCounter(): void {
 
 export interface CreateEntityOptions {
   /** Entity ID (auto-generated if not provided) */
-  id?: string;
+  id?: string | undefined;
   /** Display name (auto-generated if not provided) */
   name?: string;
   /** Shader type */
@@ -42,13 +42,13 @@ export interface CreateEntityOptions {
   /** Size in world coordinates */
   size?: Partial<Size>;
   /** Z-index for layering */
-  zIndex?: number;
+  zIndex?: number | undefined;
   /** Rotation in degrees */
   rotation?: number;
   /** Whether entity is selected */
   selected?: boolean;
   /** Whether entity is locked */
-  locked?: boolean;
+  locked?: boolean | undefined;
   /** Whether entity has been edited */
   edited?: boolean;
   /** Media source type */

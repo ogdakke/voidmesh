@@ -34,7 +34,12 @@ export function uploadExternalImageToTexture(
 ): void {
   device.queue.copyExternalImageToTexture(
     { source },
-    { texture, colorSpace: colorConfig?.textureColorSpace },
+    {
+      texture,
+      ...(colorConfig?.textureColorSpace !== undefined && {
+        colorSpace: colorConfig.textureColorSpace,
+      }),
+    },
     [width, height],
   );
 }

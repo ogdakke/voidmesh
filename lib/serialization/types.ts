@@ -71,7 +71,7 @@ interface SerializedEntityBase {
   shaderTime?: number;
   shaderTimeAutoPlay?: boolean;
   /** Palette extracted from source image (v4+) */
-  originalPalette?: ColorPalette;
+  originalPalette?: ColorPalette | undefined;
   /** Index into StudioManifest.originalPalettes (v6+). */
   originalPaletteRef?: number;
   /** Inline archive path used by legacy manifests. */
@@ -143,9 +143,9 @@ export type DeserializeStage =
 
 export interface DeserializeProgress {
   stage: DeserializeStage;
-  entityIndex?: number;
+  entityIndex?: number | undefined;
   entityCount?: number;
-  entityName?: string;
+  entityName?: string | undefined;
   fileSizeBytes?: number;
 }
 

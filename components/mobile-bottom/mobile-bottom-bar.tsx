@@ -37,8 +37,8 @@ function BottomBarProvider<T extends string>({
   children,
 }: PropsWithChildren<{
   items: readonly T[];
-  onChange?: (item: string | null) => void;
-  value?: string | null;
+  onChange?: ((item: string | null) => void) | undefined;
+  value?: string | null | undefined;
 }>) {
   const [activeItem, setActiveItem] = useState<string | null>(value ?? null);
 
@@ -62,8 +62,8 @@ function BottomBarRoot<T extends string>({
 }: {
   items: readonly T[];
   children: ReactNode | ((items: readonly T[]) => ReactNode);
-  onChange?: (item: string | null) => void;
-  value?: string | null;
+  onChange?: ((item: string | null) => void) | undefined;
+  value?: string | null | undefined;
 }) {
   return (
     <BottomBarProvider items={items} onChange={onChange} value={value}>
@@ -82,7 +82,7 @@ export function MobileBottomBar<T extends string>({
 }: {
   items: readonly T[];
   children: ReactNode | ((items: readonly T[]) => ReactNode);
-  onChange?: (item: string | null) => void;
+  onChange?: ((item: string | null) => void) | undefined;
   value: string | null;
   hideItems?: boolean;
 }) {

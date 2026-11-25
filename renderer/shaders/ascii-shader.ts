@@ -17,7 +17,7 @@ export class AsciiShader extends ShaderPass {
   #atlasSampler: GPUSampler | null = null;
 
   /** Optional callback for error notifications (e.g., to show toast) */
-  onEntityError?: (entityId: string, error: string) => void;
+  onEntityError?: ((entityId: string, error: string) => void) | undefined;
 
   /** Track reported errors to avoid duplicate notifications */
   #reportedErrors: Set<string> = new Set();

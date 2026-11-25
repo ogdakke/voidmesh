@@ -7,16 +7,16 @@ export interface CommandConfig {
   /** Backward operation - reverses the action */
   undo: ThunkSync;
   /** Cleanup callback when command is evicted from stack */
-  onEvict?: ThunkSync;
+  onEvict?: ThunkSync | undefined;
   /** Debug label for logging */
-  description?: string;
+  description?: string | undefined;
 }
 
 export class Command {
   #execute: ThunkSync;
   #undo: ThunkSync;
-  #onEvict?: ThunkSync;
-  #description?: string;
+  #onEvict: ThunkSync | undefined;
+  #description: string | undefined;
 
   constructor(config: CommandConfig) {
     this.#execute = config.execute;

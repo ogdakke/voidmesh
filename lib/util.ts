@@ -34,3 +34,12 @@ export function isDesktopWebKit() {
     "pushNotification" in (window as any).safari
   );
 }
+
+/** Drops keys whose value is `undefined`, so the result satisfies exact optional property types. */
+export function omitUndefined<T extends object>(
+  value: T,
+): { [K in keyof T]?: Exclude<T[K], undefined> } {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as {
+    [K in keyof T]?: Exclude<T[K], undefined>;
+  };
+}

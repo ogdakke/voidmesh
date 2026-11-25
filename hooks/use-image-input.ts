@@ -20,7 +20,7 @@ interface UseImageInputOptions {
 }
 
 interface PastePlacementOptions {
-  anchor?: { x: number; y: number };
+  anchor?: { x: number; y: number } | undefined;
   fitToView?: boolean;
 }
 

@@ -74,6 +74,7 @@ import {
 } from "#lib/media-loader.ts";
 import { disposeEntityMedia, disposeMediaSource } from "#lib/media-resources.ts";
 import { Command, undo } from "#lib/undo.ts";
+import { omitUndefined } from "#lib/util.ts";
 import {
   createDuplicatePlaybackState,
   createUniqueEntityNameAllocator,
@@ -520,7 +521,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       const nextKey = JSON.stringify(nextState);
       if (nextKey === lastSyncedRenderStateRef.current) return;
       lastSyncedRenderStateRef.current = nextKey;
-      setRenderState(nextState).catch((e) => logger.error(e));
+      setRenderState(omitUndefined(nextState)).catch((e) => logger.error(e));
     };
 
     syncSelectionToUrl();

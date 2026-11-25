@@ -22,7 +22,7 @@ export interface SliderEngineOptions {
   /** Pixels between tick centers (visual only). @default 5 */
   tickSpacing?: number;
   /** Pixels of drag per step. Defaults to tickSpacing. */
-  pixelsPerStep?: number;
+  pixelsPerStep?: number | undefined;
   /** Lower bound (null = infinite). @default null */
   min?: number | null;
   /** Upper bound (null = infinite). @default null */
@@ -33,11 +33,11 @@ export interface SliderEngineOptions {
   /** Called every frame with the current offset (for rendering). */
   onFrame: (offset: number) => void;
   /** Called when the derived integer value changes (debounced by changeDelay). */
-  onValueChange?: (value: number) => void;
+  onValueChange?: ((value: number) => void) | undefined;
   /** Called when scroll settles on a final value (debounced by commitDelay). */
-  onValueCommit?: (value: number) => void;
+  onValueCommit?: ((value: number) => void) | undefined;
   /** Called on first pointer down of a gesture. */
-  onInteractionStart?: () => void;
+  onInteractionStart?: (() => void) | undefined;
 
   /** Debounce for onValueChange in ms. @default 0 */
   changeDelay?: number;

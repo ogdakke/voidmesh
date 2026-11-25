@@ -19,7 +19,7 @@ interface EncodeActionLayerBlurOptions {
   height: number;
   blurIntensity: number;
   contentDirty: boolean;
-  refreshRegion?: ProcessingTextureRegion;
+  refreshRegion?: ProcessingTextureRegion | undefined;
 }
 
 export interface ActionLayerBlurPassStats {
