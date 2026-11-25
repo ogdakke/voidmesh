@@ -859,12 +859,14 @@ export function MobileStyleKnobs() {
         </SliderPickerWindow>
       </SliderPicker>
 
-      {/* Shader-specific style picker - only one will render based on selected shader */}
+      {/* Shader-specific style picker - only one will render based on selected shader.
+          Shape is shared by several shaders; keying it per shader mounts a fresh picker on a
+          shader switch, so it jumps to the value instead of scrolling the old list. */}
       <MobileDitheringStyleKnobs />
       <MobileAsciiStyleKnobs />
       <MobileGlassStyleKnobs />
       <MobileGlitchStyleKnobs />
-      <MobileShapeStyleKnobs />
+      <MobileShapeStyleKnobs key={selectedShaderType} />
     </>
   );
 }
