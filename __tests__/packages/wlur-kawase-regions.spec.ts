@@ -48,7 +48,10 @@ function render(
   const y1 = region ? region.y + region.height : target.height;
   for (let y = y0; y < y1; y++) {
     for (let x = x0; x < x1; x++) {
-      target.data[y * target.width + x] = shade((x + 0.5) / target.width, (y + 0.5) / target.height);
+      target.data[y * target.width + x] = shade(
+        (x + 0.5) / target.width,
+        (y + 0.5) / target.height,
+      );
     }
   }
 }
