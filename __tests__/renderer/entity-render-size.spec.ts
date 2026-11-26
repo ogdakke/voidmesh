@@ -74,4 +74,30 @@ describe("getContinuousOutputSize", () => {
       getContinuousOutputSize(entity, at(1.12), 1),
     );
   });
+
+  test("caps the preview side where a device cannot hold the media's own size", () => {
+    const entity = createTestEntity({ size: { width: 1000, height: 750 } });
+    entity.originalSize = { width: 4032, height: 3024 };
+    const output = { width: 0, height: 0 };
+
+    // Zoomed far in, an uncapped preview is the photo itself.
+    expect(getEntityRenderSize(entity, at(8), 3)).toEqual({ width: 4032, height: 3024 });
+    expect(getEntityRenderSize(entity, at(8), 3, output, 2048)).toEqual({
+      width: 2048,
+      height: 1536,
+    });
+    expect(getContinuousOutputSize(entity, at(8), 3, output, 2048)).toEqual({
+      width: 2048,
+      height: 1536,
+    });
+    // Below the cap nothing changes, and media smaller than the cap keeps its size.
+    expect(getEntityRenderSize(entity, at(0.2), 1, output, 2048)).toEqual(
+      getEntityRenderSize(entity, at(0.2), 1),
+    );
+    entity.originalSize = { width: 1200, height: 900 };
+    expect(getEntityRenderSize(entity, at(8), 3, output, 2048)).toEqual({
+      width: 1200,
+      height: 900,
+    });
+  });
 });

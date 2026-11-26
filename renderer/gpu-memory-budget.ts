@@ -4,6 +4,8 @@ import { isMobileWebKit } from "#lib/util.ts";
 export interface GpuMemoryBudget {
   entityTextureBytes: number;
   texturePoolBytes: number;
+  /** Longest side of a preview texture; `Infinity` leaves media at its own size. */
+  previewMaxSide: number;
 }
 
 /**
@@ -26,9 +28,11 @@ export function getGpuMemoryBudget(constrained = isMemoryConstrainedDevice()): G
     ? {
         entityTextureBytes: rendering.constrainedEntityTextureBudgetBytes,
         texturePoolBytes: rendering.constrainedTexturePoolBudgetBytes,
+        previewMaxSide: rendering.constrainedPreviewMaxSide,
       }
     : {
         entityTextureBytes: rendering.entityTextureBudgetBytes,
         texturePoolBytes: rendering.texturePoolBudgetBytes,
+        previewMaxSide: Infinity,
       };
 }

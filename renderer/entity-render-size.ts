@@ -21,18 +21,21 @@ const CONTINUOUS_OUTPUT_STEP_DIVISOR = 4;
  * Output size for an effect processed again every frame: the entity's projection in device
  * pixels, rounded up to a step of 32 px or a quarter of its power of two, and never above
  * the media's own size. Unlike `getEntityRenderSize` it keeps no zoom margin, since the next
- * frame processes it again at the size it then has.
+ * frame processes it again at the size it then has. `maxSide` bounds it as it does a tier.
  */
 export function getContinuousOutputSize(
   entity: ShaderCanvasEntity,
   viewport: Viewport,
   devicePixelRatio: number,
   output: { width: number; height: number } = { width: 0, height: 0 },
+  maxSide = Infinity,
 ): { width: number; height: number } {
   const original = entity.originalSize;
   const originalMax = Math.max(original.width, original.height);
-  const projectedMax =
-    Math.max(entity.size.width, entity.size.height) * viewport.zoom * devicePixelRatio;
+  const projectedMax = Math.min(
+    maxSide,
+    Math.max(entity.size.width, entity.size.height) * viewport.zoom * devicePixelRatio,
+  );
   const step = Math.max(
     CONTINUOUS_OUTPUT_MIN_STEP,
     2 ** Math.floor(Math.log2(Math.max(projectedMax, 1))) / CONTINUOUS_OUTPUT_STEP_DIVISOR,
@@ -49,19 +52,27 @@ export function getContinuousOutputSize(
   return output;
 }
 
+/**
+ * Preview size for an entity: the LOD tier covering its projection, or the media's own size
+ * when that is smaller. `maxSide` caps the longest side on devices that cannot hold a
+ * native-size texture and its effect intermediates; export never uses this size.
+ */
 export function getEntityRenderSize(
   entity: ShaderCanvasEntity,
   viewport: Viewport,
   devicePixelRatio: number,
   output: { width: number; height: number } = { width: 0, height: 0 },
+  maxSide = Infinity,
 ): { width: number; height: number } {
   const original = entity.originalSize;
   const originalMax = Math.max(original.width, original.height);
-  const projectedMax =
+  const projectedMax = Math.min(
+    maxSide,
     Math.max(entity.size.width, entity.size.height) *
-    viewport.zoom *
-    devicePixelRatio *
-    config.rendering.imageLodOverscan;
+      viewport.zoom *
+      devicePixelRatio *
+      config.rendering.imageLodOverscan,
+  );
   if (projectedMax >= originalMax) {
     output.width = original.width;
     output.height = original.height;
@@ -74,7 +85,7 @@ export function getEntityRenderSize(
     tier = candidate;
     break;
   }
-  const targetMax = Math.min(originalMax, tier);
+  const targetMax = Math.min(originalMax, tier, maxSide);
   const scale = targetMax / originalMax;
   output.width = Math.max(1, Math.round(original.width * scale));
   output.height = Math.max(1, Math.round(original.height * scale));

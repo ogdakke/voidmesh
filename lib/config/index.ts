@@ -493,6 +493,12 @@ export const config = {
     constrainedEntityTextureBudgetBytes: 192 * 1024 * 1024,
     /** `texturePoolBudgetBytes` on a phone or tablet. */
     constrainedTexturePoolBudgetBytes: 32 * 1024 * 1024,
+    /**
+     * Longest side of a preview texture on a phone or tablet. A processed 12 MP photo at its
+     * own size holds several 16-bit intermediates of ~100 MB each; at this side they are a
+     * quarter of that. Export is unaffected.
+     */
+    constrainedPreviewMaxSide: 2048,
     /** A browser reporting this much device memory (GiB) or less gets the constrained budgets. */
     constrainedDeviceMemoryGiB: 4,
     /** Persistent dimension-keyed blur and bloom texture budget. */

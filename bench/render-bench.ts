@@ -2863,15 +2863,10 @@ const searchParams = new URLSearchParams(window.location.search);
 if (searchParams.get("screenSizedContinuous") === "1") {
   config.rendering.continuousOutputFollowsScreen = true;
 }
-// `?constrainedMemory=1` gives a desktop the cache budgets of a phone; pair it with a
-// recorder `--device-scale-factor 3` for a phone's texture sizes.
+// `?constrainedMemory=1` makes a desktop report a phone's memory, so the renderer takes its
+// constrained budgets and preview cap; pair it with a recorder `--device-scale-factor 3`.
 if (searchParams.get("constrainedMemory") === "1") {
-  const rendering = config.rendering as {
-    entityTextureBudgetBytes: number;
-    texturePoolBudgetBytes: number;
-  };
-  rendering.entityTextureBudgetBytes = config.rendering.constrainedEntityTextureBudgetBytes;
-  rendering.texturePoolBudgetBytes = config.rendering.constrainedTexturePoolBudgetBytes;
+  Object.defineProperty(navigator, "deviceMemory", { value: 2, configurable: true });
 }
 // `?tierSizedContinuous=1` is its opposite, for comparing against the LOD tier in one build.
 if (searchParams.get("tierSizedContinuous") === "1") {

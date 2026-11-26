@@ -9,10 +9,12 @@ describe("GPU memory budget", () => {
     expect(getGpuMemoryBudget(false)).toEqual({
       entityTextureBytes: config.rendering.entityTextureBudgetBytes,
       texturePoolBytes: config.rendering.texturePoolBudgetBytes,
+      previewMaxSide: Infinity,
     });
     const constrained = getGpuMemoryBudget(true);
     expect(constrained.entityTextureBytes).toBeLessThan(config.rendering.entityTextureBudgetBytes);
     expect(constrained.texturePoolBytes).toBeLessThan(config.rendering.texturePoolBudgetBytes);
+    expect(constrained.previewMaxSide).toBe(config.rendering.constrainedPreviewMaxSide);
   });
 
   test("recognises iOS WebKit and low reported device memory", () => {

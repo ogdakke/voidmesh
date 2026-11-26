@@ -52,6 +52,8 @@ type MixedFullSceneBatchMode = "reuse" | "refresh" | "disabled";
 interface EntityDrawItemPreparerOptions {
   texturePipeline: EntityTexturePipeline;
   compositionPass: CompositionPass;
+  /** Longest side a preview texture may have; media larger than this is previewed scaled down. */
+  previewMaxSide?: number | undefined;
 }
 
 interface PrepareEntityDrawItemsOptions {
@@ -123,6 +125,7 @@ export interface FullSceneSnapshotSource {
 export class EntityDrawItemPreparer {
   readonly #texturePipeline: EntityTexturePipeline;
   readonly #compositionPass: CompositionPass;
+  readonly #previewMaxSide: number;
   readonly #desiredRenderSize = { width: 0, height: 0 };
   readonly #resolvedRenderSize = { width: 0, height: 0 };
   readonly #continuousOutputSize = { width: 0, height: 0 };
@@ -191,6 +194,7 @@ export class EntityDrawItemPreparer {
   constructor(options: EntityDrawItemPreparerOptions) {
     this.#texturePipeline = options.texturePipeline;
     this.#compositionPass = options.compositionPass;
+    this.#previewMaxSide = options.previewMaxSide ?? Infinity;
   }
 
   prepare(options: PrepareEntityDrawItemsOptions): PreparedEntityDrawItems {
@@ -324,7 +328,13 @@ export class EntityDrawItemPreparer {
         desiredRenderSize.width = previousDesiredWidth;
         desiredRenderSize.height = previousDesiredHeight;
       } else {
-        getEntityRenderSize(entity, viewport, devicePixelRatio, desiredRenderSize);
+        getEntityRenderSize(
+          entity,
+          viewport,
+          devicePixelRatio,
+          desiredRenderSize,
+          this.#previewMaxSide,
+        );
         previousSizedEntity = entity;
         previousDesiredWidth = desiredRenderSize.width;
         previousDesiredHeight = desiredRenderSize.height;
@@ -351,6 +361,7 @@ export class EntityDrawItemPreparer {
                   viewport,
                   devicePixelRatio,
                   this.#continuousOutputSize,
+                  this.#previewMaxSide,
                 ),
                 this.#continuousOutputSize,
               )
@@ -620,6 +631,7 @@ export class EntityDrawItemPreparer {
       viewport,
       devicePixelRatio,
       this.#desiredRenderSize,
+      this.#previewMaxSide,
     );
     let renderWidth = desiredRenderSize.width;
     let renderHeight = desiredRenderSize.height;
@@ -991,6 +1003,7 @@ export class EntityDrawItemPreparer {
         options.viewport,
         options.devicePixelRatio,
         this.#desiredRenderSize,
+        this.#previewMaxSide,
       );
       let source = this.#texturePipeline.getReusableStaticCompositionSource(
         run.representative,
@@ -1074,7 +1087,13 @@ export class EntityDrawItemPreparer {
         desiredRenderSize.width = previousDesiredWidth;
         desiredRenderSize.height = previousDesiredHeight;
       } else {
-        getEntityRenderSize(entity, viewport, devicePixelRatio, desiredRenderSize);
+        getEntityRenderSize(
+          entity,
+          viewport,
+          devicePixelRatio,
+          desiredRenderSize,
+          this.#previewMaxSide,
+        );
         previousSizedEntity = entity;
         previousDesiredWidth = desiredRenderSize.width;
         previousDesiredHeight = desiredRenderSize.height;
@@ -1183,6 +1202,7 @@ export class EntityDrawItemPreparer {
         options.viewport,
         options.devicePixelRatio,
         this.#desiredRenderSize,
+        this.#previewMaxSide,
       );
       let source = this.#texturePipeline.getReusableStaticCompositionSource(
         entity,

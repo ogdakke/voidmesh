@@ -456,6 +456,7 @@ export class InfiniteCanvasRenderer {
     this.#entityDrawItemPreparer = new EntityDrawItemPreparer({
       texturePipeline: this.#entityTexturePipeline,
       compositionPass: this.#compositionPass,
+      previewMaxSide: this.#memoryBudget.previewMaxSide,
     });
 
     this.#selectionRectPass = new SelectionRectPass(this.#device, this.#canvasFormat);
