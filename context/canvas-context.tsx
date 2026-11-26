@@ -106,6 +106,8 @@ import {
 let nextOwnerToken = 0;
 const resourceOwners = new Map<string, number>();
 const RENDER_ERROR_TOAST_ID = "canvas-render-error";
+/** How long a render error waits for a pending device loss before it is reported. */
+const DEVICE_LOSS_GRACE_MS = 500;
 const createPerfGraphRenderer = (
   canvas: HTMLCanvasElement,
   device: GPUDevice,
@@ -2048,12 +2050,20 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       // TODO: Add the Firefox/Bugzilla issue URL here once filed.
       if (isFirefoxExternalTextureCorsError(error)) return true;
 
+      // A dying device throws (e.g. from createCommandEncoder) before `device.lost` settles.
+      // Device loss has its own recovery UI, so only report errors from a device that survives.
       const message = formatErrorMessage(error);
-      toastManager.add({
-        id: RENDER_ERROR_TOAST_ID,
-        title: "Canvas render failed",
-        description: message,
-        type: "destructive",
+      void Promise.race([
+        renderer.deviceLost.then(() => true),
+        new Promise<false>((resolve) => setTimeout(resolve, DEVICE_LOSS_GRACE_MS, false)),
+      ]).then((deviceLost) => {
+        if (deviceLost) return;
+        toastManager.add({
+          id: RENDER_ERROR_TOAST_ID,
+          title: "Canvas render failed",
+          description: message,
+          type: "destructive",
+        });
       });
     });
     gameLoop.setRenderer(renderer);

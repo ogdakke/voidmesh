@@ -239,6 +239,30 @@
   font-family: var(--font-mono, monospace);
 }
 
+.infinite-canvas-error__actions {
+  display: flex;
+  gap: var(--spacing-2);
+  margin-top: var(--spacing-2);
+}
+
+.infinite-canvas-error .infinite-canvas-error__hint {
+  margin-top: var(--spacing-2);
+  font-size: 12px;
+}
+
+.infinite-canvas-recovering {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+  padding: var(--spacing-2) calc(var(--spacing) * 3);
+  border-radius: 999px;
+  background-color: var(--studio-background);
+  color: var(--text-color-secondary);
+  font-size: var(--text-sm);
+  pointer-events: none;
+}
+
 .infinite-canvas-error__reload {
   margin-top: var(--spacing-2);
   min-width: 160px;
