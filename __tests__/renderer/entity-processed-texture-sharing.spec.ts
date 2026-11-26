@@ -299,7 +299,9 @@ describe("EntityTexturePipeline processed image sharing", () => {
 
   test("keeps a continuous output near its screen size while the viewport moves", () => {
     const entity = createTestEntity({ id: "continuous-hysteresis" });
-    const pipeline = createPipeline(createDevice([createTexture(200, 150), createTexture(200, 150)]));
+    const pipeline = createPipeline(
+      createDevice([createTexture(200, 150), createTexture(200, 150)]),
+    );
     pipeline.renderEntityToTexture(entity, {} as GPUCommandEncoder);
 
     pipeline.beginFrame(false);
@@ -338,9 +340,7 @@ describe("EntityTexturePipeline processed image sharing", () => {
     const entities = Array.from({ length: limit + 1 }, (_, index) =>
       createTestEntity({ id: `continuous-bound-${index}`, mediaType: "video" }),
     );
-    const pipeline = createPipeline(
-      createDevice(entities.map(() => createTexture(200, 150))),
-    );
+    const pipeline = createPipeline(createDevice(entities.map(() => createTexture(200, 150))));
     for (const entity of entities) {
       entity.textureDirty = true;
       pipeline.renderEntityToTexture(entity, {} as GPUCommandEncoder);
@@ -357,9 +357,9 @@ describe("EntityTexturePipeline processed image sharing", () => {
     expect(pipeline.hasPendingLodWork).toBe(true);
 
     pipeline.beginFrame(true);
-    expect(pipeline.resolveContinuousOutputSize(entities[limit]!, { width: 100, height: 75 })).toEqual(
-      { width: 100, height: 75 },
-    );
+    expect(
+      pipeline.resolveContinuousOutputSize(entities[limit]!, { width: 100, height: 75 }),
+    ).toEqual({ width: 100, height: 75 });
 
     pipeline.destroy();
   });
