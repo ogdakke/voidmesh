@@ -230,6 +230,8 @@ export class InfiniteCanvasRenderer {
   #hasLastLodViewport = false;
   #lastLodZoom = 0;
   #lodSettleFramesRemaining = 0;
+  /** The current frame's encoder until it is submitted. */
+  #frameEncoder: GPUCommandEncoder | null = null;
   readonly #memoryBudget = getGpuMemoryBudget();
   #mixedBatchLodRefreshPending = false;
   #mixedBatchLodRefreshStarted = false;
@@ -561,6 +563,38 @@ export class InfiniteCanvasRenderer {
    * Optimized to batch all render passes into a single GPU submission.
    */
   render(state: RenderState): void {
+    try {
+      this.#renderFrame(state);
+    } finally {
+      this.#commitAbandonedFrame();
+    }
+  }
+
+  /**
+   * Commit the command buffer of a frame that threw or returned before its submission.
+   * WebKit counts command buffers that were made and never committed and loses the device
+   * past a limit, so a frame failing repeatedly would end the session, hiding its own error
+   * behind "Unable to make command encoder". What the frame encoded into entity textures is
+   * already recorded as rendered, so it is submitted, after the uploads it reads.
+   */
+  #commitAbandonedFrame(): void {
+    const encoder = this.#frameEncoder;
+    if (!encoder) return;
+    this.#frameEncoder = null;
+    const pipeline = this.#entityTexturePipeline;
+    try {
+      pipeline?.flushSourceUploads();
+      this.#device?.queue.submit([encoder.finish()]);
+      pipeline?.flushTextureReleases();
+      pipeline?.endFrame();
+      this.#compositionPass?.endFrame();
+    } catch (error) {
+      // The frame's own error is the one worth reporting.
+      logger.warn("[WebGPU] Could not commit an abandoned frame", error);
+    }
+  }
+
+  #renderFrame(state: RenderState): void {
     if (
       !this.#device ||
       !this.#context ||
@@ -638,6 +672,7 @@ export class InfiniteCanvasRenderer {
     const encoder = this.#device.createCommandEncoder({
       label: "Canvas render encoder",
     });
+    this.#frameEncoder = encoder;
     const prepareStart = performance.now();
     this.#lastPhaseStats.setupMs = tracePerformancePhase("render.setup", renderStart, prepareStart);
 
@@ -702,10 +737,7 @@ export class InfiniteCanvasRenderer {
 
     const texture = this.#context.getCurrentTexture();
     // Skip render if swapchain texture is invalid
-    if (texture.width === 0 || texture.height === 0) {
-      this.#entityTexturePipeline?.flushTextureReleases();
-      return;
-    }
+    if (texture.width === 0 || texture.height === 0) return;
     const targetView = texture.createView();
     const wlurSceneTarget = this.#wlurOverlayPass?.getSceneTarget(width, height, dpr) ?? null;
     const presentationTargetTexture = wlurSceneTarget?.texture ?? texture;
@@ -1089,6 +1121,7 @@ export class InfiniteCanvasRenderer {
     const submitStart = performance.now();
     this.#lastPhaseStats.encodeMs = tracePerformancePhase("render.encode", prepareEnd, submitStart);
     // Single submission for all passes
+    this.#frameEncoder = null;
     this.#device.queue.submit([encoder.finish()]);
     const submitEnd = performance.now();
     this.#lastPhaseStats.submitMs = tracePerformancePhase("render.submit", submitStart, submitEnd);
