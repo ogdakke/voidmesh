@@ -62,12 +62,14 @@ fn findNearestPaletteColor(rgb: vec3f) -> vec3f {
   return nearest;
 }
 
-// Load a texel at UV coordinates using integer coords (no filtering).
-// Safe to call from non-uniform control flow (unlike textureSample).
+// Read the texel under UV without filtering, from non-uniform control flow. It samples the
+// texel's centre through the clamping sampler instead of textureLoad: a coordinate that is
+// not finite must never become a texel index, which Metal reads without a bounds check.
 fn loadAtUV(uv: vec2f) -> vec4f {
   let dims = vec2f(textureDimensions(sourceTexture));
-  let coord = vec2i(clamp(uv * dims, vec2f(0.0), dims - 1.0));
-  return textureLoad(sourceTexture, coord, 0);
+  let cell = min(floor(clamp(uv, vec2f(0.0), vec2f(1.0)) * dims), dims - 1.0);
+  let texel = (cell + 0.5) / dims;
+  return textureSampleLevel(sourceTexture, sourceSampler, texel, 0.0);
 }
 
 // ---- Glitch variants ----

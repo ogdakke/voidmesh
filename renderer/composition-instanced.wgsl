@@ -30,6 +30,12 @@ struct InteractionUniforms {
 @group(0) @binding(3) var entitySampler: sampler;
 @group(0) @binding(4) var<uniform> interaction: InteractionUniforms;
 @group(2) @binding(0) var backdrop: texture_2d<f32>;
+
+// Texel of `backdrop` under a fragment. Clamped to the texture: an index outside it is a
+// read Metal does not bounds-check.
+fn backdropTexel(position: vec2f) -> vec2u {
+  return min(vec2u(max(position, vec2f(0.0))), textureDimensions(backdrop) - vec2u(1u));
+}
 @group(2) @binding(1) var<storage, read> textureOpaque: array<u32>;
 
 const BORDER_PX: f32 = 2.0;
@@ -174,10 +180,10 @@ fn fs_restore(input: VertexOutput) -> @location(0) vec4f {
   if (input.actionCard != 0u) { return crossingColor(input.uv, input.world, input.contactRange, input.cardSize, input.cardPose, paint); }
   if (!crossingTouchesLifted(input.world, input.contactRange)) { discard; }
   if (textureOpaque[0] != 0u && all(input.uv > input.opaqueMargin) && all(input.uv < vec2f(1.0) - input.opaqueMargin)) {
-    return vec4f(textureLoad(backdrop, vec2i(input.position.xy), 0).rgb, 1.0);
+    return vec4f(textureLoad(backdrop, backdropTexel(input.position.xy), 0).rgb, 1.0);
   }
   let alpha = crossingMaterial(input.uv, input.world, input.contactRange, input.cardSize, input.cardPose, paint, true).a;
-  return vec4f(textureLoad(backdrop, vec2i(input.position.xy), 0).rgb, alpha);
+  return vec4f(textureLoad(backdrop, backdropTexel(input.position.xy), 0).rgb, alpha);
 }
 
 @vertex
