@@ -99,6 +99,7 @@ export class InfiniteCanvasRenderer {
   /** Called when the device is lost for any reason other than this renderer's own `destroy()`. */
   onDeviceLost?: (error: GpuDeviceLostError) => void;
   #destroyed = false;
+  readonly #deviceLost = Promise.withResolvers<void>();
 
   #actionLayerBlurPass: ActionLayerBlurPass | null = null;
   #actionBlurBackdropState: {
@@ -242,6 +243,14 @@ export class InfiniteCanvasRenderer {
 
   get isReady(): boolean {
     return this.#device !== null && this.#gridPass !== null;
+  }
+
+  /**
+   * Settles once this renderer's device is lost, including by `destroy()`. A dying device can
+   * throw from GPU calls before its `lost` promise settles, so error reporting can race this.
+   */
+  get deviceLost(): Promise<void> {
+    return this.#deviceLost.promise;
   }
 
   get colorConfig(): GpuColorConfig {
@@ -395,6 +404,7 @@ export class InfiniteCanvasRenderer {
     this.#device = device;
 
     void device.lost.then((info) => {
+      this.#deviceLost.resolve();
       if (this.#destroyed) return;
       logger.error(`[WebGPU] Device lost: ${info.reason}`, info.message);
       this.onDeviceLost?.(new GpuDeviceLostError(info.reason, info.message));
