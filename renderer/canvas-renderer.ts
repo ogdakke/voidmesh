@@ -6,6 +6,7 @@ import { overlapConfig } from "#lib/config/overlap.config.ts";
 import { boundsIntersect, getRotatedAABB, getViewportWorldBounds } from "#lib/canvas-math.ts";
 import { getFrameAtTime } from "#lib/gif-decoder.ts";
 import { setGpuContext } from "./gpu-color-space.ts";
+import { GpuDeviceLostError, WebGpuUnavailableError } from "./gpu-device-recovery.ts";
 import type { DisintegrationRenderOverlay, RenderState } from "#engine";
 import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import { CanvasLensing } from "#types/enums.ts";
@@ -95,8 +96,9 @@ export class InfiniteCanvasRenderer {
   #entityErrors: Map<string, string> = new Map();
   // Callback for error notifications (e.g., to show toast)
   onEntityError?: (entityId: string, error: string) => void;
-  // Callback for GPU device lost events
-  onDeviceLost?: (reason: string) => void;
+  /** Called when the device is lost for any reason other than this renderer's own `destroy()`. */
+  onDeviceLost?: (error: GpuDeviceLostError) => void;
+  #destroyed = false;
 
   #actionLayerBlurPass: ActionLayerBlurPass | null = null;
   #actionBlurBackdropState: {
@@ -365,7 +367,7 @@ export class InfiniteCanvasRenderer {
   async initialize(): Promise<void> {
     const adapter = await navigator.gpu?.requestAdapter();
     if (!adapter) {
-      throw new Error("WebGPU adapter not available");
+      throw new WebGpuUnavailableError();
     }
 
     // Request higher storage buffer limit for large images (error diffusion dithering)
@@ -384,11 +386,18 @@ export class InfiniteCanvasRenderer {
       requiredLimits.maxBufferSize = adapterLimits.maxBufferSize;
     }
 
-    this.#device = await adapter.requestDevice({ requiredLimits });
+    const device = await adapter.requestDevice({ requiredLimits });
+    // `destroy()` can run while the device request is in flight; nothing else would free it.
+    if (this.#destroyed) {
+      device.destroy();
+      throw new Error("Renderer destroyed during initialization");
+    }
+    this.#device = device;
 
-    this.#device.lost.then((info) => {
+    void device.lost.then((info) => {
+      if (this.#destroyed) return;
       logger.error(`[WebGPU] Device lost: ${info.reason}`, info.message);
-      this.onDeviceLost?.(info.reason);
+      this.onDeviceLost?.(new GpuDeviceLostError(info.reason, info.message));
     });
 
     this.#device.addEventListener("uncapturederror", (event) => {
@@ -1897,6 +1906,7 @@ export class InfiniteCanvasRenderer {
   }
 
   destroy(): void {
+    this.#destroyed = true;
     this.#entityDrawItemPreparer = null;
     this.#entityTexturePipeline?.destroy();
     this.#entityTexturePipeline = null;
@@ -1950,7 +1960,8 @@ export class InfiniteCanvasRenderer {
     this.#resizeObserver?.disconnect();
     this.#resizeObserver = null;
 
-    // Destroy device
+    // A replacement renderer reconfigures the same canvas context with its own device.
+    this.#context?.unconfigure();
     this.#device?.destroy();
 
     // Clear references
