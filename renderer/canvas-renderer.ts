@@ -34,6 +34,7 @@ import { GridPass } from "./grid-pass.ts";
 import type { ByteBudgetCacheStats } from "./byte-budget-cache.ts";
 import { SelectionRectPass } from "./selection-rect-pass.ts";
 import { TexturePool, type TexturePoolStats } from "./texture-pool.ts";
+import { DeferredGpuDestroy } from "./deferred-gpu-destroy.ts";
 import { getGpuMemoryBudget } from "./gpu-memory-budget.ts";
 import { ViewportLensPass, type ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
 import { ViewportUniforms } from "./viewport-uniforms.ts";
@@ -232,6 +233,7 @@ export class InfiniteCanvasRenderer {
   #lodSettleFramesRemaining = 0;
   /** The current frame's encoder until it is submitted. */
   #frameEncoder: GPUCommandEncoder | null = null;
+  #deferredDestroy: DeferredGpuDestroy | null = null;
   readonly #memoryBudget = getGpuMemoryBudget();
   #mixedBatchLodRefreshPending = false;
   #mixedBatchLodRefreshStarted = false;
@@ -389,6 +391,11 @@ export class InfiniteCanvasRenderer {
     }
 
     this.#device = await adapter.requestDevice({ requiredLimits });
+    // Temporary A/B switch for the iOS device-loss investigation: `?immediateGpuDestroy`
+    // restores destroying at the call. Remove once the cause is confirmed.
+    if (!new URLSearchParams(window.location.search).has("immediateGpuDestroy")) {
+      this.#deferredDestroy = new DeferredGpuDestroy(this.#device);
+    }
 
     this.#device.lost.then((info) => {
       logger.error(`[WebGPU] Device lost: ${info.reason}`, info.message);
@@ -585,6 +592,7 @@ export class InfiniteCanvasRenderer {
     try {
       pipeline?.flushSourceUploads();
       this.#device?.queue.submit([encoder.finish()]);
+      this.#deferredDestroy?.afterSubmit();
       pipeline?.flushTextureReleases();
       pipeline?.endFrame();
       this.#compositionPass?.endFrame();
@@ -1123,6 +1131,7 @@ export class InfiniteCanvasRenderer {
     // Single submission for all passes
     this.#frameEncoder = null;
     this.#device.queue.submit([encoder.finish()]);
+    this.#deferredDestroy?.afterSubmit();
     const submitEnd = performance.now();
     this.#lastPhaseStats.submitMs = tracePerformancePhase("render.submit", submitStart, submitEnd);
     this.#entityTexturePipeline?.flushTextureReleases();
@@ -1939,6 +1948,8 @@ export class InfiniteCanvasRenderer {
   }
 
   destroy(): void {
+    this.#deferredDestroy?.dispose();
+    this.#deferredDestroy = null;
     this.#entityDrawItemPreparer = null;
     this.#entityTexturePipeline?.destroy();
     this.#entityTexturePipeline = null;
