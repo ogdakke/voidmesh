@@ -24,6 +24,12 @@ export interface EntityTexturePipelineOptions {
   colorConfig: GpuColorConfig;
   texturePool: TexturePool | null;
   textureBudgetBytes?: number;
+  /**
+   * Keep each video's current frame in a texture this pipeline owns, refreshed when the
+   * video shows a new frame, instead of importing an external texture every rendered frame.
+   * See `shouldCopyVideoFrames`.
+   */
+  copyVideoFrames?: boolean;
   onEntityError?: ((entityId: string, error: string) => void) | undefined;
   onTextureEvicted?: (entityIds: ReadonlySet<string>) => void;
   onImmutableSourceUpload?: (texture: GPUTexture, encoder: GPUCommandEncoder) => void;
@@ -39,6 +45,12 @@ interface CachedEntityTexture {
   /** Shared image asset this entry was made from; null for entity-owned textures. */
   asset: object | null;
 }
+
+/**
+ * Pixel ratio past which a texture is far from the size it shows at: three times in length,
+ * which only tiers two apart reach (one tier is two times, and sizes round).
+ */
+const LOD_FAR_PIXEL_RATIO = 9;
 
 interface CachedSourceTexture extends CachedEntityTexture {
   width: number;
@@ -106,6 +118,7 @@ export class EntityTexturePipeline {
   readonly #colorConfig: GpuColorConfig;
   readonly #runtime: EntityShaderRuntime;
   readonly #textureBudgetBytes: number;
+  readonly #copyVideoFrames: boolean;
   readonly #onTextureEvicted: ((entityIds: ReadonlySet<string>) => void) | undefined;
   readonly #onImmutableSourceUpload:
     | ((texture: GPUTexture, encoder: GPUCommandEncoder) => void)
@@ -122,6 +135,7 @@ export class EntityTexturePipeline {
   #lodTransitionPixelsRemaining = 0;
   #lodTransitionsUsed = 0;
   #pendingLodWork = false;
+  #continuousOutputResizesUsed = 0;
   #textureCacheRevision = 0;
   readonly #residentTextureEntries = new WeakMap<GPUTexture, CachedEntityTexture>();
   readonly #lodCacheLookups = new Map<object, LodCacheLookup>();
@@ -148,6 +162,7 @@ export class EntityTexturePipeline {
     this.#colorConfig = options.colorConfig;
     this.#textureBudgetBytes =
       options.textureBudgetBytes ?? config.rendering.entityTextureBudgetBytes;
+    this.#copyVideoFrames = options.copyVideoFrames ?? false;
     this.#onTextureEvicted = options.onTextureEvicted;
     this.#onImmutableSourceUpload = options.onImmutableSourceUpload;
     this.#runtime = new EntityShaderRuntime({
@@ -223,9 +238,16 @@ export class EntityTexturePipeline {
     outputRegion: ShaderOutputRegion | null = null,
     continuousOutputSize: { width: number; height: number } | null = null,
   ): EntityCompositionSource | null {
-    const sourceWidth = renderSize.width;
-    const sourceHeight = renderSize.height;
-    const useExternalVideoSource = entity.mediaSource.type === MediaType.video;
+    const useExternalVideoSource =
+      entity.mediaSource.type === MediaType.video && !this.#copyVideoFrames;
+    // A copied video frame is kept at the video's own size: the copy cannot scale, and a
+    // fixed size means a zoom never reallocates it.
+    const copiedVideo =
+      entity.mediaSource.type === MediaType.video && this.#copyVideoFrames
+        ? entity.mediaSource.videoElement
+        : null;
+    const sourceWidth = copiedVideo?.videoWidth || renderSize.width;
+    const sourceHeight = copiedVideo?.videoHeight || renderSize.height;
     const contentRevision = this.#resolveContentRevision(entity);
 
     // Time-based shaders need the shader pass every canvas render. Processed videos do not:
@@ -389,7 +411,12 @@ export class EntityTexturePipeline {
         this.#countAssetCacheEntry(previousCached.asset, -1);
         recycledTexture = previousCached;
       } else {
-        this.#releaseEntityProcessedTexture(entity.id, canRecyclePrevious && !!cachedTexture);
+        // A continuous output is keyed by its entity and size, so nothing can find the old
+        // one again after a resize: destroy it now, not when the byte budget runs out.
+        this.#releaseEntityProcessedTexture(
+          entity.id,
+          needsContinuousShaderRender || (canRecyclePrevious && !!cachedTexture),
+        );
       }
       cachedTexture = this.#processedTextures.get(processedKey);
     }
@@ -561,6 +588,7 @@ export class EntityTexturePipeline {
     this.#lodTransitionPixelsRemaining = config.rendering.lodTransitionPixelBudget;
     this.#lodTransitionsUsed = 0;
     this.#pendingLodWork = false;
+    this.#continuousOutputResizesUsed = 0;
     this.#lodCacheLookups.clear();
   }
 
@@ -631,8 +659,17 @@ export class EntityTexturePipeline {
       entity.mediaSource.type === MediaType.image &&
       (currentEntry?.entityIds.size ?? 0) > 1 &&
       pixelCost < currentPixelCount;
+    // A zoom in progress leaves LOD alone, except for what it has taken two tiers or more
+    // from the size it shows at: magnified that far it is plainly soft, minified that far it
+    // shimmers, and either would hold until the zoom stops.
+    const farFromScreen =
+      pixelCost >= currentPixelCount * LOD_FAR_PIXEL_RATIO ||
+      currentPixelCount >= pixelCost * LOD_FAR_PIXEL_RATIO;
     if (
-      !this.#tryAdmitLodTransition(pixelCost, allowAnimatedDemotion || allowSharedImageDemotion)
+      !this.#tryAdmitLodTransition(
+        pixelCost,
+        allowAnimatedDemotion || allowSharedImageDemotion || farFromScreen,
+      )
     ) {
       this.#pendingLodWork = true;
       output.width = current.width;
@@ -642,6 +679,51 @@ export class EntityTexturePipeline {
 
     output.width = desired.width;
     output.height = desired.height;
+    return output;
+  }
+
+  /**
+   * The size a continuous effect's output takes this frame, given the size it projects to.
+   * Each change of size is a texture allocation, so a frame admits only
+   * `continuousOutputResizesPerFrame` of them, and a moving viewport changes none that is
+   * within `LOD_FAR_PIXEL_RATIO` of its size on screen: the rule cached tiers follow, so a
+   * zoom reallocates once or twice, not at every size step. An output left at its previous
+   * size is still processed this frame and shows the same picture, resampled.
+   */
+  resolveContinuousOutputSize(
+    entity: ShaderCanvasEntity,
+    desired: { width: number; height: number },
+    output: { width: number; height: number } = { width: 0, height: 0 },
+  ): { width: number; height: number } {
+    output.width = desired.width;
+    output.height = desired.height;
+    const current = this.#entityProcessedBindings.get(entity.id)?.texture;
+    if (!current || (current.width === desired.width && current.height === desired.height)) {
+      return output;
+    }
+    // A texture of another shape belongs to other content (a crop, a replaced source).
+    const aspectError = Math.abs(current.width * desired.height - current.height * desired.width);
+    if (aspectError > Math.max(current.width, current.height, desired.width, desired.height)) {
+      return output;
+    }
+
+    const currentPixels = current.width * current.height;
+    const desiredPixels = desired.width * desired.height;
+    const keepsWhileMoving =
+      !this.#allowLodTransitions &&
+      currentPixels < desiredPixels * LOD_FAR_PIXEL_RATIO &&
+      desiredPixels < currentPixels * LOD_FAR_PIXEL_RATIO;
+    if (
+      keepsWhileMoving ||
+      this.#continuousOutputResizesUsed >= config.rendering.continuousOutputResizesPerFrame
+    ) {
+      // Settling resizes what motion left alone, so ask for the frames that takes.
+      this.#pendingLodWork = true;
+      output.width = current.width;
+      output.height = current.height;
+      return output;
+    }
+    this.#continuousOutputResizesUsed++;
     return output;
   }
 
@@ -752,10 +834,21 @@ export class EntityTexturePipeline {
     width: number,
     height: number,
   ): void {
+    if (entity.mediaSource.type === MediaType.video) {
+      // The texture has the video's own size, so the frame is copied without a canvas.
+      this.#device.queue.copyExternalImageToTexture(
+        { source: entity.mediaSource.videoElement },
+        { texture, colorSpace: this.#colorConfig.textureColorSpace },
+        [width, height],
+      );
+      this.#sourceUploads++;
+      return;
+    }
     let source: CanvasImageSource =
       entity.mediaSource.type === MediaType.image
         ? entity.mediaSource.asset.imageBitmap
         : entity.imageBitmap;
+    let oneOffSurface: OffscreenCanvas | null = null;
     if (source.width !== width || source.height !== height) {
       if (
         this.#stagingSourceUploads &&
@@ -775,12 +868,13 @@ export class EntityTexturePipeline {
         this.#sourceUploads++;
         return;
       }
-      const surface =
-        entity.mediaSource.type === MediaType.gif
-          ? this.#getGifResizeSurface(entity.id, width, height)
-          : createResizeSurface(width, height, getSourceAlphaMode(entity) !== "none");
+      const isGif = entity.mediaSource.type === MediaType.gif;
+      const surface = isGif
+        ? this.#getGifResizeSurface(entity.id, width, height)
+        : createResizeSurface(width, height, getSourceAlphaMode(entity) !== "none");
       surface.context.drawImage(source, 0, 0, width, height);
       source = surface.canvas;
+      if (!isGif) oneOffSurface = surface.canvas;
     }
     this.#device.queue.copyExternalImageToTexture(
       { source },
@@ -788,6 +882,12 @@ export class EntityTexturePipeline {
       [width, height],
     );
     this.#sourceUploads++;
+    // The copy has taken its pixels. A one-off surface would otherwise hold its backing
+    // store (up to a 4096 tier) until garbage collection, and a zoom makes one per upload.
+    if (oneOffSurface) {
+      oneOffSurface.width = 0;
+      oneOffSurface.height = 0;
+    }
   }
 
   /**
@@ -995,7 +1095,9 @@ export class EntityTexturePipeline {
       case MediaType.svg:
         return `svg:${entity.id}:${width}x${height}`;
       case MediaType.video:
-        throw new Error("External video textures do not have source cache keys");
+        if (!this.#copyVideoFrames)
+          throw new Error("External video textures do not have source cache keys");
+        return `video:${entity.id}:${width}x${height}`;
     }
   }
 

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { config } from "#config";
 import type { ShaderCanvasEntity } from "#types/canvas.ts";
 
 const runtimeEncode = vi.hoisted(() => vi.fn<() => void>());
@@ -294,6 +295,73 @@ describe("EntityTexturePipeline processed image sharing", () => {
       width: 100,
       height: 75,
     });
+  });
+
+  test("keeps a continuous output near its screen size while the viewport moves", () => {
+    const entity = createTestEntity({ id: "continuous-hysteresis" });
+    const pipeline = createPipeline(
+      createDevice([createTexture(200, 150), createTexture(200, 150)]),
+    );
+    pipeline.renderEntityToTexture(entity, {} as GPUCommandEncoder);
+
+    pipeline.beginFrame(false);
+    for (const desired of [
+      { width: 160, height: 120 },
+      { width: 400, height: 300 },
+    ]) {
+      expect(pipeline.resolveContinuousOutputSize(entity, desired)).toEqual({
+        width: 200,
+        height: 150,
+      });
+    }
+    expect(pipeline.hasPendingLodWork).toBe(true);
+    // Three times off in length, either way, no longer waits for the zoom to stop.
+    expect(pipeline.resolveContinuousOutputSize(entity, { width: 600, height: 450 })).toEqual({
+      width: 600,
+      height: 450,
+    });
+    expect(pipeline.resolveContinuousOutputSize(entity, { width: 64, height: 48 })).toEqual({
+      width: 64,
+      height: 48,
+    });
+
+    pipeline.beginFrame(true);
+    expect(pipeline.resolveContinuousOutputSize(entity, { width: 160, height: 120 })).toEqual({
+      width: 160,
+      height: 120,
+    });
+
+    pipeline.destroy();
+    if (entity.mediaSource.type === "image") releaseImageAsset(entity.mediaSource.asset);
+  });
+
+  test("bounds continuous output reallocations per frame", () => {
+    const limit = config.rendering.continuousOutputResizesPerFrame;
+    const entities = Array.from({ length: limit + 1 }, (_, index) =>
+      createTestEntity({ id: `continuous-bound-${index}`, mediaType: "video" }),
+    );
+    const pipeline = createPipeline(createDevice(entities.map(() => createTexture(200, 150))));
+    for (const entity of entities) {
+      entity.textureDirty = true;
+      pipeline.renderEntityToTexture(entity, {} as GPUCommandEncoder);
+    }
+
+    pipeline.beginFrame(true);
+    const resolved = entities.map((entity) => ({
+      ...pipeline.resolveContinuousOutputSize(entity, { width: 100, height: 75 }),
+    }));
+    expect(resolved.slice(0, limit)).toEqual(
+      Array.from({ length: limit }, () => ({ width: 100, height: 75 })),
+    );
+    expect(resolved[limit]).toEqual({ width: 200, height: 150 });
+    expect(pipeline.hasPendingLodWork).toBe(true);
+
+    pipeline.beginFrame(true);
+    expect(
+      pipeline.resolveContinuousOutputSize(entities[limit]!, { width: 100, height: 75 }),
+    ).toEqual({ width: 100, height: 75 });
+
+    pipeline.destroy();
   });
 });
 

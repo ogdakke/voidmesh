@@ -189,6 +189,17 @@ describe("EntityTexturePipeline shared image sources", () => {
     });
     expect(pipeline.hasPendingLodWork).toBe(true);
 
+    // Two tiers from the size on screen is plainly soft or shimmering: that moves mid-zoom.
+    pipeline.beginFrame(false);
+    expect(pipeline.resolveRenderSize(entities[0]!, { width: 50, height: 38 })).toEqual({
+      width: 50,
+      height: 38,
+    });
+    expect(pipeline.resolveRenderSize(entities[1]!, { width: 800, height: 600 })).toEqual({
+      width: 800,
+      height: 600,
+    });
+
     pipeline.beginFrame(true);
     const resolved = entities.map((entity) =>
       pipeline.resolveRenderSize(entity, { width: 100, height: 75 }),
@@ -348,6 +359,58 @@ describe("EntityTexturePipeline shared image sources", () => {
     expect(pipeline.getResidencyStats()).toMatchObject({
       sourceUploads: 0,
       externalTextureImports: 2,
+    });
+
+    pipeline.destroy();
+  });
+
+  test("copies a video frame into an owned texture only when the frame changes", () => {
+    const entity = createTestEntity({
+      id: "copied-video",
+      mediaType: "video",
+      shaderParams: { showOriginal: true },
+    });
+    if (entity.mediaSource.type !== "video") throw new Error("Expected a video entity");
+    Object.defineProperties(entity.mediaSource.videoElement, {
+      videoWidth: { value: 640 },
+      videoHeight: { value: 360 },
+    });
+    const frameTexture = createTexture(640, 360);
+    const device = createDevice([frameTexture]);
+    const pipeline = new EntityTexturePipeline({
+      device,
+      colorConfig,
+      texturePool: null,
+      copyVideoFrames: true,
+    });
+    const encoder = {} as GPUCommandEncoder;
+    // A render size from another LOD tier must not resize or reallocate the frame texture.
+    const tier = { width: 256, height: 144 };
+
+    entity.textureDirty = true;
+    expect(pipeline.renderEntityToTexture(entity, encoder, tier)).toEqual({
+      kind: "texture",
+      texture: frameTexture,
+    });
+    entity.textureDirty = false;
+    pipeline.renderEntityToTexture(entity, encoder, tier);
+    pipeline.renderEntityToTexture(entity, encoder, { width: 512, height: 288 });
+    expect(device.queue.copyExternalImageToTexture).toHaveBeenCalledTimes(1);
+
+    entity.textureDirty = true;
+    pipeline.renderEntityToTexture(entity, encoder, tier);
+    expect(device.queue.copyExternalImageToTexture).toHaveBeenCalledTimes(2);
+    expect(device.queue.copyExternalImageToTexture).toHaveBeenLastCalledWith(
+      { source: entity.mediaSource.videoElement },
+      { texture: frameTexture, colorSpace: "srgb" },
+      [640, 360],
+    );
+
+    expect(device.createTexture).toHaveBeenCalledTimes(1);
+    expect(device.importExternalTexture).not.toHaveBeenCalled();
+    expect(pipeline.getResidencyStats()).toMatchObject({
+      sourceUploads: 2,
+      externalTextureImports: 0,
     });
 
     pipeline.destroy();

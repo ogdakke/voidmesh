@@ -91,7 +91,12 @@ interface CliOptions {
   stagedUploadGuard: boolean;
   cullingGuard: boolean;
   outputSizeVisual: boolean;
+  lodConsistency: boolean;
   screenSizedContinuous: boolean;
+  tierSizedContinuous: boolean;
+  constrainedMemory: boolean;
+  /** Device pixel ratio forced on the page; 3 approximates a phone's texture sizes. */
+  deviceScaleFactor: number | null;
   rounds: number;
 }
 
@@ -141,12 +146,40 @@ async function main(): Promise<void> {
 
     const cdpPort = options.cdpPort ?? (await getFreePort());
     const chromePath = await resolveChromePath();
-    chromeProcess = startChrome(chromePath, cdpPort, chromeProfileDir, options.headless);
+    chromeProcess = startChrome(
+      chromePath,
+      cdpPort,
+      chromeProfileDir,
+      options.headless,
+      options.deviceScaleFactor,
+    );
     const pageWebSocketUrl = await openBenchPage(cdpPort, pageUrl);
     const pageClient = await CdpClient.connect(pageWebSocketUrl);
 
     try {
       await pageClient.send("Runtime.enable");
+      if (options.lodConsistency) {
+        const { guard } = await runBenchInPage(
+          pageClient,
+          null,
+          options.suite,
+          1,
+          "__measureVoidmeshLodConsistency",
+        );
+        const { rows } = guard as {
+          rows: Array<{ name: string; half: number; quarter: number; eighth: number }>;
+        };
+        console.log("LOD consistency (mean RGB difference from the native render, 0-255):");
+        for (const row of rows) {
+          const cells = [row.half, row.quarter, row.eighth].map((value) =>
+            value.toFixed(2).padStart(7),
+          );
+          console.log(
+            `${row.name.padStart(26)}: 1/2 ${cells[0]}  1/4 ${cells[1]}  1/8 ${cells[2]}`,
+          );
+        }
+        return;
+      }
       if (options.outputSizeVisual) {
         const { guard } = await runBenchInPage(
           pageClient,
@@ -277,7 +310,11 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
     stagedUploadGuard: false,
     cullingGuard: false,
     outputSizeVisual: false,
+    lodConsistency: false,
     screenSizedContinuous: false,
+    tierSizedContinuous: false,
+    constrainedMemory: false,
+    deviceScaleFactor: null,
     rounds: Number(process.env.BENCH_ROUNDS ?? 1),
   };
 
@@ -313,8 +350,16 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
       options.cullingGuard = true;
     } else if (arg === "--output-size-visual") {
       options.outputSizeVisual = true;
+    } else if (arg === "--lod-consistency") {
+      options.lodConsistency = true;
+    } else if (arg === "--tier-sized-continuous") {
+      options.tierSizedContinuous = true;
     } else if (arg === "--screen-sized-continuous") {
       options.screenSizedContinuous = true;
+    } else if (arg === "--constrained-memory") {
+      options.constrainedMemory = true;
+    } else if (arg === "--device-scale-factor") {
+      options.deviceScaleFactor = Number(readArgValue(argv, ++index, arg));
     } else if (arg === "--video-url") {
       options.videoUrl = readArgValue(argv, ++index, arg);
     } else if (arg === "--cpu-profile") {
@@ -392,6 +437,8 @@ function createBenchPageUrl(options: CliOptions): string {
   if (options.disableImmediates) url.searchParams.set("shaderImmediates", "0");
   if (options.videoUrl) url.searchParams.set("videoUrl", options.videoUrl);
   if (options.screenSizedContinuous) url.searchParams.set("screenSizedContinuous", "1");
+  if (options.tierSizedContinuous) url.searchParams.set("tierSizedContinuous", "1");
+  if (options.constrainedMemory) url.searchParams.set("constrainedMemory", "1");
   return url.toString();
 }
 
@@ -415,6 +462,7 @@ function startChrome(
   cdpPort: number,
   profileDir: string,
   headless: boolean,
+  deviceScaleFactor: number | null,
 ): Bun.Subprocess<"ignore", "pipe", "pipe"> {
   const args = [
     `--remote-debugging-port=${cdpPort}`,
@@ -430,6 +478,7 @@ function startChrome(
     "about:blank",
   ];
   if (headless) args.unshift("--headless=new");
+  if (deviceScaleFactor !== null) args.unshift(`--force-device-scale-factor=${deviceScaleFactor}`);
 
   const subprocess = Bun.spawn([chromePath, ...args], {
     stdin: "ignore",

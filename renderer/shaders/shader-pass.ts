@@ -53,10 +53,6 @@ export function createExternalTextureShaderSource(source: string): string {
       "@group(0) @binding(1) var sourceTexture: texture_external;",
     )
     .replace(
-      /fn\s+loadAtUV\s*\(\s*([A-Za-z_]\w*)\s*:\s*vec2f\s*\)\s*->\s*vec4f\s*\{[^{}]*textureLoad\s*\(\s*sourceTexture\s*,[^)]*,\s*0\s*\)\s*;?\s*\}/,
-      "fn loadAtUV($1: vec2f) -> vec4f {\n  return textureSampleBaseClampToEdge(sourceTexture, sourceSampler, clamp($1, vec2f(0.0), vec2f(1.0)));\n}",
-    )
-    .replace(
       /textureSampleLevel\(sourceTexture,\s*sourceSampler,\s*([^,]+),\s*0\.0\)/g,
       "textureSampleBaseClampToEdge(sourceTexture, sourceSampler, $1)",
     )

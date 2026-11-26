@@ -35,6 +35,8 @@ import { GridPass } from "./grid-pass.ts";
 import type { ByteBudgetCacheStats } from "./byte-budget-cache.ts";
 import { SelectionRectPass } from "./selection-rect-pass.ts";
 import { TexturePool, type TexturePoolStats } from "./texture-pool.ts";
+import { shouldCopyVideoFrames } from "./video-frame-source.ts";
+import { getGpuMemoryBudget } from "./gpu-memory-budget.ts";
 import { ViewportLensPass, type ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
 import { ViewportUniforms } from "./viewport-uniforms.ts";
 import type { WlurOverlayConfig } from "./wlur-overlay.ts";
@@ -232,6 +234,9 @@ export class InfiniteCanvasRenderer {
   #hasLastLodViewport = false;
   #lastLodZoom = 0;
   #lodSettleFramesRemaining = 0;
+  /** The current frame's encoder until it is submitted. */
+  #frameEncoder: GPUCommandEncoder | null = null;
+  readonly #memoryBudget = getGpuMemoryBudget();
   #mixedBatchLodRefreshPending = false;
   #mixedBatchLodRefreshStarted = false;
   readonly #visibilityViewportBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
@@ -301,7 +306,7 @@ export class InfiniteCanvasRenderer {
         residentBytes: 0,
       },
       entityTextures: this.#entityTexturePipeline?.getResidencyStats() ?? {
-        budgetBytes: config.rendering.entityTextureBudgetBytes,
+        budgetBytes: this.#memoryBudget.entityTextureBytes,
         residentBytes: 0,
         sourceBytes: 0,
         processedBytes: 0,
@@ -323,7 +328,7 @@ export class InfiniteCanvasRenderer {
           evictions: 0,
         },
       texturePool: this.#texturePool?.getStats() ?? {
-        budgetBytes: config.rendering.texturePoolBudgetBytes,
+        budgetBytes: this.#memoryBudget.texturePoolBytes,
         residentBytes: 0,
         textureCount: 0,
       },
@@ -437,7 +442,11 @@ export class InfiniteCanvasRenderer {
     });
 
     // Initialize texture pool
-    this.#texturePool = new TexturePool(this.#device, this.#colorConfig.intermediateFormat);
+    this.#texturePool = new TexturePool(
+      this.#device,
+      this.#colorConfig.intermediateFormat,
+      this.#memoryBudget.texturePoolBytes,
+    );
 
     this.#gridPass = new GridPass(this.#device, this.#canvasFormat);
     this.#viewportUniforms = new ViewportUniforms(this.#device);
@@ -455,6 +464,8 @@ export class InfiniteCanvasRenderer {
       device: this.#device,
       colorConfig: this.#colorConfig,
       texturePool: this.#texturePool,
+      textureBudgetBytes: this.#memoryBudget.entityTextureBytes,
+      copyVideoFrames: shouldCopyVideoFrames(),
       onImmutableSourceUpload: (texture, encoder) =>
         this.#compositionPass!.primeImmutableSource(texture, encoder),
       onEntityError: (entityId, error) => {
@@ -468,6 +479,7 @@ export class InfiniteCanvasRenderer {
     this.#entityDrawItemPreparer = new EntityDrawItemPreparer({
       texturePipeline: this.#entityTexturePipeline,
       compositionPass: this.#compositionPass,
+      previewMaxSide: this.#memoryBudget.previewMaxSide,
     });
 
     this.#selectionRectPass = new SelectionRectPass(this.#device, this.#canvasFormat);
@@ -562,8 +574,9 @@ export class InfiniteCanvasRenderer {
   renderEntityToTexture(
     entity: ShaderCanvasEntity,
     encoder: GPUCommandEncoder,
+    renderSize?: { width: number; height: number },
   ): EntityCompositionSource | null {
-    return this.#entityTexturePipeline?.renderEntityToTexture(entity, encoder) ?? null;
+    return this.#entityTexturePipeline?.renderEntityToTexture(entity, encoder, renderSize) ?? null;
   }
 
   /**
@@ -571,6 +584,38 @@ export class InfiniteCanvasRenderer {
    * Optimized to batch all render passes into a single GPU submission.
    */
   render(state: RenderState): void {
+    try {
+      this.#renderFrame(state);
+    } finally {
+      this.#commitAbandonedFrame();
+    }
+  }
+
+  /**
+   * Commit the command buffer of a frame that threw or returned before its submission.
+   * WebKit counts command buffers that were made and never committed and loses the device
+   * past a limit, so a frame failing repeatedly would end the session, hiding its own error
+   * behind "Unable to make command encoder". What the frame encoded into entity textures is
+   * already recorded as rendered, so it is submitted, after the uploads it reads.
+   */
+  #commitAbandonedFrame(): void {
+    const encoder = this.#frameEncoder;
+    if (!encoder) return;
+    this.#frameEncoder = null;
+    const pipeline = this.#entityTexturePipeline;
+    try {
+      pipeline?.flushSourceUploads();
+      this.#device?.queue.submit([encoder.finish()]);
+      pipeline?.flushTextureReleases();
+      pipeline?.endFrame();
+      this.#compositionPass?.endFrame();
+    } catch (error) {
+      // The frame's own error is the one worth reporting.
+      logger.warn("[WebGPU] Could not commit an abandoned frame", error);
+    }
+  }
+
+  #renderFrame(state: RenderState): void {
     if (
       !this.#device ||
       !this.#context ||
@@ -648,6 +693,7 @@ export class InfiniteCanvasRenderer {
     const encoder = this.#device.createCommandEncoder({
       label: "Canvas render encoder",
     });
+    this.#frameEncoder = encoder;
     const prepareStart = performance.now();
     this.#lastPhaseStats.setupMs = tracePerformancePhase("render.setup", renderStart, prepareStart);
 
@@ -712,10 +758,7 @@ export class InfiniteCanvasRenderer {
 
     const texture = this.#context.getCurrentTexture();
     // Skip render if swapchain texture is invalid
-    if (texture.width === 0 || texture.height === 0) {
-      this.#entityTexturePipeline?.flushTextureReleases();
-      return;
-    }
+    if (texture.width === 0 || texture.height === 0) return;
     const targetView = texture.createView();
     const wlurSceneTarget = this.#wlurOverlayPass?.getSceneTarget(width, height, dpr) ?? null;
     const presentationTargetTexture = wlurSceneTarget?.texture ?? texture;
@@ -1099,6 +1142,7 @@ export class InfiniteCanvasRenderer {
     const submitStart = performance.now();
     this.#lastPhaseStats.encodeMs = tracePerformancePhase("render.encode", prepareEnd, submitStart);
     // Single submission for all passes
+    this.#frameEncoder = null;
     this.#device.queue.submit([encoder.finish()]);
     const submitEnd = performance.now();
     this.#lastPhaseStats.submitMs = tracePerformancePhase("render.submit", submitStart, submitEnd);

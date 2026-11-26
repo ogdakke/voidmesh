@@ -50,8 +50,8 @@ describe("getContinuousOutputSize", () => {
     const entity = createTestEntity({ size: { width: 282, height: 282 } });
     entity.originalSize = { width: 1024, height: 1024 };
 
-    // 564 device pixels: steps of 64 (an eighth of 512) give 576, where the tier is 1024.
-    expect(getContinuousOutputSize(entity, at(1), 2)).toEqual({ width: 576, height: 576 });
+    // 564 device pixels: steps of 128 (a quarter of 512) give 640, where the tier is 1024.
+    expect(getContinuousOutputSize(entity, at(1), 2)).toEqual({ width: 640, height: 640 });
     expect(getEntityRenderSize(entity, at(1), 2)).toEqual({ width: 1024, height: 1024 });
     // Small projections move in 32 px steps.
     expect(getContinuousOutputSize(entity, at(0.25), 1)).toEqual({ width: 96, height: 96 });
@@ -73,5 +73,31 @@ describe("getContinuousOutputSize", () => {
     expect(getContinuousOutputSize(entity, at(1.05), 1)).toEqual(
       getContinuousOutputSize(entity, at(1.12), 1),
     );
+  });
+
+  test("caps the preview side where a device cannot hold the media's own size", () => {
+    const entity = createTestEntity({ size: { width: 1000, height: 750 } });
+    entity.originalSize = { width: 4032, height: 3024 };
+    const output = { width: 0, height: 0 };
+
+    // Zoomed far in, an uncapped preview is the photo itself.
+    expect(getEntityRenderSize(entity, at(8), 3)).toEqual({ width: 4032, height: 3024 });
+    expect(getEntityRenderSize(entity, at(8), 3, output, 2048)).toEqual({
+      width: 2048,
+      height: 1536,
+    });
+    expect(getContinuousOutputSize(entity, at(8), 3, output, 2048)).toEqual({
+      width: 2048,
+      height: 1536,
+    });
+    // Below the cap nothing changes, and media smaller than the cap keeps its size.
+    expect(getEntityRenderSize(entity, at(0.2), 1, output, 2048)).toEqual(
+      getEntityRenderSize(entity, at(0.2), 1),
+    );
+    entity.originalSize = { width: 1200, height: 900 };
+    expect(getEntityRenderSize(entity, at(8), 3, output, 2048)).toEqual({
+      width: 1200,
+      height: 900,
+    });
   });
 });

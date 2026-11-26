@@ -546,6 +546,18 @@ export const config = {
     entityTextureBudgetBytes: 512 * 1024 * 1024,
     /** Maximum idle scratch memory retained by TexturePool across dimensions/usages. */
     texturePoolBudgetBytes: 64 * 1024 * 1024,
+    /** `entityTextureBudgetBytes` on a phone or tablet, where the GPU process is killed early. */
+    constrainedEntityTextureBudgetBytes: 192 * 1024 * 1024,
+    /** `texturePoolBudgetBytes` on a phone or tablet. */
+    constrainedTexturePoolBudgetBytes: 32 * 1024 * 1024,
+    /**
+     * Longest side of a preview texture on a phone or tablet. A processed 12 MP photo at its
+     * own size holds several 16-bit intermediates of ~100 MB each; at this side they are a
+     * quarter of that. Export is unaffected.
+     */
+    constrainedPreviewMaxSide: 2048,
+    /** A browser reporting this much device memory (GiB) or less gets the constrained budgets. */
+    constrainedDeviceMemoryGiB: 4,
     /** Persistent dimension-keyed blur and bloom texture budget. */
     processingTextureBudgetBytes: 128 * 1024 * 1024,
     /** Quantized maximum dimensions for static-image viewport rendering. */
@@ -569,9 +581,11 @@ export const config = {
      * Size the output of a continuously animated effect to what it covers on screen, in
      * coarse steps, in place of its LOD tier. A tier leaves room for a cached result to
      * survive a zoom; an output processed again every frame has no use for that room.
-     * Off until its look is signed off: the effect is evaluated on fewer pixels.
+     * It also keeps the effect's look steady through a zoom, where a tier jumps.
      */
-    continuousOutputFollowsScreen: false as boolean,
+    continuousOutputFollowsScreen: true as boolean,
+    /** Maximum continuous effect outputs reallocated to a new screen size in one frame. */
+    continuousOutputResizesPerFrame: 4,
     /** Maximum target pixels admitted per settled frame (one oversized item may progress). */
     lodTransitionPixelBudget: 2 * 1024 * 1024,
     /** Minimum visible fraction required when admitting or rebuilding a full-scene batch. */
