@@ -2,12 +2,14 @@
  * Web Worker for workspace serialization.
  *
  * Receives entity media data + manifest JSON from the main thread,
- * performs PNG encoding (ImageBitmap → bytes via OffscreenCanvas) and
- * zip compression (fflate) entirely off the main thread.
+ * performs PNG encoding (ImageBitmap → bytes via OffscreenCanvas),
+ * names each media file by its content (v7: `media/<sha256>.<ext>`) and
+ * zip-compresses (fflate) entirely off the main thread.
  * Posts the final zip bytes back (transferred).
  */
 
-import type { SerializeMediaEntry } from "./types.ts";
+import { contentMediaPath, renameMediaPaths } from "./content-address.ts";
+import type { SerializeMediaEntry, StudioManifest } from "./types.ts";
 
 interface SerializeRequest {
   manifest: string;
@@ -18,26 +20,31 @@ self.onmessage = async (e: MessageEvent<SerializeRequest>) => {
   try {
     const { manifest, mediaEntries } = e.data;
     const zipEntries: Record<string, Uint8Array> = {};
-
-    // Add manifest
-    zipEntries["manifest.json"] = new TextEncoder().encode(manifest);
+    const renamed = new Map<string, string>();
 
     // Process media entries — PNG-encode ImageBitmaps, pass through raw bytes
     await Promise.all(
       mediaEntries.map(async (entry) => {
+        let bytes: Uint8Array;
         if (entry.type === "imageBitmap") {
           const bitmap = entry.bitmap!;
           const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
           const ctx = canvas.getContext("2d")!;
           ctx.drawImage(bitmap, 0, 0);
           const blob = await canvas.convertToBlob({ type: "image/png" });
-          zipEntries[entry.path] = new Uint8Array(await blob.arrayBuffer());
+          bytes = new Uint8Array(await blob.arrayBuffer());
           bitmap.close();
         } else {
-          zipEntries[entry.path] = entry.bytes!;
+          bytes = entry.bytes!;
         }
+        const path = await contentMediaPath(entry.path, bytes);
+        renamed.set(entry.path, path);
+        zipEntries[path] = bytes;
       }),
     );
+
+    const doc = renameMediaPaths(JSON.parse(manifest) as StudioManifest, renamed);
+    zipEntries["manifest.json"] = new TextEncoder().encode(JSON.stringify(doc, null, 2));
 
     // Compress into zip archive
     const { zipSync } = await import("fflate");

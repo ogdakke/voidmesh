@@ -25,12 +25,14 @@ export interface StudioManifest {
   entities: SerializedEntity[];
   /** Deduplicated static shader parameter records (v6+) */
   shaderParamsTable?: ShaderParams[];
-  /** Deduplicated archive media paths (v6+) */
+  /** Deduplicated archive media paths (v6+); content-addressed `media/<sha256>.<ext>` (v7+) */
   mediaFiles?: string[];
   /** Deduplicated original palettes referenced by entities (v6+) */
   originalPalettes?: ColorPalette[];
   /** Custom/extracted palettes referenced by entities (v4+) */
   palettes?: ColorPalette[];
+  /** The workspace this document is, when its writer keeps workspaces (v7+, desktop app) */
+  workspace?: { id: string; name: string };
 }
 
 // ============================================================================

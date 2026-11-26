@@ -9,12 +9,17 @@ A `.vdmsh` file is a zip containing:
 ```
 manifest.json     # viewport + entity metadata (versioned)
 media/
-  assets/<asset-id>-<revision>.png # shared images (one PNG per asset)
-  <entity-id>.mp4   # videos (original bytes)
-  <entity-id>.gif   # GIFs (original bytes)
+  <sha256>.<ext>    # one file per distinct media content (v7)
 ```
 
-`manifest.json` schema: `StudioManifest` (see `types.ts`), currently **v5**.
+`manifest.json` schema: `StudioManifest` (see `types.ts`), currently **v7**.
+
+v7 names media by content: the web app writes PNGs for images and original bytes for video, GIF
+and SVG; the desktop app writes every original as-is, so images may be JPEG, WebP or BMP and are
+decoded by extension. Readers treat media paths as opaque, so older layouts
+(`media/assets/<asset-id>-<revision>.png`, `media/<entity-id>.<ext>`) still load. The optional
+`workspace: { id, name }` names the desktop workspace a file was exported from. Entity ids are
+opaque strings unique within the document (`entity-N` on the web, UUIDs on desktop).
 
 Multiple image entities may reference the same `mediaFile`. Serialization writes one PNG per shared image asset, and deserialization restores one reference-counted `MediaImageAsset` for every repeated path.
 
@@ -50,11 +55,12 @@ To add a migration: add an entry keyed by the **source** version and bump `CURRE
 
 ## Files
 
-| File             | Purpose                                |
-| ---------------- | -------------------------------------- |
-| `serialize.ts`   | Canvas → zip Blob                      |
-| `deserialize.ts` | zip Blob/ArrayBuffer → canvas          |
-| `media.ts`       | Low-level bitmap/video byte conversion |
-| `migrations.ts`  | Schema version migration registry      |
-| `types.ts`       | Serialized types + type guards         |
-| `version.ts`     | `CURRENT_VERSION` constant             |
+| File                 | Purpose                                |
+| -------------------- | -------------------------------------- |
+| `serialize.ts`       | Canvas → zip Blob                      |
+| `content-address.ts` | v7 content-addressed media paths       |
+| `deserialize.ts`     | zip Blob/ArrayBuffer → canvas          |
+| `media.ts`           | Low-level bitmap/video byte conversion |
+| `migrations.ts`      | Schema version migration registry      |
+| `types.ts`           | Serialized types + type guards         |
+| `version.ts`         | `CURRENT_VERSION` constant             |

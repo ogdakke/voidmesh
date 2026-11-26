@@ -29,6 +29,15 @@ import { analytics } from "#lib/analytics.ts";
 import { createImageAsset, retainImageAsset } from "#lib/media-assets.ts";
 import { registerShaderParamsIdentity } from "#lib/shader-params-identity.ts";
 
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  gif: "image/gif",
+  bmp: "image/bmp",
+};
+
 const MIME_BY_EXT: Record<string, string> = {
   mp4: "video/mp4",
   webm: "video/webm",
@@ -530,8 +539,11 @@ async function deserializeEntity(
     case "image": {
       const bytes = zipEntries[serialized.mediaFile];
       if (!bytes) throw new Error(`Missing media file: ${serialized.mediaFile}`);
-      const imageBlob = new Blob([bytes.slice()]);
-      const bitmap = await bytesToImageBitmap(bytes);
+      // v7 keeps images in their original format (the desktop app writes JPEG, WebP, ...).
+      const imageExt = serialized.mediaFile.split(".").pop()?.toLowerCase() ?? "";
+      const imageMime = IMAGE_MIME_BY_EXT[imageExt] ?? "image/png";
+      const imageBlob = new Blob([bytes.slice()], { type: imageMime });
+      const bitmap = await bytesToImageBitmap(bytes, imageMime);
       let asset: MediaImageAsset;
       try {
         asset = createImageAsset({
