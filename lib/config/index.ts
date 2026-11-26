@@ -13,6 +13,7 @@ import {
   type ViewportLensDistortionConfig,
   GlassKind,
   GlitchKind,
+  PrintKind,
 } from "#types/canvas.ts";
 import type { PartialDeep } from "type-fest";
 import type { easings } from "../canvas-math";
@@ -141,6 +142,20 @@ export const shaderFeatures: Record<ShaderType, ShaderFeature> = {
     ] as const,
     colorMode: "palette",
   },
+  print: {
+    // Palette is only visible for riso (see paramVisibilityRules). The lightest colour is the
+    // paper, so reversing the palette has no meaning here.
+    params: [
+      "size",
+      "intensity",
+      "showOriginal",
+      "print",
+      "palette",
+      "adjustments",
+      "postProcess",
+    ] as const,
+    colorMode: "palette",
+  },
 };
 
 // ============================================================================
@@ -212,6 +227,18 @@ export const shaderDefaults: Record<ShaderType, ShaderDefaultsConfig> = {
       glitch: { kind: GlitchKind.channelShift, angle: 0 },
     },
   },
+  print: {
+    // Bloom blows out the paper white.
+    resetParams: {
+      size: 8,
+      intensity: 1,
+      adjustments: { blur: 0 },
+      postProcess: { bloom: { enabled: false } },
+    },
+    mergeParams: {
+      print: { kind: PrintKind.cmyk, angle: 0, dotGain: 0.3, paper: 0.3, misregistration: 0.25 },
+    },
+  },
 };
 
 /**
@@ -236,6 +263,35 @@ export const glitchKindResets: Record<GlitchKind, PartialDeep<ShaderParams>> = {
   [GlitchKind.pixelSmear]: { size: 50, intensity: 2, scale: 1 },
   [GlitchKind.scanline]: { size: 3, intensity: 1, scale: 1 },
 };
+
+/**
+ * Per-print-kind param resets applied when switching print sub-types.
+ * Every kind must specify all tunable params (size, intensity, print knobs)
+ * to ensure clean resets when switching between kinds.
+ */
+export const printKindResets: Record<PrintKind, PartialDeep<ShaderParams>> = {
+  [PrintKind.newsprint]: {
+    size: 6,
+    intensity: 1,
+    print: { angle: 0, dotGain: 0.5, paper: 0.8, misregistration: 0 },
+  },
+  [PrintKind.cmyk]: {
+    size: 8,
+    intensity: 1,
+    print: { angle: 0, dotGain: 0.3, paper: 0.3, misregistration: 0.25 },
+  },
+  [PrintKind.riso]: {
+    size: 8,
+    intensity: 1,
+    print: { angle: 0, dotGain: 0.15, paper: 0.5, misregistration: 0.5 },
+    palette: palettes.risoPinkBlue,
+  },
+};
+
+/** Riso takes paper and spot inks from the palette; other print kinds use fixed process inks. */
+function usesPaletteInks(params: ShaderParams): boolean {
+  return params.print?.kind === PrintKind.riso;
+}
 
 /** Error diffusion algorithms do NOT support scale parameter */
 export const errorDiffusionAlgorithms: readonly DitheringKind[] = [
@@ -297,6 +353,7 @@ export function getCommonFeatures(shaderTypes: ShaderType[]): {
 export const paramVisibilityRules: Partial<
   Record<ShaderType, { param: ParamPaths; isVisible: (params: ShaderParams) => boolean }[]>
 > = {
+  print: [{ param: "palette", isVisible: usesPaletteInks }],
   dithering: [
     {
       param: "scale",
@@ -627,6 +684,13 @@ export const config = {
       scale: 1.0,
       intensity: 1.0,
       blobs: { eagerness: 0.5 },
+      print: {
+        kind: PrintKind.cmyk,
+        angle: 0,
+        dotGain: 0.3,
+        paper: 0.3,
+        misregistration: 0.25,
+      },
       dithering: { kind: DitheringKind.bayer8x8 },
       ascii: { kind: AsciiKind.standard, invert: false },
       glass: {
@@ -717,6 +781,9 @@ export const config = {
     angle: { min: 0, max: 360, step: 1, default: 0 },
     caustic: { min: 0, max: 2, step: 0.01, default: 1 },
     frostiness: { min: 0, max: 1, step: 0.01, default: 0.8 },
+    dotGain: { min: 0, max: 1, step: 0.01, default: 0.3 },
+    paper: { min: 0, max: 1, step: 0.01, default: 0.3 },
+    misregistration: { min: 0, max: 1, step: 0.01, default: 0.25 },
     highlight: { min: 0, max: 1, step: 0.01, default: 0.1 },
     dispersion: { min: 0, max: 1, step: 0.01, default: 0.6 },
     flow: { min: 0, max: 1, step: 0.01, default: 0.5 },

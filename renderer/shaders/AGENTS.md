@@ -1,6 +1,6 @@
 # Renderer Shaders
 
-WebGPU effect passes and WGSL for dithering, halftone, ASCII, glass, blobs, melt, and glitch.
+WebGPU effect passes and WGSL for dithering, halftone (and print, which shares its pass), ASCII, glass, blobs, melt, and glitch.
 
 ## Structure
 

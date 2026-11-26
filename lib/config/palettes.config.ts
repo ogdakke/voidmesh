@@ -174,4 +174,33 @@ export const palettes = {
       hex("#bbbbbb"), // Light gray
     ],
   },
+
+  // Riso presets: first colour is the paper, the rest are spot inks (halftone riso screen).
+  risoPinkBlue: {
+    id: "risoPinkBlue",
+    name: "Riso Fluo Pink + Blue",
+    shortName: "Riso P/B",
+    colors: [hex("#f1ebe0"), hex("#ff48b0"), hex("#0078bf")],
+  },
+
+  risoRedTeal: {
+    id: "risoRedTeal",
+    name: "Riso Bright Red + Teal",
+    shortName: "Riso R/T",
+    colors: [hex("#f1ebe0"), hex("#ff665e"), hex("#00838a")],
+  },
+
+  risoOrangeNavy: {
+    id: "risoOrangeNavy",
+    name: "Riso Orange + Federal Blue",
+    shortName: "Riso O/N",
+    colors: [hex("#f1ebe0"), hex("#ff6c2f"), hex("#3d5588")],
+  },
+
+  risoTrio: {
+    id: "risoTrio",
+    name: "Riso Yellow + Fluo Pink + Blue",
+    shortName: "Riso Trio",
+    colors: [hex("#f1ebe0"), hex("#ffe800"), hex("#ff48b0"), hex("#0078bf")],
+  },
 } satisfies Record<string, ColorPalette>;
