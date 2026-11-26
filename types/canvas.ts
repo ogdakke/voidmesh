@@ -80,6 +80,7 @@ export const ShaderType = createEnum({
   ascii: "ascii",
   glass: "glass",
   glitch: "glitch",
+  print: "print",
 });
 /** Shader types available for entity processing */
 export type ShaderType = typeof ShaderType.infer;
@@ -132,6 +133,7 @@ const ERROR_DIFFUSION_KINDS: readonly DitheringKind[] = [
 
 export const SHADER_TYPE_OPTIONS = [
   { value: ShaderType.halftone, label: "Halftone" },
+  { value: ShaderType.print, label: "Print" },
   { value: ShaderType.blobs, label: "Blobs" },
   { value: ShaderType.melt, label: "Melt" },
   { value: ShaderType.dithering, label: "Dithering" },
@@ -292,6 +294,35 @@ export const SHAPE_OPTIONS = [
   { label: "Vertical Rectangle", value: Shape.rect_v },
 ];
 
+/** Print effect subtypes: simulated press screens on paper */
+export const PrintKind = createEnum({
+  newsprint: "newsprint",
+  cmyk: "cmyk",
+  riso: "riso",
+});
+/** Print effect subtype */
+export type PrintKind = typeof PrintKind.infer;
+
+export const PRINT_KIND_OPTIONS = [
+  { value: PrintKind.newsprint, label: "Newsprint" },
+  { value: PrintKind.cmyk, label: "CMYK" },
+  { value: PrintKind.riso, label: "Riso" },
+];
+
+/** Parameters for the print shader */
+export interface PrintParams {
+  /** Screen subtype */
+  kind: PrintKind;
+  /** Base screen angle in degrees (0-360), plate angles are relative to it */
+  angle: number;
+  /** Midtone dot gain / ink spread (0-1) */
+  dotGain: number;
+  /** Paper age, fibre texture and ink absorption (0-1) */
+  paper: number;
+  /** Plate registration error (0-1) */
+  misregistration: number;
+}
+
 /** Parameters for the blobs shader */
 export interface BlobsParams {
   /** Controls how eagerly adjacent dots merge (0.0 - 1.0, higher = more merging) */
@@ -358,6 +389,8 @@ export interface ShaderParams {
   scale: number;
   /** Effect intensity (0.0 - 5.0). Reusable across shaders. */
   intensity: number;
+  /** Parameters for the print shader (only used when shaderType is 'print') */
+  print?: PrintParams;
   /** Parameters for the blobs shader (only used when shaderType is 'blobs') */
   blobs?: BlobsParams;
   /** Parameters for the dithering shader (only used when shaderType is 'dithering') */

@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { config } from "#config";
 import { DitheringShader } from "#renderer/shaders/dithering-shader.ts";
+import { arrangeRisoPalette, HalftoneShader } from "#renderer/shaders/halftone-shader.ts";
+import { PrintKind, ShaderType } from "#types/canvas.ts";
 import { ShaderPass, type ShaderContext } from "#renderer/shaders/shader-pass.ts";
 import type { EffectRenderEntity } from "#renderer/effect-render-entity.ts";
 import { createTestEntity } from "../helpers/test-entity.ts";
@@ -67,6 +69,43 @@ describe("ShaderPass", () => {
 
     expect(context.floatView[2]).toBe(0.5);
     expect(context.floatView[4]).toBe(10);
+  });
+
+  test("print packs kind, angle and print knobs after palette metadata", () => {
+    const context = createContext(vi.fn<GPUDevice["createBuffer"]>());
+    const pass = new HalftoneShader(context);
+    const entity = createRenderEntity("print", 0.5);
+    entity.shaderType = ShaderType.print;
+    entity.shaderParams.scale = 2;
+    entity.shaderParams.print = {
+      kind: PrintKind.cmyk,
+      angle: 30,
+      dotGain: 1,
+      paper: 0.5,
+      misregistration: 0,
+    };
+
+    pass.writeUniforms(entity);
+
+    expect(context.floatView[7]).toBe(30);
+    expect(context.uintView[9]).toBe(2);
+    expect(context.uintView[11]).toBe(255 | (128 << 8));
+    // Print hides scale; the slot carries pixel scale for LOD-stable paper texture.
+    expect(context.floatView[2]).toBe(0.5);
+  });
+
+  test("halftone keeps scale and writes kind 0 even with stale print params", () => {
+    const context = createContext(vi.fn<GPUDevice["createBuffer"]>());
+    const pass = new HalftoneShader(context);
+    const entity = createRenderEntity("halftone-classic", 0.5);
+    entity.shaderType = ShaderType.halftone;
+    entity.shaderParams.scale = 2;
+    entity.shaderParams.print = { ...config.defaults.shaderParams.print, kind: PrintKind.riso };
+
+    pass.writeUniforms(entity);
+
+    expect(context.uintView[9]).toBe(0);
+    expect(context.floatView[2]).toBe(2);
   });
 
   test("writes fallback palette metadata immediately after the base uniforms", () => {
@@ -164,3 +203,37 @@ function createContext(createBuffer: GPUDevice["createBuffer"]): ShaderContext {
     supportsImmediates: false,
   };
 }
+
+describe("arrangeRisoPalette", () => {
+  const pack = (colors: number[][]) => {
+    const f = new Float32Array(64);
+    colors.forEach((c, i) => f.set([...c, 1], i * 4));
+    return f;
+  };
+  const colorAt = (f: Float32Array, i: number) => Array.from(f.slice(i * 4, i * 4 + 3));
+
+  test("uses the lightest colour as paper even when the palette starts dark", () => {
+    const f = pack([
+      [0, 0, 0],
+      [1, 1, 1],
+    ]);
+    expect(arrangeRisoPalette(f, 2)).toBe(2);
+    expect(colorAt(f, 0)).toEqual([1, 1, 1]);
+    expect(colorAt(f, 1)).toEqual([0, 0, 0]);
+  });
+
+  test("keeps at most three inks, preferring distinct ones over near duplicates", () => {
+    const f = pack([
+      [0.05, 0.05, 0.1],
+      [0.06, 0.05, 0.1],
+      [1, 0.2, 0.3],
+      [0.95, 0.95, 0.9],
+      [0.1, 0.6, 0.55],
+    ]);
+    expect(arrangeRisoPalette(f, 5)).toBe(4);
+    expect(colorAt(f, 0)).toEqual([0.95, 0.95, 0.9].map(Math.fround));
+    const inks = [1, 2, 3].map((i) => colorAt(f, i)[0]);
+    expect(inks).toContain(Math.fround(1));
+    expect(inks).toContain(Math.fround(0.1));
+  });
+});

@@ -36,6 +36,7 @@ import {
   AsciiKind,
   GlassKind,
   GlitchKind,
+  PrintKind,
   MediaType,
   isGifEntity,
 } from "#types/canvas.ts";
@@ -81,7 +82,7 @@ import {
   resetDuplicatedMediaPlayback,
 } from "#lib/media-duplication.ts";
 import { tracePerformancePhase } from "#lib/performance-tracing.ts";
-import { config, glassKindResets, glitchKindResets } from "#config";
+import { config, glassKindResets, glitchKindResets, printKindResets } from "#config";
 import { preferences } from "#lib/preferences.ts";
 import { paletteStore } from "#lib/palette-store.ts";
 import { analytics } from "#lib/analytics.ts";
@@ -105,6 +106,8 @@ import {
 let nextOwnerToken = 0;
 const resourceOwners = new Map<string, number>();
 const RENDER_ERROR_TOAST_ID = "canvas-render-error";
+/** How long a render error waits for a pending device loss before it is reported. */
+const DEVICE_LOSS_GRACE_MS = 500;
 const createPerfGraphRenderer = (
   canvas: HTMLCanvasElement,
   device: GPUDevice,
@@ -241,6 +244,14 @@ const shaderUrlParams = {
     config.defaults.shaderParams.glitch.kind,
   ),
   glitchAngle: parseAsFloat.withDefault(config.defaults.shaderParams.glitch.angle),
+  // Print shader params
+  printKind: parseAsStringLiteral(Object.values(PrintKind)).withDefault(
+    config.defaults.shaderParams.print.kind,
+  ),
+  printAngle: parseAsFloat.withDefault(config.defaults.shaderParams.print.angle),
+  dotGain: parseAsFloat.withDefault(config.defaults.shaderParams.print.dotGain),
+  paper: parseAsFloat.withDefault(config.defaults.shaderParams.print.paper),
+  misregistration: parseAsFloat.withDefault(config.defaults.shaderParams.print.misregistration),
 };
 
 /**
@@ -398,6 +409,13 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         kind: currentRenderState.glitchKind,
         angle: currentRenderState.glitchAngle,
       },
+      print: {
+        kind: currentRenderState.printKind,
+        angle: currentRenderState.printAngle,
+        dotGain: currentRenderState.dotGain,
+        paper: currentRenderState.paper,
+        misregistration: currentRenderState.misregistration,
+      },
       palette: palette ?? config.defaults.shaderParams.palette,
       postProcess,
     };
@@ -451,6 +469,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
             asciiInvert: null,
             glitchKind: null,
             glitchAngle: null,
+            printKind: null,
+            printAngle: null,
+            dotGain: null,
+            paper: null,
+            misregistration: null,
           };
           const nextKey = JSON.stringify(clearedState);
           if (nextKey !== lastSyncedRenderStateRef.current) {
@@ -501,6 +524,13 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         asciiInvert: entity.shaderParams.ascii?.invert ?? config.defaults.shaderParams.ascii.invert,
         glitchKind: entity.shaderParams.glitch?.kind ?? config.defaults.shaderParams.glitch.kind,
         glitchAngle: entity.shaderParams.glitch?.angle ?? config.defaults.shaderParams.glitch.angle,
+        printKind: entity.shaderParams.print?.kind ?? config.defaults.shaderParams.print.kind,
+        printAngle: entity.shaderParams.print?.angle ?? config.defaults.shaderParams.print.angle,
+        dotGain: entity.shaderParams.print?.dotGain ?? config.defaults.shaderParams.print.dotGain,
+        paper: entity.shaderParams.print?.paper ?? config.defaults.shaderParams.print.paper,
+        misregistration:
+          entity.shaderParams.print?.misregistration ??
+          config.defaults.shaderParams.print.misregistration,
         preset: paletteParams.preset,
         ppEnabled: pp?.enabled ?? ppDefaults.enabled,
         ppGrainEnabled: pp?.grain?.enabled ?? ppDefaults.grain!.enabled,
@@ -1266,6 +1296,13 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  const changePrintKind = (value: string | null) => {
+    if (!value) return;
+    const kind = value as PrintKind;
+    const reset = printKindResets[kind];
+    updateSelectedEntityParams({ ...reset, print: { ...reset.print, kind } });
+  };
+
   const setShowOriginal = (value: boolean) => {
     updateSelectedEntityParams({ showOriginal: value });
   };
@@ -1548,6 +1585,23 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         angle:
           shaderUrlParams.glitchAngle.parse(parsedParams.glitchAngle ?? "") ??
           config.defaults.shaderParams.glitch.angle,
+      },
+      print: {
+        kind:
+          shaderUrlParams.printKind.parse(parsedParams.printKind ?? "") ??
+          config.defaults.shaderParams.print.kind,
+        angle:
+          shaderUrlParams.printAngle.parse(parsedParams.printAngle ?? "") ??
+          config.defaults.shaderParams.print.angle,
+        dotGain:
+          shaderUrlParams.dotGain.parse(parsedParams.dotGain ?? "") ??
+          config.defaults.shaderParams.print.dotGain,
+        paper:
+          shaderUrlParams.paper.parse(parsedParams.paper ?? "") ??
+          config.defaults.shaderParams.print.paper,
+        misregistration:
+          shaderUrlParams.misregistration.parse(parsedParams.misregistration ?? "") ??
+          config.defaults.shaderParams.print.misregistration,
       },
       palette: palette ?? config.defaults.shaderParams.palette,
       postProcess,
@@ -1996,12 +2050,20 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       // TODO: Add the Firefox/Bugzilla issue URL here once filed.
       if (isFirefoxExternalTextureCorsError(error)) return true;
 
+      // A dying device throws (e.g. from createCommandEncoder) before `device.lost` settles.
+      // Device loss has its own recovery UI, so only report errors from a device that survives.
       const message = formatErrorMessage(error);
-      toastManager.add({
-        id: RENDER_ERROR_TOAST_ID,
-        title: "Canvas render failed",
-        description: message,
-        type: "destructive",
+      void Promise.race([
+        renderer.deviceLost.then(() => true),
+        new Promise<false>((resolve) => setTimeout(resolve, DEVICE_LOSS_GRACE_MS, false)),
+      ]).then((deviceLost) => {
+        if (deviceLost) return;
+        toastManager.add({
+          id: RENDER_ERROR_TOAST_ID,
+          title: "Canvas render failed",
+          description: message,
+          type: "destructive",
+        });
       });
     });
     gameLoop.setRenderer(renderer);
@@ -2182,6 +2244,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setAsciiInvert,
     changeGlassKind,
     changeGlitchKind,
+    changePrintKind,
     changePalette,
     renamePalette,
     uploadPalette,
@@ -2231,6 +2294,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       setAsciiInvert,
       changeGlassKind,
       changeGlitchKind,
+      changePrintKind,
       changePalette,
       renamePalette,
       uploadPalette,
@@ -2282,6 +2346,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setAsciiInvert: (...args) => commandsImplRef.current.setAsciiInvert(...args),
     changeGlassKind: (...args) => commandsImplRef.current.changeGlassKind(...args),
     changeGlitchKind: (...args) => commandsImplRef.current.changeGlitchKind(...args),
+    changePrintKind: (...args) => commandsImplRef.current.changePrintKind(...args),
     changePalette: (...args) => commandsImplRef.current.changePalette(...args),
     renamePalette: (...args) => commandsImplRef.current.renamePalette(...args),
     uploadPalette: (...args) => commandsImplRef.current.uploadPalette(...args),

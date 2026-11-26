@@ -6,6 +6,7 @@ import { overlapConfig } from "#lib/config/overlap.config.ts";
 import { boundsIntersect, getRotatedAABB, getViewportWorldBounds } from "#lib/canvas-math.ts";
 import { getFrameAtTime } from "#lib/gif-decoder.ts";
 import { setGpuContext } from "./gpu-color-space.ts";
+import { GpuDeviceLostError, WebGpuUnavailableError } from "./gpu-device-recovery.ts";
 import type { DisintegrationRenderOverlay, RenderState } from "#engine";
 import { MediaType, type Bounds, type ShaderCanvasEntity, type Viewport } from "#types/canvas.ts";
 import { CanvasLensing } from "#types/enums.ts";
@@ -34,7 +35,6 @@ import { GridPass } from "./grid-pass.ts";
 import type { ByteBudgetCacheStats } from "./byte-budget-cache.ts";
 import { SelectionRectPass } from "./selection-rect-pass.ts";
 import { TexturePool, type TexturePoolStats } from "./texture-pool.ts";
-import { DeferredGpuDestroy } from "./deferred-gpu-destroy.ts";
 import { getGpuMemoryBudget } from "./gpu-memory-budget.ts";
 import { ViewportLensPass, type ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
 import { ViewportUniforms } from "./viewport-uniforms.ts";
@@ -97,8 +97,10 @@ export class InfiniteCanvasRenderer {
   #entityErrors: Map<string, string> = new Map();
   // Callback for error notifications (e.g., to show toast)
   onEntityError?: (entityId: string, error: string) => void;
-  // Callback for GPU device lost events
-  onDeviceLost?: (reason: string) => void;
+  /** Called when the device is lost for any reason other than this renderer's own `destroy()`. */
+  onDeviceLost?: (error: GpuDeviceLostError) => void;
+  #destroyed = false;
+  readonly #deviceLost = Promise.withResolvers<void>();
 
   #actionLayerBlurPass: ActionLayerBlurPass | null = null;
   #actionBlurBackdropState: {
@@ -233,7 +235,6 @@ export class InfiniteCanvasRenderer {
   #lodSettleFramesRemaining = 0;
   /** The current frame's encoder until it is submitted. */
   #frameEncoder: GPUCommandEncoder | null = null;
-  #deferredDestroy: DeferredGpuDestroy | null = null;
   readonly #memoryBudget = getGpuMemoryBudget();
   #mixedBatchLodRefreshPending = false;
   #mixedBatchLodRefreshStarted = false;
@@ -246,6 +247,14 @@ export class InfiniteCanvasRenderer {
 
   get isReady(): boolean {
     return this.#device !== null && this.#gridPass !== null;
+  }
+
+  /**
+   * Settles once this renderer's device is lost, including by `destroy()`. A dying device can
+   * throw from GPU calls before its `lost` promise settles, so error reporting can race this.
+   */
+  get deviceLost(): Promise<void> {
+    return this.#deviceLost.promise;
   }
 
   get colorConfig(): GpuColorConfig {
@@ -371,7 +380,7 @@ export class InfiniteCanvasRenderer {
   async initialize(): Promise<void> {
     const adapter = await navigator.gpu?.requestAdapter();
     if (!adapter) {
-      throw new Error("WebGPU adapter not available");
+      throw new WebGpuUnavailableError();
     }
 
     // Request higher storage buffer limit for large images (error diffusion dithering)
@@ -390,16 +399,19 @@ export class InfiniteCanvasRenderer {
       requiredLimits.maxBufferSize = adapterLimits.maxBufferSize;
     }
 
-    this.#device = await adapter.requestDevice({ requiredLimits });
-    // Temporary A/B switch for the iOS device-loss investigation: `?immediateGpuDestroy`
-    // restores destroying at the call. Remove once the cause is confirmed.
-    if (!new URLSearchParams(window.location.search).has("immediateGpuDestroy")) {
-      this.#deferredDestroy = new DeferredGpuDestroy(this.#device);
+    const device = await adapter.requestDevice({ requiredLimits });
+    // `destroy()` can run while the device request is in flight; nothing else would free it.
+    if (this.#destroyed) {
+      device.destroy();
+      throw new Error("Renderer destroyed during initialization");
     }
+    this.#device = device;
 
-    this.#device.lost.then((info) => {
+    void device.lost.then((info) => {
+      this.#deviceLost.resolve();
+      if (this.#destroyed) return;
       logger.error(`[WebGPU] Device lost: ${info.reason}`, info.message);
-      this.onDeviceLost?.(info.reason);
+      this.onDeviceLost?.(new GpuDeviceLostError(info.reason, info.message));
     });
 
     this.#device.addEventListener("uncapturederror", (event) => {
@@ -592,7 +604,6 @@ export class InfiniteCanvasRenderer {
     try {
       pipeline?.flushSourceUploads();
       this.#device?.queue.submit([encoder.finish()]);
-      this.#deferredDestroy?.afterSubmit();
       pipeline?.flushTextureReleases();
       pipeline?.endFrame();
       this.#compositionPass?.endFrame();
@@ -1131,7 +1142,6 @@ export class InfiniteCanvasRenderer {
     // Single submission for all passes
     this.#frameEncoder = null;
     this.#device.queue.submit([encoder.finish()]);
-    this.#deferredDestroy?.afterSubmit();
     const submitEnd = performance.now();
     this.#lastPhaseStats.submitMs = tracePerformancePhase("render.submit", submitStart, submitEnd);
     this.#entityTexturePipeline?.flushTextureReleases();
@@ -1948,8 +1958,7 @@ export class InfiniteCanvasRenderer {
   }
 
   destroy(): void {
-    this.#deferredDestroy?.dispose();
-    this.#deferredDestroy = null;
+    this.#destroyed = true;
     this.#entityDrawItemPreparer = null;
     this.#entityTexturePipeline?.destroy();
     this.#entityTexturePipeline = null;
@@ -2003,7 +2012,8 @@ export class InfiniteCanvasRenderer {
     this.#resizeObserver?.disconnect();
     this.#resizeObserver = null;
 
-    // Destroy device
+    // A replacement renderer reconfigures the same canvas context with its own device.
+    this.#context?.unconfigure();
     this.#device?.destroy();
 
     // Clear references

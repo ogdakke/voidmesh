@@ -9,7 +9,7 @@ import { canvasStore } from "#engine";
 import { createTestEntity } from "../helpers/test-entity.ts";
 import { createAllProvidersWrapper } from "../helpers/render-with-providers.tsx";
 import { setupCanvasTest } from "../helpers/test-setup.ts";
-import { ShaderType, DitheringKind, GlassKind } from "#types/canvas.ts";
+import { ShaderType, DitheringKind, GlassKind, PrintKind } from "#types/canvas.ts";
 import { config } from "#config";
 
 let cleanup: () => void;
@@ -475,6 +475,50 @@ describe("paramVisibilityRules", () => {
 
       expect(canvasStore.getParamResult("glass.angle", 0).isSupported).toBe(false);
       expect(canvasStore.getParamResult("glass.frostiness", 0.8).isSupported).toBe(false);
+    });
+  });
+
+  describe("print kinds", () => {
+    test("print exposes print knobs and hides halftone-only params", () => {
+      const entity = createTestEntity({
+        shaderType: ShaderType.print,
+        shaderParams: { print: { ...config.defaults.shaderParams.print, kind: PrintKind.cmyk } },
+      });
+      canvasStore.addEntity(entity);
+      canvasStore.replaceSelection([entity.id]);
+
+      expect(canvasStore.getParamResult("print.kind", null).isSupported).toBe(true);
+      expect(canvasStore.getParamResult("print.angle", 0).isSupported).toBe(true);
+      expect(canvasStore.getParamResult("print.dotGain", 0).isSupported).toBe(true);
+      expect(canvasStore.getParamResult("print.paper", 0).isSupported).toBe(true);
+      expect(canvasStore.getParamResult("print.misregistration", 0).isSupported).toBe(true);
+      expect(canvasStore.getParamResult("shape", null).isSupported).toBe(false);
+      expect(canvasStore.getParamResult("scale", 1).isSupported).toBe(false);
+      // CMYK uses fixed process inks.
+      expect(canvasStore.getParamResult("palette", null).isSupported).toBe(false);
+      expect(canvasStore.getParamResult("reversePalette", false).isSupported).toBe(false);
+    });
+
+    test("riso takes paper and inks from the palette", () => {
+      const entity = createTestEntity({
+        shaderType: ShaderType.print,
+        shaderParams: { print: { ...config.defaults.shaderParams.print, kind: PrintKind.riso } },
+      });
+      canvasStore.addEntity(entity);
+      canvasStore.replaceSelection([entity.id]);
+
+      expect(canvasStore.getParamResult("palette", null).isSupported).toBe(true);
+      // The lightest colour is always the paper, so palette order does not matter.
+      expect(canvasStore.getParamResult("reversePalette", false).isSupported).toBe(false);
+    });
+
+    test("halftone does not expose print knobs", () => {
+      const entity = createTestEntity({ shaderType: ShaderType.halftone });
+      canvasStore.addEntity(entity);
+      canvasStore.replaceSelection([entity.id]);
+
+      expect(canvasStore.getParamResult("print.kind", null).isSupported).toBe(false);
+      expect(canvasStore.getParamResult("shape", null).isSupported).toBe(true);
     });
   });
 });

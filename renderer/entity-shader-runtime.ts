@@ -108,6 +108,7 @@ export class EntityShaderRuntime {
     asciiShader.onEntityError = this.#onEntityError;
     const shaders = [
       [ShaderType.halftone, new HalftoneShader(this.#shaderContext)] as const,
+      [ShaderType.print, new HalftoneShader(this.#shaderContext)] as const,
       [ShaderType.blobs, new BlobsShader(this.#shaderContext)] as const,
       [ShaderType.melt, new MeltShader(this.#shaderContext)] as const,
       [ShaderType.glass, new GlassShader(this.#shaderContext)] as const,

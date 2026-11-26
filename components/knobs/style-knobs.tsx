@@ -8,6 +8,7 @@ import {
   AsciiKind,
   GlassKind,
   GlitchKind,
+  PrintKind,
   Shape,
 } from "#types/canvas.ts";
 import {
@@ -52,6 +53,10 @@ import {
   GlitchScanlineIcon,
   HalftoneIcon,
   MeltIcon,
+  PrintCmykIcon,
+  PrintIcon,
+  PrintNewsprintIcon,
+  PrintRisoIcon,
   ShapeCircleIcon,
   ShapeSquareIcon,
   ShapeVerticalRectIcon,
@@ -70,6 +75,7 @@ const shaderIconMap: Record<ShaderType, () => ReactNode> = {
   [ShaderType.melt]: () => <MeltIcon className="knob-icon" />,
   [ShaderType.glass]: () => <GlassIcon className="knob-icon" />,
   [ShaderType.glitch]: () => <GlitchIcon className="knob-icon" />,
+  [ShaderType.print]: () => <PrintIcon className="knob-icon" />,
 };
 
 // ============================================================================
@@ -644,6 +650,131 @@ function MobileGlitchStyleKnobs() {
 }
 
 // ============================================================================
+// Print Kind Items
+// ============================================================================
+
+const PRINT_ITEMS: MobileStyleItem<PrintKind>[] = [
+  {
+    value: PrintKind.newsprint,
+    label: "Newsprint",
+    shortLabel: "News",
+    icon: () => <PrintNewsprintIcon className="knob-icon" />,
+  },
+  {
+    value: PrintKind.cmyk,
+    label: "CMYK",
+    shortLabel: "CMYK",
+    icon: () => <PrintCmykIcon className="knob-icon" />,
+  },
+  {
+    value: PrintKind.riso,
+    label: "Riso",
+    shortLabel: "Riso",
+    icon: () => <PrintRisoIcon className="knob-icon" />,
+  },
+];
+
+// ============================================================================
+// Mobile Print Style Knobs
+// ============================================================================
+
+function MobilePrintStyleKnobs() {
+  const { changePrintKind } = useCanvasCommands();
+  const printKind = useParamValue("print.kind", config.defaults.shaderParams.print.kind);
+
+  // Floating label state
+  const [floatingLabel, setFloatingLabel] = useState<string | null>(null);
+  const floatingLabelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showFloatingLabel = (text: string) => {
+    if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
+    setFloatingLabel(text);
+    floatingLabelTimeoutRef.current = setTimeout(
+      () => setFloatingLabel(null),
+      config.ui.floatingParamLabelHideTimeoutMs,
+    );
+  };
+
+  useEffect(
+    () => () => {
+      if (floatingLabelTimeoutRef.current) clearTimeout(floatingLabelTimeoutRef.current);
+    },
+    [],
+  );
+
+  const handleValueChange = (value: string) => {
+    changePrintKind(value);
+    const item = PRINT_ITEMS.find((i) => i.value === value);
+    if (item) showFloatingLabel(item.label);
+  };
+
+  const handleInteractionStart = () => {
+    undo.beginTransaction();
+    if (printKind.isMixed) {
+      showFloatingLabel("Mixed");
+    } else {
+      const item = PRINT_ITEMS.find((i) => i.value === printKind.value);
+      if (item) showFloatingLabel(item.label);
+    }
+  };
+
+  const handleValueCommit = () => {
+    undo.commitTransaction();
+  };
+
+  if (!printKind.isSupported) return null;
+
+  return (
+    <>
+      {floatingLabel &&
+        createPortal(
+          <div className="mobile-style-knobs__floating-label" data-visible>
+            {floatingLabel}
+          </div>,
+          document.body,
+        )}
+
+      <SliderPicker
+        value={printKind.isMixed ? "" : printKind.value}
+        onValueChange={handleValueChange}
+        onInteractionStart={handleInteractionStart}
+        onValueCommit={handleValueCommit}
+        className="mobile-style-knobs"
+      >
+        <SliderPickerWindow className="mobile-style-knobs__window">
+          <SliderPickerOptions
+            className="mobile-style-knobs__options"
+            aria-label="Print type selection"
+          >
+            {printKind.isMixed && (
+              <SliderPickerMixedItem className="mobile-style-knobs__item">
+                <button type="button" className="ui-button" tabIndex={-1}>
+                  <QuestionMark />
+                </button>
+                <span className="mobile-style-knobs__label">Mixed</span>
+              </SliderPickerMixedItem>
+            )}
+            {PRINT_ITEMS.map((item) => (
+              <SliderPickerItem
+                key={item.value}
+                value={item.value}
+                className="mobile-style-knobs__item"
+              >
+                <button type="button" className="ui-button" tabIndex={-1}>
+                  {item.icon()}
+                </button>
+                <span className="mobile-style-knobs__label">{item.shortLabel}</span>
+              </SliderPickerItem>
+            ))}
+          </SliderPickerOptions>
+          <div className="mobile-style-knobs__highlight" aria-hidden="true" />
+        </SliderPickerWindow>
+      </SliderPicker>
+    </>
+  );
+}
+
+// ============================================================================
 // Mobile Shape Style Knobs
 // ============================================================================
 
@@ -882,6 +1013,7 @@ export function MobileStyleKnobs() {
       <MobileAsciiStyleKnobs />
       <MobileGlassStyleKnobs />
       <MobileGlitchStyleKnobs />
+      <MobilePrintStyleKnobs />
       <MobileShapeStyleKnobs key={selectedShaderType} />
     </>
   );
