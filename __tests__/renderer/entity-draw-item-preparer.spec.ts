@@ -686,6 +686,12 @@ function createHarness(
       (_entity: ShaderCanvasEntity) => { kind: "texture"; texture: GPUTexture }
     >(() => ({ kind: "texture", texture })),
     resolveRenderSize: vi.fn<() => null>(() => null),
+    resolveContinuousOutputSize: vi.fn<
+      (
+        _entity: ShaderCanvasEntity,
+        desired: { width: number; height: number },
+      ) => { width: number; height: number }
+    >((_entity, desired) => desired),
     renderEntityToTexture: vi.fn<() => null>(() => null),
   };
   const spatialIndex = {

@@ -94,6 +94,8 @@ interface CliOptions {
   lodConsistency: boolean;
   screenSizedContinuous: boolean;
   tierSizedContinuous: boolean;
+  /** Device pixel ratio forced on the page; 3 approximates a phone's texture sizes. */
+  deviceScaleFactor: number | null;
   rounds: number;
 }
 
@@ -143,7 +145,13 @@ async function main(): Promise<void> {
 
     const cdpPort = options.cdpPort ?? (await getFreePort());
     const chromePath = await resolveChromePath();
-    chromeProcess = startChrome(chromePath, cdpPort, chromeProfileDir, options.headless);
+    chromeProcess = startChrome(
+      chromePath,
+      cdpPort,
+      chromeProfileDir,
+      options.headless,
+      options.deviceScaleFactor,
+    );
     const pageWebSocketUrl = await openBenchPage(cdpPort, pageUrl);
     const pageClient = await CdpClient.connect(pageWebSocketUrl);
 
@@ -304,6 +312,7 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
     lodConsistency: false,
     screenSizedContinuous: false,
     tierSizedContinuous: false,
+    deviceScaleFactor: null,
     rounds: Number(process.env.BENCH_ROUNDS ?? 1),
   };
 
@@ -345,6 +354,8 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
       options.tierSizedContinuous = true;
     } else if (arg === "--screen-sized-continuous") {
       options.screenSizedContinuous = true;
+    } else if (arg === "--device-scale-factor") {
+      options.deviceScaleFactor = Number(readArgValue(argv, ++index, arg));
     } else if (arg === "--video-url") {
       options.videoUrl = readArgValue(argv, ++index, arg);
     } else if (arg === "--cpu-profile") {
@@ -446,6 +457,7 @@ function startChrome(
   cdpPort: number,
   profileDir: string,
   headless: boolean,
+  deviceScaleFactor: number | null,
 ): Bun.Subprocess<"ignore", "pipe", "pipe"> {
   const args = [
     `--remote-debugging-port=${cdpPort}`,
@@ -461,6 +473,7 @@ function startChrome(
     "about:blank",
   ];
   if (headless) args.unshift("--headless=new");
+  if (deviceScaleFactor !== null) args.unshift(`--force-device-scale-factor=${deviceScaleFactor}`);
 
   const subprocess = Bun.spawn([chromePath, ...args], {
     stdin: "ignore",

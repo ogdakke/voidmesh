@@ -344,10 +344,14 @@ export class EntityDrawItemPreparer {
         const shown = this.#shownRects.get(entity);
         const outputSize =
           needsContinuousRender && config.rendering.continuousOutputFollowsScreen
-            ? getContinuousOutputSize(
+            ? this.#texturePipeline.resolveContinuousOutputSize(
                 entity,
-                viewport,
-                devicePixelRatio,
+                getContinuousOutputSize(
+                  entity,
+                  viewport,
+                  devicePixelRatio,
+                  this.#continuousOutputSize,
+                ),
                 this.#continuousOutputSize,
               )
             : renderSize;

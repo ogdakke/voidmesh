@@ -128,6 +128,7 @@ export class EntityTexturePipeline {
   #lodTransitionPixelsRemaining = 0;
   #lodTransitionsUsed = 0;
   #pendingLodWork = false;
+  #continuousOutputResizesUsed = 0;
   #textureCacheRevision = 0;
   readonly #residentTextureEntries = new WeakMap<GPUTexture, CachedEntityTexture>();
   readonly #lodCacheLookups = new Map<object, LodCacheLookup>();
@@ -572,6 +573,7 @@ export class EntityTexturePipeline {
     this.#lodTransitionPixelsRemaining = config.rendering.lodTransitionPixelBudget;
     this.#lodTransitionsUsed = 0;
     this.#pendingLodWork = false;
+    this.#continuousOutputResizesUsed = 0;
     this.#lodCacheLookups.clear();
   }
 
@@ -662,6 +664,51 @@ export class EntityTexturePipeline {
 
     output.width = desired.width;
     output.height = desired.height;
+    return output;
+  }
+
+  /**
+   * The size a continuous effect's output takes this frame, given the size it projects to.
+   * Each change of size is a texture allocation, so a frame admits only
+   * `continuousOutputResizesPerFrame` of them, and a moving viewport changes none that is
+   * within `LOD_FAR_PIXEL_RATIO` of its size on screen: the rule cached tiers follow, so a
+   * zoom reallocates once or twice, not at every size step. An output left at its previous
+   * size is still processed this frame and shows the same picture, resampled.
+   */
+  resolveContinuousOutputSize(
+    entity: ShaderCanvasEntity,
+    desired: { width: number; height: number },
+    output: { width: number; height: number } = { width: 0, height: 0 },
+  ): { width: number; height: number } {
+    output.width = desired.width;
+    output.height = desired.height;
+    const current = this.#entityProcessedBindings.get(entity.id)?.texture;
+    if (!current || (current.width === desired.width && current.height === desired.height)) {
+      return output;
+    }
+    // A texture of another shape belongs to other content (a crop, a replaced source).
+    const aspectError = Math.abs(current.width * desired.height - current.height * desired.width);
+    if (aspectError > Math.max(current.width, current.height, desired.width, desired.height)) {
+      return output;
+    }
+
+    const currentPixels = current.width * current.height;
+    const desiredPixels = desired.width * desired.height;
+    const keepsWhileMoving =
+      !this.#allowLodTransitions &&
+      currentPixels < desiredPixels * LOD_FAR_PIXEL_RATIO &&
+      desiredPixels < currentPixels * LOD_FAR_PIXEL_RATIO;
+    if (
+      keepsWhileMoving ||
+      this.#continuousOutputResizesUsed >= config.rendering.continuousOutputResizesPerFrame
+    ) {
+      // Settling resizes what motion left alone, so ask for the frames that takes.
+      this.#pendingLodWork = true;
+      output.width = current.width;
+      output.height = current.height;
+      return output;
+    }
+    this.#continuousOutputResizesUsed++;
     return output;
   }
 
@@ -776,6 +823,7 @@ export class EntityTexturePipeline {
       entity.mediaSource.type === MediaType.image
         ? entity.mediaSource.asset.imageBitmap
         : entity.imageBitmap;
+    let oneOffSurface: OffscreenCanvas | null = null;
     if (source.width !== width || source.height !== height) {
       if (
         this.#stagingSourceUploads &&
@@ -795,12 +843,13 @@ export class EntityTexturePipeline {
         this.#sourceUploads++;
         return;
       }
-      const surface =
-        entity.mediaSource.type === MediaType.gif
-          ? this.#getGifResizeSurface(entity.id, width, height)
-          : createResizeSurface(width, height, getSourceAlphaMode(entity) !== "none");
+      const isGif = entity.mediaSource.type === MediaType.gif;
+      const surface = isGif
+        ? this.#getGifResizeSurface(entity.id, width, height)
+        : createResizeSurface(width, height, getSourceAlphaMode(entity) !== "none");
       surface.context.drawImage(source, 0, 0, width, height);
       source = surface.canvas;
+      if (!isGif) oneOffSurface = surface.canvas;
     }
     this.#device.queue.copyExternalImageToTexture(
       { source },
@@ -808,6 +857,12 @@ export class EntityTexturePipeline {
       [width, height],
     );
     this.#sourceUploads++;
+    // The copy has taken its pixels. A one-off surface would otherwise hold its backing
+    // store (up to a 4096 tier) until garbage collection, and a zoom makes one per upload.
+    if (oneOffSurface) {
+      oneOffSurface.width = 0;
+      oneOffSurface.height = 0;
+    }
   }
 
   /**

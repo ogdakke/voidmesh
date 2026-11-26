@@ -515,6 +515,8 @@ export const config = {
      * It also keeps the effect's look steady through a zoom, where a tier jumps.
      */
     continuousOutputFollowsScreen: true as boolean,
+    /** Maximum continuous effect outputs reallocated to a new screen size in one frame. */
+    continuousOutputResizesPerFrame: 4,
     /** Maximum target pixels admitted per settled frame (one oversized item may progress). */
     lodTransitionPixelBudget: 2 * 1024 * 1024,
     /** Minimum visible fraction required when admitting or rebuilding a full-scene batch. */
