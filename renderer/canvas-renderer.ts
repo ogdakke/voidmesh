@@ -35,6 +35,7 @@ import { GridPass } from "./grid-pass.ts";
 import type { ByteBudgetCacheStats } from "./byte-budget-cache.ts";
 import { SelectionRectPass } from "./selection-rect-pass.ts";
 import { TexturePool, type TexturePoolStats } from "./texture-pool.ts";
+import { shouldCopyVideoFrames } from "./video-frame-source.ts";
 import { getGpuMemoryBudget } from "./gpu-memory-budget.ts";
 import { ViewportLensPass, type ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
 import { ViewportUniforms } from "./viewport-uniforms.ts";
@@ -464,6 +465,7 @@ export class InfiniteCanvasRenderer {
       colorConfig: this.#colorConfig,
       texturePool: this.#texturePool,
       textureBudgetBytes: this.#memoryBudget.entityTextureBytes,
+      copyVideoFrames: shouldCopyVideoFrames(),
       onImmutableSourceUpload: (texture, encoder) =>
         this.#compositionPass!.primeImmutableSource(texture, encoder),
       onEntityError: (entityId, error) => {

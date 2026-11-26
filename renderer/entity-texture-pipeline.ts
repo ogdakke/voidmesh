@@ -24,6 +24,12 @@ export interface EntityTexturePipelineOptions {
   colorConfig: GpuColorConfig;
   texturePool: TexturePool | null;
   textureBudgetBytes?: number;
+  /**
+   * Keep each video's current frame in a texture this pipeline owns, refreshed when the
+   * video shows a new frame, instead of importing an external texture every rendered frame.
+   * See `shouldCopyVideoFrames`.
+   */
+  copyVideoFrames?: boolean;
   onEntityError?: ((entityId: string, error: string) => void) | undefined;
   onTextureEvicted?: (entityIds: ReadonlySet<string>) => void;
   onImmutableSourceUpload?: (texture: GPUTexture, encoder: GPUCommandEncoder) => void;
@@ -112,6 +118,7 @@ export class EntityTexturePipeline {
   readonly #colorConfig: GpuColorConfig;
   readonly #runtime: EntityShaderRuntime;
   readonly #textureBudgetBytes: number;
+  readonly #copyVideoFrames: boolean;
   readonly #onTextureEvicted: ((entityIds: ReadonlySet<string>) => void) | undefined;
   readonly #onImmutableSourceUpload:
     | ((texture: GPUTexture, encoder: GPUCommandEncoder) => void)
@@ -155,6 +162,7 @@ export class EntityTexturePipeline {
     this.#colorConfig = options.colorConfig;
     this.#textureBudgetBytes =
       options.textureBudgetBytes ?? config.rendering.entityTextureBudgetBytes;
+    this.#copyVideoFrames = options.copyVideoFrames ?? false;
     this.#onTextureEvicted = options.onTextureEvicted;
     this.#onImmutableSourceUpload = options.onImmutableSourceUpload;
     this.#runtime = new EntityShaderRuntime({
@@ -230,9 +238,16 @@ export class EntityTexturePipeline {
     outputRegion: ShaderOutputRegion | null = null,
     continuousOutputSize: { width: number; height: number } | null = null,
   ): EntityCompositionSource | null {
-    const sourceWidth = renderSize.width;
-    const sourceHeight = renderSize.height;
-    const useExternalVideoSource = entity.mediaSource.type === MediaType.video;
+    const useExternalVideoSource =
+      entity.mediaSource.type === MediaType.video && !this.#copyVideoFrames;
+    // A copied video frame is kept at the video's own size: the copy cannot scale, and a
+    // fixed size means a zoom never reallocates it.
+    const copiedVideo =
+      entity.mediaSource.type === MediaType.video && this.#copyVideoFrames
+        ? entity.mediaSource.videoElement
+        : null;
+    const sourceWidth = copiedVideo?.videoWidth || renderSize.width;
+    const sourceHeight = copiedVideo?.videoHeight || renderSize.height;
     const contentRevision = this.#resolveContentRevision(entity);
 
     // Time-based shaders need the shader pass every canvas render. Processed videos do not:
@@ -819,6 +834,16 @@ export class EntityTexturePipeline {
     width: number,
     height: number,
   ): void {
+    if (entity.mediaSource.type === MediaType.video) {
+      // The texture has the video's own size, so the frame is copied without a canvas.
+      this.#device.queue.copyExternalImageToTexture(
+        { source: entity.mediaSource.videoElement },
+        { texture, colorSpace: this.#colorConfig.textureColorSpace },
+        [width, height],
+      );
+      this.#sourceUploads++;
+      return;
+    }
     let source: CanvasImageSource =
       entity.mediaSource.type === MediaType.image
         ? entity.mediaSource.asset.imageBitmap
@@ -1070,7 +1095,9 @@ export class EntityTexturePipeline {
       case MediaType.svg:
         return `svg:${entity.id}:${width}x${height}`;
       case MediaType.video:
-        throw new Error("External video textures do not have source cache keys");
+        if (!this.#copyVideoFrames)
+          throw new Error("External video textures do not have source cache keys");
+        return `video:${entity.id}:${width}x${height}`;
     }
   }
 
