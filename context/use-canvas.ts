@@ -1,5 +1,5 @@
 import { FancyEffects } from "#types/fancy-effects.ts";
-import { createContext, use, useSyncExternalStore } from "react";
+import { createContext, use, useEffect, useEffectEvent, useSyncExternalStore } from "react";
 import { config } from "#config";
 import { canvasStore, type ParamResult, type PreferencesSnapshot } from "#engine";
 import type {
@@ -132,6 +132,22 @@ export function useCanvasSelector<T>(
   return useSyncExternalStore(
     (listener) => canvasStore.subscribeSelector(selector, listener, equalityFn),
     () => selector(canvasStore.getState()),
+  );
+}
+
+/**
+ * Calls `listener` outside render whenever the selection or a selected entity changes
+ * (including its effect), before React re-renders with the new state.
+ */
+export function useSelectionChangeListener(listener: () => void): void {
+  const onChange = useEffectEvent(listener);
+  useEffect(
+    () =>
+      canvasStore.subscribeSelector(
+        (state) => state.selectionVersion,
+        () => onChange(),
+      ),
+    [],
   );
 }
 

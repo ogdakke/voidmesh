@@ -2,7 +2,6 @@ import {
   createContext,
   use,
   useRef,
-  useState,
   type ComponentProps,
   type PointerEvent,
   type PropsWithChildren,
@@ -126,7 +125,6 @@ function useBottomBarDrag(haptics: boolean) {
 interface BottomBarContextValue<T extends string> {
   items: T[];
   activeItem: string | null;
-  setActiveItem: (item: string | null) => void;
   onChange: (item: string | null) => void;
 }
 
@@ -150,12 +148,11 @@ function BottomBarProvider<T extends string>({
   onChange?: ((item: string | null) => void) | undefined;
   value?: string | null | undefined;
 }>) {
-  const [activeItem, setActiveItem] = useState<string | null>(value ?? null);
-
+  // Controlled: the owner may change the active item without a tap (e.g. when it becomes
+  // disabled), so the highlight must follow `value` rather than a local copy.
   const contextValue = {
     items,
-    activeItem,
-    setActiveItem,
+    activeItem: value ?? null,
     onChange,
   };
 
@@ -243,7 +240,7 @@ export function BottomBarItem({
   onClick,
   ...props
 }: PropsWithChildren<BottomBarItemProps>) {
-  const { activeItem, setActiveItem, onChange } = useBottomBarContext();
+  const { activeItem, onChange } = useBottomBarContext();
   return (
     <button
       {...props}
@@ -254,7 +251,6 @@ export function BottomBarItem({
       aria-label={label}
       onClick={(e) => {
         if (disabled) return;
-        setActiveItem(label);
         onChange?.(label);
         onClick?.(e);
       }}

@@ -21,3 +21,18 @@ export function getBottomBarCellAt(offset: number, cellStarts: readonly number[]
   }
   return best;
 }
+
+/**
+ * Bar item whose panel should be shown: the active item, or the first enabled item when
+ * the active one has become disabled (e.g. the selection changed to entities without
+ * palette support). When every item is disabled the active item is kept, so the choice
+ * survives a deselect and reselect.
+ */
+export function resolveActiveBarItem<T extends string>(
+  active: T | null,
+  items: readonly T[],
+  isDisabled: (item: T) => boolean,
+): T | null {
+  if (active === null || !isDisabled(active)) return active;
+  return items.find((item) => !isDisabled(item)) ?? active;
+}
