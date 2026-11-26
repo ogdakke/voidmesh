@@ -34,6 +34,7 @@ import { GridPass } from "./grid-pass.ts";
 import type { ByteBudgetCacheStats } from "./byte-budget-cache.ts";
 import { SelectionRectPass } from "./selection-rect-pass.ts";
 import { TexturePool, type TexturePoolStats } from "./texture-pool.ts";
+import { getGpuMemoryBudget } from "./gpu-memory-budget.ts";
 import { ViewportLensPass, type ViewportLensDistortionConfig } from "./viewport-lens-pass.ts";
 import { ViewportUniforms } from "./viewport-uniforms.ts";
 import type { WlurOverlayConfig } from "./wlur-overlay.ts";
@@ -229,6 +230,7 @@ export class InfiniteCanvasRenderer {
   #hasLastLodViewport = false;
   #lastLodZoom = 0;
   #lodSettleFramesRemaining = 0;
+  readonly #memoryBudget = getGpuMemoryBudget();
   #mixedBatchLodRefreshPending = false;
   #mixedBatchLodRefreshStarted = false;
   readonly #visibilityViewportBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
@@ -290,7 +292,7 @@ export class InfiniteCanvasRenderer {
         residentBytes: 0,
       },
       entityTextures: this.#entityTexturePipeline?.getResidencyStats() ?? {
-        budgetBytes: config.rendering.entityTextureBudgetBytes,
+        budgetBytes: this.#memoryBudget.entityTextureBytes,
         residentBytes: 0,
         sourceBytes: 0,
         processedBytes: 0,
@@ -312,7 +314,7 @@ export class InfiniteCanvasRenderer {
           evictions: 0,
         },
       texturePool: this.#texturePool?.getStats() ?? {
-        budgetBytes: config.rendering.texturePoolBudgetBytes,
+        budgetBytes: this.#memoryBudget.texturePoolBytes,
         residentBytes: 0,
         textureCount: 0,
       },
@@ -418,7 +420,11 @@ export class InfiniteCanvasRenderer {
     });
 
     // Initialize texture pool
-    this.#texturePool = new TexturePool(this.#device, this.#colorConfig.intermediateFormat);
+    this.#texturePool = new TexturePool(
+      this.#device,
+      this.#colorConfig.intermediateFormat,
+      this.#memoryBudget.texturePoolBytes,
+    );
 
     this.#gridPass = new GridPass(this.#device, this.#canvasFormat);
     this.#viewportUniforms = new ViewportUniforms(this.#device);
@@ -436,6 +442,7 @@ export class InfiniteCanvasRenderer {
       device: this.#device,
       colorConfig: this.#colorConfig,
       texturePool: this.#texturePool,
+      textureBudgetBytes: this.#memoryBudget.entityTextureBytes,
       onImmutableSourceUpload: (texture, encoder) =>
         this.#compositionPass!.primeImmutableSource(texture, encoder),
       onEntityError: (entityId, error) => {

@@ -94,6 +94,7 @@ interface CliOptions {
   lodConsistency: boolean;
   screenSizedContinuous: boolean;
   tierSizedContinuous: boolean;
+  constrainedMemory: boolean;
   /** Device pixel ratio forced on the page; 3 approximates a phone's texture sizes. */
   deviceScaleFactor: number | null;
   rounds: number;
@@ -312,6 +313,7 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
     lodConsistency: false,
     screenSizedContinuous: false,
     tierSizedContinuous: false,
+    constrainedMemory: false,
     deviceScaleFactor: null,
     rounds: Number(process.env.BENCH_ROUNDS ?? 1),
   };
@@ -354,6 +356,8 @@ async function parseOptions(argv: string[]): Promise<CliOptions> {
       options.tierSizedContinuous = true;
     } else if (arg === "--screen-sized-continuous") {
       options.screenSizedContinuous = true;
+    } else if (arg === "--constrained-memory") {
+      options.constrainedMemory = true;
     } else if (arg === "--device-scale-factor") {
       options.deviceScaleFactor = Number(readArgValue(argv, ++index, arg));
     } else if (arg === "--video-url") {
@@ -434,6 +438,7 @@ function createBenchPageUrl(options: CliOptions): string {
   if (options.videoUrl) url.searchParams.set("videoUrl", options.videoUrl);
   if (options.screenSizedContinuous) url.searchParams.set("screenSizedContinuous", "1");
   if (options.tierSizedContinuous) url.searchParams.set("tierSizedContinuous", "1");
+  if (options.constrainedMemory) url.searchParams.set("constrainedMemory", "1");
   return url.toString();
 }
 

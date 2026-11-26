@@ -2863,6 +2863,16 @@ const searchParams = new URLSearchParams(window.location.search);
 if (searchParams.get("screenSizedContinuous") === "1") {
   config.rendering.continuousOutputFollowsScreen = true;
 }
+// `?constrainedMemory=1` gives a desktop the cache budgets of a phone; pair it with a
+// recorder `--device-scale-factor 3` for a phone's texture sizes.
+if (searchParams.get("constrainedMemory") === "1") {
+  const rendering = config.rendering as {
+    entityTextureBudgetBytes: number;
+    texturePoolBudgetBytes: number;
+  };
+  rendering.entityTextureBudgetBytes = config.rendering.constrainedEntityTextureBudgetBytes;
+  rendering.texturePoolBudgetBytes = config.rendering.constrainedTexturePoolBudgetBytes;
+}
 // `?tierSizedContinuous=1` is its opposite, for comparing against the LOD tier in one build.
 if (searchParams.get("tierSizedContinuous") === "1") {
   config.rendering.continuousOutputFollowsScreen = false;

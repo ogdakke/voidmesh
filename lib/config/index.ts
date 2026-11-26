@@ -489,6 +489,12 @@ export const config = {
     entityTextureBudgetBytes: 512 * 1024 * 1024,
     /** Maximum idle scratch memory retained by TexturePool across dimensions/usages. */
     texturePoolBudgetBytes: 64 * 1024 * 1024,
+    /** `entityTextureBudgetBytes` on a phone or tablet, where the GPU process is killed early. */
+    constrainedEntityTextureBudgetBytes: 192 * 1024 * 1024,
+    /** `texturePoolBudgetBytes` on a phone or tablet. */
+    constrainedTexturePoolBudgetBytes: 32 * 1024 * 1024,
+    /** A browser reporting this much device memory (GiB) or less gets the constrained budgets. */
+    constrainedDeviceMemoryGiB: 4,
     /** Persistent dimension-keyed blur and bloom texture budget. */
     processingTextureBudgetBytes: 128 * 1024 * 1024,
     /** Quantized maximum dimensions for static-image viewport rendering. */
